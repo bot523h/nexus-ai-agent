@@ -50,4 +50,3 @@ async def test_gemma():
 async def test_phi_moderate():
     result = await PhiAgent(FakeLLMProvider()).moderate("Hello world")
     assert "safe" in result
-

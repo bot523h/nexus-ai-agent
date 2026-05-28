@@ -12,9 +12,7 @@ app = typer.Typer(help="NEXUS AI Agent CLI")
 
 @app.command()
 def migrate(
-    db_path: str = typer.Option(
-        "data/app.sqlite", help="SQLite DB path"
-    ),
+    db_path: str = typer.Option("data/app.sqlite", help="SQLite DB path"),
 ) -> None:
     """Initialize database schema."""
     from nexus_ai_agent.storage.db import create_all_tables
@@ -26,24 +24,22 @@ def migrate(
 
 @app.command()
 def run_bot(
-    mode: str = typer.Option(
-        "polling", help="Run mode: polling or webhook"
-    ),
+    mode: str = typer.Option("polling", help="Run mode: polling or webhook"),
 ) -> None:
     """Start the NEXUS AI Telegram bot."""
+    from nexus_ai_agent.bot.app import build_application
     from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.memory.long_term import LongTermMemory
     from nexus_ai_agent.observability.logging import configure_logging
+    from nexus_ai_agent.orchestration.graph import compile_graph
     from nexus_ai_agent.storage.db import create_all_tables
     from nexus_ai_agent.storage.langgraph_checkpoint import get_checkpointer
-    from nexus_ai_agent.tools.registry import ToolRegistry
     from nexus_ai_agent.tools.files import (
+        ListDirTool,
         ReadFileTool,
         WriteFileTool,
-        ListDirTool,
     )
-    from nexus_ai_agent.memory.long_term import LongTermMemory
-    from nexus_ai_agent.orchestration.graph import compile_graph
-    from nexus_ai_agent.bot.app import build_application
+    from nexus_ai_agent.tools.registry import ToolRegistry
 
     settings = get_settings()
     configure_logging(settings.log_level)
@@ -67,8 +63,7 @@ def run_bot(
         from nexus_ai_agent.llm.fake_llm import FakeLLMProvider
 
         typer.echo(
-            "⚠  Model not found — using FakeLLM. "
-            f"Set NEXUS_MODEL_PATH to a valid .gguf file."
+            "⚠  Model not found — using FakeLLM. Set NEXUS_MODEL_PATH to a valid .gguf file."
         )
         llm = FakeLLMProvider()
 
@@ -116,22 +111,20 @@ def smoke(
         "Hello, what can you do?",
         help="Message to send through the graph",
     ),
-    verbose: bool = typer.Option(
-        False, "--verbose", "-v", help="Show full state"
-    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show full state"),
 ) -> None:
     """Run the full AI graph without Telegram (for testing)."""
     from nexus_ai_agent.llm.fake_llm import FakeLLMProvider
-    from nexus_ai_agent.storage.langgraph_checkpoint import get_checkpointer
-    from nexus_ai_agent.tools.registry import ToolRegistry
-    from nexus_ai_agent.tools.files import (
-        ReadFileTool,
-        WriteFileTool,
-        ListDirTool,
-    )
     from nexus_ai_agent.memory.long_term import LongTermMemory
     from nexus_ai_agent.orchestration.graph import compile_graph
     from nexus_ai_agent.orchestration.state import NexusState
+    from nexus_ai_agent.storage.langgraph_checkpoint import get_checkpointer
+    from nexus_ai_agent.tools.files import (
+        ListDirTool,
+        ReadFileTool,
+        WriteFileTool,
+    )
+    from nexus_ai_agent.tools.registry import ToolRegistry
 
     llm = FakeLLMProvider()
     os.environ["NEXUS_WORKSPACE_ROOT"] = "."

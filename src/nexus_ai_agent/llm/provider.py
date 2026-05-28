@@ -11,4 +11,3 @@ class LLMProvider(ABC):
     @abstractmethod
     async def embed(self, text: str) -> list[float]:
         raise NotImplementedError
-

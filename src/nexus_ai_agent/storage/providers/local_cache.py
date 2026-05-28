@@ -42,4 +42,3 @@ class LocalCacheProvider:
                 keys.append(str(p.relative_to(self.cache_dir)))
         keys.sort()
         return keys
-

@@ -30,4 +30,3 @@ def test_prompt_has_persona():
 
 def test_default_is_gemma():
     assert PersonalityEngine().persona == "gemma"
-

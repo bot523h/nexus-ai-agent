@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from telegram.ext import Application, ApplicationBuilder
-from telegram.ext import CommandHandler
+from telegram.ext import Application, ApplicationBuilder, CommandHandler
 
 from nexus_ai_agent.config.settings import Settings
 
@@ -19,7 +18,11 @@ from .handlers import (
 def build_application(settings: Settings, graph: Any) -> Application:
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
     application.bot_data["graph"] = graph
-    for handler in build_handlers(graph, db_session_factory=_get_session_factory(), settings=settings):
+    for handler in build_handlers(
+        graph,
+        db_session_factory=_get_session_factory(),
+        settings=settings,
+    ):
         application.add_handler(handler)
     application.add_handler(CommandHandler("story", story_handler))
     application.add_handler(CommandHandler("companion", companion_handler))

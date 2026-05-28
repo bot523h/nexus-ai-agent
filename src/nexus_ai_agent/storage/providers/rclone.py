@@ -44,7 +44,9 @@ class RcloneProvider:
         )
         out, err = await proc.communicate()
         if proc.returncode != 0:
-            raise StorageError(f"rclone upload failed: {(out + err).decode('utf-8', 'ignore')[:200]}")
+            raise StorageError(
+                f"rclone upload failed: {(out + err).decode('utf-8', 'ignore')[:200]}"
+            )
 
     async def download(self, *, remote_key: str, local_path: Path) -> None:
         if not self.is_configured():
@@ -65,7 +67,9 @@ class RcloneProvider:
         )
         out, err = await proc.communicate()
         if proc.returncode != 0:
-            raise ProviderUnavailable(f"rclone download failed: {(out + err).decode('utf-8', 'ignore')[:200]}")
+            raise ProviderUnavailable(
+                f"rclone download failed: {(out + err).decode('utf-8', 'ignore')[:200]}"
+            )
 
     async def list_files(self, *, prefix: str = "") -> list[str]:
         if not self.is_configured():
@@ -81,6 +85,7 @@ class RcloneProvider:
         out, _err = await proc.communicate()
         if proc.returncode != 0:
             return []
-        files = [line.strip() for line in out.decode("utf-8", "ignore").splitlines() if line.strip()]
+        files = [
+            line.strip() for line in out.decode("utf-8", "ignore").splitlines() if line.strip()
+        ]
         return [f"{prefix.rstrip('/')}/{f}".lstrip("/") for f in files]
-

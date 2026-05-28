@@ -25,4 +25,3 @@ class BaseTool(ABC):
         """
 
         raise NotImplementedError
-

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import struct
 import sqlite3
+import struct
 from pathlib import Path
 
 from nexus_ai_agent.llm.provider import LLMProvider

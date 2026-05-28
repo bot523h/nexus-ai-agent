@@ -77,4 +77,3 @@ class MegaProvider:
             return keys
 
         return await asyncio.to_thread(_run)
-

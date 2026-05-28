@@ -52,4 +52,3 @@ class ShellTool(BaseTool):
             return {"success": True, "output": out, "error": None}
         except subprocess.TimeoutExpired:
             return {"success": False, "output": "", "error": "Command timed out"}
-

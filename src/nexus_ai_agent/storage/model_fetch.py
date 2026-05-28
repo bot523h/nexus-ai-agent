@@ -73,4 +73,3 @@ async def ensure_model_available(settings: Settings, model_name: str, version: s
         log.info("model_fetch_fallback_hf", reason=str(e))
         await storage.download(remote_key=hf_key, local_path=dest)
         return str(dest)
-

@@ -60,7 +60,9 @@ async def _planner_agent(llm: LLMProvider, state: NexusState) -> NexusState:
         ],
     }
     state["current_task"] = plan
-    state["response"] = f"Plan created with {len(plan['steps'])} step(s): {plan['steps'][0]['action']}"
+    state["response"] = (
+        f"Plan created with {len(plan['steps'])} step(s): {plan['steps'][0]['action']}"
+    )
     return state
 
 

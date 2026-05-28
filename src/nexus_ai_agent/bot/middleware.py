@@ -29,4 +29,3 @@ class AuthMiddleware:
         if not self.allowed_user_ids:
             return True
         return user_id in self.allowed_user_ids
-

@@ -36,7 +36,10 @@ class AIStorageManager:
             try:
                 from .providers.github_releases import GitHubReleasesProvider
 
-                self.github = GitHubReleasesProvider(token=config.github_token, repo=config.github_repo)
+                self.github = GitHubReleasesProvider(
+                    token=config.github_token,
+                    repo=config.github_repo,
+                )
             except Exception:
                 # Provider module or deps not available; remain disabled.
                 self.github = None
@@ -115,7 +118,12 @@ class AIStorageManager:
                         bytes=size,
                     )
                     await provider.upload(local_path=local_path, remote_key=remote_key)
-                    log.info("storage_upload_ok", provider=provider.name, key=remote_key, bytes=size)
+                    log.info(
+                        "storage_upload_ok",
+                        provider=provider.name,
+                        key=remote_key,
+                        bytes=size,
+                    )
                     return
                 except ProviderUnavailable as e:
                     last_err = e

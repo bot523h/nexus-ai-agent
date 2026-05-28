@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 from uuid import uuid4
 
 import structlog
@@ -57,10 +58,12 @@ def build_handlers(graph: Any, db_session_factory: Callable[[], Any], settings: 
         if update.effective_user:
             await _upsert_user(db_session_factory, update.effective_user)
         if update.effective_chat:
-            await _upsert_chat(db_session_factory, int(update.effective_chat.id), f"tg:{update.effective_chat.id}")
-        await update.message.reply_text(
-            "Welcome to NEXUS AI. I'm your offline-first AI assistant."
-        )
+            await _upsert_chat(
+                db_session_factory,
+                int(update.effective_chat.id),
+                f"tg:{update.effective_chat.id}",
+            )
+        await update.message.reply_text("Welcome to NEXUS AI. I'm your offline-first AI assistant.")
 
     async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _ = context
@@ -73,11 +76,13 @@ def build_handlers(graph: Any, db_session_factory: Callable[[], Any], settings: 
 
     async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _ = context
-        model_loaded = "yes" if settings.model_path and __import__("pathlib").Path(settings.model_path).exists() else "no"
+        model_loaded = (
+            "yes"
+            if settings.model_path and __import__("pathlib").Path(settings.model_path).exists()
+            else "no"
+        )
         await update.message.reply_text(
-            f"model loaded: {model_loaded}\n"
-            f"db path: {settings.db_path}\n"
-            "memory enabled: yes"
+            f"model loaded: {model_loaded}\ndb path: {settings.db_path}\nmemory enabled: yes"
         )
 
     async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

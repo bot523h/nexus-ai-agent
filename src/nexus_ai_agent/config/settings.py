@@ -19,16 +19,30 @@ class Settings(BaseSettings):
         default="CHANGE_ME",
         validation_alias=AliasChoices("TELEGRAM_BOT_TOKEN", "NEXUS_TELEGRAM_BOT_TOKEN"),
     )
-    db_path: str = Field(default="data/app.sqlite", validation_alias=AliasChoices("NEXUS_DB_PATH", "DB_PATH"))
+    db_path: str = Field(
+        default="data/app.sqlite",
+        validation_alias=AliasChoices("NEXUS_DB_PATH", "DB_PATH"),
+    )
     checkpoint_path: str = Field(
-        default="data/langgraph.sqlite", validation_alias=AliasChoices("NEXUS_CHECKPOINT_PATH", "CHECKPOINT_PATH")
+        default="data/langgraph.sqlite",
+        validation_alias=AliasChoices("NEXUS_CHECKPOINT_PATH", "CHECKPOINT_PATH"),
     )
     vector_path: str = Field(
-        default="data/vector.sqlite", validation_alias=AliasChoices("NEXUS_VECTOR_PATH", "VECTOR_PATH")
+        default="data/vector.sqlite",
+        validation_alias=AliasChoices("NEXUS_VECTOR_PATH", "VECTOR_PATH"),
     )
-    model_path: str = Field(default="models/model.gguf", validation_alias=AliasChoices("NEXUS_MODEL_PATH", "MODEL_PATH"))
-    log_level: str = Field(default="INFO", validation_alias=AliasChoices("NEXUS_LOG_LEVEL", "LOG_LEVEL"))
-    enable_shell: bool = Field(default=False, validation_alias=AliasChoices("NEXUS_ENABLE_SHELL", "ENABLE_SHELL"))
+    model_path: str = Field(
+        default="models/model.gguf",
+        validation_alias=AliasChoices("NEXUS_MODEL_PATH", "MODEL_PATH"),
+    )
+    log_level: str = Field(
+        default="INFO",
+        validation_alias=AliasChoices("NEXUS_LOG_LEVEL", "LOG_LEVEL"),
+    )
+    enable_shell: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("NEXUS_ENABLE_SHELL", "ENABLE_SHELL"),
+    )
     allowed_user_ids: Annotated[list[int], NoDecode] = Field(
         default_factory=list,
         validation_alias=AliasChoices("NEXUS_ALLOWED_USER_IDS", "ALLOWED_USER_IDS"),
@@ -41,10 +55,19 @@ class Settings(BaseSettings):
     top_k_memories: int = 3
 
     # Unified multi-cloud storage credentials (optional).
-    github_token: str | None = Field(default=None, validation_alias=AliasChoices("GITHUB_TOKEN", "NEXUS_GITHUB_TOKEN"))
-    github_repo: str | None = Field(default=None, validation_alias=AliasChoices("GITHUB_REPO", "NEXUS_GITHUB_REPO"))
+    github_token: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GITHUB_TOKEN", "NEXUS_GITHUB_TOKEN"),
+    )
+    github_repo: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GITHUB_REPO", "NEXUS_GITHUB_REPO"),
+    )
 
-    mega_email: str | None = Field(default=None, validation_alias=AliasChoices("MEGA_EMAIL", "NEXUS_MEGA_EMAIL"))
+    mega_email: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("MEGA_EMAIL", "NEXUS_MEGA_EMAIL"),
+    )
     mega_password: str | None = Field(
         default=None, validation_alias=AliasChoices("MEGA_PASSWORD", "NEXUS_MEGA_PASSWORD")
     )
@@ -54,18 +77,34 @@ class Settings(BaseSettings):
     )
 
     cloudflare_account_id: str | None = Field(
-        default=None, validation_alias=AliasChoices("CLOUDFLARE_ACCOUNT_ID", "NEXUS_CLOUDFLARE_ACCOUNT_ID")
+        default=None,
+        validation_alias=AliasChoices(
+            "CLOUDFLARE_ACCOUNT_ID",
+            "NEXUS_CLOUDFLARE_ACCOUNT_ID",
+        ),
     )
 
     # Optional: Google Drive (or any rclone-compatible backend) via rclone.
-    rclone_remote: str | None = Field(default=None, validation_alias=AliasChoices("NEXUS_RCLONE_REMOTE", "RCLONE_REMOTE"))
+    rclone_remote: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("NEXUS_RCLONE_REMOTE", "RCLONE_REMOTE"),
+    )
 
     # Local cache root used by AIStorageManager.
-    cache_dir: str = Field(default="data/cache", validation_alias=AliasChoices("NEXUS_CACHE_DIR", "CACHE_DIR"))
+    cache_dir: str = Field(
+        default="data/cache",
+        validation_alias=AliasChoices("NEXUS_CACHE_DIR", "CACHE_DIR"),
+    )
 
     # Optional model identity to compute remote keys when auto-downloading.
-    model_name: str = Field(default="", validation_alias=AliasChoices("NEXUS_MODEL_NAME", "MODEL_NAME"))
-    model_version: str = Field(default="", validation_alias=AliasChoices("NEXUS_MODEL_VERSION", "MODEL_VERSION"))
+    model_name: str = Field(
+        default="",
+        validation_alias=AliasChoices("NEXUS_MODEL_NAME", "MODEL_NAME"),
+    )
+    model_version: str = Field(
+        default="",
+        validation_alias=AliasChoices("NEXUS_MODEL_VERSION", "MODEL_VERSION"),
+    )
 
     @field_validator("allowed_user_ids", mode="before")
     @classmethod

@@ -13,4 +13,3 @@ class BaseAgent(ABC):
     @abstractmethod
     async def run(self, state: NexusState) -> NexusState:
         raise NotImplementedError
-

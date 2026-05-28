@@ -63,4 +63,3 @@ class HuggingFaceProvider:
     async def list_files(self, *, prefix: str = "") -> list[str]:
         _ = prefix
         return []
-

@@ -163,4 +163,3 @@ class PersonalityEngine:
             self.es = EmotionalState(**json.loads(p.read_text()))
         except Exception:
             pass
-

@@ -36,13 +36,24 @@ class GitHubReleasesProvider:
         if r.status_code not in (404,):
             raise StorageError(f"GitHub release lookup failed: {r.status_code}")
 
-        payload = {"tag_name": self._TAG, "name": "NEXUS Storage", "draft": False, "prerelease": False}
+        payload = {
+            "tag_name": self._TAG,
+            "name": "NEXUS Storage",
+            "draft": False,
+            "prerelease": False,
+        }
         r = await client.post(f"{self._api}/releases", headers=self._headers(), json=payload)
         if r.status_code not in (200, 201):
             raise StorageError(f"GitHub release create failed: {r.status_code}")
         return r.json()
 
-    async def _find_asset(self, client: httpx.AsyncClient, *, release: dict, asset_name: str) -> dict | None:
+    async def _find_asset(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        release: dict,
+        asset_name: str,
+    ) -> dict | None:
         assets_url = release.get("assets_url")
         r = await client.get(assets_url, headers=self._headers())
         if r.status_code != 200:
@@ -83,7 +94,10 @@ class GitHubReleasesProvider:
                 raise ProviderUnavailable(f"GitHub asset not found: {remote_key}")
 
             url = asset.get("url")
-            r = await client.get(url, headers={**self._headers(), "Accept": "application/octet-stream"})
+            r = await client.get(
+                url,
+                headers={**self._headers(), "Accept": "application/octet-stream"},
+            )
             if r.status_code != 200:
                 raise StorageError(f"GitHub download failed: {r.status_code}")
 
@@ -104,4 +118,3 @@ class GitHubReleasesProvider:
                     keys.append(key)
             keys.sort()
             return keys
-

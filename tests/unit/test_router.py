@@ -13,4 +13,3 @@ def test_task_intent():
 
 def test_memory_intent():
     assert classify_intent("Remember what I said") == "memory"
-

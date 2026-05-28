@@ -19,4 +19,3 @@ def test_default_gemma():
 
 def test_roleplay_to_qwen():
     assert select_persona("Let's roleplay a fantasy") == "qwen"
-

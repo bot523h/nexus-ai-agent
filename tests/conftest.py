@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -47,4 +46,3 @@ def settings_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 def sample_telegram_update() -> dict[str, Any]:
     p = Path(__file__).parent / "fixtures" / "telegram_updates" / "sample_message.json"
     return json.loads(p.read_text(encoding="utf-8"))
-

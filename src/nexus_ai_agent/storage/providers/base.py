@@ -45,4 +45,3 @@ class ProviderConfig:
     mega_password: str | None = None
     huggingface_token: str | None = None
     rclone_remote: str | None = None  # e.g. "gdrive:nexus-ai-agent"
-

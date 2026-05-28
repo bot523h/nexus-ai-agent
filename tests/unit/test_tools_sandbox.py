@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from nexus_ai_agent.tools.files import ReadFileTool, WriteFileTool
@@ -43,4 +41,3 @@ async def test_shell_allowlist():
     result = await registry.run("shell", {"command": "rm -rf /"}, policy={"confirmed": True})
     assert result["success"] is False
     assert "not allowed" in (result["error"] or "").lower()
-

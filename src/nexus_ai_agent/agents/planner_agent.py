@@ -26,4 +26,3 @@ class PlannerAgent(BaseAgent):
             + "\n\nI will execute the first step next."
         )
         return state
-

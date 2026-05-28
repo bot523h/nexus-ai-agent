@@ -63,4 +63,3 @@ class ListDirTool(BaseTool):
             return {"success": True, "output": "\n".join(items), "error": None}
         except Exception as e:  # noqa: BLE001
             return {"success": False, "output": "", "error": str(e)}
-
