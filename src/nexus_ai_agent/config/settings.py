@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 from functools import lru_cache
 from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,4 +31,7 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    # Ensure local storage directories exist on startup.
+    Path(settings.db_path).parent.mkdir(parents=True, exist_ok=True)
+    return settings
