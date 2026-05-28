@@ -16,6 +16,7 @@ from nexus_ai_agent.orchestration.graph import compile_graph
 from nexus_ai_agent.orchestration.state import NexusState
 from nexus_ai_agent.storage.db import create_all_tables
 from nexus_ai_agent.storage.langgraph_checkpoint import get_checkpointer
+from nexus_ai_agent.storage.model_fetch import ensure_model_available
 
 app = typer.Typer()
 
@@ -23,7 +24,8 @@ app = typer.Typer()
 @app.command()
 def migrate() -> None:
     "Initialize database schema"
-    asyncio.run(create_all_tables())
+    settings = get_settings()
+    asyncio.run(create_all_tables(settings.db_path))
     print("Database initialized")
 
 
@@ -34,10 +36,17 @@ def run_bot(mode: str = "polling") -> None:
     configure_logging(settings.log_level)
 
     # Initialize LLM
-    if Path(settings.model_path).exists():
-        llm = LocalLlamaCppProvider(settings.model_path)
+    model_path = Path(settings.model_path)
+    if not model_path.exists():
+        try:
+            asyncio.run(ensure_model_available(settings, settings.model_name, settings.model_version))
+        except Exception:
+            # Offline-safe: if we can't fetch a model, continue with FakeLLM.
+            print("WARNING: Model not found and auto-download failed, using FakeLLM")
+
+    if model_path.exists():
+        llm = LocalLlamaCppProvider(settings.model_path, n_ctx=settings.n_ctx, n_gpu_layers=settings.n_gpu_layers)
     else:
-        print("WARNING: Model not found, using FakeLLM")
         llm = FakeLLMProvider()
 
     # Initialize memory (created to ensure DB exists; wiring happens in graph nodes later)
@@ -51,7 +60,7 @@ def run_bot(mode: str = "polling") -> None:
     graph = compile_graph(llm, checkpointer)
 
     # Run migrations
-    asyncio.run(create_all_tables())
+    asyncio.run(create_all_tables(settings.db_path))
 
     # Build and run bot
     application = build_application(settings, graph)
@@ -86,13 +95,10 @@ def smoke(input: str = "Hello, what can you do?") -> None:
         "turn_count": 0,
     }
 
-    result = asyncio.run(
-        graph.ainvoke(state, config={"configurable": {"thread_id": "smoke-test"}})
-    )
+    result = asyncio.run(graph.ainvoke(state, config={"configurable": {"thread_id": "smoke-test"}}))
     print(f"\nResponse: {result['response']}")
     print(f"Intent: {result['intent']}")
 
 
 if __name__ == "__main__":
     app()
-
