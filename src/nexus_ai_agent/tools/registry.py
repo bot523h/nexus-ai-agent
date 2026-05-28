@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from nexus_ai_agent.tools.base import BaseTool, RiskLevel
 
 
 class ToolRegistry:
-    def __init__(self, enable_shell: bool = False):
+    def __init__(self, enable_shell: bool = False, workspace_root: str | None = None):
         self.enable_shell = enable_shell
         self._tools: dict[str, BaseTool] = {}
+        self.workspace_root = workspace_root
+
+        # Backwards-compatible convenience: allow the CLI/runtime to configure the
+        # sandbox root via ToolRegistry, since file tools resolve via env var.
+        if workspace_root:
+            os.environ["NEXUS_WORKSPACE_ROOT"] = str(workspace_root)
 
     def register(self, tool: BaseTool) -> None:
         self._tools[tool.name] = tool
@@ -33,4 +40,3 @@ class ToolRegistry:
             return result
         except Exception as e:  # noqa: BLE001
             return {"success": False, "output": "", "error": str(e)}
-

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -73,13 +74,14 @@ def run_bot(
 
     # Tools
     workspace = getattr(settings, "workspace_root", ".")
+    os.environ["NEXUS_WORKSPACE_ROOT"] = str(workspace)
     registry = ToolRegistry(
         enable_shell=settings.enable_shell,
         workspace_root=workspace,
     )
-    registry.register(ReadFileTool(workspace))
-    registry.register(WriteFileTool(workspace))
-    registry.register(ListDirTool(workspace))
+    registry.register(ReadFileTool())
+    registry.register(WriteFileTool())
+    registry.register(ListDirTool())
 
     if settings.enable_shell:
         from nexus_ai_agent.tools.system_shell import ShellTool
@@ -132,44 +134,37 @@ def smoke(
     from nexus_ai_agent.orchestration.state import NexusState
 
     llm = FakeLLMProvider()
+    os.environ["NEXUS_WORKSPACE_ROOT"] = "."
     registry = ToolRegistry(enable_shell=False, workspace_root=".")
-    registry.register(ReadFileTool("."))
-    registry.register(WriteFileTool("."))
-    registry.register(ListDirTool("."))
+    registry.register(ReadFileTool())
+    registry.register(WriteFileTool())
+    registry.register(ListDirTool())
 
     long_term = LongTermMemory(":memory:", llm)
 
     async def _run() -> dict:
-        async with get_checkpointer(":memory:") as checkpointer:
-            graph = compile_graph(
-                llm, checkpointer, long_term, registry
-            )
-            initial_state: NexusState = {
-                "thread_id": "smoke-test",
-                "chat_id": 0,
-                "user_id": 0,
-                "correlation_id": str(uuid4()),
-                "messages": [
-                    {"role": "user", "content": input}
-                ],
-                "intent": "unknown",
-                "active_persona": "gemma",
-                "current_task": None,
-                "tool_results": [],
-                "memory_context": "",
-                "response": "",
-                "error": None,
-                "turn_count": 0,
-                "moderation_passed": True,
-            }
-            return await graph.ainvoke(
-                initial_state,
-                config={
-                    "configurable": {
-                        "thread_id": "smoke-test"
-                    }
-                },
-            )
+        checkpointer = get_checkpointer(":memory:")
+        graph = compile_graph(llm, checkpointer, long_term, registry)
+        initial_state: NexusState = {
+            "thread_id": "smoke-test",
+            "chat_id": 0,
+            "user_id": 0,
+            "correlation_id": str(uuid4()),
+            "messages": [{"role": "user", "content": input}],
+            "intent": "unknown",
+            "active_persona": "gemma",
+            "current_task": None,
+            "tool_results": [],
+            "memory_context": "",
+            "response": "",
+            "error": None,
+            "turn_count": 0,
+            "moderation_passed": True,
+        }
+        return await graph.ainvoke(
+            initial_state,
+            config={"configurable": {"thread_id": "smoke-test"}},
+        )
 
     result = asyncio.run(_run())
 

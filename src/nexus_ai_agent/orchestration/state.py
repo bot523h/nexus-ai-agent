@@ -10,10 +10,11 @@ class NexusState(TypedDict):
     correlation_id: str
     messages: list[dict]  # {"role": "user"|"assistant", "content": str}
     intent: Literal["chat", "task", "memory", "unknown"]
+    active_persona: str
     current_task: dict | None
     tool_results: list[dict]
     memory_context: str
     response: str
     error: str | None
     turn_count: int
-
+    moderation_passed: bool

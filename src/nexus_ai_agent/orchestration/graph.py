@@ -5,8 +5,10 @@ from typing import Any
 from langgraph.graph import END, START, StateGraph
 
 from nexus_ai_agent.llm.provider import LLMProvider
+from nexus_ai_agent.memory.long_term import LongTermMemory
 from nexus_ai_agent.orchestration.router import classify_intent
 from nexus_ai_agent.orchestration.state import NexusState
+from nexus_ai_agent.tools.registry import ToolRegistry
 
 
 async def _router_node(state: NexusState) -> NexusState:
@@ -15,10 +17,13 @@ async def _router_node(state: NexusState) -> NexusState:
     return state
 
 
-async def _memory_reader(state: NexusState) -> NexusState:
-    # Implemented as a no-op for MVP; long-term memory integration is added later.
-    # The node exists so the graph topology is stable.
-    state.setdefault("memory_context", "")
+async def _memory_reader(long_term_memory: LongTermMemory, state: NexusState) -> NexusState:
+    last = state["messages"][-1]["content"] if state.get("messages") else ""
+    try:
+        results = await long_term_memory.search(state["thread_id"], last, top_k=3)
+        state["memory_context"] = await long_term_memory.format_context(results)
+    except Exception:
+        state.setdefault("memory_context", "")
     return state
 
 
@@ -77,7 +82,13 @@ async def _memory_writer(state: NexusState) -> NexusState:
     return state
 
 
-def compile_graph(llm: LLMProvider, checkpointer: Any):
+def compile_graph(
+    llm: LLMProvider,
+    checkpointer: Any,
+    long_term_memory: LongTermMemory,
+    tool_registry: ToolRegistry,
+):
+    _ = tool_registry  # tool wiring is used by executor/planner in later phases
     graph: StateGraph[NexusState] = StateGraph(NexusState)
 
     async def chat_node(state: NexusState) -> NexusState:
@@ -86,8 +97,11 @@ def compile_graph(llm: LLMProvider, checkpointer: Any):
     async def planner_node(state: NexusState) -> NexusState:
         return await _planner_agent(llm, state)
 
+    async def memory_reader_node(state: NexusState) -> NexusState:
+        return await _memory_reader(long_term_memory, state)
+
     graph.add_node("router", _router_node)
-    graph.add_node("memory_reader", _memory_reader)
+    graph.add_node("memory_reader", memory_reader_node)
     graph.add_node("chat_agent", chat_node)
     graph.add_node("planner_agent", planner_node)
     graph.add_node("executor_agent", _executor_agent)

@@ -111,12 +111,14 @@ def build_handlers(graph: Any, db_session_factory: Callable[[], Any], settings: 
             "correlation_id": correlation_id,
             "messages": [{"role": "user", "content": update.message.text}],
             "intent": "unknown",
+            "active_persona": "gemma",
             "current_task": None,
             "tool_results": [],
             "memory_context": "",
             "response": "",
             "error": None,
             "turn_count": 0,
+            "moderation_passed": True,
         }
 
         result = await graph.ainvoke(state, config={"configurable": {"thread_id": thread_id}})
@@ -138,4 +140,3 @@ def build_handlers(graph: Any, db_session_factory: Callable[[], Any], settings: 
         CommandHandler("status", status),
         MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
     ]
-
