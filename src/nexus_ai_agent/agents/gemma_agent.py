@@ -28,6 +28,5 @@ class GemmaAgent(BaseAgent):
             state.get("memory_context", ""),
         )
         conv = "\n".join(f"{m['role']}: {m['content']}" for m in msgs[-12:])
-        resp = await self._llm.generate(conv + "\nassistant:", system=system)
+        resp = await self.llm.generate(conv + "\nassistant:", system=system)
         return {**state, "response": resp, "active_persona": "gemma"}
-

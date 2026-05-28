@@ -4,17 +4,26 @@ from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 
+from nexus_ai_agent.agents.gemma_agent import GemmaAgent
+from nexus_ai_agent.agents.phi_agent import PhiAgent
+from nexus_ai_agent.agents.qwen_agent import QwenAgent
 from nexus_ai_agent.llm.provider import LLMProvider
 from nexus_ai_agent.memory.long_term import LongTermMemory
-from nexus_ai_agent.orchestration.router import classify_intent
+from nexus_ai_agent.orchestration.router import classify_intent, select_persona
 from nexus_ai_agent.orchestration.state import NexusState
 from nexus_ai_agent.tools.registry import ToolRegistry
 
 
 async def _router_node(state: NexusState) -> NexusState:
-    last = state["messages"][-1]["content"] if state.get("messages") else ""
-    state["intent"] = classify_intent(last)
-    return state
+    last_user = state["messages"][-1]["content"] if state.get("messages") else ""
+    intent = classify_intent(last_user)
+    persona = select_persona(last_user)
+    return {
+        **state,
+        "intent": intent,
+        "active_persona": persona,
+        "turn_count": int(state.get("turn_count", 0)) + 1,
+    }
 
 
 async def _memory_reader(long_term_memory: LongTermMemory, state: NexusState) -> NexusState:
@@ -78,7 +87,6 @@ async def _memory_writer(state: NexusState) -> NexusState:
     response = state.get("response", "")
     if response:
         state["messages"] = state.get("messages", []) + [{"role": "assistant", "content": response}]
-    state["turn_count"] = int(state.get("turn_count", 0)) + 1
     return state
 
 
@@ -89,47 +97,100 @@ def compile_graph(
     tool_registry: ToolRegistry,
 ):
     _ = tool_registry  # tool wiring is used by executor/planner in later phases
-    graph: StateGraph[NexusState] = StateGraph(NexusState)
 
-    async def chat_node(state: NexusState) -> NexusState:
-        return await _chat_agent(llm, state)
+    # Persona cores
+    phi = PhiAgent(llm)
+    qwen = QwenAgent(llm)
+    gemma = GemmaAgent(llm)
+
+    graph: StateGraph[NexusState] = StateGraph(NexusState)
 
     async def planner_node(state: NexusState) -> NexusState:
         return await _planner_agent(llm, state)
 
-    async def memory_reader_node(state: NexusState) -> NexusState:
+    async def memory_reader_task_node(state: NexusState) -> NexusState:
         return await _memory_reader(long_term_memory, state)
 
+    async def memory_reader_chat_node(state: NexusState) -> NexusState:
+        return await _memory_reader(long_term_memory, state)
+
+    async def phi_node(state: NexusState) -> NexusState:
+        return await phi.run(state)
+
+    async def qwen_node(state: NexusState) -> NexusState:
+        return await qwen.run(state)
+
+    async def gemma_node(state: NexusState) -> NexusState:
+        return await gemma.run(state)
+
+    async def moderation_node(state: NexusState) -> NexusState:
+        resp = state.get("response", "")
+        if not resp:
+            return {**state, "moderation_passed": True}
+        result = await phi.moderate(resp)
+        if not result.get("safe", True):
+            return {**state, "response": "I cannot respond to that.", "moderation_passed": False}
+        return {**state, "moderation_passed": True}
+
+    def route_intent(state: NexusState) -> str:
+        intent = state.get("intent", "chat")
+        if intent == "task":
+            return "memory_reader_task"
+        if intent == "memory":
+            return "memory_reader_chat"
+        return "route_persona"
+
+    def route_persona(state: NexusState) -> str:
+        p = state.get("active_persona", "gemma")
+        if p == "qwen":
+            return "qwen_agent"
+        if p == "phi":
+            return "phi_agent"
+        return "gemma_agent"
+
     graph.add_node("router", _router_node)
-    graph.add_node("memory_reader", memory_reader_node)
-    graph.add_node("chat_agent", chat_node)
+    graph.add_node("memory_reader_task", memory_reader_task_node)
+    graph.add_node("memory_reader_chat", memory_reader_chat_node)
     graph.add_node("planner_agent", planner_node)
     graph.add_node("executor_agent", _executor_agent)
+    graph.add_node("route_persona", lambda s: s)
+    graph.add_node("phi_agent", phi_node)
+    graph.add_node("qwen_agent", qwen_node)
+    graph.add_node("gemma_agent", gemma_node)
+    graph.add_node("moderation", moderation_node)
     graph.add_node("memory_writer", _memory_writer)
 
     graph.add_edge(START, "router")
     graph.add_conditional_edges(
         "router",
-        lambda s: s["intent"],
+        route_intent,
         {
-            "chat": "chat_agent",
-            "task": "memory_reader",
-            "memory": "memory_reader",
-        },
-    )
-    graph.add_conditional_edges(
-        "memory_reader",
-        lambda s: s["intent"],
-        {
-            "task": "planner_agent",
-            "memory": "chat_agent",
-            "chat": "chat_agent",
+            "memory_reader_task": "memory_reader_task",
+            "memory_reader_chat": "memory_reader_chat",
+            "route_persona": "route_persona",
         },
     )
 
-    graph.add_edge("chat_agent", "memory_writer")
+    graph.add_edge("memory_reader_chat", "route_persona")
+    graph.add_conditional_edges(
+        "route_persona",
+        route_persona,
+        {
+            "qwen_agent": "qwen_agent",
+            "phi_agent": "phi_agent",
+            "gemma_agent": "gemma_agent",
+        },
+    )
+
+    graph.add_edge("phi_agent", "moderation")
+    graph.add_edge("qwen_agent", "moderation")
+    graph.add_edge("gemma_agent", "moderation")
+
+    graph.add_edge("moderation", "memory_writer")
+
+    graph.add_edge("memory_reader_task", "planner_agent")
     graph.add_edge("planner_agent", "executor_agent")
-    graph.add_edge("executor_agent", "memory_writer")
+    graph.add_edge("executor_agent", "moderation")
     graph.add_edge("memory_writer", END)
 
     return graph.compile(checkpointer=checkpointer)
