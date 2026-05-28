@@ -4,7 +4,6 @@ import asyncio
 from pathlib import Path
 
 from llama_cpp import Llama
-from sentence_transformers import SentenceTransformer
 
 from nexus_ai_agent.llm.provider import LLMProvider
 
@@ -19,32 +18,31 @@ class LocalLlamaCppProvider(LLMProvider):
                 "Set NEXUS_MODEL_PATH or place a model at models/model.gguf."
             )
 
-        self._llm = Llama(
+        self._model = Llama(
             model_path=str(model_file),
             n_ctx=n_ctx,
             n_gpu_layers=n_gpu_layers,
         )
-        # Keep embedder separate to allow swapping later without affecting generation.
-        self._embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
     async def generate(self, prompt: str, system: str = "") -> str:
-        full_prompt = prompt if not system else f"{system.strip()}\n\n{prompt}"
+        formatted_prompt = f"<|system|>{system}<|user|>{prompt}<|assistant|>"
 
         def _run() -> str:
-            result = self._llm(
-                full_prompt,
+            result = self._model(
+                formatted_prompt,
                 max_tokens=512,
-                temperature=0.2,
-                stop=[],
             )
             return (result["choices"][0]["text"] or "").strip()
 
         return await asyncio.to_thread(_run)
 
     async def embed(self, text: str) -> list[float]:
+        if not hasattr(self, "_st"):
+            from sentence_transformers import SentenceTransformer
+
+            self._st = SentenceTransformer("all-MiniLM-L6-v2")
+
         def _run() -> list[float]:
-            vec = self._embedder.encode(text, normalize_embeddings=True)
-            return [float(x) for x in vec.tolist()]
+            return self._st.encode(text).tolist()
 
         return await asyncio.to_thread(_run)
-
