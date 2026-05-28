@@ -1,32 +1,17 @@
 from __future__ import annotations
-
 from functools import lru_cache
-from typing import Any
-
-from pydantic import AliasChoices, Field, field_validator
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """
-    Application configuration loaded from environment variables and a local .env file.
-
-    Env conventions:
-    - TELEGRAM_BOT_TOKEN (legacy/unprefixed) is supported for convenience.
-    - All other settings use the NEXUS_ prefix (e.g., NEXUS_DB_PATH).
-    """
-
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        extra="ignore",
-        env_prefix="NEXUS_",
+        case_sensitive=False,
     )
 
-    telegram_bot_token: str = Field(
-        ...,
-        validation_alias=AliasChoices("TELEGRAM_BOT_TOKEN", "NEXUS_TELEGRAM_BOT_TOKEN"),
-    )
+    telegram_bot_token: str = "CHANGE_ME"
     db_path: str = "data/app.sqlite"
     checkpoint_path: str = "data/langgraph.sqlite"
     vector_path: str = "data/vector.sqlite"
@@ -34,22 +19,14 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     enable_shell: bool = False
     allowed_user_ids: list[int] = []
-
-    @field_validator("allowed_user_ids", mode="before")
-    @classmethod
-    def _parse_allowed_user_ids(cls, v: Any) -> Any:
-        # Support: "", "123", "1,2,3", ["1","2"], [1,2]
-        if v is None:
-            return []
-        if isinstance(v, str):
-            s = v.strip()
-            if not s:
-                return []
-            return [int(part.strip()) for part in s.split(",") if part.strip()]
-        return v
+    workspace_root: str = "."
+    n_ctx: int = 2048
+    n_gpu_layers: int = 0
+    max_short_term_messages: int = 20
+    max_tokens_before_summary: int = 3000
+    top_k_memories: int = 3
 
 
-@lru_cache(maxsize=1)
+@lru_cache
 def get_settings() -> Settings:
     return Settings()
-
