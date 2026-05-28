@@ -80,10 +80,16 @@ async def _memory_writer(state: NexusState) -> NexusState:
 def compile_graph(llm: LLMProvider, checkpointer: Any):
     graph: StateGraph[NexusState] = StateGraph(NexusState)
 
+    async def chat_node(state: NexusState) -> NexusState:
+        return await _chat_agent(llm, state)
+
+    async def planner_node(state: NexusState) -> NexusState:
+        return await _planner_agent(llm, state)
+
     graph.add_node("router", _router_node)
     graph.add_node("memory_reader", _memory_reader)
-    graph.add_node("chat_agent", lambda s: _chat_agent(llm, s))
-    graph.add_node("planner_agent", lambda s: _planner_agent(llm, s))
+    graph.add_node("chat_agent", chat_node)
+    graph.add_node("planner_agent", planner_node)
     graph.add_node("executor_agent", _executor_agent)
     graph.add_node("memory_writer", _memory_writer)
 
@@ -113,4 +119,3 @@ def compile_graph(llm: LLMProvider, checkpointer: Any):
     graph.add_edge("memory_writer", END)
 
     return graph.compile(checkpointer=checkpointer)
-
