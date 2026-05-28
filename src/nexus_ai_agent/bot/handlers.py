@@ -140,3 +140,90 @@ def build_handlers(graph: Any, db_session_factory: Callable[[], Any], settings: 
         CommandHandler("status", status),
         MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
     ]
+
+
+async def story_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Force Qwen storytelling mode."""
+    text = " ".join(context.args) if context.args else "Begin a new adventure story"
+    graph = context.application.bot_data["graph"]
+    thread_id = f"tg:{update.effective_chat.id}"
+    state = {
+        "thread_id": thread_id,
+        "chat_id": update.effective_chat.id,
+        "user_id": update.effective_user.id,
+        "correlation_id": str(uuid4()),
+        "messages": [{"role": "user", "content": text}],
+        "intent": "chat",
+        "active_persona": "qwen",  # forced
+        "current_task": None,
+        "tool_results": [],
+        "memory_context": "",
+        "response": "",
+        "error": None,
+        "turn_count": 0,
+        "moderation_passed": True,
+    }
+    result = await graph.ainvoke(state, config={"configurable": {"thread_id": thread_id}})
+    await update.message.reply_text(result["response"])
+
+
+async def companion_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Force Gemma companion mode."""
+    _ = context
+    graph = context.application.bot_data["graph"]
+    thread_id = f"tg:{update.effective_chat.id}"
+    state = {
+        "thread_id": thread_id,
+        "chat_id": update.effective_chat.id,
+        "user_id": update.effective_user.id,
+        "correlation_id": str(uuid4()),
+        "messages": [{"role": "user", "content": "Hello, I'd like to talk"}],
+        "intent": "chat",
+        "active_persona": "gemma",  # forced
+        "current_task": None,
+        "tool_results": [],
+        "memory_context": "",
+        "response": "",
+        "error": None,
+        "turn_count": 0,
+        "moderation_passed": True,
+    }
+    result = await graph.ainvoke(state, config={"configurable": {"thread_id": thread_id}})
+    await update.message.reply_text(result["response"])
+
+
+async def analyze_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Force Phi analysis mode."""
+    text = " ".join(context.args) if context.args else "Analyze the current situation"
+    graph = context.application.bot_data["graph"]
+    thread_id = f"tg:{update.effective_chat.id}"
+    state = {
+        "thread_id": thread_id,
+        "chat_id": update.effective_chat.id,
+        "user_id": update.effective_user.id,
+        "correlation_id": str(uuid4()),
+        "messages": [{"role": "user", "content": text}],
+        "intent": "chat",
+        "active_persona": "phi",  # forced
+        "current_task": None,
+        "tool_results": [],
+        "memory_context": "",
+        "response": "",
+        "error": None,
+        "turn_count": 0,
+        "moderation_passed": True,
+    }
+    result = await graph.ainvoke(state, config={"configurable": {"thread_id": thread_id}})
+    await update.message.reply_text(result["response"])
+
+
+async def persona_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show current persona status."""
+    _ = context
+    await update.message.reply_text(
+        "🤖 NEXUS Active Cores:\n"
+        "• /story   → Qwen (Storytelling)\n"
+        "• /companion → Gemma (Social/Emotion)\n"
+        "• /analyze  → Phi (Logic/Analysis)\n"
+        "Just chat normally for auto-routing."
+    )
