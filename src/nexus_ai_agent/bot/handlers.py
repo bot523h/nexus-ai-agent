@@ -9,8 +9,15 @@ from typing import Any, cast
 from uuid import uuid4
 
 import structlog
-from sqlmodel import select
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
+from sqlmodel import desc, select
+from telegram import (
+    Audio,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    Update,
+    Voice,
+)
 from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
@@ -21,34 +28,36 @@ from telegram.ext import (
 
 from nexus_ai_agent.config.settings import Settings
 from nexus_ai_agent.features.ads import AdManager
-from nexus_ai_agent.features.analytics import AnalyticsEngine
 
 # Feature managers — lazy-initialised inside build_handlers
-
 # ── v2.0.0 imports ──
 from nexus_ai_agent.features.ai_chat import GeminiEngine
-from nexus_ai_agent.features.image_gen import ImageGenEngine
-from nexus_ai_agent.features.speech import SpeechEngine
-from nexus_ai_agent.features.summarizer import SummarizerEngine
-from nexus_ai_agent.features.referral import ReferralEngine
-from nexus_ai_agent.i18n import i18n
-from nexus_ai_agent.storage.unified_cloud import UnifiedCloudStorage
-
+from nexus_ai_agent.features.analytics import AnalyticsEngine
 from nexus_ai_agent.features.anonymous_chat import AnonymousChatManager
 from nexus_ai_agent.features.channel_manager import ChannelManager
 from nexus_ai_agent.features.engagement import EngagementEngine
 from nexus_ai_agent.features.force_join import ForceJoinManager
 from nexus_ai_agent.features.games import NumberGuess, QuickPoll, QuizGame, WordleFA
 from nexus_ai_agent.features.gamification import _ACHIEVEMENTS, GamificationEngine
+from nexus_ai_agent.features.image_gen import ImageGenEngine
 from nexus_ai_agent.features.moderation import ModerationEngine
 from nexus_ai_agent.features.owner_control import OwnerControl, is_owner
 from nexus_ai_agent.features.personality import PersonalityEngine
+from nexus_ai_agent.features.referral import ReferralEngine
+from nexus_ai_agent.features.speech import SpeechEngine
+from nexus_ai_agent.features.summarizer import SummarizerEngine
 from nexus_ai_agent.features.tools import Calculator, ReminderSystem, Translator, UnitConverter
 from nexus_ai_agent.features.viral_engine import ViralEngine
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.orchestration.state import NexusState
 from nexus_ai_agent.presence import PresenceStore
-from nexus_ai_agent.storage.models import Chat, Referral, ReferralCode, User, UserLanguage, CloudFile
+from nexus_ai_agent.storage.models import (
+    Chat,
+    CloudFile,
+    User,
+    UserLanguage,
+)
+from nexus_ai_agent.storage.unified_cloud import UnifiedCloudStorage
 
 from .middleware import AuthMiddleware, RateLimiter
 
@@ -118,10 +127,15 @@ def _base_state(update: Update, text: str, *, persona: str = "gemma") -> NexusSt
     }
 
 
-async def _reply(update: Update, text: str) -> None:
+async def _reply(
+    update: Update,
+    text: str,
+    *,
+    reply_markup: Any = None,
+) -> None:
     message = _message(update)
     if message is not None:
-        await message.reply_text(text)
+        await message.reply_text(text, reply_markup=reply_markup)
 
 
 async def _heartbeat(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -763,17 +777,17 @@ def build_handlers(
     if settings.gemini_api_key:
         gemini_engine = GeminiEngine(api_key=settings.gemini_api_key, model=settings.gemini_model)
     image_engine = ImageGenEngine()
-    speech_engine = SpeechEngine(gemini_api_key=settings.gemini_api_key or "")
+    speech_engine = SpeechEngine(output_dir="data/audio")
     summarizer_engine: SummarizerEngine | None = None
     if settings.gemini_api_key:
-        summarizer_engine = SummarizerEngine(gemini_api_key=settings.gemini_api_key, model=settings.gemini_model)
+        summarizer_engine = SummarizerEngine(
+            gemini_api_key=settings.gemini_api_key, model=settings.gemini_model
+        )
     referral_engine = ReferralEngine(db_path=settings.db_path)
     unified_cloud = UnifiedCloudStorage(
         dropbox_token=settings.dropbox_token,
         pcloud_token=settings.pcloud_token,
         internxt_token=settings.internxt_token,
-        mega_email=settings.mega_email,
-        mega_password=settings.mega_password,
     )
 
     # ── v2.0.0: /ai — AI Chat with Gemini ──
@@ -789,7 +803,11 @@ def build_handlers(
             return
         text = " ".join(context.args) if context.args else ""
         if not text:
-            await _reply(update, "🤖 Gemini AI Chat\n\nUsage: /ai <message>\n\nOther: /ask /code /translate /vision /summarize")
+            await _reply(
+                update,
+                "🤖 Gemini AI Chat\n\nUsage: /ai <message>\n"
+                "Other: /ask /code /translate /vision /summarize",
+            )
             return
         conv_id = f"tg:{user_id}"
         result = await gemini_engine.chat(text, conv_id=conv_id, user_id=user_id)
@@ -820,7 +838,10 @@ def build_handlers(
             return
         text = " ".join(context.args) if context.args else ""
         if not text:
-            await _reply(update, "❌ Usage: /code <description>\nExample: /code Python fibonacci function")
+            await _reply(
+                update,
+                "❌ Usage: /code <description>\nExample: /code Python fibonacci function",
+            )
             return
         result = await gemini_engine.code(text, user_id=user_id)
         await _reply(update, f"💻 {result}")
@@ -835,7 +856,10 @@ def build_handlers(
             return
         text = " ".join(context.args) if context.args else ""
         if not text:
-            await _reply(update, "❌ Usage: /translate <text>\nSpecific target: /translate ja Hello world")
+            await _reply(
+                update,
+                "❌ Usage: /translate <text>\nSpecific target: /translate ja Hello world",
+            )
             return
         target_lang = "fa"
         source_text = text
@@ -844,7 +868,9 @@ def build_handlers(
             if len(parts) == 2 and len(parts[0]) <= 3:
                 target_lang = parts[0]
                 source_text = parts[1].strip()
-        result = await gemini_engine.translate(source_text, target_lang=target_lang, user_id=user_id)
+        result = await gemini_engine.translate(
+            source_text, target_lang=target_lang, user_id=user_id
+        )
         await _reply(update, f"🌐 {result}")
 
     # ── v2.0.0: /vision — Image analysis via Gemini Vision ──
@@ -863,15 +889,22 @@ def build_handlers(
         elif msg and msg.photo:
             photo = msg.photo[-1]
         if photo is None:
-            await _reply(update, "❌ Reply to a photo with /vision\nExample: Reply to photo → /vision What is this?")
+            await _reply(
+                update,
+                "❌ Reply to a photo with /vision\nExample: Reply to photo → /vision What is this?",
+            )
             return
         try:
             file = await photo.get_file()
             image_bytes = await file.download_as_bytearray()
-            import base64
-            b64 = base64.b64encode(bytes(image_bytes)).decode()
-            result = await gemini_engine.vision(b64, prompt=prompt, user_id=user_id)
-            await _reply(update, f"👁 {result}")
+
+            result = await gemini_engine.vision(
+                bytes(image_bytes),
+                question=prompt,
+                user_id=user_id,
+                mime_type="image/jpeg",
+            )
+            await _reply(update, f"🤖 {result}")
         except Exception as exc:  # noqa: BLE001
             await _reply(update, f"❌ Vision error: {exc}")
 
@@ -882,7 +915,14 @@ def build_handlers(
             return
         text = " ".join(context.args) if context.args else ""
         if not text:
-            await _reply(update, "🎨 Image Generation\n\nUsage: /image <description>\nWith style: /image style:anime a cat samurai\nStyles: realistic, anime, digital, oil, watercolor, pixel, 3d, comic, minimal, fantasy")
+            await _reply(
+                update,
+                "🎨 Image Generation\n\n"
+                "Usage: /image <description>\n"
+                "With style: /image style:anime a cat samurai\n"
+                "Styles: realistic, anime, digital, oil, "
+                "watercolor, pixel, 3d, comic, minimal, fantasy",
+            )
             return
         style = "realistic"
         prompt = text
@@ -897,7 +937,10 @@ def build_handlers(
         elif result.get("file_path"):
             msg = _message(update)
             if msg is not None:
-                await msg.reply_photo(photo=open(result["file_path"], "rb"), caption=f"🎨 {prompt[:100]}")
+                await msg.reply_photo(
+                    photo=open(result["file_path"], "rb"),
+                    caption=f"🎨 {prompt[:100]}",
+                )
         else:
             await _reply(update, "❌ Image generation failed.")
 
@@ -908,7 +951,14 @@ def build_handlers(
             return
         text = " ".join(context.args) if context.args else ""
         if not text:
-            await _reply(update, "🔊 Text to Speech\n\nUsage: /tts <text>\nWith language: /tts en Hello world\nLanguages: en, fa, ar, es, fr, de, ru, zh, ja, ko, pt, hi, tr, id, it")
+            await _reply(
+                update,
+                "🔊 Text to Speech\n\n"
+                "Usage: /tts <text>\n"
+                "With language: /tts en Hello world\n"
+                "Languages: en, fa, ar, es, fr, de, ru, zh, "
+                "ja, ko, pt, hi, tr, id, it",
+            )
             return
         lang = "en"
         tts_text = text
@@ -918,7 +968,7 @@ def build_handlers(
         if not tts_text:
             await _reply(update, "❌ Provide text after language code.")
             return
-        result = await speech_engine.text_to_speech(tts_text, lang=lang, user_id=user_id)
+        result = await speech_engine.text_to_speech(tts_text, lang=lang)
         if result.get("error"):
             await _reply(update, f"❌ {result['error']}")
         elif result.get("file_path"):
@@ -937,7 +987,7 @@ def build_handlers(
         if user_id is None:
             return
         msg = _message(update)
-        voice = None
+        voice: Voice | Audio | None = None
         if msg and msg.reply_to_message and msg.reply_to_message.voice:
             voice = msg.reply_to_message.voice
         elif msg and msg.reply_to_message and msg.reply_to_message.audio:
@@ -950,9 +1000,31 @@ def build_handlers(
         try:
             file = await voice.get_file()
             audio_bytes = await file.download_as_bytearray()
-            import base64
-            b64 = base64.b64encode(bytes(audio_bytes)).decode()
-            result = await speech_engine.speech_to_text(b64, mime_type=voice.mime_type or "audio/ogg", user_id=user_id)
+
+            # Save audio to temp file for STT
+            import tempfile
+
+            suffix = ".ogg"
+            if voice.mime_type:
+                mime_ext = {
+                    "audio/ogg": ".ogg",
+                    "audio/mpeg": ".mp3",
+                    "audio/mp4": ".m4a",
+                    "audio/wav": ".wav",
+                    "audio/webm": ".webm",
+                }
+                suffix = mime_ext.get(voice.mime_type, suffix)
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp.write(bytes(audio_bytes))
+                tmp_path = tmp.name
+            result = await speech_engine.speech_to_text(
+                tmp_path,
+                lang="fa",
+                gemini_engine=gemini_engine,
+            )
+            import os
+
+            os.unlink(tmp_path)
             if result.get("error"):
                 await _reply(update, f"❌ {result['error']}")
             else:
@@ -970,7 +1042,13 @@ def build_handlers(
             return
         text = " ".join(context.args) if context.args else ""
         if not text:
-            await _reply(update, "📝 Smart Summarizer\n\nUsage: /summarize <text or URL>\nModes: /summarize mode:detailed <text>\nModes: brief, detailed, key_points, eli5, academic")
+            await _reply(
+                update,
+                "📝 Smart Summarizer\n\n"
+                "Usage: /summarize <text or URL>\n"
+                "Modes: /summarize mode:detailed <text>\n"
+                "Modes: brief, detailed, key_points, eli5, academic",
+            )
             return
         mode = "brief"
         content_text = text
@@ -997,12 +1075,30 @@ def build_handlers(
         elif msg and msg.document:
             doc = msg.document
         if doc is None:
-            await _reply(update, "☁️ Unified Cloud Storage\n\nUpload: Reply to file → /cloud\nFiles: /myfiles\nDownload: /download <name>\nStatus: /cloud_status")
+            await _reply(
+                update,
+                "☁️ Unified Cloud Storage\n\n"
+                "Upload: Reply to file → /cloud\n"
+                "Files: /myfiles\n"
+                "Download: /download <name>\n"
+                "Status: /cloud_status",
+            )
             return
         try:
             file = await doc.get_file()
             file_bytes = await file.download_as_bytearray()
-            result = await unified_cloud.upload_file(doc.file_name or "unnamed", bytes(file_bytes), user_id=user_id)
+            # Save to temp file for cloud upload
+            from pathlib import Path as _Path
+
+            tmp_dir = _Path("data/cloud_tmp")
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+            tmp_path = tmp_dir / (doc.file_name or "unnamed")
+            tmp_path.write_bytes(bytes(file_bytes))
+            result = await unified_cloud.upload_file(
+                tmp_path,
+                remote_key=doc.file_name or "unnamed",
+            )
+            tmp_path.unlink(missing_ok=True)
             if result.get("success"):
                 async with db_session_factory() as session:
                     cloud_file = CloudFile(
@@ -1014,7 +1110,12 @@ def build_handlers(
                     )
                     session.add(cloud_file)
                     await session.commit()
-                await _reply(update, f"☁️ Uploaded!\n📁 {doc.file_name}\n📦 {result.get('provider', 'N/A')}\n📊 {len(file_bytes)/1024:.1f}KB")
+                await _reply(
+                    update,
+                    f"☁️ Uploaded!\n📁 {doc.file_name}\n"
+                    f"📦 {result.get('provider', 'N/A')}\n"
+                    f"📊 {len(file_bytes) / 1024:.1f}KB",
+                )
             else:
                 await _reply(update, f"❌ Upload failed: {result.get('error', 'Unknown')}")
         except Exception as exc:  # noqa: BLE001
@@ -1026,14 +1127,18 @@ def build_handlers(
         if user_id is None:
             return
         async with db_session_factory() as session:
-            stmt = select(CloudFile).where(CloudFile.user_id == user_id).order_by(CloudFile.created_at.desc())
+            stmt = (
+                select(CloudFile)
+                .where(CloudFile.user_id == user_id)
+                .order_by(desc(CloudFile.created_at))
+            )
             files = (await session.exec(stmt)).all()
         if not files:
             await _reply(update, "📁 No files. Reply to file → /cloud to upload.")
             return
         lines = [f"📁 Your Cloud Files ({len(files)}):", "━" * 25]
         for f in files[:20]:
-            lines.append(f"📄 {f.file_name} ({f.file_size/1024:.1f}KB) [{f.provider}]")
+            lines.append(f"📄 {f.file_name} ({f.file_size / 1024:.1f}KB) [{f.provider}]")
         if len(files) > 20:
             lines.append(f"... and {len(files) - 20} more")
         await _reply(update, "\n".join(lines))
@@ -1048,19 +1153,41 @@ def build_handlers(
             await _reply(update, "❌ Usage: /download <filename>")
             return
         async with db_session_factory() as session:
-            stmt = select(CloudFile).where(CloudFile.user_id == user_id, CloudFile.file_name == filename)
+            stmt = select(CloudFile).where(
+                CloudFile.user_id == user_id, CloudFile.file_name == filename
+            )
             cloud_file = (await session.exec(stmt)).first()
         if cloud_file is None:
             await _reply(update, f"❌ File '{filename}' not found.")
             return
-        result = await unified_cloud.download_file(filename, provider=cloud_file.provider)
+        from pathlib import Path as _Path2
+
+        dl_dir = _Path2("data/cloud_downloads")
+        dl_dir.mkdir(parents=True, exist_ok=True)
+        local_path = dl_dir / filename
+        result = await unified_cloud.download_file(
+            cloud_file.remote_path or filename,
+            local_path,
+        )
         if result.get("error"):
             await _reply(update, f"❌ {result['error']}")
         elif result.get("data"):
             import io
+
             msg = _message(update)
             if msg is not None:
-                await msg.reply_document(document=io.BytesIO(result["data"]), filename=filename)
+                await msg.reply_document(
+                    document=io.BytesIO(result["data"]),
+                    filename=filename,
+                )
+        elif local_path.exists():
+            msg = _message(update)
+            if msg is not None:
+                await msg.reply_document(
+                    document=open(local_path, "rb"),
+                    filename=filename,
+                )
+            local_path.unlink(missing_ok=True)
         else:
             await _reply(update, "❌ Download failed.")
 
@@ -1074,16 +1201,15 @@ def build_handlers(
         user_id = _user_id(update)
         if user_id is None:
             return
-        code = await referral_engine.get_or_create_code(user_id)
-        link = await referral_engine.get_referral_link(code, settings.bot_username)
-        stats = await referral_engine.get_referral_stats(user_id)
-        formatted = referral_engine.format_stats(code, link, stats)
+        formatted = referral_engine.format_stats(
+            user_id,
+            settings.bot_username,
+        )
         await _reply(update, formatted)
 
     # ── v2.0.0: /referral_board — Referral leaderboard ──
     async def referral_board_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        board = await referral_engine.get_leaderboard(limit=10)
-        formatted = referral_engine.format_leaderboard(board)
+        formatted = referral_engine.format_leaderboard()
         await _reply(update, formatted)
 
     # ── v2.0.0: /language — Set language preference ──
@@ -1094,6 +1220,7 @@ def build_handlers(
         lang = " ".join(context.args) if context.args else ""
         if not lang:
             from nexus_ai_agent.i18n import SUPPORTED_LANGUAGES
+
             keyboard = []
             row = []
             for code, name in list(SUPPORTED_LANGUAGES.items())[:15]:
@@ -1107,12 +1234,21 @@ def build_handlers(
                 stmt = select(UserLanguage).where(UserLanguage.user_id == user_id)
                 ul = (await session.exec(stmt)).first()
             current = ul.language if ul else "en"
-            await _reply(update, f"🌍 Language\n\nCurrent: {SUPPORTED_LANGUAGES.get(current, current)}\n\nSelect:", reply_markup=InlineKeyboardMarkup(keyboard))
+            await _reply(
+                update,
+                f"🌐 Language\n\nCurrent: {SUPPORTED_LANGUAGES.get(current, current)}\n\nSelect:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
             return
         lang = lang.lower()
         from nexus_ai_agent.i18n import SUPPORTED_LANGUAGES
+
         if lang not in SUPPORTED_LANGUAGES:
-            await _reply(update, f"❌ '{lang}' not supported.\nSupported: {', '.join(SUPPORTED_LANGUAGES.keys())}")
+            supported = ", ".join(SUPPORTED_LANGUAGES.keys())
+            await _reply(
+                update,
+                f"❌ '{lang}' not supported.\nSupported: {supported}",
+            )
             return
         async with db_session_factory() as session:
             stmt = select(UserLanguage).where(UserLanguage.user_id == user_id)
@@ -1120,6 +1256,7 @@ def build_handlers(
             if ul:
                 ul.language = lang
                 from datetime import datetime as _dt
+
                 ul.updated_at = _dt.utcnow()
                 await session.commit()
             else:
@@ -1139,7 +1276,7 @@ def build_handlers(
         user_id = _user_id(update)
         if user_id is None:
             return
-        result = await referral_engine.process_referral(referrer_code=ref_code, referee_id=user_id)
+        result = referral_engine.process_referral(user_id, ref_code)
         if result.get("success"):
             await _reply(update, "🎉 Welcome! Referred by a friend. Enjoy NEXUS AI!")
 
@@ -1621,20 +1758,17 @@ def build_handlers(
 
         elif data == "ai_chat":
             await query.edit_message_text(
-                "💬 چت با AI\n\nاز /ai استفاده کن و پیامت رو بنویس:\n"
-                "مثال: /ai سلام، چطوری؟"
+                "💬 چت با AI\n\nاز /ai استفاده کن و پیامت رو بنویس:\nمثال: /ai سلام، چطوری؟"
             )
 
         elif data == "ai_ask":
             await query.edit_message_text(
-                "❓ سوال بپرس\n\nاز /ask استفاده کن:\n"
-                "مثال: /ask چرا آسمان آبی است؟"
+                "❓ سوال بپرس\n\nاز /ask استفاده کن:\nمثال: /ask چرا آسمان آبی است؟"
             )
 
         elif data == "ai_code":
             await query.edit_message_text(
-                "💻 کدنویسی\n\nاز /code استفاده کن:\n"
-                "مثال: /code پایتون فاکتوریل بنویس"
+                "💻 کدنویسی\n\nاز /code استفاده کن:\nمثال: /code پایتون فاکتوریل بنویس"
             )
 
         elif data == "ai_translate":
@@ -1644,9 +1778,7 @@ def build_handlers(
             )
 
         elif data == "ai_vision":
-            await query.edit_message_text(
-                "👁️ تحلیل تصویر\n\nیک عکس بفرست و /vision رو ریپلی کن"
-            )
+            await query.edit_message_text("👁️ تحلیل تصویر\n\nیک عکس بفرست و /vision رو ریپلی کن")
 
         elif data == "ai_summarize":
             await query.edit_message_text(
@@ -1721,9 +1853,7 @@ def build_handlers(
             )
 
         elif data == "speech_stt":
-            await query.edit_message_text(
-                "🎤 صدا به متن\n\nیک پیام صوتی بفرست و /stt رو ریپلی کن"
-            )
+            await query.edit_message_text("🎤 صدا به متن\n\nیک پیام صوتی بفرست و /stt رو ریپلی کن")
 
         # ── v2.0.0: Cloud Storage Menu ──
         elif data == "menu_cloud":
@@ -1742,25 +1872,18 @@ def build_handlers(
             )
 
         elif data == "cloud_upload":
-            await query.edit_message_text(
-                "📤 آپلود فایل\n\nیک فایل بفرست و /cloud رو ریپلی کن"
-            )
+            await query.edit_message_text("📤 آپلود فایل\n\nیک فایل بفرست و /cloud رو ریپلی کن")
 
         elif data == "cloud_files":
-            await query.edit_message_text(
-                "📂 فایل‌های من\n\nاز /myfiles استفاده کن"
-            )
+            await query.edit_message_text("📂 فایل‌های من\n\nاز /myfiles استفاده کن")
 
         elif data == "cloud_download":
             await query.edit_message_text(
-                "📥 دانلود فایل\n\nاز /download استفاده کن:\n"
-                "مثال: /download myfile.pdf"
+                "📥 دانلود فایل\n\nاز /download استفاده کن:\nمثال: /download myfile.pdf"
             )
 
         elif data == "cloud_status":
-            await query.edit_message_text(
-                "📊 وضعیت ذخیره‌سازی\n\nاز /cloud_status استفاده کن"
-            )
+            await query.edit_message_text("📊 وضعیت ذخیره‌سازی\n\nاز /cloud_status استفاده کن")
 
         # ── v2.0.0: Referral Menu ──
         elif data == "menu_referral":
@@ -1775,14 +1898,10 @@ def build_handlers(
             )
 
         elif data == "ref_link":
-            await query.edit_message_text(
-                "🎁 لینک دعوت\n\nاز /referral استفاده کن"
-            )
+            await query.edit_message_text("🎁 لینک دعوت\n\nاز /referral استفاده کن")
 
         elif data == "ref_board":
-            await query.edit_message_text(
-                "🏆 جدول برترین‌ها\n\nاز /referral_board استفاده کن"
-            )
+            await query.edit_message_text("🏆 جدول برترین‌ها\n\nاز /referral_board استفاده کن")
 
         # ── v2.0.0: Language Menu ──
         elif data == "menu_language":
@@ -1839,16 +1958,26 @@ def build_handlers(
                         session.add(UserLanguage(user_id=user_id, language=lang_code))
                     await session.commit()
             lang_names = {
-                "en": "English 🇬🇧", "fa": "فارسی 🇮🇷", "ar": "العربية 🇸🇦",
-                "es": "Español 🇪🇸", "fr": "Français 🇫🇷", "de": "Deutsch 🇩🇪",
-                "ru": "Русский 🇷🇺", "zh": "中文 🇨🇳", "ja": "日本語 🇯🇵",
-                "ko": "한국어 🇰🇷", "pt": "Português 🇧🇷", "hi": "हिन्दी 🇮🇳",
-                "tr": "Türkçe 🇹🇷", "id": "Indonesia 🇮🇩", "it": "Italiano 🇮🇹",
+                "en": "English 🇬🇧",
+                "fa": "فارسی 🇮🇷",
+                "ar": "العربية 🇸🇦",
+                "es": "Español 🇪🇸",
+                "fr": "Français 🇫🇷",
+                "de": "Deutsch 🇩🇪",
+                "ru": "Русский 🇷🇺",
+                "zh": "中文 🇨🇳",
+                "ja": "日本語 🇯🇵",
+                "ko": "한국어 🇰🇷",
+                "pt": "Português 🇧🇷",
+                "hi": "हिन्दी 🇮🇳",
+                "tr": "Türkçe 🇹🇷",
+                "id": "Indonesia 🇮🇩",
+                "it": "Italiano 🇮🇹",
             }
             lang_display = lang_names.get(lang_code, lang_code)
             await query.edit_message_text(f"✅ زبان انتخابی: {lang_display}")
 
-                elif data == "menu_back":
+        elif data == "menu_back":
             keyboard = [
                 [
                     InlineKeyboardButton("🤖 هوش مصنوعی", callback_data="menu_ai"),
@@ -2750,7 +2879,7 @@ def build_handlers(
         CallbackQueryHandler(menu_callback, pattern=r"^menu_language$"),
         # ── v2.0.0: Referral deep-link ──
         CommandHandler("start", start_referral_handler),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
+        MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
     ]
 
 

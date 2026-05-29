@@ -132,6 +132,12 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("NEXUS_GEMINI_MAX_DAILY", "GEMINI_MAX_DAILY"),
     )
 
+    # v2.0.0: Bot username for referral links
+    bot_username: str = Field(
+        default="nexus_ai_agent_bot",
+        validation_alias=AliasChoices("BOT_USERNAME", "NEXUS_BOT_USERNAME"),
+    )
+
     # ── v2.0.0: Unified Cloud Storage ─────────────────────────────────
     dropbox_token: str | None = Field(
         default=None,

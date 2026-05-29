@@ -1,4 +1,5 @@
 """Referral viral loop system — exponential growth engine with tiered rewards."""
+
 from __future__ import annotations
 
 import hashlib
@@ -6,7 +7,8 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import create_engine as _ce
-from sqlmodel import Field, Session as _Session, SQLModel, select
+from sqlmodel import Field, SQLModel, select
+from sqlmodel import Session as _Session
 
 from nexus_ai_agent.observability.logging import get_logger
 
@@ -62,7 +64,7 @@ class ReferralEngine:
     def _ensure_tables(self) -> None:
         """Create tables if they don't exist."""
         engine = _ce(f"sqlite:///{self._db_path}", echo=False)
-        SQLModel.metadata.create_all(engine, tables=[Referral.__tablename__])
+        SQLModel.metadata.create_all(engine)
 
     def _sync_engine(self) -> Any:
         return _ce(f"sqlite:///{self._db_path}", echo=False)
@@ -77,9 +79,7 @@ class ReferralEngine:
         """Get existing referral code or create one."""
         eng = self._sync_engine()
         with _Session(eng) as s:
-            existing = s.exec(
-                select(ReferralCode).where(ReferralCode.user_id == user_id)
-            ).first()
+            existing = s.exec(select(ReferralCode).where(ReferralCode.user_id == user_id)).first()
             if existing:
                 return existing.code
             code = self.generate_code(user_id)
@@ -121,9 +121,7 @@ class ReferralEngine:
                 return {"success": False, "error": "self_referral"}
 
             # Check if already referred
-            existing = s.exec(
-                select(Referral).where(Referral.referee_id == referee_id)
-            ).first()
+            existing = s.exec(select(Referral).where(Referral.referee_id == referee_id)).first()
             if existing:
                 return {"success": False, "error": "already_referred"}
 
@@ -199,19 +197,21 @@ class ReferralEngine:
         eng = self._sync_engine()
         with _Session(eng) as s:
             codes = s.exec(
-                select(ReferralCode).order_by(  # type: ignore[arg-type]
-                    ReferralCode.successful_referrals.desc()
+                select(ReferralCode).order_by(
+                    ReferralCode.successful_referrals.desc()  # type: ignore[attr-defined]
                 )
             ).all()
             result = []
             for i, rc in enumerate(codes[:limit], 1):
-                result.append({
-                    "rank": i,
-                    "user_id": rc.user_id,
-                    "code": rc.code,
-                    "successful": rc.successful_referrals,
-                    "tier": self._get_current_reward(rc.successful_referrals),
-                })
+                result.append(
+                    {
+                        "rank": i,
+                        "user_id": rc.user_id,
+                        "code": rc.code,
+                        "successful": rc.successful_referrals,
+                        "tier": self._get_current_reward(rc.successful_referrals),
+                    }
+                )
             return result
 
     def format_stats(self, user_id: int, bot_username: str = "nexus_ai_agent_bot") -> str:

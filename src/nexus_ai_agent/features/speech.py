@@ -1,9 +1,9 @@
 """Text-to-Speech (gTTS) and Speech-to-Text (Gemini) integration — free, 100+ languages."""
+
 from __future__ import annotations
 
 import asyncio
 import hashlib
-import os
 from pathlib import Path
 from typing import Any
 
@@ -134,7 +134,9 @@ class SpeechEngine:
             }
             mime_type = mime_map.get(suffix, "audio/mp3")
 
-            prompt = f"Transcribe this audio to text. Language: {lang}. Output only the transcription."
+            prompt = (
+                f"Transcribe this audio to text. Language: {lang}. Output only the transcription."
+            )
             result = await gemini_engine.vision(
                 audio_bytes,
                 question=prompt,

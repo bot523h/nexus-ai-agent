@@ -1,8 +1,9 @@
 """Smart Summarizer — URL / text / file summarization via Gemini AI."""
+
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import httpx
 
@@ -14,8 +15,7 @@ logger = get_logger(__name__)
 
 _SUMMARY_PROMPTS: dict[str, str] = {
     "brief": (
-        "Summarize the following text in 2-3 concise sentences. "
-        "Focus on the key points only."
+        "Summarize the following text in 2-3 concise sentences. Focus on the key points only."
     ),
     "detailed": (
         "Provide a detailed summary of the following text. "
@@ -96,8 +96,7 @@ class SummarizerEngine:
 
         try:
             resp = await self._http.post(
-                f"{self._base_url}/models/{self._model}:generateContent"
-                f"?key={self._api_key}",
+                f"{self._base_url}/models/{self._model}:generateContent?key={self._api_key}",
                 json=payload,
             )
             resp.raise_for_status()
@@ -157,10 +156,7 @@ class SummarizerEngine:
     @staticmethod
     def get_modes() -> list[dict[str, str]]:
         """Return available summary modes."""
-        return [
-            {"id": k, "description": v.split(".")[0]}
-            for k, v in _SUMMARY_PROMPTS.items()
-        ]
+        return [{"id": k, "description": v.split(".")[0]} for k, v in _SUMMARY_PROMPTS.items()]
 
     @staticmethod
     def format_result(result: SummaryResult) -> str:

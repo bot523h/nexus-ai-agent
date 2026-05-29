@@ -11,11 +11,9 @@ Providers:
 
 Total: ~57GB+ unified virtual storage, transparent to the user.
 """
+
 from __future__ import annotations
 
-import asyncio
-import hashlib
-import time
 from pathlib import Path
 from typing import Any
 
@@ -84,7 +82,9 @@ class _DropboxProvider:
         headers = {
             "Authorization": f"Bearer {self._token}",
             "Content-Type": "application/octet-stream",
-            "Dropbox-API-Arg": f'{{"path":"/NEXUS/{remote_key}","mode":"add","autorename":true,"mute":false}}',
+            "Dropbox-API-Arg": (
+                f'{{"path":"/NEXUS/{remote_key}","mode":"add","autorename":true,"mute":false}}'
+            ),
         }
         data = local_path.read_bytes()
         async with httpx.AsyncClient(timeout=120.0) as client:
@@ -123,7 +123,11 @@ class _DropboxProvider:
                     return []
                 data = resp.json()
                 entries = data.get("entries", [])
-                return [e["name"] for e in entries if e.get(".tag") == "file" and e["name"].startswith(prefix)]
+                return [
+                    e["name"]
+                    for e in entries
+                    if e.get(".tag") == "file" and e["name"].startswith(prefix)
+                ]
         except Exception:
             return []
 
@@ -142,7 +146,11 @@ class _DropboxProvider:
                     data = resp.json()
                     return {
                         "used_bytes": data.get("used", 0),
-                        "allocated_bytes": data.get("allocation", {}).get("individual", {}).get("allocated", 2 * 1024**3),
+                        "allocated_bytes": (
+                            data.get("allocation", {})
+                            .get("individual", {})
+                            .get("allocated", 2 * 1024**3)
+                        ),
                     }
         except Exception:
             pass
@@ -205,7 +213,9 @@ class _PcloudProvider:
                     return []
                 data = resp.json()
                 entries = data.get("metadata", {}).get("contents", [])
-                return [e["name"] for e in entries if e.get("isfile") and e["name"].startswith(prefix)]
+                return [
+                    e["name"] for e in entries if e.get("isfile") and e["name"].startswith(prefix)
+                ]
         except Exception:
             return []
 
@@ -412,7 +422,9 @@ class UnifiedCloudStorage:
             # Move preferred provider to front
             preferred_provider = self._provider_names.get(preferred)
             if preferred_provider:
-                candidates = [preferred_provider] + [p for p in candidates if p != preferred_provider]
+                candidates = [preferred_provider] + [
+                    p for p in candidates if p != preferred_provider
+                ]
 
         for provider in candidates:
             if not provider.is_configured():

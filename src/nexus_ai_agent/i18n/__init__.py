@@ -1,4 +1,5 @@
 """Internationalization (i18n) system — multi-language support for NEXUS AI."""
+
 from __future__ import annotations
 
 import json
@@ -33,10 +34,25 @@ SUPPORTED_LANGUAGES: dict[str, str] = {
 
 # Fallback language map for Telegram language_code
 _TELEGRAM_LANG_MAP: dict[str, str] = {
-    "en": "en", "fa": "fa", "ar": "ar", "es": "es", "fr": "fr",
-    "de": "de", "ru": "ru", "zh": "zh", "ja": "ja", "ko": "ko",
-    "pt": "pt", "pt-br": "pt", "hi": "hi", "tr": "tr", "id": "id",
-    "it": "it", "uk": "ru", "ur": "ar", "ms": "id",
+    "en": "en",
+    "fa": "fa",
+    "ar": "ar",
+    "es": "es",
+    "fr": "fr",
+    "de": "de",
+    "ru": "ru",
+    "zh": "zh",
+    "ja": "ja",
+    "ko": "ko",
+    "pt": "pt",
+    "pt-br": "pt",
+    "hi": "hi",
+    "tr": "tr",
+    "id": "id",
+    "it": "it",
+    "uk": "ru",
+    "ur": "ar",
+    "ms": "id",
 }
 
 
@@ -114,7 +130,10 @@ class I18n:
         if not telegram_lang:
             return DEFAULT_LANG
         code = telegram_lang.lower().split("-")[0]
-        return _TELEGRAM_LANG_MAP.get(code, _TELEGRAM_LANG_MAP.get(telegram_lang.lower(), DEFAULT_LANG))
+        result = _TELEGRAM_LANG_MAP.get(
+            code, _TELEGRAM_LANG_MAP.get(telegram_lang.lower(), DEFAULT_LANG)
+        )
+        return result
 
     def format_language_list(self) -> str:
         """Format the list of supported languages for display."""

@@ -1,10 +1,9 @@
 """Google Gemini 2.0 Flash AI integration — free-tier chat, vision, code, translate, summarize."""
+
 from __future__ import annotations
 
-import asyncio
 import time
 from collections import defaultdict
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -126,9 +125,7 @@ class GeminiEngine:
         url = f"{self.BASE_URL}/models/{self._model}:generateContent?key={self._api_key}"
         payload: dict[str, Any] = {"contents": contents}
         if system_instruction:
-            payload["systemInstruction"] = {
-                "parts": [{"text": system_instruction}]
-            }
+            payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
         payload["generationConfig"] = {
             "temperature": 0.9,
             "topP": 0.95,
@@ -193,7 +190,9 @@ class GeminiEngine:
             return "⏳ محدودیت درخواست."
         prompt = f"Translate the following text to {target_lang}:\n\n{text}"
         contents = [{"role": "user", "parts": [{"text": prompt}]}]
-        response = await self._call_gemini(contents, system_instruction=_SYSTEM_PROMPTS["translate"])
+        response = await self._call_gemini(
+            contents, system_instruction=_SYSTEM_PROMPTS["translate"]
+        )
         self._limiter.record(user_id)
         return response
 
@@ -203,7 +202,9 @@ class GeminiEngine:
             return "⏳ محدودیت درخواست."
         prompt = f"Summarize the following text:\n\n{text}"
         contents = [{"role": "user", "parts": [{"text": prompt}]}]
-        response = await self._call_gemini(contents, system_instruction=_SYSTEM_PROMPTS["summarize"])
+        response = await self._call_gemini(
+            contents, system_instruction=_SYSTEM_PROMPTS["summarize"]
+        )
         self._limiter.record(user_id)
         return response
 
