@@ -158,6 +158,25 @@ def build_handlers(
     auth = AuthMiddleware(settings.allowed_user_ids)
     presence_store = presence or PresenceStore()
 
+    async def _get_user_lang(update: Update) -> str:
+        """Retrieve stored language for the user, or auto-detect from Telegram."""
+        uid = _user_id(update)
+        if uid is not None:
+            try:
+                async with db_session_factory() as session:
+                    from nexus_ai_agent.storage.models import UserLanguage
+
+                    existing = (
+                        await session.exec(select(UserLanguage).where(UserLanguage.user_id == uid))
+                    ).first()
+                    if existing is not None:
+                        return existing.language
+            except Exception:
+                pass
+        return i18n.detect_language(
+            update.effective_user.language_code if update.effective_user else None
+        )
+
     async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _ = context
         user_id = _user_id(update)
@@ -168,46 +187,117 @@ def build_handlers(
         if update.effective_chat:
             await _upsert_chat(db_session_factory, _chat_id(update), f"tg:{_chat_id(update)}")
 
-        # ── v2.0.0: Main Menu with Inline Keyboard ──
+        # ── v2.1: Auto-detect user language ──
+        user_lang = i18n.detect_language(
+            update.effective_user.language_code if update.effective_user else None
+        )
+        is_new_user = False
+        # Store detected language for this user
+        if user_id is not None:
+            try:
+                async with db_session_factory() as session:
+                    from sqlmodel import select as _sel
+
+                    from nexus_ai_agent.storage.models import UserLanguage
+
+                    existing = (
+                        await session.exec(
+                            _sel(UserLanguage).where(UserLanguage.user_id == user_id)
+                        )
+                    ).first()
+                    if existing is None:
+                        is_new_user = True
+                        session.add(UserLanguage(user_id=user_id, language=user_lang))
+                        await session.commit()
+            except Exception:
+                pass  # Non-critical: just skip if DB error
+
+        # ── v2.1: Show onboarding for first-time users ──
+        if is_new_user:
+            try:
+                from nexus_ai_agent.features.onboarding import send_onboarding
+
+                await send_onboarding(update, context, user_lang)
+                return
+            except Exception:
+                pass  # Fallback to normal menu if onboarding fails
+
+        # ── v2.1: Main Menu with Inline Keyboard (i18n) ──
         keyboard = [
             [
-                InlineKeyboardButton("🤖 هوش مصنوعی", callback_data="menu_ai"),
-                InlineKeyboardButton("💬 چت هوشمند", callback_data="menu_chat"),
+                InlineKeyboardButton(i18n.t("menu.ai", lang=user_lang), callback_data="menu_ai"),
+                InlineKeyboardButton(
+                    i18n.t("menu.chat", lang=user_lang), callback_data="menu_chat"
+                ),
             ],
             [
-                InlineKeyboardButton("🎨 تصویرسازی", callback_data="menu_image"),
-                InlineKeyboardButton("🔊 صدا", callback_data="menu_speech"),
+                InlineKeyboardButton(
+                    i18n.t("menu.image", lang=user_lang), callback_data="menu_image"
+                ),
+                InlineKeyboardButton(
+                    i18n.t("menu.speech", lang=user_lang), callback_data="menu_speech"
+                ),
             ],
             [
-                InlineKeyboardButton("☁️ فضای ابری", callback_data="menu_cloud"),
-                InlineKeyboardButton("🎁 دعوت دوستان", callback_data="menu_referral"),
+                InlineKeyboardButton(
+                    i18n.t("menu.cloud", lang=user_lang), callback_data="menu_cloud"
+                ),
+                InlineKeyboardButton(
+                    i18n.t("menu.referral", lang=user_lang), callback_data="menu_referral"
+                ),
             ],
             [
-                InlineKeyboardButton("🎮 بازی‌ها", callback_data="menu_games"),
-                InlineKeyboardButton("👤 چت ناشناس", callback_data="menu_anon"),
+                InlineKeyboardButton(
+                    i18n.t("menu.games", lang=user_lang), callback_data="menu_games"
+                ),
+                InlineKeyboardButton(
+                    i18n.t("menu.anon", lang=user_lang), callback_data="menu_anon"
+                ),
             ],
             [
-                InlineKeyboardButton("🛠️ ابزارها", callback_data="menu_tools"),
-                InlineKeyboardButton("🎭 شخصیت", callback_data="menu_personality"),
+                InlineKeyboardButton(
+                    i18n.t("menu.tools", lang=user_lang), callback_data="menu_tools"
+                ),
+                InlineKeyboardButton(
+                    i18n.t("menu.personality", lang=user_lang), callback_data="menu_personality"
+                ),
             ],
             [
-                InlineKeyboardButton("🏆 گیمیفیکیشن", callback_data="menu_gamification"),
-                InlineKeyboardButton("📊 تحلیل", callback_data="menu_analytics"),
+                InlineKeyboardButton(
+                    i18n.t("menu.gamification", lang=user_lang),
+                    callback_data="menu_gamification",
+                ),
+                InlineKeyboardButton(
+                    i18n.t("menu.analytics", lang=user_lang),
+                    callback_data="menu_analytics",
+                ),
             ],
             [
-                InlineKeyboardButton("🛡️ نظارت", callback_data="menu_moderation"),
-                InlineKeyboardButton("🌐 زبان", callback_data="menu_language"),
+                InlineKeyboardButton(
+                    i18n.t("menu.moderation", lang=user_lang),
+                    callback_data="menu_moderation",
+                ),
+                InlineKeyboardButton(
+                    i18n.t("menu.language", lang=user_lang),
+                    callback_data="menu_language",
+                ),
             ],
             [
-                InlineKeyboardButton("⚙️ تنظیمات", callback_data="menu_settings"),
-                InlineKeyboardButton("👨‍💼 پنل مدیریت", callback_data="menu_admin"),
+                InlineKeyboardButton(
+                    i18n.t("menu.settings", lang=user_lang),
+                    callback_data="menu_settings",
+                ),
+                InlineKeyboardButton(
+                    i18n.t("menu.admin", lang=user_lang), callback_data="menu_admin"
+                ),
             ],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         msg = _message(update)
         if msg is not None:
+            welcome_text = i18n.t("start.welcome", lang=user_lang)
             await msg.reply_text(
-                "🤖 NEXUS AI v2.0.0\n\nیکی از گزینه‌ها رو انتخاب کن:",
+                welcome_text,
                 reply_markup=reply_markup,
             )
 
@@ -217,7 +307,8 @@ def build_handlers(
             return
         presence_store.mark_online(user_id)
         context.application.bot_data.setdefault("heartbeat_user_ids", set()).add(user_id)
-        await _reply(update, "✅ You are online. Heartbeat is active.")
+        lang = await _get_user_lang(update)
+        await _reply(update, i18n.t("status.online", lang=lang))
 
     async def disconnect(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user_id = _user_id(update)
@@ -225,7 +316,8 @@ def build_handlers(
             return
         presence_store.mark_offline(user_id)
         context.application.bot_data.setdefault("heartbeat_user_ids", set()).discard(user_id)
-        await _reply(update, "🔌 Disconnected. You are offline.")
+        lang = await _get_user_lang(update)
+        await _reply(update, i18n.t("status.offline", lang=lang))
 
     async def storage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _ = context
@@ -248,75 +340,52 @@ def build_handlers(
 
     async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _ = context
-        await _reply(
-            update,
-            "🤖 NEXUS AI v2.0.0 — راهنما\n\n"
-            "━━━ 🤖 هوش مصنوعی ━━━\n"
-            "/ai <پیام> → چت با Gemini AI\n"
-            "/ask <سوال> → سوال و جواب\n"
-            "/code <کد> → تولید و بررسی کد\n"
-            "/translate <متن> → ترجمه هوشمند\n"
-            "/vision → تحلیل تصویر (ریپلی عکس)\n"
-            "/summarize <متن|URL> → خلاصه‌سازی\n\n"
-            "━━━ 🎨 تصویرسازی ━━━\n"
-            "/image <توصیف> → ساخت تصویر AI\n"
-            "استایل‌ها: realistic, anime, digital-art,\n"
-            "oil-painting, pixel-art, watercolor,\n"
-            "cyberpunk, fantasy, 3d, sketch\n\n"
-            "━━━ 🔊 صدا ━━━\n"
-            "/tts <متن> → متن به صدا\n"
-            "/stt → صدا به متن (ریپلی صدا)\n\n"
-            "━━━ ☁️ فضای ابری ━━━\n"
-            "/cloud → آپلود فایل (ریپلی فایل)\n"
-            "/myfiles → لیست فایل‌ها\n"
-            "/download <نام> → دانلود فایل\n"
-            "/cloud_status → وضعیت ذخیره‌سازی\n\n"
-            "━━━ 🎁 دعوت دوستان ━━━\n"
-            "/referral → لینک دعوت اختصاصی\n"
-            "/referral_board → جدول برترین‌ها\n\n"
-            "━━━ 🌐 زبان ━━━\n"
-            "/language → تغییر زبان ربات\n\n"
-            "━━━ 💬 چت ━━━\n"
-            "هر پیامی بفرست = چت با AI\n"
-            "/persona → شخصیت‌ها\n"
-            "/story /companion /analyze\n\n"
-            "━━━ 👤 ناشناس ━━━\n"
-            "/anon_start /anon_stop /anon_report\n\n"
-            "━━━ 🎮 بازی ━━━\n"
-            "/quiz /guess_start /wordle /poll\n"
-            "/leaderboard /guess_stop /wordle_stop\n\n"
-            "━━━ 📢 کانال ━━━\n"
-            "/post /schedule /ban /unban\n"
-            "/stats /welcome /pin\n\n"
-            "━━━ 🛠 ابزار ━━━\n"
-            "/remind /tr /convert /calc\n\n"
-            "━━━ 🎭 شخصیت ━━━\n"
-            "/personality list|current|set <name>\n\n"
-            "━━━ 🏆 گیمیفیکیشن ━━━\n"
-            "/profile /daily /xp_leaderboard /achievements\n\n"
-            "━━━ 🛡️ نظارت ━━━\n"
-            "/mod_on /mod_off /mod_config\n"
-            "/warn /mute /unmute /reputation\n\n"
-            "━━━ ⚙️ سیستم ━━━\n"
-            "/start → منوی اصلی\n"
-            "/online /disconnect /status\n"
-            "/help → همین پیام",
+        lang = await _get_user_lang(update)
+        help_text = (
+            i18n.t("help.header", lang=lang)
+            + i18n.t("help.ai", lang=lang)
+            + "\n"
+            + i18n.t("help.cloud", lang=lang)
+            + "\n"
+            + i18n.t("help.referral", lang=lang)
+            + "\n"
+            + i18n.t("help.settings", lang=lang)
         )
+        await _reply(update, help_text)
 
     async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _ = context
+        lang = await _get_user_lang(update)
         user_id = _user_id(update)
         online_status = presence_store.is_online(user_id) if user_id is not None else False
         model_loaded = "yes" if settings.model_path and Path(settings.model_path).exists() else "no"
-        await _reply(
-            update,
-            (
-                f"online: {online_status}\n"
-                f"model loaded: {model_loaded}\n"
-                f"db path: {settings.db_path}\n"
-                "memory enabled: yes"
-            ),
+
+        # Gather engine status if available
+        gemini_engine = context.application.bot_data.get("gemini_engine")
+        engine_status = "not configured"
+        rpm_info = ""
+        daily_info = ""
+        convos_info = ""
+        if gemini_engine is not None:
+            status_data = gemini_engine.get_status()
+            engine_status = status_data.get("api_status", "unknown")
+            rpm_info = str(status_data.get("rpm_remaining", "?"))
+            daily_info = str(status_data.get("daily_remaining", "?"))
+            convos_info = str(status_data.get("active_conversations", 0))
+
+        status_text = i18n.t("ai.status", lang=lang).format(
+            model=settings.gemini_model or "N/A",
+            status=engine_status,
+            rpm=rpm_info or "N/A",
+            daily=daily_info or "N/A",
+            convos=convos_info or "0",
         )
+        status_text += (
+            f"\n\n🌐 online: {online_status}"
+            f"\n💾 model loaded: {model_loaded}"
+            f"\n📁 db: {settings.db_path}"
+        )
+        await _reply(update, status_text)
 
     # ── Phase 1: Channel & Group Management ────────────────────────
     channel_mgr = ChannelManager()
@@ -772,10 +841,25 @@ def build_handlers(
         result = calculator.evaluate(expr)
         await _reply(update, result)
 
-    # ── v2.0.0: Gemini AI Engine ──────────────────────────────────────
+    # ── v2.1: Feature engines (initialized in app.py, fallback here) ──
+    from nexus_ai_agent.features.conversation_store import ConversationStore
+    from nexus_ai_agent.features.request_queue import GeminiRequestQueue
+
+    conv_store = ConversationStore(db_path=settings.db_path)
+    request_queue = GeminiRequestQueue(
+        max_rpm=settings.gemini_max_rpm,
+        max_daily=settings.gemini_max_daily,
+    )
     gemini_engine: GeminiEngine | None = None
     if settings.gemini_api_key:
-        gemini_engine = GeminiEngine(api_key=settings.gemini_api_key, model=settings.gemini_model)
+        gemini_engine = GeminiEngine(
+            api_key=settings.gemini_api_key,
+            model=settings.gemini_model,
+            max_rpm=settings.gemini_max_rpm,
+            max_daily=settings.gemini_max_daily,
+            conversation_store=conv_store,
+            request_queue=request_queue,
+        )
     image_engine = ImageGenEngine()
     speech_engine = SpeechEngine(output_dir="data/audio")
     summarizer_engine: SummarizerEngine | None = None
@@ -789,6 +873,9 @@ def build_handlers(
         pcloud_token=settings.pcloud_token,
         internxt_token=settings.internxt_token,
     )
+
+    # ── v2.1: i18n for handler strings ──
+    from nexus_ai_agent.i18n import i18n
 
     # ── v2.0.0: /ai — AI Chat with Gemini ──
     async def ai_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1279,6 +1366,34 @@ def build_handlers(
         result = referral_engine.process_referral(user_id, ref_code)
         if result.get("success"):
             await _reply(update, "🎉 Welcome! Referred by a friend. Enjoy NEXUS AI!")
+
+    # ── v2.1: /newchat — Clear conversation and start fresh ──
+    async def newchat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        conv_id = f"tg:{user_id}"
+        if gemini_engine is not None:
+            gemini_engine.clear_history(conv_id)
+        await _reply(
+            update,
+            i18n.t(
+                "chat.new_session",
+                lang=i18n.detect_language(
+                    update.effective_user.language_code if update.effective_user else None
+                ),
+            ),
+        )
+
+    async def onboarding_callback_handler(
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+    ) -> None:
+        """Handle onboarding inline button presses."""
+        from nexus_ai_agent.features.onboarding import handle_onboarding_callback
+
+        lang = await _get_user_lang(update)
+        await handle_onboarding_callback(update, context, lang)
 
     # ── Phase 5: Inline Keyboard Menu Callbacks ────────────────────
 
@@ -2870,6 +2985,10 @@ def build_handlers(
         CommandHandler("referral_board", referral_board_cmd),
         # ── v2.0.0: Language ──
         CommandHandler("language", language_cmd),
+        # ── v2.1: New Chat ──
+        CommandHandler("newchat", newchat_cmd),
+        # ── v2.1: Onboarding callbacks ──
+        CallbackQueryHandler(onboarding_callback_handler, pattern=r"^onboarding_"),
         CallbackQueryHandler(menu_callback, pattern=r"^lang_"),
         CallbackQueryHandler(menu_callback, pattern=r"^menu_ai$"),
         CallbackQueryHandler(menu_callback, pattern=r"^menu_image$"),

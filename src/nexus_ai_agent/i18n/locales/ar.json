@@ -12,5 +12,18 @@
   "language.set": "✅ تم تغيير اللغة إلى: {lang}",
   "error.access_denied": "⛔ الوصول مرفوض",
   "status.online": "✅ أنت متصل.",
-  "status.offline": "🔌 تم قطع الاتصال."
+  "status.offline": "🔌 تم قطع الاتصال.",
+  "chat.new_session": "🆕 بدأت محادثة جديدة! تم مسح سجل المحادثة.",
+  "start.welcome": "🤖 NEXUS AI v2.1\n\nاختر خيارًا:",
+  "start.language_detected": "🌐 تم اكتشاف اللغة تلقائيًا: {lang}",
+  "onboarding.welcome": "👋 به NEXUS AI خوش آمدید!\n\nمن دستیار هوش مصنوعی شما هستم — با قدرت Google Gemini 2.0 Flash کاملاً رایگان!",
+  "onboarding.features": "✨ قابلیت‌های من:\n\n🤖 **چت هوشمند** — مکالمه با هوش مصنوعی\n🎨 **ساخت عکس** — خلق تصاویر AI\n🔊 **صدا** — متن به صدا و صدا به متن\n☁️ **فضای ابری** — آپلود و مدیریت فایل\n🔗 **دعوت** — دعوت از دوستان\n🎮 **بازی** — کوییز، وردل و بیشتر",
+  "onboarding.try_ai": "👇 برای شروع یکی از اینها رو امتحان کن:",
+  "onboarding.btn_ai": "🤖 چت AI",
+  "onboarding.btn_image": "🎨 ساخت عکس",
+  "onboarding.btn_explore": "🗺️ همه قابلیت‌ها",
+  "onboarding.ai_hint": "💡 *نکته:* هر پیامی بفرستی، AI جوابت رو میده!\n\nهمچنین:\n• `/ask <سوال>` — سوال سریع\n• `/code <کد>` — بررسی کد\n• `/translate <متن>` — ترجمه هوشمند",
+  "onboarding.image_hint": "💡 *نکته:* با `/image <توضیح>` عکس بساز!\n\nمثال: `/image یک گربه در فضا digital-art`\n\nاستایل‌ها: realistic, anime, digital-art, oil-painting, pixel-art, watercolor, cyberpunk, fantasy, 3d, sketch",
+  "onboarding.go_chat": "💬 پیامت رو بفرست و چت رو شروع کن!",
+  "onboarding.explore_hint": "🗺️ **همه دستورات:**\n\n🤖 `/ai` — چت با Gemini\n🎨 `/image` — ساخت عکس\n🔊 `/tts` — متن به صدا\n☁️ `/cloud` — آپلود فایل\n🔗 `/referral` — دعوت دوستان\n🎮 `/quiz` — بازی\n🌐 `/language` — تغییر زبان\n❓ `/help` — لیست کامل دستورات"
 }

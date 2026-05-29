@@ -1,1 +1,25 @@
-{"bot.name":"NEXUS AI","menu.title":"🤖 NEXUS AI v2.0.0","menu.chat":"💬 Smart Chat","menu.ai":"🤖 AI","menu.settings":"⚙️ Settings","chat.welcome":"Send a message and NEXUS AI will respond!","ai.activated":"🤖 AI Mode Activated!\n\nGoogle Gemini 2.0 Flash (Free)\n\nSend a message to start!","language.set":"✅ Language changed: {lang}","status.online":"✅ Online","status.offline":"🔌 Disconnected"}
+{
+  "bot.name": "NEXUS AI",
+  "menu.title": "🤖 NEXUS AI v2.0.0",
+  "menu.chat": "💬 Smart Chat",
+  "menu.ai": "🤖 AI",
+  "menu.settings": "⚙️ Settings",
+  "chat.welcome": "Send a message and NEXUS AI will respond!",
+  "ai.activated": "🤖 AI Mode Activated!\n\nGoogle Gemini 2.0 Flash (Free)\n\nSend a message to start!",
+  "language.set": "✅ Language changed: {lang}",
+  "status.online": "✅ Online",
+  "status.offline": "🔌 Disconnected",
+  "chat.new_session": "🆕 नया चैट सेशन शुरू! इतिहास साफ़ किया गया।",
+  "start.welcome": "🤖 NEXUS AI v2.1\n\nएक विकल्प चुनें:",
+  "start.language_detected": "🌐 भाषा स्वतः पहचानी गई: {lang}",
+  "onboarding.welcome": "👋 Welcome to NEXUS AI!\n\nI'm your all-in-one AI assistant powered by Google Gemini 2.0 Flash — completely FREE!",
+  "onboarding.features": "✨ Here's what I can do:\n\n🤖 **Smart Chat** — Conversations with AI\n🎨 **Image Generation** — Create AI artwork\n🔊 **Voice** — Text-to-speech & speech-to-text\n☁️ **Cloud Storage** — Upload & manage files\n🔗 **Referral** — Invite friends\n🎮 **Games** — Quiz, Wordle, and more",
+  "onboarding.try_ai": "👇 Try one of these to get started:",
+  "onboarding.btn_ai": "🤖 Try AI Chat",
+  "onboarding.btn_image": "🎨 Generate Image",
+  "onboarding.btn_explore": "🗺️ Explore All Features",
+  "onboarding.ai_hint": "💡 *Quick tip:* Just type any message and I'll respond with AI!\n\nYou can also use:\n• `/ask <question>` — Quick Q&A\n• `/code <code>` — Code review\n• `/translate <text>` — Smart translation",
+  "onboarding.image_hint": "💡 *Quick tip:* Use `/image <description>` to generate images!\n\nTry: `/image a cat in space digital-art`\n\nStyles: realistic, anime, digital-art, oil-painting, pixel-art, watercolor, cyberpunk, fantasy, 3d, sketch",
+  "onboarding.go_chat": "💬 Send any message to start chatting!",
+  "onboarding.explore_hint": "🗺️ **All Commands:**\n\n🤖 `/ai` — Chat with Gemini\n🎨 `/image` — Generate images\n🔊 `/tts` — Text to speech\n☁️ `/cloud` — Upload files\n🔗 `/referral` — Invite friends\n🎮 `/quiz` — Play games\n🌐 `/language` — Change language\n❓ `/help` — Full command list"
+}

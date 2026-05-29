@@ -68,3 +68,18 @@ disallow_untyped_defs = true
 no_implicit_optional = true
 strict_equality = true
 show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = [
+    "llama_cpp",
+    "gtts",
+    "sentence_transformers",
+    "langgraph",
+    "langgraph.checkpoint.sqlite",
+    "langchain_community",
+    "mega",
+    "sqlite_vec",
+    "telegram",
+    "telegram.ext",
+]
+ignore_missing_imports = true

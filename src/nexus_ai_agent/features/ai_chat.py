@@ -1,4 +1,10 @@
-"""Google Gemini 2.0 Flash AI integration — free-tier chat, vision, code, translate, summarize."""
+"""Google Gemini 2.0 Flash AI integration — free-tier chat, vision, code, translate, summarize.
+
+v2.1 improvements:
+  - Persistent conversation history via ConversationStore (survives restarts)
+  - Smart request queue integration (GeminiRequestQueue) for fair 15 RPM sharing
+  - Fallback response when rate-limited or API unavailable
+"""
 
 from __future__ import annotations
 
@@ -84,7 +90,11 @@ class _RateLimiter:
 
 
 class GeminiEngine:
-    """Google Gemini 2.0 Flash API client with rate limiting and conversation memory."""
+    """Google Gemini 2.0 Flash API client with rate limiting and conversation memory.
+
+    v2.1: Supports optional ConversationStore for persistent history
+    and optional GeminiRequestQueue for fair request scheduling.
+    """
 
     BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
@@ -95,24 +105,56 @@ class GeminiEngine:
         max_rpm: int = 15,
         max_daily: int = 1500,
         max_history: int = 20,
+        conversation_store: Any | None = None,
+        request_queue: Any | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
         self._limiter = _RateLimiter(max_rpm=max_rpm, max_daily=max_daily)
         self._max_history = max_history
-        # conversation_id -> list of {role, parts}
+        # conversation_id -> list of {role, parts}  (in-memory fallback)
         self._history: dict[str, list[dict[str, Any]]] = {}
+        # v2.1: persistent store (optional)
+        self._store = conversation_store
+        # v2.1: request queue (optional)
+        self._queue = request_queue
 
     @property
     def is_configured(self) -> bool:
         return bool(self._api_key)
 
+    @property
+    def queue(self) -> Any:
+        """Access the request queue (if configured)."""
+        return self._queue
+
     def _get_history(self, conv_id: str) -> list[dict[str, Any]]:
+        """Get conversation history — from persistent store if available, else in-memory."""
+        if self._store is not None:
+            return self._store.get_history(conv_id, limit=self._max_history)
+        # Fallback: in-memory
         if conv_id not in self._history:
             self._history[conv_id] = []
         return self._history[conv_id]
 
+    def _append_to_history(self, conv_id: str, message: dict[str, Any]) -> None:
+        """Append a message to conversation history — persistent store if available."""
+        if self._store is not None:
+            self._store.append(conv_id, message)
+            # Trim to limit
+            self._store.trim_to_limit(conv_id, limit=self._max_history)
+        else:
+            # In-memory fallback
+            if conv_id not in self._history:
+                self._history[conv_id] = []
+            self._history[conv_id].append(message)
+            while len(self._history[conv_id]) > self._max_history:
+                self._history[conv_id].pop(0)
+
     def clear_history(self, conv_id: str) -> None:
+        """Clear conversation history for a given conv_id."""
+        if self._store is not None:
+            self._store.clear(conv_id)
         self._history.pop(conv_id, None)
 
     async def _call_gemini(
@@ -161,17 +203,39 @@ class GeminiEngine:
                 f"باقیمانده دقیقه‌ای: {rem['rpm_remaining']}\n"
                 f"باقیمانده روزانه: {rem['daily_remaining']}"
             )
-        history = self._get_history(conv_id)
+
+        # If a request queue is configured, use it for fair scheduling
+        if self._queue is not None:
+            from nexus_ai_agent.features.request_queue import Priority
+
+            result = await self._queue.submit(
+                lambda: self._do_chat(text, conv_id=conv_id, user_id=user_id, mode=mode),
+                user_id=user_id,
+                priority=Priority.NORMAL,
+            )
+            return result
+
+        return await self._do_chat(text, conv_id=conv_id, user_id=user_id, mode=mode)
+
+    async def _do_chat(
+        self,
+        text: str,
+        *,
+        conv_id: str,
+        user_id: int,
+        mode: str = "chat",
+    ) -> str:
+        """Internal: perform the actual chat call."""
+        history = list(self._get_history(conv_id))
         # Add user message
         user_part: dict[str, Any] = {"role": "user", "parts": [{"text": text}]}
         history.append(user_part)
-        # Trim history
-        while len(history) > self._max_history:
-            history.pop(0)
         system_prompt = _SYSTEM_PROMPTS.get(mode, _SYSTEM_PROMPTS["chat"])
         response = await self._call_gemini(history, system_instruction=system_prompt)
-        # Save assistant response
-        history.append({"role": "model", "parts": [{"text": response}]})
+        # Save to history
+        self._append_to_history(conv_id, user_part)
+        assistant_part = {"role": "model", "parts": [{"text": response}]}
+        self._append_to_history(conv_id, assistant_part)
         self._limiter.record(user_id)
         return response
 
@@ -179,9 +243,22 @@ class GeminiEngine:
         """One-shot question — no conversation memory."""
         if not self._limiter.is_allowed(user_id):
             return "⏳ محدودیت درخواست. لطفاً کمی صبر کنید."
+
+        if self._queue is not None:
+            from nexus_ai_agent.features.request_queue import Priority
+
+            return await self._queue.submit(
+                lambda: self._do_one_shot(text, system=_SYSTEM_PROMPTS["chat"]),
+                user_id=user_id,
+                priority=Priority.NORMAL,
+            )
+
+        return await self._do_one_shot(text, system=_SYSTEM_PROMPTS["chat"])
+
+    async def _do_one_shot(self, text: str, *, system: str) -> str:
+        """Internal: one-shot Gemini call."""
         contents = [{"role": "user", "parts": [{"text": text}]}]
-        response = await self._call_gemini(contents, system_instruction=_SYSTEM_PROMPTS["chat"])
-        self._limiter.record(user_id)
+        response = await self._call_gemini(contents, system_instruction=system)
         return response
 
     async def translate(self, text: str, *, target_lang: str, user_id: int) -> str:
@@ -251,11 +328,20 @@ class GeminiEngine:
 
     def get_status(self) -> str:
         """Get engine status info."""
+        active_convos = (
+            self._store.active_conversations() if self._store is not None else len(self._history)
+        )
+        queue_info = ""
+        if self._queue is not None:
+            qs = self._queue.get_status()
+            queue_info = f"\n📋 صف درخواست: {qs['queue_size']} در انتظار"
         return (
             f"🤖 Gemini AI Engine\n"
-            f"━━━━━━━━━━━━━━━━━\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
             f"📋 مدل: {self._model}\n"
             f"🔑 API: {'✅ متصل' if self.is_configured else '❌ تنظیم نشده'}\n"
             f"📊 محدودیت: {self._limiter._max_rpm} RPM / {self._limiter._max_daily} روزانه\n"
-            f"💬 مکالمات فعال: {len(self._history)}"
+            f"💬 مکالمات فعال: {active_convos}"
+            + ("\n💾 ذخیره‌سازی: دائمی (SQLite)" if self._store else "\n💾 ذخیره‌سازی: حافظه موقت")
+            + f"{queue_info}"
         )

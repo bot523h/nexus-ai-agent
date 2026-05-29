@@ -1,1 +1,25 @@
-{"bot.name":"NEXUS AI","menu.title":"🤖 NEXUS AI v2.0.0\n\n옵션을 선택하세요:","menu.chat":"💬 스마트 채팅","menu.ai":"🤖 AI","menu.settings":"⚙️ 설정","chat.welcome":"메시지를 보내면 NEXUS AI가 답장합니다!","ai.activated":"🤖 AI 모드 활성화!\n\nGoogle Gemini 2.0 Flash (무료)\n\n메시지를 보내 시작하세요!","language.set":"✅ 언어 변경: {lang}","status.online":"✅ 온라인","status.offline":"🔌 오프라인"}
+{
+  "bot.name": "NEXUS AI",
+  "menu.title": "🤖 NEXUS AI v2.0.0\n\n옵션을 선택하세요:",
+  "menu.chat": "💬 스마트 채팅",
+  "menu.ai": "🤖 AI",
+  "menu.settings": "⚙️ 설정",
+  "chat.welcome": "메시지를 보내면 NEXUS AI가 답장합니다!",
+  "ai.activated": "🤖 AI 모드 활성화!\n\nGoogle Gemini 2.0 Flash (무료)\n\n메시지를 보내 시작하세요!",
+  "language.set": "✅ 언어 변경: {lang}",
+  "status.online": "✅ 온라인",
+  "status.offline": "🔌 오프라인",
+  "chat.new_session": "🆕 새 채팅 세션이 시작되었습니다! 대화 기록이 지워졌습니다.",
+  "start.welcome": "🤖 NEXUS AI v2.1\n\n옵션을 선택하세요:",
+  "start.language_detected": "🌐 언어가 자동으로 감지되었습니다: {lang}",
+  "onboarding.welcome": "👋 Welcome to NEXUS AI!\n\nI'm your all-in-one AI assistant powered by Google Gemini 2.0 Flash — completely FREE!",
+  "onboarding.features": "✨ Here's what I can do:\n\n🤖 **Smart Chat** — Conversations with AI\n🎨 **Image Generation** — Create AI artwork\n🔊 **Voice** — Text-to-speech & speech-to-text\n☁️ **Cloud Storage** — Upload & manage files\n🔗 **Referral** — Invite friends\n🎮 **Games** — Quiz, Wordle, and more",
+  "onboarding.try_ai": "👇 Try one of these to get started:",
+  "onboarding.btn_ai": "🤖 Try AI Chat",
+  "onboarding.btn_image": "🎨 Generate Image",
+  "onboarding.btn_explore": "🗺️ Explore All Features",
+  "onboarding.ai_hint": "💡 *Quick tip:* Just type any message and I'll respond with AI!\n\nYou can also use:\n• `/ask <question>` — Quick Q&A\n• `/code <code>` — Code review\n• `/translate <text>` — Smart translation",
+  "onboarding.image_hint": "💡 *Quick tip:* Use `/image <description>` to generate images!\n\nTry: `/image a cat in space digital-art`\n\nStyles: realistic, anime, digital-art, oil-painting, pixel-art, watercolor, cyberpunk, fantasy, 3d, sketch",
+  "onboarding.go_chat": "💬 Send any message to start chatting!",
+  "onboarding.explore_hint": "🗺️ **All Commands:**\n\n🤖 `/ai` — Chat with Gemini\n🎨 `/image` — Generate images\n🔊 `/tts` — Text to speech\n☁️ `/cloud` — Upload files\n🔗 `/referral` — Invite friends\n🎮 `/quiz` — Play games\n🌐 `/language` — Change language\n❓ `/help` — Full command list"
+}

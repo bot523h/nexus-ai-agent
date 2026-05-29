@@ -1,4 +1,8 @@
-"""Free AI image generation via Pollinations.ai — no API key required."""
+"""Free AI image generation via Pollinations.ai — no API key required.
+
+v2.1: Added image cache — same prompt+style returns cached result within
+1 hour, saving API calls and reducing latency for popular requests.
+"""
 
 from __future__ import annotations
 
@@ -40,6 +44,41 @@ SIZES: dict[str, str] = {
 # Rate limiting: max 1 request per user per 30 seconds
 _last_request: dict[int, float] = {}
 
+# ── v2.1: Image cache ──────────────────────────────────────────────
+# Cache key: hash(prompt+style+size) → (filepath, timestamp)
+_image_cache: dict[str, tuple[str, float]] = {}
+_CACHE_TTL = 3600  # 1 hour
+
+
+def _cache_key(prompt: str, style: str, size: str) -> str:
+    """Generate a deterministic cache key."""
+    raw = f"{prompt}||{style}||{size}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _check_cache(prompt: str, style: str, size: str) -> str | None:
+    """Return cached image path if available and not expired."""
+    key = _cache_key(prompt, style, size)
+    entry = _image_cache.get(key)
+    if entry is None:
+        return None
+    filepath, ts = entry
+    if time.monotonic() - ts > _CACHE_TTL:
+        # Expired
+        _image_cache.pop(key, None)
+        return None
+    if not Path(filepath).exists():
+        # File was deleted
+        _image_cache.pop(key, None)
+        return None
+    return filepath
+
+
+def _store_cache(prompt: str, style: str, size: str, filepath: str) -> None:
+    """Store an image in the cache."""
+    key = _cache_key(prompt, style, size)
+    _image_cache[key] = (filepath, time.monotonic())
+
 
 def _check_rate_limit(user_id: int, cooldown: float = 30.0) -> bool:
     """Return True if user can make a request."""
@@ -60,7 +99,10 @@ def _rate_limit_remaining(user_id: int, cooldown: float = 30.0) -> int:
 
 
 class ImageGenEngine:
-    """Pollinations.ai free image generation — zero cost, no API key."""
+    """Pollinations.ai free image generation — zero cost, no API key.
+
+    v2.1: Includes image caching for repeated prompts.
+    """
 
     BASE_URL = "https://image.pollinations.ai/prompt"
 
@@ -81,6 +123,20 @@ class ImageGenEngine:
 
         Returns dict with keys: success, path, prompt, style, size, error.
         """
+        # v2.1: Check cache first (skip for seeded requests — they should be unique)
+        if seed is None:
+            cached = _check_cache(prompt, style, size)
+            if cached is not None:
+                log.info("image_cache_hit", prompt=prompt, style=style)
+                return {
+                    "success": True,
+                    "path": cached,
+                    "prompt": prompt,
+                    "style": style,
+                    "size": size,
+                    "error": None,
+                }
+
         if not _check_rate_limit(user_id):
             remaining = _rate_limit_remaining(user_id)
             return {
@@ -131,6 +187,11 @@ class ImageGenEngine:
                 filepath = self._output_dir / filename
                 filepath.write_bytes(resp.content)
                 log.info("image_generated", prompt=prompt, style=style, size=len(resp.content))
+
+                # v2.1: Store in cache
+                if seed is None:
+                    _store_cache(prompt, style, size, str(filepath))
+
                 return {
                     "success": True,
                     "path": str(filepath),
@@ -161,7 +222,7 @@ class ImageGenEngine:
 
     def list_styles(self) -> str:
         """Return formatted list of available styles."""
-        lines = ["🎨 استایل‌های موجود:\n━━━━━━━━━━━━━━━━━"]
+        lines = ["🎨 استایل‌های موجود:\n━━━━━━━━━━━━━━━━━━"]
         for key, desc in STYLES.items():
             lines.append(f"  • {key} — {desc.split(',')[0].strip()}")
         lines.append("\n💡 استفاده: /image <توضیح> --style <استایل>")
@@ -171,12 +232,14 @@ class ImageGenEngine:
     def get_status(self) -> str:
         """Get engine status."""
         img_count = len(list(self._output_dir.glob("*.png")))
+        cache_count = len(_image_cache)
         return (
             f"🎨 Image Generation Engine\n"
-            f"━━━━━━━━━━━━━━━━━\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
             f"🌐 سرویس: Pollinations.ai (رایگان)\n"
             f"💰 هزینه: ۰\n"
             f"🔑 API Key: لازم نیست\n"
             f"🖼️ عکس‌های تولیدشده: {img_count}\n"
+            f"📦 کش فعال: {cache_count} تصویر\n"
             f"📐 سایز: 1024x1024 پیش‌فرض"
         )
