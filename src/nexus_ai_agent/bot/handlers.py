@@ -30,6 +30,7 @@ from nexus_ai_agent.features.games import NumberGuess, QuickPoll, QuizGame, Word
 from nexus_ai_agent.features.owner_control import OwnerControl, is_owner
 from nexus_ai_agent.features.personality import PersonalityEngine
 from nexus_ai_agent.features.tools import Calculator, ReminderSystem, Translator, UnitConverter
+from nexus_ai_agent.features.viral_engine import ViralEngine
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.orchestration.state import NexusState
 from nexus_ai_agent.presence import PresenceStore
@@ -1173,6 +1174,75 @@ def build_handlers(
         """Send a random group event prompt."""
         await _reply(update, EngagementEngine.get_event())
 
+    # ── Phase 11: Viral Content Engine ──────────────────────────────────────────
+
+    async def viral_now_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Generate and post a viral content now (owner only)."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        text = ViralEngine.generate_post()
+        score = ViralEngine.calculate_viral_score(text)
+        if "#" not in text:
+            tags = ViralEngine.auto_hashtags(text)
+            text = f"{text}\n\n{tags}"
+            score = ViralEngine.calculate_viral_score(text)
+        chat_id = _chat_id(update)
+        ViralEngine.save_post(chat_id, text, viral_score=score)
+        await _reply(
+            update,
+            f"🔥 پست وایرال تولید شد!\n\n{text}\n\n📊 امتیاز وایرال: {score:.1f}/10",
+        )
+
+    async def viral_preview_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Preview a viral post without sending (owner only)."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        text = ViralEngine.generate_post()
+        score = ViralEngine.calculate_viral_score(text)
+        if "#" not in text:
+            tags = ViralEngine.auto_hashtags(text)
+            text = f"{text}\n\n{tags}"
+            score = ViralEngine.calculate_viral_score(text)
+        await _reply(
+            update,
+            f"👁 پیش‌نمایش پست وایرال:\n\n{text}\n\n"
+            f"📊 امتیاز وایرال: {score:.1f}/10\n\n"
+            "✅ /viral_now برای ارسال\n📋 /viral_schedule برای زمان‌بندی",
+        )
+
+    async def viral_stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show viral engine statistics (owner only)."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        chat_id = _chat_id(update)
+        stats = ViralEngine.get_stats(chat_id)
+        await _reply(
+            update,
+            f"📊 آمار موتور وایرال\n━━━━━━━━━━━━━━━━━━\n"
+            f"📝 کل: {stats['total']}\n"
+            f"⏳ در انتظار: {stats['pending']}\n"
+            f"✅ ارسال شده: {stats['posted']}\n"
+            f"❌ ناموفق: {stats['failed']}",
+        )
+
+    async def viral_post_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show pending viral posts (owner only)."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        chat_id = _chat_id(update)
+        pending = ViralEngine.get_pending_posts(chat_id, limit=5)
+        if not pending:
+            await _reply(update, "📋 هیچ پست وایرال در انتظاری وجود ندارد.")
+            return
+        lines = ["📋 پست‌های وایرال در انتظار:\n━━━━━━━━━━━━━━━━━━"]
+        for p in pending:
+            lines.append(f"#{p['id']} | امتیاز: {p['viral_score']:.1f} | {p['text'][:60]}...")
+        await _reply(update, "\n".join(lines))
+
     return [
         CommandHandler("start", start),
         CommandHandler("online", online),
@@ -1237,6 +1307,11 @@ def build_handlers(
         CommandHandler("challenge", challenge_cmd),
         CommandHandler("joke", joke_cmd),
         CommandHandler("event", event_cmd),
+        # Phase 11: Viral Content Engine
+        CommandHandler("viral_now", viral_now_cmd),
+        CommandHandler("viral_preview", viral_preview_cmd),
+        CommandHandler("viral_stats", viral_stats_cmd),
+        CommandHandler("viral_post", viral_post_cmd),
         MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
     ]
 
