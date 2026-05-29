@@ -138,6 +138,40 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("BOT_USERNAME", "NEXUS_BOT_USERNAME"),
     )
 
+    # ── v3.0.0: Knowledge System ──────────────────────────────────────
+    knowledge_cache_path: str = Field(
+        default="data/knowledge_cache.sqlite",
+        validation_alias=AliasChoices("KNOWLEDGE_CACHE_PATH", "NEXUS_KNOWLEDGE_CACHE_PATH"),
+    )
+    wiki_cache_path: str = Field(
+        default="data/wiki_cache.sqlite",
+        validation_alias=AliasChoices("WIKI_CACHE_PATH", "NEXUS_WIKI_CACHE_PATH"),
+    )
+    news_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("NEWS_API_KEY", "NEXUS_NEWS_API_KEY"),
+    )
+    youtube_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("YOUTUBE_API_KEY", "NEXUS_YOUTUBE_API_KEY"),
+    )
+    auto_update: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("AUTO_UPDATE", "NEXUS_AUTO_UPDATE"),
+    )
+    health_check_interval: int = Field(
+        default=60,
+        validation_alias=AliasChoices("HEALTH_CHECK_INTERVAL", "NEXUS_HEALTH_CHECK_INTERVAL"),
+    )
+    max_ram_mb: int = Field(
+        default=1500,
+        validation_alias=AliasChoices("MAX_RAM_MB", "NEXUS_MAX_RAM_MB"),
+    )
+    feedback_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("FEEDBACK_ENABLED", "NEXUS_FEEDBACK_ENABLED"),
+    )
+
     # ── v2.0.0: Unified Cloud Storage ─────────────────────────────────
     dropbox_token: str | None = Field(
         default=None,

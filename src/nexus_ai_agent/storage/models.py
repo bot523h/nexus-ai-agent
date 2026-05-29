@@ -289,3 +289,19 @@ class CloudFile(SQLModel, table=True):
     remote_path: str = Field(default="")
     file_size: int = Field(default=0)
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+# ── v3.0.0 models ────────────────────────────────────────────────────────
+
+
+class KnowledgeCache(SQLModel, table=True):
+    """Cached knowledge entries from Wikipedia, web, and Gemini summaries."""
+
+    __table_args__ = {"extend_existing": True}
+
+    id: int | None = Field(default=None, primary_key=True)
+    query: str = Field(index=True)
+    source: str = Field(index=True)  # wikipedia | web | gemini | knowledge_manager
+    content: str
+    expires_at: datetime = Field(index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)

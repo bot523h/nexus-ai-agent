@@ -1399,6 +1399,109 @@ def build_handlers(
             ),
         )
 
+    # ── v3.0.0: Knowledge Commands ─────────────────────────────────────
+
+    async def learn_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Learn about a topic from all sources (Wikipedia + Web + Gemini)."""
+        query = " ".join(context.args) if context.args else ""
+        if not query:
+            await _reply(update, "📚 استفاده: /learn [موضوع]\nمثال: /learn هوش مصنوعی")
+            return
+        await update.message.chat.send_action("typing")  # type: ignore[union-attr]
+        from nexus_ai_agent.knowledge.knowledge_manager import KnowledgeManager
+
+        km = KnowledgeManager(
+            wiki_cache_path=settings.wiki_cache_path,
+            knowledge_cache_path=settings.knowledge_cache_path,
+            gemini_api_key=settings.gemini_api_key,
+        )
+        try:
+            result = await km.learn(query)
+            sources_text = ""
+            for s in result.get("sources", []):
+                src_name = s.get("source", "")
+                title = s.get("title", "")
+                url = s.get("url", "")
+                if url:
+                    sources_text += f"\n🔹 [{title}]({url}) ({src_name})"
+                else:
+                    sources_text += f"\n🔹 {title} ({src_name})"
+            cache_note = " (از کش)" if result.get("from_cache") else ""
+            text = f"📚 **یادگیری: {query}**{cache_note}\n\n{result['summary']}"
+            if sources_text:
+                text += f"\n\n**منابع:**{sources_text}"
+            await _reply(update, text)
+        except Exception as exc:
+            logger.error("learn_cmd_error", error=str(exc))
+            await _reply(update, f"❌ خطا در یادگیری: {exc}")
+        finally:
+            await km.close()
+
+    async def wiki_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Fetch from Wikipedia (fa + en)."""
+        query = " ".join(context.args) if context.args else ""
+        if not query:
+            await _reply(update, "📖 استفاده: /wiki [موضوع]\nمثال: /wiki Artificial Intelligence")
+            return
+        await update.message.chat.send_action("typing")  # type: ignore[union-attr]
+        from nexus_ai_agent.knowledge.wikipedia_trainer import WikipediaTrainer
+
+        wt = WikipediaTrainer(cache_path=settings.wiki_cache_path)
+        try:
+            result = await wt.fetch_both(query)
+            parts: list[str] = []
+            for lang_key in ("fa", "en"):
+                data = result.get(lang_key, {})
+                if data.get("summary"):
+                    url = data.get("url", "")
+                    title = data.get("title", query)
+                    if url:
+                        parts.append(
+                            f"📖 **Wikipedia {lang_key.upper()}**: "
+                            f"[{title}]({url})\n{data['summary']}"
+                        )
+                    else:
+                        parts.append(
+                            f"📖 **Wikipedia {lang_key.upper()}**: {title}\n{data['summary']}"
+                        )
+                else:
+                    parts.append(f"📖 **Wikipedia {lang_key.upper()}**: نتیجه‌ای یافت نشد.")
+            await _reply(update, "\n\n---\n\n".join(parts))
+        except Exception as exc:
+            logger.error("wiki_cmd_error", error=str(exc))
+            await _reply(update, f"❌ خطا در ویکیپدیا: {exc}")
+
+    async def search_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Search the web via DuckDuckGo."""
+        query = " ".join(context.args) if context.args else ""
+        if not query:
+            await _reply(update, "🔍 استفاده: /search [متن]\nمثال: /search بهترین زبان برنامه‌نویسی")
+            return
+        await update.message.chat.send_action("typing")  # type: ignore[union-attr]
+        from nexus_ai_agent.knowledge.web_trainer import WebTrainer
+
+        wt = WebTrainer()
+        try:
+            results = await wt.search(query, max_results=5)
+            if not results:
+                await _reply(update, "🔍 نتیجه‌ای یافت نشد.")
+                return
+            text = f"🔍 **نتایج جستجو: {query}**\n\n"
+            for i, r in enumerate(results, 1):
+                title = r.get("title", "")
+                snippet = r.get("snippet", "")
+                url = r.get("url", "")
+                if url:
+                    text += f"{i}. [{title}]({url})\n{snippet}\n\n"
+                else:
+                    text += f"{i}. **{title}**\n{snippet}\n\n"
+            await _reply(update, text)
+        except Exception as exc:
+            logger.error("search_cmd_error", error=str(exc))
+            await _reply(update, f"❌ خطا در جستجو: {exc}")
+        finally:
+            await wt.close()
+
     async def onboarding_callback_handler(
         update: Update,
         context: ContextTypes.DEFAULT_TYPE,
@@ -3002,6 +3105,10 @@ def build_handlers(
         CommandHandler("language", language_cmd),
         # ── v2.1: New Chat ──
         CommandHandler("newchat", newchat_cmd),
+        # ── v3.0.0: Knowledge ──────────────────────────────────
+        CommandHandler("learn", learn_cmd),
+        CommandHandler("wiki", wiki_cmd),
+        CommandHandler("search", search_cmd),
         # ── v2.1: Onboarding callbacks ──
         CallbackQueryHandler(onboarding_callback_handler, pattern=r"^onboarding_"),
         CallbackQueryHandler(menu_callback, pattern=r"^lang_"),
