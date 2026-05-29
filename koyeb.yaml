@@ -1,0 +1,33 @@
+# ── NEXUS AI Agent v3.0.0 — Koyeb Deployment Config ──
+# Deploy with: koyeb app create nexus-ai-agent --docker dockerfile
+# Or connect GitHub repo and Koyeb auto-detects this file.
+
+services:
+  - name: nexus-ai-agent
+    instance_type: nano
+    regions:
+      - fra
+    env:
+      - key: TELEGRAM_BOT_TOKEN
+        value: ""
+        type: SECRET
+      - key: GEMINI_API_KEY
+        value: ""
+        type: SECRET
+      - key: NEXUS_OWNER_TELEGRAM_ID
+        value: ""
+      - key: NEXUS_DB_PATH
+        value: /storage/app.sqlite
+      - key: NEXUS_CHECKPOINT_PATH
+        value: /storage/langgraph.sqlite
+      - key: NEXUS_VECTOR_PATH
+        value: /storage/vector.sqlite
+      - key: NEXUS_CACHE_DIR
+        value: /storage/cache
+      - key: NEXUS_LOG_LEVEL
+        value: INFO
+      - key: PYTHONUNBUFFERED
+        value: "1"
+    routes:
+      - path: /
+        port: 8080
