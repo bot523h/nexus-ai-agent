@@ -25,6 +25,7 @@ from nexus_ai_agent.config.settings import Settings
 from nexus_ai_agent.features.anonymous_chat import AnonymousChatManager
 from nexus_ai_agent.features.channel_manager import ChannelManager
 from nexus_ai_agent.features.games import NumberGuess, QuickPoll, QuizGame, WordleFA
+from nexus_ai_agent.features.tools import Calculator, ReminderSystem, Translator, UnitConverter
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.orchestration.state import NexusState
 from nexus_ai_agent.presence import PresenceStore
@@ -571,6 +572,87 @@ def build_handlers(
                         results, reply_markup=InlineKeyboardMarkup(keyboard)
                     )
 
+    # ── Phase 4: Utility Tools ─────────────────────────────────────
+    reminder_sys = ReminderSystem()
+    translator = Translator()
+    converter = UnitConverter()
+    calculator = Calculator()
+
+    async def remind_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Set a reminder. Usage: /remind 30m نماز"""
+        if not context.args or len(context.args) < 2:
+            await _reply(update, "❌ استفاده: /remind 30m متن — واحدها: s/m/h/d")
+            return
+        time_str = context.args[0]
+        text = " ".join(context.args[1:])
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        chat_id = _chat_id(update)
+        reminder_sys.bot = context.bot
+        result = await reminder_sys.set_reminder(user_id, chat_id, time_str, text)
+        await _reply(update, result)
+
+    async def tr_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Translate text. Usage: /tr [en] متن — default: fa→en"""
+        if not context.args:
+            await _reply(
+                update,
+                "❌ استفاده: /tr متن (فارسی→انگلیسی)\nیا /tr en متن (انگلیسی→فارسی)",
+            )
+            return
+        # Check if first arg is a language code
+        source = "fa"
+        target = "en"
+        start_idx = 0
+        if len(context.args) >= 2 and len(context.args[0]) == 2:
+            lang = context.args[0].lower()
+            if lang == "en":
+                source = "en"
+                target = "fa"
+            elif lang == "fa":
+                source = "fa"
+                target = "en"
+            else:
+                source = lang
+                target = "fa"
+            start_idx = 1
+        text = " ".join(context.args[start_idx:])
+        result = await translator.translate(text, source=source, target=target)
+        await _reply(update, f"🌐 ترجمه:\n{result}")
+
+    async def convert_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Convert units. Usage: /convert 100 usd to irt"""
+        if not context.args or len(context.args) < 4:
+            await _reply(
+                update,
+                "❌ استفاده: /convert 100 usd to irt\n"
+                "ارز: usd, eur, irt, gbp, cad, aud, jpy, cny\n"
+                "طول: km, m, cm, mm, mile, yard, ft, in\n"
+                "وزن: kg, g, mg, lb, oz, ton\n"
+                "دما: c, f, k",
+            )
+            return
+        try:
+            amount = float(context.args[0])
+        except ValueError:
+            await _reply(update, "❌ مقدار باید عدد باشد.")
+            return
+        from_unit = context.args[1]
+        # args[2] should be "to"
+        to_unit = context.args[3]
+        result = converter.convert(amount, from_unit, to_unit)
+        await _reply(update, result)
+
+    async def calc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Safe calculator. Usage: /calc 2^10 + sin(45)"""
+        if not context.args:
+            await _reply(update, "❌ استفاده: /calc عبارت_ریاضی")
+            return
+        expr = " ".join(context.args)
+        result = calculator.evaluate(expr)
+        await _reply(update, result)
+
     async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _ = context
         if not update.effective_user or not update.message or not update.message.text:
@@ -642,6 +724,11 @@ def build_handlers(
         CommandHandler("poll", poll_cmd),
         CallbackQueryHandler(quiz_callback, pattern=r"^quiz_"),
         CallbackQueryHandler(poll_callback, pattern=r"^poll"),
+        # Phase 4: Utility Tools
+        CommandHandler("remind", remind_cmd),
+        CommandHandler("tr", tr_cmd),
+        CommandHandler("convert", convert_cmd),
+        CommandHandler("calc", calc_cmd),
         MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
     ]
 

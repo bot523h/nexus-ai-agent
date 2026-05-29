@@ -12,10 +12,10 @@
 - [x] Lint + test + commit Phase 2
 
 ## Phase 3 — Games & Entertainment
-- [ ] Create `src/nexus_ai_agent/features/games.py`
-- [ ] Create quiz questions JSON and Persian words list
-- [ ] Add game command handlers to `handlers.py`
-- [ ] Lint + test + commit Phase 3
+- [x] Create `src/nexus_ai_agent/features/games.py`
+- [x] Create quiz questions JSON and Persian words list
+- [x] Add game command handlers to `handlers.py`
+- [x] Lint + test + commit Phase 3
 
 ## Phase 4 — Utility Tools
 - [ ] Create `src/nexus_ai_agent/features/tools.py`
