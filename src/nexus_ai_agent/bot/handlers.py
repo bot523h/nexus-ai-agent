@@ -1644,7 +1644,7 @@ def build_handlers(
         from nexus_ai_agent.agent.feedback import FeedbackCollector
 
         fc = FeedbackCollector()
-        report = fc.get_daily_report()
+        report = await fc.get_daily_report()
         await _reply(update, fc.format_report(report))
 
     async def onboarding_callback_handler(
@@ -1682,13 +1682,13 @@ def build_handlers(
 
         if data.startswith("fb_pos:"):
             msg_id = int(data.split(":")[1])
-            fc.save_feedback(user_id, chat_id, msg_id, "positive")
+            await fc.save_feedback(user_id, chat_id, msg_id, "positive")
             await query.edit_message_reply_markup(reply_markup=None)
             await msg_obj.reply_text("🙏 ممنون از بازخورد مثبت!")
 
         elif data.startswith("fb_neg:"):
             msg_id = int(data.split(":")[1])
-            fc.save_feedback(user_id, chat_id, msg_id, "negative")
+            await fc.save_feedback(user_id, chat_id, msg_id, "negative")
             # Ask for reason
             keyboard = fc.get_reason_keyboard(msg_id)
             await msg_obj.reply_text(
@@ -1707,7 +1707,7 @@ def build_handlers(
                     "unclear": "نامفهوم",
                     "offensive": "توهین‌آمیز",
                 }
-                fc.save_feedback(
+                await fc.save_feedback(
                     user_id,
                     chat_id,
                     msg_id,

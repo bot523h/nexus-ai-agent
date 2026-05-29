@@ -1,33 +1,34 @@
 """Feedback collection system — inline 👍👎 after AI responses.
 
 Collects user feedback, asks for reasons on 👎, and generates
-daily reports for the bot owner.
+daily reports for the bot owner. (v3.1.0: migrated to AsyncDB.)
 """
 
 from __future__ import annotations
 
-import sqlite3
 import time
 from typing import Any
 
 from telegram import InlineKeyboardMarkup
 
+from nexus_ai_agent.core.async_db import AsyncDB
 from nexus_ai_agent.observability.logging import get_logger
 
 logger = get_logger(__name__)
 
 
 class FeedbackCollector:
-    """Collect and manage user feedback via inline keyboards."""
+    """Collect and manage user feedback via inline keyboards (async-safe)."""
 
     def __init__(self, db_path: str = "data/feedback_cache.sqlite") -> None:
-        self._db_path = db_path
-        self._init_db()
+        self._db = AsyncDB(db_path)
+        self._initialized = False
 
-    def _init_db(self) -> None:
-        """Create feedback SQLite table."""
-        conn = sqlite3.connect(self._db_path)
-        conn.execute(
+    async def _ensure_init(self) -> None:
+        """Lazy-initialize the schema (called once per process)."""
+        if self._initialized:
+            return
+        await self._db.script(
             """
             CREATE TABLE IF NOT EXISTS feedback (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,14 +38,13 @@ class FeedbackCollector:
                 feedback_type TEXT NOT NULL,
                 reason TEXT DEFAULT '',
                 created_at REAL NOT NULL
-            )
+            );
+            CREATE INDEX IF NOT EXISTS idx_fb_created ON feedback(created_at);
             """
         )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_fb_created ON feedback(created_at)")
-        conn.commit()
-        conn.close()
+        self._initialized = True
 
-    def save_feedback(
+    async def save_feedback(
         self,
         user_id: int,
         chat_id: int,
@@ -53,37 +53,30 @@ class FeedbackCollector:
         reason: str = "",
     ) -> None:
         """Save a feedback entry to the database."""
-        conn = sqlite3.connect(self._db_path)
-        conn.execute(
-            """
-            INSERT INTO feedback (user_id, chat_id, message_id, feedback_type, reason, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
+        await self._ensure_init()
+        await self._db.execute(
+            "INSERT INTO feedback "
+            "(user_id, chat_id, message_id, feedback_type, reason, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             (user_id, chat_id, message_id, feedback_type, reason, time.time()),
         )
-        conn.commit()
-        conn.close()
         logger.info(
             "feedback_saved",
             user_id=user_id,
             feedback_type=feedback_type,
         )
 
-    def get_daily_report(self) -> dict[str, Any]:
+    async def get_daily_report(self) -> dict[str, Any]:
         """Generate a daily feedback report.
 
         Returns a dict with: total, positive, negative, top_reasons.
         """
+        await self._ensure_init()
         one_day_ago = time.time() - 86400
-        conn = sqlite3.connect(self._db_path)
-        rows = conn.execute(
-            """
-            SELECT feedback_type, reason FROM feedback
-            WHERE created_at > ?
-            """,
+        rows = await self._db.fetchall(
+            "SELECT feedback_type, reason FROM feedback WHERE created_at > ?",
             (one_day_ago,),
-        ).fetchall()
-        conn.close()
+        )
 
         positive = sum(1 for r in rows if r[0] == "positive")
         negative = sum(1 for r in rows if r[0] == "negative")
