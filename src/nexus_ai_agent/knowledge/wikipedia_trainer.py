@@ -1,16 +1,17 @@
 """Wikipedia knowledge source — supports fa.wikipedia.org and en.wikipedia.org.
 
-Uses the MediaWiki API (free, no key required) with 24-hour SQLite cache.
+Uses the MediaWiki API (free, no key required) with 24-hour cache.
+v3.1.0: migrated to AsyncDB + ResilientHttpClient + @instrumented.
 """
 
 from __future__ import annotations
 
-import sqlite3
 import time
 from typing import Any
 
-import httpx
-
+from nexus_ai_agent.core.async_db import AsyncDB
+from nexus_ai_agent.core.http_client import ResilientHttpClient, get_http_client
+from nexus_ai_agent.core.instrumentation import instrumented
 from nexus_ai_agent.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -26,18 +27,23 @@ _ENDPOINTS = {
 
 
 class WikipediaTrainer:
-    """Fetch and cache Wikipedia articles in Persian and English."""
+    """Fetch and cache Wikipedia articles in Persian and English (async-safe)."""
 
-    def __init__(self, cache_path: str = "data/wiki_cache.sqlite") -> None:
-        self._cache_path = cache_path
-        self._init_db()
+    def __init__(
+        self,
+        cache_path: str = "data/wiki_cache.sqlite",
+        *,
+        http_client: ResilientHttpClient | None = None,
+    ) -> None:
+        self._db = AsyncDB(cache_path)
+        self._http = http_client or get_http_client()
+        self._initialized = False
 
-    # ── internal cache ──────────────────────────────────────────
-
-    def _init_db(self) -> None:
-        """Create the SQLite cache table if it does not exist."""
-        conn = sqlite3.connect(self._cache_path)
-        conn.execute(
+    async def _ensure_init(self) -> None:
+        """Lazy-initialize cache schema."""
+        if self._initialized:
+            return
+        await self._db.script(
             """
             CREATE TABLE IF NOT EXISTS wiki_cache (
                 query   TEXT NOT NULL,
@@ -45,43 +51,40 @@ class WikipediaTrainer:
                 content TEXT NOT NULL,
                 fetched_at REAL NOT NULL,
                 PRIMARY KEY (query, lang)
-            )
+            );
             """
         )
-        conn.commit()
-        conn.close()
+        self._initialized = True
 
-    def _get_cached(self, query: str, lang: str) -> str | None:
+    # ── internal cache ───────────────────────────────────────
+
+    async def _get_cached(self, query: str, lang: str) -> str | None:
         """Return cached content if it exists and is not expired."""
-        conn = sqlite3.connect(self._cache_path)
-        row = conn.execute(
+        await self._ensure_init()
+        row = await self._db.fetchone(
             "SELECT content, fetched_at FROM wiki_cache WHERE query=? AND lang=?",
             (query, lang),
-        ).fetchone()
-        conn.close()
+        )
         if row is None:
             return None
         content, fetched_at = row
         if time.time() - fetched_at > _CACHE_TTL:
             return None  # expired
-        return content
+        content_str: str = content
+        return content_str
 
-    def _set_cached(self, query: str, lang: str, content: str) -> None:
+    async def _set_cached(self, query: str, lang: str, content: str) -> None:
         """Store content in the cache with current timestamp."""
-        conn = sqlite3.connect(self._cache_path)
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO wiki_cache
-                (query, lang, content, fetched_at)
-            VALUES (?, ?, ?, ?)
-            """,
+        await self._ensure_init()
+        await self._db.execute(
+            "INSERT OR REPLACE INTO wiki_cache (query, lang, content, fetched_at) "
+            "VALUES (?, ?, ?, ?)",
             (query, lang, content, time.time()),
         )
-        conn.commit()
-        conn.close()
 
-    # ── public API ──────────────────────────────────────────────
+    # ── public API ───────────────────────────────────────────
 
+    @instrumented("wikipedia.fetch")
     async def fetch(self, query: str, lang: str = "fa") -> dict[str, Any]:
         """Fetch a Wikipedia article summary.
 
@@ -89,7 +92,7 @@ class WikipediaTrainer:
         If the article is not found, summary will be an empty string.
         """
         # Check cache first
-        cached = self._get_cached(query, lang)
+        cached = await self._get_cached(query, lang)
         if cached is not None:
             logger.info("wiki_cache_hit", query=query, lang=lang)
             return {
@@ -101,53 +104,54 @@ class WikipediaTrainer:
             }
 
         endpoint = _ENDPOINTS.get(lang, _ENDPOINTS["en"])
-        params: dict[str, Any] = {
-            "action": "query",
-            "list": "search",
-            "srsearch": query,
-            "format": "json",
-            "srlimit": 1,
-        }
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            # Step 1: Search for the article
-            resp = await client.get(endpoint, params=params)
-            data = resp.json()
-            search_results = data.get("query", {}).get("search", [])
-            if not search_results:
-                logger.info("wiki_not_found", query=query, lang=lang)
-                return {
-                    "title": query,
-                    "summary": "",
-                    "url": "",
-                    "lang": lang,
-                    "source": "wikipedia",
-                }
+        # Step 1: Search for the article (resilient HTTP with retry+breaker)
+        search_data = await self._http.get_json(
+            endpoint,
+            params={
+                "action": "query",
+                "list": "search",
+                "srsearch": query,
+                "format": "json",
+                "srlimit": 1,
+            },
+        )
+        search_results = search_data.get("query", {}).get("search", [])
+        if not search_results:
+            logger.info("wiki_not_found", query=query, lang=lang)
+            return {
+                "title": query,
+                "summary": "",
+                "url": "",
+                "lang": lang,
+                "source": "wikipedia",
+            }
 
-            page_title = search_results[0]["title"]
-            page_id = search_results[0]["pageid"]
+        page_title = search_results[0]["title"]
+        page_id = search_results[0]["pageid"]
 
-            # Step 2: Get the article extract/summary
-            summary_params: dict[str, Any] = {
+        # Step 2: Get the article extract/summary
+        summary_data = await self._http.get_json(
+            endpoint,
+            params={
                 "action": "query",
                 "pageids": page_id,
                 "prop": "extracts",
                 "exintro": True,
                 "explaintext": True,
                 "format": "json",
-            }
-            resp2 = await client.get(endpoint, params=summary_params)
-            data2 = resp2.json()
-            pages = data2.get("query", {}).get("pages", {})
-            page_data = pages.get(str(page_id), {})
-            summary = page_data.get("extract", "")
+            },
+        )
+        pages = summary_data.get("query", {}).get("pages", {})
+        page_data = pages.get(str(page_id), {})
+        summary = page_data.get("extract", "")
 
-            # Build URL
-            base_url = endpoint.replace("/w/api.php", "/wiki/")
-            url = f"{base_url}{page_title.replace(' ', '_')}"
+        # Build URL
+        base_url = endpoint.replace("/w/api.php", "/wiki/")
+        url = f"{base_url}{page_title.replace(' ', '_')}"
 
         # Cache the result
-        self._set_cached(query, lang, summary)
+        await self._set_cached(query, lang, summary)
 
         logger.info("wiki_fetched", query=query, lang=lang, title=page_title)
         return {

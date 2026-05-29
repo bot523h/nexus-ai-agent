@@ -147,9 +147,8 @@ class SelfMonitor:
             action = "disk_cleanup"
             try:
                 if os.path.exists(self._db_path):
-                    conn = sqlite3.connect(self._db_path)
-                    conn.execute("VACUUM")
-                    conn.close()
+                    async with aiosqlite.connect(self._db_path) as conn:
+                        await conn.execute("VACUUM")
                 # Clean temp files
                 import tempfile
 
