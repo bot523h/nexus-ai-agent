@@ -25,6 +25,7 @@ from nexus_ai_agent.config.settings import Settings
 from nexus_ai_agent.features.anonymous_chat import AnonymousChatManager
 from nexus_ai_agent.features.channel_manager import ChannelManager
 from nexus_ai_agent.features.games import NumberGuess, QuickPoll, QuizGame, WordleFA
+from nexus_ai_agent.features.owner_control import OwnerControl, is_owner
 from nexus_ai_agent.features.tools import Calculator, ReminderSystem, Translator, UnitConverter
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.orchestration.state import NexusState
@@ -955,6 +956,88 @@ def build_handlers(
             tool_results=json.dumps(result.get("tool_results", [])),
         )
 
+    # ── Phase 7: Owner Control ────────────────────────────────────
+    async def owner_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show owner dashboard."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        status = OwnerControl.system_status()
+        await _reply(update, status)
+
+    async def system_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show system status (owner only)."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        await _reply(update, OwnerControl.system_status())
+
+    async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Broadcast a message to all chats (owner only)."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        text = " ".join(context.args) if context.args else ""
+        if not text:
+            await _reply(update, "❌ متن پیام را وارد کنید: /broadcast <text>")
+            return
+        from sqlalchemy import create_engine as _ce
+        from sqlmodel import Session as _Session
+
+        from nexus_ai_agent.config.settings import get_settings as _gs
+
+        _eng = _ce(f"sqlite:///{_gs().db_path}", echo=False)
+        with _Session(_eng) as _s:
+            from nexus_ai_agent.storage.models import Chat as _Chat
+
+            _chats = _s.exec(select(_Chat)).all()
+            _ids = [c.chat_id for c in _chats]
+        result = await OwnerControl.owner_broadcast(context.bot, _ids, text)
+        await _reply(
+            update,
+            f"📢 پیام ارسال شد\n✅ موفق: {result['success']}\n❌ ناموفق: {result['failed']}",
+        )
+
+    async def broadcast_all_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Broadcast to every known chat (owner only)."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        text = " ".join(context.args) if context.args else ""
+        if not text:
+            await _reply(update, "❌ متن پیام را وارد کنید: /broadcast_all <text>")
+            return
+        from sqlalchemy import create_engine as _ce
+        from sqlmodel import Session as _Session
+
+        from nexus_ai_agent.config.settings import get_settings as _gs
+
+        _eng = _ce(f"sqlite:///{_gs().db_path}", echo=False)
+        with _Session(_eng) as _s:
+            from nexus_ai_agent.storage.models import Chat as _Chat
+
+            _chats = _s.exec(select(_Chat)).all()
+            _ids = [c.chat_id for c in _chats]
+        result = await OwnerControl.owner_broadcast(context.bot, _ids, text)
+        await _reply(
+            update,
+            f"📢 ارسال به همه چت‌ها\n✅ موفق: {result['success']}\n❌ ناموفق: {result['failed']}",
+        )
+
+    async def admin_logs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show recent admin logs (owner only)."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        logs = OwnerControl.admin_logs(limit=10)
+        if not logs:
+            await _reply(update, "📋 لاگ ادمینی وجود ندارد.")
+            return
+        lines = ["📋 **لاگ‌های ادمین**\n━━━━━━━━━━━━━━━━"]
+        for log in logs:
+            lines.append(f"• [{log['action']}] {log['target']} — {log['details'][:50]}")
+        await _reply(update, "\n".join(lines))
+
     return [
         CommandHandler("start", start),
         CommandHandler("online", online),
@@ -999,6 +1082,12 @@ def build_handlers(
         CallbackQueryHandler(menu_callback, pattern=r"^ch_"),
         CallbackQueryHandler(menu_callback, pattern=r"^tool_"),
         CallbackQueryHandler(menu_callback, pattern=r"^set_"),
+        # Phase 7: Owner Control
+        CommandHandler("owner", owner_cmd),
+        CommandHandler("system", system_cmd),
+        CommandHandler("broadcast", broadcast_cmd),
+        CommandHandler("broadcast_all", broadcast_all_cmd),
+        CommandHandler("admin_logs", admin_logs_cmd),
         MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
     ]
 
