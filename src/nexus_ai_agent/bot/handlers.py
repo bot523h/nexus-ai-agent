@@ -24,6 +24,7 @@ from nexus_ai_agent.config.settings import Settings
 # Feature managers — lazy-initialised inside build_handlers
 from nexus_ai_agent.features.anonymous_chat import AnonymousChatManager
 from nexus_ai_agent.features.channel_manager import ChannelManager
+from nexus_ai_agent.features.engagement import EngagementEngine
 from nexus_ai_agent.features.force_join import ForceJoinManager
 from nexus_ai_agent.features.games import NumberGuess, QuickPoll, QuizGame, WordleFA
 from nexus_ai_agent.features.owner_control import OwnerControl, is_owner
@@ -1134,6 +1135,44 @@ def build_handlers(
             "/personality set <name> — تغییر شخصیت",
         )
 
+    # ── Phase 10: Engagement ───────────────────────────────────────
+
+    async def engagement_on_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Enable auto-engagement (owner only)."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        chat_id = _chat_id(update)
+        freq = 60
+        if context.args:
+            try:
+                freq = int(context.args[0])
+            except ValueError:
+                pass
+        EngagementEngine.set_config(chat_id, enabled=True, frequency_minutes=freq)
+        await _reply(update, f"✅ تعامل خودکار فعال شد (هر {freq} دقیقه)")
+
+    async def engagement_off_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Disable auto-engagement (owner only)."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        chat_id = _chat_id(update)
+        EngagementEngine.set_config(chat_id, enabled=False)
+        await _reply(update, "❌ تعامل خودکار غیرفعال شد.")
+
+    async def challenge_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Send a random challenge."""
+        await _reply(update, EngagementEngine.get_challenge())
+
+    async def joke_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Send a random Persian joke."""
+        await _reply(update, EngagementEngine.get_joke())
+
+    async def event_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Send a random group event prompt."""
+        await _reply(update, EngagementEngine.get_event())
+
     return [
         CommandHandler("start", start),
         CommandHandler("online", online),
@@ -1192,6 +1231,12 @@ def build_handlers(
         CallbackQueryHandler(forcejoin_verify_callback, pattern=r"^forcejoin_verify$"),
         # Phase 9: Personality
         CommandHandler("personality", personality_cmd),
+        # Phase 10: Engagement
+        CommandHandler("engagement_on", engagement_on_cmd),
+        CommandHandler("engagement_off", engagement_off_cmd),
+        CommandHandler("challenge", challenge_cmd),
+        CommandHandler("joke", joke_cmd),
+        CommandHandler("event", event_cmd),
         MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
     ]
 
