@@ -20,6 +20,7 @@ from telegram.ext import (
 )
 
 from nexus_ai_agent.config.settings import Settings
+from nexus_ai_agent.features.ads import AdManager
 
 # Feature managers — lazy-initialised inside build_handlers
 from nexus_ai_agent.features.anonymous_chat import AnonymousChatManager
@@ -1243,6 +1244,119 @@ def build_handlers(
             lines.append(f"#{p['id']} | امتیاز: {p['viral_score']:.1f} | {p['text'][:60]}...")
         await _reply(update, "\n".join(lines))
 
+    # ── Phase 12: Advertisement System ─────────────────────────────────────────
+
+    async def ad_create_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Create an ad campaign (owner only). Usage: /ad_create <interval_h> <text>"""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        if not context.args or len(context.args) < 2:
+            await _reply(
+                update,
+                "❌ استفاده: /ad_create <فاصله_ساعت> <متن>\n"
+                "مثال: /ad_create 24 🔥 پیشنهاد ویژه امروز!",
+            )
+            return
+        try:
+            interval = int(context.args[0])
+        except ValueError:
+            await _reply(update, "❌ فاصله زمانی باید عدد (ساعت) باشد.")
+            return
+        text = " ".join(context.args[1:])
+        chat_id = _chat_id(update)
+        user_id = update.effective_user.id if update.effective_user else 0
+        cid = AdManager.create_campaign(
+            chat_id, text, interval_hours=interval, created_by=user_id
+        )
+        await _reply(update, f"✅ کمپین تبلیغاتی ایجاد شد\n🆔 شناسه: {cid}\n⏰ هر {interval} ساعت")
+
+    async def ad_list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """List ad campaigns (owner only)."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        chat_id = _chat_id(update)
+        campaigns = AdManager.list_campaigns(chat_id)
+        if not campaigns:
+            await _reply(update, "📋 هیچ کمپین تبلیغاتی وجود ندارد.")
+            return
+        lines = ["📋 کمپین‌های تبلیغاتی:\n━━━━━━━━━━━━━━━━━━"]
+        for c in campaigns:
+            status_icon = {"active": "🟢", "paused": "⏸️", "completed": "✅"}.get(
+                c["status"], "❓"
+            )
+            lines.append(
+                f"{status_icon} #{c['id']} | هر {c['interval_hours']}ساعت | "
+                f"تکرار: {c['repeat_count']}/{c['max_repeats'] or '∞'} | "
+                f"{c['text'][:40]}..."
+            )
+        await _reply(update, "\n".join(lines))
+
+    async def ad_pause_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Pause an ad campaign (owner only). Usage: /ad_pause <id>"""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        if not context.args:
+            await _reply(update, "❌ استفاده: /ad_pause <شناسه_کمپین>")
+            return
+        try:
+            cid = int(context.args[0])
+        except ValueError:
+            await _reply(update, "❌ شناسه باید عدد باشد.")
+            return
+        ok = AdManager.pause_campaign(cid)
+        await _reply(update, f"⏸️ کمپین #{cid} متوقف شد." if ok else f"❌ کمپین #{cid} یافت نشد.")
+
+    async def ad_resume_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Resume a paused ad campaign (owner only). Usage: /ad_resume <id>"""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        if not context.args:
+            await _reply(update, "❌ استفاده: /ad_resume <شناسه_کمپین>")
+            return
+        try:
+            cid = int(context.args[0])
+        except ValueError:
+            await _reply(update, "❌ شناسه باید عدد باشد.")
+            return
+        ok = AdManager.resume_campaign(cid)
+        await _reply(update, f"▶️ کمپین #{cid} فعال شد." if ok else f"❌ کمپین #{cid} یافت نشد.")
+
+    async def ad_delete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Delete an ad campaign (owner only). Usage: /ad_delete <id>"""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        if not context.args:
+            await _reply(update, "❌ استفاده: /ad_delete <شناسه_کمپین>")
+            return
+        try:
+            cid = int(context.args[0])
+        except ValueError:
+            await _reply(update, "❌ شناسه باید عدد باشد.")
+            return
+        ok = AdManager.delete_campaign(cid)
+        await _reply(update, f"🗑️ کمپین #{cid} حذف شد." if ok else f"❌ کمپین #{cid} یافت نشد.")
+
+    async def ad_stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show ad system statistics (owner only)."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        chat_id = _chat_id(update)
+        stats = AdManager.get_stats(chat_id)
+        await _reply(
+            update,
+            f"📊 آمار تبلیغات\n━━━━━━━━━━━━━━━━━━\n"
+            f"📝 کل: {stats['total']}\n"
+            f"🟢 فعال: {stats['active']}\n"
+            f"⏸️ متوقف: {stats['paused']}\n"
+            f"✅ تکمیل: {stats['completed']}",
+        )
+
     return [
         CommandHandler("start", start),
         CommandHandler("online", online),
@@ -1312,6 +1426,13 @@ def build_handlers(
         CommandHandler("viral_preview", viral_preview_cmd),
         CommandHandler("viral_stats", viral_stats_cmd),
         CommandHandler("viral_post", viral_post_cmd),
+        # Phase 12: Advertisement System
+        CommandHandler("ad_create", ad_create_cmd),
+        CommandHandler("ad_list", ad_list_cmd),
+        CommandHandler("ad_pause", ad_pause_cmd),
+        CommandHandler("ad_resume", ad_resume_cmd),
+        CommandHandler("ad_delete", ad_delete_cmd),
+        CommandHandler("ad_stats", ad_stats_cmd),
         MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
     ]
 
