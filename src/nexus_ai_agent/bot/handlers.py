@@ -28,6 +28,7 @@ from nexus_ai_agent.features.channel_manager import ChannelManager
 from nexus_ai_agent.features.engagement import EngagementEngine
 from nexus_ai_agent.features.force_join import ForceJoinManager
 from nexus_ai_agent.features.games import NumberGuess, QuickPoll, QuizGame, WordleFA
+from nexus_ai_agent.features.gamification import _ACHIEVEMENTS, GamificationEngine
 from nexus_ai_agent.features.moderation import ModerationEngine
 from nexus_ai_agent.features.owner_control import OwnerControl, is_owner
 from nexus_ai_agent.features.personality import PersonalityEngine
@@ -1501,6 +1502,86 @@ def build_handlers(
             f"🔇 میوت: {'بله' if rep.is_muted else 'خیر'}",
         )
 
+    # ── Phase 14: Gamification ─────────────────────────────────────────────────
+
+    async def profile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show user gamification profile."""
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        chat_id = _chat_id(update)
+        profile = GamificationEngine.get_profile(user_id, chat_id)
+        ach_text = GamificationEngine.format_achievements(profile["achievements"])
+        await _reply(
+            update,
+            f"👤 پروفایل شما\n━━━━━━━━━━━━━━━━━━\n"
+            f"⭐ سطح {profile['level']}: {profile['title']}\n"
+            f"✨ XP: {profile['xp']}\n"
+            f"📊 تا سطح بعد: {profile['xp_to_next']} XP\n"
+            f"🔥 استریک: {profile['streak']} روز\n"
+            f"🏆 دستاوردها ({profile['achievement_count']}):\n{ach_text}",
+        )
+
+    async def daily_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Claim daily XP reward."""
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        chat_id = _chat_id(update)
+        result = GamificationEngine.claim_daily(user_id, chat_id)
+        if not result["claimed"]:
+            await _reply(
+                update,
+                f"⏰ امروز پاداش رو گرفتی!\n"
+                f"⏳ {result['remaining_hours']} ساعت تا پاداش بعدی",
+            )
+            return
+        level_up_msg = ""
+        if result.get("leveled_up"):
+            level_up_msg = f"\n🎉 سطح جدید: {result['new_level']}!"
+        await _reply(
+            update,
+            f"🎁 پاداش روزانه!\n━━━━━━━━━━━━━━━━━━\n"
+            f"💰 پایه: +{result['base_reward']} XP\n"
+            f"🔥 استریک ×{result['streak']}: +{result['streak_bonus']} XP\n"
+            f"✅ مجموع: +{result['total_reward']} XP{level_up_msg}",
+        )
+
+    async def xp_leaderboard_cmd(
+        update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Show XP leaderboard for the chat."""
+        chat_id = _chat_id(update)
+        board = GamificationEngine.get_leaderboard(chat_id, limit=10)
+        if not board:
+            await _reply(update, "🏆 هنوز کسی XP نگرفته!")
+            return
+        medals = ["🥇", "🥈", "🥉"]
+        lines = ["🏆 جدول امتیازات\n━━━━━━━━━━━━━━━━━━"]
+        for i, entry in enumerate(board):
+            medal = medals[i] if i < 3 else f"  {i + 1}."
+            lines.append(
+                f"{medal} کاربر {entry['user_id']} — "
+                f"{entry['title']} | {entry['xp']} XP"
+            )
+        await _reply(update, "\n".join(lines))
+
+    async def achievements_cmd(
+        update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Show all available achievements and user progress."""
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        chat_id = _chat_id(update)
+        unlocked = GamificationEngine.get_achievements(user_id, chat_id)
+        lines = ["🏆 دستاوردها\n━━━━━━━━━━━━━━━━━━"]
+        for aid, ach in _ACHIEVEMENTS.items():
+            status = "✅" if aid in unlocked else "🔒"
+            lines.append(f"{status} {ach['name']} — {ach['desc']}")
+        lines.append(f"\n📊 {len(unlocked)}/{len(_ACHIEVEMENTS)} باز شده")
+        await _reply(update, "\n".join(lines))
+
     return [
         CommandHandler("start", start),
         CommandHandler("online", online),
@@ -1585,6 +1666,11 @@ def build_handlers(
         CommandHandler("mute", mod_mute_cmd),
         CommandHandler("unmute", mod_unmute_cmd),
         CommandHandler("reputation", mod_reputation_cmd),
+        # Phase 14: Gamification
+        CommandHandler("profile", profile_cmd),
+        CommandHandler("daily", daily_cmd),
+        CommandHandler("xp_leaderboard", xp_leaderboard_cmd),
+        CommandHandler("achievements", achievements_cmd),
         MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
     ]
 

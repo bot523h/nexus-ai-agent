@@ -31,9 +31,9 @@
 - [x] Lint + test + commit Phase 12
 
 ## Phase 13 — Smart Moderation
-- [ ] Create `src/nexus_ai_agent/features/moderation.py`
-- [ ] Add moderation handlers
-- [ ] Lint + test + commit Phase 13
+- [x] Create `src/nexus_ai_agent/features/moderation.py`
+- [x] Add moderation handlers
+- [x] Lint + test + commit Phase 13
 
 ## Phase 14 — Gamification System
 - [ ] Create `src/nexus_ai_agent/features/gamification.py`
