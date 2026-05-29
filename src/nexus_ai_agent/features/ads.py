@@ -92,16 +92,12 @@ class AdManager:
                 "status": campaign.status,
                 "repeat_count": campaign.repeat_count,
                 "max_repeats": campaign.max_repeats,
-                "next_run": (
-                    campaign.next_run.isoformat() if campaign.next_run else None
-                ),
+                "next_run": (campaign.next_run.isoformat() if campaign.next_run else None),
                 "created_by": campaign.created_by,
             }
 
     @staticmethod
-    def list_campaigns(
-        chat_id: int, status: str | None = None
-    ) -> list[dict[str, Any]]:
+    def list_campaigns(chat_id: int, status: str | None = None) -> list[dict[str, Any]]:
         """List ad campaigns, optionally filtered by status."""
         engine = _sync_engine()
         with Session(engine) as session:
@@ -180,8 +176,7 @@ class AdManager:
             )
             now = datetime.now(timezone.utc)
             results = [
-                r for r in session.exec(stmt).all()
-                if r.next_run is not None and r.next_run <= now
+                r for r in session.exec(stmt).all() if r.next_run is not None and r.next_run <= now
             ]
             return [
                 {
@@ -243,7 +238,5 @@ class AdManager:
                 "total": len(all_campaigns),
                 "active": sum(1 for c in all_campaigns if c.status == "active"),
                 "paused": sum(1 for c in all_campaigns if c.status == "paused"),
-                "completed": sum(
-                    1 for c in all_campaigns if c.status == "completed"
-                ),
+                "completed": sum(1 for c in all_campaigns if c.status == "completed"),
             }

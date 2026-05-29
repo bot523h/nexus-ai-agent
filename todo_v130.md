@@ -46,14 +46,14 @@
 - [x] Lint + test + commit Phase 15
 
 ## Phase 16 — Advanced UI
-- [ ] Upgrade inline keyboard menus
-- [ ] Add admin dashboard, stats panel, settings panel
-- [ ] Lint + test + commit Phase 16
+- [x] Upgrade inline keyboard menus
+- [x] Add admin dashboard, stats panel, settings panel
+- [x] Lint + test + commit Phase 16
 
 ## Final
-- [ ] mypy + ruff + pytest all green
-- [ ] CHANGELOG.md updated
-- [ ] README updated
-- [ ] Architecture diagram
+- [x] mypy + ruff + pytest all green
+- [x] CHANGELOG.md updated
+- [x] README updated
+- [x] Architecture diagram
 - [ ] git push
 - [ ] GitHub Release v1.3.0

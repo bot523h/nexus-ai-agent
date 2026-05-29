@@ -105,9 +105,7 @@ class EngagementEngine:
         engine = _sync_engine()
         with Session(engine) as session:
             return session.exec(
-                select(EngagementConfig).where(
-                    EngagementConfig.chat_id == chat_id
-                )
+                select(EngagementConfig).where(EngagementConfig.chat_id == chat_id)
             ).first()
 
     @staticmethod
@@ -121,9 +119,7 @@ class EngagementEngine:
         engine = _sync_engine()
         with Session(engine) as session:
             existing = session.exec(
-                select(EngagementConfig).where(
-                    EngagementConfig.chat_id == chat_id
-                )
+                select(EngagementConfig).where(EngagementConfig.chat_id == chat_id)
             ).first()
             if existing is not None:
                 existing.enabled = enabled
@@ -226,9 +222,7 @@ class EngagementEngine:
         engine = _sync_engine()
         with Session(engine) as session:
             db_cfg = session.exec(
-                select(EngagementConfig).where(
-                    EngagementConfig.chat_id == chat_id
-                )
+                select(EngagementConfig).where(EngagementConfig.chat_id == chat_id)
             ).first()
             if db_cfg is not None:
                 db_cfg.last_engagement = datetime.now(timezone.utc)
@@ -236,9 +230,7 @@ class EngagementEngine:
                 session.commit()
 
         # Pick a random engagement type
-        action = random.choice(
-            ["icebreaker", "joke", "challenge", "question", "story", "event"]
-        )
+        action = random.choice(["icebreaker", "joke", "challenge", "question", "story", "event"])
         if action == "icebreaker":
             return self.get_ice_breaker()
         if action == "joke":

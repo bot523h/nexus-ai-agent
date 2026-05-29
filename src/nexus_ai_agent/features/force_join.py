@@ -56,9 +56,7 @@ class ForceJoinManager:
         engine = _sync_engine()
         with Session(engine) as session:
             return session.exec(
-                select(ForceJoinConfig).where(
-                    ForceJoinConfig.chat_id == chat_id
-                )
+                select(ForceJoinConfig).where(ForceJoinConfig.chat_id == chat_id)
             ).first()
 
     @staticmethod
@@ -73,9 +71,7 @@ class ForceJoinManager:
         engine = _sync_engine()
         with Session(engine) as session:
             existing = session.exec(
-                select(ForceJoinConfig).where(
-                    ForceJoinConfig.chat_id == chat_id
-                )
+                select(ForceJoinConfig).where(ForceJoinConfig.chat_id == chat_id)
             ).first()
             if existing is not None:
                 existing.enabled = enabled
@@ -91,8 +87,7 @@ class ForceJoinManager:
                 chat_id=chat_id,
                 enabled=enabled,
                 channel_username=channel_username,
-                welcome_message=welcome_message
-                or "⛔ لطفاً ابتدا در کانال عضو شوید.",
+                welcome_message=welcome_message or "⛔ لطفاً ابتدا در کانال عضو شوید.",
             )
             session.add(cfg)
             session.commit()

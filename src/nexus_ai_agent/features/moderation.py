@@ -51,9 +51,7 @@ _PROFANITY_PATTERNS: list[str] = [
 _PROFANITY_RE = re.compile("|".join(_PROFANITY_PATTERNS), re.IGNORECASE)
 
 # Link detection regex
-_LINK_RE = re.compile(
-    r"https?://[^\s<>\"]+|t\.me/[^\s<>\"]+|www\.[^\s<>\"]+", re.IGNORECASE
-)
+_LINK_RE = re.compile(r"https?://[^\s<>\"]+|t\.me/[^\s<>\"]+|www\.[^\s<>\"]+", re.IGNORECASE)
 
 
 class ModerationEngine:
@@ -102,9 +100,7 @@ class ModerationEngine:
                     anti_spam=anti_spam if anti_spam is not None else True,
                     anti_flood=anti_flood if anti_flood is not None else True,
                     link_filter=link_filter if link_filter is not None else True,
-                    profanity_filter=(
-                        profanity_filter if profanity_filter is not None else True
-                    ),
+                    profanity_filter=(profanity_filter if profanity_filter is not None else True),
                     max_warnings=max_warnings if max_warnings is not None else 3,
                     mute_duration_minutes=(
                         mute_duration_minutes if mute_duration_minutes is not None else 30
@@ -266,14 +262,11 @@ class ModerationEngine:
                     reputation=0,
                     warnings=0,
                     is_muted=True,
-                    mute_until=datetime.now(timezone.utc)
-                    + timedelta(minutes=duration_minutes),
+                    mute_until=datetime.now(timezone.utc) + timedelta(minutes=duration_minutes),
                 )
             else:
                 rep.is_muted = True
-                rep.mute_until = datetime.now(timezone.utc) + timedelta(
-                    minutes=duration_minutes
-                )
+                rep.mute_until = datetime.now(timezone.utc) + timedelta(minutes=duration_minutes)
             session.add(rep)
             session.commit()
             logger.info(
@@ -316,9 +309,7 @@ class ModerationEngine:
             if rep is None or not rep.is_muted:
                 return False
             # Check if mute has expired
-            if rep.mute_until is not None and rep.mute_until <= datetime.now(
-                timezone.utc
-            ):
+            if rep.mute_until is not None and rep.mute_until <= datetime.now(timezone.utc):
                 rep.is_muted = False
                 rep.mute_until = None
                 session.add(rep)

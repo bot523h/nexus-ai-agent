@@ -20,7 +20,7 @@ class MegaProvider:
 
     def _get_client(self) -> Any:
         try:
-            from mega import Mega  # type: ignore
+            from mega import Mega
         except Exception as e:  # pragma: no cover
             raise ProviderUnavailable("mega.py is not installed") from e
 

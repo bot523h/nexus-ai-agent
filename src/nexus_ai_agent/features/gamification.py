@@ -35,18 +35,18 @@ def _sync_engine() -> Any:
 
 # XP required for each level (cumulative)
 _LEVEL_XP: list[int] = [
-    0,      # Level 0 (newbie)
-    50,     # Level 1
-    150,    # Level 2
-    300,    # Level 3
-    600,    # Level 4
-    1000,   # Level 5
-    1500,   # Level 6
-    2200,   # Level 7
-    3000,   # Level 8
-    4000,   # Level 9
-    5500,   # Level 10
-    7500,   # Level 11
+    0,  # Level 0 (newbie)
+    50,  # Level 1
+    150,  # Level 2
+    300,  # Level 3
+    600,  # Level 4
+    1000,  # Level 5
+    1500,  # Level 6
+    2200,  # Level 7
+    3000,  # Level 8
+    4000,  # Level 9
+    5500,  # Level 10
+    7500,  # Level 11
     10000,  # Level 12
     13000,  # Level 13
     17000,  # Level 14
@@ -106,9 +106,7 @@ class GamificationEngine:
         engine = _sync_engine()
         with Session(engine) as session:
             xp = session.exec(
-                select(UserXP).where(
-                    UserXP.user_id == user_id, UserXP.chat_id == chat_id
-                )
+                select(UserXP).where(UserXP.user_id == user_id, UserXP.chat_id == chat_id)
             ).first()
             if xp is None:
                 xp = UserXP(
@@ -130,9 +128,7 @@ class GamificationEngine:
         engine = _sync_engine()
         with Session(engine) as session:
             xp = session.exec(
-                select(UserXP).where(
-                    UserXP.user_id == user_id, UserXP.chat_id == chat_id
-                )
+                select(UserXP).where(UserXP.user_id == user_id, UserXP.chat_id == chat_id)
             ).first()
             if xp is None:
                 xp = UserXP(
@@ -208,9 +204,7 @@ class GamificationEngine:
         engine = _sync_engine()
         with Session(engine) as session:
             xp = session.exec(
-                select(UserXP).where(
-                    UserXP.user_id == user_id, UserXP.chat_id == chat_id
-                )
+                select(UserXP).where(UserXP.user_id == user_id, UserXP.chat_id == chat_id)
             ).first()
             if xp is None:
                 xp = UserXP(
@@ -254,9 +248,7 @@ class GamificationEngine:
         engine = _sync_engine()
         with Session(engine) as session:
             xp = session.exec(
-                select(UserXP).where(
-                    UserXP.user_id == user_id, UserXP.chat_id == chat_id
-                )
+                select(UserXP).where(UserXP.user_id == user_id, UserXP.chat_id == chat_id)
             ).first()
             if xp is None:
                 xp = UserXP(
@@ -320,16 +312,12 @@ class GamificationEngine:
             return []
 
     @staticmethod
-    def unlock_achievement(
-        user_id: int, chat_id: int, achievement_id: str
-    ) -> bool:
+    def unlock_achievement(user_id: int, chat_id: int, achievement_id: str) -> bool:
         """Unlock an achievement for a user. Returns True if newly unlocked."""
         engine = _sync_engine()
         with Session(engine) as session:
             xp = session.exec(
-                select(UserXP).where(
-                    UserXP.user_id == user_id, UserXP.chat_id == chat_id
-                )
+                select(UserXP).where(UserXP.user_id == user_id, UserXP.chat_id == chat_id)
             ).first()
             if xp is None:
                 return False

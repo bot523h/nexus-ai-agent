@@ -72,14 +72,8 @@ class AnalyticsEngine:
                     chat_id=ev.get("chat_id", 0),
                     user_id=ev.get("user_id", 0),
                     event_type=ev.get("event_type", "unknown"),
-                    event_data=(
-                        json.dumps(ev["event_data"])
-                        if "event_data" in ev
-                        else None
-                    ),
-                    created_at=ev.get(
-                        "created_at", datetime.now(timezone.utc)
-                    ),
+                    event_data=(json.dumps(ev["event_data"]) if "event_data" in ev else None),
+                    created_at=ev.get("created_at", datetime.now(timezone.utc)),
                 )
                 session.add(event)
                 count += 1
@@ -91,16 +85,12 @@ class AnalyticsEngine:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def get_active_users(
-        chat_id: int = 0, hours: int = 24
-    ) -> list[dict[str, Any]]:
+    def get_active_users(chat_id: int = 0, hours: int = 24) -> list[dict[str, Any]]:
         """Get users active in the last N hours."""
         since = datetime.now(timezone.utc) - timedelta(hours=hours)
         engine = _sync_engine()
         with Session(engine) as session:
-            stmt = select(AnalyticsEvent).where(
-                AnalyticsEvent.created_at >= since
-            )
+            stmt = select(AnalyticsEvent).where(AnalyticsEvent.created_at >= since)
             if chat_id:
                 stmt = stmt.where(AnalyticsEvent.chat_id == chat_id)
             results = session.exec(stmt).all()
@@ -114,9 +104,7 @@ class AnalyticsEngine:
 
             return [
                 {"user_id": uid, "events": cnt}
-                for uid, cnt in sorted(
-                    user_events.items(), key=lambda x: x[1], reverse=True
-                )
+                for uid, cnt in sorted(user_events.items(), key=lambda x: x[1], reverse=True)
             ]
 
     @staticmethod
@@ -129,9 +117,7 @@ class AnalyticsEngine:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def get_engagement_rate(
-        chat_id: int = 0, hours: int = 24
-    ) -> dict[str, float]:
+    def get_engagement_rate(chat_id: int = 0, hours: int = 24) -> dict[str, float]:
         """Calculate engagement metrics for the last N hours.
 
         Returns dict with total_events, unique_users, events_per_user.
@@ -139,9 +125,7 @@ class AnalyticsEngine:
         since = datetime.now(timezone.utc) - timedelta(hours=hours)
         engine = _sync_engine()
         with Session(engine) as session:
-            stmt = select(AnalyticsEvent).where(
-                AnalyticsEvent.created_at >= since
-            )
+            stmt = select(AnalyticsEvent).where(AnalyticsEvent.created_at >= since)
             if chat_id:
                 stmt = stmt.where(AnalyticsEvent.chat_id == chat_id)
             results = session.exec(stmt).all()
@@ -161,16 +145,12 @@ class AnalyticsEngine:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def get_peak_hours(
-        chat_id: int = 0, days: int = 7
-    ) -> list[dict[str, Any]]:
+    def get_peak_hours(chat_id: int = 0, days: int = 7) -> list[dict[str, Any]]:
         """Get peak activity hours over the last N days."""
         since = datetime.now(timezone.utc) - timedelta(days=days)
         engine = _sync_engine()
         with Session(engine) as session:
-            stmt = select(AnalyticsEvent).where(
-                AnalyticsEvent.created_at >= since
-            )
+            stmt = select(AnalyticsEvent).where(AnalyticsEvent.created_at >= since)
             if chat_id:
                 stmt = stmt.where(AnalyticsEvent.chat_id == chat_id)
             results = session.exec(stmt).all()
@@ -183,13 +163,8 @@ class AnalyticsEngine:
                     hour_counts[hour] = hour_counts.get(hour, 0) + 1
 
             # Sort by count descending
-            sorted_hours = sorted(
-                hour_counts.items(), key=lambda x: x[1], reverse=True
-            )
-            return [
-                {"hour": h, "count": c, "label": f"{h:02d}:00"}
-                for h, c in sorted_hours
-            ]
+            sorted_hours = sorted(hour_counts.items(), key=lambda x: x[1], reverse=True)
+            return [{"hour": h, "count": c, "label": f"{h:02d}:00"} for h, c in sorted_hours]
 
     # ------------------------------------------------------------------
     # Retention
@@ -206,9 +181,7 @@ class AnalyticsEngine:
         start = now - timedelta(days=days)
         engine = _sync_engine()
         with Session(engine) as session:
-            stmt = select(AnalyticsEvent).where(
-                AnalyticsEvent.created_at >= start
-            )
+            stmt = select(AnalyticsEvent).where(AnalyticsEvent.created_at >= start)
             if chat_id:
                 stmt = stmt.where(AnalyticsEvent.chat_id == chat_id)
             results = session.exec(stmt).all()
@@ -235,9 +208,7 @@ class AnalyticsEngine:
             for day_key in sorted_days:
                 retained = len(cohort_users & day_users[day_key])
                 rate = (retained / cohort_size * 100) if cohort_size else 0
-                retention.append(
-                    {"date": day_key, "retained": retained, "rate": round(rate, 1)}
-                )
+                retention.append({"date": day_key, "retained": retained, "rate": round(rate, 1)})
 
             return {
                 "days": days,
@@ -250,9 +221,7 @@ class AnalyticsEngine:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def get_command_usage(
-        chat_id: int = 0, hours: int = 24
-    ) -> list[dict[str, Any]]:
+    def get_command_usage(chat_id: int = 0, hours: int = 24) -> list[dict[str, Any]]:
         """Get command usage statistics."""
         since = datetime.now(timezone.utc) - timedelta(hours=hours)
         engine = _sync_engine()
@@ -282,9 +251,7 @@ class AnalyticsEngine:
 
             return [
                 {"command": cmd, "count": cnt}
-                for cmd, cnt in sorted(
-                    cmd_counts.items(), key=lambda x: x[1], reverse=True
-                )
+                for cmd, cnt in sorted(cmd_counts.items(), key=lambda x: x[1], reverse=True)
             ]
 
     # ------------------------------------------------------------------

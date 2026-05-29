@@ -122,9 +122,7 @@ class PersonalityEngine:
         engine = _sync_engine()
         with Session(engine) as session:
             cfg = session.exec(
-                select(PersonalityConfig).where(
-                    PersonalityConfig.chat_id == chat_id
-                )
+                select(PersonalityConfig).where(PersonalityConfig.chat_id == chat_id)
             ).first()
             if cfg is not None:
                 return cfg.personality
@@ -135,17 +133,13 @@ class PersonalityEngine:
         """Set the personality for *chat_id*. Returns status message."""
         p = personality.lower().strip()
         if p not in PERSONALITIES:
-            available = ", ".join(
-                f"{v['emoji']} {k}" for k, v in PERSONALITIES.items()
-            )
+            available = ", ".join(f"{v['emoji']} {k}" for k, v in PERSONALITIES.items())
             return f"❌ شخصیت '{personality}' یافت نشد.\n\nشخصیت‌های موجود:\n{available}"
 
         engine = _sync_engine()
         with Session(engine) as session:
             cfg = session.exec(
-                select(PersonalityConfig).where(
-                    PersonalityConfig.chat_id == chat_id
-                )
+                select(PersonalityConfig).where(PersonalityConfig.chat_id == chat_id)
             ).first()
             if cfg is not None:
                 cfg.personality = p

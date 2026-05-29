@@ -33,7 +33,7 @@ class LongTermMemory:
             conn = sqlite3.connect(self._path, check_same_thread=False)
 
         try:
-            import sqlite_vec  # type: ignore
+            import sqlite_vec
 
             conn.enable_load_extension(True)
             sqlite_vec.load(conn)
