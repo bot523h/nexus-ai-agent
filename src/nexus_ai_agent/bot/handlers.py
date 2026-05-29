@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Callable, Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
@@ -13,6 +14,9 @@ from telegram import Message, Update
 from telegram.ext import CommandHandler, ContextTypes, MessageHandler, filters
 
 from nexus_ai_agent.config.settings import Settings
+
+# Feature managers — lazy-initialised inside build_handlers
+from nexus_ai_agent.features.channel_manager import ChannelManager
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.orchestration.state import NexusState
 from nexus_ai_agent.presence import PresenceStore
@@ -186,6 +190,132 @@ def build_handlers(
             ),
         )
 
+    # ── Phase 1: Channel & Group Management ────────────────────────
+    channel_mgr = ChannelManager()
+
+    async def post_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Post text to the current channel/group. Usage: /post <text>"""
+        if not context.args:
+            await _reply(update, "❌ استفاده: /post <متن>")
+            return
+        text = " ".join(context.args)
+        chat_id = _chat_id(update)
+        try:
+            channel_mgr.bot = context.bot
+            await channel_mgr.post_to_channel(chat_id, text)
+            await _reply(update, "✅ پست ارسال شد.")
+        except Exception as exc:  # noqa: BLE001
+            await _reply(update, f"❌ خطا: {exc}")
+
+    async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Schedule a post. Usage: /schedule <YYYY-MM-DD HH:MM> <text>"""
+        if not context.args or len(context.args) < 3:
+            await _reply(update, "❌ استفاده: /schedule YYYY-MM-DD HH:MM <متن>")
+            return
+        date_str = context.args[0]
+        time_str = context.args[1]
+        text = " ".join(context.args[2:])
+        try:
+            when = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+            when = when.replace(tzinfo=timezone.utc)
+        except ValueError:
+            await _reply(update, "❌ فرمت زمان نادرست. مثال: 2025-06-01 14:30")
+            return
+        chat_id = _chat_id(update)
+        try:
+            channel_mgr.bot = context.bot
+            sid = await channel_mgr.schedule_post(chat_id, text, when)
+            await _reply(update, f"✅ پست زمان‌بندی شد (id={sid}).")
+        except Exception as exc:  # noqa: BLE001
+            await _reply(update, f"❌ خطا: {exc}")
+
+    async def ban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Ban a user (reply to their message or give user_id)."""
+        chat_id = _chat_id(update)
+        target_id: int | None = None
+        # Try from reply
+        if (
+            update.message
+            and update.message.reply_to_message
+            and update.message.reply_to_message.from_user
+        ):
+            target_id = update.message.reply_to_message.from_user.id
+        elif context.args:
+            try:
+                target_id = int(context.args[0])
+            except ValueError:
+                await _reply(update, "❌ شناسه کاربر باید عدد باشد.")
+                return
+        if target_id is None:
+            await _reply(update, "❌ ریپلای روی پیام کاربر یا /ban <user_id>")
+            return
+        channel_mgr.bot = context.bot
+        ok = await channel_mgr.ban_user(chat_id, target_id)
+        await _reply(update, "✅ کاربر بن شد." if ok else "❌ خطا در بن کردن.")
+
+    async def unban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Unban a user by id."""
+        if not context.args:
+            await _reply(update, "❌ استفاده: /unban <user_id>")
+            return
+        try:
+            target_id = int(context.args[0])
+        except ValueError:
+            await _reply(update, "❌ شناسه باید عدد باشد.")
+            return
+        chat_id = _chat_id(update)
+        channel_mgr.bot = context.bot
+        ok = await channel_mgr.unban_user(chat_id, target_id)
+        await _reply(update, "✅ کاربر آزاد شد." if ok else "❌ خطا در آزاد کردن.")
+
+    async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show group/channel statistics."""
+        chat_id = _chat_id(update)
+        channel_mgr.bot = context.bot
+        try:
+            count = await channel_mgr.get_members_count(chat_id)
+            admins = await channel_mgr.get_admins(chat_id)
+            admin_names = ", ".join(
+                a.get("username", str(a.get("user_id", "?"))) for a in admins[:10]
+            )
+            await _reply(update, f"📊 آمار:\n👥 اعضا: {count}\n🛡 ادمین‌ها: {admin_names}")
+        except Exception as exc:  # noqa: BLE001
+            await _reply(update, f"❌ خطا: {exc}")
+
+    async def welcome_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Set welcome message. Use {name} for new member name."""
+        if not context.args:
+            await _reply(update, "❌ استفاده: /welcome <متن> — {name} جای اسم عضو جدید")
+            return
+        text = " ".join(context.args)
+        chat_id = _chat_id(update)
+        channel_mgr.set_welcome_message(chat_id, text)
+        await _reply(update, f"✅ پیام خوشامد تنظیم شد:\n{text}")
+
+    async def pin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Pin the replied-to message."""
+        if not update.message or not update.message.reply_to_message:
+            await _reply(update, "❌ ریپلای روی پیامی که می‌خوای پین بشه")
+            return
+        chat_id = _chat_id(update)
+        msg_id = update.message.reply_to_message.message_id
+        channel_mgr.bot = context.bot
+        try:
+            await channel_mgr.pin_message(chat_id, msg_id)
+            await _reply(update, "📌 پیام پین شد.")
+        except Exception as exc:  # noqa: BLE001
+            await _reply(update, f"❌ خطا: {exc}")
+
+    async def new_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Send welcome message when a new member joins."""
+        if not update.message or not update.message.new_chat_members:
+            return
+        chat_id = _chat_id(update)
+        channel_mgr.bot = context.bot
+        for member in update.message.new_chat_members:
+            name = member.first_name or "دوست جدید"
+            await channel_mgr.welcome_new_member(chat_id, name)
+
     async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _ = context
         if not update.effective_user or not update.message or not update.message.text:
@@ -234,6 +364,15 @@ def build_handlers(
         CommandHandler("model", model_cmd),
         CommandHandler("help", help_cmd),
         CommandHandler("status", status),
+        # Phase 1: Channel & Group Management
+        CommandHandler("post", post_cmd),
+        CommandHandler("schedule", schedule_cmd),
+        CommandHandler("ban", ban_cmd),
+        CommandHandler("unban", unban_cmd),
+        CommandHandler("stats", stats_cmd),
+        CommandHandler("welcome", welcome_cmd),
+        CommandHandler("pin", pin_cmd),
+        MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, new_member_handler),
         MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
     ]
 

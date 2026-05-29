@@ -47,6 +47,10 @@ class Settings(BaseSettings):
         default_factory=list,
         validation_alias=AliasChoices("NEXUS_ALLOWED_USER_IDS", "ALLOWED_USER_IDS"),
     )
+    owner_telegram_id: int = Field(
+        default=0,
+        validation_alias=AliasChoices("NEXUS_OWNER_TELEGRAM_ID", "OWNER_TELEGRAM_ID"),
+    )
     workspace_root: str = "."
     n_ctx: int = 2048
     n_gpu_layers: int = 0
