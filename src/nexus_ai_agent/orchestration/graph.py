@@ -48,21 +48,21 @@ async def _chat_agent(llm: LLMProvider, state: NexusState) -> NexusState:
 async def _planner_agent(llm: LLMProvider, state: NexusState) -> NexusState:
     # Deterministic MVP plan so FakeLLM works in tests.
     user_msg = state.get("messages", [])[-1]["content"] if state.get("messages") else ""
-    plan = {
+    action = user_msg or "No-op"
+    steps: list[dict[str, Any]] = [
+        {
+            "id": 1,
+            "action": action,
+            "tool": None,
+            "status": "pending",
+        }
+    ]
+    plan: dict[str, Any] = {
         "goal": user_msg,
-        "steps": [
-            {
-                "id": 1,
-                "action": user_msg or "No-op",
-                "tool": None,
-                "status": "pending",
-            }
-        ],
+        "steps": steps,
     }
     state["current_task"] = plan
-    state["response"] = (
-        f"Plan created with {len(plan['steps'])} step(s): {plan['steps'][0]['action']}"
-    )
+    state["response"] = f"Plan created with {len(steps)} step(s): {action}"
     return state
 
 

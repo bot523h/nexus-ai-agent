@@ -17,7 +17,7 @@ class LocalLlamaCppProvider(LLMProvider):
                 "Set NEXUS_MODEL_PATH or place a model at models/model.gguf."
             )
 
-        from llama_cpp import Llama  # type: ignore[import-not-found]
+        from llama_cpp import Llama
 
         self._model: Any = Llama(
             model_path=str(model_file),
@@ -39,7 +39,7 @@ class LocalLlamaCppProvider(LLMProvider):
 
     async def embed(self, text: str) -> list[float]:
         if not hasattr(self, "_st"):
-            from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
+            from sentence_transformers import SentenceTransformer
 
             self._st = SentenceTransformer("all-MiniLM-L6-v2")
 
