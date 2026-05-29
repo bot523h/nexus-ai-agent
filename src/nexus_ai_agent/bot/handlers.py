@@ -1717,7 +1717,36 @@ def build_handlers(
                 await query.edit_message_reply_markup(reply_markup=None)
                 await msg_obj.reply_text("📝 بازخورد شما ثبت شد. سعی می‌کنیم بهتر باشیم! 🙏")
 
-    # ── Phase 5: Inline Keyboard Menu Callbacks ────────────────────
+    # ── v3.0.0: Auto-Update Commands ──────────────────────────
+
+    async def update_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Check for updates and optionally apply them."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ فقط owner می‌تواند آپدیت کند.")
+            return
+        await update.message.chat.send_action("typing")  # type: ignore[union-attr]
+        from nexus_ai_agent.agent.updater import AutoUpdater
+
+        updater = AutoUpdater()
+        info = await updater.check_update()
+        args = context.args or []
+        if info.update_available and args and args[0] == "apply":
+            success = updater.perform_update()
+            if success:
+                await _reply(update, "✅ آپدیت با موفقیت اعمال شد! ربات را ری‌استارت کنید.")
+            else:
+                await _reply(update, "❌ خطا در آپدیت. لطفاً دستی آپدیت کنید.")
+        else:
+            await _reply(update, updater.format_update(info))
+
+    async def version_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show current bot version."""
+        from nexus_ai_agent.agent.updater import AutoUpdater
+
+        ver = AutoUpdater.get_current_version()
+        await _reply(update, f"📦 **نسخه ربات:** `v{ver}`")
+
+        # ── Phase 5: Inline Keyboard Menu Callbacks ────────────────────
 
     async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle all menu button callbacks."""
@@ -3326,6 +3355,9 @@ def build_handlers(
         CommandHandler("approve", approve_cmd),
         CommandHandler("feedback_report", feedback_report_cmd),
         CallbackQueryHandler(feedback_callback_handler, pattern=r"^fb_"),
+        # ── v3.0.0: Auto-Update ──
+        CommandHandler("update", update_cmd),
+        CommandHandler("version", version_cmd),
         # ── v2.1: Onboarding callbacks ──
         CallbackQueryHandler(onboarding_callback_handler, pattern=r"^onboarding_"),
         CallbackQueryHandler(menu_callback, pattern=r"^lang_"),
