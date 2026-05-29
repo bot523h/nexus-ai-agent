@@ -1,0 +1,15 @@
+{
+  "bot.name": "NEXUS AI",
+  "menu.title": "🤖 NEXUS AI v2.0.0\n\n选择一个选项：",
+  "menu.chat": "💬 智能聊天",
+  "menu.games": "🎮 游戏",
+  "menu.tools": "🛠️ 工具",
+  "menu.ai": "🤖 AI功能",
+  "menu.settings": "⚙️ 设置",
+  "chat.welcome": "发送消息，NEXUS AI将回复您！",
+  "ai.activated": "🤖 AI模式已激活！\n\n由 Google Gemini 2.0 Flash (免费) 提供支持\n\n发送消息开始聊天！",
+  "language.set": "✅ 语言已更改为：{lang}",
+  "error.access_denied": "⛔ 访问被拒绝",
+  "status.online": "✅ 您在线。",
+  "status.offline": "🔌 已断开连接。"
+}

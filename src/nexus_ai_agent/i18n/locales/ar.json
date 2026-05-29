@@ -1,0 +1,16 @@
+{
+  "bot.name": "NEXUS AI",
+  "menu.title": "🤖 NEXUS AI v2.0.0\n\nاختر خيارًا:",
+  "menu.chat": "💬 محادثة ذكية",
+  "menu.games": "🎮 ألعاب",
+  "menu.anon": "👤 محادثة مجهولة",
+  "menu.tools": "🛠️ أدوات",
+  "menu.ai": "🤖 الذكاء الاصطناعي",
+  "menu.settings": "⚙️ الإعدادات",
+  "chat.welcome": "أرسل أي رسالة وسيجيبك NEXUS AI!",
+  "ai.activated": "🤖 تم تفعيل وضع AI!\n\nمدعوم من Google Gemini 2.0 Flash (مجاني)\n\nأرسل رسالتك للبدء!",
+  "language.set": "✅ تم تغيير اللغة إلى: {lang}",
+  "error.access_denied": "⛔ الوصول مرفوض",
+  "status.online": "✅ أنت متصل.",
+  "status.offline": "🔌 تم قطع الاتصال."
+}

@@ -1,0 +1,15 @@
+{
+  "bot.name": "NEXUS AI",
+  "menu.title": "🤖 NEXUS AI v2.0.0\n\nBir seçenek seçin:",
+  "menu.chat": "💬 Akıllı Sohbet",
+  "menu.games": "🎮 Oyunlar",
+  "menu.tools": "🛠️ Araçlar",
+  "menu.ai": "🤖 Yapay Zeka",
+  "menu.settings": "⚙️ Ayarlar",
+  "chat.welcome": "Herhangi bir mesaj gönderin, NEXUS AI yanıt versin!",
+  "ai.activated": "🤖 AI Modu Aktif!\n\nGoogle Gemini 2.0 Flash (ücretsiz) ile çalışıyor\n\nMesaj göndererek sohbete başlayın!",
+  "language.set": "✅ Dil değiştirildi: {lang}",
+  "error.access_denied": "⛔ Erişim reddedildi",
+  "status.online": "✅ Çevrimiçisiniz.",
+  "status.offline": "🔌 Bağlantı kesildi."
+}

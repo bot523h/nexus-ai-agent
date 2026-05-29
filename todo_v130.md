@@ -55,5 +55,5 @@
 - [x] CHANGELOG.md updated
 - [x] README updated
 - [x] Architecture diagram
-- [ ] git push
-- [ ] GitHub Release v1.3.0
+- [x] git push
+- [x] GitHub Release v1.3.0

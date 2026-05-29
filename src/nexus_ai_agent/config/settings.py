@@ -114,6 +114,38 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("NEXUS_MODEL_VERSION", "MODEL_VERSION"),
     )
 
+    # ── v2.0.0: Google Gemini AI ──────────────────────────────────────
+    gemini_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GEMINI_API_KEY", "NEXUS_GEMINI_API_KEY"),
+    )
+    gemini_model: str = Field(
+        default="gemini-2.0-flash",
+        validation_alias=AliasChoices("NEXUS_GEMINI_MODEL", "GEMINI_MODEL"),
+    )
+    gemini_max_rpm: int = Field(
+        default=15,
+        validation_alias=AliasChoices("NEXUS_GEMINI_MAX_RPM", "GEMINI_MAX_RPM"),
+    )
+    gemini_max_daily: int = Field(
+        default=1500,
+        validation_alias=AliasChoices("NEXUS_GEMINI_MAX_DAILY", "GEMINI_MAX_DAILY"),
+    )
+
+    # ── v2.0.0: Unified Cloud Storage ─────────────────────────────────
+    dropbox_token: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("DROPBOX_TOKEN", "NEXUS_DROPBOX_TOKEN"),
+    )
+    pcloud_token: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("PCLOUD_TOKEN", "NEXUS_PCLOUD_TOKEN"),
+    )
+    internxt_token: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("INTERNXT_TOKEN", "NEXUS_INTERNXT_TOKEN"),
+    )
+
     @field_validator("allowed_user_ids", mode="before")
     @classmethod
     def _parse_allowed_user_ids(cls, v):  # type: ignore[no-untyped-def]
