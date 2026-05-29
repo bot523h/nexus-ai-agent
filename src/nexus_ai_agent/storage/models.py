@@ -184,6 +184,8 @@ class UserReputation(SQLModel, table=True):
 class UserXP(SQLModel, table=True):
     """Per-user XP and levelling."""
 
+    __table_args__ = {"extend_existing": True}
+
     id: int | None = Field(default=None, primary_key=True)
     user_id: int = Field(index=True)
     chat_id: int = Field(index=True)
@@ -192,6 +194,7 @@ class UserXP(SQLModel, table=True):
     streak: int = Field(default=0)
     last_daily: datetime | None = Field(default=None)
     achievements: str = Field(default="[]")  # JSON array
+    referral_count: int = Field(default=0)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -247,7 +250,9 @@ class Referral(SQLModel, table=True):
     referral_code: str = Field(index=True)
     status: str = Field(default="pending", index=True)  # pending | completed | rewarded
     reward_claimed: bool = Field(default=False)
+    xp_awarded: bool = Field(default=False)
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    completed_at: datetime | None = Field(default=None)
 
 
 class ReferralCode(SQLModel, table=True):

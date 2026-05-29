@@ -30,6 +30,7 @@ class Referral(SQLModel, table=True):
     referral_code: str = Field(index=True)
     status: str = Field(default="pending", index=True)  # pending | completed | rewarded
     reward_claimed: bool = Field(default=False)
+    xp_awarded: bool = Field(default=False)
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
     completed_at: datetime | None = Field(default=None)
 
@@ -79,6 +80,7 @@ class ReferralEngine:
                     "referral_code VARCHAR,"
                     "status VARCHAR DEFAULT 'pending',"
                     "reward_claimed BOOLEAN DEFAULT 0,"
+                    "xp_awarded BOOLEAN DEFAULT 0,"
                     "created_at DATETIME,"
                     "completed_at DATETIME)"
                 )
@@ -161,6 +163,7 @@ class ReferralEngine:
                 referral_code=code,
                 status="completed",
                 completed_at=datetime.utcnow(),
+                xp_awarded=True,
             )
             s.add(ref)
 
@@ -182,6 +185,7 @@ class ReferralEngine:
                 "total_referrals": count,
                 "current_reward": current_reward,
                 "next_reward": next_reward,
+                "xp_bonus": 50,  # Both users get +50 XP
             }
 
     def _get_current_reward(self, count: int) -> dict[str, Any] | None:

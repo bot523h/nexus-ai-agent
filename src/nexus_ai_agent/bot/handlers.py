@@ -1359,13 +1359,26 @@ def build_handlers(
         arg = context.args[0]
         if not arg.startswith("ref_"):
             return
-        ref_code = arg[4:]
         user_id = _user_id(update)
         if user_id is None:
             return
-        result = referral_engine.process_referral(user_id, ref_code)
+        # process_referral expects (referee_id, start_param_with_ref_prefix)
+        result = referral_engine.process_referral(user_id, arg)
         if result.get("success"):
-            await _reply(update, "🎉 Welcome! Referred by a friend. Enjoy NEXUS AI!")
+            # Award +50 XP to both referrer and referee
+            try:
+                chat_id = _chat_id(update)
+                from nexus_ai_agent.features.gamification import GamificationEngine
+                GamificationEngine.add_xp(result["referrer_id"], chat_id, 50)
+                GamificationEngine.add_xp(user_id, chat_id, 50)
+            except Exception:
+                pass  # Non-critical: XP award is best-effort
+            lang = await _get_user_lang(update)
+            await _reply(
+                update,
+                i18n.t("referral.welcome", lang=lang)
+                + "\n\n🎉 Both you and your friend received +50 XP!",
+            )
 
     # ── v2.1: /newchat — Clear conversation and start fresh ──
     async def newchat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2982,6 +2995,7 @@ def build_handlers(
         CommandHandler("cloud_status", cloud_status_cmd),
         # ── v2.0.0: Referral ──
         CommandHandler("referral", referral_cmd),
+        CommandHandler("ref", referral_cmd),  # alias for /referral
         CommandHandler("referral_board", referral_board_cmd),
         # ── v2.0.0: Language ──
         CommandHandler("language", language_cmd),

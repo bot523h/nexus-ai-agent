@@ -21,4 +21,4 @@
 - [x] **11. Update .env.example** — Added GEMINI_API_KEY, BOT_USERNAME, DROPBOX_TOKEN, PCLOUD_TOKEN, INTERNXT_TOKEN
 - [x] **12. Update mypy config** — Added ignore_missing_imports for llama_cpp, gtts, sentence_transformers, langgraph, mega, sqlite_vec, telegram
 - [x] **13. Run all quality gates** — ruff ✅ mypy ✅ pytest 23/23 ✅
-- [ ] **14. Commit & push** — All changes pushed to GitHub
+- [x] **14. Commit & push** — All changes pushed to GitHub (commit 403c383)
