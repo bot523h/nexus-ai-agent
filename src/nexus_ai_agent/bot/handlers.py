@@ -134,7 +134,29 @@ def build_handlers(
             await _upsert_user(db_session_factory, update.effective_user)
         if update.effective_chat:
             await _upsert_chat(db_session_factory, _chat_id(update), f"tg:{_chat_id(update)}")
-        await _reply(update, "Welcome to NEXUS AI. I'm your offline-first AI assistant.")
+
+        # ── Phase 5: Main Menu with Inline Keyboard ──
+        keyboard = [
+            [
+                InlineKeyboardButton("💬 چت هوشمند", callback_data="menu_chat"),
+                InlineKeyboardButton("🎮 بازی‌ها", callback_data="menu_games"),
+            ],
+            [
+                InlineKeyboardButton("👤 چت ناشناس", callback_data="menu_anon"),
+                InlineKeyboardButton("📢 کانال", callback_data="menu_channel"),
+            ],
+            [
+                InlineKeyboardButton("🛠️ ابزارها", callback_data="menu_tools"),
+                InlineKeyboardButton("⚙️ تنظیمات", callback_data="menu_settings"),
+            ],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        msg = _message(update)
+        if msg is not None:
+            await msg.reply_text(
+                "🤖 NEXUS AI\n\nیکی از گزینه‌ها رو انتخاب کن:",
+                reply_markup=reply_markup,
+            )
 
     async def online(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user_id = _user_id(update)
@@ -653,6 +675,234 @@ def build_handlers(
         result = calculator.evaluate(expr)
         await _reply(update, result)
 
+    # ── Phase 5: Inline Keyboard Menu Callbacks ────────────────────
+
+    async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle all menu button callbacks."""
+        query = update.callback_query
+        if query is None or query.data is None:
+            return
+        await query.answer()
+        data = query.data
+
+        if data == "menu_chat":
+            keyboard = [
+                [InlineKeyboardButton("💬 شروع چت", callback_data="chat_start")],
+                [InlineKeyboardButton("🤖 شخصیت‌ها", callback_data="chat_personas")],
+                [InlineKeyboardButton("◀️ بازگشت", callback_data="menu_back")],
+            ]
+            await query.edit_message_text(
+                "💬 چت هوشمند\n\nبا NEXUS AI چت کن یا شخصیت مورد نظرت رو انتخاب کن:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+        elif data == "chat_start":
+            await query.edit_message_text(
+                "💬 کافیه پیام بفرستی تا NEXUS AI جواب بده!\nبرای تغییر شخصیت: /persona"
+            )
+
+        elif data == "chat_personas":
+            await query.edit_message_text(
+                "🤖 شخصیت‌های NEXUS:\n\n"
+                "• /story → Qwen (داستان‌سرایی)\n"
+                "• /companion → Gemma (اجتماعی/هیجانی)\n"
+                "• /analyze → Phi (منطق/تحلیل)\n\n"
+                "چت عادی = مسیریابی خودکار"
+            )
+
+        elif data == "menu_games":
+            keyboard = [
+                [InlineKeyboardButton("❓ کوییز", callback_data="game_quiz")],
+                [InlineKeyboardButton("🔢 حدس عدد", callback_data="game_guess")],
+                [InlineKeyboardButton("🟩 وردل فارسی", callback_data="game_wordle")],
+                [InlineKeyboardButton("📊 نظرسنجی", callback_data="game_poll")],
+                [InlineKeyboardButton("🏆 جدول امتیازات", callback_data="game_leaderboard")],
+                [InlineKeyboardButton("◀️ بازگشت", callback_data="menu_back")],
+            ]
+            await query.edit_message_text(
+                "🎮 بازی‌ها\n\nیکی رو انتخاب کن:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+        elif data == "game_quiz":
+            await query.edit_message_text("❓ کوییز\n\nبرای شروع: /quiz")
+
+        elif data == "game_guess":
+            await query.edit_message_text(
+                "🔢 حدس عدد\n\nبرای شروع: /guess_start\nبعد عدد حدسی بفرست.\nبرای توقف: /guess_stop"
+            )
+
+        elif data == "game_wordle":
+            await query.edit_message_text(
+                "🟩 وردل فارسی\n\nبرای شروع: /wordle\n"
+                "کلمه ۵ حرفی فارسی حدس بزن.\nبرای توقف: /wordle_stop"
+            )
+
+        elif data == "game_poll":
+            await query.edit_message_text(
+                "📊 نظرسنجی سریع\n\nاستفاده: /poll سوال | گزینه۱ | گزینه۲"
+            )
+
+        elif data == "game_leaderboard":
+            await query.edit_message_text("🏆 جدول امتیازات\n\n/leaderboard")
+
+        elif data == "menu_anon":
+            keyboard = [
+                [InlineKeyboardButton("🟢 ورود به صف", callback_data="anon_join")],
+                [InlineKeyboardButton("🔴 قطع چت", callback_data="anon_leave")],
+                [InlineKeyboardButton("🚨 گزارش", callback_data="anon_rep")],
+                [InlineKeyboardButton("◀️ بازگشت", callback_data="menu_back")],
+            ]
+            await query.edit_message_text(
+                "👤 چت ناشناس\n\nبا کاربر ناشناس چت کن بدون اینکه هویتت فاش بشه:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+        elif data == "anon_join":
+            user_id = query.from_user.id if query.from_user else 0
+            anon_mgr.bot = context.bot
+            result = await anon_mgr.join_queue(user_id)
+            await query.edit_message_text(result)
+
+        elif data == "anon_leave":
+            user_id = query.from_user.id if query.from_user else 0
+            anon_mgr.bot = context.bot
+            result = await anon_mgr.leave_chat(user_id)
+            await query.edit_message_text(result)
+
+        elif data == "anon_rep":
+            user_id = query.from_user.id if query.from_user else 0
+            anon_mgr.bot = context.bot
+            result = await anon_mgr.report_user(user_id, settings.owner_telegram_id)
+            await query.edit_message_text(result)
+
+        elif data == "menu_channel":
+            keyboard = [
+                [InlineKeyboardButton("📝 پست در کانال", callback_data="ch_post")],
+                [InlineKeyboardButton("📋 زمان‌بندی", callback_data="ch_schedule")],
+                [InlineKeyboardButton("👋 پیام خوشامد", callback_data="ch_welcome")],
+                [InlineKeyboardButton("📊 آمار", callback_data="ch_stats")],
+                [InlineKeyboardButton("◀️ بازگشت", callback_data="menu_back")],
+            ]
+            await query.edit_message_text(
+                "📢 مدیریت کانال و گروه\n\n",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+        elif data == "ch_post":
+            await query.edit_message_text("📝 پست در کانال\n\nاستفاده: /post متن")
+
+        elif data == "ch_schedule":
+            await query.edit_message_text(
+                "📋 زمان‌بندی پست\n\nاستفاده: /schedule YYYY-MM-DD HH:MM متن"
+            )
+
+        elif data == "ch_welcome":
+            await query.edit_message_text(
+                "👋 پیام خوشامد\n\nاستفاده: /welcome متن\n{name} = اسم عضو جدید"
+            )
+
+        elif data == "ch_stats":
+            await query.edit_message_text("📊 آمار\n\nاستفاده: /stats")
+
+        elif data == "menu_tools":
+            keyboard = [
+                [InlineKeyboardButton("⏰ یادآور", callback_data="tool_remind")],
+                [InlineKeyboardButton("🌐 ترجمه", callback_data="tool_tr")],
+                [InlineKeyboardButton("💱 تبدیل واحد", callback_data="tool_convert")],
+                [InlineKeyboardButton("🧮 ماشین‌حساب", callback_data="tool_calc")],
+                [InlineKeyboardButton("◀️ بازگشت", callback_data="menu_back")],
+            ]
+            await query.edit_message_text(
+                "🛠️ ابزارهای کاربردی\n\nیکی رو انتخاب کن:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+        elif data == "tool_remind":
+            await query.edit_message_text("⏰ یادآور\n\nاستفاده: /remind 30m متن\nواحدها: s/m/h/d")
+
+        elif data == "tool_tr":
+            await query.edit_message_text(
+                "🌐 ترجمه\n\n/tr متن → فارسی به انگلیسی\n/tr en متن → انگلیسی به فارسی"
+            )
+
+        elif data == "tool_convert":
+            await query.edit_message_text(
+                "💱 تبدیل واحد\n\n"
+                "/convert 100 usd to irt\n"
+                "/convert 5 km to mile\n"
+                "/convert 32 f to c"
+            )
+
+        elif data == "tool_calc":
+            await query.edit_message_text(
+                "🧮 ماشین‌حساب\n\n/calc 2^10 + sin(45)\nتوابع: sin, cos, tan, sqrt, log, pi, e"
+            )
+
+        elif data == "menu_settings":
+            keyboard = [
+                [InlineKeyboardButton("🟢 آنلاین", callback_data="set_online")],
+                [InlineKeyboardButton("🔴 آفلاین", callback_data="set_offline")],
+                [InlineKeyboardButton("📋 وضعیت", callback_data="set_status")],
+                [InlineKeyboardButton("ℹ️ راهنما", callback_data="set_help")],
+                [InlineKeyboardButton("◀️ بازگشت", callback_data="menu_back")],
+            ]
+            await query.edit_message_text(
+                "⚙️ تنظیمات\n\n",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+        elif data == "set_online":
+            user_id = query.from_user.id if query.from_user else 0
+            if user_id:
+                presence_store.mark_online(user_id)
+                context.application.bot_data.setdefault("heartbeat_user_ids", set()).add(user_id)
+            await query.edit_message_text("✅ شما آنلاین هستید. Heartbeat فعال شد.")
+
+        elif data == "set_offline":
+            user_id = query.from_user.id if query.from_user else 0
+            if user_id:
+                presence_store.mark_offline(user_id)
+                hb = context.application.bot_data.setdefault("heartbeat_user_ids", set())
+                hb.discard(user_id)
+            await query.edit_message_text("🔌 قطع شد. شما آفلاین هستید.")
+
+        elif data == "set_status":
+            user_id = query.from_user.id if query.from_user else 0
+            on = presence_store.is_online(user_id) if user_id else False
+            await query.edit_message_text(f"📋 وضعیت: {'آنلاین' if on else 'آفلاین'}")
+
+        elif data == "set_help":
+            await query.edit_message_text(
+                "ℹ️ راهنمای NEXUS AI v1.2.0\n\n"
+                "💬 چت: فقط پیام بفرست\n"
+                "🎮 بازی‌ها: /quiz /guess_start /wordle /poll\n"
+                "👤 ناشناس: /anon_start /anon_stop /anon_report\n"
+                "📢 کانال: /post /schedule /ban /unban /stats /welcome /pin\n"
+                "🛠 ابزارها: /remind /tr /convert /calc\n"
+                "⚙️ تنظیمات: /online /disconnect /status /help"
+            )
+
+        elif data == "menu_back":
+            keyboard = [
+                [
+                    InlineKeyboardButton("💬 چت هوشمند", callback_data="menu_chat"),
+                    InlineKeyboardButton("🎮 بازی‌ها", callback_data="menu_games"),
+                ],
+                [
+                    InlineKeyboardButton("👤 چت ناشناس", callback_data="menu_anon"),
+                    InlineKeyboardButton("📢 کانال", callback_data="menu_channel"),
+                ],
+                [
+                    InlineKeyboardButton("🛠️ ابزارها", callback_data="menu_tools"),
+                    InlineKeyboardButton("⚙️ تنظیمات", callback_data="menu_settings"),
+                ],
+            ]
+            await query.edit_message_text(
+                "🤖 NEXUS AI\n\nیکی از گزینه‌ها رو انتخاب کن:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
     async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _ = context
         if not update.effective_user or not update.message or not update.message.text:
@@ -729,6 +979,14 @@ def build_handlers(
         CommandHandler("tr", tr_cmd),
         CommandHandler("convert", convert_cmd),
         CommandHandler("calc", calc_cmd),
+        # Phase 5: Menu callbacks
+        CallbackQueryHandler(menu_callback, pattern=r"^menu_"),
+        CallbackQueryHandler(menu_callback, pattern=r"^chat_"),
+        CallbackQueryHandler(menu_callback, pattern=r"^game_"),
+        CallbackQueryHandler(menu_callback, pattern=r"^anon_"),
+        CallbackQueryHandler(menu_callback, pattern=r"^ch_"),
+        CallbackQueryHandler(menu_callback, pattern=r"^tool_"),
+        CallbackQueryHandler(menu_callback, pattern=r"^set_"),
         MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
     ]
 

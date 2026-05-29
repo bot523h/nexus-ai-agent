@@ -18,9 +18,9 @@
 - [x] Lint + test + commit Phase 3
 
 ## Phase 4 — Utility Tools
-- [ ] Create `src/nexus_ai_agent/features/tools.py`
-- [ ] Add utility command handlers to `handlers.py`
-- [ ] Lint + test + commit Phase 4
+- [x] Create `src/nexus_ai_agent/features/tools.py`
+- [x] Add utility command handlers to `handlers.py`
+- [x] Lint + test + commit Phase 4
 
 ## Phase 5 — Main Menu with Inline Keyboard
 - [ ] Update `/start` to show inline keyboard menu
