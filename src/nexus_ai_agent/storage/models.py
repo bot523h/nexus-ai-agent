@@ -232,3 +232,51 @@ class AnalyticsEvent(SQLModel, table=True):
     event_type: str = Field(index=True)
     event_data: str = Field(default="{}")  # JSON
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+# ── v2.0.0 models ──────────────────────────────────────────────────────
+
+
+class Referral(SQLModel, table=True):
+    """Referral tracking: who referred whom."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    referrer_id: int = Field(index=True)
+    referee_id: int = Field(index=True)
+    referral_code: str = Field(index=True)
+    status: str = Field(default="pending", index=True)  # pending | completed | rewarded
+    reward_claimed: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+class ReferralCode(SQLModel, table=True):
+    """Per-user unique referral code and stats."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True, unique=True)
+    code: str = Field(index=True, unique=True)
+    total_referrals: int = Field(default=0)
+    successful_referrals: int = Field(default=0)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class UserLanguage(SQLModel, table=True):
+    """Per-user language preference for i18n."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True, unique=True)
+    language: str = Field(default="en", index=True)  # ISO 639-1 code
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class CloudFile(SQLModel, table=True):
+    """Tracks files uploaded to unified cloud storage."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True)
+    file_name: str = Field(index=True)
+    provider: str = Field(index=True)  # dropbox | pcloud | internxt | mega
+    remote_path: str = Field(default="")
+    file_size: int = Field(default=0)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)

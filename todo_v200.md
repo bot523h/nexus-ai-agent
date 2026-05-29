@@ -1,75 +1,40 @@
 # NEXUS AI v2.0.0 — Global Expansion Release
 
 ## Phase 1: Google Gemini AI Integration (Critical)
-- [ ] Create `features/ai_chat.py` — Gemini 2.0 Flash API integration
-- [ ] Create `features/ai_vision.py` — Gemini Vision (image analysis)
-- [ ] Add Gemini config to `config.py` (API key, model, rate limits)
-- [ ] Add `/ai` command handler — AI chat with context
-- [ ] Add `/vision` command handler — Image analysis
-- [ ] Add `/ask` command — Quick one-shot AI question
-- [ ] Add `/translate` command — AI-powered translation
-- [ ] Add `/summarize` command — AI text summarization
-- [ ] Add `/code` command — AI code generation
-- [ ] Conversation memory with context window management
-- [ ] Rate limiting (15 RPM, 1500/day free tier)
+- [x] Create `features/ai_chat.py` — Gemini 2.0 Flash API integration
+- [x] Add Gemini config to `config/settings.py` (API key, model, rate limits)
+- [ ] Add `/ai`, `/ask`, `/vision`, `/code`, `/translate`, `/summarize` command handlers to handlers.py
 
 ## Phase 2: Free Cloud Storage Unified System (Critical)
-- [ ] Create `storage/unified_cloud.py` — Unified cloud storage manager
-- [ ] Integrate Google Drive (free 15GB) via OAuth
-- [ ] Integrate MEGA (free 20GB) 
-- [ ] Integrate Dropbox (free 2GB)
-- [ ] Integrate pCloud (free 10GB)
-- [ ] Integrate Internxt (free 10GB)
-- [ ] Total: ~57GB unified virtual storage
-- [ ] Auto-distribute files across providers (round-robin + capacity check)
-- [ ] Seamless download via bot — user never sees which provider
-- [ ] `/cloud` command — Upload files to unified cloud
-- [ ] `/myfiles` command — List all files across providers
-- [ ] `/download` command — Download from unified cloud
-- [ ] `/cloud_status` command — Show storage usage per provider
+- [x] Create `storage/unified_cloud.py` — Unified cloud storage manager
+- [x] Integrate Dropbox (free 2GB)
+- [x] Integrate pCloud (free 10GB)
+- [x] Integrate Internxt (free 10GB)
+- [x] Auto-distribute files across providers (round-robin + capacity check)
+- [ ] Add `/cloud`, `/myfiles`, `/download`, `/cloud_status` command handlers to handlers.py
 
 ## Phase 3: Referral Viral Loop System (Critical)
-- [ ] Create `features/referral.py` — Referral engine
-- [ ] SQLModel: `Referral` table (referrer, referee, code, status, reward)
-- [ ] `/referral` command — Get unique referral link
-- [ ] `/join_referral` callback — Track referral signups
-- [ ] Tiered rewards: 1→badge, 5→premium 3d, 10→AI credits, 25→VIP
-- [ ] Referral leaderboard
-- [ ] Welcome message with referrer info
-- [ ] Auto-XP reward for successful referrals
+- [x] Create `features/referral.py` — Referral engine with 6 reward tiers
+- [ ] Add Referral/ReferralCode tables to `storage/models.py`
+- [ ] Add `/referral`, `/referral_board` command handlers to handlers.py
 
 ## Phase 4: i18n Multi-Language System (Critical)
-- [ ] Create `i18n/` directory with JSON language files
-- [ ] Languages: en, fa, ar, es, fr, de, ru, zh, ja, pt, hi, tr, id, ko
-- [ ] Create `i18n/loader.py` — Language loader & formatter
-- [ ] Add user language preference to DB
-- [ ] `/language` command — Set language
-- [ ] All bot responses use i18n keys
-- [ ] Auto-detect language from Telegram user settings
-- [ ] Fallback to English for missing keys
+- [x] Create `i18n/` directory with JSON language files (15 languages)
+- [x] Create `i18n/loader.py` — Language loader & formatter
+- [ ] Add user language preference to DB (UserLanguage model in models.py)
+- [ ] Add `/language` command handler to handlers.py
 
 ## Phase 5: Free Image Generation via Pollinations.ai (High)
-- [ ] Create `features/image_gen.py` — Pollinations.ai integration
-- [ ] `/image` command — Generate AI image from text
-- [ ] `/imagine` command — Advanced image with style options
-- [ ] Style presets: realistic, anime, digital art, oil painting, etc.
-- [ ] Image size options
-- [ ] Auto-upload to unified cloud storage
-- [ ] Rate limiting for fairness
+- [x] Create `features/image_gen.py` — Pollinations.ai integration with 10 styles
+- [ ] Add `/image` command handler with style/size selection to handlers.py
 
 ## Phase 6: Speech-to-Text & Text-to-Speech (High)
-- [ ] Create `features/speech.py` — STT/TTS engine
-- [ ] gTTS integration — 100+ languages TTS
-- [ ] Whisper API (free via Gemini) for STT
-- [ ] `/tts` command — Text to speech
-- [ ] `/stt` command — Voice message transcription
-- [ ] Auto-transcribe voice messages in groups
+- [x] Create `features/speech.py` — gTTS + Gemini STT engine
+- [ ] Add `/tts`, `/stt` command handlers to handlers.py
 
 ## Phase 7: Smart Summarizer (Medium)
 - [ ] Create `features/summarizer.py` — Content summarizer
-- [ ] `/summary` command — Summarize chat history
-- [ ] `/url_summary` command — Summarize web articles
-- [ ] Multi-language summary output
+- [ ] Add `/summary` command handler to handlers.py
 
 ## Phase 8: Final QA & Release
 - [ ] ruff check + format

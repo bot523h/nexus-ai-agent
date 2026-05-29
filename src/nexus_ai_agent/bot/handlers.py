@@ -24,6 +24,16 @@ from nexus_ai_agent.features.ads import AdManager
 from nexus_ai_agent.features.analytics import AnalyticsEngine
 
 # Feature managers — lazy-initialised inside build_handlers
+
+# ── v2.0.0 imports ──
+from nexus_ai_agent.features.ai_chat import GeminiEngine
+from nexus_ai_agent.features.image_gen import ImageGenEngine
+from nexus_ai_agent.features.speech import SpeechEngine
+from nexus_ai_agent.features.summarizer import SummarizerEngine
+from nexus_ai_agent.features.referral import ReferralEngine
+from nexus_ai_agent.i18n import i18n
+from nexus_ai_agent.storage.unified_cloud import UnifiedCloudStorage
+
 from nexus_ai_agent.features.anonymous_chat import AnonymousChatManager
 from nexus_ai_agent.features.channel_manager import ChannelManager
 from nexus_ai_agent.features.engagement import EngagementEngine
@@ -38,7 +48,7 @@ from nexus_ai_agent.features.viral_engine import ViralEngine
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.orchestration.state import NexusState
 from nexus_ai_agent.presence import PresenceStore
-from nexus_ai_agent.storage.models import Chat, User
+from nexus_ai_agent.storage.models import Chat, Referral, ReferralCode, User, UserLanguage, CloudFile
 
 from .middleware import AuthMiddleware, RateLimiter
 
@@ -144,15 +154,23 @@ def build_handlers(
         if update.effective_chat:
             await _upsert_chat(db_session_factory, _chat_id(update), f"tg:{_chat_id(update)}")
 
-        # ── Phase 5+16: Main Menu with Inline Keyboard ──
+        # ── v2.0.0: Main Menu with Inline Keyboard ──
         keyboard = [
             [
+                InlineKeyboardButton("🤖 هوش مصنوعی", callback_data="menu_ai"),
                 InlineKeyboardButton("💬 چت هوشمند", callback_data="menu_chat"),
-                InlineKeyboardButton("🎮 بازی‌ها", callback_data="menu_games"),
             ],
             [
+                InlineKeyboardButton("🎨 تصویرسازی", callback_data="menu_image"),
+                InlineKeyboardButton("🔊 صدا", callback_data="menu_speech"),
+            ],
+            [
+                InlineKeyboardButton("☁️ فضای ابری", callback_data="menu_cloud"),
+                InlineKeyboardButton("🎁 دعوت دوستان", callback_data="menu_referral"),
+            ],
+            [
+                InlineKeyboardButton("🎮 بازی‌ها", callback_data="menu_games"),
                 InlineKeyboardButton("👤 چت ناشناس", callback_data="menu_anon"),
-                InlineKeyboardButton("📢 کانال", callback_data="menu_channel"),
             ],
             [
                 InlineKeyboardButton("🛠️ ابزارها", callback_data="menu_tools"),
@@ -164,9 +182,10 @@ def build_handlers(
             ],
             [
                 InlineKeyboardButton("🛡️ نظارت", callback_data="menu_moderation"),
-                InlineKeyboardButton("⚙️ تنظیمات", callback_data="menu_settings"),
+                InlineKeyboardButton("🌐 زبان", callback_data="menu_language"),
             ],
             [
+                InlineKeyboardButton("⚙️ تنظیمات", callback_data="menu_settings"),
                 InlineKeyboardButton("👨‍💼 پنل مدیریت", callback_data="menu_admin"),
             ],
         ]
@@ -174,7 +193,7 @@ def build_handlers(
         msg = _message(update)
         if msg is not None:
             await msg.reply_text(
-                "🤖 NEXUS AI\n\nیکی از گزینه‌ها رو انتخاب کن:",
+                "🤖 NEXUS AI v2.0.0\n\nیکی از گزینه‌ها رو انتخاب کن:",
                 reply_markup=reply_markup,
             )
 
@@ -217,7 +236,32 @@ def build_handlers(
         _ = context
         await _reply(
             update,
-            "🤖 NEXUS AI v1.3.0 — راهنما\n\n"
+            "🤖 NEXUS AI v2.0.0 — راهنما\n\n"
+            "━━━ 🤖 هوش مصنوعی ━━━\n"
+            "/ai <پیام> → چت با Gemini AI\n"
+            "/ask <سوال> → سوال و جواب\n"
+            "/code <کد> → تولید و بررسی کد\n"
+            "/translate <متن> → ترجمه هوشمند\n"
+            "/vision → تحلیل تصویر (ریپلی عکس)\n"
+            "/summarize <متن|URL> → خلاصه‌سازی\n\n"
+            "━━━ 🎨 تصویرسازی ━━━\n"
+            "/image <توصیف> → ساخت تصویر AI\n"
+            "استایل‌ها: realistic, anime, digital-art,\n"
+            "oil-painting, pixel-art, watercolor,\n"
+            "cyberpunk, fantasy, 3d, sketch\n\n"
+            "━━━ 🔊 صدا ━━━\n"
+            "/tts <متن> → متن به صدا\n"
+            "/stt → صدا به متن (ریپلی صدا)\n\n"
+            "━━━ ☁️ فضای ابری ━━━\n"
+            "/cloud → آپلود فایل (ریپلی فایل)\n"
+            "/myfiles → لیست فایل‌ها\n"
+            "/download <نام> → دانلود فایل\n"
+            "/cloud_status → وضعیت ذخیره‌سازی\n\n"
+            "━━━ 🎁 دعوت دوستان ━━━\n"
+            "/referral → لینک دعوت اختصاصی\n"
+            "/referral_board → جدول برترین‌ها\n\n"
+            "━━━ 🌐 زبان ━━━\n"
+            "/language → تغییر زبان ربات\n\n"
             "━━━ 💬 چت ━━━\n"
             "هر پیامی بفرست = چت با AI\n"
             "/persona → شخصیت‌ها\n"
@@ -714,6 +758,391 @@ def build_handlers(
         result = calculator.evaluate(expr)
         await _reply(update, result)
 
+    # ── v2.0.0: Gemini AI Engine ──────────────────────────────────────
+    gemini_engine: GeminiEngine | None = None
+    if settings.gemini_api_key:
+        gemini_engine = GeminiEngine(api_key=settings.gemini_api_key, model=settings.gemini_model)
+    image_engine = ImageGenEngine()
+    speech_engine = SpeechEngine(gemini_api_key=settings.gemini_api_key or "")
+    summarizer_engine: SummarizerEngine | None = None
+    if settings.gemini_api_key:
+        summarizer_engine = SummarizerEngine(gemini_api_key=settings.gemini_api_key, model=settings.gemini_model)
+    referral_engine = ReferralEngine(db_path=settings.db_path)
+    unified_cloud = UnifiedCloudStorage(
+        dropbox_token=settings.dropbox_token,
+        pcloud_token=settings.pcloud_token,
+        internxt_token=settings.internxt_token,
+        mega_email=settings.mega_email,
+        mega_password=settings.mega_password,
+    )
+
+    # ── v2.0.0: /ai — AI Chat with Gemini ──
+    async def ai_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if gemini_engine is None:
+            await _reply(update, "❌ Gemini AI is not configured. Set GEMINI_API_KEY.")
+            return
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        if not rate_limiter.is_allowed(user_id):
+            await _reply(update, "⏳ Rate limit reached.")
+            return
+        text = " ".join(context.args) if context.args else ""
+        if not text:
+            await _reply(update, "🤖 Gemini AI Chat\n\nUsage: /ai <message>\n\nOther: /ask /code /translate /vision /summarize")
+            return
+        conv_id = f"tg:{user_id}"
+        result = await gemini_engine.chat(text, conv_id=conv_id, user_id=user_id)
+        await _reply(update, f"🤖 {result}" if not result.startswith("❌") else result)
+
+    # ── v2.0.0: /ask — One-shot AI question ──
+    async def ask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if gemini_engine is None:
+            await _reply(update, "❌ Gemini AI not configured.")
+            return
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        text = " ".join(context.args) if context.args else ""
+        if not text:
+            await _reply(update, "❌ Usage: /ask <question>")
+            return
+        result = await gemini_engine.ask(text, user_id=user_id)
+        await _reply(update, f"💡 {result}")
+
+    # ── v2.0.0: /code — AI Code Generation ──
+    async def code_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if gemini_engine is None:
+            await _reply(update, "❌ Gemini AI not configured.")
+            return
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        text = " ".join(context.args) if context.args else ""
+        if not text:
+            await _reply(update, "❌ Usage: /code <description>\nExample: /code Python fibonacci function")
+            return
+        result = await gemini_engine.code(text, user_id=user_id)
+        await _reply(update, f"💻 {result}")
+
+    # ── v2.0.0: /translate — AI-powered translation ──
+    async def ai_translate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if gemini_engine is None:
+            await _reply(update, "❌ Gemini AI not configured.")
+            return
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        text = " ".join(context.args) if context.args else ""
+        if not text:
+            await _reply(update, "❌ Usage: /translate <text>\nSpecific target: /translate ja Hello world")
+            return
+        target_lang = "fa"
+        source_text = text
+        if ":" in text and text.split(":")[0].isalpha():
+            parts = text.split(":", 1)
+            if len(parts) == 2 and len(parts[0]) <= 3:
+                target_lang = parts[0]
+                source_text = parts[1].strip()
+        result = await gemini_engine.translate(source_text, target_lang=target_lang, user_id=user_id)
+        await _reply(update, f"🌐 {result}")
+
+    # ── v2.0.0: /vision — Image analysis via Gemini Vision ──
+    async def vision_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if gemini_engine is None:
+            await _reply(update, "❌ Gemini AI not configured.")
+            return
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        msg = _message(update)
+        photo = None
+        prompt = " ".join(context.args) if context.args else "Describe this image in detail."
+        if msg and msg.reply_to_message and msg.reply_to_message.photo:
+            photo = msg.reply_to_message.photo[-1]
+        elif msg and msg.photo:
+            photo = msg.photo[-1]
+        if photo is None:
+            await _reply(update, "❌ Reply to a photo with /vision\nExample: Reply to photo → /vision What is this?")
+            return
+        try:
+            file = await photo.get_file()
+            image_bytes = await file.download_as_bytearray()
+            import base64
+            b64 = base64.b64encode(bytes(image_bytes)).decode()
+            result = await gemini_engine.vision(b64, prompt=prompt, user_id=user_id)
+            await _reply(update, f"👁 {result}")
+        except Exception as exc:  # noqa: BLE001
+            await _reply(update, f"❌ Vision error: {exc}")
+
+    # ── v2.0.0: /image — AI Image Generation via Pollinations.ai ──
+    async def image_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        text = " ".join(context.args) if context.args else ""
+        if not text:
+            await _reply(update, "🎨 Image Generation\n\nUsage: /image <description>\nWith style: /image style:anime a cat samurai\nStyles: realistic, anime, digital, oil, watercolor, pixel, 3d, comic, minimal, fantasy")
+            return
+        style = "realistic"
+        prompt = text
+        if text.lower().startswith("style:"):
+            parts = text.split(None, 1)
+            if len(parts) >= 2:
+                style = parts[0].split(":")[1].lower()
+                prompt = parts[1]
+        result = await image_engine.generate(prompt, style=style, user_id=user_id)
+        if result.get("error"):
+            await _reply(update, f"❌ {result['error']}")
+        elif result.get("file_path"):
+            msg = _message(update)
+            if msg is not None:
+                await msg.reply_photo(photo=open(result["file_path"], "rb"), caption=f"🎨 {prompt[:100]}")
+        else:
+            await _reply(update, "❌ Image generation failed.")
+
+    # ── v2.0.0: /tts — Text to Speech ──
+    async def tts_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        text = " ".join(context.args) if context.args else ""
+        if not text:
+            await _reply(update, "🔊 Text to Speech\n\nUsage: /tts <text>\nWith language: /tts en Hello world\nLanguages: en, fa, ar, es, fr, de, ru, zh, ja, ko, pt, hi, tr, id, it")
+            return
+        lang = "en"
+        tts_text = text
+        if context.args and len(context.args[0]) == 2 and context.args[0].isalpha():
+            lang = context.args[0].lower()
+            tts_text = " ".join(context.args[1:])
+        if not tts_text:
+            await _reply(update, "❌ Provide text after language code.")
+            return
+        result = await speech_engine.text_to_speech(tts_text, lang=lang, user_id=user_id)
+        if result.get("error"):
+            await _reply(update, f"❌ {result['error']}")
+        elif result.get("file_path"):
+            msg = _message(update)
+            if msg is not None:
+                await msg.reply_voice(voice=open(result["file_path"], "rb"))
+        else:
+            await _reply(update, "❌ TTS failed.")
+
+    # ── v2.0.0: /stt — Speech to Text ──
+    async def stt_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if gemini_engine is None:
+            await _reply(update, "❌ Gemini AI not configured.")
+            return
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        msg = _message(update)
+        voice = None
+        if msg and msg.reply_to_message and msg.reply_to_message.voice:
+            voice = msg.reply_to_message.voice
+        elif msg and msg.reply_to_message and msg.reply_to_message.audio:
+            voice = msg.reply_to_message.audio
+        elif msg and msg.voice:
+            voice = msg.voice
+        if voice is None:
+            await _reply(update, "❌ Reply to a voice message with /stt")
+            return
+        try:
+            file = await voice.get_file()
+            audio_bytes = await file.download_as_bytearray()
+            import base64
+            b64 = base64.b64encode(bytes(audio_bytes)).decode()
+            result = await speech_engine.speech_to_text(b64, mime_type=voice.mime_type or "audio/ogg", user_id=user_id)
+            if result.get("error"):
+                await _reply(update, f"❌ {result['error']}")
+            else:
+                await _reply(update, f"🎤 Transcription:\n\n{result.get('text', '')}")
+        except Exception as exc:  # noqa: BLE001
+            await _reply(update, f"❌ STT error: {exc}")
+
+    # ── v2.0.0: /summarize — Smart Summarizer ──
+    async def summarize_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if summarizer_engine is None:
+            await _reply(update, "❌ Summarizer not configured (requires GEMINI_API_KEY).")
+            return
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        text = " ".join(context.args) if context.args else ""
+        if not text:
+            await _reply(update, "📝 Smart Summarizer\n\nUsage: /summarize <text or URL>\nModes: /summarize mode:detailed <text>\nModes: brief, detailed, key_points, eli5, academic")
+            return
+        mode = "brief"
+        content_text = text
+        if text.lower().startswith("mode:"):
+            parts = text.split(None, 1)
+            if len(parts) >= 2:
+                mode = parts[0].split(":")[1].lower()
+                content_text = parts[1]
+        if content_text.startswith("http://") or content_text.startswith("https://"):
+            result = await summarizer_engine.summarize_url(content_text, mode=mode)
+        else:
+            result = await summarizer_engine.summarize_text(content_text, mode=mode)
+        await _reply(update, SummarizerEngine.format_result(result))
+
+    # ── v2.0.0: /cloud — Upload file to unified cloud ──
+    async def cloud_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        msg = _message(update)
+        doc = None
+        if msg and msg.reply_to_message and msg.reply_to_message.document:
+            doc = msg.reply_to_message.document
+        elif msg and msg.document:
+            doc = msg.document
+        if doc is None:
+            await _reply(update, "☁️ Unified Cloud Storage\n\nUpload: Reply to file → /cloud\nFiles: /myfiles\nDownload: /download <name>\nStatus: /cloud_status")
+            return
+        try:
+            file = await doc.get_file()
+            file_bytes = await file.download_as_bytearray()
+            result = await unified_cloud.upload_file(doc.file_name or "unnamed", bytes(file_bytes), user_id=user_id)
+            if result.get("success"):
+                async with db_session_factory() as session:
+                    cloud_file = CloudFile(
+                        user_id=user_id,
+                        file_name=doc.file_name or "unnamed",
+                        provider=result.get("provider", "unknown"),
+                        remote_path=result.get("remote_path", ""),
+                        file_size=len(file_bytes),
+                    )
+                    session.add(cloud_file)
+                    await session.commit()
+                await _reply(update, f"☁️ Uploaded!\n📁 {doc.file_name}\n📦 {result.get('provider', 'N/A')}\n📊 {len(file_bytes)/1024:.1f}KB")
+            else:
+                await _reply(update, f"❌ Upload failed: {result.get('error', 'Unknown')}")
+        except Exception as exc:  # noqa: BLE001
+            await _reply(update, f"❌ Cloud error: {exc}")
+
+    # ── v2.0.0: /myfiles — List my cloud files ──
+    async def myfiles_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        async with db_session_factory() as session:
+            stmt = select(CloudFile).where(CloudFile.user_id == user_id).order_by(CloudFile.created_at.desc())
+            files = (await session.exec(stmt)).all()
+        if not files:
+            await _reply(update, "📁 No files. Reply to file → /cloud to upload.")
+            return
+        lines = [f"📁 Your Cloud Files ({len(files)}):", "━" * 25]
+        for f in files[:20]:
+            lines.append(f"📄 {f.file_name} ({f.file_size/1024:.1f}KB) [{f.provider}]")
+        if len(files) > 20:
+            lines.append(f"... and {len(files) - 20} more")
+        await _reply(update, "\n".join(lines))
+
+    # ── v2.0.0: /download — Download from cloud ──
+    async def download_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        filename = " ".join(context.args) if context.args else ""
+        if not filename:
+            await _reply(update, "❌ Usage: /download <filename>")
+            return
+        async with db_session_factory() as session:
+            stmt = select(CloudFile).where(CloudFile.user_id == user_id, CloudFile.file_name == filename)
+            cloud_file = (await session.exec(stmt)).first()
+        if cloud_file is None:
+            await _reply(update, f"❌ File '{filename}' not found.")
+            return
+        result = await unified_cloud.download_file(filename, provider=cloud_file.provider)
+        if result.get("error"):
+            await _reply(update, f"❌ {result['error']}")
+        elif result.get("data"):
+            import io
+            msg = _message(update)
+            if msg is not None:
+                await msg.reply_document(document=io.BytesIO(result["data"]), filename=filename)
+        else:
+            await _reply(update, "❌ Download failed.")
+
+    # ── v2.0.0: /cloud_status — Cloud storage status ──
+    async def cloud_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        status = await unified_cloud.get_status()
+        await _reply(update, f"☁️ Cloud Storage Status\n\n{status}")
+
+    # ── v2.0.0: /referral — Referral system ──
+    async def referral_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        code = await referral_engine.get_or_create_code(user_id)
+        link = await referral_engine.get_referral_link(code, settings.bot_username)
+        stats = await referral_engine.get_referral_stats(user_id)
+        formatted = referral_engine.format_stats(code, link, stats)
+        await _reply(update, formatted)
+
+    # ── v2.0.0: /referral_board — Referral leaderboard ──
+    async def referral_board_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        board = await referral_engine.get_leaderboard(limit=10)
+        formatted = referral_engine.format_leaderboard(board)
+        await _reply(update, formatted)
+
+    # ── v2.0.0: /language — Set language preference ──
+    async def language_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        lang = " ".join(context.args) if context.args else ""
+        if not lang:
+            from nexus_ai_agent.i18n import SUPPORTED_LANGUAGES
+            keyboard = []
+            row = []
+            for code, name in list(SUPPORTED_LANGUAGES.items())[:15]:
+                row.append(InlineKeyboardButton(name, callback_data=f"lang_{code}"))
+                if len(row) == 3:
+                    keyboard.append(row)
+                    row = []
+            if row:
+                keyboard.append(row)
+            async with db_session_factory() as session:
+                stmt = select(UserLanguage).where(UserLanguage.user_id == user_id)
+                ul = (await session.exec(stmt)).first()
+            current = ul.language if ul else "en"
+            await _reply(update, f"🌍 Language\n\nCurrent: {SUPPORTED_LANGUAGES.get(current, current)}\n\nSelect:", reply_markup=InlineKeyboardMarkup(keyboard))
+            return
+        lang = lang.lower()
+        from nexus_ai_agent.i18n import SUPPORTED_LANGUAGES
+        if lang not in SUPPORTED_LANGUAGES:
+            await _reply(update, f"❌ '{lang}' not supported.\nSupported: {', '.join(SUPPORTED_LANGUAGES.keys())}")
+            return
+        async with db_session_factory() as session:
+            stmt = select(UserLanguage).where(UserLanguage.user_id == user_id)
+            ul = (await session.exec(stmt)).first()
+            if ul:
+                ul.language = lang
+                from datetime import datetime as _dt
+                ul.updated_at = _dt.utcnow()
+                await session.commit()
+            else:
+                ul = UserLanguage(user_id=user_id, language=lang)
+                session.add(ul)
+                await session.commit()
+        await _reply(update, f"✅ Language: {SUPPORTED_LANGUAGES[lang]}")
+
+    # ── v2.0.0: Handle /start ref_XXX for referral tracking ──
+    async def start_referral_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not context.args:
+            return
+        arg = context.args[0]
+        if not arg.startswith("ref_"):
+            return
+        ref_code = arg[4:]
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        result = await referral_engine.process_referral(referrer_code=ref_code, referee_id=user_id)
+        if result.get("success"):
+            await _reply(update, "🎉 Welcome! Referred by a friend. Enjoy NEXUS AI!")
+
     # ── Phase 5: Inline Keyboard Menu Callbacks ────────────────────
 
     async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1162,7 +1591,7 @@ def build_handlers(
 
         elif data == "set_help":
             await query.edit_message_text(
-                "ℹ️ راهنمای NEXUS AI v1.3.0\n\n"
+                "ℹ️ راهنمای NEXUS AI v2.0.0\n\n"
                 "💬 چت: فقط پیام بفرست\n"
                 "🎮 بازی‌ها: /quiz /guess_start /wordle /poll\n"
                 "👤 ناشناس: /anon_start /anon_stop /anon_report\n"
@@ -1174,15 +1603,268 @@ def build_handlers(
                 "⚙️ تنظیمات: /online /disconnect /status /help"
             )
 
-        elif data == "menu_back":
+        # ── v2.0.0: AI Menu ──
+        elif data == "menu_ai":
+            keyboard = [
+                [InlineKeyboardButton("💬 چت با AI", callback_data="ai_chat")],
+                [InlineKeyboardButton("❓ سوال بپرس", callback_data="ai_ask")],
+                [InlineKeyboardButton("💻 کدنویسی", callback_data="ai_code")],
+                [InlineKeyboardButton("🌍 ترجمه هوشمند", callback_data="ai_translate")],
+                [InlineKeyboardButton("👁️ تحلیل تصویر", callback_data="ai_vision")],
+                [InlineKeyboardButton("📝 خلاصه‌سازی", callback_data="ai_summarize")],
+                [InlineKeyboardButton("◀️ بازگشت", callback_data="menu_back")],
+            ]
+            await query.edit_message_text(
+                "🤖 هوش مصنوعی\n\nقابلیت‌های AI رو انتخاب کن:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+        elif data == "ai_chat":
+            await query.edit_message_text(
+                "💬 چت با AI\n\nاز /ai استفاده کن و پیامت رو بنویس:\n"
+                "مثال: /ai سلام، چطوری؟"
+            )
+
+        elif data == "ai_ask":
+            await query.edit_message_text(
+                "❓ سوال بپرس\n\nاز /ask استفاده کن:\n"
+                "مثال: /ask چرا آسمان آبی است؟"
+            )
+
+        elif data == "ai_code":
+            await query.edit_message_text(
+                "💻 کدنویسی\n\nاز /code استفاده کن:\n"
+                "مثال: /code پایتون فاکتوریل بنویس"
+            )
+
+        elif data == "ai_translate":
+            await query.edit_message_text(
+                "🌍 ترجمه هوشمند\n\nاز /translate استفاده کن:\n"
+                "مثال: /translate Hello, how are you? fa"
+            )
+
+        elif data == "ai_vision":
+            await query.edit_message_text(
+                "👁️ تحلیل تصویر\n\nیک عکس بفرست و /vision رو ریپلی کن"
+            )
+
+        elif data == "ai_summarize":
+            await query.edit_message_text(
+                "📝 خلاصه‌سازی\n\nاز /summarize استفاده کن:\n"
+                "مثال: /summarize متن طولانی...\n"
+                "مدل‌ها: brief, detailed, key_points, eli5, academic"
+            )
+
+        # ── v2.0.0: Image Gen Menu ──
+        elif data == "menu_image":
+            keyboard = [
+                [InlineKeyboardButton("🎨 ساخت تصویر", callback_data="img_create")],
+                [InlineKeyboardButton("📋 استایل‌ها", callback_data="img_styles")],
+                [InlineKeyboardButton("📐 اندازه‌ها", callback_data="img_sizes")],
+                [InlineKeyboardButton("◀️ بازگشت", callback_data="menu_back")],
+            ]
+            await query.edit_message_text(
+                "🎨 تصویرسازی AI\n\nاز /image استفاده کن:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+        elif data == "img_create":
+            await query.edit_message_text(
+                "🎨 ساخت تصویر\n\nاز /image استفاده کن:\n"
+                "مثال: /image a cat in space --style anime\n"
+                "استایل‌ها: realistic, anime, digital-art, oil-painting,\n"
+                "pixel-art, watercolor, cyberpunk, fantasy, 3d, sketch"
+            )
+
+        elif data == "img_styles":
+            await query.edit_message_text(
+                "📋 استایل‌های موجود:\n\n"
+                "• realistic — واقع‌گرایانه\n"
+                "• anime — انیمه‌ای\n"
+                "• digital-art — هنر دیجیتال\n"
+                "• oil-painting — نقاشی رنگ روغن\n"
+                "• pixel-art — پیکسل آرت\n"
+                "• watercolor — آبرنگ\n"
+                "• cyberpunk — سایبرپانک\n"
+                "• fantasy — فانتزی\n"
+                "• 3d — سه‌بعدی\n"
+                "• sketch — طرح‌نهایی\n\n"
+                "استفاده: /image توصیف --style استایل"
+            )
+
+        elif data == "img_sizes":
+            await query.edit_message_text(
+                "📐 اندازه‌های موجود:\n\n"
+                "• 1024x1024 — مربع (پیش‌فرض)\n"
+                "• 1792x1024 — افقی\n"
+                "• 1024x1792 — عمودی\n\n"
+                "استفاده: /image توصیف --size 1792x1024"
+            )
+
+        # ── v2.0.0: Speech Menu ──
+        elif data == "menu_speech":
+            keyboard = [
+                [InlineKeyboardButton("🔊 متن به صدا", callback_data="speech_tts")],
+                [InlineKeyboardButton("🎤 صدا به متن", callback_data="speech_stt")],
+                [InlineKeyboardButton("◀️ بازگشت", callback_data="menu_back")],
+            ]
+            await query.edit_message_text(
+                "🔊 صدا\n\nقابلیت‌های صوتی:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+        elif data == "speech_tts":
+            await query.edit_message_text(
+                "🔊 متن به صدا\n\nاز /tts استفاده کن:\n"
+                "مثال: /tts سلام دنیا fa\n"
+                "کد زبان: en, fa, ar, fr, de, es, ru, zh, ja, ..."
+            )
+
+        elif data == "speech_stt":
+            await query.edit_message_text(
+                "🎤 صدا به متن\n\nیک پیام صوتی بفرست و /stt رو ریپلی کن"
+            )
+
+        # ── v2.0.0: Cloud Storage Menu ──
+        elif data == "menu_cloud":
+            keyboard = [
+                [InlineKeyboardButton("📤 آپلود فایل", callback_data="cloud_upload")],
+                [InlineKeyboardButton("📂 فایل‌های من", callback_data="cloud_files")],
+                [InlineKeyboardButton("📥 دانلود فایل", callback_data="cloud_download")],
+                [InlineKeyboardButton("📊 وضعیت ذخیره‌سازی", callback_data="cloud_status")],
+                [InlineKeyboardButton("◀️ بازگشت", callback_data="menu_back")],
+            ]
+            await query.edit_message_text(
+                "☁️ فضای ابری\n\nذخیره‌سازی یکپارچه ۵+ سرویس:\n"
+                "Google Drive + MEGA + Dropbox + pCloud + Internxt\n"
+                "مجموعاً بیش از ۵۷ گیگابایت رایگان!",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+        elif data == "cloud_upload":
+            await query.edit_message_text(
+                "📤 آپلود فایل\n\nیک فایل بفرست و /cloud رو ریپلی کن"
+            )
+
+        elif data == "cloud_files":
+            await query.edit_message_text(
+                "📂 فایل‌های من\n\nاز /myfiles استفاده کن"
+            )
+
+        elif data == "cloud_download":
+            await query.edit_message_text(
+                "📥 دانلود فایل\n\nاز /download استفاده کن:\n"
+                "مثال: /download myfile.pdf"
+            )
+
+        elif data == "cloud_status":
+            await query.edit_message_text(
+                "📊 وضعیت ذخیره‌سازی\n\nاز /cloud_status استفاده کن"
+            )
+
+        # ── v2.0.0: Referral Menu ──
+        elif data == "menu_referral":
+            keyboard = [
+                [InlineKeyboardButton("🎁 لینک دعوت من", callback_data="ref_link")],
+                [InlineKeyboardButton("🏆 جدول برترین‌ها", callback_data="ref_board")],
+                [InlineKeyboardButton("◀️ بازگشت", callback_data="menu_back")],
+            ]
+            await query.edit_message_text(
+                "🎁 دعوت دوستان\n\nدوستانت رو دعوت کن و جایزه بگیر!",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+        elif data == "ref_link":
+            await query.edit_message_text(
+                "🎁 لینک دعوت\n\nاز /referral استفاده کن"
+            )
+
+        elif data == "ref_board":
+            await query.edit_message_text(
+                "🏆 جدول برترین‌ها\n\nاز /referral_board استفاده کن"
+            )
+
+        # ── v2.0.0: Language Menu ──
+        elif data == "menu_language":
             keyboard = [
                 [
-                    InlineKeyboardButton("💬 چت هوشمند", callback_data="menu_chat"),
-                    InlineKeyboardButton("🎮 بازی‌ها", callback_data="menu_games"),
+                    InlineKeyboardButton("🇬🇧 English", callback_data="lang_en"),
+                    InlineKeyboardButton("🇮🇷 فارسی", callback_data="lang_fa"),
                 ],
                 [
+                    InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar"),
+                    InlineKeyboardButton("🇪🇸 Español", callback_data="lang_es"),
+                ],
+                [
+                    InlineKeyboardButton("🇫🇷 Français", callback_data="lang_fr"),
+                    InlineKeyboardButton("🇩🇪 Deutsch", callback_data="lang_de"),
+                ],
+                [
+                    InlineKeyboardButton("🇷🇺 Русский", callback_data="lang_ru"),
+                    InlineKeyboardButton("🇨🇳 中文", callback_data="lang_zh"),
+                ],
+                [
+                    InlineKeyboardButton("🇯🇵 日本語", callback_data="lang_ja"),
+                    InlineKeyboardButton("🇰🇷 한국어", callback_data="lang_ko"),
+                ],
+                [
+                    InlineKeyboardButton("🇧🇷 Português", callback_data="lang_pt"),
+                    InlineKeyboardButton("🇮🇳 हिन्दी", callback_data="lang_hi"),
+                ],
+                [
+                    InlineKeyboardButton("🇹🇷 Türkçe", callback_data="lang_tr"),
+                    InlineKeyboardButton("🇮🇩 Indonesia", callback_data="lang_id"),
+                ],
+                [
+                    InlineKeyboardButton("🇮🇹 Italiano", callback_data="lang_it"),
+                ],
+                [InlineKeyboardButton("◀️ بازگشت", callback_data="menu_back")],
+            ]
+            await query.edit_message_text(
+                "🌐 زبان / Language\n\nزبان مورد نظرت رو انتخاب کن:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+        elif data.startswith("lang_"):
+            lang_code = data[5:]
+            user_id = query.from_user.id if query.from_user else 0
+            if user_id:
+                async with db_session_factory() as session:
+                    stmt = select(UserLanguage).where(UserLanguage.user_id == user_id)
+                    existing = (await session.exec(stmt)).first()
+                    if existing:
+                        existing.language = lang_code
+                        existing.updated_at = datetime.now(timezone.utc)
+                    else:
+                        session.add(UserLanguage(user_id=user_id, language=lang_code))
+                    await session.commit()
+            lang_names = {
+                "en": "English 🇬🇧", "fa": "فارسی 🇮🇷", "ar": "العربية 🇸🇦",
+                "es": "Español 🇪🇸", "fr": "Français 🇫🇷", "de": "Deutsch 🇩🇪",
+                "ru": "Русский 🇷🇺", "zh": "中文 🇨🇳", "ja": "日本語 🇯🇵",
+                "ko": "한국어 🇰🇷", "pt": "Português 🇧🇷", "hi": "हिन्दी 🇮🇳",
+                "tr": "Türkçe 🇹🇷", "id": "Indonesia 🇮🇩", "it": "Italiano 🇮🇹",
+            }
+            lang_display = lang_names.get(lang_code, lang_code)
+            await query.edit_message_text(f"✅ زبان انتخابی: {lang_display}")
+
+                elif data == "menu_back":
+            keyboard = [
+                [
+                    InlineKeyboardButton("🤖 هوش مصنوعی", callback_data="menu_ai"),
+                    InlineKeyboardButton("💬 چت هوشمند", callback_data="menu_chat"),
+                ],
+                [
+                    InlineKeyboardButton("🎨 تصویرسازی", callback_data="menu_image"),
+                    InlineKeyboardButton("🔊 صدا", callback_data="menu_speech"),
+                ],
+                [
+                    InlineKeyboardButton("☁️ فضای ابری", callback_data="menu_cloud"),
+                    InlineKeyboardButton("🎁 دعوت دوستان", callback_data="menu_referral"),
+                ],
+                [
+                    InlineKeyboardButton("🎮 بازی‌ها", callback_data="menu_games"),
                     InlineKeyboardButton("👤 چت ناشناس", callback_data="menu_anon"),
-                    InlineKeyboardButton("📢 کانال", callback_data="menu_channel"),
                 ],
                 [
                     InlineKeyboardButton("🛠️ ابزارها", callback_data="menu_tools"),
@@ -1194,14 +1876,15 @@ def build_handlers(
                 ],
                 [
                     InlineKeyboardButton("🛡️ نظارت", callback_data="menu_moderation"),
-                    InlineKeyboardButton("⚙️ تنظیمات", callback_data="menu_settings"),
+                    InlineKeyboardButton("🌐 زبان", callback_data="menu_language"),
                 ],
                 [
+                    InlineKeyboardButton("⚙️ تنظیمات", callback_data="menu_settings"),
                     InlineKeyboardButton("👨‍💼 پنل مدیریت", callback_data="menu_admin"),
                 ],
             ]
             await query.edit_message_text(
-                "🤖 NEXUS AI v1.3.0\n\nیکی از گزینه‌ها رو انتخاب کن:",
+                "🤖 NEXUS AI v2.0.0\n\nیکی از گزینه‌ها رو انتخاب کن:",
                 reply_markup=InlineKeyboardMarkup(keyboard),
             )
 
@@ -2036,7 +2719,38 @@ def build_handlers(
         CommandHandler("analytics_active", analytics_active_cmd),
         CommandHandler("analytics_retention", analytics_retention_cmd),
         CommandHandler("track", track_cmd),
-        MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
+        # ── v2.0.0: AI Commands ──
+        CommandHandler("ai", ai_cmd),
+        CommandHandler("ask", ask_cmd),
+        CommandHandler("code", code_cmd),
+        CommandHandler("translate", ai_translate_cmd),
+        CommandHandler("vision", vision_cmd),
+        CommandHandler("summarize", summarize_cmd),
+        # ── v2.0.0: Image Generation ──
+        CommandHandler("image", image_cmd),
+        # ── v2.0.0: Speech ──
+        CommandHandler("tts", tts_cmd),
+        CommandHandler("stt", stt_cmd),
+        # ── v2.0.0: Cloud Storage ──
+        CommandHandler("cloud", cloud_cmd),
+        CommandHandler("myfiles", myfiles_cmd),
+        CommandHandler("download", download_cmd),
+        CommandHandler("cloud_status", cloud_status_cmd),
+        # ── v2.0.0: Referral ──
+        CommandHandler("referral", referral_cmd),
+        CommandHandler("referral_board", referral_board_cmd),
+        # ── v2.0.0: Language ──
+        CommandHandler("language", language_cmd),
+        CallbackQueryHandler(menu_callback, pattern=r"^lang_"),
+        CallbackQueryHandler(menu_callback, pattern=r"^menu_ai$"),
+        CallbackQueryHandler(menu_callback, pattern=r"^menu_image$"),
+        CallbackQueryHandler(menu_callback, pattern=r"^menu_cloud$"),
+        CallbackQueryHandler(menu_callback, pattern=r"^menu_speech$"),
+        CallbackQueryHandler(menu_callback, pattern=r"^menu_referral$"),
+        CallbackQueryHandler(menu_callback, pattern=r"^menu_language$"),
+        # ── v2.0.0: Referral deep-link ──
+        CommandHandler("start", start_referral_handler),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
     ]
 
 
