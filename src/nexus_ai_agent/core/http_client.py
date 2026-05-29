@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -142,9 +142,7 @@ class ResilientHttpClient:
                     timeout=timeout,
                     follow_redirects=True,
                 ) as client:
-                    response = await client.request(
-                        method, url, headers=merged_headers, **kwargs
-                    )
+                    response = await client.request(method, url, headers=merged_headers, **kwargs)
                 latency = (time.monotonic() - start) * 1000
                 logger.info(
                     "http_request",
