@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal, cast
 
 from langgraph.graph import END, START, StateGraph
 
@@ -16,7 +16,7 @@ from nexus_ai_agent.tools.registry import ToolRegistry
 
 async def _router_node(state: NexusState) -> NexusState:
     last_user = state["messages"][-1]["content"] if state.get("messages") else ""
-    intent = classify_intent(last_user)
+    intent = cast(Literal["chat", "task", "memory", "unknown"], classify_intent(last_user))
     persona = select_persona(last_user)
     return {
         **state,
@@ -97,7 +97,7 @@ def compile_graph(
     checkpointer: Any,
     long_term_memory: LongTermMemory,
     tool_registry: ToolRegistry,
-):
+) -> Any:
     _ = tool_registry  # tool wiring is used by executor/planner in later phases
 
     # Persona cores

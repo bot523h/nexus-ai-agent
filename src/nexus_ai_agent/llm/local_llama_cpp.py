@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-
-from llama_cpp import Llama
+from typing import Any
 
 from nexus_ai_agent.llm.provider import LLMProvider
 
@@ -18,7 +17,9 @@ class LocalLlamaCppProvider(LLMProvider):
                 "Set NEXUS_MODEL_PATH or place a model at models/model.gguf."
             )
 
-        self._model = Llama(
+        from llama_cpp import Llama  # type: ignore[import-not-found]
+
+        self._model: Any = Llama(
             model_path=str(model_file),
             n_ctx=n_ctx,
             n_gpu_layers=n_gpu_layers,
@@ -38,7 +39,7 @@ class LocalLlamaCppProvider(LLMProvider):
 
     async def embed(self, text: str) -> list[float]:
         if not hasattr(self, "_st"):
-            from sentence_transformers import SentenceTransformer
+            from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
 
             self._st = SentenceTransformer("all-MiniLM-L6-v2")
 

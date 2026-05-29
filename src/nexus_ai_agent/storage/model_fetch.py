@@ -18,6 +18,7 @@ def _build_storage(settings: Settings) -> AIStorageManager:
         mega_password=getattr(settings, "mega_password", None),
         huggingface_token=getattr(settings, "huggingface_token", None),
         rclone_remote=getattr(settings, "rclone_remote", None),
+        gdrive_bearer_token=getattr(settings, "gdrive_bearer_token", None),
     )
     return AIStorageManager(cache_dir=cache_dir, config=cfg)
 

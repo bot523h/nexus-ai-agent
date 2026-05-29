@@ -89,6 +89,10 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("NEXUS_RCLONE_REMOTE", "RCLONE_REMOTE"),
     )
+    gdrive_bearer_token: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GDRIVE_BEARER_TOKEN", "NEXUS_GDRIVE_BEARER_TOKEN"),
+    )
 
     # Local cache root used by AIStorageManager.
     cache_dir: str = Field(

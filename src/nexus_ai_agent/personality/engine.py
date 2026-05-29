@@ -156,6 +156,8 @@ class PersonalityEngine:
         Path(self._state_path).write_text(json.dumps(self.es.__dict__, indent=2))
 
     def _load(self) -> None:
+        if self._state_path is None:
+            return
         p = Path(self._state_path)
         if not p.exists():
             return

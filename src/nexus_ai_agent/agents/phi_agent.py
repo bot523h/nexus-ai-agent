@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from nexus_ai_agent.agents.base import BaseAgent
+from nexus_ai_agent.llm.provider import LLMProvider
 from nexus_ai_agent.orchestration.state import NexusState
 from nexus_ai_agent.personality.engine import PersonalityEngine
 
@@ -10,7 +11,7 @@ from nexus_ai_agent.personality.engine import PersonalityEngine
 class PhiAgent(BaseAgent):
     """Logic, moderation, structured analysis."""
 
-    def __init__(self, llm, state_path=None):
+    def __init__(self, llm: LLMProvider, state_path: str | None = None) -> None:
         super().__init__(llm)
         self._pe = PersonalityEngine("phi", state_path)
 

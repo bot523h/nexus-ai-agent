@@ -1,18 +1,20 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
 from nexus_ai_agent.storage import models as _models  # noqa: F401
 
-_engine = None
-_session_factory = None
+_engine: Any | None = None
+_session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
-def _get_engine(db_path: str):
+def _get_engine(db_path: str) -> Any:
     global _engine, _session_factory
     if _engine is None:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -30,7 +32,9 @@ async def create_all_tables(db_path: str = "data/app.sqlite") -> None:
 
 
 @asynccontextmanager
-async def get_session(db_path: str = "data/app.sqlite"):
+async def get_session(db_path: str = "data/app.sqlite") -> AsyncIterator[AsyncSession]:
     _get_engine(db_path)
+    if _session_factory is None:
+        raise RuntimeError("Database session factory is not initialized")
     async with _session_factory() as session:
         yield session

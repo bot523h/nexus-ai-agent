@@ -3,11 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from nexus_ai_agent.agents.base import BaseAgent
+from nexus_ai_agent.llm.provider import LLMProvider
 from nexus_ai_agent.orchestration.state import NexusState
 
 
 class ExecutorAgent(BaseAgent):
-    def __init__(self, llm, registry: Any | None = None):
+    def __init__(self, llm: LLMProvider, registry: Any | None = None) -> None:
         # registry is intentionally typed as Any to avoid importing tools at import time.
         # It is expected to be a ToolRegistry from nexus_ai_agent.tools.registry.
         super().__init__(llm)

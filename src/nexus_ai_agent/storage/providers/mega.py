@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 from .base import ProviderUnavailable, StorageError, filename_to_safe_key, safe_key_to_filename
 
@@ -17,7 +18,7 @@ class MegaProvider:
     def is_configured(self) -> bool:
         return bool(self._email and self._password)
 
-    def _get_client(self):
+    def _get_client(self) -> Any:
         try:
             from mega import Mega  # type: ignore
         except Exception as e:  # pragma: no cover

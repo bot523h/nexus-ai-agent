@@ -7,6 +7,8 @@ from uuid import uuid4
 
 import typer
 
+from nexus_ai_agent.llm.provider import LLMProvider
+
 app = typer.Typer(help="NEXUS AI Agent CLI")
 
 
@@ -54,7 +56,7 @@ def run_bot(
         from nexus_ai_agent.llm.local_llama_cpp import LocalLlamaCppProvider
 
         typer.echo(f"✓ Loading model: {settings.model_path}")
-        llm = LocalLlamaCppProvider(
+        llm: LLMProvider = LocalLlamaCppProvider(
             settings.model_path,
             n_ctx=getattr(settings, "n_ctx", 2048),
             n_gpu_layers=getattr(settings, "n_gpu_layers", 0),
@@ -81,7 +83,7 @@ def run_bot(
     if settings.enable_shell:
         from nexus_ai_agent.tools.system_shell import ShellTool
 
-        registry.register(ShellTool())
+        registry.register(ShellTool(enable_shell=True))
         typer.echo("⚠  Shell tool ENABLED")
 
     # Memory + checkpointer
@@ -92,7 +94,7 @@ def run_bot(
     graph = compile_graph(llm, checkpointer, long_term, registry)
 
     # Bot
-    application = build_application(settings, graph, long_term)
+    application = build_application(settings, graph)
 
     if mode == "polling":
         typer.echo("✓ Starting bot in polling mode…")

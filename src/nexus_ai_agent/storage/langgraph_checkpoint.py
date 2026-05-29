@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 
@@ -18,28 +20,30 @@ class AsyncCompatibleSqliteSaver(SqliteSaver):
     lifecycle in CLIs/tests.
     """
 
-    async def aget_tuple(self, config):  # type: ignore[override]
+    async def aget_tuple(self, config: Any) -> Any:
         return await asyncio.to_thread(self.get_tuple, config)
 
-    async def aget(self, config):  # type: ignore[override]
+    async def aget(self, config: Any) -> Any:
         return await asyncio.to_thread(self.get, config)
 
-    async def alist(self, *args, **kwargs):  # type: ignore[override]
-        return await asyncio.to_thread(self.list, *args, **kwargs)
+    async def alist(self, *args: Any, **kwargs: Any) -> AsyncIterator[Any]:
+        items = await asyncio.to_thread(lambda: list(self.list(*args, **kwargs)))
+        for item in items:
+            yield item
 
-    async def aput(self, *args, **kwargs):  # type: ignore[override]
+    async def aput(self, *args: Any, **kwargs: Any) -> Any:
         return await asyncio.to_thread(self.put, *args, **kwargs)
 
-    async def aput_writes(self, *args, **kwargs):  # type: ignore[override]
+    async def aput_writes(self, *args: Any, **kwargs: Any) -> Any:
         return await asyncio.to_thread(self.put_writes, *args, **kwargs)
 
-    async def adelete_thread(self, *args, **kwargs):  # type: ignore[override]
+    async def adelete_thread(self, *args: Any, **kwargs: Any) -> Any:
         return await asyncio.to_thread(self.delete_thread, *args, **kwargs)
 
-    async def aprune(self, *args, **kwargs):  # type: ignore[override]
+    async def aprune(self, *args: Any, **kwargs: Any) -> Any:
         return await asyncio.to_thread(self.prune, *args, **kwargs)
 
-    async def aget_delta_channel_history(self, *args, **kwargs):  # type: ignore[override]
+    async def aget_delta_channel_history(self, *args: Any, **kwargs: Any) -> Any:
         return await asyncio.to_thread(self.get_delta_channel_history, *args, **kwargs)
 
 

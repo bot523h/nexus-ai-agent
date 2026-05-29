@@ -54,7 +54,9 @@ class GitHubReleasesProvider:
         release: dict,
         asset_name: str,
     ) -> dict | None:
-        assets_url = release.get("assets_url")
+        assets_url = str(release.get("assets_url") or "")
+        if not assets_url:
+            raise StorageError("GitHub release has no assets_url")
         r = await client.get(assets_url, headers=self._headers())
         if r.status_code != 200:
             raise StorageError(f"GitHub assets list failed: {r.status_code}")
@@ -70,8 +72,9 @@ class GitHubReleasesProvider:
             existing = await self._find_asset(client, release=release, asset_name=asset_name)
             if existing:
                 # Delete to overwrite.
-                del_url = existing.get("url")
-                _ = await client.delete(del_url, headers=self._headers())
+                del_url = str(existing.get("url") or "")
+                if del_url:
+                    _ = await client.delete(del_url, headers=self._headers())
 
             upload_url = f"{self._uploads}/releases/{release['id']}/assets"
             params = {"name": asset_name}
@@ -93,7 +96,9 @@ class GitHubReleasesProvider:
             if not asset:
                 raise ProviderUnavailable(f"GitHub asset not found: {remote_key}")
 
-            url = asset.get("url")
+            url = str(asset.get("url") or "")
+            if not url:
+                raise StorageError("GitHub asset has no API URL")
             r = await client.get(
                 url,
                 headers={**self._headers(), "Accept": "application/octet-stream"},
@@ -107,7 +112,10 @@ class GitHubReleasesProvider:
     async def list_files(self, *, prefix: str = "") -> list[str]:
         async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
             release = await self._get_or_create_release(client)
-            r = await client.get(release.get("assets_url"), headers=self._headers())
+            assets_url = str(release.get("assets_url") or "")
+            if not assets_url:
+                raise StorageError("GitHub release has no assets_url")
+            r = await client.get(assets_url, headers=self._headers())
             if r.status_code != 200:
                 raise StorageError(f"GitHub assets list failed: {r.status_code}")
             keys: list[str] = []
