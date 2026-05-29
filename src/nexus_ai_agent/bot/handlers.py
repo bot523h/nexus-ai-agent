@@ -1369,6 +1369,7 @@ def build_handlers(
             try:
                 chat_id = _chat_id(update)
                 from nexus_ai_agent.features.gamification import GamificationEngine
+
                 GamificationEngine.add_xp(result["referrer_id"], chat_id, 50)
                 GamificationEngine.add_xp(user_id, chat_id, 50)
             except Exception:
