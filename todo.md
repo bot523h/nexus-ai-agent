@@ -23,9 +23,9 @@
 - [x] Lint + test + commit Phase 4
 
 ## Phase 5 — Main Menu with Inline Keyboard
-- [ ] Update `/start` to show inline keyboard menu
-- [ ] Add callback query handlers for all submenus
-- [ ] Lint + test + commit Phase 5
+- [x] Update `/start` to show inline keyboard menu
+- [x] Add callback query handlers for all submenus
+- [x] Lint + test + commit Phase 5
 
 ## Phase 6 — Database Models & Migration
 - [ ] Add new SQLModel tables to `models.py`

@@ -129,14 +129,14 @@ class AnonymousChatManager:
         # Mark session as ended in DB
         engine = _sync_engine()
         with Session(engine) as session:
-            results = session.exec(
-                select(AnonSession).where(
-                    (AnonSession.status == "active")  # type: ignore[union-attr]
-                    & ((AnonSession.user1_id == user_id) | (AnonSession.user2_id == user_id))
-                )
-            ).all()
+            stmt = (
+                select(AnonSession)
+                .where(AnonSession.status == "active")
+                .where((AnonSession.user1_id == user_id) | (AnonSession.user2_id == user_id))
+            )
+            results = session.exec(stmt).all()
             for s in results:
-                s.status = "ended"  # type: ignore[union-attr]
+                s.status = "ended"
             session.commit()
 
         # Notify partner
@@ -156,7 +156,7 @@ class AnonymousChatManager:
         """Report the current partner. Notify the owner for safety."""
         partner_id = self._active.get(reporter_id)
         if partner_id is None:
-            return "⚠️ شما در هیچ چت ناشناسی نیستید که گزارش بدید."
+            return "⚠️ شما در هیچ چت ناشناسی نیستید که گزارش بدهید."
 
         # End the session
         await self.leave_chat(reporter_id)
@@ -164,17 +164,16 @@ class AnonymousChatManager:
         # Update DB status
         engine = _sync_engine()
         with Session(engine) as session:
-            results = session.exec(
-                select(AnonSession).where(
-                    (AnonSession.status == "ended")  # type: ignore[union-attr]
-                    & (
-                        (AnonSession.user1_id == reporter_id)
-                        | (AnonSession.user2_id == reporter_id)
-                    )
+            stmt = (
+                select(AnonSession)
+                .where(AnonSession.status == "ended")
+                .where(
+                    (AnonSession.user1_id == reporter_id) | (AnonSession.user2_id == reporter_id)
                 )
-            ).all()
+            )
+            results = session.exec(stmt).all()
             for s in results:
-                s.status = "reported"  # type: ignore[union-attr]
+                s.status = "reported"
             session.commit()
 
         # Notify owner
@@ -200,9 +199,8 @@ class AnonymousChatManager:
         """Return active sessions for the owner to inspect."""
         engine = _sync_engine()
         with Session(engine) as session:
-            results = session.exec(
-                select(AnonSession).where(AnonSession.status == "active")  # type: ignore[union-attr]
-            ).all()
+            stmt = select(AnonSession).where(AnonSession.status == "active")
+            results = session.exec(stmt).all()
             return [
                 {
                     "id": s.id,

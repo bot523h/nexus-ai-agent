@@ -92,7 +92,7 @@ class ReminderSystem:
             session.add(reminder)
             session.commit()
             session.refresh(reminder)
-            rid = reminder.id  # type: ignore[assignment]
+            rid: int = reminder.id if reminder.id is not None else 0
 
         # Schedule the background task
         async def _fire() -> None:
@@ -106,11 +106,11 @@ class ReminderSystem:
             with Session(engine2) as s2:
                 obj = s2.get(Reminder, rid)
                 if obj is not None:
-                    obj.status = "sent"  # type: ignore[union-attr]
+                    obj.status = "sent"
                     s2.commit()
 
         task = asyncio.create_task(_fire())
-        self._tasks[int(rid)] = task
+        self._tasks[rid] = task
         return f"✅ یادآوری تنظیم شد: {text} ({time_str})"
 
     async def restore_pending(self) -> int:
@@ -118,40 +118,42 @@ class ReminderSystem:
         engine = _sync_engine()
         count = 0
         with Session(engine) as session:
-            results = session.exec(
-                select(Reminder).where(Reminder.status == "pending")  # type: ignore[union-attr]
-            ).all()
+            stmt = select(Reminder).where(Reminder.status == "pending")
+            results = session.exec(stmt).all()
             now = datetime.now(timezone.utc)
             for r in results:
                 if r.remind_at <= now:
                     # Already overdue — send immediately
-                    r.status = "sent"  # type: ignore[union-attr]
+                    r.status = "sent"
                     count += 1
                     continue
                 delay = (r.remind_at - now).total_seconds()
-                rid = r.id  # type: ignore[assignment]
+                rid: int = r.id if r.id is not None else 0
 
                 async def _fire(
-                    rid: int = rid,
-                    chat_id: int = r.chat_id,
-                    text: str = r.text,
-                    delay: float = delay,
+                    _rid: int = rid,
+                    _chat_id: int = r.chat_id,
+                    _text: str = r.text,
+                    _delay: float = delay,
                 ) -> None:
-                    await asyncio.sleep(delay)
+                    await asyncio.sleep(_delay)
                     bot = self._require_bot()
                     try:
-                        await bot.send_message(chat_id=chat_id, text=f"⏰ یادآوری: {text}")
+                        await bot.send_message(
+                            chat_id=_chat_id,
+                            text=f"⏰ یادآوری: {_text}",
+                        )
                     except Exception:  # noqa: BLE001
-                        logger.exception("reminder_send_failed", reminder_id=rid)
+                        logger.exception("reminder_send_failed", reminder_id=_rid)
                     engine2 = _sync_engine()
                     with Session(engine2) as s2:
-                        obj = s2.get(Reminder, rid)
+                        obj = s2.get(Reminder, _rid)
                         if obj is not None:
-                            obj.status = "sent"  # type: ignore[union-attr]
+                            obj.status = "sent"
                             s2.commit()
 
                 task = asyncio.create_task(_fire())
-                self._tasks[int(rid)] = task
+                self._tasks[rid] = task
                 count += 1
             session.commit()
         return count
@@ -353,9 +355,6 @@ _SAFE_NAMES: dict[str, Any] = {
     "gcd": math.gcd,
     "exp": math.exp,
 }
-
-# Only allow these characters in expression
-_SAFE_EXPR_RE = re.compile(r"^[\d\s\+\-\*/\.\(\)\^%,]+$")
 
 
 class Calculator:

@@ -21,9 +21,9 @@ logger = get_logger(__name__)
 
 def _sync_engine() -> Any:
     """Return a synchronous SQLAlchemy engine for simple CRUD inside features."""
-    settings = get_settings()
-    from sqlalchemy import create_engine as _ce  # noqa: WPS433
+    from sqlalchemy import create_engine as _ce
 
+    settings = get_settings()
     return _ce(f"sqlite:///{settings.db_path}", echo=False)
 
 
@@ -32,21 +32,13 @@ class ChannelManager:
 
     def __init__(self, bot: Any | None = None) -> None:
         self.bot = bot
-        self._scheduled_tasks: dict[int, asyncio.Task[Any]] = {}  # schedule_id → task
-        self._welcome_cache: dict[int, str] = {}  # chat_id → welcome text
-
-    # ------------------------------------------------------------------
-    # Internal helper
-    # ------------------------------------------------------------------
+        self._scheduled_tasks: dict[int, asyncio.Task[Any]] = {}
+        self._welcome_cache: dict[int, str] = {}
 
     def _require_bot(self) -> Any:
         if self.bot is None:
             raise RuntimeError("Bot instance not set on ChannelManager")
         return self.bot
-
-    # ------------------------------------------------------------------
-    # Posting
-    # ------------------------------------------------------------------
 
     async def post_to_channel(self, chat_id: int, text: str, *, pin: bool = False) -> Any:
         """Send *text* to *chat_id* and optionally pin it."""
@@ -66,10 +58,6 @@ class ChannelManager:
         bot = self._require_bot()
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
 
-    # ------------------------------------------------------------------
-    # Scheduling
-    # ------------------------------------------------------------------
-
     async def schedule_post(self, chat_id: int, text: str, when: datetime) -> int:
         """Schedule a post for *when* (UTC). Returns the schedule DB id."""
         engine = _sync_engine()
@@ -83,7 +71,7 @@ class ChannelManager:
             session.add(schedule)
             session.commit()
             session.refresh(schedule)
-            schedule_id = schedule.id  # type: ignore[assignment]
+            schedule_id: int = schedule.id if schedule.id is not None else 0
 
         delay = (when - datetime.now(timezone.utc)).total_seconds()
         if delay > 0:
@@ -95,17 +83,13 @@ class ChannelManager:
                 with Session(engine2) as s2:
                     obj = s2.get(ChannelSchedule, schedule_id)
                     if obj is not None:
-                        obj.status = "sent"  # type: ignore[union-attr]
+                        obj.status = "sent"
                         s2.commit()
 
             task = asyncio.create_task(_send())
             self._scheduled_tasks[schedule_id] = task
 
-        return int(schedule_id)
-
-    # ------------------------------------------------------------------
-    # Moderation
-    # ------------------------------------------------------------------
+        return schedule_id
 
     async def ban_user(self, chat_id: int, user_id: int, *, reason: str = "") -> bool:
         """Ban *user_id* from *chat_id*. Returns True on success."""
@@ -128,10 +112,6 @@ class ChannelManager:
             logger.exception("unban_user_failed", chat_id=chat_id, user_id=user_id)
             return False
 
-    # ------------------------------------------------------------------
-    # Group info
-    # ------------------------------------------------------------------
-
     async def get_members_count(self, chat_id: int) -> int:
         """Return the member count for *chat_id*."""
         bot = self._require_bot()
@@ -145,10 +125,6 @@ class ChannelManager:
             {"user_id": a.user.id, "username": a.user.username, "status": a.status} for a in admins
         ]
 
-    # ------------------------------------------------------------------
-    # Welcome messages
-    # ------------------------------------------------------------------
-
     def set_welcome_message(self, chat_id: int, text: str) -> None:
         """Store a welcome message for *chat_id* (in DB + cache)."""
         self._welcome_cache[chat_id] = text
@@ -158,7 +134,7 @@ class ChannelManager:
                 select(WelcomeMessage).where(WelcomeMessage.chat_id == chat_id)
             ).first()
             if existing is not None:
-                existing.text = text  # type: ignore[union-attr]
+                existing.text = text
             else:
                 session.add(WelcomeMessage(chat_id=chat_id, text=text))
             session.commit()
@@ -173,8 +149,8 @@ class ChannelManager:
                 select(WelcomeMessage).where(WelcomeMessage.chat_id == chat_id)
             ).first()
             if obj is not None:
-                self._welcome_cache[chat_id] = obj.text  # type: ignore[union-attr]
-                return obj.text  # type: ignore[return-value]
+                self._welcome_cache[chat_id] = obj.text
+                return obj.text
         return ""
 
     async def welcome_new_member(self, chat_id: int, user_name: str) -> str | None:

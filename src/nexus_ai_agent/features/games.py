@@ -13,7 +13,7 @@ import random
 from pathlib import Path
 from typing import Any
 
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.observability.logging import get_logger
@@ -95,7 +95,6 @@ class QuizGame:
 
     def __init__(self) -> None:
         self._questions = list(_QUIZ_QUESTIONS)
-        # user_id → current question index
         self._active: dict[int, dict[str, Any]] = {}
 
     def get_question(self, user_id: int) -> dict[str, Any] | None:
@@ -127,14 +126,14 @@ class QuizGame:
                 )
             ).first()
             if existing is not None:
-                existing.answered += 1  # type: ignore[union-attr]
+                existing.answered += 1
                 if correct:
-                    existing.score += 1  # type: ignore[union-attr]
+                    existing.score += 1
                 from datetime import datetime, timezone
 
-                existing.updated_at = datetime.now(timezone.utc)  # type: ignore[union-attr]
+                existing.updated_at = datetime.now(timezone.utc)
                 session.commit()
-                return int(existing.score)  # type: ignore[return-value]
+                return existing.score
             else:
                 score = QuizScore(
                     user_id=user_id,
@@ -144,7 +143,7 @@ class QuizGame:
                 )
                 session.add(score)
                 session.commit()
-                return int(score.score)  # type: ignore[return-value]
+                return score.score
 
     def get_leaderboard(self, chat_id: int, limit: int = 10) -> list[dict[str, Any]]:
         """Return top quiz scores for *chat_id*."""
@@ -153,7 +152,7 @@ class QuizGame:
             results = session.exec(
                 select(QuizScore)
                 .where(QuizScore.chat_id == chat_id)
-                .order_by(QuizScore.score.desc())  # type: ignore[union-attr]
+                .order_by(col(QuizScore.score).desc())
                 .limit(limit)
             ).all()
             return [
@@ -170,7 +169,6 @@ class NumberGuess:
     """Simple guess-the-number game (1-100)."""
 
     def __init__(self) -> None:
-        # user_id → {"target": int, "attempts": int}
         self._games: dict[int, dict[str, int]] = {}
 
     def start(self, user_id: int) -> str:
@@ -262,10 +260,7 @@ _PERSIAN_WORDS: list[str] = [
     "پیمان",
 ]
 
-# Filter to exactly 5-character words for Wordle
 _FIVE_LETTER_WORDS = [w for w in _PERSIAN_WORDS if len(w) == 5]
-
-# If we don't have enough 5-letter words, use all as fallback
 if len(_FIVE_LETTER_WORDS) < 5:
     _FIVE_LETTER_WORDS = [w[:5] for w in _PERSIAN_WORDS if len(w) >= 5]
 
@@ -276,7 +271,6 @@ class WordleFA:
     MAX_ATTEMPTS = 6
 
     def __init__(self) -> None:
-        # user_id → {"target": str, "attempts": int, "history": list[str]}
         self._games: dict[int, dict[str, Any]] = {}
 
     def start(self, user_id: int) -> str:
@@ -303,19 +297,16 @@ class WordleFA:
         target = game["target"]
         game["attempts"] += 1
 
-        # Build feedback
         result = ["⬛"] * 5
         target_chars = list(target)
         word_chars = list(word)
 
-        # First pass: exact matches
         for i in range(5):
             if word_chars[i] == target_chars[i]:
                 result[i] = "🟩"
                 target_chars[i] = ""
                 word_chars[i] = ""
 
-        # Second pass: wrong position
         for i in range(5):
             if word_chars[i] and word_chars[i] in target_chars:
                 result[i] = "🟨"
@@ -359,9 +350,7 @@ class QuickPoll:
     """Quick inline polls with real-time results."""
 
     def __init__(self) -> None:
-        # poll_id → {"question": str, "options": list[str], "votes": dict[str, int]}
         self._polls: dict[str, dict[str, Any]] = {}
-        # user_id → set of poll_ids they voted in
         self._voted: dict[int, set[str]] = {}
 
     def create(self, question: str, options: list[str], poll_id: str | None = None) -> str:
@@ -385,7 +374,7 @@ class QuickPoll:
             return False
         user_voted = self._voted.setdefault(user_id, set())
         if poll_id in user_voted:
-            return False  # already voted
+            return False
         user_voted.add(poll_id)
         poll["votes"][option_idx] = poll["votes"].get(option_idx, 0) + 1
         return True

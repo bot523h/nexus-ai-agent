@@ -197,13 +197,25 @@ def build_handlers(
         _ = context
         await _reply(
             update,
-            "/start - initialize\n"
-            "/online - mark yourself online and enable heartbeat\n"
-            "/disconnect - mark yourself offline\n"
-            "/storage - show storage status\n"
-            "/model - show model status\n"
-            "/status - show runtime status\n"
-            "Send any message to chat with NEXUS.",
+            "🤖 NEXUS AI v1.2.0 — راهنما\n\n"
+            "━━━ 💬 چت ━━━\n"
+            "هر پیامی بفرست = چت با AI\n"
+            "/persona → شخصیت‌ها\n"
+            "/story /companion /analyze\n\n"
+            "━━━ 👤 ناشناس ━━━\n"
+            "/anon_start /anon_stop /anon_report\n\n"
+            "━━━ 🎮 بازی ━━━\n"
+            "/quiz /guess_start /wordle /poll\n"
+            "/leaderboard /guess_stop /wordle_stop\n\n"
+            "━━━ 📢 کانال ━━━\n"
+            "/post /schedule /ban /unban\n"
+            "/stats /welcome /pin\n\n"
+            "━━━ 🛠 ابزار ━━━\n"
+            "/remind /tr /convert /calc\n\n"
+            "━━━ ⚙️ سیستم ━━━\n"
+            "/start → منوی اصلی\n"
+            "/online /disconnect /status\n"
+            "/help → همین پیام",
         )
 
     async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -439,7 +451,7 @@ def build_handlers(
             await query.edit_message_reply_markup(reply_markup=None)
             return
         correct = quiz_game.check_answer(user_id, choice)
-        chat_id = query.message.chat_id if query.message else 0
+        chat_id = getattr(query.message, "chat_id", 0) or 0
         score = quiz_game.update_score(user_id, chat_id, correct)
         emoji = "✅" if correct else "❌"
         await query.edit_message_text(
