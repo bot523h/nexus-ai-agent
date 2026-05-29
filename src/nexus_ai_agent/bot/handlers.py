@@ -24,6 +24,7 @@ from nexus_ai_agent.config.settings import Settings
 # Feature managers — lazy-initialised inside build_handlers
 from nexus_ai_agent.features.anonymous_chat import AnonymousChatManager
 from nexus_ai_agent.features.channel_manager import ChannelManager
+from nexus_ai_agent.features.force_join import ForceJoinManager
 from nexus_ai_agent.features.games import NumberGuess, QuickPoll, QuizGame, WordleFA
 from nexus_ai_agent.features.owner_control import OwnerControl, is_owner
 from nexus_ai_agent.features.tools import Calculator, ReminderSystem, Translator, UnitConverter
@@ -1038,6 +1039,70 @@ def build_handlers(
             lines.append(f"• [{log['action']}] {log['target']} — {log['details'][:50]}")
         await _reply(update, "\n".join(lines))
 
+    # ── Phase 8: Force Join ────────────────────────────────────────
+    force_join_mgr = ForceJoinManager()
+
+    async def forcejoin_on_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Enable force-join for the current chat (owner only)."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        chat_id = _chat_id(update)
+        cfg = ForceJoinManager.set_config(
+            chat_id, enabled=True, channel_username="@nexus_ai_official"
+        )
+        await _reply(update, f"✅ عضوگیری اجباری فعال شد.\n📢 کانال: {cfg.channel_username}")
+
+    async def forcejoin_off_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Disable force-join (owner only)."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        chat_id = _chat_id(update)
+        ForceJoinManager.set_config(chat_id, enabled=False)
+        await _reply(update, "❌ عضوگیری اجباری غیرفعال شد.")
+
+    async def forcejoin_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show force-join status."""
+        chat_id = _chat_id(update)
+        cfg = ForceJoinManager.get_config(chat_id)
+        if cfg is None or not cfg.enabled:
+            await _reply(update, "📋 عضوگیری اجباری: غیرفعال")
+            return
+        await _reply(
+            update,
+            f"📋 عضوگیری اجباری: فعال\n📢 کانال: {cfg.channel_username}",
+        )
+
+    async def forcejoin_message_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Set custom force-join message (owner only)."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        text = " ".join(context.args) if context.args else ""
+        if not text:
+            await _reply(update, "❌ متن را وارد کنید: /forcejoin_message <text>")
+            return
+        chat_id = _chat_id(update)
+        ForceJoinManager.set_config(chat_id, enabled=True, welcome_message=text)
+        await _reply(update, "✅ پیام عضوگیری اجباری تغییر کرد.")
+
+    async def forcejoin_verify_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle the 'verify' button press."""
+        query = update.callback_query
+        if query is None:
+            return
+        await query.answer()
+        user_id = query.from_user.id
+        is_member = await force_join_mgr.check_membership(user_id)
+        if is_member:
+            force_join_mgr.invalidate_cache(user_id)
+            await query.edit_message_text("✅ عضویت شما تأیید شد! می‌تونید از ربات استفاده کنید.")
+        else:
+            await query.edit_message_text(
+                "❌ شما هنوز در کانال عضو نشدید. لطفاً اول عضو بشید."
+            )
+
     return [
         CommandHandler("start", start),
         CommandHandler("online", online),
@@ -1088,6 +1153,12 @@ def build_handlers(
         CommandHandler("broadcast", broadcast_cmd),
         CommandHandler("broadcast_all", broadcast_all_cmd),
         CommandHandler("admin_logs", admin_logs_cmd),
+        # Phase 8: Force Join
+        CommandHandler("forcejoin_on", forcejoin_on_cmd),
+        CommandHandler("forcejoin_off", forcejoin_off_cmd),
+        CommandHandler("forcejoin_status", forcejoin_status_cmd),
+        CommandHandler("forcejoin_message", forcejoin_message_cmd),
+        CallbackQueryHandler(forcejoin_verify_callback, pattern=r"^forcejoin_verify$"),
         MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
     ]
 
