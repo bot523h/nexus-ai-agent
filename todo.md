@@ -2,9 +2,9 @@
 
 ## Phase 1 — Channel & Group Management
 - [x] Create `src/nexus_ai_agent/features/__init__.py`
-- [ ] Create `src/nexus_ai_agent/features/channel_manager.py`
-- [ ] Add channel/group command handlers to `handlers.py`
-- [ ] Lint + test + commit Phase 1
+- [x] Create `src/nexus_ai_agent/features/channel_manager.py`
+- [x] Add channel/group command handlers to `handlers.py`
+- [x] Lint + test + commit Phase 1
 
 ## Phase 2 — Anonymous Chat
 - [ ] Create `src/nexus_ai_agent/features/anonymous_chat.py`

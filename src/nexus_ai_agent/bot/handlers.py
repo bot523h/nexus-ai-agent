@@ -16,6 +16,7 @@ from telegram.ext import CommandHandler, ContextTypes, MessageHandler, filters
 from nexus_ai_agent.config.settings import Settings
 
 # Feature managers — lazy-initialised inside build_handlers
+from nexus_ai_agent.features.anonymous_chat import AnonymousChatManager
 from nexus_ai_agent.features.channel_manager import ChannelManager
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.orchestration.state import NexusState
@@ -316,6 +317,54 @@ def build_handlers(
             name = member.first_name or "دوست جدید"
             await channel_mgr.welcome_new_member(chat_id, name)
 
+    # ── Phase 2: Anonymous Chat ────────────────────────────────────
+    anon_mgr = AnonymousChatManager()
+
+    async def anon_start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Join the anonymous chat queue."""
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        anon_mgr.bot = context.bot
+        result = await anon_mgr.join_queue(user_id)
+        await _reply(update, result)
+
+    async def anon_stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Leave the anonymous chat."""
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        anon_mgr.bot = context.bot
+        result = await anon_mgr.leave_chat(user_id)
+        await _reply(update, result)
+
+    async def anon_report_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Report the current anonymous chat partner."""
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        anon_mgr.bot = context.bot
+        result = await anon_mgr.report_user(user_id, settings.owner_telegram_id)
+        await _reply(update, result)
+
+    async def anon_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Forward text messages as anonymous if user is in an anon session."""
+        user_id = _user_id(update)
+        if user_id is None or not update.message or not update.message.text:
+            return
+        anon_mgr.bot = context.bot
+        # Only intercept if the user is in an active anon session AND in private chat
+        if (
+            user_id in anon_mgr._active
+            and update.effective_chat
+            and update.effective_chat.type == "private"
+        ):
+            ok = await anon_mgr.send_anon_message(user_id, update.message.text)
+            if ok:
+                await _reply(update, "✅ پیام ناشناس ارسال شد.")
+            else:
+                await _reply(update, "❌ خطا در ارسال پیام ناشناس.")
+
     async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _ = context
         if not update.effective_user or not update.message or not update.message.text:
@@ -373,6 +422,10 @@ def build_handlers(
         CommandHandler("welcome", welcome_cmd),
         CommandHandler("pin", pin_cmd),
         MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, new_member_handler),
+        # Phase 2: Anonymous Chat
+        CommandHandler("anon_start", anon_start_cmd),
+        CommandHandler("anon_stop", anon_stop_cmd),
+        CommandHandler("anon_report", anon_report_cmd),
         MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
     ]
 
