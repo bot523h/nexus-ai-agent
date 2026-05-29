@@ -1614,7 +1614,7 @@ def build_handlers(
             from nexus_ai_agent.agent.approval import ApprovalSystem
 
             approval_sys = ApprovalSystem(owner_id=settings.owner_telegram_id)
-            pending = approval_sys.get_pending()
+            pending = await approval_sys.get_pending()
             if not pending:
                 await _reply(update, "✅ هیچ درخواست تأییدی در انتظار نیست.")
                 return
@@ -1631,7 +1631,7 @@ def build_handlers(
         from nexus_ai_agent.agent.approval import ApprovalSystem
 
         approval_sys = ApprovalSystem(owner_id=settings.owner_telegram_id)
-        if approval_sys.approve(approval_id):
+        if await approval_sys.approve(approval_id):
             await _reply(update, f"✅ درخواست #{approval_id} تأیید شد.")
         else:
             await _reply(update, f"❌ درخواست #{approval_id} یافت نشد یا قبلاً پردازش شده.")
