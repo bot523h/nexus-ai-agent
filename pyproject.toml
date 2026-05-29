@@ -29,6 +29,7 @@ dependencies = [
   "beautifulsoup4>=4.12",
   "duckduckgo-search>=6.0",
   "lxml>=5.0",
+  "psutil>=5.9",
 ]
 
 [project.optional-dependencies]

@@ -1588,6 +1588,65 @@ def build_handlers(
         results = await yt.search(query, max_results=5)
         await _reply(update, yt.format_search_results(results, query))
 
+    # ── v3.0.0: Self-Healing Commands ──────────────────────────────────
+
+    async def health_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show system health status."""
+        await update.message.chat.send_action("typing")  # type: ignore[union-attr]
+        from nexus_ai_agent.agent.self_monitor import SelfMonitor
+
+        monitor = SelfMonitor(
+            db_path=settings.db_path,
+            max_ram_mb=settings.max_ram_mb,
+            gemini_api_key=settings.gemini_api_key,
+        )
+        data = await monitor.check_health()
+        await _reply(update, monitor.format_health(data))
+
+    async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Approve a pending change by ID."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ فقط owner می‌تواند تأیید کند.")
+            return
+        args = context.args or []
+        if not args:
+            # Show pending approvals
+            from nexus_ai_agent.agent.approval import ApprovalSystem
+
+            approval_sys = ApprovalSystem(owner_id=settings.owner_telegram_id)
+            pending = approval_sys.get_pending()
+            if not pending:
+                await _reply(update, "✅ هیچ درخواست تأییدی در انتظار نیست.")
+                return
+            text = "📋 **درخواست‌های در انتظار:**\n\n"
+            for p in pending:
+                text += approval_sys.format_approval_request(p) + "\n\n---\n\n"
+            await _reply(update, text)
+            return
+        try:
+            approval_id = int(args[0])
+        except ValueError:
+            await _reply(update, "❌ شناسه باید عدد باشد.")
+            return
+        from nexus_ai_agent.agent.approval import ApprovalSystem
+
+        approval_sys = ApprovalSystem(owner_id=settings.owner_telegram_id)
+        if approval_sys.approve(approval_id):
+            await _reply(update, f"✅ درخواست #{approval_id} تأیید شد.")
+        else:
+            await _reply(update, f"❌ درخواست #{approval_id} یافت نشد یا قبلاً پردازش شده.")
+
+    async def feedback_report_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show daily feedback report (owner only)."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ فقط owner می‌تواند گزارش بازخورد ببیند.")
+            return
+        from nexus_ai_agent.agent.feedback import FeedbackCollector
+
+        fc = FeedbackCollector()
+        report = fc.get_daily_report()
+        await _reply(update, fc.format_report(report))
+
     async def onboarding_callback_handler(
         update: Update,
         context: ContextTypes.DEFAULT_TYPE,
@@ -1597,6 +1656,66 @@ def build_handlers(
 
         lang = await _get_user_lang(update)
         await handle_onboarding_callback(update, context, lang)
+
+    async def feedback_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle 👍👎 feedback button presses."""
+        query = update.callback_query
+        if query is None or query.data is None:
+            return
+        await query.answer()
+        data = query.data
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        msg_obj = query.message
+        if msg_obj is None:
+            return
+        from telegram import Message
+
+        if not isinstance(msg_obj, Message):
+            return
+        chat_id = msg_obj.chat_id
+
+        from nexus_ai_agent.agent.feedback import FeedbackCollector
+
+        fc = FeedbackCollector()
+
+        if data.startswith("fb_pos:"):
+            msg_id = int(data.split(":")[1])
+            fc.save_feedback(user_id, chat_id, msg_id, "positive")
+            await query.edit_message_reply_markup(reply_markup=None)
+            await msg_obj.reply_text("🙏 ممنون از بازخورد مثبت!")
+
+        elif data.startswith("fb_neg:"):
+            msg_id = int(data.split(":")[1])
+            fc.save_feedback(user_id, chat_id, msg_id, "negative")
+            # Ask for reason
+            keyboard = fc.get_reason_keyboard(msg_id)
+            await msg_obj.reply_text(
+                "😕 متاسفم! دلیل نارضایتی رو بگید:",
+                reply_markup=keyboard,
+            )
+
+        elif data.startswith("fb_r:"):
+            parts = data.split(":")
+            if len(parts) >= 3:
+                reason = parts[1]
+                msg_id = int(parts[2]) if len(parts) > 2 else 0
+                reason_map = {
+                    "incorrect": "نادرست",
+                    "irrelevant": "بی‌ربط",
+                    "unclear": "نامفهوم",
+                    "offensive": "توهین‌آمیز",
+                }
+                fc.save_feedback(
+                    user_id,
+                    chat_id,
+                    msg_id,
+                    "negative",
+                    reason_map.get(reason, reason),
+                )
+                await query.edit_message_reply_markup(reply_markup=None)
+                await msg_obj.reply_text("📝 بازخورد شما ثبت شد. سعی می‌کنیم بهتر باشیم! 🙏")
 
     # ── Phase 5: Inline Keyboard Menu Callbacks ────────────────────
 
@@ -3202,6 +3321,11 @@ def build_handlers(
         CommandHandler("news", news_cmd),
         CommandHandler("yt", yt_cmd),
         CommandHandler("youtube", youtube_cmd),
+        # ── v3.0.0: Self-Healing ──
+        CommandHandler("health", health_cmd),
+        CommandHandler("approve", approve_cmd),
+        CommandHandler("feedback_report", feedback_report_cmd),
+        CallbackQueryHandler(feedback_callback_handler, pattern=r"^fb_"),
         # ── v2.1: Onboarding callbacks ──
         CallbackQueryHandler(onboarding_callback_handler, pattern=r"^onboarding_"),
         CallbackQueryHandler(menu_callback, pattern=r"^lang_"),
