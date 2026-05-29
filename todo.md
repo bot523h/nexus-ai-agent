@@ -28,13 +28,13 @@
 - [x] Lint + test + commit Phase 5
 
 ## Phase 6 — Database Models & Migration
-- [ ] Add new SQLModel tables to `models.py`
-- [ ] Update `settings.py` with OWNER_TELEGRAM_ID
-- [ ] Run `make migrate`
-- [ ] Lint + test + commit Phase 6
+- [x] Add new SQLModel tables to `models.py`
+- [x] Update `settings.py` with OWNER_TELEGRAM_ID
+- [x] Run `make migrate`
+- [x] Lint + test + commit Phase 6
 
 ## Final
-- [ ] mypy + ruff + pytest all green
-- [ ] git commit -m "feat: full platform - games, anon, channel mgmt v1.2.0"
-- [ ] git push
-- [ ] GitHub Release v1.2.0
+- [x] mypy + ruff + pytest all green
+- [x] git commit -m "feat: full platform - games, anon, channel mgmt v1.2.0"
+- [x] git push
+- [x] GitHub Release v1.2.0
