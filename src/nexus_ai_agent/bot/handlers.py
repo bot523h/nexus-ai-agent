@@ -28,6 +28,7 @@ from nexus_ai_agent.features.channel_manager import ChannelManager
 from nexus_ai_agent.features.engagement import EngagementEngine
 from nexus_ai_agent.features.force_join import ForceJoinManager
 from nexus_ai_agent.features.games import NumberGuess, QuickPoll, QuizGame, WordleFA
+from nexus_ai_agent.features.moderation import ModerationEngine
 from nexus_ai_agent.features.owner_control import OwnerControl, is_owner
 from nexus_ai_agent.features.personality import PersonalityEngine
 from nexus_ai_agent.features.tools import Calculator, ReminderSystem, Translator, UnitConverter
@@ -1357,6 +1358,149 @@ def build_handlers(
             f"✅ تکمیل: {stats['completed']}",
         )
 
+    # ── Phase 13: Smart Moderation ─────────────────────────────────────────────
+
+    async def mod_on_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Enable smart moderation (owner only)."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        chat_id = _chat_id(update)
+        ModerationEngine.set_config(
+            chat_id,
+            anti_spam=True,
+            anti_flood=True,
+            link_filter=True,
+            profanity_filter=True,
+        )
+        await _reply(update, "🛡️ سیستم نظارت هوشمند فعال شد.")
+
+    async def mod_off_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Disable smart moderation (owner only)."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        chat_id = _chat_id(update)
+        ModerationEngine.set_config(
+            chat_id,
+            anti_spam=False,
+            anti_flood=False,
+            link_filter=False,
+            profanity_filter=False,
+        )
+        await _reply(update, "🛡️ سیستم نظارت هوشمند غیرفعال شد.")
+
+    async def mod_config_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show moderation settings."""
+        chat_id = _chat_id(update)
+        cfg = ModerationEngine.get_config(chat_id)
+        if cfg is None:
+            await _reply(update, "🛡️ نظارت: غیرفعال (تنظیم نشده)")
+            return
+        status_icon = lambda v: "✅" if v else "❌"  # noqa: E731
+        await _reply(
+            update,
+            f"🛡️ تنظیمات نظارت\n━━━━━━━━━━━━━━━━━━\n"
+            f"آنتی‌اسپم: {status_icon(cfg.anti_spam)}\n"
+            f"آنتی‌فلاد: {status_icon(cfg.anti_flood)}\n"
+            f"فیلتر لینک: {status_icon(cfg.link_filter)}\n"
+            f"فیلتر کلمات: {status_icon(cfg.profanity_filter)}\n"
+            f"حداکثر هشدار: {cfg.max_warnings}\n"
+            f"مدت میوت: {cfg.mute_duration_minutes} دقیقه",
+        )
+
+    async def mod_warn_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Warn a user manually. Reply to their message or give user_id."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        chat_id = _chat_id(update)
+        target_id: int | None = None
+        if (
+            update.message
+            and update.message.reply_to_message
+            and update.message.reply_to_message.from_user
+        ):
+            target_id = update.message.reply_to_message.from_user.id
+        elif context.args:
+            try:
+                target_id = int(context.args[0])
+            except ValueError:
+                await _reply(update, "❌ شناسه کاربر باید عدد باشد.")
+                return
+        if target_id is None:
+            await _reply(update, "❌ ریپلای روی پیام کاربر یا /warn <user_id>")
+            return
+        warnings = ModerationEngine.add_warning(target_id, chat_id)
+        await _reply(update, f"⚠️ کاربر {target_id} هشدار دریافت کرد ({warnings} از 3)")
+
+    async def mod_mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Mute a user (owner only)."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        chat_id = _chat_id(update)
+        if not context.args:
+            await _reply(update, "❌ استفاده: /mute <user_id> [دقیقه]")
+            return
+        try:
+            target_id = int(context.args[0])
+        except ValueError:
+            await _reply(update, "❌ شناسه باید عدد باشد.")
+            return
+        duration = 30
+        if len(context.args) > 1:
+            try:
+                duration = int(context.args[1])
+            except ValueError:
+                pass
+        ModerationEngine.mute_user(target_id, chat_id, duration)
+        await _reply(update, f"🔇 کاربر {target_id} میوت شد ({duration} دقیقه)")
+
+    async def mod_unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Unmute a user (owner only)."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        chat_id = _chat_id(update)
+        if not context.args:
+            await _reply(update, "❌ استفاده: /unmute <user_id>")
+            return
+        try:
+            target_id = int(context.args[0])
+        except ValueError:
+            await _reply(update, "❌ شناسه باید عدد باشد.")
+            return
+        ModerationEngine.unmute_user(target_id, chat_id)
+        await _reply(update, f"🔊 کاربر {target_id} آنمیوت شد.")
+
+    async def mod_reputation_cmd(
+        update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Show user reputation."""
+        chat_id = _chat_id(update)
+        target_id: int | None = None
+        if context.args:
+            try:
+                target_id = int(context.args[0])
+            except ValueError:
+                pass
+        if target_id is None:
+            target_id = _user_id(update)
+        if target_id is None:
+            return
+        rep = ModerationEngine.get_reputation(target_id, chat_id)
+        if rep is None:
+            await _reply(update, f"👤 کاربر {target_id}: اعتبار ۰ | هشدار ۰")
+            return
+        await _reply(
+            update,
+            f"👤 کاربر {target_id}\n━━━━━━━━━━━━━━━━━━\n"
+            f"⭐ اعتبار: {rep.reputation}\n"
+            f"⚠️ هشدارها: {rep.warnings}\n"
+            f"🔇 میوت: {'بله' if rep.is_muted else 'خیر'}",
+        )
+
     return [
         CommandHandler("start", start),
         CommandHandler("online", online),
@@ -1433,6 +1577,14 @@ def build_handlers(
         CommandHandler("ad_resume", ad_resume_cmd),
         CommandHandler("ad_delete", ad_delete_cmd),
         CommandHandler("ad_stats", ad_stats_cmd),
+        # Phase 13: Smart Moderation
+        CommandHandler("mod_on", mod_on_cmd),
+        CommandHandler("mod_off", mod_off_cmd),
+        CommandHandler("mod_config", mod_config_cmd),
+        CommandHandler("warn", mod_warn_cmd),
+        CommandHandler("mute", mod_mute_cmd),
+        CommandHandler("unmute", mod_unmute_cmd),
+        CommandHandler("reputation", mod_reputation_cmd),
         MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
     ]
 

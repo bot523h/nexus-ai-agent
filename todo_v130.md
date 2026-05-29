@@ -26,9 +26,9 @@
 - [x] Lint + test + commit Phase 11
 
 ## Phase 12 — Advertisement System
-- [ ] Create `src/nexus_ai_agent/features/ads.py`
-- [ ] Add ads model + handlers
-- [ ] Lint + test + commit Phase 12
+- [x] Create `src/nexus_ai_agent/features/ads.py`
+- [x] Add ads model + handlers
+- [x] Lint + test + commit Phase 12
 
 ## Phase 13 — Smart Moderation
 - [ ] Create `src/nexus_ai_agent/features/moderation.py`
