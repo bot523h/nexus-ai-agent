@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import os
 import platform
-import sqlite3
 import time
 from typing import Any
 
+import aiosqlite
 import psutil
 
 from nexus_ai_agent.observability.logging import get_logger
