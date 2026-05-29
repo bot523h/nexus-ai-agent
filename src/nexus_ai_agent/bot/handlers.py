@@ -27,6 +27,7 @@ from nexus_ai_agent.features.channel_manager import ChannelManager
 from nexus_ai_agent.features.force_join import ForceJoinManager
 from nexus_ai_agent.features.games import NumberGuess, QuickPoll, QuizGame, WordleFA
 from nexus_ai_agent.features.owner_control import OwnerControl, is_owner
+from nexus_ai_agent.features.personality import PersonalityEngine
 from nexus_ai_agent.features.tools import Calculator, ReminderSystem, Translator, UnitConverter
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.orchestration.state import NexusState
@@ -1103,6 +1104,36 @@ def build_handlers(
                 "❌ شما هنوز در کانال عضو نشدید. لطفاً اول عضو بشید."
             )
 
+    # ── Phase 9: Personality Engine ────────────────────────────────
+    async def personality_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Manage group personality: list, current, set."""
+        args = context.args or []
+        chat_id = _chat_id(update)
+
+        if not args or args[0] == "list":
+            await _reply(update, PersonalityEngine.list_personalities())
+            return
+
+        if args[0] == "current":
+            await _reply(update, PersonalityEngine.current_personality(chat_id))
+            return
+
+        if args[0] == "set" and len(args) >= 2:
+            user_id = update.effective_user.id if update.effective_user else 0
+            result = PersonalityEngine.set_personality(
+                chat_id, args[1], set_by=user_id
+            )
+            await _reply(update, result)
+            return
+
+        await _reply(
+            update,
+            "🎭 شخصیت گروه\n━━━━━━━━━━━━━━━━\n"
+            "/personality list — لیست شخصیت‌ها\n"
+            "/personality current — شخصیت فعلی\n"
+            "/personality set <name> — تغییر شخصیت",
+        )
+
     return [
         CommandHandler("start", start),
         CommandHandler("online", online),
@@ -1159,6 +1190,8 @@ def build_handlers(
         CommandHandler("forcejoin_status", forcejoin_status_cmd),
         CommandHandler("forcejoin_message", forcejoin_message_cmd),
         CallbackQueryHandler(forcejoin_verify_callback, pattern=r"^forcejoin_verify$"),
+        # Phase 9: Personality
+        CommandHandler("personality", personality_cmd),
         MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
     ]
 
