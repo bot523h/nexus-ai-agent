@@ -1502,6 +1502,92 @@ def build_handlers(
         finally:
             await wt.close()
 
+    # ── v3.0.0: Free Tools Commands ────────────────────────────────────
+
+    async def weather_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Fetch weather for a city using wttr.in (free)."""
+        city = " ".join(context.args) if context.args else ""
+        if not city:
+            await _reply(update, "🌤 استفاده: /weather [شهر]\nمثال: /weather تهران")
+            return
+        await update.message.chat.send_action("typing")  # type: ignore[union-attr]
+        from nexus_ai_agent.integrations.free_tools import WeatherTool
+
+        wt = WeatherTool()
+        data = await wt.get_weather(city)
+        await _reply(update, wt.format_weather(data))
+
+    async def rate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show USD to IRR/Toman rate."""
+        await update.message.chat.send_action("typing")  # type: ignore[union-attr]
+        from nexus_ai_agent.integrations.free_tools import CurrencyTool
+
+        ct = CurrencyTool()
+        data = await ct.get_usd_to_irr()
+        await _reply(update, ct.format_rate(data))
+
+    async def convert_cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Convert currency: /convert 100 usd irr."""
+        args = context.args or []
+        if len(args) < 3:
+            await _reply(
+                update,
+                "💱 استفاده: /convert [مقدار] [از] [به]\nمثال: /convert 100 usd irr",
+            )
+            return
+        await update.message.chat.send_action("typing")  # type: ignore[union-attr]
+        from nexus_ai_agent.integrations.free_tools import CurrencyTool
+
+        ct = CurrencyTool()
+        try:
+            amount = float(args[0])
+        except ValueError:
+            await _reply(update, "❌ مقدار باید عدد باشد.")
+            return
+        from_curr = args[1].upper()
+        to_curr = args[2].upper()
+        data = await ct.convert(amount, from_curr, to_curr)
+        await _reply(update, ct.format_convert(data))
+
+    async def news_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Fetch news for a topic."""
+        query = " ".join(context.args) if context.args else ""
+        if not query:
+            await _reply(update, "📰 استفاده: /news [موضوع]\nمثال: /news هوش مصنوعی")
+            return
+        await update.message.chat.send_action("typing")  # type: ignore[union-attr]
+        from nexus_ai_agent.integrations.free_tools import NewsTool
+
+        nt = NewsTool(news_api_key=settings.news_api_key)
+        results = await nt.get_news(query, max_results=5)
+        await _reply(update, nt.format_news(results, query))
+
+    async def yt_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Get YouTube video info from a URL."""
+        url = " ".join(context.args) if context.args else ""
+        if not url:
+            await _reply(update, "🎬 استفاده: /yt [لینک یوتیوب]")
+            return
+        await update.message.chat.send_action("typing")  # type: ignore[union-attr]
+        from nexus_ai_agent.integrations.free_tools import YouTubeSearchTool
+
+        yt = YouTubeSearchTool()
+        data = await yt.get_video_info(url)
+        await _reply(update, yt.format_video_info(data))
+
+    async def youtube_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Search YouTube for a topic."""
+        query = " ".join(context.args) if context.args else ""
+        if not query:
+            await _reply(update, "🎬 استفاده: /youtube [موضوع]\nمثال: /youtube Python tutorial")
+            return
+        await update.message.chat.send_action("typing")  # type: ignore[union-attr]
+        from nexus_ai_agent.integrations.free_tools import YouTubeSearchTool
+
+        yt = YouTubeSearchTool()
+        results = await yt.search(query, max_results=5)
+        await _reply(update, yt.format_search_results(results, query))
+
     async def onboarding_callback_handler(
         update: Update,
         context: ContextTypes.DEFAULT_TYPE,
@@ -3109,6 +3195,13 @@ def build_handlers(
         CommandHandler("learn", learn_cmd),
         CommandHandler("wiki", wiki_cmd),
         CommandHandler("search", search_cmd),
+        # ── v3.0.0: Free Tools ──────────────────────────────────
+        CommandHandler("weather", weather_cmd),
+        CommandHandler("rate", rate_cmd),
+        CommandHandler("convert", convert_cmd_new),
+        CommandHandler("news", news_cmd),
+        CommandHandler("yt", yt_cmd),
+        CommandHandler("youtube", youtube_cmd),
         # ── v2.1: Onboarding callbacks ──
         CallbackQueryHandler(onboarding_callback_handler, pattern=r"^onboarding_"),
         CallbackQueryHandler(menu_callback, pattern=r"^lang_"),
