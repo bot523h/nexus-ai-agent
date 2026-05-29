@@ -47,8 +47,8 @@
 - [x] ruff check + format
 - [x] mypy type check
 - [x] pytest all green
-- [ ] Update CHANGELOG.md for v2.0.0
-- [ ] Update README.md for v2.0.0
-- [ ] Update architecture.md
-- [ ] Git commit + tag v2.0.0
-- [ ] GitHub Release v2.0.0
+- [x] Update CHANGELOG.md for v2.0.0
+- [x] Update README.md for v2.0.0
+- [x] Update architecture.md
+- [x] Git commit + tag v2.0.0
+- [x] GitHub Release v2.0.0
