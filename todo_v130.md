@@ -41,9 +41,9 @@
 - [x] Lint + test + commit Phase 14
 
 ## Phase 15 — Analytics Engine
-- [ ] Create `src/nexus_ai_agent/features/analytics.py`
-- [ ] Add analytics model + handlers
-- [ ] Lint + test + commit Phase 15
+- [x] Create `src/nexus_ai_agent/features/analytics.py`
+- [x] Add analytics model + handlers
+- [x] Lint + test + commit Phase 15
 
 ## Phase 16 — Advanced UI
 - [ ] Upgrade inline keyboard menus

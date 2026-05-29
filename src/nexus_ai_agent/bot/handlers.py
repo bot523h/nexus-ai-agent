@@ -144,7 +144,7 @@ def build_handlers(
         if update.effective_chat:
             await _upsert_chat(db_session_factory, _chat_id(update), f"tg:{_chat_id(update)}")
 
-        # ── Phase 5: Main Menu with Inline Keyboard ──
+        # ── Phase 5+16: Main Menu with Inline Keyboard ──
         keyboard = [
             [
                 InlineKeyboardButton("💬 چت هوشمند", callback_data="menu_chat"),
@@ -156,7 +156,18 @@ def build_handlers(
             ],
             [
                 InlineKeyboardButton("🛠️ ابزارها", callback_data="menu_tools"),
+                InlineKeyboardButton("🎭 شخصیت", callback_data="menu_personality"),
+            ],
+            [
+                InlineKeyboardButton("🏆 گیمیفیکیشن", callback_data="menu_gamification"),
+                InlineKeyboardButton("📊 تحلیل", callback_data="menu_analytics"),
+            ],
+            [
+                InlineKeyboardButton("🛡️ نظارت", callback_data="menu_moderation"),
                 InlineKeyboardButton("⚙️ تنظیمات", callback_data="menu_settings"),
+            ],
+            [
+                InlineKeyboardButton("👨‍💼 پنل مدیریت", callback_data="menu_admin"),
             ],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -206,7 +217,7 @@ def build_handlers(
         _ = context
         await _reply(
             update,
-            "🤖 NEXUS AI v1.2.0 — راهنما\n\n"
+            "🤖 NEXUS AI v1.3.0 — راهنما\n\n"
             "━━━ 💬 چت ━━━\n"
             "هر پیامی بفرست = چت با AI\n"
             "/persona → شخصیت‌ها\n"
@@ -221,6 +232,13 @@ def build_handlers(
             "/stats /welcome /pin\n\n"
             "━━━ 🛠 ابزار ━━━\n"
             "/remind /tr /convert /calc\n\n"
+            "━━━ 🎭 شخصیت ━━━\n"
+            "/personality list|current|set <name>\n\n"
+            "━━━ 🏆 گیمیفیکیشن ━━━\n"
+            "/profile /daily /xp_leaderboard /achievements\n\n"
+            "━━━ 🛡️ نظارت ━━━\n"
+            "/mod_on /mod_off /mod_config\n"
+            "/warn /mute /unmute /reputation\n\n"
             "━━━ ⚙️ سیستم ━━━\n"
             "/start → منوی اصلی\n"
             "/online /disconnect /status\n"
@@ -860,6 +878,255 @@ def build_handlers(
                 "🧮 ماشین‌حساب\n\n/calc 2^10 + sin(45)\nتوابع: sin, cos, tan, sqrt, log, pi, e"
             )
 
+        elif data == "menu_personality":
+            keyboard = [
+                [InlineKeyboardButton("📋 لیست شخصیت‌ها", callback_data="pers_list")],
+                [InlineKeyboardButton("🔍 شخصیت فعلی", callback_data="pers_current")],
+                [InlineKeyboardButton("🎭 تغییر شخصیت", callback_data="pers_set")],
+                [InlineKeyboardButton("◀️ بازگشت", callback_data="menu_back")],
+            ]
+            await query.edit_message_text(
+                "🎭 شخصیت‌های AI\n\nشخصیت ربات رو انتخاب کن:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+        elif data == "pers_list":
+            await query.edit_message_text(PersonalityEngine.list_personalities())
+
+        elif data == "pers_current":
+            chat_id = _chat_id(update)
+            await query.edit_message_text(PersonalityEngine.current_personality(chat_id))
+
+        elif data == "pers_set":
+            await query.edit_message_text(
+                "🎭 تغییر شخصیت\n\n/personality set <name>\n\nمثال:\n/personality set friendly\n"
+                "/personality list — لیست شخصیت‌ها"
+            )
+
+        elif data == "menu_gamification":
+            keyboard = [
+                [InlineKeyboardButton("👤 پروفایل من", callback_data="gam_profile")],
+                [InlineKeyboardButton("🎁 پاداش روزانه", callback_data="gam_daily")],
+                [InlineKeyboardButton("🏆 جدول امتیازات", callback_data="gam_leaderboard")],
+                [InlineKeyboardButton("🏅 دستاوردها", callback_data="gam_achievements")],
+                [InlineKeyboardButton("◀️ بازگشت", callback_data="menu_back")],
+            ]
+            await query.edit_message_text(
+                "🏆 گیمیفیکیشن\n\nXP کسب کن، سطح‌بندرو برو بالا!",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+        elif data == "gam_profile":
+            user_id = query.from_user.id if query.from_user else 0
+            chat_id = _chat_id(update)
+            if user_id:
+                profile = GamificationEngine.get_profile(user_id, chat_id)
+                ach_t = GamificationEngine.format_achievements(profile["achievements"])
+                await query.edit_message_text(
+                    f"👤 پروفایل شما\n━━━━━━━━━━━━━━━━\n"
+                    f"⭐ سطح {profile['level']}: {profile['title']}\n"
+                    f"✨ XP: {profile['xp']}\n"
+                    f"📊 تا سطح بعد: {profile['xp_to_next']} XP\n"
+                    f"🔥 استریک: {profile['streak']} روز\n"
+                    f"🏆 دستاوردها ({profile['achievement_count']}):\n{ach_t}"
+                )
+            else:
+                await query.edit_message_text("❌ خطا: کاربر شناسایی نشد.")
+
+        elif data == "gam_daily":
+            await query.edit_message_text("🎁 پاداش روزانه\n\n/daily — دریافت پاداش روزانه")
+
+        elif data == "gam_leaderboard":
+            await query.edit_message_text("🏆 جدول امتیازات\n\n/xp_leaderboard")
+
+        elif data == "gam_achievements":
+            await query.edit_message_text("🏅 دستاوردها\n\n/achievements")
+
+        elif data == "menu_analytics":
+            keyboard = [
+                [InlineKeyboardButton("📊 داشبورد", callback_data="an_dashboard")],
+                [InlineKeyboardButton("👥 کاربران فعال", callback_data="an_active")],
+                [InlineKeyboardButton("📈 بازگشت کاربران", callback_data="an_retention")],
+                [InlineKeyboardButton("⚡ دستورات پرکاربرد", callback_data="an_commands")],
+                [InlineKeyboardButton("◀️ بازگشت", callback_data="menu_back")],
+            ]
+            await query.edit_message_text(
+                "📊 تحلیل و آمار\n\nداده‌های جامعه رو ببین:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+        elif data == "an_dashboard":
+            if not is_owner(query.from_user.id if query.from_user else 0):
+                await query.edit_message_text("⛔ فقط مدیر")
+                return
+            chat_id = _chat_id(update)
+            dashboard = AnalyticsEngine.get_dashboard(chat_id)
+            eng = dashboard["engagement_24h"]
+            peak_t = (
+                ", ".join(f"{p['label']} ({p['count']})" for p in dashboard["peak_hours_top3"])
+                or "ندارد"
+            )
+            await query.edit_message_text(
+                f"📊 داشبورد تحلیلی\n━━━━━━━━━━━━━━━━\n"
+                f"👤 فعال ۲۴ساعت: {dashboard['active_users_24h']}\n"
+                f"👤 فعال ۷روز: {dashboard['active_users_7d']}\n"
+                f"📈 رویداد ۲۴ساعت: {eng['total_events']}\n"
+                f"📊 رویداد/کاربر: {eng['events_per_user']}\n"
+                f"🕐 ساعات اوج: {peak_t}"
+            )
+
+        elif data == "an_active":
+            await query.edit_message_text("👥 کاربران فعال\n\n/analytics_active [ساعت]")
+
+        elif data == "an_retention":
+            await query.edit_message_text("📈 بازگشت کاربران\n\n/analytics_retention [روز]")
+
+        elif data == "an_commands":
+            if not is_owner(query.from_user.id if query.from_user else 0):
+                await query.edit_message_text("⛔ فقط مدیر")
+                return
+            chat_id = _chat_id(update)
+            cmds = AnalyticsEngine.get_command_usage(chat_id)
+            if not cmds:
+                await query.edit_message_text("⚡ هنوز داده‌ای ثبت نشده.")
+                return
+            lines = ["⚡ دستورات پرکاربرد\n━━━━━━━━━━━━━━━━"]
+            for c in cmds[:5]:
+                lines.append(f"  /{c['command']} — {c['count']} بار")
+            await query.edit_message_text("\n".join(lines))
+
+        elif data == "menu_moderation":
+            keyboard = [
+                [InlineKeyboardButton("🟢 فعال‌سازی", callback_data="mod_on")],
+                [InlineKeyboardButton("🔴 غیرفعال", callback_data="mod_off")],
+                [InlineKeyboardButton("⚙️ تنظیمات نظارت", callback_data="mod_cfg")],
+                [InlineKeyboardButton("👤 اعتبار کاربر", callback_data="mod_rep")],
+                [InlineKeyboardButton("◀️ بازگشت", callback_data="menu_back")],
+            ]
+            await query.edit_message_text(
+                "🛡️ نظارت هوشمند\n\nمحتوای گروه رو مدیریت کن:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+        elif data == "mod_on":
+            await query.edit_message_text("🟢 فعال‌سازی نظارت\n\n/mod_on")
+
+        elif data == "mod_off":
+            await query.edit_message_text("🔴 غیرفعال‌سازی نظارت\n\n/mod_off")
+
+        elif data == "mod_cfg":
+            chat_id = _chat_id(update)
+            cfg = ModerationEngine.get_config(chat_id)
+            if cfg is None:
+                await query.edit_message_text("🛡️ نظارت: غیرفعال (تنظیم نشده)")
+                return
+            si = lambda v: "✅" if v else "❌"  # noqa: E731
+            await query.edit_message_text(
+                f"🛡️ تنظیمات نظارت\n━━━━━━━━━━━━━━━━\n"
+                f"آنتی‌اسپم: {si(cfg.anti_spam)}\n"
+                f"آنتی‌فلاد: {si(cfg.anti_flood)}\n"
+                f"فیلتر لینک: {si(cfg.link_filter)}\n"
+                f"فیلتر کلمات: {si(cfg.profanity_filter)}\n"
+                f"حداکثر هشدار: {cfg.max_warnings}\n"
+                f"مدت میوت: {cfg.mute_duration_minutes} دقیقه"
+            )
+
+        elif data == "mod_rep":
+            await query.edit_message_text("👤 اعتبار کاربر\n\n/reputation [user_id]")
+
+        elif data == "menu_admin":
+            if not is_owner(query.from_user.id if query.from_user else 0):
+                await query.edit_message_text("⛔ فقط مدیر")
+                return
+            keyboard = [
+                [InlineKeyboardButton("👑 مدیریت مالک", callback_data="adm_owner")],
+                [InlineKeyboardButton("🔥 موتور وایرال", callback_data="adm_viral")],
+                [InlineKeyboardButton("📢 تبلیغات", callback_data="adm_ads")],
+                [InlineKeyboardButton("🛡️ نظارت", callback_data="adm_mod")],
+                [InlineKeyboardButton("📊 تحلیل‌ها", callback_data="adm_analytics")],
+                [InlineKeyboardButton("📢 عضویت اجباری", callback_data="adm_forcejoin")],
+                [InlineKeyboardButton("💬 تعامل خودکار", callback_data="adm_engagement")],
+                [InlineKeyboardButton("🖥️ وضعیت سیستم", callback_data="adm_system")],
+                [InlineKeyboardButton("◀️ بازگشت", callback_data="menu_back")],
+            ]
+            await query.edit_message_text(
+                "👨‍💼 پنل مدیریت\n\nابزارهای مدیریتی:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+        elif data == "adm_owner":
+            await query.edit_message_text(
+                "👑 مدیریت مالک\n━━━━━━━━━━━━━━━━\n"
+                "/owner — داشبورد مالک\n"
+                "/system — وضعیت سیستم\n"
+                "/broadcast <text> — پیام همگانی\n"
+                "/admin_logs — لاگ‌های ادمین"
+            )
+
+        elif data == "adm_viral":
+            await query.edit_message_text(
+                "🔥 موتور وایرال\n━━━━━━━━━━━━━━━━\n"
+                "/viral_now — تولید و ارسال\n"
+                "/viral_preview — پیش‌نمایش\n"
+                "/viral_stats — آمار\n"
+                "/viral_post — پست‌های در انتظار"
+            )
+
+        elif data == "adm_ads":
+            await query.edit_message_text(
+                "📢 تبلیغات\n━━━━━━━━━━━━━━━━\n"
+                "/ad_create <ساعت> <متن> — ساخت\n"
+                "/ad_list — لیست کمپین‌ها\n"
+                "/ad_pause <id> — توقف\n"
+                "/ad_resume <id> — ادامه\n"
+                "/ad_delete <id> — حذف\n"
+                "/ad_stats — آمار"
+            )
+
+        elif data == "adm_mod":
+            await query.edit_message_text(
+                "🛡️ نظارت\n━━━━━━━━━━━━━━━━\n"
+                "/mod_on — فعال‌سازی\n"
+                "/mod_off — غیرفعال\n"
+                "/mod_config — تنظیمات\n"
+                "/warn <user_id> — هشدار\n"
+                "/mute <user_id> [دقیقه] — میوت\n"
+                "/unmute <user_id> — آنمیوت\n"
+                "/reputation [user_id] — اعتبار"
+            )
+
+        elif data == "adm_analytics":
+            await query.edit_message_text(
+                "📊 تحلیل‌ها\n━━━━━━━━━━━━━━━━\n"
+                "/analytics — داشبورد\n"
+                "/analytics_active [ساعت] — کاربران فعال\n"
+                "/analytics_retention [روز] — بازگشت\n"
+                "/track <نوع> — ثبت رویداد"
+            )
+
+        elif data == "adm_forcejoin":
+            await query.edit_message_text(
+                "📢 عضویت اجباری\n━━━━━━━━━━━━━━━━\n"
+                "/forcejoin_on — فعال‌سازی\n"
+                "/forcejoin_off — غیرفعال\n"
+                "/forcejoin_status — وضعیت\n"
+                "/forcejoin_message <text> — پیام سفارشی"
+            )
+
+        elif data == "adm_engagement":
+            await query.edit_message_text(
+                "💬 تعامل خودکار\n━━━━━━━━━━━━━━━━\n"
+                "/engagement_on [دقیقه] — فعال‌سازی\n"
+                "/engagement_off — غیرفعال\n"
+                "/challenge — چالش تصادفی\n"
+                "/joke — جوک تصادفی\n"
+                "/event — رویداد تصادفی"
+            )
+
+        elif data == "adm_system":
+            status_text = OwnerControl.system_status()
+            await query.edit_message_text(f"🖥️ وضعیت سیستم\n━━━━━━━━━━━━━━━━\n{status_text}")
+
         elif data == "menu_settings":
             keyboard = [
                 [InlineKeyboardButton("🟢 آنلاین", callback_data="set_online")],
@@ -895,12 +1162,15 @@ def build_handlers(
 
         elif data == "set_help":
             await query.edit_message_text(
-                "ℹ️ راهنمای NEXUS AI v1.2.0\n\n"
+                "ℹ️ راهنمای NEXUS AI v1.3.0\n\n"
                 "💬 چت: فقط پیام بفرست\n"
                 "🎮 بازی‌ها: /quiz /guess_start /wordle /poll\n"
                 "👤 ناشناس: /anon_start /anon_stop /anon_report\n"
                 "📢 کانال: /post /schedule /ban /unban /stats /welcome /pin\n"
                 "🛠 ابزارها: /remind /tr /convert /calc\n"
+                "🎭 شخصیت: /personality list|current|set\n"
+                "🏆 گیمیفیکیشن: /profile /daily /xp_leaderboard /achievements\n"
+                "🛡️ نظارت: /mod_on /mod_off /mod_config\n"
                 "⚙️ تنظیمات: /online /disconnect /status /help"
             )
 
@@ -916,11 +1186,22 @@ def build_handlers(
                 ],
                 [
                     InlineKeyboardButton("🛠️ ابزارها", callback_data="menu_tools"),
+                    InlineKeyboardButton("🎭 شخصیت", callback_data="menu_personality"),
+                ],
+                [
+                    InlineKeyboardButton("🏆 گیمیفیکیشن", callback_data="menu_gamification"),
+                    InlineKeyboardButton("📊 تحلیل", callback_data="menu_analytics"),
+                ],
+                [
+                    InlineKeyboardButton("🛡️ نظارت", callback_data="menu_moderation"),
                     InlineKeyboardButton("⚙️ تنظیمات", callback_data="menu_settings"),
+                ],
+                [
+                    InlineKeyboardButton("👨‍💼 پنل مدیریت", callback_data="menu_admin"),
                 ],
             ]
             await query.edit_message_text(
-                "🤖 NEXUS AI\n\nیکی از گزینه‌ها رو انتخاب کن:",
+                "🤖 NEXUS AI v1.3.0\n\nیکی از گزینه‌ها رو انتخاب کن:",
                 reply_markup=InlineKeyboardMarkup(keyboard),
             )
 
@@ -1106,9 +1387,7 @@ def build_handlers(
             force_join_mgr.invalidate_cache(user_id)
             await query.edit_message_text("✅ عضویت شما تأیید شد! می‌تونید از ربات استفاده کنید.")
         else:
-            await query.edit_message_text(
-                "❌ شما هنوز در کانال عضو نشدید. لطفاً اول عضو بشید."
-            )
+            await query.edit_message_text("❌ شما هنوز در کانال عضو نشدید. لطفاً اول عضو بشید.")
 
     # ── Phase 9: Personality Engine ────────────────────────────────
     async def personality_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1126,9 +1405,7 @@ def build_handlers(
 
         if args[0] == "set" and len(args) >= 2:
             user_id = update.effective_user.id if update.effective_user else 0
-            result = PersonalityEngine.set_personality(
-                chat_id, args[1], set_by=user_id
-            )
+            result = PersonalityEngine.set_personality(chat_id, args[1], set_by=user_id)
             await _reply(update, result)
             return
 
@@ -1269,9 +1546,7 @@ def build_handlers(
         text = " ".join(context.args[1:])
         chat_id = _chat_id(update)
         user_id = update.effective_user.id if update.effective_user else 0
-        cid = AdManager.create_campaign(
-            chat_id, text, interval_hours=interval, created_by=user_id
-        )
+        cid = AdManager.create_campaign(chat_id, text, interval_hours=interval, created_by=user_id)
         await _reply(update, f"✅ کمپین تبلیغاتی ایجاد شد\n🆔 شناسه: {cid}\n⏰ هر {interval} ساعت")
 
     async def ad_list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1286,9 +1561,7 @@ def build_handlers(
             return
         lines = ["📋 کمپین‌های تبلیغاتی:\n━━━━━━━━━━━━━━━━━━"]
         for c in campaigns:
-            status_icon = {"active": "🟢", "paused": "⏸️", "completed": "✅"}.get(
-                c["status"], "❓"
-            )
+            status_icon = {"active": "🟢", "paused": "⏸️", "completed": "✅"}.get(c["status"], "❓")
             lines.append(
                 f"{status_icon} #{c['id']} | هر {c['interval_hours']}ساعت | "
                 f"تکرار: {c['repeat_count']}/{c['max_repeats'] or '∞'} | "
@@ -1476,9 +1749,7 @@ def build_handlers(
         ModerationEngine.unmute_user(target_id, chat_id)
         await _reply(update, f"🔊 کاربر {target_id} آنمیوت شد.")
 
-    async def mod_reputation_cmd(
-        update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
+    async def mod_reputation_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show user reputation."""
         chat_id = _chat_id(update)
         target_id: int | None = None
@@ -1533,8 +1804,7 @@ def build_handlers(
         if not result["claimed"]:
             await _reply(
                 update,
-                f"⏰ امروز پاداش رو گرفتی!\n"
-                f"⏳ {result['remaining_hours']} ساعت تا پاداش بعدی",
+                f"⏰ امروز پاداش رو گرفتی!\n⏳ {result['remaining_hours']} ساعت تا پاداش بعدی",
             )
             return
         level_up_msg = ""
@@ -1548,9 +1818,7 @@ def build_handlers(
             f"✅ مجموع: +{result['total_reward']} XP{level_up_msg}",
         )
 
-    async def xp_leaderboard_cmd(
-        update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
+    async def xp_leaderboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show XP leaderboard for the chat."""
         chat_id = _chat_id(update)
         board = GamificationEngine.get_leaderboard(chat_id, limit=10)
@@ -1561,15 +1829,10 @@ def build_handlers(
         lines = ["🏆 جدول امتیازات\n━━━━━━━━━━━━━━━━━━"]
         for i, entry in enumerate(board):
             medal = medals[i] if i < 3 else f"  {i + 1}."
-            lines.append(
-                f"{medal} کاربر {entry['user_id']} — "
-                f"{entry['title']} | {entry['xp']} XP"
-            )
+            lines.append(f"{medal} کاربر {entry['user_id']} — {entry['title']} | {entry['xp']} XP")
         await _reply(update, "\n".join(lines))
 
-    async def achievements_cmd(
-        update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
+    async def achievements_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show all available achievements and user progress."""
         user_id = _user_id(update)
         if user_id is None:
@@ -1593,12 +1856,14 @@ def build_handlers(
         chat_id = _chat_id(update)
         dashboard = AnalyticsEngine.get_dashboard(chat_id)
         eng = dashboard["engagement_24h"]
-        peak_text = ", ".join(
-            f"{p['label']} ({p['count']})" for p in dashboard["peak_hours_top3"]
-        ) or "ندارد"
-        cmds_text = ", ".join(
-            f"/{c['command']} ({c['count']})" for c in dashboard["top_commands"]
-        ) or "ندارد"
+        peak_text = (
+            ", ".join(f"{p['label']} ({p['count']})" for p in dashboard["peak_hours_top3"])
+            or "ندارد"
+        )
+        cmds_text = (
+            ", ".join(f"/{c['command']} ({c['count']})" for c in dashboard["top_commands"])
+            or "ندارد"
+        )
         await _reply(
             update,
             f"📊 داشبورد تحلیلی\n━━━━━━━━━━━━━━━━━━\n"
@@ -1610,9 +1875,7 @@ def build_handlers(
             f"⚡ دستورات پرکاربرد: {cmds_text}",
         )
 
-    async def analytics_active_cmd(
-        update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
+    async def analytics_active_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show active users (owner only)."""
         if not is_owner(update.effective_user.id if update.effective_user else 0):
             await _reply(update, "⛔ Access denied")
@@ -1633,9 +1896,7 @@ def build_handlers(
             lines.append(f"  👤 کاربر {u['user_id']}: {u['events']} رویداد")
         await _reply(update, "\n".join(lines))
 
-    async def analytics_retention_cmd(
-        update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
+    async def analytics_retention_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show retention data (owner only)."""
         if not is_owner(update.effective_user.id if update.effective_user else 0):
             await _reply(update, "⛔ Access denied")
@@ -1710,7 +1971,7 @@ def build_handlers(
         CommandHandler("tr", tr_cmd),
         CommandHandler("convert", convert_cmd),
         CommandHandler("calc", calc_cmd),
-        # Phase 5: Menu callbacks
+        # Phase 5+16: Menu callbacks
         CallbackQueryHandler(menu_callback, pattern=r"^menu_"),
         CallbackQueryHandler(menu_callback, pattern=r"^chat_"),
         CallbackQueryHandler(menu_callback, pattern=r"^game_"),
@@ -1718,6 +1979,13 @@ def build_handlers(
         CallbackQueryHandler(menu_callback, pattern=r"^ch_"),
         CallbackQueryHandler(menu_callback, pattern=r"^tool_"),
         CallbackQueryHandler(menu_callback, pattern=r"^set_"),
+        CallbackQueryHandler(menu_callback, pattern=r"^pers_"),
+        CallbackQueryHandler(menu_callback, pattern=r"^gam_"),
+        CallbackQueryHandler(menu_callback, pattern=r"^an_"),
+        CallbackQueryHandler(menu_callback, pattern=r"^mod_o(?:n|ff)$"),
+        CallbackQueryHandler(menu_callback, pattern=r"^mod_c(?:fg)?$"),
+        CallbackQueryHandler(menu_callback, pattern=r"^mod_rep$"),
+        CallbackQueryHandler(menu_callback, pattern=r"^adm_"),
         # Phase 7: Owner Control
         CommandHandler("owner", owner_cmd),
         CommandHandler("system", system_cmd),
