@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import create_engine as _ce
+from sqlalchemy import text as _text
 from sqlmodel import Field, SQLModel, select
 from sqlmodel import Session as _Session
 
@@ -21,6 +22,8 @@ log = get_logger(__name__)
 class Referral(SQLModel, table=True):
     """Referral tracking — who referred whom."""
 
+    __table_args__ = {"extend_existing": True}
+
     id: int | None = Field(default=None, primary_key=True)
     referrer_id: int = Field(index=True)
     referee_id: int = Field(index=True, unique=True)  # each user can only be referred once
@@ -33,6 +36,8 @@ class Referral(SQLModel, table=True):
 
 class ReferralCode(SQLModel, table=True):
     """Unique referral codes per user."""
+
+    __table_args__ = {"extend_existing": True}
 
     id: int | None = Field(default=None, primary_key=True)
     user_id: int = Field(index=True, unique=True)
@@ -64,7 +69,31 @@ class ReferralEngine:
     def _ensure_tables(self) -> None:
         """Create tables if they don't exist."""
         engine = _ce(f"sqlite:///{self._db_path}", echo=False)
-        SQLModel.metadata.create_all(engine)
+        with engine.begin() as conn:
+            conn.execute(
+                _text(
+                    "CREATE TABLE IF NOT EXISTS referral ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                    "referrer_id INTEGER,"
+                    "referee_id INTEGER UNIQUE,"
+                    "referral_code VARCHAR,"
+                    "status VARCHAR DEFAULT 'pending',"
+                    "reward_claimed BOOLEAN DEFAULT 0,"
+                    "created_at DATETIME,"
+                    "completed_at DATETIME)"
+                )
+            )
+            conn.execute(
+                _text(
+                    "CREATE TABLE IF NOT EXISTS referralcode ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                    "user_id INTEGER UNIQUE,"
+                    "code VARCHAR UNIQUE,"
+                    "total_referrals INTEGER DEFAULT 0,"
+                    "successful_referrals INTEGER DEFAULT 0,"
+                    "created_at DATETIME)"
+                )
+            )
 
     def _sync_engine(self) -> Any:
         return _ce(f"sqlite:///{self._db_path}", echo=False)

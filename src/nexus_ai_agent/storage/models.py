@@ -238,6 +238,7 @@ class AnalyticsEvent(SQLModel, table=True):
 
 
 class Referral(SQLModel, table=True):
+    __table_args__ = {"extend_existing": True}
     """Referral tracking: who referred whom."""
 
     id: int | None = Field(default=None, primary_key=True)
@@ -250,6 +251,7 @@ class Referral(SQLModel, table=True):
 
 
 class ReferralCode(SQLModel, table=True):
+    __table_args__ = {"extend_existing": True}
     """Per-user unique referral code and stats."""
 
     id: int | None = Field(default=None, primary_key=True)
@@ -261,6 +263,7 @@ class ReferralCode(SQLModel, table=True):
 
 
 class UserLanguage(SQLModel, table=True):
+    __table_args__ = {"extend_existing": True}
     """Per-user language preference for i18n."""
 
     id: int | None = Field(default=None, primary_key=True)
@@ -271,6 +274,7 @@ class UserLanguage(SQLModel, table=True):
 
 
 class CloudFile(SQLModel, table=True):
+    __table_args__ = {"extend_existing": True}
     """Tracks files uploaded to unified cloud storage."""
 
     id: int | None = Field(default=None, primary_key=True)
