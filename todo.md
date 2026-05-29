@@ -7,9 +7,9 @@
 - [x] Lint + test + commit Phase 1
 
 ## Phase 2 — Anonymous Chat
-- [ ] Create `src/nexus_ai_agent/features/anonymous_chat.py`
-- [ ] Add anon chat command handlers to `handlers.py`
-- [ ] Lint + test + commit Phase 2
+- [x] Create `src/nexus_ai_agent/features/anonymous_chat.py`
+- [x] Add anon chat command handlers to `handlers.py`
+- [x] Lint + test + commit Phase 2
 
 ## Phase 3 — Games & Entertainment
 - [ ] Create `src/nexus_ai_agent/features/games.py`

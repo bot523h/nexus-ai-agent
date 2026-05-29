@@ -10,14 +10,21 @@ from uuid import uuid4
 
 import structlog
 from sqlmodel import select
-from telegram import Message, Update
-from telegram.ext import CommandHandler, ContextTypes, MessageHandler, filters
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
+from telegram.ext import (
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 from nexus_ai_agent.config.settings import Settings
 
 # Feature managers — lazy-initialised inside build_handlers
 from nexus_ai_agent.features.anonymous_chat import AnonymousChatManager
 from nexus_ai_agent.features.channel_manager import ChannelManager
+from nexus_ai_agent.features.games import NumberGuess, QuickPoll, QuizGame, WordleFA
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.orchestration.state import NexusState
 from nexus_ai_agent.presence import PresenceStore
@@ -365,6 +372,205 @@ def build_handlers(
             else:
                 await _reply(update, "❌ خطا در ارسال پیام ناشناس.")
 
+    # ── Phase 3: Games & Entertainment ─────────────────────────────
+    quiz_game = QuizGame()
+    number_guess = NumberGuess()
+    wordle_fa = WordleFA()
+    quick_poll = QuickPoll()
+
+    async def quiz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Start a quiz question with inline keyboard."""
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        q = quiz_game.get_question(user_id)
+        if q is None:
+            await _reply(update, "❌ سوالی موجود نیست.")
+            return
+        keyboard = [
+            [InlineKeyboardButton(opt, callback_data=f"quiz_{user_id}_{i}")]
+            for i, opt in enumerate(q["options"])
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        msg = _message(update)
+        if msg is not None:
+            await msg.reply_text(f"❓ {q['q']}", reply_markup=reply_markup)
+
+    async def quiz_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle quiz inline keyboard answer."""
+        query = update.callback_query
+        if query is None or query.data is None:
+            return
+        await query.answer()
+        # Parse: quiz_{user_id}_{choice_idx}
+        parts = query.data.split("_")
+        if len(parts) != 3 or parts[0] != "quiz":
+            return
+        try:
+            target_user = int(parts[1])
+            choice = int(parts[2])
+        except ValueError:
+            return
+        user_id = query.from_user.id if query.from_user else 0
+        if user_id != target_user:
+            await query.edit_message_reply_markup(reply_markup=None)
+            return
+        correct = quiz_game.check_answer(user_id, choice)
+        chat_id = query.message.chat_id if query.message else 0
+        score = quiz_game.update_score(user_id, chat_id, correct)
+        emoji = "✅" if correct else "❌"
+        await query.edit_message_text(
+            f"{emoji} {'درست!' if correct else 'نادرست!'}\nامتیاز شما: {score}"
+        )
+        quiz_game.clear(user_id)
+
+    async def leaderboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show quiz leaderboard."""
+        chat_id = _chat_id(update)
+        board = quiz_game.get_leaderboard(chat_id)
+        if not board:
+            await _reply(update, "📊 هنوز امتیازی ثبت نشده.")
+            return
+        lines = ["🏆 جدول امتیازات:"]
+        for i, entry in enumerate(board, 1):
+            lines.append(f"  {i}. کاربر {entry['user_id']}: {entry['score']}/{entry['answered']}")
+        await _reply(update, "\n".join(lines))
+
+    async def guess_start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Start a number guessing game."""
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        result = number_guess.start(user_id)
+        await _reply(update, result)
+
+    async def guess_number_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle number guesses when a game is active."""
+        user_id = _user_id(update)
+        if user_id is None or not update.message or not update.message.text:
+            return
+        if not number_guess.is_active(user_id):
+            return
+        try:
+            number = int(update.message.text.strip())
+        except ValueError:
+            return  # not a number, ignore
+        result = number_guess.guess(user_id, number)
+        await _reply(update, result)
+
+    async def guess_stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Stop the number guessing game."""
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        result = number_guess.stop(user_id)
+        await _reply(update, result)
+
+    async def wordle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Start a Persian Wordle game."""
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        result = wordle_fa.start(user_id)
+        await _reply(update, result)
+
+    async def wordle_guess_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle Wordle guesses when a game is active."""
+        user_id = _user_id(update)
+        if user_id is None or not update.message or not update.message.text:
+            return
+        if not wordle_fa.is_active(user_id):
+            return
+        word = update.message.text.strip()
+        if len(word) != 5:
+            return  # not a 5-letter word, skip
+        # Check it's Persian/Arabic script
+        if not all("\u0600" <= c <= "\u06ff" or "\ufb50" <= c <= "\ufdff" for c in word):
+            return
+        result = wordle_fa.guess(user_id, word)
+        await _reply(update, result)
+
+    async def wordle_stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Stop the current Wordle game."""
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        result = wordle_fa.stop(user_id)
+        await _reply(update, result)
+
+    async def poll_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Create a quick poll. Usage: /poll سوال | گزینه1 | گزینه2 ..."""
+        if not context.args:
+            await _reply(update, "❌ استفاده: /poll سوال | گزینه۱ | گزینه۲")
+            return
+        full = " ".join(context.args)
+        parts = [p.strip() for p in full.split("|")]
+        if len(parts) < 3:
+            await _reply(update, "❌ حداقل ۲ گزینه نیاز است: /poll سوال | گزینه۱ | گزینه۲")
+            return
+        question = parts[0]
+        options = parts[1:]
+        poll_id = quick_poll.create(question, options)
+        keyboard = [
+            [InlineKeyboardButton(opt, callback_data=f"poll_{poll_id}_{i}")]
+            for i, opt in enumerate(options)
+        ]
+        keyboard.append([InlineKeyboardButton("📊 نتایج", callback_data=f"pollr_{poll_id}")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        msg = _message(update)
+        if msg is not None:
+            await msg.reply_text(f"📊 {question}", reply_markup=reply_markup)
+
+    async def poll_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle poll vote and results callbacks."""
+        query = update.callback_query
+        if query is None or query.data is None:
+            return
+        await query.answer()
+        data = query.data
+        if data.startswith("pollr_"):
+            poll_id = data[6:]
+            results = quick_poll.get_results(poll_id)
+            if results:
+                await query.edit_message_text(results)
+            return
+        if data.startswith("poll_"):
+            parts = data.split("_")
+            if len(parts) != 3:
+                return
+            poll_id = parts[1]
+            try:
+                option_idx = int(parts[2])
+            except ValueError:
+                return
+            user_id = query.from_user.id if query.from_user else 0
+            ok = quick_poll.vote(poll_id, option_idx, user_id)
+            if ok:
+                await query.answer("✅ رأی ثبت شد!", show_alert=True)
+            else:
+                await query.answer("⚠️ قبلاً رأی داده‌اید!", show_alert=True)
+            # Show updated results
+            results = quick_poll.get_results(poll_id)
+            if results and query.message:
+                # Rebuild keyboard
+                poll = quick_poll.get_poll(poll_id)
+                if poll:
+                    keyboard = [
+                        [
+                            InlineKeyboardButton(
+                                opt,
+                                callback_data=f"poll_{poll_id}_{i}",
+                            )
+                        ]
+                        for i, opt in enumerate(poll["options"])
+                    ]
+                    keyboard.append(
+                        [InlineKeyboardButton("📊 نتایج", callback_data=f"pollr_{poll_id}")]
+                    )
+                    await query.edit_message_text(
+                        results, reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+
     async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _ = context
         if not update.effective_user or not update.message or not update.message.text:
@@ -426,6 +632,16 @@ def build_handlers(
         CommandHandler("anon_start", anon_start_cmd),
         CommandHandler("anon_stop", anon_stop_cmd),
         CommandHandler("anon_report", anon_report_cmd),
+        # Phase 3: Games
+        CommandHandler("quiz", quiz_cmd),
+        CommandHandler("leaderboard", leaderboard_cmd),
+        CommandHandler("guess_start", guess_start_cmd),
+        CommandHandler("guess_stop", guess_stop_cmd),
+        CommandHandler("wordle", wordle_cmd),
+        CommandHandler("wordle_stop", wordle_stop_cmd),
+        CommandHandler("poll", poll_cmd),
+        CallbackQueryHandler(quiz_callback, pattern=r"^quiz_"),
+        CallbackQueryHandler(poll_callback, pattern=r"^poll"),
         MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
     ]
 
