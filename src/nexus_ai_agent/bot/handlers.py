@@ -21,6 +21,7 @@ from telegram.ext import (
 
 from nexus_ai_agent.config.settings import Settings
 from nexus_ai_agent.features.ads import AdManager
+from nexus_ai_agent.features.analytics import AnalyticsEngine
 
 # Feature managers — lazy-initialised inside build_handlers
 from nexus_ai_agent.features.anonymous_chat import AnonymousChatManager
@@ -1582,6 +1583,97 @@ def build_handlers(
         lines.append(f"\n📊 {len(unlocked)}/{len(_ACHIEVEMENTS)} باز شده")
         await _reply(update, "\n".join(lines))
 
+    # ── Phase 15: Analytics ────────────────────────────────────────────────────
+
+    async def analytics_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show analytics dashboard (owner only)."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        chat_id = _chat_id(update)
+        dashboard = AnalyticsEngine.get_dashboard(chat_id)
+        eng = dashboard["engagement_24h"]
+        peak_text = ", ".join(
+            f"{p['label']} ({p['count']})" for p in dashboard["peak_hours_top3"]
+        ) or "ندارد"
+        cmds_text = ", ".join(
+            f"/{c['command']} ({c['count']})" for c in dashboard["top_commands"]
+        ) or "ندارد"
+        await _reply(
+            update,
+            f"📊 داشبورد تحلیلی\n━━━━━━━━━━━━━━━━━━\n"
+            f"👥 فعال ۲۴ ساعت: {dashboard['active_users_24h']}\n"
+            f"👥 فعال ۷ روز: {dashboard['active_users_7d']}\n"
+            f"📈 رویداد ۲۴ ساعت: {eng['total_events']}\n"
+            f"📊 رویداد/کاربر: {eng['events_per_user']}\n"
+            f"🕐 ساعات اوج: {peak_text}\n"
+            f"⚡ دستورات پرکاربرد: {cmds_text}",
+        )
+
+    async def analytics_active_cmd(
+        update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Show active users (owner only)."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        chat_id = _chat_id(update)
+        hours = 24
+        if context.args:
+            try:
+                hours = int(context.args[0])
+            except ValueError:
+                pass
+        users = AnalyticsEngine.get_active_users(chat_id, hours=hours)
+        if not users:
+            await _reply(update, f"👥 کاربر فعال در {hours} ساعت اخیر: ۰")
+            return
+        lines = [f"👥 کاربران فعال ({hours} ساعت اخیر):\n━━━━━━━━━━━━━━━━━━"]
+        for u in users[:15]:
+            lines.append(f"  👤 کاربر {u['user_id']}: {u['events']} رویداد")
+        await _reply(update, "\n".join(lines))
+
+    async def analytics_retention_cmd(
+        update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Show retention data (owner only)."""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        chat_id = _chat_id(update)
+        days = 7
+        if context.args:
+            try:
+                days = int(context.args[0])
+            except ValueError:
+                pass
+        retention = AnalyticsEngine.get_retention(chat_id, days=days)
+        if not retention["retention"]:
+            await _reply(update, "📊 داده بازگشت کافی نیست.")
+            return
+        lines = [
+            f"📊 بازگشت کاربران ({days} روز)\n"
+            f"👤 سایز کوهورت: {retention['cohort_size']}\n"
+            f"━━━━━━━━━━━━━━━━━━"
+        ]
+        for r in retention["retention"]:
+            lines.append(f"  {r['date']}: {r['retained']} نفر ({r['rate']}%)")
+        await _reply(update, "\n".join(lines))
+
+    async def track_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Manually track an event (owner only). Usage: /track <event_type>"""
+        if not is_owner(update.effective_user.id if update.effective_user else 0):
+            await _reply(update, "⛔ Access denied")
+            return
+        if not context.args:
+            await _reply(update, "❌ استفاده: /track <نوع_رویداد>")
+            return
+        event_type = context.args[0]
+        user_id = _user_id(update) or 0
+        chat_id = _chat_id(update)
+        eid = AnalyticsEngine.track_event(chat_id, user_id, event_type)
+        await _reply(update, f"✅ رویداد ثبت شد (id={eid})")
+
     return [
         CommandHandler("start", start),
         CommandHandler("online", online),
@@ -1671,6 +1763,11 @@ def build_handlers(
         CommandHandler("daily", daily_cmd),
         CommandHandler("xp_leaderboard", xp_leaderboard_cmd),
         CommandHandler("achievements", achievements_cmd),
+        # Phase 15: Analytics
+        CommandHandler("analytics", analytics_cmd),
+        CommandHandler("analytics_active", analytics_active_cmd),
+        CommandHandler("analytics_retention", analytics_retention_cmd),
+        CommandHandler("track", track_cmd),
         MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
     ]
 
