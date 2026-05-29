@@ -1,10 +1,8 @@
 # NEXUS AI Agent
 
-**AI Community Operating System** — an offline-first, mobile-optimized AI orchestration runtime with a Telegram bot interface.
+**Global AI Platform** — the world's most feature-rich free Telegram AI bot, combining Google Gemini 2.0 Flash, 57GB+ unified cloud storage, viral referral growth, 15-language support, image generation, speech synthesis, and smart summarization — all powered by 100% free APIs.
 
-NEXUS AI is not just a chatbot: it provides routing, planning, tool execution gates, memory primitives, community management, gamification, analytics, and content automation — all built around **LangGraph** and local LLM backends.
-
-> **Current version: v1.3.0** — AI Community Operating System
+> **Current version: v2.0.0** — Global Expansion Release 🌍🚀
 
 ---
 
@@ -30,49 +28,107 @@ NEXUS AI is not just a chatbot: it provides routing, planning, tool execution ga
 - 📊 **Analytics** — Active users, engagement rate, peak hours, cohort retention, command usage, dashboard
 - 🎨 **Advanced UI** — 6-row main menu, nested submenus, admin dashboard panel
 
+### 🌍 Global Expansion (v2.0.0)
+
+#### 🤖 Google Gemini AI Integration
+- **Gemini 2.0 Flash** — Free tier: 15 RPM, 1M TPM, 1500 requests/day
+- `/ai <text>` — Conversational AI with context memory (20 messages per session)
+- `/ask <question>` — Single-turn factual Q&A
+- `/vision` — Image analysis via Gemini Vision (reply to any photo)
+- `/code <prompt>` — AI code generation
+- `/translate <text>` — AI-powered translation with auto-detect
+- `/summarize <text|URL>` — Smart summarization with 5 modes
+
+#### 🎨 Free Image Generation (Pollinations.ai)
+- **10 style presets**: realistic, anime, digital, oil, watercolor, pixel, 3d, comic, minimal, fantasy
+- **5 size options**: 1024×1024, 1792×1024, 1024×1792, 512×512, 1280×720
+- `/image <description>` — e.g., `/image style:anime a cat samurai`
+- Zero API key required — completely free
+
+#### 🎤 Speech-to-Text & Text-to-Speech
+- `/tts <text>` — Convert text to voice message (100+ languages via gTTS)
+- `/stt` — Transcribe voice/audio messages (reply to voice, powered by Gemini)
+- Automatic MIME type detection for all audio formats
+
+#### ☁️ Unified Cloud Storage (57GB+ Free)
+- **5+ free providers**: Dropbox (2GB), pCloud (10GB), Internxt (10GB), MEGA (20GB), GitHub Releases
+- Round-robin distribution with capacity-aware routing and automatic failover
+- `/cloud` — Upload file to unified cloud (reply to document)
+- `/myfiles` — List all your cloud files
+- `/download <filename>` — Download from cloud
+- `/cloud_status` — View storage status across all providers
+
+#### 🔗 Referral Viral Loop System
+- **6 exponential growth tiers**: 🥉 Inviter → 🥈 Networker → 🥇 Star → 💎 Diamond → 👑 Legendary → 🚀 Viral Master
+- Dual-reward system: both referrer and referee get prizes
+- `/referral` — View your code, link, and tier progress
+- `/referral_board` — Global referral leaderboard
+- Deep-link support: `t.me/bot?start=ref_CODE`
+
+#### 🌐 i18n Multi-Language (15 Languages)
+- English, Persian, Arabic, Spanish, French, German, Russian, Chinese, Japanese, Korean, Portuguese, Hindi, Turkish, Indonesian, Italian
+- Per-user language preference persistence
+- `/language` — Interactive inline keyboard for language selection
+
 ---
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                       Telegram Bot API                       │
-└──────────────────────────┬───────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                       Telegram Bot API                           │
+└──────────────────────────────────┬───────────────────────────────┘
+                                   │
+                                   ▼
+┌──────────────────────────────────────────────────────────────────┐
+│              python-telegram-bot Handlers                        │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────────────┐  │
+│  │  Auth    │ │  Rate    │ │  Force   │ │  Moderation        │  │
+│  │Middleware│ │ Limiter  │ │  Join    │ │  Pipeline          │  │
+│  └──────────┘ └──────────┘ └──────────┘ └────────────────────┘  │
+└──────────────────────────────────┬───────────────────────────────┘
+                                   │
+           ┌───────────────────────┼───────────────────────┐
+           │                       │                       │
+           ▼                       ▼                       ▼
+┌──────────────────────┐ ┌──────────────────┐ ┌─────────────────────┐
+│  LangGraph           │ │  Feature         │ │  Inline Keyboard UI │
+│  StateGraph          │ │  Engines         │ │  ┌────────┐         │
+│  (router→agent       │ │                  │ │  │ Main   │ v2.0.0  │
+│   →memory→tools)     │ │  v1.x:           │ │  │ Menu   │ Menu    │
+│                      │ │  • Owner         │ │  └───┬────┘ System  │
+│  LLMProvider:        │ │  • Personality   │ │      │              │
+│  • llama.cpp         │ │  • Engagement    │ │  ┌───┴──────────┐   │
+│  • FakeLLM           │ │  • Viral/Ads     │ │  │6 Sections:   │   │
+│                      │ │  • Moderation    │ │  │🤖AI 🎨Image  │   │
+│  v2.0.0:             │ │  • Gamification  │ │  │🎤Speech ☁️Cloud│   │
+│  • Gemini 2.0 Flash  │ │  • Analytics     │ │  │🔗Referral    │   │
+│                      │ │                  │ │  │🌐Language     │   │
+│                      │ │  v2.0.0:         │ │  └──────────────┘   │
+│                      │ │  • GeminiEngine  │ │                     │
+│                      │ │  • ImageGen      │ └─────────────────────┘
+│                      │ │  • SpeechEngine  │
+│                      │ │  • Summarizer    │
+│                      │ │  • ReferralEngine│
+│                      │ │  • I18n          │
+└──────────────────────┘ └──────────────────┘
                            │
                            ▼
-┌──────────────────────────────────────────────────────────────┐
-│              python-telegram-bot Handlers                     │
-│  ┌─────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────┐ │
-│  │  Auth   │ │  Rate    │ │  Force   │ │  Moderation     │ │
-│  │Middleware│ │ Limiter  │ │  Join    │ │  Pipeline       │ │
-│  └─────────┘ └──────────┘ └──────────┘ └──────────────────┘ │
-└──────────────────────────┬───────────────────────────────────┘
-                           │
-           ┌───────────────┼───────────────┐
-           │               │               │
-           ▼               ▼               ▼
-┌─────────────────┐ ┌──────────────┐ ┌─────────────────────────┐
-│  LangGraph      │ │  Feature     │ │  Inline Keyboard UI     │
-│  StateGraph     │ │  Engines     │ │  ┌───────┐ ┌─────────┐  │
-│  (router→agent  │ │              │ │  │ Main  │ │ Admin   │  │
-│   →memory→tools)│ │ • Owner      │ │  │ Menu  │ │ Dashboard│ │
-│                 │ │ • Personality│ │  └───┬───┘ └────┬────┘  │
-│  LLMProvider:   │ │ • Engagement │ │      │          │       │
-│  • llama.cpp    │ │ • Viral      │ │  ┌───┴───┐  ┌───┴───┐  │
-│  • FakeLLM      │ │ • Ads        │ │  │Nested │  │Nested │  │
-│                 │ │ • Moderation │ │  │Subs   │  │Subs   │  │
-│                 │ │ • Gamification│ │  └───────┘  └───────┘  │
-│                 │ │ • Analytics  │ │                          │
-└─────────────────┘ └──────┬───────┘ └─────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│              Unified Cloud Storage (57GB+ Free)                  │
+│  ┌─────────┐ ┌────────┐ ┌─────────┐ ┌──────┐ ┌──────────────┐  │
+│  │ Dropbox │ │ pCloud │ │ Internxt│ │ MEGA │ │ GitHub Rel.  │  │
+│  │  2GB    │ │ 10GB   │ │  10GB   │ │ 20GB │ │  Unlimited   │  │
+│  └─────────┘ └────────┘ └─────────┘ └──────┘ └──────────────┘  │
+└──────────────────────────────────────────────────────────────────┘
                            │
                            ▼
-┌──────────────────────────────────────────────────────────────┐
-│                    SQLModel + SQLite                          │
-│  ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐  │
-│  │User│ │Chat│ │Ad  │ │Viral│ │Mod │ │XP  │ │Event│ │Conf │  │
-│  │    │ │    │ │Camp│ │Post │ │Conf│ │    │ │     │ │igs  │  │
-│  └────┘ └────┘ └────┘ └────┘ └────┘ └────┘ └────┘ └────┘  │
-└──────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                    SQLModel + SQLite                             │
+│  ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌─────┐ ┌──────┐ ┌──────┐        │
+│  │User│ │Chat│ │Msg │ │XP  │ │Event│ │Referr│ │Cloud │ ...     │
+│  └────┘ └────┘ └────┘ └────┘ └─────┘ └──────┘ └──────┘        │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -95,7 +151,23 @@ cp .env.example .env
 
 Edit `.env` and set:
 
-- `TELEGRAM_BOT_TOKEN=...`
+```env
+# Required
+TELEGRAM_BOT_TOKEN=your_bot_token
+
+# v2.0.0: Google Gemini AI (free — get key at https://aistudio.google.com/apikey)
+GEMINI_API_KEY=your_gemini_api_key
+
+# v2.0.0: Bot username for referral links
+BOT_USERNAME=your_bot_username
+
+# v2.0.0: Cloud storage (optional — add providers you want)
+DROPBOX_TOKEN=           # https://www.dropbox.com/developers
+PCLOUD_TOKEN=            # https://www.pcloud.com/developers
+INTERNXT_TOKEN=          # https://developer.internxt.com
+MEGA_EMAIL=              # MEGA account email
+MEGA_PASSWORD=           # MEGA account password
+```
 
 ### 3) Initialize DB
 
@@ -109,20 +181,52 @@ make migrate
 make run
 ```
 
-## Downloading a local model (GGUF)
-
-This project expects a GGUF model file path via `NEXUS_MODEL_PATH` (default: `models/model.gguf`).
-You can download GGUF models from Hugging Face:
-
-- https://huggingface.co/models?search=gguf
-
-If no model is present, the runtime falls back to `FakeLLMProvider` (useful for smoke tests and CI).
-
 ---
 
 ## Commands Reference
 
-### 💬 Chat
+### 🤖 AI (v2.0.0)
+| Command | Description |
+|---------|-------------|
+| `/ai <text>` | Chat with Gemini AI (with memory) |
+| `/ask <question>` | Single-turn Q&A |
+| `/vision` | Analyze image (reply to photo) |
+| `/code <prompt>` | Generate code |
+| `/translate <text>` | Translate text |
+| `/summarize <text\|URL>` | Summarize content |
+
+### 🎨 Image (v2.0.0)
+| Command | Description |
+|---------|-------------|
+| `/image <description>` | Generate AI image |
+| `/image style:anime a cat` | Generate with style preset |
+
+### 🎤 Speech (v2.0.0)
+| Command | Description |
+|---------|-------------|
+| `/tts <text>` | Text to speech |
+| `/stt` | Speech to text (reply to voice) |
+
+### ☁️ Cloud Storage (v2.0.0)
+| Command | Description |
+|---------|-------------|
+| `/cloud` | Upload file to cloud (reply to file) |
+| `/myfiles` | List your cloud files |
+| `/download <name>` | Download file from cloud |
+| `/cloud_status` | Cloud storage status |
+
+### 🔗 Referral (v2.0.0)
+| Command | Description |
+|---------|-------------|
+| `/referral` | Your referral code & stats |
+| `/referral_board` | Global referral leaderboard |
+
+### 🌐 Language (v2.0.0)
+| Command | Description |
+|---------|-------------|
+| `/language` | Change bot language |
+
+### 💬 Chat (v1.x)
 | Command | Description |
 |---------|-------------|
 | (any message) | Chat with AI |
@@ -211,6 +315,23 @@ If no model is present, the runtime falls back to `FakeLLMProvider` (useful for 
 
 ---
 
+## Free API Stack (v2.0.0)
+
+| Service | Free Tier | Purpose |
+|---------|-----------|---------|
+| Google Gemini 2.0 Flash | 15 RPM, 1500/day | AI chat, vision, code, translation |
+| Pollinations.ai | Unlimited | Image generation (10 styles) |
+| gTTS | Unlimited | Text-to-speech (100+ languages) |
+| Dropbox | 2GB | Cloud storage |
+| pCloud | 10GB | Cloud storage |
+| Internxt | 10GB | Cloud storage |
+| MEGA | 20GB | Cloud storage |
+| GitHub Releases | Unlimited | Cloud storage overflow |
+
+**Total free storage: 57GB+**
+
+---
+
 ## Testing
 
 ```bash
@@ -224,8 +345,12 @@ make types       # mypy
 - **Runtime:** Python 3.11+ with asyncio
 - **Bot Framework:** python-telegram-bot v21+
 - **Database:** SQLModel + SQLAlchemy async/sync SQLite
+- **AI (v2.0.0):** Google Gemini 2.0 Flash API
 - **AI Orchestration:** LangGraph StateGraph
-- **LLM:** llama.cpp GGUF (local) with FakeLLMProvider fallback
+- **LLM (local):** llama.cpp GGUF with FakeLLMProvider fallback
+- **Image Gen:** Pollinations.ai (free, no API key)
+- **Speech:** gTTS (free TTS) + Gemini (STT)
+- **Cloud Storage:** Unified 5+ provider orchestrator
 - **Linting:** ruff + mypy
 - **Testing:** pytest
 
@@ -242,21 +367,30 @@ src/nexus_ai_agent/
 │   ├── ads.py               # Advertisement system
 │   ├── analytics.py         # Analytics engine
 │   ├── anonymous_chat.py    # Anonymous chat pairing
+│   ├── ai_chat.py           # v2.0.0: Gemini 2.0 Flash integration
 │   ├── channel_manager.py   # Channel/group management
 │   ├── engagement.py        # Community engagement
 │   ├── force_join.py        # Force join verification
 │   ├── games.py             # Quiz, Wordle, polls
 │   ├── gamification.py      # XP, levels, achievements
+│   ├── image_gen.py         # v2.0.0: Pollinations.ai image generation
 │   ├── moderation.py        # Smart moderation
 │   ├── owner_control.py     # Owner control system
 │   ├── personality.py       # AI personality engine
+│   ├── referral.py          # v2.0.0: Referral viral loop system
+│   ├── speech.py            # v2.0.0: gTTS + Gemini STT
+│   ├── summarizer.py        # v2.0.0: Smart content summarizer
 │   ├── tools.py             # Calculator, translator, etc.
 │   └── viral_engine.py      # Viral content engine
+├── i18n/
+│   ├── __init__.py          # v2.0.0: I18n manager (15 languages)
+│   └── loader.py            # v2.0.0: Language loader
 ├── orchestration/
 │   ├── graph.py             # LangGraph StateGraph
 │   └── state.py             # NexusState definition
 ├── storage/
-│   ├── models.py            # All SQLModel tables
+│   ├── models.py            # All SQLModel tables (including v2.0.0 models)
+│   ├── unified_cloud.py     # v2.0.0: Unified cloud storage orchestrator
 │   └── providers/           # Storage backends
 ├── observability/
 │   └── logging.py           # structlog setup

@@ -44,9 +44,9 @@
 - [x] Add language callback handler (lang_{code}) in menu_callback
 
 ## Phase 8: Final QA & Release
-- [ ] ruff check + format
-- [ ] mypy type check
-- [ ] pytest all green
+- [x] ruff check + format
+- [x] mypy type check
+- [x] pytest all green
 - [ ] Update CHANGELOG.md for v2.0.0
 - [ ] Update README.md for v2.0.0
 - [ ] Update architecture.md
