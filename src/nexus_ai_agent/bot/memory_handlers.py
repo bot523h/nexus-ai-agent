@@ -11,14 +11,14 @@ async def memory_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     user_id = update.effective_user.id
     engine = AIMemoryEngine()
     ctx = await engine.get_context(user_id)
-    
+
     if ctx:
         nl = "\n"
         formatted_ctx = ctx.replace(" | ", nl)
         await update.message.reply_text(
             f"🧠 *آنچه من از شما می‌دانم:*\n\n{formatted_ctx}\n\n"
             "این اطلاعات به من کمک می‌کند تا پاسخ‌های دقیق‌تری به شما بدهم.",
-            parse_mode="Markdown"
+            parse_mode="Markdown",
         )
     else:
         await update.message.reply_text("🧠 من هنوز اطلاعات خاصی از شما در حافظه بلندمدتم ندارم.")

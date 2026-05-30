@@ -58,7 +58,7 @@ class SelfMonitor:
     async def auto_fix(self, issue: str) -> None:
         """Basic auto-fix logic and notify owner."""
         logger.info(f"Attempting to fix: {issue}")
-        
+
         if self.bot and self.settings.owner_telegram_id:
             try:
                 await self.bot.send_message(

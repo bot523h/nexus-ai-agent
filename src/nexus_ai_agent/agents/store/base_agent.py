@@ -17,12 +17,14 @@ class StoreAgent:
         settings = get_settings()
         self.gemini = gemini_provider or GeminiProvider(api_key=settings.gemini_api_key or "")
 
-    async def respond(self, user_id: int, message: str, history: list[dict[str, str]], context: str = "") -> str:
+    async def respond(
+        self, user_id: int, message: str, history: list[dict[str, str]], context: str = ""
+    ) -> str:
         """Generate a response using the agent's unique personality."""
         full_system_prompt = self.system_prompt
         if context:
             full_system_prompt += f"\n\nContext about user:\n{context}"
-        
+
         # history should be list of {"role": "user/assistant", "content": "..."}
         response = await self.gemini.generate(
             prompt=message,

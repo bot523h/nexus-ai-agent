@@ -1,24 +1,26 @@
 import pytest
+from unittest.mock import AsyncMock
 from nexus_ai_agent.features.ai_memory import AIMemoryEngine
 
 @pytest.mark.asyncio
-async def test_extract_name():
-    engine = AIMemoryEngine()
-    # Mocking Gemini response for extraction
-    engine.gemini = AsyncMock()
-    engine.gemini.generate.return_value = '{"name": "Majid"}'
+async def test_extract_context():
+    # Mocking Gemini provider
+    mock_gemini = AsyncMock()
+    # Should return a JSON string
+    mock_gemini.generate.return_value = '{"name": "Majid", "occupation": "Developer"}'
     
-    name = await engine.extract_name(123, "My name is Majid")
-    assert name == "Majid"
+    engine = AIMemoryEngine(gemini_provider=mock_gemini)
+    await engine.update_from_message(123, "My name is Majid and I am a developer")
+    
+    context = await engine.get_context(123)
+    assert "Majid" in context
+    assert "Developer" in context
 
 @pytest.mark.asyncio
 async def test_forget_me():
     engine = AIMemoryEngine()
-    await engine.store_memory(123, name="Majid")
+    # Manually save something to test deletion
+    await engine._save_memory(123, {"name": "Majid"})
     await engine.forget_user(123)
-    memory = await engine.get_memory(123)
-    assert memory.name is None
-
-class AsyncMock(MagicMock):
-    async def __call__(self, *args, **kwargs):
-        return super(AsyncMock, self).__call__(*args, **kwargs)
+    context = await engine.get_context(123)
+    assert context == ""

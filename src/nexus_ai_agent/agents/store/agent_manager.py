@@ -35,11 +35,11 @@ class AgentManager:
         """Activate an agent for a specific user."""
         if agent_id not in AGENTS:
             return False
-        
+
         async with get_session() as session:
             stmt = select(UserActiveAgent).where(UserActiveAgent.user_id == user_id)
-            existing = (await session.exec(stmt)).first()
-            
+            existing = (await session.execute(stmt)).scalar_one_or_none()
+
             if existing:
                 existing.agent_name = agent_id
                 existing.activated_at = datetime.utcnow()
@@ -47,7 +47,7 @@ class AgentManager:
             else:
                 new_active = UserActiveAgent(user_id=user_id, agent_name=agent_id)
                 session.add(new_active)
-            
+
             await session.commit()
             return True
 
@@ -56,7 +56,7 @@ class AgentManager:
         """Deactivate any active agent for a user."""
         async with get_session() as session:
             stmt = select(UserActiveAgent).where(UserActiveAgent.user_id == user_id)
-            existing = (await session.exec(stmt)).first()
+            existing = (await session.execute(stmt)).scalar_one_or_none()
             if existing:
                 await session.delete(existing)
                 await session.commit()
@@ -66,8 +66,8 @@ class AgentManager:
         """Get the currently active agent for a user."""
         async with get_session() as session:
             stmt = select(UserActiveAgent).where(UserActiveAgent.user_id == user_id)
-            active_record = (await session.exec(stmt)).first()
-            
+            active_record = (await session.execute(stmt)).scalar_one_or_none()
+
             if active_record and active_record.agent_name in AGENTS:
                 agent_class = AGENTS[active_record.agent_name]
                 return agent_class()

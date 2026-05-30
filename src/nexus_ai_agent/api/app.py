@@ -18,6 +18,7 @@ app.add_middleware(
 
 app.include_router(dashboard_router)
 
+
 @app.get("/", response_class=HTMLResponse)
 async def root() -> str:
     return """
@@ -30,7 +31,11 @@ async def root() -> str:
         <script src="https://cdn.tailwindcss.com"></script>
         <style>
             @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@100;400;700&display=swap');
-            body { font-family: 'Vazirmatn', sans-serif; background-color: #0f172a; color: #f8fafc; }
+            body {
+                font-family: 'Vazirmatn', sans-serif;
+                background-color: #0f172a;
+                color: #f8fafc;
+            }
         </style>
     </head>
     <body class="p-8">
@@ -77,7 +82,8 @@ async def root() -> str:
                     document.getElementById('total_users').innerText = data.total_users;
                     document.getElementById('total_chats').innerText = data.total_chats;
                     document.getElementById('total_files').innerText = data.total_files;
-                    document.getElementById('active_agents').innerText = data.active_specialized_agents;
+                    const activeAgents = data.active_specialized_agents;
+                    document.getElementById('active_agents').innerText = activeAgents;
                 } catch (e) { console.error(e); }
             }
 
@@ -97,7 +103,9 @@ async def root() -> str:
                             <li class="py-3 flex justify-between items-center">
                                 <div>
                                     <span class="font-bold text-blue-300">${name}</span>
-                                    <span class="text-slate-500 text-sm ml-2">ID: ${u.telegram_id}</span>
+                                    <span class="text-slate-500 text-sm ml-2">
+                             ID: ${u.telegram_id}
+                         </span>
                                 </div>
                                 <span class="bg-slate-700 px-2 py-1 rounded text-xs text-slate-300">
                                     User #${u.id}

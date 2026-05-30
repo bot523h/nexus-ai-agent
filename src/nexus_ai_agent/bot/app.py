@@ -10,7 +10,7 @@ import os
 from collections.abc import Callable
 from typing import Any
 
-from telegram.ext import Application, ApplicationBuilder, CommandHandler
+from telegram.ext import Application, ApplicationBuilder
 
 from nexus_ai_agent.config.settings import Settings
 from nexus_ai_agent.presence import PresenceStore
@@ -18,7 +18,6 @@ from nexus_ai_agent.storage.ai_storage import AIStorageManager, ProviderConfig
 
 from .handlers import (
     build_handlers,
-    install_presence_heartbeat,
 )
 
 

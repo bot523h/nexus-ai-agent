@@ -28,11 +28,11 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     """Approve a pending action (Owner only)."""
     if not is_owner(update.effective_user.id if update.effective_user else 0):
         return
-    
+
     if not context.args:
         await update.message.reply_text("❌ استفاده: /approve <id>")
         return
-    
+
     try:
         approval_id = int(context.args[0])
         system = ApprovalSystem(bot=context.bot)
@@ -50,11 +50,11 @@ async def reject_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     """Reject a pending action (Owner only)."""
     if not is_owner(update.effective_user.id if update.effective_user else 0):
         return
-    
+
     if not context.args:
         await update.message.reply_text("❌ استفاده: /reject <id>")
         return
-    
+
     try:
         approval_id = int(context.args[0])
         system = ApprovalSystem(bot=context.bot)

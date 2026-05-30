@@ -24,12 +24,12 @@ async def get_global_stats():
         file_count = (await session.exec(select(func.count(CloudFile.id)))).one()
         # Active Agents
         agent_count = (await session.exec(select(func.count(UserActiveAgent.id)))).one()
-        
+
         return {
             "total_users": user_count,
             "total_chats": chat_count,
             "total_files": file_count,
-            "active_specialized_agents": agent_count
+            "active_specialized_agents": agent_count,
         }
 
 

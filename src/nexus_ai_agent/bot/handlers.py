@@ -40,7 +40,6 @@ from nexus_ai_agent.bot.monitor_handlers import approve_cmd, health_cmd, reject_
 from nexus_ai_agent.bot.tool_handlers import news_cmd, rate_cmd, weather_cmd, youtube_cmd
 from nexus_ai_agent.bot.update_handlers import update_cmd, version_cmd
 from nexus_ai_agent.config.settings import Settings
-from nexus_ai_agent.features.ads import AdManager
 
 # Feature managers — lazy-initialised inside build_handlers
 # ── v2.0.0 imports ──
@@ -826,7 +825,7 @@ def build_handlers(
         memory_engine = AIMemoryEngine()
         # Update memory in background
         asyncio.create_task(memory_engine.update_from_message(user_id, update.message.text))
-        
+
         active_agent = await AgentManager.get_active(user_id)
         if active_agent:
             user_context = await memory_engine.get_context(user_id)
@@ -837,6 +836,7 @@ def build_handlers(
             result = {"intent": f"agent:{active_agent.name}", "response": response}
         else:
             from nexus_ai_agent.orchestration.graph import graph as _graph
+
             state = _base_state(update, update.message.text)
             state["correlation_id"] = correlation_id
             state["intent"] = "unknown"
@@ -1087,7 +1087,7 @@ def build_handlers(
         await _reply(update, "📋 Pending viral posts: 3 in queue.")
 
     # ── Phase 12: Advertisement System ─────────────────────────────
-    ad_manager = AdManager()
+    # ad_manager = AdManager()
 
     async def ad_create_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Create a new ad campaign (owner only)."""
@@ -1421,67 +1421,81 @@ def build_handlers(
         CallbackQueryHandler(menu_callback, pattern=r"^menu_language$"),
         # ── v2.0.0: Referral deep-link ──
         CommandHandler("start", start_referral_handler),
-    # ── Phase 2: RAG (PDF) ──
-    CommandHandler("docs", docs_list_cmd),
-    CommandHandler("doc_delete", doc_delete_cmd),
-    CommandHandler("chat_with_doc", chat_with_doc_cmd),
-    MessageHandler(filters.Document.PDF, pdf_handler),
-    # ── Phase 3: AI Story ──
-    CommandHandler("story", story_cmd_handler),
-    CommandHandler("story_style", story_style_cmd),
-    # ── Catch-all Message Handler ──
-    MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
-]
+        # ── Phase 2: RAG (PDF) ──
+        CommandHandler("docs", docs_list_cmd),
+        CommandHandler("doc_delete", doc_delete_cmd),
+        CommandHandler("chat_with_doc", chat_with_doc_cmd),
+        MessageHandler(filters.Document.PDF, pdf_handler),
+        # ── Phase 3: AI Story ──
+        CommandHandler("story", story_cmd_handler),
+        CommandHandler("story_style", story_style_cmd),
+        # ── Catch-all Message Handler ──
+        MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
+    ]
 
 
 async def start_referral_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start with referral code."""
     await _reply(update, "Welcome! You were referred by someone.")
 
+
 async def pdf_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from nexus_ai_agent.features.rag import RAGEngine
+
     user_id = _user_id(update) or 0
     doc = update.message.document
-    if not doc: return
-    
+    if not doc:
+        return
+
     file = await doc.get_file()
     file_bytes = await file.download_as_bytearray()
-    
+
     engine = RAGEngine()
     msg = await engine.ingest_pdf(user_id, bytes(file_bytes), doc.file_name or "document.pdf")
-    await _reply(update, f"✅ {msg}\nحالا می‌توانید با دستور /chat_with_doc درباره این سند سوال بپرسید.")
+    await _reply(
+        update, f"✅ {msg}\nحالا می‌توانید با دستور /chat_with_doc درباره این سند سوال بپرسید."
+    )
+
 
 async def docs_list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _reply(update, "📚 لیست اسناد شما خالی است (نسخه دمو).")
 
+
 async def doc_delete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _reply(update, "🗑️ سند حذف شد.")
+
 
 async def chat_with_doc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _reply(update, "🔍 حالت چت با سند فعال شد. سوال خود را بپرسید.")
 
+
 async def story_cmd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from nexus_ai_agent.features.story_gen import AIStoryGenerator
+
     if not context.args:
         await _reply(update, "❌ استفاده: /story [متن]")
         return
-    
+
     text = " ".join(context.args)
     await _reply(update, "🎨 در حال ساخت استوری شما...")
-    
+
     generator = AIStoryGenerator()
     image_bytes = await generator.create_story(_user_id(update) or 0, text)
-    
+
     await update.message.reply_photo(photo=image_bytes, caption="✨ استوری شما آماده شد!")
+
 
 async def story_style_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _reply(update, "🎨 استایل فعلی: Motivational\nگزینه‌ها: Motivational | Romantic | Success")
 
+
 def storage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     pass
 
+
 def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     pass
+
 
 async def install_presence_heartbeat(application: Any) -> None:
     """Mock presence heartbeat for now."""

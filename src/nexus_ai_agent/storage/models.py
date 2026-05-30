@@ -326,6 +326,7 @@ class UserMemory(SQLModel, table=True):
     personality_tags: str = "[]"  # JSON list
     last_updated: datetime = Field(default_factory=datetime.utcnow)
 
+
 class DocumentChunk(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     user_id: int = Field(index=True)

@@ -7,7 +7,7 @@ from nexus_ai_agent.presence import PresenceStore
 
 def test_build_handlers_includes_required_commands(monkeypatch) -> None:
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test")
-    handlers = build_handlers(object(), lambda: None, Settings(), presence=PresenceStore())
+    handlers = build_handlers(object(), lambda: None, Settings(), PresenceStore(), object())
     commands = {
         next(iter(handler.commands)) for handler in handlers if hasattr(handler, "commands")
     }
@@ -27,7 +27,7 @@ def test_build_handlers_includes_required_commands(monkeypatch) -> None:
 
 def test_build_handlers_includes_callback_handlers(monkeypatch) -> None:
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test")
-    handlers = build_handlers(object(), lambda: None, Settings(), presence=PresenceStore())
+    handlers = build_handlers(object(), lambda: None, Settings(), PresenceStore(), object())
     # Check we have CallbackQueryHandler instances
     from telegram.ext import CallbackQueryHandler
 

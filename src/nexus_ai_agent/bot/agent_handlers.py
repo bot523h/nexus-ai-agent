@@ -21,20 +21,19 @@ async def agents_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if i + 1 < len(agents):
             row.append(
                 InlineKeyboardButton(
-                    f"{agents[i+1]['emoji']} {agents[i+1]['id'].capitalize()}",
-                    callback_data=f"agent_select_{agents[i+1]['id']}",
+                    f"{agents[i + 1]['emoji']} {agents[i + 1]['id'].capitalize()}",
+                    callback_data=f"agent_select_{agents[i + 1]['id']}",
                 )
             )
         keyboard.append(row)
-    
+
     keyboard.append([InlineKeyboardButton("❌ غیرفعال کردن Agent", callback_data="agent_stop")])
-    
+
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "🤖 *Agent Store*\n\nیک دستیار متخصص انتخاب کنید تا تمام پیام‌های شما توسط او پاسخ داده شود:",
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
+    msg = (
+        "🤖 *Agent Store*\n\nیک دستیار متخصص انتخاب کنید تا تمام پیام‌های شما توسط او پاسخ داده شود:"
     )
+    await update.message.reply_text(msg, reply_markup=reply_markup, parse_mode="Markdown")
 
 
 async def agent_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -44,12 +43,13 @@ async def agent_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         return
     await query.answer()
     user_id = query.from_user.id
-    
+
     if query.data == "agent_stop":
         await AgentManager.deactivate(user_id)
-        await query.edit_message_text("✅ Agent غیرفعال شد. حالا به حالت هوش مصنوعی معمولی برگشتیم.")
+        msg = "✅ Agent غیرفعال شد. حالا به حالت هوش مصنوعی معمولی برگشتیم."
+        await query.edit_message_text(msg)
         return
-    
+
     if query.data and query.data.startswith("agent_select_"):
         agent_id = query.data.replace("agent_select_", "")
         success = await AgentManager.activate(user_id, agent_id)
@@ -60,7 +60,7 @@ async def agent_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 f"✅ *{agent_info['name']}* فعال شد!\n\n"
                 f"{agent_info['description']}\n\n"
                 "از این به بعد من با این شخصیت پاسخ شما را می‌دهم. برای توقف: /agent_stop",
-                parse_mode="Markdown"
+                parse_mode="Markdown",
             )
 
 
