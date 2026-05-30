@@ -1450,10 +1450,20 @@ async def pdf_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     file = await doc.get_file()
     file_bytes = await file.download_as_bytearray()
 
-    engine = RAGEngine()
-    msg = await engine.ingest_pdf(user_id, bytes(file_bytes), doc.file_name or "document.pdf")
+    # Background processing via Celery
+    from nexus_ai_agent.worker import process_pdf_task
+
+    # Save to temp file for worker
+    os.makedirs("data/temp", exist_ok=True)
+    temp_path = f"data/temp/{doc.file_id}.pdf"
+    with open(temp_path, "wb") as f:
+        f.write(file_bytes)
+
+    process_pdf_task.delay(user_id, temp_path, doc.file_id)
     await _reply(
-        update, f"✅ {msg}\nحالا می‌توانید با دستور /chat_with_doc درباره این سند سوال بپرسید."
+        update,
+        f"⏳ در حال پردازش فایل {doc.file_name} در پس‌زمینه...\n"
+        "وقتی آماده شد به شما اطلاع می‌دهم.",
     )
 
 
@@ -1479,10 +1489,14 @@ async def story_cmd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     text = " ".join(context.args)
     await _reply(update, "🎨 در حال ساخت استوری شما...")
 
-    generator = AIStoryGenerator()
-    image_bytes = await generator.create_story(_user_id(update) or 0, text)
+    # Background story generation
+    from nexus_ai_agent.worker import generate_story_task
 
-    await update.message.reply_photo(photo=image_bytes, caption="✨ استوری شما آماده شد!")
+    output_path = f"data/temp/story_{_user_id(update)}_{int(datetime.now().timestamp())}.png"
+    os.makedirs("data/temp", exist_ok=True)
+
+    generate_story_task.delay(_user_id(update) or 0, text, output_path)
+    await _reply(update, "🎨 استوری شما در حال آماده‌سازی در پس‌زمینه است...")
 
 
 async def story_style_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
