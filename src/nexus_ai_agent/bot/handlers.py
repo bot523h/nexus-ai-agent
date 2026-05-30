@@ -1440,7 +1440,7 @@ async def start_referral_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def pdf_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from nexus_ai_agent.features.rag import RAGEngine
+    from nexus_ai_agent.features.rag import AdvancedRAGEngine as RAGEngine
 
     user_id = _user_id(update) or 0
     doc = update.message.document
