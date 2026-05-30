@@ -1,0 +1,11 @@
+name: nexus-ai-agent
+services:
+  - name: bot
+    type: worker
+    git:
+      branch: main
+    env:
+      - name: TELEGRAM_BOT_TOKEN
+        value: "{{ .Env.TELEGRAM_BOT_TOKEN }}"
+      - name: GEMINI_API_KEY
+        value: "{{ .Env.GEMINI_API_KEY }}"
