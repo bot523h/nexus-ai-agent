@@ -1,11 +1,13 @@
-name: nexus-ai-agent
+name: nexus-ai
 services:
   - name: bot
     type: worker
-    git:
-      branch: main
+    docker:
+      dockerfile: Dockerfile
     env:
       - name: TELEGRAM_BOT_TOKEN
         value: "{{ .Env.TELEGRAM_BOT_TOKEN }}"
       - name: GEMINI_API_KEY
         value: "{{ .Env.GEMINI_API_KEY }}"
+    health_check:
+      path: /api/health
