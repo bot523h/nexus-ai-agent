@@ -1,9 +1,13 @@
+from __future__ import annotations
+
 import logging
 from datetime import datetime, timedelta
+from typing import Optional
 
 from sqlmodel import select
 
 from nexus_ai_agent.config.settings import get_settings
+from nexus_ai_agent.core.instrumentation import instrumented
 from nexus_ai_agent.knowledge.web_trainer import WebTrainer
 from nexus_ai_agent.knowledge.wikipedia_trainer import WikipediaTrainer
 from nexus_ai_agent.llm.gemini_provider import GeminiProvider
@@ -14,13 +18,15 @@ logger = logging.getLogger(__name__)
 
 
 class KnowledgeManager:
-    def __init__(self, gemini_provider: GeminiProvider | None = None) -> None:
+    """Knowledge orchestration layer with instrumentation."""
+
+    def __init__(self, gemini_provider: Optional[GeminiProvider] = None) -> None:
         self.wiki = WikipediaTrainer()
         self.web = WebTrainer()
         settings = get_settings()
         self.gemini = gemini_provider or GeminiProvider(api_key=settings.gemini_api_key or "")
 
-    async def get_cached_knowledge(self, query: str) -> str | None:
+    async def get_cached_knowledge(self, query: str) -> Optional[str]:
         """Retrieve knowledge from cache if not expired."""
         async with get_session() as session:
             statement = select(KnowledgeCache).where(
@@ -30,6 +36,7 @@ class KnowledgeManager:
             cache_entry = result.scalar_one_or_none()
             return cache_entry.content if cache_entry else None
 
+    @instrumented("knowledge.learn")
     async def learn(self, query: str) -> str:
         """Learn about a topic from all sources and summarize."""
         cached = await self.get_cached_knowledge(query)
@@ -73,5 +80,6 @@ class KnowledgeManager:
         return summary
 
     async def close(self) -> None:
+        """Close underlying trainers."""
         await self.wiki.close()
         await self.web.close()
