@@ -48,6 +48,12 @@ from nexus_ai_agent.features.speech import SpeechEngine
 from nexus_ai_agent.features.summarizer import SummarizerEngine
 from nexus_ai_agent.features.tools import Calculator, ReminderSystem, Translator, UnitConverter
 from nexus_ai_agent.features.viral_engine import ViralEngine
+
+# ── v3.1.0 imports ──
+from nexus_ai_agent.bot.knowledge_handlers import learn_cmd, search_cmd, wiki_cmd
+from nexus_ai_agent.bot.monitor_handlers import health_cmd
+from nexus_ai_agent.bot.tool_handlers import news_cmd, rate_cmd, weather_cmd, youtube_cmd
+from nexus_ai_agent.bot.update_handlers import update_cmd, version_cmd
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.orchestration.state import NexusState
 from nexus_ai_agent.presence import PresenceStore
@@ -3002,6 +3008,18 @@ def build_handlers(
         CommandHandler("language", language_cmd),
         # ── v2.1: New Chat ──
         CommandHandler("newchat", newchat_cmd),
+        # ── v3.1.0: Knowledge & Tools ──
+        CommandHandler("learn", learn_cmd),
+        CommandHandler("wiki", wiki_cmd),
+        CommandHandler("search", search_cmd),
+        CommandHandler("weather", weather_cmd),
+        CommandHandler("rate", rate_cmd),
+        CommandHandler("news", news_cmd),
+        CommandHandler("youtube", youtube_cmd),
+        # ── v3.1.0: System & Updates ──
+        CommandHandler("health", health_cmd),
+        CommandHandler("version", version_cmd),
+        CommandHandler("update", update_cmd),
         # ── v2.1: Onboarding callbacks ──
         CallbackQueryHandler(onboarding_callback_handler, pattern=r"^onboarding_"),
         CallbackQueryHandler(menu_callback, pattern=r"^lang_"),
