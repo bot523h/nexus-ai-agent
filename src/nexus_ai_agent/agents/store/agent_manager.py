@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Optional
 
 from sqlmodel import select
 
 from nexus_ai_agent.storage.db import get_session
 from nexus_ai_agent.storage.models import UserActiveAgent
+
 from .specialized_agents import AGENTS, StoreAgent
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ class AgentManager:
                 await session.commit()
 
     @staticmethod
-    async def get_active(user_id: int) -> Optional[StoreAgent]:
+    async def get_active(user_id: int) -> StoreAgent | None:
         """Get the currently active agent for a user."""
         async with get_session() as session:
             stmt = select(UserActiveAgent).where(UserActiveAgent.user_id == user_id)

@@ -13,10 +13,18 @@ async def agents_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     # Create 2x5 grid
     for i in range(0, len(agents), 2):
         row = [
-            InlineKeyboardButton(f"{agents[i]['emoji']} {agents[i]['id'].capitalize()}", callback_data=f"agent_select_{agents[i]['id']}"),
+            InlineKeyboardButton(
+                f"{agents[i]['emoji']} {agents[i]['id'].capitalize()}",
+                callback_data=f"agent_select_{agents[i]['id']}",
+            ),
         ]
         if i + 1 < len(agents):
-            row.append(InlineKeyboardButton(f"{agents[i+1]['emoji']} {agents[i+1]['id'].capitalize()}", callback_data=f"agent_select_{agents[i+1]['id']}"))
+            row.append(
+                InlineKeyboardButton(
+                    f"{agents[i+1]['emoji']} {agents[i+1]['id'].capitalize()}",
+                    callback_data=f"agent_select_{agents[i+1]['id']}",
+                )
+            )
         keyboard.append(row)
     
     keyboard.append([InlineKeyboardButton("❌ غیرفعال کردن Agent", callback_data="agent_stop")])
@@ -32,6 +40,8 @@ async def agents_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def agent_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle agent selection and stopping."""
     query = update.callback_query
+    if not query:
+        return
     await query.answer()
     user_id = query.from_user.id
     
@@ -40,7 +50,7 @@ async def agent_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text("✅ Agent غیرفعال شد. حالا به حالت هوش مصنوعی معمولی برگشتیم.")
         return
     
-    if query.data.startswith("agent_select_"):
+    if query.data and query.data.startswith("agent_select_"):
         agent_id = query.data.replace("agent_select_", "")
         success = await AgentManager.activate(user_id, agent_id)
         if success:
@@ -59,7 +69,9 @@ async def myagent_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     user_id = update.effective_user.id
     active_agent = await AgentManager.get_active(user_id)
     if active_agent:
-        await update.message.reply_text(f"🤖 در حال حاضر **{active_agent.name}** فعال است.", parse_mode="Markdown")
+        await update.message.reply_text(
+            f"🤖 در حال حاضر **{active_agent.name}** فعال است.", parse_mode="Markdown"
+        )
     else:
         await update.message.reply_text("❌ هیچ Agent فعالی ندارید. از /agents یکی انتخاب کنید.")
 

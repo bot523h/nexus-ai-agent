@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Optional
-
-from nexus_ai_agent.llm.gemini_provider import GeminiProvider
 from nexus_ai_agent.config.settings import get_settings
+from nexus_ai_agent.llm.gemini_provider import GeminiProvider
 
 
 class StoreAgent:
@@ -15,7 +13,7 @@ class StoreAgent:
     system_prompt: str
     category: str
 
-    def __init__(self, gemini_provider: Optional[GeminiProvider] = None) -> None:
+    def __init__(self, gemini_provider: GeminiProvider | None = None) -> None:
         settings = get_settings()
         self.gemini = gemini_provider or GeminiProvider(api_key=settings.gemini_api_key or "")
 

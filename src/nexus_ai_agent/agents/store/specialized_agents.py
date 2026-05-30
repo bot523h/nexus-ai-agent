@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from .base_agent import StoreAgent
+
 
 class CodingAgent(StoreAgent):
     name = "👨‍💻 Coding Partner"
@@ -12,6 +15,7 @@ class CodingAgent(StoreAgent):
     همیشه کد رو با توضیح بده.
     """
 
+
 class StudyAgent(StoreAgent):
     name = "📚 Study Coach"
     emoji = "📚"
@@ -23,6 +27,7 @@ class StudyAgent(StoreAgent):
     سوال میپرسی که مطمئن بشی فهمیده.
     منابع رایگان معرفی میکنی.
     """
+
 
 class FitnessAgent(StoreAgent):
     name = "💪 Fitness Coach"
@@ -36,6 +41,7 @@ class FitnessAgent(StoreAgent):
     بدون equipment هم برنامه داری.
     """
 
+
 class FinanceAgent(StoreAgent):
     name = "💰 Finance Advisor"
     emoji = "💰"
@@ -48,6 +54,7 @@ class FinanceAgent(StoreAgent):
     با اعداد و مثال توضیح بده.
     """
 
+
 class ChefAgent(StoreAgent):
     name = "👨‍🍳 Chef Assistant"
     emoji = "👨‍🍳"
@@ -58,6 +65,7 @@ class ChefAgent(StoreAgent):
     دستور غذا میدی بر اساس مواد موجود.
     ایرانی، بین‌المللی، رژیمی - همه رو بلدی.
     """
+
 
 class LanguageAgent(StoreAgent):
     name = "🌍 Language Tutor"
@@ -71,6 +79,7 @@ class LanguageAgent(StoreAgent):
     با مثال و تمرین یاد میدی.
     """
 
+
 class CreativeAgent(StoreAgent):
     name = "✍️ Creative Writer"
     emoji = "✍️"
@@ -82,6 +91,7 @@ class CreativeAgent(StoreAgent):
     سبک کاربر رو یاد میگیری.
     """
 
+
 class BusinessAgent(StoreAgent):
     name = "📊 Business Mentor"
     emoji = "📊"
@@ -92,6 +102,7 @@ class BusinessAgent(StoreAgent):
     ایده، استارتاپ، بازاریابی، مدل درآمدی.
     با سوال نیاز رو کشف میکنی، بعد راهنمایی میکنی.
     """
+
 
 class TherapistAgent(StoreAgent):
     name = "🧘 Wellness Guide"
@@ -105,6 +116,7 @@ class TherapistAgent(StoreAgent):
     اگر وضعیت جدی بود، حتماً به متخصص ارجاع بده.
     """
 
+
 class NewsAgent(StoreAgent):
     name = "📰 News Analyst"
     emoji = "📰"
@@ -117,7 +129,8 @@ class NewsAgent(StoreAgent):
     بی‌طرف هستی.
     """
 
-AGENTS = {
+
+AGENTS: dict[str, type[StoreAgent]] = {
     "coding": CodingAgent,
     "study": StudyAgent,
     "fitness": FitnessAgent,

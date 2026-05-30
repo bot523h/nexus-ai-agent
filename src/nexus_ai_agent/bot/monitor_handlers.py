@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from telegram import Update
 from telegram.ext import ContextTypes
 
@@ -38,7 +40,8 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if success:
             await update.message.reply_text(f"✅ درخواست {approval_id} تایید شد.")
         else:
-            await update.message.reply_text(f"❌ درخواست {approval_id} یافت نشد یا قبلاً بررسی شده است.")
+            msg = f"❌ درخواست {approval_id} یافت نشد یا قبلاً بررسی شده است."
+            await update.message.reply_text(msg)
     except ValueError:
         await update.message.reply_text("❌ شناسه باید عدد باشد.")
 
@@ -59,6 +62,7 @@ async def reject_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if success:
             await update.message.reply_text(f"❌ درخواست {approval_id} رد شد.")
         else:
-            await update.message.reply_text(f"❌ درخواست {approval_id} یافت نشد یا قبلاً بررسی شده است.")
+            msg = f"❌ درخواست {approval_id} یافت نشد یا قبلاً بررسی شده است."
+            await update.message.reply_text(msg)
     except ValueError:
         await update.message.reply_text("❌ شناسه باید عدد باشد.")

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlmodel import select, func
+from fastapi import APIRouter
+from sqlmodel import func, select
 
 from nexus_ai_agent.storage.db import get_session
-from nexus_ai_agent.storage.models import User, Chat, CloudFile, UserActiveAgent
+from nexus_ai_agent.storage.models import Chat, CloudFile, User, UserActiveAgent
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])

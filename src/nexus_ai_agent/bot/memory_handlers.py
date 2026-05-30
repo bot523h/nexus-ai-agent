@@ -13,8 +13,10 @@ async def memory_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     ctx = await engine.get_context(user_id)
     
     if ctx:
+        nl = "\n"
+        formatted_ctx = ctx.replace(" | ", nl)
         await update.message.reply_text(
-            f"🧠 *آنچه من از شما می‌دانم:*\n\n{ctx.replace(' | ', '\n')}\n\n"
+            f"🧠 *آنچه من از شما می‌دانم:*\n\n{formatted_ctx}\n\n"
             "این اطلاعات به من کمک می‌کند تا پاسخ‌های دقیق‌تری به شما بدهم.",
             parse_mode="Markdown"
         )

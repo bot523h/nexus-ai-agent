@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from typing import Optional
 
 from sqlmodel import select
 
@@ -18,26 +17,27 @@ logger = logging.getLogger(__name__)
 class AIMemoryEngine:
     """Engine for analyzing user interactions and maintaining long-term memory."""
 
-    def __init__(self, gemini_provider: Optional[GeminiProvider] = None) -> None:
+    def __init__(self, gemini_provider: GeminiProvider | None = None) -> None:
         settings = get_settings()
         self.gemini = gemini_provider or GeminiProvider(api_key=settings.gemini_api_key or "")
 
     async def update_from_message(self, user_id: int, message: str) -> None:
         """Extract important user information from a message."""
-        # For efficiency, we only analyze if the message looks informative or every N messages
-        # In this simplified version, we'll use Gemini to extract key-value pairs
         prompt = f"""
         Analyze the following message from a user and extract key personal information.
         Information to look for: Name, Interests, Occupation, Personality traits.
         
         User Message: "{message}"
         
-        Return ONLY a JSON object with these keys: name, interests (list), occupation, personality_tags (list).
+        Return ONLY a JSON object with these keys: 
+        name, interests (list), occupation, personality_tags (list).
         If no new information is found, return an empty JSON object {{}}.
         """
         
         try:
-            response_text = await self.gemini.generate(prompt=prompt, system="You are a personal information extractor.")
+            response_text = await self.gemini.generate(
+                prompt=prompt, system="You are a personal information extractor."
+            )
             # Basic JSON extraction from response
             start = response_text.find("{")
             end = response_text.rfind("}") + 1

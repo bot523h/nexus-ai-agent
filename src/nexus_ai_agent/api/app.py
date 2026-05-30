@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
@@ -20,7 +19,7 @@ app.add_middleware(
 app.include_router(dashboard_router)
 
 @app.get("/", response_class=HTMLResponse)
-async def root():
+async def root() -> str:
     return """
     <!DOCTYPE html>
     <html lang="fa" dir="rtl">
@@ -93,13 +92,16 @@ async def root():
                     }
                     let html = '<ul class="divide-y divide-slate-700">';
                     data.forEach(u => {
+                        const name = u.username || 'بدون نام';
                         html += `
                             <li class="py-3 flex justify-between items-center">
                                 <div>
-                                    <span class="font-bold text-blue-300">${u.username || 'بدون نام'}</span>
+                                    <span class="font-bold text-blue-300">${name}</span>
                                     <span class="text-slate-500 text-sm ml-2">ID: ${u.telegram_id}</span>
                                 </div>
-                                <span class="bg-slate-700 px-2 py-1 rounded text-xs text-slate-300">User #${u.id}</span>
+                                <span class="bg-slate-700 px-2 py-1 rounded text-xs text-slate-300">
+                                    User #${u.id}
+                                </span>
                             </li>
                         `;
                     });
