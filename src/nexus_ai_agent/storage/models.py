@@ -301,3 +301,27 @@ class KnowledgeCache(SQLModel, table=True):
     content: str
     expires_at: datetime = Field(index=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class PendingApproval(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    change_type: str
+    description: str
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    status: str = "pending"  # pending, approved, rejected
+    auto_apply_at: datetime | None = None
+
+
+class UserActiveAgent(SQLModel, table=True):
+    user_id: int = Field(primary_key=True)
+    agent_name: str
+    activated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class UserMemory(SQLModel, table=True):
+    user_id: int = Field(primary_key=True)
+    name: str | None = None
+    interests: str = "[]"  # JSON list
+    occupation: str | None = None
+    personality_tags: str = "[]"  # JSON list
+    last_updated: datetime = Field(default_factory=datetime.utcnow)
