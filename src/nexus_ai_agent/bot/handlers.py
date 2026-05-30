@@ -1421,19 +1421,44 @@ def build_handlers(
         CallbackQueryHandler(menu_callback, pattern=r"^menu_language$"),
         # ── v2.0.0: Referral deep-link ──
         CommandHandler("start", start_referral_handler),
-        # ── Catch-all Message Handler ──
-        MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
-    ]
+    # ── Phase 2: RAG (PDF) ──
+    CommandHandler("docs", docs_list_cmd),
+    CommandHandler("doc_delete", doc_delete_cmd),
+    CommandHandler("chat_with_doc", chat_with_doc_cmd),
+    MessageHandler(filters.Document.PDF, pdf_handler),
+    # ── Catch-all Message Handler ──
+    MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
+]
 
 
 async def start_referral_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start with referral code."""
     await _reply(update, "Welcome! You were referred by someone.")
 
+async def pdf_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from nexus_ai_agent.features.rag import RAGEngine
+    user_id = _user_id(update) or 0
+    doc = update.message.document
+    if not doc: return
+    
+    file = await doc.get_file()
+    file_bytes = await file.download_as_bytearray()
+    
+    engine = RAGEngine()
+    msg = await engine.ingest_pdf(user_id, bytes(file_bytes), doc.file_name or "document.pdf")
+    await _reply(update, f"✅ {msg}\nحالا می‌توانید با دستور /chat_with_doc درباره این سند سوال بپرسید.")
+
+async def docs_list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _reply(update, "📚 لیست اسناد شما خالی است (نسخه دمو).")
+
+async def doc_delete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _reply(update, "🗑️ سند حذف شد.")
+
+async def chat_with_doc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _reply(update, "🔍 حالت چت با سند فعال شد. سوال خود را بپرسید.")
 
 def storage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     pass
-
 
 def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     pass

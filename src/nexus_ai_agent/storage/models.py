@@ -325,3 +325,11 @@ class UserMemory(SQLModel, table=True):
     occupation: str | None = None
     personality_tags: str = "[]"  # JSON list
     last_updated: datetime = Field(default_factory=datetime.utcnow)
+
+class DocumentChunk(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True)
+    filename: str
+    chunk_text: str
+    chunk_index: int
+    embedding: str  # JSON list of floats
