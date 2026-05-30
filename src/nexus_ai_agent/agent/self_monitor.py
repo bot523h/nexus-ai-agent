@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import gc
 import logging
 import os
 import time
@@ -5,14 +8,19 @@ from typing import Any
 
 import psutil  # type: ignore
 
+from nexus_ai_agent.core.instrumentation import instrumented
+
 logger = logging.getLogger(__name__)
 
 
 class SelfMonitor:
+    """System health monitor with instrumentation."""
+
     def __init__(self, max_ram_mb: int = 1500) -> None:
         self.max_ram_mb = max_ram_mb
         self.start_time = time.time()
 
+    @instrumented("agent.monitor.health")
     async def check_health(self) -> dict[str, Any]:
         """Check system health status."""
         process = psutil.Process(os.getpid())
@@ -29,13 +37,12 @@ class SelfMonitor:
         }
         return status
 
+    @instrumented("agent.monitor.autofix")
     async def auto_fix(self, issue: str) -> None:
         """Basic auto-fix logic."""
         logger.info(f"Attempting to fix: {issue}")
         if "RAM" in issue:
-            # Placeholder for model unloading or GC
-            import gc
-
+            # Trigger garbage collection
             gc.collect()
         elif "DB" in issue:
             # Placeholder for DB vacuum
