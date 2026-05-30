@@ -152,6 +152,19 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("INTERNXT_TOKEN", "NEXUS_INTERNXT_TOKEN"),
     )
 
+    news_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("NEWS_API_KEY", "NEXUS_NEWS_API_KEY"),
+    )
+    youtube_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("YOUTUBE_API_KEY", "NEXUS_YOUTUBE_API_KEY"),
+    )
+    max_ram_mb: int = Field(
+        default=1500,
+        validation_alias=AliasChoices("MAX_RAM_MB", "NEXUS_MAX_RAM_MB"),
+    )
+
     @field_validator("allowed_user_ids", mode="before")
     @classmethod
     def _parse_allowed_user_ids(cls, v):  # type: ignore[no-untyped-def]

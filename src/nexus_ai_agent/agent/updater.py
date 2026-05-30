@@ -1,17 +1,17 @@
-import httpx
 import logging
-import os
 import subprocess
-from typing import Tuple, Optional
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
+
 class AutoUpdater:
-    def __init__(self, current_version: str, repo: str = "bot523h/nexus-ai-agent"):
+    def __init__(self, current_version: str, repo: str = "bot523h/nexus-ai-agent") -> None:
         self.current_version = current_version
         self.repo = repo
 
-    async def check_for_update(self) -> Tuple[bool, Optional[str]]:
+    async def check_for_update(self) -> tuple[bool, str | None]:
         """Check GitHub for latest release."""
         url = f"https://api.github.com/repos/{self.repo}/releases/latest"
         async with httpx.AsyncClient() as client:
@@ -25,7 +25,7 @@ class AutoUpdater:
                 logger.error(f"Update check error: {e}")
         return False, None
 
-    async def do_update(self):
+    async def do_update(self) -> bool:
         """Perform git pull and reinstall."""
         try:
             subprocess.run(["git", "pull"], check=True)

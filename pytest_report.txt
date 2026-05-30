@@ -1,0 +1,20 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.0rc1, pytest-9.0.3, pluggy-1.6.0
+rootdir: /home/ubuntu/nexus-ai-agent
+configfile: pyproject.toml
+testpaths: tests
+plugins: anyio-4.13.0, mock-3.15.1, asyncio-1.4.0, langsmith-0.8.7
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 29 items
+
+tests/integration/test_agents.py ....                                    [ 13%]
+tests/integration/test_graph.py ..                                       [ 20%]
+tests/unit/test_gdrive.py .                                              [ 24%]
+tests/unit/test_handlers.py ..                                           [ 31%]
+tests/unit/test_persona_routing.py .....                                 [ 48%]
+tests/unit/test_personality.py ......                                    [ 68%]
+tests/unit/test_presence.py ..                                           [ 75%]
+tests/unit/test_router.py ...                                            [ 86%]
+tests/unit/test_tools_sandbox.py ....                                    [100%]
+
+============================== 29 passed in 2.56s ==============================

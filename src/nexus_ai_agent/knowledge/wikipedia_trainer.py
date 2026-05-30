@@ -1,24 +1,25 @@
+import logging
+
 import httpx
 from bs4 import BeautifulSoup
-from typing import Optional
-import logging
 
 logger = logging.getLogger(__name__)
 
+
 class WikipediaTrainer:
-    def __init__(self):
+    def __init__(self) -> None:
         self.client = httpx.AsyncClient(timeout=10.0)
 
-    async def fetch_summary(self, query: str, lang: str = "fa") -> Optional[str]:
+    async def fetch_summary(self, query: str, lang: str = "fa") -> str | None:
         """Fetch summary from Wikipedia without API key."""
         url = f"https://{lang}.wikipedia.org/wiki/{query.replace(' ', '_')}"
         try:
             response = await self.client.get(url)
             if response.status_code != 200:
-                if lang == "fa": # Fallback to English
+                if lang == "fa":  # Fallback to English
                     return await self.fetch_summary(query, "en")
                 return None
-            
+
             soup = BeautifulSoup(response.text, "lxml")
             # Extract first few paragraphs
             paragraphs = soup.find_all("p")
@@ -34,5 +35,5 @@ class WikipediaTrainer:
             logger.error(f"Wikipedia fetch error: {e}")
             return None
 
-    async def close(self):
+    async def close(self) -> None:
         await self.client.aclose()

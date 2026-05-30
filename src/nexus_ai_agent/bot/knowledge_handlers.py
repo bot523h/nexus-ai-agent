@@ -1,15 +1,21 @@
 from telegram import Update
 from telegram.ext import ContextTypes
+
 from nexus_ai_agent.knowledge.knowledge_manager import KnowledgeManager
 
+
 async def learn_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not context.args:
-        await update.message.reply_text("لطفاً یک موضوع برای یادگیری وارد کنید. مثال: /learn هوش مصنوعی")
+    if not update.message:
         return
-    
+    if not context.args:
+        await update.message.reply_text(
+            "لطفاً یک موضوع برای یادگیری وارد کنید. مثال: /learn هوش مصنوعی"
+        )
+        return
+
     query = " ".join(context.args)
     await update.message.reply_text(f"🔍 در حال یادگیری در مورد '{query}'...")
-    
+
     km = KnowledgeManager()
     try:
         summary = await km.learn(query)
@@ -19,11 +25,14 @@ async def learn_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     finally:
         await km.close()
 
+
 async def wiki_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
     if not context.args:
         await update.message.reply_text("لطفاً یک موضوع برای جستجو در ویکی‌پدیا وارد کنید.")
         return
-    
+
     query = " ".join(context.args)
     km = KnowledgeManager()
     try:
@@ -37,11 +46,14 @@ async def wiki_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     finally:
         await km.close()
 
+
 async def search_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
     if not context.args:
         await update.message.reply_text("لطفاً یک موضوع برای جستجو در وب وارد کنید.")
         return
-    
+
     query = " ".join(context.args)
     km = KnowledgeManager()
     try:

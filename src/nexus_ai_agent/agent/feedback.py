@@ -1,20 +1,23 @@
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 import logging
+from typing import Any
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 logger = logging.getLogger(__name__)
 
+
 class FeedbackCollector:
     @staticmethod
-    def get_feedback_keyboard(message_id: str):
+    def get_feedback_keyboard(message_id: str) -> InlineKeyboardMarkup:
         keyboard = [
             [
                 InlineKeyboardButton("👍", callback_data=f"fb_up_{message_id}"),
-                InlineKeyboardButton("👎", callback_data=f"fb_down_{message_id}")
+                InlineKeyboardButton("👎", callback_data=f"fb_down_{message_id}"),
             ]
         ]
         return InlineKeyboardMarkup(keyboard)
 
-    async def handle_feedback(self, update, context):
+    async def handle_feedback(self, update: Any, context: Any) -> None:
         query = update.callback_query
         data = query.data
         if data.startswith("fb_down"):
