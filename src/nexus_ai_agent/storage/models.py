@@ -289,3 +289,14 @@ class CloudFile(SQLModel, table=True):
     remote_path: str = Field(default="")
     file_size: int = Field(default=0)
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+# ── v3.0.0 models ──────────────────────────────────────────────────────
+
+
+class KnowledgeCache(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    query: str = Field(index=True)
+    source: str
+    content: str
+    expires_at: datetime = Field(index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
