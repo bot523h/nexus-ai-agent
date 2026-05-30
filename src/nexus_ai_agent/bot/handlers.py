@@ -28,7 +28,7 @@ from telegram.ext import (
 
 # ── v3.1.0 imports ──
 from nexus_ai_agent.bot.knowledge_handlers import learn_cmd, search_cmd, wiki_cmd
-from nexus_ai_agent.bot.monitor_handlers import health_cmd
+from nexus_ai_agent.bot.monitor_handlers import approve_cmd, health_cmd, reject_cmd
 from nexus_ai_agent.bot.tool_handlers import news_cmd, rate_cmd, weather_cmd, youtube_cmd
 from nexus_ai_agent.bot.update_handlers import update_cmd, version_cmd
 from nexus_ai_agent.config.settings import Settings
@@ -3017,6 +3017,8 @@ def build_handlers(
         CommandHandler("youtube", youtube_cmd),
         # ── v3.1.0: System & Updates ──
         CommandHandler("health", health_cmd),
+        CommandHandler("approve", approve_cmd),
+        CommandHandler("reject", reject_cmd),
         CommandHandler("version", version_cmd),
         CommandHandler("update", update_cmd),
         # ── v2.1: Onboarding callbacks ──
