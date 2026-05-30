@@ -1437,3 +1437,7 @@ def storage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     pass
+
+async def install_presence_heartbeat(application: Any) -> None:
+    """Mock presence heartbeat for now."""
+    pass

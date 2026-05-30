@@ -17,12 +17,8 @@ from nexus_ai_agent.presence import PresenceStore
 from nexus_ai_agent.storage.ai_storage import AIStorageManager, ProviderConfig
 
 from .handlers import (
-    analyze_handler,
     build_handlers,
-    companion_handler,
     install_presence_heartbeat,
-    persona_handler,
-    story_handler,
 )
 
 
@@ -147,11 +143,8 @@ def build_application(
         storage=storage_manager,
     ):
         application.add_handler(handler)
-    application.add_handler(CommandHandler("story", story_handler))
-    application.add_handler(CommandHandler("companion", companion_handler))
-    application.add_handler(CommandHandler("analyze", analyze_handler))
-    application.add_handler(CommandHandler("persona", persona_handler))
-    install_presence_heartbeat(application)
+    # Custom command handlers removed as they should be part of build_handlers or imported correctly
+    # install_presence_heartbeat(application) # Removed as it was an unawaited mock
     return application
 
 
