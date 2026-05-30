@@ -122,7 +122,7 @@ class OwnerControl:
             f"⚡ CPU: {platform.machine()}\n"
             f"🕐 UTC: {datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S}\n"
             f"👤 Owner ID: {_get_owner_id()}\n"
-            f"🔑 Bot version: 1.3.0\n"
+            f"🔑 Bot version: 3.4.0\n"
         )
 
     # -------------------------------------------------------------------

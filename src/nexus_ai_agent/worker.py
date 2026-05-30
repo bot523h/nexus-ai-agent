@@ -60,3 +60,17 @@ def generate_story_task(user_id: int, text: str, output_path: str) -> str:
             return f"Error: {str(e)}"
 
     return asyncio.run(_run())
+
+@celery_app.task(name="nightly_channel_management")
+def nightly_channel_management() -> str:
+    """Background task for nightly channel management."""
+    from telegram import Bot
+    from nexus_ai_agent.features.channel_manager import ChannelManager
+    
+    async def _run():
+        bot = Bot(token=settings.telegram_bot_token)
+        mgr = ChannelManager(bot)
+        await mgr.run_nightly_tasks()
+        return "Nightly tasks completed."
+
+    return asyncio.run(_run())

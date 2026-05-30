@@ -1,13 +1,44 @@
 version: '3.8'
 
 services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
   bot:
     build: .
     env_file: .env
+    depends_on:
+      - redis
     volumes:
       - ./data:/app/data
-    restart: unless-stopped
-  
+      - ./assets:/app/assets
+    restart: always
+
+  worker:
+    build: .
+    env_file: .env
+    command: celery -A nexus_ai_agent.worker.celery_app worker --loglevel=info
+    depends_on:
+      - redis
+    volumes:
+      - ./data:/app/data
+      - ./assets:/app/assets
+    restart: always
+
+  beat:
+    build: .
+    env_file: .env
+    command: celery -A nexus_ai_agent.worker.celery_app beat --loglevel=info
+    depends_on:
+      - redis
+    volumes:
+      - ./data:/app/data
+    restart: always
+
   dashboard:
     build: .
     command: uvicorn nexus_ai_agent.api.app:app --host 0.0.0.0 --port 8000
@@ -15,3 +46,6 @@ services:
     ports:
       - "8000:8000"
     restart: unless-stopped
+
+volumes:
+  redis_data:
