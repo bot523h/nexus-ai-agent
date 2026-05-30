@@ -1,18 +1,25 @@
+from __future__ import annotations
+
 import logging
 from typing import Any
 
-import httpx
 from bs4 import BeautifulSoup
 from duckduckgo_search import DDGS  # type: ignore
+
+from nexus_ai_agent.core.http_client import get_http_client
+from nexus_ai_agent.core.instrumentation import instrumented
 
 logger = logging.getLogger(__name__)
 
 
 class WebTrainer:
+    """Web search and content extractor with resilient HTTP and instrumentation."""
+
     def __init__(self) -> None:
         self.ddgs = DDGS()
-        self.client = httpx.AsyncClient(timeout=10.0)
+        self.client = get_http_client()
 
+    @instrumented("knowledge.web.search")
     async def search_and_summarize(self, query: str) -> list[dict[str, str]]:
         """Search web using DuckDuckGo and extract content."""
         results = []
@@ -22,18 +29,18 @@ class WebTrainer:
                 url = res.get("href")
                 title = res.get("title")
                 try:
-                    resp = await self.client.get(url)
-                    if resp.status_code == 200:
-                        soup = BeautifulSoup(resp.text, "lxml")
+                    text = await self.client.get_text(url)
+                    if text:
+                        soup = BeautifulSoup(text, "lxml")
                         # Remove script and style elements
                         for script in soup(["script", "style"]):
                             script.decompose()
-                        text = soup.get_text(separator=" ", strip=True)
+                        content = soup.get_text(separator=" ", strip=True)
                         results.append(
                             {
                                 "title": title,
                                 "url": url,
-                                "content": text[:2000],  # Limit content size
+                                "content": content[:2000],  # Limit content size
                             }
                         )
                 except Exception as e:
@@ -45,4 +52,5 @@ class WebTrainer:
             return []
 
     async def close(self) -> None:
-        await self.client.aclose()
+        """No-op as we use the shared singleton client."""
+        pass
