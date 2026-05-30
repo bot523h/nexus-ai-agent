@@ -1,60 +1,74 @@
-import logging
-from typing import Any
+from __future__ import annotations
 
-import httpx
+import logging
+from typing import Any, Optional
+
 from duckduckgo_search import DDGS  # type: ignore
+
+from nexus_ai_agent.core.http_client import get_http_client
+from nexus_ai_agent.core.instrumentation import instrumented
 
 logger = logging.getLogger(__name__)
 
 
 class WeatherTool:
-    async def get_weather(self, city: str) -> dict[str, Any] | None:
+    """Weather information tool with resilient HTTP."""
+
+    def __init__(self) -> None:
+        self.client = get_http_client()
+
+    @instrumented("tools.weather")
+    async def get_weather(self, city: str) -> Optional[dict[str, Any]]:
         """Get weather from wttr.in."""
         url = f"https://wttr.in/{city}?format=j1"
-        async with httpx.AsyncClient() as client:
-            try:
-                resp = await client.get(url)
-                if resp.status_code == 200:
-                    return resp.json()
-            except Exception as e:
-                logger.error(f"Weather error: {e}")
+        try:
+            return await self.client.get_json(url)
+        except Exception as e:
+            logger.error(f"Weather error: {e}")
         return None
 
 
 class CurrencyTool:
-    async def get_rate(self, base: str = "USD") -> float | None:
+    """Currency exchange rate tool with resilient HTTP."""
+
+    def __init__(self) -> None:
+        self.client = get_http_client()
+
+    @instrumented("tools.currency")
+    async def get_rate(self, base: str = "USD") -> Optional[float]:
         """Get exchange rate from api.exchangerate-api.com."""
         url = f"https://api.exchangerate-api.com/v4/latest/{base.upper()}"
-        async with httpx.AsyncClient() as client:
-            try:
-                resp = await client.get(url)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    # Example: get IRT (Toman) or IRR (Rial)
-                    rates = data.get("rates", {})
-                    return float(rates.get("IRR", 0))
-            except Exception as e:
-                logger.error(f"Currency error: {e}")
+        try:
+            data = await self.client.get_json(url)
+            if data:
+                # Example: get IRT (Toman) or IRR (Rial)
+                rates = data.get("rates", {})
+                return float(rates.get("IRR", 0))
+        except Exception as e:
+            logger.error(f"Currency error: {e}")
         return None
 
 
 class NewsTool:
-    def __init__(self, api_key: str | None = None) -> None:
+    """News retrieval tool with resilient HTTP and fallback."""
+
+    def __init__(self, api_key: Optional[str] = None) -> None:
         self.api_key = api_key
         self.ddgs = DDGS()
+        self.client = get_http_client()
 
+    @instrumented("tools.news")
     async def get_news(self, query: str) -> list[dict[str, str]]:
         """Get news from NewsAPI or DuckDuckGo."""
         if self.api_key:
             url = f"https://newsapi.org/v2/everything?q={query}&apiKey={self.api_key}"
-            async with httpx.AsyncClient() as client:
-                try:
-                    resp = await client.get(url)
-                    if resp.status_code == 200:
-                        articles = resp.json().get("articles", [])
-                        return [{"title": a["title"], "url": a["url"]} for a in articles[:5]]
-                except Exception as e:
-                    logger.warning(f"NewsAPI error: {e}, falling back to DDG")
+            try:
+                data = await self.client.get_json(url)
+                if data:
+                    articles = data.get("articles", [])
+                    return [{"title": a["title"], "url": a["url"]} for a in articles[:5]]
+            except Exception as e:
+                logger.warning(f"NewsAPI error: {e}, falling back to DDG")
 
         # Fallback to DuckDuckGo
         try:
@@ -66,9 +80,12 @@ class NewsTool:
 
 
 class YouTubeSearchTool:
+    """YouTube search tool using DuckDuckGo."""
+
     def __init__(self) -> None:
         self.ddgs = DDGS()
 
+    @instrumented("tools.youtube")
     async def search(self, query: str) -> list[dict[str, str]]:
         """Search YouTube videos using DuckDuckGo."""
         try:
