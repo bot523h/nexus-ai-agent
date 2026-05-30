@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from bs4 import BeautifulSoup
 
@@ -18,7 +17,7 @@ class WikipediaTrainer:
         self.client = get_http_client()
 
     @instrumented("knowledge.wikipedia.fetch")
-    async def fetch_summary(self, query: str, lang: str = "fa") -> Optional[str]:
+    async def fetch_summary(self, query: str, lang: str = "fa") -> str | None:
         """Fetch summary from Wikipedia without API key."""
         url = f"https://{lang}.wikipedia.org/wiki/{query.replace(' ', '_')}"
         try:

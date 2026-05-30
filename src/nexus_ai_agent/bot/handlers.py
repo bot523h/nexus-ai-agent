@@ -26,6 +26,11 @@ from telegram.ext import (
     filters,
 )
 
+# ── v3.1.0 imports ──
+from nexus_ai_agent.bot.knowledge_handlers import learn_cmd, search_cmd, wiki_cmd
+from nexus_ai_agent.bot.monitor_handlers import health_cmd
+from nexus_ai_agent.bot.tool_handlers import news_cmd, rate_cmd, weather_cmd, youtube_cmd
+from nexus_ai_agent.bot.update_handlers import update_cmd, version_cmd
 from nexus_ai_agent.config.settings import Settings
 from nexus_ai_agent.features.ads import AdManager
 
@@ -48,12 +53,6 @@ from nexus_ai_agent.features.speech import SpeechEngine
 from nexus_ai_agent.features.summarizer import SummarizerEngine
 from nexus_ai_agent.features.tools import Calculator, ReminderSystem, Translator, UnitConverter
 from nexus_ai_agent.features.viral_engine import ViralEngine
-
-# ── v3.1.0 imports ──
-from nexus_ai_agent.bot.knowledge_handlers import learn_cmd, search_cmd, wiki_cmd
-from nexus_ai_agent.bot.monitor_handlers import health_cmd
-from nexus_ai_agent.bot.tool_handlers import news_cmd, rate_cmd, weather_cmd, youtube_cmd
-from nexus_ai_agent.bot.update_handlers import update_cmd, version_cmd
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.orchestration.state import NexusState
 from nexus_ai_agent.presence import PresenceStore

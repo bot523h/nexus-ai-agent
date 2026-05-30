@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from typing import Optional
 
 from sqlmodel import select
 
@@ -20,13 +19,13 @@ logger = logging.getLogger(__name__)
 class KnowledgeManager:
     """Knowledge orchestration layer with instrumentation."""
 
-    def __init__(self, gemini_provider: Optional[GeminiProvider] = None) -> None:
+    def __init__(self, gemini_provider: GeminiProvider | None = None) -> None:
         self.wiki = WikipediaTrainer()
         self.web = WebTrainer()
         settings = get_settings()
         self.gemini = gemini_provider or GeminiProvider(api_key=settings.gemini_api_key or "")
 
-    async def get_cached_knowledge(self, query: str) -> Optional[str]:
+    async def get_cached_knowledge(self, query: str) -> str | None:
         """Retrieve knowledge from cache if not expired."""
         async with get_session() as session:
             statement = select(KnowledgeCache).where(

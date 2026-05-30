@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from duckduckgo_search import DDGS  # type: ignore
 
@@ -18,7 +18,7 @@ class WeatherTool:
         self.client = get_http_client()
 
     @instrumented("tools.weather")
-    async def get_weather(self, city: str) -> Optional[dict[str, Any]]:
+    async def get_weather(self, city: str) -> dict[str, Any] | None:
         """Get weather from wttr.in."""
         url = f"https://wttr.in/{city}?format=j1"
         try:
@@ -35,7 +35,7 @@ class CurrencyTool:
         self.client = get_http_client()
 
     @instrumented("tools.currency")
-    async def get_rate(self, base: str = "USD") -> Optional[float]:
+    async def get_rate(self, base: str = "USD") -> float | None:
         """Get exchange rate from api.exchangerate-api.com."""
         url = f"https://api.exchangerate-api.com/v4/latest/{base.upper()}"
         try:
@@ -52,7 +52,7 @@ class CurrencyTool:
 class NewsTool:
     """News retrieval tool with resilient HTTP and fallback."""
 
-    def __init__(self, api_key: Optional[str] = None) -> None:
+    def __init__(self, api_key: str | None = None) -> None:
         self.api_key = api_key
         self.ddgs = DDGS()
         self.client = get_http_client()
