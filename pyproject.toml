@@ -19,14 +19,20 @@ dependencies = [
   "sqlalchemy>=2.0",
   "aiosqlite>=0.20",
   "pydantic-settings>=2.0",
-  "sentence-transformers>=3.0",
-  "llama-cpp-python>=0.2",
-  "structlog>=24.0",
-  "sqlite-vec>=0.1",
-  "typer>=0.12",
-  "httpx>=0.27",
-  "numpy>=1.26",
-]
+    "sentence-transformers>=3.0",
+    "llama-cpp-python>=0.2",
+    "structlog>=24.0",
+    "sqlite-vec>=0.1",
+    "typer>=0.12",
+    "httpx>=0.27",
+    "numpy>=1.26",
+    "chromadb>=0.5",
+    "flashrank>=0.2",
+    "celery>=5.3",
+    "redis>=5.0",
+    "arabic-reshaper>=3.0",
+    "python-bidi>=0.4",
+  ]
 
 [project.optional-dependencies]
 dev = [
@@ -81,5 +87,11 @@ module = [
     "sqlite_vec",
     "telegram",
     "telegram.ext",
+    "chromadb",
+    "flashrank",
+    "celery",
+    "redis",
+    "arabic_reshaper",
+    "bidi.algorithm",
 ]
 ignore_missing_imports = true
