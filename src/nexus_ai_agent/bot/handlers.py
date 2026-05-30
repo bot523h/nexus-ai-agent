@@ -31,6 +31,8 @@ from nexus_ai_agent.bot.knowledge_handlers import learn_cmd, search_cmd, wiki_cm
 from nexus_ai_agent.bot.monitor_handlers import approve_cmd, health_cmd, reject_cmd
 from nexus_ai_agent.bot.tool_handlers import news_cmd, rate_cmd, weather_cmd, youtube_cmd
 from nexus_ai_agent.bot.update_handlers import update_cmd, version_cmd
+from nexus_ai_agent.bot.agent_handlers import agents_cmd, agent_callback_handler, myagent_cmd, agent_stop_cmd
+from nexus_ai_agent.agents.store.agent_manager import AgentManager
 from nexus_ai_agent.config.settings import Settings
 from nexus_ai_agent.features.ads import AdManager
 
@@ -2174,12 +2176,20 @@ def build_handlers(
         await _upsert_user(db_session_factory, update.effective_user)
         await _upsert_chat(db_session_factory, chat_id, thread_id)
 
-        state = _base_state(update, update.message.text)
-        state["correlation_id"] = correlation_id
-        state["intent"] = "unknown"
+        # ── v3.2.0: Agent Store integration ──
+        active_agent = await AgentManager.get_active(user_id)
+        if active_agent:
+            # TODO: Add AI Memory context here in Phase 4
+            response = await active_agent.respond(user_id, update.message.text, history=[])
+            await _reply(update, response)
+            result = {"intent": f"agent:{active_agent.name}", "response": response}
+        else:
+            state = _base_state(update, update.message.text)
+            state["correlation_id"] = correlation_id
+            state["intent"] = "unknown"
 
-        result = await graph.ainvoke(state, config={"configurable": {"thread_id": thread_id}})
-        await _reply(update, result.get("response") or "")
+            result = await graph.ainvoke(state, config={"configurable": {"thread_id": thread_id}})
+            await _reply(update, result.get("response") or "")
 
         logger.info(
             "handled_message",
@@ -3021,6 +3031,10 @@ def build_handlers(
         CommandHandler("reject", reject_cmd),
         CommandHandler("version", version_cmd),
         CommandHandler("update", update_cmd),
+        # ── v3.2.0: Agent Store ──
+        CommandHandler("agents", agents_cmd),
+        CommandHandler("myagent", myagent_cmd),
+        CommandHandler("agent_stop", agent_stop_cmd),
         # ── v2.1: Onboarding callbacks ──
         CallbackQueryHandler(onboarding_callback_handler, pattern=r"^onboarding_"),
         CallbackQueryHandler(menu_callback, pattern=r"^lang_"),
@@ -3028,6 +3042,7 @@ def build_handlers(
         CallbackQueryHandler(menu_callback, pattern=r"^menu_image$"),
         CallbackQueryHandler(menu_callback, pattern=r"^menu_cloud$"),
         CallbackQueryHandler(menu_callback, pattern=r"^menu_speech$"),
+        CallbackQueryHandler(agent_callback_handler, pattern=r"^agent_"),
         CallbackQueryHandler(menu_callback, pattern=r"^menu_referral$"),
         CallbackQueryHandler(menu_callback, pattern=r"^menu_language$"),
         # ── v2.0.0: Referral deep-link ──
