@@ -809,8 +809,13 @@ def build_handlers(
             await _reply(update, "Access denied.")
             return
 
-        if not rate_limiter.is_allowed(user_id):
-            await _reply(update, "Rate limit exceeded. Please wait a moment.")
+        from nexus_ai_agent.bot.rate_limiter import RedisRateLimiter
+
+        limiter = RedisRateLimiter()
+        if not limiter.is_allowed(user_id):
+            await _reply(
+                update, "⚠️ شما بیش از حد مجاز پیام ارسال کرده‌اید. لطفاً یک دقیقه صبر کنید."
+            )
             return
 
         correlation_id = str(uuid4())
