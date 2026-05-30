@@ -4,6 +4,7 @@ import logging
 import os
 import textwrap
 from io import BytesIO
+from typing import Any
 
 import arabic_reshaper
 from bidi.algorithm import get_display
@@ -34,7 +35,6 @@ class AIStoryGenerator:
 
         # 2. Reshape and Bidi for Persian text
         reshaped_text = arabic_reshaper.reshape(text)
-        bidi_text = get_display(reshaped_text)
 
         # 3. Load font
         try:

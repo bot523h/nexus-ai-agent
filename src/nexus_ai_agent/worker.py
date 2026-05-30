@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 
 from celery import Celery
 
@@ -36,7 +35,7 @@ def process_pdf_task(user_id: int, file_path: str, file_id: str) -> str:
         # Mocking PDF extraction (should use a real PDF library in production)
         # For now, we assume file_path points to a text file or we just read it as text
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8") as f:
                 text = f.read()
             await engine.add_document(user_id, text, {"file_id": file_id})
             return f"Successfully processed {file_id}"
@@ -65,6 +64,7 @@ def generate_story_task(user_id: int, text: str, output_path: str) -> str:
 def nightly_channel_management() -> str:
     """Background task for nightly channel management."""
     from telegram import Bot
+
     from nexus_ai_agent.features.channel_manager import ChannelManager
     
     async def _run():

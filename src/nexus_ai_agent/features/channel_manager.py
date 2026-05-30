@@ -7,18 +7,16 @@ All Telegram API calls go through the bot instance stored in the application.
 from __future__ import annotations
 
 import asyncio
-import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlmodel import Session, select, desc
-from telegram import Bot
+from sqlmodel import Session, desc, select
 from telegram.error import TelegramError
 
 from nexus_ai_agent.config.settings import get_settings
-from nexus_ai_agent.observability.logging import get_logger
-from nexus_ai_agent.storage.models import ChannelSchedule, WelcomeMessage, User, ViralPost
 from nexus_ai_agent.features.viral_engine import ViralEngine
+from nexus_ai_agent.observability.logging import get_logger
+from nexus_ai_agent.storage.models import ChannelSchedule, User, ViralPost, WelcomeMessage
 
 logger = get_logger(__name__)
 
