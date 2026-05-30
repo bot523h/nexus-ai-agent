@@ -1426,6 +1426,9 @@ def build_handlers(
     CommandHandler("doc_delete", doc_delete_cmd),
     CommandHandler("chat_with_doc", chat_with_doc_cmd),
     MessageHandler(filters.Document.PDF, pdf_handler),
+    # ── Phase 3: AI Story ──
+    CommandHandler("story", story_cmd_handler),
+    CommandHandler("story_style", story_style_cmd),
     # ── Catch-all Message Handler ──
     MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
 ]
@@ -1456,6 +1459,23 @@ async def doc_delete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def chat_with_doc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _reply(update, "🔍 حالت چت با سند فعال شد. سوال خود را بپرسید.")
+
+async def story_cmd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from nexus_ai_agent.features.story_gen import AIStoryGenerator
+    if not context.args:
+        await _reply(update, "❌ استفاده: /story [متن]")
+        return
+    
+    text = " ".join(context.args)
+    await _reply(update, "🎨 در حال ساخت استوری شما...")
+    
+    generator = AIStoryGenerator()
+    image_bytes = await generator.create_story(_user_id(update) or 0, text)
+    
+    await update.message.reply_photo(photo=image_bytes, caption="✨ استوری شما آماده شد!")
+
+async def story_style_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _reply(update, "🎨 استایل فعلی: Motivational\nگزینه‌ها: Motivational | Romantic | Success")
 
 def storage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     pass
