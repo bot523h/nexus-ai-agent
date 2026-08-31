@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -22,8 +22,6 @@ class Backend(Protocol):
 
 
 class _LlamaModel(Protocol):
-    def __call__(self, prompt: str, **kwargs: object) -> object: ...
-
     def create_chat_completion(self, **kwargs: object) -> object: ...
 
 
@@ -43,15 +41,18 @@ class LlamaCppBackend:
             Llama(model_path=str(path), n_ctx=n_ctx, n_gpu_layers=n_gpu_layers, verbose=False),
         )
 
+    def _completion_kwargs(self, request: GenerateRequest, stream: bool) -> dict[str, object]:
+        return {
+            "messages": [message.model_dump() for message in request.messages],
+            "tools": [tool.model_dump() for tool in request.tools] or None,
+            "max_tokens": request.max_tokens,
+            "temperature": request.temperature,
+            "stream": stream,
+        }
+
     async def generate(self, request: GenerateRequest) -> str:
         def run() -> str:
-            result = self._model.create_chat_completion(
-                messages=[message.model_dump() for message in request.messages],
-                tools=[tool.model_dump() for tool in request.tools] or None,
-                max_tokens=request.max_tokens,
-                temperature=request.temperature,
-                stream=False,
-            )
+            result = self._model.create_chat_completion(**self._completion_kwargs(request, False))
             payload = cast(Mapping[str, object], result)
             choices = cast(Sequence[Mapping[str, object]], payload["choices"])
             message = cast(Mapping[str, object], choices[0]["message"])
@@ -59,18 +60,27 @@ class LlamaCppBackend:
 
         return await asyncio.to_thread(run)
 
-    async def stream(self, request: GenerateRequest) -> AsyncIterator[str]:
-        def run() -> object:
-            return self._model.create_chat_completion(
-                messages=[message.model_dump() for message in request.messages],
-                tools=[tool.model_dump() for tool in request.tools] or None,
-                max_tokens=request.max_tokens,
-                temperature=request.temperature,
-                stream=True,
-            )
+    async def _next_chunk(
+        self, iterator: Iterator[Mapping[str, object]]
+    ) -> tuple[bool, Mapping[str, object] | None]:
+        def get_next() -> tuple[bool, Mapping[str, object] | None]:
+            try:
+                chunk = next(iterator)
+            except StopIteration:
+                return False, None
+            return True, chunk
 
-        chunks = cast(Sequence[Mapping[str, object]], await asyncio.to_thread(run))
-        for chunk in chunks:
+        return await asyncio.to_thread(get_next)
+
+    async def stream(self, request: GenerateRequest) -> AsyncIterator[str]:
+        raw = await asyncio.to_thread(
+            lambda: self._model.create_chat_completion(**self._completion_kwargs(request, True))
+        )
+        iterator = iter(cast(Sequence[Mapping[str, object]], raw))
+        while True:
+            has_chunk, chunk = await self._next_chunk(iterator)
+            if not has_chunk or chunk is None:
+                return
             choices = cast(Sequence[Mapping[str, object]], chunk.get("choices", []))
             if choices:
                 delta = cast(Mapping[str, object], choices[0].get("delta", {}))
@@ -93,6 +103,12 @@ class OllamaBackend:
     def _messages(request: GenerateRequest) -> list[dict[str, object]]:
         return [message.model_dump() for message in request.messages]
 
+    @staticmethod
+    def _normalize_http_error(exc: httpx.HTTPError) -> ConnectionError | RuntimeError:
+        if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code < 500:
+            return RuntimeError(f"Ollama rejected request with HTTP {exc.response.status_code}")
+        return ConnectionError(f"Ollama unavailable: {exc}")
+
     async def generate(self, request: GenerateRequest) -> str:
         payload: dict[str, object] = {
             "model": self.model,
@@ -102,12 +118,15 @@ class OllamaBackend:
         }
         if request.tools:
             payload["tools"] = [tool.model_dump() for tool in request.tools]
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(f"{self.base_url}/api/chat", json=payload)
-            response.raise_for_status()
-            body = cast(Mapping[str, object], response.json())
-            message = cast(Mapping[str, object], body.get("message", {}))
-            return str(message.get("content") or "").strip()
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(f"{self.base_url}/api/chat", json=payload)
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise self._normalize_http_error(exc) from exc
+        body = cast(Mapping[str, object], response.json())
+        message = cast(Mapping[str, object], body.get("message", {}))
+        return str(message.get("content") or "").strip()
 
     async def stream(self, request: GenerateRequest) -> AsyncIterator[str]:
         payload: dict[str, object] = {
@@ -116,16 +135,21 @@ class OllamaBackend:
             "stream": True,
             "options": {"temperature": request.temperature, "num_predict": request.max_tokens},
         }
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            async with client.stream("POST", f"{self.base_url}/api/chat", json=payload) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line:
-                        continue
-                    body = cast(Mapping[str, object], json.loads(line))
-                    message = cast(Mapping[str, object], body.get("message", {}))
-                    text = str(message.get("content") or "")
-                    if text:
-                        yield text
-                    if body.get("done") is True:
-                        break
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                async with client.stream(
+                    "POST", f"{self.base_url}/api/chat", json=payload
+                ) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line:
+                            continue
+                        body = cast(Mapping[str, object], json.loads(line))
+                        message = cast(Mapping[str, object], body.get("message", {}))
+                        text = str(message.get("content") or "")
+                        if text:
+                            yield text
+                        if body.get("done") is True:
+                            return
+        except httpx.HTTPError as exc:
+            raise self._normalize_http_error(exc) from exc

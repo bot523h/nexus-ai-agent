@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
 
+import httpx
 from pydantic import BaseModel, Field
 
 from nexus_ai_agent.llm.backends import Backend
@@ -9,25 +10,40 @@ from nexus_ai_agent.llm.schemas import ChatMessage, GenerateRequest, GenerateRes
 
 
 class ContextPolicy(BaseModel):
-    """Deterministic context policy used before every backend call."""
+    """Deterministic context policy that budgets system and conversation messages."""
 
     reserve_tokens: int = Field(default=512, ge=1)
     chars_per_token: int = Field(default=4, ge=1)
 
     def fit(self, messages: Sequence[ChatMessage], context_window: int) -> list[ChatMessage]:
-        budget = max((context_window - self.reserve_tokens) * self.chars_per_token, 1)
+        effective_reserve = min(self.reserve_tokens, max(context_window // 2, 1))
+        budget = max((context_window - effective_reserve) * self.chars_per_token, 1)
+        system_messages = [message for message in messages if message.role.value == "system"]
+        conversation = [message for message in messages if message.role.value != "system"]
+
         selected: list[ChatMessage] = []
         used = 0
-        system_messages = [message for message in messages if message.role.value == "system"]
-        recent_messages = [message for message in messages if message.role.value != "system"]
-        for message in reversed(recent_messages):
-            size = len(message.content)
-            if selected and used + size > budget:
+        system_budget = max(budget // 2, 1)
+        for message in system_messages:
+            remaining = system_budget - used
+            if remaining <= 0:
                 break
-            selected.append(message)
-            used += size
-        selected.reverse()
-        return system_messages + selected
+            content = message.content[:remaining]
+            selected.append(message.model_copy(update={"content": content}))
+            used += len(content)
+
+        recent: list[ChatMessage] = []
+        used = min(used, system_budget)
+
+        for message in reversed(conversation):
+            remaining = budget - used
+            if remaining <= 0:
+                break
+            content = message.content[:remaining]
+            recent.append(message.model_copy(update={"content": content}))
+            used += len(content)
+        recent.reverse()
+        return selected + recent
 
 
 class ProviderUnavailable(RuntimeError):
@@ -56,7 +72,7 @@ class LocalLLMProvider:
             try:
                 text = await backend.generate(prepared)
                 return GenerateResponse(text=text, backend=backend.name)
-            except (ConnectionError, TimeoutError, OSError) as exc:
+            except (ConnectionError, TimeoutError, OSError, httpx.TransportError) as exc:
                 failures.append(f"{backend.name}: {exc}")
         raise ProviderUnavailable("; ".join(failures) or "No local backend succeeded")
 
@@ -68,6 +84,6 @@ class LocalLLMProvider:
                 async for chunk in backend.stream(prepared):
                     yield chunk
                 return
-            except (ConnectionError, TimeoutError, OSError) as exc:
+            except (ConnectionError, TimeoutError, OSError, httpx.TransportError) as exc:
                 failures.append(f"{backend.name}: {exc}")
         raise ProviderUnavailable("; ".join(failures) or "No local backend succeeded")

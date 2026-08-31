@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 
+import httpx
 import pytest
 
 from nexus_ai_agent.llm.backends import Backend
@@ -18,6 +19,8 @@ class FakeBackend:
         self.last_request = request
         if self.fail:
             raise ConnectionError("backend unavailable")
+        if self.response == "httpx-error":
+            raise httpx.ConnectError("ollama offline")
         return self.response
 
     async def stream(self, request: GenerateRequest) -> AsyncIterator[str]:
@@ -66,12 +69,23 @@ async def test_provider_raises_when_all_backends_fail() -> None:
         await provider.generate(request("hello"))
 
 
+@pytest.mark.asyncio
+async def test_provider_falls_back_from_httpx_transport_error() -> None:
+    primary = FakeBackend("ollama", response="httpx-error")
+    fallback = FakeBackend("llama.cpp", response="local")
+
+    result = await LocalLLMProvider([primary, fallback]).generate(request("hello"))
+
+    assert result.backend == "llama.cpp"
+    assert result.text == "local"
+
+
 def test_context_policy_keeps_system_and_recent_messages() -> None:
     provider = LocalLLMProvider([FakeBackend("fake")])
     prepared = provider.prepare(
         GenerateRequest(
             messages=[
-                ChatMessage(role=ChatRole.SYSTEM, content="system"),
+                ChatMessage(role=ChatRole.SYSTEM, content="system" * 100),
                 ChatMessage(role=ChatRole.USER, content="old" * 100),
                 ChatMessage(role=ChatRole.USER, content="new"),
             ],
@@ -79,9 +93,10 @@ def test_context_policy_keeps_system_and_recent_messages() -> None:
         )
     )
 
-    assert prepared.messages[0].content == "system"
+    assert prepared.messages[0].role is ChatRole.SYSTEM
+    assert len(prepared.messages[0].content) < 300
     assert prepared.messages[-1].content == "new"
-    assert len(prepared.messages) < 3
+    assert len(prepared.messages[1].content) < 300
 
 
 def test_backend_protocol_is_runtime_compatible() -> None:

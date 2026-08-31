@@ -12,13 +12,22 @@ class ChatRole(str, Enum):
     TOOL = "tool"
 
 
+class ToolCall(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+    arguments: dict[str, object] = Field(default_factory=dict)
+
+
 class ChatMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role: ChatRole
-    content: str = Field(min_length=1)
+    content: str = ""
     name: str | None = None
     tool_call_id: str | None = None
+    tool_calls: list[ToolCall] = Field(default_factory=list)
 
 
 class ToolDefinition(BaseModel):
@@ -37,14 +46,6 @@ class GenerateRequest(BaseModel):
     max_tokens: int = Field(default=512, ge=1, le=32768)
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     context_window: int = Field(default=4096, ge=256, le=131072)
-
-
-class ToolCall(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    id: str
-    name: str
-    arguments: dict[str, object] = Field(default_factory=dict)
 
 
 class GenerateResponse(BaseModel):
