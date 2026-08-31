@@ -27,15 +27,13 @@ class AIStoryGenerator:
         """Generate a story image with properly rendered Persian text."""
         _ = user_id
         _ = style
-        
+
         # 1. Create a dark gradient background
         width, height = 1080, 1920
         image = Image.new("RGB", (width, height), color="#0f172a")
         draw = ImageDraw.Draw(image)
 
-        # 2. Reshape and Bidi for Persian text
-        reshaped_text = arabic_reshaper.reshape(text)
-
+        # 2. Persian text is reshaped per line below before drawing.
         # 3. Load font
         try:
             font_size = 60
@@ -46,13 +44,13 @@ class AIStoryGenerator:
 
         # 4. Wrap text (handling RTL)
         wrapped_lines = textwrap.wrap(text, width=30)
-        
+
         y_offset = height // 3
         for line in wrapped_lines:
             # Re-process each line for RTL
             r_line = arabic_reshaper.reshape(line)
             b_line = get_display(r_line)
-            
+
             # Center text
             w = draw.textlength(b_line, font=font)
             draw.text(((width - w) // 2, y_offset), b_line, font=font, fill="#f8fafc")
@@ -60,7 +58,9 @@ class AIStoryGenerator:
 
         # 5. Add a footer
         footer_text = get_display(arabic_reshaper.reshape("ساخته شده توسط NEXUS AI"))
-        footer_font = ImageFont.truetype(self.font_path, 30) if os.path.exists(self.font_path) else font
+        footer_font = (
+            ImageFont.truetype(self.font_path, 30) if os.path.exists(self.font_path) else font
+        )
         fw = draw.textlength(footer_text, font=footer_font)
         draw.text(((width - fw) // 2, height - 100), footer_text, font=footer_font, fill="#64748b")
 

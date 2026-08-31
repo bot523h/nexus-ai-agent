@@ -1,6 +1,8 @@
 import asyncio
 import os
+
 from nexus_ai_agent.features.story_gen import AIStoryGenerator
+
 
 async def main():
     gen = AIStoryGenerator()
@@ -11,6 +13,7 @@ async def main():
         print(f"Success: {output} created.")
     else:
         print("Failed to create image.")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -18,9 +18,15 @@ def test_build_handlers_includes_required_commands(monkeypatch) -> None:
     # Phase 2: Anonymous Chat
     assert {"anon_start", "anon_stop", "anon_report"}.issubset(commands)
     # Phase 3: Games
-    assert {"quiz", "leaderboard", "guess_start", "guess_stop", "wordle", "wordle_stop", "poll"}.issubset(
-        commands
-    )
+    assert {
+        "quiz",
+        "leaderboard",
+        "guess_start",
+        "guess_stop",
+        "wordle",
+        "wordle_stop",
+        "poll",
+    }.issubset(commands)
     # Phase 4: Utility Tools
     assert {"remind", "tr", "convert", "calc"}.issubset(commands)
 

@@ -49,10 +49,11 @@ src/nexus_ai_agent/llm/
 # gemini_provider.py
 import google.generativeai as genai  # pip install google-generativeai
 
+
 class GeminiProvider(LLMProvider):
     def __init__(self, api_key: str):
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-2.0-flash')
+        self.model = genai.GenerativeModel("gemini-2.0-flash")
 
     async def generate(self, prompt: str, **kwargs) -> str:
         response = await self.model.generate_content_async(prompt)
@@ -74,8 +75,8 @@ class GeminiProvider(LLMProvider):
 ```python
 class Referral(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
-    referrer_id: int      # کسی که دعوت کرده
-    referred_id: int      # کسی که دعوت شده
+    referrer_id: int  # کسی که دعوت کرده
+    referred_id: int  # کسی که دعوت شده
     chat_id: int
     created_at: datetime
     reward_claimed: bool = False
@@ -169,6 +170,7 @@ src/nexus_ai_agent/i18n/
 # features/image_gen.py
 import httpx
 
+
 async def generate_image(prompt: str) -> bytes:
     encoded = urllib.parse.quote(prompt)
     url = f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&nologo=true"
@@ -197,7 +199,7 @@ async def generate_image(prompt: str) -> bytes:
 **پیاده‌سازی:**
 ```python
 # با Gemini Vision (رایگان)
-model = genai.GenerativeModel('gemini-2.0-flash')
+model = genai.GenerativeModel("gemini-2.0-flash")
 response = model.generate_content(["Describe this image", image_file])
 ```
 

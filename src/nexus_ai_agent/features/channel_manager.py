@@ -176,17 +176,17 @@ class ChannelManager:
         with Session(engine) as session:
             stmt = select(User).order_by(desc(User.id)).limit(10)
             users = session.exec(stmt).all()
-            
+
             if not users:
                 return False
-                
+
             text = "🏆 **برترین کاربران ۲۴ ساعت گذشته**\n\n"
             for i, user in enumerate(users, 1):
                 username = f"@{user.username}" if user.username else f"User {user.telegram_id}"
                 text += f"{i}. {username}\n"
-            
+
             text += "\n🚀 شما هم می‌توانید با فعالیت در ربات به لیست برترین‌ها اضافه شوید!"
-            
+
             try:
                 await bot.send_message(chat_id=self.channel_id, text=text, parse_mode="Markdown")
                 return True
@@ -199,11 +199,14 @@ class ChannelManager:
         bot = self._require_bot()
         engine = _sync_engine()
         with Session(engine) as session:
-            stmt = select(ViralPost).where(
-                ViralPost.status == "pending"
-            ).order_by(desc(ViralPost.viral_score)).limit(10)
+            stmt = (
+                select(ViralPost)
+                .where(ViralPost.status == "pending")
+                .order_by(desc(ViralPost.viral_score))
+                .limit(10)
+            )
             posts = session.exec(stmt).all()
-            
+
             count = 0
             for post in posts:
                 try:
@@ -216,21 +219,21 @@ class ChannelManager:
                     logger.error(f"Failed to post viral content {post.id}: {e}")
                     post.status = "failed"
                     session.add(post)
-            
+
             session.commit()
             return count
 
     async def run_nightly_tasks(self) -> None:
         """Main entry point for nightly automation."""
         logger.info("Starting nightly channel management tasks...")
-        
+
         # 1. Post Top Users
         await self.post_top_users()
-        
+
         # 2. Generate new viral content if needed
         await self.viral_engine.generate_and_schedule(self.channel_id, count=10)
-        
+
         # 3. Post viral content
         await self.post_viral_content()
-        
+
         logger.info("Nightly tasks completed.")

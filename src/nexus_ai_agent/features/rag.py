@@ -5,7 +5,7 @@ import os
 from typing import Any
 
 import chromadb
-from chromadb.utils import embedding_functions
+from chromadb.utils import embedding_functions  # type: ignore[import-not-found]
 from flashrank import Ranker, RerankRequest
 
 from nexus_ai_agent.config.settings import get_settings

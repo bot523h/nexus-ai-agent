@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any, cast
@@ -70,7 +71,7 @@ from nexus_ai_agent.storage.models import (
 )
 from nexus_ai_agent.storage.unified_cloud import UnifiedCloudStorage
 
-from .middleware import AuthMiddleware, RateLimiter
+from .middleware import AuthMiddleware
 
 logger = get_logger(__name__)
 SessionFactory = Callable[[], Any]
@@ -148,7 +149,6 @@ def build_handlers(
 ) -> list[Any]:
     # ── Middleware & Utilities ────────────────────────────────────
     auth = AuthMiddleware(db_session_factory)
-    rate_limiter = RateLimiter()
     presence_store = presence
     _ = storage  # placeholder for now
 
@@ -813,9 +813,7 @@ def build_handlers(
 
         limiter = RedisRateLimiter()
         if not limiter.is_allowed(user_id):
-            await _reply(
-                update, "⚠️ شما بیش از حد مجاز پیام ارسال کرده‌اید. لطفاً یک دقیقه صبر کنید."
-            )
+            await _reply(update, "⚠️ شما بیش از حد مجاز پیام ارسال کرده‌اید. لطفاً یک دقیقه صبر کنید.")
             return
 
         correlation_id = str(uuid4())
@@ -1445,7 +1443,6 @@ async def start_referral_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def pdf_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from nexus_ai_agent.features.rag import AdvancedRAGEngine as RAGEngine
 
     user_id = _user_id(update) or 0
     doc = update.message.document
@@ -1467,8 +1464,7 @@ async def pdf_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     process_pdf_task.delay(user_id, temp_path, doc.file_id)
     await _reply(
         update,
-        f"⏳ در حال پردازش فایل {doc.file_name} در پس‌زمینه...\n"
-        "وقتی آماده شد به شما اطلاع می‌دهم.",
+        f"⏳ در حال پردازش فایل {doc.file_name} در پس‌زمینه...\nوقتی آماده شد به شما اطلاع می‌دهم.",
     )
 
 
@@ -1485,7 +1481,6 @@ async def chat_with_doc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def story_cmd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from nexus_ai_agent.features.story_gen import AIStoryGenerator
 
     if not context.args:
         await _reply(update, "❌ استفاده: /story [متن]")
