@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
+from nexus_ai_agent.storage import control_plane_models as _control_plane_models  # noqa: F401
 from nexus_ai_agent.storage import models as _models  # noqa: F401
 
 _engine: Any | None = None
