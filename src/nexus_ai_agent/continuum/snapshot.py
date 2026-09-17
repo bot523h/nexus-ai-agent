@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import subprocess
 import sys
@@ -89,6 +90,19 @@ def _environment() -> EnvFingerprint:
     )
 
 
+def _test_case_count() -> int:
+    """Count test functions, rather than test files, for a useful invariant."""
+    total = 0
+    for path in (_REPO_ROOT / "tests").rglob("test_*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        total += sum(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name.startswith("test")
+            for node in ast.walk(tree)
+        )
+    return total
+
+
 def verify_snapshot() -> list[str]:
     try:
         snap = read_snapshot()
@@ -101,7 +115,7 @@ def verify_snapshot() -> list[str]:
             f"state loss detected: recorded good commit {snap.step} is not "
             f"reachable from HEAD {head}"
         )
-    actual_tests = sum(1 for p in (_REPO_ROOT / "tests").rglob("test_*.py"))
+    actual_tests = _test_case_count()
     if snap.test_count_expected != actual_tests:
         problems.append(
             f"test count mismatch: expected {snap.test_count_expected}, found {actual_tests}"
