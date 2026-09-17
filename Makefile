@@ -1,7 +1,10 @@
-.PHONY: setup lint types test migrate smoke run
+.PHONY: setup lint types test migrate smoke run dev-bootstrap
 
 setup:
 	pip install -e ".[dev]"
+
+dev-bootstrap:
+	bash scripts/bootstrap_dev.sh
 
 lint:
 	ruff check . && ruff format --check .

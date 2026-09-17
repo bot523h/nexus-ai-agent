@@ -17,7 +17,11 @@ dependencies = [
   "langchain-community>=0.2",
   "sqlmodel>=0.0.19",
   "sqlalchemy>=2.0",
+  "alembic==1.20.0",
   "aiosqlite>=0.20",
+  "asyncpg==0.31.0",
+  "psycopg[binary,pool]==3.3.5",
+  "langgraph-checkpoint-postgres==3.1.2",
   "pydantic-settings>=2.0",
     "sentence-transformers>=3.0",
     "llama-cpp-python>=0.2",
@@ -37,7 +41,11 @@ dependencies = [
     "pillow>=10.0",
     "beautifulsoup4>=4.12",
     "psutil>=5.9",
+    "cryptography>=42.0",
   ]
+
+[project.scripts]
+nexus = "nexus_ai_agent.cli:app"
 
 [project.optional-dependencies]
 dev = [
@@ -87,6 +95,11 @@ module = [
     "sentence_transformers",
     "langgraph",
     "langgraph.checkpoint.sqlite",
+    "langgraph.checkpoint.postgres",
+    "langgraph.checkpoint.postgres.aio",
+    "psycopg",
+    "psycopg_pool",
+    "asyncpg",
     "langchain_community",
     "mega",
     "sqlite_vec",

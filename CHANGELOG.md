@@ -5,6 +5,35 @@ All notable changes to NEXUS AI Agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0-D] — 2026-09-17
+
+### Added
+- Alembic-based schema management end-to-end (D1–D5)
+- `nexus migrate` CLI command (Alembic-first, legacy `create_all` fallback)
+- `nexus adopt-pg` CLI command for legacy PostgreSQL (D10), dry-run by default
+- PostgreSQL/Neon support via `NEXUS_DATABASE_URL` (C1)
+- Token encryption at rest — Fernet (`security/crypto.py`, D8)
+- pgvector integration — Alembic revision `2a1c4b6d8e9f` (D7)
+- Postgres adoption / fail-fast seam (`storage/adopt_pg.py`, D10)
+- Continuum snapshot (`nexus continuum show|verify`, `.nexus/continuum.json`) for
+  turn-to-turn state recovery
+
+### Changed
+- PostgreSQL `create_all` stopgap retired (D7); Alembic is the single source
+  of schema truth for PostgreSQL
+- Startup schema management is Alembic-first on both backends
+- `nexus migrate --db-path` marked deprecated (removal 2026-10-01)
+
+### Fixed
+- Legacy SQLite databases are auto-adopted (+ stamped) before upgrading (D6),
+  preserving user data and avoiding the initial-revision `CREATE TABLE` clash
+- Un-stamped PostgreSQL with schema drift now fails fast with an actionable
+  message instead of a raw DBAPI error (D10)
+
+### Known limitations
+- Real Neon connectivity test (D9) pending a user-supplied `NEXUS_DATABASE_URL`;
+  CI already verifies the full Alembic chain on a real Postgres + pgvector
+
 ## [3.4.1] — 2026-09-17
 
 ### Security — Phase 0

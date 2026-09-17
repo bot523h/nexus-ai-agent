@@ -14,14 +14,123 @@ app = typer.Typer(help="NEXUS AI Agent CLI")
 
 @app.command()
 def migrate(
-    db_path: str = typer.Option("data/app.sqlite", help="SQLite DB path"),
+    db_path: str | None = typer.Option(
+        None,
+        "--db-path",
+        help=(
+            "[deprecated since v0.2.0-D, removal 2026-10-01] Force a legacy "
+            "SQLite path. Prefer NEXUS_DB_PATH, which `nexus migrate` honours "
+            "via Alembic."
+        ),
+    ),
 ) -> None:
-    """Initialize database schema."""
-    from nexus_ai_agent.storage.db import create_all_tables
+    """Apply database migrations (alembic upgrade head).
 
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    asyncio.run(create_all_tables(db_path))
-    typer.echo(f"✓ Database initialized at {db_path}")
+    Backs both backends automatically: NEXUS_DATABASE_URL (PostgreSQL/Neon)
+    wins; otherwise the configured SQLite file is migrated.  Existing
+    un-migrated databases keep working via the legacy create_all fallback.
+    """
+    from nexus_ai_agent.storage.migrations import run_migrations
+
+    if db_path is not None:
+        # Legacy stopgap: explicit path still bootstraps via create_all (idempotent).
+        from nexus_ai_agent.storage.db import create_all_tables
+
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        asyncio.run(create_all_tables(db_path))
+        typer.echo(f"✓ Database initialized (legacy create_all) at {db_path}")
+    else:
+        run_migrations()
+        typer.echo("✓ Database migrated to head")
+
+
+@app.command("adopt-pg")
+def adopt_pg(
+    dry_run: bool = typer.Option(
+        True,
+        "--dry-run/--yes",
+        help=(
+            "Inspect the PostgreSQL database and report what adopt would do, "
+            "without changing anything. Pass --yes to actually stamp it."
+        ),
+    ),
+) -> None:
+    """Adopt a pre-Alembic PostgreSQL/Neon database (D10).
+
+    A database created by the old create_all stopgap has tables but no
+    ``alembic_version`` marker.  ``nexus adopt-pg`` inspects it and:
+
+    * zero drift  → stamps it at head (--yes), preserving all data;
+    * schema drift → refuses with a clear error and leaves data untouched.
+
+    Defaults to --dry-run so the outcome is always visible before any change.
+    """
+    from nexus_ai_agent.storage.adopt_pg import decide, inspect_postgres
+    from nexus_ai_agent.storage.db import normalize_database_url, resolve_database_url
+
+    url = resolve_database_url()
+    if url is None:
+        raise typer.BadParameter(
+            "NEXUS_DATABASE_URL is not set; adopt-pg only targets PostgreSQL/Neon."
+        )
+    normalized = normalize_database_url(url)
+
+    if dry_run:
+        from nexus_ai_agent.storage.adopt_pg import ACTION_ADOPT, ACTION_FAIL, ACTION_MANAGED
+
+        report = inspect_postgres(normalized)
+        action = decide(report)
+        if action == ACTION_ADOPT:
+            typer.echo(
+                f"dry-run: would ADOPT (stamp head) — {report.table_count} tables, "
+                "zero drift. Re-run with --yes to apply."
+            )
+        elif action == ACTION_MANAGED:
+            typer.echo(f"dry-run: already Alembic-managed ({report.table_count} tables).")
+        elif action == ACTION_FAIL:
+            typer.echo(
+                f"dry-run: REFUSED — schema drift detected "
+                f"(missing={report.missing_tables}, extra={report.extra_tables})."
+            )
+        else:
+            typer.echo(
+                f"dry-run: empty database ({report.table_count} tables). "
+                "Run `nexus migrate` instead."
+            )
+        return
+
+    from nexus_ai_agent.storage.adopt_pg import adopt_postgres
+
+    report = adopt_postgres(normalized)
+    typer.echo(f"✓ {report.action} — {report.table_count} tables at head")
+
+
+@app.command()
+def continuum(
+    mode: str = typer.Argument("show", help="show | verify"),
+) -> None:
+    """Show or verify the committed project-state snapshot (.nexus/continuum.json).
+
+    ``show`` prints the snapshot; ``verify`` compares HEAD against the
+    recorded last-good commit and exits non-zero on drift.
+    """
+    from nexus_ai_agent.continuum.snapshot import verify_snapshot
+
+    if mode == "show":
+        from nexus_ai_agent.continuum.snapshot import SNAPSHOT_PATH
+
+        typer.echo(f"# {SNAPSHOT_PATH}")
+        typer.echo(SNAPSHOT_PATH.read_text(encoding="utf-8"))
+        return
+    if mode == "verify":
+        problems = verify_snapshot()
+        if problems:
+            for problem in problems:
+                typer.echo(f"✗ {problem}", err=True)
+            raise typer.Exit(code=1)
+        typer.echo("✓ continuum snapshot matches checkout")
+        return
+    raise typer.BadParameter("mode must be 'show' or 'verify'")
 
 
 @app.command()
@@ -34,8 +143,8 @@ def run_bot(
     from nexus_ai_agent.memory.long_term import LongTermMemory
     from nexus_ai_agent.observability.logging import configure_logging
     from nexus_ai_agent.orchestration.graph import compile_graph
-    from nexus_ai_agent.storage.db import create_all_tables
     from nexus_ai_agent.storage.langgraph_checkpoint import get_checkpointer
+    from nexus_ai_agent.storage.migrations import ensure_startup_schema
     from nexus_ai_agent.tools.files import (
         ListDirTool,
         ReadFileTool,
@@ -46,9 +155,10 @@ def run_bot(
     settings = get_settings()
     configure_logging(settings.log_level)
 
-    # Ensure data directory exists
+    # Bring the schema up (Alembic-first, create_all fallback for legacy files)
     Path(settings.db_path).parent.mkdir(parents=True, exist_ok=True)
-    asyncio.run(create_all_tables(settings.db_path))
+    schema = ensure_startup_schema()
+    typer.echo(f"✓ Schema ready ({schema['backend']}/{schema['source']})")
 
     # Initialize LLM
     model_path = Path(settings.model_path)
