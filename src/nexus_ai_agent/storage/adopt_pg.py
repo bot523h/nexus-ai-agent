@@ -177,10 +177,13 @@ def redact_url(url: str) -> str:
     """Return ``url`` with the password replaced, safe for error messages.
 
     ``NEXUS_DATABASE_URL`` carries credentials; an error that quotes it would
-    leak them into logs and CI output, undoing the intent of D8.
+    leak them into logs and CI output, undoing the intent of D8.  An *empty*
+    password (``user:@host``) is redacted too: there is no secret to leak, but
+    leaving ``:@`` in output reads like one, and the check that matters is
+    "is there a password field", not "is it non-empty".
     """
     parts = urlsplit(url)
-    if not parts.password:
+    if parts.password is None:
         return url
     netloc = parts.netloc.replace(f":{parts.password}@", ":***@", 1)
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))

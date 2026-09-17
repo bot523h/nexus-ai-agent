@@ -182,8 +182,20 @@ class TestRedactUrl:
         assert redacted.endswith("/nexus")
 
     def test_url_without_password_is_returned_unchanged(self) -> None:
-        url = "postgresql+asyncpg://localhost:5432/nexus"
-        assert redact_url(url) == url
+        assert (
+            redact_url("postgresql+asyncpg://localhost:5432/nexus")
+            == "postgresql+asyncpg://localhost:5432/nexus"
+        )
+        assert (
+            redact_url("postgresql://nexus@localhost:5432/nexus")
+            == "postgresql://nexus@localhost:5432/nexus"
+        )
+
+    def test_empty_password_field_is_still_redacted(self) -> None:
+        """`user:@host` holds no secret, but leaving `:@` in output reads like one."""
+        assert redact_url("postgresql://nexus:@localhost:5432/nexus") == (
+            "postgresql://nexus:***@localhost:5432/nexus"
+        )
 
 
 # ── 3. Introspection ─────────────────────────────────────────────────────
