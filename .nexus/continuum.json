@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "plan": "C2",
-  "step": "c42cccb",
+  "step": "c42cccbe32e3c6642e392f69015d9b0af03c66fb",
   "next": "post-revert verification",
   "ledger": [
     {"id": "C1", "commit": "c81f299", "status": "complete"},
