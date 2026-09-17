@@ -7,8 +7,14 @@ extension point for registering those additional targets, and
 :func:`get_target_metadata` merges them into a single metadata object that
 ``migrations/env.py`` hands to Alembic.
 
-Importing this module imports :mod:`nexus_ai_agent.storage.db`, which in turn
-imports ``.models`` and therefore populates ``SQLModel.metadata``.
+Importing this module must produce the *effective* metadata the production
+runtime sees.  Besides ``storage.db`` → ``storage.models``, this means importing
+:mod:`nexus_ai_agent.features.referral`: the production import chain
+(``bot.handlers``) loads that module, whose ``Referral``/``ReferralCode`` classes
+re-declare the ``referral``/``referralcode`` tables with ``extend_existing=True``
+and add the indexes/unique constraints the feature actually relies on.  Without
+that import here, autogenerate would walk the pre-extension metadata and the
+initial migration would knowingly omit 7 indexes.
 """
 
 from __future__ import annotations
@@ -16,6 +22,7 @@ from __future__ import annotations
 from sqlalchemy import MetaData
 from sqlmodel import SQLModel
 
+from nexus_ai_agent.features import referral as _referral  # noqa: F401
 from nexus_ai_agent.storage import db as _db  # noqa: F401  (populates SQLModel.metadata)
 
 #: The metadata objects Alembic should autogenerate against, in priority order.
