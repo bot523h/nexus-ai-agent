@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -70,6 +74,33 @@ class SQLiteCheckpointLifecycleStore:
             (record.thread_id, record.checkpoint_id),
         )
         self._connection.commit()
+
+    def schema_fingerprint(self) -> str:
+        """Return a deterministic fingerprint of the lifecycle schema only."""
+        tables = self._connection.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type IN ('table', 'index') "
+            "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        ).fetchall()
+        payload = json.dumps(tables, separators=(",", ":"), ensure_ascii=True)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+@contextmanager
+def cleanup_lock(path: str) -> Iterator[None]:
+    """Serialize cleanup processes; failure to acquire is fail-safe."""
+    import fcntl
+
+    lock_path = Path(path).with_suffix(Path(path).suffix + ".cleanup.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError("checkpoint cleanup is already in progress") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _key(value: datetime | None) -> str | None:
