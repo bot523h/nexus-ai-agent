@@ -265,6 +265,7 @@ def verify(
     path: Path | None = None,
     actual_test_count: int | None = None,
     root: Path | None = None,
+    strict: bool = False,
 ) -> VerifyReport:
     """Check the snapshot against reality, without changing anything.
 
@@ -272,10 +273,17 @@ def verify(
 
     1. schema version is one this build understands;
     2. ``phase_status`` is ``complete`` when the phase claims to be closed;
-    3. ``last_good_commit`` is an ancestor of ``HEAD`` — being *behind* HEAD is
-       reported (the snapshot wants refreshing), while being unrelated to HEAD
-       means history diverged or was rewritten;
+    3. ``last_good_commit`` is related to ``HEAD``: being *behind* HEAD is
+       normal progress and is only reported (see below), while being unrelated
+       to HEAD means history diverged or was rewritten, which is a problem;
     4. ``test_count_expected`` equals ``actual_test_count``, when supplied.
+
+    A snapshot can never contain the hash of the commit that contains it, so
+    "HEAD is one commit newer" is the ordinary state right after saving one.
+    Treating that as a failure would make ``verify`` cry wolf at exactly the
+    moment it should say everything is fine, so staleness is reported in
+    ``checks["head_relation"]`` and only becomes a problem under
+    ``strict=True``.
 
     ``last_good_branch`` is reported, never asserted: a closed phase is normally
     reviewed from ``main`` after the merge, so branch drift is normal.  Git
@@ -325,15 +333,17 @@ def verify(
                 checks["head_relation"] = "unchecked (history unavailable)"
             elif relation:
                 ahead = commits_ahead(snap.last_good_commit, git.commit, root)
-                checks["head_relation"] = (
+                stale = (
                     f"snapshot is an ancestor of HEAD ({ahead} commit(s) newer)"
                     if ahead is not None
                     else "snapshot is an ancestor of HEAD"
                 )
-                problems.append(
-                    f"HEAD has moved past the snapshot ({snap.last_good_commit[:12]}); "
-                    f"re-save it once this work is verified"
-                )
+                checks["head_relation"] = stale
+                if strict:
+                    problems.append(
+                        f"HEAD has moved past the snapshot ({snap.last_good_commit[:12]}); "
+                        f"re-save it once this work is verified"
+                    )
             else:
                 checks["head_relation"] = "diverged"
                 problems.append(

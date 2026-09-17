@@ -1,0 +1,82 @@
+{
+  "env_fingerprint": {
+    "alembic": "1.20.0",
+    "asyncpg": "0.31.0",
+    "cryptography": "50.0.1",
+    "psycopg": "3.3.5",
+    "python": "3.11.2",
+    "sqlalchemy": "2.0.54"
+  },
+  "last_good_branch": "arena/01a0b0bf-nexus-ai-agent",
+  "last_good_commit": "400457a3e8ec1e5aa355a428046b4faa2adff59a",
+  "next_phase": "E",
+  "pending": [
+    {
+      "id": "D9-real-neon",
+      "owner": "user",
+      "reason": "awaiting_neon_url",
+      "status": "blocked"
+    }
+  ],
+  "phase": "D",
+  "phase_status": "complete",
+  "phases_completed": [
+    {
+      "commit": "c81f299",
+      "id": "C1",
+      "status": "complete"
+    },
+    {
+      "commit": "f9bcd83",
+      "id": "D1-D3",
+      "status": "complete"
+    },
+    {
+      "commit": "799dbd0",
+      "id": "D4",
+      "status": "complete"
+    },
+    {
+      "commit": "f93cb16",
+      "id": "D4-finalize",
+      "status": "complete"
+    },
+    {
+      "commit": "79b720d",
+      "id": "D5",
+      "status": "complete"
+    },
+    {
+      "commit": "29bbd41",
+      "id": "D6",
+      "status": "complete"
+    },
+    {
+      "commit": "acab2f4",
+      "id": "D7",
+      "status": "complete"
+    },
+    {
+      "commit": "f61a8e1",
+      "id": "D8",
+      "status": "complete"
+    },
+    {
+      "commit": "f448e45",
+      "id": "D9",
+      "status": "ci_groundwork_only"
+    },
+    {
+      "commit": "e7f944d",
+      "id": "D10",
+      "status": "complete"
+    },
+    {
+      "commit": "a875e28",
+      "id": "D10-concurrency-fix",
+      "status": "complete"
+    }
+  ],
+  "schema_version": 1,
+  "test_count_expected": 277
+}

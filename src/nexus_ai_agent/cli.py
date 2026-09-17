@@ -145,6 +145,11 @@ def continuum_verify(
         "--expected-tests",
         help="Also assert the collected test count matches the snapshot.",
     ),
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        help="Also treat HEAD having moved past the snapshot as a problem.",
+    ),
 ) -> None:
     """Check the snapshot against the working tree; exit 1 on any problem."""
     from nexus_ai_agent.continuum import verify
@@ -152,6 +157,7 @@ def continuum_verify(
     report = verify(
         path=Path(path) if path else None,
         actual_test_count=expected_tests,
+        strict=strict,
     )
     for key, value in report.checks.items():
         typer.echo(f"{key}: {value}")

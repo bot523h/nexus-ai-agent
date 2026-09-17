@@ -162,7 +162,11 @@ class TestVerify:
         report = verify(path=target, root=repo.path)
         assert "ancestor of HEAD" in str(report.checks["head_relation"])
         assert "1 commit(s) newer" in str(report.checks["head_relation"])
-        assert any("re-save it" in problem for problem in report.problems)
+        # Ordinary progress is reported, not failed...
+        assert not any("re-save it" in problem for problem in report.problems)
+        # ...unless the caller asks for strictness.
+        strict = verify(path=target, root=repo.path, strict=True)
+        assert any("re-save it" in problem for problem in strict.problems)
 
     def test_unrelated_commit_is_reported_as_diverged(self, tmp_path: Path) -> None:
         """A commit on a sibling branch means history diverged or was rewritten."""
