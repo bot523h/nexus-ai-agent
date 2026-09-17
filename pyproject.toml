@@ -43,6 +43,9 @@ dependencies = [
     "psutil>=5.9",
   ]
 
+[project.scripts]
+nexus = "nexus_ai_agent.cli:app"
+
 [project.optional-dependencies]
 dev = [
   "pytest>=8.0",

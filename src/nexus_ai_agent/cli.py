@@ -14,14 +14,33 @@ app = typer.Typer(help="NEXUS AI Agent CLI")
 
 @app.command()
 def migrate(
-    db_path: str = typer.Option("data/app.sqlite", help="SQLite DB path"),
+    db_path: str | None = typer.Option(
+        None,
+        "--db-path",
+        help=(
+            "[deprecated] Force a legacy SQLite path. Prefer NEXUS_DB_PATH, "
+            "which `nexus migrate` now honours via Alembic."
+        ),
+    ),
 ) -> None:
-    """Initialize database schema."""
-    from nexus_ai_agent.storage.db import create_all_tables
+    """Apply database migrations (alembic upgrade head).
 
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    asyncio.run(create_all_tables(db_path))
-    typer.echo(f"✓ Database initialized at {db_path}")
+    Backs both backends automatically: NEXUS_DATABASE_URL (PostgreSQL/Neon)
+    wins; otherwise the configured SQLite file is migrated.  Existing
+    un-migrated databases keep working via the legacy create_all fallback.
+    """
+    from nexus_ai_agent.storage.migrations import run_migrations
+
+    if db_path is not None:
+        # Legacy stopgap: explicit path still bootstraps via create_all (idempotent).
+        from nexus_ai_agent.storage.db import create_all_tables
+
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        asyncio.run(create_all_tables(db_path))
+        typer.echo(f"✓ Database initialized (legacy create_all) at {db_path}")
+    else:
+        run_migrations()
+        typer.echo("✓ Database migrated to head")
 
 
 @app.command()
@@ -34,8 +53,8 @@ def run_bot(
     from nexus_ai_agent.memory.long_term import LongTermMemory
     from nexus_ai_agent.observability.logging import configure_logging
     from nexus_ai_agent.orchestration.graph import compile_graph
-    from nexus_ai_agent.storage.db import create_all_tables
     from nexus_ai_agent.storage.langgraph_checkpoint import get_checkpointer
+    from nexus_ai_agent.storage.migrations import ensure_startup_schema
     from nexus_ai_agent.tools.files import (
         ListDirTool,
         ReadFileTool,
@@ -46,9 +65,10 @@ def run_bot(
     settings = get_settings()
     configure_logging(settings.log_level)
 
-    # Ensure data directory exists
+    # Bring the schema up (Alembic-first, create_all fallback for legacy files)
     Path(settings.db_path).parent.mkdir(parents=True, exist_ok=True)
-    asyncio.run(create_all_tables(settings.db_path))
+    schema = ensure_startup_schema()
+    typer.echo(f"✓ Schema ready ({schema['backend']}/{schema['source']})")
 
     # Initialize LLM
     model_path = Path(settings.model_path)

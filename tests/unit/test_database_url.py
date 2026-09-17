@@ -16,6 +16,7 @@ from sqlmodel import select
 from nexus_ai_agent.config import settings as settings_module
 from nexus_ai_agent.storage import db as db_module
 from nexus_ai_agent.storage.db import (
+    decide_sqlite_bootstrap,
     get_session,
     normalize_database_url,
     resolve_database_url,
@@ -259,3 +260,49 @@ class TestGetSessionBackendSelection:
         # Real SQLite round-trip: the explicit path is untouched by the URL.
         assert len(rows) == 1
         assert db_path.exists()
+
+
+class TestDecideSqliteBootstrap:
+    """D5 bootstrap decision: Alembic-first, create_all for pre-Alembic files."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_state(self) -> None:
+        db_module._initialized_paths.clear()
+        yield
+        db_module._initialized_paths.clear()
+
+    def test_missing_file_is_alembic(self, tmp_path: Path) -> None:
+        db_path = str(tmp_path / "fresh.sqlite")
+        assert decide_sqlite_bootstrap(db_path) == "alembic"
+
+    def test_empty_existing_file_is_alembic(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "empty.sqlite"
+        db_path.touch()
+        assert decide_sqlite_bootstrap(str(db_path)) == "alembic"
+
+    def test_alembic_stamped_file_is_alembic(self, tmp_path: Path) -> None:
+        import sqlite3
+
+        db_path = tmp_path / "managed.sqlite"
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE alembic_version (version_num VARCHAR(32))")
+        conn.execute("INSERT INTO alembic_version VALUES ('47903d282ede')")
+        conn.execute("CREATE TABLE chat (id INTEGER PRIMARY KEY)")
+        conn.commit()
+        conn.close()
+        assert decide_sqlite_bootstrap(str(db_path)) == "alembic"
+
+    def test_legacy_tables_without_stamp_are_create_all(self, tmp_path: Path) -> None:
+        import sqlite3
+
+        db_path = tmp_path / "legacy.sqlite"
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE chat (id INTEGER PRIMARY KEY)")
+        conn.commit()
+        conn.close()
+        assert decide_sqlite_bootstrap(str(db_path)) == "create_all"
+
+    def test_initialized_path_is_nothing(self, tmp_path: Path) -> None:
+        db_path = str(tmp_path / "done.sqlite")
+        db_module._initialized_paths.add(db_path)
+        assert decide_sqlite_bootstrap(db_path) == "nothing"

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from enum import Enum
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
@@ -100,6 +101,80 @@ def resolve_database_url() -> str | None:
     if not value:
         return None
     return normalize_database_url(value)
+
+
+# ── D5: Alembic-first bootstrap decision for SQLite ───────────────────
+
+
+class _SqliteBootstrapMode(Enum):
+    """Which of the two schema sources (Alembic / create_all) should run.
+
+    Both sources end in an equivalent schema; the decision only guards the
+    bootstrap *path*, so existing SQLite users are never forced to migrate.
+    """
+
+    ALEMBIC = "alembic"
+    CREATE_ALL = "create_all"
+    NOTHING = "nothing"
+
+
+def _sqlite_has_tables(db_path: str) -> bool:
+    """True when the SQLite file has any user table (sqlite_* excluded)."""
+    from sqlalchemy import create_engine as sync_create_engine
+
+    engine = sync_create_engine(f"sqlite:///{Path(db_path).expanduser()}")
+    try:
+        inspector = inspect(engine)
+        tables = {t for t in inspector.get_table_names() if not t.startswith("sqlite_")}
+        return bool(tables)
+    finally:
+        engine.dispose()
+
+
+def _sqlite_is_alembic_stamped(db_path: str) -> bool:
+    """True when the SQLite file carries an ``alembic_version`` table."""
+    from sqlalchemy import create_engine as sync_create_engine
+
+    engine = sync_create_engine(f"sqlite:///{Path(db_path).expanduser()}")
+    try:
+        inspector = inspect(engine)
+        return "alembic_version" in inspector.get_table_names()
+    finally:
+        engine.dispose()
+
+
+def decide_sqlite_bootstrap(db_path: str | None = None) -> str:
+    """Decide the SQLite bootstrap path (D5), without mutating anything.
+
+    Priority:
+
+    1. ``alembic``  — the file is already Alembic-managed (``alembic_version``
+       exists: a developer already ran ``nexus migrate`` / an earlier Alembic
+       release, or an empty file is a brand-new install where Alembic is the
+       single source of truth from day one).  ``alembic upgrade head`` brings
+       it to head.
+    2. ``create_all`` — the file already has tables but is NOT Alembic-stamped:
+       a pre-Alembic install.  ``SQLModel.metadata.create_all`` is idempotent,
+       so this preserves the existing data and tables without a migration.
+    3. ``nothing`` — the database is ready (already created in this process);
+       the cached ``_initialized_paths`` guard handles this case upstream.
+
+    The enum value is returned as a string for a tiny, stable public API.
+    """
+    from nexus_ai_agent.config.settings import get_settings
+
+    normalized = str(Path(db_path or get_settings().db_path).expanduser())
+    if normalized in _initialized_paths:
+        return _SqliteBootstrapMode.NOTHING.value
+    if not Path(normalized).exists():
+        # Brand-new install: Alembic owns the schema from the first byte.
+        return _SqliteBootstrapMode.ALEMBIC.value
+    if _sqlite_is_alembic_stamped(normalized):
+        return _SqliteBootstrapMode.ALEMBIC.value
+    if _sqlite_has_tables(normalized):
+        return _SqliteBootstrapMode.CREATE_ALL.value
+    # Empty-but-existing (created with no table): treat as a new install.
+    return _SqliteBootstrapMode.ALEMBIC.value
 
 
 def _get_engine(db_path: str) -> Any:
