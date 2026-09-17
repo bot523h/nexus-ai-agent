@@ -3,10 +3,12 @@
 SQLAlchemy 2.0 / Alembic 1.20 async template, wired to the application's own
 URL + metadata resolution:
 
-- The database URL comes from ``resolve_migration_url()`` (D3) — the same
-  ``NEXUS_DATABASE_URL`` → asyncpg, else ``sqlite+aiosqlite:///{NEXUS_DB_PATH}``
-  priority used by the runtime (never from ``alembic.ini``, which keeps an
-  empty ``sqlalchemy.url``).
+- The database URL comes from ``resolve_url()`` below: an explicit per-run
+  override (``nexus.url_override``, set by ``build_alembic_config`` for D10
+  adoption) when the caller supplied one, otherwise ``resolve_migration_url()``
+  (D3) — the same ``NEXUS_DATABASE_URL`` → asyncpg, else
+  ``sqlite+aiosqlite:///{NEXUS_DB_PATH}`` priority used by the runtime.  It is
+  never read from ``alembic.ini``, which keeps an empty ``sqlalchemy.url``.
 - The target metadata comes from ``get_target_metadata()`` (D2), the V1 hook
   that merges ``SQLModel.metadata`` with any future metadata owners.
 - ``render_as_batch=True`` is enabled only for SQLite, which needs batch mode
@@ -40,6 +42,18 @@ if config.config_file_name is not None:
 target_metadata = get_target_metadata()
 
 
+def resolve_url() -> str:
+    """Return the URL this run migrates.
+
+    An explicit ``nexus.url_override`` wins (D10: adoption must stamp the very
+    database it just introspected); otherwise the application resolves it (D3).
+    """
+    override = config.get_main_option("nexus.url_override")
+    if override:
+        return override
+    return resolve_migration_url()
+
+
 def is_sqlite_url(url: str) -> bool:
     """Whether ``url`` targets the SQLite backend (needs batch mode)."""
     return url.startswith("sqlite")
@@ -51,7 +65,7 @@ def run_migrations_offline() -> None:
     Configures the context with just a URL and not an Engine, so no DBAPI is
     required.  Calls to ``context.execute()`` emit SQL to the script output.
     """
-    url = resolve_migration_url()
+    url = resolve_url()
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -68,7 +82,7 @@ def do_run_migrations(connection: Connection) -> None:
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
-        render_as_batch=is_sqlite_url(resolve_migration_url()),
+        render_as_batch=is_sqlite_url(resolve_url()),
     )
 
     with context.begin_transaction():
@@ -78,7 +92,7 @@ def do_run_migrations(connection: Connection) -> None:
 async def run_async_migrations() -> None:
     """Create an async engine and run migrations through ``run_sync``."""
     configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = resolve_migration_url()
+    configuration["sqlalchemy.url"] = resolve_url()
 
     connectable = async_engine_from_config(
         configuration,
