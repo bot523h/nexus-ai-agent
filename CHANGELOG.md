@@ -5,6 +5,65 @@ All notable changes to NEXUS AI Agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.0] — 2026-09-17
+
+Phase D — Alembic-based schema management and PostgreSQL as a first-class
+backend. See `docs/PHASE_D_ARCHITECTURE.md` for the design and
+`docs/MIGRATION_GUIDE.md` for operator instructions.
+
+### Added
+- **Alembic migration chain** (D1–D5): `migrations/` with an initial revision
+  covering all 30 tables (`47903d282ede`) and a pgvector revision
+  (`2a1c4b6d8e9f`, current head), driven by `migrations/env.py` in async mode
+- **`nexus migrate`** CLI command — backend-agnostic, idempotent
+- **PostgreSQL / Neon support** via `NEXUS_DATABASE_URL` (C1), with
+  `DATABASE_URL` accepted as a legacy alias; asyncpg runtime plus a Postgres
+  LangGraph checkpointer
+- **pgvector** enabled on PostgreSQL (`CREATE EXTENSION IF NOT EXISTS vector`)
+- **Legacy SQLite adoption** (D6): a pre-Alembic file is repaired with an
+  idempotent `create_all` and stamped at head instead of being overwritten
+- **`nexus adopt-pg`** (D10) with `--dry-run` and `--yes`: adopts a PostgreSQL
+  database that already holds NEXUS tables but has no `alembic_version`
+- **Fail-fast on un-stamped PostgreSQL** (D10): `nexus migrate` and bot startup
+  refuse before Alembic writes anything, naming the exact command to run
+- **Token encryption at rest** (D8): Fernet, master key from `NEXUS_SECRET_KEY`
+  only — a database dump alone cannot decrypt stored tokens
+- **`nexus continuum show` / `verify`** and a committed
+  `.nexus/continuum.json`, so cross-turn project state travels with the code
+- **CI job `migrate-postgres`** (D9 groundwork): proves the whole chain against
+  a real `pgvector/pgvector:pg16` service container, zero cloud credentials
+- `scripts/bootstrap_env.py` — deterministic dev environment, pins read from
+  `pyproject.toml` rather than duplicated
+- `nexus` console entry point (`[project.scripts]`)
+
+### Changed
+- The PostgreSQL `create_all` stopgap is retired (D7): Alembic is now the single
+  source of schema truth for both backends
+- Startup is Alembic-first; `create_all` survives only as the adoption repair
+  step, because it is idempotent and therefore cannot lose data
+- `nexus migrate`'s help no longer advertises a PostgreSQL `create_all`
+  fallback that no longer exists
+
+### Fixed
+- **Concurrent bootstrap no longer fails.** `MetaData.create_all(checkfirst=True)`
+  has a TOCTOU race: two processes both see "does not exist", both emit
+  `CREATE TABLE`, and the loser died on `table … already exists`. Conflicts are
+  now retried, so racers converge; any other error still propagates immediately
+- Legacy SQLite databases were at risk of the initial revision being replayed
+  over existing tables; they are adopted first (D6)
+- Database credentials are redacted from every migration and adoption message
+
+### Security
+- Credentials never appear in error output (`redact_url`), so a failed
+  migration cannot leak `NEXUS_DATABASE_URL` into logs or CI
+
+### Known limitations
+- **D9 is CI-only**: the chain is proven on a local Postgres container; the same
+  path against real Neon is pending `NEXUS_DATABASE_URL` from the project owner
+- pgvector is enabled but no `vector` column exists yet
+- `nexus migrate --db-path` still bootstraps via `create_all`; prefer
+  `NEXUS_DB_PATH`
+
 ## [3.4.1] — 2026-09-17
 
 ### Security — Phase 0
