@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from enum import Enum
@@ -8,11 +9,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from sqlalchemy import inspect, text
+from sqlalchemy import MetaData, inspect, text
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
 from nexus_ai_agent.storage import models as _models  # noqa: F401
+
+log = logging.getLogger(__name__)
 
 _engine: Any | None = None
 _engine_path: str | None = None
@@ -212,6 +216,50 @@ async def _dispose_replaced_engines() -> None:
             pass
 
 
+#: How many times :func:`create_all_metadata` retries after losing a race.
+_CREATE_ALL_ATTEMPTS = 6
+
+
+def _is_concurrent_create_conflict(exc: Exception) -> bool:
+    """Whether ``exc`` is another process having just created the same object.
+
+    ``MetaData.create_all`` runs with ``checkfirst=True``, so it asks whether a
+    table exists and *then* emits ``CREATE TABLE``.  Two processes booting
+    together both see "does not exist", both emit the DDL, and the loser gets
+    ``table … already exists``.  That is a benign race, not a broken schema —
+    the winner did exactly the work the loser was about to do.
+    """
+    message = str(getattr(exc, "orig", exc)).lower()
+    return "already exists" in message
+
+
+async def create_all_metadata(engine: Any, metadata: MetaData) -> None:
+    """Idempotently create ``metadata``'s tables, tolerating a concurrent creator.
+
+    Shared by the SQLite adoption path (:func:`create_all_tables`) and the
+    PostgreSQL one (:func:`nexus_ai_agent.storage.adopt_pg.adopt`) so both
+    backends survive two processes racing to bootstrap the same database.
+    A conflict is retried rather than surfaced, because a retry re-runs
+    ``checkfirst`` and now sees the tables the other process created.
+    """
+    for attempt in range(1, _CREATE_ALL_ATTEMPTS + 1):
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(metadata.create_all)
+            return
+        except (OperationalError, ProgrammingError) as exc:
+            if attempt >= _CREATE_ALL_ATTEMPTS or not _is_concurrent_create_conflict(exc):
+                raise
+            log.warning(
+                "concurrent schema creation detected (%s); retry %d/%d",
+                str(getattr(exc, "orig", exc)).splitlines()[0],
+                attempt,
+                _CREATE_ALL_ATTEMPTS - 1,
+            )
+            await asyncio.sleep(0.05 * attempt)
+    raise RuntimeError("unreachable: create_all_metadata retry loop exhausted")  # pragma: no cover
+
+
 async def create_all_tables(db_path: str = "data/app.sqlite") -> None:
     """Create all SQLModel tables for the selected database, exactly once per path."""
     await _dispose_replaced_engines()
@@ -222,7 +270,7 @@ async def create_all_tables(db_path: str = "data/app.sqlite") -> None:
 
     async with engine.begin() as conn:
         await conn.execute(text("PRAGMA journal_mode=WAL"))
-        await conn.run_sync(SQLModel.metadata.create_all)
+    await create_all_metadata(engine, SQLModel.metadata)
     _initialized_paths.add(normalized_path)
 
 
