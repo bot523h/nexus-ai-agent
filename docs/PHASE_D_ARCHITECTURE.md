@@ -14,7 +14,7 @@ A concise engineering record of Phase D (C1 → D10). Max 200 lines by design.
 | D7 | `acab2f4` | Postgres `create_all` stopgap retired; pgvector revision |
 | D8 | `f61a8e1` | Token encryption at rest (Fernet) |
 | D9 | `f448e45` | CI on real Postgres + pgvector (Neon test still pending URL) |
-| D10 | (this turn) | Postgres adoption / fail-fast + continuum snapshot |
+| D10 | `c42cccb` | Postgres adoption / fail-fast + continuum snapshot |
 
 ## 2. Flow diagrams
 
