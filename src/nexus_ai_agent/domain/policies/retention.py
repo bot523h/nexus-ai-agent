@@ -15,17 +15,25 @@ class JournalStatus(StrEnum):
     FAILED = "failed"
     RETRYING = "retrying"
     BLOCKED = "blocked"
+    CANCELLED = "cancelled"
 
 
 ALLOWED_TRANSITIONS: Final[dict[JournalStatus, frozenset[JournalStatus]]] = {
     JournalStatus.PENDING: frozenset({JournalStatus.RUNNING}),
     JournalStatus.RUNNING: frozenset(
-        {JournalStatus.SUCCEEDED, JournalStatus.FAILED, JournalStatus.BLOCKED}
+        {
+            JournalStatus.SUCCEEDED,
+            JournalStatus.FAILED,
+            JournalStatus.BLOCKED,
+            JournalStatus.CANCELLED,
+        }
     ),
+    # A retry edge increments attempts and applies exponential backoff.
     JournalStatus.FAILED: frozenset({JournalStatus.RETRYING}),
     JournalStatus.RETRYING: frozenset({JournalStatus.RUNNING}),
+    JournalStatus.BLOCKED: frozenset({JournalStatus.PENDING}),
     JournalStatus.SUCCEEDED: frozenset(),
-    JournalStatus.BLOCKED: frozenset(),
+    JournalStatus.CANCELLED: frozenset(),
 }
 
 
@@ -38,6 +46,7 @@ class RetentionRecord:
 
 RESUMABILITY_WINDOW: Final[timedelta] = timedelta(days=30)
 FORK_AFTER_RESUMABILITY: Final[str] = "fork_new_thread_from_message_history"
+RETRY_BACKOFF: Final[str] = "exponential_backoff_on_failed_to_retrying"
 
 
 def _utc(value: datetime) -> datetime:

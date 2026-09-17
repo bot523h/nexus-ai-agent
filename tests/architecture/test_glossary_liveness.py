@@ -8,6 +8,8 @@ from nexus_ai_agent.domain.policies.retention import (
     ALLOWED_TRANSITIONS,
     FORK_AFTER_RESUMABILITY,
     RESUMABILITY_WINDOW,
+    RETRY_BACKOFF,
+    JournalStatus,
 )
 
 
@@ -22,3 +24,8 @@ def test_retention_contract_remains_live() -> None:
     assert RESUMABILITY_WINDOW.days == 30
     assert FORK_AFTER_RESUMABILITY == "fork_new_thread_from_message_history"
     assert ALLOWED_TRANSITIONS
+    assert ALLOWED_TRANSITIONS[JournalStatus.BLOCKED] == frozenset({JournalStatus.PENDING})
+    assert JournalStatus.CANCELLED in ALLOWED_TRANSITIONS[JournalStatus.RUNNING]
+    assert not ALLOWED_TRANSITIONS[JournalStatus.SUCCEEDED]
+    assert not ALLOWED_TRANSITIONS[JournalStatus.CANCELLED]
+    assert RETRY_BACKOFF == "exponential_backoff_on_failed_to_retrying"

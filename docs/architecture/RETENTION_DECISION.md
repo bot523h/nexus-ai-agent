@@ -26,3 +26,11 @@ A cleanup run is automatically blocked when either threshold is reached:
 
 The circuit breaker is fail-safe: it stops further mutation, records a redacted
 reason in the operation journal, and requires an explicit reviewed retry.
+Every reconciler anomaly is one journal entry with a specific `error_code`.
+The 1% or 500 threshold is evaluated over those anomaly entries; crossing
+**either** threshold stops the entire purge path and emits a structured warning.
+
+Journal state transitions are binding: `blocked -> pending` is allowed only
+after grace-period re-evaluation; `running -> cancelled` is terminal. Only
+`succeeded` and `cancelled` are terminal. The `failed -> retrying` edge
+increments `attempts` and applies exponential backoff before the retry.
