@@ -35,6 +35,7 @@ class AIStoryGenerator:
 
         # 2. Persian text is reshaped per line below before drawing.
         # 3. Load font
+        font: ImageFont.ImageFont | ImageFont.FreeTypeFont
         try:
             font_size = 60
             font = ImageFont.truetype(self.font_path, font_size)
