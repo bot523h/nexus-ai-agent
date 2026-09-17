@@ -64,7 +64,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-markers = ["slow: marks tests as slow"]
+markers = ["slow: marks tests as slow", "integration: requires an external service"]
 
 [tool.ruff]
 line-length = 100
