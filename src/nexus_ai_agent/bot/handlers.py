@@ -156,7 +156,7 @@ def build_handlers(
     storage: Any,
 ) -> list[Any]:
     # ── Middleware & Utilities ────────────────────────────────────
-    auth = AuthMiddleware(settings.allowed_user_ids)
+    auth = AuthMiddleware(settings.allowed_user_ids, settings.owner_telegram_id)
     presence_store = presence
     _ = storage  # placeholder for now
 

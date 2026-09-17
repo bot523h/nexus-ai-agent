@@ -15,6 +15,26 @@ def fake_llm() -> FakeLLMProvider:
     return FakeLLMProvider()
 
 
+@pytest.fixture(autouse=True)
+async def _dispose_db_engine():
+    """Dispose the shared async engine between tests.
+
+    aiosqlite connections are bound to the event loop they were opened on;
+    leaving the global engine referenced across tests lets worker threads
+    outlive their loop and emit "Event loop is closed" noise.  Disposing
+    while the current loop is still open keeps the suite warning-free and
+    gives each test a fresh engine.
+    """
+    yield
+    from nexus_ai_agent.storage import db as db_module
+
+    if db_module._engine is not None:
+        await db_module._engine.dispose()
+        db_module._engine = None
+        db_module._engine_path = None
+        db_module._session_factory = None
+
+
 @pytest.fixture()
 def settings_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """
