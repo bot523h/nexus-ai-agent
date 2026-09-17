@@ -190,8 +190,11 @@ class TestSqlitePathUnaffected:
         monkeypatch.delenv("DATABASE_URL", raising=False)
         monkeypatch.setenv("NEXUS_DB_PATH", str(tmp_path / "app.sqlite"))
         settings_module.get_settings.cache_clear()
+        # Point the migration URL at the tmp file too: a bare relative URL would
+        # create a stray database in whatever the cwd happens to be.
+        sqlite_url = f"sqlite+aiosqlite:///{tmp_path / 'app.sqlite'}"
         for module in (db_module, migrations_module):
-            monkeypatch.setattr(module, "resolve_migration_url", lambda: "sqlite+aiosqlite:///x")
+            monkeypatch.setattr(module, "resolve_migration_url", lambda: sqlite_url)
 
         def explode(url: str) -> PostgresAdoptionReport:
             raise AssertionError("the SQLite path must not inspect PostgreSQL")
