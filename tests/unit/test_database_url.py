@@ -7,6 +7,7 @@ a connection).
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +43,7 @@ async def _clean_db_env(monkeypatch: pytest.MonkeyPatch) -> Any:
             await engine.dispose()
     db_module._pg_engines.clear()
     db_module._pg_session_factories.clear()
-    db_module._pg_initialized_urls.clear()
+    db_module._pg_prepared_urls.clear()
 
 
 class _FakeSessionCM:
@@ -224,14 +225,14 @@ class TestGetSessionBackendSelection:
         factory_calls: list[str] = []
         fake_factory = _FakeSessionFactory(session="pg-session")
 
-        async def fake_ensure_pg_tables(url: str) -> None:
+        async def fake_ensure_pg_schema(url: str) -> None:
             ensured.append(url)
 
         def fake_pg_factory(url: str) -> _FakeSessionFactory:
             factory_calls.append(url)
             return fake_factory
 
-        monkeypatch.setattr(db_module, "_ensure_pg_tables", fake_ensure_pg_tables)
+        monkeypatch.setattr(db_module, "_ensure_pg_schema", fake_ensure_pg_schema)
         monkeypatch.setattr(db_module, "_get_pg_session_factory", fake_pg_factory)
 
         async with get_session() as session:
@@ -260,6 +261,56 @@ class TestGetSessionBackendSelection:
         # Real SQLite round-trip: the explicit path is untouched by the URL.
         assert len(rows) == 1
         assert db_path.exists()
+
+
+class TestEnsurePgSchema:
+    """D7: Postgres schema is prepared lazily via Alembic, cached per URL."""
+
+    @pytest.mark.asyncio
+    async def test_runs_migrations_once_per_normalized_url(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[str] = []
+
+        async def fake_run_migrations() -> None:  # simulate a thread call
+            calls.append("ran")
+
+        monkeypatch.setattr("nexus_ai_agent.storage.migrations.run_migrations", fake_run_migrations)
+
+        # Drop the thread hop: _ensure_pg_schema awaits asyncio.to_thread; make
+        # it call the fake synchronously-in-loop instead.
+        async def fake_to_thread(fn: Any, *args: Any) -> Any:
+            return await fn(*args) if asyncio.iscoroutinefunction(fn) else fn(*args)
+
+        import asyncio
+
+        monkeypatch.setattr(db_module.asyncio, "to_thread", fake_to_thread)
+
+        db_module._pg_prepared_urls.clear()
+        await db_module._ensure_pg_schema("postgres://u:p@h:5432/db")
+        await db_module._ensure_pg_schema("postgresql://u:p@h:5432/db")  # normalized same
+        assert calls == ["ran"]  # one alembic run; second URL is the cache hit
+
+    @pytest.mark.asyncio
+    async def test_prepares_distinct_urls_independently(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[str] = []
+
+        async def fake_run_migrations() -> None:
+            calls.append("ran")
+
+        monkeypatch.setattr("nexus_ai_agent.storage.migrations.run_migrations", fake_run_migrations)
+
+        async def fake_to_thread(fn: Any, *args: Any) -> Any:
+            return await fn(*args) if asyncio.iscoroutinefunction(fn) else fn(*args)
+
+        monkeypatch.setattr(db_module.asyncio, "to_thread", fake_to_thread)
+
+        db_module._pg_prepared_urls.clear()
+        await db_module._ensure_pg_schema("postgres://u:p@h:5432/db1")
+        await db_module._ensure_pg_schema("postgres://u:p@h:5432/db2")
+        assert calls == ["ran", "ran"]
 
 
 class TestDecideSqliteBootstrap:

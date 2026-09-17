@@ -15,9 +15,9 @@ local SQLite and hosted PostgreSQL/Neon share one code path:
     ``alembic stamp head`` records it as versioned, so existing installs are
     never forced to migrate and never lose data.
 
-  PostgreSQL stays lazy at startup (the C1 ``_ensure_pg_tables`` stopgap still
-  bootstraps it on first use); ``nexus migrate`` is the explicit upgrade path
-  for Neon until the stopgap is retired (D7).
+  PostgreSQL is prepared lazily via Alembic too (D7 retired the C1
+  ``create_all`` stopgap).  ``nexus migrate`` upgrades Neon explicitly;
+  ``get_session`` prepares it on first use through the same code path.
 """
 
 from __future__ import annotations
@@ -93,8 +93,10 @@ def ensure_startup_schema() -> dict[str, Any]:
         {"backend": "sqlite" | "postgresql",
          "source": "alembic" | "legacy_adopted" | "none" | "deferred"}
 
-    ``"deferred"`` means PostgreSQL: its schema is bootstrapped lazily by the
-    unchanged C1 stopgap; ``nexus migrate`` upgrades it explicitly.
+    ``"deferred"`` means PostgreSQL: ``ensure_startup_schema`` never blocks a
+    serverless Postgres host (Neon) that may be idle/scaled-to-zero at bot
+    startup.  The schema is prepared lazily by ``get_session`` via the same
+    ``run_migrations`` path (D7).
 
     Note: call this from a *sync* context (the CLI command body).  The legacy
     SQLite adoption opens its own private event loop; do not call it from

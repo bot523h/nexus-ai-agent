@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from enum import Enum
@@ -25,7 +26,10 @@ _replaced_engines: list[Any] = []
 # Postgres (NEXUS_DATABASE_URL) state, keyed by the normalized URL.
 _pg_engines: dict[str, Any] = {}
 _pg_session_factories: dict[str, async_sessionmaker[AsyncSession]] = {}
-_pg_initialized_urls: set[str] = set()
+# URLs whose schema has already been brought to head via Alembic.  Prepared
+# = Alembic migrated (the stopgap create_all was retired in D7); the guard is
+# per-URL so two different Neon databases in one process stay independent.
+_pg_prepared_urls: set[str] = set()
 
 # The only URL schemes accepted for NEXUS_DATABASE_URL.
 _SUPPORTED_URL_SCHEMES = ("postgresql", "postgres", "postgresql+asyncpg")
@@ -246,14 +250,22 @@ def _get_pg_session_factory(url: str) -> async_sessionmaker[AsyncSession]:
     return factory
 
 
-async def _ensure_pg_tables(url: str) -> None:
-    """Stopgap schema bootstrap for Postgres until Alembic lands in C2."""
+async def _ensure_pg_schema(url: str) -> None:
+    """Bring a Postgres database to head via Alembic (D7), exactly once per URL.
+
+    Alembic's ``env.py`` drives its own event loop (``asyncio.run``), so the
+    upgrade is executed in a worker thread from this running loop.  The legacy
+    ``SQLModel.metadata.create_all`` stopgap that used to live here was retired:
+    Alembic is now the single source of schema truth for PostgreSQL, the same
+    way it has been for SQLite since D4.
+    """
     normalized = normalize_database_url(url)
-    if normalized in _pg_initialized_urls:
+    if normalized in _pg_prepared_urls:
         return
-    async with _get_pg_engine(normalized).begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
-    _pg_initialized_urls.add(normalized)
+    from nexus_ai_agent.storage.migrations import run_migrations
+
+    await asyncio.to_thread(run_migrations)
+    _pg_prepared_urls.add(normalized)
 
 
 @asynccontextmanager
@@ -262,14 +274,15 @@ async def get_session(db_path: str | None = None) -> AsyncIterator[AsyncSession]
 
     - ``db_path`` given  → SQLite backend, exactly as before (unchanged).
     - ``db_path`` is ``None`` → the backend comes from the environment:
-      ``NEXUS_DATABASE_URL`` set → PostgreSQL (with a stopgap ``create_all``
-      until Alembic lands in C2); otherwise the default SQLite path.
+      ``NEXUS_DATABASE_URL`` set → PostgreSQL, prepared lazily via Alembic
+      (D7: the ``create_all`` stopgap was retired); otherwise the default
+      SQLite path.
     """
     await _dispose_replaced_engines()
     if db_path is None:
         database_url = resolve_database_url()
         if database_url is not None:
-            await _ensure_pg_tables(database_url)
+            await _ensure_pg_schema(database_url)
             factory = _get_pg_session_factory(database_url)
             async with factory() as session:
                 yield session
