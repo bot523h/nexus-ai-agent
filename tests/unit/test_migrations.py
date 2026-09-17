@@ -99,7 +99,7 @@ def test_revision_chain_is_single_line() -> None:
     script = ScriptDirectory.from_config(_make_config())
     heads = script.get_heads()
     assert heads == ["47903d282ede"]
-    assert [r.revision for r in script.walk_revisions()] == ["47903d282ede", "47903d282ede"]
+    assert [r.revision for r in script.walk_revisions()] == ["47903d282ede"]
 
 
 def test_upgrade_creates_exact_schema(db_path: str) -> None:
