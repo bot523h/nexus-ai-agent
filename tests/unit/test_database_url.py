@@ -7,7 +7,6 @@ a connection).
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -264,7 +263,7 @@ class TestGetSessionBackendSelection:
 
 
 class TestEnsurePgSchema:
-    """D7: Postgres schema is prepared lazily via Alembic, cached per URL."""
+    """D7/D10: Postgres schema is prepared lazily once per URL (adopt→migrate)."""
 
     @pytest.mark.asyncio
     async def test_runs_migrations_once_per_normalized_url(
@@ -272,24 +271,17 @@ class TestEnsurePgSchema:
     ) -> None:
         calls: list[str] = []
 
-        async def fake_run_migrations() -> None:  # simulate a thread call
-            calls.append("ran")
+        async def fake_prepare_postgres(url: str) -> None:  # D10 seam
+            calls.append(url)
 
-        monkeypatch.setattr("nexus_ai_agent.storage.migrations.run_migrations", fake_run_migrations)
-
-        # Drop the thread hop: _ensure_pg_schema awaits asyncio.to_thread; make
-        # it call the fake synchronously-in-loop instead.
-        async def fake_to_thread(fn: Any, *args: Any) -> Any:
-            return await fn(*args) if asyncio.iscoroutinefunction(fn) else fn(*args)
-
-        import asyncio
-
-        monkeypatch.setattr(db_module.asyncio, "to_thread", fake_to_thread)
+        monkeypatch.setattr(
+            "nexus_ai_agent.storage.adopt_pg.prepare_postgres", fake_prepare_postgres
+        )
 
         db_module._pg_prepared_urls.clear()
         await db_module._ensure_pg_schema("postgres://u:p@h:5432/db")
         await db_module._ensure_pg_schema("postgresql://u:p@h:5432/db")  # normalized same
-        assert calls == ["ran"]  # one alembic run; second URL is the cache hit
+        assert calls == ["postgresql://u:p@h:5432/db"]  # one prepare; second is the cache hit
 
     @pytest.mark.asyncio
     async def test_prepares_distinct_urls_independently(
@@ -297,20 +289,17 @@ class TestEnsurePgSchema:
     ) -> None:
         calls: list[str] = []
 
-        async def fake_run_migrations() -> None:
-            calls.append("ran")
+        async def fake_prepare_postgres(url: str) -> None:
+            calls.append(url)
 
-        monkeypatch.setattr("nexus_ai_agent.storage.migrations.run_migrations", fake_run_migrations)
-
-        async def fake_to_thread(fn: Any, *args: Any) -> Any:
-            return await fn(*args) if asyncio.iscoroutinefunction(fn) else fn(*args)
-
-        monkeypatch.setattr(db_module.asyncio, "to_thread", fake_to_thread)
+        monkeypatch.setattr(
+            "nexus_ai_agent.storage.adopt_pg.prepare_postgres", fake_prepare_postgres
+        )
 
         db_module._pg_prepared_urls.clear()
         await db_module._ensure_pg_schema("postgres://u:p@h:5432/db1")
         await db_module._ensure_pg_schema("postgres://u:p@h:5432/db2")
-        assert calls == ["ran", "ran"]
+        assert calls == ["postgresql://u:p@h:5432/db1", "postgresql://u:p@h:5432/db2"]
 
 
 class TestDecideSqliteBootstrap:

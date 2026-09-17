@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from enum import Enum
@@ -251,20 +250,23 @@ def _get_pg_session_factory(url: str) -> async_sessionmaker[AsyncSession]:
 
 
 async def _ensure_pg_schema(url: str) -> None:
-    """Bring a Postgres database to head via Alembic (D7), exactly once per URL.
+    """Bring a Postgres database to head via Alembic, exactly once per URL.
+
+    D7 retired the ``create_all`` stopgap and made Alembic the single source
+    of schema truth for PostgreSQL.  D10 adds the adoption seam: a pre-Alembic
+    database (C1-era, tables but no ``alembic_version``) is either stamped at
+    head when its schema matches the metadata exactly, or rejected with a
+    clear RuntimeError.  Fresh databases are built via ``upgrade head``.
 
     Alembic's ``env.py`` drives its own event loop (``asyncio.run``), so the
-    upgrade is executed in a worker thread from this running loop.  The legacy
-    ``SQLModel.metadata.create_all`` stopgap that used to live here was retired:
-    Alembic is now the single source of schema truth for PostgreSQL, the same
-    way it has been for SQLite since D4.
+    upgrade is executed in a worker thread from this running loop.
     """
     normalized = normalize_database_url(url)
     if normalized in _pg_prepared_urls:
         return
-    from nexus_ai_agent.storage.migrations import run_migrations
+    from nexus_ai_agent.storage.adopt_pg import prepare_postgres
 
-    await asyncio.to_thread(run_migrations)
+    await prepare_postgres(normalized)
     _pg_prepared_urls.add(normalized)
 
 

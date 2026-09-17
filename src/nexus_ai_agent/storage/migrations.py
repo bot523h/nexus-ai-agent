@@ -23,7 +23,11 @@ local SQLite and hosted PostgreSQL/Neon share one code path:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +42,62 @@ from nexus_ai_agent.storage.db import (
 )
 
 log = logging.getLogger(__name__)
+
+#: Lock files held by this process (re-entrancy guard: flock is per-file-
+#: description, so a second handle to the same lock file would self-conflict).
+_held_locks: set[str] = set()
+
+
+def _lock_path() -> Path:
+    """A deterministic, cross-process lock file path for the migration target."""
+    digest = hashlib.sha256(resolve_migration_url().encode("utf-8")).hexdigest()[:16]
+    return Path(tempfile.gettempdir()) / f"nexus-migrate-{digest}.lock"
+
+
+@contextmanager
+def migration_lock() -> Iterator[None]:
+    """Serialize schema mutations across processes (fail-fast, non-blocking).
+
+    Two concurrent migrators aimed at the same database would race into
+    Alembic DDL (a real, reproduced ``table already exists`` crash).  This
+    advisory lock makes the race deterministic: the first holder runs to
+    completion; any subsequent migrator fails fast with a clear, actionable
+    message instead of a raw DBAPI error.
+
+    Raises:
+        RuntimeError: If another process holds the lock for this target.
+    """
+    lock_path = _lock_path()
+    key = str(lock_path)
+    if key in _held_locks:  # re-entrant within this process
+        yield
+        return
+
+    try:
+        import fcntl  # POSIX only
+    except ImportError:  # pragma: no cover - non-POSIX best-effort
+        log.warning("no fcntl; migration lock is best-effort on this platform")
+        yield
+        return
+
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fh = lock_path.open("a+")
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        fh.close()
+        raise RuntimeError(
+            "A database migration is already in progress for this target; "
+            "wait for it to finish and try again."
+        ) from exc
+    _held_locks.add(key)
+    try:
+        yield
+    finally:
+        _held_locks.discard(key)
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        fh.close()
+
 
 # Repository root: src/nexus_ai_agent/storage/migrations.py → 4 levels up.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -75,14 +135,15 @@ def run_migrations() -> None:
     being overwritten by the initial revision, which keeps legacy installs and
     their data intact.
     """
-    if resolve_database_url() is None:
-        from nexus_ai_agent.config.settings import get_settings
+    with migration_lock():
+        if resolve_database_url() is None:
+            from nexus_ai_agent.config.settings import get_settings
 
-        db_path = str(Path(get_settings().db_path).expanduser())
-        if decide_sqlite_bootstrap(db_path) == "create_all":
-            _adopt_legacy_sqlite(db_path)
-            return
-    command.upgrade(build_alembic_config(), "head")
+            db_path = str(Path(get_settings().db_path).expanduser())
+            if decide_sqlite_bootstrap(db_path) == "create_all":
+                _adopt_legacy_sqlite(db_path)
+                return
+        command.upgrade(build_alembic_config(), "head")
 
 
 def ensure_startup_schema() -> dict[str, Any]:
