@@ -48,6 +48,7 @@ jobs:
           python-version: "3.12"
       - run: pip install -e "."
       - run: nexus migrate
+      - run: pytest -q tests/integration/test_postgres_create_all_race.py
       # idempotent re-run must be a no-op (revision already at head).
       - run: nexus migrate
       # Confirm the migration stamp on a real Postgres.

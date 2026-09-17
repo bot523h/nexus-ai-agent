@@ -8,7 +8,8 @@ import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from nexus_ai_agent.storage.db import create_all_metadata
-from nexus_ai_agent.storage.models import SQLModel
+from sqlmodel import SQLModel
+import nexus_ai_agent.storage.models  # noqa: F401
 
 
 @pytest.mark.integration
