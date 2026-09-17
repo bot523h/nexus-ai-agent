@@ -9,6 +9,240 @@
     "src/nexus_ai_agent/application/ports/object_storage.py",
     "src/nexus_ai_agent/application/ports/job_queue.py"
   ],
-  "forbidden_imports": ["langgraph", "sqlmodel", "telegram", "adapters"],
-  "baseline_version": 1
+  "forbidden_imports": [
+    "langgraph",
+    "sqlmodel",
+    "telegram",
+    "adapters"
+  ],
+  "baseline_version": 1,
+  "legacy_violations": [
+    {
+      "file": "src/nexus_ai_agent/worker.py",
+      "imports": [
+        "telegram"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/agent/approval.py",
+      "imports": [
+        "telegram"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/agent/feedback.py",
+      "imports": [
+        "telegram"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/agent/self_monitor.py",
+      "imports": [
+        "telegram"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/agent/updater.py",
+      "imports": [
+        "sqlmodel"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/agents/store/agent_manager.py",
+      "imports": [
+        "sqlmodel"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/api/dashboard.py",
+      "imports": [
+        "sqlmodel"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/bot/agent_handlers.py",
+      "imports": [
+        "telegram"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/bot/app.py",
+      "imports": [
+        "telegram"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/bot/handlers.py",
+      "imports": [
+        "sqlmodel",
+        "telegram"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/bot/knowledge_handlers.py",
+      "imports": [
+        "telegram"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/bot/memory_handlers.py",
+      "imports": [
+        "telegram"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/bot/monitor_handlers.py",
+      "imports": [
+        "telegram"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/bot/tool_handlers.py",
+      "imports": [
+        "telegram"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/bot/update_handlers.py",
+      "imports": [
+        "telegram"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/features/ads.py",
+      "imports": [
+        "sqlmodel"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/features/ai_memory.py",
+      "imports": [
+        "sqlmodel"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/features/analytics.py",
+      "imports": [
+        "sqlmodel"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/features/anonymous_chat.py",
+      "imports": [
+        "sqlmodel"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/features/channel_manager.py",
+      "imports": [
+        "sqlmodel",
+        "telegram"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/features/engagement.py",
+      "imports": [
+        "sqlmodel"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/features/force_join.py",
+      "imports": [
+        "sqlmodel",
+        "telegram"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/features/games.py",
+      "imports": [
+        "sqlmodel"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/features/gamification.py",
+      "imports": [
+        "sqlmodel"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/features/moderation.py",
+      "imports": [
+        "sqlmodel"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/features/onboarding.py",
+      "imports": [
+        "sqlmodel",
+        "telegram"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/features/owner_control.py",
+      "imports": [
+        "sqlmodel"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/features/personality.py",
+      "imports": [
+        "sqlmodel"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/features/referral.py",
+      "imports": [
+        "sqlmodel"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/features/tools.py",
+      "imports": [
+        "sqlmodel"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/features/viral_engine.py",
+      "imports": [
+        "sqlmodel"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/knowledge/knowledge_manager.py",
+      "imports": [
+        "sqlmodel"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/orchestration/graph.py",
+      "imports": [
+        "langgraph"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/storage/db.py",
+      "imports": [
+        "sqlmodel"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/storage/langgraph_checkpoint.py",
+      "imports": [
+        "langgraph"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/storage/migration_metadata.py",
+      "imports": [
+        "sqlmodel"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/storage/models.py",
+      "imports": [
+        "sqlmodel"
+      ]
+    }
+  ],
+  "scan_scope": "src/**/*.py; legacy framework imports are grandfathered"
 }

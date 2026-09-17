@@ -44,3 +44,14 @@ def test_new_boundary_files_do_not_import_adapters() -> None:
     ]
     for path in paths:
         assert "adapters" not in _imports(path), path
+
+
+def test_global_legacy_baseline_has_no_new_violations() -> None:
+    baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
+    expected = {(item["file"], tuple(item["imports"])) for item in baseline["legacy_violations"]}
+    actual: set[tuple[str, tuple[str, ...]]] = set()
+    for path in (ROOT / "src").rglob("*.py"):
+        imports = tuple(sorted(_imports(path) & {"langgraph", "sqlmodel", "telegram"}))
+        if imports:
+            actual.add((str(path.relative_to(ROOT)), imports))
+    assert actual <= expected, f"new legacy boundary violations: {sorted(actual - expected)}"
