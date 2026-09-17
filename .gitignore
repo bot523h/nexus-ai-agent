@@ -1,5 +1,6 @@
 data/
 models/
+build/
 __pycache__/
 .env
 *.pyc

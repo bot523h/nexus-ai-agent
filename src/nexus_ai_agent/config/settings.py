@@ -43,6 +43,10 @@ class Settings(BaseSettings):
         default=False,
         validation_alias=AliasChoices("NEXUS_ENABLE_SHELL", "ENABLE_SHELL"),
     )
+    auto_update: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("NEXUS_AUTO_UPDATE", "AUTO_UPDATE"),
+    )
     allowed_user_ids: Annotated[list[int], NoDecode] = Field(
         default_factory=list,
         validation_alias=AliasChoices("NEXUS_ALLOWED_USER_IDS", "ALLOWED_USER_IDS"),
