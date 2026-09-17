@@ -8,6 +8,9 @@ from nexus_ai_agent.agents.store.agent_manager import AgentManager
 
 async def agents_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show the Agent Store menu."""
+    if not update.message:
+        return
+    message = update.message
     agents = AgentManager.list_agents()
     keyboard = []
     # Create 2x5 grid
@@ -33,16 +36,17 @@ async def agents_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     msg = (
         "🤖 *Agent Store*\n\nیک دستیار متخصص انتخاب کنید تا تمام پیام‌های شما توسط او پاسخ داده شود:"
     )
-    await update.message.reply_text(msg, reply_markup=reply_markup, parse_mode="Markdown")
+    await message.reply_text(msg, reply_markup=reply_markup, parse_mode="Markdown")
 
 
 async def agent_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle agent selection and stopping."""
     query = update.callback_query
-    if not query:
+    if query is None or query.from_user is None:
         return
+    sender = query.from_user
     await query.answer()
-    user_id = query.from_user.id
+    user_id = sender.id
 
     if query.data == "agent_stop":
         await AgentManager.deactivate(user_id)
@@ -66,18 +70,24 @@ async def agent_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 async def myagent_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show currently active agent."""
+    if not update.effective_user or not update.message:
+        return
     user_id = update.effective_user.id
+    message = update.message
     active_agent = await AgentManager.get_active(user_id)
     if active_agent:
-        await update.message.reply_text(
+        await message.reply_text(
             f"🤖 در حال حاضر **{active_agent.name}** فعال است.", parse_mode="Markdown"
         )
     else:
-        await update.message.reply_text("❌ هیچ Agent فعالی ندارید. از /agents یکی انتخاب کنید.")
+        await message.reply_text("❌ هیچ Agent فعالی ندارید. از /agents یکی انتخاب کنید.")
 
 
 async def agent_stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Stop active agent via command."""
+    if not update.effective_user or not update.message:
+        return
     user_id = update.effective_user.id
+    message = update.message
     await AgentManager.deactivate(user_id)
-    await update.message.reply_text("✅ Agent غیرفعال شد.")
+    await message.reply_text("✅ Agent غیرفعال شد.")

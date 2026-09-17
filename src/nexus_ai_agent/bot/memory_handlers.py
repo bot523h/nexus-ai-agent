@@ -8,25 +8,31 @@ from nexus_ai_agent.features.ai_memory import AIMemoryEngine
 
 async def memory_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show what the AI remembers about the user."""
+    if not update.effective_user or not update.message:
+        return
     user_id = update.effective_user.id
+    message = update.message
     engine = AIMemoryEngine()
     ctx = await engine.get_context(user_id)
 
     if ctx:
         nl = "\n"
         formatted_ctx = ctx.replace(" | ", nl)
-        await update.message.reply_text(
+        await message.reply_text(
             f"🧠 *آنچه من از شما می‌دانم:*\n\n{formatted_ctx}\n\n"
             "این اطلاعات به من کمک می‌کند تا پاسخ‌های دقیق‌تری به شما بدهم.",
             parse_mode="Markdown",
         )
     else:
-        await update.message.reply_text("🧠 من هنوز اطلاعات خاصی از شما در حافظه بلندمدتم ندارم.")
+        await message.reply_text("🧠 من هنوز اطلاعات خاصی از شما در حافظه بلندمدتم ندارم.")
 
 
 async def forget_me_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Wipe user memory."""
+    if not update.effective_user or not update.message:
+        return
     user_id = update.effective_user.id
+    message = update.message
     engine = AIMemoryEngine()
     await engine.forget_user(user_id)
-    await update.message.reply_text("✅ تمامی اطلاعات حافظه بلندمدت شما پاک شد.")
+    await message.reply_text("✅ تمامی اطلاعات حافظه بلندمدت شما پاک شد.")

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass
 
 import httpx
 
+from nexus_ai_agent.core.ssrf_guard import SafeAsyncTransport, SSRFBlockError, validate_url
 from nexus_ai_agent.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -67,7 +69,7 @@ class SummarizerEngine:
         self._api_key = gemini_api_key
         self._model = model
         self._base_url = base_url
-        self._http = httpx.AsyncClient(timeout=60.0)
+        self._http = httpx.AsyncClient(timeout=60.0, transport=SafeAsyncTransport())
 
     async def summarize_text(
         self,
@@ -132,7 +134,19 @@ class SummarizerEngine:
         mode: str = "brief",
         language: str | None = None,
     ) -> SummaryResult:
-        """Fetch content from a URL and summarize it."""
+        """Fetch content from a URL and summarize it.
+
+        Security (SSRF protection): only ``https`` URLs whose resolved
+        address is public may be fetched — checked before the fetch and
+        again at connect time for every connection, including redirects
+        (see ``core/ssrf_guard.py``).
+        """
+        try:
+            await asyncio.to_thread(validate_url, url)
+        except SSRFBlockError as exc:
+            logger.warning("summarize_url_blocked", url=url, error=str(exc))
+            return SummaryResult(error=str(exc))
+
         try:
             resp = await self._http.get(url, follow_redirects=True, timeout=30.0)
             resp.raise_for_status()

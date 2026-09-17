@@ -9,6 +9,7 @@ from typing import Any
 import psutil  # type: ignore
 from telegram import Bot
 
+from nexus_ai_agent.agent.approval import ApprovalSystem
 from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.core.instrumentation import instrumented
 
@@ -73,3 +74,37 @@ class SelfMonitor:
             gc.collect()
         elif "DB" in issue:
             pass
+
+    # ── Self-update path (gated by settings.auto_update) ───────────
+
+    @instrumented("agent.monitor.update_check")
+    async def check_for_update(self, current_version: str) -> tuple[bool, str | None] | None:
+        """Check GitHub for a new release.
+
+        The self-update path is only active when ``settings.auto_update``
+        is True (default: off — the owner must enable it explicitly).
+
+        Returns:
+            ``None`` when the self-update path is disabled.
+            ``(needed, latest_version)`` when enabled.
+        """
+        if not self.settings.auto_update:
+            logger.info("Update check skipped: self-update disabled (AUTO_UPDATE=false)")
+            return None
+        from nexus_ai_agent.agent.updater import AutoUpdater
+
+        return await AutoUpdater(current_version).check_for_update()
+
+    @instrumented("agent.monitor.update_apply")
+    async def perform_update(
+        self, current_version: str, approval: ApprovalSystem
+    ) -> tuple[bool, str]:
+        """Run the self-update (git pull + pip install) behind owner approval.
+
+        Only active when ``settings.auto_update`` is True (default: off).
+        """
+        if not self.settings.auto_update:
+            return False, "self-update is disabled (set AUTO_UPDATE=true to enable)"
+        from nexus_ai_agent.agent.updater import AutoUpdater
+
+        return await AutoUpdater(current_version).do_update(approval)

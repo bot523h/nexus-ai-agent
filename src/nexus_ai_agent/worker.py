@@ -30,7 +30,7 @@ def process_pdf_task(user_id: int, file_path: str, file_id: str) -> str:
     """Background task for PDF chunking and embedding."""
     from nexus_ai_agent.features.rag import AdvancedRAGEngine
 
-    async def _run():
+    async def _run() -> str:
         engine = AdvancedRAGEngine()
         # Mocking PDF extraction (should use a real PDF library in production)
         # For now, we assume file_path points to a text file or we just read it as text
@@ -50,7 +50,7 @@ def generate_story_task(user_id: int, text: str, output_path: str) -> str:
     """Background task for Pillow story rendering."""
     from nexus_ai_agent.features.story_gen import AIStoryGenerator
 
-    async def _run():
+    async def _run() -> str:
         gen = AIStoryGenerator()
         try:
             await gen.generate_story_image(text, output_path)
@@ -68,7 +68,7 @@ def nightly_channel_management() -> str:
 
     from nexus_ai_agent.features.channel_manager import ChannelManager
 
-    async def _run():
+    async def _run() -> str:
         bot = Bot(token=settings.telegram_bot_token)
         mgr = ChannelManager(bot)
         await mgr.run_nightly_tasks()

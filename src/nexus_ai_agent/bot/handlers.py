@@ -131,12 +131,20 @@ async def _reply(update: Update, text: str, **kwargs: Any) -> None:
 
 def _base_state(update: Update, text: str) -> NexusState:
     return {
-        "user_id": _user_id(update) or 0,
+        "thread_id": f"tg:{_chat_id(update)}",
         "chat_id": _chat_id(update),
-        "message": text,
-        "history": [],
-        "response": "",
+        "user_id": _user_id(update) or 0,
+        "correlation_id": "",
+        "messages": [{"role": "user", "content": text}],
+        "intent": "unknown",
+        "active_persona": "",
+        "current_task": None,
         "tool_results": [],
+        "memory_context": "",
+        "response": "",
+        "error": None,
+        "turn_count": 0,
+        "moderation_passed": True,
     }
 
 
@@ -148,7 +156,7 @@ def build_handlers(
     storage: Any,
 ) -> list[Any]:
     # ── Middleware & Utilities ────────────────────────────────────
-    auth = AuthMiddleware(db_session_factory)
+    auth = AuthMiddleware(settings.allowed_user_ids, settings.owner_telegram_id)
     presence_store = presence
     _ = storage  # placeholder for now
 
@@ -290,15 +298,19 @@ def build_handlers(
 
     # ── Phase 3: Games ─────────────────────────────────────────────
     async def quiz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user_id = _user_id(update) or 0
         quiz = QuizGame()
-        q = quiz.get_question()
+        q = quiz.get_question(user_id)
+        if q is None:
+            await _reply(update, "❓ No question available right now.")
+            return
         keyboard = [
             [InlineKeyboardButton(opt, callback_data=f"quiz_{i}")]
             for i, opt in enumerate(q["options"])
         ]
         await _reply(
             update,
-            f"❓ **Quiz Time!**\n\n{q['question']}",
+            f"❓ **Quiz Time!**\n\n{q['q']}",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="Markdown",
         )
@@ -354,7 +366,9 @@ def build_handlers(
         if not text:
             await _reply(update, "❌ Usage: /ai <your message>")
             return
-        result = await gemini_engine.generate(text)
+        user_id = _user_id(update) or 0
+        conv_id = f"tg:{_chat_id(update)}"
+        result = await gemini_engine.chat(text, conv_id=conv_id, user_id=user_id)
         await _reply(update, f"🤖 {result}")
 
     async def ask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -365,7 +379,8 @@ def build_handlers(
             await _reply(update, "❌ Gemini AI not configured.")
             return
         text = " ".join(context.args) if context.args else ""
-        result = await gemini_engine.generate(f"Write code for: {text}")
+        user_id = _user_id(update) or 0
+        result = await gemini_engine.code(text, user_id=user_id)
         await _reply(update, f"👨‍💻 Code:\n\n```python\n{result}\n```", parse_mode="Markdown")
 
     async def ai_translate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -373,7 +388,8 @@ def build_handlers(
             await _reply(update, "❌ Gemini AI not configured.")
             return
         text = " ".join(context.args) if context.args else ""
-        result = await gemini_engine.generate(f"Translate this to Persian: {text}")
+        user_id = _user_id(update) or 0
+        result = await gemini_engine.translate(text, target_lang="Persian", user_id=user_id)
         await _reply(update, f"🌐 {result}")
 
     async def vision_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -838,13 +854,11 @@ def build_handlers(
             await _reply(update, response)
             result = {"intent": f"agent:{active_agent.name}", "response": response}
         else:
-            from nexus_ai_agent.orchestration.graph import graph as _graph
-
             state = _base_state(update, update.message.text)
             state["correlation_id"] = correlation_id
             state["intent"] = "unknown"
 
-            result = await _graph.ainvoke(state, config={"configurable": {"thread_id": thread_id}})
+            result = await graph.ainvoke(state, config={"configurable": {"thread_id": thread_id}})
             await _reply(update, result.get("response") or "")
 
         logger.info(
@@ -1074,8 +1088,10 @@ def build_handlers(
             await _reply(update, "⛔ Access denied")
             return
         chat_id = _chat_id(update)
-        result = await ViralEngine.generate_and_send(chat_id, context.bot)
-        await _reply(update, result)
+        text = ViralEngine.generate_post()
+        score = ViralEngine.calculate_viral_score(text)
+        post_id = ViralEngine.save_post(chat_id, text, score)
+        await _reply(update, f"🔥 Viral post saved (id={post_id}, score={score:.1f}):\n\n{text}")
 
     async def viral_preview_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Preview next viral post."""
@@ -1126,7 +1142,9 @@ def build_handlers(
             await _reply(update, "⛔ Access denied")
             return
         chat_id = _chat_id(update)
-        ModerationEngine.set_config(chat_id, enabled=True)
+        ModerationEngine.set_config(
+            chat_id, anti_spam=True, anti_flood=True, link_filter=True, profanity_filter=True
+        )
         await _reply(update, "🛡️ Smart Moderation enabled.")
 
     async def mod_off_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1135,7 +1153,9 @@ def build_handlers(
             await _reply(update, "⛔ Access denied")
             return
         chat_id = _chat_id(update)
-        ModerationEngine.set_config(chat_id, enabled=False)
+        ModerationEngine.set_config(
+            chat_id, anti_spam=False, anti_flood=False, link_filter=False, profanity_filter=False
+        )
         await _reply(update, "🛡️ Smart Moderation disabled.")
 
     async def mod_config_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1443,9 +1463,11 @@ async def start_referral_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def pdf_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-
+    if not update.message:
+        return
+    message = update.message
     user_id = _user_id(update) or 0
-    doc = update.message.document
+    doc = message.document
     if not doc:
         return
 
@@ -1503,11 +1525,11 @@ async def story_style_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await _reply(update, "🎨 استایل فعلی: Motivational\nگزینه‌ها: Motivational | Romantic | Success")
 
 
-def storage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def storage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     pass
 
 
-def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     pass
 
 

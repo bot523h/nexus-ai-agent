@@ -22,10 +22,19 @@ class RateLimiter:
 
 
 class AuthMiddleware:
-    def __init__(self, allowed_user_ids: list[int]):
-        self.allowed_user_ids = allowed_user_ids
+    """Allow-list auth with deny-by-default.
+
+    - The owner (``owner_telegram_id`` != 0) is always allowed.
+    - ``allowed_user_ids`` adds extra allowed users on top of the owner.
+    - Empty list + owner configured → only the owner is allowed.
+    - Empty list + no owner configured → nobody is allowed.
+    """
+
+    def __init__(self, allowed_user_ids: list[int], owner_telegram_id: int = 0):
+        self.allowed_user_ids = list(allowed_user_ids)
+        self.owner_telegram_id = owner_telegram_id
 
     def is_allowed(self, user_id: int) -> bool:
-        if not self.allowed_user_ids:
+        if self.owner_telegram_id and user_id == self.owner_telegram_id:
             return True
         return user_id in self.allowed_user_ids

@@ -5,6 +5,102 @@ All notable changes to NEXUS AI Agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.1] — 2026-09-17
+
+### Security — Phase 0
+- **SSRF protection** for URL summarization (`core/ssrf_guard.py`):
+  https-only fetching, pre-fetch DNS validation of every resolved
+  address, and connect-time re-validation on each connection including
+  redirects (closes the DNS-rebinding TOCTOU window by connecting to the
+  validated IP literal); 127/8, 10/8, 172.16/12, 192.168/16,
+  169.254/16 (cloud metadata), 0/8, ::1, fe80::/10, fc00::/7 blocked
+- **Shell tool sandboxed to the workspace** (`tools/system_shell.py`):
+  commands run with `cwd=workspace_root`; path arguments of ls/cat/
+  grep/find are containment-checked (absolute paths, `..`, symlink
+  escapes rejected); `find -exec/-execdir/-delete/-ok/-okdir` blocked;
+  file-writing find flags (`-fprintf`, `-fprint`, `-fprint0`, `-fls`,
+  `-newer`) restricted to the workspace
+- **AuthMiddleware deny-by-default** (`bot/middleware.py`): only the
+  owner and explicitly allowed users get in; an empty configuration no
+  longer allows everyone (previously fail-open)
+- **Self-update gated**: `/update` is owner-only and requires an
+  explicit owner approval (`PendingApproval`, 30-minute window); fixed
+  the broken `pip install -r requirements.txt` (file never existed) to
+  `pip install .` (matches the Dockerfile)
+- New `settings.auto_update` (default **off**): the self-update
+  check/apply path (now in `agent/self_monitor.py`) only runs when the
+  owner explicitly enables it via `AUTO_UPDATE=true`
+
+### Bug fixes (surfaced by mypy strict)
+- `/quiz`, `/code`, `/translate`, `/viral_now` called methods that do not
+  exist (AttributeError/TypeError at runtime) — repaired and regression
+  tested
+- `bot/handlers.py`: `_base_state` now builds a valid `NexusState` for
+  the LangGraph invocation; `on_message` uses the compiled graph
+  instance instead of a non-existent module attribute
+- `api/dashboard.py`: async session API (`execute/scalar_one`) and
+  counts on columns that actually exist
+- `None`-guards for `update.message` / `effective_user` /
+  `callback_query.from_user` across bot handler modules
+- Missing dependencies declared: `duckduckgo-search`, `fastapi`;
+  `httpx` pinned (dependency on a private API in `core/ssrf_guard.py`)
+
+### Maintenance
+- Quality gates green: `ruff check` + `ruff format` clean,
+  `mypy strict` clean (46 pre-existing errors fixed), 96 passing tests
+- `build/` artifacts untracked and added to `.gitignore`
+- `VERSION` and `pyproject.toml` aligned to 3.4.1
+
+## [3.4.0] — 2026-09-17
+
+### Added — catch-up entry for the work shipped since 2.0.0
+
+The changelog was last updated at 2.0.0; this entry documents the
+features that were implemented afterwards without being recorded.
+
+**Multi-agent framework (`agents/`)**
+- Persona agents `gemma_agent.py`, `phi_agent.py`, `qwen_agent.py` with
+  distinct system prompts (note: they share one LLM provider instance —
+  the difference is personality, not model)
+- Core roles: `chat_agent.py`, `planner_agent.py`, `executor_agent.py`
+- `agents/store/` — user-selectable specialized agents with per-user
+  activation state (`/agents`, `/myagent`, `/agent_stop`)
+
+**LangGraph orchestration (`orchestration/`)**
+- `graph.py` — intent router → memory reader → persona selection →
+  planner/executor → memory writer, compiled against a SQLite
+  checkpointer (`storage/langgraph_checkpoint.py`)
+- `router.py` — intent classification and persona routing
+- `state.py` — shared `NexusState` graph state
+
+**Tool system (`tools/`) + approvals (`agent/`)**
+- `ToolRegistry` with risk levels (safe/guarded/blocked) and policy
+  confirmation
+- Sandboxed file tools (read/write/list) and an allowlisted shell tool
+  (disabled by default; enable with `NEXUS_ENABLE_SHELL`)
+- `agent/approval.py` — persistent `PendingApproval` workflow with owner
+  notifications and `/approve` / `/reject` handlers
+
+**Self-monitoring (`agent/self_monitor.py`, `bot/monitor_handlers.py`)**
+- RAM/disk/uptime health checks with owner alerts (`/health`)
+- Instrumented observability hooks across the pipeline
+
+**Memory & knowledge**
+- `memory/short_term.py`, `memory/long_term.py` (SQLite + sqlite-vec)
+- `knowledge/` — web and Wikipedia trainers with a cached knowledge
+  store (`/learn`, `/search`, `/wiki`)
+
+**API & background workers**
+- FastAPI dashboard (`api/`) with stats endpoints
+- Celery worker (`worker.py`) for story rendering, PDF processing and
+  nightly channel maintenance
+
+**LLM layer (`llm/`)**
+- Provider abstraction with Gemini, local llama.cpp, fallback and
+  fake (test) providers
+- Resilient HTTP client with retry and circuit breaker
+  (`core/http_client.py`)
+
 ## [2.0.0] — 2025-06-12
 
 ### Added — Global Expansion Release 🌍🚀

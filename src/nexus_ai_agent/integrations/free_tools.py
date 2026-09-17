@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from duckduckgo_search import DDGS  # type: ignore
+from duckduckgo_search import DDGS
 
 from nexus_ai_agent.core.http_client import get_http_client
 from nexus_ai_agent.core.instrumentation import instrumented

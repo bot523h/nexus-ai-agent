@@ -5,7 +5,7 @@ import os
 from typing import Any
 
 import chromadb
-from chromadb.utils import embedding_functions  # type: ignore[import-not-found]
+from chromadb.utils import embedding_functions
 from flashrank import Ranker, RerankRequest
 
 from nexus_ai_agent.config.settings import get_settings
@@ -39,8 +39,11 @@ class AdvancedRAGEngine:
     def _get_collection(self, user_id: int) -> Any:
         """Get or create a unique collection for each user."""
         collection_name = f"user_docs_{user_id}"
+        # chromadb 1.x typing does not recognize SentenceTransformerEmbeddingFunction
+        # as conforming to its EmbeddingFunction protocol (upstream typing gap).
         return self.client.get_or_create_collection(
-            name=collection_name, embedding_function=self.embedding_fn
+            name=collection_name,
+            embedding_function=self.embedding_fn,  # type: ignore[arg-type]
         )
 
     async def add_document(self, user_id: int, text: str, metadata: dict[str, Any]) -> None:
