@@ -26,8 +26,9 @@ def migrate(
     """Apply database migrations (alembic upgrade head).
 
     Backs both backends automatically: NEXUS_DATABASE_URL (PostgreSQL/Neon)
-    wins; otherwise the configured SQLite file is migrated.  Existing
-    un-migrated databases keep working via the legacy create_all fallback.
+    wins; otherwise the configured SQLite file is migrated.  A pre-Alembic
+    SQLite file is adopted automatically (D6); a pre-Alembic *PostgreSQL*
+    database fails fast and points at `nexus adopt-pg` (D10).
     """
     from nexus_ai_agent.storage.migrations import run_migrations
 
@@ -41,6 +42,125 @@ def migrate(
     else:
         run_migrations()
         typer.echo("✓ Database migrated to head")
+
+
+@app.command(name="adopt-pg")
+def adopt_pg(
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Inspect and report only; change nothing.",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip the confirmation prompt.",
+    ),
+) -> None:
+    """Adopt a legacy PostgreSQL database into Alembic management (D10).
+
+    Use this when NEXUS_DATABASE_URL points at a database that already holds
+    NEXUS tables but has no `alembic_version` — typically one created by the
+    pre-D7 create_all stopgap, or restored from an older dump.  Existing rows
+    are preserved: missing tables are created and the database is stamped at
+    head, so the initial revision is never replayed over existing tables.
+    """
+    from nexus_ai_agent.storage.adopt_pg import (
+        ACTION_ADOPT,
+        ACTION_NONE,
+        ACTION_UPGRADE,
+        PgAdoptionError,
+        adopt_postgres,
+        redact_url,
+    )
+
+    try:
+        preview = adopt_postgres(dry_run=True)
+    except PgAdoptionError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"Database : {redact_url(preview.url)}")
+    typer.echo(f"State    : {preview.state.value}")
+    typer.echo(f"Tables   : {len(preview.tables_before)} present")
+    if preview.extra:
+        typer.echo(f"Extra    : {len(preview.extra)} table(s) not model-defined (kept)")
+    typer.echo(f"Planned  : {preview.action}")
+
+    if preview.action == ACTION_NONE:
+        typer.echo("✓ Already Alembic-managed — nothing to do.")
+        return
+    if dry_run:
+        typer.echo("✓ Dry run — nothing was changed. Re-run without --dry-run to apply.")
+        return
+
+    if preview.action == ACTION_ADOPT:
+        typer.echo(
+            "This will CREATE any missing table and STAMP the database at head. "
+            "No table is dropped and no row is deleted."
+        )
+    elif preview.action == ACTION_UPGRADE:
+        typer.echo("The database is empty; this will run `alembic upgrade head`.")
+
+    if not yes and not typer.confirm("Proceed?"):
+        typer.echo("Aborted — nothing was changed.")
+        raise typer.Exit(code=1)
+
+    try:
+        result = adopt_postgres(dry_run=False)
+    except PgAdoptionError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"✓ Adopted ({result.action}); stamped at {result.stamped_revision}")
+
+
+continuum_app = typer.Typer(help="Cross-turn project state (.nexus/continuum.json)")
+app.add_typer(continuum_app, name="continuum")
+
+
+@continuum_app.command("show")
+def continuum_show(
+    path: str | None = typer.Option(None, "--path", help="Snapshot path override."),
+) -> None:
+    """Print the committed continuum snapshot as JSON."""
+    import json
+
+    from nexus_ai_agent.continuum import ContinuumError, load
+
+    try:
+        snapshot = load(Path(path) if path else None)
+    except ContinuumError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(snapshot.to_dict(), indent=2, sort_keys=True, ensure_ascii=False))
+
+
+@continuum_app.command("verify")
+def continuum_verify(
+    path: str | None = typer.Option(None, "--path", help="Snapshot path override."),
+    expected_tests: int | None = typer.Option(
+        None,
+        "--expected-tests",
+        help="Also assert the collected test count matches the snapshot.",
+    ),
+) -> None:
+    """Check the snapshot against the working tree; exit 1 on any problem."""
+    from nexus_ai_agent.continuum import verify
+
+    report = verify(
+        path=Path(path) if path else None,
+        actual_test_count=expected_tests,
+    )
+    for key, value in report.checks.items():
+        typer.echo(f"{key}: {value}")
+    if report.ok:
+        typer.echo("✓ Continuum snapshot is consistent with this checkout.")
+        return
+    for problem in report.problems:
+        typer.echo(f"✗ {problem}", err=True)
+    raise typer.Exit(code=1)
 
 
 @app.command()
