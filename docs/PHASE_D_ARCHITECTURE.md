@@ -26,8 +26,17 @@ added PostgreSQL (Neon) as a first-class backend.
 | D10 | `e7f944d` | Legacy PostgreSQL adoption (`nexus adopt-pg`) + fail-fast on un-stamped databases | `test_adopt_pg.py`, `test_fail_fast_unstamped.py` |
 | D10 fix | `a875e28` | Concurrent `create_all` converges instead of colliding | `test_create_all_race.py`, `test_migrate_race_condition.py` |
 
-Test count: **179** at `f448e45` → **277 collected / 275 passing + 2 skipped** at
-Phase D exit (`make test`).
+Test count: **179** at `f448e45` → **278 collected, 278 passing** at Phase D exit
+(`make test`).
+
+### Verification beyond the unit suite
+
+D10 was additionally driven against a **real PostgreSQL server** (not the SQLite
+stand-in used in CI-free unit tests): a database built the C1 way
+(`create_all`, no stamp, one row of data) was introspected as `adoptable`,
+refused by the fail-fast guard, left untouched by `--dry-run`, adopted with the
+row intact and stamped at `2a1c4b6d8e9f`, idempotent on a second run, and
+accepted by the guard afterwards. Real Neon remains the D9 pending item.
 
 ---
 
