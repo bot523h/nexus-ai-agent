@@ -23,6 +23,10 @@ class Settings(BaseSettings):
         default="data/app.sqlite",
         validation_alias=AliasChoices("NEXUS_DB_PATH", "DB_PATH"),
     )
+    database_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("NEXUS_DATABASE_URL", "DATABASE_URL"),
+    )
     checkpoint_path: str = Field(
         default="data/langgraph.sqlite",
         validation_alias=AliasChoices("NEXUS_CHECKPOINT_PATH", "CHECKPOINT_PATH"),
