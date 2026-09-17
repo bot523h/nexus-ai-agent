@@ -5,7 +5,13 @@ All notable changes to NEXUS AI Agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.0-D] — 2026-09-17
+## [3.5.0] — 2026-09-17
+
+> Released as **v3.5.0**.  An earlier tag `v0.2.0-D` was cut on the same work
+> while this entry was still numbered `0.2.0-D`; the project line is
+> 3.x (`VERSION` and `pyproject.toml` were 3.4.1, and tags run v1.2.0 → v3.3.0),
+> so a 0.2.0 tag sorted three major versions backwards.  The tag is left in
+> place — tags are never rewritten — and v3.5.0 supersedes it.
 
 ### Added
 - Alembic-based schema management end-to-end (D1–D5)
@@ -17,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Postgres adoption / fail-fast seam (`storage/adopt_pg.py`, D10)
 - Continuum snapshot (`nexus continuum show|verify`, `.nexus/continuum.json`) for
   turn-to-turn state recovery
+- Cross-host safety for concurrent schema creation: `create_all_metadata`
+  retries a create-conflict, complementing `migration_lock()` (which is a local
+  `fcntl.flock` file and therefore cannot see a second host)
 
 ### Changed
 - PostgreSQL `create_all` stopgap retired (D7); Alembic is the single source
@@ -29,6 +38,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preserving user data and avoiding the initial-revision `CREATE TABLE` clash
 - Un-stamped PostgreSQL with schema drift now fails fast with an actionable
   message instead of a raw DBAPI error (D10)
+- **`nexus migrate` now consults the D10 decision matrix too.** `prepare_postgres`
+  guarded the `get_session` path, but `run_migrations` went straight to
+  `command.upgrade`, so an un-stamped Postgres still died there with a bare
+  `asyncpg.DuplicateTableError: relation "adcampaign" already exists` that never
+  mentioned `nexus adopt-pg`. Reproduced against a real PostgreSQL server; a
+  zero-drift database is now adopted (stamped at head) and drift is refused with
+  the actionable message, before Alembic writes anything.
+- Concurrent `create_all` converges instead of colliding. `MetaData.create_all`
+  runs `checkfirst=True`, so two processes both see "does not exist", both emit
+  the DDL, and the loser died on `table … already exists` — reproduced with four
+  concurrent `nexus migrate` subprocesses where all four failed.
+- `VERSION` and `pyproject.toml` moved 3.4.1 → 3.5.0 to match this release.
 
 ### Known limitations
 - Real Neon connectivity test (D9) pending a user-supplied `NEXUS_DATABASE_URL`;
