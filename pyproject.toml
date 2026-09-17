@@ -41,7 +41,6 @@ dependencies = [
     "pillow>=10.0",
     "beautifulsoup4>=4.12",
     "psutil>=5.9",
-    "cryptography>=42.0",
   ]
 
 [project.scripts]
