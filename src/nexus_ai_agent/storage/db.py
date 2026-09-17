@@ -68,6 +68,25 @@ def to_asyncpg_url(url: str) -> str:
     return urlunsplit(("postgresql+asyncpg", parts.netloc, parts.path, parts.query, parts.fragment))
 
 
+def resolve_migration_url() -> str:
+    """Resolve the URL Alembic should migrate (D3).
+
+    Mirrors the runtime backend selection with the exact same priority as
+    :func:`resolve_database_url`: ``NEXUS_DATABASE_URL`` (PostgreSQL/Neon,
+    returned in asyncpg form via :func:`to_asyncpg_url`) wins; otherwise the
+    configured SQLite path is returned as a ``sqlite+aiosqlite://`` URL.  The
+    C1 helpers are reused as-is — no URL logic is duplicated here.
+    """
+    database_url = resolve_database_url()
+    if database_url is not None:
+        return to_asyncpg_url(database_url)
+
+    from nexus_ai_agent.config.settings import get_settings
+
+    db_path = Path(get_settings().db_path).expanduser()
+    return f"sqlite+aiosqlite:///{db_path}"
+
+
 def resolve_database_url() -> str | None:
     """Return the PostgreSQL URL configured via the environment, or ``None``.
 
