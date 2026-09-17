@@ -1,0 +1,14 @@
+{
+  "approval": "ARCH_BASELINE_APPROVED",
+  "files": [
+    "src/nexus_ai_agent/domain/glossary.py",
+    "src/nexus_ai_agent/domain/policies/retention.py",
+    "src/nexus_ai_agent/application/ports/llm.py",
+    "src/nexus_ai_agent/application/ports/conversation_store.py",
+    "src/nexus_ai_agent/application/ports/checkpoint_lifecycle.py",
+    "src/nexus_ai_agent/application/ports/object_storage.py",
+    "src/nexus_ai_agent/application/ports/job_queue.py"
+  ],
+  "forbidden_imports": ["langgraph", "sqlmodel", "telegram", "adapters"],
+  "baseline_version": 1
+}

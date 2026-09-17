@@ -1,17 +1,17 @@
-"""Canonical Nexus data vocabulary and source-of-truth map.
+"""Frozen Nexus vocabulary and source-of-truth contract.
 
-Conversation is the product-level aggregate. A thread is one resumable
-workflow branch. Messages are the durable conversation history; checkpoints
-are disposable workflow state and never the source of truth for user-visible
-history. Attachments are object-storage references owned by the conversation.
+Messages are the durable history. Checkpoints are disposable workflow
+continuation state. A thread is the v1 unit of deletion; surgery on one
+checkpoint is explicitly deferred because LangGraph stores delta lineage.
 """
 
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Final, TypeAlias
 
 
-class Entity(StrEnum):
+class EntityType(StrEnum):
     CONVERSATION = "conversation"
     THREAD = "thread"
     MESSAGE = "message"
@@ -20,14 +20,15 @@ class Entity(StrEnum):
     ATTACHMENT = "attachment"
 
 
-SOURCE_OF_TRUTH: dict[Entity, str] = {
-    Entity.CONVERSATION: "application conversation store",
-    Entity.THREAD: "application conversation store",
-    Entity.MESSAGE: "message persistence; the durable user-visible history",
-    Entity.CHECKPOINT: "LangGraph checkpointer; resumable workflow state only",
-    Entity.TOOL_STATE: "workflow state owned by its tool integration",
-    Entity.ATTACHMENT: "object storage plus attachment metadata",
+SourceOfTruth: TypeAlias = str
+SOURCE_OF_TRUTH: Final[dict[EntityType, SourceOfTruth]] = {
+    EntityType.CONVERSATION: "application conversation store",
+    EntityType.THREAD: "application conversation store",
+    EntityType.MESSAGE: "message persistence; durable user-visible history",
+    EntityType.CHECKPOINT: "LangGraph checkpointer; workflow continuation state only",
+    EntityType.TOOL_STATE: "tool integration owning the state",
+    EntityType.ATTACHMENT: "object storage plus attachment metadata",
 }
 
-# Per-checkpoint deletion is intentionally not part of the v1 contract.
-POST_V1_CHECKPOINT_SURGERY = True
+THREAD_DELETE_UNIT: Final[EntityType] = EntityType.THREAD
+POST_V1_CHECKPOINT_DELETION: Final[str] = "POST_V1"

@@ -1,11 +1,13 @@
-"""Fitness tests for the contract-freeze architecture boundaries."""
+"""Frozen import-boundary fitness tests for Stage 0."""
 
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
+BASELINE = ROOT / "tests/architecture/legacy_baseline.json"
 
 
 def _imports(path: Path) -> set[str]:
@@ -19,14 +21,26 @@ def _imports(path: Path) -> set[str]:
     return names
 
 
-def test_domain_is_framework_free() -> None:
-    forbidden = {"langgraph", "sqlmodel", "telegram"}
-    domain = ROOT / "src/nexus_ai_agent/domain"
-    imported = set().union(*(_imports(path) for path in domain.rglob("*.py")))
-    assert not imported & forbidden
+def test_approved_baseline_is_present_and_frozen() -> None:
+    baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
+    assert baseline["approval"] == "ARCH_BASELINE_APPROVED"
+    assert baseline["baseline_version"] == 1
+    assert baseline["files"]
+    assert all((ROOT / path).is_file() for path in baseline["files"])
 
 
-def test_ports_do_not_import_adapters() -> None:
-    ports = ROOT / "src/nexus_ai_agent/application/ports"
-    imported = set().union(*(_imports(path) for path in ports.rglob("*.py")))
-    assert "adapters" not in imported
+def test_domain_and_ports_respect_baseline() -> None:
+    baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
+    forbidden = set(baseline["forbidden_imports"])
+    for relative in baseline["files"]:
+        imported = _imports(ROOT / relative)
+        assert not imported & forbidden, f"forbidden import in {relative}"
+
+
+def test_new_boundary_files_do_not_import_adapters() -> None:
+    paths = [
+        *(ROOT / "src/nexus_ai_agent/domain").rglob("*.py"),
+        *(ROOT / "src/nexus_ai_agent/application/ports").rglob("*.py"),
+    ]
+    for path in paths:
+        assert "adapters" not in _imports(path), path
