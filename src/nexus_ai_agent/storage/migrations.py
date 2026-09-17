@@ -125,15 +125,50 @@ def _adopt_legacy_sqlite(db_path: str) -> None:
     log.info("adopted legacy SQLite database and stamped it at head: %s", db_path)
 
 
+def _prepare_postgres_sync() -> str:
+    """Apply the D10 decision matrix to PostgreSQL from a sync context.
+
+    ``prepare_postgres`` already guards the ``get_session`` path, but it is a
+    coroutine and it calls *back* into :func:`run_migrations` — so
+    ``run_migrations`` cannot delegate to it without recursing.  This is the
+    same decision matrix expressed for sync callers, using the same two
+    primitives: :func:`~nexus_ai_agent.storage.adopt_pg.inspect_postgres` and
+    :func:`~nexus_ai_agent.storage.adopt_pg.decide`.
+
+    Returns the decided action.  Raises ``RuntimeError`` on drift, with the
+    actionable message, *before* Alembic writes anything.
+    """
+    from nexus_ai_agent.storage.adopt_pg import (
+        ACTION_ADOPT,
+        ACTION_FAIL,
+        decide,
+        drift_error,
+        inspect_postgres,
+        stamp_head,
+    )
+
+    report = inspect_postgres(resolve_migration_url())
+    action = decide(report)
+    if action == ACTION_FAIL:
+        raise drift_error(report)
+    if action == ACTION_ADOPT:
+        stamp_head()
+        log.info("adopted legacy PostgreSQL database and stamped it at head")
+    return action
+
+
 def run_migrations() -> None:
     """Apply all pending Alembic revisions (``upgrade head``).
 
     Backend-agnostic: the URL comes from :func:`resolve_migration_url`, so the
     same call upgrades a local SQLite file or a Neon Postgres database.
 
-    A pre-Alembic SQLite file is adopted first (create_all + stamp) instead of
-    being overwritten by the initial revision, which keeps legacy installs and
-    their data intact.
+    A pre-Alembic database is adopted first instead of being overwritten by the
+    initial revision, which keeps legacy installs and their data intact.  For
+    SQLite that means create_all + stamp (D6); for PostgreSQL the D10 decision
+    matrix is consulted, so an un-stamped database is adopted when it has zero
+    drift and refused with an actionable message when it does not — rather than
+    dying inside ``op.create_table`` with a bare ``DuplicateTableError``.
     """
     with migration_lock():
         if resolve_database_url() is None:
@@ -143,6 +178,8 @@ def run_migrations() -> None:
             if decide_sqlite_bootstrap(db_path) == "create_all":
                 _adopt_legacy_sqlite(db_path)
                 return
+        else:
+            _prepare_postgres_sync()
         command.upgrade(build_alembic_config(), "head")
 
 

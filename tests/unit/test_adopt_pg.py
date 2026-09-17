@@ -62,6 +62,6 @@ class TestFailFastError:
     def test_drift_error_message_is_actionable(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import nexus_ai_agent.storage.adopt_pg as mod
 
-        err = mod._drift_error(_report(stamped=False, tables=3, missing=["chat"], extra=[]))
+        err = mod.drift_error(_report(stamped=False, tables=3, missing=["chat"], extra=[]))
         assert "nexus adopt-pg --dry-run" in str(err)
         assert "chat" in str(err)

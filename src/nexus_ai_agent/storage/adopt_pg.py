@@ -123,7 +123,7 @@ def decide(report: PostgresAdoptionReport) -> str:
     return ACTION_ADOPT
 
 
-def _drift_error(report: PostgresAdoptionReport) -> RuntimeError:
+def drift_error(report: PostgresAdoptionReport) -> RuntimeError:
     return RuntimeError(
         "Detected an un-stamped PostgreSQL database with schema drift "
         f"(missing={report.missing_tables}, extra={report.extra_tables}). "
@@ -132,8 +132,14 @@ def _drift_error(report: PostgresAdoptionReport) -> RuntimeError:
     )
 
 
-def _stamp_head_sync() -> None:
-    """Stamp the database at ``head`` without replaying any migration."""
+def stamp_head() -> None:
+    """Stamp the database at ``head`` without replaying any migration.
+
+    Synchronous: Alembic drives its own event loop in ``migrations/env.py``, so
+    callers that already own a loop must off-load this to a worker thread (see
+    :func:`prepare_postgres`).  Sync callers such as ``run_migrations`` can call
+    it directly.
+    """
     from alembic import command
 
     from nexus_ai_agent.storage.migrations import build_alembic_config
@@ -154,9 +160,9 @@ async def prepare_postgres(url: str) -> PostgresAdoptionReport:
     report = await _inspect(url)
     action = decide(report)
     if action == ACTION_FAIL:
-        raise _drift_error(report)
+        raise drift_error(report)
     if action == ACTION_ADOPT:
-        await asyncio.to_thread(_stamp_head_sync)
+        await asyncio.to_thread(stamp_head)
         report.action = ACTION_ADOPT
         log.info("Adopted PostgreSQL database at head (%s tables, zero drift)", report.table_count)
         return report
@@ -178,9 +184,9 @@ def adopt_postgres(url: str) -> PostgresAdoptionReport:
     report = inspect_postgres(url)
     action = decide(report)
     if action == ACTION_FAIL:
-        raise _drift_error(report)
+        raise drift_error(report)
     if action == ACTION_ADOPT:
-        _stamp_head_sync()
+        stamp_head()
         report.action = ACTION_ADOPT
         log.info("Adopted PostgreSQL database at head (%s tables, zero drift)", report.table_count)
         return report
