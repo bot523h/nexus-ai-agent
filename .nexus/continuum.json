@@ -10,6 +10,6 @@
     {"id": "D7/pgvector", "status": "reverted", "reason": "migration must not require pgvector"},
     {"id": "D8", "status": "reverted", "reason": "unused token encryption has no consumer"}
   ],
-  "test_count_expected": 179,
+  "test_count_expected": 296,
   "env_fingerprint": {"python": "3.11.2", "alembic": "1.20.0", "sqlalchemy": "2.0.54"}
 }
