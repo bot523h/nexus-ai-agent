@@ -46,3 +46,13 @@ def test_touch_coalescer_keeps_latest_timestamp():
     coalescer.add("t", datetime.fromtimestamp(now.timestamp() + 1))
     assert list(coalescer.pending) == ["t"]
     assert coalescer.pending["t"].timestamp() == now.timestamp() + 1
+
+
+@pytest.mark.asyncio
+async def test_kill_switch_skips_lifecycle_writes():
+    lifecycle = Lifecycle()
+    saver = LifecycleRecordingSaver(FakeSaver(), lifecycle, enabled=False)
+    async with access_context("user"):
+        saver.get_tuple({"configurable": {"thread_id": "disabled"}})
+    await saver.flush()
+    assert lifecycle.touches == []

@@ -124,7 +124,7 @@ class LifecycleRecordingSaver:
             )
 
     def _touch(self, config: Any) -> None:
-        if nexus_access_context.get() != "user":
+        if not self.enabled or nexus_access_context.get() != "user":
             return
         thread_id = _thread_id(config)
         if thread_id:
