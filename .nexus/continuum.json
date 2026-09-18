@@ -1,14 +1,15 @@
 {
-  "schema_version": 1,
-  "phase": "D",
-  "phase_status": "complete",
-  "last_good_commit": "b594d4afe07c06b096afb4eba9f8b90429c79d2f",
-  "last_good_branch": "arena/01a0b0bf-nexus-ai-agent",
-  "test_count_expected": 225,
-  "env_fingerprint": {
-    "python": "3.11.2",
-    "alembic": "1.20.0",
-    "sqlalchemy": "2.0.54"
-  },
-  "next_phase": "E"
+  "schema_version": 2,
+  "plan": "C2",
+  "step": "c42cccbe32e3c6642e392f69015d9b0af03c66fb",
+  "next": "post-revert verification",
+  "ledger": [
+    {"id": "C1", "commit": "c81f299", "status": "complete"},
+    {"id": "C2", "status": "complete", "scope": "D1-D10 except reverted pgvector in D7 and all of D8"},
+    {"id": "tooling", "status": "approved", "scope": "bootstrap scripts and continuum"},
+    {"id": "D7/pgvector", "status": "reverted", "reason": "migration must not require pgvector"},
+    {"id": "D8", "status": "reverted", "reason": "unused token encryption has no consumer"}
+  ],
+  "test_count_expected": 179,
+  "env_fingerprint": {"python": "3.11.2", "alembic": "1.20.0", "sqlalchemy": "2.0.54"}
 }
