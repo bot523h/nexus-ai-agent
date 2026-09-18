@@ -1,4 +1,4 @@
-# ROADMAP_STATUS — NEXUS AI agent (as of 2026-09-18)
+# ROADMAP_STATUS — NEXUS AI agent (as of 2026-09-18, Phase 3)
 
 ## Active workstream: checkpoint lifecycle (PR1/PR2)
 
@@ -9,10 +9,11 @@ Header: **No hidden migration. No hidden mutation. No implicit repair.**
 | Phase D ("Leviathan") | Alembic schema management, Postgres/Neon support | MERGED to main (v3.5.0) | `c81f299` (C1) → `f9bcd83` (Alembic) → `f93cb16` (bootstrap) → `79b720d` (D5) → D10 |
 | Stage 0 | Frozen domain + port contracts (vocabulary, retention, journal state machine, 5 ports) | DONE on branch | `371926c`, `a145058` |
 | PR1 | Read-only SQLite checkpoint adapter contract (schema-v1 fingerprint, golden, lineage, POST_V1 delete guards) + lifecycle metadata store | DONE on branch (NOT merged to main) | `f8a08d4`, `88cdfdd`, `4a06ff2`, `ca615cd`, `6d953e4` |
-| PR2 C1 | hooks + context + reconciler + health gate + kill-switch | IN PROGRESS — hooks/context/kill-switch DONE (`f154848`, `6f21908`); reconciler, health gate, wiring, atexit flush MISSING | — |
-| PR2 C2 | inspect product slice (inspect-v1 contract) | IN PROGRESS — command exists (`08766ba`); `unknown_fields` + schema key MISSING | — |
-| PR2 C3 | O1 observability (redaction, structured logging, in-process registry, core schema fingerprint) | IN PROGRESS — redaction/registry/metrics snapshot DONE (`e67c3e0`); `core_schema_fingerprint` warning semantics MISSING | — |
-| PR2 C4 | Adversarial test hardening (8 remaining), golden safety, kill-switch + flush-shutdown tests | IN PROGRESS — golden + drift/missing-golden/connection-error/kill-switch tests DONE (`1430895`); remaining 8 + flush-shutdown MISSING | — |
+| PR2 C1 | hooks + context + reconciler + health gate + kill-switch | **DONE** — composition root + atexit, `reconcile` CLI (dry-run default), `purge_allowed`, health gate | `6d172f2` |
+| PR2 C2 | inspect product slice (inspect-v1 contract) | **DONE** — `schema="inspect-v1"`, sorted `unknown_fields`, real `would_free_bytes_estimate`, no touch | `dba1702` |
+| PR2 C3 | O1 observability (redaction, structured logging, in-process registry, core schema fingerprint) | **DONE** — `log_lifecycle_event` (redacted, fail-safe), `core_schema_fingerprint` (warning-only mismatch), process-wide registry in `metrics snapshot` | `35e0ba6` |
+| PR2 C4 | Adversarial test hardening (8 remaining), golden safety, kill-switch + flush-shutdown tests | **DONE** — `test_lifecycle_adversarial.py` (8 tests: boundaries, error containment, lost context, atexit flush, golden no-generate, introspective full delegate, CLI kill-switch, lock contention) | `fdef331` |
+| D1 | `make smoke` Makefile fix (`--input` → positional argument) | **DONE** — `make smoke` verified exit 0 | `02f8d18` |
 | POST_V1 | Per-checkpoint (delta-chain) deletion surgery | DEFERRED — guarded by `POST_V1_DELETE_MARKER` + architecture test | — |
 
 Rescue note (2026-09-18): the PR1/PR2 lineage existed only on
@@ -30,19 +31,21 @@ no work was lost. Working tree at rescue time was clean; no stashes.
 
 ## Continuum
 
-`.nexus/continuum.json` (schema v2) anchors the continuity state:
-`plan=C2`, ledger entries for C1/C2/tooling/D7pgvector/D8.
-`test_count_expected` is stale (179); measured 2026-09-18: **242 passed,
-1 skipped (PostgreSQL-required)**; will be refreshed with the measured value.
+`.nexus/continuum.json` (schema v2): `test_count_expected` refreshed to
+**296** on 2026-09-18 (was stale at 179); matches `pytest --collect-only -m
+"not slow"`.
 
-## Quality gates (measured 2026-09-18, `6f21908`)
+## Quality gates (measured 2026-09-18, `02f8d18`)
 
 | Gate | Result |
 |------|--------|
-| `make lint` | green — `All checks passed!`, 195 files formatted |
-| `make types` | green — `Success: no issues found in 134 source files` |
-| `make test` | green — `242 passed, 1 skipped in ~24s` (skip: PG service required, run by CI `migrate-postgres` job) |
-| `make smoke` | **broken** — Makefile passes `--input` but the CLI takes a positional argument (reproduced; fix pending) |
+| `make lint` | green — `All checks passed!`, 211 files formatted |
+| `make types` | green — `Success: no issues found in 140 source files` |
+| `make test` | green — **295 passed, 1 skipped in ~26s** (skip: PG service required, run by CI `migrate-postgres` job) |
+| `make smoke` | **fixed** — full graph via FakeLLMProvider, exit 0 |
+
+Baseline delta: 242 → 295 passed (+53), 1 skipped (unchanged, PG-only);
+mypy 134 → 140 files. No test was removed or weakened.
 
 CI (`.github/workflows/ci.yml`): two jobs — `test` (ruff/mypy/pytest, no
 service) and `migrate-postgres` (service container `pgvector/pgvector:pg16`,
