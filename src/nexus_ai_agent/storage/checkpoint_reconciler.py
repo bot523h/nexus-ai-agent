@@ -25,6 +25,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import psycopg
+
 from nexus_ai_agent.domain.policies.reconciler_policy import (
     anomaly_rate,
     orphan_block_until,
@@ -35,8 +37,8 @@ from nexus_ai_agent.infrastructure.observability.structured import (
     log_lifecycle_event,
 )
 from nexus_ai_agent.storage.checkpoint_adapter import (
+    CheckpointReadAdapter,
     CleanupDisabled,
-    SQLiteCheckpointAdapter,
 )
 from nexus_ai_agent.storage.checkpoint_fingerprint import (
     core_manifest_head as compute_core_manifest_head,
@@ -49,6 +51,10 @@ from nexus_ai_agent.storage.checkpoint_lifecycle_store import (
     SQLiteCheckpointLifecycleStore,
     cleanup_lock,
 )
+
+# Driver exceptions from either backend; a DB error during a scan is a
+# health-gate signal, never an unhandled crash (backend-agnostic since PR3).
+_DB_ERRORS = (sqlite3.Error, psycopg.Error)
 
 ORPHAN = "orphan_lifecycle"
 MISSING = "missing_lifecycle"
@@ -127,7 +133,7 @@ class CheckpointReconciler:
 
     def __init__(
         self,
-        adapter: SQLiteCheckpointAdapter,
+        adapter: CheckpointReadAdapter,
         store: SQLiteCheckpointLifecycleStore,
         *,
         golden_path: Path | str = DEFAULT_GOLDEN,
@@ -166,7 +172,7 @@ class CheckpointReconciler:
                 reason=error_field(exc),
             )
             return "disabled:fingerprint_mismatch"
-        except sqlite3.Error as exc:
+        except _DB_ERRORS as exc:
             # A connection error is NOT schema drift.
             return f"error:{type(exc).__name__}"
         return "match"
@@ -184,7 +190,7 @@ class CheckpointReconciler:
         scan_errors = 0
         try:
             threads = self._adapter.list_threads()
-        except sqlite3.Error as exc:
+        except _DB_ERRORS as exc:
             scan_errors += 1
             log_lifecycle_event(
                 logging.WARNING,
@@ -201,7 +207,7 @@ class CheckpointReconciler:
                     anomalies.append(
                         Anomaly(BROKEN_LINEAGE, thread_id, None, "lineage check failed")
                     )
-            except sqlite3.Error as exc:
+            except _DB_ERRORS as exc:
                 scan_errors += 1
                 log_lifecycle_event(
                     logging.WARNING,
@@ -332,7 +338,7 @@ class CheckpointReconciler:
                 # Unknown age is protected: recorded as created *now*.
                 self._store.upsert(CheckpointRecord(item.thread_id, item.checkpoint_id or "", now))
                 count += 1
-            except sqlite3.Error as exc:
+            except _DB_ERRORS as exc:
                 log_lifecycle_event(
                     logging.WARNING,
                     "reconcile backfill failed",
@@ -371,7 +377,7 @@ class CheckpointReconciler:
                 purged += 1
                 # Only the index row is removed; estimate its on-disk size.
                 freed += len(item.thread_id) + len(item.checkpoint_id) + 64
-            except sqlite3.Error as exc:
+            except _DB_ERRORS as exc:
                 log_lifecycle_event(
                     logging.WARNING,
                     "reconcile purge failed",

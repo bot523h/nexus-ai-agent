@@ -49,6 +49,8 @@ jobs:
       - run: pip install -e "."
       - run: nexus migrate
       - run: pytest -q tests/integration/test_postgres_create_all_race.py
+      # Shared read-only adapter contract, PG leg (incl. golden stability).
+      - run: pytest -q tests/integration/test_checkpoint_adapter_contract.py
       # idempotent re-run must be a no-op (revision already at head).
       - run: nexus migrate
       # Confirm the migration stamp on a real Postgres.

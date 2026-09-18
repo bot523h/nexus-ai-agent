@@ -12,7 +12,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Final, Protocol, runtime_checkable
 
 FINGERPRINT_ALGORITHM: Final[str] = "schema-v1"
 POST_V1_DELETE_MARKER: Final[str] = "POST_V1"
@@ -27,6 +27,41 @@ class CheckpointInfo:
     thread_id: str
     checkpoint_id: str
     parent_checkpoint_id: str | None
+
+
+@runtime_checkable
+class CheckpointReadAdapter(Protocol):
+    """Backend-agnostic read-only checkpoint adapter contract (PR3).
+
+    Satisfied by :class:`SQLiteCheckpointAdapter` and
+    :class:`~nexus_ai_agent.storage.checkpoint_pg_adapter.PostgresCheckpointAdapter`.
+    Everything is read-only; the two ``delete_*`` methods exist only as
+    POST_V1 guards that raise.
+    """
+
+    def close(self) -> None: ...
+
+    def list_threads(self) -> list[str]: ...
+
+    def list_checkpoints(self, thread_id: str) -> list[CheckpointInfo]: ...
+
+    def exists_checkpoint(self, thread_id: str, checkpoint_id: str) -> bool: ...
+
+    def estimate_thread_bytes(self, thread_id: str) -> int: ...
+
+    def get_blob_refs(self, thread_id: str) -> list[tuple[str, str]]: ...
+
+    def verify_lineage(self, thread_id: str) -> bool: ...
+
+    def delete_checkpoint(self, checkpoint_id: str) -> None: ...
+
+    def delete_thread(self, thread_id: str) -> None: ...
+
+    def schema_fingerprint(self) -> str: ...
+
+    def assert_golden(self, golden_path: str | Path) -> None: ...
+
+    def core_head(self) -> str | None: ...
 
 
 class SQLiteCheckpointAdapter:
