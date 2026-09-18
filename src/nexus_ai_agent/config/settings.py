@@ -31,11 +31,9 @@ class Settings(BaseSettings):
         default="data/langgraph.sqlite",
         validation_alias=AliasChoices("NEXUS_CHECKPOINT_PATH", "CHECKPOINT_PATH"),
     )
-    # Master secret for encrypting stored tokens (D8).  Keep this only in the
-    # environment, never in the database; losing it loses the tokens.
-    secret_key: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("NEXUS_SECRET_KEY", "SECRET_KEY"),
+    lifecycle_hooks_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("NEXUS_LIFECYCLE_HOOKS_ENABLED", "LIFECYCLE_HOOKS_ENABLED"),
     )
     vector_path: str = Field(
         default="data/vector.sqlite",
