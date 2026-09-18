@@ -269,12 +269,13 @@ def test_missing_golden_disables_apply_and_alerts(tmp_path: Path, caplog) -> Non
     db = _make_db(tmp_path)
     reconciler = CheckpointReconciler(*_open(db), golden_path=tmp_path / "does-not-exist.json")
 
-    with caplog.at_level("WARNING", logger="nexus_ai_agent.storage.checkpoint_reconciler"):
+    with caplog.at_level("WARNING", logger="nexus_ai_agent.lifecycle"):
         report = reconciler.run(apply=True, now=NOW)
 
     assert report.langgraph_schema == "disabled:missing_golden"
     assert report.applied is False
-    assert any("missing" in message for message in caplog.text.splitlines())
+    # The alert is a structured event on the lifecycle logger.
+    assert any("missing" in record.message for record in caplog.records)
     # No golden was auto-generated.
     assert not (tmp_path / "does-not-exist.json").exists()
 

@@ -20,8 +20,11 @@ from typing import Any
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from nexus_ai_agent.domain.policies.lifecycle_health import health_gate_ok
+from nexus_ai_agent.infrastructure.observability.structured import (
+    error_field,
+    log_lifecycle_event,
+)
 
-log = logging.getLogger(__name__)
 AccessContext = str
 nexus_access_context: ContextVar[AccessContext] = ContextVar(
     "nexus_access_context", default="system"
@@ -67,14 +70,19 @@ class TouchCoalescer:
                 continue
             try:
                 await lifecycle.touch_thread(thread_id, accessed_at=accessed_at)
-            except Exception:
-                log.warning(
-                    "lifecycle touch flush failed", extra={"operation": "touch"}, exc_info=True
+            except Exception as exc:
+                log_lifecycle_event(
+                    logging.WARNING,
+                    "lifecycle touch flush failed",
+                    operation="touch",
+                    error=error_field(exc),
                 )
         if dropped:
-            log.warning(
+            log_lifecycle_event(
+                logging.WARNING,
                 "lifecycle touches dropped after window expiry",
-                extra={"operation": "touch_drop", "dropped": dropped},
+                operation="touch_drop",
+                dropped=dropped,
             )
 
 
@@ -133,10 +141,14 @@ class LifecycleRecordingSaver(BaseCheckpointSaver):
         except RuntimeError:
             try:
                 asyncio.run(self.flush())
-            except Exception:
-                log.warning("lifecycle atexit flush failed", exc_info=True)
+            except Exception as exc:
+                log_lifecycle_event(
+                    logging.WARNING, "lifecycle atexit flush failed", error=error_field(exc)
+                )
         else:
-            log.warning("lifecycle flush deferred: event loop still running")
+            log_lifecycle_event(
+                logging.WARNING, "lifecycle flush deferred: event loop still running"
+            )
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._saver, name)
@@ -149,16 +161,19 @@ class LifecycleRecordingSaver(BaseCheckpointSaver):
             # Latched off for the process lifetime; never re-enables itself.
             self.enabled = False
             _close_quietly(operation)
-            log.warning(
+            log_lifecycle_event(
+                logging.WARNING,
                 "lifecycle disabled by health gate",
-                extra={"operation": metric, "failed": self._failures, "total": self._ops},
+                operation=metric,
+                failed=self._failures,
+                total=self._ops,
             )
             return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             _close_quietly(operation)
-            log.warning("lifecycle operation skipped", extra={"operation": metric})
+            log_lifecycle_event(logging.WARNING, "lifecycle operation skipped", operation=metric)
             return
         loop.create_task(self._run_best_effort(operation, metric))
 
@@ -167,21 +182,25 @@ class LifecycleRecordingSaver(BaseCheckpointSaver):
         outcome = "ok"
         try:
             await operation
-        except Exception:
+        except Exception as exc:
             self._failures += 1
             outcome = "failed"
-            log.warning("lifecycle operation failed", extra={"operation": metric}, exc_info=True)
+            log_lifecycle_event(
+                logging.WARNING,
+                "lifecycle operation failed",
+                operation=metric,
+                error=error_field(exc),
+            )
             # Fail-safe latch: the very sample that crosses the threshold
             # disables the lifecycle for the process lifetime.
             if not health_gate_ok(failed=self._failures, total=self._ops):
                 self.enabled = False
-                log.warning(
+                log_lifecycle_event(
+                    logging.WARNING,
                     "lifecycle disabled by health gate",
-                    extra={
-                        "operation": metric,
-                        "failed": self._failures,
-                        "total": self._ops,
-                    },
+                    operation=metric,
+                    failed=self._failures,
+                    total=self._ops,
                 )
         _mirror_metric(metric, outcome)
 
@@ -292,8 +311,12 @@ def _mirror_metric(metric: str, outcome: str) -> None:
         from nexus_ai_agent.infrastructure.observability.metrics import get_metrics_registry
 
         get_metrics_registry().increment(f"nexus_{metric}_total", labels={"outcome": outcome})
-    except Exception:
-        log.warning("lifecycle metrics increment failed", exc_info=True)
+    except Exception as exc:
+        # Redaction is already best-effort; a metric failure must stay silent
+        # here to avoid recursion — one stdlib warning, no field values.
+        logging.getLogger(__name__).warning(
+            "lifecycle metrics increment failed: %s", type(exc).__name__
+        )
 
 
 def _thread_id(value: Any) -> str | None:

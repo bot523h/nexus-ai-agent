@@ -30,9 +30,19 @@ from nexus_ai_agent.domain.policies.reconciler_policy import (
     orphan_block_until,
     purge_allowed,
 )
+from nexus_ai_agent.infrastructure.observability.structured import (
+    error_field,
+    log_lifecycle_event,
+)
 from nexus_ai_agent.storage.checkpoint_adapter import (
     CleanupDisabled,
     SQLiteCheckpointAdapter,
+)
+from nexus_ai_agent.storage.checkpoint_fingerprint import (
+    core_manifest_head as compute_core_manifest_head,
+)
+from nexus_ai_agent.storage.checkpoint_fingerprint import (
+    evaluate_core_head,
 )
 from nexus_ai_agent.storage.checkpoint_lifecycle import CheckpointRecord
 from nexus_ai_agent.storage.checkpoint_lifecycle_store import (
@@ -40,14 +50,15 @@ from nexus_ai_agent.storage.checkpoint_lifecycle_store import (
     cleanup_lock,
 )
 
-log = logging.getLogger(__name__)
-
 ORPHAN = "orphan_lifecycle"
 MISSING = "missing_lifecycle"
 BROKEN_LINEAGE = "broken_lineage"
 
 #: Default golden (schema-v1 fingerprint of the LangGraph SQLite schema).
 DEFAULT_GOLDEN = Path(__file__).parent / "golden" / "sqlite.langgraph.json"
+
+#: Sentinel: compute the core manifest head from the local migrations chain.
+AUTO = "auto"
 
 
 @dataclass(frozen=True)
@@ -121,13 +132,17 @@ class CheckpointReconciler:
         *,
         golden_path: Path | str = DEFAULT_GOLDEN,
         enabled: bool = True,
-        core_schema: str | None = None,
+        core_manifest_head: str | None = AUTO,
     ) -> None:
         self._adapter = adapter
         self._store = store
         self._golden_path = Path(golden_path)
         self.enabled = enabled
-        self._core_schema = core_schema
+        # ``AUTO`` (default) => compute from the local migrations manifest
+        # (read-only); an explicit ``None`` means "manifest unavailable".
+        self._core_manifest_head = (
+            compute_core_manifest_head() if core_manifest_head == AUTO else core_manifest_head
+        )
 
     # ── measurement ─────────────────────────────────────────────────────
 
@@ -136,15 +151,19 @@ class CheckpointReconciler:
             self._adapter.assert_golden(self._golden_path)
         except FileNotFoundError:
             # Missing golden: alert loudly, never auto-generate.
-            log.warning(
+            log_lifecycle_event(
+                logging.WARNING,
                 "checkpoint cleanup disabled: golden fingerprint missing",
-                extra={"operation": "reconcile", "golden": str(self._golden_path)},
+                operation="reconcile",
+                golden=str(self._golden_path),
             )
             return "disabled:missing_golden"
         except CleanupDisabled as exc:
-            log.warning(
+            log_lifecycle_event(
+                logging.WARNING,
                 "checkpoint cleanup disabled: schema fingerprint mismatch",
-                extra={"operation": "reconcile", "reason": str(exc)},
+                operation="reconcile",
+                reason=error_field(exc),
             )
             return "disabled:fingerprint_mismatch"
         except sqlite3.Error as exc:
@@ -167,7 +186,11 @@ class CheckpointReconciler:
             threads = self._adapter.list_threads()
         except sqlite3.Error as exc:
             scan_errors += 1
-            log.warning("reconcile scan failed to list threads", extra={"error": str(exc)})
+            log_lifecycle_event(
+                logging.WARNING,
+                "reconcile scan failed to list threads",
+                error=error_field(exc),
+            )
         for thread_id in threads:
             try:
                 checkpoints = self._adapter.list_checkpoints(thread_id)
@@ -180,9 +203,11 @@ class CheckpointReconciler:
                     )
             except sqlite3.Error as exc:
                 scan_errors += 1
-                log.warning(
+                log_lifecycle_event(
+                    logging.WARNING,
                     "reconcile scan failed for thread",
-                    extra={"thread_id": thread_id, "error": str(exc)},
+                    thread_id=thread_id,
+                    error=error_field(exc),
                 )
         records = self._store.records()
         lifecycle_keys: set[tuple[str, str]] = set()
@@ -219,7 +244,9 @@ class CheckpointReconciler:
         report = ReconcileReport(
             rows_scanned=0, checkpoints=0, lifecycle_rows=0, kill_switch=self.enabled
         )
-        report.core_schema = self._core_schema or "not_evaluated"
+        # Core head is read from alembic_version (no migration run, R7) and
+        # compared to the local manifest. Mismatch is warning-only (S6).
+        report.core_schema = evaluate_core_head(self._adapter.core_head(), self._core_manifest_head)
         report.langgraph_schema = self._check_langgraph_schema()
 
         (
@@ -284,7 +311,9 @@ class CheckpointReconciler:
             try:
                 self._adapter.assert_golden(self._golden_path)
             except (CleanupDisabled, FileNotFoundError):
-                log.warning("reconcile apply aborted: schema no longer provable")
+                log_lifecycle_event(
+                    logging.WARNING, "reconcile apply aborted: schema no longer provable"
+                )
                 return report
             report.backfilled = self._backfill(missing, now)
             report.purged, report.bytes_freed_estimate = self._purge(
@@ -304,9 +333,11 @@ class CheckpointReconciler:
                 self._store.upsert(CheckpointRecord(item.thread_id, item.checkpoint_id or "", now))
                 count += 1
             except sqlite3.Error as exc:
-                log.warning(
+                log_lifecycle_event(
+                    logging.WARNING,
                     "reconcile backfill failed",
-                    extra={"thread_id": item.thread_id, "error": str(exc)},
+                    thread_id=item.thread_id,
+                    error=error_field(exc),
                 )
         return count
 
@@ -341,9 +372,11 @@ class CheckpointReconciler:
                 # Only the index row is removed; estimate its on-disk size.
                 freed += len(item.thread_id) + len(item.checkpoint_id) + 64
             except sqlite3.Error as exc:
-                log.warning(
+                log_lifecycle_event(
+                    logging.WARNING,
                     "reconcile purge failed",
-                    extra={"thread_id": item.thread_id, "error": str(exc)},
+                    thread_id=item.thread_id,
+                    error=error_field(exc),
                 )
         return purged, freed
 

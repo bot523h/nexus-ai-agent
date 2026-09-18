@@ -156,6 +156,10 @@ class SQLiteCheckpointAdapter:
                 f"expected={expected.get('fingerprint')} actual={actual}"
             )
 
+    def core_head(self) -> str | None:
+        """Core migration head from ``alembic_version`` (read-only, R7)."""
+        return _migration_head(self._connection)
+
     def _has_table(self, name: str) -> bool:
         return (
             self._connection.execute(

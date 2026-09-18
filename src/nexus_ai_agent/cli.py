@@ -143,9 +143,9 @@ def metrics_snapshot(
     """Print the current low-cardinality metrics snapshot."""
     import json
 
-    from nexus_ai_agent.infrastructure.observability.metrics import MetricsRegistry
+    from nexus_ai_agent.infrastructure.observability.metrics import get_metrics_registry
 
-    snapshot = MetricsRegistry().snapshot()
+    snapshot = get_metrics_registry().snapshot()
     typer.echo(
         json.dumps(snapshot)
         if json_output
