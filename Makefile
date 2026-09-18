@@ -19,7 +19,7 @@ migrate:
 	python -m nexus_ai_agent.cli migrate
 
 smoke:
-	python -m nexus_ai_agent.cli smoke --input "Hello, plan my day"
+	python -m nexus_ai_agent.cli smoke "Hello, plan my day"
 
 run:
 	python -m nexus_ai_agent.cli run-bot --mode polling
