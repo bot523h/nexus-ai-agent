@@ -367,8 +367,8 @@ def golden_update(
         golden_path = DEFAULT_PG_GOLDEN
     else:
         from nexus_ai_agent.storage.checkpoint_adapter import (
-            CheckpointReadAdapter,
             FINGERPRINT_ALGORITHM,
+            CheckpointReadAdapter,
             SQLiteCheckpointAdapter,
         )
         from nexus_ai_agent.storage.checkpoint_reconciler import DEFAULT_GOLDEN

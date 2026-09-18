@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from nexus_ai_agent.llm.fake_llm import FakeLLMProvider
@@ -17,7 +19,10 @@ async def test_smoke_chat_flow(settings_override):
     registry = ToolRegistry(enable_shell=False, workspace_root=".")
     graph = compile_graph(llm, checkpointer, long_term, registry)
 
-    thread_id = "t1"
+    # Unique per run: hermetic against a persistent store (e.g. the same
+    # Neon/PG database across repeated local runs). Resume semantics are
+    # preserved — the second ainvoke uses the same fresh thread id.
+    thread_id = f"smoke-{uuid.uuid4().hex[:12]}"
     state = {
         "thread_id": thread_id,
         "chat_id": 0,
@@ -54,7 +59,7 @@ async def test_resume_after_restart(settings_override):
     registry = ToolRegistry(enable_shell=False, workspace_root=".")
     graph = compile_graph(llm, checkpointer, long_term, registry)
 
-    thread_id = "t2"
+    thread_id = f"restart-{uuid.uuid4().hex[:12]}"
     state = {
         "thread_id": thread_id,
         "chat_id": 0,
