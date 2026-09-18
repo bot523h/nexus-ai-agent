@@ -11,6 +11,7 @@ from nexus_ai_agent.llm.provider import LLMProvider
 
 app = typer.Typer(help="NEXUS AI Agent CLI")
 checkpoints_app = typer.Typer(help="Inspect checkpoint lifecycle state")
+metrics_app = typer.Typer(help="Observability snapshots")
 
 
 @app.command()
@@ -134,6 +135,23 @@ def continuum(
     raise typer.BadParameter("mode must be 'show' or 'verify'")
 
 
+@metrics_app.command("snapshot")
+def metrics_snapshot(
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Print the current low-cardinality metrics snapshot."""
+    import json
+
+    from nexus_ai_agent.infrastructure.observability.metrics import MetricsRegistry
+
+    snapshot = MetricsRegistry().snapshot()
+    typer.echo(
+        json.dumps(snapshot)
+        if json_output
+        else "\\n".join(f"{key} {value}" for key, value in snapshot.items())
+    )
+
+
 @checkpoints_app.command("inspect")
 def inspect_checkpoints(
     json_output: bool = typer.Option(False, "--json"),
@@ -215,6 +233,7 @@ def inspect_checkpoints(
 
 
 app.add_typer(checkpoints_app, name="checkpoints")
+app.add_typer(metrics_app, name="metrics")
 
 
 @app.command()
