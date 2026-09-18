@@ -29,6 +29,17 @@ class MetricsRegistry:
         }
 
 
+_registry: MetricsRegistry | None = None
+
+
+def get_metrics_registry() -> MetricsRegistry:
+    """Process-wide registry (low cardinality, in-memory, no dependencies)."""
+    global _registry
+    if _registry is None:
+        _registry = MetricsRegistry()
+    return _registry
+
+
 def _format_labels(labels: tuple[tuple[str, str], ...]) -> str:
     if not labels:
         return ""

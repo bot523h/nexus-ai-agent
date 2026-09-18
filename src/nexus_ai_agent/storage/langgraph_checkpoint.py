@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import inspect
 import sqlite3
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -10,6 +11,12 @@ from typing import Any, cast
 import psycopg
 from langgraph.checkpoint.sqlite import SqliteSaver
 
+from nexus_ai_agent.adapters.langgraph.lifecycle_recording import LifecycleRecordingSaver
+from nexus_ai_agent.storage.checkpoint_lifecycle_adapter import (
+    SQLiteCheckpointLifecycleAdapter,
+)
+from nexus_ai_agent.storage.checkpoint_lifecycle_store import SQLiteCheckpointLifecycleStore
+from nexus_ai_agent.storage.checkpoint_reconciler import lifecycle_db_path
 from nexus_ai_agent.storage.db import normalize_database_url, resolve_database_url
 
 # Factory returning the underlying saver plus the pool that owns its
@@ -230,13 +237,21 @@ async def _default_saver_factory(database_url: str) -> tuple[Any, Any]:
     return saver, pool
 
 
-def get_checkpointer(path: str) -> AsyncCompatibleSqliteSaver | PostgresCheckpointer:
+def get_checkpointer(
+    path: str,
+) -> AsyncCompatibleSqliteSaver | PostgresCheckpointer | LifecycleRecordingSaver:
     """Return the LangGraph checkpointer for this process (sync, as before).
 
     When ``NEXUS_DATABASE_URL`` is configured the checkpoints live in
-    PostgreSQL (e.g. Neon) behind a lazy :class:`PostgresCheckpointer`;
-    otherwise the SQLite checkpointer is returned, exactly as before.
+    PostgreSQL (e.g. Neon) behind a lazy :class:`PostgresCheckpointer`
+    (unwrapped: the lifecycle scope is SQLite-only).  Otherwise the SQLite
+    checkpointer is returned, wrapped by :class:`LifecycleRecordingSaver`
+    when the kill-switch allows — this is the *only* place the wrapper is
+    applied (composition root), and pending touches are flushed on shutdown
+    via ``atexit``.
     """
+    from nexus_ai_agent.config.settings import get_settings
+
     database_url = resolve_database_url()
     if database_url is not None:
         return PostgresCheckpointer(database_url)
@@ -250,4 +265,15 @@ def get_checkpointer(path: str) -> AsyncCompatibleSqliteSaver | PostgresCheckpoi
     except sqlite3.OperationalError:
         # In-memory DBs don't support WAL.
         pass
-    return AsyncCompatibleSqliteSaver(conn)
+    saver = AsyncCompatibleSqliteSaver(conn)
+
+    settings = get_settings()
+    if not settings.lifecycle_hooks_enabled:
+        # Kill-switch off: raw saver, zero lifecycle writes.
+        return saver
+
+    store = SQLiteCheckpointLifecycleStore(lifecycle_db_path(path))
+    lifecycle = SQLiteCheckpointLifecycleAdapter(store)
+    wrapped = LifecycleRecordingSaver(saver, lifecycle, enabled=True)
+    atexit.register(wrapped.flush_sync)
+    return wrapped

@@ -166,11 +166,12 @@ def inspect_checkpoints(
     from nexus_ai_agent.domain.policies.retention import RetentionRecord, deletable, pinned
     from nexus_ai_agent.storage.checkpoint_adapter import SQLiteCheckpointAdapter
     from nexus_ai_agent.storage.checkpoint_lifecycle_store import SQLiteCheckpointLifecycleStore
+    from nexus_ai_agent.storage.checkpoint_reconciler import lifecycle_db_path
 
     settings = get_settings()
     access_token = nexus_access_context.set("admin")
     adapter = SQLiteCheckpointAdapter(settings.checkpoint_path)
-    lifecycle = SQLiteCheckpointLifecycleStore(settings.checkpoint_path + ".lifecycle")
+    lifecycle = SQLiteCheckpointLifecycleStore(lifecycle_db_path(settings.checkpoint_path))
     try:
         now = datetime.now(timezone.utc)
         records = lifecycle.records()
@@ -230,6 +231,51 @@ def inspect_checkpoints(
         adapter.close()
         lifecycle.close()
         nexus_access_context.reset(access_token)
+
+
+@checkpoints_app.command("reconcile")
+def reconcile_checkpoints(
+    apply: bool = typer.Option(
+        False, "--apply", help="Apply safe mutations (default: dry-run, no writes)"
+    ),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Reconcile checkpoints and lifecycle metadata (dry-run by default).
+
+    Two-way, eventual-consistency reconciliation.  Dry-run only measures and
+    reports.  With ``--apply`` the reconciler may (a) backfill checkpoints
+    missing from the lifecycle index with a protected estimated age, and
+    (b) delete orphaned *lifecycle index rows* whose 24h block has elapsed
+    while every anomaly guard holds.  It never deletes LangGraph rows.
+    """
+    import json
+
+    from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.storage.checkpoint_adapter import SQLiteCheckpointAdapter
+    from nexus_ai_agent.storage.checkpoint_lifecycle_store import SQLiteCheckpointLifecycleStore
+    from nexus_ai_agent.storage.checkpoint_reconciler import (
+        CheckpointReconciler,
+        lifecycle_db_path,
+        render_report,
+    )
+
+    settings = get_settings()
+    adapter = SQLiteCheckpointAdapter(settings.checkpoint_path)
+    lifecycle = SQLiteCheckpointLifecycleStore(lifecycle_db_path(settings.checkpoint_path))
+    try:
+        reconciler = CheckpointReconciler(
+            adapter,
+            lifecycle,
+            enabled=settings.lifecycle_hooks_enabled,
+        )
+        report = reconciler.run(apply=apply)
+        if json_output:
+            typer.echo(json.dumps(report.to_dict(), default=str))
+        else:
+            typer.echo(render_report(report))
+    finally:
+        adapter.close()
+        lifecycle.close()
 
 
 app.add_typer(checkpoints_app, name="checkpoints")

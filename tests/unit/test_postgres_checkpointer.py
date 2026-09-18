@@ -274,7 +274,21 @@ class TestOperationReconnect:
 
 
 class TestGetCheckpointer:
-    def test_returns_sqlite_saver_without_url(self) -> None:
+    def test_returns_lifecycle_wrapped_sqlite_saver_without_url(self) -> None:
+        from nexus_ai_agent.adapters.langgraph.lifecycle_recording import (
+            LifecycleRecordingSaver,
+        )
+
+        checkpointer = get_checkpointer(":memory:")
+        # C1 wiring: the runtime passes through the lifecycle wrapper.
+        assert isinstance(checkpointer, LifecycleRecordingSaver)
+        assert isinstance(checkpointer._saver, AsyncCompatibleSqliteSaver)
+
+    def test_kill_switch_returns_unwrapped_sqlite_saver(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("NEXUS_LIFECYCLE_HOOKS_ENABLED", "false")
+        settings_module.get_settings.cache_clear()
         checkpointer = get_checkpointer(":memory:")
         assert isinstance(checkpointer, AsyncCompatibleSqliteSaver)
 

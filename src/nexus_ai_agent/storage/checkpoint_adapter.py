@@ -60,6 +60,54 @@ class SQLiteCheckpointAdapter:
         ).fetchall()
         return [CheckpointInfo(row[0], row[1], row[2]) for row in rows]
 
+    def exists_checkpoint(self, thread_id: str, checkpoint_id: str) -> bool:
+        """Read-only existence check (used to re-verify orphans right before a purge)."""
+        if not self._has_table("checkpoints"):
+            return False
+        row = self._connection.execute(
+            "SELECT 1 FROM checkpoints WHERE thread_id = ? AND checkpoint_id = ? LIMIT 1",
+            (thread_id, checkpoint_id),
+        ).fetchone()
+        return row is not None
+
+    def estimate_thread_bytes(self, thread_id: str) -> int:
+        """Read-only size estimate for a thread's checkpoint data.
+
+        Sums the lengths of the stored checkpoint payloads (schema-version
+        tolerant: covers both the 2.x ``checkpoints``/``writes`` layout and
+        the legacy 1.x ``checkpoint_blobs``/``checkpoint_writes`` layout).
+        Callers must label the result with the ``_estimate`` suffix; it is an
+        approximation, not an authoritative disk accounting.
+        """
+        total = 0
+        if self._has_table("checkpoints"):
+            row = self._connection.execute(
+                "SELECT COALESCE(SUM(LENGTH(checkpoint)), 0) "
+                "+ COALESCE(SUM(LENGTH(metadata)), 0) FROM checkpoints "
+                "WHERE thread_id = ?",
+                (thread_id,),
+            ).fetchone()
+            total += int(row[0])
+        if self._has_table("writes"):
+            row = self._connection.execute(
+                "SELECT COALESCE(SUM(LENGTH(value)), 0) FROM writes WHERE thread_id = ?",
+                (thread_id,),
+            ).fetchone()
+            total += int(row[0])
+        if self._has_table("checkpoint_blobs"):
+            row = self._connection.execute(
+                "SELECT COALESCE(SUM(LENGTH(blob)), 0) FROM checkpoint_blobs WHERE thread_id = ?",
+                (thread_id,),
+            ).fetchone()
+            total += int(row[0])
+        if self._has_table("checkpoint_writes"):
+            row = self._connection.execute(
+                "SELECT COALESCE(SUM(LENGTH(value)), 0) FROM checkpoint_writes WHERE thread_id = ?",
+                (thread_id,),
+            ).fetchone()
+            total += int(row[0])
+        return total
+
     def get_blob_refs(self, thread_id: str) -> list[tuple[str, str]]:
         if not self._has_table("checkpoint_blobs"):
             return []

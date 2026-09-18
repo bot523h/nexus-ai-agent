@@ -11,6 +11,11 @@ from nexus_ai_agent.adapters.langgraph.lifecycle_recording import (
 
 
 class FakeSaver:
+    def __init__(self):
+        from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+        self.serde = JsonPlusSerializer()
+
     def get_tuple(self, config):
         return {"ok": True}
 

@@ -22,7 +22,9 @@ class SQLiteCheckpointLifecycleStore:
         self.path = path
         if path != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self._connection = sqlite3.connect(path)
+        # Cross-thread access is required: the async adapter runs store
+        # operations in worker threads (same pattern as the LangGraph saver).
+        self._connection = sqlite3.connect(path, check_same_thread=False)
         self._connection.execute(
             f"""CREATE TABLE IF NOT EXISTS {_TABLE} (
                 thread_id TEXT NOT NULL,
@@ -66,6 +68,20 @@ class SQLiteCheckpointLifecycleStore:
             )
             for row in rows
         ]
+
+    def touch_thread(self, thread_id: str, accessed_at: datetime) -> bool:
+        """Update ``last_accessed_at`` on existing rows of one thread.
+
+        Returns ``False`` when the thread is unknown to the index.  Touching
+        never creates a record: unknown checkpoints are backfilled by the
+        reconciler only, with an explicitly estimated age.
+        """
+        cursor = self._connection.execute(
+            f"UPDATE {_TABLE} SET last_accessed_at = ? WHERE thread_id = ?",
+            (_key(accessed_at), thread_id),
+        )
+        self._connection.commit()
+        return cursor.rowcount > 0
 
     def delete_index(self, record: CheckpointRecord) -> None:
         """Remove only the lifecycle row, after an adapter deletes checkpoint data."""
