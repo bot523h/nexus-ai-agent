@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import psycopg
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 from nexus_ai_agent.adapters.langgraph.lifecycle_recording import LifecycleRecordingSaver
@@ -66,8 +67,15 @@ class AsyncCompatibleSqliteSaver(SqliteSaver):
         return await asyncio.to_thread(self.get_delta_channel_history, *args, **kwargs)
 
 
-class PostgresCheckpointer:
+class PostgresCheckpointer(BaseCheckpointSaver):
     """Lazy, self-healing LangGraph checkpointer backed by PostgreSQL.
+
+    Subclasses ``BaseCheckpointSaver`` (without calling its ``__init__``) so
+    LangGraph's ``isinstance`` validation accepts it, exactly like the
+    upstream ``AsyncPostgresSaver``: the async surface is implemented by
+    delegation to the lazily created saver, the sync surface inherits the
+    base class's ``NotImplementedError`` virtuals, and ``serde`` /
+    ``config_specs`` resolve through inheritance.
 
     The psycopg connection pool and the underlying ``AsyncPostgresSaver`` are
     created on first use, inside the process event loop (psycopg pools must be
@@ -87,6 +95,8 @@ class PostgresCheckpointer:
         max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
         base_delay: float = _DEFAULT_BASE_DELAY,
     ) -> None:
+        # Deliberately NOT calling super().__init__(): no storage state is
+        # owned here; serde/config_specs resolve via the class attributes.
         self._database_url = normalize_database_url(database_url)
         self._saver_factory = saver_factory
         self._max_attempts = max_attempts
@@ -242,19 +252,33 @@ def get_checkpointer(
 ) -> AsyncCompatibleSqliteSaver | PostgresCheckpointer | LifecycleRecordingSaver:
     """Return the LangGraph checkpointer for this process (sync, as before).
 
-    When ``NEXUS_DATABASE_URL`` is configured the checkpoints live in
-    PostgreSQL (e.g. Neon) behind a lazy :class:`PostgresCheckpointer`
-    (unwrapped: the lifecycle scope is SQLite-only).  Otherwise the SQLite
-    checkpointer is returned, wrapped by :class:`LifecycleRecordingSaver`
-    when the kill-switch allows — this is the *only* place the wrapper is
-    applied (composition root), and pending touches are flushed on shutdown
-    via ``atexit``.
+    Both backends are wrapped by :class:`LifecycleRecordingSaver` when the
+    kill-switch allows — this is the *only* place the wrapper is applied
+    (composition root), and pending touches are flushed on shutdown via
+    ``atexit``.
+
+    * ``NEXUS_DATABASE_URL`` set → checkpoints live in PostgreSQL (e.g.
+      Neon) behind a lazy :class:`PostgresCheckpointer`.
+    * otherwise → the SQLite checkpointer.
+
+    The lifecycle metadata store stays a SQLite sidecar on *both* backends
+    (PR3 decision D-1/B): on Postgres deployments the sidecar file must
+    live on persistent storage (see ``docs/ops/NEON_LIFECYCLE_RUNBOOK.md``).
     """
     from nexus_ai_agent.config.settings import get_settings
 
+    settings = get_settings()
     database_url = resolve_database_url()
     if database_url is not None:
-        return PostgresCheckpointer(database_url)
+        pg_saver = PostgresCheckpointer(database_url)
+        if not settings.lifecycle_hooks_enabled:
+            # Kill-switch off: raw saver, zero lifecycle writes.
+            return pg_saver
+        store = SQLiteCheckpointLifecycleStore(lifecycle_db_path(settings.checkpoint_path))
+        lifecycle = SQLiteCheckpointLifecycleAdapter(store)
+        wrapped = LifecycleRecordingSaver(pg_saver, lifecycle, enabled=True)
+        atexit.register(wrapped.flush_sync)
+        return wrapped
 
     # Ensure parent directories exist for file-backed DBs.
     if path != ":memory:":
@@ -267,7 +291,6 @@ def get_checkpointer(
         pass
     saver = AsyncCompatibleSqliteSaver(conn)
 
-    settings = get_settings()
     if not settings.lifecycle_hooks_enabled:
         # Kill-switch off: raw saver, zero lifecycle writes.
         return saver

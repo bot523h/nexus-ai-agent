@@ -300,6 +300,8 @@ def test_cli_kill_switch_blocks_apply(tmp_path: Path, monkeypatch) -> None:
 
     monkeypatch.setenv("NEXUS_CHECKPOINT_PATH", str(tmp_path / "lg.sqlite"))
     monkeypatch.setenv("NEXUS_LIFECYCLE_HOOKS_ENABLED", "false")
+    monkeypatch.delenv("NEXUS_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     get_settings.cache_clear()
     try:
         _langgraph_db(tmp_path / "lg.sqlite")

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 import pytest
@@ -107,12 +108,78 @@ async def test_kill_switch_removes_wrapper(settings_env, tmp_path: Path, monkeyp
         checkpointer.conn.close()
 
 
+# ── PR3: the four-way matrix (backend × kill-switch) ───────────────────
+
+
 @pytest.mark.asyncio
-async def test_postgres_path_stays_unwrapped(settings_env, monkeypatch) -> None:
+async def test_postgres_kill_switch_on_wraps(settings_env, monkeypatch, tmp_path: Path) -> None:
+    """PG + kill-switch on → wrapped (lifecycle metadata in the SQLite sidecar)."""
     monkeypatch.setenv("NEXUS_DATABASE_URL", "postgresql://nexus:nexus@localhost:5432/nexus")
+    monkeypatch.setenv("NEXUS_CHECKPOINT_PATH", str(tmp_path / "lg.sqlite"))
+    from nexus_ai_agent.config.settings import get_settings
+
+    get_settings.cache_clear()
+    checkpointer = get_checkpointer(str(tmp_path / "lg.sqlite"))
+    # No live database is needed for the wiring contract: the PG pool is
+    # built lazily on first use, so construction is connection-free.
+    assert isinstance(checkpointer, LifecycleRecordingSaver)
+    assert isinstance(checkpointer._saver, PostgresCheckpointer)
+    await checkpointer._saver.reset()
+
+
+@pytest.mark.asyncio
+async def test_postgres_kill_switch_off_stays_bare(settings_env, monkeypatch) -> None:
+    """PG + kill-switch off → bare PostgresCheckpointer, zero lifecycle writes."""
+    monkeypatch.setenv("NEXUS_DATABASE_URL", "postgresql://nexus:nexus@localhost:5432/nexus")
+    monkeypatch.setenv("NEXUS_LIFECYCLE_HOOKS_ENABLED", "false")
+    monkeypatch.setenv("NEXUS_CHECKPOINT_PATH", str(Path("unused") / "lg.sqlite"))
     from nexus_ai_agent.config.settings import get_settings
 
     get_settings.cache_clear()
     checkpointer = get_checkpointer(str(Path("unused") / "lg.sqlite"))
     assert isinstance(checkpointer, PostgresCheckpointer)
     assert not isinstance(checkpointer, LifecycleRecordingSaver)
+    await checkpointer.reset()
+
+
+PG_URL = os.getenv("NEXUS_DATABASE_URL")
+requires_pg = pytest.mark.skipif(not PG_URL, reason="requires PostgreSQL")
+
+
+@requires_pg
+@pytest.mark.asyncio
+async def test_postgres_wrapped_end_to_end(settings_env, monkeypatch, tmp_path: Path) -> None:
+    """The wrapped PG checkpointer works against a real database.
+
+    Data goes to Postgres (through the wrapper untouched); lifecycle
+    metadata goes to the SQLite sidecar; a user read produces a coalesced
+    touch; a shutdown flush persists it.
+    """
+    monkeypatch.setenv("NEXUS_DATABASE_URL", PG_URL)  # type: ignore[arg-type]
+    monkeypatch.setenv("NEXUS_CHECKPOINT_PATH", str(tmp_path / "lg.sqlite"))
+    from nexus_ai_agent.config.settings import get_settings
+
+    get_settings.cache_clear()
+    checkpointer = get_checkpointer(str(tmp_path / "lg.sqlite"))
+    try:
+        assert isinstance(checkpointer, LifecycleRecordingSaver)
+        async with access_context("user"):
+            result = await checkpointer.aput(CONFIG, CHECKPOINT, {}, {})
+        assert result["configurable"]["thread_id"] == "t1"
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        async with access_context("user"):
+            got = await checkpointer.aget_tuple(result)
+        assert got is not None
+        await checkpointer.flush()
+
+        store = _store_for(tmp_path)
+        try:
+            records = store.records()
+        finally:
+            store.close()
+        assert [(r.thread_id, r.checkpoint_id) for r in records] == [("t1", "cp1")]
+        assert records[0].last_accessed_at is not None
+    finally:
+        await checkpointer._saver.reset()

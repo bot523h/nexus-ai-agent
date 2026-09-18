@@ -302,6 +302,10 @@ def cli_env(tmp_path: Path, monkeypatch) -> Path:
     from nexus_ai_agent.config.settings import get_settings
 
     monkeypatch.setenv("NEXUS_CHECKPOINT_PATH", str(tmp_path / "lg.sqlite"))
+    # Hermetic backend: pin the SQLite path even if a PG URL is present in
+    # the environment (PR3 backend branching in the CLI).
+    monkeypatch.delenv("NEXUS_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("NEXUS_LIFECYCLE_HOOKS_ENABLED", "true")
     get_settings.cache_clear()
     yield tmp_path
