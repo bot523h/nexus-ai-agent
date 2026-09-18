@@ -46,7 +46,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e "."
+      - run: pip install -e ".[dev]"
       - run: nexus migrate
       - run: pytest -q tests/integration/test_postgres_create_all_race.py
       # Shared read-only adapter contract, PG leg (incl. golden stability).
