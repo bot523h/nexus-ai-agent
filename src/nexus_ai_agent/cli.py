@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import typer
@@ -171,10 +172,17 @@ def inspect_checkpoints(
     settings = get_settings()
     access_token = nexus_access_context.set("admin")
     adapter = SQLiteCheckpointAdapter(settings.checkpoint_path)
-    lifecycle = SQLiteCheckpointLifecycleStore(lifecycle_db_path(settings.checkpoint_path))
+    # Read-only by contract: inspect never creates or mutates the lifecycle
+    # index.  A missing index file simply means "no metadata yet".
+    lifecycle_path = lifecycle_db_path(settings.checkpoint_path)
+    lifecycle = (
+        SQLiteCheckpointLifecycleStore(lifecycle_path)
+        if lifecycle_path != ":memory:" and Path(lifecycle_path).exists()
+        else None
+    )
     try:
         now = datetime.now(timezone.utc)
-        records = lifecycle.records()
+        records = lifecycle.records() if lifecycle is not None else []
         grouped: dict[str, list] = {}
         for record in records:
             grouped.setdefault(record.thread_id, []).append(record)
@@ -202,26 +210,31 @@ def inspect_checkpoints(
             )
             pinned_value = pinned(retention, now=now) if retention is not None else "unknown"
             deletable_value = deletable(retention, now=now) if retention is not None else False
-            output.append(
-                {
-                    "thread_id": thread_id,
-                    "checkpoint_count": len(checkpoints),
-                    "oldest_created_at": oldest.isoformat() if oldest else "unknown",
-                    "newest_created_at": newest.isoformat() if newest else "unknown",
-                    "last_accessed_at": last_accessed.isoformat() if last_accessed else "unknown",
-                    "pinned": pinned_value,
-                    "active": bool(
-                        lifecycle_record
-                        and lifecycle_record.active_until
-                        and lifecycle_record.active_until > now
-                    ),
-                    "resumable_within_window": bool(retention and not deletable_value),
-                    "would_delete": deletable_value,
-                    "would_free_bytes_estimate": "unknown",
-                    "missing_lifecycle": not bool(metadata),
-                    "orphan_candidate_count": max(0, len(metadata) - len(checkpoints)),
-                }
+            entry: dict[str, Any] = {
+                "schema": "inspect-v1",
+                "thread_id": thread_id,
+                "checkpoint_count": len(checkpoints),
+                "oldest_created_at": oldest.isoformat() if oldest else "unknown",
+                "newest_created_at": newest.isoformat() if newest else "unknown",
+                "last_accessed_at": last_accessed.isoformat() if last_accessed else "unknown",
+                "pinned": pinned_value,
+                "active": bool(
+                    lifecycle_record
+                    and lifecycle_record.active_until
+                    and lifecycle_record.active_until > now
+                ),
+                "resumable_within_window": bool(retention and not deletable_value),
+                "would_delete": deletable_value,
+                "would_free_bytes_estimate": adapter.estimate_thread_bytes(thread_id),
+                "missing_lifecycle": not bool(metadata),
+                "orphan_candidate_count": max(0, len(metadata) - len(checkpoints)),
+            }
+            # inspect-v1 contract: every undeterminable field is named here
+            # (unknown values stay live in the output; see I10).
+            entry["unknown_fields"] = sorted(
+                name for name, value in entry.items() if value == "unknown"
             )
+            output.append(entry)
         if json_output:
             typer.echo(json.dumps(output, default=str))
         else:
@@ -229,7 +242,8 @@ def inspect_checkpoints(
                 typer.echo(json.dumps(item, default=str, sort_keys=True))
     finally:
         adapter.close()
-        lifecycle.close()
+        if lifecycle is not None:
+            lifecycle.close()
         nexus_access_context.reset(access_token)
 
 
