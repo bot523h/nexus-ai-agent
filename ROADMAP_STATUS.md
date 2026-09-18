@@ -1,4 +1,4 @@
-# ROADMAP_STATUS — NEXUS AI agent (as of 2026-09-18, Phase 3)
+# ROADMAP_STATUS — NEXUS AI agent (as of 2026-09-18, Phase 5)
 
 ## Active workstream: checkpoint lifecycle (PR1/PR2)
 
@@ -14,6 +14,7 @@ Header: **No hidden migration. No hidden mutation. No implicit repair.**
 | PR2 C3 | O1 observability (redaction, structured logging, in-process registry, core schema fingerprint) | **DONE** — `log_lifecycle_event` (redacted, fail-safe), `core_schema_fingerprint` (warning-only mismatch), process-wide registry in `metrics snapshot` | `35e0ba6` |
 | PR2 C4 | Adversarial test hardening (8 remaining), golden safety, kill-switch + flush-shutdown tests | **DONE** — `test_lifecycle_adversarial.py` (8 tests: boundaries, error containment, lost context, atexit flush, golden no-generate, introspective full delegate, CLI kill-switch, lock contention) | `fdef331` |
 | D1 | `make smoke` Makefile fix (`--input` → positional argument) | **DONE** — `make smoke` verified exit 0 | `02f8d18` |
+| PR3 (Phase 5) | PG path end-to-end: read-only PG adapter + shared contract; PG composition (isinstance bug fixed, four-way kill-switch matrix, sidecar lifecycle store, option B — zero migrations); backend-aware inspect/reconcile; `golden update` (human-only); `postgres.langgraph.json` golden; Neon runbook | **DONE on branch** (NOT merged to main) | `063e7df` (C1) → `aed8728` (C2/C3) → this commit (C4 docs) |
 | POST_V1 | Per-checkpoint (delta-chain) deletion surgery | DEFERRED — guarded by `POST_V1_DELETE_MARKER` + architecture test | — |
 
 Rescue note (2026-09-18): the PR1/PR2 lineage existed only on
@@ -41,7 +42,7 @@ no work was lost. Working tree at rescue time was clean; no stashes.
 |------|--------|
 | `make lint` | green — `All checks passed!`, 211 files formatted |
 | `make types` | green — `Success: no issues found in 140 source files` |
-| `make test` | green — **295 passed, 1 skipped in ~26s** (skip: PG service required, run by CI `migrate-postgres` job) |
+| `make test` | green — **312 passed, 16 skipped in ~24s** (PG-runtime legs skip without `NEXUS_DATABASE_URL`; covered by CI `migrate-postgres` job + local PG verification 327 passed / 0 failed) |
 | `make smoke` | **fixed** — full graph via FakeLLMProvider, exit 0 |
 
 Baseline delta: 242 → 295 passed (+53), 1 skipped (unchanged, PG-only);
@@ -50,7 +51,7 @@ mypy 134 → 140 files. No test was removed or weakened.
 CI (`.github/workflows/ci.yml`): two jobs — `test` (ruff/mypy/pytest, no
 service) and `migrate-postgres` (service container `pgvector/pgvector:pg16`,
 runs `nexus migrate` idempotently + race regression + head assertion on
-`47903d282ede`).
+`47903d282ede` + the adapter contract suite (PG leg).
 
 ## Dependencies (core, 30 declared)
 
@@ -62,7 +63,8 @@ was removed with the D8 revert; `sqlmodel==0.0.42`, `sqlalchemy==2.0.54`,
 
 ## Known doc/spec friction
 
-- `docs/architecture/DATA_LIFECYCLE.md` describes a `nexus_operation_journal`
-  table; the consolidated spec forbids a journal table. Resolution: keep the
-  pure state machine in `domain/policies/retention.py`, do NOT materialize the
-  table. Doc update pending.
+- ~~`docs/architecture/DATA_LIFECYCLE.md` described a `nexus_operation_journal`
+  table~~ — **resolved**: journal references removed; the pure state machine in
+  `domain/policies/retention.py` is documented as the retention policy; the doc
+  now maps both real checkpoint backends (SQLite saver 2.x + LangGraph PG
+  schema) empirically. The journal table remains forbidden until Stage 3.

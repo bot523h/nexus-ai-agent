@@ -76,6 +76,28 @@ Hard constraints (all of C1–C4): reconciler is CLI-only, dry-run default,
 mutation only via `--apply`, no cron; **no** journal table; **no** PG adapter;
 **no** migration; no PR without owner confirmation.
 
+## D — PR3 targets (Phase 5, this session)
+
+| ID  | Target                                                                                  | Status | Evidence |
+|-----|------------------------------------------------------------------------------------------|--------|----------|
+| D1  | read-only Postgres checkpoint adapter (same contract as SQLite)                          | DONE | `063e7df` — `storage/checkpoint_pg_adapter.py`; read-only enforced server-side (`default_transaction_read_only`, psycopg 25006 test) |
+| D2  | one contract, two backends (fingerprint/golden/lineage/estimate)                        | DONE | `063e7df` — `tests/integration/test_checkpoint_adapter_contract.py` (24 tests; PG leg in CI `migrate-postgres` job) |
+| D3  | PG composition: real `PostgresCheckpointer` (isinstance bug fixed) + lifecycle wrapper   | DONE | `aed8728` — four-way matrix in `test_checkpoint_composition.py` incl. live PG e2e (data → PG, lifecycle → sidecar) |
+| D4  | sidecar SQLite lifecycle store on PG path (option B; zero migrations, zero PG tables)    | DONE | `aed8728` — `get_checkpointer` PG branch; sidecar write failures never propagate; kill-switch off ⇒ bare checkpointer |
+| D5  | backend-aware CLI: inspect/reconcile on PG; reconcile = no-op on PG (SQLite-only purge)  | DONE | `aed8728` — `_open_checkpoint_backend`; `purge_eligible: false` on PG with reason |
+| D6  | `golden update` command (human-in-the-loop only; `--yes` required for write)             | DONE | `aed8728` — `tests/unit/test_golden_management.py` (5 tests incl. live PG fingerprint == committed golden) |
+| D7  | `postgres.langgraph.json` committed golden (schema-v1-pg; LangGraph scope only)          | DONE | `063e7df` — generated under owner authority from PG 18; stability on CI's pg16 proven by contract test |
+| D8  | ops runbook + DATA_LIFECYCLE schema map + ledger/roadmap/continuum refresh               | DONE | `43a1b6a` (schema map) + this commit — `docs/ops/NEON_LIFECYCLE_RUNBOOK.md` |
+
+PR3 hard constraints (owner): zero migrations (option B); no new core
+dependencies; kill-switch + flush at composition root only; touch errors
+never propagate; connection error ≠ drift; purge stays SQLite-only;
+golden update human-triggered only, never in CI.
+
+Final gate (this session): **312 passed, 16 skipped** (`-m "not slow"`,
+no PG); with local PG: 327 passed, 0 failed; ruff check + format clean;
+mypy clean (141 files).
+
 ## DoD (final verification)
 
 | # | Criterion                                                                       | Status | Evidence |

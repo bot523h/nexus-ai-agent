@@ -1,15 +1,63 @@
 {
   "schema_version": 2,
-  "plan": "C2",
-  "step": "c42cccbe32e3c6642e392f69015d9b0af03c66fb",
-  "next": "post-revert verification",
+  "plan": "PR3",
+  "step": "aed8728",
+  "next": "open PR (owner approved creation; merge only on explicit instruction)",
   "ledger": [
-    {"id": "C1", "commit": "c81f299", "status": "complete"},
-    {"id": "C2", "status": "complete", "scope": "D1-D10 except reverted pgvector in D7 and all of D8"},
-    {"id": "tooling", "status": "approved", "scope": "bootstrap scripts and continuum"},
-    {"id": "D7/pgvector", "status": "reverted", "reason": "migration must not require pgvector"},
-    {"id": "D8", "status": "reverted", "reason": "unused token encryption has no consumer"}
+    {
+      "id": "C1",
+      "commit": "c81f299",
+      "status": "complete"
+    },
+    {
+      "id": "C2",
+      "status": "complete",
+      "scope": "D1-D10 except reverted pgvector in D7 and all of D8"
+    },
+    {
+      "id": "tooling",
+      "status": "approved",
+      "scope": "bootstrap scripts and continuum"
+    },
+    {
+      "id": "D7/pgvector",
+      "status": "reverted",
+      "reason": "migration must not require pgvector"
+    },
+    {
+      "id": "D8",
+      "status": "reverted",
+      "reason": "unused token encryption has no consumer"
+    },
+    {
+      "id": "PR3-C1",
+      "commit": "063e7df",
+      "status": "complete",
+      "scope": "PG read-only adapter + shared contract + pg golden + CI PG-leg contract tests"
+    },
+    {
+      "id": "PR3-C2",
+      "commit": "aed8728",
+      "status": "complete",
+      "scope": "PG composition (isinstance fix, four-way matrix, sidecar store) + backend-aware CLI + hermetic CLI tests"
+    },
+    {
+      "id": "PR3-C3",
+      "commit": "pending",
+      "status": "complete",
+      "scope": "golden management human-in-the-loop tests"
+    },
+    {
+      "id": "PR3-C4",
+      "commit": "pending",
+      "status": "complete",
+      "scope": "Neon runbook + ledger/roadmap/continuum"
+    }
   ],
-  "test_count_expected": 296,
-  "env_fingerprint": {"python": "3.11.2", "alembic": "1.20.0", "sqlalchemy": "2.0.54"}
+  "test_count_expected": 312,
+  "env_fingerprint": {
+    "python": "3.11.2",
+    "alembic": "1.20.0",
+    "sqlalchemy": "2.0.54"
+  }
 }
