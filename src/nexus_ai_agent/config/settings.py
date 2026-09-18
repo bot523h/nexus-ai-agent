@@ -31,6 +31,10 @@ class Settings(BaseSettings):
         default="data/langgraph.sqlite",
         validation_alias=AliasChoices("NEXUS_CHECKPOINT_PATH", "CHECKPOINT_PATH"),
     )
+    lifecycle_hooks_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("NEXUS_LIFECYCLE_HOOKS_ENABLED", "LIFECYCLE_HOOKS_ENABLED"),
+    )
     vector_path: str = Field(
         default="data/vector.sqlite",
         validation_alias=AliasChoices("NEXUS_VECTOR_PATH", "VECTOR_PATH"),
