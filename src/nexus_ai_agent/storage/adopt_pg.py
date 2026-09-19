@@ -29,6 +29,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from nexus_ai_agent.observability.logging import get_logger
+from nexus_ai_agent.storage.checkpoint_lifecycle import LIFECYCLE_TABLE_NAME
 from nexus_ai_agent.storage.db import normalize_database_url, to_asyncpg_url
 from nexus_ai_agent.storage.migration_metadata import get_target_metadata
 
@@ -88,7 +89,11 @@ def _snapshot(sync_conn: Connection, expected: set[str], redacted: str) -> Postg
 async def _inspect(url: str) -> PostgresAdoptionReport:
     """Introspect the database over asyncpg; never mutates it."""
     normalized = normalize_database_url(url)
-    expected = set(get_target_metadata().tables.keys())
+    # Head state = ORM tables + the lifecycle table created by revision
+    # f4a9c2e71b08 (PR3 option A).  A database stamped at head must
+    # contain it; a legacy database without it is drift (fail-fast), not
+    # something to paper over (no implicit repair).
+    expected = set(get_target_metadata().tables.keys()) | {LIFECYCLE_TABLE_NAME}
     engine = create_async_engine(to_asyncpg_url(normalized), echo=False)
     try:
         async with engine.connect() as conn:

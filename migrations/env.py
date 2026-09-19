@@ -33,8 +33,11 @@ from nexus_ai_agent.storage.migration_metadata import get_target_metadata
 config = context.config
 
 # Interpret the config file for Python logging.
+# ``disable_existing_loggers=False`` is mandatory: the default would silently
+# disable every application logger that already exists (e.g. the bot's
+# structured loggers) for the rest of the process after a migration runs.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # Target metadata for 'autogenerate' support (D2).
 target_metadata = get_target_metadata()

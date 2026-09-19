@@ -13,6 +13,9 @@ from typing import Any
 import psycopg
 import pytest
 
+from nexus_ai_agent.adapters.langgraph.lifecycle_recording import (
+    LifecycleRecordingSaver,
+)
 from nexus_ai_agent.config import settings as settings_module
 from nexus_ai_agent.storage.langgraph_checkpoint import (
     AsyncCompatibleSqliteSaver,
@@ -274,20 +277,50 @@ class TestOperationReconnect:
 
 
 class TestGetCheckpointer:
-    def test_returns_sqlite_saver_without_url(self) -> None:
+    def test_returns_lifecycle_wrapped_sqlite_saver_without_url(self) -> None:
+        from nexus_ai_agent.adapters.langgraph.lifecycle_recording import (
+            LifecycleRecordingSaver,
+        )
+
+        checkpointer = get_checkpointer(":memory:")
+        # C1 wiring: the runtime passes through the lifecycle wrapper.
+        assert isinstance(checkpointer, LifecycleRecordingSaver)
+        assert isinstance(checkpointer._saver, AsyncCompatibleSqliteSaver)
+
+    def test_kill_switch_returns_unwrapped_sqlite_saver(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("NEXUS_LIFECYCLE_HOOKS_ENABLED", "false")
+        settings_module.get_settings.cache_clear()
         checkpointer = get_checkpointer(":memory:")
         assert isinstance(checkpointer, AsyncCompatibleSqliteSaver)
 
-    def test_returns_postgres_checkpointer_with_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_returns_wrapped_postgres_checkpointer_with_url(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # PR3 four-way matrix: PG + kill-switch on → wrapped (the wrapper is
+        # the only place the lifecycle is applied).
         monkeypatch.setenv("NEXUS_DATABASE_URL", URL)
         settings_module.get_settings.cache_clear()
         checkpointer = get_checkpointer("data/langgraph.sqlite")
-        assert isinstance(checkpointer, PostgresCheckpointer)
-        assert checkpointer.database_url == NORMALIZED_URL
+        assert isinstance(checkpointer, LifecycleRecordingSaver)
+        assert isinstance(checkpointer._saver, PostgresCheckpointer)
+        assert checkpointer._saver.database_url == NORMALIZED_URL
 
     def test_postgres_url_ignores_local_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DATABASE_URL", URL)
         settings_module.get_settings.cache_clear()
         checkpointer = get_checkpointer(":memory:")
+        assert isinstance(checkpointer, LifecycleRecordingSaver)
+        assert checkpointer._saver.database_url == NORMALIZED_URL
+
+    def test_kill_switch_returns_bare_postgres_checkpointer(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("NEXUS_DATABASE_URL", URL)
+        monkeypatch.setenv("NEXUS_LIFECYCLE_HOOKS_ENABLED", "false")
+        settings_module.get_settings.cache_clear()
+        checkpointer = get_checkpointer(":memory:")
         assert isinstance(checkpointer, PostgresCheckpointer)
+        assert not isinstance(checkpointer, LifecycleRecordingSaver)
         assert checkpointer.database_url == NORMALIZED_URL

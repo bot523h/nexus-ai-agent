@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from sqlalchemy import MetaData, inspect, text
-from sqlalchemy.exc import OperationalError, ProgrammingError
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
@@ -249,7 +249,7 @@ async def create_all_metadata(engine: Any, metadata: MetaData) -> None:
             async with engine.begin() as conn:
                 await conn.run_sync(metadata.create_all)
             return
-        except (OperationalError, ProgrammingError) as exc:
+        except (IntegrityError, OperationalError, ProgrammingError) as exc:
             if attempt >= _CREATE_ALL_ATTEMPTS or not _is_concurrent_create_conflict(exc):
                 raise
             log.warning(

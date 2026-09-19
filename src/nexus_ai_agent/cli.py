@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from pathlib import Path
+from typing import Any, cast
 from uuid import uuid4
 
 import typer
@@ -10,6 +11,77 @@ import typer
 from nexus_ai_agent.llm.provider import LLMProvider
 
 app = typer.Typer(help="NEXUS AI Agent CLI")
+checkpoints_app = typer.Typer(help="Inspect checkpoint lifecycle state")
+golden_app = typer.Typer(help="Schema golden management (human-triggered only)")
+metrics_app = typer.Typer(help="Observability snapshots")
+
+
+def _open_checkpoint_backend() -> tuple[Any, Path]:
+    """Return ``(read_adapter, default_golden_path)`` for the active backend.
+
+    Backend selection is the same as the runtime composition root:
+    ``NEXUS_DATABASE_URL`` set → PostgreSQL (e.g. Neon), otherwise the
+    configured SQLite file.  Both adapters satisfy the read-only
+    ``CheckpointReadAdapter`` contract, so inspect/reconcile are
+    backend-agnostic (PR3).
+    """
+    from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.storage.checkpoint_adapter import (
+        CheckpointReadAdapter,
+        SQLiteCheckpointAdapter,
+    )
+    from nexus_ai_agent.storage.checkpoint_reconciler import DEFAULT_GOLDEN
+    from nexus_ai_agent.storage.db import resolve_database_url
+
+    settings = get_settings()
+    database_url = resolve_database_url()
+    if database_url is not None:
+        from nexus_ai_agent.storage.checkpoint_pg_adapter import (
+            DEFAULT_PG_GOLDEN,
+            PostgresCheckpointAdapter,
+        )
+
+        adapter: CheckpointReadAdapter = PostgresCheckpointAdapter(database_url)
+        return adapter, DEFAULT_PG_GOLDEN
+    adapter = SQLiteCheckpointAdapter(settings.checkpoint_path)
+    return cast(CheckpointReadAdapter, adapter), DEFAULT_GOLDEN
+
+
+def _open_lifecycle_store(
+    settings: Any,
+    database_url: str | None,
+    *,
+    strict: bool,
+    read_only: bool,
+) -> Any:
+    """Return the lifecycle index store for the active backend.
+
+    PostgreSQL → the ``nexus_checkpoint_lifecycle`` table (option A).
+    SQLite → the local sidecar file (pre-existing behaviour).
+
+    * ``strict=True`` (inspect): a missing *local* index file means
+      "no metadata yet" → ``None``.  A missing table on PostgreSQL is a
+      migration gap, surfaced as an error by the store's first query —
+      never invented data.
+    * ``read_only=True`` (inspect): the PostgreSQL connection is
+      server-enforced read-only; inspect never touches access data.
+    """
+    from nexus_ai_agent.storage.checkpoint_reconciler import lifecycle_db_path
+
+    if database_url is not None:
+        from nexus_ai_agent.storage.checkpoint_lifecycle_pg_store import (
+            PostgresCheckpointLifecycleStore,
+        )
+
+        return PostgresCheckpointLifecycleStore(database_url, read_only=read_only)
+    from nexus_ai_agent.storage.checkpoint_lifecycle_store import (
+        SQLiteCheckpointLifecycleStore,
+    )
+
+    lifecycle_path = lifecycle_db_path(settings.checkpoint_path)
+    if strict and (lifecycle_path == ":memory:" or not Path(lifecycle_path).exists()):
+        return None
+    return SQLiteCheckpointLifecycleStore(lifecycle_path)
 
 
 @app.command()
@@ -131,6 +203,243 @@ def continuum(
         typer.echo("✓ continuum snapshot matches checkout")
         return
     raise typer.BadParameter("mode must be 'show' or 'verify'")
+
+
+@metrics_app.command("snapshot")
+def metrics_snapshot(
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Print the current low-cardinality metrics snapshot."""
+    import json
+
+    from nexus_ai_agent.infrastructure.observability.metrics import get_metrics_registry
+
+    snapshot = get_metrics_registry().snapshot()
+    typer.echo(
+        json.dumps(snapshot)
+        if json_output
+        else "\\n".join(f"{key} {value}" for key, value in snapshot.items())
+    )
+
+
+@checkpoints_app.command("inspect")
+def inspect_checkpoints(
+    json_output: bool = typer.Option(False, "--json"),
+    thread: str | None = typer.Option(None, "--thread"),
+) -> None:
+    """Read checkpoint lifecycle state without touching access timestamps."""
+    import json
+    from datetime import datetime, timezone
+
+    from nexus_ai_agent.adapters.langgraph.lifecycle_recording import nexus_access_context
+    from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.domain.policies.retention import RetentionRecord, deletable, pinned
+    from nexus_ai_agent.storage.db import resolve_database_url
+
+    settings = get_settings()
+    access_token = nexus_access_context.set("admin")
+    adapter, _ = _open_checkpoint_backend()
+    # Read-only by contract: inspect never creates or mutates the lifecycle
+    # index (on PostgreSQL the read-only connection is server-enforced).
+    # A missing local index file simply means "no metadata yet".
+    database_url = resolve_database_url()
+    lifecycle = _open_lifecycle_store(settings, database_url, strict=True, read_only=True)
+    try:
+        now = datetime.now(timezone.utc)
+        records = lifecycle.records() if lifecycle is not None else []
+        grouped: dict[str, list] = {}
+        for record in records:
+            grouped.setdefault(record.thread_id, []).append(record)
+        threads = (
+            [thread] if thread is not None else sorted(set(adapter.list_threads()) | set(grouped))
+        )
+        output = []
+        for thread_id in threads:
+            checkpoints = adapter.list_checkpoints(thread_id)
+            metadata = grouped.get(thread_id, [])
+            oldest = min((item.created_at for item in metadata), default=None)
+            newest = max((item.created_at for item in metadata), default=None)
+            last_accessed = max(
+                (item.last_accessed_at for item in metadata if item.last_accessed_at), default=None
+            )
+            lifecycle_record = metadata[-1] if metadata else None
+            retention = (
+                RetentionRecord(
+                    lifecycle_record.created_at,
+                    lifecycle_record.last_accessed_at,
+                    lifecycle_record.active_until,
+                )
+                if lifecycle_record is not None
+                else None
+            )
+            pinned_value = pinned(retention, now=now) if retention is not None else "unknown"
+            deletable_value = deletable(retention, now=now) if retention is not None else False
+            entry: dict[str, Any] = {
+                "schema": "inspect-v1",
+                "thread_id": thread_id,
+                "checkpoint_count": len(checkpoints),
+                "oldest_created_at": oldest.isoformat() if oldest else "unknown",
+                "newest_created_at": newest.isoformat() if newest else "unknown",
+                "last_accessed_at": last_accessed.isoformat() if last_accessed else "unknown",
+                "pinned": pinned_value,
+                "active": bool(
+                    lifecycle_record
+                    and lifecycle_record.active_until
+                    and lifecycle_record.active_until > now
+                ),
+                "resumable_within_window": bool(retention and not deletable_value),
+                "would_delete": deletable_value,
+                "would_free_bytes_estimate": adapter.estimate_thread_bytes(thread_id),
+                "missing_lifecycle": not bool(metadata),
+                "orphan_candidate_count": max(0, len(metadata) - len(checkpoints)),
+            }
+            # inspect-v1 contract: every undeterminable field is named here
+            # (unknown values stay live in the output; see I10).
+            entry["unknown_fields"] = sorted(
+                name for name, value in entry.items() if value == "unknown"
+            )
+            output.append(entry)
+        if json_output:
+            typer.echo(json.dumps(output, default=str))
+        else:
+            for item in output:
+                typer.echo(json.dumps(item, default=str, sort_keys=True))
+    finally:
+        adapter.close()
+        if lifecycle is not None:
+            lifecycle.close()
+        nexus_access_context.reset(access_token)
+
+
+@checkpoints_app.command("reconcile")
+def reconcile_checkpoints(
+    apply: bool = typer.Option(
+        False, "--apply", help="Apply safe mutations (default: dry-run, no writes)"
+    ),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Reconcile checkpoints and lifecycle metadata (dry-run by default).
+
+    Two-way, eventual-consistency reconciliation.  Dry-run only measures and
+    reports.  With ``--apply`` the reconciler may (a) backfill checkpoints
+    missing from the lifecycle index with a protected estimated age, and
+    (b) delete orphaned *lifecycle index rows* whose 24h block has elapsed
+    while every anomaly guard holds.  It never deletes LangGraph rows.
+    """
+    import json
+
+    from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.storage.checkpoint_reconciler import (
+        CheckpointReconciler,
+        render_report,
+    )
+    from nexus_ai_agent.storage.db import resolve_database_url
+
+    settings = get_settings()
+    adapter, default_golden = _open_checkpoint_backend()
+    # The reconciler owns the only lifecycle-mutation path in the CLI
+    # (backfill/purge under the full guard stack); on PostgreSQL that
+    # means the nexus_checkpoint_lifecycle table, never LangGraph rows.
+    database_url = resolve_database_url()
+    lifecycle = _open_lifecycle_store(settings, database_url, strict=False, read_only=False)
+    try:
+        reconciler = CheckpointReconciler(
+            adapter,
+            lifecycle,
+            golden_path=default_golden,
+            enabled=settings.lifecycle_hooks_enabled,
+        )
+        report = reconciler.run(apply=apply)
+        if json_output:
+            typer.echo(json.dumps(report.to_dict(), default=str))
+        else:
+            typer.echo(render_report(report))
+    finally:
+        adapter.close()
+        lifecycle.close()
+
+
+@golden_app.command("update")
+def golden_update(
+    backend: str = typer.Option("postgres", "--backend", help="postgres | sqlite"),
+    url: str | None = typer.Option(
+        None, "--url", help="PostgreSQL URL (default: NEXUS_DATABASE_URL)"
+    ),
+    path: str | None = typer.Option(
+        None, "--path", help="SQLite checkpoint file (default: configured)"
+    ),
+    output: str | None = typer.Option(
+        None, "--output", help="Write here instead of the canonical golden path"
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Confirm the write (human-in-the-loop)"),
+) -> None:
+    """Write the schema golden for a backend. HUMAN-TRIGGERED ONLY.
+
+    This is the *only* code path allowed to write a schema golden file.
+    CI never runs it; ``reconcile`` only *asserts* against the committed
+    golden.  Review the printed fingerprint before committing the file.
+    """
+    import json
+
+    from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.storage.db import resolve_database_url
+
+    if backend not in ("postgres", "sqlite"):
+        typer.echo(f"unknown backend: {backend} (use postgres | sqlite)", err=True)
+        raise typer.Exit(code=2)
+
+    if backend == "postgres":
+        from nexus_ai_agent.storage.checkpoint_pg_adapter import (
+            DEFAULT_PG_GOLDEN,
+            FINGERPRINT_ALGORITHM,
+            PostgresCheckpointAdapter,
+        )
+
+        database_url = url or resolve_database_url()
+        if database_url is None:
+            typer.echo("no PostgreSQL URL (set NEXUS_DATABASE_URL or pass --url)", err=True)
+            raise typer.Exit(code=2)
+        adapter: CheckpointReadAdapter = PostgresCheckpointAdapter(database_url)
+        golden_path = DEFAULT_PG_GOLDEN
+    else:
+        from nexus_ai_agent.storage.checkpoint_adapter import (
+            FINGERPRINT_ALGORITHM,
+            CheckpointReadAdapter,
+            SQLiteCheckpointAdapter,
+        )
+        from nexus_ai_agent.storage.checkpoint_reconciler import DEFAULT_GOLDEN
+
+        sqlite_path = path or get_settings().checkpoint_path
+        adapter = SQLiteCheckpointAdapter(sqlite_path)
+        golden_path = DEFAULT_GOLDEN
+
+    try:
+        fingerprint = adapter.schema_fingerprint()
+    finally:
+        adapter.close()
+
+    if output is not None:
+        golden_path = Path(output)
+    payload = json.dumps({"algorithm": FINGERPRINT_ALGORITHM, "fingerprint": fingerprint}, indent=2)
+    previous = json.loads(golden_path.read_text(encoding="utf-8")) if golden_path.exists() else None
+    if previous is not None and previous.get("fingerprint") != fingerprint:
+        typer.echo("⚠ golden fingerprint CHANGES:")
+        typer.echo(f"  old: {previous.get('fingerprint')}")
+        typer.echo(f"  new: {fingerprint}")
+    if not yes:
+        typer.echo(f"would write {golden_path}:")
+        typer.echo(payload)
+        typer.echo("re-run with --yes to confirm (human-in-the-loop)")
+        return
+    golden_path.write_text(payload + "\n", encoding="utf-8")
+    typer.echo(f"✓ wrote {golden_path}")
+    typer.echo(payload)
+    typer.echo("commit this file after review; reconcile will enforce it")
+
+
+checkpoints_app.add_typer(golden_app, name="golden")
+app.add_typer(checkpoints_app, name="checkpoints")
+app.add_typer(metrics_app, name="metrics")
 
 
 @app.command()

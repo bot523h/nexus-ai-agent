@@ -38,8 +38,8 @@ from sqlmodel import SQLModel
 
 import nexus_ai_agent.storage.db  # noqa: F401  (registers every SQLModel table)
 
-#: Chain head — migrations/versions/2a1c4b6d8e9f_pgvector.py.
-_HEAD = "2a1c4b6d8e9f"
+#: Chain head — migrations/versions/f4a9c2e71b08_nexus_checkpoint_lifecycle.py.
+_HEAD = "f4a9c2e71b08"
 
 _WORKERS = 4
 _TIMEOUT_SECONDS = 180

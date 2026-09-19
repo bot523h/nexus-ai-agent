@@ -18,7 +18,7 @@ jobs:
       - run: mypy src
       - run: pytest -q -m "not slow"
 
-  # Leviathan: prove the Alembic chain (initial_schema → pgvector) works on a
+  # Prove the initial Alembic chain on real PostgreSQL.
   # real PostgreSQL before any Neon URL is provided.  Zero cloud credentials:
   # a local service container plays the part of Neon.  When NEXUS_DATABASE_URL
   # is later set to Neon, the exact same `nexus migrate` path runs against it.
@@ -46,12 +46,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e "."
+      - run: pip install -e ".[dev]"
       - run: nexus migrate
+      - run: pytest -q tests/integration/test_postgres_create_all_race.py
+      # Shared read-only adapter contract, PG leg (incl. golden stability
+      # and the f4a9c2e71b08 lifecycle table).
+      - run: pytest -q tests/integration/test_checkpoint_adapter_contract.py
+      # Lifecycle store contract, PG leg (option A).
+      - run: pytest -q tests/integration/test_lifecycle_store_contract.py
       # idempotent re-run must be a no-op (revision already at head).
       - run: nexus migrate
-      # Chain head is the pgvector revision, and psql confirms both the
-      # alembic stamp and the extension's existence on a real Postgres.
+      # Confirm the migration stamp on a real Postgres.
       - run: |
-          PGPASSWORD=nexus psql -h localhost -U nexus -d nexus -tAc "SELECT version_num FROM alembic_version" | grep -q 2a1c4b6d8e9f
-      - run: PGPASSWORD=nexus psql -h localhost -U nexus -d nexus -tAc "SELECT count(*) FROM pg_extension WHERE extname = 'vector'" | grep -q 1
+          PGPASSWORD=nexus psql -h localhost -U nexus -d nexus -tAc "SELECT version_num FROM alembic_version" | grep -q f4a9c2e71b08

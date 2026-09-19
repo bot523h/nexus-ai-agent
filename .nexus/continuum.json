@@ -1,14 +1,75 @@
 {
-  "schema_version": 1,
-  "phase": "D",
-  "phase_status": "complete",
-  "last_good_commit": "b594d4afe07c06b096afb4eba9f8b90429c79d2f",
-  "last_good_branch": "arena/01a0b0bf-nexus-ai-agent",
-  "test_count_expected": 225,
+  "schema_version": 2,
+  "plan": "PR3",
+  "step": "1133df1",
+  "next": "merge PR #7 (owner-approved) at 3.6.0",
+  "ledger": [
+    {
+      "id": "C1",
+      "commit": "c81f299",
+      "status": "complete"
+    },
+    {
+      "id": "C2",
+      "status": "complete",
+      "scope": "D1-D10 except reverted pgvector in D7 and all of D8"
+    },
+    {
+      "id": "tooling",
+      "status": "approved",
+      "scope": "bootstrap scripts and continuum"
+    },
+    {
+      "id": "D7/pgvector",
+      "status": "reverted",
+      "reason": "migration must not require pgvector"
+    },
+    {
+      "id": "D8",
+      "status": "reverted",
+      "reason": "unused token encryption has no consumer"
+    },
+    {
+      "id": "PR3-C1",
+      "commit": "063e7df",
+      "status": "complete",
+      "scope": "PG read-only adapter + shared contract + pg golden + CI PG-leg contract tests"
+    },
+    {
+      "id": "PR3-C2",
+      "commit": "aed8728",
+      "status": "complete",
+      "scope": "PG composition (isinstance fix, four-way matrix, sidecar store) + backend-aware CLI + hermetic CLI tests"
+    },
+    {
+      "id": "PR3-C3",
+      "commit": "pending",
+      "status": "complete",
+      "scope": "golden management human-in-the-loop tests"
+    },
+    {
+      "id": "PR3-C4",
+      "commit": "pending",
+      "status": "complete",
+      "scope": "Neon runbook + ledger/roadmap/continuum"
+    },
+    {
+      "id": "PR3-A-C1",
+      "commit": "d214e1a",
+      "status": "complete",
+      "scope": "isolated migration f4a9c2e71b08 + PG lifecycle store + store contract + adopt-pg head-state + golden regen"
+    },
+    {
+      "id": "PR3-A-C2",
+      "commit": "1133df1",
+      "status": "complete",
+      "scope": "PG composition over in-database lifecycle index + CLI branching + reconciler containment"
+    }
+  ],
+  "test_count_expected": 320,
   "env_fingerprint": {
     "python": "3.11.2",
     "alembic": "1.20.0",
     "sqlalchemy": "2.0.54"
-  },
-  "next_phase": "E"
+  }
 }
