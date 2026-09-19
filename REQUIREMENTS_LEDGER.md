@@ -97,9 +97,11 @@ owner for option A **only** for the single isolated lifecycle-table
 revision (strict isolation condition — see E); migrations remain
 forbidden everywhere else.
 
-Final gate (option A state): **320 passed, 20 skipped** (`-m "not slow"`,
-no PG); with live PG: **345 passed, 0 failed — twice consecutively on the
-same database**; ruff check + format clean; mypy clean (142 files).
+Final gate (option A, PR #7 head `4af957f`, re-run 2026-09-19): **320 passed,
+20 skipped** (`-m "not slow"`, no PG); with live PG: **345 passed, 0 failed —
+twice consecutively on the same database**; ruff check + format clean; mypy
+clean (142 files). CI on `4af957f`: `test` + `migrate-postgres` green
+(run 35457832337). **Merged to main as v3.6.0 (PR #7, merge commit `acdbcb7`).**
 
 ## E — PR3 option A decision (this session)
 

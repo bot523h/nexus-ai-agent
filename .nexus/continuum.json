@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
   "plan": "PR3",
-  "step": "1133df1",
-  "next": "merge PR #7 (owner-approved) at 3.6.0",
+  "step": "acdbcb7",
+  "next": "PR3 merged to main as 3.6.0 (PR #7) — await next owner directive",
   "ledger": [
     {
       "id": "C1",
@@ -64,6 +64,12 @@
       "commit": "1133df1",
       "status": "complete",
       "scope": "PG composition over in-database lifecycle index + CLI branching + reconciler containment"
+    },
+    {
+      "id": "PR3-merge",
+      "commit": "acdbcb7",
+      "status": "merged",
+      "scope": "PR #7 -> main as 3.6.0 (owner-approved); final gates 320/20 + 345x2 + mypy 142 + ruff clean on 4af957f"
     }
   ],
   "test_count_expected": 320,
