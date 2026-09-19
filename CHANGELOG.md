@@ -5,6 +5,34 @@ All notable changes to NEXUS AI Agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.0] — 2026-09-19
+
+### Added
+- **Multi-provider LLM routing chain (litellm) — end of single-provider lock-in**
+  - `llm/litellm_provider.py`: new `LiteLLMRoutingProvider(LLMProvider)` built
+    on `litellm.Router` with a priority chain of free-tier providers:
+    **Ollama (local, unlimited) → Groq → Gemini → OpenRouter `:free`**;
+    only configured providers enter the chain
+  - Anti retry-storm cooldowns: providers with daily caps
+    (Groq/Gemini/OpenRouter) are parked for 86,400s after the *first* 429
+    (`allowed_fails=1`); Ollama keeps a short 300s cooldown
+  - `NEXUS_LLM_STRICT_PRIVACY=true` removes OpenRouter `:free` deployments
+    (which may train on user prompts) from the chain
+  - Existing `FallbackProvider` remains the outer layer: a fully drained
+    router degrades to `FakeLLM` with the usual disclaimer instead of raising
+  - `LLMProvider`, `FallbackProvider`, `GeminiProvider`, `FakeLLMProvider`,
+    `LocalLlamaCppProvider` untouched; legacy local-GGUF path preserved when
+    routing is disabled or unconfigured
+  - New settings: `NEXUS_LLM_ROUTING_ENABLED`, `NEXUS_LLM_STRICT_PRIVACY`,
+    `NEXUS_LLM_CLOUD_COOLDOWN`, `NEXUS_LLM_REQUEST_TIMEOUT`,
+    `NEXUS_GROQ_API_KEY`/`GROQ_API_KEY`, `NEXUS_GROQ_MODEL`,
+    `NEXUS_OLLAMA_BASE_URL`, `NEXUS_OLLAMA_MODEL`,
+    `NEXUS_OPENROUTER_API_KEY`/`OPENROUTER_API_KEY`, `NEXUS_OPENROUTER_MODEL`
+  - New dependency: `litellm>=1.74,<2` (verified against 1.101.0)
+  - Docs: `docs/architecture/LLM_PROVIDERS.md` — chain, cooldowns, privacy
+    flag, and the documented (deferred) shared-provider pattern of
+    `agents/{gemma,phi,qwen}`
+
 ## [3.6.0] — 2026-09-19
 
 ### Added

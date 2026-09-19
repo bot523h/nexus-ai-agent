@@ -199,6 +199,62 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("VAZIR_FONT_PATH", "NEXUS_VAZIR_FONT_PATH"),
     )
 
+    # ── v3.7.0: Multi-provider LLM routing (litellm) ─────────────────
+    # Priority chain: Ollama (local, unlimited) → Groq → Gemini → OpenRouter:free.
+    # Only providers with credentials/settings enter the chain. The chain is
+    # orchestrated by litellm.Router with long cooldowns on the first 429 for
+    # providers with daily caps (Groq/Gemini/OpenRouter) to prevent retry-storms.
+    llm_routing_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("NEXUS_LLM_ROUTING_ENABLED", "LLM_ROUTING_ENABLED"),
+    )
+    # When true, drop providers that may train on user prompts
+    # (OpenRouter ":free" endpoints) from the routing chain.
+    llm_strict_privacy: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("NEXUS_LLM_STRICT_PRIVACY", "LLM_STRICT_PRIVACY"),
+    )
+    # Cooldown (seconds) applied to a cloud deployment after its first 429.
+    # 86400 = park it for ~24h instead of hammering a drained daily quota.
+    llm_cloud_cooldown: int = Field(
+        default=86_400,
+        validation_alias=AliasChoices("NEXUS_LLM_CLOUD_COOLDOWN", "LLM_CLOUD_COOLDOWN"),
+    )
+    # Per-request timeout (seconds) for every routed provider.
+    llm_request_timeout: int = Field(
+        default=60,
+        validation_alias=AliasChoices("NEXUS_LLM_REQUEST_TIMEOUT", "LLM_REQUEST_TIMEOUT"),
+    )
+    # 1) Ollama — local, unlimited. Leave ollama_model empty to disable.
+    ollama_base_url: str = Field(
+        default="http://localhost:11434",
+        validation_alias=AliasChoices("NEXUS_OLLAMA_BASE_URL", "OLLAMA_BASE_URL"),
+    )
+    ollama_model: str = Field(
+        default="",
+        validation_alias=AliasChoices("NEXUS_OLLAMA_MODEL", "OLLAMA_MODEL"),
+    )
+    # 2) Groq — free tier (https://console.groq.com).
+    groq_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GROQ_API_KEY", "NEXUS_GROQ_API_KEY"),
+    )
+    groq_model: str = Field(
+        default="llama-3.3-70b-versatile",
+        validation_alias=AliasChoices("NEXUS_GROQ_MODEL", "GROQ_MODEL"),
+    )
+    # 3) Gemini — the existing free-tier engine (gemini_api_key/gemini_model above).
+    # 4) OpenRouter — last resort. NOTE: some ":free" endpoints may train on
+    # prompts; set NEXUS_LLM_STRICT_PRIVACY=true to exclude them from the chain.
+    openrouter_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENROUTER_API_KEY", "NEXUS_OPENROUTER_API_KEY"),
+    )
+    openrouter_model: str = Field(
+        default="meta-llama/llama-3.3-70b-instruct:free",
+        validation_alias=AliasChoices("NEXUS_OPENROUTER_MODEL", "OPENROUTER_MODEL"),
+    )
+
     @field_validator("allowed_user_ids", mode="before")
     @classmethod
     def _parse_allowed_user_ids(cls, v):  # type: ignore[no-untyped-def]
