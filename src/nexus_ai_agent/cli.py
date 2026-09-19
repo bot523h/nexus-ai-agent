@@ -8,7 +8,8 @@ from uuid import uuid4
 
 import typer
 
-from nexus_ai_agent.llm.provider import LLMProvider
+from nexus_ai_agent.llm.litellm_provider import build_llm_provider
+from nexus_ai_agent.llm.provider import LLMProvider  # noqa: F401 — re-exported for typing
 
 app = typer.Typer(help="NEXUS AI Agent CLI")
 checkpoints_app = typer.Typer(help="Inspect checkpoint lifecycle state")
@@ -469,24 +470,12 @@ def run_bot(
     schema = ensure_startup_schema()
     typer.echo(f"✓ Schema ready ({schema['backend']}/{schema['source']})")
 
-    # Initialize LLM
-    model_path = Path(settings.model_path)
-    if model_path.exists():
-        from nexus_ai_agent.llm.local_llama_cpp import LocalLlamaCppProvider
-
-        typer.echo(f"✓ Loading model: {settings.model_path}")
-        llm: LLMProvider = LocalLlamaCppProvider(
-            settings.model_path,
-            n_ctx=getattr(settings, "n_ctx", 2048),
-            n_gpu_layers=getattr(settings, "n_gpu_layers", 0),
-        )
-    else:
-        from nexus_ai_agent.llm.fake_llm import FakeLLMProvider
-
-        typer.echo(
-            "⚠  Model not found — using FakeLLM. Set NEXUS_MODEL_PATH to a valid .gguf file."
-        )
-        llm = FakeLLMProvider()
+    # Initialize LLM — v3.7.0 multi-provider routing chain:
+    #   litellm chain (Ollama → Groq → Gemini → OpenRouter:free, wrapped in
+    #   FallbackProvider → FakeLLM) with legacy local-GGUF/FakeLLM as the
+    #   fallback path when routing is disabled/unavailable.
+    llm, llm_label = build_llm_provider(settings)
+    typer.echo(f"✓ LLM engine: {llm_label}")
 
     # Tools
     workspace = getattr(settings, "workspace_root", ".")
