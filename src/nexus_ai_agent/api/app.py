@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from fastapi import FastAPI
+import secrets
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from nexus_ai_agent.api.dashboard import router as dashboard_router
 
@@ -125,3 +127,65 @@ async def root() -> str:
     </body>
     </html>
     """
+
+
+@app.get("/healthz")
+async def healthz() -> dict[str, str]:
+    """Liveness probe for webhook/scale-to-zero platforms (v3.8.0).
+
+    Deliberately touches no database and no engine: a 200 here means only
+    "the process is up and accepting requests", which is exactly what the
+    platform health gate should ask before routing traffic.
+    """
+    return {"status": "ok"}
+
+
+@app.post("/webhook/telegram")
+async def telegram_webhook(request: Request) -> JSONResponse:
+    """Receive Telegram webhook deliveries (webhook run-mode, v3.8.0).
+
+    The shared secret (``NEXUS_WEBHOOK_SECRET``) is compared constant-time
+    against the header Telegram echoes from ``set_webhook(secret_token=...)``.
+    Verified payloads are converted into a PTB ``Update`` (via the
+    ``WebhookApplicationAdapter`` in ``bot/app.py`` — the sanctioned telegram
+    import boundary) and pushed to the application's update queue; actual
+    processing happens on the application's own loop.
+    """
+    from nexus_ai_agent.bot.app import WebhookApplicationAdapter
+    from nexus_ai_agent.bot.webhook import TELEGRAM_SECRET_TOKEN_HEADER
+    from nexus_ai_agent.config.settings import get_settings
+
+    secret = getattr(request.app.state, "webhook_secret", None)
+    if secret is None:
+        secret = get_settings().webhook_secret or ""
+    provided = request.headers.get(TELEGRAM_SECRET_TOKEN_HEADER)
+    if not secret or provided is None or not secrets.compare_digest(provided, secret):
+        return JSONResponse({"ok": False, "error": "invalid secret"}, status_code=403)
+
+    application = getattr(request.app.state, "webhook_application", None)
+    if application is None:
+        # run_webhook() always publishes the application before serving;
+        # reaching this means a cold-start race or a misconfiguration.
+        # 503 makes Telegram retry the delivery instead of dropping it.
+        return JSONResponse(
+            {"ok": False, "error": "webhook application not ready"}, status_code=503
+        )
+
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
+    if not isinstance(payload, dict):
+        return JSONResponse({"ok": False, "error": "invalid payload"}, status_code=400)
+
+    adapter = WebhookApplicationAdapter(application)
+    try:
+        update = adapter.parse_update(payload)
+    except Exception:
+        return JSONResponse({"ok": False, "error": "unparsable update"}, status_code=400)
+    if update is None:
+        # Telegram always includes update_id; anything else is malformed.
+        return JSONResponse({"ok": False, "error": "missing update_id"}, status_code=400)
+
+    adapter.enqueue(update)
+    return JSONResponse({"ok": True}, status_code=200)

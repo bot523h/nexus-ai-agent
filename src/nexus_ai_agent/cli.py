@@ -445,10 +445,17 @@ app.add_typer(metrics_app, name="metrics")
 
 @app.command()
 def run_bot(
-    mode: str = typer.Option("polling", help="Run mode: polling or webhook"),
+    mode: str | None = typer.Option(
+        None,
+        help=(
+            "Run mode: polling or webhook. Overrides NEXUS_RUN_MODE; "
+            "defaults to polling when neither is set."
+        ),
+    ),
 ) -> None:
     """Start the NEXUS AI Telegram bot."""
     from nexus_ai_agent.bot.app import build_application
+    from nexus_ai_agent.bot.webhook import resolve_run_mode, run_webhook
     from nexus_ai_agent.config.settings import get_settings
     from nexus_ai_agent.memory.long_term import LongTermMemory
     from nexus_ai_agent.observability.logging import configure_logging
@@ -461,6 +468,12 @@ def run_bot(
         WriteFileTool,
     )
     from nexus_ai_agent.tools.registry import ToolRegistry
+
+    try:
+        run_mode = resolve_run_mode(mode)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
 
     settings = get_settings()
     configure_logging(settings.log_level)
@@ -504,15 +517,12 @@ def run_bot(
     # Bot
     application = build_application(settings, graph)
 
-    if mode == "polling":
+    if run_mode == "webhook":
+        typer.echo("✓ Starting bot in webhook mode…")
+        run_webhook(application)
+    else:
         typer.echo("✓ Starting bot in polling mode…")
         application.run_polling()
-    elif mode == "webhook":
-        typer.echo("Webhook mode not yet configured.")
-        raise typer.Exit(code=1)
-    else:
-        typer.echo(f"Unknown mode: {mode}")
-        raise typer.Exit(code=1)
 
 
 @app.command()

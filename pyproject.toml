@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nexus-ai-agent"
-version = "3.7.0"
+version = "3.8.0"
 description = "NEXUS AI agent: offline-first multi-agent orchestration with Telegram integration."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -31,6 +31,7 @@ dependencies = [
     "httpx==0.28.1",  # pinned: core/ssrf_guard.py uses a private httpx API
     "duckduckgo-search>=8.0",
     "fastapi>=0.110",
+    "uvicorn==0.53.0",  # pinned: webhook run-mode server (v3.8.0, verified latest on PyPI)
     "numpy>=1.26",
     "chromadb>=0.5",
     "flashrank>=0.2",

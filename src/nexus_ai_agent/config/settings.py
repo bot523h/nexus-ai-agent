@@ -255,6 +255,30 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("NEXUS_OPENROUTER_MODEL", "OPENROUTER_MODEL"),
     )
 
+    # ── v3.8.0: Telegram webhook mode (scale-to-zero deployments) ─────
+    # "polling" (default) keeps the legacy always-on long-poll loop;
+    # "webhook" serves Telegram updates over HTTP for web-type services
+    # that scale to zero (Koyeb web, ...). The CLI --mode flag wins over
+    # this value; see bot/webhook.py:resolve_run_mode.
+    run_mode: str = Field(
+        default="polling",
+        validation_alias=AliasChoices("NEXUS_RUN_MODE", "RUN_MODE"),
+    )
+    # Public HTTPS URL Telegram should POST updates to (webhook mode only),
+    # e.g. https://<app>.koyeb.app/webhook/telegram.
+    webhook_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("NEXUS_WEBHOOK_URL", "WEBHOOK_URL"),
+    )
+    # Shared secret Telegram echoes back in the
+    # X-Telegram-Bot-Api-Secret-Token header; verified constant-time in
+    # api/app.py. Generate e.g. with: python -c "import secrets;
+    # print(secrets.token_hex(32))".
+    webhook_secret: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("NEXUS_WEBHOOK_SECRET", "WEBHOOK_SECRET"),
+    )
+
     @field_validator("allowed_user_ids", mode="before")
     @classmethod
     def _parse_allowed_user_ids(cls, v):  # type: ignore[no-untyped-def]
