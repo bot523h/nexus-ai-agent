@@ -14,7 +14,7 @@ Header: **No hidden migration. No hidden mutation. No implicit repair.**
 | PR2 C3 | O1 observability (redaction, structured logging, in-process registry, core schema fingerprint) | **DONE** — `log_lifecycle_event` (redacted, fail-safe), `core_schema_fingerprint` (warning-only mismatch), process-wide registry in `metrics snapshot` | `35e0ba6` |
 | PR2 C4 | Adversarial test hardening (8 remaining), golden safety, kill-switch + flush-shutdown tests | **DONE** — `test_lifecycle_adversarial.py` (8 tests: boundaries, error containment, lost context, atexit flush, golden no-generate, introspective full delegate, CLI kill-switch, lock contention) | `fdef331` |
 | D1 | `make smoke` Makefile fix (`--input` → positional argument) | **DONE** — `make smoke` verified exit 0 | `02f8d18` |
-| PR3 (Phase 5) | PG path end-to-end: read-only PG adapter + shared contract; PG composition (isinstance bug fixed, four-way kill-switch matrix, sidecar lifecycle store, option B — zero migrations); backend-aware inspect/reconcile; `golden update` (human-only); `postgres.langgraph.json` golden; Neon runbook | **DONE on branch** (NOT merged to main) | `063e7df` (C1) → `aed8728` (C2/C3) → this commit (C4 docs) |
+| PR3 (Phase 5) | PG path end-to-end: read-only PG adapter + shared contract; PG composition (isinstance bug fixed, four-way kill-switch matrix); **lifecycle index in the database (option A** — isolated migration `f4a9c2e71b08`; interim option B sidecar remains in history and on the SQLite path); backend-aware inspect/reconcile; `golden update` (human-only); `postgres.langgraph.json` golden; Neon runbook | **DONE on branch** (NOT merged to main) | `063e7df` (C1) → `aed8728` (C2/C3) → `d214e1a`/`1133df1` (option A) + docs follow-up |
 | POST_V1 | Per-checkpoint (delta-chain) deletion surgery | DEFERRED — guarded by `POST_V1_DELETE_MARKER` + architecture test | — |
 
 Rescue note (2026-09-18): the PR1/PR2 lineage existed only on
@@ -42,7 +42,7 @@ no work was lost. Working tree at rescue time was clean; no stashes.
 |------|--------|
 | `make lint` | green — `All checks passed!`, 211 files formatted |
 | `make types` | green — `Success: no issues found in 140 source files` |
-| `make test` | green — **312 passed, 16 skipped in ~24s** (PG-runtime legs skip without `NEXUS_DATABASE_URL`; covered by CI `migrate-postgres` job + local PG verification 327 passed / 0 failed) |
+| `make test` | green — **320 passed, 20 skipped in ~24s** (PG-runtime legs skip without `NEXUS_DATABASE_URL`; covered by CI `migrate-postgres` job + local PG verification 345 passed / 0 failed, twice consecutively) |
 | `make smoke` | **fixed** — full graph via FakeLLMProvider, exit 0 |
 
 Baseline delta: 242 → 295 passed (+53), 1 skipped (unchanged, PG-only);
@@ -50,8 +50,9 @@ mypy 134 → 140 files. No test was removed or weakened.
 
 CI (`.github/workflows/ci.yml`): two jobs — `test` (ruff/mypy/pytest, no
 service) and `migrate-postgres` (service container `pgvector/pgvector:pg16`,
-runs `nexus migrate` idempotently + race regression + head assertion on
-`47903d282ede` + the adapter contract suite (PG leg).
+runs `nexus migrate` idempotently (now through head `f4a9c2e71b08`) +
+race regression + head assertion + the adapter contract and lifecycle
+store contract suites (PG legs).
 
 ## Dependencies (core, 30 declared)
 

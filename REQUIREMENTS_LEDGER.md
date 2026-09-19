@@ -83,20 +83,39 @@ mutation only via `--apply`, no cron; **no** journal table; **no** PG adapter;
 | D1  | read-only Postgres checkpoint adapter (same contract as SQLite)                          | DONE | `063e7df` — `storage/checkpoint_pg_adapter.py`; read-only enforced server-side (`default_transaction_read_only`, psycopg 25006 test) |
 | D2  | one contract, two backends (fingerprint/golden/lineage/estimate)                        | DONE | `063e7df` — `tests/integration/test_checkpoint_adapter_contract.py` (24 tests; PG leg in CI `migrate-postgres` job) |
 | D3  | PG composition: real `PostgresCheckpointer` (isinstance bug fixed) + lifecycle wrapper   | DONE | `aed8728` — four-way matrix in `test_checkpoint_composition.py` incl. live PG e2e (data → PG, lifecycle → sidecar) |
-| D4  | sidecar SQLite lifecycle store on PG path (option B; zero migrations, zero PG tables)    | DONE | `aed8728` — `get_checkpointer` PG branch; sidecar write failures never propagate; kill-switch off ⇒ bare checkpointer |
+| D4  | lifecycle store on PG path — **superseded by option A (see E)**; sidecar kept only on the SQLite path | SUPERSEDED | `aed8728` (B) → `d214e1a`/`1133df1` (A) |
 | D5  | backend-aware CLI: inspect/reconcile on PG; reconcile = no-op on PG (SQLite-only purge)  | DONE | `aed8728` — `_open_checkpoint_backend`; `purge_eligible: false` on PG with reason |
 | D6  | `golden update` command (human-in-the-loop only; `--yes` required for write)             | DONE | `aed8728` — `tests/unit/test_golden_management.py` (5 tests incl. live PG fingerprint == committed golden) |
 | D7  | `postgres.langgraph.json` committed golden (schema-v1-pg; LangGraph scope only)          | DONE | `063e7df` — generated under owner authority from PG 18; stability on CI's pg16 proven by contract test |
 | D8  | ops runbook + DATA_LIFECYCLE schema map + ledger/roadmap/continuum refresh               | DONE | `43a1b6a` (schema map) + this commit — `docs/ops/NEON_LIFECYCLE_RUNBOOK.md` |
 
-PR3 hard constraints (owner): zero migrations (option B); no new core
-dependencies; kill-switch + flush at composition root only; touch errors
-never propagate; connection error ≠ drift; purge stays SQLite-only;
-golden update human-triggered only, never in CI.
+PR3 hard constraints (owner): no new core dependencies; kill-switch +
+flush at composition root only; touch errors never propagate; connection
+error ≠ drift; golden update human-triggered only, never in CI.  The
+"zero migrations" constraint was set under option B and lifted by the
+owner for option A **only** for the single isolated lifecycle-table
+revision (strict isolation condition — see E); migrations remain
+forbidden everywhere else.
 
-Final gate (this session): **312 passed, 16 skipped** (`-m "not slow"`,
-no PG); with local PG: 327 passed, 0 failed; ruff check + format clean;
-mypy clean (141 files).
+Final gate (option A state): **320 passed, 20 skipped** (`-m "not slow"`,
+no PG); with live PG: **345 passed, 0 failed — twice consecutively on the
+same database**; ruff check + format clean; mypy clean (142 files).
+
+## E — PR3 option A decision (this session)
+
+| ID  | Decision / Target                                                                 | Status | Evidence |
+|-----|------------------------------------------------------------------------------------|--------|----------|
+| E1  | owner decision: lifecycle index moves from local SQLite sidecar (B) to the database (A) — serverless (Neon) local files are ephemeral; sidecar history would be lost on every restart | DECIDED | owner instruction 2026-09-19, with rationale |
+| E2  | strict isolation condition: one isolated revision (`f4a9c2e71b08`) creating exactly one table; no other DDL; PG dialect only | DONE | `d214e1a` — migration + source-level isolation test (`test_lifecycle_migration_is_isolated_and_postgres_only`) |
+| E3  | PG store: DML-only (AST test), lazy connection (boot-safe), server-enforced read-only for inspect | DONE | `d214e1a` — `checkpoint_lifecycle_pg_store.py` + `test_lifecycle_store_contract.py` |
+| E4  | adopt-pg: stamped-at-head DB must contain the table; legacy DB without it = drift (fail-fast) | DONE | `d214e1a` — `TestHeadStateIncludesLifecycleTable` |
+| E5  | composition: lifecycle rows land in the same database; no sidecar file on the PG path (asserted); kill-switch off = zero rows (live PG) | DONE | `1133df1` — four-way matrix + `test_postgres_kill_switch_off_writes_nothing` |
+| E6  | golden regenerated via human-triggered CLI (`bac07283…` → `0842f831…`, head-only change) | DONE | `d214e1a` — one-line diff on `postgres.langgraph.json` |
+| E7  | purge works uniformly on both backends (lifecycle rows only, full guard stack) | DONE | `1133df1` — reconciler store-agnostic; store-read failure contained as health-gate scan error |
+
+Supersession note: section D rows D1–D3/D5–D7 remain valid; D4 (sidecar
+on the PG path) is history — the sidecar remains on the SQLite path only
+(see `docs/ops/NEON_LIFECYCLE_RUNBOOK.md`, "Lifecycle index maintenance").
 
 ## DoD (final verification)
 

@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
   "plan": "PR3",
-  "step": "aed8728",
-  "next": "open PR (owner approved creation; merge only on explicit instruction)",
+  "step": "1133df1",
+  "next": "merge PR #7 (owner-approved) at 3.6.0",
   "ledger": [
     {
       "id": "C1",
@@ -52,9 +52,21 @@
       "commit": "pending",
       "status": "complete",
       "scope": "Neon runbook + ledger/roadmap/continuum"
+    },
+    {
+      "id": "PR3-A-C1",
+      "commit": "d214e1a",
+      "status": "complete",
+      "scope": "isolated migration f4a9c2e71b08 + PG lifecycle store + store contract + adopt-pg head-state + golden regen"
+    },
+    {
+      "id": "PR3-A-C2",
+      "commit": "1133df1",
+      "status": "complete",
+      "scope": "PG composition over in-database lifecycle index + CLI branching + reconciler containment"
     }
   ],
-  "test_count_expected": 312,
+  "test_count_expected": 320,
   "env_fingerprint": {
     "python": "3.11.2",
     "alembic": "1.20.0",

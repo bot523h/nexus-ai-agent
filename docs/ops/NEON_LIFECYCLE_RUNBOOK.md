@@ -1,7 +1,9 @@
 # Neon Lifecycle Operations Runbook
 
 Operating procedures for the PostgreSQL checkpoint backend (Neon) with the
-SQLite sidecar lifecycle store (PR3, option B).
+in-database lifecycle index (PR3, option A — the index lives in the same
+database; see "Lifecycle index maintenance" for why option B's sidecar was
+retired on this path).
 
 No hidden migration. No hidden mutation. No implicit repair.
 
@@ -11,13 +13,13 @@ No hidden migration. No hidden mutation. No implicit repair.
 |---|---|---|
 | Checkpoints, blobs, writes | PostgreSQL (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) | LangGraph official `PostgresCheckpointer`; the only durable source of conversation state |
 | Alembic head | PostgreSQL (`alembic_version`) | Schema version for the app schema (the 4 `checkpoint_*` tables are LangGraph-owned, not Alembic-owned) |
-| Lifecycle metadata (`last_accessed_at`) | Local SQLite sidecar next to `settings.checkpoint_path` | PR3 option B: disposable metadata, zero migrations, zero PG tables. Losing it is non-fatal (rebuilds on next access) |
+| Lifecycle metadata (`created_at`, `last_accessed_at`, `active_until`) | **PG path:** PostgreSQL, table `nexus_checkpoint_lifecycle` (Alembic revision `f4a9c2e71b08`). **SQLite path:** local sidecar file next to `settings.checkpoint_path`, owned by the store | Durable on serverless (Neon) — the reason option A replaced the interim sidecar (option B). Rows are disposable metadata: losing them is non-fatal (reconcile backfills) |
 | Schema goldens | `src/nexus_ai_agent/storage/golden/*.json` | Drift detection; `postgres.langgraph.json` covers the LangGraph schema scope only |
 
 Kill switch: `NEXUS_LIFECYCLE_KILL_SWITCH=false` (or the settings field)
 disables all lifecycle recording; the checkpointer stays a bare
 `PostgresCheckpointer`. Recording is never active while the kill switch is
-off, and no lifecycle write (including the sidecar) is ever performed.
+off, and no lifecycle write of any kind is ever performed.
 
 ## Daily
 
@@ -43,8 +45,10 @@ off, and no lifecycle write (including the sidecar) is ever performed.
    - `core_schema: "match"` / `"drift"` vs `alembic_version` head
    - `health_gate`: `anomaly_rate` and counts. `--apply` is blocked when
      `anomaly_rate > 0.01` or anomalies > 500 — that is a guard, not a bug.
-   - `purge_eligible` stays `false` on the PG backend (SQLite-only by
-     design). The lifecycle on PG is observability, not reclamation.
+   - `--apply` (both backends) may backfill missing lifecycle rows and
+     purge orphaned *lifecycle rows* under the full guard stack (kill
+     switch, golden match, health gate, 24h block per orphan, anomaly
+     caps). It never deletes LangGraph rows on any backend.
 
 ## Drift response (any `drift` in the report)
 
@@ -71,13 +75,33 @@ nexus checkpoints golden update --backend postgres --yes
   library version changed its DDL — review the `old:` / `new:` warning
   and the upstream changelog before committing.
 
-## Lifecycle sidecar maintenance
+## Lifecycle index maintenance
 
-- The sidecar is a local file. Deleting it is safe (worst case: the next
-  `reconcile` reports `missing_lifecycle: true` until the next user
-  access repopulates rows; the graph is unaffected).
-- It must not be committed, backed up, or shipped. It is per-host
-  metadata (the owner's laptop, the worker's scratch disk).
+**PG path — the table is migration-owned (option A).**
+
+- Never hand-DDL the table. If it is missing (database predates revision
+  `f4a9c2e71b08`), the fix is `nexus migrate`; reconcile contains the
+  resulting read failure as a health-gate error, never as drift.
+- Rows are disposable metadata. Losing them (branch restore, manual
+  truncate) is non-fatal: the next `reconcile --apply` backfills missing
+  rows with a protected estimated age, and the graph is unaffected.
+- Why the sidecar was retired here: the interim design (option B) kept
+  the index in a local SQLite file next to the checkpoint path. On
+  serverless deployments (Neon) the local file is ephemeral — it is lost
+  on every compute restart, so lifecycle history would vanish
+  repeatedly and silently. Option A (owner decision) puts the index in
+  the database, where it is as durable as the checkpoints themselves.
+
+**SQLite path — the sidecar stays.**
+
+- On the SQLite backend the "database" is already a local file, so the
+  sidecar is the store's own local index file (created by the store via
+  `CREATE TABLE IF NOT EXISTS`; no migration machinery for a disposable
+  index). It is not ephemeral in the Neon sense — it lives with the
+  checkpoint file — and it must not be committed, backed up, or shipped
+  (per-host metadata).
+- Deleting it is safe: the next reconcile reports `missing_lifecycle:
+  true` until rows are repopulated; the graph is unaffected.
 
 ## Neon-specific notes
 
@@ -95,8 +119,9 @@ nexus checkpoints golden update --backend postgres --yes
 | Situation | Behavior |
 |---|---|
 | PG connection error during inspect/reconcile | `health_gate: "error"`, exit 2, no drift verdict |
-| `anomaly_rate > 1%` | `--apply` blocked (SQLite purge path) |
+| `anomaly_rate > 1%` | `--apply` blocked (both backends; lifecycle rows only) |
 | Kill switch off | bare checkpointer, zero lifecycle writes |
-| Sidecar write failure | logged, never raised into the graph |
+| Lifecycle store write failure (either backend) | logged, never raised into the graph |
+| PG lifecycle table missing (migration not run) | reconcile health-gate error — never a crash, never drift; fix with `nexus migrate` |
 | Golden fingerprint changed, same head | warning with `old:` / `new:`; human updates golden via CLI |
 | `missing_lifecycle: true` | informational; no data is lost |
