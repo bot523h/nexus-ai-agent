@@ -16,8 +16,6 @@ class JobRegistry:
         self._initialized = False
 
     async def initialize(self) -> None:
-        if self._initialized:
-            return
         async with self._init_lock:
             if self._initialized:
                 return

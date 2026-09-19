@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 
 try:
-    from playwright.async_api import async_playwright
+    from playwright.async_api import async_playwright  # type: ignore[import-not-found]
 except ImportError:  # pragma: no cover - environment dependent
     async_playwright = None
 
@@ -37,10 +37,13 @@ async def generate_image_post(text: str, image_url: str | None, template: str) -
     html = f"""
     <html lang="fa" dir="rtl">
       <body style="margin:0;background:#0f172a;color:#f8fafc;font-family:sans-serif;">
-        <main style="width:1080px;height:1080px;padding:64px;display:flex;flex-direction:column;gap:32px;">
-          <section style="padding:48px;border-radius:32px;background:#1e293b;display:flex;flex:1;flex-direction:column;justify-content:center;gap:24px;">
+        <main style="width:1080px;height:1080px;padding:64px;display:flex;
+                     flex-direction:column;gap:32px;">
+          <section style="padding:48px;border-radius:32px;background:#1e293b;display:flex;
+                          flex:1;flex-direction:column;justify-content:center;gap:24px;">
             <div style="font-size:24px;opacity:0.7;">{template}</div>
-            <div style="font-size:56px;line-height:1.4;font-weight:700;white-space:pre-wrap;">{text}</div>
+            <div style="font-size:56px;line-height:1.4;font-weight:700;
+                         white-space:pre-wrap;">{text}</div>
             {image_markup}
           </section>
         </main>

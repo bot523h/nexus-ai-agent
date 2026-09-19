@@ -4,6 +4,7 @@ import os
 import secrets
 import tempfile
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import urlparse
 
 import httpx
@@ -29,6 +30,7 @@ def get_creative_registry() -> JobRegistry:
     if _creative_registry is None or _creative_registry._db_path != registry_path:
         _creative_registry = JobRegistry(registry_path)
     return _creative_registry
+
 
 app = FastAPI(title="NEXUS AI Dashboard")
 
@@ -237,8 +239,8 @@ async def _process_video_edit_job(
 @app.post("/creative/video-edit")
 async def create_video_edit_job(
     background_tasks: BackgroundTasks,
-    file: UploadFile | None = File(None),
-    video_url: str | None = Form(None),
+    file: Annotated[UploadFile | None, File()] = None,
+    video_url: Annotated[str | None, Form()] = None,
 ) -> dict[str, str]:
     if file is None and not video_url:
         raise HTTPException(status_code=400, detail="Provide either file or video_url")

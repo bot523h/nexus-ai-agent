@@ -19,12 +19,7 @@ class FFmpegResult(BaseModel):
 
 
 def _escape_drawtext(value: str) -> str:
-    return (
-        value.replace("\\", "\\\\")
-        .replace(":", "\\:")
-        .replace("'", "\\'")
-        .replace("%", "\\%")
-    )
+    return value.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'").replace("%", "\\%")
 
 
 def _build_filter_chain(plan: VideoEditPlan) -> str | None:
@@ -32,9 +27,7 @@ def _build_filter_chain(plan: VideoEditPlan) -> str | None:
     if plan.zooms:
         zoom_expr = "1"
         for zoom in reversed(plan.zooms):
-            zoom_expr = (
-                f"if(between(in_time,{zoom.start},{zoom.end}),{zoom.scale},{zoom_expr})"
-            )
+            zoom_expr = f"if(between(in_time,{zoom.start},{zoom.end}),{zoom.scale},{zoom_expr})"
         filters.append(f"zoompan=z='{zoom_expr}':d=1:fps=30")
     for caption in plan.captions:
         text = _escape_drawtext(caption.text)
@@ -69,9 +62,7 @@ def _execute_ffmpeg_commands_sync(
 ) -> FFmpegResult:
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    expected_duration = (
-        sum(cut.end - cut.start for cut in plan.cuts) if plan.cuts else None
-    )
+    expected_duration = sum(cut.end - cut.start for cut in plan.cuts) if plan.cuts else None
 
     try:
         with tempfile.TemporaryDirectory(prefix="nexus_ffmpeg_") as temp_dir_name:
@@ -175,8 +166,7 @@ def _execute_ffmpeg_commands_sync(
                     return FFmpegResult(
                         success=False,
                         output_path=None,
-                        error_message=filter_result.stderr.strip()
-                        or filter_result.stdout.strip(),
+                        error_message=filter_result.stderr.strip() or filter_result.stdout.strip(),
                         duration=None,
                     )
             elif concat_output != output:
