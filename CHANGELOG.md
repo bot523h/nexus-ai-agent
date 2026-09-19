@@ -5,6 +5,60 @@ All notable changes to NEXUS AI Agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.0] — 2026-09-19
+
+### Added
+- **Checkpoint lifecycle on the PostgreSQL path, end-to-end (PR3, option A)**
+  - `nexus_checkpoint_lifecycle` table in PostgreSQL via the isolated
+    Alembic revision `f4a9c2e71b08` (single-table DDL, PostgreSQL dialect
+    only — the SQLite path is unchanged)
+  - Read-only `PostgresCheckpointAdapter` (server-enforced read-only
+    connection) behind the shared `CheckpointReadAdapter` contract with
+    the SQLite adapter
+  - Runtime PG path: `LifecycleRecordingSaver` over the real
+    `PostgresCheckpointer` — lifecycle metadata lands in the same
+    database, so serverless (Neon) restarts no longer lose it
+  - Backend-aware `nexus checkpoints inspect|reconcile` (same CLI, PG or
+    SQLite)
+  - `nexus checkpoints golden update` — human-triggered schema golden
+    management (write requires `--yes`; CHANGES warning with old/new
+    digests)
+  - Committed `postgres.langgraph.json` golden (schema-v1-pg)
+  - Parameterized lifecycle store contract (SQLite + PG) and Neon
+    operations runbook (`docs/ops/NEON_LIFECYCLE_RUNBOOK.md`)
+  - Four-way kill-switch matrix (SQLite/PG × on/off) with live-PG
+    composition tests
+- Read-only checkpoint lifecycle operations: `inspect` contract
+  (inspect-v1), reconciler with health gate (dry-run default), retention
+  policy, schema goldens (SQLite + Postgres), O1 observability
+  (redaction, structured events, core-schema fingerprint), lifecycle
+  kill-switch and architecture boundary tests (PR1/PR2, this line of work)
+
+### Changed
+- Lifecycle metadata on the PostgreSQL path moved from a local SQLite
+  sidecar (interim option B) to the database itself (option A, owner
+  decision): serverless local files are ephemeral, so the sidecar would
+  lose all lifecycle history on compute restart
+- `nexus adopt-pg` now treats a database stamped at head but missing
+  `nexus_checkpoint_lifecycle` as drift (fail-fast — never implicit
+  repair)
+- Migration chain head: `47903d282ede` → `f4a9c2e71b08`;
+  `postgres.langgraph.json` fingerprint regenerated via the
+  human-triggered CLI (head-only change)
+- Reconciler purge (lifecycle rows only, under the full guard stack)
+  works uniformly on both backends
+
+### Fixed
+- `PostgresCheckpointer` subclassed itself
+  (`class PostgresCheckpointer(PostgresCheckpointer)`) and failed
+  `ensure_valid_checkpointer`'s `BaseCheckpointSaver` isinstance check on
+  every PG boot — it is now a genuine `BaseCheckpointSaver` subclass
+  delegating to the official checkpointer
+- Graph smoke tests are hermetic on persistent stores (unique thread ids
+  per run)
+- CI `migrate-postgres` job installs the `[dev]` extra so its pytest
+  steps run
+
 ## [3.5.0] — 2026-09-17
 
 > Released as **v3.5.0**.  An earlier tag `v0.2.0-D` was cut on the same work
