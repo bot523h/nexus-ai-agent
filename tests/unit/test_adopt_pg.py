@@ -50,6 +50,52 @@ class TestDecideMatrix:
         assert decide(_report(stamped=False, tables=30, extra=["rogue_table"])) == ACTION_FAIL
 
 
+class TestHeadStateIncludesLifecycleTable:
+    def test_expected_set_includes_lifecycle_table(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A head-state database must contain nexus_checkpoint_lifecycle (A)."""
+        import asyncio
+
+        import nexus_ai_agent.storage.adopt_pg as mod
+
+        captured: dict[str, object] = {}
+
+        def fake_snapshot(sync_conn, expected, redacted):
+            captured["expected"] = set(expected)
+            return mod.PostgresAdoptionReport(
+                database=redacted,
+                action="inspect_only",
+                alembic_stamped=False,
+                table_count=0,
+            )
+
+        class _FakeConn:
+            async def run_sync(self, fn):
+                return fn(None)
+
+        class _FakeCtx:
+            async def __aenter__(self):
+                return _FakeConn()
+
+            async def __aexit__(self, *args):
+                return False
+
+        class _FakeEngine:
+            def connect(self):
+                return _FakeCtx()
+
+            async def dispose(self):
+                return None
+
+        monkeypatch.setattr(mod, "_snapshot", fake_snapshot)
+        monkeypatch.setattr(mod, "create_async_engine", lambda *a, **k: _FakeEngine())
+
+        report = asyncio.run(mod._inspect("postgresql://u:p@h/d"))
+        assert report.alembic_stamped is False
+        expected = captured["expected"]
+        assert "nexus_checkpoint_lifecycle" in expected
+        assert "chat" in expected  # ORM tables still expected
+
+
 class TestRedaction:
     def test_credentials_never_leak(self) -> None:
         leaked = "postgresql://secretuser:secretpass@neon-host:5432/mydb"

@@ -312,3 +312,96 @@ def test_committed_postgres_golden_matches_pg16_in_ci() -> None:
         adapter.assert_golden(DEFAULT_PG_GOLDEN)
     finally:
         adapter.close()
+
+
+# ── PR3 option A: the lifecycle table + PG store contract ───────────────
+
+
+@requires_pg
+def test_postgres_lifecycle_table_created_by_migration() -> None:
+    """f4a9c2e71b08 creates exactly nexus_checkpoint_lifecycle, exact shape."""
+    from nexus_ai_agent.storage.migrations import run_migrations
+
+    run_migrations()  # idempotent: already at head in CI
+    conn = psycopg.connect(PG_URL, autocommit=True)
+    try:
+        cols = conn.execute(
+            "SELECT column_name::text, is_nullable::text "
+            "FROM information_schema.columns "
+            "WHERE table_schema = 'public' "
+            "  AND table_name = 'nexus_checkpoint_lifecycle' "
+            "ORDER BY ordinal_position"
+        ).fetchall()
+        assert [c[0] for c in cols] == [
+            "thread_id",
+            "checkpoint_id",
+            "created_at",
+            "last_accessed_at",
+            "active_until",
+        ]
+        assert [c[1] for c in cols] == ["NO", "NO", "NO", "YES", "YES"]
+        pk = conn.execute(
+            "SELECT kcu.column_name::text "
+            "FROM information_schema.table_constraints tc "
+            "JOIN information_schema.key_column_usage kcu "
+            "  ON tc.constraint_name = kcu.constraint_name "
+            " AND tc.table_schema = kcu.table_schema "
+            "WHERE tc.table_schema = 'public' "
+            "  AND tc.table_name = 'nexus_checkpoint_lifecycle' "
+            "  AND tc.constraint_type = 'PRIMARY KEY' "
+            "ORDER BY kcu.ordinal_position"
+        ).fetchall()
+        assert [r[0] for r in pk] == ["thread_id", "checkpoint_id"]
+    finally:
+        conn.close()
+
+
+@requires_pg
+def test_postgres_lifecycle_store_roundtrip_and_read_only() -> None:
+    """Same store contract as SQLite: roundtrip, touch, read-only server-side."""
+    from datetime import datetime, timezone
+
+    from nexus_ai_agent.storage.checkpoint_lifecycle import CheckpointRecord
+    from nexus_ai_agent.storage.checkpoint_lifecycle_pg_store import (
+        PostgresCheckpointLifecycleStore,
+    )
+    from nexus_ai_agent.storage.migrations import run_migrations
+
+    run_migrations()
+    thread_id = f"lifecycle-{_SESSION}"
+    record = CheckpointRecord(thread_id, "cp1", datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+    store = PostgresCheckpointLifecycleStore(PG_URL)
+    try:
+        store.upsert(record)
+        rows = [r for r in store.records() if r.thread_id == thread_id]
+        assert [(r.thread_id, r.checkpoint_id) for r in rows] == [(thread_id, "cp1")]
+        assert rows[0].created_at == record.created_at
+        assert rows[0].last_accessed_at is None
+
+        touched_at = datetime(2026, 2, 1, tzinfo=timezone.utc)
+        assert store.touch_thread(thread_id, touched_at) is True
+        rows = [r for r in store.records() if r.thread_id == thread_id]
+        assert rows[0].last_accessed_at == touched_at
+        # touch never creates: unknown thread → False, no row
+        assert store.touch_thread("no-such-thread", touched_at) is False
+
+        # server-enforced read-only (SQLSTATE 25006)
+        ro = PostgresCheckpointLifecycleStore(PG_URL, read_only=True)
+        try:
+            with pytest.raises(psycopg.errors.ReadOnlySqlTransaction):
+                ro.upsert(record)
+            assert ro.records()  # reads still work
+        finally:
+            ro.close()
+
+        again = PostgresCheckpointLifecycleStore(PG_URL)
+        try:
+            assert again.schema_fingerprint() == store.schema_fingerprint()
+        finally:
+            again.close()
+
+        store.delete_index(record)
+        assert [r for r in store.records() if r.thread_id == thread_id] == []
+    finally:
+        store.close()

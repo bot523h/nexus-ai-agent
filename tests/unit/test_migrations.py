@@ -98,8 +98,40 @@ def _actual(db_file: str) -> tuple[set[str], set[tuple[str, str, bool]]]:
 def test_revision_chain_is_single_line() -> None:
     script = ScriptDirectory.from_config(_make_config())
     heads = script.get_heads()
-    assert heads == ["47903d282ede"]
-    assert [r.revision for r in script.walk_revisions()] == ["47903d282ede"]
+    assert heads == ["f4a9c2e71b08"]
+    assert [r.revision for r in script.walk_revisions()] == [
+        "f4a9c2e71b08",
+        "47903d282ede",
+    ]
+
+
+def test_lifecycle_migration_is_isolated_and_postgres_only() -> None:
+    """f4a9c2e71b08: exactly one table, no other DDL, PG dialect only."""
+    import re
+
+    migration = (
+        Path(__file__).parents[2]
+        / "migrations"
+        / "versions"
+        / "f4a9c2e71b08_nexus_checkpoint_lifecycle.py"
+    )
+    source = migration.read_text(encoding="utf-8")
+    # exactly one create / one drop, both the lifecycle table
+    assert source.count("op.create_table(") == 1
+    assert source.count("op.drop_table(") == 1
+    assert '"nexus_checkpoint_lifecycle"' in source
+    # no other DDL vocabulary
+    lowered = source.lower()
+    assert "op.execute(" not in lowered
+    assert "create extension" not in lowered
+    assert "pgvector" not in lowered
+    assert "alter table" not in lowered
+    # never touches a LangGraph table
+    assert not re.search(r"\bcheckpoints\b", source)
+    assert "checkpoint_writes" not in source
+    assert "checkpoint_blobs" not in source
+    # dialect guard in both directions
+    assert source.count("if not _is_postgresql():") == 2
 
 
 def test_upgrade_creates_exact_schema(db_path: str) -> None:

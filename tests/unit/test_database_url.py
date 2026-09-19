@@ -326,7 +326,7 @@ class TestDecideSqliteBootstrap:
         db_path = tmp_path / "managed.sqlite"
         conn = sqlite3.connect(db_path)
         conn.execute("CREATE TABLE alembic_version (version_num VARCHAR(32))")
-        conn.execute("INSERT INTO alembic_version VALUES ('47903d282ede')")
+        conn.execute("INSERT INTO alembic_version VALUES ('f4a9c2e71b08')")
         conn.execute("CREATE TABLE chat (id INTEGER PRIMARY KEY)")
         conn.commit()
         conn.close()

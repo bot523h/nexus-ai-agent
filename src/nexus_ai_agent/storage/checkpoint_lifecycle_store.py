@@ -18,6 +18,10 @@ _TABLE = "nexus_checkpoint_lifecycle"
 class SQLiteCheckpointLifecycleStore:
     """Small independent index; it never deletes LangGraph rows by itself."""
 
+    #: Local store anchor (file path); ``str | Path`` for LifecycleStore
+    #: invariance.
+    path: str | Path
+
     def __init__(self, path: str) -> None:
         self.path = path
         if path != ":memory:":
@@ -102,7 +106,7 @@ class SQLiteCheckpointLifecycleStore:
 
 
 @contextmanager
-def cleanup_lock(path: str) -> Iterator[None]:
+def cleanup_lock(path: str | Path) -> Iterator[None]:
     """Serialize cleanup processes; failure to acquire is fail-safe."""
     import fcntl
 

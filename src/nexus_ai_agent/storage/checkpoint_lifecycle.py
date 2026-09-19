@@ -10,6 +10,41 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Protocol
+
+#: The lifecycle index table name, shared by both backends.  On PostgreSQL
+#: it is created by the explicit, isolated Alembic revision
+#: ``f4a9c2e71b08`` (PR3 option A); on SQLite the store owns it via
+#: ``CREATE TABLE IF NOT EXISTS``.
+LIFECYCLE_TABLE_NAME = "nexus_checkpoint_lifecycle"
+
+
+class LifecycleStore(Protocol):
+    """Structural contract for the lifecycle index (SQLite or PostgreSQL).
+
+    The runtime recording saver and the CLI reconciler/inspect code are
+    typed against this protocol, so the backend is swappable at the
+    composition root without touching either consumer.  ``path`` is the
+    store's local, host-scoped anchor for the reconciler cleanup lock —
+    for the SQLite store it is the file path; for the PostgreSQL store it
+    is a deterministic temp-dir anchor derived from the database URL
+    (never the database itself).
+    """
+
+    path: str | Path
+
+    def upsert(self, record: CheckpointRecord) -> None: ...
+
+    def records(self) -> list[CheckpointRecord]: ...
+
+    def touch_thread(self, thread_id: str, accessed_at: datetime) -> bool: ...
+
+    def delete_index(self, record: CheckpointRecord) -> None: ...
+
+    def schema_fingerprint(self) -> str: ...
+
+    def close(self) -> None: ...
 
 
 @dataclass(frozen=True)

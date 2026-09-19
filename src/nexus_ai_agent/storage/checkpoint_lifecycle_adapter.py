@@ -15,14 +15,13 @@ from typing import Any
 
 from nexus_ai_agent.application.ports.checkpoint_lifecycle import CheckpointLifecyclePort
 from nexus_ai_agent.domain.glossary import POST_V1_CHECKPOINT_DELETION
-from nexus_ai_agent.storage.checkpoint_lifecycle import CheckpointRecord
-from nexus_ai_agent.storage.checkpoint_lifecycle_store import SQLiteCheckpointLifecycleStore
+from nexus_ai_agent.storage.checkpoint_lifecycle import CheckpointRecord, LifecycleStore
 
 
 class SQLiteCheckpointLifecycleAdapter:
     """Lifecycle port adapter; satisfies :class:`CheckpointLifecyclePort`."""
 
-    def __init__(self, store: SQLiteCheckpointLifecycleStore) -> None:
+    def __init__(self, store: LifecycleStore) -> None:
         self._store = store
 
     async def record_checkpoint(
