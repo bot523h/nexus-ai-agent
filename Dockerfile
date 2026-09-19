@@ -24,5 +24,8 @@ RUN mkdir -p data/chroma data/cache assets/fonts
 
 EXPOSE 8000
 
-# Default command runs the bot
-CMD ["python", "-m", "nexus_ai_agent.cli", "run-bot", "--mode", "polling"]
+# Default command runs the bot.
+# NEXUS_RUN_MODE selects the run mode (see bot/webhook.py); "polling" is the
+# default so existing always-on (worker-type) deployments keep working
+# unchanged. Set NEXUS_RUN_MODE=webhook for scale-to-zero web deployments.
+CMD ["sh", "-c", "python -m nexus_ai_agent.cli run-bot --mode ${NEXUS_RUN_MODE:-polling}"]

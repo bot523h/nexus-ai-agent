@@ -151,3 +151,47 @@ def _get_session_factory() -> Callable[[], Any]:
     from nexus_ai_agent.storage.db import get_session
 
     return get_session
+
+
+class WebhookApplicationAdapter:
+    """Bridge raw Telegram webhook payloads into the PTB Application (v3.8.0).
+
+    Lives here, in ``bot/app.py``, on purpose: the frozen import-boundary
+    test (``tests/architecture/test_import_boundaries.py``) only tolerates
+    the ``telegram`` package in grandfathered files and this file is one of
+    them.  ``api/app.py`` and ``bot/webhook.py`` must stay telegram-free;
+    they call this adapter instead.
+    """
+
+    def __init__(self, application: Any) -> None:
+        self._application = application
+
+    def parse_update(self, payload: dict[str, Any]) -> Any | None:
+        """Convert a raw webhook JSON payload into a PTB ``Update``.
+
+        Returns ``None`` when the payload carries no ``update_id``
+        (Telegram always sends one; anything else is malformed).  Raises
+        for payloads ``Update.de_json`` cannot make sense of.
+        """
+        from telegram import Update
+
+        if payload.get("update_id") is None:
+            # Telegram always includes update_id; PTB's de_json raises
+            # (Update.__init__ requires it) for payloads without one —
+            # surface that as "no update" so the API answers 400.
+            return None
+        bot = getattr(self._application, "bot", None)
+        # Annotated as Any on purpose: PTB types de_json() as non-optional,
+        # but at runtime it returns None for falsy payloads (and may raise
+        # for garbage) — exactly the cases this method must surface.
+        update: Any = Update.de_json(payload, bot)
+        if update is None or update.update_id is None:
+            return None
+        return update
+
+    def enqueue(self, update: Any) -> None:
+        """Hand a parsed ``Update`` to the application's update queue."""
+        queue = getattr(self._application, "update_queue", None)
+        if queue is None:
+            raise RuntimeError("application has no update_queue (not initialized?)")
+        queue.put_nowait(update)

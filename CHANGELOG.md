@@ -5,6 +5,40 @@ All notable changes to NEXUS AI Agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0] — 2026-09-19
+
+### Added
+- **Telegram webhook run-mode — real webhook for scale-to-zero deployments (Phase 3)**
+  - `bot/webhook.py`: run-mode orchestration — `resolve_run_mode()`
+    (CLI `--mode` > `NEXUS_RUN_MODE` > `polling`), `build_webhook_bind()`
+    (port priority `PORT` > `DASHBOARD_PORT` > `8000`), and `run_webhook()`
+    (PTB application init, `set_webhook` with a shared-secret token,
+    uvicorn serving, graceful SIGTERM shutdown for scale-to-zero platforms)
+  - `api/app.py`: two new endpoints — `POST /webhook/telegram`
+    (constant-time secret check against `NEXUS_WEBHOOK_SECRET`; 403 on
+    mismatch, 400 on missing `update_id`, verified payloads pushed to
+    `application.update_queue`) and `GET /healthz` (process liveness, no
+    database touch — the scale-to-zero health gate)
+  - `bot/app.py`: `WebhookApplicationAdapter` — converts raw webhook JSON
+    into a PTB `Update`. Lives in `bot/app.py` deliberately: the frozen
+    import-boundary baseline only tolerates `telegram` imports in
+    grandfathered files (`bot/webhook.py` and `api/app.py` stay
+    telegram-free)
+  - `cli.py run-bot`: the webhook branch now actually runs webhook mode
+    (was "not yet configured" + exit 1); polling path untouched
+  - New settings: `NEXUS_RUN_MODE`, `NEXUS_WEBHOOK_URL`,
+    `NEXUS_WEBHOOK_SECRET` (+ `.env.example` entries)
+  - `koyeb.yaml`: service type `worker` → `web`, health check path
+    `/healthz` (was the non-existent `/api/health`)
+  - `Dockerfile`: `CMD` honors `NEXUS_RUN_MODE` (default `polling` keeps
+    existing always-on deployments working unchanged)
+  - New dependency: `uvicorn==0.53.0` (verified latest on PyPI at pin time)
+  - Tests: `tests/unit/test_webhook_mode.py` — mode/port priority,
+    `/healthz`, enqueue of valid payloads, 403/400 rejection paths
+  - Docs: `docs/deployment-koyeb.md` — step-by-step Koyeb `web` deploy and
+    the explicitly accepted cold-start trade-off (Telegram retries; the
+    multi-second wake-up delay is not a bug)
+
 ## [3.7.0] — 2026-09-19
 
 ### Added

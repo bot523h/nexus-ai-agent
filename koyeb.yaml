@@ -1,7 +1,10 @@
 name: nexus-ai
 services:
   - name: bot
-    type: worker
+    # v3.8.0 (Phase 3): "web" instead of "worker" so the service can scale
+    # to zero. Telegram POSTs updates to POST /webhook/telegram; liveness
+    # is answered by GET /healthz (no database touch).
+    type: web
     docker:
       dockerfile: Dockerfile
     env:
@@ -9,5 +12,11 @@ services:
         value: "{{ .Env.TELEGRAM_BOT_TOKEN }}"
       - name: GEMINI_API_KEY
         value: "{{ .Env.GEMINI_API_KEY }}"
+      - name: NEXUS_RUN_MODE
+        value: "webhook"
+      - name: NEXUS_WEBHOOK_URL
+        value: "{{ .Env.NEXUS_WEBHOOK_URL }}"
+      - name: NEXUS_WEBHOOK_SECRET
+        value: "{{ .Env.NEXUS_WEBHOOK_SECRET }}"
     health_check:
-      path: /api/health
+      path: /healthz
