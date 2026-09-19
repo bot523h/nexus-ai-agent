@@ -113,10 +113,13 @@ async def test_kill_switch_removes_wrapper(settings_env, tmp_path: Path, monkeyp
 
 @pytest.mark.asyncio
 async def test_postgres_kill_switch_on_wraps(settings_env, monkeypatch, tmp_path: Path) -> None:
-    """PG + kill-switch on → wrapped (lifecycle metadata in the SQLite sidecar)."""
+    """PG + kill-switch on → wrapped (lifecycle metadata in the PG table)."""
     monkeypatch.setenv("NEXUS_DATABASE_URL", "postgresql://nexus:nexus@localhost:5432/nexus")
     monkeypatch.setenv("NEXUS_CHECKPOINT_PATH", str(tmp_path / "lg.sqlite"))
     from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.storage.checkpoint_lifecycle_pg_store import (
+        PostgresCheckpointLifecycleStore,
+    )
 
     get_settings.cache_clear()
     checkpointer = get_checkpointer(str(tmp_path / "lg.sqlite"))
@@ -124,6 +127,8 @@ async def test_postgres_kill_switch_on_wraps(settings_env, monkeypatch, tmp_path
     # built lazily on first use, so construction is connection-free.
     assert isinstance(checkpointer, LifecycleRecordingSaver)
     assert isinstance(checkpointer._saver, PostgresCheckpointer)
+    # Option A: the lifecycle store is the PG table store, not a sidecar.
+    assert isinstance(checkpointer._lifecycle._store, PostgresCheckpointLifecycleStore)
     await checkpointer._saver.reset()
 
 
@@ -151,14 +156,21 @@ requires_pg = pytest.mark.skipif(not PG_URL, reason="requires PostgreSQL")
 async def test_postgres_wrapped_end_to_end(settings_env, monkeypatch, tmp_path: Path) -> None:
     """The wrapped PG checkpointer works against a real database.
 
-    Data goes to Postgres (through the wrapper untouched); lifecycle
-    metadata goes to the SQLite sidecar; a user read produces a coalesced
-    touch; a shutdown flush persists it.
+    Option A: data goes to Postgres (through the wrapper untouched) and
+    lifecycle metadata goes to the nexus_checkpoint_lifecycle table in the
+    same database — no local sidecar file is created; a user read produces
+    a coalesced touch; a shutdown flush persists it.
     """
     monkeypatch.setenv("NEXUS_DATABASE_URL", PG_URL)  # type: ignore[arg-type]
     monkeypatch.setenv("NEXUS_CHECKPOINT_PATH", str(tmp_path / "lg.sqlite"))
     from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.storage.checkpoint_lifecycle_pg_store import (
+        PostgresCheckpointLifecycleStore,
+    )
+    from nexus_ai_agent.storage.migrations import run_migrations
 
+    # Off-thread: run_migrations owns its own event loop.
+    await asyncio.to_thread(run_migrations)  # ensures the lifecycle table exists
     get_settings.cache_clear()
     checkpointer = get_checkpointer(str(tmp_path / "lg.sqlite"))
     try:
@@ -174,12 +186,58 @@ async def test_postgres_wrapped_end_to_end(settings_env, monkeypatch, tmp_path: 
         assert got is not None
         await checkpointer.flush()
 
-        store = _store_for(tmp_path)
+        store = PostgresCheckpointLifecycleStore(PG_URL)
         try:
-            records = store.records()
+            records = [r for r in store.records() if r.thread_id == "t1"]
         finally:
             store.close()
         assert [(r.thread_id, r.checkpoint_id) for r in records] == [("t1", "cp1")]
         assert records[0].last_accessed_at is not None
+        # Option A: no sidecar file on the PG path.
+        assert not (tmp_path / "lg.sqlite.lifecycle").exists()
     finally:
         await checkpointer._saver.reset()
+
+
+@requires_pg
+@pytest.mark.asyncio
+async def test_postgres_kill_switch_off_writes_nothing(
+    settings_env, monkeypatch, tmp_path: Path
+) -> None:
+    """PG + kill-switch off (live): the bare checkpointer writes no lifecycle rows."""
+    monkeypatch.setenv("NEXUS_DATABASE_URL", PG_URL)  # type: ignore[arg-type]
+    monkeypatch.setenv("NEXUS_LIFECYCLE_HOOKS_ENABLED", "false")
+    monkeypatch.setenv("NEXUS_CHECKPOINT_PATH", str(tmp_path / "lg.sqlite"))
+    from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.storage.checkpoint_lifecycle_pg_store import (
+        PostgresCheckpointLifecycleStore,
+    )
+    from nexus_ai_agent.storage.migrations import run_migrations
+
+    # Off-thread: run_migrations owns its own event loop.
+    await asyncio.to_thread(run_migrations)
+    get_settings.cache_clear()
+    checkpointer = get_checkpointer(str(tmp_path / "lg.sqlite"))
+    assert not isinstance(checkpointer, LifecycleRecordingSaver)
+    # Unique thread: the shared PG database may hold the e2e test's t1
+    # lifecycle row; this test must prove *its own* writes never happen.
+    import uuid
+
+    thread_id = f"killswitch-off-{uuid.uuid4().hex[:12]}"
+    config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+    checkpoint = {**CHECKPOINT, "id": f"cp-{uuid.uuid4().hex[:12]}"}
+    try:
+        async with access_context("user"):
+            result = await checkpointer.aput(config, checkpoint, {}, {})
+        assert result["configurable"]["thread_id"] == thread_id
+        # No flush: the kill switch removes the wrapper entirely — there is
+        # no coalescer and no lifecycle store to flush against.
+
+        store = PostgresCheckpointLifecycleStore(PG_URL)
+        try:
+            records = [r for r in store.records() if r.thread_id == thread_id]
+        finally:
+            store.close()
+        assert records == []
+    finally:
+        await checkpointer.reset()

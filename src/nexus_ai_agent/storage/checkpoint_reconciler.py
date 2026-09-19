@@ -46,9 +46,8 @@ from nexus_ai_agent.storage.checkpoint_fingerprint import (
 from nexus_ai_agent.storage.checkpoint_fingerprint import (
     evaluate_core_head,
 )
-from nexus_ai_agent.storage.checkpoint_lifecycle import CheckpointRecord
+from nexus_ai_agent.storage.checkpoint_lifecycle import CheckpointRecord, LifecycleStore
 from nexus_ai_agent.storage.checkpoint_lifecycle_store import (
-    SQLiteCheckpointLifecycleStore,
     cleanup_lock,
 )
 
@@ -134,7 +133,7 @@ class CheckpointReconciler:
     def __init__(
         self,
         adapter: CheckpointReadAdapter,
-        store: SQLiteCheckpointLifecycleStore,
+        store: LifecycleStore,
         *,
         golden_path: Path | str = DEFAULT_GOLDEN,
         enabled: bool = True,
@@ -215,7 +214,19 @@ class CheckpointReconciler:
                     thread_id=thread_id,
                     error=error_field(exc),
                 )
-        records = self._store.records()
+        try:
+            records = self._store.records()
+        except _DB_ERRORS as exc:
+            # e.g. the PG lifecycle table is missing (migration not run):
+            # a measurement error, surfaced via the health gate — never a
+            # crash, and never reported as schema drift.
+            scan_errors += 1
+            log_lifecycle_event(
+                logging.WARNING,
+                "reconcile scan failed to read the lifecycle index",
+                error=error_field(exc),
+            )
+            records = []
         lifecycle_keys: set[tuple[str, str]] = set()
         orphan_records: list = []
         missing: list[Anomaly] = []

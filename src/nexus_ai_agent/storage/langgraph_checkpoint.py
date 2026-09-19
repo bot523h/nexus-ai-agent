@@ -13,9 +13,11 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 from nexus_ai_agent.adapters.langgraph.lifecycle_recording import LifecycleRecordingSaver
+from nexus_ai_agent.storage.checkpoint_lifecycle import LifecycleStore
 from nexus_ai_agent.storage.checkpoint_lifecycle_adapter import (
     SQLiteCheckpointLifecycleAdapter,
 )
+from nexus_ai_agent.storage.checkpoint_lifecycle_pg_store import PostgresCheckpointLifecycleStore
 from nexus_ai_agent.storage.checkpoint_lifecycle_store import SQLiteCheckpointLifecycleStore
 from nexus_ai_agent.storage.checkpoint_reconciler import lifecycle_db_path
 from nexus_ai_agent.storage.db import normalize_database_url, resolve_database_url
@@ -261,9 +263,12 @@ def get_checkpointer(
       Neon) behind a lazy :class:`PostgresCheckpointer`.
     * otherwise → the SQLite checkpointer.
 
-    The lifecycle metadata store stays a SQLite sidecar on *both* backends
-    (PR3 decision D-1/B): on Postgres deployments the sidecar file must
-    live on persistent storage (see ``docs/ops/NEON_LIFECYCLE_RUNBOOK.md``).
+    The lifecycle metadata is the ``nexus_checkpoint_lifecycle`` table
+    (PR3 option A, owner-approved): on the PostgreSQL path it lives in the
+    database itself, created by the explicit, isolated Alembic revision
+    ``f4a9c2e71b08`` (serverless-safe: no dependence on an ephemeral local
+    file); on the SQLite path the same table is a local sidecar file owned
+    by the store.  See ``docs/ops/NEON_LIFECYCLE_RUNBOOK.md``.
     """
     from nexus_ai_agent.config.settings import get_settings
 
@@ -274,7 +279,7 @@ def get_checkpointer(
         if not settings.lifecycle_hooks_enabled:
             # Kill-switch off: raw saver, zero lifecycle writes.
             return pg_saver
-        store = SQLiteCheckpointLifecycleStore(lifecycle_db_path(settings.checkpoint_path))
+        store: LifecycleStore = PostgresCheckpointLifecycleStore(database_url)
         lifecycle = SQLiteCheckpointLifecycleAdapter(store)
         wrapped = LifecycleRecordingSaver(pg_saver, lifecycle, enabled=True)
         atexit.register(wrapped.flush_sync)

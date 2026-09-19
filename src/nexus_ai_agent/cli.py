@@ -47,6 +47,43 @@ def _open_checkpoint_backend() -> tuple[Any, Path]:
     return cast(CheckpointReadAdapter, adapter), DEFAULT_GOLDEN
 
 
+def _open_lifecycle_store(
+    settings: Any,
+    database_url: str | None,
+    *,
+    strict: bool,
+    read_only: bool,
+) -> Any:
+    """Return the lifecycle index store for the active backend.
+
+    PostgreSQL → the ``nexus_checkpoint_lifecycle`` table (option A).
+    SQLite → the local sidecar file (pre-existing behaviour).
+
+    * ``strict=True`` (inspect): a missing *local* index file means
+      "no metadata yet" → ``None``.  A missing table on PostgreSQL is a
+      migration gap, surfaced as an error by the store's first query —
+      never invented data.
+    * ``read_only=True`` (inspect): the PostgreSQL connection is
+      server-enforced read-only; inspect never touches access data.
+    """
+    from nexus_ai_agent.storage.checkpoint_reconciler import lifecycle_db_path
+
+    if database_url is not None:
+        from nexus_ai_agent.storage.checkpoint_lifecycle_pg_store import (
+            PostgresCheckpointLifecycleStore,
+        )
+
+        return PostgresCheckpointLifecycleStore(database_url, read_only=read_only)
+    from nexus_ai_agent.storage.checkpoint_lifecycle_store import (
+        SQLiteCheckpointLifecycleStore,
+    )
+
+    lifecycle_path = lifecycle_db_path(settings.checkpoint_path)
+    if strict and (lifecycle_path == ":memory:" or not Path(lifecycle_path).exists()):
+        return None
+    return SQLiteCheckpointLifecycleStore(lifecycle_path)
+
+
 @app.command()
 def migrate(
     db_path: str | None = typer.Option(
@@ -197,20 +234,16 @@ def inspect_checkpoints(
     from nexus_ai_agent.adapters.langgraph.lifecycle_recording import nexus_access_context
     from nexus_ai_agent.config.settings import get_settings
     from nexus_ai_agent.domain.policies.retention import RetentionRecord, deletable, pinned
-    from nexus_ai_agent.storage.checkpoint_lifecycle_store import SQLiteCheckpointLifecycleStore
-    from nexus_ai_agent.storage.checkpoint_reconciler import lifecycle_db_path
+    from nexus_ai_agent.storage.db import resolve_database_url
 
     settings = get_settings()
     access_token = nexus_access_context.set("admin")
     adapter, _ = _open_checkpoint_backend()
     # Read-only by contract: inspect never creates or mutates the lifecycle
-    # index.  A missing index file simply means "no metadata yet".
-    lifecycle_path = lifecycle_db_path(settings.checkpoint_path)
-    lifecycle = (
-        SQLiteCheckpointLifecycleStore(lifecycle_path)
-        if lifecycle_path != ":memory:" and Path(lifecycle_path).exists()
-        else None
-    )
+    # index (on PostgreSQL the read-only connection is server-enforced).
+    # A missing local index file simply means "no metadata yet".
+    database_url = resolve_database_url()
+    lifecycle = _open_lifecycle_store(settings, database_url, strict=True, read_only=True)
     try:
         now = datetime.now(timezone.utc)
         records = lifecycle.records() if lifecycle is not None else []
@@ -296,16 +329,19 @@ def reconcile_checkpoints(
     import json
 
     from nexus_ai_agent.config.settings import get_settings
-    from nexus_ai_agent.storage.checkpoint_lifecycle_store import SQLiteCheckpointLifecycleStore
     from nexus_ai_agent.storage.checkpoint_reconciler import (
         CheckpointReconciler,
-        lifecycle_db_path,
         render_report,
     )
+    from nexus_ai_agent.storage.db import resolve_database_url
 
     settings = get_settings()
     adapter, default_golden = _open_checkpoint_backend()
-    lifecycle = SQLiteCheckpointLifecycleStore(lifecycle_db_path(settings.checkpoint_path))
+    # The reconciler owns the only lifecycle-mutation path in the CLI
+    # (backfill/purge under the full guard stack); on PostgreSQL that
+    # means the nexus_checkpoint_lifecycle table, never LangGraph rows.
+    database_url = resolve_database_url()
+    lifecycle = _open_lifecycle_store(settings, database_url, strict=False, read_only=False)
     try:
         reconciler = CheckpointReconciler(
             adapter,
