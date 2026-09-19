@@ -29,6 +29,7 @@ dependencies = [
     "sqlite-vec>=0.1",
     "typer>=0.12",
     "httpx==0.28.1",  # pinned: core/ssrf_guard.py uses a private httpx API
+    "python-multipart>=0.0.9",
     "duckduckgo-search>=8.0",
     "fastapi>=0.110",
     "uvicorn==0.53.0",  # pinned: webhook run-mode server (v3.8.0, verified latest on PyPI)

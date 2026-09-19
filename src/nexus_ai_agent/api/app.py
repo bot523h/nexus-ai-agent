@@ -1,12 +1,34 @@
 from __future__ import annotations
 
+import os
 import secrets
+import tempfile
+from pathlib import Path
+from urllib.parse import urlparse
 
-from fastapi import FastAPI, Request
+import httpx
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from nexus_ai_agent.api.dashboard import router as dashboard_router
+from nexus_ai_agent.config.settings import get_settings
+from nexus_ai_agent.creative import image_post
+from nexus_ai_agent.creative.ffmpeg_executor import execute_ffmpeg_commands
+from nexus_ai_agent.creative.job_registry import JobRegistry
+from nexus_ai_agent.creative.video_director import analyze_video_with_gemini
+
+CREATIVE_IMAGE_POST_AVAILABLE = hasattr(image_post, "generate_image_post")
+_creative_registry: JobRegistry | None = None
+
+
+def get_creative_registry() -> JobRegistry:
+    global _creative_registry
+    settings = get_settings()
+    registry_path = Path(settings.creative_temp_dir) / "creative_jobs.sqlite3"
+    if _creative_registry is None or _creative_registry._db_path != registry_path:
+        _creative_registry = JobRegistry(registry_path)
+    return _creative_registry
 
 app = FastAPI(title="NEXUS AI Dashboard")
 
@@ -140,6 +162,127 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
+async def _save_upload_to_temp(upload: UploadFile) -> str:
+    settings = get_settings()
+    temp_dir = Path(settings.creative_temp_dir)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    suffix = Path(upload.filename or "upload.bin").suffix or ".bin"
+    fd, temp_path = tempfile.mkstemp(prefix="creative-upload-", suffix=suffix, dir=temp_dir)
+    os.close(fd)
+    with Path(temp_path).open("wb") as handle:
+        while True:
+            chunk = await upload.read(1024 * 1024)
+            if not chunk:
+                break
+            handle.write(chunk)
+    await upload.close()
+    return temp_path
+
+
+async def _download_video_to_temp(video_url: str) -> str:
+    settings = get_settings()
+    temp_dir = Path(settings.creative_temp_dir)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    suffix = Path(urlparse(video_url).path).suffix or ".mp4"
+    fd, temp_path = tempfile.mkstemp(prefix="creative-url-", suffix=suffix, dir=temp_dir)
+    os.close(fd)
+    try:
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+            async with client.stream("GET", video_url) as response:
+                response.raise_for_status()
+                with Path(temp_path).open("wb") as handle:
+                    async for chunk in response.aiter_bytes():
+                        handle.write(chunk)
+    except Exception:
+        Path(temp_path).unlink(missing_ok=True)
+        raise
+    return temp_path
+
+
+async def _process_video_edit_job(
+    job_id: str,
+    source: str,
+    cleanup_path: str | None = None,
+) -> None:
+    local_input_path = cleanup_path
+    registry = get_creative_registry()
+    try:
+        await registry.update_job_status(job_id, "processing")
+        if source.startswith(("http://", "https://")):
+            local_input_path = await _download_video_to_temp(source)
+        if local_input_path is None:
+            raise RuntimeError("No local video source available for processing")
+
+        settings = get_settings()
+        plan = await analyze_video_with_gemini(
+            local_input_path,
+            settings.creative_gemini_api_key or "",
+        )
+        output_path = str(Path(settings.creative_temp_dir) / f"{job_id}.mp4")
+        result = await execute_ffmpeg_commands(plan, local_input_path, output_path)
+        if not result.success:
+            raise RuntimeError(result.error_message or "FFmpeg execution failed")
+        await registry.update_job_status(
+            job_id,
+            "done",
+            result=result.model_dump(),
+        )
+    except Exception as exc:
+        await registry.update_job_status(job_id, "failed", error=str(exc))
+    finally:
+        if local_input_path:
+            Path(local_input_path).unlink(missing_ok=True)
+
+
+@app.post("/creative/video-edit")
+async def create_video_edit_job(
+    background_tasks: BackgroundTasks,
+    file: UploadFile | None = File(None),
+    video_url: str | None = Form(None),
+) -> dict[str, str]:
+    if file is None and not video_url:
+        raise HTTPException(status_code=400, detail="Provide either file or video_url")
+    if file is not None and video_url:
+        raise HTTPException(status_code=400, detail="Provide only one video source")
+
+    source: str
+    cleanup_path: str | None = None
+    input_data: dict[str, str | None]
+
+    if file is not None:
+        cleanup_path = await _save_upload_to_temp(file)
+        source = cleanup_path
+        input_data = {
+            "source_type": "upload",
+            "path": cleanup_path,
+            "filename": file.filename,
+            "content_type": file.content_type,
+        }
+    else:
+        normalized_url = (video_url or "").strip()
+        if not normalized_url:
+            raise HTTPException(status_code=400, detail="video_url must not be empty")
+        source = normalized_url
+        input_data = {
+            "source_type": "url",
+            "video_url": normalized_url,
+            "filename": None,
+            "content_type": None,
+        }
+
+    job_id = await get_creative_registry().create_job("video_edit", input_data)
+    background_tasks.add_task(_process_video_edit_job, job_id, source, cleanup_path)
+    return {"job_id": job_id, "status": "pending"}
+
+
+@app.get("/creative/jobs/{job_id}")
+async def get_job_status(job_id: str) -> dict[str, object]:
+    job = await get_creative_registry().get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
 @app.post("/webhook/telegram")
 async def telegram_webhook(request: Request) -> JSONResponse:
     """Receive Telegram webhook deliveries (webhook run-mode, v3.8.0).
@@ -153,7 +296,6 @@ async def telegram_webhook(request: Request) -> JSONResponse:
     """
     from nexus_ai_agent.bot.app import WebhookApplicationAdapter
     from nexus_ai_agent.bot.webhook import TELEGRAM_SECRET_TOKEN_HEADER
-    from nexus_ai_agent.config.settings import get_settings
 
     secret = getattr(request.app.state, "webhook_secret", None)
     if secret is None:

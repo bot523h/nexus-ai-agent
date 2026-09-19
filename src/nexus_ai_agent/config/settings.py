@@ -278,6 +278,14 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("NEXUS_WEBHOOK_SECRET", "WEBHOOK_SECRET"),
     )
+    creative_gemini_api_key: str | None = Field(
+        default=None,
+        validation_alias="NEXUS_CREATIVE_GEMINI_API_KEY",
+    )
+    creative_temp_dir: str = Field(
+        default="/tmp/nexus_creative",
+        description="Temporary directory for creative jobs",
+    )
 
     @field_validator("allowed_user_ids", mode="before")
     @classmethod
@@ -310,4 +318,5 @@ def get_settings() -> Settings:
     Path(settings.vector_path).parent.mkdir(parents=True, exist_ok=True)
     Path(settings.model_path).parent.mkdir(parents=True, exist_ok=True)
     Path(settings.cache_dir).mkdir(parents=True, exist_ok=True)
+    Path(settings.creative_temp_dir).mkdir(parents=True, exist_ok=True)
     return settings
