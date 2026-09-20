@@ -1,9 +1,14 @@
 # NEXUS AI — Architecture Decision Log
 
-**Status:** Canonical historical record, effective 2026-09-20  
+**Status:** Canonical historical record; revision 2 effective 2026-09-20  
 **Scope:** Architectural, operational, and roadmap decisions from Phase 0 through the current post-Phase-5 baseline and the accepted Phase 6 Nagar design.  
-**Current main:** `db1ba541717dbc0ae4c26bf6e835881be6d015d1`  
+**Main baseline for this revision:** `3c8d1de0` (the PR#14 merge — modular monolith + canonical decision log). The live head may have advanced; consult `git log origin/main`.  
 **Current release baseline:** `v3.9.0` / Phase 5
+
+**Revision history**
+
+- **r1 (2026-09-20, PR#14):** initial canonical log — phase history, core rejections, Nagar acceptance, numbering families.
+- **r2 (2026-09-20, this revision):** added the Cognee and manual-Neon-keep-alive rejections, sharpened the "Nexus World" rejection (3-D world model + alleged quantum decision algorithms), converted the zombie-branch list into a per-branch disposition table with the required manual-deletion note, added the old-continuum `Phase D/E` numbering row, mapped every numbering family onto the final seven-phase roadmap, and recorded an open-PR snapshot.
 
 This document is the single reference point for architectural decisions in this repository. A new decision must be appended here with its date, status, rationale, rejected alternatives, and repository evidence. Existing historical documents remain useful as detailed records, but this log is authoritative when summaries differ.
 
@@ -94,10 +99,20 @@ The rejection does not deny that a distributed queue could be appropriate in a f
 **Status:** Rejected/retired.  
 **Reason:** pgvector was considered premature before a real RAG consumer, query contract, and operational requirement existed. A storage extension without a product consumer would increase migration and deployment cost while leaving the application behavior unchanged.
 
+### Cognee as the RAG/memory framework
+
+**Status:** Rejected (never implemented).  
+**Reason:** Cognee was evaluated as a replacement for the in-repo RAG stack, but no replacement was ever implemented: as of this revision the vector store remains `chromadb` and no pgvector (or Cognee) substitution has landed. Adopting an external memory framework without an implemented consumer and a query contract would have added a heavy dependency and an unowned data path. Revisiting it requires a new decision with a real consumer, an ingestion/query contract, and a migration plan for existing documents.
+
+### Manual Neon keep-alive traffic
+
+**Status:** Rejected.  
+**Reason:** Sending synthetic "keep-alive" requests to prevent the Neon serverless instance from autosuspending was rejected: it masks the platform's actual behaviour, burns resources to fight the pricing model instead of designing for it, and adds a moving part that fails silently. The accepted alternative is the Phase 3 scale-to-zero posture — accept cold starts, keep all durable state in the database, and rely on `nexus migrate` / the Neon runbook for deterministic wake-and-repair on cold boot.
+
 ### “Nexus World” / Qwen rewrite
 
 **Status:** Rejected.  
-**Reason:** The proposal was over-engineered relative to the product need. It relied on ungrounded quantum-algorithm concepts for UI behavior and proposed a broad rewrite without a justified product outcome, migration plan, or bounded consumer. The project retained incremental, contract-first evolution instead.
+**Reason:** The proposal (“Nexus World”) combined a 3-D world model with alleged “quantum decision-making algorithms” for agent behaviour. The quantum claims were baseless — no algorithm, benchmark, or peer-reviewed basis was ever produced — and the 3-D layer had no product consumer. On top of that it demanded a broad rewrite without a justified product outcome, migration plan, or bounded scope. The project retained incremental, contract-first evolution instead.
 
 ## Accepted Architectural Decisions
 
@@ -148,22 +163,34 @@ Nagar is accepted as the Phase 6 design baseline because it makes operation inte
 
 ## Branch and Numbering Disposition
 
-The following branches are historical, open, or abandoned proposals and are not part of the active mainline decision path. Deleting them is an owner action and is not performed by this document change:
+### Zombie / abandoned branches
 
-- `trae/agent-FdzTxJ`
-- `feat/phase1-control-plane`
-- `feat/phase2-local-llm`
-- `circleci-project-setup`
+The following branches are historical, open, or abandoned proposals and are not part of the active mainline decision path. **They must be deleted manually on GitHub by the owner** — deletion is a remote administrative action and is deliberately not performed by documentation changes:
 
-The repository contains several numbering systems from different workstreams. They must not be interpreted as one chronological sequence:
-
-| Identifier family | Historical meaning | Current disposition |
+| Branch | Status | Reason / evidence |
 |---|---|---|
-| `C1–C4` | Checkpoint/lifecycle composition and contract steps | Historical records; superseded by the final lifecycle baseline where applicable |
-| `D1–D10` | Phase D schema management, migration, adoption, and PostgreSQL decisions | Historical records; not the same as the PR#12 D1–D4 labels |
-| `S1/V1/L1/M0/T1` | Earlier roadmap or contract vocabulary | Historical labels; use the current decision entry and repository contract instead |
-| `R-0XX` | Requirement and architecture requirement identifiers | Retain as traceability identifiers when referenced by code or tests |
-| `PR#12 D1–D4` | A separate feature bundle for job resume, dead-code removal, PDF extraction, and Telegram notification | Not merged; adaptation to the post-PR#13 queue architecture requires a separate implementation decision |
+| `trae/agent-FdzTxJ` | Rejected — duplicate | A parallel “Creative Studio MVP implementation” (`843f004`) stacked on the PR#9 merge point, superseded by the creative-studio line that actually merged through PR#10 (`62e25ce`). Never merged. |
+| `feat/phase1-control-plane` | Abandoned — origin unclear | The “phase one control plane foundation” proposal (open as PR#1 historically). Never merged into `main`; its rate-limiter/control-plane ideas survive only as history. Treat as unowned. |
+| `feat/phase2-local-llm` | Abandoned — stacked on an unmerged base | “Provider-agnostic local LLM engine” built **on top of the unmerged `feat/phase1-control-plane`**, so it can never merge cleanly. The underlying need (a provider seam) was satisfied properly by litellm routing in v3.7.0 (Phase 3). |
+| `circleci-project-setup` | Irrelevant — CI platform cut | Only adds `.circleci/config.yml` (commits `265d6a0`, `2818d9d`). `.circleci/` does not exist on `main`; the project standardizes on GitHub Actions (`.github/workflows/ci.yml`, `maintenance.yml`). |
+
+### Open pull requests at the time of this revision (snapshot, 2026-09-20)
+
+- **PR#12** — “Return to the modular monolith … + decisions D1–D4”: still **open**; its head branch (`arena/01a0bdda-…`) was rebuilt with an orphaned history and has **no merge base with `main`** — merging it mechanically will conflict extensively. The functional content (in-process queue, D1–D4) already exists on `main`/open PRs; disposition (close vs. merge) is an owner decision.
+- **PR#15** — re-implementation of D1–D4 on the in-process `JobQueuePort` architecture (single commit on the post-PR#14 mainline).
+- **PR#16** — security hardening (CORS allowlist, HMAC endpoint auth, SSRF/DNS-rebinding egress guard, log redaction); **manual review required, no auto-merge**.
+
+The repository contains several numbering systems from different workstreams. They must not be interpreted as one chronological sequence. The final roadmap is the **seven-phase plan** documented above: Phase 0 (control plane/security) → 1 (core product) → 2 (local-LLM direction) → 3 (multi-provider routing, scale-to-zero) → 4 (schema management, PostgreSQL/Neon) → 5 (durable storage, lifecycle, R2) → 6 (Nagar creative studio, design accepted).
+
+| Identifier family | Historical meaning | Current disposition | Maps to the final roadmap |
+|---|---|---|---|
+| `C1–C4` | Checkpoint/lifecycle composition and contract steps (PR2 line: hooks/reconciler, inspect slice, O1 observability, adversarial hardening) | Historical records; superseded by the final lifecycle baseline where applicable | Phase 5 (lifecycle, released v3.6.0) |
+| `D1–D10` | Phase D schema management, migration, adoption, and PostgreSQL decisions (D7 pgvector and D8 token-encryption portions were **reverted** for having no consumer) | Historical records; not the same as the PR#12 D1–D4 labels | Phase 4 (schema/PostgreSQL, released v3.5.0) |
+| Old continuum `Phase D` (aka “Leviathan”) | Workstream name for the Alembic + Postgres/Neon line in `ROADMAP_STATUS.md` and `.nexus/continuum.json` | Merged as v3.5.0 | Phase 4 |
+| Old continuum `Phase E` | Referenced in some roadmap discussions; **no surviving artifact exists in the repository** | Undefined — treat any `Phase E` reference as having no recorded meaning; do not act on it | — |
+| `S1/V1/L1/M0/T1` | Earlier roadmap or contract vocabulary | Historical labels; use the current decision entry and repository contract instead | Pre-Phase-0 vocabulary; no direct phase mapping |
+| `R-0XX` (e.g. `R-001`, `R-026`) | Requirement identifiers cited by the modular-monolith decision (PR#13 lineage) | Citation labels only — **no `R-0XX` rows exist in `REQUIREMENTS_LEDGER.md`**; keep for traceability to that decision text | Phase 6 foundation (monolith basis of the Nagar baseline) |
+| `PR#12 D1–D4` | A separate feature bundle for job resume, dead-code removal, PDF extraction, and Telegram notification | Not merged as-is; the re-implementation onto the in-process `JobQueuePort` architecture exists on open PR#15 (see the snapshot above); final disposition pending the owner's review of the open PRs | Post-Phase-5 feature bundle (queued for the post-Nagar mainline) |
 
 These numbering families are now treated as historical labels inside the final seven-phase roadmap. A new decision must use a descriptive title and a unique date, and may include an identifier only when it improves traceability.
 
