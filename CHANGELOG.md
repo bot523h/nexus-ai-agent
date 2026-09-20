@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.11.0] — 2026-09-20
+
+Semver-minor: three backward-compatible feature waves (Wave 2a substrate,
+Wave 2b slideshow pack, Wave 2c render lane) landed on `main` after v3.10.0.
+Canonical state grew additively (Wave 1 states stay valid), the Wave 1
+catalog stays frozen, and no existing command, setting or table changed
+meaning. Merged through PR#21 (`865780e`), PR#22 (`aa7b2f4`) and PR#23
+(`ebe995a`).
+
 ### Added
 - **Nagar Phase 6, Wave 2a — the capability-pack substrate
   (`src/nexus_ai_agent/creative/packs/`)** (PR#21): the TDD rule “a pack is
@@ -102,6 +111,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `[dev]` extra gains `imageio-ffmpeg`, so the render tests execute a real
   encoder on any machine; production still uses the system FFmpeg. New settings:
   `NEXUS_FFMPEG_BIN` and `NEXUS_SLIDESHOW_RENDER_TIMEOUT`.
+- **Release housekeeping (this cut).** `VERSION` and `pyproject.toml` move to
+  **3.11.0** in lock-step (covered by `tests/unit/test_version_command.py`).
+  `.nexus/continuum.json` is refreshed for the first time since the PR3 line:
+  `step` → `ebe995a` (the Wave 2c merge), the ledger records the merged
+  lifecycle line (PR#7) and Nagar Waves 1–2c, and `test_count_expected` →
+  **586** — the verifier's invariant counts test *functions* (AST), not
+  pytest's 622 collected cases — so `nexus continuum verify` is green again.
+  `ROADMAP_STATUS.md` is rewritten around the Phase 6 waves (the stale
+  "PR1/PR2/PR3 not merged" rows were wrong: that line merged through PR#7 as
+  v3.6.0). `docs/DECISION_LOG.md` **r6** records two owner decisions: image
+  generation goes behind an adapter (Pollinations by default, Gemini opt-in
+  behind a key, the free core stays free) and **Wave 2.5 — the Telegram
+  surface for the slideshow pack — precedes Wave 3**.
 
 ## [3.10.0] — 2026-09-20
 

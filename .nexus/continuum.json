@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
-  "plan": "PR3",
-  "step": "1133df1",
-  "next": "merge PR #7 (owner-approved) at 3.6.0",
+  "plan": "Nagar Phase 6",
+  "step": "ebe995a",
+  "next": "Wave 2.5 — Telegram surface for the slideshow pack (/slideshow -> JobQueuePort -> in-process worker -> D4 notifier); then Wave 3 (optional local upscale stage + image generation behind an adapter: Pollinations default, Gemini opt-in)",
   "ledger": [
     {
       "id": "C1",
@@ -43,13 +43,13 @@
     },
     {
       "id": "PR3-C3",
-      "commit": "pending",
+      "commit": "e9e77df",
       "status": "complete",
       "scope": "golden management human-in-the-loop tests"
     },
     {
       "id": "PR3-C4",
-      "commit": "pending",
+      "commit": "82a6377",
       "status": "complete",
       "scope": "Neon runbook + ledger/roadmap/continuum"
     },
@@ -64,9 +64,44 @@
       "commit": "1133df1",
       "status": "complete",
       "scope": "PG composition over in-database lifecycle index + CLI branching + reconciler containment"
+    },
+    {
+      "id": "lifecycle-line",
+      "commit": "acdbcb7",
+      "status": "merged",
+      "scope": "PR1/PR2/PR3 checkpoint-lifecycle line merged to main through PR#7 (released as v3.6.0); POST_V1 per-checkpoint deletion stays deferred behind POST_V1_DELETE_MARKER"
+    },
+    {
+      "id": "nagar-wave1",
+      "commit": "ac6c25b",
+      "status": "merged",
+      "scope": "Green Cockpit core — typed command envelope, capability registry, reference resolver, atomic bus, five operations (PR#19, released as v3.10.0)"
+    },
+    {
+      "id": "nagar-wave2a",
+      "commit": "865780e",
+      "status": "merged",
+      "scope": "capability-pack substrate — data-only manifests, verifier, PackRegistry (PR#21)"
+    },
+    {
+      "id": "nagar-wave2b",
+      "commit": "aa7b2f4",
+      "status": "merged",
+      "scope": "slideshow pack — evidence-carrying commands, 14 tone templates, deterministic planning, one atomic compose (PR#22)"
+    },
+    {
+      "id": "nagar-wave2c",
+      "commit": "ebe995a",
+      "status": "merged",
+      "scope": "render lane — plan -> RenderIR -> filtergraph -> argv -> one FFmpeg encode -> measured master (PR#23)"
+    },
+    {
+      "id": "release-3.11.0",
+      "status": "in_progress",
+      "scope": "housekeeping cut: continuum refresh, changelog 3.11.0, roadmap/decision-log refresh (r6: image generation behind an adapter, Wave 2.5 sequencing)"
     }
   ],
-  "test_count_expected": 320,
+  "test_count_expected": 586,
   "env_fingerprint": {
     "python": "3.11.2",
     "alembic": "1.20.0",
