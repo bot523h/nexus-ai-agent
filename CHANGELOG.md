@@ -5,6 +5,42 @@ All notable changes to NEXUS AI Agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security — dashboard API & egress hardening (fresh implementation; manual review required)
+- **CORS lock-down (`api/app.py`)**: the previous default
+  `allow_origins=["*"]` + `allow_credentials=True` reflected *any* origin
+  with credentials, voiding the browser same-origin policy for the whole
+  dashboard API. CORS is now an explicit allowlist
+  (`NEXUS_API_CORS_ORIGINS`, comma-separated; **empty by default** — the
+  served dashboard is same-origin and needs no CORS), with
+  `allow_credentials` enabled only when origins are configured and methods
+  limited to `GET/POST/OPTIONS`.
+- **HMAC endpoint auth (`api/app.py`)**: `POST /creative/video-edit` now
+  accepts `NEXUS_API_HMAC_KEY` deployments only with
+  `X-NEXUS-Timestamp` (±300 s freshness) +
+  `X-NEXUS-Signature: hex(HMAC-SHA256(key, "{timestamp}:{raw_body}"))`,
+  compared constant-time. Without a key the legacy behaviour is kept with a
+  one-time warning (deliberate, non-breaking — flagged for review).
+- **SSRF/DNS-rebinding guard on the shared egress client
+  (`core/http_client.py`)**: `ResilientHttpClient` (free_tools,
+  web_trainer — which fetches *user-supplied* URLs —, wikipedia_trainer)
+  now runs `ssrf_guard.validate_url()` (https-only; *every* resolved
+  address must be public) before each request and rides the
+  connect-time re-validating `SafeAsyncTransport`, closing the
+  rebinding/TOCTOU window even across redirects. Opt-out:
+  `ResilientHttpClient(ssrf_protect=False)`.
+- **Log redaction (`observability/logging.py`)**: `configure_logging`
+  installs a redaction stage into structlog and the stdlib handlers —
+  Telegram bot tokens, `Bearer`/`Authorization` values and
+  key/value secrets (`api_key=`, `"token":`, …) are masked as
+  `[REDACTED]` before they reach the logs. `redact_secrets()` is
+  reusable; disable with `configure_logging(redact=False)`.
+- **Telegram webhook**: unchanged (already constant-time, fail-closed);
+  regression tests added.
+- `.env.example` documents the two new variables
+  (`NEXUS_API_CORS_ORIGINS`, `NEXUS_API_HMAC_KEY`).
+
 ## [3.9.0] — 2026-09-20
 
 ### Added

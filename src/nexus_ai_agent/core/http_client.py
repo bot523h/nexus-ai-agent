@@ -5,6 +5,10 @@ Use this everywhere instead of bare `httpx.AsyncClient()`. It handles:
 - Exponential backoff retry on transient failures (default 3 attempts)
 - Circuit breaker: after N consecutive failures, fail fast for cooldown period
 - Structured logging for every request
+- SSRF / DNS-rebinding protection (default on): user-influenced URLs are
+  validated (https-only, every resolved address public) before the request
+  and the underlying transport re-checks the resolved IP at the moment of
+  each TCP connection, closing the TOCTOU/rebinding window.
 
 Usage:
     client = ResilientHttpClient()
@@ -16,6 +20,8 @@ Why this exists:
   no timeout enforcement, no circuit breaker.
 - When DuckDuckGo or Wikipedia got slow, the bot would hang indefinitely.
 - One client = one consistent failure model across the entire codebase.
+- v3.9.1: knowledge/web_trainer.py fetches user-supplied URLs; without the
+  SSRF guard that was a direct internal-network probing vector.
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ from typing import Any
 
 import httpx
 
+from nexus_ai_agent.core.ssrf_guard import SafeAsyncTransport, validate_url
 from nexus_ai_agent.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -90,11 +97,13 @@ class ResilientHttpClient:
         circuit_threshold: int = 5,
         circuit_cooldown: float = 30.0,
         default_headers: dict[str, str] | None = None,
+        ssrf_protect: bool = True,
     ) -> None:
         self._timeout = timeout
         self._retry = retry or RetryConfig()
         self._circuit_threshold = circuit_threshold
         self._circuit_cooldown = circuit_cooldown
+        self._ssrf_protect = ssrf_protect
         self._default_headers = default_headers or {
             "User-Agent": "NEXUS-AI-Agent/3.1.0 (+https://github.com/bot523h/nexus-ai-agent)"
         }
@@ -129,6 +138,13 @@ class ResilientHttpClient:
             logger.warning("circuit_breaker_short_circuit", host=host, url=url)
             raise CircuitOpenError(f"Circuit breaker open for {host}")
 
+        # SSRF gate (once, before retries): https-only and every address the
+        # URL's host resolves to must be public. Raises SSRFBlockError (a
+        # ValueError). The connect-time re-check below covers redirects and
+        # DNS-rebinding TOCTOU.
+        if self._ssrf_protect:
+            validate_url(url)
+
         last_exc: Exception | None = None
         delay = self._retry.base_delay
 
@@ -138,9 +154,11 @@ class ResilientHttpClient:
         for attempt in range(1, self._retry.max_attempts + 1):
             start = time.monotonic()
             try:
+                transport = SafeAsyncTransport() if self._ssrf_protect else None
                 async with httpx.AsyncClient(
                     timeout=timeout,
                     follow_redirects=True,
+                    transport=transport,
                 ) as client:
                     response = await client.request(method, url, headers=merged_headers, **kwargs)
                 latency = (time.monotonic() - start) * 1000

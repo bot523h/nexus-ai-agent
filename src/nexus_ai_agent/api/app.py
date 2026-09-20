@@ -1,14 +1,26 @@
 from __future__ import annotations
 
+import hmac as hmac_mod
+import logging
 import os
 import secrets
 import tempfile
+import time
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 
@@ -34,13 +46,72 @@ def get_creative_registry() -> JobRegistry:
 
 app = FastAPI(title="NEXUS AI Dashboard")
 
+
+def parse_cors_origins(raw: str) -> list[str]:
+    """Parse the comma-separated ``NEXUS_API_CORS_ORIGINS`` allowlist."""
+    return [origin.strip() for origin in (raw or "").split(",") if origin.strip()]
+
+
+# CORS is an explicit allowlist (NEXUS_API_CORS_ORIGINS, comma-separated).
+# Default is empty → no cross-origin browser access at all; the served
+# dashboard is same-origin and needs none. The previous default
+# (allow_origins=["*"] + allow_credentials=True) reflected *any* origin —
+# effectively disabling the browser same-origin policy for this API.
+_cors_origins = parse_cors_origins(get_settings().api_cors_origins)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_origins,
+    allow_credentials=bool(_cors_origins),
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-NEXUS-Signature", "X-NEXUS-Timestamp"],
 )
+
+#: Signature freshness window for HMAC-authenticated mutating endpoints.
+_HMAC_MAX_AGE_SECONDS = 300.0
+_HMAC_TIMESTAMP_HEADER = "X-NEXUS-Timestamp"
+_HMAC_SIGNATURE_HEADER = "X-NEXUS-Signature"
+_hmac_warning_emitted = False
+_logger = logging.getLogger(__name__)
+
+
+async def require_hmac_signature(request: Request) -> None:
+    """HMAC-SHA256 request signing for state-changing dashboard endpoints.
+
+    When ``NEXUS_API_HMAC_KEY`` is set, the request must carry
+    ``X-NEXUS-Timestamp`` (unix seconds) and
+    ``X-NEXUS-Signature: hex(HMAC-SHA256(key, "{timestamp}:{raw_body}"))``;
+    the timestamp must be within ±300 s and the comparison is constant-time.
+    With no key configured the dependency keeps the legacy open behaviour
+    and logs a one-time warning — deployments must set the key in production.
+    """
+    global _hmac_warning_emitted
+    key = get_settings().api_hmac_key
+    if not key:
+        if not _hmac_warning_emitted:
+            _hmac_warning_emitted = True
+            _logger.warning(
+                "NEXUS_API_HMAC_KEY is not set: mutating dashboard endpoints "
+                "accept unauthenticated requests (legacy behaviour)."
+            )
+        return
+
+    timestamp = request.headers.get(_HMAC_TIMESTAMP_HEADER)
+    signature = request.headers.get(_HMAC_SIGNATURE_HEADER)
+    if not timestamp or not signature:
+        raise HTTPException(status_code=401, detail="missing signature headers")
+    try:
+        age = abs(time.time() - float(timestamp))
+    except ValueError:
+        raise HTTPException(status_code=401, detail="invalid signature timestamp") from None
+    if age > _HMAC_MAX_AGE_SECONDS:
+        raise HTTPException(status_code=401, detail="stale signature timestamp")
+
+    body = await request.body()
+    message = f"{timestamp}:".encode() + body
+    expected = hmac_mod.new(key.encode(), message, "sha256").hexdigest()
+    if not hmac_mod.compare_digest(signature.strip().lower(), expected):
+        raise HTTPException(status_code=401, detail="invalid signature")
+
 
 app.include_router(dashboard_router)
 
@@ -236,7 +307,7 @@ async def _process_video_edit_job(
             Path(local_input_path).unlink(missing_ok=True)
 
 
-@app.post("/creative/video-edit")
+@app.post("/creative/video-edit", dependencies=[Depends(require_hmac_signature)])
 async def create_video_edit_job(
     background_tasks: BackgroundTasks,
     file: Annotated[UploadFile | None, File()] = None,
