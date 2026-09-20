@@ -18,7 +18,7 @@ def test_required_port_methods_are_present_and_typed() -> None:
             "schema_fingerprint",
         ),
         ConversationStorePort: ("append_message", "list_messages"),
-        JobQueuePort: ("enqueue", "get_status"),
+        JobQueuePort: ("enqueue", "get_status", "get_result"),
         LLMPort: ("complete",),
         ObjectStoragePort: ("put", "delete"),
     }
