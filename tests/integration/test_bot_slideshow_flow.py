@@ -25,6 +25,7 @@ from nexus_ai_agent.creative.slideshow.probe import ProbeError
 #: The encoder is mocked here — the suite must never depend on FFmpeg.
 FAKE_MASTER = b"\x00\x00\x00\x18ftypmp42fake-master"
 
+
 #: The payload envelope validates suffixes only (probing lives behind the
 #: mocked engine call), so placeholder bytes with image names are enough.
 def make_image(path: Path, seed: int = 0) -> Path:
