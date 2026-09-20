@@ -151,3 +151,12 @@ Gates on this PR: `ruff check` + `ruff format --check` clean (243 files);
 skipped** (was 386 / 20 on `994a509`; +49 = exactly the new tests, none
 removed or weakened); `nexus continuum verify` count refreshed (357 → 405
 collected test functions incl. slow-marked).
+
+## G — PHASE 4 / PR4 follow-up: the four open decisions (D1–D4)
+
+Each decision is one atomic commit whose body carries the Decision Record
+(Evidence → Impact → Contract → Alternatives → Decision).
+
+| ID | Decision                                                                                     | Status | Test reference(s) / evidence | Notes |
+|----|-----------------------------------------------------------------------------------------------|--------|------------------------------|-------|
+| D2 | `nightly_channel_management`: **removed dead code; channel management stays simulated until R-031.** No scheduler added. | DONE | `tests/architecture/test_no_distributed_queue.py::test_no_scheduler_in_production` (bans `apscheduler`/`schedule`/`croniter`/`rocketry` imports in `src/` and asserts `run_nightly_tasks` / `nightly_channel_management` are no longer defined; red on the previous tree) | Evidence: the Celery task had no `beat_schedule` and no caller; `ChannelManager` is never instantiated in `src/`; `post_top_users` / `post_viral_content` / `run_nightly_tasks` were reachable only through the task. The `/post`, `/schedule`, `/ban` handlers are explicitly "(simulated)". Removed the "Autonomous Channel Management (v3.4.0)" block + unused imports; channel primitives (post/pin/delete/schedule/ban/welcome) kept for R-031. `legacy_baseline.json` entry for `channel_manager.py` shrinks from `[sqlmodel, telegram]` to `[sqlmodel]` (the `telegram.error` import left with the dead code). |

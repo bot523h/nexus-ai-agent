@@ -129,8 +129,7 @@
     {
       "file": "src/nexus_ai_agent/features/channel_manager.py",
       "imports": [
-        "sqlmodel",
-        "telegram"
+        "sqlmodel"
       ]
     },
     {

@@ -10,13 +10,11 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlmodel import Session, desc, select
-from telegram.error import TelegramError
+from sqlmodel import Session, select
 
 from nexus_ai_agent.config.settings import get_settings
-from nexus_ai_agent.features.viral_engine import ViralEngine
 from nexus_ai_agent.observability.logging import get_logger
-from nexus_ai_agent.storage.models import ChannelSchedule, User, ViralPost, WelcomeMessage
+from nexus_ai_agent.storage.models import ChannelSchedule, WelcomeMessage
 
 logger = get_logger(__name__)
 
@@ -30,14 +28,13 @@ def _sync_engine() -> Any:
 
 
 class ChannelManager:
-    """Manages channel/group operations: posts, schedules, bans, welcomes, and autonomous tasks."""
+    """Manages channel/group operations: posts, schedules, bans and welcomes."""
 
     def __init__(self, bot: Any | None = None) -> None:
         self.bot = bot
         self._scheduled_tasks: dict[int, asyncio.Task[Any]] = {}
         self._welcome_cache: dict[int, str] = {}
         self.channel_id = -1003945319426  # Numerical ID for @nexus_ai_official
-        self.viral_engine = ViralEngine(bot)
 
     def _require_bot(self) -> Any:
         if self.bot is None:
@@ -166,74 +163,3 @@ class ChannelManager:
         bot = self._require_bot()
         await bot.send_message(chat_id=chat_id, text=formatted)
         return formatted
-
-    # ── Autonomous Channel Management (v3.4.0) ───────────────────
-
-    async def post_top_users(self) -> bool:
-        """Fetch top 10 users by XP/activity and post to channel."""
-        bot = self._require_bot()
-        engine = _sync_engine()
-        with Session(engine) as session:
-            stmt = select(User).order_by(desc(User.id)).limit(10)
-            users = session.exec(stmt).all()
-
-            if not users:
-                return False
-
-            text = "🏆 **برترین کاربران ۲۴ ساعت گذشته**\n\n"
-            for i, user in enumerate(users, 1):
-                username = f"@{user.username}" if user.username else f"User {user.telegram_id}"
-                text += f"{i}. {username}\n"
-
-            text += "\n🚀 شما هم می‌توانید با فعالیت در ربات به لیست برترین‌ها اضافه شوید!"
-
-            try:
-                await bot.send_message(chat_id=self.channel_id, text=text, parse_mode="Markdown")
-                return True
-            except TelegramError as e:
-                logger.error(f"Failed to post top users: {e}")
-                return False
-
-    async def post_viral_content(self) -> int:
-        """Post pending viral content to channel."""
-        bot = self._require_bot()
-        engine = _sync_engine()
-        with Session(engine) as session:
-            stmt = (
-                select(ViralPost)
-                .where(ViralPost.status == "pending")
-                .order_by(desc(ViralPost.viral_score))
-                .limit(10)
-            )
-            posts = session.exec(stmt).all()
-
-            count = 0
-            for post in posts:
-                try:
-                    await bot.send_message(chat_id=self.channel_id, text=post.text)
-                    post.status = "posted"
-                    post.posted_at = datetime.now(timezone.utc)
-                    session.add(post)
-                    count += 1
-                except TelegramError as e:
-                    logger.error(f"Failed to post viral content {post.id}: {e}")
-                    post.status = "failed"
-                    session.add(post)
-
-            session.commit()
-            return count
-
-    async def run_nightly_tasks(self) -> None:
-        """Main entry point for nightly automation."""
-        logger.info("Starting nightly channel management tasks...")
-
-        # 1. Post Top Users
-        await self.post_top_users()
-
-        # 2. Generate new viral content if needed
-        await self.viral_engine.generate_and_schedule(self.channel_id, count=10)
-
-        # 3. Post viral content
-        await self.post_viral_content()
-
-        logger.info("Nightly tasks completed.")

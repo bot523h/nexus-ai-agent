@@ -19,7 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   topology, settings surface).
   - `nightly_channel_management` is **not** carried over: it was a Celery task
     with no `beat_schedule`, i.e. it never ran. Scheduling it would be new
-    behaviour without a contract; left to an explicit follow-up.
+    behaviour without a contract.
+  - **D2 (decision):** the task body behind it — `ChannelManager.post_top_users`,
+    `post_viral_content`, `run_nightly_tasks` — is removed as dead code
+    (`ChannelManager` is never instantiated; the channel commands are
+    "(simulated)" until R-031). No scheduler is added;
+    `test_no_scheduler_in_production` bans one.
 
 ### Added
 - `adapters/in_process_job_queue.py` — `InProcessJobQueue`, the Stage 0

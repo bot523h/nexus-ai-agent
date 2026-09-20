@@ -30,6 +30,11 @@ BANNED_REMOTE_CALLS = frozenset({"delay", "apply_async", "send_task"})
 #: Environment aliases that used to advertise a broker in ``Settings``.
 BANNED_SETTINGS_FIELDS = frozenset({"redis_url", "celery_broker_url", "celery_result_backend"})
 
+#: D2 — no scheduler either.  The nightly channel task never had a schedule
+#: and was removed as dead code; channel management stays simulated until
+#: R-031.  Adding a scheduler is a contract change, so it must edit this test.
+BANNED_SCHEDULER_MODULES = frozenset({"apscheduler", "schedule", "croniter", "rocketry"})
+
 
 def _top_level_imports(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -155,3 +160,22 @@ def test_settings_do_not_advertise_a_broker() -> None:
 
     exposed = set(Settings.model_fields) & BANNED_SETTINGS_FIELDS
     assert not exposed, f"broker settings still exposed: {sorted(exposed)}"
+
+
+def test_no_scheduler_in_production() -> None:
+    """D2: no periodic scheduler in the monolith; the dead nightly task is gone."""
+    offenders = {
+        str(path.relative_to(ROOT)): sorted(imported & BANNED_SCHEDULER_MODULES)
+        for path in sorted(SRC.rglob("*.py"))
+        if (imported := _top_level_imports(path)) & BANNED_SCHEDULER_MODULES
+    }
+    assert not offenders, f"scheduler imports in production code: {offenders}"
+    dead = {"run_nightly_tasks", "nightly_channel_management"}
+    for path in sorted(SRC.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        defined = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        assert not defined & dead, f"{path.relative_to(ROOT)} still defines {defined & dead}"
