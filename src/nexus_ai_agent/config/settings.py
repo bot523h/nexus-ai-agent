@@ -266,6 +266,23 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("NEXUS_WEBHOOK_SECRET", "WEBHOOK_SECRET"),
     )
+    # Browser origins allowed to call the dashboard API cross-origin
+    # (comma-separated, e.g. "https://nexus.example.com,https://a.example.org").
+    # Empty (default) disables cross-origin browser access entirely — the
+    # served dashboard is same-origin and needs no CORS. Never use "*".
+    api_cors_origins: str = Field(
+        default="",
+        validation_alias="NEXUS_API_CORS_ORIGINS",
+    )
+    # Fail-closed: unset/empty disables mutating dashboard API endpoints
+    # (currently POST /creative/video-edit answers 503 "Security
+    # configuration incomplete"). When set, requests must be signed with
+    # X-NEXUS-Signature: hex(HMAC-SHA256(key, "{timestamp}:{raw_body}"))
+    # plus a fresh X-NEXUS-Timestamp (unix seconds, ±300 s).
+    api_hmac_key: str | None = Field(
+        default=None,
+        validation_alias="NEXUS_API_HMAC_KEY",
+    )
     creative_gemini_api_key: str | None = Field(
         default=None,
         validation_alias="NEXUS_CREATIVE_GEMINI_API_KEY",

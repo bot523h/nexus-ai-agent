@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import hmac as hmac_mod
 import os
 import secrets
 import tempfile
+import time
 from pathlib import Path
-from typing import Annotated
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from nexus_ai_agent.api.dashboard import router as dashboard_router
 from nexus_ai_agent.config.settings import get_settings
@@ -34,13 +36,63 @@ def get_creative_registry() -> JobRegistry:
 
 app = FastAPI(title="NEXUS AI Dashboard")
 
+
+def parse_cors_origins(raw: str) -> list[str]:
+    """Parse the comma-separated ``NEXUS_API_CORS_ORIGINS`` allowlist."""
+    return [origin.strip() for origin in (raw or "").split(",") if origin.strip()]
+
+
+# CORS is an explicit allowlist (NEXUS_API_CORS_ORIGINS, comma-separated).
+# Default is empty → no cross-origin browser access at all; the served
+# dashboard is same-origin and needs none. The previous default
+# (allow_origins=["*"] + allow_credentials=True) reflected *any* origin —
+# effectively disabling the browser same-origin policy for this API.
+_cors_origins = parse_cors_origins(get_settings().api_cors_origins)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_origins,
+    allow_credentials=bool(_cors_origins),
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-NEXUS-Signature", "X-NEXUS-Timestamp"],
 )
+
+#: Signature freshness window for HMAC-authenticated mutating endpoints.
+_HMAC_MAX_AGE_SECONDS = 300.0
+_HMAC_TIMESTAMP_HEADER = "X-NEXUS-Timestamp"
+_HMAC_SIGNATURE_HEADER = "X-NEXUS-Signature"
+
+
+async def require_hmac_signature(request: Request) -> None:
+    """HMAC-SHA256 request signing for state-changing dashboard endpoints.
+
+    **Fail-closed**: without a configured ``NEXUS_API_HMAC_KEY`` the
+    endpoint is disabled outright and answers ``503 Security configuration
+    incomplete``. With a key, the request must carry ``X-NEXUS-Timestamp``
+    (unix seconds) and
+    ``X-NEXUS-Signature: hex(HMAC-SHA256(key, "{timestamp}:{raw_body}"))``;
+    the timestamp must be within ±300 s and the comparison is constant-time.
+    """
+    key = get_settings().api_hmac_key
+    if not key:
+        raise HTTPException(status_code=503, detail="Security configuration incomplete")
+
+    timestamp = request.headers.get(_HMAC_TIMESTAMP_HEADER)
+    signature = request.headers.get(_HMAC_SIGNATURE_HEADER)
+    if not timestamp or not signature:
+        raise HTTPException(status_code=401, detail="missing signature headers")
+    try:
+        age = abs(time.time() - float(timestamp))
+    except ValueError:
+        raise HTTPException(status_code=401, detail="invalid signature timestamp") from None
+    if age > _HMAC_MAX_AGE_SECONDS:
+        raise HTTPException(status_code=401, detail="stale signature timestamp")
+
+    body = await request.body()
+    message = f"{timestamp}:".encode() + body
+    expected = hmac_mod.new(key.encode(), message, "sha256").hexdigest()
+    if not hmac_mod.compare_digest(signature.strip().lower(), expected):
+        raise HTTPException(status_code=401, detail="invalid signature")
+
 
 app.include_router(dashboard_router)
 
@@ -164,7 +216,7 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
-async def _save_upload_to_temp(upload: UploadFile) -> str:
+async def _save_upload_to_temp(upload: StarletteUploadFile) -> str:
     settings = get_settings()
     temp_dir = Path(settings.creative_temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
@@ -238,10 +290,22 @@ async def _process_video_edit_job(
 
 @app.post("/creative/video-edit")
 async def create_video_edit_job(
+    request: Request,
     background_tasks: BackgroundTasks,
-    file: Annotated[UploadFile | None, File()] = None,
-    video_url: Annotated[str | None, Form()] = None,
 ) -> dict[str, str]:
+    # Fail-closed HMAC gate runs BEFORE any form parsing so the raw body is
+    # read exactly once here (starlette caches it in request._body, and the
+    # multipart parser below reuses that cache).
+    await require_hmac_signature(request)
+
+    form = await request.form()
+    upload = form.get("file")
+    # request.form() yields starlette UploadFile instances (fastapi's class
+    # only subclasses it), so the isinstance target is the starlette one.
+    file = upload if isinstance(upload, StarletteUploadFile) else None
+    raw_video_url = form.get("video_url")
+    video_url = str(raw_video_url) if isinstance(raw_video_url, str) and raw_video_url else None
+
     if file is None and not video_url:
         raise HTTPException(status_code=400, detail="Provide either file or video_url")
     if file is not None and video_url:

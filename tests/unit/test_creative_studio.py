@@ -148,8 +148,14 @@ def test_background_task_flow(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    import hashlib
+    import hmac as hmac_module
+    import time
+
     monkeypatch.setenv("NEXUS_CREATIVE_GEMINI_API_KEY", "creative-key")
     monkeypatch.setenv("CREATIVE_TEMP_DIR", str(tmp_path / "creative"))
+    # The endpoint is fail-closed: without a signing key it answers 503.
+    monkeypatch.setenv("NEXUS_API_HMAC_KEY", "test-signing-key")
     settings_module.get_settings.cache_clear()
     monkeypatch.setattr(app_module, "_creative_registry", None)
 
@@ -182,9 +188,28 @@ def test_background_task_flow(
     monkeypatch.setattr(app_module, "execute_ffmpeg_commands", fake_execute)
 
     client = TestClient(app_module.app)
+    # Build the multipart body once so the HMAC signature covers exactly
+    # the raw bytes the server will receive.
+    request = httpx.Request(
+        "POST",
+        "http://testserver/creative/video-edit",
+        files={"file": ("clip.mp4", b"video-bytes", "video/mp4")},
+    )
+    request.read()  # materialize the streaming multipart body
+    timestamp = str(int(time.time()))
+    signature = hmac_module.new(
+        b"test-signing-key",
+        f"{timestamp}:".encode() + request.content,
+        hashlib.sha256,
+    ).hexdigest()
     response = client.post(
         "/creative/video-edit",
-        files={"file": ("clip.mp4", b"video-bytes", "video/mp4")},
+        content=request.content,
+        headers={
+            "Content-Type": request.headers["Content-Type"],
+            "X-NEXUS-Timestamp": timestamp,
+            "X-NEXUS-Signature": signature,
+        },
     )
 
     assert response.status_code == 200
