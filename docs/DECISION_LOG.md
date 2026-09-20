@@ -1,14 +1,15 @@
 # NEXUS AI — Architecture Decision Log
 
-**Status:** Canonical historical record; revision 2 effective 2026-09-20  
+**Status:** Canonical historical record; revision 3 effective 2026-09-20  
 **Scope:** Architectural, operational, and roadmap decisions from Phase 0 through the current post-Phase-5 baseline and the accepted Phase 6 Nagar design.  
 **Main baseline for this revision:** `3c8d1de0` (the PR#14 merge — modular monolith + canonical decision log). The live head may have advanced; consult `git log origin/main`.  
-**Current release baseline:** `v3.9.0` / Phase 5
+**Current release baseline:** `v3.10.0` / Phase 6 Wave 1 (“Green Cockpit” core)
 
 **Revision history**
 
 - **r1 (2026-09-20, PR#14):** initial canonical log — phase history, core rejections, Nagar acceptance, numbering families.
-- **r2 (2026-09-20, this revision):** added the Cognee and manual-Neon-keep-alive rejections, sharpened the "Nexus World" rejection (3-D world model + alleged quantum decision algorithms), converted the zombie-branch list into a per-branch disposition table with the required manual-deletion note, added the old-continuum `Phase D/E` numbering row, mapped every numbering family onto the final seven-phase roadmap, and recorded an open-PR snapshot.
+- **r2 (2026-09-20):** added the Cognee and manual-Neon-keep-alive rejections, sharpened the "Nexus World" rejection (3-D world model + alleged quantum decision algorithms), converted the zombie-branch list into a per-branch disposition table with the required manual-deletion note, added the old-continuum `Phase D/E` numbering row, mapped every numbering family onto the final seven-phase roadmap, and recorded an open-PR snapshot.
+- **r3 (2026-09-20, PR#19 + the v3.10.0 release commit):** recorded the implemented Nagar Wave 1 core as an accepted decision, moved the release baseline to `v3.10.0`, corrected the Phase 6 “implementation has not started” status, added the PR#18/PR#19 rows to the PR snapshot, marked the D1–D4 bundle as merged (`d9f5cf9`), and locked the Celery/Redis scan result into the record.
 
 This document is the single reference point for architectural decisions in this repository. A new decision must be appended here with its date, status, rationale, rejected alternatives, and repository evidence. Existing historical documents remain useful as detailed records, but this log is authoritative when summaries differ.
 
@@ -67,13 +68,13 @@ The post-Phase-5 mainline then accepted the modular-monolith foundation and the 
 ### Phase 6 — Nagar architecture
 
 **Date:** 2026-09-20.  
-**Status:** Architecture accepted; implementation of the 70 operations has not started.
+**Status:** Architecture accepted; **Wave 1 (“Green Cockpit” core) implemented and merged** through PR#19 (`ac6c25b`). The remaining operations are not implemented.
 
 `docs/NAGAR_70_OPERATIONS_TDD.md` is accepted as the formal Phase 6 architecture document. Acceptance is limited to the design baseline. It does not authorize implementation work until the relevant operation contracts, ownership boundaries, and execution gates are separately approved.
 
 The Nagar choice is based on three architectural properties. Commands are typed rather than simulated UI clicks. Content is stored and transported through content-addressed packs. Execution is divided into three explicit paths: **Preview**, **Analysis**, and **Master**. These choices make intent, reproducibility, and resource cost visible before an operation is executed.
 
-No Phase 6 operation implementation is included in this decision-log change.
+This record was updated when Wave 1 landed: the five Wave 1 operations and their substrate are implemented (see “Nagar Wave 1 — Green Cockpit core implemented from the TDD baseline” under Accepted Architectural Decisions). The other 65 operations remain unimplemented, and each still requires its own contract, ownership boundary and decision before implementation.
 
 ## Rejected or Retired Decisions
 
@@ -130,6 +131,24 @@ Background jobs remain inside the application process. The queue is durable thro
 
 Nagar is accepted as the Phase 6 design baseline because it makes operation intent explicit through typed commands, avoids brittle UI-click simulation, and uses content-addressed packs for reproducible content movement. Its three execution paths provide a controlled separation between cheap previews, analytical work, and authoritative master execution.
 
+### Nagar Wave 1 — “Green Cockpit” core implemented from the TDD baseline
+
+**Date:** 2026-09-20; implemented through PR#19 (merged as `ac6c25b`).  
+**Status:** Accepted **and implemented**. This entry does not authorize any of the remaining operations.  
+**Problem:** The Phase 6 architecture was accepted as a *design*, but no execution surface existed: there was no typed command envelope, no capability registry, no reference semantics, no atomic apply path and no undo contract. Implementing any single operation first would have meant inventing that substrate implicitly, one operation at a time.
+**Decision:** Wave 1 implements exactly the substrate the TDD asks for first (executive summary, execution order step 1: “تثبیت Command Envelope، timecode_us، Registry، State revision و Undo برای Green Cockpit”) and nothing more — the models, the `Domain > Capability > OperationSpec` registry, the semantic reference resolver and the atomic command bus in `src/nexus_ai_agent/creative/studio/`, exposed through exactly five operations: `media.play`, `media.pause` (level A), `timeline.mark`, `timeline.split_at_playhead` (level B, non-destructive — the source `MediaRef` is never mutated), and `system.undo` (level A). The implementation follows `docs/NAGAR_70_OPERATIONS_TDD.md` directly; no operation outside the document was invented, and the catalog is pinned by an architecture gate.
+**Consequences recorded for the future (in-code decisions that must not silently drift):**
+- `state_hash` is **content-derived** — canonical JSON over `project_id`, `name` and `timeline` — and **excludes** `state_revision`, which stays monotonic. Undo therefore restores the exact previous hash, and revision+hash preconditions stay sound across undo cycles.
+- References (`"اینجا"`, «۵ ثانیه قبل», absolute/relative/start/end, Arabic-Indic digits) are pinned **once at command receipt** with `captured_at_command=True`, before validation and application. No later stage may re-interpret an expression against a moved playhead.
+- `timecode_us` is authoritative; `frame_number` is a derived convenience only (VFR is a documented black swan).
+- Handlers are pure `(project, context) -> outcome` and never touch I/O. Atomicity depends on that purity: a failing handler leaves central state exactly as it was.
+- The studio package stays UI-free and stdlib+pydantic-only; both properties are machine-enforced by `tests/architecture/test_nagar_studio_isolation.py`.
+- `system.undo` skips its own `system.undo` records (classic NLE semantics), which is what makes repeated undo meaningful rather than self-consuming.
+**Rejected alternatives:** re-interpreting references at apply time (non-replayable and racy); inverse-patch undo (a later optimization that must not change the snapshot-based contract); a separate error module (the typed error tree belongs beside the models it protects); UI-click simulation as the operation surface (already rejected in “Nagar as the formal Phase 6 architecture”).
+**Impact on contracts:** the `nagar.command.v1` envelope, the A/B/C/D permission ladder, `EditTransaction` / `CommandResult` and `compute_state_hash()` are now live contracts. Any later change to them requires a new entry that names this one.
+**Verification:** `tests/unit/test_nagar_wave1_green_cockpit.py` (33 tests — for every registered operation: command validates, applies on in-memory state, and undo restores the previous state hash) and `tests/architecture/test_nagar_studio_isolation.py` (3 gates — dependency allow-list, package boundary, exact Wave 1 catalog). Fresh gates on the PR head (`848a40a`): `ruff` (252 files), `mypy src` (159 files), `pytest -m "not slow"` = **460 passed / 20 skipped**; CI `test` (7m44s) and `migrate-postgres` (5m55s) green.
+**Celery/Redis lock:** a repository-wide scan at this revision found **no live Celery or Redis reference** — no import under `src/`, no dependency in `pyproject.toml`, and no document claiming Celery-based background processing. The remaining mentions are intentional records only: the guard test `tests/architecture/test_modular_monolith.py`, the rejection entry and the modular-monolith decision in this log, `docs/architecture/PORTS.md` (“Redis/Celery are forbidden in the Modular Monolith”), and a historical v1.x changelog note. The modular-monolith decision stands unchanged.
+
 ### Typed commands instead of UI clicks
 
 **Status:** Accepted for Nagar.  
@@ -174,11 +193,13 @@ The following branches are historical, open, or abandoned proposals and are not 
 | `feat/phase2-local-llm` | Abandoned — stacked on an unmerged base | “Provider-agnostic local LLM engine” built **on top of the unmerged `feat/phase1-control-plane`**, so it can never merge cleanly. The underlying need (a provider seam) was satisfied properly by litellm routing in v3.7.0 (Phase 3). |
 | `circleci-project-setup` | Irrelevant — CI platform cut | Only adds `.circleci/config.yml` (commits `265d6a0`, `2818d9d`). `.circleci/` does not exist on `main`; the project standardizes on GitHub Actions (`.github/workflows/ci.yml`, `maintenance.yml`). |
 
-### Open pull requests at the time of this revision (snapshot, 2026-09-20)
+### Pull-request snapshot at this revision (2026-09-20)
 
 - **PR#12** — “Return to the modular monolith … + decisions D1–D4”: **CLOSED 2026-09-20** — its orphaned-history branch (`arena/01a0bdda-…`, no merge base with `main`) was deleted with the owner's approval; the D1–D4 logic is re-built cleanly on the post-PR#16 mainline instead (see `feat/d1-d4-clean-rebuild`).
 - **PR#15** — re-implementation of D1–D4 on the in-process `JobQueuePort` architecture (single commit on the post-PR#14 mainline); **superseded by `feat/d1-d4-clean-rebuild`**, which carries the same reviewed content onto the current `main` (disposition: close in favour of the rebuild).
 - **PR#16** — security hardening (CORS allowlist, fail-closed HMAC endpoint auth, SSRF/DNS-rebinding egress guard, log redaction): **MERGED 2026-09-20** (`4e92371`).
+- **PR#18** — D1–D4 re-implemented cleanly on the post-PR#16 mainline (`feat/d1-d4-clean-rebuild`): **MERGED 2026-09-20** (`d9f5cf9`).
+- **PR#19** — Nagar Phase 6 Wave 1 “Green Cockpit” core (`feat/nagar-wave1-green-cockpit`, head `848a40a`): **MERGED 2026-09-20** (`ac6c25b`), CI green (`test` + `migrate-postgres`).
 
 The repository contains several numbering systems from different workstreams. They must not be interpreted as one chronological sequence. The final roadmap is the **seven-phase plan** documented above: Phase 0 (control plane/security) → 1 (core product) → 2 (local-LLM direction) → 3 (multi-provider routing, scale-to-zero) → 4 (schema management, PostgreSQL/Neon) → 5 (durable storage, lifecycle, R2) → 6 (Nagar creative studio, design accepted).
 
@@ -190,7 +211,7 @@ The repository contains several numbering systems from different workstreams. Th
 | Old continuum `Phase E` | Referenced in some roadmap discussions; **no surviving artifact exists in the repository** | Undefined — treat any `Phase E` reference as having no recorded meaning; do not act on it | — |
 | `S1/V1/L1/M0/T1` | Earlier roadmap or contract vocabulary | Historical labels; use the current decision entry and repository contract instead | Pre-Phase-0 vocabulary; no direct phase mapping |
 | `R-0XX` (e.g. `R-001`, `R-026`) | Requirement identifiers cited by the modular-monolith decision (PR#13 lineage) | Citation labels only — **no `R-0XX` rows exist in `REQUIREMENTS_LEDGER.md`**; keep for traceability to that decision text | Phase 6 foundation (monolith basis of the Nagar baseline) |
-| `PR#12 D1–D4` | A separate feature bundle for job resume, dead-code removal, PDF extraction, and Telegram notification | Cleanly re-implemented on the post-PR#16 mainline (`feat/d1-d4-clean-rebuild`): pending-only `resume_pending_jobs` + `nexus jobs resume`, `pypdf` extraction under the `pdf_extract` job type, fail-safe completion hook; `nightly_channel_management` dead code removed — port signatures untouched | Post-Phase-5 feature bundle (queued for the post-Nagar mainline) |
+| `PR#12 D1–D4` | A separate feature bundle for job resume, dead-code removal, PDF extraction, and Telegram notification | Cleanly re-implemented on the post-PR#16 mainline (`feat/d1-d4-clean-rebuild`): pending-only `resume_pending_jobs` + `nexus jobs resume`, `pypdf` extraction under the `pdf_extract` job type, fail-safe completion hook; `nightly_channel_management` dead code removed — port signatures untouched | Post-Phase-5 feature bundle — **merged via PR#18 (`d9f5cf9`)** |
 
 These numbering families are now treated as historical labels inside the final seven-phase roadmap. A new decision must use a descriptive title and a unique date, and may include an identifier only when it improves traceability.
 

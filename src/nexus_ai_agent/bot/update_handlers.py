@@ -1,3 +1,9 @@
+from __future__ import annotations
+
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _distribution_version
+from pathlib import Path
+
 from telegram import Update
 from telegram.ext import ContextTypes
 
@@ -5,13 +11,35 @@ from nexus_ai_agent.agent.approval import ApprovalSystem
 from nexus_ai_agent.agent.self_monitor import SelfMonitor
 from nexus_ai_agent.features.owner_control import is_owner
 
+_DISTRIBUTION_NAME = "nexus-ai-agent"
+_UNKNOWN_VERSION = "v0.0.0+unknown"
+
+
+def _version_from_repo_checkout() -> str | None:
+    """Fallback for a source checkout that was never ``pip install``-ed."""
+    candidate = Path(__file__).resolve().parents[3] / "VERSION"
+    if candidate.is_file():
+        return f"v{candidate.read_text(encoding='utf-8').strip()}"
+    return None
+
+
+def running_version() -> str:
+    """The real running version.
+
+    The ``VERSION`` file lives at the repository root and is **not** part of a
+    wheel, so the installed distribution metadata is the primary source; the
+    repository file is only a fallback for an uninstalled checkout.
+    """
+    try:
+        return f"v{_distribution_version(_DISTRIBUTION_NAME)}"
+    except PackageNotFoundError:
+        return _version_from_repo_checkout() or _UNKNOWN_VERSION
+
 
 async def version_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
         return
-    # In a real app, read from VERSION file
-    current_version = "v3.0.0"
-    await update.message.reply_text(f"🤖 نسخه فعلی: {current_version}")
+    await update.message.reply_text(f"🤖 نسخه فعلی: {running_version()}")
 
 
 async def update_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -26,7 +54,7 @@ async def update_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await message.reply_text("⛔ Only the bot owner can trigger updates.")
         return
 
-    current_version = "v3.0.0"
+    current_version = running_version()
     monitor = SelfMonitor(bot=context.bot)
     approval_system = ApprovalSystem(bot=context.bot)
 
