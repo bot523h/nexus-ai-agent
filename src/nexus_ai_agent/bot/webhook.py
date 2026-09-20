@@ -175,5 +175,15 @@ async def _serve_webhook(
         # 4) Graceful application shutdown: stop consuming updates and close
         #    the bot's HTTP sessions.  Runs even if serving failed, so a
         #    platform-issued SIGTERM never leaves half-open resources behind.
+        #    PTB runs ``post_stop`` / ``post_shutdown`` only from its own
+        #    ``run_polling`` / ``run_webhook``; we drive the lifecycle here,
+        #    so we honour the same hooks in the same order (the in-process
+        #    job queue drains in ``post_stop`` while the bot is still usable).
         await application.stop()
+        post_stop = getattr(application, "post_stop", None)
+        if post_stop is not None:
+            await post_stop(application)
         await application.shutdown()
+        post_shutdown = getattr(application, "post_shutdown", None)
+        if post_shutdown is not None:
+            await post_shutdown(application)

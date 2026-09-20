@@ -305,3 +305,113 @@ def test_run_webhook_requires_webhook_secret() -> None:
     )
     with pytest.raises(WebhookConfigError, match="NEXUS_WEBHOOK_SECRET"):
         run_webhook(StubApplication(), settings=settings)  # type: ignore[arg-type]
+
+
+# ── lifecycle hooks in webhook mode ────────────────────────────────────
+#
+# PTB runs ``post_stop`` / ``post_shutdown`` only from ``run_polling`` /
+# ``run_webhook``.  Our webhook runner drives ``stop()`` / ``shutdown()``
+# itself, so it must honour the same hooks — the in-process job queue drains
+# in ``post_stop`` (bot still initialised, so completion notices can be sent).
+
+
+class _LifecycleRecorder:
+    """Stub Application that records the lifecycle order."""
+
+    def __init__(self, *, with_hooks: bool = True) -> None:
+        self.calls: list[str] = []
+        self.bot = self
+        self.update_queue: asyncio.Queue[Any] = asyncio.Queue()
+        self.post_stop = self._post_stop if with_hooks else None
+        self.post_shutdown = self._post_shutdown if with_hooks else None
+
+    async def initialize(self) -> None:
+        self.calls.append("initialize")
+
+    async def start(self) -> None:
+        self.calls.append("start")
+
+    async def set_webhook(self, *, url: str, secret_token: str) -> None:
+        self.calls.append("set_webhook")
+
+    async def stop(self) -> None:
+        self.calls.append("stop")
+
+    async def shutdown(self) -> None:
+        self.calls.append("shutdown")
+
+    async def _post_stop(self, app: Any) -> None:
+        assert app is self
+        self.calls.append("post_stop")
+
+    async def _post_shutdown(self, app: Any) -> None:
+        assert app is self
+        self.calls.append("post_shutdown")
+
+
+class _ServeStub:
+    """Replaces ``uvicorn.Server``: serve() returns immediately (or raises)."""
+
+    fail: BaseException | None = None
+
+    def __init__(self, config: Any) -> None:
+        self.config = config
+
+    async def serve(self) -> None:
+        if _ServeStub.fail is not None:
+            raise _ServeStub.fail
+
+
+@pytest.fixture()
+def _stub_uvicorn(monkeypatch: pytest.MonkeyPatch):
+    import uvicorn
+
+    monkeypatch.setattr(uvicorn, "Server", _ServeStub)
+    _ServeStub.fail = None
+    yield
+    _ServeStub.fail = None
+
+
+async def _serve(app: _LifecycleRecorder) -> None:
+    from nexus_ai_agent.bot.webhook import _serve_webhook
+
+    await _serve_webhook(
+        application=app,
+        api_app=object(),
+        webhook_url="https://example.test/webhook/telegram",
+        webhook_secret=SECRET,
+        host="0.0.0.0",
+        port=8000,
+        log_level="info",
+    )
+
+
+@pytest.mark.usefixtures("_stub_uvicorn")
+async def test_webhook_runner_honours_ptb_lifecycle_hooks() -> None:
+    app = _LifecycleRecorder()
+    await _serve(app)
+    assert app.calls == [
+        "initialize",
+        "start",
+        "set_webhook",
+        "stop",
+        "post_stop",
+        "shutdown",
+        "post_shutdown",
+    ]
+
+
+@pytest.mark.usefixtures("_stub_uvicorn")
+async def test_webhook_runner_hooks_run_even_when_serving_fails() -> None:
+    app = _LifecycleRecorder()
+    _ServeStub.fail = RuntimeError("bind failed")
+    with pytest.raises(RuntimeError, match="bind failed"):
+        await _serve(app)
+    assert app.calls[-4:] == ["stop", "post_stop", "shutdown", "post_shutdown"]
+
+
+@pytest.mark.usefixtures("_stub_uvicorn")
+async def test_webhook_runner_tolerates_absent_hooks() -> None:
+    app = _LifecycleRecorder(with_hooks=False)
+    await _serve(app)
+    assert app.calls == ["initialize", "start", "set_webhook", "stop", "shutdown"]

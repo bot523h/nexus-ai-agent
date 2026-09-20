@@ -162,15 +162,17 @@ def test_build_application_wires_the_in_process_queue(
     assert isinstance(queue, InProcessJobQueue)
     assert set(queue.handlers) == {jobs.PDF_JOB, jobs.STORY_JOB}
     assert str(queue.db_path) == jobs.job_queue_db_path(settings_override.db_path)
-    # Graceful shutdown drains in-flight jobs (PTB post_shutdown hook).
-    assert application.post_shutdown is not None
+    # Graceful shutdown drains in-flight jobs in post_stop (bot still usable);
+    # both run modes honour it (run_polling natively, the webhook runner explicitly).
+    assert application.post_stop is not None
+    assert application.post_shutdown is None
     assert application.post_init is None, "nothing is resumed implicitly at startup"
 
 
 async def test_application_shutdown_drains_in_flight_jobs(
     settings_override: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The ``post_shutdown`` hook lets a running story job finish instead of destroying it."""
+    """The ``post_stop`` hook lets a running story job finish instead of destroying it."""
     from nexus_ai_agent.adapters.in_process_job_queue import JobStatus
     from nexus_ai_agent.bot.app import build_application
 
@@ -187,8 +189,8 @@ async def test_application_shutdown_drains_in_flight_jobs(
     )
     assert queue.in_flight == 1
 
-    assert application.post_shutdown is not None
-    await application.post_shutdown(application)  # what Application.shutdown() runs
+    assert application.post_stop is not None
+    await application.post_stop(application)  # what both run modes invoke after stop()
 
     assert queue.in_flight == 0
     assert await queue.get_status(job_id) == JobStatus.SUCCEEDED

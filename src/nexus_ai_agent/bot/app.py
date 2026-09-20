@@ -141,11 +141,14 @@ def build_application(
     job_queue: InProcessJobQueue = engines["job_queue"]
 
     async def _drain_jobs(_app: Application) -> None:
-        # Runs on Application.shutdown() in both polling and webhook mode:
-        # let in-flight jobs finish (bounded) instead of destroying their tasks.
+        # PTB ``post_stop``: runs after ``Application.stop()`` (handlers have
+        # finished enqueueing) and before ``shutdown()`` (the bot can still
+        # send).  Both run modes honour it: ``run_polling`` natively and our
+        # webhook runner explicitly.  Lets in-flight jobs finish (bounded)
+        # instead of destroying their tasks.
         await job_queue.close(timeout=JOB_DRAIN_TIMEOUT_SECONDS)
 
-    application = ApplicationBuilder().token(token).post_shutdown(_drain_jobs).build()
+    application = ApplicationBuilder().token(token).post_stop(_drain_jobs).build()
     application.bot_data["graph"] = graph
     application.bot_data["presence"] = presence_store
     application.bot_data["storage"] = storage_manager

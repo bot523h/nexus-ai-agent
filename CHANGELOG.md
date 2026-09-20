@@ -59,6 +59,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unknown key still fails fast exactly as before.
 
 ### Fixed
+- `bot/webhook.py`: the webhook runner now honours PTB's `post_stop` /
+  `post_shutdown` hooks in the same order as `run_polling` (PTB only runs
+  them from its own runners). Without this the in-process job drain never
+  ran in webhook mode (the Koyeb path). The drain moved from `post_shutdown`
+  to `post_stop`, i.e. while the bot is still initialised.
 - Job failures were previously returned as `"Error: …"` strings from a
   *successful* Celery task result; they are now persisted as `failed` with
   the error message. (Real PDF text extraction and the "I will notify you"
