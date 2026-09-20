@@ -63,6 +63,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     JPEG/WAV fixtures, plus `tests/architecture/test_slideshow_adapter_boundary.py`
     (manifest ↔ code coherence, heavy imports stay behind the adapter, the
     adapter never bypasses the command bus, templates are data).
+- **Nagar Phase 6, Wave 2c — the render lane renders a real master
+  (`nexus slideshow render`)**: the plan becomes a file, and the file's measured
+  facts become the evidence recorded in state.
+  - `creative/slideshow/ffmpeg.py`: the lane is staged so only its last step is
+    impure — `render_ir_from_plan` (pure), `build_filtergraph`/`build_command`
+    (pure, argv only), `encode` (one process, no shell, timeout, staging file
+    published by an atomic rename, never an in-place overwrite).
+  - Camera moves come from the template's motion parameters (`zoompan`), grade
+    from its color parameters (`eq`/`hue`/`colorbalance`/`vignette`/`noise`),
+    transitions from its transition kind and duration (`xfade`) — the pack still
+    never writes FFmpeg syntax.
+  - Crossfades are **centred on the cut**: each neighbour is authored half a
+    transition longer than its slot, so the rendered boundaries stay where the
+    pack planned them and the master keeps the promised duration.
+  - `probe_video` reads duration, frame size and streams back out of the
+    produced file with the same allow-listed binary (no `ffprobe` dependency),
+    so the hash and duration recorded in state are measurements.
+  - `render_from_files()` runs the whole pipeline and dispatches
+    `slideshow.render` (level C) with the pinned facts; the encode happens
+    *before* the command, so the bus stays pure and `system.undo` can take the
+    record back without touching the file.
+  - CLI: `nexus slideshow render --out master.mp4` (auto/manual, `--overwrite`
+    to replace a file, `--json` reports the pinned facts).
+  - Tests: 19 new tests — the pure IR/argv layer, typed failures, overwrite
+    protection, staging cleanup, byte-identical re-encodes of the same IR, and
+    **four genuine FFmpeg encodes** (including a 1-minute master verified with
+    `probe_video`).
 
 ### Changed
 - `CapabilityRegistry` gains the Wave 2 slideshow operations through
@@ -72,6 +99,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `LITELLM_LOCAL_MODEL_COST_MAP=True` before importing litellm, so the pricing
   map comes from the bundled copy. This removes a hidden network fetch and keeps
   litellm's retry warnings off stdout, which the CLI's `--json` modes depend on.
+- The `[dev]` extra gains `imageio-ffmpeg`, so the render tests execute a real
+  encoder on any machine; production still uses the system FFmpeg. New settings:
+  `NEXUS_FFMPEG_BIN` and `NEXUS_SLIDESHOW_RENDER_TIMEOUT`.
 
 ## [3.10.0] — 2026-09-20
 
