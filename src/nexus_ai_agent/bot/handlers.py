@@ -5,6 +5,7 @@ import json
 import os
 from collections.abc import Callable
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
@@ -27,6 +28,7 @@ from telegram.ext import (
 )
 
 from nexus_ai_agent.agents.store.agent_manager import AgentManager
+from nexus_ai_agent.application.ports.job_queue import JobQueuePort
 from nexus_ai_agent.bot.agent_handlers import (
     agent_callback_handler,
     agent_stop_cmd,
@@ -158,7 +160,10 @@ def build_handlers(
     # ── Middleware & Utilities ────────────────────────────────────
     auth = AuthMiddleware(settings.allowed_user_ids, settings.owner_telegram_id)
     presence_store = presence
-    _ = storage  # placeholder for now
+    from nexus_ai_agent.bot.rate_limiter import InMemoryRateLimiter
+
+    rate_limiter = InMemoryRateLimiter()
+    _ = storage
 
     # ── Feature Engines ───────────────────────────────────────────
     # These are mostly accessed via bot_data, but local aliases help
@@ -825,10 +830,7 @@ def build_handlers(
             await _reply(update, "Access denied.")
             return
 
-        from nexus_ai_agent.bot.rate_limiter import RedisRateLimiter
-
-        limiter = RedisRateLimiter()
-        if not limiter.is_allowed(user_id):
+        if not rate_limiter.is_allowed(user_id):
             await _reply(update, "⚠️ شما بیش از حد مجاز پیام ارسال کرده‌اید. لطفاً یک دقیقه صبر کنید.")
             return
 
@@ -1462,6 +1464,12 @@ async def start_referral_handler(update: Update, context: ContextTypes.DEFAULT_T
     await _reply(update, "Welcome! You were referred by someone.")
 
 
+def _job_queue_from_context(context: ContextTypes.DEFAULT_TYPE) -> JobQueuePort | None:
+    application = getattr(context, "application", None)
+    bot_data = getattr(application, "bot_data", {})
+    return cast(JobQueuePort | None, bot_data.get("job_queue"))
+
+
 async def pdf_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
         return
@@ -1470,23 +1478,37 @@ async def pdf_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     doc = message.document
     if not doc:
         return
+    queue = _job_queue_from_context(context)
+    if queue is None:
+        await _reply(update, "❌ صف پردازش داخلی پیکربندی نشده است.")
+        return
 
     file = await doc.get_file()
     file_bytes = await file.download_as_bytearray()
 
-    # Background processing via Celery
-    from nexus_ai_agent.worker import process_pdf_task
-
-    # Save to temp file for worker
     os.makedirs("data/temp", exist_ok=True)
     temp_path = f"data/temp/{doc.file_id}.pdf"
-    with open(temp_path, "wb") as f:
-        f.write(file_bytes)
+    with open(temp_path, "wb") as handle:
+        handle.write(file_bytes)
 
-    process_pdf_task.delay(user_id, temp_path, doc.file_id)
+    try:
+        job_id = await queue.enqueue(
+            job_type="pdf",
+            idempotency_key=f"telegram-pdf:{user_id}:{doc.file_id}",
+            payload={
+                "user_id": user_id,
+                "file_path": temp_path,
+                "file_id": doc.file_id,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - surface queue failure to the user
+        Path(temp_path).unlink(missing_ok=True)
+        await _reply(update, f"❌ صف پردازش فایل در دسترس نیست: {exc}")
+        return
+
     await _reply(
         update,
-        f"⏳ در حال پردازش فایل {doc.file_name} در پس‌زمینه...\nوقتی آماده شد به شما اطلاع می‌دهم.",
+        f"⏳ فایل {doc.file_name} در صف پردازش داخلی قرار گرفت.\nشناسه: {job_id}",
     )
 
 
@@ -1503,22 +1525,35 @@ async def chat_with_doc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def story_cmd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-
     if not context.args:
         await _reply(update, "❌ استفاده: /story [متن]")
         return
+    queue = _job_queue_from_context(context)
+    if queue is None:
+        await _reply(update, "❌ صف پردازش داخلی پیکربندی نشده است.")
+        return
 
+    user_id = _user_id(update) or 0
     text = " ".join(context.args)
-    await _reply(update, "🎨 در حال ساخت استوری شما...")
+    await _reply(update, "🎨 در حال قرار دادن استوری در صف داخلی...")
 
-    # Background story generation
-    from nexus_ai_agent.worker import generate_story_task
-
-    output_path = f"data/temp/story_{_user_id(update)}_{int(datetime.now().timestamp())}.png"
     os.makedirs("data/temp", exist_ok=True)
+    output_path = f"data/temp/story_{user_id}_{uuid4().hex}.png"
+    try:
+        job_id = await queue.enqueue(
+            job_type="story",
+            idempotency_key=f"telegram-story:{user_id}:{uuid4().hex}",
+            payload={
+                "user_id": user_id,
+                "text": text,
+                "output_path": output_path,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - surface queue failure to the user
+        await _reply(update, f"❌ صف ساخت استوری در دسترس نیست: {exc}")
+        return
 
-    generate_story_task.delay(_user_id(update) or 0, text, output_path)
-    await _reply(update, "🎨 استوری شما در حال آماده‌سازی در پس‌زمینه است...")
+    await _reply(update, f"🎨 استوری در صف پردازش داخلی قرار گرفت.\nشناسه: {job_id}")
 
 
 async def story_style_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

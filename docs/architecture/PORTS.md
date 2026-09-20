@@ -11,7 +11,7 @@ port owns only lifecycle metadata and safe, whole-thread deletion.
 - Per-checkpoint deletion is `POST_V1` because delta-chain surgery is unsafe.
 - `inspect()` is read-only and never updates access timestamps.
 - Unknown lineage, metadata, schema, or lock state blocks deletion.
-- JobQueue starts with an in-process implementation; Redis/Celery are not part of Stage 0.
+- JobQueue is the SQLite-backed in-process implementation; Redis/Celery are forbidden in the Modular Monolith.
 
 ## Port list
 

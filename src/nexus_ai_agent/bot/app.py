@@ -47,6 +47,9 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
 
     Returns a dict suitable for storing in application.bot_data.
     """
+    from pathlib import Path
+
+    from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
     from nexus_ai_agent.features.ai_chat import GeminiEngine
     from nexus_ai_agent.features.conversation_store import ConversationStore
     from nexus_ai_agent.features.image_gen import ImageGenEngine
@@ -57,6 +60,15 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
     from nexus_ai_agent.storage.unified_cloud import UnifiedCloudStorage
 
     engines: dict[str, Any] = {}
+
+    # Application-owned background jobs. The queue is a SQLite sidecar owned
+    # by this adapter; execution remains on the bot process event loop.
+    from nexus_ai_agent.worker import generate_story_job, process_pdf_job
+
+    job_queue = InProcessJobQueue(Path(f"{settings.db_path}.jobs.sqlite3"))
+    job_queue.register_handler("pdf", process_pdf_job)
+    job_queue.register_handler("story", generate_story_job)
+    engines["job_queue"] = job_queue
 
     # Persistent conversation store
     conv_store = ConversationStore(db_path=settings.db_path)
@@ -127,8 +139,12 @@ def build_application(
 
     # Initialize all v2.0.0+ engines
     engines = _init_v2_engines(settings)
+    job_queue = engines["job_queue"]
 
-    application = ApplicationBuilder().token(token).build()
+    async def _resume_jobs(_: Any) -> None:
+        await job_queue.resume_pending()
+
+    application = ApplicationBuilder().token(token).post_init(_resume_jobs).build()
     application.bot_data["graph"] = graph
     application.bot_data["presence"] = presence_store
     application.bot_data["storage"] = storage_manager

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import os
 import tempfile
+from importlib import import_module
 from pathlib import Path
+from typing import Any
 
 try:
-    from playwright.async_api import async_playwright  # type: ignore[import-not-found]
+    async_playwright: Any = import_module("playwright.async_api").async_playwright
 except ImportError:  # pragma: no cover - environment dependent
     async_playwright = None
 
