@@ -64,3 +64,37 @@ async def test_missing_consent_preserves_uploaded_photo_session(
     assert sessions.count((7, 42)) == 1
     assert "--fill" in update.message.reply_text.await_args.args[0]
     sessions.clear()
+
+
+async def test_fill_does_not_allow_unlisted_users_to_spend_operator_credit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        handlers,
+        "get_settings",
+        lambda: SimpleNamespace(
+            allowed_user_ids=[],
+            owner_telegram_id=0,
+        ),
+    )
+    queue = SimpleNamespace(enqueue=AsyncMock())
+    context = SimpleNamespace(
+        application=SimpleNamespace(bot_data={"job_queue": queue}),
+        bot=SimpleNamespace(get_file=AsyncMock()),
+    )
+    update = SimpleNamespace(
+        effective_chat=SimpleNamespace(id=7),
+        effective_user=SimpleNamespace(id=42),
+        message=SimpleNamespace(reply_text=AsyncMock()),
+    )
+    await handlers._begin_render(
+        update,
+        context,
+        project_name="Ocean",
+        file_ids=["photo"],
+        target_images=5,
+        generate_missing=True,
+    )
+    queue.enqueue.assert_not_awaited()
+    context.bot.get_file.assert_not_awaited()
+    assert "مجاز نیست" in update.message.reply_text.await_args.args[0]
