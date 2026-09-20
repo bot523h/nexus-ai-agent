@@ -47,6 +47,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `bot/rate_limiter.py` — `InMemoryRateLimiter` (same 5/60 s sliding-window
   policy), constructed once per application instead of once per message.
 
+### Added
+- **D4 (decision):** the "I will notify you when it is ready" reply is now
+  backed by code. `InProcessJobQueue.set_completion_hook()` fires a fail-safe
+  observer after every terminal transition (success, failure, resumed work,
+  handler-less rows) and `bot/job_notifications.py::TelegramJobNotifier`
+  reports to the originating chat: the story PNG is delivered with
+  `send_photo` (it used to sit in `data/temp`), PDF indexing reports pages and
+  truncation, failures carry a user-facing reason (`PdfExtractionError`
+  message; "PDF processing is not enabled on this server" when the `[pdf]`
+  extra is missing; a generic text otherwise — internals never leak). Job
+  payloads carry `chat_id` (+ `file_name` for PDFs).
+
 ### Changed
 - **D3 (decision):** `process_pdf_job` extracts real text with `pypdf` under
   the new optional `[pdf]` extra (`pip install 'nexus-ai-agent[pdf]'`; the

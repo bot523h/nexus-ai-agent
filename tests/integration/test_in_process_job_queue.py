@@ -362,3 +362,97 @@ async def test_close_drains_in_flight_work(tmp_path: Path) -> None:
     await queue.close(timeout=5)
     assert queue.in_flight == 0
     assert await queue.get_status(job_id) == "succeeded"
+
+
+# ── D4: completion hook ────────────────────────────────────────────────
+
+
+async def test_completion_hook_receives_the_terminal_record(tmp_path: Path) -> None:
+    """The hook fires once per terminal transition with the persisted record."""
+    queue = _queue(tmp_path)
+    seen: list[JobRecord] = []
+
+    async def hook(record: JobRecord) -> None:
+        seen.append(record)
+
+    async def ok(payload: dict[str, object]) -> dict[str, object]:
+        return {"ok": True}
+
+    async def boom(payload: dict[str, object]) -> None:
+        raise RuntimeError("nope")
+
+    queue.register("ok", ok)
+    queue.register("boom", boom)
+    queue.set_completion_hook(hook)
+    ok_id = await queue.enqueue(job_type="ok", idempotency_key="a", payload={"chat_id": 1})
+    boom_id = await queue.enqueue(job_type="boom", idempotency_key="b", payload={"chat_id": 2})
+    assert await queue.wait(ok_id, timeout=5) == JobStatus.SUCCEEDED
+    assert await queue.wait(boom_id, timeout=5) == JobStatus.FAILED
+    await queue.close()
+
+    by_id = {record.job_id: record for record in seen}
+    assert set(by_id) == {ok_id, boom_id}
+    assert by_id[ok_id].status is JobStatus.SUCCEEDED
+    assert by_id[ok_id].result == {"ok": True}
+    assert by_id[ok_id].payload == {"chat_id": 1}
+    assert by_id[boom_id].status is JobStatus.FAILED
+    assert by_id[boom_id].error == "RuntimeError: nope"
+
+
+async def test_completion_hook_failure_is_logged_not_fatal(tmp_path: Path) -> None:
+    """A broken notifier can never change a job's recorded outcome (fail-safe)."""
+    from structlog.testing import capture_logs
+
+    queue = _queue(tmp_path)
+
+    async def hook(record: JobRecord) -> None:
+        raise ConnectionError("telegram down")
+
+    async def ok(payload: dict[str, object]) -> dict[str, object]:
+        return {"ok": True}
+
+    queue.register("ok", ok)
+    queue.set_completion_hook(hook)
+    with capture_logs() as logs:
+        job_id = await queue.enqueue(job_type="ok", idempotency_key="a", payload={})
+        assert await queue.wait(job_id, timeout=5) == JobStatus.SUCCEEDED
+        await queue.close()
+    record = await queue.get_job(job_id)
+    assert record is not None and record.status is JobStatus.SUCCEEDED and record.error is None
+    failures = [entry for entry in logs if entry["event"] == "job_completion_hook_failed"]
+    assert failures and failures[0]["error"] == "ConnectionError: telegram down"
+
+
+async def test_completion_hook_fires_for_resumed_and_unhandled_jobs(tmp_path: Path) -> None:
+    """Interrupted work resumed later, and rows whose handler is gone, notify too."""
+    db = tmp_path / "jobs.sqlite"
+    release = asyncio.Event()
+
+    async def hang(payload: dict[str, object]) -> None:
+        await release.wait()
+
+    first = InProcessJobQueue(db)
+    first.register("hang", hang)
+    first.register("gone", hang)
+    hang_id = await first.enqueue(job_type="hang", idempotency_key="h", payload={})
+    gone_id = await first.enqueue(job_type="gone", idempotency_key="g", payload={})
+    await asyncio.sleep(0.05)
+    await first.close(timeout=0)
+
+    seen: list[JobRecord] = []
+
+    async def hook(record: JobRecord) -> None:
+        seen.append(record)
+
+    async def ok(payload: dict[str, object]) -> dict[str, object]:
+        return {"ok": True}
+
+    second = InProcessJobQueue(db)
+    second.register("hang", ok)  # "gone" deliberately unregistered
+    second.set_completion_hook(hook)
+    assert set(await second.resume_pending()) == {hang_id, gone_id}
+    assert await second.wait(hang_id, timeout=5) == JobStatus.SUCCEEDED
+    assert await second.wait(gone_id, timeout=5) == JobStatus.FAILED
+    await second.close()
+    outcomes = {record.job_id: record.status for record in seen}
+    assert outcomes == {hang_id: JobStatus.SUCCEEDED, gone_id: JobStatus.FAILED}

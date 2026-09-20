@@ -103,6 +103,8 @@ async def test_pdf_handler_enqueues_through_the_port(in_tmp_cwd: Path) -> None:
     assert job["idempotency_key"] == "pdf:777:31"
     assert job["payload"]["user_id"] == 555
     assert job["payload"]["file_id"] == "f1"
+    assert job["payload"]["chat_id"] == 777  # D4: the completion notice goes here
+    assert job["payload"]["file_name"] == "paper.pdf"
     saved = Path(str(job["payload"]["file_path"]))
     assert saved == Path("data/temp/f1.pdf")
     assert saved.read_bytes() == b"hello world"
@@ -122,6 +124,7 @@ async def test_story_handler_enqueues_through_the_port(in_tmp_cwd: Path) -> None
     assert job["job_type"] == jobs.STORY_JOB
     assert job["idempotency_key"] == "story:777:8"
     assert job["payload"]["user_id"] == 9
+    assert job["payload"]["chat_id"] == 777  # D4: the PNG is delivered here
     assert job["payload"]["text"] == "سلام دنیا"
     output = str(job["payload"]["output_path"])
     assert output.startswith("data/temp/story_9_") and output.endswith(".png")
@@ -167,6 +170,12 @@ def test_build_application_wires_the_in_process_queue(
     assert application.post_stop is not None
     assert application.post_shutdown is None
     assert application.post_init is None, "nothing is resumed implicitly at startup"
+    # D4: terminal jobs notify the originating chat through the application's bot.
+    from nexus_ai_agent.bot.job_notifications import TelegramJobNotifier
+
+    hook = queue.completion_hook
+    assert isinstance(hook, TelegramJobNotifier)
+    assert hook.bot is application.bot
 
 
 async def test_application_shutdown_drains_in_flight_jobs(
@@ -195,3 +204,35 @@ async def test_application_shutdown_drains_in_flight_jobs(
     assert queue.in_flight == 0
     assert await queue.get_status(job_id) == JobStatus.SUCCEEDED
     assert output.exists()
+
+
+async def test_story_job_result_is_delivered_to_the_chat(
+    settings_override: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """End to end through the real application wiring: enqueue → render → send_photo."""
+    from nexus_ai_agent.adapters.in_process_job_queue import JobStatus
+    from nexus_ai_agent.bot.app import build_application
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:test-token")
+    application = build_application(
+        settings_override, graph=object(), storage=object(), session_factory=lambda: None
+    )
+    sent: list[dict[str, Any]] = []
+
+    async def fake_send_photo(
+        self: Any, *, chat_id: int, photo: bytes, caption: str, **kwargs: Any
+    ) -> None:
+        sent.append({"chat_id": chat_id, "size": len(photo), "caption": caption})
+
+    # PTB bot instances are immutable; intercept at the class (restored by monkeypatch).
+    monkeypatch.setattr(type(application.bot), "send_photo", fake_send_photo)
+    queue = application.bot_data["job_queue"]
+    output = tmp_path / "story.png"
+    job_id = await queue.enqueue(
+        job_type=jobs.STORY_JOB,
+        idempotency_key="story:e2e",
+        payload={"chat_id": 4242, "user_id": 1, "text": "تحویل واقعی", "output_path": str(output)},
+    )
+    assert await queue.wait(job_id, timeout=30) == JobStatus.SUCCEEDED
+    await queue.close()
+    assert sent and sent[0]["chat_id"] == 4242 and sent[0]["size"] == output.stat().st_size

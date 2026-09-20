@@ -1501,10 +1501,17 @@ async def pdf_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     # In-process background job (R-001/R-026). One upload message = one job;
     # a redelivered update maps onto the same idempotency key (no second effect).
+    # ``chat_id``/``file_name`` let the completion notice (D4) reach this chat.
     await queue.enqueue(
         job_type=PDF_JOB,
         idempotency_key=f"pdf:{_chat_id(update)}:{message.message_id}",
-        payload={"user_id": user_id, "file_path": temp_path, "file_id": doc.file_id},
+        payload={
+            "user_id": user_id,
+            "chat_id": _chat_id(update),
+            "file_path": temp_path,
+            "file_id": doc.file_id,
+            "file_name": doc.file_name or f"{doc.file_id}.pdf",
+        },
     )
     await _reply(
         update,
@@ -1544,12 +1551,21 @@ async def story_cmd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     os.makedirs("data/temp", exist_ok=True)
 
     # In-process background job (R-001/R-026); idempotent per command message.
+    # The finished PNG is delivered to ``chat_id`` by the completion notice (D4).
     await queue.enqueue(
         job_type=STORY_JOB,
         idempotency_key=f"story:{_chat_id(update)}:{message.message_id if message else 0}",
-        payload={"user_id": user_id, "text": text, "output_path": output_path},
+        payload={
+            "user_id": user_id,
+            "chat_id": _chat_id(update),
+            "text": text,
+            "output_path": output_path,
+        },
     )
-    await _reply(update, "🎨 استوری شما در حال آماده‌سازی در پس‌زمینه است...")
+    await _reply(
+        update,
+        "🎨 استوری شما در حال آماده‌سازی در پس‌زمینه است...\nوقتی آماده شد همین‌جا ارسال می‌شود.",
+    )
 
 
 async def story_style_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

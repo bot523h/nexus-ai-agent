@@ -26,6 +26,10 @@ Design
   and ``failed → retrying → running`` are used.
 * Failures are recorded (``failed`` + ``"ExcType: message"``), logged, and
   never raised into the enqueuing coroutine.  Nothing is retried implicitly.
+* An optional **completion hook** (D4) receives the persisted record after
+  every terminal transition — success, failure, resumed work, rows whose
+  handler is gone.  It runs after the state is durable and is fail-safe: an
+  exception in the hook is logged and can never change a job's outcome.
 * Recovery after a process restart is **explicit** (``resume_pending()``);
   the adapter never re-dispatches work on its own at construction or on
   first use.  Rows left ``running`` by a dead process are treated as
@@ -61,6 +65,8 @@ JobStatus = JournalStatus
 
 JobPayload = dict[str, object]
 JobHandler = Callable[[JobPayload], Awaitable[JobPayload | None]]
+#: Called with the persisted record once a job is terminal (see module docs).
+CompletionHook = Callable[["JobRecord"], Awaitable[None]]
 
 _TABLE = "jobs"
 _CLAIMABLE = (JobStatus.PENDING, JobStatus.RETRYING)
@@ -141,6 +147,7 @@ class InProcessJobQueue:
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._init_lock = asyncio.Lock()
         self._initialized = False
+        self._completion_hook: CompletionHook | None = None
 
     # ── Introspection ────────────────────────────────────────────────
 
@@ -156,6 +163,14 @@ class InProcessJobQueue:
     def in_flight(self) -> int:
         """Jobs currently being executed by *this* process."""
         return len(self._tasks)
+
+    @property
+    def completion_hook(self) -> CompletionHook | None:
+        return self._completion_hook
+
+    def set_completion_hook(self, hook: CompletionHook | None) -> None:
+        """Install the (single) terminal-state observer; ``None`` removes it."""
+        self._completion_hook = hook
 
     # ── Registration / schema ────────────────────────────────────────
 
@@ -347,6 +362,7 @@ class InProcessJobQueue:
             await self._transition(
                 job_id, expected=(JobStatus.RUNNING,), to=JobStatus.FAILED, error=message
             )
+            await self._notify(job_id)
             return
 
         try:
@@ -362,12 +378,34 @@ class InProcessJobQueue:
             await self._transition(
                 job_id, expected=(JobStatus.RUNNING,), to=JobStatus.FAILED, error=message
             )
+            await self._notify(job_id)
             return
 
         await self._transition(
             job_id, expected=(JobStatus.RUNNING,), to=JobStatus.SUCCEEDED, result=encoded
         )
         log.info("job_succeeded", job_id=job_id, job_type=record.job_type)
+        await self._notify(job_id)
+
+    async def _notify(self, job_id: str) -> None:
+        """Run the completion hook on the durable terminal record (fail-safe)."""
+        hook = self._completion_hook
+        if hook is None:
+            return
+        record = await self.get_job(job_id)
+        if record is None or record.status not in _TERMINAL:
+            return
+        try:
+            await hook(record)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.error(
+                "job_completion_hook_failed",
+                job_id=job_id,
+                job_type=record.job_type,
+                error=f"{type(exc).__name__}: {exc}",
+            )
 
     async def _transition(
         self,

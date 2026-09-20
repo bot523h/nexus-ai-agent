@@ -13,6 +13,7 @@ from typing import Any
 from telegram.ext import Application, ApplicationBuilder
 
 from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+from nexus_ai_agent.bot.job_notifications import TelegramJobNotifier
 from nexus_ai_agent.config.settings import Settings
 from nexus_ai_agent.jobs import build_job_queue
 from nexus_ai_agent.presence import PresenceStore
@@ -149,6 +150,8 @@ def build_application(
         await job_queue.close(timeout=JOB_DRAIN_TIMEOUT_SECONDS)
 
     application = ApplicationBuilder().token(token).post_stop(_drain_jobs).build()
+    # D4: terminal jobs report back to the originating chat (fail-safe hook).
+    job_queue.set_completion_hook(TelegramJobNotifier(application.bot))
     application.bot_data["graph"] = graph
     application.bot_data["presence"] = presence_store
     application.bot_data["storage"] = storage_manager
