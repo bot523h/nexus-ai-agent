@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import os
 import tempfile
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
 try:
-    from playwright.async_api import async_playwright as _async_playwright
+    async_playwright: Any = import_module("playwright.async_api").async_playwright
 except ImportError:  # pragma: no cover - environment dependent
-    async_playwright: Any = None
-else:
-    async_playwright = _async_playwright
+    async_playwright = None
 
 from nexus_ai_agent.config.settings import get_settings
 
