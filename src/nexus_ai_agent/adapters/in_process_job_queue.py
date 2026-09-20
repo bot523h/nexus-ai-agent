@@ -3,17 +3,22 @@
 The queue deliberately has no broker, worker process, or external service. A
 small SQLite table is the durable hand-off point; execution is scheduled on
 the current asyncio event loop. A new process can call ``resume_pending``
-to continue rows left pending or processing by an earlier process.
+to continue rows left pending or processing by an earlier process, or
+``resume_pending_jobs`` (CLI/operator entry point) to requeue only rows
+still sitting in ``pending``. Terminal states fan out to an optional,
+strictly fail-safe completion hook (job-finished notifications).
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sqlite3
 import threading
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -21,6 +26,25 @@ from uuid import uuid4
 from nexus_ai_agent.application.ports.job_queue import JobStatus
 
 JobHandler = Callable[[dict[str, object]], Awaitable[dict[str, object]]]
+JobCompletionHook = Callable[["JobCompletion"], Awaitable[None]]
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class JobCompletion:
+    """Terminal-state snapshot handed to the completion hook.
+
+    ``payload`` is the original job payload, so hooks can route the
+    notification (e.g. to the Telegram chat that enqueued the job).
+    """
+
+    job_id: str
+    job_type: str
+    status: JobStatus
+    result: dict[str, object] | None
+    error: str | None
+    payload: dict[str, object]
 
 
 class InProcessJobQueue:
@@ -30,9 +54,12 @@ class InProcessJobQueue:
         self,
         db_path: Path | str,
         handlers: dict[str, JobHandler] | None = None,
+        *,
+        on_job_finished: JobCompletionHook | None = None,
     ) -> None:
         self.db_path = Path(db_path)
         self._sqlite_path = str(db_path)
+        self._on_job_finished = on_job_finished
         if self._sqlite_path != ":memory:":
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._handlers: dict[str, JobHandler] = dict(handlers or {})
@@ -106,6 +133,20 @@ class InProcessJobQueue:
             self._schedule(job_id)
         return job_ids
 
+    async def resume_pending_jobs(self) -> list[str]:
+        """Requeue jobs currently sitting in ``pending`` and run them here.
+
+        Operator/CLI entry point (D1: ``nexus jobs resume``). Unlike
+        :meth:`resume_pending` — process-startup recovery, which also claims
+        orphaned ``processing`` rows — this never touches ``processing``
+        rows: a live owner process (usually the bot) may still be executing
+        those, and re-running them here would duplicate side effects.
+        """
+        job_ids = await asyncio.to_thread(self._select_pending)
+        for job_id in job_ids:
+            self._schedule(job_id)
+        return job_ids
+
     async def shutdown(self) -> None:
         """Cancel local tasks and leave them recoverable as pending jobs."""
         tasks = list(self._tasks.values())
@@ -132,13 +173,15 @@ class InProcessJobQueue:
 
         await asyncio.to_thread(self._mark_processing, job_id)
         handler = self._handlers.get(str(row["job_type"]))
+        payload: dict[str, object] = {}
         try:
             if handler is None:
                 raise RuntimeError(f"no handler registered for job type {row['job_type']}")
-            payload = json.loads(str(row["payload_json"]))
-            if not isinstance(payload, dict):
+            parsed = json.loads(str(row["payload_json"]))
+            if not isinstance(parsed, dict):
                 raise RuntimeError(f"invalid persisted payload for {job_id}")
-            result = await handler({str(key): value for key, value in payload.items()})
+            payload = {str(key): value for key, value in parsed.items()}
+            result = await handler(payload)
             if not isinstance(result, dict):
                 raise TypeError("job handler must return a dictionary")
             await asyncio.to_thread(self._mark_completed, job_id, result)
@@ -149,6 +192,45 @@ class InProcessJobQueue:
             raise
         except Exception as exc:  # noqa: BLE001 - job failure must be persisted
             await asyncio.to_thread(self._mark_failed, job_id, str(exc))
+            await self._notify_completion(
+                JobCompletion(
+                    job_id=job_id,
+                    job_type=str(row["job_type"]),
+                    status=JobStatus.FAILED,
+                    result=None,
+                    error=str(exc),
+                    payload=payload,
+                )
+            )
+        else:
+            await self._notify_completion(
+                JobCompletion(
+                    job_id=job_id,
+                    job_type=str(row["job_type"]),
+                    status=JobStatus.COMPLETED,
+                    result=result,
+                    error=None,
+                    payload=payload,
+                )
+            )
+
+    async def _notify_completion(self, completion: JobCompletion) -> None:
+        """Fan a terminal job state out to the injected hook (D4).
+
+        Strictly fail-safe: the durable state is already persisted before
+        this runs, so a broken notifier must never corrupt the queue or
+        lose a job result.
+        """
+        if self._on_job_finished is None:
+            return
+        try:
+            await self._on_job_finished(completion)
+        except Exception:  # noqa: BLE001 - notifier must never break the queue
+            logger.warning(
+                "job completion notifier failed for job %s",
+                completion.job_id,
+                exc_info=True,
+            )
 
     def _initialize_db(self) -> None:
         """Create only the queue-owned table; no application migration is run."""
@@ -234,6 +316,19 @@ class InProcessJobQueue:
                     JobStatus.PROCESSING.value,
                 ),
             )
+        return [str(row[0]) for row in rows]
+
+    def _select_pending(self) -> list[str]:
+        """Return ids of rows still in ``pending``, oldest first."""
+        with self._db_lock, self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT id FROM nexus_job_queue
+                WHERE status = ?
+                ORDER BY created_at, id
+                """,
+                (JobStatus.PENDING.value,),
+            ).fetchall()
         return [str(row[0]) for row in rows]
 
     def _mark_processing(self, job_id: str) -> None:

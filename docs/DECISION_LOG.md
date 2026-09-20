@@ -176,9 +176,9 @@ The following branches are historical, open, or abandoned proposals and are not 
 
 ### Open pull requests at the time of this revision (snapshot, 2026-09-20)
 
-- **PR#12** — “Return to the modular monolith … + decisions D1–D4”: still **open**; its head branch (`arena/01a0bdda-…`) was rebuilt with an orphaned history and has **no merge base with `main`** — merging it mechanically will conflict extensively. The functional content (in-process queue, D1–D4) already exists on `main`/open PRs; disposition (close vs. merge) is an owner decision.
-- **PR#15** — re-implementation of D1–D4 on the in-process `JobQueuePort` architecture (single commit on the post-PR#14 mainline).
-- **PR#16** — security hardening (CORS allowlist, HMAC endpoint auth, SSRF/DNS-rebinding egress guard, log redaction); **manual review required, no auto-merge**.
+- **PR#12** — “Return to the modular monolith … + decisions D1–D4”: **CLOSED 2026-09-20** — its orphaned-history branch (`arena/01a0bdda-…`, no merge base with `main`) was deleted with the owner's approval; the D1–D4 logic is re-built cleanly on the post-PR#16 mainline instead (see `feat/d1-d4-clean-rebuild`).
+- **PR#15** — re-implementation of D1–D4 on the in-process `JobQueuePort` architecture (single commit on the post-PR#14 mainline); **superseded by `feat/d1-d4-clean-rebuild`**, which carries the same reviewed content onto the current `main` (disposition: close in favour of the rebuild).
+- **PR#16** — security hardening (CORS allowlist, fail-closed HMAC endpoint auth, SSRF/DNS-rebinding egress guard, log redaction): **MERGED 2026-09-20** (`4e92371`).
 
 The repository contains several numbering systems from different workstreams. They must not be interpreted as one chronological sequence. The final roadmap is the **seven-phase plan** documented above: Phase 0 (control plane/security) → 1 (core product) → 2 (local-LLM direction) → 3 (multi-provider routing, scale-to-zero) → 4 (schema management, PostgreSQL/Neon) → 5 (durable storage, lifecycle, R2) → 6 (Nagar creative studio, design accepted).
 
@@ -190,7 +190,7 @@ The repository contains several numbering systems from different workstreams. Th
 | Old continuum `Phase E` | Referenced in some roadmap discussions; **no surviving artifact exists in the repository** | Undefined — treat any `Phase E` reference as having no recorded meaning; do not act on it | — |
 | `S1/V1/L1/M0/T1` | Earlier roadmap or contract vocabulary | Historical labels; use the current decision entry and repository contract instead | Pre-Phase-0 vocabulary; no direct phase mapping |
 | `R-0XX` (e.g. `R-001`, `R-026`) | Requirement identifiers cited by the modular-monolith decision (PR#13 lineage) | Citation labels only — **no `R-0XX` rows exist in `REQUIREMENTS_LEDGER.md`**; keep for traceability to that decision text | Phase 6 foundation (monolith basis of the Nagar baseline) |
-| `PR#12 D1–D4` | A separate feature bundle for job resume, dead-code removal, PDF extraction, and Telegram notification | Not merged as-is; the re-implementation onto the in-process `JobQueuePort` architecture exists on open PR#15 (see the snapshot above); final disposition pending the owner's review of the open PRs | Post-Phase-5 feature bundle (queued for the post-Nagar mainline) |
+| `PR#12 D1–D4` | A separate feature bundle for job resume, dead-code removal, PDF extraction, and Telegram notification | Cleanly re-implemented on the post-PR#16 mainline (`feat/d1-d4-clean-rebuild`): pending-only `resume_pending_jobs` + `nexus jobs resume`, `pypdf` extraction under the `pdf_extract` job type, fail-safe completion hook; `nightly_channel_management` dead code removed — port signatures untouched | Post-Phase-5 feature bundle (queued for the post-Nagar mainline) |
 
 These numbering families are now treated as historical labels inside the final seven-phase roadmap. A new decision must use a descriptive title and a unique date, and may include an identifier only when it improves traceability.
 

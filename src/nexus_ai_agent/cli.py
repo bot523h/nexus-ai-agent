@@ -16,6 +16,7 @@ checkpoints_app = typer.Typer(help="Inspect checkpoint lifecycle state")
 golden_app = typer.Typer(help="Schema golden management (human-triggered only)")
 metrics_app = typer.Typer(help="Observability snapshots")
 maintenance_app = typer.Typer(help="Stateless maintenance (R2 DB backups, housekeeping)")
+jobs_app = typer.Typer(help="Durable in-process job queue operations")
 
 
 def _open_checkpoint_backend() -> tuple[Any, Path]:
@@ -443,6 +444,60 @@ checkpoints_app.add_typer(golden_app, name="golden")
 app.add_typer(checkpoints_app, name="checkpoints")
 app.add_typer(metrics_app, name="metrics")
 app.add_typer(maintenance_app, name="maintenance")
+app.add_typer(jobs_app, name="jobs")
+
+
+# ── D1: nexus jobs resume — operator drain of the durable in-process queue ──
+
+
+@jobs_app.command("resume")
+def jobs_resume(
+    timeout: float = typer.Option(
+        120.0,
+        "--timeout",
+        min=1.0,
+        help="Max seconds to wait for requeued jobs to reach a terminal state.",
+    ),
+) -> None:
+    """Requeue leftover pending jobs and drain them in this process.
+
+    Only ``pending`` rows are claimed; ``processing`` rows belong to the
+    live owner process (usually the bot) and are never duplicated here.
+    Handlers are the standard application ones, so resumed jobs run exactly
+    as they would inside the bot.
+    """
+    from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+    from nexus_ai_agent.application.ports.job_queue import JobStatus
+    from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.worker import default_job_handlers, job_queue_db_path
+
+    async def _run() -> None:
+        queue = InProcessJobQueue(job_queue_db_path(get_settings().db_path))
+        for job_type, handler in default_job_handlers().items():
+            queue.register_handler(job_type, handler)
+        job_ids = await queue.resume_pending_jobs()
+        if not job_ids:
+            typer.echo("No pending jobs to resume.")
+            return
+        typer.echo(f"Requeued {len(job_ids)} job(s): {', '.join(job_ids)}")
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        remaining = set(job_ids)
+        while remaining:
+            for job_id in sorted(remaining):
+                status = await queue.get_status(job_id)
+                if status in {JobStatus.COMPLETED, JobStatus.FAILED}:
+                    marker = "✅" if status is JobStatus.COMPLETED else "❌"
+                    typer.echo(f"{marker} {job_id}: {status.value}")
+                    remaining.discard(job_id)
+            if remaining and loop.time() >= deadline:
+                for job_id in sorted(remaining):
+                    typer.echo(f"⏳ {job_id}: still unfinished after {timeout:g}s")
+                raise typer.Exit(1)
+            if remaining:
+                await asyncio.sleep(0.2)
+
+    asyncio.run(_run())
 
 
 # ── v3.9.0: nexus maintenance — stateless scheduled jobs (Phase 5) ─────

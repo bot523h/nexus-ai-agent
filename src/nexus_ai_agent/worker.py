@@ -7,19 +7,69 @@ process is required.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
+from pathlib import Path
+
+JobHandler = Callable[[dict[str, object]], Awaitable[dict[str, object]]]
+
+
+def job_queue_db_path(db_path: str | Path) -> Path:
+    """Return the SQLite sidecar path owned by the in-process job queue.
+
+    Single source of truth for every composition root (bot process, CLI
+    drain command) so they all address the same durable queue.
+    """
+    return Path(f"{db_path}.jobs.sqlite3")
+
+
+def default_job_handlers() -> dict[str, JobHandler]:
+    """Map every application job type to its handler.
+
+    Composition roots register the full map so a resumed job always finds
+    its handler, regardless of which process drains the queue.
+    """
+    return {
+        "pdf_extract": process_pdf_job,
+        "story": generate_story_job,
+    }
+
+
+async def extract_pdf_text(file_path: str) -> str:
+    """Extract a PDF's text layer with ``pypdf`` (D3).
+
+    Parsing runs in a worker thread so the event loop stays responsive on
+    large documents. A missing ``pypdf`` install raises a clear, actionable
+    error — PDF bytes are never silently decoded as UTF-8 text.
+    """
+
+    def _extract() -> str:
+        try:
+            from pypdf import PdfReader
+        except ImportError as exc:
+            raise RuntimeError(
+                "PDF extraction requires the optional 'pypdf' package. "
+                "Install it with: pip install pypdf "
+                "(or pip install 'nexus-ai-agent[pdf]')"
+            ) from exc
+        reader = PdfReader(file_path)
+        return "\n".join(page.extract_text() or "" for page in reader.pages)
+
+    return await asyncio.to_thread(_extract)
+
 
 async def process_pdf_task(user_id: int, file_path: str, file_id: str) -> str:
     """Process a PDF job and return a durable success message.
 
-    PDF extraction remains the existing text-file-compatible implementation;
-    replacing that parser is outside the queue-migration scope. Failures are
-    raised so the queue can persist ``failed`` rather than reporting success.
+    Extraction runs first: a missing ``pypdf`` must surface as the clear
+    dependency error before the heavier RAG stack is even imported.
+    Failures are raised so the queue can persist ``failed`` rather than
+    reporting success.
     """
-    from nexus_ai_agent.features.rag import AdvancedRAGEngine
-
     try:
-        with open(file_path, encoding="utf-8") as handle:
-            text = handle.read()
+        text = await extract_pdf_text(file_path)
+        from nexus_ai_agent.features.rag import AdvancedRAGEngine
+
         engine = AdvancedRAGEngine()
         await engine.add_document(user_id, text, {"file_id": file_id})
     except Exception as exc:  # noqa: BLE001 - queue owns durable failure mapping
@@ -57,24 +107,12 @@ async def generate_story_job(payload: dict[str, object]) -> dict[str, object]:
     return {"output_path": result}
 
 
-async def nightly_channel_management() -> str:
-    """Run the existing nightly channel operation in-process."""
-    from telegram import Bot
-
-    from nexus_ai_agent.config.settings import get_settings
-    from nexus_ai_agent.features.channel_manager import ChannelManager
-
-    settings = get_settings()
-    bot = Bot(token=settings.telegram_bot_token)
-    manager = ChannelManager(bot)
-    await manager.run_nightly_tasks()
-    return "Nightly tasks completed."
-
-
 __all__ = [
+    "default_job_handlers",
+    "extract_pdf_text",
     "generate_story_job",
     "generate_story_task",
-    "nightly_channel_management",
+    "job_queue_db_path",
     "process_pdf_job",
     "process_pdf_task",
 ]
