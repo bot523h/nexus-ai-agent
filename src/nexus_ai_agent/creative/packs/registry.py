@@ -56,7 +56,12 @@ class RegisteredPack:
 
     @property
     def pending_capabilities(self) -> tuple[str, ...]:
-        """Capabilities unknown to the runtime *at registration time* (snapshot)."""
+        """Capabilities unknown to the runtime *at registration time* (snapshot).
+
+        Activation never trusts this snapshot: it re-checks the live runtime, so
+        a pack registered while its operations were still pending (Wave 2a)
+        becomes activatable the moment the runtime learns them (Wave 2b).
+        """
         return self.report.pending_capabilities
 
 
@@ -136,7 +141,7 @@ class PackRegistry:
             for capability in pack.manifest.capabilities
             if capability not in self._runtime
         )
-        if unknown:
+        if unknown:  # re-evaluated against the live registry, never the snapshot
             raise PackRegistryError(
                 f"{package_id}: cannot activate — the runtime does not know " + ", ".join(unknown)
             )
@@ -149,6 +154,15 @@ class PackRegistry:
         )
         self._packs[package_id] = activated
         return activated
+
+    def unknown_capabilities(self, package_id: str) -> tuple[str, ...]:
+        """Capabilities the runtime still does not know (live, not a snapshot)."""
+        pack = self.get(package_id)
+        return tuple(
+            capability
+            for capability in pack.manifest.capabilities
+            if capability not in self._runtime
+        )
 
     def deactivate(self, package_id: str) -> RegisteredPack:
         pack = self.get(package_id)

@@ -34,6 +34,7 @@ Usage:
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -154,6 +155,12 @@ class LiteLLMRoutingProvider(LLMProvider):
                 "Set GROQ_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY / NEXUS_OLLAMA_MODEL."
             )
         if router is None:
+            # litellm fetches its pricing map from the network at import time
+            # unless this switch is set.  Keep the bundled map: it removes a
+            # hidden network dependency (offline and test determinism) and keeps
+            # litellm's retry warnings off stdout, which the CLI's ``--json``
+            # modes rely on.
+            os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
             from litellm import Router
 
             router = Router(

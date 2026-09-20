@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from enum import Enum
 from typing import Any, Literal
 
@@ -168,18 +169,74 @@ class Marker(BaseModel):
     color: str | None = None
 
 
+def compute_parameters_hash(
+    operation: str, parameters: dict[str, Any], time_range: TimeRangeUS
+) -> str:
+    """Content hash of one effect layer (operation + parameters + range)."""
+    payload = {
+        "operation": operation,
+        "parameters": parameters,
+        "range": time_range.model_dump(mode="json"),
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+class EffectLayerRef(BaseModel):
+    """A reversible, content-addressed effect layer (TDD section 1.1).
+
+    Wave 2 keeps the parameters **in state** in addition to their hash: a render
+    must be reproducible from the state hash alone, so the hash is derived from
+    the parameters rather than trusted as an independent source of truth.
+    """
+
+    layer_id: str = Field(default_factory=lambda: f"fx_{uuid.uuid4().hex[:12]}")
+    operation: str
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    range: TimeRangeUS
+    reversible: bool = True
+    parameters_hash: str = ""
+
+    @model_validator(mode="after")
+    def _maintain_parameters_hash(self) -> EffectLayerRef:
+        self.parameters_hash = compute_parameters_hash(self.operation, self.parameters, self.range)
+        return self
+
+
+class AssetRecord(BaseModel):
+    """One entry of the project asset registry: a source asset or a derived one.
+
+    The registry is additive: Wave 1 states carry no assets and remain valid.
+    A record with ``parent_asset_ids`` is a *derived* asset (TDD section 1.1);
+    the source asset it came from is never mutated.
+    """
+
+    asset_id: str
+    media_kind: Literal["video", "audio", "image"]
+    content_sha256: str
+    duration_us: int = Field(ge=0, default=0)
+    parent_asset_ids: tuple[str, ...] = ()
+    provenance: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def is_derived(self) -> bool:
+        return bool(self.parent_asset_ids)
+
+
 class Clip(BaseModel):
     """Non-destructive clip: a window on an immutable asset, placed on a track.
 
     ``source_range`` is the window into the asset; ``timeline_range`` is the
     editorial placement on the track.  Splitting/trimming only rewrites these
     windows -- the underlying ``MediaRef`` (and its hash) is untouched.
+    ``effects`` holds the clip's reversible effect layers (motion, grade, ...).
     """
 
     clip_id: str
     media_ref: MediaRef
     source_range: TimeRangeUS
     timeline_range: TimeRangeUS
+    effects: list[EffectLayerRef] = Field(default_factory=list)
 
 
 class Track(BaseModel):
@@ -187,6 +244,7 @@ class Track(BaseModel):
     name: str
     kind: Literal["video", "audio", "image"]
     clips: list[Clip] = Field(default_factory=list)
+    effects: list[EffectLayerRef] = Field(default_factory=list)
 
 
 class Timeline(BaseModel):
@@ -206,7 +264,7 @@ class Project(BaseModel):
     """The central in-memory state of one studio project.
 
     ``state_hash`` is *derived*: every construction recomputes it from the
-    content (``project_id``, ``name``, ``timeline``) via a canonical
+    content (``project_id``, ``name``, ``timeline``, ``assets``) via a canonical
     serialization, so a stored hash can never drift from the state it claims
     to describe.  ``state_revision`` is a monotonic counter owned by the
     command bus; it is deliberately excluded from the hash so that
@@ -216,6 +274,7 @@ class Project(BaseModel):
     project_id: str
     name: str
     timeline: Timeline
+    assets: list[AssetRecord] = Field(default_factory=list)
     state_revision: int = Field(ge=0, default=0)
     state_hash: str = ""
 
@@ -226,11 +285,17 @@ class Project(BaseModel):
 
 
 def compute_state_hash(project: Project) -> str:
-    """Canonical content hash of a project state (revision excluded)."""
+    """Canonical content hash of a project state (revision excluded).
+
+    Wave 2 extends the hashed payload with the asset registry, so a state that
+    only differs by derived assets is still a *different* state for precondition
+    purposes.  ``state_revision`` stays excluded and monotonic.
+    """
     payload = {
         "project_id": project.project_id,
         "name": project.name,
         "timeline": project.timeline.model_dump(mode="json"),
+        "assets": [asset.model_dump(mode="json") for asset in project.assets],
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()

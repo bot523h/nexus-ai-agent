@@ -29,11 +29,13 @@ ALLOWED_TOP_LEVEL = {
     "__future__",
     "collections",
     "dataclasses",
+    "datetime",
     "importlib",
     "json",
     "pathlib",
     "re",
     "typing",
+    "uuid",
     "pydantic",
     "nexus_ai_agent",
 }
