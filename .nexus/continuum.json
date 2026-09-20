@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
-  "plan": "PR3",
-  "step": "1133df1",
-  "next": "merge PR #7 (owner-approved) at 3.6.0",
+  "plan": "PR4",
+  "step": "994a509",
+  "next": "merge PR4 (Celery/Redis removal, R-001/R-026) — owner-approved; then decide resume-at-boot / job completion notice",
   "ledger": [
     {
       "id": "C1",
@@ -64,9 +64,15 @@
       "commit": "1133df1",
       "status": "complete",
       "scope": "PG composition over in-database lifecycle index + CLI branching + reconciler containment"
+    },
+    {
+      "id": "PR4-C1",
+      "commit": "pending",
+      "status": "complete",
+      "scope": "R-001/R-026: Celery/Redis removed; in-process JobQueuePort adapter (SQLite sidecar) + jobs.py + in-memory rate limiter + architecture ban tests"
     }
   ],
-  "test_count_expected": 320,
+  "test_count_expected": 405,
   "env_fingerprint": {
     "python": "3.11.2",
     "alembic": "1.20.0",

@@ -1,48 +1,54 @@
+"""Per-user sliding-window rate limiter, in-process (R-001 / R-026).
+
+Replaces the Redis-backed limiter.  The bot is a single-process modular
+monolith, so process memory *is* the shared state; there is no network hop
+and therefore no "fail open" path.  The policy is unchanged: at most
+``limit`` accepted messages per ``period`` seconds per user.  Rejected
+attempts are not recorded, so a burst does not extend its own penalty.
+"""
+
 from __future__ import annotations
 
-import logging
 import time
+from collections import deque
+from collections.abc import Callable
 
-import redis
+from nexus_ai_agent.observability.logging import get_logger
 
-from nexus_ai_agent.config.settings import get_settings
-
-logger = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
-class RedisRateLimiter:
-    """Rate limiter using Redis for spam prevention."""
+class InMemoryRateLimiter:
+    """Sliding-window limiter keyed by Telegram user id."""
 
-    def __init__(self) -> None:
-        settings = get_settings()
-        self.redis = redis.from_url(settings.redis_url)
-        self.limit = 5  # requests
-        self.period = 60  # seconds
+    def __init__(
+        self,
+        limit: int = 5,
+        period: float = 60.0,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if limit < 1:
+            raise ValueError("limit must be >= 1")
+        if period <= 0:
+            raise ValueError("period must be > 0")
+        self.limit = limit
+        self.period = period
+        self._clock = clock
+        self._hits: dict[int, deque[float]] = {}
 
     def is_allowed(self, user_id: int) -> bool:
-        """Check if user is within rate limits."""
-        key = f"rate_limit:{user_id}"
-        now = time.time()
-
-        try:
-            # Using Redis pipeline for atomicity
-            pipe = self.redis.pipeline()
-            # Remove timestamps older than the period
-            pipe.zremrangebyscore(key, 0, now - self.period)
-            # Add current timestamp
-            pipe.zadd(key, {str(now): now})
-            # Count remaining timestamps
-            pipe.zcard(key)
-            # Set expiration to cleanup old keys
-            pipe.expire(key, self.period)
-
-            _, _, count, _ = pipe.execute()
-
-            if count > self.limit:
-                logger.warning(f"User {user_id} rate limited: {count} requests in {self.period}s")
-                return False
-
-            return True
-        except Exception as e:
-            logger.error(f"Rate limiter error: {e}")
-            return True  # Fail open
+        """Record and accept the request if the user is under the limit."""
+        now = self._clock()
+        window_start = now - self.period
+        hits = self._hits.get(user_id)
+        if hits is None:
+            hits = deque()
+            self._hits[user_id] = hits
+        while hits and hits[0] <= window_start:
+            hits.popleft()
+        if len(hits) >= self.limit:
+            log.warning("rate_limited", user_id=user_id, hits=len(hits), period=self.period)
+            return False
+        hits.append(now)
+        return True

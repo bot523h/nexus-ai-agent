@@ -71,7 +71,7 @@ class AIStoryGenerator:
         return buf.getvalue()
 
     async def generate_story_image(self, text: str, output_path: str) -> None:
-        """Used by Celery worker to save to disk."""
+        """Render to disk (used by the in-process story job, see ``jobs.py``)."""
         image_bytes = await self.create_story(0, text)
         with open(output_path, "wb") as f:
             f.write(image_bytes)

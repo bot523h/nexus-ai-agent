@@ -5,6 +5,61 @@ All notable changes to NEXUS AI Agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+- **Celery/Redis decomposition (ledger R-001 / R-026) — back to a modular
+  monolith.** `worker.py` (Celery app + tasks), the `worker`/`beat`/`redis`
+  services and `redis_data` volume in `docker-compose.yml`, the `celery` and
+  `redis` runtime dependencies, and the `REDIS_URL` / `CELERY_BROKER_URL` /
+  `CELERY_RESULT_BACKEND` settings. `docs/architecture/PORTS.md` always said
+  "Redis/Celery are not part of Stage 0"; the tree now matches the contract
+  and `tests/architecture/test_no_distributed_queue.py` keeps it that way
+  (AST import scan, `.delay()`/`apply_async()` scan, pyproject, compose
+  topology, settings surface).
+  - `nightly_channel_management` is **not** carried over: it was a Celery task
+    with no `beat_schedule`, i.e. it never ran. Scheduling it would be new
+    behaviour without a contract; left to an explicit follow-up.
+
+### Added
+- `adapters/in_process_job_queue.py` — `InProcessJobQueue`, the Stage 0
+  `JobQueuePort` adapter (the port file is untouched). Jobs run as asyncio
+  tasks inside the bot process; durable state in the `<db_path>.jobs` SQLite
+  sidecar (`CREATE TABLE IF NOT EXISTS`, no Alembic migration, no touch of the
+  application schema); statuses reuse the frozen domain vocabulary
+  (`pending → running → succeeded | failed`, `failed → retrying → running`)
+  with every persisted change applied as a compare-and-set edge of
+  `ALLOWED_TRANSITIONS`; `UNIQUE (job_type, idempotency_key)` ⇒ a resubmission
+  returns the existing job with no second effect; failures are stored as
+  `failed` + `"ExcType: message"` (never swallowed, never raised into the
+  caller); explicit `resume_pending()` re-runs work interrupted by a restart
+  (never implicit at boot); bounded `close()` drains in-flight jobs on
+  `Application.shutdown()` (PTB `post_shutdown`).
+- `jobs.py` — the former Celery tasks as plain async job handlers
+  (`process_pdf_job`, `generate_story_job`) plus `build_job_queue(settings)`.
+  The CPU-bound engines run in a worker thread (`asyncio.to_thread`), the
+  in-process equivalent of the separate worker process.
+- `bot/rate_limiter.py` — `InMemoryRateLimiter` (same 5/60 s sliding-window
+  policy), constructed once per application instead of once per message.
+
+### Changed
+- `bot/handlers.py`: `pdf_handler` and `story_cmd_handler` submit through
+  `JobQueuePort.enqueue()` from `bot_data["job_queue"]` (idempotency key =
+  one Telegram message ⇒ one job; a redelivered update collapses onto it).
+  User-facing replies are unchanged. A missing queue is a visible error
+  reply, not a silent drop.
+- `config/settings.py`: the three retired broker keys are dropped from
+  `.env` input with a warning (`RETIRED_BROKER_KEYS`) instead of failing boot
+  with `extra_forbidden` on an operator's v3.4.0-era `.env`; any other
+  unknown key still fails fast exactly as before.
+
+### Fixed
+- Job failures were previously returned as `"Error: …"` strings from a
+  *successful* Celery task result; they are now persisted as `failed` with
+  the error message. (Real PDF text extraction and the "I will notify you"
+  completion notice were never implemented and remain out of scope — see the
+  PR description.)
+
 ## [3.9.0] — 2026-09-20
 
 ### Added

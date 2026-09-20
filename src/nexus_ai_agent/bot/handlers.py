@@ -27,6 +27,7 @@ from telegram.ext import (
 )
 
 from nexus_ai_agent.agents.store.agent_manager import AgentManager
+from nexus_ai_agent.application.ports.job_queue import JobQueuePort
 from nexus_ai_agent.bot.agent_handlers import (
     agent_callback_handler,
     agent_stop_cmd,
@@ -38,6 +39,7 @@ from nexus_ai_agent.bot.agent_handlers import (
 from nexus_ai_agent.bot.knowledge_handlers import learn_cmd, search_cmd, wiki_cmd
 from nexus_ai_agent.bot.memory_handlers import forget_me_cmd, memory_cmd
 from nexus_ai_agent.bot.monitor_handlers import approve_cmd, health_cmd, reject_cmd
+from nexus_ai_agent.bot.rate_limiter import InMemoryRateLimiter
 from nexus_ai_agent.bot.tool_handlers import news_cmd, rate_cmd, weather_cmd, youtube_cmd
 from nexus_ai_agent.bot.update_handlers import update_cmd, version_cmd
 from nexus_ai_agent.config.settings import Settings
@@ -60,6 +62,7 @@ from nexus_ai_agent.features.referral import ReferralEngine
 from nexus_ai_agent.features.speech import SpeechEngine
 from nexus_ai_agent.features.summarizer import SummarizerEngine
 from nexus_ai_agent.features.viral_engine import ViralEngine
+from nexus_ai_agent.jobs import PDF_JOB, STORY_JOB
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.orchestration.state import NexusState
 from nexus_ai_agent.presence import PresenceStore
@@ -75,6 +78,11 @@ from .middleware import AuthMiddleware
 
 logger = get_logger(__name__)
 SessionFactory = Callable[[], Any]
+
+#: Shown when a handler needs background work but no ``JobQueuePort`` is
+#: wired (never the case via ``build_application``); a visible error, not a
+#: silent drop.
+JOBS_UNAVAILABLE_TEXT = "❌ پردازش پس‌زمینه در دسترس نیست. لطفاً بعداً دوباره تلاش کنید."
 
 
 async def _upsert_user(db_session_factory: SessionFactory, tg_user: Any) -> User:
@@ -129,6 +137,12 @@ async def _reply(update: Update, text: str, **kwargs: Any) -> None:
         await msg.reply_text(text, **kwargs)
 
 
+def _job_queue(context: ContextTypes.DEFAULT_TYPE) -> JobQueuePort | None:
+    """The in-process ``JobQueuePort`` wired into ``bot_data`` by ``build_application``."""
+    bot_data = getattr(context, "bot_data", None) or {}
+    return cast("JobQueuePort | None", bot_data.get("job_queue"))
+
+
 def _base_state(update: Update, text: str) -> NexusState:
     return {
         "thread_id": f"tg:{_chat_id(update)}",
@@ -159,6 +173,8 @@ def build_handlers(
     auth = AuthMiddleware(settings.allowed_user_ids, settings.owner_telegram_id)
     presence_store = presence
     _ = storage  # placeholder for now
+    # One limiter per application (process memory is the shared state).
+    rate_limiter = InMemoryRateLimiter()
 
     # ── Feature Engines ───────────────────────────────────────────
     # These are mostly accessed via bot_data, but local aliases help
@@ -825,10 +841,7 @@ def build_handlers(
             await _reply(update, "Access denied.")
             return
 
-        from nexus_ai_agent.bot.rate_limiter import RedisRateLimiter
-
-        limiter = RedisRateLimiter()
-        if not limiter.is_allowed(user_id):
+        if not rate_limiter.is_allowed(user_id):
             await _reply(update, "⚠️ شما بیش از حد مجاز پیام ارسال کرده‌اید. لطفاً یک دقیقه صبر کنید.")
             return
 
@@ -1471,19 +1484,28 @@ async def pdf_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not doc:
         return
 
+    queue = _job_queue(context)
+    if queue is None:
+        logger.error("job_queue_unavailable", handler="pdf", chat_id=_chat_id(update))
+        await _reply(update, JOBS_UNAVAILABLE_TEXT)
+        return
+
     file = await doc.get_file()
     file_bytes = await file.download_as_bytearray()
 
-    # Background processing via Celery
-    from nexus_ai_agent.worker import process_pdf_task
-
-    # Save to temp file for worker
+    # Save to a temp file for the in-process job
     os.makedirs("data/temp", exist_ok=True)
     temp_path = f"data/temp/{doc.file_id}.pdf"
     with open(temp_path, "wb") as f:
         f.write(file_bytes)
 
-    process_pdf_task.delay(user_id, temp_path, doc.file_id)
+    # In-process background job (R-001/R-026). One upload message = one job;
+    # a redelivered update maps onto the same idempotency key (no second effect).
+    await queue.enqueue(
+        job_type=PDF_JOB,
+        idempotency_key=f"pdf:{_chat_id(update)}:{message.message_id}",
+        payload={"user_id": user_id, "file_path": temp_path, "file_id": doc.file_id},
+    )
     await _reply(
         update,
         f"⏳ در حال پردازش فایل {doc.file_name} در پس‌زمینه...\nوقتی آماده شد به شما اطلاع می‌دهم.",
@@ -1503,21 +1525,30 @@ async def chat_with_doc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def story_cmd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-
     if not context.args:
         await _reply(update, "❌ استفاده: /story [متن]")
         return
 
+    queue = _job_queue(context)
+    if queue is None:
+        logger.error("job_queue_unavailable", handler="story", chat_id=_chat_id(update))
+        await _reply(update, JOBS_UNAVAILABLE_TEXT)
+        return
+
+    message = _message(update)
     text = " ".join(context.args)
     await _reply(update, "🎨 در حال ساخت استوری شما...")
 
-    # Background story generation
-    from nexus_ai_agent.worker import generate_story_task
-
-    output_path = f"data/temp/story_{_user_id(update)}_{int(datetime.now().timestamp())}.png"
+    user_id = _user_id(update) or 0
+    output_path = f"data/temp/story_{user_id}_{int(datetime.now().timestamp())}.png"
     os.makedirs("data/temp", exist_ok=True)
 
-    generate_story_task.delay(_user_id(update) or 0, text, output_path)
+    # In-process background job (R-001/R-026); idempotent per command message.
+    await queue.enqueue(
+        job_type=STORY_JOB,
+        idempotency_key=f"story:{_chat_id(update)}:{message.message_id if message else 0}",
+        payload={"user_id": user_id, "text": text, "output_path": output_path},
+    )
     await _reply(update, "🎨 استوری شما در حال آماده‌سازی در پس‌زمینه است...")
 
 

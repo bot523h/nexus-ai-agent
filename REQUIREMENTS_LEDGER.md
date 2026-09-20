@@ -126,3 +126,28 @@ on the PG path) is history — the sidecar remains on the SQLite path only
 | 3 | Runtime passes through `LifecycleRecordingSaver` (composition test)              | DONE | `tests/integration/test_checkpoint_composition.py` (three-way wiring contract) |
 | 4 | Full delegate — introspective test over the wrapped saver                       | DONE | `test_lifecycle_adversarial.py::test_wrapper_exposes_full_saver_surface` |
 | 5 | Raw-saver AST scan: only composition root + `adapters/langgraph` touch raw saver| DONE | `tests/architecture/test_saver_boundary.py`; concrete-saver names appear in src only in `storage/langgraph_checkpoint.py` (the composition root) |
+
+## F — PHASE 4 / PR4: Celery/Redis removal (R-001, R-026)
+
+First corrective PR. Scope is exactly the two ledger items below; message
+history, thread lifecycle, creative security and Nagar are untouched.
+Order followed: failing tests proving the violation → architecture-contract
+tests → implementation → `make lint` / `make types` / `make test` → hostile
+`git diff` review.
+
+| ID    | Requirement                                                                             | Status | Test reference(s) | Notes |
+|-------|------------------------------------------------------------------------------------------|--------|-------------------|-------|
+| R-001 | No distributed queue: Celery/Redis fully out of the runtime path (deps, worker, compose, `.delay()`, Redis rate limiter, broker settings) | DONE | `tests/architecture/test_no_distributed_queue.py` (6 contract tests, all red on `994a509`, plus a parser self-check: `worker.py` celery, `rate_limiter.py` redis, `handlers.py` `.delay`, pyproject deps, compose `{beat, bot, dashboard, redis, worker}`, 3 broker settings) | `worker.py` deleted (its `legacy_baseline.json` entry removed — baseline shrinks 37 → 36); `docker-compose.yml` = `bot` + `dashboard`; `RETIRED_BROKER_KEYS` shim keeps a v3.4.0-era `.env` bootable with a warning (`tests/unit/test_settings_retired_broker_keys.py`); verified with celery/redis/kombu/billiard **uninstalled**: 142 production modules import, full suite green, `make smoke` green |
+| R-026 | `JobQueuePort` implemented in-process, SQLite-durable, statuses + result/error, PDF and story jobs preserved and invoked via `enqueue()` | DONE | `tests/integration/test_in_process_job_queue.py` (execution, non-blocking submit, idempotency incl. concurrent duplicates, failure ⇒ `failed` + error, unknown type/payload rejected before any write, restart durability + explicit resume, missing-handler-after-restart fails visibly, audit-trigger proof that every persisted transition is an `ALLOWED_TRANSITIONS` edge, JSON columns, bounded drain); `tests/unit/test_jobs.py` (real Pillow story PNG through the queue; PDF indexing via recording RAG double; binary PDF ⇒ recorded `UnicodeDecodeError`; engines run off the loop thread); `tests/unit/test_job_handlers.py` (handlers enqueue through the port with per-message idempotency keys; missing queue ⇒ visible reply; `build_application` wires one queue, no `post_init`, `post_shutdown` drains a real in-flight job) | Port file `application/ports/job_queue.py` untouched (`test_port_signatures.py` still green); adapter extras (`register`, `get_job`, `get_result`, `wait`, `resume_pending`, `close`) are adapter-level, not port additions; sidecar `<db_path>.jobs` — no migration, no app-schema change, no operation journal (Stage 3) |
+
+Explicitly **not** done (needs an owner decision, not a silent change):
+`resume_pending()` at boot (multi-instance caveat documented in the adapter);
+scheduling `nightly_channel_management` (never had a beat schedule); real PDF
+text extraction; completion notification for PDF/story jobs (the "I will
+notify you" reply predates this PR and was never backed by code).
+
+Gates on this PR: `ruff check` + `ruff format --check` clean (243 files);
+`mypy src` clean (154 files); `pytest -m "not slow"` = **435 passed / 20
+skipped** (was 386 / 20 on `994a509`; +49 = exactly the new tests, none
+removed or weakened); `nexus continuum verify` count refreshed (357 → 405
+collected test functions incl. slow-marked).

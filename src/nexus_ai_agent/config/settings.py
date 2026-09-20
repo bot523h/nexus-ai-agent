@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any, Final
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+_log = logging.getLogger(__name__)
+
+#: Broker settings retired with the Celery/Redis removal (R-001/R-026).
+#: ``Settings`` forbids unknown dotenv keys, so without this list an operator's
+#: existing ``.env`` (``REDIS_URL=…``) would crash boot with ``extra_forbidden``.
+#: These keys — and only these — are dropped with a warning.
+RETIRED_BROKER_KEYS: Final[frozenset[str]] = frozenset(
+    {"redis_url", "celery_broker_url", "celery_result_backend"}
+)
 
 
 class Settings(BaseSettings):
@@ -177,22 +188,13 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("MAX_RAM_MB", "NEXUS_MAX_RAM_MB"),
     )
 
-    # ── v3.4.0: Redis & ChromaDB ──────────────────────────────────────
-    redis_url: str = Field(
-        default="redis://localhost:6379/0",
-        validation_alias=AliasChoices("REDIS_URL", "NEXUS_REDIS_URL"),
-    )
+    # ── v3.4.0: ChromaDB ──────────────────────────────────────────────
+    # (The Redis/Celery broker settings that used to sit here were removed
+    # with the return to a modular monolith — background jobs run in-process,
+    # see ``jobs.py``; durable job state is the ``<db_path>.jobs`` sidecar.)
     chroma_db_path: str = Field(
         default="data/chroma",
         validation_alias=AliasChoices("CHROMA_DB_PATH", "NEXUS_CHROMA_DB_PATH"),
-    )
-    celery_broker_url: str = Field(
-        default="redis://localhost:6379/0",
-        validation_alias=AliasChoices("CELERY_BROKER_URL", "NEXUS_CELERY_BROKER_URL"),
-    )
-    celery_result_backend: str = Field(
-        default="redis://localhost:6379/0",
-        validation_alias=AliasChoices("CELERY_RESULT_BACKEND", "NEXUS_CELERY_RESULT_BACKEND"),
     )
     vazir_font_path: str = Field(
         default="assets/fonts/Vazirmatn.ttf",
@@ -306,6 +308,26 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("R2_BUCKET", "NEXUS_R2_BUCKET"),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_retired_broker_keys(cls, data: Any) -> Any:
+        """Ignore ``REDIS_URL`` / ``CELERY_*`` from old ``.env`` files (with a warning).
+
+        Surgical on purpose: any *other* unknown dotenv key still fails fast
+        exactly as before.
+        """
+        if not isinstance(data, dict):
+            return data
+        retired = sorted(key for key in data if str(key).lower() in RETIRED_BROKER_KEYS)
+        if not retired:
+            return data
+        _log.warning(
+            "ignoring retired broker settings %s: background jobs run in-process "
+            "(Celery/Redis were removed) — delete them from your .env",
+            retired,
+        )
+        return {key: value for key, value in data.items() if key not in retired}
 
     @field_validator("allowed_user_ids", mode="before")
     @classmethod

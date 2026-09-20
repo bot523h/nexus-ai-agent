@@ -12,13 +12,19 @@ from typing import Any
 
 from telegram.ext import Application, ApplicationBuilder
 
+from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
 from nexus_ai_agent.config.settings import Settings
+from nexus_ai_agent.jobs import build_job_queue
 from nexus_ai_agent.presence import PresenceStore
 from nexus_ai_agent.storage.ai_storage import AIStorageManager, ProviderConfig
 
 from .handlers import (
     build_handlers,
 )
+
+#: Seconds a graceful shutdown waits for in-flight background jobs before
+#: cancelling them (scale-to-zero platforms SIGTERM and do not wait forever).
+JOB_DRAIN_TIMEOUT_SECONDS = 30.0
 
 
 def _build_default_storage(settings: Settings) -> AIStorageManager:
@@ -107,6 +113,11 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
         internxt_token=settings.internxt_token,
     )
 
+    # In-process background jobs (R-001/R-026): PDF indexing + story rendering.
+    # Durable state lives in the ``<db_path>.jobs`` sidecar; nothing is
+    # resumed implicitly at startup.
+    engines["job_queue"] = build_job_queue(settings)
+
     return engines
 
 
@@ -127,8 +138,14 @@ def build_application(
 
     # Initialize all v2.0.0+ engines
     engines = _init_v2_engines(settings)
+    job_queue: InProcessJobQueue = engines["job_queue"]
 
-    application = ApplicationBuilder().token(token).build()
+    async def _drain_jobs(_app: Application) -> None:
+        # Runs on Application.shutdown() in both polling and webhook mode:
+        # let in-flight jobs finish (bounded) instead of destroying their tasks.
+        await job_queue.close(timeout=JOB_DRAIN_TIMEOUT_SECONDS)
+
+    application = ApplicationBuilder().token(token).post_shutdown(_drain_jobs).build()
     application.bot_data["graph"] = graph
     application.bot_data["presence"] = presence_store
     application.bot_data["storage"] = storage_manager

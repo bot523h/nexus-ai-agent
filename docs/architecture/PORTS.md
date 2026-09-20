@@ -12,6 +12,14 @@ port owns only lifecycle metadata and safe, whole-thread deletion.
 - `inspect()` is read-only and never updates access timestamps.
 - Unknown lineage, metadata, schema, or lock state blocks deletion.
 - JobQueue starts with an in-process implementation; Redis/Celery are not part of Stage 0.
+  The adapter is `adapters/in_process_job_queue.py` (`InProcessJobQueue`): jobs run as
+  asyncio tasks inside the bot process; state is durable in the `<db_path>.jobs` SQLite
+  sidecar (never in the Alembic-managed schema); `UNIQUE (job_type, idempotency_key)`
+  makes a resubmission return the existing job with no second effect; every persisted
+  status change is an `ALLOWED_TRANSITIONS` edge (`domain/policies/retention.py`);
+  failures are stored as `failed` + error; recovery after a restart is the explicit
+  `resume_pending()` — nothing is re-dispatched implicitly at boot. Guarded by
+  `tests/architecture/test_no_distributed_queue.py`.
 
 ## Port list
 
