@@ -3,11 +3,14 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
+from typing import Any
 
 try:
-    from playwright.async_api import async_playwright  # type: ignore[import-not-found]
+    from playwright.async_api import async_playwright as _async_playwright
 except ImportError:  # pragma: no cover - environment dependent
-    async_playwright = None
+    async_playwright: Any = None
+else:
+    async_playwright = _async_playwright
 
 from nexus_ai_agent.config.settings import get_settings
 
