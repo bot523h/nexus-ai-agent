@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from pathlib import Path
-from typing import Any, cast
+from typing import Annotated, Any, cast
 from uuid import uuid4
 
 import typer
@@ -17,6 +18,7 @@ golden_app = typer.Typer(help="Schema golden management (human-triggered only)")
 metrics_app = typer.Typer(help="Observability snapshots")
 maintenance_app = typer.Typer(help="Stateless maintenance (R2 DB backups, housekeeping)")
 jobs_app = typer.Typer(help="Durable in-process job queue operations")
+packs_app = typer.Typer(help="Capability-pack manifests (data-only packs)")
 
 
 def _open_checkpoint_backend() -> tuple[Any, Path]:
@@ -440,11 +442,135 @@ def golden_update(
     typer.echo("commit this file after review; reconcile will enforce it")
 
 
+# ── Wave 2a: nexus packs — capability-pack manifests (data-only packs) ──
+
+
+def _packs_registry() -> Any:
+    """The runtime registry a pack must fit into (Wave 1 catalog today)."""
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as distribution_version
+
+    from nexus_ai_agent.creative.packs.registry import PackRegistry
+    from nexus_ai_agent.creative.studio.capabilities import build_wave1_registry
+
+    try:
+        current = distribution_version("nexus-ai-agent")
+    except PackageNotFoundError:  # pragma: no cover - uninstalled source checkout
+        current = None
+    return PackRegistry(build_wave1_registry(), current_version=current)
+
+
+@packs_app.command("list")
+def packs_list(
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable output."),
+) -> None:
+    """List the capability packs that ship with this runtime."""
+    from nexus_ai_agent.creative.packs.manifest import PackManifestError
+
+    registry = _packs_registry()
+    try:
+        packs = registry.register_builtin()
+    except PackManifestError as exc:
+        typer.echo(f"✗ {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        typer.echo(
+            json.dumps(
+                [
+                    {
+                        "package_id": pack.package_id,
+                        "version": pack.manifest.version,
+                        "display_name": pack.manifest.display_name,
+                        "capabilities": list(pack.manifest.capabilities),
+                        "pending_capabilities": list(pack.pending_capabilities),
+                        "signature_state": pack.report.signature_state,
+                        "external_binaries": list(pack.manifest.external_binaries),
+                        "active": pack.active,
+                        "source": pack.source,
+                    }
+                    for pack in packs
+                ],
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return
+
+    typer.echo(f"{len(packs)} capability pack(s) registered")
+    for pack in packs:
+        pending = (
+            f" · pending={len(pack.pending_capabilities)}" if pack.pending_capabilities else ""
+        )
+        binaries = (
+            " · binaries=" + ",".join(pack.manifest.external_binaries)
+            if pack.manifest.external_binaries
+            else ""
+        )
+        typer.echo(f"  • {pack.package_id} {pack.manifest.version} — {pack.manifest.display_name}")
+        typer.echo(
+            f"    capabilities={len(pack.manifest.capabilities)}{pending}"
+            f" · signature={pack.report.signature_state}{binaries}"
+        )
+
+
+@packs_app.command("verify")
+def packs_verify(
+    path: Annotated[Path, typer.Argument(help="Path to a pack.manifest.json file.")],
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable output."),
+) -> None:
+    """Verify a manifest: schema, policy, and the runtime capability allow-list."""
+    from nexus_ai_agent.creative.packs.manifest import PackManifestError
+    from nexus_ai_agent.creative.packs.verify import verify_manifest_file
+
+    registry = _packs_registry()
+    try:
+        report = verify_manifest_file(
+            path,
+            known_operations=registry.runtime_registry.list_operations(),
+            current_version=registry.current_version,
+            anchor="external",
+        )
+    except PackManifestError as exc:
+        typer.echo(f"✗ {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        typer.echo(
+            json.dumps(
+                {
+                    "package_id": report.package_id,
+                    "version": report.package_version,
+                    "ok": report.ok,
+                    "capabilities": list(report.capabilities),
+                    "pending_capabilities": list(report.pending_capabilities),
+                    "signature_state": report.signature_state,
+                    "external_binaries": list(report.external_binaries),
+                    "issues": [
+                        {"code": i.code, "severity": i.severity, "message": i.message}
+                        for i in report.issues
+                    ],
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+    else:
+        typer.echo(report.summary())
+        for issue in report.issues:
+            marker = "✗" if issue.severity == "error" else "!"
+            typer.echo(f"  {marker} {issue.code}: {issue.message}")
+
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
 checkpoints_app.add_typer(golden_app, name="golden")
 app.add_typer(checkpoints_app, name="checkpoints")
 app.add_typer(metrics_app, name="metrics")
 app.add_typer(maintenance_app, name="maintenance")
 app.add_typer(jobs_app, name="jobs")
+app.add_typer(packs_app, name="packs")
 
 
 # ── D1: nexus jobs resume — operator drain of the durable in-process queue ──

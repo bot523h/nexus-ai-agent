@@ -1,0 +1,70 @@
+{
+  "manifest_schema": "nexus.capability-pack.v1",
+  "package_id": "nexus.slideshow.compose",
+  "version": "0.1.0",
+  "display_name": "Slideshow composer — tone-templated stills to a beat-aligned master",
+  "download_size_mb": 0.2,
+  "capabilities": [
+    "slideshow.scan_assets",
+    "slideshow.suggest_tone",
+    "slideshow.score_images",
+    "slideshow.compose",
+    "slideshow.render"
+  ],
+  "runtime": {
+    "native": {
+      "adapter_id": "nagar.local.slideshow.v1",
+      "sandbox": "in_process",
+      "network_required": false
+    },
+    "browser": {
+      "preferred": "none",
+      "fallback": "none",
+      "worker_required": false
+    }
+  },
+  "permissions": [
+    "read_project_images",
+    "read_project_audio",
+    "write_timeline_layers",
+    "write_derived_video_assets",
+    "egress_media_optin"
+  ],
+  "network_policy": {
+    "upload_media": true,
+    "runtime_network": false,
+    "pack_update": "forbidden"
+  },
+  "hardware_requirements": {
+    "minimum_ram_mb": 1024,
+    "recommended_ram_mb": 2048,
+    "minimum_cpu_threads": 2,
+    "gpu": {
+      "optional": true,
+      "webgpu": false,
+      "features": []
+    },
+    "disk_free_mb": 2048
+  },
+  "artifacts": [],
+  "resource_budget": {
+    "max_resident_model_mb": 0,
+    "max_audio_minutes_in_memory": 6,
+    "max_preview_resolution": "1280x720"
+  },
+  "compatibility": {
+    "min_nagar_version": "3.10.0",
+    "protocol_version": "nagar.command.v1",
+    "state_schema": "nagar.state.v1"
+  },
+  "security": {
+    "signature_algorithm": "ed25519",
+    "signature": "base64:replace-with-signed-manifest",
+    "trusted_publisher": "nagar-core",
+    "allow_arbitrary_native_code": false,
+    "allow_arbitrary_wasm_imports": false
+  },
+  "external_binaries": [
+    "ffmpeg"
+  ]
+}
