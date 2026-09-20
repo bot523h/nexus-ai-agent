@@ -418,3 +418,31 @@ code merely because they are old; preserve them rather than guess at reachabilit
 queue integration tests, and 40 architecture tests pass. All source types pass.
 No live Pollinations/Gemini requests or paid operations were performed. Final
 whole-repository gates and Git synchronization are recorded after sanitization.
+
+### History sanitization and final local gates (2026-09-20)
+
+Interactive autosquash (`GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash
+HEAD~8`) folded the access-control follow-up into the slideshow feature commit.
+The seven substantive phase commits were retained with Conventional Commit
+messages; no mainline commit was rewritten and the already-pushed baseline
+remained an ancestor. A pre-rebase bundle was kept in Git's local metadata as a
+recovery aid, not as a tracked artifact. Dates were not fabricated.
+
+Final verification on Python 3.11.2 in the local `.venv`:
+
+- `make lint`: passed; Ruff checks and formatting, 295 files.
+- `make types`: passed; 184 source files.
+- `make test`: passed; **742 passed, 20 skipped**, repeated with `-rs` to inspect
+  skips. All 20 require PostgreSQL / `NEXUS_DATABASE_URL`; the GitHub workflow's
+  dedicated PostgreSQL job remains the external-service verification gate.
+- One upstream Starlette/AnyIO deprecation warning; no test failures. An initial
+  run also reported a non-fatal LiteLLM remote-price-map connection warning.
+- `git diff --check`: passed. No root `test_*.py`, generated images, downloaded
+  archives or stale gate-output reports remain tracked.
+
+Commands use `.venv/bin` on PATH. The test environment did not install the heavy
+`llama-cpp-python` / `sentence-transformers` runtime stacks; this session does not
+claim live local-model inference, live hosted image-provider availability, or
+real-account billing verification. The complete non-slow repository suite above
+was run unchanged (no tests disabled or marks added to make the gates pass).
+The final verification record is committed before the last push/PR update.
