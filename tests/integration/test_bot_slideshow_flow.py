@@ -16,7 +16,6 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from slideshow_media import make_image
 
 from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue, JobCompletion
 from nexus_ai_agent.application.ports.job_queue import JobStatus
@@ -25,6 +24,12 @@ from nexus_ai_agent.creative.slideshow.probe import ProbeError
 
 #: The encoder is mocked here — the suite must never depend on FFmpeg.
 FAKE_MASTER = b"\x00\x00\x00\x18ftypmp42fake-master"
+
+#: The payload envelope validates suffixes only (probing lives behind the
+#: mocked engine call), so placeholder bytes with image names are enough.
+def make_image(path: Path, seed: int = 0) -> Path:
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + f"placeholder-{seed}".encode())
+    return path
 
 
 def _completed_outcome(output_path: Path, *, shots: int = 3) -> SimpleNamespace:
