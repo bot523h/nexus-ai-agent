@@ -102,6 +102,7 @@ class CommandBus:
 
     def dispatch(self, command: TypedCommand | dict[str, Any]) -> CommandResult:
         """Run the full validate -> authorize -> apply pipeline."""
+        # 1. envelope validation (typed command, protocol v1)
         if isinstance(command, dict):
             try:
                 command = TypedCommand.model_validate(command)
