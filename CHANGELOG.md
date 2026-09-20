@@ -48,6 +48,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   policy), constructed once per application instead of once per message.
 
 ### Changed
+- **D3 (decision):** `process_pdf_job` extracts real text with `pypdf` under
+  the new optional `[pdf]` extra (`pip install 'nexus-ai-agent[pdf]'`; the
+  Docker image installs it). Extraction is bounded (`PDF_MAX_PAGES = 100`,
+  `PDF_MAX_CHARACTERS = 250_000`, separators counted) and the result reports
+  `pages` / `total_pages` / `characters` / `truncated`. Without the extra the
+  job fails with an explicit `PdfSupportMissingError` naming the install
+  command — no UTF-8 fallback, no silence. Password-protected, unreadable
+  and text-less (scanned) PDFs fail with a user-facing `PdfExtractionError`.
+  Tested against a real committed fixture (`tests/fixtures/pdf/two_pages.pdf`).
 - `bot/handlers.py`: `pdf_handler` and `story_cmd_handler` submit through
   `JobQueuePort.enqueue()` from `bot_data["job_queue"]` (idempotency key =
   one Telegram message ⇒ one job; a redelivered update collapses onto it).
@@ -66,9 +75,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to `post_stop`, i.e. while the bot is still initialised.
 - Job failures were previously returned as `"Error: …"` strings from a
   *successful* Celery task result; they are now persisted as `failed` with
-  the error message. (Real PDF text extraction and the "I will notify you"
-  completion notice were never implemented and remain out of scope — see the
-  PR description.)
+  the error message. (Real PDF text extraction landed with D3; the
+  completion notice with D4 — see the PR description.)
 
 ## [3.9.0] — 2026-09-20
 

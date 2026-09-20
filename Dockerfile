@@ -13,8 +13,8 @@ RUN apt-get update && apt-get install -y \
 # Copy assets and code
 COPY . .
 
-# Install dependencies
-RUN pip install --no-cache-dir .
+# Install dependencies (+ the optional [pdf] extra: PDF uploads work out of the box)
+RUN pip install --no-cache-dir ".[pdf]"
 
 # Create necessary directories
 RUN mkdir -p data/chroma data/cache assets/fonts

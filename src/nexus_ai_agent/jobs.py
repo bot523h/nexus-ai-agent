@@ -35,6 +35,20 @@ PDF_JOB = "process_pdf"
 #: Render a Persian/RTL story image to disk.
 STORY_JOB = "generate_story"
 
+#: D3 — extraction is bounded: at most this many pages are read …
+PDF_MAX_PAGES = 100
+#: … and at most this many characters are handed to the RAG engine.
+PDF_MAX_CHARACTERS = 250_000
+PDF_EXTRA_HINT = "pip install 'nexus-ai-agent[pdf]'"
+
+
+class PdfSupportMissingError(RuntimeError):
+    """The optional ``[pdf]`` extra (pypdf) is not installed on this deployment."""
+
+
+class PdfExtractionError(ValueError):
+    """The upload is not a PDF we can extract text from (user-facing reason in the message)."""
+
 
 def job_queue_db_path(db_path: str) -> str:
     """Sidecar file for durable job state, next to the application database.
@@ -53,33 +67,95 @@ def _field(payload: Mapping[str, object], key: str) -> object:
         raise KeyError(f"job payload is missing {key!r}") from None
 
 
-def _index_document(user_id: int, file_path: str, file_id: str) -> int:
+def extract_pdf_text(file_path: str) -> tuple[str, int, int, bool]:
+    """Extract text from a PDF, bounded by ``PDF_MAX_PAGES`` / ``PDF_MAX_CHARACTERS``.
+
+    Returns ``(text, pages_read, total_pages, truncated)``.
+
+    * Missing ``pypdf`` ⇒ :class:`PdfSupportMissingError` with the install hint
+      (no UTF-8 fallback, no silent empty result).
+    * Password-protected, unreadable or text-less PDFs ⇒ :class:`PdfExtractionError`
+      with a reason a user can act on.  ``FileNotFoundError`` and other
+      infrastructure errors propagate unchanged.
+    """
+    try:
+        from pypdf import PdfReader
+        from pypdf.errors import PyPdfError
+    except ImportError as exc:
+        raise PdfSupportMissingError(
+            f"PDF text extraction requires the optional 'pdf' extra: {PDF_EXTRA_HINT}"
+        ) from exc
+
+    parts: list[str] = []
+    characters = 0
+    truncated = False
+    try:
+        reader = PdfReader(file_path)
+        if reader.is_encrypted and not reader.decrypt(""):
+            raise PdfExtractionError("the PDF is password-protected; upload an unlocked copy")
+        total_pages = len(reader.pages)
+        pages_read = min(total_pages, PDF_MAX_PAGES)
+        truncated = total_pages > pages_read
+        for index in range(pages_read):
+            page_text = (reader.pages[index].extract_text() or "").strip()
+            if not page_text:
+                continue
+            separator = 2 if parts else 0  # the "\n\n" join below counts too
+            room = PDF_MAX_CHARACTERS - characters - separator
+            if room <= 0:
+                truncated = True
+                pages_read = index
+                break
+            if len(page_text) > room:
+                page_text = page_text[:room]
+                truncated = True
+            parts.append(page_text)
+            characters += separator + len(page_text)
+    except PdfExtractionError:
+        raise
+    except (PyPdfError, ValueError, KeyError, TypeError, IndexError, RecursionError) as exc:
+        # pypdf is lenient by default; anything it still cannot parse is not a
+        # usable upload.  Keep the original type visible for operators.
+        raise PdfExtractionError(f"not a readable PDF ({type(exc).__name__}: {exc})") from exc
+
+    text = "\n\n".join(parts)
+    if not text:
+        raise PdfExtractionError(
+            "the PDF has no extractable text (scanned images need OCR, which is not supported)"
+        )
+    return text, pages_read, total_pages, truncated
+
+
+def _index_document(user_id: int, file_path: str, file_id: str) -> dict[str, object]:
     """Blocking body of :func:`process_pdf_job`; runs in a worker thread."""
     from nexus_ai_agent.features.rag import AdvancedRAGEngine
 
-    with open(file_path, encoding="utf-8") as handle:
-        text = handle.read()
+    text, pages_read, total_pages, truncated = extract_pdf_text(file_path)
     engine = AdvancedRAGEngine()
     # The engine API is ``async`` but does no real awaiting; drive it on a
     # private loop in this worker thread exactly as the Celery task did.
     asyncio.run(engine.add_document(user_id, text, {"file_id": file_id}))
-    return len(text)
+    return {
+        "file_id": file_id,
+        "pages": pages_read,
+        "total_pages": total_pages,
+        "characters": len(text),
+        "truncated": truncated,
+    }
 
 
 async def process_pdf_job(payload: dict[str, object]) -> dict[str, object]:
-    """Index an uploaded document.  Payload: ``user_id``, ``file_path``, ``file_id``.
+    """Index an uploaded PDF.  Payload: ``user_id``, ``file_path``, ``file_id``.
 
-    The file is read as UTF-8 text exactly as the Celery task did; a binary
-    PDF therefore fails with ``UnicodeDecodeError`` — now *visibly* (the queue
-    stores ``failed`` + the error) instead of as an ``"Error processing"``
-    string returned as a successful result.  Real PDF text extraction is a
-    separate product change, not part of the Celery removal.
+    D3: text is extracted with pypdf (optional ``[pdf]`` extra), bounded by
+    ``PDF_MAX_PAGES`` / ``PDF_MAX_CHARACTERS``; the result reports
+    ``pages`` / ``total_pages`` / ``characters`` / ``truncated``.  Errors
+    propagate to the queue, which records them as ``failed`` + message.
     """
     user_id = int(str(_field(payload, "user_id")))
     file_path = str(_field(payload, "file_path"))
     file_id = str(_field(payload, "file_id"))
-    characters = await asyncio.to_thread(_index_document, user_id, file_path, file_id)
-    return {"file_id": file_id, "characters": characters}
+    return await asyncio.to_thread(_index_document, user_id, file_path, file_id)
 
 
 def _render_story(text: str, output_path: str) -> None:

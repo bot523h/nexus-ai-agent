@@ -72,7 +72,7 @@
       "scope": "R-001/R-026: Celery/Redis removed; in-process JobQueuePort adapter (SQLite sidecar) + jobs.py + in-memory rate limiter + architecture ban tests"
     }
   ],
-  "test_count_expected": 409,
+  "test_count_expected": 416,
   "env_fingerprint": {
     "python": "3.11.2",
     "alembic": "1.20.0",

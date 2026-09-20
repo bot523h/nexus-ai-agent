@@ -143,6 +143,10 @@ cd nexus-ai-agent
 make setup
 ```
 
+PDF uploads need the optional `pdf` extra (`pip install -e ".[pdf]"`; the
+Docker image includes it). Without it, PDF jobs fail with an explicit
+"install the pdf extra" error instead of guessing.
+
 ### 2) Configure environment
 
 ```bash

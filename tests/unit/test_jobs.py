@@ -9,6 +9,7 @@ real Pillow renderer for stories and a recording double for the RAG engine
 
 from __future__ import annotations
 
+import sys
 import threading
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,8 @@ from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue, JobS
 from nexus_ai_agent.config.settings import Settings
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+#: A real two-page PDF (Helvetica text, valid xref) — see tests/fixtures/pdf/.
+TWO_PAGE_PDF = Path(__file__).parents[1] / "fixtures" / "pdf" / "two_pages.pdf"
 
 
 class _RecordingRAGEngine:
@@ -66,20 +69,125 @@ async def test_generate_story_job_renders_a_png(
     assert output.read_bytes().startswith(PNG_MAGIC)
 
 
-async def test_process_pdf_job_indexes_the_document(
+async def test_process_pdf_job_extracts_text_from_a_real_pdf(
+    rag_double: type[_RecordingRAGEngine],
+) -> None:
+    """D3: real extraction (pypdf) — page text reaches the RAG engine; result is inspectable."""
+    result = await jobs.process_pdf_job(
+        {"user_id": 42, "file_path": str(TWO_PAGE_PDF), "file_id": "abc"}
+    )
+    assert len(rag_double.calls) == 1
+    user_id, text, metadata = rag_double.calls[0]
+    assert user_id == 42 and metadata == {"file_id": "abc"}
+    assert "NEXUS PDF fixture page one" in text
+    assert "Second page: knowledge base" in text
+    assert result == {
+        "file_id": "abc",
+        "pages": 2,
+        "total_pages": 2,
+        "characters": len(text),
+        "truncated": False,
+    }
+
+
+async def test_pdf_job_without_the_extra_fails_with_an_actionable_error(
+    rag_double: type[_RecordingRAGEngine], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D3: no ``[pdf]`` extra ⇒ explicit, actionable error — no UTF-8 fallback, no silence."""
+    monkeypatch.setitem(sys.modules, "pypdf", None)  # makes ``import pypdf`` raise ImportError
+    with pytest.raises(jobs.PdfSupportMissingError) as excinfo:
+        await jobs.process_pdf_job({"user_id": 1, "file_path": str(TWO_PAGE_PDF), "file_id": "x"})
+    assert "pip install" in str(excinfo.value) and "[pdf]" in str(excinfo.value)
+    assert rag_double.calls == []
+
+
+async def test_pdf_job_rejects_password_protected_pdf(
     rag_double: type[_RecordingRAGEngine], tmp_path: Path
 ) -> None:
-    doc = tmp_path / "abc.pdf"
-    doc.write_text("hello knowledge base", encoding="utf-8")
-    result = await jobs.process_pdf_job({"user_id": 42, "file_path": str(doc), "file_id": "abc"})
-    assert result == {"file_id": "abc", "characters": len("hello knowledge base")}
-    assert rag_double.calls == [(42, "hello knowledge base", {"file_id": "abc"})]
+    from pypdf import PdfReader, PdfWriter
+
+    writer = PdfWriter(clone_from=PdfReader(str(TWO_PAGE_PDF)))
+    writer.encrypt(user_password="secret", algorithm="RC4-128")
+    locked = tmp_path / "locked.pdf"
+    with locked.open("wb") as handle:
+        writer.write(handle)
+
+    with pytest.raises(jobs.PdfExtractionError, match="password"):
+        await jobs.process_pdf_job({"user_id": 1, "file_path": str(locked), "file_id": "x"})
+    assert rag_double.calls == []
+
+
+async def test_pdf_job_rejects_pdf_without_extractable_text(
+    rag_double: type[_RecordingRAGEngine], tmp_path: Path
+) -> None:
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    blank = tmp_path / "blank.pdf"
+    with blank.open("wb") as handle:
+        writer.write(handle)
+
+    with pytest.raises(jobs.PdfExtractionError, match="no extractable text"):
+        await jobs.process_pdf_job({"user_id": 1, "file_path": str(blank), "file_id": "x"})
+    assert rag_double.calls == []
+
+
+async def test_pdf_job_rejects_non_pdf_bytes(
+    rag_double: type[_RecordingRAGEngine], tmp_path: Path
+) -> None:
+    garbage = tmp_path / "garbage.pdf"
+    garbage.write_bytes(b"%PDF-1.7\n\xff\xfe\x00binary")
+    with pytest.raises(jobs.PdfExtractionError, match="not a readable PDF"):
+        await jobs.process_pdf_job({"user_id": 1, "file_path": str(garbage), "file_id": "x"})
+    assert rag_double.calls == []
+
+
+async def test_pdf_extraction_is_bounded_by_pages(
+    rag_double: type[_RecordingRAGEngine], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D3: bounded — only the first ``PDF_MAX_PAGES`` pages are read; truncation is reported."""
+    monkeypatch.setattr(jobs, "PDF_MAX_PAGES", 1)
+    result = await jobs.process_pdf_job(
+        {"user_id": 1, "file_path": str(TWO_PAGE_PDF), "file_id": "x"}
+    )
+    _, text, _ = rag_double.calls[0]
+    assert "page one" in text and "Second page" not in text
+    assert result["pages"] == 1 and result["total_pages"] == 2 and result["truncated"] is True
+
+
+async def test_pdf_extraction_is_bounded_by_characters(
+    rag_double: type[_RecordingRAGEngine], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cap counts the page separators too, so the RAG engine never sees more."""
+    monkeypatch.setattr(jobs, "PDF_MAX_CHARACTERS", 30)  # page one is 26 chars + "\n\n" + 2
+    result = await jobs.process_pdf_job(
+        {"user_id": 1, "file_path": str(TWO_PAGE_PDF), "file_id": "x"}
+    )
+    _, text, _ = rag_double.calls[0]
+    assert text == "NEXUS PDF fixture page one\n\nSe"
+    assert len(text) == 30 == result["characters"]
+    assert result["pages"] == 2 and result["truncated"] is True
+
+    rag_double.calls.clear()
+    monkeypatch.setattr(jobs, "PDF_MAX_CHARACTERS", 26)  # exactly page one: page two never starts
+    result = await jobs.process_pdf_job(
+        {"user_id": 1, "file_path": str(TWO_PAGE_PDF), "file_id": "y"}
+    )
+    _, text, _ = rag_double.calls[0]
+    assert text == "NEXUS PDF fixture page one"
+    assert result["pages"] == 1 and result["truncated"] is True
+
+
+def test_pdf_bounds_are_sane_defaults() -> None:
+    assert jobs.PDF_MAX_PAGES == 100
+    assert jobs.PDF_MAX_CHARACTERS == 250_000
 
 
 async def test_process_pdf_job_raises_on_missing_file(
     rag_double: type[_RecordingRAGEngine], tmp_path: Path
 ) -> None:
-    """Errors propagate (the queue records them); the old task returned an 'Error:' string."""
+    """Infrastructure errors propagate as-is (the queue records them); no 'Error:' strings."""
     with pytest.raises(FileNotFoundError):
         await jobs.process_pdf_job(
             {"user_id": 1, "file_path": str(tmp_path / "missing.pdf"), "file_id": "x"}
@@ -121,7 +229,7 @@ async def test_story_job_end_to_end_through_the_queue(
 async def test_pdf_job_failure_is_recorded_not_swallowed(
     settings_override: Settings, rag_double: type[_RecordingRAGEngine], tmp_path: Path
 ) -> None:
-    """A binary (non-UTF-8) upload fails visibly with the decode error persisted."""
+    """An unreadable upload fails visibly with the extraction error persisted."""
     queue = jobs.build_job_queue(settings_override)
     doc = tmp_path / "binary.pdf"
     doc.write_bytes(b"%PDF-1.7\n\xff\xfe\x00binary")
@@ -133,7 +241,7 @@ async def test_pdf_job_failure_is_recorded_not_swallowed(
     assert await queue.wait(job_id, timeout=30) == JobStatus.FAILED
     record = await queue.get_job(job_id)
     assert record is not None
-    assert record.error is not None and "UnicodeDecodeError" in record.error
+    assert record.error is not None and record.error.startswith("PdfExtractionError:")
     assert rag_double.calls == []
     await queue.close()
 
@@ -163,9 +271,7 @@ async def test_heavy_work_runs_off_the_event_loop_thread(
     await jobs.generate_story_job(
         {"user_id": 1, "text": "x", "output_path": str(tmp_path / "s.png")}
     )
-    doc = tmp_path / "d.pdf"
-    doc.write_text("text", encoding="utf-8")
-    await jobs.process_pdf_job({"user_id": 1, "file_path": str(doc), "file_id": "d"})
+    await jobs.process_pdf_job({"user_id": 1, "file_path": str(TWO_PAGE_PDF), "file_id": "d"})
 
     loop_thread = threading.get_ident()
     assert seen_threads and all(ident != loop_thread for ident in seen_threads)

@@ -49,12 +49,18 @@ dependencies = [
 nexus = "nexus_ai_agent.cli:app"
 
 [project.optional-dependencies]
+# D3: PDF text extraction for uploaded documents. Optional on purpose — a
+# deployment without it fails PDF jobs with an explicit, actionable error.
+pdf = [
+  "pypdf>=4.0",
+]
 dev = [
   "pytest>=8.0",
   "pytest-asyncio>=0.23",
   "ruff>=0.4",
   "mypy>=1.10",
   "pytest-mock>=3.12",
+  "pypdf>=4.0",  # keep in sync with [pdf]; the fixture test needs it
 ]
 
 [tool.setuptools]
