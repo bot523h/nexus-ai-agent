@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
   "plan": "Nagar Phase 6",
-  "step": "ebe995a",
-  "next": "Wave 2.5 — Telegram surface for the slideshow pack (/slideshow -> JobQueuePort -> in-process worker -> D4 notifier); then Wave 3 (optional local upscale stage + image generation behind an adapter: Pollinations default, Gemini opt-in)",
+  "step": "13809ed",
+  "next": "v3.12.0 housekeeping cut after Wave 2.5 merges (VERSION/pyproject, changelog move, roadmap to Wave 3); then Wave 3 — optional local upscale stage + image generation behind an adapter (Pollinations sole free default; a paid Gemini adapter only behind an explicit opt-in setting with a per-call cost line logged first) — plan and DECISION_LOG detail first, code only after the owner's final approval.",
   "ledger": [
     {
       "id": "C1",
@@ -97,11 +97,18 @@
     },
     {
       "id": "release-3.11.0",
-      "status": "in_progress",
-      "scope": "housekeeping cut: continuum refresh, changelog 3.11.0, roadmap/decision-log refresh (r6: image generation behind an adapter, Wave 2.5 sequencing)"
+      "status": "merged",
+      "scope": "housekeeping cut: continuum refresh, changelog 3.11.0, roadmap/decision-log refresh (r6: image generation behind an adapter, Wave 2.5 sequencing); merged via PR#24 (2026-09-20)",
+      "commit": "8b27625"
+    },
+    {
+      "id": "nagar-wave2.5",
+      "commit": "13809ed",
+      "status": "in_review",
+      "scope": "Telegram surface for the slideshow pack — /slideshow session buffer (5 photos, 30s, workspace confinement) -> slideshow_render queue job -> render_from_files in a thread -> D4 delivery of the measured master with typed, path-free failures (PR#25; decision-log Wave 2.5 + revision r7)"
     }
   ],
-  "test_count_expected": 586,
+  "test_count_expected": 620,
   "env_fingerprint": {
     "python": "3.11.2",
     "alembic": "1.20.0",
