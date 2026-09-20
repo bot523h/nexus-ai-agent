@@ -1493,10 +1493,11 @@ async def pdf_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     try:
         job_id = await queue.enqueue(
-            job_type="pdf",
+            job_type="pdf_extract",
             idempotency_key=f"telegram-pdf:{user_id}:{doc.file_id}",
             payload={
                 "user_id": user_id,
+                "chat_id": _chat_id(update),
                 "file_path": temp_path,
                 "file_id": doc.file_id,
             },
@@ -1545,6 +1546,7 @@ async def story_cmd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             idempotency_key=f"telegram-story:{user_id}:{uuid4().hex}",
             payload={
                 "user_id": user_id,
+                "chat_id": _chat_id(update),
                 "text": text,
                 "output_path": output_path,
             },

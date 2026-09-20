@@ -42,6 +42,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.env.example` documents the two new variables
   (`NEXUS_API_CORS_ORIGINS`, `NEXUS_API_HMAC_KEY`).
 
+### Added
+- **D1 — Job resume CLI (`nexus jobs resume`)**: operator entry point on the
+  durable in-process queue. `InProcessJobQueue.resume_pending_jobs()` requeues
+  rows still sitting in `pending` and drains them in the calling process with
+  the standard application handlers; `processing` rows are never claimed, so
+  the command is safe to run beside a live bot (which keeps its own
+  process-startup `resume_pending()` recovery).
+- **D3 — real PDF extraction via `pypdf`**: `worker.extract_pdf_text()` parses
+  the PDF text layer in a worker thread (`asyncio.to_thread`) and feeds the
+  RAG engine; PDF bytes are never silently decoded as UTF-8 text. Without
+  `pypdf` the job fails durably with an actionable install hint
+  (`pip install pypdf`). `pypdf` ships as the optional `[pdf]` extra (and in
+  `[dev]` so the suite exercises the real parser); enqueue job type renamed
+  `pdf` → `pdf_extract` through the existing `JobQueuePort` contract
+  (signature unchanged).
+- **D4 — Telegram completion notification**: `InProcessJobQueue` accepts an
+  optional, strictly fail-safe `on_job_finished` hook that fires when a job
+  reaches `completed` or `failed` (never on cancellation). The bot injects a
+  notifier that messages the origin `chat_id` carried in the job payload;
+  hook exceptions are logged and swallowed and can never corrupt durable job
+  state.
+
+### Removed
+- **D2 — dead code**: `worker.nightly_channel_management()` (no callers) is
+  gone; with it the only `telegram` import leaked out of the bot layer.
+
 ## [3.9.0] — 2026-09-20
 
 ### Added
