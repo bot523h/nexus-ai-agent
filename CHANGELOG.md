@@ -5,7 +5,57 @@ All notable changes to NEXUS AI Agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.10.0] — 2026-09-20
+
+### Added
+- **Nagar Phase 6, Wave 1 — the “Green Cockpit” core
+  (`src/nexus_ai_agent/creative/studio/`)**: the first implementation of the
+  accepted Nagar architecture (`docs/NAGAR_70_OPERATIONS_TDD.md`). Everything
+  is a typed, UI-free command surface — JSON command in, in-memory state
+  update out; no React/DOM/Canvas, no torch/transformers/CV, no `storage/`
+  or `llm/` imports (enforced by `tests/architecture/test_nagar_studio_isolation.py`).
+  - `models.py`: project/timeline/track/clip state, `MediaRef`, `Playhead`,
+    markers, the `nagar.command.v1` typed envelope, `EditTransaction`/`CommandResult`,
+    and the content-derived `state_hash` contract (`state_revision` excluded and
+    monotonic, so revision+hash pairs stay valid across undo cycles).
+  - `capabilities.py`: `Domain > Capability > OperationSpec` registry — the
+    allow-list the bus consults, the A/B/C/D permission ladder, per-operation
+    typed input models and pure `(project, context) -> outcome` handlers.
+  - `references.py`: semantic reference resolution (`"اینجا"`, «۵ ثانیه قبل»,
+    absolute/relative/start/end, Arabic-Indic digits) pinned **once at command
+    receipt** with `captured_at_command=True`.
+  - `bus.py`: the single write path — envelope validation → idempotency replay →
+    registry lookup → permission gate → typed input validation → reference
+    pinning → optimistic-concurrency preconditions → atomic apply. A failing
+    handler leaves central state exactly as it was.
+  - Exactly **five** operations in the Wave 1 catalog: `media.play` and
+    `media.pause` (A), `timeline.mark` and `timeline.split_at_playhead` (B,
+    non-destructive — source `MediaRef` untouched), `system.undo` (A, classic
+    NLE undo that skips its own `system.undo` records).
+  - Tests: `tests/unit/test_nagar_wave1_green_cockpit.py` (33 tests — every
+    registered operation proves validate → apply on in-memory state → undo
+    restores the previous state hash) plus the three isolation/architecture
+    gates.
+- **D1 — Job resume CLI (`nexus jobs resume`)**: operator entry point on the
+  durable in-process queue. `InProcessJobQueue.resume_pending_jobs()` requeues
+  rows still sitting in `pending` and drains them in the calling process with
+  the standard application handlers; `processing` rows are never claimed, so
+  the command is safe to run beside a live bot (which keeps its own
+  process-startup `resume_pending()` recovery).
+- **D3 — real PDF extraction via `pypdf`**: `worker.extract_pdf_text()` parses
+  the PDF text layer in a worker thread (`asyncio.to_thread`) and feeds the
+  RAG engine; PDF bytes are never silently decoded as UTF-8 text. Without
+  `pypdf` the job fails durably with an actionable install hint
+  (`pip install pypdf`). `pypdf` ships as the optional `[pdf]` extra (and in
+  `[dev]` so the suite exercises the real parser); enqueue job type renamed
+  `pdf` → `pdf_extract` through the existing `JobQueuePort` contract
+  (signature unchanged).
+- **D4 — Telegram completion notification**: `InProcessJobQueue` accepts an
+  optional, strictly fail-safe `on_job_finished` hook that fires when a job
+  reaches `completed` or `failed` (never on cancellation). The bot injects a
+  notifier that messages the origin `chat_id` carried in the job payload;
+  hook exceptions are logged and swallowed and can never corrupt durable job
+  state.
 
 ### Security — dashboard API & egress hardening (fresh implementation; manual review required)
 - **CORS lock-down (`api/app.py`)**: the previous default
@@ -42,27 +92,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.env.example` documents the two new variables
   (`NEXUS_API_CORS_ORIGINS`, `NEXUS_API_HMAC_KEY`).
 
-### Added
-- **D1 — Job resume CLI (`nexus jobs resume`)**: operator entry point on the
-  durable in-process queue. `InProcessJobQueue.resume_pending_jobs()` requeues
-  rows still sitting in `pending` and drains them in the calling process with
-  the standard application handlers; `processing` rows are never claimed, so
-  the command is safe to run beside a live bot (which keeps its own
-  process-startup `resume_pending()` recovery).
-- **D3 — real PDF extraction via `pypdf`**: `worker.extract_pdf_text()` parses
-  the PDF text layer in a worker thread (`asyncio.to_thread`) and feeds the
-  RAG engine; PDF bytes are never silently decoded as UTF-8 text. Without
-  `pypdf` the job fails durably with an actionable install hint
-  (`pip install pypdf`). `pypdf` ships as the optional `[pdf]` extra (and in
-  `[dev]` so the suite exercises the real parser); enqueue job type renamed
-  `pdf` → `pdf_extract` through the existing `JobQueuePort` contract
-  (signature unchanged).
-- **D4 — Telegram completion notification**: `InProcessJobQueue` accepts an
-  optional, strictly fail-safe `on_job_finished` hook that fires when a job
-  reaches `completed` or `failed` (never on cancellation). The bot injects a
-  notifier that messages the origin `chat_id` carried in the job payload;
-  hook exceptions are logged and swallowed and can never corrupt durable job
-  state.
+### Changed
+- **Release metadata is now consistent**: `VERSION` 3.9.0 → **3.10.0** and
+  `pyproject.toml` 3.8.0 → **3.10.0**. The v3.9.0 release bumped `VERSION`
+  only, so the packaged distribution had been reporting 3.8.0; both sources are
+  now in lock-step and are covered by `tests/unit/test_version_command.py`.
+- **`/version` no longer lies**: `bot/update_handlers.py` hardcoded `v3.0.0`
+  in two places. Both now read the real running version from the installed
+  distribution metadata (`importlib.metadata`), falling back to the repository
+  `VERSION` file only for an uninstalled checkout — the file lives at the
+  repository root and is deliberately not part of a wheel.
 
 ### Removed
 - **D2 — dead code**: `worker.nightly_channel_management()` (no callers) is
