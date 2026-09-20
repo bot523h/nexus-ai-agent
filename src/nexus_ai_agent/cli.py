@@ -638,34 +638,22 @@ def slideshow_templates(
         )
 
 
-@slideshow_app.command("plan")
-def slideshow_plan(
-    images: Annotated[list[Path], typer.Option("--image", help="Input image (repeatable).")],
-    duration_minutes: int = typer.Option(1, "--duration-min", help="Target duration: 1, 2 or 5."),
-    audio: Annotated[
-        Path | None, typer.Option("--audio", help="Soundtrack (WAV until the FFmpeg adapter).")
-    ] = None,
-    mode: str = typer.Option("auto", "--mode", help="auto | manual"),
-    template_id: str | None = typer.Option(None, "--template", help="Explicit tone template id."),
-    shot_seconds: str | None = typer.Option(
-        None, "--shot-seconds", help="Manual mode: comma-separated seconds per image."
-    ),
-    provider: str | None = typer.Option(
-        None, "--provider", help="Image analysis: local | gemini (default from settings)."
-    ),
-    allow_image_upload: bool = typer.Option(
-        False, "--allow-image-upload", help="Opt in to sending downscaled images to Gemini."
-    ),
-    resolution: str = typer.Option("1920x1080", "--resolution"),
-    fps: int | None = typer.Option(None, "--fps"),
-    json_output: bool = typer.Option(False, "--json", help="Machine-readable output."),
-    out: Annotated[
-        Path | None, typer.Option("--out", help="Write the plan JSON to this file.")
-    ] = None,
-) -> None:
-    """Plan a slideshow from real files (probe -> beats -> analysis -> ONE transaction)."""
+def _slideshow_request(
+    *,
+    images: list[Path],
+    duration_minutes: int,
+    audio: Path | None,
+    mode: str,
+    template_id: str | None,
+    shot_seconds: str | None,
+    provider: str | None,
+    allow_image_upload: bool,
+    resolution: str,
+    fps: int | None,
+) -> tuple[Any, int]:
+    """Validate the options shared by ``slideshow plan`` and ``slideshow render``."""
     from nexus_ai_agent.config.settings import get_settings
-    from nexus_ai_agent.creative.slideshow.service import PlanningRequest, plan_from_files
+    from nexus_ai_agent.creative.slideshow.service import PlanningRequest
 
     target_us = duration_minutes * 60 * 1_000_000
     if target_us not in (60_000_000, 120_000_000, 300_000_000):
@@ -697,6 +685,49 @@ def slideshow_plan(
         allow_image_upload=allow_image_upload or settings.slideshow_allow_image_upload,
         gemini_api_key=settings.creative_gemini_api_key or settings.gemini_api_key,
         gemini_model=settings.gemini_model,
+        resolution=resolution,
+        fps=fps,
+    )
+    return request, target_us
+
+
+@slideshow_app.command("plan")
+def slideshow_plan(
+    images: Annotated[list[Path], typer.Option("--image", help="Input image (repeatable).")],
+    duration_minutes: int = typer.Option(1, "--duration-min", help="Target duration: 1, 2 or 5."),
+    audio: Annotated[
+        Path | None, typer.Option("--audio", help="Soundtrack (WAV until the FFmpeg adapter).")
+    ] = None,
+    mode: str = typer.Option("auto", "--mode", help="auto | manual"),
+    template_id: str | None = typer.Option(None, "--template", help="Explicit tone template id."),
+    shot_seconds: str | None = typer.Option(
+        None, "--shot-seconds", help="Manual mode: comma-separated seconds per image."
+    ),
+    provider: str | None = typer.Option(
+        None, "--provider", help="Image analysis: local | gemini (default from settings)."
+    ),
+    allow_image_upload: bool = typer.Option(
+        False, "--allow-image-upload", help="Opt in to sending downscaled images to Gemini."
+    ),
+    resolution: str = typer.Option("1920x1080", "--resolution"),
+    fps: int | None = typer.Option(None, "--fps"),
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable output."),
+    out: Annotated[
+        Path | None, typer.Option("--out", help="Write the plan JSON to this file.")
+    ] = None,
+) -> None:
+    """Plan a slideshow from real files (probe -> beats -> analysis -> ONE transaction)."""
+    from nexus_ai_agent.creative.slideshow.service import plan_from_files
+
+    request, _target_us = _slideshow_request(
+        images=images,
+        duration_minutes=duration_minutes,
+        audio=audio,
+        mode=mode,
+        template_id=template_id,
+        shot_seconds=shot_seconds,
+        provider=provider,
+        allow_image_upload=allow_image_upload,
         resolution=resolution,
         fps=fps,
     )
@@ -735,6 +766,96 @@ def slideshow_plan(
         typer.echo(f"  … {len(outcome.plan['shots']) - 8} more shots")
     for warning in outcome.warnings:
         typer.echo(f"  ! {warning}")
+
+
+@slideshow_app.command("render")
+def slideshow_render(
+    images: Annotated[list[Path], typer.Option("--image", help="Input image (repeatable).")],
+    out: Annotated[Path, typer.Option("--out", help="Destination master file (e.g. master.mp4).")],
+    duration_minutes: int = typer.Option(1, "--duration-min", help="Target duration: 1, 2 or 5."),
+    audio: Annotated[
+        Path | None, typer.Option("--audio", help="Soundtrack (anything FFmpeg can decode).")
+    ] = None,
+    mode: str = typer.Option("auto", "--mode", help="auto | manual"),
+    template_id: str | None = typer.Option(None, "--template", help="Explicit tone template id."),
+    shot_seconds: str | None = typer.Option(
+        None, "--shot-seconds", help="Manual mode: comma-separated seconds per image."
+    ),
+    provider: str | None = typer.Option(
+        None, "--provider", help="Image analysis: local | gemini (default from settings)."
+    ),
+    allow_image_upload: bool = typer.Option(
+        False, "--allow-image-upload", help="Opt in to sending downscaled images to Gemini."
+    ),
+    resolution: str = typer.Option("1920x1080", "--resolution"),
+    fps: int | None = typer.Option(None, "--fps"),
+    overwrite: bool = typer.Option(
+        False, "--overwrite", help="Replace an existing file at --out (never done silently)."
+    ),
+    ffmpeg_bin: str | None = typer.Option(
+        None, "--ffmpeg-bin", help="Explicit FFmpeg binary (else NEXUS_FFMPEG_BIN, PATH, wheel)."
+    ),
+    timeout: int | None = typer.Option(None, "--timeout", help="Render timeout in seconds."),
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable output."),
+) -> None:
+    """Render ONE master with FFmpeg and record it as a derived asset (level C)."""
+    from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.creative.slideshow.ffmpeg import RenderError
+    from nexus_ai_agent.creative.slideshow.service import render_from_files
+
+    request, _target_us = _slideshow_request(
+        images=images,
+        duration_minutes=duration_minutes,
+        audio=audio,
+        mode=mode,
+        template_id=template_id,
+        shot_seconds=shot_seconds,
+        provider=provider,
+        allow_image_upload=allow_image_upload,
+        resolution=resolution,
+        fps=fps,
+    )
+    settings = get_settings()
+    try:
+        outcome = render_from_files(
+            request,
+            output_path=out,
+            overwrite=overwrite,
+            ffmpeg_bin=ffmpeg_bin or settings.ffmpeg_bin,
+            timeout=timeout or settings.slideshow_render_timeout_seconds,
+        )
+    except (ValueError, OSError, RenderError) as exc:
+        typer.echo(f"✗ {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    artifact = outcome.artifact
+    payload = {
+        "output_path": artifact["output_path"],
+        "output_sha256": artifact["output_sha256"],
+        "duration_us": artifact["duration_us"],
+        "size_bytes": artifact["size_bytes"],
+        "width": artifact["width"],
+        "height": artifact["height"],
+        "has_audio": artifact["has_audio"],
+        "template_id": outcome.template_id,
+        "shot_count": len(outcome.plan["shots"]),
+        "render_ir_hash": outcome.render_ir_hash,
+        "derived_asset_id": outcome.derived_asset_id,
+        "state_revision": outcome.state_revision,
+        "state_hash": outcome.state_hash,
+        "commands": list(outcome.commands),
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, ensure_ascii=False))
+        return
+    seconds = artifact["duration_us"] / 1_000_000
+    megabytes = artifact["size_bytes"] / 1_000_000
+    typer.echo(
+        f"✓ {artifact['output_path']} · {seconds:.2f}s · {megabytes:.2f} MB · "
+        f"{artifact['width']}x{artifact['height']}"
+    )
+    typer.echo(f"  • {outcome.derived_asset_id} ← {len(outcome.plan['shots'])} shots")
+    typer.echo(f"  • {artifact['output_sha256']}")
 
 
 checkpoints_app.add_typer(golden_app, name="golden")

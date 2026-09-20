@@ -1,9 +1,9 @@
 # NEXUS AI — Architecture Decision Log
 
-**Status:** Canonical historical record; revision 4 effective 2026-09-20  
-**Scope:** Architectural, operational, and roadmap decisions from Phase 0 through the released v3.10.0 baseline, the accepted Phase 6 Nagar design, and the implemented Nagar Waves 1–2.  
+**Status:** Canonical historical record; revision 5 effective 2026-09-20  
+**Scope:** Architectural, operational, and roadmap decisions from Phase 0 through the released v3.10.0 baseline, the accepted Phase 6 Nagar design, and the implemented Nagar Waves 1–2 (2a substrate, 2b pack, 2c render lane).  
 **Main baseline for this revision:** `3c8d1de0` (the PR#14 merge — modular monolith + canonical decision log). The live head may have advanced; consult `git log origin/main`.  
-**Current release baseline:** `v3.10.0` (Phase 6 Wave 1); Phase 6 Wave 2 lands on the unreleased line (`main` after PR#21).
+**Current release baseline:** `v3.10.0` (Phase 6 Wave 1); Phase 6 Wave 2 lands on the unreleased line (`main` after PR#22; Wave 2c is rendered on its own branch).
 
 **Revision history**
 
@@ -168,6 +168,24 @@ Nagar is accepted as the Phase 6 design baseline because it makes operation inte
 **Impact on contracts:** manifest schema + verification codes, `PackRegistry` activation semantics, the pack↔registry coherence requirement (a gate asserts the manifest's capabilities are exactly the operations the pack registers), the additive state models and the extended `state_hash` payload. Any change to these requires a new entry naming this one.
 **Verification:** `tests/unit/test_pack_manifest_verify.py` (37 tests), `tests/unit/test_slideshow_pack.py`, `tests/unit/test_slideshow_engine.py` (real generated JPEG/WAV fixtures; only the hosted transport is mocked), `tests/unit/test_slideshow_cli.py`, `tests/architecture/test_pack_manifest_is_data_only.py` and `tests/architecture/test_slideshow_adapter_boundary.py`. Local gates on the Wave 2b tree: `ruff check`/`ruff format --check` (274 files), `mypy src` (172 files), `pytest -m "not slow"` = **602 passed / 20 skipped**.
 
+### Nagar Wave 2c — the render lane: an IR, one encoder, measured evidence
+
+**Date:** 2026-09-20; the slideshow pack merged through PR#22 (`a0c23e4`, merge `aa7b2f4`), the render lane implemented on the Wave 2c branch.  
+**Status:** Accepted **and implemented**. This entry extends “Nagar Wave 2 — packs are data, commands carry evidence” and authorizes no other external binary or pack.  
+**Problem:** Wave 2b produced a plan and a level-C operation that *records* a master, but nothing rendered one. The TDD's master lane requires that (a) the agent never writes FFmpeg syntax — the filtergraph is derived from a render IR, (b) a source or existing artifact is never overwritten (no `-y` against a user path), and (c) the result is reproducible from canonical state. Rendering also cannot live in the pure layers: `creative/studio/` and `creative/packs/` may not import `subprocess`, `shutil` or `os` at all, and an architecture gate enforces that.
+**Decision:** the render lane is staged, and only its last step is impure.
+
+1. **Parameters → IR (pure).** `render_ir_from_plan` maps the composed plan into a small dataclass IR: per-shot duration, camera move, grade, transition, audio fades, output profile. It contains no FFmpeg syntax.
+2. **IR → filtergraph → argv (pure).** `build_filtergraph` and `build_command` derive both from the IR, so the exact encoder invocation is asserted in unit tests without running anything — and the command that runs is the command that was asserted.
+3. **Crossfades are centred on the cut.** `xfade` consumes each transition from the tail of one clip and the head of the next, so both neighbours are authored half a transition longer than their slot. The extensions sum to exactly the transitions consumed (the master keeps the duration the pack promised), and every fade is centred on the boundary the planner chose — which is what lets a beat-aligned plan survive the render.
+4. **One process, no shell, staging publish.** `encode` resolves exactly one binary (explicit override → `NEXUS_FFMPEG_BIN` → `PATH` → the `imageio-ffmpeg` wheel), runs `subprocess.run` with an argv list and no `shell=`, writes `.<name>.part.<ext>` and publishes by an atomic `Path.replace`. An existing destination is replaced only when the caller passes `overwrite=True`; a failure or timeout deletes the staging file and leaves nothing behind.
+5. **Evidence is measured, not assumed.** `probe_video` reads duration, frame size and stream layout back out of the produced file *with the same allow-listed binary* (no second `ffprobe` dependency), and `render_from_files()` dispatches `slideshow.render` with `output_sha256`, the measured duration, the IR hash and the pre-render state hash. The encode happens *before* the command, so the bus stays pure and atomic and `system.undo` can take the record back without touching the file.
+6. **The encoder stays a declared external binary.** `ffmpeg` remains the single binary the manifest names; `imageio-ffmpeg` is a dev/test extra (so the suite executes a genuine encode anywhere), never an application dependency, and no codec or container library enters the project.
+
+**Rejected alternatives:** letting the agent or the CLI author filtergraph strings (unreviewable and unreproducible, and it would put syntax back into the pack); passing `-y` against the destination (a failed render could destroy an existing master); trusting the plan's duration instead of probing the produced file (a silently truncated render would be recorded as truth); adding `ffprobe` as a second required binary (a minimal install frequently lacks it); encoding inside the handler (breaks bus purity and atomicity); adding a Python video library such as `imageio`/`moviepy` (a dependency for a job one process already does correctly).
+**Impact on contracts:** `RenderInput`'s evidence fields are now populated by measurement; the settings surface gains `NEXUS_FFMPEG_BIN` and `NEXUS_SLIDESHOW_RENDER_TIMEOUT`; the development extra gains `imageio-ffmpeg`; and `tests/architecture/test_slideshow_adapter_boundary.py` now pins that exactly one adapter module may spawn a process and may never use a shell. Any change to these requires a new entry naming this one.
+**Verification:** `tests/unit/test_slideshow_render.py` (19 tests) — the pure IR/argv layer, typed failures (`FfmpegUnavailableError`, unusable resolution, missing media), overwrite refusal, staging cleanup, byte-identical re-encodes of the same IR, and **four genuine FFmpeg encodes**, including a 60-second master read back with `probe_video` and the CLI path. Local gates on the Wave 2c tree: `ruff check`/`ruff format --check` (276 files), `mypy src` (173 files), `pytest -m "not slow"` = **622 passed / 20 skipped**.
+
 ### Typed commands instead of UI clicks
 
 **Status:** Accepted for Nagar.  
@@ -221,6 +239,8 @@ The following branches are historical, open, or abandoned proposals and are not 
 - **PR#19** — Nagar Phase 6 Wave 1 “Green Cockpit” core (`feat/nagar-wave1-green-cockpit`, head `848a40a`): **MERGED 2026-09-20** (`ac6c25b`), CI green (`test` + `migrate-postgres`).
 - **PR#20** — v3.10.0 release (`chore/release-v3.10.0`, head `bab27e1`): **MERGED 2026-09-20** (`c550420`); semver-minor bump with the rationale recorded in the changelog, `/version` de-hardcoded, pyproject version drift fixed.
 - **PR#21** — Nagar Phase 6 Wave 2a, the capability-pack substrate (`feat/wave2a-pack-substrate`, head `96ad952`): **MERGED 2026-09-20** (`865780e`), CI green (`test` 7m30s, `migrate-postgres` 6m7s).
+- **PR#22** — Nagar Phase 6 Wave 2b, the slideshow pack (`feat/wave2b-slideshow-planning`, head `a0c23e4`): **MERGED 2026-09-20** (`aa7b2f4`), CI green (`test` 7m10s, `migrate-postgres` 6m12s).
+- **PR#23** — Nagar Phase 6 Wave 2c, the render lane (`feat/wave2c-slideshow-render`): **opened 2026-09-20**, awaiting CI and review.
 
 The repository contains several numbering systems from different workstreams. They must not be interpreted as one chronological sequence. The final roadmap is the **seven-phase plan** documented above: Phase 0 (control plane/security) → 1 (core product) → 2 (local-LLM direction) → 3 (multi-provider routing, scale-to-zero) → 4 (schema management, PostgreSQL/Neon) → 5 (durable storage, lifecycle, R2) → 6 (Nagar creative studio, design accepted).
 

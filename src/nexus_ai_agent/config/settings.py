@@ -307,6 +307,19 @@ class Settings(BaseSettings):
         default=False,
         validation_alias="NEXUS_SLIDESHOW_ALLOW_IMAGE_UPLOAD",
     )
+    # Wave 2c render lane. Exactly one allow-listed binary is executed, never
+    # through a shell. Resolution order: this override, then PATH, then the
+    # `imageio-ffmpeg` wheel (a dev/test convenience).
+    ffmpeg_bin: str | None = Field(
+        default=None,
+        validation_alias="NEXUS_FFMPEG_BIN",
+    )
+    slideshow_render_timeout_seconds: int = Field(
+        default=900,
+        ge=1,
+        le=7200,
+        validation_alias="NEXUS_SLIDESHOW_RENDER_TIMEOUT",
+    )
 
     # ── v3.9.0: Cloudflare R2 — technical blob tier (DB backups, heavy RAG docs) ──
     # Not part of the user-file round-robin. Create an R2 API token scoped to a

@@ -33,11 +33,14 @@ MANIFEST = PACKS / "slideshow" / "pack.manifest.json"
 
 PURE_DIRECTORIES = (PACKS, STUDIO)
 
-#: Anything that reads pixels/audio, opens sockets or spawns processes.
+#: Anything that reads pixels/audio, opens sockets, spawns processes or writes
+#: files outside the state store.
 ADAPTER_ONLY_MODULES = {
     "PIL",
     "httpx",
     "numpy",
+    "os",
+    "shutil",
     "socket",
     "subprocess",
     "wave",
@@ -138,3 +141,36 @@ def test_tone_templates_are_data_only() -> None:
 
     walk(payload, "")
     assert not offenders, f"template library contains execution-shaped content: {offenders}"
+
+
+def test_only_the_render_lane_spawns_a_process() -> None:
+    """Wave 2c: exactly one module may run a binary, and only through argv.
+
+    The pack plans, the adapter encodes.  Anything else spawning a process — or
+    handing a string to a shell — would put an unauditable side effect inside
+    the boundary the manifest describes.
+    """
+    spawners = {
+        path.relative_to(ADAPTER).as_posix()
+        for path in ADAPTER.rglob("*.py")
+        if "subprocess" in _imports(path)
+    }
+    assert spawners == {"ffmpeg.py"}, (
+        f"expected exactly one adapter module to spawn FFmpeg, found {sorted(spawners)}"
+    )
+    source = (ADAPTER / "ffmpeg.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    run_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "run"
+    ]
+    assert len(run_calls) == 1, "the render lane must run the encoder in one place"
+    assert not any(keyword.arg == "shell" for keyword in run_calls[0].keywords), (
+        "the encoder must never be handed to a shell"
+    )
+    # The encoder always writes the staging file; publishing is a rename.
+    assert "output_path=staging" in source
+    assert "replace(destination)" in source

@@ -59,6 +59,7 @@ dev = [
   "mypy>=1.10",
   "pytest-mock>=3.12",
   "pypdf>=5.1",  # keep the pdf-extraction test path real, not mocked
+  "imageio-ffmpeg>=0.5",  # bundles a static FFmpeg: the render test runs a real encode
 ]
 
 [tool.setuptools]

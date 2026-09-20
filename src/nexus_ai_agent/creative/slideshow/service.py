@@ -2,6 +2,7 @@
 
 This is the orchestration layer the CLI (and, later, the bot/API) calls:
 
+0. (render) the same planning run, then one encoder call and one command;
 1. probe the input files and hash them (:mod:`probe`);
 2. estimate a beat grid from the soundtrack (:mod:`audio`);
 3. optionally score the images — locally or, with an explicit opt-in, with a
@@ -28,11 +29,13 @@ from nexus_ai_agent.creative.packs.slideshow.models import (
     BeatGrid,
     ComposeInput,
     ImageScore,
+    RenderInput,
     ShotSelection,
     SlideshowAnalysis,
 )
 from nexus_ai_agent.creative.packs.slideshow.operations import (
     OPERATION_COMPOSE,
+    OPERATION_RENDER,
     OPERATION_SCAN,
     OPERATION_SCORE,
     OPERATION_SUGGEST_TONE,
@@ -42,6 +45,14 @@ from nexus_ai_agent.creative.packs.slideshow.operations import (
 from nexus_ai_agent.creative.packs.slideshow.planning import MICROSECONDS_PER_SECOND
 from nexus_ai_agent.creative.slideshow.analysis import analyze
 from nexus_ai_agent.creative.slideshow.audio import AudioError, beat_grid_for_file
+from nexus_ai_agent.creative.slideshow.ffmpeg import (
+    FFMPEG_TIMEOUT_SECONDS,
+    RenderArtifact,
+    build_filtergraph,
+    encode,
+    render_ir_from_plan,
+    render_ir_hash,
+)
 from nexus_ai_agent.creative.slideshow.probe import probe_audio, probe_image
 from nexus_ai_agent.creative.studio.bus import CommandBus
 from nexus_ai_agent.creative.studio.models import Playhead, Timeline, new_project
@@ -121,8 +132,17 @@ def _manual_shot_durations(
     return durations_us
 
 
-def plan_from_files(request: PlanningRequest) -> PlanningOutcome:
-    """Run the whole planning pipeline for a request and return the outcome."""
+@dataclass(frozen=True)
+class _Session:
+    """A finished planning run plus the bus that produced it."""
+
+    bus: CommandBus
+    outcome: PlanningOutcome
+    evidence: dict[str, AssetEvidence]
+
+
+def _planned_session(request: PlanningRequest) -> _Session:
+    """Run the planning pipeline and keep the bus, so a render can continue it."""
     if not request.images:
         raise ValueError("at least one image is required")
     library = tone_library()
@@ -247,7 +267,7 @@ def plan_from_files(request: PlanningRequest) -> PlanningOutcome:
     commands.append(OPERATION_COMPOSE)
 
     plan = result.output["plan"]
-    return PlanningOutcome(
+    outcome = PlanningOutcome(
         plan=plan,
         template_id=plan["template_id"],
         ordered_evidence_ids=tuple(shot["evidence_id"] for shot in plan["shots"]),
@@ -259,4 +279,83 @@ def plan_from_files(request: PlanningRequest) -> PlanningOutcome:
         state_hash=result.state_hash,
         commands=tuple(commands),
         asset_count=len(bus.project.assets),
+    )
+    evidence: dict[str, AssetEvidence] = {item.evidence_id: item for item in images}
+    if audio_evidence is not None:
+        evidence[audio_evidence.evidence_id] = audio_evidence
+    return _Session(bus=bus, outcome=outcome, evidence=evidence)
+
+
+def plan_from_files(request: PlanningRequest) -> PlanningOutcome:
+    """Plan a slideshow end to end: real files in, one atomic edit out."""
+    return _planned_session(request).outcome
+
+
+@dataclass(frozen=True)
+class RenderOutcome:
+    """What a render run produced: the plan, the measured master, the record."""
+
+    plan: dict[str, Any]
+    artifact: dict[str, Any]
+    derived_asset_id: str
+    render_ir_hash: str
+    filtergraph: str
+    template_id: str
+    commands: tuple[str, ...]
+    state_revision: int
+    state_hash: str
+    state_hash_before_render: str
+
+
+def render_from_files(
+    request: PlanningRequest,
+    *,
+    output_path: Path,
+    overwrite: bool = False,
+    ffmpeg_bin: str | None = None,
+    timeout: int = FFMPEG_TIMEOUT_SECONDS,
+) -> RenderOutcome:
+    """Plan, encode exactly one master, and record it as a derived asset.
+
+    The encoder runs *before* the command: the produced file's hash, duration
+    and stream layout become the command's evidence.  The command itself only
+    writes a record into canonical state, so the bus stays pure and atomic and
+    ``system.undo`` can take the record back without touching the file — a
+    master is data, the timeline decides how it was made.
+    """
+    session = _planned_session(request)
+    paths = {
+        evidence_id: item.path
+        for evidence_id, item in session.evidence.items()
+        if item.media_kind == "image"
+    }
+    ir = render_ir_from_plan(session.outcome.plan, paths)
+    filtergraph, _label, _has_audio = build_filtergraph(ir)
+    artifact: RenderArtifact = encode(
+        ir, Path(output_path), binary=ffmpeg_bin, timeout=timeout, overwrite=overwrite
+    )
+    payload = RenderInput(
+        output_path=artifact.path,
+        output_sha256=artifact.sha256,
+        duration_us=artifact.duration_us,
+        parent_asset_ids=tuple(session.evidence),
+        render_ir_hash=artifact.render_ir_hash,
+        state_hash_before_render=session.bus.state_hash,
+        encoder=artifact.encoder,
+        template_id=session.outcome.template_id,
+    )
+    result = session.bus.dispatch(
+        _command(OPERATION_RENDER, payload.model_dump(mode="json"), confirmed=True)
+    )
+    return RenderOutcome(
+        plan=session.outcome.plan,
+        artifact=artifact.evidence() | {"size_bytes": artifact.size_bytes},
+        derived_asset_id=result.output["asset_id"],
+        render_ir_hash=render_ir_hash(ir),
+        filtergraph=filtergraph,
+        template_id=session.outcome.template_id,
+        commands=(*session.outcome.commands, OPERATION_RENDER),
+        state_revision=result.state_revision,
+        state_hash=result.state_hash,
+        state_hash_before_render=payload.state_hash_before_render,
     )
