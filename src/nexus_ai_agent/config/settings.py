@@ -177,22 +177,10 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("MAX_RAM_MB", "NEXUS_MAX_RAM_MB"),
     )
 
-    # ── v3.4.0: Redis & ChromaDB ──────────────────────────────────────
-    redis_url: str = Field(
-        default="redis://localhost:6379/0",
-        validation_alias=AliasChoices("REDIS_URL", "NEXUS_REDIS_URL"),
-    )
+    # ── Local RAG storage ─────────────────────────────────────────────
     chroma_db_path: str = Field(
         default="data/chroma",
         validation_alias=AliasChoices("CHROMA_DB_PATH", "NEXUS_CHROMA_DB_PATH"),
-    )
-    celery_broker_url: str = Field(
-        default="redis://localhost:6379/0",
-        validation_alias=AliasChoices("CELERY_BROKER_URL", "NEXUS_CELERY_BROKER_URL"),
-    )
-    celery_result_backend: str = Field(
-        default="redis://localhost:6379/0",
-        validation_alias=AliasChoices("CELERY_RESULT_BACKEND", "NEXUS_CELERY_RESULT_BACKEND"),
     )
     vazir_font_path: str = Field(
         default="assets/fonts/Vazirmatn.ttf",

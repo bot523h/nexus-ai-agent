@@ -153,6 +153,9 @@ async def _serve_webhook(
     # 1) Bring the application up.  No Updater is started, so nothing polls:
     #    Telegram POSTs updates to /webhook/telegram instead.
     await application.initialize()
+    job_queue = getattr(application, "bot_data", {}).get("job_queue")
+    if job_queue is not None:
+        await job_queue.resume_pending()
     await application.start()
     try:
         # 2) Register the webhook.  Telegram will echo `webhook_secret` back
