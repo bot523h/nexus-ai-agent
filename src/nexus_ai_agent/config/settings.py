@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
@@ -290,6 +291,24 @@ class Settings(BaseSettings):
     creative_temp_dir: str = Field(
         default="/tmp/nexus_creative",
         description="Temporary directory for creative jobs",
+    )
+
+    # Image generation is distinct from image analysis/upload authorization.
+    image_gen_provider: Literal["pollinations", "gemini"] = Field(
+        default="pollinations", validation_alias="NEXUS_IMAGE_GEN_PROVIDER"
+    )
+    image_gen_paid_tier: bool = Field(default=False, validation_alias="NEXUS_IMAGE_GEN_PAID_TIER")
+    image_gen_model: str = Field(
+        default="gemini-2.5-flash-image",
+        validation_alias="NEXUS_IMAGE_GEN_MODEL",
+        min_length=1,
+        max_length=100,
+    )
+    image_gen_estimated_cost_usd: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        allow_inf_nan=False,
+        validation_alias="NEXUS_IMAGE_GEN_ESTIMATED_COST_USD",
     )
 
     # ── v3.10.0: Nagar slideshow pack (Wave 2) ────────────────────────

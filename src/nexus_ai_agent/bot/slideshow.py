@@ -34,6 +34,7 @@ __all__ = [
     "photo_extension",
     "usage_text",
     "validate_prompt",
+    "parse_slideshow_options",
 ]
 
 #: Telegram photo formats the render lane can read (mirror of the pack probe).
@@ -133,7 +134,10 @@ def usage_text() -> str:
         "۱) این پیام را بفرستید تا جمع‌آوری تصویر شروع شود.\n"
         f"۲) تا {MAX_IMAGES} تصویر بفرستید (در این گفتگو).\n"
         f"۳) سپس /slideshow <عنوان> بفرستید تا رندر در صف بنشیند "
-        f"(حداکثر {BOT_TARGET_DURATION_US // 1_000_000} ثانیه، {DEFAULT_RESOLUTION})."
+        f"(حداکثر {BOT_TARGET_DURATION_US // 1_000_000} ثانیه، {DEFAULT_RESOLUTION}).\n"
+        "اختیاری: /slideshow --slides 5 --fill <عنوان>\n"
+        "گزینهٔ --fill اجازهٔ ارسال عنوان به سرویس تولید تصویر و تولید کمبودهاست؛ "
+        "در سرویس پولیِ فعال‌شده توسط مدیر، هزینه دارد. عکس‌های شما ارسال نمی‌شوند."
     )
 
 
@@ -176,6 +180,7 @@ _FRIENDLY_ERRORS: Mapping[str, str] = {
     "invalid_request": (
         "❌ درخواست ساخت ویدیو نامعتبر بود (تصاویر یا تنظیمات خارج از محدودهٔ مجاز)."
     ),
+    "image_generation_failed": "❌ تولید تصویرهای تکمیلی ناموفق بود؛ دوباره تلاش کنید.",
     "internal": "❌ خطای داخلی هنگام ساخت ویدیو. درخواست ثبت شد؛ بعداً دوباره تلاش کنید.",
 }
 
@@ -205,3 +210,43 @@ def friendly_success(result: Mapping[str, object]) -> str:
         "✅ اسلایدشوی شما آماده شد 🎬\n"
         f"⏱ {duration_s} ثانیه · 🖼 {shots} شات · 📐 {resolution} · 💾 {size_mb:.1f} مگابایت"
     )
+
+
+@dataclass(frozen=True)
+class SlideshowOptions:
+    project_name: str | None
+    target_images: int | None = None
+    generate_missing: bool = False
+
+    def validate_count(self, count: int) -> None:
+        if self.target_images is not None:
+            if self.target_images < count:
+                raise ValueError("❌ تعداد اسلاید نباید کمتر از تعداد عکس‌های ارسالی باشد.")
+            if self.target_images > count and not self.generate_missing:
+                raise ValueError("❌ برای تولید عکس‌های کمبود، گزینهٔ --fill را اضافه کنید.")
+
+
+def parse_slideshow_options(args: list[str]) -> SlideshowOptions:
+    """Flags precede the title; --fill is consent, never inferred from a count."""
+    args = list(args)
+    target: int | None = None
+    fill = False
+    while args and args[0].startswith("--"):
+        flag = args.pop(0)
+        if flag == "--fill" and not fill:
+            fill = True
+        elif flag == "--slides" and target is None and args:
+            try:
+                target = int(args.pop(0))
+            except ValueError:
+                raise ValueError("❌ --slides باید عددی بین ۱ تا ۵ باشد.") from None
+            if not 1 <= target <= MAX_IMAGES:
+                raise ValueError("❌ --slides باید عددی بین ۱ تا ۵ باشد.")
+        else:
+            raise ValueError("❌ استفاده: /slideshow --slides 5 --fill <عنوان>")
+    project_name, error = validate_prompt(" ".join(args))
+    if error:
+        raise ValueError(error)
+    if fill and (target is None or not project_name):
+        raise ValueError("❌ --fill به --slides و عنوان نیاز دارد.")
+    return SlideshowOptions(project_name, target, fill)

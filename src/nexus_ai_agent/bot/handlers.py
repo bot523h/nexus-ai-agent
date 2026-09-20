@@ -28,6 +28,7 @@ from telegram.ext import (
 )
 
 from nexus_ai_agent.agents.store.agent_manager import AgentManager
+from nexus_ai_agent.application.image_generation import get_image_gen_provider
 from nexus_ai_agent.application.ports.job_queue import JobQueuePort
 from nexus_ai_agent.bot.agent_handlers import (
     agent_callback_handler,
@@ -44,6 +45,7 @@ from nexus_ai_agent.bot.slideshow_handlers import slideshow_cmd, slideshow_photo
 from nexus_ai_agent.bot.tool_handlers import news_cmd, rate_cmd, weather_cmd, youtube_cmd
 from nexus_ai_agent.bot.update_handlers import update_cmd, version_cmd
 from nexus_ai_agent.config.settings import Settings
+from nexus_ai_agent.creative.image_gen import ImageGenerationError, ImageRequest
 
 # Feature managers — lazy-initialised inside build_handlers
 # ── v2.0.0 imports ──
@@ -444,6 +446,30 @@ def build_handlers(
                 )
         else:
             await _reply(update, "❌ Image generation failed.")
+
+    async def imagine_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        message = _message(update)
+        if message is None or _user_id(update) is None:
+            return
+        user_id = _user_id(update)
+        if user_id is None or not auth.is_allowed(user_id):
+            await _reply(update, "❌ دسترسی به تولید تصویر مجاز نیست.")
+            return
+        if not rate_limiter.is_allowed(user_id):
+            await _reply(update, "⏳ تعداد درخواست‌ها زیاد است؛ کمی صبر کنید.")
+            return
+        prompt = " ".join(context.args or [])
+        if not prompt:
+            await _reply(
+                update, "🎨 /imagine <توضیح تصویر> — متن به سرویس تولید تصویر ارسال می‌شود."
+            )
+            return
+        try:
+            image = await get_image_gen_provider().generate(ImageRequest(prompt))
+        except (ImageGenerationError, ValueError):
+            await _reply(update, "❌ تولید تصویر ناموفق بود؛ توضیح یا تنظیمات سرویس را بررسی کنید.")
+            return
+        await message.reply_photo(photo=image.data, caption=f"🎨 {prompt[:100]}")
 
     # ── v2.0.0: /tts — Text to Speech ──
     async def tts_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1399,6 +1425,7 @@ def build_handlers(
         CommandHandler("summarize", summarize_cmd),
         # ── v2.0.0: Image Generation ──
         CommandHandler("image", image_cmd),
+        CommandHandler("imagine", imagine_cmd),
         # ── v2.0.0: Speech ──
         CommandHandler("tts", tts_cmd),
         CommandHandler("stt", stt_cmd),

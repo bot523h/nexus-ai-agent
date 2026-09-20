@@ -18,15 +18,18 @@ import asyncio
 import shutil
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from nexus_ai_agent.application.image_generation import get_image_gen_provider
 from nexus_ai_agent.config.settings import get_settings
+from nexus_ai_agent.creative.image_gen import ImageGenerationError
 from nexus_ai_agent.creative.packs.slideshow.models import TARGET_DURATIONS_US
 from nexus_ai_agent.creative.slideshow.ffmpeg import FfmpegUnavailableError, RenderError
+from nexus_ai_agent.creative.slideshow.image_fill import generate_missing_images
 from nexus_ai_agent.creative.slideshow.probe import IMAGE_SUFFIXES, ProbeError
 from nexus_ai_agent.creative.slideshow.service import PlanningRequest, render_from_files
 
@@ -53,7 +56,14 @@ STALE_WORKSPACE_MAX_AGE_S = 24 * 3600.0
 
 #: Closed vocabulary of user-mappable failures (r7 item 7).
 ERROR_CODES = frozenset(
-    {"ffmpeg_unavailable", "render_failed", "unusable_image", "invalid_request", "internal"}
+    {
+        "ffmpeg_unavailable",
+        "render_failed",
+        "unusable_image",
+        "invalid_request",
+        "image_generation_failed",
+        "internal",
+    }
 )
 
 
@@ -87,6 +97,23 @@ class SlideshowRenderPayload(BaseModel):
         default="telegram-slideshow",
     )
 
+    target_images: int | None = Field(default=None, ge=1, le=MAX_IMAGES, strict=True)
+    generate_missing: bool = Field(default=False, strict=True)
+    generation_prompt: str | None = Field(default=None, min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def _generation_requires_consent(self) -> SlideshowRenderPayload:
+        target = self.target_images or len(self.image_paths)
+        if target < len(self.image_paths):
+            raise ValueError("target cannot discard uploaded images")
+        if target > len(self.image_paths) and not self.generate_missing:
+            raise ValueError("missing slides require explicit generation consent")
+        if self.generate_missing and (
+            self.target_images is None or not (self.generation_prompt or "").strip()
+        ):
+            raise ValueError("generation requires a target and a non-empty prompt")
+        return self
+
     @field_validator("target_duration_us")
     @classmethod
     def _duration_is_an_approved_short_target(cls, value: int) -> int:
@@ -107,6 +134,8 @@ class _JobSpec:
     duration_us: int
     resolution: str
     project_name: str
+    target_images: int
+    generation_prompt: str | None
 
 
 def _inside(workspace: Path, raw: str, label: str) -> Path:
@@ -139,10 +168,14 @@ def _parse_payload(payload: Mapping[str, Any]) -> _JobSpec:
         duration_us=model.target_duration_us,
         resolution=model.resolution,
         project_name=model.project_name,
+        target_images=model.target_images or len(images),
+        generation_prompt=model.generation_prompt if model.generate_missing else None,
     )
 
 
 def _code_for(exc: Exception) -> str:
+    if isinstance(exc, ImageGenerationError):
+        return "image_generation_failed"
     if isinstance(exc, FfmpegUnavailableError):
         return "ffmpeg_unavailable"
     if isinstance(exc, ProbeError):
@@ -227,6 +260,15 @@ async def slideshow_render_job(payload: dict[str, object]) -> dict[str, object]:
 
     succeeded = False
     try:
+        if spec.target_images > len(spec.images):
+            generated = await generate_missing_images(
+                get_image_gen_provider(),
+                workspace=spec.workspace_dir,
+                prompt=spec.generation_prompt or "",
+                existing_count=len(spec.images),
+                target_count=spec.target_images,
+            )
+            spec = replace(spec, images=(*spec.images, *generated))
         result = await asyncio.to_thread(_render_sync, spec)
         succeeded = True
         return result
