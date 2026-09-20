@@ -34,6 +34,10 @@ def _build_default_storage(settings: Settings) -> AIStorageManager:
             huggingface_token=settings.huggingface_token,
             rclone_remote=settings.rclone_remote,
             gdrive_bearer_token=settings.gdrive_bearer_token,
+            r2_account_id=settings.r2_account_id,
+            r2_access_key_id=settings.r2_access_key_id,
+            r2_secret_access_key=settings.r2_secret_access_key,
+            r2_bucket=settings.r2_bucket,
         ),
     )
 

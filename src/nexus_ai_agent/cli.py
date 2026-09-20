@@ -15,6 +15,7 @@ app = typer.Typer(help="NEXUS AI Agent CLI")
 checkpoints_app = typer.Typer(help="Inspect checkpoint lifecycle state")
 golden_app = typer.Typer(help="Schema golden management (human-triggered only)")
 metrics_app = typer.Typer(help="Observability snapshots")
+maintenance_app = typer.Typer(help="Stateless maintenance (R2 DB backups, housekeeping)")
 
 
 def _open_checkpoint_backend() -> tuple[Any, Path]:
@@ -441,6 +442,81 @@ def golden_update(
 checkpoints_app.add_typer(golden_app, name="golden")
 app.add_typer(checkpoints_app, name="checkpoints")
 app.add_typer(metrics_app, name="metrics")
+app.add_typer(maintenance_app, name="maintenance")
+
+
+# ── v3.9.0: nexus maintenance — stateless scheduled jobs (Phase 5) ─────
+
+
+@maintenance_app.command()
+def backup(
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show what would be dumped and uploaded without doing it.",
+    ),
+) -> None:
+    """Dump the database and upload it to the R2 blob tier (stateless)."""
+    from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.maintenance.backup import create_backup
+    from nexus_ai_agent.storage.providers.base import ProviderUnavailable
+
+    settings = get_settings()
+    try:
+        result = create_backup(settings=settings, dry_run=dry_run)
+    except (ProviderUnavailable, RuntimeError) as e:
+        typer.echo(f"❌ backup failed: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    typer.echo(f"source: {result['source']}")
+    typer.echo(f"key:    {result['key']}")
+    if result["dry_run"]:
+        typer.echo("dry-run: nothing dumped or uploaded")
+    else:
+        typer.echo(f"size:   {result['size_bytes']} bytes")
+        typer.echo("✅ uploaded to R2")
+
+
+@maintenance_app.command()
+def housekeeping(
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="List what would be removed/deleted without touching anything.",
+    ),
+    temp_max_age_hours: int = typer.Option(
+        48,
+        "--temp-max-age-hours",
+        help="Creative temp files older than this are removed.",
+    ),
+    backup_retention_days: int = typer.Option(
+        30,
+        "--backup-retention-days",
+        help="R2 database backups older than this are deleted.",
+    ),
+) -> None:
+    """Remove stale creative temp files and prune old R2 backups (idempotent)."""
+    from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.maintenance.housekeeping import run_housekeeping
+
+    result = run_housekeeping(
+        settings=get_settings(),
+        dry_run=dry_run,
+        temp_max_age_hours=temp_max_age_hours,
+        backup_retention_days=backup_retention_days,
+    )
+    typer.echo(f"temp files removed: {len(result['temp_files_removed'])}")
+    for path in result["temp_files_removed"]:
+        typer.echo(f"  - {path}")
+    if result["backups_deleted"]:
+        typer.echo(f"R2 backups deleted: {len(result['backups_deleted'])}")
+        for key in result["backups_deleted"]:
+            typer.echo(f"  - {key}")
+    else:
+        typer.echo("R2 backups deleted: 0")
+    if result["r2_skipped_reason"]:
+        typer.echo(f"note: {result['r2_skipped_reason']}")
+    if result["dry_run"]:
+        typer.echo("dry-run: nothing was changed")
 
 
 @app.command()

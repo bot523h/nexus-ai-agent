@@ -1,0 +1,61 @@
+# Phase 5 — periodic maintenance only. Deliberately NOT on push/pull_request;
+# those gates live in ci.yml. Scheduled workflows only run on the default
+# branch and require the repo secrets to be set (docs/r2-storage.md).
+name: maintenance
+
+on:
+  schedule:
+    # Nightly DB backup — 03:17 UTC (deliberately off the top-of-hour).
+    - cron: "17 3 * * *"
+    # Weekly housekeeping — Mondays 04:23 UTC (also off the top-of-hour).
+    - cron: "23 4 * * 1"
+  # Allow manual runs from the Actions tab (e.g. right after setting secrets).
+  workflow_dispatch: {}
+
+# One shared group: a scheduled backup never overlaps a running one, and a
+# manual run queues behind an in-progress schedule instead of cancelling it.
+concurrency:
+  group: nexus-maintenance
+  cancel-in-progress: false
+
+jobs:
+  backup-db:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 3 * * *'
+    runs-on: ubuntu-latest
+    env:
+      # pg_dump target. When unset, the command backs up the local SQLite
+      # file instead (which is empty in CI) — set the secret for real use.
+      NEXUS_DATABASE_URL: ${{ secrets.NEXUS_DATABASE_URL }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      # Stateless + idempotent: safe to re-run. Exits non-zero when R2 is
+      # not configured so a silently-skipped backup is visible, not hidden.
+      - run: nexus maintenance backup
+
+  housekeeping:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '23 4 * * 1'
+    runs-on: ubuntu-latest
+    env:
+      # Housekeeping needs no database access — R2 secrets only.
+      # No bot token here on purpose.
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      # Idempotent: a second run finds nothing to do. Stays green when R2
+      # is not configured (local temp cleanup only).
+      - run: nexus maintenance housekeeping

@@ -10,12 +10,25 @@ from .providers import (
     LocalCacheProvider,
     ProviderConfig,
     ProviderUnavailable,
+    R2Provider,
     RcloneProvider,
     StorageError,
     StorageProvider,
 )
 
 log = get_logger(__name__)
+
+# ── v3.9.0: the "technical blob" tier ─────────────────────────────────
+# Keys under these prefixes are stateless maintenance artifacts (database
+# backups, heavy RAG documents) and are routed to Cloudflare R2 ONLY —
+# they never enter the user-file provider routing below. User files keep
+# flowing through github_releases/rclone/mega exactly as before.
+BLOB_KEY_PREFIXES: tuple[str, ...] = ("backups/", "rag-docs/")
+
+
+def is_blob_key(remote_key: str) -> bool:
+    """True when ``remote_key`` belongs to the R2-only technical blob tier."""
+    return remote_key.startswith(BLOB_KEY_PREFIXES)
 
 
 class AIStorageManager:
@@ -59,6 +72,27 @@ class AIStorageManager:
         if config.rclone_remote:
             self.rclone = RcloneProvider(remote=config.rclone_remote)
 
+        # R2 (technical blob tier) — never added to the candidate routing.
+        self.r2: R2Provider | None = None
+        if (
+            config.r2_account_id
+            and config.r2_access_key_id
+            and config.r2_secret_access_key
+            and config.r2_bucket
+        ):
+            try:
+                from .providers.r2 import R2Provider as _R2Provider
+
+                self.r2 = _R2Provider(
+                    account_id=config.r2_account_id,
+                    access_key_id=config.r2_access_key_id,
+                    secret_access_key=config.r2_secret_access_key,
+                    bucket=config.r2_bucket,
+                )
+            except Exception:
+                # Provider module or deps not available; remain disabled.
+                self.r2 = None
+
     def get_best_provider(self, *, size_bytes: int) -> str:
         if size_bytes < 50 * 1024 * 1024:
             return "github_releases"
@@ -96,7 +130,39 @@ class AIStorageManager:
         await self.cache.upload(local_path=local_path, remote_key=remote_key)
         return self.cache.path_for_key(remote_key)
 
+    # ── v3.9.0: technical blob tier (R2-only, outside the user routing) ──
+
+    def _blob_provider(self) -> R2Provider:
+        if not (self.r2 and self.r2.is_configured()):
+            raise ProviderUnavailable("R2 blob tier is not configured (R2_* settings)")
+        return self.r2
+
+    async def upload_blob(self, *, local_path: Path, remote_key: str) -> None:
+        """Upload a maintenance blob (DB backup / heavy RAG doc) to R2 only."""
+        provider = self._blob_provider()
+        size = local_path.stat().st_size
+        await provider.upload(local_path=local_path, remote_key=remote_key)
+        log.info("storage_blob_upload_ok", provider=provider.name, key=remote_key, bytes=size)
+
+    async def download_blob(self, *, remote_key: str, local_path: Path) -> Path:
+        """Download a maintenance blob from R2 only (no cache, no fallbacks)."""
+        provider = self._blob_provider()
+        await provider.download(remote_key=remote_key, local_path=local_path)
+        log.info("storage_blob_download_ok", provider=provider.name, key=remote_key)
+        return local_path
+
+    def blob_presigned_url(self, *, remote_key: str, expires_in: int = 3600) -> str:
+        """Presigned GET URL for a blob; TTL capped at 7 days by R2Provider."""
+        provider = self._blob_provider()
+        return provider.generate_presigned_url(remote_key, expires_in)
+
     async def upload(self, *, local_path: Path, remote_key: str) -> None:
+        # Separate routing branch: technical blobs (DB backups, heavy RAG
+        # docs) go to R2 only and never enter the user-file candidates below.
+        if is_blob_key(remote_key):
+            await self.upload_blob(local_path=local_path, remote_key=remote_key)
+            return
+
         size = local_path.stat().st_size
         preferred = self.get_best_provider(size_bytes=size)
         candidates = self._upload_candidates(preferred=preferred)
@@ -136,6 +202,10 @@ class AIStorageManager:
         raise StorageError(f"Upload failed for key '{remote_key}': {last_err}") from last_err
 
     async def download(self, *, remote_key: str, local_path: Path) -> Path:
+        # Separate routing branch: technical blobs come from R2 only.
+        if is_blob_key(remote_key):
+            return await self.download_blob(remote_key=remote_key, local_path=local_path)
+
         # Cache-first.
         try:
             await self.cache.download(remote_key=remote_key, local_path=local_path)
