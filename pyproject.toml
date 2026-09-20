@@ -49,12 +49,16 @@ dependencies = [
 nexus = "nexus_ai_agent.cli:app"
 
 [project.optional-dependencies]
+pdf = [
+  "pypdf>=5.1",  # D3: real PDF text extraction (clear error when missing)
+]
 dev = [
   "pytest>=8.0",
   "pytest-asyncio>=0.23",
   "ruff>=0.4",
   "mypy>=1.10",
   "pytest-mock>=3.12",
+  "pypdf>=5.1",  # keep the pdf-extraction test path real, not mocked
 ]
 
 [tool.setuptools]

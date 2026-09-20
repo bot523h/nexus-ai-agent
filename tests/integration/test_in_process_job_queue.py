@@ -11,9 +11,18 @@ from typing import Any
 
 import pytest
 
-from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+from nexus_ai_agent.adapters.in_process_job_queue import (
+    InProcessJobQueue,
+    JobCompletion,
+)
 from nexus_ai_agent.application.ports.job_queue import JobStatus
-from nexus_ai_agent.worker import generate_story_job, process_pdf_job
+from nexus_ai_agent.worker import (
+    extract_pdf_text,
+    generate_story_job,
+    process_pdf_job,
+)
+
+FIXTURES = Path(__file__).parents[1] / "fixtures"
 
 
 async def _wait_for_status(
@@ -129,6 +138,106 @@ async def test_job_queue_resumes_unfinished_rows(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_resume_pending_jobs_requeues_only_pending_rows(tmp_path: Path) -> None:
+    """D1: the operator entry point claims ``pending`` rows, never ``processing``."""
+    db_path = tmp_path / "jobs.sqlite3"
+    InProcessJobQueue(db_path)
+    pending_id = "pending-job"
+    processing_id = "busy-job"
+    with sqlite3.connect(db_path) as connection:
+        for job_id, status in ((pending_id, "pending"), (processing_id, "processing")):
+            connection.execute(
+                """
+                INSERT INTO nexus_job_queue
+                    (id, job_type, idempotency_key, payload_json, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (job_id, "echo", f"seed-{job_id}", '{"value": 1}', status, "2026-01-01"),
+            )
+
+    queue = InProcessJobQueue(db_path)
+
+    async def handler(payload: dict[str, object]) -> dict[str, object]:
+        return {"value": payload["value"]}
+
+    queue.register_handler("echo", handler)
+    resumed = await queue.resume_pending_jobs()
+
+    assert resumed == [pending_id]
+    await _wait_for_status(queue, pending_id, JobStatus.COMPLETED)
+    # The processing row belongs to a (hypothetical) live owner process and
+    # must not be claimed, re-run, or duplicated here.
+    row = (
+        sqlite3.connect(db_path)
+        .execute("SELECT status FROM nexus_job_queue WHERE id = ?", (processing_id,))
+        .fetchone()
+    )
+    assert row is not None
+    assert row[0] == "processing"
+
+
+def _job_completion_log(log: list[JobCompletion]) -> Any:
+    async def hook(completion: JobCompletion) -> None:
+        log.append(completion)
+
+    return hook
+
+
+@pytest.mark.asyncio
+async def test_completion_hook_fires_on_terminal_states(tmp_path: Path) -> None:
+    """D4: the queue notifies the injected hook on completed AND failed."""
+    log: list[JobCompletion] = []
+    queue = InProcessJobQueue(tmp_path / "jobs.sqlite3", on_job_finished=_job_completion_log(log))
+
+    async def ok(payload: dict[str, object]) -> dict[str, object]:
+        return {"echo": payload["value"]}
+
+    async def boom(payload: dict[str, object]) -> dict[str, object]:
+        raise RuntimeError(f"bad payload: {payload['value']}")
+
+    queue.register_handler("ok", ok)
+    queue.register_handler("boom", boom)
+    ok_id = await queue.enqueue(
+        job_type="ok", idempotency_key="ok-1", payload={"value": 1, "chat_id": 42}
+    )
+    failed_id = await queue.enqueue(
+        job_type="boom", idempotency_key="boom-1", payload={"value": "x", "chat_id": 42}
+    )
+
+    await _wait_for_status(queue, ok_id, JobStatus.COMPLETED)
+    await _wait_for_status(queue, failed_id, JobStatus.FAILED)
+    assert [(c.job_id, c.status) for c in log] == [
+        (ok_id, JobStatus.COMPLETED),
+        (failed_id, JobStatus.FAILED),
+    ]
+    completed, failed = log
+    assert completed.result == {"echo": 1}
+    assert completed.payload == {"value": 1, "chat_id": 42}
+    assert completed.error is None
+    assert failed.result is None
+    assert failed.error == "bad payload: x"
+
+
+@pytest.mark.asyncio
+async def test_completion_hook_is_fail_safe(tmp_path: Path) -> None:
+    """D4: a broken notifier never corrupts the durable job state."""
+
+    async def broken_hook(completion: JobCompletion) -> None:
+        raise RuntimeError(f"telegram down (job {completion.job_id})")
+
+    queue = InProcessJobQueue(tmp_path / "jobs.sqlite3", on_job_finished=broken_hook)
+
+    async def handler(payload: dict[str, object]) -> dict[str, object]:
+        return {"value": payload["value"]}
+
+    queue.register_handler("ok", handler)
+    job_id = await queue.enqueue(job_type="ok", idempotency_key="ok-1", payload={"value": 99})
+
+    await _wait_for_status(queue, job_id, JobStatus.COMPLETED)
+    assert await queue.get_result(job_id) == {"value": 99}
+
+
+@pytest.mark.asyncio
 async def test_job_queue_idempotency_returns_original_job(tmp_path: Path) -> None:
     queue = InProcessJobQueue(tmp_path / "jobs.sqlite3")
     calls = 0
@@ -182,10 +291,11 @@ async def test_job_queue_failure_is_persisted(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_pdf_job_executes_through_in_process_queue(
+async def test_pdf_job_extracts_text_with_pypdf(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    pytest.importorskip("pypdf")
     captured: dict[str, Any] = {}
 
     class FakeRag:
@@ -199,23 +309,77 @@ async def test_pdf_job_executes_through_in_process_queue(
     fake_rag_module.AdvancedRAGEngine = FakeRag  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "nexus_ai_agent.features.rag", fake_rag_module)
     source = tmp_path / "document.pdf"
-    source.write_text("document body", encoding="utf-8")
+    source.write_bytes((FIXTURES / "minimal.pdf").read_bytes())
     queue = InProcessJobQueue(tmp_path / "jobs.sqlite3")
 
-    queue.register_handler("pdf", process_pdf_job)
+    queue.register_handler("pdf_extract", process_pdf_job)
     job_id = await queue.enqueue(
-        job_type="pdf",
+        job_type="pdf_extract",
         idempotency_key="pdf-1",
-        payload={"user_id": 7, "file_path": str(source), "file_id": "file-7"},
+        payload={
+            "user_id": 7,
+            "chat_id": 555,
+            "file_path": str(source),
+            "file_id": "file-7",
+        },
     )
 
     await _wait_for_status(queue, job_id, JobStatus.COMPLETED)
     assert (await queue.get_result(job_id)) == {"message": "Successfully processed file-7"}
     assert captured == {
         "user_id": 7,
-        "text": "document body",
+        "text": "Hello NEXUS job queue",
         "metadata": {"file_id": "file-7"},
     }
+
+
+@pytest.mark.asyncio
+async def test_extract_pdf_text_reads_text_layer(tmp_path: Path) -> None:
+    pytest.importorskip("pypdf")
+    source = tmp_path / "doc.pdf"
+    source.write_bytes((FIXTURES / "minimal.pdf").read_bytes())
+
+    assert await extract_pdf_text(str(source)) == "Hello NEXUS job queue"
+
+
+@pytest.mark.asyncio
+async def test_extract_pdf_text_without_pypdf_fails_clearly(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "binary.pdf"
+    source.write_bytes(b"%PDF-1.4 definitely not utf-8 text \x00\x01\x02")
+
+    monkeypatch.setitem(sys.modules, "pypdf", None)
+    with pytest.raises(RuntimeError, match=r"pip install pypdf"):
+        await extract_pdf_text(str(source))
+
+
+@pytest.mark.asyncio
+async def test_pdf_job_without_pypdf_persists_clear_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "binary.pdf"
+    source.write_bytes(b"%PDF-1.4 not readable as utf-8 \x00\x01\x02")
+    queue = InProcessJobQueue(tmp_path / "jobs.sqlite3")
+    queue.register_handler("pdf_extract", process_pdf_job)
+
+    monkeypatch.setitem(sys.modules, "pypdf", None)
+    job_id = await queue.enqueue(
+        job_type="pdf_extract",
+        idempotency_key="pdf-missing-dep",
+        payload={"user_id": 1, "file_path": str(source), "file_id": "file-x"},
+    )
+
+    await _wait_for_status(queue, job_id, JobStatus.FAILED)
+    row = (
+        sqlite3.connect(tmp_path / "jobs.sqlite3")
+        .execute("SELECT error FROM nexus_job_queue WHERE id = ?", (job_id,))
+        .fetchone()
+    )
+    assert row is not None
+    assert "pip install pypdf" in str(row[0])
 
 
 @pytest.mark.asyncio

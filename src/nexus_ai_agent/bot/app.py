@@ -42,13 +42,47 @@ def _build_default_storage(settings: Settings) -> AIStorageManager:
     )
 
 
+def _bot_token(settings: Settings) -> str:
+    """Resolve the bot token exactly like ``build_application`` does."""
+    return os.environ.get("TELEGRAM_BOT_TOKEN", settings.telegram_bot_token)
+
+
+def _build_job_completion_notifier(token: str) -> Any:
+    """D4: notify the origin chat when a background job finishes.
+
+    Returns the hook injected into ``InProcessJobQueue``. The queue
+    guarantees fail-safety (hook exceptions are logged and swallowed), so
+    this only formats and sends. Payloads without an origin ``chat_id``
+    (e.g. CLI-drained jobs) stay silent.
+    """
+    from nexus_ai_agent.adapters.in_process_job_queue import JobCompletion
+    from nexus_ai_agent.application.ports.job_queue import JobStatus
+
+    async def _notify(completion: JobCompletion) -> None:
+        raw_chat_id = completion.payload.get("chat_id")
+        if raw_chat_id is None:
+            return
+        from telegram import Bot
+
+        if completion.status is JobStatus.FAILED:
+            text = (
+                f"❌ پردازش «{completion.job_type}» ناموفق بود.\n"
+                f"شناسه: {completion.job_id}\n"
+                f"خطا: {completion.error or 'نامشخص'}"
+            )
+        else:
+            text = f"✅ پردازش «{completion.job_type}» کامل شد.\nشناسه: {completion.job_id}"
+        bot = Bot(token=token)
+        await bot.send_message(chat_id=int(str(raw_chat_id)), text=text)
+
+    return _notify
+
+
 def _init_v2_engines(settings: Settings) -> dict[str, Any]:
     """Initialize all v2.0.0+ feature engines.
 
     Returns a dict suitable for storing in application.bot_data.
     """
-    from pathlib import Path
-
     from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
     from nexus_ai_agent.features.ai_chat import GeminiEngine
     from nexus_ai_agent.features.conversation_store import ConversationStore
@@ -63,11 +97,15 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
 
     # Application-owned background jobs. The queue is a SQLite sidecar owned
     # by this adapter; execution remains on the bot process event loop.
-    from nexus_ai_agent.worker import generate_story_job, process_pdf_job
+    # D4: finished jobs notify the origin Telegram chat (fail-safe hook).
+    from nexus_ai_agent.worker import default_job_handlers, job_queue_db_path
 
-    job_queue = InProcessJobQueue(Path(f"{settings.db_path}.jobs.sqlite3"))
-    job_queue.register_handler("pdf", process_pdf_job)
-    job_queue.register_handler("story", generate_story_job)
+    job_queue = InProcessJobQueue(
+        job_queue_db_path(settings.db_path),
+        on_job_finished=_build_job_completion_notifier(_bot_token(settings)),
+    )
+    for job_type, handler in default_job_handlers().items():
+        job_queue.register_handler(job_type, handler)
     engines["job_queue"] = job_queue
 
     # Persistent conversation store

@@ -163,7 +163,7 @@ The repository contains several numbering systems from different workstreams. Th
 | `D1–D10` | Phase D schema management, migration, adoption, and PostgreSQL decisions | Historical records; not the same as the PR#12 D1–D4 labels |
 | `S1/V1/L1/M0/T1` | Earlier roadmap or contract vocabulary | Historical labels; use the current decision entry and repository contract instead |
 | `R-0XX` | Requirement and architecture requirement identifiers | Retain as traceability identifiers when referenced by code or tests |
-| `PR#12 D1–D4` | A separate feature bundle for job resume, dead-code removal, PDF extraction, and Telegram notification | Not merged; adaptation to the post-PR#13 queue architecture requires a separate implementation decision |
+| `PR#12 D1–D4` | A separate feature bundle for job resume, dead-code removal, PDF extraction, and Telegram notification | Adapted post-PR#14 onto the in-process `JobQueuePort` architecture (pending-only `resume_pending_jobs` + `nexus jobs resume`, `pypdf` extraction under the `pdf_extract` job type, fail-safe completion hook; `nightly_channel_management` dead code removed) — port signatures untouched |
 
 These numbering families are now treated as historical labels inside the final seven-phase roadmap. A new decision must use a descriptive title and a unique date, and may include an identifier only when it improves traceability.
 
