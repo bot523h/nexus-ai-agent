@@ -28,9 +28,11 @@ SLIDESHOW_PACKAGE_ID = "nexus.slideshow.compose"
 OPERATION_COMPOSE = "slideshow.compose"
 OPERATION_RENDER = "slideshow.render"
 
-#: The owner-approved target durations (1, 2 and 5 minutes).
-TARGET_DURATIONS_US = (60_000_000, 120_000_000, 300_000_000)
-TargetDurationUS = Literal[60_000_000, 120_000_000, 300_000_000]
+#: The owner-approved target durations (30 s, 1, 2 and 5 minutes).  The 30 s
+#: entry was added by the Wave 2.5 revision r7: the Telegram surface caps every
+#: request at half a minute, and a ceiling must be a representable plan target.
+TARGET_DURATIONS_US = (30_000_000, 60_000_000, 120_000_000, 300_000_000)
+TargetDurationUS = Literal[30_000_000, 60_000_000, 120_000_000, 300_000_000]
 
 #: Soft guard rails from the product spec (10-20 images).  Outside them the plan
 #: still works but reports a warning instead of silently pretending.

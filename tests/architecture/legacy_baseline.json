@@ -97,6 +97,18 @@
       ]
     },
     {
+      "file": "src/nexus_ai_agent/bot/slideshow_handlers.py",
+      "imports": [
+        "telegram"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/bot/slideshow_notify.py",
+      "imports": [
+        "telegram"
+      ]
+    },
+    {
       "file": "src/nexus_ai_agent/bot/tool_handlers.py",
       "imports": [
         "telegram"
