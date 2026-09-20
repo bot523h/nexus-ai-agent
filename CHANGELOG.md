@@ -5,6 +5,74 @@ All notable changes to NEXUS AI Agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Nagar Phase 6, Wave 2a — the capability-pack substrate
+  (`src/nexus_ai_agent/creative/packs/`)** (PR#21): the TDD rule “a pack is
+  data plus pre-registered adapters, never arbitrary code” is now mechanical.
+  - `manifest.py`: the strict `nexus.capability-pack.v1` manifest — artifact
+    digests and relative paths, runtime/network policy, permissions, hardware
+    and resource budgets, compatibility, security — with `extra="forbid"`
+    everywhere, so `post_install` / `entrypoint` / `shell` / `hooks` fail
+    validation instead of being ignored, and `Literal[False]` code gates.
+  - `verify.py`: verification that returns **every** finding (never a bare
+    boolean) — artifact paths and digests, `runtime_network` forbiddance, media
+    egress only with the explicit `egress_media_optin` permission, native
+    `network_required` rejection, unknown-permission warnings, signature state
+    (`format_only_unverified`, never implied trust), `min_nagar_version`.
+  - `registry.py`: `PackRegistry` over the studio capability registry —
+    external packs may not introduce unknown operations; builtin packs register
+    with *pending* capabilities and activate only once the runtime knows them
+    (checked against the live registry, so Wave 2b needed no rework).
+  - `slideshow/pack.manifest.json`: the eighth pack
+    (`nexus.slideshow.compose`) — five capabilities, `ffmpeg` as a declared
+    external binary, opt-in media egress declared truthfully,
+    `min_nagar_version 3.10.0`.
+  - CLI: `nexus packs list` / `nexus packs verify`; gates in
+    `tests/architecture/test_pack_manifest_is_data_only.py` (data-only
+    manifests at any depth, import allow-list, no package crossing).
+- **Nagar Phase 6, Wave 2b — the slideshow pack plans and composes real
+  footage (`nexus.slideshow.compose`)**: five pure operations, one atomic edit.
+  - `packs/slideshow/`: the typed payloads (`AssetEvidence`, `BeatGrid`,
+    `ImageScore`, `SlideshowAnalysis`, `ComposeInput`, `SlideshowPlan`,
+    `RenderInput`), the tone library, the deterministic planning rules and the
+    five operations — `slideshow.scan_assets` (B), `slideshow.score_images` (A),
+    `slideshow.suggest_tone` (A), `slideshow.compose` (B), `slideshow.render`
+    (C, the first level-C operation: heavy export requires `confirmed=true`).
+  - `templates/tone_templates.json`: **14 tone templates** (12 primary + 2
+    alternates) as *data* — rhythm, transition, motion, color, audio and render
+    defaults, never a filtergraph. Plain JSON by design: no new YAML dependency.
+  - Planning guarantees: the shots tile the target duration (1/2/5 minutes)
+    **exactly**; beat alignment is opportunistic (a sparse grid falls back to
+    arithmetic boundaries and says so in `warnings`); auto mode weights shots by
+    narrative role; the whole plan is a deterministic function of pinned
+    evidence and is re-checked by the plan model.
+  - `creative/slideshow/` adapter — the only place that touches the world:
+    content-addressed probing (Pillow), WAV decoding and an energy-flux beat
+    detector (numpy; **no `librosa`**, see the decision log), local image
+    scoring, and an **opt-in** hosted analysis path (Gemini) that is fail-closed
+    behind `NEXUS_SLIDESHOW_ALLOW_IMAGE_UPLOAD` and uploads downscaled copies
+    only.
+  - State extension (additive): `Project.assets`, `Clip.effects`,
+    `Track.effects`, `AssetRecord` and `EffectLayerRef` (content-hashed,
+    reversible), with `state_hash` extended to cover the asset registry.
+  - CLI: `nexus slideshow templates`, `nexus slideshow plan` (auto/manual) and
+    `nexus packs activate`.
+  - Tests: 90 new unit tests including end-to-end planning over generated
+    JPEG/WAV fixtures, plus `tests/architecture/test_slideshow_adapter_boundary.py`
+    (manifest ↔ code coherence, heavy imports stay behind the adapter, the
+    adapter never bypasses the command bus, templates are data).
+
+### Changed
+- `CapabilityRegistry` gains the Wave 2 slideshow operations through
+  `build_slideshow_registry()`; `build_wave1_registry()` stays frozen (Wave 1
+  catalog unchanged, still pinned by its architecture gate).
+- **litellm no longer reaches the network on first use**: the provider seam sets
+  `LITELLM_LOCAL_MODEL_COST_MAP=True` before importing litellm, so the pricing
+  map comes from the bundled copy. This removes a hidden network fetch and keeps
+  litellm's retry warnings off stdout, which the CLI's `--json` modes depend on.
+
 ## [3.10.0] — 2026-09-20
 
 ### Added

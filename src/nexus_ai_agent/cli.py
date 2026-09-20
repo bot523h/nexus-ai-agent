@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, cast
 from uuid import uuid4
 
 import typer
@@ -19,6 +19,9 @@ metrics_app = typer.Typer(help="Observability snapshots")
 maintenance_app = typer.Typer(help="Stateless maintenance (R2 DB backups, housekeeping)")
 jobs_app = typer.Typer(help="Durable in-process job queue operations")
 packs_app = typer.Typer(help="Capability-pack manifests (data-only packs)")
+slideshow_app = typer.Typer(
+    help="Slideshow pack (nexus.slideshow.compose): tone templates and planning"
+)
 
 
 def _open_checkpoint_backend() -> tuple[Any, Path]:
@@ -446,18 +449,23 @@ def golden_update(
 
 
 def _packs_registry() -> Any:
-    """The runtime registry a pack must fit into (Wave 1 catalog today)."""
+    """The runtime registry a pack must fit into.
+
+    Wave 1 kept this to the frozen five-operation catalog; Wave 2 composes that
+    catalog with the slideshow pack's operation specs, which is exactly what
+    turns ``nexus.slideshow.compose`` from "pending" into "activatable".
+    """
     from importlib.metadata import PackageNotFoundError
     from importlib.metadata import version as distribution_version
 
     from nexus_ai_agent.creative.packs.registry import PackRegistry
-    from nexus_ai_agent.creative.studio.capabilities import build_wave1_registry
+    from nexus_ai_agent.creative.packs.slideshow.operations import build_slideshow_registry
 
     try:
         current = distribution_version("nexus-ai-agent")
     except PackageNotFoundError:  # pragma: no cover - uninstalled source checkout
         current = None
-    return PackRegistry(build_wave1_registry(), current_version=current)
+    return PackRegistry(build_slideshow_registry(), current_version=current)
 
 
 @packs_app.command("list")
@@ -565,12 +573,177 @@ def packs_verify(
         raise typer.Exit(code=1)
 
 
+@packs_app.command("activate")
+def packs_activate(
+    package_id: str = typer.Argument(help="Pack id, e.g. nexus.slideshow.compose"),
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable output."),
+) -> None:
+    """Activate a registered builtin pack (all its capabilities must be known)."""
+    from nexus_ai_agent.creative.packs.manifest import PackManifestError
+    from nexus_ai_agent.creative.packs.registry import PackRegistryError
+
+    registry = _packs_registry()
+    try:
+        registry.register_builtin()
+        pack = registry.activate(package_id)
+    except (PackManifestError, PackRegistryError) as exc:
+        typer.echo(f"✗ {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        typer.echo(
+            json.dumps(
+                {
+                    "package_id": pack.package_id,
+                    "active": pack.active,
+                    "capabilities": list(pack.manifest.capabilities),
+                    "source": pack.source,
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return
+    typer.echo(f"✓ {pack.package_id} is active ({len(pack.manifest.capabilities)} capabilities)")
+
+
+# ── Wave 2b: nexus slideshow — planning surface of the slideshow pack ──
+
+
+@slideshow_app.command("templates")
+def slideshow_templates(
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable output."),
+) -> None:
+    """List the shipped tone templates (data, not code)."""
+    from nexus_ai_agent.creative.packs.slideshow.templates import load_tone_templates
+
+    library = load_tone_templates()
+    if json_output:
+        typer.echo(
+            json.dumps(
+                [template.model_dump(mode="json") for template in library.templates],
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return
+    primary = len(library.ids(tier="primary"))
+    typer.echo(
+        f"{len(library.templates)} tone template(s): {primary} primary, "
+        f"{len(library.templates) - primary} alternate"
+    )
+    for template in library.templates:
+        typer.echo(
+            f"  • {template.template_id} [{template.tier}] {template.display_name_fa} — "
+            f"{template.summary_fa}"
+        )
+
+
+@slideshow_app.command("plan")
+def slideshow_plan(
+    images: Annotated[list[Path], typer.Option("--image", help="Input image (repeatable).")],
+    duration_minutes: int = typer.Option(1, "--duration-min", help="Target duration: 1, 2 or 5."),
+    audio: Annotated[
+        Path | None, typer.Option("--audio", help="Soundtrack (WAV until the FFmpeg adapter).")
+    ] = None,
+    mode: str = typer.Option("auto", "--mode", help="auto | manual"),
+    template_id: str | None = typer.Option(None, "--template", help="Explicit tone template id."),
+    shot_seconds: str | None = typer.Option(
+        None, "--shot-seconds", help="Manual mode: comma-separated seconds per image."
+    ),
+    provider: str | None = typer.Option(
+        None, "--provider", help="Image analysis: local | gemini (default from settings)."
+    ),
+    allow_image_upload: bool = typer.Option(
+        False, "--allow-image-upload", help="Opt in to sending downscaled images to Gemini."
+    ),
+    resolution: str = typer.Option("1920x1080", "--resolution"),
+    fps: int | None = typer.Option(None, "--fps"),
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable output."),
+    out: Annotated[
+        Path | None, typer.Option("--out", help="Write the plan JSON to this file.")
+    ] = None,
+) -> None:
+    """Plan a slideshow from real files (probe -> beats -> analysis -> ONE transaction)."""
+    from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.creative.slideshow.service import PlanningRequest, plan_from_files
+
+    target_us = duration_minutes * 60 * 1_000_000
+    if target_us not in (60_000_000, 120_000_000, 300_000_000):
+        typer.echo("✗ --duration-min must be 1, 2 or 5", err=True)
+        raise typer.Exit(code=2)
+    settings = get_settings()
+    parsed_shots: tuple[float, ...] = ()
+    if shot_seconds:
+        try:
+            parsed_shots = tuple(float(value) for value in shot_seconds.split(","))
+        except ValueError as exc:
+            typer.echo(f"✗ --shot-seconds expects comma-separated numbers: {exc}", err=True)
+            raise typer.Exit(code=2) from exc
+    provider_choice: Literal["local", "gemini"]
+    if provider == "gemini":
+        provider_choice = "gemini"
+    elif provider == "local":
+        provider_choice = "local"
+    else:
+        provider_choice = settings.slideshow_analysis_provider
+    request = PlanningRequest(
+        images=tuple(images),
+        target_duration_us=target_us,
+        audio=audio,
+        mode="manual" if mode == "manual" else "auto",
+        template_id=template_id,
+        shot_seconds=parsed_shots,
+        provider=provider_choice,
+        allow_image_upload=allow_image_upload or settings.slideshow_allow_image_upload,
+        gemini_api_key=settings.creative_gemini_api_key or settings.gemini_api_key,
+        gemini_model=settings.gemini_model,
+        resolution=resolution,
+        fps=fps,
+    )
+    try:
+        outcome = plan_from_files(request)
+    except (ValueError, OSError) as exc:
+        typer.echo(f"✗ {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    payload = {
+        "template_id": outcome.template_id,
+        "shot_count": len(outcome.plan["shots"]),
+        "alignment_quality": outcome.alignment_quality,
+        "tempo_bpm": outcome.tempo_bpm,
+        "beat_confidence": outcome.beat_confidence,
+        "warnings": list(outcome.warnings),
+        "state_revision": outcome.state_revision,
+        "state_hash": outcome.state_hash,
+        "commands": list(outcome.commands),
+        "plan": outcome.plan,
+    }
+    if out is not None:
+        out.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, ensure_ascii=False))
+        return
+    typer.echo(
+        f"✓ {len(outcome.plan['shots'])} shots · template={outcome.template_id} · "
+        f"alignment={outcome.alignment_quality}"
+        + (f" · tempo={outcome.tempo_bpm:.1f} bpm" if outcome.tempo_bpm else "")
+    )
+    for shot in outcome.plan["shots"][:8]:
+        seconds = (shot["slot"]["end_us"] - shot["slot"]["start_us"]) / 1_000_000
+        typer.echo(f"  • {shot['evidence_id']}  {seconds:.2f}s")
+    if len(outcome.plan["shots"]) > 8:
+        typer.echo(f"  … {len(outcome.plan['shots']) - 8} more shots")
+    for warning in outcome.warnings:
+        typer.echo(f"  ! {warning}")
+
+
 checkpoints_app.add_typer(golden_app, name="golden")
 app.add_typer(checkpoints_app, name="checkpoints")
 app.add_typer(metrics_app, name="metrics")
 app.add_typer(maintenance_app, name="maintenance")
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(packs_app, name="packs")
+app.add_typer(slideshow_app, name="slideshow")
 
 
 # ── D1: nexus jobs resume — operator drain of the durable in-process queue ──

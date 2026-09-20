@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -290,6 +290,22 @@ class Settings(BaseSettings):
     creative_temp_dir: str = Field(
         default="/tmp/nexus_creative",
         description="Temporary directory for creative jobs",
+    )
+
+    # ── v3.10.0: Nagar slideshow pack (Wave 2) ────────────────────────
+    # Image analysis for slideshow planning: "local" (default) keeps every
+    # pixel on this machine; "gemini" uses hosted multimodal scoring and is
+    # additionally gated by the explicit upload switch below.
+    slideshow_analysis_provider: Literal["local", "gemini"] = Field(
+        default="local",
+        validation_alias="NEXUS_SLIDESHOW_ANALYSIS_PROVIDER",
+    )
+    # Fail-closed media-egress switch: downscaled copies are only ever sent to
+    # a hosted model when this is explicitly enabled. It mirrors the pack
+    # manifest's declared `egress_media_optin` permission.
+    slideshow_allow_image_upload: bool = Field(
+        default=False,
+        validation_alias="NEXUS_SLIDESHOW_ALLOW_IMAGE_UPLOAD",
     )
 
     # ── v3.9.0: Cloudflare R2 — technical blob tier (DB backups, heavy RAG docs) ──

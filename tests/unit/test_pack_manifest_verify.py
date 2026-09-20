@@ -347,11 +347,13 @@ def test_unreadable_manifest_raises_a_typed_error(tmp_path: Path) -> None:
 
 
 def test_cli_packs_list_reports_the_builtin_pack() -> None:
+    """Wave 2b: the runtime knows the pack's operations, so nothing is pending."""
     result = CliRunner().invoke(app, ["packs", "list", "--json"])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert [pack["package_id"] for pack in payload] == ["nexus.slideshow.compose"]
-    assert payload[0]["pending_capabilities"]
+    assert payload[0]["pending_capabilities"] == []
+    assert payload[0]["active"] is False  # activation stays an explicit step
     assert payload[0]["signature_state"] == "placeholder"
     assert payload[0]["external_binaries"] == ["ffmpeg"]
 
@@ -360,23 +362,22 @@ def test_cli_packs_list_human_output() -> None:
     result = CliRunner().invoke(app, ["packs", "list"])
     assert result.exit_code == 0, result.output
     assert "nexus.slideshow.compose" in result.output
-    assert "pending=5" in result.output
+    assert "capabilities=5" in result.output
 
 
 def test_cli_packs_verify_accepts_the_builtin_manifest() -> None:
-    """The shipped manifest is structurally valid; only unknown capabilities fail
-    (which is expected for the builtin pack until Wave 2b registers them)."""
+    """Wave 2b: the runtime knows the five operations, so verification passes."""
     result = CliRunner().invoke(app, ["packs", "verify", str(SLIDESHOW_MANIFEST), "--json"])
-    assert result.exit_code == 1  # external anchor → unknown capability
+    assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["ok"] is False
-    assert "unknown_capability" in {issue["code"] for issue in payload["issues"]}
+    assert payload["ok"] is True
+    assert payload["pending_capabilities"] == []
 
 
 def test_cli_packs_verify_rejects_a_tampered_manifest(tmp_path: Path) -> None:
     payload = _manifest_dict()
     payload["network_policy"]["runtime_network"] = True
-    payload["capabilities"] = ["slideshow.compose"]  # unknown to the Wave 1 runtime
+    payload["capabilities"] = ["slideshow.render_master"]  # valid namespace, unknown op
     tampered = tmp_path / "pack.manifest.json"
     tampered.write_text(json.dumps(payload), encoding="utf-8")
 
