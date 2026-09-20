@@ -40,6 +40,7 @@ from nexus_ai_agent.bot.agent_handlers import (
 from nexus_ai_agent.bot.knowledge_handlers import learn_cmd, search_cmd, wiki_cmd
 from nexus_ai_agent.bot.memory_handlers import forget_me_cmd, memory_cmd
 from nexus_ai_agent.bot.monitor_handlers import approve_cmd, health_cmd, reject_cmd
+from nexus_ai_agent.bot.slideshow_handlers import slideshow_cmd, slideshow_photo
 from nexus_ai_agent.bot.tool_handlers import news_cmd, rate_cmd, weather_cmd, youtube_cmd
 from nexus_ai_agent.bot.update_handlers import update_cmd, version_cmd
 from nexus_ai_agent.config.settings import Settings
@@ -1450,6 +1451,9 @@ def build_handlers(
         CommandHandler("docs", docs_list_cmd),
         CommandHandler("doc_delete", doc_delete_cmd),
         CommandHandler("chat_with_doc", chat_with_doc_cmd),
+        # v3.12.0 Wave 2.5: slideshow surface — command + upload buffer (queue only)
+        CommandHandler("slideshow", slideshow_cmd),
+        MessageHandler(filters.PHOTO, slideshow_photo),
         MessageHandler(filters.Document.PDF, pdf_handler),
         # ── Phase 3: AI Story ──
         CommandHandler("story", story_cmd_handler),

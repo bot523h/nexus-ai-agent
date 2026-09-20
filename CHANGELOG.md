@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Semver-minor: **Nagar Phase 6, Wave 2.5 — the Telegram surface for the
+slideshow pack.** A user can now reach the Wave 2c render lane from chat:
+`/slideshow` collects up to five photos, validates the envelope, queues one
+`slideshow_render` job, and the D4 completion hook returns the measured master
+(or a plain failure message) to the originating chat. No inline rendering, no
+new dependency, no new binary. The decision-log records this as Wave 2.5 +
+revision r7.
+
+### Added
+- **The pack gains its fourth approved target duration**
+  (`creative/packs/slideshow/models.py`): `30_000_000` µs joins
+  `TARGET_DURATIONS_US`/`TargetDurationUS` so the Wave 2.5 30-second ceiling is
+  a representable plan target; the set stays closed and every previously valid
+  plan (1/2/5 minutes via CLI) is untouched. Unit coverage proves 30 s tiles
+  exactly (`MIN_SHOT_US` respected, shots contiguous) for 4- and 12-image sets.
+- **`creative/slideshow/worker_adapter.py`** — the queue-side seam for the new
+  `slideshow_render` job type: a strict `SlideshowRenderPayload` envelope (≤
+  `MAX_IMAGES=5` images, duration pinned to the 30 s cap, every path confined
+  to the job's own freshly created workspace — traversal payloads are refused
+  and never deleted), then `asyncio.to_thread(render_from_files, …)` — the
+  same pure planning+encode entry point the CLI uses, one FFmpeg process,
+  measured evidence back through the bus. Expected failures return typed
+  `{"success": false, "error_code": …}` codes
+  (`ffmpeg_unavailable | render_failed | unusable_image | invalid_request |
+  internal`); input images and any failed output are removed in `finally`, a
+  successful master is left for delivery, and a 24-hour sweep prunes
+  workspaces a crash orphaned.
+- **`bot/slideshow.py`** — the pure product surface: `SlideshowSessionStore`
+  (per-chat/user rolling buffer, dedup, hard 5-image refusal at the sixth
+  upload, 30-minute idle expiry, FIFO-capped to 512 sessions), prompt-as-name
+  validation (≤ 60 chars, allow-listed grammar — the caption names the project
+  because the render lane has no prompt field, r7 item 5), and the complete
+  Persian message vocabulary: usage, `friendly_success` (measured
+  seconds/shots/resolution/size), `friendly_render_error` total over the code
+  set. Tests assert no path, traceback or raw exception detail can ever reach a
+  chat.
+- **`bot/slideshow_handlers.py` + registration** — thin PTB glue:
+  `/slideshow` starts collecting, photos buffer with `🖼 n/5` receipts, a photo
+  captioned `/slideshow <عنوان>` (or the bare command) downloads the session's
+  images into `creative_temp_dir/slideshow_<user>_<uuid>/` and enqueues via
+  `JobQueuePort` with the handler replying `⏳` plus the job id; no queue, no
+  render, ever. Registered in `build_handlers()` beside the pdf/story jobs.
+- **`bot/slideshow_notify.py`** — the D4 completion hook grows one
+  `slideshow_render` branch in `bot/app.py`: success sends
+  `send_document(master.mp4)` with the measured caption and only then removes
+  the workspace (delivery owns the file, r7 item 4); failure sends the mapped
+  code message; a vanished artifact degrades to the internal message; without
+  an origin `chat_id` the hook is silent but still cleans; the cleanup deletes
+  only inside the configured temp root; the hook never raises to the queue.
+- **Test surface (+34):** pack 30 s tiling (`tests/unit/test_slideshow_30s_target.py`),
+  pure surface limits/session/mapping (`tests/unit/test_bot_slideshow_surface.py`),
+  notifier with `telegram` stubbed as a `ModuleType`
+  (`tests/unit/test_bot_slideshow_notify.py`), and a real-queue round-trip with
+  the encoder mocked (`tests/integration/test_bot_slideshow_flow.py`) covering
+  delivery, cleanup ownership, the trust-boundary envelope and the traversal
+  refusal. The architecture baseline gains the two new Telegram-facing files as
+  grandfathered entries — the import-boundary gate stays frozen otherwise.
+
+### Changed
+- `nexus.worker.default_job_handlers()` now maps `slideshow_render`; the queue,
+  `JobQueuePort`, the bus, the manifest and the render IR are unchanged.
+
 ## [3.11.0] — 2026-09-20
 
 Semver-minor: three backward-compatible feature waves (Wave 2a substrate,

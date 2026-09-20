@@ -72,6 +72,13 @@ def _build_job_completion_notifier(token: str) -> Any:
             )
         else:
             text = f"✅ پردازش «{completion.job_type}» کامل شد.\nشناسه: {completion.job_id}"
+        if completion.job_type == "slideshow_render":
+            # Wave 2.5 (D4 extension, r7 item 4): deliver the rendered master
+            # and own its cleanup; failures arrive as short mapped messages.
+            from nexus_ai_agent.bot.slideshow_notify import notify_slideshow_completion
+
+            await notify_slideshow_completion(completion, token)
+            return
         bot = Bot(token=token)
         await bot.send_message(chat_id=int(str(raw_chat_id)), text=text)
 
