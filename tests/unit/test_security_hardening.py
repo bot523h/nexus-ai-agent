@@ -4,8 +4,9 @@ Covers the hardening of the dashboard API surface:
 
 * CORS is an explicit allowlist (empty by default) — never ``*`` with
   credentials.
-* ``POST /creative/video-edit`` verifies an HMAC-SHA256 request signature
-  when ``NEXUS_API_HMAC_KEY`` is set (constant-time, ±300 s freshness).
+* ``POST /creative/video-edit`` is **fail-closed**: without
+  ``NEXUS_API_HMAC_KEY`` (unset or empty) it answers ``503``; with a key it
+  verifies an HMAC-SHA256 request signature (constant-time, ±300 s).
 * The Telegram webhook stays fail-closed on secret mismatch.
 * Logs never carry raw bot tokens / bearer / key-value secrets.
 """
@@ -154,22 +155,33 @@ def test_hmac_valid_signature_reaches_handler(
     assert "Provide either file or video_url" in ok.json()["detail"]
 
 
-def test_no_hmac_key_keeps_legacy_behaviour_and_warns(
+def test_hmac_key_unset_fails_closed(
     api_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """No key configured ⇒ the mutating endpoint is disabled outright (503)."""
     import nexus_ai_agent.api.app as app_module
 
     monkeypatch.delenv("NEXUS_API_HMAC_KEY", raising=False)
     settings_module.get_settings.cache_clear()
-    app_module._hmac_warning_emitted = False
+    del app_module
 
-    with caplog.at_level(logging.WARNING):
-        response = api_client.post("/creative/video-edit", data={})
+    missing = api_client.post("/creative/video-edit", data={})
+    assert missing.status_code == 503
+    assert "Security configuration incomplete" in missing.json()["detail"]
 
-    assert response.status_code == 400  # reached handler validation
-    assert any("NEXUS_API_HMAC_KEY" in record.message for record in caplog.records)
+
+def test_hmac_key_empty_string_fails_closed(
+    api_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty-string key counts as 'not configured' and must not pass."""
+    monkeypatch.setenv("NEXUS_API_HMAC_KEY", "")
+    settings_module.get_settings.cache_clear()
+
+    empty = api_client.post("/creative/video-edit", data={})
+    assert empty.status_code == 503
+    assert "Security configuration incomplete" in empty.json()["detail"]
 
 
 # ── Telegram webhook stays fail-closed ─────────────────────────────────

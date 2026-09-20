@@ -16,12 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   served dashboard is same-origin and needs no CORS), with
   `allow_credentials` enabled only when origins are configured and methods
   limited to `GET/POST/OPTIONS`.
-- **HMAC endpoint auth (`api/app.py`)**: `POST /creative/video-edit` now
-  accepts `NEXUS_API_HMAC_KEY` deployments only with
+- **HMAC endpoint auth (`api/app.py`)**: `POST /creative/video-edit` is
+  **fail-closed** — without `NEXUS_API_HMAC_KEY` (unset or empty) it answers
+  `503 Security configuration incomplete`; with a key it accepts only
   `X-NEXUS-Timestamp` (±300 s freshness) +
   `X-NEXUS-Signature: hex(HMAC-SHA256(key, "{timestamp}:{raw_body}"))`,
-  compared constant-time. Without a key the legacy behaviour is kept with a
-  one-time warning (deliberate, non-breaking — flagged for review).
+  compared constant-time. (Fail-open legacy behaviour was hardened to
+  fail-closed per the owner's pre-merge review, 2026-09-20.)
 - **SSRF/DNS-rebinding guard on the shared egress client
   (`core/http_client.py`)**: `ResilientHttpClient` (free_tools,
   web_trainer — which fetches *user-supplied* URLs —, wikipedia_trainer)
