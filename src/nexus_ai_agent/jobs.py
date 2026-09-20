@@ -17,18 +17,32 @@ as ``failed`` + message; the old tasks returned ``"Error: ..."`` strings as
 *successful* results.
 
 Not carried over: ``nightly_channel_management``.  It was a Celery task with
-no ``beat_schedule`` entry, i.e. it never ran; scheduling it would be new
-behaviour without a contract and is left to an explicit follow-up.
+no ``beat_schedule`` entry, i.e. it never ran (D2: deleted as dead code;
+channel management is simulated until R-031).
+
+Recovery (D1): nothing is resumed at boot.  :func:`run_resume` is the
+operator entry point behind ``nexus jobs resume`` — dry-run by default, and
+it refuses to run while another process owns the job store.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+from nexus_ai_agent.adapters.in_process_job_queue import (
+    CompletionHook,
+    InProcessJobQueue,
+    JobRecord,
+    JobStatus,
+)
 from nexus_ai_agent.config.settings import Settings
+from nexus_ai_agent.observability.logging import get_logger
+
+log = get_logger(__name__)
 
 #: Chunk + embed an uploaded document into the user's RAG collection.
 PDF_JOB = "process_pdf"
@@ -180,3 +194,97 @@ def build_job_queue(settings: Settings) -> InProcessJobQueue:
     queue.register(PDF_JOB, process_pdf_job)
     queue.register(STORY_JOB, generate_story_job)
     return queue
+
+
+def job_store_path(settings: Settings) -> str:
+    """The sidecar file the bot's queue uses for ``settings``."""
+    return job_queue_db_path(settings.db_path)
+
+
+# ── D1: explicit, operator-driven recovery ───────────────────────────────
+
+
+@dataclass
+class ResumeReport:
+    """Outcome of :func:`run_resume`; rendered by ``nexus jobs resume``."""
+
+    store: str
+    unfinished: list[JobRecord]
+    applied: bool
+    resumed: list[str] = field(default_factory=list)
+    outcomes: dict[str, JobStatus] = field(default_factory=dict)
+    notified: bool = False
+
+    @property
+    def ok(self) -> bool:
+        """True when nothing was left behind: every resumed job succeeded."""
+        if not self.applied:
+            return True
+        return all(status is JobStatus.SUCCEEDED for status in self.outcomes.values()) and len(
+            self.outcomes
+        ) == len(self.resumed)
+
+
+#: Opens a completion hook for the duration of a resume run (e.g. a Telegram
+#: notifier over an initialised bot client).  Composed in the ``bot`` layer;
+#: this module stays free of Telegram imports.
+NotifierFactory = Callable[[], AbstractAsyncContextManager[CompletionHook]]
+
+
+class NotifierUnavailableError(RuntimeError):
+    """The completion-notice channel could not be opened (e.g. Telegram unreachable)."""
+
+
+async def run_resume(
+    settings: Settings,
+    *,
+    apply: bool,
+    timeout: float,
+    notifier: NotifierFactory | None = None,
+) -> ResumeReport:
+    """Report — and with ``apply`` re-run — jobs a previous process left unfinished.
+
+    * Dry run (``apply=False``) only reads the store.
+    * ``apply=True`` requires store ownership: :class:`JobStoreBusyError`
+      propagates when the bot (or another operator) holds the lock, so a
+      live ``running`` row is never executed twice.
+    * ``notifier`` (optional) opens the completion hook for the run — the
+      CLI passes the same Telegram notifier the bot uses, so users still get
+      their story / PDF notice.  It is opened *before* anything is resumed,
+      so a failure there resumes nothing.
+    * Waits up to ``timeout`` seconds for the resumed jobs, then records each
+      one's status; jobs still running after the timeout are cancelled and
+      stay ``running`` (eligible for another resume).
+    """
+    queue = build_job_queue(settings)
+    report = ResumeReport(
+        store=str(queue.db_path), unfinished=await queue.list_unfinished(), applied=apply
+    )
+    if not apply or not report.unfinished:
+        await queue.close()
+        return report
+
+    async def _apply() -> None:
+        report.resumed = await queue.resume_pending()
+        await queue.close(timeout=timeout)
+        for job_id in report.resumed:
+            record = await queue.get_job(job_id)
+            if record is not None:
+                report.outcomes[job_id] = record.status
+
+    try:
+        if notifier is not None:
+            async with notifier() as hook:
+                queue.set_completion_hook(hook)
+                report.notified = True
+                await _apply()
+        else:
+            await _apply()
+    finally:
+        await queue.close(timeout=0)
+    log.info(
+        "jobs_resume_finished",
+        resumed=len(report.resumed),
+        outcomes={k: v.value for k, v in report.outcomes.items()},
+    )
+    return report

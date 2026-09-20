@@ -34,9 +34,15 @@ Design
   the adapter never re-dispatches work on its own at construction or on
   first use.  Rows left ``running`` by a dead process are treated as
   interrupted (``running → failed → retrying → running``) when resumed.
-* Single-process ownership: the sidecar belongs to one bot process (that is
-  the point of the monolith).  Two live processes sharing the file would
-  misclassify each other's in-flight rows on ``resume_pending()``.
+* Single-process ownership (D1): the sidecar belongs to one process at a
+  time.  An advisory ``flock`` on ``<sidecar>.lock`` is taken lazily (first
+  use) and released by ``close()``.  Ownership is only *required* for
+  ``resume_pending()`` — the one operation that reclassifies another
+  process's ``running`` rows; a second live process (deploy overlap, an
+  operator shell) may still enqueue/read, because claims are CAS-safe.
+  Without ownership ``resume_pending()`` raises :class:`JobStoreBusyError`
+  instead of double-executing work.  Platforms without ``fcntl`` assume
+  ownership and log a warning once.
 """
 
 from __future__ import annotations
@@ -44,6 +50,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+import os
 import sqlite3
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -58,6 +65,18 @@ from nexus_ai_agent.domain.policies.retention import ALLOWED_TRANSITIONS, Journa
 from nexus_ai_agent.observability.logging import get_logger
 
 log = get_logger(__name__)
+
+try:  # POSIX advisory locks; absent on Windows
+    import fcntl
+
+    _FLOCK_AVAILABLE = True
+except ImportError:  # pragma: no cover - platform dependent
+    _FLOCK_AVAILABLE = False
+
+
+class JobStoreBusyError(RuntimeError):
+    """``resume_pending()`` was attempted while another process owns the job store."""
+
 
 #: Job states reuse the frozen domain vocabulary rather than inventing a
 #: parallel one.  ``JobStatus.SUCCEEDED`` is the terminal success state.
@@ -148,6 +167,9 @@ class InProcessJobQueue:
         self._init_lock = asyncio.Lock()
         self._initialized = False
         self._completion_hook: CompletionHook | None = None
+        self._lock_fd: int | None = None
+        self._owns_store = False
+        self._ownership_warned = False
 
     # ── Introspection ────────────────────────────────────────────────
 
@@ -163,6 +185,15 @@ class InProcessJobQueue:
     def in_flight(self) -> int:
         """Jobs currently being executed by *this* process."""
         return len(self._tasks)
+
+    @property
+    def owns_store(self) -> bool:
+        """True while this instance holds the advisory ownership lock."""
+        return self._owns_store
+
+    @property
+    def lock_path(self) -> Path:
+        return self._db_path.with_name(self._db_path.name + ".lock")
 
     @property
     def completion_hook(self) -> CompletionHook | None:
@@ -183,15 +214,52 @@ class InProcessJobQueue:
         self._handlers[job_type] = handler
 
     async def initialize(self) -> None:
-        """Create the sidecar schema (idempotent).  Called lazily by every operation."""
-        async with self._init_lock:
-            if self._initialized:
-                return
-            self._db_path.parent.mkdir(parents=True, exist_ok=True)
-            async with self._connect() as db:
-                await db.executescript(_SCHEMA)
-                await db.commit()
-            self._initialized = True
+        """Create the sidecar schema (idempotent) and try to take store ownership.
+
+        Called lazily by every operation, so an instance that started while
+        another process held the lock picks ownership up as soon as it is free.
+        """
+        if not self._initialized:
+            async with self._init_lock:
+                if not self._initialized:
+                    self._db_path.parent.mkdir(parents=True, exist_ok=True)
+                    async with self._connect() as db:
+                        await db.executescript(_SCHEMA)
+                        await db.commit()
+                    self._initialized = True
+        self._try_acquire_ownership()
+
+    def _try_acquire_ownership(self) -> bool:
+        """Take the advisory lock if it is free; never blocks, never raises."""
+        if self._owns_store:
+            return True
+        if not _FLOCK_AVAILABLE:  # pragma: no cover - platform dependent
+            if not self._ownership_warned:
+                log.warning("job_store_lock_unsupported", path=str(self.lock_path))
+                self._ownership_warned = True
+            self._owns_store = True
+            return True
+        fd = os.open(self.lock_path, os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            if not self._ownership_warned:
+                log.warning("job_store_owned_elsewhere", path=str(self.lock_path))
+                self._ownership_warned = True
+            return False
+        self._lock_fd = fd
+        self._owns_store = True
+        return True
+
+    def _release_ownership(self) -> None:
+        if self._lock_fd is not None:
+            try:
+                fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+            finally:
+                os.close(self._lock_fd)
+                self._lock_fd = None
+        self._owns_store = False
 
     def _connect(self) -> aiosqlite.Connection:
         # ``timeout`` is SQLite's busy timeout: short overlapping writers
@@ -275,6 +343,18 @@ class InProcessJobQueue:
                 raise TimeoutError(f"job {job_id} still {status} after {timeout}s")
             await asyncio.sleep(_WAIT_POLL_SECONDS)
 
+    async def list_unfinished(self) -> list[JobRecord]:
+        """Rows that are not terminal (``pending`` / ``running`` / ``retrying``), oldest first."""
+        await self.initialize()
+        async with self._connect() as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                f"SELECT * FROM {_TABLE} WHERE status IN (?, ?, ?) ORDER BY created_at, rowid",
+                tuple(status.value for status in _UNFINISHED),
+            )
+            rows = await cursor.fetchall()
+        return [_record(row) for row in rows]
+
     async def resume_pending(self) -> list[str]:
         """Explicitly re-dispatch unfinished rows left behind by a previous process.
 
@@ -282,15 +362,17 @@ class InProcessJobQueue:
         as they are; ``running`` rows are interrupted work and go through the
         legal ``running → failed → retrying`` edges first (attempt count and
         error stay visible).  Rows already in flight here are skipped.
+
+        Requires store ownership (D1): a ``running`` row may belong to a live
+        process, so without the lock this raises :class:`JobStoreBusyError`
+        rather than executing that work a second time.
         """
         await self.initialize()
-        async with self._connect() as db:
-            cursor = await db.execute(
-                f"SELECT id, status FROM {_TABLE} WHERE status IN (?, ?, ?) "
-                "ORDER BY created_at, rowid",
-                tuple(status.value for status in _UNFINISHED),
+        if not self._try_acquire_ownership():
+            raise JobStoreBusyError(
+                f"another process owns the job store (is the bot running?); lock: {self.lock_path}"
             )
-            rows = await cursor.fetchall()
+        rows = [(record.job_id, record.status.value) for record in await self.list_unfinished()]
 
         resumed: list[str] = []
         for job_id, status in rows:
@@ -313,17 +395,21 @@ class InProcessJobQueue:
         """Drain in-flight jobs for up to ``timeout`` seconds, then cancel the rest.
 
         Cancelled jobs keep their ``running`` row (truthful: interrupted) and
-        are eligible for an explicit ``resume_pending()`` later.
+        are eligible for an explicit ``resume_pending()`` later.  Always
+        releases store ownership, even when nothing was in flight.
         """
-        tasks = [task for task in self._tasks.values() if not task.done()]
-        if not tasks:
-            return
-        _, pending = await asyncio.wait(tasks, timeout=timeout)
-        if pending:
-            log.warning("job_queue_close_cancelling_in_flight", count=len(pending))
-            for task in pending:
-                task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
+        try:
+            tasks = [task for task in self._tasks.values() if not task.done()]
+            if not tasks:
+                return
+            _, pending = await asyncio.wait(tasks, timeout=timeout)
+            if pending:
+                log.warning("job_queue_close_cancelling_in_flight", count=len(pending))
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+        finally:
+            self._release_ownership()
 
     # ── Internals ────────────────────────────────────────────────────
 

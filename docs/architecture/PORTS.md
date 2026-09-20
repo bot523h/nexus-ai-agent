@@ -18,8 +18,11 @@ port owns only lifecycle metadata and safe, whole-thread deletion.
   makes a resubmission return the existing job with no second effect; every persisted
   status change is an `ALLOWED_TRANSITIONS` edge (`domain/policies/retention.py`);
   failures are stored as `failed` + error; recovery after a restart is the explicit
-  `resume_pending()` — nothing is re-dispatched implicitly at boot. Guarded by
-  `tests/architecture/test_no_distributed_queue.py`.
+  `resume_pending()` — nothing is re-dispatched implicitly at boot; the operator runs
+  `nexus jobs resume` (D1, `docs/ops/JOBS_RUNBOOK.md`), which requires the advisory
+  store-ownership lock (`<db_path>.jobs.lock`) so two live processes never execute the
+  same `running` row twice; a completion hook (D4) reports terminal jobs to the
+  originating chat. Guarded by `tests/architecture/test_no_distributed_queue.py`.
 
 ## Port list
 

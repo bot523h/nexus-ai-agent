@@ -48,6 +48,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   policy), constructed once per application instead of once per message.
 
 ### Added
+- **D1 (decision):** `nexus jobs resume` — operator recovery for jobs a
+  previous bot process left unfinished (dry-run by default; `--apply`,
+  `--timeout`, `--notify/--no-notify`; exit 0/1/2 = all succeeded / some
+  failed or unfinished / refused). The bot still never resumes anything at
+  boot. The in-process queue now takes an advisory `flock` on
+  `<sidecar>.lock`; only `resume_pending()` requires ownership and raises
+  `JobStoreBusyError` ("another process owns the job store (is the bot
+  running?)") otherwise, so a live `running` row is never executed twice by
+  a second instance. Enqueue/read never need the lock. New
+  `InProcessJobQueue.list_unfinished()`, `jobs.run_resume()`, and
+  `docs/ops/JOBS_RUNBOOK.md`.
 - **D4 (decision):** the "I will notify you when it is ready" reply is now
   backed by code. `InProcessJobQueue.set_completion_hook()` fires a fail-safe
   observer after every terminal transition (success, failure, resumed work,

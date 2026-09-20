@@ -16,6 +16,7 @@ checkpoints_app = typer.Typer(help="Inspect checkpoint lifecycle state")
 golden_app = typer.Typer(help="Schema golden management (human-triggered only)")
 metrics_app = typer.Typer(help="Observability snapshots")
 maintenance_app = typer.Typer(help="Stateless maintenance (R2 DB backups, housekeeping)")
+jobs_app = typer.Typer(help="Background jobs of the in-process queue (operator recovery)")
 
 
 def _open_checkpoint_backend() -> tuple[Any, Path]:
@@ -439,10 +440,81 @@ def golden_update(
     typer.echo("commit this file after review; reconcile will enforce it")
 
 
+@jobs_app.command("resume")
+def jobs_resume(
+    apply: bool = typer.Option(
+        False, "--apply", help="Re-run the unfinished jobs (default: dry run, read-only)"
+    ),
+    timeout: float = typer.Option(
+        300.0, "--timeout", help="Seconds to wait for the resumed jobs before giving up"
+    ),
+    notify: bool = typer.Option(
+        True, "--notify/--no-notify", help="Send the usual completion notice to each chat"
+    ),
+) -> None:
+    """Resume jobs a previous bot process left unfinished (D1: never automatic).
+
+    Dry run lists ``pending`` / ``running`` / ``retrying`` rows of the job
+    store.  ``--apply`` re-dispatches them in this process and waits up to
+    ``--timeout`` seconds.  It refuses to run while another process (the bot)
+    owns the store, because a live ``running`` row must never be executed
+    twice.  Exit codes: 0 all resumed jobs succeeded (or nothing to do);
+    1 some job failed or did not finish in time; 2 the store is owned
+    elsewhere or Telegram could not be reached for notices.
+    """
+    import asyncio
+    import functools
+
+    from nexus_ai_agent.adapters.in_process_job_queue import JobStoreBusyError
+    from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.jobs import NotifierFactory, NotifierUnavailableError, run_resume
+
+    settings = get_settings()
+    notifier: NotifierFactory | None = None
+    if notify and apply:
+        # Telegram composition lives in the bot layer (import boundary).
+        from nexus_ai_agent.bot.app import job_notifier_for_token
+
+        notifier = functools.partial(job_notifier_for_token, settings.telegram_bot_token)
+    try:
+        report = asyncio.run(run_resume(settings, apply=apply, timeout=timeout, notifier=notifier))
+    except JobStoreBusyError as exc:
+        typer.echo(f"refusing to resume: {exc}")
+        typer.echo("Stop the bot (or wait for the other operator run) and try again.")
+        raise typer.Exit(code=2) from exc
+    except NotifierUnavailableError as exc:
+        typer.echo(f"cannot reach Telegram for completion notices: {exc}")
+        typer.echo("Nothing was resumed. Re-run with --no-notify to resume without notices.")
+        raise typer.Exit(code=2) from exc
+
+    typer.echo(f"job store: {report.store}")
+    if not report.unfinished:
+        typer.echo("nothing to resume: no unfinished jobs.")
+        return
+    typer.echo(f"unfinished jobs: {len(report.unfinished)}")
+    for record in report.unfinished:
+        typer.echo(
+            f"  {record.job_id}  {record.job_type:<14} {record.status.value:<9} "
+            f"attempts={record.attempts} updated={record.updated_at}"
+        )
+    if not report.applied:
+        typer.echo("dry run - nothing was changed. Pass --apply to resume these jobs.")
+        return
+    typer.echo(f"resumed: {len(report.resumed)}  notices: {'on' if report.notified else 'off'}")
+    for job_id in report.resumed:
+        status = report.outcomes.get(job_id)
+        typer.echo(f"  {job_id}  {status.value if status else 'unknown'}")
+    if not report.ok:
+        typer.echo("some jobs failed or did not finish within --timeout; see the log.")
+        raise typer.Exit(code=1)
+    typer.echo("all resumed jobs succeeded.")
+
+
 checkpoints_app.add_typer(golden_app, name="golden")
 app.add_typer(checkpoints_app, name="checkpoints")
 app.add_typer(metrics_app, name="metrics")
 app.add_typer(maintenance_app, name="maintenance")
+app.add_typer(jobs_app, name="jobs")
 
 
 # ── v3.9.0: nexus maintenance — stateless scheduled jobs (Phase 5) ─────

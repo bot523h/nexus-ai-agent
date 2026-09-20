@@ -7,15 +7,18 @@ are initialized here and passed to handlers via bot_data.
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from typing import Any
 
+from telegram import Bot
+from telegram.error import TelegramError
 from telegram.ext import Application, ApplicationBuilder
 
 from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
 from nexus_ai_agent.bot.job_notifications import TelegramJobNotifier
 from nexus_ai_agent.config.settings import Settings
-from nexus_ai_agent.jobs import build_job_queue
+from nexus_ai_agent.jobs import NotifierUnavailableError, build_job_queue
 from nexus_ai_agent.presence import PresenceStore
 from nexus_ai_agent.storage.ai_storage import AIStorageManager, ProviderConfig
 
@@ -222,3 +225,23 @@ class WebhookApplicationAdapter:
         if queue is None:
             raise RuntimeError("application has no update_queue (not initialized?)")
         queue.put_nowait(update)
+
+
+@asynccontextmanager
+async def job_notifier_for_token(token: str) -> AsyncIterator[TelegramJobNotifier]:
+    """The bot's completion notifier over a standalone PTB client (``nexus jobs resume``).
+
+    Opens (``initialize``) and closes the client around the block.  A client
+    that cannot be opened — invalid token, no network — surfaces as
+    :class:`NotifierUnavailableError` so the CLI can refuse *before* it resumes
+    anything, without importing Telegram itself.
+    """
+    bot = Bot(token)
+    try:
+        await bot.initialize()
+    except TelegramError as exc:
+        raise NotifierUnavailableError(f"{type(exc).__name__}: {exc}") from exc
+    try:
+        yield TelegramJobNotifier(bot)
+    finally:
+        await bot.shutdown()

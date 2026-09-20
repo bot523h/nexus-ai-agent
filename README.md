@@ -147,6 +147,10 @@ PDF uploads need the optional `pdf` extra (`pip install -e ".[pdf]"`; the
 Docker image includes it). Without it, PDF jobs fail with an explicit
 "install the pdf extra" error instead of guessing.
 
+Background jobs (PDF indexing, story rendering) run inside the bot process;
+nothing is resumed automatically after a restart — see
+[`docs/ops/JOBS_RUNBOOK.md`](docs/ops/JOBS_RUNBOOK.md) and `nexus jobs resume`.
+
 ### 2) Configure environment
 
 ```bash

@@ -36,6 +36,18 @@ def _queue(tmp_path: Path) -> InProcessJobQueue:
     return InProcessJobQueue(tmp_path / "jobs.sqlite")
 
 
+async def _until_running(queue: InProcessJobQueue, job_id: str, *, timeout: float = 5.0) -> None:
+    """Block until the job's row is ``running`` (deterministic stand-in for a fixed sleep)."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        record = await queue.get_job(job_id)
+        if record is not None and record.status is JobStatus.RUNNING:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"job {job_id} did not reach running within {timeout}s")
+
+
 async def test_adapter_satisfies_the_stage0_port(tmp_path: Path) -> None:
     """The adapter is a structural ``JobQueuePort``; the port itself is untouched."""
     queue = _queue(tmp_path)
@@ -248,7 +260,7 @@ async def test_resume_pending_fails_rows_without_a_handler(tmp_path: Path) -> No
     first = InProcessJobQueue(db)
     first.register("gone", hang)
     job_id = await first.enqueue(job_type="gone", idempotency_key="k", payload={})
-    await asyncio.sleep(0.05)
+    await _until_running(first, job_id)
     await first.close(timeout=0)
 
     second = InProcessJobQueue(db)  # no handler for "gone" registered
@@ -298,7 +310,7 @@ async def test_persisted_transitions_obey_the_domain_state_machine(tmp_path: Pat
     hang_id = await queue.enqueue(job_type="hang", idempotency_key="c", payload={})
     assert await queue.wait(ok_id, timeout=5) == JobStatus.SUCCEEDED
     assert await queue.wait(boom_id, timeout=5) == JobStatus.FAILED
-    await asyncio.sleep(0.05)
+    await _until_running(queue, hang_id)
     await queue.close(timeout=0)
 
     resumed = InProcessJobQueue(db)
@@ -436,7 +448,8 @@ async def test_completion_hook_fires_for_resumed_and_unhandled_jobs(tmp_path: Pa
     first.register("gone", hang)
     hang_id = await first.enqueue(job_type="hang", idempotency_key="h", payload={})
     gone_id = await first.enqueue(job_type="gone", idempotency_key="g", payload={})
-    await asyncio.sleep(0.05)
+    await _until_running(first, hang_id)
+    await _until_running(first, gone_id)
     await first.close(timeout=0)
 
     seen: list[JobRecord] = []
@@ -456,3 +469,87 @@ async def test_completion_hook_fires_for_resumed_and_unhandled_jobs(tmp_path: Pa
     await second.close()
     outcomes = {record.job_id: record.status for record in seen}
     assert outcomes == {hang_id: JobStatus.SUCCEEDED, gone_id: JobStatus.FAILED}
+
+
+# ── D1: store ownership (no double execution across processes) ─────────
+
+
+async def test_second_instance_cannot_resume_while_the_store_is_owned(tmp_path: Path) -> None:
+    """``resume_pending`` reclassifies ``running`` rows; only the store owner may do that."""
+    from nexus_ai_agent.adapters.in_process_job_queue import JobStoreBusyError
+
+    db = tmp_path / "jobs.sqlite"
+    owner = InProcessJobQueue(db)
+    await owner.initialize()
+    assert owner.owns_store is True
+
+    other = InProcessJobQueue(db)
+    await other.initialize()
+    assert other.owns_store is False
+    with pytest.raises(JobStoreBusyError, match="another process owns the job store"):
+        await other.resume_pending()
+
+    await owner.close()
+    assert owner.owns_store is False
+    assert await other.resume_pending() == []  # ownership acquired lazily once free
+    assert other.owns_store is True
+    await other.close()
+
+
+async def test_enqueue_never_needs_ownership(tmp_path: Path) -> None:
+    """The bot keeps serving even if an operator holds the store (claims are CAS-safe)."""
+    from structlog.testing import capture_logs
+
+    db = tmp_path / "jobs.sqlite"
+    operator = InProcessJobQueue(db)
+    await operator.initialize()
+
+    async def ok(payload: dict[str, object]) -> dict[str, object]:
+        return {"ok": True}
+
+    bot = InProcessJobQueue(db)
+    bot.register("ok", ok)
+    with capture_logs() as logs:
+        job_id = await bot.enqueue(job_type="ok", idempotency_key="a", payload={})
+    assert await bot.wait(job_id, timeout=5) == JobStatus.SUCCEEDED
+    assert any(entry["event"] == "job_store_owned_elsewhere" for entry in logs)
+    await bot.close()
+    await operator.close()
+
+
+async def test_close_releases_ownership_even_without_tasks(tmp_path: Path) -> None:
+    db = tmp_path / "jobs.sqlite"
+    first = InProcessJobQueue(db)
+    await first.initialize()
+    await first.close()
+    second = InProcessJobQueue(db)
+    await second.initialize()
+    assert second.owns_store is True
+    await second.close()
+
+
+async def test_list_unfinished_reports_rows_in_creation_order(tmp_path: Path) -> None:
+    db = tmp_path / "jobs.sqlite"
+    release = asyncio.Event()
+
+    async def hang(payload: dict[str, object]) -> None:
+        await release.wait()
+
+    async def ok(payload: dict[str, object]) -> dict[str, object]:
+        return {"ok": True}
+
+    first = InProcessJobQueue(db)
+    first.register("hang", hang)
+    first.register("ok", ok)
+    hang_id = await first.enqueue(job_type="hang", idempotency_key="h", payload={})
+    ok_id = await first.enqueue(job_type="ok", idempotency_key="o", payload={})
+    assert await first.wait(ok_id, timeout=5) == JobStatus.SUCCEEDED
+    await _until_running(first, hang_id)
+    await first.close(timeout=0)
+
+    second = InProcessJobQueue(db)
+    unfinished = await second.list_unfinished()
+    assert [(record.job_id, record.status) for record in unfinished] == [
+        (hang_id, JobStatus.RUNNING)
+    ]
+    await second.close()
