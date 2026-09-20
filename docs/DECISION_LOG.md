@@ -358,3 +358,14 @@ existing `/image` and upload-only slideshow behavior remain compatible.
 three uploaded plus two generated images, consent and cleanup; enforce AST
 import boundaries; run `make lint`, `make types`, `make test`. Clean only session
 history, keep commits atomic and conventional, never rewrite shared mainline.
+
+### Cleanup disposition
+
+Repository-wide Ruff unused-import checks found no violations; no `# DEBUG`
+comments or root `test_*.py` scripts were present. Removed stale root gate
+reports, `test_story.png`, and the unreferenced downloaded font ZIP (the actual
+`assets/fonts/Vazirmatn.ttf` remains). Replaced the print-only `tests/test_rtl.py`
+manual script with `tests/unit/test_story_rtl.py`, using `tmp_path` and real
+assertions. Ignore disposable gate reports/root render artifacts. Historical
+roadmaps, TODO records, supported command handlers and fixtures are not dead
+code merely because they are old; preserve them rather than guess at reachability.
