@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "plan": "Nagar Phase 6",
-  "step": "13809ed",
+  "step": "f32c30c",
   "next": "v3.12.0 housekeeping cut after Wave 2.5 merges (VERSION/pyproject, changelog move, roadmap to Wave 3); then Wave 3 — optional local upscale stage + image generation behind an adapter (Pollinations sole free default; a paid Gemini adapter only behind an explicit opt-in setting with a per-call cost line logged first) — plan and DECISION_LOG detail first, code only after the owner's final approval.",
   "ledger": [
     {
@@ -108,7 +108,7 @@
       "scope": "Telegram surface for the slideshow pack — /slideshow session buffer (5 photos, 30s, workspace confinement) -> slideshow_render queue job -> render_from_files in a thread -> D4 delivery of the measured master with typed, path-free failures (PR#25; decision-log Wave 2.5 + revision r7)"
     }
   ],
-  "test_count_expected": 620,
+  "test_count_expected": 656,
   "env_fingerprint": {
     "python": "3.11.2",
     "alembic": "1.20.0",
