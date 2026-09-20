@@ -1,9 +1,9 @@
 # NEXUS AI — Architecture Decision Log
 
-**Status:** Canonical historical record; revision 5 effective 2026-09-20  
-**Scope:** Architectural, operational, and roadmap decisions from Phase 0 through the released v3.10.0 baseline, the accepted Phase 6 Nagar design, and the implemented Nagar Waves 1–2 (2a substrate, 2b pack, 2c render lane).  
-**Main baseline for this revision:** `3c8d1de0` (the PR#14 merge — modular monolith + canonical decision log). The live head may have advanced; consult `git log origin/main`.  
-**Current release baseline:** `v3.10.0` (Phase 6 Wave 1); Phase 6 Wave 2 lands on the unreleased line (`main` after PR#22; Wave 2c is rendered on its own branch).
+**Status:** Canonical historical record; revision 6 effective 2026-09-20  
+**Scope:** Architectural, operational, and roadmap decisions from Phase 0 through the released v3.11.0 baseline, the accepted Phase 6 Nagar design, the implemented Nagar Waves 1–2 (2a substrate, 2b pack, 2c render lane), and the owner decisions that sequence what comes next (Wave 2.5 bot surface first; image generation behind an adapter).  
+**Main baseline for this revision:** `ebe995a` (the PR#23 merge — Wave 2c render lane). The live head may have advanced; consult `git log origin/main`.  
+**Current release baseline:** `v3.11.0` (Phase 6 Waves 1–2c on `main`; cut by the housekeeping PR that carries this revision).
 
 **Revision history**
 
@@ -11,6 +11,8 @@
 - **r2 (2026-09-20):** added the Cognee and manual-Neon-keep-alive rejections, sharpened the "Nexus World" rejection (3-D world model + alleged quantum decision algorithms), converted the zombie-branch list into a per-branch disposition table with the required manual-deletion note, added the old-continuum `Phase D/E` numbering row, mapped every numbering family onto the final seven-phase roadmap, and recorded an open-PR snapshot.
 - **r3 (2026-09-20, PR#19 + the v3.10.0 release commit):** recorded the implemented Nagar Wave 1 core as an accepted decision, moved the release baseline to `v3.10.0`, corrected the Phase 6 “implementation has not started” status, added the PR#18/PR#19 rows to the PR snapshot, marked the D1–D4 bundle as merged (`d9f5cf9`), and locked the Celery/Redis scan result into the record.
 - **r4 (2026-09-20, PR#21 + the Wave 2 slideshow pack):** recorded Nagar Wave 2 — the capability-pack substrate and the slideshow pack — as an accepted and implemented decision, including the “evidence above the bus, pure handlers inside it” split, the additive state extension (`Project.assets` / `Clip.effects` / `AssetRecord` / `EffectLayerRef`), the level assignments of the five new operations, and the dependency verdicts (librosa deferred, Real-ESRGAN deferred, hosted image *generation* left out of the render path).
+- **r5 (2026-09-20, PR#23):** recorded Nagar Wave 2c — the render lane (pure `RenderIR` → filtergraph → argv, one FFmpeg process, staging publish, measured evidence) — as an accepted and implemented decision with its rejected alternatives (agent-authored filtergraphs, `-y` against the destination, trusting the plan's duration, a second `ffprobe` binary, encoding inside a handler, a Python video library).
+- **r6 (2026-09-20, v3.11.0 housekeeping PR):** moved the release baseline to `v3.11.0`; recorded two owner decisions — *image generation behind an adapter (Pollinations by default, Gemini opt-in)*, which resolves the open question left by Wave 2 item 7, and *Wave 2.5 (Telegram surface for the slideshow pack) precedes Wave 3*; corrected the Phase 6 status text to Waves 1–2c merged; updated the PR snapshot (PR#23 merged as `ebe995a`, PR#1/PR#2 closed); noted that the lifecycle PR1/PR2/PR3 line has been on `main` since PR#7 (`acdbcb7`, v3.6.0) — the roadmap file had still called it unmerged.
 
 This document is the single reference point for architectural decisions in this repository. A new decision must be appended here with its date, status, rationale, rejected alternatives, and repository evidence. Existing historical documents remain useful as detailed records, but this log is authoritative when summaries differ.
 
@@ -69,7 +71,7 @@ The post-Phase-5 mainline then accepted the modular-monolith foundation and the 
 ### Phase 6 — Nagar architecture
 
 **Date:** 2026-09-20.  
-**Status:** Architecture accepted; **Wave 1 (“Green Cockpit” core) implemented and merged** through PR#19 (`ac6c25b`). The remaining operations are not implemented.
+**Status:** Architecture accepted; **Wave 1 (“Green Cockpit” core) implemented and merged** through PR#19 (`ac6c25b`, released as v3.10.0); **Wave 2a/2b/2c (pack substrate, slideshow pack, render lane) implemented and merged** through PR#21 (`865780e`), PR#22 (`aa7b2f4`) and PR#23 (`ebe995a`, released as v3.11.0). Ten operations exist (five Wave 1, five slideshow). None is reachable from the Telegram bot yet — closing that gap is Wave 2.5 (see “Wave 2.5 — the Telegram surface for the slideshow pack precedes Wave 3”). The remaining 60 TDD operations are not implemented.
 
 `docs/NAGAR_70_OPERATIONS_TDD.md` is accepted as the formal Phase 6 architecture document. Acceptance is limited to the design baseline. It does not authorize implementation work until the relevant operation contracts, ownership boundaries, and execution gates are separately approved.
 
@@ -186,6 +188,40 @@ Nagar is accepted as the Phase 6 design baseline because it makes operation inte
 **Impact on contracts:** `RenderInput`'s evidence fields are now populated by measurement; the settings surface gains `NEXUS_FFMPEG_BIN` and `NEXUS_SLIDESHOW_RENDER_TIMEOUT`; the development extra gains `imageio-ffmpeg`; and `tests/architecture/test_slideshow_adapter_boundary.py` now pins that exactly one adapter module may spawn a process and may never use a shell. Any change to these requires a new entry naming this one.
 **Verification:** `tests/unit/test_slideshow_render.py` (19 tests) — the pure IR/argv layer, typed failures (`FfmpegUnavailableError`, unusable resolution, missing media), overwrite refusal, staging cleanup, byte-identical re-encodes of the same IR, and **four genuine FFmpeg encodes**, including a 60-second master read back with `probe_video` and the CLI path. Local gates on the Wave 2c tree: `ruff check`/`ruff format --check` (276 files), `mypy src` (173 files), `pytest -m "not slow"` = **622 passed / 20 skipped**.
 
+### Image generation behind an adapter — Pollinations by default, Gemini opt-in
+
+**Date:** 2026-09-20; owner decision recorded with the v3.11.0 housekeeping PR.  
+**Status:** Accepted — **not yet implemented**. This entry resolves the question that “Nagar Wave 2 — packs are data, commands carry evidence” (item 7) explicitly left to the owner. It authorizes the *shape* of the generation seam; the generation pack itself (Wave 3) still needs its own contract and lands only after Wave 2.5.  
+**Problem:** Two generation paths exist or are wanted: the free, key-less Pollinations endpoint that the bot has used since v2.0.0 (`features/image_gen.py`), and Google's image-output models, for which the official price list shows **no free tier** (Nano Banana 2 Lite ≈ $0.034 per 1K image, Nano Banana 2 ≈ $0.067, Pro ≈ $0.134; verified 2026-09-20). Hard-wiring either one is wrong: Pollinations alone is a single point of failure with anonymous rate caps, throttling under load and possible watermarks; Gemini alone would make the free product cost money per image. Local diffusion models are not an option on the deployment targets (Koyeb scale-to-zero web instance, Termux/Android, a GPU-less Docker image), and the Wave 2 dependency verdict already keeps torch out of the core.  
+**Decision:**
+
+1. **Image generation is an adapter behind one contract.** A single provider-neutral seam (prompt + size/style/seed in, bytes + provenance — provider id, model id, seed, request digest — out) with one adapter per provider. The Nagar operation that consumes it (Wave 3) sees the contract, never a provider.
+2. **Pollinations is the default adapter.** It needs no key and costs nothing, so the shipped configuration keeps the product free. Its limits (rate caps, throttling, watermark on the anonymous tier) are surfaced as typed failures and user-facing messages, not hidden retries.
+3. **Gemini is opt-in behind a key and an explicit setting.** It activates only when both an API key and an explicit provider selection are present (the same fail-closed pattern as `NEXUS_SLIDESHOW_ANALYSIS_PROVIDER` / `NEXUS_SLIDESHOW_ALLOW_IMAGE_UPLOAD`); absent either, the code path is unreachable and no billable request can be made by accident.
+4. **The core stays free.** No adapter may become a required dependency of the free path; a paid provider is never a fallback that engages silently when the free one fails — falling back to a billable provider is itself an explicit owner/user choice.
+5. **Egress is declared truthfully.** A generation pack sends the *prompt* (never user media) to a provider, so its manifest declares that egress as a distinct permission rather than reusing `egress_media_optin`. Results are recorded as derived assets with provider/model/seed provenance (TDD black swan 6: reproducibility across model changes must be explicit).
+
+**Rejected alternatives:** a local diffusion model (no GPU on any deployment target; torch already rejected for the core); Gemini as the default (no free tier for image output — the free product would start costing money per image); Pollinations hard-wired with no seam (single point of failure, and the second provider would arrive as a fork of the first); silent paid fallback (turns an outage into a bill); putting generation inside the slideshow pack (a different capability with different egress — it gets its own pack and decision).  
+**Impact on contracts:** none yet on shipped code. When Wave 3 lands it must: add the seam under `application/ports/` next to `LLMPort`, register the pack with a prompt-egress permission, and route both adapters through the existing SSRF egress guard. Any change to this default/opt-in posture requires a new entry naming this one.  
+**Verification plan:** contract tests executed against every adapter with the transport mocked (no network in the suite); a gate that the free configuration imports no paid client; an architecture test that the Gemini adapter is unreachable without both the key and the explicit selection.
+
+### Wave 2.5 — the Telegram surface for the slideshow pack precedes Wave 3
+
+**Date:** 2026-09-20; owner decision recorded with the v3.11.0 housekeeping PR.  
+**Status:** Accepted — **implementation pending on its own branch and PR** (this entry is appended before implementation, as the lifecycle rule requires).  
+**Problem:** After Waves 1–2c the studio has ten operations, a real render lane and a CLI, but no user can reach any of it: the bot and the API know nothing about Nagar. Starting Wave 3 (upscale + generation) would add capability to a surface nobody can use. The v3.11.0 verification report made this explicit and the owner agreed: **build the surface before the next feature.**  
+**Decision:** Wave 2.5 connects the existing slideshow lane to the Telegram bot through the infrastructure that already exists, adding no new heavy dependency and no new external binary:
+
+1. **A bot command** (`/slideshow`) collects the user's inputs (uploaded images, an optional caption/prompt) and validates them **before** anything is enqueued.
+2. **Hard resource limits are enforced in the handler**, not in the worker: at most **5 images** and at most **30 seconds** of output per request (DoS containment — FFmpeg time is bounded by the smallest of these and by `NEXUS_SLIDESHOW_RENDER_TIMEOUT`). Anything larger is refused with a plain message.
+3. **The request is a job, not an inline call.** The handler calls `JobQueuePort.enqueue("slideshow_render", payload)` on the durable in-process queue (D1–D4 line, PR#18); the Telegram handler returns immediately. No Celery/Redis — the modular-monolith decision stands.
+4. **The in-process worker runs the Wave 2c lane unchanged** (`render_from_files()` → `RenderIR` → one FFmpeg process → measured evidence → `slideshow.render` through the bus). The worker does not grow a second render path.
+5. **Completion uses the D4 completion hook**: on success the produced `master.mp4` is sent back to the requesting chat; on failure the typed error (`FfmpegUnavailableError`, unusable resolution, missing media, timeout, encoder failure) is rendered as a short user-facing message — **never a stack trace** — and the failure is logged with the redaction rules already in place.
+6. **Verification is an end-to-end test**: at least one integration test drives enqueue → process → notify with the encoder's output file mocked, plus unit coverage of the limits and the error mapping.
+
+**Rejected alternatives:** rendering inline in the handler (blocks the bot's event loop and Telegram's delivery window; a long encode would time out the update); a dedicated worker service (Celery/Redis — already rejected); exposing every studio operation to chat at once (a chat surface for a 70-operation catalog needs the agent/registry work that is not designed yet; one bounded command is the right first surface); skipping limits because the queue serialises work (the queue bounds *concurrency*, not *cost per job*).  
+**Impact on contracts:** a new job type `slideshow_render` in the job registry; a new bot command; settings for the limits if they are made configurable. No change to the bus, the pack manifest, the render IR or `JobQueuePort`. Any deviation (a new binary, a new dependency, an inline render) requires a new entry naming this one.
+
 ### Typed commands instead of UI clicks
 
 **Status:** Accepted for Nagar.  
@@ -240,7 +276,9 @@ The following branches are historical, open, or abandoned proposals and are not 
 - **PR#20** — v3.10.0 release (`chore/release-v3.10.0`, head `bab27e1`): **MERGED 2026-09-20** (`c550420`); semver-minor bump with the rationale recorded in the changelog, `/version` de-hardcoded, pyproject version drift fixed.
 - **PR#21** — Nagar Phase 6 Wave 2a, the capability-pack substrate (`feat/wave2a-pack-substrate`, head `96ad952`): **MERGED 2026-09-20** (`865780e`), CI green (`test` 7m30s, `migrate-postgres` 6m7s).
 - **PR#22** — Nagar Phase 6 Wave 2b, the slideshow pack (`feat/wave2b-slideshow-planning`, head `a0c23e4`): **MERGED 2026-09-20** (`aa7b2f4`), CI green (`test` 7m10s, `migrate-postgres` 6m12s).
-- **PR#23** — Nagar Phase 6 Wave 2c, the render lane (`feat/wave2c-slideshow-render`): **opened 2026-09-20**, awaiting CI and review.
+- **PR#23** — Nagar Phase 6 Wave 2c, the render lane (`feat/wave2c-slideshow-render`, head `934f70b`): **MERGED 2026-09-20** (`ebe995a`), CI green (`test` ×2, `migrate-postgres` ×2); head branch deleted.
+- **PR#1 / PR#2** — the abandoned `feat/phase1-control-plane` and `feat/phase2-local-llm` proposals: **CLOSED** (unmerged; see the zombie-branch table).
+- **v3.11.0 housekeeping PR** (opened from the session branch `arena/01a0c05a-nexus-ai-agent`, 2026-09-20): release lock-step, continuum refresh, roadmap rewrite, this revision (r6). Wave 2.5 follows on its own PR once this one is merged.
 
 The repository contains several numbering systems from different workstreams. They must not be interpreted as one chronological sequence. The final roadmap is the **seven-phase plan** documented above: Phase 0 (control plane/security) → 1 (core product) → 2 (local-LLM direction) → 3 (multi-provider routing, scale-to-zero) → 4 (schema management, PostgreSQL/Neon) → 5 (durable storage, lifecycle, R2) → 6 (Nagar creative studio, design accepted).
 
