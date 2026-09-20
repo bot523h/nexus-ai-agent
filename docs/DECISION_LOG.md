@@ -369,3 +369,52 @@ manual script with `tests/unit/test_story_rtl.py`, using `tmp_path` and real
 assertions. Ignore disposable gate reports/root render artifacts. Historical
 roadmaps, TODO records, supported command handlers and fixtures are not dead
 code merely because they are old; preserve them rather than guess at reachability.
+
+### Implemented filenames, consent, limits and accounting
+
+- `creative/image_gen/provider.py`: immutable request/result and asynchronous
+  `ImageGenProvider` protocol. `pollinations_adapter.py` and `gemini_adapter.py`
+  are HTTP adapters, not a new command-bus execution manifest. Shared transport
+  mechanics live in `resilience.py`; no bot/storage imports, including transitive
+  project dependencies. `tests/architecture/test_image_gen_boundary.py` resolves
+  absolute/relative imports and tests the detector against prohibited examples.
+- `application/image_generation.py` is the operator-settings composition root;
+  provider and cache live for the process. Settings changes require a restart.
+  `bot/handlers.py` registers `/imagine` without adding another Telegram module
+  to the frozen import-boundary baseline. Existing `/image` is unchanged.
+- The provider guard requires `paid_tier=True`, a key and a positive operator
+  estimate. No automatic paid fallback. `/imagine` and `--fill` enforce the
+  existing owner/allowlist policy; `/imagine` uses the existing request limiter.
+- `bot/slideshow.py` parses leading `--slides N --fill` options. The flag provides
+  consent without a second interaction; a number alone never grants it. Require
+  at least one uploaded image and preserve the five-image/30-second queue limit.
+  Titles remain subject to the existing 60-character grammar. Generation prompts
+  add a distinct scene index; they do not include uploaded image bytes.
+- `creative/slideshow/image_fill.py` generates the deficit before the existing
+  render lane. `SlideshowRenderPayload` revalidates consent, prompt and counts
+  at the queue boundary. Failures use `image_generation_failed`, not raw provider
+  exceptions. No change to pack manifests, `JobQueuePort` or the render IR.
+- Cleanup: generated files are `generated_<index>_<uuid>.<verified image extension>`
+  inside the existing `slideshow_<user>_<job>` workspace. Partial generation is
+  removed on exceptions/cancellation; the worker deletes all input images after
+  rendering. `master.mp4` is retained only on success for notifier-owned delivery
+  and deletion; existing 24-hour stale-workspace pruning remains in place.
+- Cache: SHA-256 of provider/model/all request fields, per-instance TTL of one
+  hour, 16-entry and 32-MiB LRU limits. Immutable validated image bytes, not paths
+  that another job can delete. Serialize requests per adapter to prevent duplicate
+  in-flight generation. Never cache failures or bypass billing authorization.
+- Retry: three attempts by default (configurable internally within 1–5), async
+  exponential delay plus jitter, capped numeric Retry-After; only transport,
+  429 and 5xx failures. No redirects, arbitrary endpoints or raw HTTP exceptions
+  at the application boundary; responses/images have byte limits and Pillow
+  verifies image structure. Gemini honors supported aspect ratios, not a promise
+  of exact pixel dimensions, and rejects unsupported seeds.
+- Accounting: `image_generation_cost` logs an explicit **estimate per successful
+  HTTP response**, including undecodable responses; guards and cache hits emit
+  none. Network ambiguity is not proof of zero billing. No assertion that these
+  logs form a provider invoice, budget limit or exactly-once billing guarantee.
+
+**Verification so far:** 48 offline adapter cases, real handler registration and
+queue integration tests, and 40 architecture tests pass. All source types pass.
+No live Pollinations/Gemini requests or paid operations were performed. Final
+whole-repository gates and Git synchronization are recorded after sanitization.

@@ -1,8 +1,8 @@
 # NEXUS AI Agent
 
-**Global AI Platform** — the world's most feature-rich free Telegram AI bot, combining Google Gemini 2.0 Flash, 57GB+ unified cloud storage, viral referral growth, 15-language support, image generation, speech synthesis, and smart summarization — all powered by 100% free APIs.
+**Telegram AI platform** — multi-provider conversations, cloud storage, 15-language support, image generation, speech synthesis, and the Nagar creative studio. Local/free paths are available; optional hosted services may require credentials and incur charges.
 
-> **Current version: v2.0.0** — Global Expansion Release 🌍🚀
+> **Current release: v3.11.0** (see `VERSION`). The Wave 3 additions below are unreleased.
 
 ---
 
@@ -43,7 +43,7 @@
 - **10 style presets**: realistic, anime, digital, oil, watercolor, pixel, 3d, comic, minimal, fantasy
 - **5 size options**: 1024×1024, 1792×1024, 1024×1792, 512×512, 1280×720
 - `/image <description>` — e.g., `/image style:anime a cat samurai`
-- Zero API key required — completely free
+- Legacy Pollinations integration; provider availability, terms and quotas may change.
 
 #### 🎤 Speech-to-Text & Text-to-Speech
 - `/tts <text>` — Convert text to voice message (100+ languages via gTTS)
@@ -69,6 +69,95 @@
 - English, Persian, Arabic, Spanish, French, German, Russian, Chinese, Japanese, Korean, Portuguese, Hindi, Turkish, Indonesian, Italian
 - Per-user language preference persistence
 - `/language` — Interactive inline keyboard for language selection
+
+---
+
+## Nagar image generation and slideshow (Wave 3, unreleased)
+
+### `/imagine`: text to image
+
+```text
+/imagine a watercolor sunrise over the Caspian Sea
+```
+
+The new command uses `ImageGenProvider`, not the legacy `/image` engine. It sends
+only your text prompt to the configured service and replies with image bytes.
+Prompts must be non-empty and at most 2,000 characters. `/imagine` and slideshow
+`--fill` require the owner or an entry in `NEXUS_ALLOWED_USER_IDS`; `/imagine`
+also uses the bot's request limiter. Existing `/image` style syntax is unchanged.
+
+**Default provider:** Pollinations, with no automatic paid fallback. External
+availability is not guaranteed; HTTP failures surface as errors, not fake images.
+
+**Optional paid Gemini:** configure all of the following and restart the process:
+
+| Variable | Default / meaning |
+|---|---|
+| `NEXUS_IMAGE_GEN_PROVIDER` | `pollinations`; set to `gemini` to select Gemini |
+| `NEXUS_IMAGE_GEN_PAID_TIER` | `false`; must be `true` to authorize paid generation |
+| `NEXUS_CREATIVE_GEMINI_API_KEY` | Required for Gemini; use your secret environment, not Git |
+| `NEXUS_IMAGE_GEN_MODEL` | `gemini-2.5-flash-image` (Gemini only) |
+| `NEXUS_IMAGE_GEN_ESTIMATED_COST_USD` | `0`; Gemini requires a **positive operator-supplied estimate per response** |
+
+The estimate is not a live price lookup. Confirm current model availability,
+provider pricing and account billing before enabling Gemini. Merely supplying an
+API key never authorizes paid generation. There were no live image-provider calls
+in the offline verification suite.
+
+### `/slideshow`: uploads plus optional generated images
+
+1. Send `/slideshow` to open a photo collection session.
+2. Upload one to five photos in that chat (sessions are per chat/user).
+3. Send `/slideshow Ocean holiday` for the existing upload-only behavior.
+4. To fill a deficit, instead send:
+
+   ```text
+   /slideshow --slides 5 --fill Ocean holiday
+   ```
+
+With **three uploaded photos**, that final command generates **exactly two**
+complementary images. `--slides N` specifies the total number of input images,
+not additional images; `N` is 1–5 and cannot discard already collected uploads.
+Flags precede the title. A title is at most 60 characters, using letters, digits,
+spaces, dots, colons or hyphens. The same syntax works in a photo caption.
+
+`--fill` is opt-in consent to send the title as a generation prompt and, if the
+operator enabled Gemini, incur its generation cost. A count alone is **not**
+consent: the bot asks for `--fill` and retains the collected photos. No extra
+confirmation round-trip is needed once the flag is present. Existing photographs
+are **never uploaded to the image generator**. The separate slideshow-analysis
+upload setting still controls optional hosted analysis. Without `--fill`, no
+image generation occurs; when there is no deficit, no provider is contacted.
+
+Generation runs in the existing `slideshow_render` queue before the same planner
+and FFmpeg renderer. The Telegram flow remains capped at **five images / 30
+seconds**, at 1280×720. The worker removes inputs and generated intermediates;
+on success the notifier delivers the MP4 and then deletes it. On generation
+failure or cancellation, partial generated images are removed. Session photo IDs
+expire after 30 minutes; queued jobs follow the existing queue lifecycle.
+
+### Reliability, caching and cost events
+
+- Up to three HTTP attempts for transport errors, 429 and 5xx, with jittered
+  exponential backoff and a numeric `Retry-After` capped at eight seconds.
+  Other 4xx, redirects, invalid images and safety refusals are not retried.
+- Each process/provider owns an in-memory SHA-256 cache over provider, model,
+  prompt, dimensions and seed. It is limited to **16 entries / 32 MiB / one hour**;
+  LRU eviction, restart or expiration permits a new request. It is not durable
+  across queue restarts and is not a disk cache.
+- Concurrent requests are serialized per adapter, so identical requests share
+  their result. Failed or cancelled requests are never cached. Gemini's paid-tier
+  guard runs **before** cache access as well as before waiting requests proceed.
+- `image_generation_cost` records provider, model, attempt and
+  `estimated_cost_usd` once per successful HTTP response, including malformed
+  responses that might still be billable. Cache hits and rejected guards emit no
+  cost event. Adapter cost/retry events contain neither API keys nor prompt text.
+- These events are **estimates, not an invoice or spending cap**. A timeout can
+  occur after the provider has billed a request; retries and resumed jobs may
+  incur additional charges. Reconcile actual charges with the provider.
+
+See [the decision log](docs/DECISION_LOG.md#2026-09-20--wave-3-image-generation-refinement)
+for filenames, ownership boundaries and the cleanup policy.
 
 ---
 
@@ -200,6 +289,10 @@ make run
 |---------|-------------|
 | `/image <description>` | Generate AI image |
 | `/image style:anime a cat` | Generate with style preset |
+| `/imagine <description>` | Generate via retry/cache-aware provider (authorized users) |
+| `/slideshow` | Start collecting one to five photos |
+| `/slideshow <title>` | Queue an upload-only slideshow |
+| `/slideshow --slides 5 --fill <title>` | Opt in to generating only missing images |
 
 ### 🎤 Speech (v2.0.0)
 | Command | Description |
