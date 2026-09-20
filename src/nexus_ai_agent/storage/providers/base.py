@@ -46,3 +46,9 @@ class ProviderConfig:
     huggingface_token: str | None = None
     rclone_remote: str | None = None  # e.g. "gdrive:nexus-ai-agent"
     gdrive_bearer_token: str | None = None
+    # Cloudflare R2 — technical blob tier (DB backups, heavy RAG docs).
+    # Not part of the user-file round-robin; see providers/r2.py.
+    r2_account_id: str | None = None
+    r2_access_key_id: str | None = None
+    r2_secret_access_key: str | None = None
+    r2_bucket: str | None = None

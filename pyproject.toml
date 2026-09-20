@@ -44,6 +44,7 @@ dependencies = [
     "beautifulsoup4>=4.12",
     "psutil>=5.9",
     "litellm>=1.74,<2",  # multi-provider routing chain (Ollama/Groq/Gemini/OpenRouter)
+    "boto3==1.43.98",  # pinned: Cloudflare R2 blob tier (v3.9.0, latest on PyPI 2026-09-20)
   ]
 
 [project.scripts]
@@ -113,5 +114,8 @@ module = [
     "redis",
     "arabic_reshaper",
     "bidi.algorithm",
+    "boto3",
+    "botocore",
+    "botocore.config",
 ]
 ignore_missing_imports = true

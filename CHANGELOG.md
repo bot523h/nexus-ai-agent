@@ -5,6 +5,38 @@ All notable changes to NEXUS AI Agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0] — 2026-09-20
+
+### Added
+- **Cloudflare R2 — the "technical blob" tier + scheduled maintenance (Phase 5)**
+  - `storage/providers/r2.py`: `R2Provider` on the existing
+    `StorageProvider` protocol — boto3 against the S3-compatible endpoint
+    (`https://{account_id}.r2.cloudflarestorage.com`, `region_name="auto"`,
+    pinned `boto3==1.43.98`), client always built with
+    `Config(request_checksum_calculation="when_required")` (known R2
+    checksum-compatibility trap). Adds `generate_presigned_url(key,
+    expires_in)` with the R2 7-day TTL cap (604800 s → beyond raises) and
+    batched `delete_objects` for retention pruning. boto3 client is
+    injectable — unit tests run fully offline.
+  - `storage/ai_storage_manager.py`: a **separate routing branch** for
+    technical blobs (`is_blob_key`, `BLOB_KEY_PREFIXES = ("backups/",
+    "rag-docs/")`) — database backups and heavy RAG documents go to R2
+    only (`upload_blob`/`download_blob`/`blob_presigned_url`). R2 is
+    deliberately **not** added to the user-file round-robin
+    (`unified_cloud.py` untouched; user files keep their existing path).
+  - `maintenance/` + new CLI group `nexus maintenance`:
+    `backup` (pg_dump / SQLite online-backup → R2, stateless, fails loudly
+    without R2) and `housekeeping` (stale creative temp files + R2 backup
+    retention prune, idempotent, stays green without R2); both with
+    `--dry-run`.
+  - `.github/workflows/maintenance.yml`: schedule-only (plus manual
+    `workflow_dispatch`) — `backup-db` nightly 03:17 UTC, `housekeeping`
+    weekly Mondays 04:23 UTC (deliberately off the top-of-hour); single
+    shared `concurrency` group (`cancel-in-progress: false`); secrets:
+    `NEXUS_DATABASE_URL` + the four `R2_*` keys — no bot token.
+  - `docs/r2-storage.md`: bucket/token setup (single-bucket token scope),
+    `.env` and GitHub secrets guide.
+
 ## [3.8.0] — 2026-09-19
 
 ### Added

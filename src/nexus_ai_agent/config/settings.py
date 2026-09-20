@@ -287,6 +287,26 @@ class Settings(BaseSettings):
         description="Temporary directory for creative jobs",
     )
 
+    # ── v3.9.0: Cloudflare R2 — technical blob tier (DB backups, heavy RAG docs) ──
+    # Not part of the user-file round-robin. Create an R2 API token scoped to a
+    # single bucket (Object Read & Write); see docs/r2-storage.md.
+    r2_account_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("R2_ACCOUNT_ID", "NEXUS_R2_ACCOUNT_ID"),
+    )
+    r2_access_key_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("R2_ACCESS_KEY_ID", "NEXUS_R2_ACCESS_KEY_ID"),
+    )
+    r2_secret_access_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("R2_SECRET_ACCESS_KEY", "NEXUS_R2_SECRET_ACCESS_KEY"),
+    )
+    r2_bucket: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("R2_BUCKET", "NEXUS_R2_BUCKET"),
+    )
+
     @field_validator("allowed_user_ids", mode="before")
     @classmethod
     def _parse_allowed_user_ids(cls, v):  # type: ignore[no-untyped-def]
