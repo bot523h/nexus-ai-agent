@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T18:56:20Z",
+  "updated_at": "2026-09-21T21:28:25Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -117,6 +117,80 @@
       "status": "delivered_pending_gates_owner",
       "note": "DELIVERED task-113-ci-lint-rail (+ task-111 residue R1) on arena/01a0c54f-nexus-ai-agent @ c3b1635. Zero added conflict, proven: `git merge-tree --write-tree` against origin/pr33 and origin/pr39 yields exactly the same conflict sets with and without this branch (11 files / 1 file), and .github/workflows/ci.yml is in neither — the PR#33 conflicts are its own rebase debt with main. Gates deferred to ci-gates-steward per rule 4. Next: PR open, then task-135 once PR#33 lands.",
       "ci_evidence": "PR#42 (OPEN, MERGEABLE) · CI run 35641927691 completed SUCCESS with all four jobs: lint-fast 10 s (new rail: lockstep script -> pinned ruff check -> format), lint, test, migrate-postgres. The rail reports in 10 s what used to wait ~14 min behind the install."
+    },
+    "agent_i_01a0c5da": {
+      "identity": "عامل I (سشن canonical=شاخه 01a0c5da — فعال‌سازی runtime پک‌ها، بستن شکاف ۶ عمل TDD، دروازه‌های حقیقت و پوشش سبک)",
+      "branch": "arena/01a0c5da-nexus-ai-agent",
+      "task": "wave5-activation-and-gap-closure (W5-1..W5-10)",
+      "status": "active_claimed",
+      "note": "Claim پیش از کدنویسی و به‌صورت push‌شده (قاعده ۱). نقشه عدم‌تداخل measured است، نه ادعایی: شاخه‌های #45 (ee500f5)، #44 (54da28a) و #43 (c8910fa) روی b422512 ساخته شده‌اند و فایل‌هایشان با مسیرهای من اشتراک صفر دارند؛ #39/#33/#32 تاریخ مشترک با main ندارند (merge-base=NONE) پس GitHub آن‌ها را ادغام‌ناپذیر می‌داند تا مالکشان rebase کند — فهرست فایل آن‌ها فقط به‌عنوان سیگنال محتوا خوانده شد و از مسیرهای یکتای اعلام‌شده‌شان (packaging/OTIO/conv-store/docs/board) دور ماندم. تنها فایل مشترک با همه، .agents/board.json است که طبق AGENTS.md با قاعده «جدیدترین وضعیت فورنزیک برنده» حل می‌شود؛ blob بازاعمال در WAVE5_COORDINATION_01a0c5da.md ثبت شده است.",
+      "collision_proof": {
+        "method": "file-level intersection of my exclusive_paths with `git diff --name-only origin/main <pr-branch>` for every open PR + `git merge-base` lineage check",
+        "open_prs_at_claim": {
+          "45": {
+            "branch": "arena/01a0c58e-nexus-ai-agent",
+            "tip": "ee500f5",
+            "merge_base": "b422512",
+            "intersection_with_me": []
+          },
+          "44": {
+            "branch": "arena/01a0c593-nexus-ai-agent",
+            "tip": "54da28a",
+            "merge_base": "b422512",
+            "intersection_with_me": []
+          },
+          "43": {
+            "branch": "arena/01a0c58a-nexus-ai-agent",
+            "tip": "c8910fa",
+            "merge_base": "b422512",
+            "intersection_with_me": []
+          },
+          "39": {
+            "branch": "arena/01a0c4c1-nexus-ai-agent",
+            "tip": "71fc9f6",
+            "merge_base": "NONE(unrelated history)",
+            "intersection_with_me": [
+              ".agents/board.json"
+            ]
+          },
+          "33": {
+            "branch": "arena/01a0c3aa-nexus-ai-agent",
+            "tip": "8f2029e",
+            "merge_base": "NONE(unrelated history)",
+            "intersection_with_me": [
+              ".agents/board.json"
+            ],
+            "note_fa": "تنها ناحیه مشترک واقعی با کار یکتای #33 همین board است؛ در cli.py تغییر من در تابع _packs_registry (حدود خط ۴۴۸) و تغییر #33 در golden_update (حدود خط ۳۹۰) است → هانک‌های گسسته."
+          },
+          "32": {
+            "branch": "arena/01a0c34d-nexus-ai-agent",
+            "tip": "cda2119",
+            "merge_base": "NONE(unrelated history)",
+            "intersection_with_me": [
+              ".agents/board.json"
+            ]
+          }
+        },
+        "statement_fa": "هیچ عاملی در مسیرهای انحصاری این سشن نیست و هیچ مسیر انحصاری دیگری هم توسط این سشن لمس نمی‌شود. تفکیک صریح: #39=docs/architecture+AGENTS.md+board · #33=packaging/version/README/ci/board · #32=bot/surface+features+worker+board · #43=storage/resilience.py · #44=scripts/agent_board.py · #45=creative/rendering/*+CHANGELOG/ROADMAP/DECISION_LOG.",
+        "repo_level_exclusions_untouched": [
+          "CHANGELOG.md",
+          "VERSION",
+          "README.md",
+          "ROADMAP_STATUS.md",
+          ".nexus/continuum.json",
+          "pyproject.toml",
+          ".github/**",
+          "AGENTS.md",
+          "docs/DECISION_LOG.md",
+          "docs/architecture/**",
+          "src/nexus_ai_agent/bot/**",
+          "src/nexus_ai_agent/features/**",
+          "src/nexus_ai_agent/storage/**",
+          "src/nexus_ai_agent/creative/rendering/**",
+          "scripts/agent_board.py"
+        ],
+        "why_exclusions_fa": "همه این مسیرها مالک فعال دارند (PR#33/#39/#32/#43/#44/#45). ورود به آن‌ها = تداخل میلی‌متری ممنوع. ورودی CHANGELOG آگاهانه ساخته نشد تا با بازنویسی سربرگ نسخه در PR#33 تعارض ندهد؛ متن آماده برای paste در سند سشن ثبت شده است."
+      }
     }
   },
   "ten_forward_tasks_network": [
@@ -245,7 +319,7 @@
       "zone": "creative-surface",
       "priority": "P2",
       "assigned_to": "عامل آزاد",
-      "status": "available_rescoped",
+      "status": "completed_on_main",
       "exclusive_paths": [
         "src/nexus_ai_agent/bot/creative_surface.py",
         "tests/unit/test_creative_surface.py"
@@ -256,7 +330,10 @@
         "برای هر فرمان: تست واحد با فیک surface (الگوی tests/unit/surface_fakes.py عامل B)",
         "لغو/timeout job به‌درستی وضعیت job را تمیز می‌کند"
       ],
-      "note": "RESCOPED 2026-09-21: main chose feature_handlers/ over surface/ (PR#34). Follow main pattern, NOT PR#32 surface (unless owner picks surface in task-122)."
+      "note": "RESCOPED 2026-09-21: main chose feature_handlers/ over surface/ (PR#34). Follow main pattern, NOT PR#32 surface (unless owner picks surface in task-122).",
+      "status_at_2026_09_21T21_28Z": "available_rescoped",
+      "evidence": "src/nexus_ai_agent/bot/creative_surface.py + tests/unit/test_creative_surface.py روی origin/main (wave4-step5)",
+      "verified_by_branch": "arena/01a0c5da-nexus-ai-agent"
     },
     {
       "id": "task-107",
@@ -855,6 +932,33 @@
       ],
       "scope": "Record of PR#39 (OPEN, head 71fc9f6): living architecture suite + board schema 2 + three guard tests (task-131, task-111). 26 files. Was invisible on the board before this record — that gap let another session duplicate its scope.",
       "note": "Coordination files (.agents/board.json, AGENTS.md) are deliberately NOT exclusive: every agent must write claims there, and PR#39's diff rewrites both to board schema 2. ⚠️ MERGE HAZARD for the schema-2 switch: .agents/board.json has two competing rewrites (PR#39 full schema-2 document vs this session's schema-1 additions). The claim entries added today are mirrored in COORDINATION_2026-09-21.md with an exact re-apply blob."
+    },
+    {
+      "task": "wave5-activation-and-gap-closure",
+      "zone": "nagar-runtime-activation",
+      "agent_branch": "arena/01a0c5da-nexus-ai-agent",
+      "claimed_at": "2026-09-21T21:28:25Z",
+      "ttl_hours": 24,
+      "status": "active",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/runtime.py",
+        "src/nexus_ai_agent/creative/packs/__init__.py",
+        "src/nexus_ai_agent/creative/packs/audio/",
+        "src/nexus_ai_agent/creative/packs/motion/",
+        "src/nexus_ai_agent/creative/packs/edit/",
+        "src/nexus_ai_agent/cli.py",
+        "scripts/pack_coverage.py",
+        "tests/unit/test_pack_runtime_composition.py",
+        "tests/unit/test_opgap_wave5.py",
+        "tests/architecture/test_pack_activation_completeness.py",
+        "docs/ops/PACK_RUNTIME.md",
+        "docs/audits/WAVE5_ACTIVATION_2026-09-21.md",
+        "WAVE5_COORDINATION_01a0c5da.md",
+        ".agents/board.json"
+      ],
+      "scope": "۱۰ گام مهندسی‌شده: (W5-1) ترکیب واحد runtime برای همه پک‌ها — ماژول جدید creative/packs/runtime.py؛ (W5-2) واگذاری _packs_registry به ترکیب واحد تا `nexus packs list` شش پک را active و pending=0 نشان دهد؛ (W5-3) تست واحد ترکیب (idempotency/duplicate/external-policy)؛ (W5-4) دروازه معماری کامل‌بودن فعال‌سازی (manifest ↔ runtime)؛ (W5-5) سه عمل جامانده motion (apply_mask/warp/add_particles)؛ (W5-6) دو عمل جامانده audio (remove_vocal/align_music)؛ (W5-7) آخرین عمل timeline (sync_multicam)؛ (W5-8) هارنس پوشش فقط-stdlib روی پک‌ها با آستانه و کد خروج (scripts/pack_coverage.py)؛ (W5-9) مستند عملیات PACK_RUNTIME.md؛ (W5-10) حسابرسی حقیقت تخته + مستند سشن + شبکه ۱۰ وظیفه بعدی.",
+      "note": "diagnostic-only gates (ruff check + targeted/full pytest) — full `make lint/types/test` deferred to the gates owner per AGENTS.md rule 4."
     }
   ],
   "deferred_log": [
@@ -935,7 +1039,7 @@
       "zone": "delivery-signing",
       "priority": "P1",
       "assigned_to": "عامل آزاد (پس از ۱۱۰)",
-      "status": "available",
+      "status": "completed_on_main",
       "exclusive_paths": [
         "src/nexus_ai_agent/creative/packs/delivery/signing.py",
         "tests/unit/test_delivery_signing.py"
@@ -945,7 +1049,10 @@
         "امضا/تأیید round-trip سبز",
         "دست‌کاری → خطای تایپ‌شده",
         "بدون کلید → fail-closed با پیام"
-      ]
+      ],
+      "status_at_2026_09_21T21_28Z": "available",
+      "evidence": "src/nexus_ai_agent/creative/packs/delivery/signing.py + tests/unit/test_delivery_signing.py روی origin/main",
+      "verified_by_branch": "arena/01a0c5da-nexus-ai-agent"
     },
     {
       "id": "task-113",
@@ -972,7 +1079,7 @@
       "zone": "creative-bench",
       "priority": "P2",
       "assigned_to": "عامل آزاد (پس از ۱۰۴/۱۰۵)",
-      "status": "available",
+      "status": "completed_on_main",
       "exclusive_paths": [
         "tests/bench/",
         "scripts/bench_render.py",
@@ -983,7 +1090,10 @@
         "baseline کامیت‌شده",
         "گیت رگرسیون perf در CI",
         "بدون نیاز به GPU"
-      ]
+      ],
+      "status_at_2026_09_21T21_28Z": "available",
+      "evidence": "tests/bench/* + scripts/bench_render.py + scripts/bench_caption.py روی origin/main (wave4-step6)",
+      "verified_by_branch": "arena/01a0c5da-nexus-ai-agent"
     },
     {
       "id": "task-115",
@@ -991,7 +1101,7 @@
       "zone": "llm-local",
       "priority": "P2",
       "assigned_to": "عامل آزاد",
-      "status": "available",
+      "status": "completed_on_main",
       "exclusive_paths": [
         "src/nexus_ai_agent/llm/local_provider.py",
         "tests/unit/test_llm_local.py"
@@ -1001,7 +1111,10 @@
         "بدون سرور: تست‌ها سبز (fail-closed)",
         "با سرور: یک round-trip واقعی",
         "هیچ ترافیک ابری"
-      ]
+      ],
+      "status_at_2026_09_21T21_28Z": "available",
+      "evidence": "src/nexus_ai_agent/llm/local_server_provider.py + tests/unit/test_local_server_provider.py روی origin/main",
+      "verified_by_branch": "arena/01a0c5da-nexus-ai-agent"
     },
     {
       "id": "task-116",
@@ -1045,7 +1158,7 @@
       "zone": "memory-eval",
       "priority": "P2",
       "assigned_to": "عامل آزاد",
-      "status": "available",
+      "status": "completed_on_main",
       "exclusive_paths": [
         "src/nexus_ai_agent/memory/",
         "tests/unit/test_memory_recall.py"
@@ -1055,7 +1168,10 @@
         "recall@k گزارش‌شده",
         "گارد معماری سبز",
         "بدون وابستگی جدید"
-      ]
+      ],
+      "status_at_2026_09_21T21_28Z": "available",
+      "evidence": "src/nexus_ai_agent/memory/eval.py + tests/unit/test_memory_recall.py + tests/architecture/test_memory_boundaries.py",
+      "verified_by_branch": "arena/01a0c5da-nexus-ai-agent"
     },
     {
       "id": "task-119",
@@ -1250,7 +1366,7 @@
       "zone": "i18n-parity",
       "priority": "P2",
       "assigned_to": "عامل آزاد (اکنون)",
-      "status": "available",
+      "status": "completed_on_main",
       "exclusive_paths": [
         "src/nexus_ai_agent/i18n/",
         "tests/unit/test_i18n_key_parity.py"
@@ -1260,7 +1376,10 @@
         "تست parity سبز (۱۵/۱۵)",
         "گزارش پوشش fa",
         "بدون کلید یتیم"
-      ]
+      ],
+      "status_at_2026_09_21T21_28Z": "available",
+      "evidence": "tests/unit/test_i18n_parity.py سبز؛ هر ۱۵ locale دقیقاً ۶۳ کلید با مجموعه placeholder یکسان",
+      "verified_by_branch": "arena/01a0c5da-nexus-ai-agent"
     },
     {
       "id": "task-130",
@@ -1268,7 +1387,7 @@
       "zone": "e2e-deploy",
       "priority": "P3",
       "assigned_to": "عامل آزاد (اکنون، اسکوپ محدود)",
-      "status": "available",
+      "status": "partially_completed_on_main",
       "exclusive_paths": [
         "koyeb.yaml",
         "scripts/smoke_e2e.py",
@@ -1279,7 +1398,10 @@
         "smoke با exit-code معنادار",
         "۴ ران‌بوک + لینک README",
         "بدون لمس compose/Dockerfile"
-      ]
+      ],
+      "status_at_2026_09_21T21_28Z": "available",
+      "evidence": "scripts/deploy_smoke.py + docs/ops/RUNBOOK_HARDENING.md موجود؛ نیمه compose در smoke_e2e.py تا #33 stub است",
+      "verified_by_branch": "arena/01a0c5da-nexus-ai-agent"
     }
   ],
   "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins.",
@@ -1304,6 +1426,22 @@
         "tasks 122/123 need B/E#1 action — cannot do for them (their zones)"
       ],
       "fa": "تکرار ۱۱۰ حذف و به #33 واگذار شد؛ تخته با ۱۰ تسک جدید مالک‌دار به‌روز شد؛ PR من (۱۰۴+۱۰۵) آماده باز شدن است."
+    },
+    {
+      "at": "2026-09-21T21:28:25Z",
+      "by_branch": "arena/01a0c5da-nexus-ai-agent",
+      "agent": "عامل I",
+      "done": [
+        "fetch همه شاخه‌های arena + نقشه عدم‌تداخل measured (merge-base + تقاطع فایل)",
+        "claim push-شده روی تخته با exclusive_paths و collision_proof",
+        "حسابرسی حقیقت: ۶ تسک «available» ثابت شد روی main تحویل شده‌اند و وضعیتشان اصلاح شد",
+        "baseline سبز سنجیده شد: pytest 1181 passed / 20 skipped، ruff check+format سبز، mypy فقط ۲ خطای محیطی (chromadb نصب‌نشده) — قبل از هر تغییری"
+      ],
+      "not_done": [
+        "W5-1..W5-10 (اجرای این موج)",
+        "گیت کامل make lint/types/test — deferred to gates owner (قاعده ۴)"
+      ],
+      "fa": "اول حقیقت را اندازه گرفتم، بعد ادعا کردم، بعد کد می‌زنم: تخته stale بود و قبل از هر کار جدید تصحیح شد تا هیچ عاملی کار تکراری انجام ندهد."
     }
   ],
   "ten_forward_tasks_wave4": [
@@ -1547,6 +1685,18 @@
       "by_branch": "arena/01a0c54f-nexus-ai-agent",
       "action": "PR#42 opened; CI verified end-to-end on the real runner",
       "evidence_fa": "چهار job سبز: lint-fast ۱۰ ثانیه (اسکریپت lockstep + ruff پین‌شده، بدون نصب)، lint، test، migrate-postgres؛ PR قابل merge است. یعنی هم معیار پذیرش task-113 روی واقعیت اجرا تأیید شد و هم ادعای «ثانیه‌ای به‌جای ۱۴ دقیقه» اندازه‌گیری شد."
+    },
+    {
+      "at": "2026-09-21T21:28:25Z",
+      "by_branch": "arena/01a0c5da-nexus-ai-agent",
+      "action": "claim لایه Wave-5 با اثبات measured عدم‌تداخل (پیش از هر خط کد)",
+      "evidence_fa": "۱) `git fetch` + `git merge-base` روی همه شاخه‌های open نشان داد #45/#44/#43 از b422512 منشعب‌اند (merge-base = tip main) و فهرست فایلشان با مسیرهای من اشتراک صفر دارد؛ #39/#33/#32 تاریخ مشترک ندارند (merge-base=NONE) و ادغام‌پذیر نیستند مگر با rebase مالک. ۲) تقاطع فایل‌به‌فایل با diff همه PRها محاسبه شد: تنها اشتراک، .agents/board.json (فایل هماهنگی) است. ۳) این claim **قبل** از اولین خط کد نوشته، کامیت و push می‌شود (قاعده ۱ «claim push‌نشده وجود ندارد»)."
+    },
+    {
+      "at": "2026-09-21T21:28:25Z",
+      "by_branch": "arena/01a0c5da-nexus-ai-agent",
+      "action": "forensic truth pass: وضعیت واقعی ۱۰ وظیفه قبلی روی main بازبینی شد",
+      "evidence_fa": "با بازبینی artifactها روی origin/main (نه ادعاها): task-106 (bot/creative_surface.py + tests/unit/test_creative_surface.py) ✅ انجام‌شده؛ task-112 (delivery/signing.py + test_delivery_signing.py) ✅؛ task-114 (tests/bench/*، scripts/bench_*.py) ✅؛ task-115 (llm/local_server_provider.py + test_local_server_provider.py) ✅؛ task-118 (memory/eval.py + test_memory_recall.py + tests/architecture/test_memory_boundaries.py) ✅؛ task-117/130 نیمه‌انجام: scripts/deploy_smoke.py + docs/ops/RUNBOOK_HARDENING.md ✅ اما نیمه compose در scripts/smoke_e2e.py صریحاً stub تا #33 ❌؛ task-116 در ریویو PR#43؛ task-129 (i18n 15 زبان) ✅ انجام‌شده — tests/unit/test_i18n_parity.py + ۶۳ کلید هم‌مجموعه در هر ۱۵ locale. نتیجه: تخته در این ردیف‌ها stale بود. وضعیت‌ها با فیلد evidence اصلاح شد (بدون تغییر مالکیت)."
     }
   ]
 }
