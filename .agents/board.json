@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T20:10:15Z",
+  "updated_at": "2026-09-21T20:10:32Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -121,9 +121,9 @@
     "agent_i_01a0c593": {
       "identity": "عامل I (داور برد/کنترل تداخل active_in_review — ادامهٔ مستقل پس از راستی‌آزمایی PR#43)",
       "branch": "arena/01a0c593-nexus-ai-agent",
-      "task": "task-136-board-active-in-review-referee",
-      "status": "active_verification_and_fix_in_progress",
-      "note": "راستی‌آزمایی PR#43 کامل شد: PR کد با تست‌های storage resilience برابر 69 passed؛ همان تست‌ها روی origin/main با تست boundary افزوده‌شده برابر 36 failed / 33 passed. GitHub CI PR#43 اکنون همهٔ checkها سبز است (۲× lint، ۲× test، ۲× migrate-postgres، ۲× lint-fast) و PR MERGEABLE است. این سشن فایل‌های storage PR#43 را لمس نکرد. اصلاح داور برد انجام شد: active_in_review در check/claim/gc/defer مثل active دیده می‌شود."
+      "task": "task-136-board-active-in-review-referee — PR#44",
+      "status": "active_in_review_PR44",
+      "note": "راستی‌آزمایی PR#43 کامل شد: PR کد با تست‌های storage resilience برابر 69 passed؛ همان تست‌ها روی origin/main با تست boundary افزوده‌شده برابر 36 failed / 33 passed. GitHub CI PR#43 اکنون همهٔ checkها سبز است (۲× lint، ۲× test، ۲× migrate-postgres، ۲× lint-fast) و PR MERGEABLE است. این سشن فایل‌های storage PR#43 را لمس نکرد. اصلاح داور برد انجام شد: active_in_review در check/claim/gc/defer مثل active دیده می‌شود. PR#44 باز شد: https://github.com/bot523h/nexus-ai-agent/pull/44"
     }
   },
   "ten_forward_tasks_network": [
@@ -869,7 +869,7 @@
       "agent_branch": "arena/01a0c593-nexus-ai-agent",
       "claimed_at": "2026-09-21T20:07:41Z",
       "ttl_hours": 24,
-      "status": "active",
+      "status": "active_in_review",
       "gates_owner": false,
       "exclusive_paths": [
         "scripts/agent_board.py",
@@ -877,7 +877,7 @@
         "COORDINATION_2026-09-21.md"
       ],
       "scope": "رفع شکاف داور برد: status=active_in_review باید در کنترل تداخل، انتخاب next و GC/lease مثل اجارهٔ فعال حساب شود؛ همراه با تست مستقل که به فایل‌های PR#39 دست نمی‌زند. همچنین ثبت راستی‌آزمایی PR#43 بدون ورود به فایل‌های storage آن.",
-      "note": "Implemented and locally verified: pytest tests/unit/test_agent_board_active_in_review.py -> 5 passed; ruff check/format on changed files -> green; mypy on changed files -> green; board negative control now blocks pr39 active_in_review docs/**. Awaiting PR creation from this branch."
+      "note": "Delivered in PR#44: active_in_review is now honored by check/claim/gc/defer. Local verification green: pytest 5/5, ruff check/format, mypy; negative control blocks PR#39 docs/**. Full gates deferred to gates owner."
     },
     {
       "task": "pr43-in-review-storage-resilience",
