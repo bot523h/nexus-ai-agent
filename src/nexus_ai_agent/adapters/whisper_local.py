@@ -295,8 +295,8 @@ class WhisperLocalCaptionEngine(CaptionEnginePort):
         return module.WhisperModel
 
     def _load_model(self) -> Any:
-        if self._model is not None:
-            return self._model
+        # Single check under the lock: an uncontended lock is nanoseconds, and
+        # double-checked locking only confuses both readers and type checkers.
         with self._lock:
             if self._model is not None:
                 return self._model
