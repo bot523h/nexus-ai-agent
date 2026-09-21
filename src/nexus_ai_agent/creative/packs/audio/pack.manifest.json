@@ -8,7 +8,11 @@
     "audio.detect_beats",
     "audio.normalize_loudness",
     "audio.duck_music",
-    "audio.beat_sync_cut"
+    "audio.beat_sync_cut",
+    "audio.remove_noise",
+    "audio.deess",
+    "audio.eq_voice",
+    "audio.time_stretch"
   ],
   "runtime": {
     "native": {

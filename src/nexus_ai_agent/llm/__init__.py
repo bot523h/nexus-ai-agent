@@ -8,6 +8,10 @@ from nexus_ai_agent.llm.litellm_provider import (
     LiteLLMRoutingProvider,
     RouterExhaustedError,
 )
+from nexus_ai_agent.llm.local_server_provider import (
+    LlamaServerError,
+    LocalLlamaServerProvider,
+)
 from nexus_ai_agent.llm.provider import LLMProvider
 
 __all__ = [
@@ -17,5 +21,7 @@ __all__ = [
     "GeminiProvider",
     "LLMProvider",
     "LiteLLMRoutingProvider",
+    "LlamaServerError",
+    "LocalLlamaServerProvider",
     "RouterExhaustedError",
 ]

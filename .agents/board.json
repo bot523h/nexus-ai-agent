@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T16:05:00Z",
+  "updated_at": "2026-09-21T15:56:57Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -670,6 +670,68 @@
       "note": "F runs/reads full gates (branch CI + main CI) until E#1 merges #33 or A returns. E#1 backup (green-gates evidence). No code paths locked."
     },
     {
+      "task": "task-125",
+      "zone": "nagar-opgap",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "done",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/audio/",
+        "src/nexus_ai_agent/creative/packs/motion/",
+        "tests/unit/test_opgap_audio_motion.py"
+      ],
+      "scope": "شکاف TDD: اسلایس صوت/موشن (۱۵ عملیات جامانده) — فاز خالص",
+      "note": ""
+    },
+    {
+      "task": "task-129",
+      "zone": "i18n-parity",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "done",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/i18n/",
+        "tests/unit/test_i18n_parity.py"
+      ],
+      "scope": "برابری کلیدهای i18n در ۱۵ زبان + ممیزی فارسی (اکنون — صفر تداخل)",
+      "note": ""
+    },
+    {
+      "task": "task-130",
+      "zone": "e2e-deploy",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "done",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "koyeb.yaml",
+        "scripts/deploy_smoke.py",
+        "docs/ops/"
+      ],
+      "scope": "دودکش E2E + ران‌بوک استقرار (نیمه آزاد؛ compose پس از #33)",
+      "note": ""
+    },
+    {
+      "task": "task-115",
+      "zone": "llm-local",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "done",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/llm/local_server_provider.py",
+        "tests/unit/test_local_server_provider.py"
+      ],
+      "scope": "ارائه‌دهنده LLM محلی (llama.cpp server) به‌صورت extra اختیاری",
+      "note": ""
+    },
+    {
       "task": "task-111-version-lockstep-ci",
       "zone": "ci-quality",
       "agent_branch": null,
@@ -1109,7 +1171,7 @@
       ]
     }
   ],
-  "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly.",
+  "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins.",
   "merge_order_recommendation": "Owner picks; F recommends by blast-radius: 1) F PR (104+105 — smallest, functionally disjoint from #33/#32; only pyproject/board/log touch) → 2) PR#33 after rescope+rebase (task-123; biggest value: packaging+interop) → 3) PR#32 last (task-122; needs most rework). Never merge #32+#33 un-rebased in sequence (E#1 overlapping-PRs rule).",
   "execution_log": [
     {

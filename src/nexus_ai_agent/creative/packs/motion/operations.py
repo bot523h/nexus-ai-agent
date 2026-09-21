@@ -19,14 +19,18 @@ from nexus_ai_agent.creative.packs.motion.models import (
     MOTION_PACKAGE_ID,
     OPERATION_ADD_GLOW,
     OPERATION_ADD_MOTION_BLUR,
+    OPERATION_ADD_PARALLAX,
     OPERATION_ADD_TITLE,
     OPERATION_ADD_TRANSITION,
     OPERATION_KEYFRAME_TRANSFORM,
+    OPERATION_STABILIZE,
     AddGlowInput,
     AddMotionBlurInput,
+    AddParallaxInput,
     AddTitleInput,
     AddTransitionInput,
     KeyframeTransformInput,
+    StabilizeInput,
 )
 from nexus_ai_agent.creative.studio.capabilities import (
     CapabilityRegistry,
@@ -273,6 +277,117 @@ def _add_title(project: Project, context: OperationContext) -> OperationOutcome:
     )
 
 
+def _require_video_asset(
+    known: dict[str, AssetRecord], asset_id: str, operation_id: str
+) -> AssetRecord:
+    """Resolve ``asset_id`` or raise; enforces the ``video`` media kind."""
+    if asset_id not in known:
+        raise CommandValidationError(f"{operation_id} references unknown video asset: {asset_id!r}")
+    record = known[asset_id]
+    if record.media_kind != "video":
+        raise CommandValidationError(
+            f"{operation_id} requires a video asset, got {record.media_kind!r} for {asset_id!r}"
+        )
+    return record
+
+
+def _stabilize(project: Project, context: OperationContext) -> OperationOutcome:
+    """Level B (REVERSIBLE) handler for motion.stabilize.
+
+    Derives a stabilized clip plan (camera-shake compensation with crop mode).
+    """
+    payload = StabilizeInput.model_validate(context.input_data)
+    known = _asset_index(project)
+    source = _require_video_asset(known, payload.clip_asset_id, OPERATION_STABILIZE)
+
+    output_id = payload.output_asset_id or f"stabilized_{uuid.uuid4().hex[:12]}"
+    digest_seed = f"{source.content_sha256}:stabilize:{payload.strength}:{payload.crop_mode}"
+    derived_sha256 = hashlib.sha256(digest_seed.encode("utf-8")).hexdigest()
+
+    stabilized_record = AssetRecord(
+        asset_id=output_id,
+        media_kind="video",
+        content_sha256=f"sha256:{derived_sha256}",
+        duration_us=source.duration_us,
+        parent_asset_ids=(source.asset_id,),
+        provenance={
+            "source_asset_id": source.asset_id,
+            "strength": payload.strength,
+            "crop_mode": payload.crop_mode,
+            "processor": "nagar.motion.graphics.stabilize.v1",
+        },
+    )
+
+    new_project = project.model_copy(update={"assets": [*project.assets, stabilized_record]})
+    return OperationOutcome(
+        new_project,
+        context.history,
+        {
+            "asset_id": output_id,
+            "source_asset_id": source.asset_id,
+            "strength": payload.strength,
+            "crop_mode": payload.crop_mode,
+            "content_sha256": stabilized_record.content_sha256,
+        },
+    )
+
+
+def _add_parallax(project: Project, context: OperationContext) -> OperationOutcome:
+    """Level B (REVERSIBLE) handler for motion.add_parallax.
+
+    Derives a parallax clip plan with a deterministic per-layer offset table:
+    layer 0 is the foreground (full offset) and the last layer is the
+    background (zero offset).
+    """
+    payload = AddParallaxInput.model_validate(context.input_data)
+    known = _asset_index(project)
+    source = _require_video_asset(known, payload.clip_asset_id, OPERATION_ADD_PARALLAX)
+
+    layer_count = payload.depth_layers
+    layer_plan = [
+        {
+            "layer": index,
+            "depth": round(index / (layer_count - 1), 4),
+            "offset_factor": round((1.0 - index / (layer_count - 1)) * payload.intensity, 4),
+            "axis": payload.direction,
+        }
+        for index in range(layer_count)
+    ]
+
+    output_id = payload.output_asset_id or f"parallax_{uuid.uuid4().hex[:12]}"
+    digest_seed = (
+        f"{source.content_sha256}:parallax:{layer_count}:{payload.intensity}:{payload.direction}"
+    )
+    derived_sha256 = hashlib.sha256(digest_seed.encode("utf-8")).hexdigest()
+
+    parallax_record = AssetRecord(
+        asset_id=output_id,
+        media_kind="video",
+        content_sha256=f"sha256:{derived_sha256}",
+        duration_us=source.duration_us,
+        parent_asset_ids=(source.asset_id,),
+        provenance={
+            "source_asset_id": source.asset_id,
+            "depth_layers": layer_count,
+            "intensity": payload.intensity,
+            "direction": payload.direction,
+            "processor": "nagar.motion.graphics.parallax.v1",
+        },
+    )
+
+    new_project = project.model_copy(update={"assets": [*project.assets, parallax_record]})
+    return OperationOutcome(
+        new_project,
+        context.history,
+        {
+            "asset_id": output_id,
+            "source_asset_id": source.asset_id,
+            "layer_plan": layer_plan,
+            "content_sha256": parallax_record.content_sha256,
+        },
+    )
+
+
 def register_motion_operations(registry: CapabilityRegistry) -> None:
     """Register all motion graphics operations with the capability registry."""
     registry.register_operation(
@@ -336,6 +451,32 @@ def register_motion_operations(registry: CapabilityRegistry) -> None:
             permission_level=PermissionLevel.REVERSIBLE,
             input_model=AddTitleInput,
             handler=_add_title,
+            required_packs=(MOTION_PACKAGE_ID,),
+            deterministic=True,
+        ),
+    )
+    registry.register_operation(
+        DOMAIN,
+        "stabilize",
+        OperationSpec(
+            operation_id=OPERATION_STABILIZE,
+            description="Derive a stabilized clip plan (Level B).",
+            permission_level=PermissionLevel.REVERSIBLE,
+            input_model=StabilizeInput,
+            handler=_stabilize,
+            required_packs=(MOTION_PACKAGE_ID,),
+            deterministic=True,
+        ),
+    )
+    registry.register_operation(
+        DOMAIN,
+        "add_parallax",
+        OperationSpec(
+            operation_id=OPERATION_ADD_PARALLAX,
+            description="Derive a depth-layer parallax clip plan (Level B).",
+            permission_level=PermissionLevel.REVERSIBLE,
+            input_model=AddParallaxInput,
+            handler=_add_parallax,
             required_packs=(MOTION_PACKAGE_ID,),
             deterministic=True,
         ),

@@ -8,6 +8,10 @@ This module implements the Nagar Command Bus operations for audio studio feature
 * ``audio.duck_music`` (Level B, REVERSIBLE): Sidechain ducking of background music against voice.
 * ``audio.beat_sync_cut`` (Level B, REVERSIBLE): Synchronizes visual clip edits to
 * musical beat boundaries.
+* ``audio.remove_noise`` (Level B, REVERSIBLE): Broadband denoise derivation.
+* ``audio.deess`` (Level B, REVERSIBLE): Sibilance taming derivation.
+* ``audio.eq_voice`` (Level B, REVERSIBLE): Voice EQ preset derivation.
+* ``audio.time_stretch`` (Level B, REVERSIBLE): Duration-ratio retime derivation.
 """
 
 from __future__ import annotations
@@ -19,15 +23,25 @@ from nexus_ai_agent.creative.packs.audio.models import (
     AUDIO_PACKAGE_ID,
     DOMAIN,
     OPERATION_BEAT_SYNC_CUT,
+    OPERATION_DEESS,
     OPERATION_DETECT_BEATS,
     OPERATION_DUCK_MUSIC,
+    OPERATION_EQ_VOICE,
     OPERATION_NORMALIZE_LOUDNESS,
+    OPERATION_REMOVE_NOISE,
+    OPERATION_TIME_STRETCH,
+    VOICE_EQ_CUTS,
+    VOICE_EQ_PRESETS,
     BeatGridRef,
     BeatMarker,
     BeatSyncCutInput,
+    DeessInput,
     DetectBeatsInput,
     DuckMusicInput,
+    EqVoiceInput,
     NormalizeLoudnessInput,
+    RemoveNoiseInput,
+    TimeStretchInput,
 )
 from nexus_ai_agent.creative.studio.capabilities import (
     CapabilityRegistry,
@@ -274,6 +288,195 @@ def _beat_sync_cut(project: Project, context: OperationContext) -> OperationOutc
     )
 
 
+def _require_audio_asset(
+    known: dict[str, AssetRecord], asset_id: str, operation_id: str
+) -> AssetRecord:
+    """Resolve ``asset_id`` or raise; enforces the ``audio`` media kind."""
+    if asset_id not in known:
+        raise CommandValidationError(f"{operation_id} references unknown audio asset: {asset_id!r}")
+    record = known[asset_id]
+    if record.media_kind != "audio":
+        raise CommandValidationError(
+            f"{operation_id} requires an audio asset, got {record.media_kind!r} for {asset_id!r}"
+        )
+    return record
+
+
+def _remove_noise(project: Project, context: OperationContext) -> OperationOutcome:
+    """Level B (REVERSIBLE) handler for audio.remove_noise.
+
+    Derives a denoised audio track plan (broadband noise profile subtraction).
+    """
+    payload = RemoveNoiseInput.model_validate(context.input_data)
+    known = _asset_index(project)
+    source = _require_audio_asset(known, payload.audio_asset_id, OPERATION_REMOVE_NOISE)
+
+    output_id = payload.output_asset_id or f"denoised_{uuid.uuid4().hex[:12]}"
+    digest_seed = f"{source.content_sha256}:denoise:{payload.strength}:{payload.preserve_speech}"
+    derived_sha256 = hashlib.sha256(digest_seed.encode("utf-8")).hexdigest()
+
+    denoised_record = AssetRecord(
+        asset_id=output_id,
+        media_kind="audio",
+        content_sha256=f"sha256:{derived_sha256}",
+        duration_us=source.duration_us,
+        parent_asset_ids=(source.asset_id,),
+        provenance={
+            "source_asset_id": source.asset_id,
+            "strength": payload.strength,
+            "preserve_speech": payload.preserve_speech,
+            "processor": "nagar.audio.studio.denoise.v1",
+        },
+    )
+
+    new_project = project.model_copy(update={"assets": [*project.assets, denoised_record]})
+    return OperationOutcome(
+        new_project,
+        context.history,
+        {
+            "asset_id": output_id,
+            "source_asset_id": source.asset_id,
+            "strength": payload.strength,
+            "preserve_speech": payload.preserve_speech,
+            "content_sha256": denoised_record.content_sha256,
+        },
+    )
+
+
+def _deess(project: Project, context: OperationContext) -> OperationOutcome:
+    """Level B (REVERSIBLE) handler for audio.deess.
+
+    Derives a de-essed audio track plan (narrow-band sibilance compression).
+    """
+    payload = DeessInput.model_validate(context.input_data)
+    known = _asset_index(project)
+    source = _require_audio_asset(known, payload.audio_asset_id, OPERATION_DEESS)
+
+    output_id = payload.output_asset_id or f"deessed_{uuid.uuid4().hex[:12]}"
+    digest_seed = f"{source.content_sha256}:deess:{payload.frequency_hz}:{payload.threshold_db}"
+    derived_sha256 = hashlib.sha256(digest_seed.encode("utf-8")).hexdigest()
+
+    deessed_record = AssetRecord(
+        asset_id=output_id,
+        media_kind="audio",
+        content_sha256=f"sha256:{derived_sha256}",
+        duration_us=source.duration_us,
+        parent_asset_ids=(source.asset_id,),
+        provenance={
+            "source_asset_id": source.asset_id,
+            "frequency_hz": payload.frequency_hz,
+            "threshold_db": payload.threshold_db,
+            "processor": "nagar.audio.studio.deess.v1",
+        },
+    )
+
+    new_project = project.model_copy(update={"assets": [*project.assets, deessed_record]})
+    return OperationOutcome(
+        new_project,
+        context.history,
+        {
+            "asset_id": output_id,
+            "source_asset_id": source.asset_id,
+            "frequency_hz": payload.frequency_hz,
+            "threshold_db": payload.threshold_db,
+            "content_sha256": deessed_record.content_sha256,
+        },
+    )
+
+
+def _eq_voice(project: Project, context: OperationContext) -> OperationOutcome:
+    """Level B (REVERSIBLE) handler for audio.eq_voice.
+
+    Derives a voice-EQ'd audio track plan from a deterministic preset table.
+    """
+    payload = EqVoiceInput.model_validate(context.input_data)
+    known = _asset_index(project)
+    source = _require_audio_asset(known, payload.audio_asset_id, OPERATION_EQ_VOICE)
+
+    preset_bands = VOICE_EQ_PRESETS[payload.preset]
+    applied_bands = {band: round(gain + payload.gain_db, 2) for band, gain in preset_bands.items()}
+    cuts = list(VOICE_EQ_CUTS[payload.preset])
+
+    output_id = payload.output_asset_id or f"eqvoice_{uuid.uuid4().hex[:12]}"
+    digest_seed = f"{source.content_sha256}:eqvoice:{payload.preset}:{payload.gain_db}"
+    derived_sha256 = hashlib.sha256(digest_seed.encode("utf-8")).hexdigest()
+
+    eq_record = AssetRecord(
+        asset_id=output_id,
+        media_kind="audio",
+        content_sha256=f"sha256:{derived_sha256}",
+        duration_us=source.duration_us,
+        parent_asset_ids=(source.asset_id,),
+        provenance={
+            "source_asset_id": source.asset_id,
+            "preset": payload.preset,
+            "gain_db": payload.gain_db,
+            "applied_bands": dict(applied_bands),
+            "cuts": cuts,
+            "processor": "nagar.audio.studio.eq.v1",
+        },
+    )
+
+    new_project = project.model_copy(update={"assets": [*project.assets, eq_record]})
+    return OperationOutcome(
+        new_project,
+        context.history,
+        {
+            "asset_id": output_id,
+            "source_asset_id": source.asset_id,
+            "preset": payload.preset,
+            "applied_bands": applied_bands,
+            "cuts": cuts,
+            "content_sha256": eq_record.content_sha256,
+        },
+    )
+
+
+def _time_stretch(project: Project, context: OperationContext) -> OperationOutcome:
+    """Level B (REVERSIBLE) handler for audio.time_stretch.
+
+    Derives a retimed audio track plan; ``factor`` is the output/input
+    duration ratio (2.0 doubles the duration, 0.5 halves it).
+    """
+    payload = TimeStretchInput.model_validate(context.input_data)
+    known = _asset_index(project)
+    source = _require_audio_asset(known, payload.audio_asset_id, OPERATION_TIME_STRETCH)
+
+    new_duration_us = max(1, int(round(source.duration_us * payload.factor)))
+    output_id = payload.output_asset_id or f"stretched_{uuid.uuid4().hex[:12]}"
+    digest_seed = f"{source.content_sha256}:stretch:{payload.factor}:{payload.preserve_pitch}"
+    derived_sha256 = hashlib.sha256(digest_seed.encode("utf-8")).hexdigest()
+
+    stretched_record = AssetRecord(
+        asset_id=output_id,
+        media_kind="audio",
+        content_sha256=f"sha256:{derived_sha256}",
+        duration_us=new_duration_us,
+        parent_asset_ids=(source.asset_id,),
+        provenance={
+            "source_asset_id": source.asset_id,
+            "factor": payload.factor,
+            "preserve_pitch": payload.preserve_pitch,
+            "source_duration_us": source.duration_us,
+            "processor": "nagar.audio.studio.stretch.v1",
+        },
+    )
+
+    new_project = project.model_copy(update={"assets": [*project.assets, stretched_record]})
+    return OperationOutcome(
+        new_project,
+        context.history,
+        {
+            "asset_id": output_id,
+            "source_asset_id": source.asset_id,
+            "factor": payload.factor,
+            "preserve_pitch": payload.preserve_pitch,
+            "new_duration_us": new_duration_us,
+            "content_sha256": stretched_record.content_sha256,
+        },
+    )
+
+
 def register_audio_operations(registry: CapabilityRegistry) -> None:
     """Register all audio studio operations with the capability registry."""
     registry.register_operation(
@@ -324,6 +527,58 @@ def register_audio_operations(registry: CapabilityRegistry) -> None:
             permission_level=PermissionLevel.REVERSIBLE,
             input_model=BeatSyncCutInput,
             handler=_beat_sync_cut,
+            required_packs=(AUDIO_PACKAGE_ID,),
+            deterministic=True,
+        ),
+    )
+    registry.register_operation(
+        DOMAIN,
+        "remove_noise",
+        OperationSpec(
+            operation_id=OPERATION_REMOVE_NOISE,
+            description="Derive a denoised audio track plan (Level B).",
+            permission_level=PermissionLevel.REVERSIBLE,
+            input_model=RemoveNoiseInput,
+            handler=_remove_noise,
+            required_packs=(AUDIO_PACKAGE_ID,),
+            deterministic=True,
+        ),
+    )
+    registry.register_operation(
+        DOMAIN,
+        "deess",
+        OperationSpec(
+            operation_id=OPERATION_DEESS,
+            description="Derive a de-essed audio track plan (Level B).",
+            permission_level=PermissionLevel.REVERSIBLE,
+            input_model=DeessInput,
+            handler=_deess,
+            required_packs=(AUDIO_PACKAGE_ID,),
+            deterministic=True,
+        ),
+    )
+    registry.register_operation(
+        DOMAIN,
+        "eq_voice",
+        OperationSpec(
+            operation_id=OPERATION_EQ_VOICE,
+            description="Derive a voice-EQ'd audio track plan from a preset (Level B).",
+            permission_level=PermissionLevel.REVERSIBLE,
+            input_model=EqVoiceInput,
+            handler=_eq_voice,
+            required_packs=(AUDIO_PACKAGE_ID,),
+            deterministic=True,
+        ),
+    )
+    registry.register_operation(
+        DOMAIN,
+        "time_stretch",
+        OperationSpec(
+            operation_id=OPERATION_TIME_STRETCH,
+            description="Derive a retimed audio track plan by duration ratio (Level B).",
+            permission_level=PermissionLevel.REVERSIBLE,
+            input_model=TimeStretchInput,
+            handler=_time_stretch,
             required_packs=(AUDIO_PACKAGE_ID,),
             deterministic=True,
         ),

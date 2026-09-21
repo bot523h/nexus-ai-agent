@@ -9,7 +9,9 @@
     "motion.keyframe_transform",
     "motion.add_glow",
     "motion.add_motion_blur",
-    "motion.add_title"
+    "motion.add_title",
+    "motion.stabilize",
+    "motion.add_parallax"
   ],
   "runtime": {
     "native": {

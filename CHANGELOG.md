@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (session `01a0c460` — tasks 125/129/130/115)
+
+- **Creative op-gap (task-125):** six pure Level-B pack operations —
+  `audio.remove_noise`, `audio.deess`, `audio.eq_voice`, `audio.time_stretch`,
+  `motion.stabilize`, `motion.add_parallax` — with input models, registry
+  entries, manifest capabilities, and 12 unit tests.
+- **i18n parity (task-129):** all 15 locales at 63/63 keys with matching
+  `{placeholders}` (486 keys filled, 120 verbatim-English onboarding blocks
+  translated, `ai.activated` `{rpm}`/`{daily}` restored in 13 locales, 7
+  Persian audit fixes) plus a 34-test parity gate
+  (`tests/unit/test_i18n_parity.py`).
+- **Deploy smoke + runbook (task-130):** `scripts/deploy_smoke.py` (offline
+  manifest/contract checks plus live `/healthz` and webhook-gate probes) and
+  `docs/ops/DEPLOY_RUNBOOK.md` (preflight → deploy → smoke → rollback →
+  incidents), with 21 unit tests.
+- **llama.cpp server provider (task-115):** `LocalLlamaServerProvider`
+  (OpenAI-compatible `/v1/chat|embeddings`, `/health`; zero new
+  dependencies) behind `NEXUS_LLAMA_SERVER_*` settings, wired into
+  `build_llm_provider` as an opt-in priority (default off), with 15 unit
+  tests and clearer error hints on the legacy in-process GGUF path.
+
 ### Maintenance (repo hygiene pass, 2026-09-21 — owner-directed)
 
 - **Docs reorganized.** Session audits moved to `docs/audits/`; v1/v2-era plans,

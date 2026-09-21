@@ -27,6 +27,8 @@ OPERATION_KEYFRAME_TRANSFORM = "motion.keyframe_transform"
 OPERATION_ADD_GLOW = "motion.add_glow"
 OPERATION_ADD_MOTION_BLUR = "motion.add_motion_blur"
 OPERATION_ADD_TITLE = "motion.add_title"
+OPERATION_STABILIZE = "motion.stabilize"
+OPERATION_ADD_PARALLAX = "motion.add_parallax"
 
 TransitionKind = Literal[
     "crossfade",
@@ -132,4 +134,27 @@ class AddTitleInput(BaseModel):
     color: str = "#FFFFFF"
     duration_us: int = Field(default=3_000_000, ge=100_000)
     position: Literal["center", "lower_third", "top_header"] = "lower_third"
+    output_asset_id: str | None = None
+
+
+class StabilizeInput(BaseModel):
+    """Input payload for ``motion.stabilize`` (Level B)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    clip_asset_id: str = Field(min_length=1)
+    strength: float = Field(default=0.7, ge=0.0, le=1.0)
+    crop_mode: Literal["none", "static", "dynamic"] = "dynamic"
+    output_asset_id: str | None = None
+
+
+class AddParallaxInput(BaseModel):
+    """Input payload for ``motion.add_parallax`` (Level B)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    clip_asset_id: str = Field(min_length=1)
+    depth_layers: int = Field(default=3, ge=2, le=8)
+    intensity: float = Field(default=0.5, ge=0.0, le=1.0)
+    direction: Literal["horizontal", "vertical"] = "horizontal"
     output_asset_id: str | None = None
