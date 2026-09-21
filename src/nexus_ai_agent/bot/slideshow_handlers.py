@@ -19,14 +19,15 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from nexus_ai_agent.application.ports.job_queue import JobQueuePort
+from nexus_ai_agent.bot.middleware import AuthMiddleware
 from nexus_ai_agent.bot.slideshow import (
     BOT_TARGET_DURATION_US,
     MAX_IMAGES,
     SLIDESHOW_JOB_TYPE,
     SlideshowSessionStore,
+    parse_slideshow_options,
     photo_extension,
     usage_text,
-    validate_prompt,
 )
 from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.creative.slideshow.worker_adapter import (
@@ -79,9 +80,12 @@ async def slideshow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await _reply(update, usage_text())
         return
 
-    project_name, error = validate_prompt(" ".join(args))
-    if error is not None:
-        await _reply(update, error)
+    try:
+        options = parse_slideshow_options(args)
+        if _sessions.count(key):
+            options.validate_count(_sessions.count(key))
+    except ValueError as exc:
+        await _reply(update, str(exc))
         return
     file_ids = _sessions.take_images(key)
     if not file_ids:
@@ -92,7 +96,14 @@ async def slideshow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "سپس دوباره /slideshow <عنوان>.",
         )
         return
-    await _begin_render(update, context, project_name=project_name, file_ids=file_ids)
+    await _begin_render(
+        update,
+        context,
+        project_name=options.project_name,
+        file_ids=file_ids,
+        target_images=options.target_images,
+        generate_missing=options.generate_missing,
+    )
 
 
 async def slideshow_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -108,13 +119,31 @@ async def slideshow_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     caption = (update.message.caption or "").strip()
     if caption.startswith("/slideshow"):
         remainder = caption[len("/slideshow") :].strip()
-        project_name, error = validate_prompt(remainder)
-        if error is not None:
-            await _reply(update, error)
+        try:
+            options = parse_slideshow_options(remainder.split())
+        except ValueError as exc:
+            await _reply(update, str(exc))
             return
-        buffered = _sessions.take_images(key)
-        collected = list(dict.fromkeys([*buffered, file_id]))[-MAX_IMAGES:]
-        await _begin_render(update, context, project_name=project_name, file_ids=collected)
+        if not _sessions.is_active(key):
+            _sessions.start(key)
+        count = _sessions.add_image(key, file_id)
+        if count is None or count < 0:
+            await _reply(update, f"❌ سقف {MAX_IMAGES} تصویر پر شده است.")
+            return
+        try:
+            options.validate_count(count)
+        except ValueError as exc:
+            await _reply(update, str(exc))
+            return
+        collected = _sessions.take_images(key)
+        await _begin_render(
+            update,
+            context,
+            project_name=options.project_name,
+            file_ids=collected,
+            target_images=options.target_images,
+            generate_missing=options.generate_missing,
+        )
         return
 
     count = _sessions.add_image(key, file_id)
@@ -141,6 +170,8 @@ async def _begin_render(
     *,
     project_name: str | None,
     file_ids: list[str],
+    target_images: int | None = None,
+    generate_missing: bool = False,
 ) -> None:
     """Download the buffered photos into a private workspace and enqueue the job."""
     queue = _job_queue(context)
@@ -149,6 +180,11 @@ async def _begin_render(
         return
     user_id = _user_id(update) or 0
     settings = get_settings()
+    if generate_missing and not AuthMiddleware(
+        settings.allowed_user_ids, settings.owner_telegram_id
+    ).is_allowed(user_id):
+        await _reply(update, "❌ دسترسی به تولید تصویر مجاز نیست.")
+        return
     workspace = Path(settings.creative_temp_dir) / f"{WORKSPACE_PREFIX}{user_id}_{uuid4().hex[:12]}"
     image_paths: list[Path] = []
     try:
@@ -174,6 +210,11 @@ async def _begin_render(
         "target_duration_us": BOT_TARGET_DURATION_US,
         "resolution": DEFAULT_RESOLUTION,
     }
+    if target_images is not None:
+        payload["target_images"] = target_images
+    if generate_missing:
+        payload["generate_missing"] = True
+        payload["generation_prompt"] = project_name
     if project_name:
         payload["project_name"] = project_name
     try:
@@ -186,11 +227,15 @@ async def _begin_render(
         shutil.rmtree(workspace, ignore_errors=True)
         await _reply(update, f"❌ صف رندر در دسترس نیست: {exc}")
         return
+    missing = max(0, (target_images or len(image_paths)) - len(image_paths))
+    generation_notice = (
+        f"\n🎨 {missing} تصویر تکمیلی با سرویس تولید تصویر ساخته می‌شود." if missing else ""
+    )
     seconds = BOT_TARGET_DURATION_US // 1_000_000
     await _reply(
         update,
         f"⏳ ساخت اسلایدشو در صف داخلی قرار گرفت ({len(image_paths)} تصویر، سقف {seconds} ثانیه).\n"
-        f"شناسه: {job_id}",
+        f"شناسه: {job_id}{generation_notice}",
     )
 
 

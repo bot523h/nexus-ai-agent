@@ -233,3 +233,119 @@ def test_default_job_handlers_gains_the_slideshow_type() -> None:
     handlers = default_job_handlers()
     assert handlers[worker_adapter.SLIDESHOW_JOB_TYPE] is worker_adapter.slideshow_render_job
     assert {"pdf_extract", "story"} <= set(handlers)  # pre-existing jobs untouched
+
+
+async def test_three_uploads_generate_only_two_missing_slides_through_queue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _fake_render: list[dict[str, Any]]
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from nexus_ai_agent.creative.image_gen import GeneratedImage
+
+    provider = SimpleNamespace(
+        generate=AsyncMock(return_value=GeneratedImage(b"image", "image/png"))
+    )
+    monkeypatch.setattr(worker_adapter, "get_image_gen_provider", lambda: provider)
+    workspace, images = _make_workspace(tmp_path, 3)
+    queue = _queue(tmp_path, [])
+    job_id = await queue.enqueue(
+        job_type=worker_adapter.SLIDESHOW_JOB_TYPE,
+        idempotency_key="fill-two",
+        payload=_payload(
+            workspace,
+            images,
+            target_images=5,
+            generate_missing=True,
+            generation_prompt="Ocean holiday",
+        ),
+    )
+    await _drain(queue, job_id)
+    result = await queue.get_result(job_id)
+    assert result and result["success"] is True and result["shot_count"] == 5
+    assert provider.generate.await_count == 2
+    prompts = [call.args[0].prompt for call in provider.generate.await_args_list]
+    assert "scene 4 of 5" in prompts[0] and "scene 5 of 5" in prompts[1]
+    assert all("Ocean holiday" in prompt for prompt in prompts)
+    assert len(_fake_render) == 1  # still one authoritative render path
+    assert list(workspace.iterdir()) == [workspace / "master.mp4"]
+
+
+@pytest.mark.parametrize("target,consent", [(5, False), (6, True), (2, True)])
+async def test_fill_rejects_missing_consent_and_bad_counts_before_egress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: int, consent: bool
+) -> None:
+    def forbidden() -> None:
+        raise AssertionError("invalid payload must not create a provider")
+
+    monkeypatch.setattr(worker_adapter, "get_image_gen_provider", forbidden)
+    workspace, images = _make_workspace(tmp_path, 3)
+    result = await worker_adapter.slideshow_render_job(
+        _payload(
+            workspace,
+            images,
+            target_images=target,
+            generate_missing=consent,
+            generation_prompt="Ocean holiday",
+        )
+    )
+    assert result == {"success": False, "error_code": "invalid_request"}
+    assert all(path.exists() for path in images)  # invalid envelopes never own deletion
+
+
+@pytest.mark.parametrize("consent", [False, True])
+async def test_sufficient_uploads_never_call_image_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _fake_render: list[dict[str, Any]],
+    consent: bool,
+) -> None:
+    def forbidden() -> None:
+        raise AssertionError("no deficit means no provider")
+
+    monkeypatch.setattr(worker_adapter, "get_image_gen_provider", forbidden)
+    workspace, images = _make_workspace(tmp_path, 3)
+    result = await worker_adapter.slideshow_render_job(
+        _payload(
+            workspace,
+            images,
+            target_images=3,
+            generate_missing=consent,
+            generation_prompt="Ocean holiday",
+        )
+    )
+    assert result["success"] is True
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_partial_generation_failure_cleans_inputs_and_generated_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cancel: bool,
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from nexus_ai_agent.creative.image_gen import GeneratedImage, ImageGenerationError
+
+    error = asyncio.CancelledError() if cancel else ImageGenerationError("offline")
+    provider = SimpleNamespace(
+        generate=AsyncMock(
+            side_effect=[
+                GeneratedImage(b"image", "image/png"),
+                error,
+            ]
+        )
+    )
+    monkeypatch.setattr(worker_adapter, "get_image_gen_provider", lambda: provider)
+    workspace, images = _make_workspace(tmp_path, 3)
+    payload = _payload(
+        workspace, images, target_images=5, generate_missing=True, generation_prompt="Ocean holiday"
+    )
+    if cancel:
+        with pytest.raises(asyncio.CancelledError):
+            await worker_adapter.slideshow_render_job(payload)
+    else:
+        assert await worker_adapter.slideshow_render_job(payload) == {
+            "success": False,
+            "error_code": "image_generation_failed",
+        }
+    assert not workspace.exists()

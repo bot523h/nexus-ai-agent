@@ -156,3 +156,33 @@ def test_usage_text_states_the_limits() -> None:
 @pytest.mark.parametrize("code", sorted(ERROR_CODES))
 def test_mapper_is_total_over_the_closed_vocabulary(code: str) -> None:
     assert friendly_render_error(code) != friendly_render_error("internal") or code == "internal"
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--slides", "0", "Title"],
+        ["--slides", "6", "Title"],
+        ["--slides", "NaN", "Title"],
+        ["--fill", "Title"],
+        ["--fill", "--slides", "5"],
+        ["--unknown", "Title"],
+        ["--slides", "5", "--slides", "4", "Title"],
+    ],
+)
+def test_invalid_generation_options_are_rejected(args: list[str]) -> None:
+    from nexus_ai_agent.bot.slideshow import parse_slideshow_options
+
+    with pytest.raises(ValueError):
+        parse_slideshow_options(args)
+
+
+def test_generation_options_require_consent_without_changing_legacy_titles() -> None:
+    from nexus_ai_agent.bot.slideshow import parse_slideshow_options
+
+    assert parse_slideshow_options(["Ocean", "holiday"]).project_name == "Ocean holiday"
+    options = parse_slideshow_options(["--slides", "5", "--fill", "Ocean", "holiday"])
+    options.validate_count(3)
+    assert options.generate_missing is True and options.target_images == 5
+    with pytest.raises(ValueError, match="--fill"):
+        parse_slideshow_options(["--slides", "5", "Title"]).validate_count(3)

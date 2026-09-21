@@ -326,3 +326,123 @@ The current record deliberately separates **accepted architecture** from **imple
 [3]: https://github.com/bot523h/nexus-ai-agent/blob/main/ROADMAP_STATUS.md "NEXUS roadmap status"
 [4]: https://github.com/bot523h/nexus-ai-agent/blob/main/REQUIREMENTS_LEDGER.md "NEXUS requirements ledger"
 [5]: https://github.com/bot523h/nexus-ai-agent/pull/13 "PR 13 — Nagar modular-monolith foundation"
+
+## 2026-09-20 — Wave 3 image generation refinement
+
+**Status:** Accepted for this session; verification recorded below as work completes.
+**Problem:** The supplied checkout starts at `316ed33` (Wave 2.5). The five
+reported local commits, push watchdog, `creative/image_gen/` adapters and
+`ImageGenProvider` are absent. GitHub connectivity and an initial push of the
+session branch succeeded. Do not invent or rewrite missing work.
+
+**Decision:** Introduce a self-contained `creative/image_gen/` provider protocol,
+Pollinations and Gemini HTTP adapters, bounded per-instance prompt-hash caches,
+and bounded asynchronous retry with injectable HTTP transports. Gemini is
+fail-closed behind operator `paid_tier` approval, checked before cache access;
+log successful provider responses with explicit estimated costs, never secrets
+or prompts. Do not claim failed/ambiguous requests are free. No fallback may
+silently switch to a paid provider.
+
+The bot and worker compose the provider, not the pack. `/imagine` explicitly
+requests text egress; `/slideshow --slides N --fill <title>` consents to generate
+only missing images, never uploads existing images, and remains opt-in. Keep
+network work in the existing queue for slideshows, preserve five-image/30-second
+limits, and preserve notifier-owned successful output cleanup.
+
+**Rejected alternatives:** unbounded/global image caches, retries of validation
+or authorization failures, implicit billing, new broker, new render lane,
+wholesale dead-code deletion based solely on textual reference counts.
+**Contracts:** additive provider API and optional slideshow payload fields;
+existing `/image` and upload-only slideshow behavior remain compatible.
+**Verification plan:** mock HTTP network/status failures and cost guards; test
+three uploaded plus two generated images, consent and cleanup; enforce AST
+import boundaries; run `make lint`, `make types`, `make test`. Clean only session
+history, keep commits atomic and conventional, never rewrite shared mainline.
+
+### Cleanup disposition
+
+Repository-wide Ruff unused-import checks found no violations; no `# DEBUG`
+comments or root `test_*.py` scripts were present. Removed stale root gate
+reports, `test_story.png`, and the unreferenced downloaded font ZIP (the actual
+`assets/fonts/Vazirmatn.ttf` remains). Replaced the print-only `tests/test_rtl.py`
+manual script with `tests/unit/test_story_rtl.py`, using `tmp_path` and real
+assertions. Ignore disposable gate reports/root render artifacts. Historical
+roadmaps, TODO records, supported command handlers and fixtures are not dead
+code merely because they are old; preserve them rather than guess at reachability.
+
+### Implemented filenames, consent, limits and accounting
+
+- `creative/image_gen/provider.py`: immutable request/result and asynchronous
+  `ImageGenProvider` protocol. `pollinations_adapter.py` and `gemini_adapter.py`
+  are HTTP adapters, not a new command-bus execution manifest. Shared transport
+  mechanics live in `resilience.py`; no bot/storage imports, including transitive
+  project dependencies. `tests/architecture/test_image_gen_boundary.py` resolves
+  absolute/relative imports and tests the detector against prohibited examples.
+- `application/image_generation.py` is the operator-settings composition root;
+  provider and cache live for the process. Settings changes require a restart.
+  `bot/handlers.py` registers `/imagine` without adding another Telegram module
+  to the frozen import-boundary baseline. Existing `/image` is unchanged.
+- The provider guard requires `paid_tier=True`, a key and a positive operator
+  estimate. No automatic paid fallback. `/imagine` and `--fill` enforce the
+  existing owner/allowlist policy; `/imagine` uses the existing request limiter.
+- `bot/slideshow.py` parses leading `--slides N --fill` options. The flag provides
+  consent without a second interaction; a number alone never grants it. Require
+  at least one uploaded image and preserve the five-image/30-second queue limit.
+  Titles remain subject to the existing 60-character grammar. Generation prompts
+  add a distinct scene index; they do not include uploaded image bytes.
+- `creative/slideshow/image_fill.py` generates the deficit before the existing
+  render lane. `SlideshowRenderPayload` revalidates consent, prompt and counts
+  at the queue boundary. Failures use `image_generation_failed`, not raw provider
+  exceptions. No change to pack manifests, `JobQueuePort` or the render IR.
+- Cleanup: generated files are `generated_<index>_<uuid>.<verified image extension>`
+  inside the existing `slideshow_<user>_<job>` workspace. Partial generation is
+  removed on exceptions/cancellation; the worker deletes all input images after
+  rendering. `master.mp4` is retained only on success for notifier-owned delivery
+  and deletion; existing 24-hour stale-workspace pruning remains in place.
+- Cache: SHA-256 of provider/model/all request fields, per-instance TTL of one
+  hour, 16-entry and 32-MiB LRU limits. Immutable validated image bytes, not paths
+  that another job can delete. Serialize requests per adapter to prevent duplicate
+  in-flight generation. Never cache failures or bypass billing authorization.
+- Retry: three attempts by default (configurable internally within 1–5), async
+  exponential delay plus jitter, capped numeric Retry-After; only transport,
+  429 and 5xx failures. No redirects, arbitrary endpoints or raw HTTP exceptions
+  at the application boundary; responses/images have byte limits and Pillow
+  verifies image structure. Gemini honors supported aspect ratios, not a promise
+  of exact pixel dimensions, and rejects unsupported seeds.
+- Accounting: `image_generation_cost` logs an explicit **estimate per successful
+  HTTP response**, including undecodable responses; guards and cache hits emit
+  none. Network ambiguity is not proof of zero billing. No assertion that these
+  logs form a provider invoice, budget limit or exactly-once billing guarantee.
+
+**Verification so far:** 48 offline adapter cases, real handler registration and
+queue integration tests, and 40 architecture tests pass. All source types pass.
+No live Pollinations/Gemini requests or paid operations were performed. Final
+whole-repository gates and Git synchronization are recorded after sanitization.
+
+### History sanitization and final local gates (2026-09-20)
+
+Interactive autosquash (`GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash
+HEAD~8`) folded the access-control follow-up into the slideshow feature commit.
+The seven substantive phase commits were retained with Conventional Commit
+messages; no mainline commit was rewritten and the already-pushed baseline
+remained an ancestor. A pre-rebase bundle was kept in Git's local metadata as a
+recovery aid, not as a tracked artifact. Dates were not fabricated.
+
+Final verification on Python 3.11.2 in the local `.venv`:
+
+- `make lint`: passed; Ruff checks and formatting, 295 files.
+- `make types`: passed; 184 source files.
+- `make test`: passed; **742 passed, 20 skipped**, repeated with `-rs` to inspect
+  skips. All 20 require PostgreSQL / `NEXUS_DATABASE_URL`; the GitHub workflow's
+  dedicated PostgreSQL job remains the external-service verification gate.
+- One upstream Starlette/AnyIO deprecation warning; no test failures. An initial
+  run also reported a non-fatal LiteLLM remote-price-map connection warning.
+- `git diff --check`: passed. No root `test_*.py`, generated images, downloaded
+  archives or stale gate-output reports remain tracked.
+
+Commands use `.venv/bin` on PATH. The test environment did not install the heavy
+`llama-cpp-python` / `sentence-transformers` runtime stacks; this session does not
+claim live local-model inference, live hosted image-provider availability, or
+real-account billing verification. The complete non-slow repository suite above
+was run unchanged (no tests disabled or marks added to make the gates pass).
+The final verification record is committed before the last push/PR update.

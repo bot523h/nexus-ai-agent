@@ -9,3 +9,7 @@ __pycache__/
 dist/
 *.egg-info/
 .venv/
+.pytest_cache/
+# Disposable local gate output; never treat old reports as current evidence.
+/*_report.txt
+/test_story.png
