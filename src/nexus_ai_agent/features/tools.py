@@ -1,36 +1,37 @@
 """Utility tools for NEXUS AI Telegram bot.
 
 Includes:
-- ReminderSystem: Persistent reminders with asyncio
+- ReminderSystem: Persistent reminders with asyncio (deliver to the
+  originating chat, bindable bot, cancel + list support, survives restarts)
 - Translator: Free translation via MyMemory API
 - UnitConverter: Currency and metric conversions (pure Python)
-- Calculator: Safe math expression evaluator
+- Calculator: Safe math expression evaluator (no ``eval`` — see
+  :mod:`nexus_ai_agent.features.calculator`)
 """
 
 from __future__ import annotations
 
 import asyncio
-import math
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
+from sqlalchemy import create_engine as _create_engine
 from sqlmodel import Session, select
 
 from nexus_ai_agent.config.settings import get_settings
+from nexus_ai_agent.features.calculator import (
+    CalculatorError,
+    ExpressionTooComplex,
+    MathError,
+    SafeCalculator,
+    format_result,
+)
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.storage.models import Reminder
 
 logger = get_logger(__name__)
-
-
-def _sync_engine() -> Any:
-    """Return a synchronous SQLAlchemy engine for feature CRUD."""
-    from sqlalchemy import create_engine as _ce
-
-    settings = get_settings()
-    return _ce(f"sqlite:///{settings.db_path}", echo=False)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -47,6 +48,8 @@ def _parse_remind_time(text: str) -> tuple[timedelta, str] | None:
     if m is None:
         return None
     amount = int(m.group(1))
+    if amount <= 0:
+        return None
     unit = m.group(2).lower()
     if unit == "s":
         return timedelta(seconds=amount), text
@@ -59,28 +62,87 @@ def _parse_remind_time(text: str) -> tuple[timedelta, str] | None:
     return None
 
 
-class ReminderSystem:
-    """Persistent reminder system with asyncio-based scheduling."""
+def _as_utc(dt: datetime) -> datetime:
+    """Normalise a possibly-naive stored datetime to aware UTC.
 
-    def __init__(self, bot: Any | None = None) -> None:
+    SQLite stores ``DATETIME`` without an offset, so values read back are
+    naive even though they were written as UTC.
+    """
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
+class ReminderSystem:
+    """Persistent reminder system with asyncio-based scheduling.
+
+    Guarantees implemented here:
+
+    - **Originating-chat delivery**: a reminder fires into the chat it was
+      created in (``chat_id``), never into ``user_id`` as a chat.
+    - **Bindable bot**: the Telegram bot may be attached any time via
+      :meth:`bind` (application startup) without rebuilding the system.
+    - **Cancel support**: users may cancel their own pending reminders
+      with :meth:`cancel_reminder` (ownership-checked).
+    - **Restart safety**: :meth:`restore_pending` reschedules pending rows;
+      overdue rows are delivered immediately instead of being dropped.
+    - **Bounded I/O**: every Telegram send is wrapped in a timeout.
+    """
+
+    SEND_TIMEOUT_SECONDS = 30.0
+
+    def __init__(self, bot: Any | None = None, db_path: str | None = None) -> None:
         self.bot = bot
-        self._tasks: dict[int, asyncio.Task[Any]] = {}  # reminder_id → task
+        # Optional explicit DB path (tests); production uses settings.db_path.
+        self._db_path = db_path
+        self._engine: Any | None = None
+        self._tasks: dict[int, asyncio.Task[None]] = {}
+
+    # -- bot binding -------------------------------------------------------
+
+    def bind(self, bot: Any) -> None:
+        """Attach (or replace) the Telegram bot used for delivery."""
+        self.bot = bot
+
+    @property
+    def is_bound(self) -> bool:
+        return self.bot is not None
 
     def _require_bot(self) -> Any:
         if self.bot is None:
             raise RuntimeError("Bot instance not set on ReminderSystem")
         return self.bot
 
+    # -- engine --------------------------------------------------------------
+
+    def _engine_ref(self) -> Any:
+        if self._engine is None:
+            path = self._db_path or get_settings().db_path
+            self._engine = _create_engine(f"sqlite:///{path}", echo=False)
+        return self._engine
+
+    def close(self) -> None:
+        """Cancel scheduled tasks and dispose the engine (shutdown hook)."""
+        for task in self._tasks.values():
+            if not task.done():
+                task.cancel()
+        self._tasks.clear()
+        if self._engine is not None:
+            self._engine.dispose()
+            self._engine = None
+
+    # -- user-facing API -----------------------------------------------------
+
     async def set_reminder(self, user_id: int, chat_id: int, time_str: str, text: str) -> str:
         """Set a reminder. *time_str* is like '30m', '2h', '1d'."""
         parsed = _parse_remind_time(time_str)
         if parsed is None:
             return "❌ فرمت نادرست. مثال: /remind 30m نماز"
+        if not self.is_bound:
+            logger.error("reminder_set_unbound", user_id=user_id)
+            return "❌ سیستم یادآوری در دسترس نیست."
         delta, _ = parsed
         remind_at = datetime.now(timezone.utc) + delta
 
-        # Save to DB
-        engine = _sync_engine()
+        engine = self._engine_ref()
         with Session(engine) as session:
             reminder = Reminder(
                 user_id=user_id,
@@ -94,69 +156,116 @@ class ReminderSystem:
             session.refresh(reminder)
             rid: int = reminder.id if reminder.id is not None else 0
 
-        # Schedule the background task
-        async def _fire() -> None:
-            await asyncio.sleep(delta.total_seconds())
-            bot = self._require_bot()
-            try:
-                await bot.send_message(chat_id=user_id, text=f"⏰ یادآوری: {text}")
-            except Exception:  # noqa: BLE001
-                logger.exception("reminder_send_failed", reminder_id=rid)
-            engine2 = _sync_engine()
-            with Session(engine2) as s2:
-                obj = s2.get(Reminder, rid)
-                if obj is not None:
-                    obj.status = "sent"
-                    s2.commit()
+        self._schedule(rid, user_id, chat_id, text, delta)
+        return f"✅ یادآوری #{rid} تنظیم شد: {text} ({time_str})"
 
-        task = asyncio.create_task(_fire())
-        self._tasks[rid] = task
-        return f"✅ یادآوری تنظیم شد: {text} ({time_str})"
+    async def cancel_reminder(self, reminder_id: int, user_id: int) -> str:
+        """Cancel a pending reminder. Only the creator may cancel it."""
+        with Session(self._engine_ref()) as session:
+            obj = session.get(Reminder, reminder_id)
+            if obj is None:
+                return "❌ یادآوری‌ای با این شناسه پیدا نشد."
+            if obj.user_id != user_id:
+                return "❌ شما مجوز لغو این یادآوری را ندارید."
+            if obj.status != "pending":
+                return f"⚠️ این یادآوری «{obj.status}» است و دیگر لغو نمی‌شود."
+            obj.status = "cancelled"
+            session.commit()
+
+        task = self._tasks.pop(reminder_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+        return f"✅ یادآوری #{reminder_id} لغو شد."
+
+    async def list_reminders(self, user_id: int) -> str:
+        """List the user's pending reminders with their ids."""
+        with Session(self._engine_ref()) as session:
+            rows = session.exec(
+                select(Reminder)
+                .where(Reminder.user_id == user_id, Reminder.status == "pending")
+                .order_by(Reminder.remind_at)  # type: ignore[arg-type]
+            ).all()
+        if not rows:
+            return "📭 یادآوری در انتظار ندارید."
+        lines = ["⏰ یادآوری‌های در انتظار:", ""]
+        for r in rows:
+            when = _as_utc(r.remind_at).strftime("%Y-%m-%d %H:%M UTC")
+            rid: int = r.id if r.id is not None else 0
+            lines.append(f"#{rid} — {r.text} ({when})")
+        lines.append("")
+        lines.append("لغو: /cancel_remind <id>")
+        return "\n".join(lines)
 
     async def restore_pending(self) -> int:
-        """Restore pending reminders from DB (after restart). Returns count."""
-        engine = _sync_engine()
-        count = 0
-        with Session(engine) as session:
+        """Restore pending reminders from DB (after restart).
+
+        Overdue reminders are delivered immediately; future ones are
+        rescheduled. Returns the number of pending reminders processed.
+        """
+        now = datetime.now(timezone.utc)
+        with Session(self._engine_ref()) as session:
             stmt = select(Reminder).where(Reminder.status == "pending")
-            results = session.exec(stmt).all()
-            now = datetime.now(timezone.utc)
-            for r in results:
-                if r.remind_at <= now:
-                    # Already overdue — send immediately
-                    r.status = "sent"
-                    count += 1
-                    continue
-                delay = (r.remind_at - now).total_seconds()
-                rid: int = r.id if r.id is not None else 0
+            rows = session.exec(stmt).all()
+            pending = [
+                (r.id, r.user_id, r.chat_id, r.text, _as_utc(r.remind_at))
+                for r in rows
+                if r.id is not None
+            ]
 
-                async def _fire(
-                    _rid: int = rid,
-                    _chat_id: int = r.chat_id,
-                    _text: str = r.text,
-                    _delay: float = delay,
-                ) -> None:
-                    await asyncio.sleep(_delay)
-                    bot = self._require_bot()
-                    try:
-                        await bot.send_message(
-                            chat_id=_chat_id,
-                            text=f"⏰ یادآوری: {_text}",
-                        )
-                    except Exception:  # noqa: BLE001
-                        logger.exception("reminder_send_failed", reminder_id=_rid)
-                    engine2 = _sync_engine()
-                    with Session(engine2) as s2:
-                        obj = s2.get(Reminder, _rid)
-                        if obj is not None:
-                            obj.status = "sent"
-                            s2.commit()
-
-                task = asyncio.create_task(_fire())
-                self._tasks[rid] = task
-                count += 1
-            session.commit()
+        count = 0
+        for rid, user_id, chat_id, text, remind_at in pending:
+            delay = (remind_at - now).total_seconds()
+            self._schedule(rid, user_id, chat_id, text, timedelta(seconds=max(delay, 0.0)))
+            count += 1
+        if count:
+            logger.info("reminders_restored", count=count)
         return count
+
+    # -- internals ------------------------------------------------------------
+
+    def _schedule(self, rid: int, user_id: int, chat_id: int, text: str, delay: timedelta) -> None:
+        old = self._tasks.get(rid)
+        if old is not None and not old.done():
+            old.cancel()
+        task = asyncio.create_task(
+            self._fire(rid, user_id, chat_id, text, max(delay.total_seconds(), 0.0))
+        )
+        self._tasks[rid] = task
+
+    async def _fire(
+        self, rid: int, user_id: int, chat_id: int, text: str, delay_seconds: float
+    ) -> None:
+        if delay_seconds > 0:
+            await asyncio.sleep(delay_seconds)
+        await self._deliver(rid, chat_id, text)
+
+    async def _deliver(self, rid: int, chat_id: int, text: str) -> None:
+        try:
+            bot = self._require_bot()
+            await asyncio.wait_for(
+                bot.send_message(chat_id=chat_id, text=f"⏰ یادآوری: {text}"),
+                timeout=self.SEND_TIMEOUT_SECONDS,
+            )
+            self._mark_status(rid, "sent")
+        except RuntimeError:
+            # Bot unbound at fire time (e.g. restore before post_init bound it).
+            logger.error("reminder_unbound_at_fire", reminder_id=rid)
+            self._mark_status(rid, "failed")
+        except Exception:  # noqa: BLE001 — never let a reminder kill the loop
+            logger.exception("reminder_send_failed", reminder_id=rid)
+            self._mark_status(rid, "failed")
+        finally:
+            self._tasks.pop(rid, None)
+
+    def _mark_status(self, rid: int, status: str) -> None:
+        try:
+            with Session(self._engine_ref()) as session:
+                obj = session.get(Reminder, rid)
+                if obj is not None:
+                    obj.status = status
+                    session.commit()
+        except Exception:  # noqa: BLE001 — status bookkeeping must not raise
+            logger.exception("reminder_status_update_failed", reminder_id=rid)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -330,50 +439,27 @@ class UnitConverter:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Safe Calculator
+# Calculator (UI wrapper — the safe engine lives in features/calculator.py)
 # ═══════════════════════════════════════════════════════════════════════
-
-# Only allow safe math operations
-_SAFE_NAMES: dict[str, Any] = {
-    "abs": abs,
-    "round": round,
-    "min": min,
-    "max": max,
-    "pow": pow,
-    "sum": sum,
-    "sin": math.sin,
-    "cos": math.cos,
-    "tan": math.tan,
-    "sqrt": math.sqrt,
-    "log": math.log,
-    "log10": math.log10,
-    "pi": math.pi,
-    "e": math.e,
-    "ceil": math.ceil,
-    "floor": math.floor,
-    "factorial": math.factorial,
-    "gcd": math.gcd,
-    "exp": math.exp,
-}
 
 
 class Calculator:
-    """Safe math expression evaluator."""
+    """Safe math expression evaluator.
+
+    Delegates to :class:`~nexus_ai_agent.features.calculator.SafeCalculator`
+    (strict AST whitelist — no ``eval``, no attribute access, bounded
+    expressions) and maps errors back to the familiar Persian messages.
+    """
 
     def evaluate(self, expr: str) -> str:
-        """Safely evaluate a math expression."""
-        # Replace ^ with ** for exponentiation
-        cleaned = expr.replace("^", "**").strip()
-        # Remove percent-style
-        cleaned = cleaned.replace("%", "/100")
-        # Basic safety: only digits, operators, parens, dots, spaces
-        # Allow letters for function names
-        check = cleaned.replace("**", "  ").replace(" ", "")
-        # We need to allow letters for sin, cos, etc.
-        if not re.match(r"^[\d\s\+\-\*/\.\(\),a-zA-Z_]+$", check):
-            return "❌ عبارت نامعتبر است."
+        """Evaluate *expr* and return a user-facing message."""
         try:
-            result = eval(cleaned, {"__builtins__": {}}, _SAFE_NAMES)  # noqa: S307
-            return f"🧮 {expr} = {result}"
-        except Exception as exc:  # noqa: BLE001
+            result = SafeCalculator().evaluate(expr)
+        except ExpressionTooComplex as exc:
+            logger.info("calc_too_complex", expr=expr[:80], reason=str(exc))
+            return "❌ عبارت نامعتبر است. (عبارت بیش از حد بزرگ یا پیچیده است)"
+        except MathError as exc:
             return f"❌ خطا در محاسبه: {exc}"
+        except CalculatorError:
+            return "❌ عبارت نامعتبر است."
+        return f"🧮 {expr} = {format_result(result)}"

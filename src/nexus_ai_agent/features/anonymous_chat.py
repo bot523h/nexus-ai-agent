@@ -41,6 +41,18 @@ class AnonymousChatManager:
             raise RuntimeError("Bot instance not set on AnonymousChatManager")
         return self.bot
 
+    def bind(self, bot: Any) -> None:
+        """Attach (or replace) the Telegram bot (called at startup)."""
+        self.bot = bot
+
+    @property
+    def is_bound(self) -> bool:
+        return self.bot is not None
+
+    def has_active_session(self, user_id: int) -> bool:
+        """True when *user_id* is currently paired with an anonymous partner."""
+        return self._active.get(user_id) is not None
+
     # ------------------------------------------------------------------
     # Queue & matching
     # ------------------------------------------------------------------

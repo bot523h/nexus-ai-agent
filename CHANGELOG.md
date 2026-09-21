@@ -7,6 +7,108 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Semver-minor: **P0 Week-1 security batch + feature-engine wiring.** Delivers
+the four "stop the bleeding" items from the 2026-09-21 audit
+(global auth, dashboard PII, path traversal, README honesty) and wires the
+previously dead feature engines to the live Telegram surface
+(P0-1/P0-4/P0-8/P0-10, audit §12 items 5-7 and 9).
+
+### Security
+
+- **Global deny-by-default access guard (P0-2).** New
+  `bot/access_guard.py::AccessGuardHandler` is registered in handler
+  **group -1** (before every command, callback and free message).
+  `check_update` claims only *denied* updates, so unlisted users get one
+  rate-limited denial (3/min) plus an audit log entry and nothing else;
+  allowed users flow through untouched. Previously only `on_message` and
+  `/imagine` consulted the allow-list — ~80 other commands were open.
+  Per-command checks stay as defense-in-depth.
+- **Dashboard PII removal + bearer gate (P0-5).** `/api/dashboard/*`
+  responses no longer contain `telegram_id`/`username` (`/recent_users`
+  returns only the internal DB id + join time). New
+  `NEXUS_DASHBOARD_TOKEN` setting: when set, every dashboard request must
+  carry `Authorization: Bearer <token>` (constant-time compare, 401
+  otherwise); when unset the API is open and `docker-compose.yml` now
+  binds port 8000 to `127.0.0.1` by default.
+- **Path traversal fixes in `/cloud` and `/download` (P0-6).** User- and
+  DB-controlled file names now go through `bot/safe_paths.py`
+  (`sanitize_file_name` + `safe_join` with `is_relative_to` containment),
+  with a unique suffix to prevent same-name overwrites. The unclosed
+  `open(local_path, "rb")` file-handle leak in `/download` is fixed.
+- **Duplicate `/start` handler removed (P0-4, part 1).** The second
+  `CommandHandler("start")` (which PTB could never fire) is gone; the
+  single `/start` handler now parses referral deep links.
+
+### Added
+
+- **Safe calculator engine** (`features/calculator.py`): strict AST
+  whitelist evaluator — no `eval`, no attribute access, no subscripts,
+  no strings/containers; bounded length (200), node count (128), depth
+  (64), integer exponents (≤1000), factorial (0-170) and result
+  magnitude; Persian/Arabic-Indic digits and `^`/`×`/`÷` normalized.
+  `features/tools.py::Calculator` is now a thin UI wrapper over it.
+- **ReminderSystem rewrite** (`features/tools.py`): reminders are
+  delivered to the **originating chat** (the old code sent to
+  `chat_id=user_id`); the bot is **bindable** at startup
+  (`bind()`); users can **cancel** their own reminders
+  (`cancel_reminder`, ownership-checked) and list them
+  (`list_reminders`); `restore_pending()` now actually **delivers
+  overdue** reminders after a restart (they were silently marked
+  "sent" without any send) and survives SQLite's naive/aware datetime
+  round-trip; all sends are timeout-bounded; failures are recorded as
+  `failed` instead of lost.
+- **Feature-engine container** (`bot/feature_handlers.py`): one shared
+  `FeatureEngines` instance (calculator, reminders, translator,
+  converter, quiz, number-guess, wordle, poll, referral, force-join,
+  anon chat) built in `_init_v2_engines`, stored in `bot_data`, and
+  passed into `build_handlers` — the per-call "new instance" pattern
+  that dropped game state is gone, and `ReferralEngine` is no longer
+  constructed twice (P0-8).
+- **Live wiring for the dead engines (P0-1, audit §12.9):**
+  `/calc` computes; `/remind <time> <text>` persists + schedules;
+  `/cancel_remind <id>` and `/reminds` manage them; `/tr [from to] text`
+  uses the real MyMemory engine; `/convert <amount> <from> <to>` uses
+  the real converter; `/guess <n>` joins `/guess_start`/`/guess_stop`;
+  `/wordle [<5-letter>]` and `/wordle_stop` run the real Persian Wordle;
+  `/poll Q | A | B` creates real inline polls with per-user votes and
+  live results; `/quiz` answers now score against the shared engine.
+- **Referral loop actually records referrals (P0-4, part 2).**
+  `/start ref_<code>` calls `ReferralEngine.process_referral` (previously
+  dead code): the row is written, the referee sees the reward + their
+  own link, self-referrals are silently ignored, bad codes get a gentle
+  warning.
+- **Force-join with a real bot (P0-3).** The shared
+  `ForceJoinManager` is bound to the application bot at startup, so the
+  verify button performs a genuine `get_chat_member` check instead of
+  failing open. While force-join is enabled, non-members hitting free
+  text get the join keyboard instead of the AI.
+- **Anonymous chat with a real bot and a delivery path (P0-10).**
+  `AnonymousChatManager` is bound at startup; plain messages from paired
+  users are routed to their partner (custom `MessageFilter` registered
+  before the catch-all) with a sender acknowledgement; `has_active_session`
+  added to the engine.
+- **Startup/shutdown lifecycle for the wiring:** `post_init` binds the
+  bot to reminders/force-join/anon and restores pending reminders;
+  `post_shutdown` closes the reminder engine.
+- **108 new tests** across `test_safe_calculator.py`,
+  `test_reminder_system.py`, `test_safe_paths.py`, `test_access_guard.py`,
+  `test_dashboard_api.py`, `test_feature_wiring.py` — behavioural
+  assertions (the calculator really computes, the guard really blocks,
+  the referral row really lands), including classic `eval` escape
+  payloads and DoS inputs.
+
+### Changed
+
+- `/calc` percent: `50%` no longer means "divide by 100"; `%` is now
+  proper modulo (`10 % 3 = 1`). Use explicit division for percentages.
+- Unlisted Telegram users are now denied on **all** surfaces (previously
+  two). If your deployment relied on open access, set
+  `NEXUS_ALLOWED_USER_IDS` (and/or `NEXUS_OWNER_TELEGRAM_ID`) explicitly.
+- Architecture baseline: `bot/access_guard.py` and
+  `bot/feature_handlers.py` are registered in
+  `tests/architecture/legacy_baseline.json` (bot-layer files importing
+  `telegram`, same category as all existing `bot/*` files).
+
 ## [3.12.0] — 2026-09-21
 
 Semver-minor: **Nagar Phase 6 — the Wave 2.5 Telegram slideshow surface and

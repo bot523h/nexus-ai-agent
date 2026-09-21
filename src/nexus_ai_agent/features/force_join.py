@@ -46,6 +46,18 @@ class ForceJoinManager:
     def __init__(self, bot: Any | None = None) -> None:
         self.bot = bot
 
+    def bind(self, bot: Any) -> None:
+        """Attach (or replace) the Telegram bot (called at startup).
+
+        Without a bot, :meth:`check_membership` cannot verify membership
+        and fails open; binding at application startup closes that gap.
+        """
+        self.bot = bot
+
+    @property
+    def is_bound(self) -> bool:
+        return self.bot is not None
+
     # ------------------------------------------------------------------
     # Configuration
     # ------------------------------------------------------------------

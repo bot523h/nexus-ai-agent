@@ -284,6 +284,16 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="NEXUS_API_HMAC_KEY",
     )
+    # Bearer token for the dashboard API (P0-5). When set, every
+    # /api/dashboard/* request must send "Authorization: Bearer <token>"
+    # (constant-time comparison). When unset the API is open — the
+    # deployment MUST keep the port private (docker-compose binds
+    # 127.0.0.1 by default). Generate with:
+    #   python -c "import secrets; print(secrets.token_urlsafe(32))"
+    api_dashboard_token: str | None = Field(
+        default=None,
+        validation_alias="NEXUS_DASHBOARD_TOKEN",
+    )
     creative_gemini_api_key: str | None = Field(
         default=None,
         validation_alias="NEXUS_CREATIVE_GEMINI_API_KEY",

@@ -10,21 +10,21 @@
 
 ### Core (v1.0–v1.2)
 - 💬 **AI Chat** — Multi-persona conversations with auto-routing (Qwen, Gemma, Phi)
-- 👤 **Anonymous Chat** — Random queue-based pairing with report system
-- 🎮 **Games** — Quiz, number guessing, Persian Wordle, quick polls
-- 🛠️ **Tools** — Reminders, translation, unit conversion, calculator
-- 📢 **Channel Management** — Post, schedule, ban, welcome, pin, stats
+- 👤 **Anonymous Chat** — Random queue-based pairing, live message delivery, report system
+- 🎮 **Games** — Quiz, number guessing, Persian Wordle, quick polls (all real, stateful engines)
+- 🛠️ **Tools** — Reminders (persistent, cancellable, restart-safe), translation, unit conversion, safe calculator (no `eval`)
+- 📢 **Channel Management** — ⚠️ *simulated replies; see "Real vs. Simulated" table below*
 - 📋 **Inline Menu System** — Full interactive keyboard navigation
 
 ### Community OS (v1.3.0)
 - 👑 **Owner Control** — Admin dashboard, broadcast, system status, admin logs
-- 📢 **Force Join** — Channel membership verification with cached checks and anti-bypass
+- 📢 **Force Join** — Real channel membership verification (bot-injected `get_chat_member`), 5-minute cache, verify button, and a message-flow gate while enabled
 - 🎭 **AI Personalities** — 10 distinct personalities with per-group config and persistence
 - 💬 **Auto Engagement** — Ice breakers, jokes, challenges, daily questions, events with rate limiting
-- 🔥 **Viral Engine** — Auto viral post generation, scoring, hashtags, scheduling, duplicate prevention
-- 📢 **Ad System** — Scheduled ads with repeat intervals, campaigns, pause/resume/delete lifecycle
-- 🛡️ **Smart Moderation** — Anti-spam, flood, link filter, Persian profanity filter, warnings, reputation
-- 🏆 **Gamification** — XP, 16 levels with Persian titles, daily rewards, streaks, 8 achievements, leaderboard
+- 🔥 **Viral Engine** — Real post generation/scoring/storage via `/viral_now`; preview/stats/post views are ⚠️ *simulated*
+- 📢 **Ad System** — ⚠️ *simulated replies; no persistence yet*
+- 🛡️ **Smart Moderation** — Config on/off is real; warn/mute/unmute/reputation are ⚠️ *simulated*
+- 🏆 **Gamification** — ⚠️ *simulated at the command level* (quiz scoring is real)
 - 📊 **Analytics** — Active users, engagement rate, peak hours, cohort retention, command usage, dashboard
 - 🎨 **Advanced UI** — 6-row main menu, nested submenus, admin dashboard panel
 
@@ -256,7 +256,26 @@ PCLOUD_TOKEN=            # https://www.pcloud.com/developers
 INTERNXT_TOKEN=          # https://developer.internxt.com
 MEGA_EMAIL=              # MEGA account email
 MEGA_PASSWORD=           # MEGA account password
+
+# v3.13.0: Security — the bot is DENY-BY-DEFAULT. Only the owner
+# (NEXUS_OWNER_TELEGRAM_ID) and explicitly allowed user ids can use it.
+NEXUS_OWNER_TELEGRAM_ID=your_telegram_id
+NEXUS_ALLOWED_USER_IDS=12345,67890     # optional extra users
+
+# v3.13.0: Dashboard API bearer token. Set this whenever the dashboard
+# port is reachable beyond localhost. Responses are PII-free; the token
+# gates access.
+NEXUS_DASHBOARD_TOKEN=                 # python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
+
+> **Security (v3.13.0):** a global deny-by-default access guard now
+> runs before every command, callback and free message. Unlisted users
+> get one rate-limited denial and nothing else — this closes the hole
+> where only `/ai`-family and `/imagine` were checked. The dashboard
+> API no longer returns `telegram_id`/`username`, is bearer-token gated
+> when `NEXUS_DASHBOARD_TOKEN` is set, and docker-compose binds port
+> 8000 to `127.0.0.1` by default. `/cloud` and `/download` sanitize
+> file names (no path traversal).
 
 ### 3) Initialize DB
 
@@ -273,6 +292,21 @@ make run
 ---
 
 ## Commands Reference
+
+### ✅ Real vs. Simulated — status honesty (v3.13.0)
+
+This bot has been caught overselling before; this table is the
+source of truth. **Real** = wired to a working engine with tests.
+**Simulated** = replies with a canned message; no backend effect.
+
+| Status | Commands |
+|---|---|
+| ✅ Real | `/ai`, `/ask`, `/code`, `/translate`, `/summarize`, `/image`, `/imagine`, `/slideshow`, `/tts`, `/stt`, `/cloud`, `/myfiles`, `/download`, `/cloud_status`, `/referral`, `/referral_board`, `/start` (referral deep-link), `/calc`, `/remind`, `/cancel_remind`, `/reminds`, `/tr`, `/convert`, `/quiz`, `/guess_start`, `/guess`, `/guess_stop`, `/wordle`, `/wordle_stop`, `/poll`, `/anon_start`, `/anon_stop`, `/anon_report` (plus live anonymous delivery), force-join (`/forcejoin_on` + verify gate), `/owner`, `/system`, `/broadcast`, `/admin_logs`, `/personality`, `/engagement_*`, `/joke`, `/challenge`, `/analytics*`, `/track`, `/viral_now`, `/health`, `/agents`, `/myagent`, `/memory`, `/forget_me`, `/story` |
+| ⚠️ Simulated | `/vision` (canned image description), `/post`, `/schedule`, `/ban`, `/unban`, `/stats`, `/welcome`, `/pin`, `/leaderboard`, `/daily`, `/xp_leaderboard`, `/achievements`, `/docs`, `/doc_delete`, `/chat_with_doc`, `/newchat` (claims to clear history but does not), `/ad_*`, `/mod_config`, `/warn`, `/mute`, `/unmute`, `/reputation`, `/viral_preview`, `/viral_stats`, `/viral_post`, `/companion`, `/analyze` |
+
+Simulated commands reply with "(simulated)" or a canned string; they
+are on the roadmap (see `AUDIT_REPORT_2026-09-21.md` §12) but should
+not be treated as working features.
 
 ### 🤖 AI (v2.0.0)
 | Command | Description |
@@ -313,6 +347,7 @@ make run
 |---------|-------------|
 | `/referral` | Your referral code & stats |
 | `/referral_board` | Global referral leaderboard |
+| `/start ref_<code>` | Deep-link: records the referral + rewards on first start |
 
 ### 🌐 Language (v2.0.0)
 | Command | Description |
@@ -339,18 +374,25 @@ make run
 ### 🎮 Games
 | Command | Description |
 |---------|-------------|
-| `/quiz` | Start quiz |
+| `/quiz` | Start quiz (real engine, inline answers) |
 | `/guess_start` | Number guessing game |
-| `/wordle` | Persian Wordle |
-| `/poll Q \| A \| B` | Quick poll |
+| `/guess <n>` | Submit a guess |
+| `/guess_stop` | Stop number guessing |
+| `/wordle` | Persian Wordle (start) |
+| `/wordle <5-letter>` | Submit a Wordle guess |
+| `/wordle_stop` | Stop Wordle |
+| `/poll Q \| A \| B` | Quick poll with inline votes + results |
 
 ### 🛠️ Tools
 | Command | Description |
 |---------|-------------|
-| `/remind 30m text` | Set reminder |
+| `/remind 30m text` | Set reminder (30m / 2h / 1d; fires into this chat) |
+| `/reminds` | List your pending reminders |
+| `/cancel_remind <id>` | Cancel one of your reminders |
 | `/tr text` | Translate (fa→en) |
-| `/convert 100 usd to irt` | Unit conversion |
-| `/calc expression` | Calculator |
+| `/tr <from> <to> text` | Translate between any pair, e.g. `/tr en fa سلام` |
+| `/convert 100 usd irt` | Unit conversion (currency / length / weight / temp) |
+| `/calc expression` | Real safe calculator (e.g. `/calc 2+2*3`, `/calc sqrt(144)`) |
 
 ### 👑 Owner (admin only)
 | Command | Description |
