@@ -1,7 +1,7 @@
 # Deploy Runbook — NEXUS AI on Koyeb (webhook, scale-to-zero)
 
 **Scope:** production deploys of the `bot` web service described by
-`koyeb.yaml`. Companion docs: `docs/deployment-koyeb.md` (first-time setup),
+`koyeb.yaml`. Companion docs: `docs/ops/deployment-koyeb.md` (first-time setup),
 `docs/ops/NEON_LIFECYCLE_RUNBOOK.md` (database lifecycle).
 
 **Golden rule:** every deploy ends with the smoke script green. If smoke is
@@ -56,7 +56,7 @@ so the probe is side-effect free).
 
 Then send the bot one real message. On a cold start the first reply lags a
 few seconds (accepted trade-off — Telegram retries; see
-`docs/deployment-koyeb.md`).
+`docs/ops/deployment-koyeb.md`).
 
 ## 4. Rollback
 

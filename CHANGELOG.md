@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (session `01a0c460` — tasks 125/129/130/115)
+
+- **Creative op-gap (task-125):** six pure Level-B pack operations —
+  `audio.remove_noise`, `audio.deess`, `audio.eq_voice`, `audio.time_stretch`,
+  `motion.stabilize`, `motion.add_parallax` — with input models, registry
+  entries, manifest capabilities, and 12 unit tests.
+- **i18n parity (task-129):** all 15 locales at 63/63 keys with matching
+  `{placeholders}` (486 keys filled, 120 verbatim-English onboarding blocks
+  translated, `ai.activated` `{rpm}`/`{daily}` restored in 13 locales, 7
+  Persian audit fixes) plus a 34-test parity gate
+  (`tests/unit/test_i18n_parity.py`).
+- **Deploy smoke + runbook (task-130):** `scripts/deploy_smoke.py` (offline
+  manifest/contract checks plus live `/healthz` and webhook-gate probes) and
+  `docs/ops/DEPLOY_RUNBOOK.md` (preflight → deploy → smoke → rollback →
+  incidents), with 21 unit tests.
+- **llama.cpp server provider (task-115):** `LocalLlamaServerProvider`
+  (OpenAI-compatible `/v1/chat|embeddings`, `/health`; zero new
+  dependencies) behind `NEXUS_LLAMA_SERVER_*` settings, wired into
+  `build_llm_provider` as an opt-in priority (default off), with 15 unit
+  tests and clearer error hints on the legacy in-process GGUF path.
+
+### Maintenance (repo hygiene pass, 2026-09-21 — owner-directed)
+
+- **Docs reorganized.** Session audits moved to `docs/audits/`; v1/v2-era plans,
+  phase records and stale todo checklists archived under `docs/history/`;
+  ops runbooks grouped in `docs/ops/`. `docs/README.md` added as the single
+  documentation index. No content was deleted — archival only.
+- **Removed the broken root `termux_install.sh`** (it installed from a
+  nonexistent `requirements.txt`); `scripts/termux_install.sh` repaired to use
+  the canonical entrypoint (`python -m nexus_ai_agent.cli run-bot`) and the real
+  env-var names (`TELEGRAM_BOT_TOKEN`, `NEXUS_OWNER_TELEGRAM_ID`).
+- **Remote-branch janitorial work:** 28 fully merged or closed-superseded
+  branches deleted on the remote, with per-branch dispositions recorded in
+  `docs/DECISION_LOG.md` (r7). Active session branches preserved.
+- **PR #33 closed as superseded, then reopened the same day:** the closure
+  cited the duplicated security scope (delivered by merged PR #34) and the
+  conflicting head; afterwards the `ci-gates-steward` board (15:21Z) designated
+  PR #33 as the **task-110 vehicle** (OTIO round-trip + ConversationStorePort
+  adapter), so it was reopened and awaits a rebase on current `main`.
+
+## [3.13.0] — 2026-09-21
+
 Semver-minor: **P0 Week-1 security batch + feature-engine wiring.** Delivers
 the four "stop the bleeding" items from the 2026-09-21 audit
 (global auth, dashboard PII, path traversal, README honesty) and wires the

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# ── NEXUS AI Agent v3.0.0 — Termux Installer ──
-# Usage: bash termux_install.sh
-# Installs all dependencies and sets up the bot on Termux (Android).
+# ── NEXUS AI Agent — Termux Installer ──
+# Usage: bash scripts/termux_install.sh
+# Installs runtime dependencies and sets up the bot on Termux (Android).
+# The bot is started through the single supported entrypoint:
+#   python -m nexus_ai_agent.cli run-bot --mode polling
 
 set -euo pipefail
 
@@ -19,8 +21,9 @@ log "Updating Termux packages..."
 pkg update -y && pkg upgrade -y
 
 # ── 2. Install system dependencies ──
+# build-essential/cmake: needed by source-built wheels (e.g. llama-cpp-python).
 log "Installing system dependencies..."
-pkg install -y python python-pip git sqlite ffmpeg
+pkg install -y python python-pip git sqlite ffmpeg build-essential cmake pkg-config
 
 # ── 3. Clone repository ──
 REPO_URL="https://github.com/bot523h/nexus-ai-agent.git"
@@ -36,9 +39,12 @@ else
 fi
 
 # ── 4. Install Python dependencies ──
-log "Installing Python dependencies..."
+# Runtime install only (not [dev]): a phone is a deployment target,
+# not a development workstation. Heavy optional stacks (torch via
+# sentence-transformers, local llama.cpp) may take a long time to compile.
+log "Installing Python runtime dependencies..."
 pip install --upgrade pip
-pip install -e ".[dev]"
+pip install -e .
 
 # ── 5. Create data directory ──
 mkdir -p data
@@ -56,21 +62,24 @@ if [ ! -f .env ]; then
 fi
 
 # ── 7. Create startup script ──
+# Canonical entrypoint + the exact env-var names config/settings.py reads
+# (TELEGRAM_BOT_TOKEN, GEMINI_API_KEY, NEXUS_OWNER_TELEGRAM_ID).
 cat > "$INSTALL_DIR/start.sh" << 'STARTSCRIPT'
 #!/usr/bin/env bash
 cd "$(dirname "$0")"
-source .env 2>/dev/null || true
-export TELEGRAM_TOKEN TELEGRAM_BOT_NAME GEMINI_API_KEY OWNER_TEGRAM_ID
-python -m nexus_ai_agent.bot.main
+set -a
+. ./.env 2>/dev/null || true
+set +a
+python -m nexus_ai_agent.cli run-bot --mode polling
 STARTSCRIPT
 chmod +x "$INSTALL_DIR/start.sh"
 
 # ── 8. Create autostart service ──
-mkdir -p "$HOME/.termux"
+mkdir -p "$HOME/.termux/boot"
 cat > "$HOME/.termux/boot/start-nexus.sh" << 'BOOTSCRIPT'
 #!/usr/bin/env bash
 cd "$HOME/nexus-ai-agent"
-bash start.sh &
+bash start.sh > data/boot.log 2>&1 &
 BOOTSCRIPT
 chmod +x "$HOME/.termux/boot/start-nexus.sh" 2>/dev/null || true
 

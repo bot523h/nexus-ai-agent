@@ -262,7 +262,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("NEXUS_OPENROUTER_MODEL", "OPENROUTER_MODEL"),
     )
 
-    # ── v3.12.0: llama.cpp server (local, optional) ────────────────────
+    # ── Unreleased: llama.cpp server (local, optional) ───────────────
     # Points the engine at a locally running `llama-server` (OpenAI-compatible
     # HTTP API) via LocalLlamaServerProvider. Empty (default) disables it and
     # keeps the legacy priority: routing chain → GGUF file → FakeLLM.
@@ -396,7 +396,7 @@ class Settings(BaseSettings):
 
     # ── v3.9.0: Cloudflare R2 — technical blob tier (DB backups, heavy RAG docs) ──
     # Not part of the user-file round-robin. Create an R2 API token scoped to a
-    # single bucket (Object Read & Write); see docs/r2-storage.md.
+    # single bucket (Object Read & Write); see docs/ops/r2-storage.md.
     r2_account_id: str | None = Field(
         default=None,
         validation_alias=AliasChoices("R2_ACCOUNT_ID", "NEXUS_R2_ACCOUNT_ID"),

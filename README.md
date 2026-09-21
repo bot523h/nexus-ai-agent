@@ -499,44 +499,44 @@ make types       # mypy
 
 ```
 src/nexus_ai_agent/
-├── bot/
-│   ├── handlers.py          # All Telegram command/callback handlers
-│   └── middleware.py        # Auth + rate limiting
-├── config/
-│   └── settings.py          # pydantic-settings configuration
-├── features/
-│   ├── ads.py               # Advertisement system
-│   ├── analytics.py         # Analytics engine
-│   ├── anonymous_chat.py    # Anonymous chat pairing
-│   ├── ai_chat.py           # v2.0.0: Gemini 2.0 Flash integration
-│   ├── channel_manager.py   # Channel/group management
-│   ├── engagement.py        # Community engagement
-│   ├── force_join.py        # Force join verification
-│   ├── games.py             # Quiz, Wordle, polls
-│   ├── gamification.py      # XP, levels, achievements
-│   ├── image_gen.py         # v2.0.0: Pollinations.ai image generation
-│   ├── moderation.py        # Smart moderation
-│   ├── owner_control.py     # Owner control system
-│   ├── personality.py       # AI personality engine
-│   ├── referral.py          # v2.0.0: Referral viral loop system
-│   ├── speech.py            # v2.0.0: gTTS + Gemini STT
-│   ├── summarizer.py        # v2.0.0: Smart content summarizer
-│   ├── tools.py             # Calculator, translator, etc.
-│   └── viral_engine.py      # Viral content engine
-├── i18n/
-│   ├── __init__.py          # v2.0.0: I18n manager (15 languages)
-│   └── loader.py            # v2.0.0: Language loader
-├── orchestration/
-│   ├── graph.py             # LangGraph StateGraph
-│   └── state.py             # NexusState definition
-├── storage/
-│   ├── models.py            # All SQLModel tables (including v2.0.0 models)
-│   ├── unified_cloud.py     # v2.0.0: Unified cloud storage orchestrator
-│   └── providers/           # Storage backends
-├── observability/
-│   └── logging.py           # structlog setup
-└── presence.py              # Online presence tracking
+├── adapters/                # Out-of-band adapters (caption unavailable shim, in-process job queue)
+├── agent/                   # Governance: approval, feedback, self-monitor, updater
+├── agents/                  # Persona agents (planner/executor/chat + model-tuned variants) & agent store
+├── api/                     # FastAPI dashboard app
+├── application/             # Hexagon core: image-generation app service + ports/ (typed seams)
+├── bot/                     # Telegram surface: handlers, middleware, access guard, rate limiter
+├── config/                  # pydantic-settings configuration (env aliases, fail-closed defaults)
+├── continuum/               # Continuum snapshot state (.nexus/continuum.json contract)
+├── core/                    # Hardened primitives: async DB, HTTP client w/ SSRF guard, instrumentation
+├── creative/                # Nagar creative studio: capability packs (data-only manifests), slideshow
+│   │                        #   render lane, image generation, caption/audio/edit/motion/delivery packs
+├── domain/                  # Pure domain: glossary, retention/lifecycle/reconciler policies
+├── features/                # Product feature engines (chat, games, referral, moderation, RAG, ...)
+├── i18n/                    # 15-locale message catalogs
+├── infrastructure/          # Observability: metrics, structured events, log redaction
+├── integrations/            # Free third-party tool integrations
+├── knowledge/               # Knowledge manager + web/Wikipedia trainers
+├── llm/                     # LLM providers: litellm router, Gemini, local llama.cpp, fallback, fake
+├── maintenance/             # R2 backups + scheduled housekeeping
+├── memory/                  # Short-term + long-term memory stores
+├── observability/           # structlog setup
+├── orchestration/           # LangGraph StateGraph, router, NexusState
+├── personality/             # Personality engine
+├── storage/                 # SQLModel tables, checkpoint lifecycle, cloud providers (R2, HF, MEGA)
+├── tools/                   # Sandboxed tool registry (files, shell)
+├── cli.py                   # Single CLI entrypoint (`nexus ...`)
+└── worker.py                # Job-queue worker entrypoint
 ```
+
+## Documentation Map
+
+Everything lives under `docs/` (index: [`docs/README.md`](docs/README.md)):
+
+- `docs/DECISION_LOG.md` — the authoritative architecture decision log
+- `docs/architecture.md` + `docs/architecture/` — current architecture & data lifecycle
+- `docs/audits/` — dated audits and handoff analyses
+- `docs/history/` — archived plans from the v1/v2 era (kept for traceability only)
+- `docs/ops/` — deployment & operations runbooks (Koyeb, Neon, R2)
 
 ## License
 

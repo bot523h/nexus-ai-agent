@@ -142,7 +142,7 @@ def check_manifest(manifest_path: Path) -> list[CheckResult]:
     absent_recommended = [name for name in RECOMMENDED_ENV_VARS if name not in env_names]
     if absent_recommended:
         # Advisory, not a skip: these are optional by contract (see
-        # docs/deployment-koyeb.md), so their absence never blocks a deploy.
+        # docs/ops/deployment-koyeb.md), so their absence never blocks a deploy.
         results.append(
             CheckResult(
                 "manifest",
