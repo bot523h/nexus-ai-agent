@@ -85,6 +85,12 @@ class ReminderSystem:
     - **Restart safety**: :meth:`restore_pending` reschedules pending rows;
       overdue rows are delivered immediately instead of being dropped.
     - **Bounded I/O**: every Telegram send is wrapped in a timeout.
+    - **Non-blocking event loop** (P1-2): the SQLite core is synchronous
+      and runs *off the event loop* via :func:`asyncio.to_thread`.  Each
+      public async method is a thin wrapper over a ``*_sync`` core — the
+      reference pattern for the rest of the feature engines.  The engine
+      is created with ``check_same_thread=False`` because pooled
+      connections legitimately cross the loop/worker thread boundary.
     """
 
     SEND_TIMEOUT_SECONDS = 30.0
@@ -116,7 +122,13 @@ class ReminderSystem:
     def _engine_ref(self) -> Any:
         if self._engine is None:
             path = self._db_path or get_settings().db_path
-            self._engine = _create_engine(f"sqlite:///{path}", echo=False)
+            # P1-2: sessions are executed in worker threads (to_thread);
+            # pooled connections may therefore be created and used on
+            # different threads, which sqlite3 allows only with
+            # check_same_thread=False.
+            self._engine = _create_engine(
+                f"sqlite:///{path}", echo=False, connect_args={"check_same_thread": False}
+            )
         return self._engine
 
     def close(self) -> None:
@@ -142,8 +154,20 @@ class ReminderSystem:
         delta, _ = parsed
         remind_at = datetime.now(timezone.utc) + delta
 
-        engine = self._engine_ref()
-        with Session(engine) as session:
+        # P1-2: sync SQLite core off the event loop.
+        rid = await asyncio.to_thread(
+            self._persist_reminder_sync, user_id, chat_id, remind_at, text
+        )
+
+        self._schedule(rid, user_id, chat_id, text, delta)
+        return f"✅ یادآوری #{rid} تنظیم شد: {text} ({time_str})"
+
+    def _persist_reminder_sync(
+        self, user_id: int, chat_id: int, remind_at: datetime, text: str
+    ) -> int:
+        """Synchronous DB core for :meth:`set_reminder` (runs in a worker
+        thread via :func:`asyncio.to_thread`)."""
+        with Session(self._engine_ref()) as session:
             reminder = Reminder(
                 user_id=user_id,
                 chat_id=chat_id,
@@ -154,13 +178,27 @@ class ReminderSystem:
             session.add(reminder)
             session.commit()
             session.refresh(reminder)
-            rid: int = reminder.id if reminder.id is not None else 0
-
-        self._schedule(rid, user_id, chat_id, text, delta)
-        return f"✅ یادآوری #{rid} تنظیم شد: {text} ({time_str})"
+            return reminder.id if reminder.id is not None else 0
 
     async def cancel_reminder(self, reminder_id: int, user_id: int) -> str:
         """Cancel a pending reminder. Only the creator may cancel it."""
+        # P1-2: sync SQLite core off the event loop.
+        error = await asyncio.to_thread(self._cancel_reminder_sync, reminder_id, user_id)
+        if error is not None:
+            return error
+
+        task = self._tasks.pop(reminder_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+        return f"✅ یادآوری #{reminder_id} لغو شد."
+
+    def _cancel_reminder_sync(self, reminder_id: int, user_id: int) -> str | None:
+        """Synchronous DB core for :meth:`cancel_reminder`.
+
+        Returns the user-facing error message when the cancellation is
+        refused, or ``None`` when the row was marked cancelled (the caller
+        then cancels the live task on the event-loop thread).
+        """
         with Session(self._engine_ref()) as session:
             obj = session.get(Reminder, reminder_id)
             if obj is None:
@@ -171,20 +209,12 @@ class ReminderSystem:
                 return f"⚠️ این یادآوری «{obj.status}» است و دیگر لغو نمی‌شود."
             obj.status = "cancelled"
             session.commit()
-
-        task = self._tasks.pop(reminder_id, None)
-        if task is not None and not task.done():
-            task.cancel()
-        return f"✅ یادآوری #{reminder_id} لغو شد."
+        return None
 
     async def list_reminders(self, user_id: int) -> str:
         """List the user's pending reminders with their ids."""
-        with Session(self._engine_ref()) as session:
-            rows = session.exec(
-                select(Reminder)
-                .where(Reminder.user_id == user_id, Reminder.status == "pending")
-                .order_by(Reminder.remind_at)  # type: ignore[arg-type]
-            ).all()
+        # P1-2: sync SQLite core off the event loop.
+        rows = await asyncio.to_thread(self._list_reminders_sync, user_id)
         if not rows:
             return "📭 یادآوری در انتظار ندارید."
         lines = ["⏰ یادآوری‌های در انتظار:", ""]
@@ -196,6 +226,17 @@ class ReminderSystem:
         lines.append("لغو: /cancel_remind <id>")
         return "\n".join(lines)
 
+    def _list_reminders_sync(self, user_id: int) -> list[Reminder]:
+        """Synchronous DB core for :meth:`list_reminders`."""
+        with Session(self._engine_ref()) as session:
+            return list(
+                session.exec(
+                    select(Reminder)
+                    .where(Reminder.user_id == user_id, Reminder.status == "pending")
+                    .order_by(Reminder.remind_at)  # type: ignore[arg-type]
+                ).all()
+            )
+
     async def restore_pending(self) -> int:
         """Restore pending reminders from DB (after restart).
 
@@ -203,14 +244,8 @@ class ReminderSystem:
         rescheduled. Returns the number of pending reminders processed.
         """
         now = datetime.now(timezone.utc)
-        with Session(self._engine_ref()) as session:
-            stmt = select(Reminder).where(Reminder.status == "pending")
-            rows = session.exec(stmt).all()
-            pending = [
-                (r.id, r.user_id, r.chat_id, r.text, _as_utc(r.remind_at))
-                for r in rows
-                if r.id is not None
-            ]
+        # P1-2: sync SQLite core off the event loop.
+        pending = await asyncio.to_thread(self._restore_pending_sync)
 
         count = 0
         for rid, user_id, chat_id, text, remind_at in pending:
@@ -220,6 +255,19 @@ class ReminderSystem:
         if count:
             logger.info("reminders_restored", count=count)
         return count
+
+    def _restore_pending_sync(
+        self,
+    ) -> list[tuple[int, int, int, str, datetime]]:
+        """Synchronous DB core for :meth:`restore_pending`."""
+        with Session(self._engine_ref()) as session:
+            stmt = select(Reminder).where(Reminder.status == "pending")
+            rows = session.exec(stmt).all()
+            return [
+                (r.id, r.user_id, r.chat_id, r.text, _as_utc(r.remind_at))
+                for r in rows
+                if r.id is not None
+            ]
 
     # -- internals ------------------------------------------------------------
 
@@ -246,18 +294,22 @@ class ReminderSystem:
                 bot.send_message(chat_id=chat_id, text=f"⏰ یادآوری: {text}"),
                 timeout=self.SEND_TIMEOUT_SECONDS,
             )
-            self._mark_status(rid, "sent")
+            await self._mark_status(rid, "sent")
         except RuntimeError:
             # Bot unbound at fire time (e.g. restore before post_init bound it).
             logger.error("reminder_unbound_at_fire", reminder_id=rid)
-            self._mark_status(rid, "failed")
+            await self._mark_status(rid, "failed")
         except Exception:  # noqa: BLE001 — never let a reminder kill the loop
             logger.exception("reminder_send_failed", reminder_id=rid)
-            self._mark_status(rid, "failed")
+            await self._mark_status(rid, "failed")
         finally:
             self._tasks.pop(rid, None)
 
-    def _mark_status(self, rid: int, status: str) -> None:
+    async def _mark_status(self, rid: int, status: str) -> None:
+        """Mark a reminder row (P1-2: sync core off the event loop)."""
+        await asyncio.to_thread(self._mark_status_sync, rid, status)
+
+    def _mark_status_sync(self, rid: int, status: str) -> None:
         try:
             with Session(self._engine_ref()) as session:
                 obj = session.get(Reminder, rid)

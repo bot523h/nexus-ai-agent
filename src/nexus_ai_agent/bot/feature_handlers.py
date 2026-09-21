@@ -25,6 +25,7 @@ Design notes
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -34,6 +35,7 @@ from telegram.ext import ContextTypes, MessageHandler
 from telegram.ext.filters import MessageFilter
 
 from nexus_ai_agent.config.settings import Settings
+from nexus_ai_agent.features.ai_memory import AIMemoryEngine
 from nexus_ai_agent.features.anonymous_chat import AnonymousChatManager
 from nexus_ai_agent.features.force_join import ForceJoinManager
 from nexus_ai_agent.features.games import NumberGuess, QuickPoll, QuizGame, WordleFA
@@ -94,6 +96,7 @@ class FeatureEngines:
     referral: ReferralEngine
     force_join: ForceJoinManager
     anon: AnonymousChatManager
+    ai_memory: AIMemoryEngine
 
 
 def build_feature_engines(
@@ -116,6 +119,10 @@ def build_feature_engines(
         referral=referral or ReferralEngine(db_path=settings.db_path),
         force_join=ForceJoinManager(),
         anon=AnonymousChatManager(),
+        # Single shared instance (task-102 acceptance): the P0-7 consent
+        # gate lives inside the engine, so every call site — /memory,
+        # /forget_me and the main message handler — shares one gate state.
+        ai_memory=AIMemoryEngine(),
     )
 
 
@@ -447,9 +454,14 @@ def build_feature_command_handlers(engines: FeatureEngines, settings: Settings) 
         start_param = " ".join(context.args or [])
         if not start_param.startswith("ref_"):
             return
-        result = engines.referral.process_referral(int(user.id), start_param)
+        # P1-2: sync SQLite work off the event loop (call-site offload).
+        result = await asyncio.to_thread(
+            engines.referral.process_referral, int(user.id), start_param
+        )
         if result.get("success"):
-            link = engines.referral.get_referral_link(int(user.id), settings.bot_username)
+            link = await asyncio.to_thread(
+                engines.referral.get_referral_link, int(user.id), settings.bot_username
+            )
             await _reply(
                 update,
                 f"🎁 خوش آمدید! شما از طریق یک دوست شروع کردید (+50 XP).\nلینک دعوت شما: {link}",

@@ -275,7 +275,13 @@ NEXUS_DASHBOARD_TOKEN=                 # python -c "import secrets; print(secret
 > API no longer returns `telegram_id`/`username`, is bearer-token gated
 > when `NEXUS_DASHBOARD_TOKEN` is set, and docker-compose binds port
 > 8000 to `127.0.0.1` by default. `/cloud` and `/download` sanitize
-> file names (no path traversal).
+> file names (no path traversal). **AIMemory egress (P0-7)** is
+> default-deny: `/memory` extraction only sends text to the external
+> Gemini model after an explicit per-user consent vote via inline keyboard
+> (`aimem:grant`/`aimem:deny`); see `NEXUS_AI_MEMORY_ENABLED` and
+> `NEXUS_AI_MEMORY_MIN_EGRESS_SECONDS` below. **Event-loop non-blocking
+> (P1-2):** all sync-DB feature engines (reminders, referrals, force-join,
+> anon chat) are offloaded to worker threads via `asyncio.to_thread`.
 
 ### 3) Initialize DB
 

@@ -692,3 +692,87 @@ clean; `mypy src` clean (197 files). The stale `P0-security-batch` lease
 from the finished session `arena/01a0c316-nexus-ai-agent` (PR#30 merged as
 `5e5009a`) was released with an explanatory board note and re-claimed by
 this session per owner instruction; see `.agents/board.json`.
+
+## 2026-09-21 — P0-7 LLM-egress consent gate + P1-2 event-loop non-blocking
+
+**Status:** Implemented on `arena/01a0c3a0-nexus-ai-agent`; pending merge in PR#34.
+
+### P0-7: AIMemory consent gate
+
+**Problem.** The main message handler (`on_message`) created a fresh
+`AIMemoryEngine()` per message and fire-and-forget'd
+`update_from_message(user_id, text)` — sending *every* user's raw
+message text to the external Gemini model with no consent, no opt-out,
+no rate limit, and one new provider per message.
+
+**Decisions:**
+
+1. **Default-deny, consent tri-state.** `UserMemory.ai_memory_consent` is
+   `str | None` (tri-state: `None` = unset, `"granted"`, `"denied"`).
+   No egress unless exactly `"granted"`. Rejected: opt-out model
+   (pre-existing users would egress without knowing), checkbox in
+   /settings (too hidden for a privacy gate).
+
+2. **One-time inline-keyboard question.** Shown exactly once per user
+   (tracked via `ai_memory_prompted: bool | None`). Ignoring the question
+   does not re-prompt (no prompt spam). Rejected: a persistent /consent
+   command (would require users to know the command exists).
+
+3. **Gate enforced inside the engine, not at call sites.** Returns an
+   outcome string (`EGRESSED` / `SKIP_*`). No future caller can bypass
+   the gate. `ensure_consent_prompted()` is a pure-orchestration helper
+   (testable, in `memory_handlers.py`).
+
+4. **New Alembic revision `7c2f9d41e8a3`.** Three nullable columns on
+   `usermemory` (no server default → zero drift on `alembic check` on
+   both SQLite and PostgreSQL). CI pinned from `f4a9c2e71b08` to
+   `7c2f9d41e8a3`.
+
+5. **Shared engine instance.** `FeatureEngines.ai_memory` is built once
+   in `build_feature_engines` (single Gemini provider, single rate-limit
+   dict). `/memory`, `/forget_me`, `on_message` and the consent callback
+   all share it.
+
+6. **`forget_user` = consent revoke.** The row is deleted (including
+   `ai_memory_consent`), so any future egress requires a fresh vote.
+   Rejected: soft-delete (complex, privacy-unfriendly).
+
+**Tests.** 17 new tests in `test_ai_memory_consent.py` (engine gate,
+global kill switch, one-time prompt, callback, rate limit, forget-wipes,
+shared instance, schema + migration chain). 2 pre-existing tests in
+`test_ai_memory.py` rewritten to the new contract with proper DB
+isolation.
+
+### P1-2: Event-loop non-blocking
+
+**Problem.** All four sync-DB feature engines (`ReminderSystem`,
+`ReferralEngine`, `ForceJoinManager`, `AnonymousChatManager`) executed
+synchronous `Session(engine)` blocks inside `async` handler coroutines,
+blocking the event loop on every message.
+
+**Decisions:**
+
+1. **`asyncio.to_thread(sync_core)` reference pattern.** Each public
+   async method is a thin wrapper over a `*_sync` core. The task
+   management (`_schedule`, `task.cancel()`) stays on the loop thread.
+   Rejected: migrating to `AsyncSession` (too invasive for a batch
+   change, touches every engine and its tests).
+
+2. **Cached engines with `check_same_thread=False`.** `_sync_engine` is
+   `@lru_cache`'d per `db_path` (or stored on `self`). Sessions are
+   created and used within a single worker thread (safe), but the
+   connection pool may be accessed from both the loop and worker threads
+   (requires the flag).
+
+3. **Call-site offload for owner commands.** `ForceJoinManager.set_config`
+   / `get_config` (sync classmethod calls from `handlers.py`) wrapped at
+   the call site with `asyncio.to_thread`. Same for referral
+   `format_stats` / `format_leaderboard` / `process_referral` /
+   `get_referral_link`.
+
+**Tests.** All 990 existing tests pass (20 PG-only skips). The sync
+methods are exercised through the existing behavioural tests which now
+go through the async wrapper + `to_thread`.
+
+**Evidence.** `make lint` ✅, `make types` ✅ (209 files), `make test` ✅
+(990 passed, 20 skipped, 53.58s).

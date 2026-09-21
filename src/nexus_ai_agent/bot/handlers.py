@@ -46,7 +46,10 @@ from nexus_ai_agent.bot.feature_handlers import (
 
 # ── v3.1.0 imports ──
 from nexus_ai_agent.bot.knowledge_handlers import learn_cmd, search_cmd, wiki_cmd
-from nexus_ai_agent.bot.memory_handlers import forget_me_cmd, memory_cmd
+from nexus_ai_agent.bot.memory_handlers import (
+    build_memory_handlers,
+    ensure_consent_prompted,
+)
 from nexus_ai_agent.bot.monitor_handlers import approve_cmd, health_cmd, reject_cmd
 from nexus_ai_agent.bot.safe_paths import (
     UnsafeFileNameError,
@@ -62,7 +65,7 @@ from nexus_ai_agent.creative.image_gen import ImageGenerationError, ImageRequest
 # Feature managers — lazy-initialised inside build_handlers
 # ── v2.0.0 imports ──
 from nexus_ai_agent.features.ai_chat import GeminiEngine
-from nexus_ai_agent.features.ai_memory import AIMemoryEngine
+from nexus_ai_agent.features.ai_memory import CONSENT_GRANTED
 from nexus_ai_agent.features.analytics import AnalyticsEngine
 from nexus_ai_agent.features.engagement import EngagementEngine
 from nexus_ai_agent.features.force_join import ForceJoinManager
@@ -196,6 +199,11 @@ def build_handlers(
     referral_engine = engines.referral
     feature_cmds = build_feature_command_handlers(engines, settings)
     force_gate = forcejoin_gate(engines)
+    # P0-7: /memory + /forget_me bind to the SHARED engine instance.
+    memory_cmd, forget_me_cmd, aimem_consent_callback = build_memory_handlers(engines.ai_memory)
+    # Strong references to in-flight background tasks (fire-and-forget
+    # create_task() without a held reference may be GC'd mid-execution).
+    _held_background_tasks: set[asyncio.Task[Any]] = set()
     # v2.0.0 specific engines
     gemini_engine: GeminiEngine | None = None
     summarizer_engine: SummarizerEngine | None = None
@@ -707,7 +715,9 @@ def build_handlers(
         user_id = _user_id(update)
         if user_id is None:
             return
-        formatted = referral_engine.format_stats(
+        # P1-2: sync SQLite read off the event loop (call-site offload).
+        formatted = await asyncio.to_thread(
+            referral_engine.format_stats,
             user_id,
             settings.bot_username,
         )
@@ -715,7 +725,8 @@ def build_handlers(
 
     # ── v2.0.0: /referral_board — Referral leaderboard ──
     async def referral_board_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        formatted = referral_engine.format_leaderboard()
+        # P1-2: sync SQLite read off the event loop (call-site offload).
+        formatted = await asyncio.to_thread(referral_engine.format_leaderboard)
         await _reply(update, formatted)
 
     # ── v2.0.0: /language — Set language preference ──
@@ -857,9 +868,28 @@ def build_handlers(
         await _upsert_chat(db_session_factory, chat_id, thread_id)
 
         # ── v3.2.0: Agent Store & AI Memory integration ──
-        memory_engine = AIMemoryEngine()
-        # Update memory in background
-        asyncio.create_task(memory_engine.update_from_message(user_id, update.message.text))
+        # P0-7: the shared engine (one per process) owns the consent gate —
+        # global switch → per-user vote (default-deny) → per-user rate limit.
+        # Unset users see a one-time consent question and never egress until
+        # they explicitly grant; the AI reply itself is unaffected.
+        memory_engine = engines.ai_memory
+        # P0-7: one-time consent question (default-deny egress), then the
+        # background extraction only for users who explicitly granted.
+        memory_consent = await ensure_consent_prompted(
+            memory_engine,
+            settings.ai_memory_enabled,
+            user_id,
+            lambda text, **kw: _reply(update, text, **kw),
+        )
+        if memory_consent == CONSENT_GRANTED:
+            # Held task reference: an un-referenced create_task() can be
+            # garbage-collected mid-flight (the documented fire-and-forget
+            # hazard), which would lose the extraction *and* its error log.
+            task = asyncio.create_task(
+                memory_engine.update_from_message(user_id, update.message.text)
+            )
+            _held_background_tasks.add(task)
+            task.add_done_callback(_held_background_tasks.discard)
 
         active_agent = await AgentManager.get_active(user_id)
         if active_agent:
@@ -982,8 +1012,12 @@ def build_handlers(
             await _reply(update, "⛔ Access denied")
             return
         chat_id = _chat_id(update)
-        cfg = ForceJoinManager.set_config(
-            chat_id, enabled=True, channel_username="@nexus_ai_official"
+        # P1-2: sync SQLite write off the event loop (call-site offload).
+        cfg = await asyncio.to_thread(
+            ForceJoinManager.set_config,
+            chat_id,
+            enabled=True,
+            channel_username="@nexus_ai_official",
         )
         await _reply(update, f"✅ عضوگیری اجباری فعال شد.\n📢 کانال: {cfg.channel_username}")
 
@@ -993,13 +1027,15 @@ def build_handlers(
             await _reply(update, "⛔ Access denied")
             return
         chat_id = _chat_id(update)
-        ForceJoinManager.set_config(chat_id, enabled=False)
+        # P1-2: sync SQLite write off the event loop (call-site offload).
+        await asyncio.to_thread(ForceJoinManager.set_config, chat_id, enabled=False)
         await _reply(update, "❌ عضوگیری اجباری غیرفعال شد.")
 
     async def forcejoin_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show force-join status."""
         chat_id = _chat_id(update)
-        cfg = ForceJoinManager.get_config(chat_id)
+        # P1-2: sync SQLite read off the event loop (call-site offload).
+        cfg = await asyncio.to_thread(ForceJoinManager.get_config, chat_id)
         if cfg is None or not cfg.enabled:
             await _reply(update, "📋 عضوگیری اجباری: غیرفعال")
             return
@@ -1018,7 +1054,10 @@ def build_handlers(
             await _reply(update, "❌ متن را وارد کنید: /forcejoin_message <text>")
             return
         chat_id = _chat_id(update)
-        ForceJoinManager.set_config(chat_id, enabled=True, welcome_message=text)
+        # P1-2: sync SQLite write off the event loop (call-site offload).
+        await asyncio.to_thread(
+            ForceJoinManager.set_config, chat_id, enabled=True, welcome_message=text
+        )
         await _reply(update, "✅ پیام عضوگیری اجباری تغییر کرد.")
 
     # ── Phase 9: Personality Engine ────────────────────────────────
@@ -1445,6 +1484,8 @@ def build_handlers(
         # ── v3.2.0: AI Memory ──
         CommandHandler("memory", memory_cmd),
         CommandHandler("forget_me", forget_me_cmd),
+        # ── P0-7: AI Memory consent vote ──
+        CallbackQueryHandler(aimem_consent_callback, pattern=r"^aimem:(grant|deny)$"),
         # ── v2.1: Onboarding callbacks ──
         CallbackQueryHandler(onboarding_callback_handler, pattern=r"^onboarding_"),
         CallbackQueryHandler(menu_callback, pattern=r"^lang_"),

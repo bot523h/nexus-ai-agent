@@ -325,6 +325,15 @@ class UserMemory(SQLModel, table=True):
     occupation: str | None = None
     personality_tags: str = "[]"  # JSON list
     last_updated: datetime = Field(default_factory=datetime.utcnow)
+    # ── P0-7: explicit consent for LLM egress (AIMemory) ──────────────
+    # ``ai_memory_consent`` is a tri-state: None (unset / never asked or
+    # answered) | "granted" | "denied".  No message text may leave the
+    # process for the external LLM while it is not exactly "granted".
+    ai_memory_consent: str | None = None
+    ai_memory_consent_at: datetime | None = None
+    # Whether the one-time consent question has already been shown, so the
+    # bot never re-prompts a user who ignored the first question.
+    ai_memory_prompted: bool | None = None
 
 
 class DocumentChunk(SQLModel, table=True):

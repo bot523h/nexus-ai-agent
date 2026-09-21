@@ -13,6 +13,24 @@ the four "stop the bleeding" items from the 2026-09-21 audit
 previously dead feature engines to the live Telegram surface
 (P0-1/P0-4/P0-8/P0-10, audit §12 items 5-7 and 9).
 
+### Changed (P1-2: event-loop non-blocking)
+
+- **All sync-DB feature engines offloaded via `asyncio.to_thread`.**
+  `ReminderSystem`, `ReferralEngine`, `ForceJoinManager` and
+  `AnonymousChatManager` previously executed synchronous SQLite sessions
+  directly inside the `async` handler coroutines, blocking the event
+  loop on every message. Each engine now:
+  (1) caches a single `create_engine(..., check_same_thread=False)` per
+  `db_path` (the `_sync_engine` is `@lru_cache`'d or stored on `self`);
+  (2) separates a pure-sync DB core (e.g. `_persist_reminder_sync`,
+  `_create_session_sync`, `_end_sessions_sync`, `_report_sessions_sync`,
+  `_is_enabled_anywhere_sync`);
+  (3) the async public API calls `await asyncio.to_thread(sync_core)`.
+  The `task.cancel()` and `_schedule` calls stay on the event-loop
+  thread (not inside the worker thread). `ForceJoinManager.should_block`
+  (called on *every* message) and all referral/force-join owner
+  command-sites now use the same pattern.
+
 ### Security
 
 - **Global deny-by-default access guard (P0-2).** New
@@ -38,6 +56,19 @@ previously dead feature engines to the live Telegram surface
 - **Duplicate `/start` handler removed (P0-4, part 1).** The second
   `CommandHandler("start")` (which PTB could never fire) is gone; the
   single `/start` handler now parses referral deep links.
+- **LLM-egress consent gate for AIMemory (P0-7).** Every `/memory`
+  extraction (the path that sends raw user message text to external
+  Gemini) now passes a three-stage gate *inside* the engine:
+  (1) `NEXUS_AI_MEMORY_ENABLED` global kill switch (default true);
+  (2) per-user explicit consent vote (`aimem:grant`/`aimem:deny` via a
+  one-time inline-keyboard question, **default-deny** — unset users
+  never egress);
+  (3) per-user in-process rate limit
+  (`NEXUS_AI_MEMORY_MIN_EGRESS_SECONDS`, default 120s).
+  `/forget_me` now also wipes the consent record (forget ⇒ revoke).
+  New Alembic revision `7c2f9d41e8a3` (revises `f4a9c2e71b08`) adds
+  three nullable columns to `usermemory` (zero-drift on `alembic check`).
+  CI pinned to the new head.
 
 ### Added
 
