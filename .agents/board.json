@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T15:21:39Z",
+  "updated_at": "2026-09-21T15:55:00Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -439,6 +439,20 @@
         "src/nexus_ai_agent/adapters/",
         "docs/DECISION_LOG.md"
       ]
+    },
+    {
+      "id": "repo-hygiene",
+      "description": "Root/docs cleanup, archival, release metadata alignment, remote-branch janitorial work",
+      "paths": [
+        "todo*.md",
+        "termux_install.sh",
+        "docs/audits/",
+        "docs/history/",
+        "README.md",
+        "CHANGELOG.md",
+        "VERSION",
+        "pyproject.toml"
+      ]
     }
   ],
   "claims": [
@@ -645,6 +659,41 @@
       "exclusive_paths": [],
       "scope": "Interim gates stewardship after A orphaned (vacant gates_owner).",
       "note": "F runs/reads full gates (branch CI + main CI) until E#1 merges #33 or A returns. E#1 backup (green-gates evidence). No code paths locked."
+    },
+    {
+      "task": "repo-hygiene-2026-09-21",
+      "zone": "repo-hygiene",
+      "agent_branch": "arena/01a0c484-nexus-ai-agent",
+      "claimed_at": "2026-09-21T15:55:00Z",
+      "ttl_hours": 24,
+      "status": "active",
+      "gates_owner": true,
+      "exclusive_paths": [
+        "todo.md",
+        "todo_step3.md",
+        "todo_v130.md",
+        "todo_v200.md",
+        "todo_v21.md",
+        "termux_install.sh",
+        "scripts/termux_install.sh",
+        "AUDIT_REPORT_2026-09-21.md",
+        "docs/audits/",
+        "docs/history/",
+        "docs/README.md",
+        "docs/HANDOFF_ANALYSIS_2026-09-21.md",
+        "docs/v2-roadmap-strategy.md",
+        "docs/PHASE_D_ARCHITECTURE.md",
+        "docs/DECISION_LOG.md",
+        "docs/deployment-koyeb.md",
+        "docs/r2-storage.md",
+        "README.md",
+        "AGENTS.md",
+        "CHANGELOG.md",
+        "VERSION",
+        "pyproject.toml"
+      ],
+      "scope": "Owner-directed zero-to-hundred repo hygiene pass: archive stale v1/v2-era todo checklists + historical docs into docs/history/, move session audits into docs/audits/ + docs index, remove broken root termux_install.sh and repair scripts/termux_install.sh, align VERSION/pyproject/CHANGELOG/README at 3.13.0, remote-branch janitorial work, DECISION_LOG r7, AGENTS.md refresh. Zero src/ runtime changes.",
+      "note_fa": "کلایم مجدداً روی main جدید (پس از PR#36) بازسازی شد — تداخل تخته حل شد به سود آخرین وضعیت forensic."
     }
   ],
   "deferred_log": [
