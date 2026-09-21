@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T09:00:54Z",
+  "updated_at": "2026-09-21T10:15:00Z",
   "notes": [
     "This file is the machine-readable task/claim registry for multi-agent work on this repository.",
     "It is the shared coordination channel between agents working in SEPARATE sandboxes.",
@@ -34,6 +34,17 @@
         "tests/unit/test_tools*",
         "tests/unit/test_games*"
       ]
+    },
+    {
+      "id": "nagar-creative-cognition",
+      "description": "Nagar Wave 4b subtitle styling, ASS/RTL engine, multilingual intent routing, and cognitive graph memory",
+      "paths": [
+        "src/nexus_ai_agent/creative/packs/caption/",
+        "src/nexus_ai_agent/orchestration/",
+        "tests/unit/test_caption_ass.py",
+        "tests/unit/test_router_multilingual.py",
+        "tests/unit/test_graph_memory.py"
+      ]
     }
   ],
   "claims": [
@@ -56,16 +67,32 @@
     {
       "task": "feature-wiring-batch",
       "zone": "feature-wiring",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0c34d-nexus-ai-agent",
+      "claimed_at": "2026-09-21T10:00:52Z",
       "ttl_hours": 24,
-      "status": "queued",
+      "status": "active",
       "gates_owner": false,
       "exclusive_paths": [
         "src/nexus_ai_agent/bot/handlers.py",
         "src/nexus_ai_agent/features/"
       ],
-      "scope": "Wire dead engines (features/tools.py, WordleFA, NumberGuess, QuickPoll, ReferralEngine.process_referral, ForceJoinManager bot injection, AnonymousChatManager bot injection) to live Telegram handlers"
+      "scope": "Wire dead engines (features/tools.py, WordleFA, NumberGuess, QuickPoll, ReferralEngine.process_referral, ForceJoinManager bot injection, AnonymousChatManager bot injection) to live Telegram handlers",
+      "note": "Deferred until security batch merges due to shared lock on bot/handlers.py"
+    },
+    {
+      "task": "nagar-wave4b-caption-cognition",
+      "zone": "nagar-creative-cognition",
+      "agent_branch": "arena/01a0c36f-nexus-ai-agent",
+      "claimed_at": "2026-09-21T10:15:00Z",
+      "ttl_hours": 24,
+      "status": "active",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/caption/",
+        "src/nexus_ai_agent/orchestration/"
+      ],
+      "scope": "Nagar Wave 4b caption ASS/RTL formatting, Vazirmatn typography, word-level highlight/karaoke, multilingual router & cognitive graph memory persistence",
+      "note": "Fully isolated from core-security and feature-wiring zones; zero overlap with bot/handlers.py or features/"
     }
   ],
   "deferred_log": [
