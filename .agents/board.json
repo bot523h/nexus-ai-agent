@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T15:40:34Z",
+  "updated_at": "2026-09-21T15:45:34Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -665,10 +665,10 @@
     {
       "task": "task-129",
       "zone": "i18n-parity",
-      "agent_branch": "arena/01a0c460-nexus-ai-agent",
-      "claimed_at": "2026-09-21T15:40:34Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
-      "status": "active",
+      "status": "done",
       "gates_owner": false,
       "exclusive_paths": [
         "src/nexus_ai_agent/i18n/",
@@ -680,10 +680,10 @@
     {
       "task": "task-130",
       "zone": "e2e-deploy",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0c460-nexus-ai-agent",
+      "claimed_at": "2026-09-21T15:45:34Z",
       "ttl_hours": 24,
-      "status": "queued",
+      "status": "active",
       "gates_owner": false,
       "exclusive_paths": [
         "koyeb.yaml",
