@@ -1,4 +1,4 @@
-# ROADMAP_STATUS — NEXUS AI agent (as of 2026-09-20, v3.11.0, Phase 6)
+# ROADMAP_STATUS — NEXUS AI agent (as of 2026-09-21, v3.12.0 housekeeping, Phase 6)
 
 Header: **No hidden migration. No hidden mutation. No implicit repair.**
 Phase 6 adds: **packs are data; commands carry evidence; only the last step
@@ -19,13 +19,16 @@ Phases 0–5 are complete on `main`.
 | Wave 2a | Capability-pack substrate — strict data-only `nexus.capability-pack.v1` manifest, verifier that reports every finding, `PackRegistry` (external packs cannot introduce unknown operations) | **MERGED** | PR#21 `865780e` |
 | Wave 2b | Slideshow pack `nexus.slideshow.compose` — five pure operations (`scan_assets` B, `score_images` A, `suggest_tone` A, `compose` B, `render` C), 14 tone templates as JSON, deterministic planning, evidence pinned above the bus (Pillow probe, numpy beat grid, opt-in fail-closed Gemini analysis) | **MERGED** | PR#22 `aa7b2f4` |
 | Wave 2c | Render lane — plan → `RenderIR` → filtergraph → argv → **one** FFmpeg process (no shell, staging file + atomic publish, no overwrite by default), `probe_video` measures the master with the same binary, `render_from_files()` dispatches `slideshow.render` with measured evidence; CLI `nexus slideshow render` | **MERGED** | PR#23 `ebe995a` |
-| Release | v3.11.0 housekeeping cut — version lock-step, continuum refresh, this document, decision log r6 | this PR | — |
-| **Wave 2.5** | **Telegram surface for the slideshow pack** — `/slideshow` handler → `JobQueuePort.enqueue("slideshow_render", …)` → in-process worker runs the Wave 2c lane → D4 completion hook sends `master.mp4` back. Hard input limits (≤ 5 images / ≤ 30 s), typed failures rendered as plain user-facing messages, no new heavy dependency. **Owner decision 2026-09-20: precedes Wave 3** because no user path to Wave 2 exists yet (CLI only) | **NEXT** — own branch/PR | decision log r6 |
-| Wave 3 | (a) optional local upscale stage — never in the main render path (`ffmpeg scale`/lanczos first; a small ONNX model only as an opt-in pack); (b) image generation **behind an adapter**: Pollinations by default (free, key-less), Gemini opt-in behind a key (no free tier for image-output models), core stays free | PLANNED — after Wave 2.5 | decision log r6 |
+| Release 3.11.0 | Housekeeping cut after Waves 2a–2c | **MERGED** | PR#24 `8b27625` |
+| **Wave 2.5** | Telegram `/slideshow` surface → `JobQueuePort` → existing render lane → completion delivery; five-image/30-second limits and typed failures | **MERGED** | PR#25 `316ed33` |
+| Wave 3 — image generation | Isolated `ImageGenProvider`, Pollinations default and fail-closed paid Gemini; bounded retry/cache, `/imagine`, opt-in slideshow autofill, cost/consent/cleanup tests and import-boundary checks | **MERGED** | PR#26 `52329e6` |
+| Release 3.12.0 | Version lock-step and release notes for Wave 2.5 + Wave 3 image generation; refresh README, roadmap, continuum and decision log | **THIS PR** — separate release commit, pending merge | base `52329e6` |
+| Wave 3 — local upscale | Optional local stage, not the main render path; contract and owner approval required before implementation | **DEFERRED / NOT IMPLEMENTED** | decision log r6 and release-scope decision 2026-09-21 |
 | Other 60 TDD operations | Each still needs its own contract, ownership boundary and decision entry | NOT STARTED | — |
 
-None of the Nagar surfaces is reachable from the Telegram bot or the API yet;
-Wave 2.5 is exactly that gap.
+Telegram now exposes `/slideshow` and `/imagine`; the latter and slideshow
+`--fill` enforce owner/allowlist access. Plain slideshow rendering remains
+upload-only. No new HTTP API surface or local upscale stage is part of this cut.
 
 ## Checkpoint lifecycle workstream (Phases 4–5) — complete
 
@@ -53,43 +56,47 @@ maintenance) completed with v3.9.0 (`994a509`).
 
 ## Continuum
 
-`.nexus/continuum.json` (schema v2) refreshed with v3.11.0: `plan` “Nagar
-Phase 6”, `step` **`ebe995a`** (the Wave 2c merge), ledger rows for the merged
-lifecycle line and Waves 1–2c, `test_count_expected` **586**.
+`.nexus/continuum.json` (schema v2) now anchors the merged feature state at
+**`52329e6`** (PR#26). Wave 2.5 is corrected from stale `in_review` to merged,
+Wave 3 image generation is recorded separately from local upscale, and the
+v3.12.0 metadata cut remains `in_review` until its own PR merges.
 
-The verifier's invariant counts **test functions** (an AST walk over
-`tests/**/test_*.py`), not pytest's collected cases — pytest reports **622
-passed** because of parametrization. The previous value (320) dated from the
-PR3 line, so `nexus continuum verify` had been red since v3.10.0; it is green
-again. The `env_fingerprint` (Python / Alembic / SQLAlchemy versions) is
-machine-specific by design: it was recorded on Python 3.11.2 and will report a
-fingerprint mismatch on another interpreter — that is drift *detection*, not a
-failure of the checkout.
+The verifier counts **test functions** using an AST walk, not parametrized
+pytest cases. The refreshed `test_count_expected` is **649**; pytest reports
+**742 passed / 20 skipped** locally. The previous snapshot's 656 was stale.
+The environment fingerprint (Python 3.11.2, Alembic 1.20.0, SQLAlchemy 2.0.54)
+is intentionally machine-specific; a different interpreter reports drift rather
+than silently rewriting the snapshot.
 
-## Quality gates (measured 2026-09-20 at `ebe995a`)
+## Quality gates (reverified 2026-09-21 on PR#26 head `471803c`)
+
+The working tree was verified byte-for-byte against the requested commit, with
+a fresh local virtualenv and disabled Ruff/mypy/pytest caches before merging.
 
 | Gate | Result |
 |------|--------|
-| `make lint` | green — `All checks passed!`, 276 files already formatted |
-| `make types` | green — `Success: no issues found in 173 source files` |
-| `make test` | green — **622 passed, 20 skipped in ~40s** (PG-runtime legs skip without `NEXUS_DATABASE_URL`; covered by the CI `migrate-postgres` job) |
-| `nexus continuum verify` | green after this refresh (`✓ continuum snapshot matches checkout`) |
-| `make smoke` | full graph via FakeLLMProvider, exit 0 (fixed in `02f8d18`) |
+| `make lint` | green — 295 files already formatted |
+| `make types` | green — 184 source files |
+| `make test` | green — **742 passed, 20 skipped**, one upstream Starlette/AnyIO deprecation warning |
+| GitHub `test` | **SUCCESS**, both `push` and `pull_request` runs on `471803c` |
+| GitHub `migrate-postgres` | **SUCCESS**, both runs; real PostgreSQL service-container verification |
 
-Baseline delta since the previous revision of this file (`02f8d18`, 320
-passed): +302 passed, skips unchanged (20, PG-only); ruff 211 → 276 files;
-mypy 140 → 173 files. No test was removed or weakened.
+Actual CI evidence: [pull-request run 35542282107](https://github.com/bot523h/nexus-ai-agent/actions/runs/35542282107)
+and [push run 35542278734](https://github.com/bot523h/nexus-ai-agent/actions/runs/35542278734).
+PR#26 merged as **`52329e6022a0bdd9f3f9e287da581b752204c811`**. Release PR
+checks run separately; the feature results must not be mistaken for release CI.
 
-CI (`.github/workflows/ci.yml`): two jobs — `test` (ruff / mypy / pytest, no
-service) and `migrate-postgres` (service container `pgvector/pgvector:pg16`,
-runs `nexus migrate` idempotently through head `f4a9c2e71b08`, the create-all
-race regression, the head assertion, and the adapter-contract and
-lifecycle-store-contract suites on the PG leg). Both were green on PR#23.
+All 20 local skips require PostgreSQL / `NEXUS_DATABASE_URL`; no new skip marks
+were added. Local verification did not install the two heavy inference stacks
+or exercise paid image APIs. Hosted CI installs the complete `.[dev]` set. The
+PostgreSQL job checks idempotent migrations through `f4a9c2e71b08`, the create-all
+race and the adapter/lifecycle contracts on PostgreSQL.
 
 ## Dependencies
 
 Core: unchanged since v3.10.0 — no new runtime dependency entered with Waves
-2a–2c (`numpy` and `pillow` were already core; tone templates are JSON, not
+2a–3 image generation (`httpx`, `numpy` and `pillow` were already core;
+retries use the standard library; tone templates are JSON, not
 YAML; the beat detector is numpy, **not `librosa`**; upscaling is not in the
 render path, **no Real-ESRGAN/torch**). `ffmpeg` is the single declared
 external binary of the slideshow pack. Heavy flags that remain from earlier

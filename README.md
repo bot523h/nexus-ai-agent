@@ -2,7 +2,7 @@
 
 **Telegram AI platform** — multi-provider conversations, cloud storage, 15-language support, image generation, speech synthesis, and the Nagar creative studio. Local/free paths are available; optional hosted services may require credentials and incur charges.
 
-> **Current release: v3.11.0** (see `VERSION`). The Wave 3 additions below are unreleased.
+> **Version: v3.12.0** (see `VERSION` and [the changelog](CHANGELOG.md)). Nagar Wave 2.5 and Wave 3 image generation; local upscaling remains deferred.
 
 ---
 
@@ -72,7 +72,7 @@
 
 ---
 
-## Nagar image generation and slideshow (Wave 3, unreleased)
+## Nagar image generation and slideshow (v3.12.0)
 
 ### `/imagine`: text to image
 
