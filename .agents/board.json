@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T15:21:39Z",
+  "updated_at": "2026-09-21T15:36:53Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -645,6 +645,68 @@
       "exclusive_paths": [],
       "scope": "Interim gates stewardship after A orphaned (vacant gates_owner).",
       "note": "F runs/reads full gates (branch CI + main CI) until E#1 merges #33 or A returns. E#1 backup (green-gates evidence). No code paths locked."
+    },
+    {
+      "task": "task-125",
+      "zone": "nagar-opgap",
+      "agent_branch": "arena/01a0c460-nexus-ai-agent",
+      "claimed_at": "2026-09-21T15:36:53Z",
+      "ttl_hours": 24,
+      "status": "active",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/audio/",
+        "src/nexus_ai_agent/creative/packs/motion/",
+        "tests/unit/test_opgap_audio_motion.py"
+      ],
+      "scope": "شکاف TDD: اسلایس صوت/موشن (۱۵ عملیات جامانده) — فاز خالص",
+      "note": ""
+    },
+    {
+      "task": "task-129",
+      "zone": "i18n-parity",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "queued",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/i18n/",
+        "tests/unit/test_i18n_key_parity.py"
+      ],
+      "scope": "برابری کلیدهای i18n در ۱۵ زبان + ممیزی فارسی (اکنون — صفر تداخل)",
+      "note": ""
+    },
+    {
+      "task": "task-130",
+      "zone": "e2e-deploy",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "queued",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "koyeb.yaml",
+        "scripts/smoke_e2e.py",
+        "docs/ops/"
+      ],
+      "scope": "دودکش E2E + ران‌بوک استقرار (نیمه آزاد؛ compose پس از #33)",
+      "note": ""
+    },
+    {
+      "task": "task-115",
+      "zone": "llm-local",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "queued",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/llm/local_provider.py",
+        "tests/unit/test_llm_local.py"
+      ],
+      "scope": "ارائه‌دهنده LLM محلی (llama.cpp server) به‌صورت extra اختیاری",
+      "note": ""
     }
   ],
   "deferred_log": [
