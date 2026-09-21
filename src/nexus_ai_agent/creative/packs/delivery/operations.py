@@ -4,7 +4,8 @@ This module implements the Nagar Command Bus operations for color grading, proxy
 master rendering, and standard OpenTimelineIO (OTIO v1) timeline export:
 * ``color.apply_lut`` (Level B, REVERSIBLE): 3D LUT look application with intensity blending.
 * ``color.adjust_exposure`` (Level B, REVERSIBLE): EV exposure and Kelvin white-balance adjustments.
-* ``color.auto_balance`` (Level B, REVERSIBLE): Automated histogram balancing and skin-tone preservation.
+* ``color.auto_balance`` (Level B, REVERSIBLE): Automated histogram balancing and
+* skin-tone preservation.
 * ``delivery.make_proxy_480p`` (Level A, IMMEDIATE): Low-resolution proxy asset derivation.
 * ``delivery.export_otio`` (Level B, REVERSIBLE): OpenTimelineIO v1 interchange JSON export.
 * ``delivery.render_master_4k`` (Level C, CONFIRMATION): Master 4K encode with color management.
@@ -74,7 +75,10 @@ def _apply_lut(project: Project, context: OperationContext) -> OperationOutcome:
         )
 
     output_id = payload.output_asset_id or f"{payload.clip_asset_id}_lut"
-    digest_seed = f"{clip_rec.content_sha256}:lut:{payload.lut_name}:{payload.intensity}:{payload.color_space}"
+    digest_seed = (
+        f"{clip_rec.content_sha256}:lut:{payload.lut_name}:"
+        f"{payload.intensity}:{payload.color_space}"
+    )
     derived_sha256 = hashlib.sha256(digest_seed.encode("utf-8")).hexdigest()
 
     graded_record = AssetRecord(
@@ -93,9 +97,7 @@ def _apply_lut(project: Project, context: OperationContext) -> OperationOutcome:
         },
     )
 
-    new_project = project.model_copy(
-        update={"assets": [*project.assets, graded_record]}
-    )
+    new_project = project.model_copy(update={"assets": [*project.assets, graded_record]})
     return OperationOutcome(
         new_project,
         context.history,
@@ -121,7 +123,9 @@ def _adjust_exposure(project: Project, context: OperationContext) -> OperationOu
 
     clip_rec = known[payload.clip_asset_id]
     output_id = payload.output_asset_id or f"{payload.clip_asset_id}_exp"
-    digest_seed = f"{clip_rec.content_sha256}:exp:{payload.exposure_ev}:temp:{payload.temperature_k}"
+    digest_seed = (
+        f"{clip_rec.content_sha256}:exp:{payload.exposure_ev}:temp:{payload.temperature_k}"
+    )
     derived_sha256 = hashlib.sha256(digest_seed.encode("utf-8")).hexdigest()
 
     graded_record = AssetRecord(
@@ -140,9 +144,7 @@ def _adjust_exposure(project: Project, context: OperationContext) -> OperationOu
         },
     )
 
-    new_project = project.model_copy(
-        update={"assets": [*project.assets, graded_record]}
-    )
+    new_project = project.model_copy(update={"assets": [*project.assets, graded_record]})
     return OperationOutcome(
         new_project,
         context.history,
@@ -184,9 +186,7 @@ def _auto_balance(project: Project, context: OperationContext) -> OperationOutco
         },
     )
 
-    new_project = project.model_copy(
-        update={"assets": [*project.assets, graded_record]}
-    )
+    new_project = project.model_copy(update={"assets": [*project.assets, graded_record]})
     return OperationOutcome(
         new_project,
         context.history,
@@ -232,9 +232,7 @@ def _match_shot(project: Project, context: OperationContext) -> OperationOutcome
         },
     )
 
-    new_project = project.model_copy(
-        update={"assets": [*project.assets, matched_record]}
-    )
+    new_project = project.model_copy(update={"assets": [*project.assets, matched_record]})
     return OperationOutcome(
         new_project,
         context.history,
@@ -277,9 +275,7 @@ def _make_proxy(project: Project, context: OperationContext) -> OperationOutcome
         },
     )
 
-    new_project = project.model_copy(
-        update={"assets": [*project.assets, proxy_record]}
-    )
+    new_project = project.model_copy(update={"assets": [*project.assets, proxy_record]})
     return OperationOutcome(
         new_project,
         context.history,
@@ -371,9 +367,7 @@ def _export_otio(project: Project, context: OperationContext) -> OperationOutcom
         },
     )
 
-    new_project = project.model_copy(
-        update={"assets": [*project.assets, otio_record]}
-    )
+    new_project = project.model_copy(update={"assets": [*project.assets, otio_record]})
     return OperationOutcome(
         new_project,
         context.history,
@@ -394,12 +388,16 @@ def _render_master_4k(project: Project, context: OperationContext) -> OperationO
     payload = RenderMaster4KInput.model_validate(context.input_data)
     if not payload.confirmed:
         raise CommandValidationError(
-            "delivery.render_master_4k requires explicit user confirmation (confirmed=true) in Level C"
+            "delivery.render_master_4k requires explicit user confirmation "
+            "(confirmed=true) in Level C"
         )
 
     output_id = payload.output_asset_id or f"master_{uuid.uuid4().hex[:12]}"
     composite_hashes = ":".join(sorted(a.content_sha256 for a in project.assets))
-    render_spec = f"{composite_hashes}:{payload.width}x{payload.height}:{payload.codec}:{payload.color_space}:{payload.target_lufs}"
+    render_spec = (
+        f"{composite_hashes}:{payload.width}x{payload.height}:{payload.codec}:"
+        f"{payload.color_space}:{payload.target_lufs}"
+    )
     derived_sha256 = hashlib.sha256(render_spec.encode("utf-8")).hexdigest()
 
     master_record = AssetRecord(
@@ -407,7 +405,9 @@ def _render_master_4k(project: Project, context: OperationContext) -> OperationO
         media_kind="video",
         content_sha256=f"sha256:{derived_sha256}",
         duration_us=project.timeline.duration_us,
-        parent_asset_ids=tuple(a.asset_id for a in project.assets if a.media_kind in ("video", "audio")),
+        parent_asset_ids=tuple(
+            a.asset_id for a in project.assets if a.media_kind in ("video", "audio")
+        ),
         provenance={
             "is_master": True,
             "width": payload.width,
@@ -420,9 +420,7 @@ def _render_master_4k(project: Project, context: OperationContext) -> OperationO
         },
     )
 
-    new_project = project.model_copy(
-        update={"assets": [*project.assets, master_record]}
-    )
+    new_project = project.model_copy(update={"assets": [*project.assets, master_record]})
     return OperationOutcome(
         new_project,
         context.history,

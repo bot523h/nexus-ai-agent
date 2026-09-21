@@ -13,8 +13,6 @@ Covers:
 
 from __future__ import annotations
 
-import hashlib
-
 import pytest
 
 from nexus_ai_agent.creative.packs.caption import (
@@ -241,9 +239,7 @@ def test_style_vazirmatn_command_dispatch_and_undo() -> None:
     assert style_res.output["font_size"] == 52
 
     # Verify styled record
-    styled_record = next(
-        a for a in bus.project.assets if a.asset_id == "caption_for_styling_vazir"
-    )
+    styled_record = next(a for a in bus.project.assets if a.asset_id == "caption_for_styling_vazir")
     assert styled_record.provenance["font"] == "Vazirmatn"
     assert styled_record.parent_asset_ids == ("caption_for_styling",)
 
@@ -284,6 +280,7 @@ def test_highlight_words_level_a_immediate() -> None:
 
 def test_render_ir_with_subtitles_burn_in_filtergraph() -> None:
     from pathlib import Path
+
     from nexus_ai_agent.creative.slideshow.ffmpeg import (
         RenderIR,
         RenderShot,
@@ -436,5 +433,3 @@ def test_burn_in_level_c_requires_confirmation_and_registers_derived_video() -> 
     undo_res = bus.dispatch(undo_cmd)
     assert undo_res.status == "applied"
     assert "burned_master_01" not in [a.asset_id for a in bus.project.assets]
-
-

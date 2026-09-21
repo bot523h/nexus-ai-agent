@@ -46,7 +46,9 @@ class TrimInput(BaseModel):
     @model_validator(mode="after")
     def _validate_points(self) -> TrimInput:
         if self.out_point_us <= self.in_point_us:
-            raise ValueError(f"out_point_us ({self.out_point_us}) must be > in_point_us ({self.in_point_us})")
+            raise ValueError(
+                f"out_point_us ({self.out_point_us}) must be > in_point_us ({self.in_point_us})"
+            )
         return self
 
 

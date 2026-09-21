@@ -180,13 +180,15 @@ def format_ass(
         f"PlayResY: {play_res_y}\n"
         "\n"
         "[V4+ Styles]\n"
-        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
-        "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, "
-        "Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        f"Style: {cfg.name},{cfg.font_name},{cfg.font_size},{cfg.primary_colour},{cfg.secondary_colour},"
-        f"{cfg.outline_colour},{cfg.back_colour},{bold_val},{italic_val},{underline_val},{strikeout_val},"
-        f"{cfg.scale_x},{cfg.scale_y},{cfg.spacing},{cfg.angle},{cfg.border_style},{cfg.outline:.1f},"
-        f"{cfg.shadow:.1f},{cfg.alignment},{cfg.margin_l},{cfg.margin_r},{cfg.margin_v},{cfg.encoding}\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+        "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"Style: {cfg.name},{cfg.font_name},{cfg.font_size},"
+        f"{cfg.primary_colour},{cfg.secondary_colour},{cfg.outline_colour},{cfg.back_colour},"
+        f"{bold_val},{italic_val},{underline_val},{strikeout_val},{cfg.scale_x},{cfg.scale_y},"
+        f"{cfg.spacing},{cfg.angle},{cfg.border_style},{cfg.outline:.1f},{cfg.shadow:.1f},"
+        f"{cfg.alignment},{cfg.margin_l},{cfg.margin_r},{cfg.margin_v},{cfg.encoding}\n"
         "\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
@@ -207,8 +209,6 @@ def format_ass(
         else:
             dialogue_text = _normalize_cue_text(seg.text).replace("\n", "\\N")
 
-        lines.append(
-            f"Dialogue: 0,{start_ts},{end_ts},{cfg.name},,0,0,0,,{dialogue_text}"
-        )
+        lines.append(f"Dialogue: 0,{start_ts},{end_ts},{cfg.name},,0,0,0,,{dialogue_text}")
 
     return "\n".join(lines) + "\n"

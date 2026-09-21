@@ -1,10 +1,13 @@
 """Pure operations for the ``nexus.audio.studio`` pack (Wave 5 substrate).
 
 This module implements the Nagar Command Bus operations for audio studio features:
-* ``audio.detect_beats`` (Level A, IMMEDIATE): Inspects audio asset and derives beat markers and tempo.
-* ``audio.normalize_loudness`` (Level C, CONFIRMATION): EBU R128 loudness normalization and peak limiting.
+* ``audio.detect_beats`` (Level A, IMMEDIATE): Inspects audio asset and derives beat
+* markers and tempo.
+* ``audio.normalize_loudness`` (Level C, CONFIRMATION): EBU R128 loudness
+* normalization and peak limiting.
 * ``audio.duck_music`` (Level B, REVERSIBLE): Sidechain ducking of background music against voice.
-* ``audio.beat_sync_cut`` (Level B, REVERSIBLE): Synchronizes visual clip edits to musical beat boundaries.
+* ``audio.beat_sync_cut`` (Level B, REVERSIBLE): Synchronizes visual clip edits to
+* musical beat boundaries.
 """
 
 from __future__ import annotations
@@ -112,7 +115,8 @@ def _normalize_loudness(project: Project, context: OperationContext) -> Operatio
     payload = NormalizeLoudnessInput.model_validate(context.input_data)
     if not payload.confirmed:
         raise CommandValidationError(
-            "audio.normalize_loudness requires explicit user confirmation (confirmed=true) in Level C"
+            "audio.normalize_loudness requires explicit user confirmation "
+            "(confirmed=true) in Level C"
         )
 
     known = _asset_index(project)
@@ -124,11 +128,14 @@ def _normalize_loudness(project: Project, context: OperationContext) -> Operatio
     source_rec = known[payload.audio_asset_id]
     if source_rec.media_kind not in ("audio", "video"):
         raise CommandValidationError(
-            f"audio.normalize_loudness requires audio or video media, got: {source_rec.media_kind!r}"
+            f"audio.normalize_loudness requires audio or video media, "
+            f"got: {source_rec.media_kind!r}"
         )
 
     output_id = payload.output_asset_id or f"norm_{uuid.uuid4().hex[:12]}"
-    digest_seed = f"{source_rec.content_sha256}:lufs:{payload.target_lufs}:peak:{payload.true_peak_db}"
+    digest_seed = (
+        f"{source_rec.content_sha256}:lufs:{payload.target_lufs}:peak:{payload.true_peak_db}"
+    )
     derived_sha256 = hashlib.sha256(digest_seed.encode("utf-8")).hexdigest()
 
     normalized_record = AssetRecord(
@@ -146,9 +153,7 @@ def _normalize_loudness(project: Project, context: OperationContext) -> Operatio
         },
     )
 
-    new_project = project.model_copy(
-        update={"assets": [*project.assets, normalized_record]}
-    )
+    new_project = project.model_copy(update={"assets": [*project.assets, normalized_record]})
     return OperationOutcome(
         new_project,
         context.history,
@@ -203,9 +208,7 @@ def _duck_music(project: Project, context: OperationContext) -> OperationOutcome
         },
     )
 
-    new_project = project.model_copy(
-        update={"assets": [*project.assets, ducked_record]}
-    )
+    new_project = project.model_copy(update={"assets": [*project.assets, ducked_record]})
     return OperationOutcome(
         new_project,
         context.history,
@@ -237,7 +240,7 @@ def _beat_sync_cut(project: Project, context: OperationContext) -> OperationOutc
                 f"audio.beat_sync_cut references unknown clip asset: {clip_id!r}"
             )
 
-    audio_rec = known[payload.audio_asset_id]
+    known[payload.audio_asset_id]  # fail fast (KeyError) when the audio asset is unknown
     bpm = 120.0
     beat_duration_us = int((60.0 / bpm) * 1_000_000)
     clip_duration_us = beat_duration_us * payload.beats_per_cut

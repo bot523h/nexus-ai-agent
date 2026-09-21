@@ -9,17 +9,12 @@ from nexus_ai_agent.creative.packs.audio.models import (
     AUDIO_PACKAGE_ID,
     BeatGridRef,
     BeatMarker,
-    BeatSyncCutInput,
     DetectBeatsInput,
-    DuckMusicInput,
-    NormalizeLoudnessInput,
 )
 from nexus_ai_agent.creative.packs.audio.operations import (
     build_audio_registry,
-    register_audio_operations,
 )
 from nexus_ai_agent.creative.studio.bus import CommandBus
-from nexus_ai_agent.creative.studio.capabilities import CapabilityRegistry
 from nexus_ai_agent.creative.studio.models import (
     AssetRecord,
     CommandValidationError,

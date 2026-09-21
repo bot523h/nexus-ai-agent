@@ -11,7 +11,8 @@
 1. **اعلام هویت رسمی در بدو ورود:** هر عاملی که وارد سشن جدید می‌شود باید در اولین گام هویت خود را مشخص کند:
    - «من عامل A هستم» (`arena/01a0c316-...` مالک امنیت هسته و گیت‌ها)
    - «من عامل B هستم» (`arena/01a0c34d-...` مالک سیم‌کشی فیچرها)
-   - «من عامل C هستم» (`arena/01a0c36f-...` مالک استودیوی نگار و هسته شناختی)
+   - «من عامل C هستم» (`arena/01a0c36f-...` مالک استودیوی نگار — سشن تکمیل و آزاد شد)
+   - «من عامل D هستم» (`arena/01a0c3ca-...` تحلیل سیستم، پاک‌سازی تخته و واگذاری مهندسی‌شده — سشن تکمیل و آزاد شد)
    و تیک شروع‌به‌کار کارت وظیفه خود را در تخته (`.agents/board.json`) روی `active` ثبت و کامیت کند تا در هر سشن جدید دقیقاً مشخص باشد کدام تسک در حال اجراست و نفر بعدی از کجا باید ادامه دهد.
 2. **مرزبندی میلی‌متری (Zero Millimeter Overlap):** هیچ عاملی حق ورود یا حتی یک ویرایش کوچک در فایل‌های انحصاری (`exclusive_paths`) عامل دیگر را ندارد. قبل از پوش گیت، اجرای `python scripts/agent_board.py check --files ...` اجباری است و باید کد خروج ۰ بدهد.
 3. **پروتکل شبکه ۱۰ کار بعدی (10 Forward Tasks Protocol):** هر عاملی که کار خود را به اتمام رساند، موظف است شبکه ۱۰ کار کلیدی بعدی را با دقت روی تخته مستند و اولویت‌بندی کند تا سایر عامل‌ها نقشه راه دقیق داشته باشند و بدانند چه کاری باید انجام شود و از چه کارهایی باید پرهیز کنند.
@@ -55,33 +56,47 @@ worktree-style isolation + a shared task board with leases and stale-lease takeo
 
 | Agent | Task | Zone | Status | Owner Branch |
 |---|---|---|---|---|
-| **عامل A** | `P0-security-batch` | core-security | active | `arena/01a0c316-nexus-ai-agent` |
-| **عامل B** | `feature-wiring-batch` | feature-wiring | active (PR #32 open) | `arena/01a0c34d-nexus-ai-agent` |
-| **عامل C** | `nagar-wave3-timeline-edit-delivery` | nagar-creative-edit | active | `arena/01a0c36f-nexus-ai-agent` |
+| **عامل A** | `P0-security-batch` | core-security | active (gates_owner) | `arena/01a0c316-nexus-ai-agent` |
+| **عامل B** | `feature-wiring-batch` | feature-wiring | active — PR #32 open, needs rebase | `arena/01a0c34d-nexus-ai-agent` |
+| **عامل C** | `nagar-wave3-timeline-edit-delivery` | nagar-creative-edit | ✅ completed — PR #31 merged (`c41b1b0`), lease released | `arena/01a0c36f-nexus-ai-agent` |
+| **عامل D** | `board-gc-engineered-handoff` | coordination | ✅ completed — board cleanup + 10-task engineered handoff | `arena/01a0c3ca-nexus-ai-agent` |
+
+> **⚠️ INCIDENT (2026-09-21) — RESOLVED by عامل D ✅:** PR #31 was merged to `main` with a red
+> lint gate (71 ruff errors + 16 unformatted files; CI run
+> [35594818988](https://github.com/bot523h/nexus-ai-agent/actions/runs/35594818988) died at `ruff check .`).
+> عامل D claimed **task-101**, fixed all 71 errors mechanically (zero semantic change — proven by
+> 180/180 targeted tests, 749 suite passes, and an A/B `git stash` reproduction of the 20
+> pre-existing env failures on the base commit), and opened the restore PR from
+> `arena/01a0c3ca-nexus-ai-agent`. Full evidence: `docs/HANDOFF_ANALYSIS_2026-09-21.md`.
+> Until that PR merges, treat `main` as RED.
 
 ---
 
-## شبکه ۱۰ وظیفه کلیدی بعدی (10 Forward Tasks Network)
+## شبکه ۱۰ وظیفه کلیدی بعدی (10 Forward Tasks Network — نسخه مهندسی‌شده ۲۰۲۶-۰۹-۲۱)
 
-برای ایجاد هماهنگی بی‌نقص موازی در سشن‌های آینده، ۱۰ کار اولویت‌دار بعدی به تفکیک حوزه و مسیرهای انحصاری به‌روزرسانی شده‌اند:
+تسک‌های تکمیل‌شده قبلی (موج ۳ تدوین، موج ۶ موشن، موج ۵ صدا، موج ۷ رنگ/تحویل) از تخته حذف شدند.
+۱۰ وظیفه بعدی با معیار پذیرش، مسیر انحصاری گسسته و ابزارهای تحقیق‌شده رایگان در
+`.agents/board.json` مستند شده‌اند؛ خلاصه اولویت‌بندی شده:
 
-1. **[عامل A] تسک ۱ — سخت‌سازی امنیت سراسری (`P0-security-batch`):** پیاده‌سازی Global Auth Middleware در `bot/middleware.py` و رفع PII در `/api/dashboard` (مسیرهای اختصاصی هسته و امنیت).
-2. **[عامل B] تسک ۲ — سیم‌کشی ابزارهای تلگرام (`feature-tools-wiring`):** اتصال موتورهای `features/tools.py` (ماشین‌حساب، یادآور، مترجم) به هندلرهای تلگرام.
-3. **[عامل B] تسک ۳ — احیای بازی‌ها و ریفرال (`feature-games-referral-wiring`):** اتصال WordleFA، نظرسنجی و فعال‌سازی متد `ReferralEngine.process_referral` و تزریق بات به فورس‌جوین.
-4. **[عامل C] تسک ۴ — استودیوی تدوین خط زمانی غیرمخرب (`nagar-wave3-timeline-edit`):** پیاده‌سازی پکیج `nexus.edit.timeline` (عملیات‌های trim، ripple delete، speed ramp، reverse، freeze frame و B-roll) — [تکمیل شد ✅].
-5. **[عامل C] تسک ۵ — استودیوی موشن گرافیک و ترنزیشن (`nagar-wave6-motion-graphics`):** پیاده‌سازی پکیج `nexus.motion.graphics` (ترنزیشن‌های xfade، کی‌فریم، موشن بلور، درخشش و تایتل متحرک) — [تکمیل شد ✅].
-6. **[عامل C] تسک ۶ — استودیوی صدای نگار (`nagar-wave5-audio-studio`):** پیاده‌سازی پکیج `nexus.audio.studio` (تحلیل تمپو، نرمال‌سازی EBU R128، منحنی Ducking موزیک) — [تکمیل شد ✅].
-7. **[عامل C] تسک ۷ — استودیوی رنگ و تحویل استاندارد سینمایی (`nagar-color-delivery-pack`):** پیاده‌سازی پکیج `nexus.color.delivery` (3D LUTs، اکسپورت OpenTimelineIO، پروکسی و رندر 4K) — [تکمیل شد ✅].
-8. **[عامل بعدی] تسک ۸ — لاغرسازی حیاتی بسته‌های پایتون (`core-packaging-slimming`):** تفکیک extras در `pyproject.toml` به `[creative]`, `[rag]`, `[speech]` جهت کاهش حجم ایمیج از ۷GB به زیر ۲۰۰MB.
-9. **[عامل بعدی] تسک ۹ — همگام‌سازی ناهمگام دیتابیس (`async-db-harmonization`):** حذف sync engineها از ماژول‌های فیچر و انتقال به `core/async_db.py` جهت رفع بلاک شدن لوپ تلگرام.
-10. **[عامل بعدی] تسک ۱۰ — ضدبرخورد RAG و چندزبانه کردن سراسری (`rag-i18n-binding`):** اصلاح سیستم چانکینگ با همپوشانی در Chroma و متصل کردن کلیدهای ۱۵ زبانه به تمامی خروجی‌های کاربری.
+1. **[P0 — ✅ انجام شد توسط عامل D] تسک ۱۰۱ — نجات گیت‌های کیفیت (`ci-restore`):** ۷۱ خطای ruff → ۰ (۲۸×F401 خودکار، ۲×I001، ۴۰×E501 با شکست رشته‌های همسان-بایت، ۱×F841 به fail-fast بدون انتساب) + فرمت ۱۶ فایل. اثبات صفر-رگرسیون: 180/180 هدفمند + 749 گسترده + بازتولید A/B شکست‌های محیطی روی commit پایه. PR از شاخه سشن عامل D باز است.
+2. **[P0 — عامل A] تسک ۱۰۲ — بچ امنیتی (`P0-security-batch`):** بستن P0-1 تا P0-10 ممیزی؛ معیار پذیرش: AuthMiddleware روی تمام مسیرهای خصوصی، حذف PII از `/api/dashboard/recent_users`، گارد Path Traversal با `resolve()+is_relative_to`، احراز واقعی فورس‌جوین، گیت رضایت خروجی LLM.
+3. **[P1 — عامل B] تسک ۱۰۳ — ادغام PR#32 (`feature-wiring`):** rebase روی main سبز، حل تداخل `board.json` به سود آخرین وضعیت واگذاری، هماهنگی `handlers.py` با عامل A.
+4. **[P1 — عامل آزاد] تسک ۱۰۴ — نگار موج ۸، «لاین اعمال» (`nagar-render-lane`):** از IR خالص پک‌ها تا یک انکد واقعی FFmpeg — الگوی موج 2c: plan → IR → filtergraph → argv → یک پروسه → probe اثبات‌شده؛ نگاشت فنی هر عملیات (atrim/xfade/loudnorm دوماسه/sidechaincompress/tpad/tmix) در تخته.
+5. **[P1 — عامل آزاد] تسک ۱۰۵ — نگار موج ۹، موتور محلی گفتار (`nagar-caption-engine`):** faster-whisper (CTranslate2، int8، بدون torch) پشت `CaptionEnginePort` به‌عنوان extra `[speech]`؛ پیاده‌سازی align_words/diarize/translate_local (argos-translate آفلاین)؛ `pending` کپشن از ۳ به ۰.
+6. **[P1 — عامل آزاد] تسک ۱۰۷ — بسته‌بندی مدرن (`core-packaging`):** تفکیک با PEP 735 (`[dependency-groups]` برای ابزار توسعه) + extras واقعی `[rag]/[speech]/[translate]/[local-llm]/[r2]`، نصب CI با uv، Docker چندمرحله‌ای slim؛ هدف: هسته <۲۵۰MB بدون torch/chroma/llama.
+7. **[P1 — عامل آزاد] تسک ۱۰۸ — دیتابیس تمام‌ناهمگام (`core-database`):** حذف sync `create_engine` از features/* به سود یک `create_async_engine` مرکزی با session-per-task + آزمون نگهبان معماری.
+8. **[P2 — عامل آزاد] تسک ۱۰۹ — RAG و i18n (`features-rag-i18n`):** چانکینگ بازگشتی ۲۵۶–۵۱۲ توکن با همپوشانی ۱۰–۲۰٪، بازیابی هایبرید BM25+وکتور+rerank، هارنس recall@k، اتصال کلیدهای ۱۵ زبانه به همه خروجی‌ها + آزمون برابری کلیدها.
+9. **[P2 — عامل آزاد] تسک ۱۱۰ — درون‌سازی OTIO و بدهی پورت‌ها (`delivery-interop`):** تست round-trip خروجی export_otio با کتابخانه واقعی OpenTimelineIO (dev-extra)، بستن شکاف ConversationStorePort (آداپتور یا ADR)، spike امضای ed25519 برای manifest.
+10. **[P2 — عامل آزاد، پس از PR#32] تسک ۱۰۶ — نگار موج ۱۰، سطح تلگرام (`creative-surface`):** فرمان‌های /edit و /caption و /grade روی فایل جدید `bot/creative_surface.py` (بدون لمس handlers.py) از مسیر JobQueuePort و لاین رندر.
 
-Full details: `.agents/board.json` · Protocol: `docs/MULTI_AGENT_PROTOCOL.md`
-(فارسی: `docs/MULTI_AGENT_PROTOCOL.fa.md`)
+Full details + acceptance criteria: `.agents/board.json` · Analysis: `docs/HANDOFF_ANALYSIS_2026-09-21.md` · Protocol: `docs/MULTI_AGENT_PROTOCOL.md` (فارسی: `docs/MULTI_AGENT_PROTOCOL.fa.md`)
 
-## Merge order & shared files
+## Merge order
 
-`src/nexus_ai_agent/bot/handlers.py` is the single highest-conflict file in the repo.
-It is listed in **both** zones' `exclusive_paths` on purpose: whoever holds the active
-lease owns it; the other agent must not touch it until the lease is released and the
-PR is merged. After a merge to `main`, rebase your branch on `main` before continuing.
+1. **task-101** (lint restore — ✅ delivered by عامل D, PR open from `arena/01a0c3ca-nexus-ai-agent`) merges first — everything else rebases on a green `main`.
+2. **PR #32** rebases, resolves the `.agents/board.json` conflict in favor of *this* handoff state, then merges (handlers.py coordination with عامل A).
+3. task-102 / 104 / 105 / 107 / 108 / 109 / 110 proceed **in parallel on disjoint paths**.
+4. **task-106** (creative surface) lands after PR #32's `bot/surface` pattern is on `main`.
+
+`src/nexus_ai_agent/bot/handlers.py` remains the single highest-conflict file. It is locked to
+عامل A's security batch until that PR merges; عامل B's surface layer deliberately avoids it.

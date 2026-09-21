@@ -7,22 +7,16 @@ from pydantic import ValidationError
 
 from nexus_ai_agent.creative.packs.motion.models import (
     MOTION_PACKAGE_ID,
-    AddGlowInput,
-    AddMotionBlurInput,
-    AddTitleInput,
     AddTransitionInput,
     KeyframeTransformInput,
     TransformKeyframe,
 )
 from nexus_ai_agent.creative.packs.motion.operations import (
     build_motion_registry,
-    register_motion_operations,
 )
 from nexus_ai_agent.creative.studio.bus import CommandBus
-from nexus_ai_agent.creative.studio.capabilities import CapabilityRegistry
 from nexus_ai_agent.creative.studio.models import (
     AssetRecord,
-    CommandValidationError,
     PermissionLevel,
     Project,
     Timeline,
@@ -56,10 +50,14 @@ def _setup_motion_bus() -> tuple[Project, CommandBus]:
 
 def test_input_validations() -> None:
     # AddTransitionInput: valid duration and easing
-    t_valid = AddTransitionInput(left_clip_id="clip_scene_a", right_clip_id="clip_scene_b", duration_us=600_000)
+    t_valid = AddTransitionInput(
+        left_clip_id="clip_scene_a", right_clip_id="clip_scene_b", duration_us=600_000
+    )
     assert t_valid.duration_us == 600_000
     with pytest.raises(ValidationError):
-        AddTransitionInput(left_clip_id="clip_scene_a", right_clip_id="clip_scene_b", duration_us=100)
+        AddTransitionInput(
+            left_clip_id="clip_scene_a", right_clip_id="clip_scene_b", duration_us=100
+        )
 
     # KeyframeTransformInput: keyframes must be monotonic
     kf1 = TransformKeyframe(time_offset_us=0, scale=1.0)

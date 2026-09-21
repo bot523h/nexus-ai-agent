@@ -67,8 +67,12 @@ class TransformKeyframe(BaseModel):
 
     time_offset_us: int = Field(ge=0, description="Time offset from clip start in microseconds.")
     scale: float = Field(default=1.0, ge=0.0, le=10.0)
-    position_x: float = Field(default=0.0, ge=-1.0, le=1.0, description="Normalized X offset [-1.0, 1.0].")
-    position_y: float = Field(default=0.0, ge=-1.0, le=1.0, description="Normalized Y offset [-1.0, 1.0].")
+    position_x: float = Field(
+        default=0.0, ge=-1.0, le=1.0, description="Normalized X offset [-1.0, 1.0]."
+    )
+    position_y: float = Field(
+        default=0.0, ge=-1.0, le=1.0, description="Normalized Y offset [-1.0, 1.0]."
+    )
     rotation_deg: float = Field(default=0.0, ge=-360.0, le=360.0)
     opacity: float = Field(default=1.0, ge=0.0, le=1.0)
 
@@ -120,7 +124,9 @@ class AddTitleInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     text: str = Field(min_length=1, max_length=500)
-    animation_style: Literal["fade_up", "typewriter", "kinetic_pop", "glitch", "slide_in"] = "fade_up"
+    animation_style: Literal["fade_up", "typewriter", "kinetic_pop", "glitch", "slide_in"] = (
+        "fade_up"
+    )
     font_name: str = "Vazirmatn"
     font_size: int = Field(default=64, ge=12, le=256)
     color: str = "#FFFFFF"

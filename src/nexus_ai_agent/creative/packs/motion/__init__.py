@@ -1,4 +1,5 @@
-"""``nexus.motion.graphics`` — Local motion graphics, video transitions, keyframe animation, and kinetic titles (Wave 6 substrate).
+"""``nexus.motion.graphics`` — Local motion graphics, video transitions, keyframe
+animation, and kinetic titles (Wave 6 substrate).
 
 This package provides the pure substrate for Nagar motion graphics:
 * typed data models (:class:`AddTransitionInput`, :class:`TransformKeyframe`,

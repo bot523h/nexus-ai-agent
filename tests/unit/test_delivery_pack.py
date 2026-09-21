@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+
 import pytest
 from pydantic import ValidationError
 
@@ -10,20 +11,14 @@ from nexus_ai_agent.creative.packs.delivery.models import (
     DELIVERY_PACKAGE_ID,
     AdjustExposureInput,
     ApplyLutInput,
-    AutoBalanceInput,
-    ExportOtioInput,
-    MakeProxyInput,
     RenderMaster4KInput,
 )
 from nexus_ai_agent.creative.packs.delivery.operations import (
     build_delivery_registry,
-    register_delivery_operations,
 )
 from nexus_ai_agent.creative.studio.bus import CommandBus
-from nexus_ai_agent.creative.studio.capabilities import CapabilityRegistry
 from nexus_ai_agent.creative.studio.models import (
     AssetRecord,
-    CommandValidationError,
     PermissionDeniedError,
     PermissionLevel,
     Project,
@@ -64,13 +59,17 @@ def _setup_delivery_bus() -> tuple[Project, CommandBus]:
 
 def test_input_validations() -> None:
     # ApplyLutInput: intensity bound [0, 1]
-    lut_valid = ApplyLutInput(clip_asset_id="clip_master_01", lut_name="cinematic_warm", intensity=0.8)
+    lut_valid = ApplyLutInput(
+        clip_asset_id="clip_master_01", lut_name="cinematic_warm", intensity=0.8
+    )
     assert lut_valid.intensity == 0.8
     with pytest.raises(ValidationError):
         ApplyLutInput(clip_asset_id="clip_master_01", lut_name="cinematic_warm", intensity=1.5)
 
     # AdjustExposureInput: EV range [-4, 4]
-    exp_valid = AdjustExposureInput(clip_asset_id="clip_master_01", exposure_ev=1.5, temperature_k=5600)
+    exp_valid = AdjustExposureInput(
+        clip_asset_id="clip_master_01", exposure_ev=1.5, temperature_k=5600
+    )
     assert exp_valid.exposure_ev == 1.5
     with pytest.raises(ValidationError):
         AdjustExposureInput(clip_asset_id="clip_master_01", exposure_ev=5.0)

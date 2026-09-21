@@ -1,4 +1,5 @@
-"""``nexus.color.delivery`` — Local color grading, LUT profiles, proxy generation, and OTIO delivery (Wave 7 substrate).
+"""``nexus.color.delivery`` — Local color grading, LUT profiles, proxy generation,
+and OTIO delivery (Wave 7 substrate).
 
 This package provides the pure substrate for Nagar color grading and delivery:
 * typed data models (:class:`ApplyLutInput`, :class:`AdjustExposureInput`,

@@ -63,7 +63,9 @@ def _add_transition(project: Project, context: OperationContext) -> OperationOut
     right_rec = known[payload.right_clip_id]
 
     output_id = payload.output_asset_id or f"trans_{payload.left_clip_id}_{payload.right_clip_id}"
-    digest_seed = f"{left_rec.content_sha256}:{right_rec.content_sha256}:{payload.kind}:{payload.duration_us}"
+    digest_seed = (
+        f"{left_rec.content_sha256}:{right_rec.content_sha256}:{payload.kind}:{payload.duration_us}"
+    )
     derived_sha256 = hashlib.sha256(digest_seed.encode("utf-8")).hexdigest()
 
     transition_record = AssetRecord(
@@ -83,9 +85,7 @@ def _add_transition(project: Project, context: OperationContext) -> OperationOut
         },
     )
 
-    new_project = project.model_copy(
-        update={"assets": [*project.assets, transition_record]}
-    )
+    new_project = project.model_copy(update={"assets": [*project.assets, transition_record]})
     return OperationOutcome(
         new_project,
         context.history,
@@ -128,9 +128,7 @@ def _keyframe_transform(project: Project, context: OperationContext) -> Operatio
         },
     )
 
-    new_project = project.model_copy(
-        update={"assets": [*project.assets, anim_record]}
-    )
+    new_project = project.model_copy(update={"assets": [*project.assets, anim_record]})
     return OperationOutcome(
         new_project,
         context.history,
@@ -154,7 +152,10 @@ def _add_glow(project: Project, context: OperationContext) -> OperationOutcome:
 
     clip_rec = known[payload.clip_asset_id]
     output_id = payload.output_asset_id or f"{payload.clip_asset_id}_glow"
-    digest_seed = f"{clip_rec.content_sha256}:glow:{payload.radius_px}:{payload.intensity}:{payload.threshold}"
+    digest_seed = (
+        f"{clip_rec.content_sha256}:glow:{payload.radius_px}:"
+        f"{payload.intensity}:{payload.threshold}"
+    )
     derived_sha256 = hashlib.sha256(digest_seed.encode("utf-8")).hexdigest()
 
     glow_record = AssetRecord(
@@ -173,9 +174,7 @@ def _add_glow(project: Project, context: OperationContext) -> OperationOutcome:
         },
     )
 
-    new_project = project.model_copy(
-        update={"assets": [*project.assets, glow_record]}
-    )
+    new_project = project.model_copy(update={"assets": [*project.assets, glow_record]})
     return OperationOutcome(
         new_project,
         context.history,
@@ -218,9 +217,7 @@ def _add_motion_blur(project: Project, context: OperationContext) -> OperationOu
         },
     )
 
-    new_project = project.model_copy(
-        update={"assets": [*project.assets, blur_record]}
-    )
+    new_project = project.model_copy(update={"assets": [*project.assets, blur_record]})
     return OperationOutcome(
         new_project,
         context.history,
@@ -238,7 +235,9 @@ def _add_title(project: Project, context: OperationContext) -> OperationOutcome:
     """Level B (REVERSIBLE) handler for motion.add_title."""
     payload = AddTitleInput.model_validate(context.input_data)
     output_id = payload.output_asset_id or f"title_{uuid.uuid4().hex[:12]}"
-    digest_seed = f"title:{payload.text}:{payload.animation_style}:{payload.font_name}:{payload.duration_us}"
+    digest_seed = (
+        f"title:{payload.text}:{payload.animation_style}:{payload.font_name}:{payload.duration_us}"
+    )
     derived_sha256 = hashlib.sha256(digest_seed.encode("utf-8")).hexdigest()
 
     title_record = AssetRecord(
@@ -259,9 +258,7 @@ def _add_title(project: Project, context: OperationContext) -> OperationOutcome:
         },
     )
 
-    new_project = project.model_copy(
-        update={"assets": [*project.assets, title_record]}
-    )
+    new_project = project.model_copy(update={"assets": [*project.assets, title_record]})
     return OperationOutcome(
         new_project,
         context.history,

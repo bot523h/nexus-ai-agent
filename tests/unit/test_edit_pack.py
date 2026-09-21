@@ -7,24 +7,15 @@ from pydantic import ValidationError
 
 from nexus_ai_agent.creative.packs.edit.models import (
     EDIT_PACKAGE_ID,
-    AttachBRollInput,
-    FreezeFrameInput,
-    InsertGapInput,
-    RetimeToMusicInput,
-    ReverseSegmentInput,
-    RippleDeleteInput,
     SpeedRampInput,
     TrimInput,
 )
 from nexus_ai_agent.creative.packs.edit.operations import (
     build_edit_registry,
-    register_edit_operations,
 )
 from nexus_ai_agent.creative.studio.bus import CommandBus
-from nexus_ai_agent.creative.studio.capabilities import CapabilityRegistry
 from nexus_ai_agent.creative.studio.models import (
     AssetRecord,
-    CommandValidationError,
     PermissionLevel,
     Project,
     Timeline,
@@ -64,7 +55,9 @@ def _setup_edit_bus() -> tuple[Project, CommandBus]:
 
 def test_input_validations() -> None:
     # TrimInput: out_point > in_point
-    valid_trim = TrimInput(clip_asset_id="clip_main_01", in_point_us=1_000_000, out_point_us=4_000_000)
+    valid_trim = TrimInput(
+        clip_asset_id="clip_main_01", in_point_us=1_000_000, out_point_us=4_000_000
+    )
     assert valid_trim.in_point_us == 1_000_000
     with pytest.raises(ValidationError, match="out_point_us"):
         TrimInput(clip_asset_id="clip_main_01", in_point_us=4_000_000, out_point_us=2_000_000)
@@ -183,7 +176,11 @@ def test_freeze_frame_execution() -> None:
     cmd = TypedCommand(
         command_id="cmd_freeze_01",
         operation="timeline.freeze_frame",
-        input={"clip_asset_id": "clip_main_01", "freeze_at_us": 2_500_000, "duration_us": 4_000_000},
+        input={
+            "clip_asset_id": "clip_main_01",
+            "freeze_at_us": 2_500_000,
+            "duration_us": 4_000_000,
+        },
     )
     res = bus.dispatch(cmd)
     assert res.status == "applied"
@@ -243,7 +240,11 @@ def test_reversible_undo() -> None:
     cmd = TypedCommand(
         command_id="cmd_trim_undo",
         operation="timeline.trim",
-        input={"clip_asset_id": "clip_main_01", "in_point_us": 1_000_000, "out_point_us": 5_000_000},
+        input={
+            "clip_asset_id": "clip_main_01",
+            "in_point_us": 1_000_000,
+            "out_point_us": 5_000_000,
+        },
     )
     res = bus.dispatch(cmd)
     assert res.status == "applied"
