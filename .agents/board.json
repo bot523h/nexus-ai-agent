@@ -114,8 +114,8 @@
       "identity": "عامل H (راه‌آهن‌های CI — job سریع بدون نصب + پین هم‌نسخه ruff)",
       "branch": "arena/01a0c54f-nexus-ai-agent",
       "task": "task-113-ci-lint-rail (+ بازماندهٔ R1 تسک ۱۱۱: گارد lockstep پیش از نصب)",
-      "status": "active",
-      "note": "Collision map (verified before coding): PR#33 (01a0c3aa) owns the `lint` job's install block and the new `test-extras` job inside .github/workflows/ci.yml, plus README.md / .nexus/continuum.json / pyproject.toml / src/**. This session touches ONLY (a) the `test` job's one needs-line and (b) one new job appended at EOF — proven conflict-free with `git merge-tree`. PR#39 (01a0c4c1) owns docs/** + tests/unit/test_{version_lockstep,agent_board,docs_integrity}.py; it had no board claim at all, so it is now recorded as `pr39-in-review-docs` (record-only) — that invisibility is what caused the previous session's duplicate work."
+      "status": "delivered_pending_gates_owner",
+      "note": "DELIVERED task-113-ci-lint-rail (+ task-111 residue R1) on arena/01a0c54f-nexus-ai-agent @ c3b1635. Zero added conflict, proven: `git merge-tree --write-tree` against origin/pr33 and origin/pr39 yields exactly the same conflict sets with and without this branch (11 files / 1 file), and .github/workflows/ci.yml is in neither — the PR#33 conflicts are its own rebase debt with main. Gates deferred to ci-gates-steward per rule 4. Next: PR open, then task-135 once PR#33 lands."
     }
   },
   "ten_forward_tasks_network": [
@@ -790,7 +790,7 @@
       "agent_branch": "arena/01a0c54f-nexus-ai-agent",
       "claimed_at": "2026-09-21T18:56:20Z",
       "ttl_hours": 24,
-      "status": "active",
+      "status": "done",
       "gates_owner": false,
       "exclusive_paths": [
         ".github/workflows/ci.yml",
@@ -803,7 +803,23 @@
         "COORDINATION_2026-09-21.md"
       ],
       "scope": "task-113 (CI همیشه‌سبز): (1) یک job سریع مستقل «lint-fast» که صفر نصب پکیج لازم دارد — گارد lockstep فقط-stdlib + ruff پین‌شده — تا پوش خراب lint در ~۳۰ ثانیه قرمز شود؛ (2) قطع وابستگی `test` از `lint` (حذف needs) تا خرابی lint تست‌ها را قرمز نکند؛ (3) همراستاسازی پین ruff در .pre-commit-config.yaml با CI + تست نگهبان parity؛ (4) نصب یک‌دستوری هوک‌ها (make hooks) و مستندسازی در CONTRIBUTING.",
-      "note": ""
+      "note": "DELIVERED on branch arena/01a0c54f-nexus-ai-agent @ c3b1635, pushed. Zero touch on src/**, pyproject.toml, README.md, CHANGELOG.md, VERSION, .nexus/continuum.json (PR#33) and on docs/** + the three PR#39 test files. Gates deferred to the gates owner (ci-gates-steward). Residual work for the next agent: after PR#33 merges, unify the duplicate ruff run (the heavy lint job keeps ruff+mypy) and claim task-135-lockstep-residue.",
+      "released_at": "2026-09-21T19:20:00Z",
+      "delivered": [
+        "lint-fast job in .github/workflows/ci.yml: zero package install, stdlib lockstep check first, then pinned ruff check+format",
+        "`test` job no longer declares `needs: lint` (task-113 acceptance: a broken-lint push cannot red the tests)",
+        "one pinned ruff: v0.16.8 in .pre-commit-config.yaml == ruff==0.16.8 in the rail (measured safe on main first: check clean, 384 files formatted)",
+        "tests/unit/test_ci_lint_parity.py: structural guards + red-proofs (split pin, gated job, invisible install)",
+        "scripts/check_version_lockstep.py + tests/unit/test_version_lockstep_script.py: task-111 residue R1 (drift fails before the install)",
+        "make hooks (one command) + make version-check + CONTRIBUTING 'Local quality rails'"
+      ],
+      "evidence": [
+        "ruff check . / ruff format --check . clean repo-wide with the new pin (388 files)",
+        "19 targeted tests pass in 0.32 s (standalone: they need no package install)",
+        "both YAML files parse; jobs = lint, test, migrate-postgres, lint-fast; needs removed only from `test`",
+        "referee exit 0 for the changed files on this branch; negative control (--branch '') exit 1, so the zone is fenced",
+        "merge-tree proof: conflicts vs PR#33 (11 files) and vs PR#39 (1 file) are byte-identical with and without this branch -> zero added conflict; .github/workflows/ci.yml is in neither set"
+      ]
     },
     {
       "task": "task-135-lockstep-residue",
@@ -1516,6 +1532,12 @@
       "by_branch": "arena/01a0c54f-nexus-ai-agent",
       "action": "void-claim record for arena/ifk3hadg (unpushed session)",
       "evidence_fa": "قانون خود تخته: «کلایم push‌نشده وجود ندارد». شاخه در remote نیست و هیچ PR/کامیتی از آن ساخته نشده؛ پس تحویل‌های اعلام‌شده در گزارش آن سشن به main نرسیده و نباید مبنای کار نفر بعد قرار گیرد."
+    },
+    {
+      "at": "2026-09-21T19:20:00Z",
+      "by_branch": "arena/01a0c54f-nexus-ai-agent",
+      "action": "task-113 delivered; conflict boundary measured, not asserted",
+      "evidence_fa": "روش: `git merge-tree --write-tree A B` سه‌طرفه است و merge-base واقعی را می‌گیرد. PR#33 با main → ۱۱ تداخل؛ PR#33 با شاخهٔ این سشن → همان ۱۱ تداخل (پس صفر تداخل اضافه) و ci.yml در هیچ‌کدام نیست؛ PR#39 با main → تنها board.json؛ با این شاخه → همان یک مورد. بنابراین مرز خط‌کشی‌شده درست است و تنها نقطهٔ برخورد، فایل هماهنگی board.json است که طبق AGENTS.md با قاعدهٔ «جدیدترین وضعیت فورنزیک» و blob بازاعمال در COORDINATION_2026-09-21.md حل می‌شود."
     }
   ]
 }
