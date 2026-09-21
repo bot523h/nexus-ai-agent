@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T09:00:54Z",
+  "updated_at": "2026-09-21T11:20:10Z",
   "notes": [
     "This file is the machine-readable task/claim registry for multi-agent work on this repository.",
     "It is the shared coordination channel between agents working in SEPARATE sandboxes.",
@@ -40,8 +40,57 @@
     {
       "task": "P0-security-batch",
       "zone": "core-security",
-      "agent_branch": "arena/01a0c316-nexus-ai-agent",
-      "claimed_at": "2026-09-21T12:00:00Z",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "done",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/bot/middleware.py",
+        "src/nexus_ai_agent/api/",
+        "src/nexus_ai_agent/core/"
+      ],
+      "scope": "Global auth middleware, /api/dashboard PII removal, /cloud + /download path traversal fixes, coordination protocol files, audit report",
+      "note": "PR#30 merged as 5e5009a delivering ONLY the coordination protocol files and the audit report. The code half of the declared scope (global auth middleware, /api/dashboard PII removal, /cloud + /download path traversal) was never committed. Lease orphaned by the merge and reclaimed by arena/01a0c3aa-nexus-ai-agent on 2026-09-21T11:20:10Z.",
+      "delivered": [
+        "AGENTS.md",
+        "docs/MULTI_AGENT_PROTOCOL.md",
+        "docs/MULTI_AGENT_PROTOCOL.fa.md",
+        "scripts/agent_board.py",
+        ".agents/board.json",
+        "AUDIT_REPORT_2026-09-21.md",
+        ".github/workflows/*",
+        ".env.example",
+        ".dockerignore",
+        "CONTRIBUTING.md"
+      ],
+      "not_delivered": [
+        "global PTB auth middleware (still 2 call sites: handlers.py:455, handlers.py:856)",
+        "api/dashboard.py:/recent_users still returns telegram_id + username",
+        "bot/handlers.py:/cloud and /download still build paths from user-controlled file names"
+      ]
+    },
+    {
+      "task": "feature-wiring-batch",
+      "zone": "feature-wiring",
+      "agent_branch": "arena/01a0c3aa-nexus-ai-agent",
+      "claimed_at": "2026-09-21T11:20:10Z",
+      "ttl_hours": 24,
+      "status": "active",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/features/"
+      ],
+      "scope": "Wire dead engines (features/tools.py, WordleFA, NumberGuess, QuickPoll, ReferralEngine.process_referral, ForceJoinManager bot injection, AnonymousChatManager bot injection) to live Telegram handlers",
+      "note": ""
+    },
+    {
+      "task": "P0-security-code-batch",
+      "zone": "core-security",
+      "agent_branch": "arena/01a0c3aa-nexus-ai-agent",
+      "claimed_at": "2026-09-21T11:20:10Z",
       "ttl_hours": 24,
       "status": "active",
       "gates_owner": true,
@@ -51,21 +100,7 @@
         "src/nexus_ai_agent/api/",
         "src/nexus_ai_agent/core/"
       ],
-      "scope": "Global auth middleware, /api/dashboard PII removal, /cloud + /download path traversal fixes, coordination protocol files, audit report"
-    },
-    {
-      "task": "feature-wiring-batch",
-      "zone": "feature-wiring",
-      "agent_branch": "",
-      "claimed_at": null,
-      "ttl_hours": 24,
-      "status": "queued",
-      "gates_owner": false,
-      "exclusive_paths": [
-        "src/nexus_ai_agent/bot/handlers.py",
-        "src/nexus_ai_agent/features/"
-      ],
-      "scope": "Wire dead engines (features/tools.py, WordleFA, NumberGuess, QuickPoll, ReferralEngine.process_referral, ForceJoinManager bot injection, AnonymousChatManager bot injection) to live Telegram handlers"
+      "scope": "Deliver the code half of P0-security-batch that PR#30 documented but did not ship: single choke-point bot access gate (auth + rate limit for every update), PII removal on /api/dashboard/*, path-traversal containment for /cloud and /download, fail-closed force-join membership check + the 'enabled is True' query bug."
     }
   ],
   "deferred_log": [
@@ -78,5 +113,13 @@
       "resume_when": "P0-security-batch PR is merged to main and its claim is released"
     }
   ],
-  "gates_rule": "Exactly ONE agent (the gates_owner of the active claim) runs make lint / make types / make test on main-bound work. Other agents must NOT run overlapping gates in parallel; they note 'deferred to gates owner' in their PR body."
+  "gates_rule": "Exactly ONE agent (the gates_owner of the active claim) runs make lint / make types / make test on main-bound work. Other agents must NOT run overlapping gates in parallel; they note 'deferred to gates owner' in their PR body.",
+  "takeover_log": [
+    {
+      "task": "P0-security-batch",
+      "by_branch": "arena/01a0c3aa-nexus-ai-agent",
+      "at": "2026-09-21T11:20:10Z",
+      "reason": "Orphaned lease: owner branch arena/01a0c316-nexus-ai-agent was merged to main (PR#30) and its sandbox no longer exists, but claimed_at was hand-written 3h in the future so gc_expired() could not free it. Reclaimed as stewardship so bot/handlers.py is not blocked for 24h after the owner already finished."
+    }
+  ]
 }

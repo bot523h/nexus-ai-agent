@@ -38,8 +38,16 @@ worktree-style isolation + a shared task board with leases and stale-lease takeo
 
 | Task | Zone | Status | Owner |
 |---|---|---|---|
-| `P0-security-batch` | core-security (auth, api, core, docs) | active | `arena/01a0c316-nexus-ai-agent` |
-| `feature-wiring-batch` | feature-wiring (features/, handlers wiring) | queued — deferred until security batch merges | unclaimed |
+| `P0-security-batch` | core-security (auth, api, core, docs) | **done** — PR#30 merged (`5e5009a`); shipped protocol files + audit report only, the code half of its scope never landed | released |
+| `P0-security-code-batch` | core-security (auth, api, core, handlers) | active | `arena/01a0c3aa-nexus-ai-agent` (gates owner) |
+| `feature-wiring-batch` | feature-wiring (features/, handlers wiring) | active | `arena/01a0c3aa-nexus-ai-agent` |
+
+**Orphaned-lease rule (learned 2026-09-21).** A claim whose branch has already been
+merged to `main` is finished even if its lease has not expired — the owning sandbox
+is gone and nobody will ever run `release`. If `show` reports an `active` lease whose
+`agent_branch` is merged, the next agent may reclaim it, but MUST record the takeover
+in `.agents/board.json → takeover_log` with the merge commit as evidence. `gc_expired()`
+cannot catch these because TTL is measured from `claimed_at`, not from the merge.
 
 Full details: `.agents/board.json` · Protocol: `docs/MULTI_AGENT_PROTOCOL.md`
 (فارسی: `docs/MULTI_AGENT_PROTOCOL.fa.md`)
