@@ -158,3 +158,41 @@ def test_cli_registry_is_the_composition_registry() -> None:
 
     cli_operations = set(_packs_registry().runtime_registry.list_operations())
     assert cli_operations == set(build_runtime_registry().list_operations())
+
+
+# ---------------------------------------------------------------------------
+# 6. the measurement tool must not loosen the substrate's data-only gate
+# ---------------------------------------------------------------------------
+
+
+def test_coverage_harness_stays_outside_the_data_only_substrate() -> None:
+    """Wave 5 measures pack coverage *without* relaxing the substrate allowlist.
+
+    ``tests/architecture/test_pack_manifest_is_data_only.py`` whitelists the
+    substrate's imports; the harness needs ``trace``/``dis``/``types``/``pytest``,
+    none of which belong in a data-only pack.  The harness therefore lives in
+    ``nexus_ai_agent.continuum`` (repo-truth tooling) next to the snapshot
+    verifier, and this gate keeps it there: a copy inside ``creative/packs/``
+    would either be dead code or force the allowlist open.
+    """
+    harness = REPO_ROOT / "src" / "nexus_ai_agent" / "continuum" / "pack_coverage.py"
+    assert harness.is_file()
+    harness_imports = {
+        line.split()[1]
+        for line in harness.read_text(encoding="utf-8").splitlines()
+        if line.startswith("import ")
+    }
+    assert {"trace", "dis", "types"} <= harness_imports
+    assert not (PACKS_DIR / "coverage.py").exists()
+    assert not (PACKS_DIR / "pack_coverage.py").exists()
+
+
+def test_pack_coverage_cli_is_a_thin_script_over_the_installed_package() -> None:
+    """``scripts/`` is not installed: the logic must be importable from the package."""
+    script = REPO_ROOT / "scripts" / "pack_coverage.py"
+    assert script.is_file()
+    text = script.read_text(encoding="utf-8")
+    assert "from nexus_ai_agent.continuum.pack_coverage import" in text
+    from nexus_ai_agent.continuum.pack_coverage import measure as harness_measure
+
+    assert callable(harness_measure)
