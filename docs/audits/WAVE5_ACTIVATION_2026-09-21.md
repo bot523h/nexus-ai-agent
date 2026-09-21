@@ -49,6 +49,22 @@ exactly W5-3 (18) + W5-4 (11) + W5-5..7 (35) + W5-8 (13).
 #   identical on the pre-change baseline). 223 source files checked.
 ```
 
+### 2.1b CI on the pushed branch (GitHub Actions, run `35659132669`)
+
+All four jobs of the repository's own workflow pass on this branch — i.e. the diagnostic
+commands above were not the only witness:
+
+| job | result | duration |
+|---|---|---|
+| `lint-fast (lockstep + pinned ruff, no install)` | ✅ pass | 9 s |
+| `lint (ruff + mypy + version lockstep)` | ✅ pass | 7 m 8 s |
+| `test (pytest -m "not slow")` | ✅ pass | 7 m 5 s |
+| `migrate-postgres` | ✅ pass | 6 m 9 s |
+
+PR #46 is reported `MERGEABLE` / `CLEAN` by GitHub after the push. The authoritative
+`make lint && make types && make test` acknowledgement still belongs to the gates owner
+(AGENTS.md rule 4); this run is the repository's CI, not a session-local gate.
+
 ### 2.2 Runtime activation — before and after
 
 ```bash

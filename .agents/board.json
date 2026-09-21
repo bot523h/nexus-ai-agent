@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T21:48:00Z",
+  "updated_at": "2026-09-21T22:05:00Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -990,7 +990,9 @@
           "W5-8": "continuum/pack_coverage.py + scripts/pack_coverage.py + 13 tests (stdlib only)",
           "W5-9": "docs/ops/PACK_RUNTIME.md",
           "W5-10": "docs/audits/WAVE5_ACTIVATION_2026-09-21.md + board fence/next-10"
-        }
+        },
+        "ci": "GitHub Actions run 35659132669: lint-fast ✅ 9s · lint ✅ 7m8s · test ✅ 7m5s · migrate-postgres ✅ 6m9s; PR#46 MERGEABLE/CLEAN",
+        "pr": "https://github.com/bot523h/nexus-ai-agent/pull/46 (draft pending gates owner)"
       },
       "fence": {
         "owner": "arena/01a0c5da-nexus-ai-agent",
@@ -1783,6 +1785,12 @@
       "by_branch": "arena/01a0c5da-nexus-ai-agent",
       "action": "شبکهٔ ۱۰ وظیفهٔ بعدی (wave5 forward network) ثبت شد",
       "evidence_fa": "task-141..150: سیم‌کشی پوشش به CI (پس از #33)، بستن signing.py به ۹۵٪، پک‌های portrait/scene (۲۰ op)، سه op رنگی (مالک #45)، packs doctor، خط مبنای پوشش، گسترش هارنس به studio/continuum، ران‌بوک پک، بهداشت پس از merge. مالکیت‌ها و مسیرهای انحصاری هرکدام در ten_forward_tasks_wave5."
+    },
+    {
+      "at": "2026-09-21T22:05:00Z",
+      "by_branch": "arena/01a0c5da-nexus-ai-agent",
+      "action": "CI کامل روی شاخه سبز شد (۴/۴ job)",
+      "evidence_fa": "run 35659132669: lint-fast ۹ ثانیه، lint (ruff+mypy+lockstep) ۷m۸s، test (pytest not slow) ۷m۵s، migrate-postgres ۶m۹s — همه pass. PR#46 MERGEABLE/CLEAN. همچنین بررسی شد شاخهٔ 4bb (wave4) با این موج صفر تداخل دارد و مسیرهای audio/motion را لمس نکرده (merge-tree=0)."
     }
   ],
   "ten_forward_tasks_wave5": [
