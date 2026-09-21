@@ -11,6 +11,8 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
+from nexus_ai_agent.optional_deps import from_import_error
+
 JobHandler = Callable[[dict[str, object]], Awaitable[dict[str, object]]]
 
 
@@ -72,7 +74,14 @@ async def process_pdf_task(user_id: int, file_path: str, file_id: str) -> str:
     """
     try:
         text = await extract_pdf_text(file_path)
-        from nexus_ai_agent.features.rag import AdvancedRAGEngine
+        # The RAG lane is an optional extra ([rag] pulls chromadb + flashrank +
+        # sentence-transformers/torch). Translate the import failure so the
+        # durable job record carries the install command instead of a bare
+        # ModuleNotFoundError from deep inside features.rag.
+        try:
+            from nexus_ai_agent.features.rag import AdvancedRAGEngine
+        except ModuleNotFoundError as exc:
+            raise from_import_error(exc) from exc
 
         engine = AdvancedRAGEngine()
         await engine.add_document(user_id, text, {"file_id": file_id})

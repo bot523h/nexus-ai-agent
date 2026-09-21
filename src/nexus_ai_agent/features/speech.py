@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from nexus_ai_agent.observability.logging import get_logger
+from nexus_ai_agent.optional_deps import OptionalDependencyMissing, require
 
 log = get_logger(__name__)
 
@@ -55,7 +56,8 @@ class SpeechEngine:
         Returns dict with: success, path, lang, error.
         """
         try:
-            from gtts import gTTS
+            gtts = require("gtts")
+            gTTS = gtts.gTTS
 
             # Generate filename
             h = hashlib.md5(f"{text}{lang}".encode()).hexdigest()[:10]
@@ -75,12 +77,21 @@ class SpeechEngine:
                 "lang": lang,
                 "error": None,
             }
+        except OptionalDependencyMissing as exc:
+            # [speech] is an optional extra; report the install command verbatim
+            # so the user can act on it instead of guessing a package name.
+            return {
+                "success": False,
+                "path": None,
+                "lang": lang,
+                "error": f"❌ {exc}",
+            }
         except ImportError:
             return {
                 "success": False,
                 "path": None,
                 "lang": lang,
-                "error": "❌ gTTS نصب نشده. اجرا: pip install gTTS",
+                "error": "❌ gTTS نصب نشده. اجرا: pip install 'nexus-ai-agent[speech]'",
             }
         except Exception as e:
             log.error("tts_error", error=str(e))

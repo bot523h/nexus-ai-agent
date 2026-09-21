@@ -12,7 +12,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev]"
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+      # task-107: uv (free, Rust-based) replaces pip. The elapsed time is printed
+      # to the job summary so the speedup stays auditable in the CI log.
+      # NOTE: `.[dev]` deliberately excludes every heavy extra (no torch /
+      # ChromaDB / llama.cpp), so this job is also the proof that the test suite
+      # passes on a core-only install.
+      - name: Install dependencies with uv
+        run: |
+          start=$(date +%s%N)
+          uv pip install --system -e ".[dev]"
+          end=$(date +%s%N)
+          ms=$(( (end - start) / 1000000 ))
+          echo "uv install (core + dev): ${ms} ms" | tee "$GITHUB_STEP_SUMMARY"
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy src
@@ -46,7 +61,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev]"
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+      # The Postgres driver is the optional [postgres] extra since task-107.
+      - name: Install dependencies with uv
+        run: |
+          start=$(date +%s%N)
+          uv pip install --system -e ".[dev,postgres]"
+          end=$(date +%s%N)
+          ms=$(( (end - start) / 1000000 ))
+          echo "uv install (core + dev + postgres): ${ms} ms" | tee "$GITHUB_STEP_SUMMARY"
       - run: nexus migrate
       - run: pytest -q tests/integration/test_postgres_create_all_race.py
       # Shared read-only adapter contract, PG leg (incl. golden stability

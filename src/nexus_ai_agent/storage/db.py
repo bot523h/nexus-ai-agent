@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
+from nexus_ai_agent.optional_deps import require
 from nexus_ai_agent.storage import models as _models  # noqa: F401
 
 log = logging.getLogger(__name__)
@@ -285,6 +286,12 @@ def _get_pg_engine(url: str) -> Any:
     normalized = normalize_database_url(url)
     engine = _pg_engines.get(normalized)
     if engine is None:
+        # The Postgres driver is an optional extra ([postgres]); the core install
+        # is SQLite-only. Guard here — the single place an asyncpg engine is
+        # created — so the error names the extra instead of surfacing as an
+        # opaque SQLAlchemy ModuleNotFoundError.
+        require("asyncpg")
+        require("psycopg")
         engine = create_async_engine(to_asyncpg_url(normalized), echo=False, pool_pre_ping=True)
         _pg_engines[normalized] = engine
     return engine

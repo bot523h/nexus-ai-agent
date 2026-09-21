@@ -229,8 +229,68 @@ for filenames, ownership boundaries and the cleanup policy.
 ```bash
 git clone https://github.com/bot523h/nexus-ai-agent.git
 cd nexus-ai-agent
-make setup
+make setup          # pip install -e ".[dev]"
 ```
+
+#### Core vs capability extras (v3.13.0)
+
+The core install is deliberately small: **bot + API + database + slideshow +
+creative packs**, with no torch, no ChromaDB and no llama.cpp. Anything that
+needs a model download, a native build or a paid-adjacent service is an opt-in
+extra. Measured on this repo, same interpreter, warm cache:
+
+| Install | site-packages | Install time |
+|---|---|---|
+| before the split (`pip install .`, v3.12.0) | **6.5 GB** | 7 min 50 s |
+| core only, `pip install .` (v3.13.0) | **520 MB** | 43 s |
+| core only, `uv pip install .` | **389 MB** | **2.6 s** |
+
+That is a **12.5×** smaller install and — with [uv](https://docs.astral.sh/uv/)
+(free, Rust-based) — a **16×** faster one.
+
+```bash
+pip install .                                  # core: boots the bot
+pip install --group dev                        # dev tools (PEP 735, pip >= 25.1 / uv)
+pip install -e ".[dev]"                        # same list, legacy spelling
+pip install '.[rag,speech,pdf,media]'          # only what you need
+uv pip install --system .                      # faster core install
+```
+
+| Extra | Enables | Packages |
+|---|---|---|
+| `[rag]` | document Q&A over uploaded files | chromadb, flashrank, sqlite-vec, sentence-transformers (pulls torch ≈ 2 GB) |
+| `[local-llm]` | on-device inference | llama-cpp-python (C++ build) |
+| `[speech]` | `/tts` text-to-speech | gTTS |
+| `[media]` | `/slideshow` + Nagar renders without a system FFmpeg | imageio-ffmpeg (static binary) |
+| `[r2]` | Cloudflare R2 storage tier | boto3 |
+| `[pdf]` | PDF text extraction for the RAG lane | pypdf |
+| `[postgres]` | PostgreSQL/Neon backend instead of SQLite | psycopg[binary,pool], asyncpg, langgraph-checkpoint-postgres |
+| `[otio]` | real OpenTimelineIO round-trip validation | opentimelineio |
+| `[all]` | every extra above | — |
+
+Every extra is imported lazily and guarded by `nexus_ai_agent.optional_deps`, so
+a missing extra **fails closed with the exact install command** instead of a
+`ModuleNotFoundError` traceback — in the Telegram reply, in the durable job
+record, or on the CLI. `tests/unit/test_packaging.py` enforces the contract: no
+heavy package in core, no core entry point importing an extra at module scope,
+and the whole startup path booting in a fresh interpreter with **every** extra
+blocked.
+
+#### Docker
+
+Two runtime targets; `slim` is the default:
+
+```bash
+docker build -t nexus-slim .                          # core only (default target)
+docker build --target full -t nexus-full .            # every extra + system FFmpeg
+docker build --build-arg NEXUS_EXTRAS=rag,media -t nexus-rag .
+```
+
+The default image carries no torch, no ChromaDB and no llama.cpp: the Python
+layer is the **389–520 MB** measured above on top of `python:3.12-slim`
+(≈ 45 MB), i.e. roughly **0.43–0.57 GB** — against a pre-split image that could
+not stay under 7 GB. Both targets resolve dependencies with `uv` in a builder
+stage, so nothing is compiled at runtime.
 
 ### 2) Configure environment
 

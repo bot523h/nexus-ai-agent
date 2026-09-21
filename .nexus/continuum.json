@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
   "plan": "Nagar Phase 6 + product-surface hardening",
-  "step": "5e5009a599b4511c32b357c67b71a4f889c72a82",
-  "next": "Merge the v3.13.0 branch arena/01a0c3aa-nexus-ai-agent: bot access gate, dashboard PII removal, /cloud + /download containment, feature wiring (tools/games/referral/anon-chat) and four production bugs found by the new behavioural tests. Then release the remaining P0 audit items: per-message AIMemory opt-in (P0-7), engine single-sourcing from bot_data (P0-8), LongTermMemory.store or removal of the vector-memory claim (P0-9), and the stub commands listed in the README status table.",
+  "step": "3b0c670",
+  "next": "Review/merge PR#33 (arena/01a0c3aa-nexus-ai-agent): v3.13.0 P0 security code + feature wiring, then task-107 packaging (core 6.5GB -> 520MB, PEP 735 groups, capability extras + typed fail-closed guards, uv CI, multi-stage Docker) and task-110 (real OpenTimelineIO round-trip with the media_reference fix, SqliteConversationStore adapter, Ed25519 manifest-signing spike). Owner decisions still open: where the pack-signing key lives, and which of PR#32/#33/#34 merges first (all three touch the feature-wiring / handlers surface). Next engineering work: P0-7 per-message AIMemory opt-in, P0-8 engine single-sourcing from bot_data, handlers.py decomposition, task-108 async-only DB.",
   "ledger": [
     {
       "id": "C1",
@@ -122,9 +122,19 @@
       "id": "v3.13.0-hardening",
       "status": "on_branch",
       "scope": "P0-security-code-batch + feature-wiring-batch: BotAccessGate in PTB group -1, core/paths.py containment, dashboard PII removal + optional bearer token, fail-closed force join, tools/games/referral/anon-chat wired to real engines, get_session db-path bug, AsyncSession.exec crashes, first-daily-reward bug, force-join 'enabled is True' bug. 837 passed / 20 skipped, ruff + mypy clean."
+    },
+    {
+      "id": "task-107-packaging",
+      "status": "on_branch",
+      "scope": "Modern packaging: core deps cut from 32 to 22 (measured 6.5GB -> 520MB of site-packages, 389MB with uv; uv install 2.6s vs pip 43s). Capability extras [rag] [local-llm] [speech] [media] [r2] [pdf] [postgres] [otio] [all], PEP 735 [dependency-groups] dev/lint mirrored by the [dev] extra, optional_deps typed fail-closed guards wired into the worker/db/r2/speech/pg-checkpoint paths, multi-stage Dockerfile with slim as the default target, uv in CI with the elapsed time written to the job summary. tests/unit/test_packaging.py boots the whole startup path in a fresh interpreter with every extra blocked."
+    },
+    {
+      "id": "task-110-ports-and-otio",
+      "status": "on_branch",
+      "scope": "Real OpenTimelineIO interop: delivery.export_otio now emits ExternalReference.1 instead of the non-schema media_url key (the real reader silently dropped it, so every clip opened as offline media) plus global_start_time; tests/unit/test_otio_interop.py round-trips through opentimelineio 0.18.1 (7 of 11 tests fail against the pre-fix producer). ConversationStorePort gap closed with adapters/conversation_store_sqlite.py (async, append-only, fail-closed) and 24 contract tests. Ed25519 manifest-signing spike documented in docs/DECISION_LOG.md; implementation intentionally deferred to an owner decision on key custody."
     }
   ],
-  "test_count_expected": 742,
+  "test_count_expected": 853,
   "env_fingerprint": {
     "python": "3.11.2",
     "alembic": "1.20.0",

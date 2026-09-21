@@ -605,3 +605,103 @@ depended strictly on English keywords.
 - 47 architecture boundary tests passed (`tests/architecture/`).
 - 63 unit and integration tests passed (`test_caption_ass.py`, `test_caption_pack.py`, `test_router_multilingual.py`, `test_graph_memory.py`, `test_graph.py`, `test_router.py`, `test_persona_routing.py`).
 - Pre-push coordination check passed with zero overlap against Agent A and Agent B leases.
+
+## 2026-09-21 — task-110: ConversationStorePort adapter (gap closed)
+
+**Status:** Implemented by Agent E (`arena/01a0c3aa-nexus-ai-agent`); wiring into
+the bot is deliberately left to the `feature-wiring` zone owner.
+
+**Problem:** `application/ports/conversation_store.py` declared
+`ConversationStorePort` (`append_message`, `list_messages`) but **no
+implementation existed**. `bot/app.py` wires
+`features/conversation_store.ConversationStore` directly, which (a) does not
+match the port and (b) is synchronous — it opens a SQLAlchemy connection and
+blocks the event loop on every message. A port with no adapter is worse than no
+port: the contract is untested and every caller diverges from it.
+
+**Decision:** Add `adapters/conversation_store_sqlite.py::SqliteConversationStore`
+rather than retire the port:
+
+1. **Async-only.** `aiosqlite` (already a core dependency), no sync engine, no
+   thread hand-off. This is the same direction task-108 formalises for the rest
+   of the storage layer, and it does not fight it.
+2. **Port-shaped, append-only.** One row per message
+   (`message_id, thread_id, role, content, seq, created_at`), returning the
+   durable message id from `append_message` and chronological
+   `{"message_id","role","content","created_at"}` dicts from `list_messages`.
+   `limit` keeps the *most recent* messages in chronological order, which is
+   what a prompt window needs.
+3. **Fail-closed validation.** Empty ids, non-string content, oversized content
+   and unknown roles raise instead of being persisted: a typo in `role` silently
+   corrupts the model prompt later, which is more expensive than an exception.
+   Roles are canonicalised (stripped, lower-cased) on write.
+4. **Coexists with the legacy store.** It owns a new table
+   (`conversation_messages`) and never touches `conversation_history`, so the
+   migration can be done one call site at a time instead of in one risky
+   switch-over.
+5. **Migration path (owner action, `feature-wiring` zone).** `bot/app.py:119`
+   constructs `ConversationStore(db_path=settings.db_path)`; the adapter is a
+   drop-in for any consumer that only needs the port. `features/ai_chat.py`
+   keeps the legacy `parts`-shaped history until it is ported, which is why the
+   bot wiring itself is not flipped in this task.
+
+**Verification:**
+- `tests/unit/test_conversation_store_adapter.py` — 24 tests: signature parity
+  with the port (parameter *names*, so keyword calls through the port keep
+  working, plus annotations), round-trip, thread isolation, persistence across
+  reconnects, `limit` semantics, role canonicalisation, fail-closed inputs,
+  `clear_thread`, `:memory:`, async-context-manager lifecycle.
+- `tests/architecture/test_port_signatures.py` continues to pass unchanged, so
+  the port itself was not bent to fit the adapter.
+
+## 2026-09-21 — task-110 spike: Ed25519 signing for capability-pack manifests
+
+**Status:** Documented spike. **Not implemented** — it is blocked on an owner
+decision about key custody, and implementing it without that decision would add
+a dependency and a false sense of security.
+
+**Problem:** `creative/packs/verify.py` accepts a manifest signature but never
+verifies it. Every pack therefore reports either `signature=placeholder`
+(`base64:replace-…`) or `signature=format_only_unverified`, both as *warnings*.
+A pack that declares Level C permissions can be edited after publication and
+nothing notices.
+
+**Design (ready to implement, ~120 lines + tests):**
+
+1. **Canonical bytes.** Sign the manifest with the `security.signature` field
+   replaced by the empty string, serialised with `json.dumps(obj,
+   sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")`.
+   Deterministic, and independent of key ordering or pretty-printing — the same
+   normalisation already used for the OTIO export hash.
+2. **Algorithm and key format.** Ed25519 (`cryptography` package: Apache-2.0,
+   free, no model download, no native build beyond an existing wheel). Signature
+   field format: `base64:<64-byte signature>`. Public keys: a new
+   `NEXUS_PACK_PUBLIC_KEYS` setting holding one or more
+   `base64:<32-byte ed25519 public key>` entries, matched against
+   `security.trusted_publisher`.
+3. **Verification point.** `verify.py` gains two states: `verified` and
+   `signature_invalid`. Fail-closed rule: when at least one public key is
+   configured and verification fails, `signature_invalid` is an **error** (the
+   pack is refused), not a warning. When no key is configured the current
+   warning behaviour is preserved so existing installs keep working.
+4. **Packaging.** `cryptography` becomes a new extra (`[packsign]`) guarded by
+   `optional_deps`, so the core install stays light; the verification tests run
+   in CI where the extra is installed and skip in a typed way otherwise.
+
+**Why this is blocked on a decision, not on code:** if the public key ships
+inside the same repository (or the same pack archive) as the manifest, anyone
+who can modify the manifest can also modify the key — the check would be
+decorative. Signature verification only buys something once the key comes from
+outside the pack's distribution channel. Owner decisions needed:
+
+* where the private key lives (CI secret, release machine, or a hardware token)
+  and who may sign a release;
+* whether a third-party pack with an unknown publisher is **refused** or only
+  **warned** about;
+* whether the seven first-party packs in this repository get signed at all, or
+  only packs fetched from a remote source.
+
+**Recommendation:** sign only *remotely fetched* packs, keep first-party packs
+on the placeholder, and treat `signature_invalid` as fatal. That gives a real
+supply-chain guarantee exactly where untrusted bytes enter the system, with no
+key-management burden for self-hosted installs.

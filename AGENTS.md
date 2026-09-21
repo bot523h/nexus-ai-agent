@@ -60,7 +60,7 @@ worktree-style isolation + a shared task board with leases and stale-lease takeo
 | **عامل B** | `feature-wiring-batch` | feature-wiring | active — PR #32 open, needs rebase | `arena/01a0c34d-nexus-ai-agent` |
 | **عامل C** | `nagar-wave3-timeline-edit-delivery` | nagar-creative-edit | ✅ completed — PR #31 merged (`c41b1b0`), lease released | `arena/01a0c36f-nexus-ai-agent` |
 | **عامل D** | `board-gc-engineered-handoff` | coordination | ✅ completed — board cleanup + 10-task engineered handoff | `arena/01a0c3ca-nexus-ai-agent` |
-| **عامل E** | `task-107` (packaging) + `task-110` (delivery-interop) | core-packaging, delivery-interop | active — PR #33 open (v3.13.0 security code + feature wiring) | `arena/01a0c3aa-nexus-ai-agent` |
+| **عامل E** | `task-107` (packaging) + `task-110` (ports + OTIO) | core-packaging, delivery-interop | ✅ delivered in PR #33 — `delivered`/`evidence` written on both tasks; awaiting review | `arena/01a0c3aa-nexus-ai-agent` |
 
 **Closing a claim.** `release` is not enough on its own: write what was actually
 delivered into the claim's `delivered` list and point `evidence` at the tests that

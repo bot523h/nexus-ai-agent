@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T12:28:56Z",
+  "updated_at": "2026-09-21T13:17:47Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -214,7 +214,7 @@
       "zone": "core-packaging",
       "priority": "P1",
       "assigned_to": "عامل E (arena/01a0c3aa-nexus-ai-agent)",
-      "status": "active_in_progress",
+      "status": "delivered_in_PR33_pending_review",
       "exclusive_paths": [
         "pyproject.toml",
         "Dockerfile",
@@ -230,7 +230,18 @@
       ],
       "toolchain": "PEP 735 dependency-groups (استاندارد رسمی پایتون ۲۰۲۴→)، uv (OSS، رایگان)، multi-stage Docker",
       "claimed_at": "2026-09-21T12:28:56Z",
-      "claimed_by": "arena/01a0c3aa-nexus-ai-agent"
+      "claimed_by": "arena/01a0c3aa-nexus-ai-agent",
+      "delivered": [
+        "core deps 32 -> 22; extras [rag] [local-llm] [speech] [media] [r2] [pdf] [postgres] [otio] [all]",
+        "PEP 735 [dependency-groups] dev/lint, mirrored by the [dev] extra so legacy `.[dev]` installs keep working",
+        "nexus_ai_agent/optional_deps.py typed fail-closed guard, wired into worker (rag), storage/db (asyncpg+psycopg), r2 (boto3), speech (gtts), PG checkpoint modules",
+        "psycopg made optional: langgraph_checkpoint + checkpoint_reconciler resolved it at module scope, which would have broken `nexus run-bot` on SQLite",
+        "multi-stage Dockerfile, `slim` default target (no apt packages), `full` target with every extra + real FFmpeg, uv builder",
+        "CI installs with uv (astral-sh/setup-uv@v10) and logs the elapsed time to the job summary; PG job installs [postgres]",
+        "README documents the extras matrix and the measured sizes"
+      ],
+      "evidence": "tests/unit/test_packaging.py (22 tests): no heavy package in core, no core entry point importing an extra at module scope (AST closure over the eager import graph), and the whole startup path imported in a fresh interpreter with EVERY extra blocked. Measured: old core install 6.5 GB / 7m50s vs new core 520 MB / 43 s (pip) and 389 MB / 2.6 s (uv).",
+      "completed_at": "2026-09-21T13:17:26Z"
     },
     {
       "id": "task-108",
@@ -288,7 +299,7 @@
       "zone": "delivery-interop",
       "priority": "P2",
       "assigned_to": "عامل E (arena/01a0c3aa-nexus-ai-agent)",
-      "status": "active_in_progress",
+      "status": "delivered_in_PR33_pending_review",
       "exclusive_paths": [
         "tests/unit/test_otio_interop.py",
         "src/nexus_ai_agent/application/ports/conversation_store.py",
@@ -303,7 +314,16 @@
       ],
       "toolchain": "opentimelineio (ASWF/OSS، فقط dev)، ed25519 از cryptography (فقط dev) — صفر هزینه",
       "claimed_at": "2026-09-21T12:28:56Z",
-      "claimed_by": "arena/01a0c3aa-nexus-ai-agent"
+      "claimed_by": "arena/01a0c3aa-nexus-ai-agent",
+      "delivered": [
+        "delivery.export_otio now emits ExternalReference.1 + global_start_time; the non-schema media_url key is gone",
+        "tests/unit/test_otio_interop.py: 11 tests round-tripping through the real opentimelineio 0.18.1 (order, fps, durations, media refs, writer idempotence, negative control)",
+        "adapters/conversation_store_sqlite.py: async ConversationStorePort adapter (append-only, fail-closed, role canonicalisation)",
+        "tests/unit/test_conversation_store_adapter.py: 24 tests incl. port signature parity",
+        "docs/DECISION_LOG.md: Ed25519 manifest-signing spike + the reason it stays unimplemented (key custody is an owner decision)"
+      ],
+      "evidence": "Anti-vacuity verified: reverting creative/packs/delivery/{models,operations}.py makes 7 of the 11 OTIO interop tests fail. Full suite: 986 passed / 20 skipped (PostgreSQL-only), ruff clean, mypy clean on 208 files, continuum verify OK.",
+      "completed_at": "2026-09-21T13:17:26Z"
     }
   ],
   "zones": [

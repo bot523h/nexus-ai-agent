@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Board tasks `task-107` (packaging) and `task-110` (ports + OTIO interop), claimed
+and delivered on `arena/01a0c3aa-nexus-ai-agent`.
+
+### Added
+- **Capability extras + PEP 735 dependency groups** (`task-107`). Core
+  dependencies went from 32 to 22: `[rag]`, `[local-llm]`, `[speech]`, `[media]`,
+  `[r2]`, `[pdf]`, `[postgres]`, `[otio]` and `[all]` are opt-in, and developer
+  tooling now lives in `[dependency-groups]` (mirrored by the `[dev]` extra so
+  `pip install -e ".[dev]"` keeps working). Measured on this repo: **6.5 GB →
+  520 MB** of site-packages for `pip install .` (389 MB with uv), and **43 s →
+  2.6 s** to install.
+- **`nexus_ai_agent.optional_deps`** — one typed, fail-closed guard
+  (`OptionalDependencyMissing`) for every optional capability. It carries the
+  module *and* the extra, so the user sees
+  `pip install 'nexus-ai-agent[rag]'` in the Telegram reply, in the durable job
+  record and on the CLI instead of a `ModuleNotFoundError` traceback. Wired into
+  the PDF→RAG job lane, the R2 provider, `/tts`, the PostgreSQL engine and the
+  Postgres checkpointer.
+- **Multi-stage Dockerfile** with `slim` as the *default* target (no apt packages
+  at all: no libgl, no libmagic, no system fonts), a `full` target with every
+  extra plus a real FFmpeg, and `--build-arg NEXUS_EXTRAS=…`. Dependencies are
+  resolved by `uv` in a builder stage.
+- **`adapters/conversation_store_sqlite.py`** (`task-110`) — the missing
+  `ConversationStorePort` implementation: async (`aiosqlite`), append-only,
+  fail-closed validation, role canonicalisation, thread-scoped history with a
+  most-recent-first `limit`. 24 contract tests, including signature parity with
+  the port.
+
+### Changed
+- **CI installs with uv** and writes the elapsed install time to the job summary;
+  the `migrate-postgres` job installs the new `[postgres]` extra. The `test` job
+  installs core + dev only, which makes it the standing proof that the suite
+  passes without any heavy extra.
+- **`psycopg` is now optional.** `storage/langgraph_checkpoint.py` and
+  `storage/checkpoint_reconciler.py` resolved the driver at module scope, so a
+  SQLite-only install crashed on `nexus run-bot` once the driver moved out of
+  core; the connection-error tuples are now built at import time and degrade to
+  the SQLite errors when the driver is absent.
+
+### Fixed
+- **`delivery.export_otio` produced timelines with no media** — the pack wrote
+  `media_url` on each clip, which is not an OTIO schema field. The real
+  OpenTimelineIO reader silently drops unknown keys, so every clip came back as
+  `MissingReference`: a file that looks correct in a diff and opens 100 %
+  offline in DaVinci/Premiere/Kdenlive. Clips now carry `ExternalReference.1`
+  (derived from `media_url`) and the timeline carries `global_start_time`.
+  `tests/unit/test_otio_interop.py` round-trips the export through
+  `opentimelineio` 0.18.1; 7 of its 11 tests fail against the pre-fix producer.
+
+### Security
+- Pack-manifest signature verification is documented as an implementable Ed25519
+  design in `docs/DECISION_LOG.md` (canonical bytes, key format, fail-closed
+  `signature_invalid` state) but **not** enabled: with the public key shipped in
+  the same repository as the manifest the check would be decorative. Owner
+  decision required on key custody.
+
 ## [3.13.0] — 2026-09-21
 
 Semver-minor: **the code half of the P0 security batch plus the queued

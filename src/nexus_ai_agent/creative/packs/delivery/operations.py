@@ -334,8 +334,16 @@ def _export_otio(project: Project, context: OperationContext) -> OperationOutcom
     otio_doc: dict[str, Any] = {
         "OTIO_SCHEMA": "Timeline.1",
         "name": project.name or project.project_id,
+        # Real OTIO timelines carry an explicit start; NLEs anchor the first clip
+        # to it, and the frame rate is carried by the RationalTime itself.
+        "global_start_time": {
+            "OTIO_SCHEMA": "RationalTime.1",
+            "value": 0,
+            "rate": rate,
+        },
         "tracks": {
             "OTIO_SCHEMA": "Stack.1",
+            "name": "tracks",
             "children": [
                 video_track.model_dump(mode="json"),
                 audio_track.model_dump(mode="json"),

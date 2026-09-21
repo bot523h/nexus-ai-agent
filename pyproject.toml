@@ -10,56 +10,102 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
 authors = [{ name = "NEXUS AI" }]
+# Core runtime only: bot + api + db + slideshow + creative packs (task-107).
+# Rule: if importing it is not required to start the bot, it belongs in an extra.
 dependencies = [
   "python-telegram-bot>=21.0",
   "langgraph>=0.2",
   "langgraph-checkpoint-sqlite>=1.0",
-  "langchain-community>=0.2",
   "sqlmodel==0.0.42",
   "sqlalchemy==2.0.54",
   "alembic==1.20.0",
   "aiosqlite==0.22.1",
-  "asyncpg==0.31.0",
-  "psycopg[binary,pool]==3.3.5",
-  "langgraph-checkpoint-postgres==3.1.2",
   "pydantic-settings>=2.0",
-    "sentence-transformers>=3.0",
-    "llama-cpp-python>=0.2",
-    "structlog>=24.0",
-    "sqlite-vec>=0.1",
-    "typer>=0.12",
-    "httpx==0.28.1",  # pinned: core/ssrf_guard.py uses a private httpx API
-    "python-multipart>=0.0.9",
-    "duckduckgo-search>=8.0",
-    "fastapi>=0.110",
-    "uvicorn==0.53.0",  # pinned: webhook run-mode server (v3.8.0, verified latest on PyPI)
-    "numpy>=1.26",
-    "chromadb>=0.5",
-    "flashrank>=0.2",
-    "arabic-reshaper>=3.0",
-    "python-bidi>=0.4",
-    "pillow>=10.0",
-    "beautifulsoup4>=4.12",
-    "psutil>=5.9",
-    "litellm>=1.74,<2",  # multi-provider routing chain (Ollama/Groq/Gemini/OpenRouter)
-    "boto3==1.43.98",  # pinned: Cloudflare R2 blob tier (v3.9.0, latest on PyPI 2026-09-20)
-  ]
+  "structlog>=24.0",
+  "typer>=0.12",
+  "httpx==0.28.1",  # pinned: core/ssrf_guard.py uses a private httpx API
+  "python-multipart>=0.0.9",
+  "duckduckgo-search>=8.0",
+  "fastapi>=0.110",
+  "uvicorn==0.53.0",  # pinned: webhook run-mode server (v3.8.0, verified latest on PyPI)
+  "numpy>=1.26",
+  "arabic-reshaper>=3.0",
+  "python-bidi>=0.4",
+  "pillow>=10.0",
+  "beautifulsoup4>=4.12",
+  "psutil>=5.9",
+  "litellm>=1.74,<2",  # multi-provider routing chain (Ollama/Groq/Gemini/OpenRouter)
+]
 
 [project.scripts]
 nexus = "nexus_ai_agent.cli:app"
 
 [project.optional-dependencies]
+# Capability extras. Every extra is imported lazily behind
+# nexus_ai_agent.optional_deps, so a missing extra fails closed with an
+# actionable message instead of a bare ImportError traceback.
+# tests/unit/test_packaging.py enforces the declaration/guard contract.
+rag = [
+  "chromadb>=0.5",
+  "flashrank>=0.2",
+  "sqlite-vec>=0.1",
+  "sentence-transformers>=3.0",  # pulls torch (~2GB): never a core dependency
+]
+local-llm = [
+  "llama-cpp-python>=0.2",  # C++ build; only for on-device inference
+]
+speech = [
+  "gtts>=2.5",  # features/speech.py text-to-speech
+]
+r2 = [
+  "boto3==1.43.98",  # pinned: Cloudflare R2 blob tier (v3.9.0, latest on PyPI 2026-09-20)
+]
 pdf = [
   "pypdf>=5.1",  # D3: real PDF text extraction (clear error when missing)
 ]
+postgres = [
+  "psycopg[binary,pool]==3.3.5",
+  "asyncpg==0.31.0",
+  "langgraph-checkpoint-postgres==3.1.2",
+]
+otio = [
+  "opentimelineio>=0.17",  # ASWF reference reader for the delivery pack round-trip test
+]
+media = [
+  "imageio-ffmpeg>=0.5",  # bundles a static FFmpeg: /slideshow + the Nagar render lane
+]
+all = [
+  "nexus-ai-agent[rag,local-llm,speech,r2,pdf,postgres,otio,media]",
+]
+# `dev` mirrors dependency-groups.dev below so both modern
+# (pip install --group dev / uv sync) and legacy (pip install -e ".[dev]")
+# invocations keep working. test_packaging.py fails if the lists drift.
 dev = [
   "pytest>=8.0",
   "pytest-asyncio>=0.23",
+  "pytest-mock>=3.12",
   "ruff>=0.4",
   "mypy>=1.10",
-  "pytest-mock>=3.12",
   "pypdf>=5.1",  # keep the pdf-extraction test path real, not mocked
   "imageio-ffmpeg>=0.5",  # bundles a static FFmpeg: the render test runs a real encode
+  "opentimelineio>=0.17",  # real OTIO round-trip for the delivery pack
+]
+
+# PEP 735 dependency groups: developer-only, never published to an index.
+[dependency-groups]
+dev = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.23",
+  "pytest-mock>=3.12",
+  "ruff>=0.4",
+  "mypy>=1.10",
+  "pypdf>=5.1",
+  "imageio-ffmpeg>=0.5",
+  "opentimelineio>=0.17",
+]
+lint = [
+  "ruff>=0.4",
+  "mypy>=1.10",
 ]
 
 [tool.setuptools]

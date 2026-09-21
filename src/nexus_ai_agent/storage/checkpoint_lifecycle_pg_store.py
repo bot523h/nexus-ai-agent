@@ -35,9 +35,9 @@ import tempfile
 import threading
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
-import psycopg
-
+from nexus_ai_agent.optional_deps import require
 from nexus_ai_agent.storage.checkpoint_lifecycle import (
     LIFECYCLE_TABLE_NAME,
     CheckpointRecord,
@@ -47,6 +47,10 @@ from nexus_ai_agent.storage.checkpoint_lifecycle_store import (
     _parse,
     _parse_required,
 )
+
+# PG-only module: fail closed with the install command instead of a bare
+# ModuleNotFoundError when the [postgres] extra is not installed.
+psycopg: Any = require("psycopg")
 
 _TABLE = LIFECYCLE_TABLE_NAME  # "nexus_checkpoint_lifecycle"
 
