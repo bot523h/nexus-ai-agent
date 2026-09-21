@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T15:55:00Z",
+  "updated_at": "2026-09-21T16:05:00Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -339,6 +339,15 @@
       ],
       "toolchain": "opentimelineio (ASWF/OSS، فقط dev)، ed25519 از cryptography (فقط dev) — صفر هزینه",
       "note": "Delivered in PR#33 (OTIO ExternalReference + aiosqlite conv-store, green) WITHOUT markers. F duplicate reverted (see deferred_log). Markers → task-121."
+    },
+    {
+      "id": "task-111",
+      "title": "گیت CI قفل نسخه (VERSION ↔ pyproject ↔ CHANGELOG)",
+      "zone": "ci-quality",
+      "priority": "P2",
+      "assigned_to": "آزاد",
+      "status": "queued",
+      "origin": "repo-hygiene pass 2026-09-21 (سشن 01a0c484) — ضعف شماره ۱۱ گزارش بهداشت"
     }
   ],
   "zones": [
@@ -661,39 +670,18 @@
       "note": "F runs/reads full gates (branch CI + main CI) until E#1 merges #33 or A returns. E#1 backup (green-gates evidence). No code paths locked."
     },
     {
-      "task": "repo-hygiene-2026-09-21",
-      "zone": "repo-hygiene",
-      "agent_branch": "arena/01a0c484-nexus-ai-agent",
-      "claimed_at": "2026-09-21T15:55:00Z",
+      "task": "task-111-version-lockstep-ci",
+      "zone": "ci-quality",
+      "agent_branch": null,
+      "claimed_at": null,
       "ttl_hours": 24,
-      "status": "active",
-      "gates_owner": true,
+      "status": "queued",
+      "gates_owner": false,
       "exclusive_paths": [
-        "todo.md",
-        "todo_step3.md",
-        "todo_v130.md",
-        "todo_v200.md",
-        "todo_v21.md",
-        "termux_install.sh",
-        "scripts/termux_install.sh",
-        "AUDIT_REPORT_2026-09-21.md",
-        "docs/audits/",
-        "docs/history/",
-        "docs/README.md",
-        "docs/HANDOFF_ANALYSIS_2026-09-21.md",
-        "docs/v2-roadmap-strategy.md",
-        "docs/PHASE_D_ARCHITECTURE.md",
-        "docs/DECISION_LOG.md",
-        "docs/deployment-koyeb.md",
-        "docs/r2-storage.md",
-        "README.md",
-        "AGENTS.md",
-        "CHANGELOG.md",
-        "VERSION",
-        "pyproject.toml"
+        ".github/workflows/ci.yml",
+        "tests/unit/test_version_command.py"
       ],
-      "scope": "Owner-directed zero-to-hundred repo hygiene pass: archive stale v1/v2-era todo checklists + historical docs into docs/history/, move session audits into docs/audits/ + docs index, remove broken root termux_install.sh and repair scripts/termux_install.sh, align VERSION/pyproject/CHANGELOG/README at 3.13.0, remote-branch janitorial work, DECISION_LOG r7, AGENTS.md refresh. Zero src/ runtime changes.",
-      "note_fa": "کلایم مجدداً روی main جدید (پس از PR#36) بازسازی شد — تداخل تخته حل شد به سود آخرین وضعیت forensic."
+      "scope": "Prevent the 3.12.0-vs-v3.13.0 drift that the hygiene pass fixed: a CI guard asserting VERSION == pyproject version == latest CHANGELOG section (extends the existing test_version_command.py chain to the changelog). Acceptance: failing case demonstrably red on a mismatched fixture, green on current main; no new dependencies."
     }
   ],
   "deferred_log": [
