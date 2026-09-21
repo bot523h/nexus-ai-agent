@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T23:42:53Z",
+  "updated_at": "2026-09-21T23:44:15Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -1466,6 +1466,18 @@
         "full-suite A/B in this sandbox: 22 failed / 943 passed / 7 skipped / 27 collection errors vs 22 / 934 / 7 / 27 on the pristine tree → zero regression, +9"
       ],
       "next": "tick 6 — 10 forward tasks on the board, docs alignment, PR open"
+    },
+    {
+      "at": "2026-09-21T23:44:15Z",
+      "by_branch": "arena/01a0c634-nexus-ai-agent",
+      "agent": "عامل B (سشن 01a0c634)",
+      "tick": 6,
+      "done": [
+        "10 forward tasks documented as ten_forward_tasks_wave5 (P1–P3, disjoint exclusive paths, acceptance criteria, toolchains)",
+        "version lock-step verified: scripts/check_version_lockstep.py exit 0 (3.13.0 across VERSION/pyproject/CHANGELOG) — no bump, so no collision with PR#33 or task-135",
+        "worker.py file_name deliberately deferred (PR#33 collision cost > cosmetic value) and recorded as task-137"
+      ],
+      "next": "open the PR from this branch; gates deferred to ci-gates-steward (AGENTS.md rule 4)"
     }
   ],
   "ten_forward_tasks_wave4": [
@@ -1721,6 +1733,192 @@
       "by_branch": "arena/01a0c634-nexus-ai-agent",
       "action": "bot/handlers.py touched — 7 stub commands re-pointed at bot/surface, registration lines untouched",
       "evidence_fa": "تنها بلوک import و تعریف‌های استاب تغییر کرد (+۳۰/-۳۰ خط)؛ هفت خط CommandHandler دست‌نخورده ماندند چون اسامی هندلرها همان است و فقط مبدأ ایمپورت عوض شده. متن آزاد در on_message پیش از مسیر LLM به route_doc_text سپرده شد. قرارداد سیم‌کشی با تست AST (tests/unit/test_surface_registration.py) قفل شده تا هیچ ریبِیسی نتواند بی‌صدا استاب محلی را برگرداند."
+    }
+  ],
+  "ten_forward_tasks_wave5": [
+    {
+      "id": "task-137",
+      "title": "نام فایل واقعی در /docs — انتقال file_name از pdf_handler تا engine (پس از PR#33)",
+      "zone": "feature-wiring",
+      "priority": "P2",
+      "assigned_to": "عامل آزاد (پس از ادغام #33)",
+      "status": "queued",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/worker.py",
+        "src/nexus_ai_agent/bot/handlers.py"
+      ],
+      "instructions": "`process_pdf_task(..., file_name=...)` (موجود در PR#32، عقب‌نشینی‌شده در این سشن به‌دلیل تداخل #33 روی worker.py)؛ `pdf_handler` نام فایل را در payload صف می‌گذارد و `/docs` عنوان خوانا نشان می‌دهد.",
+      "acceptance_criteria": [
+        "/docs عنوان فایل را نشان می‌دهد نه file_id",
+        "سازگاری عقب‌رو با payloadهای قدیمی",
+        "تست واحد روی pdf_handler"
+      ],
+      "note": "این سشن عمداً انجامش نداد: worker.py در PR#33 هم لمس شده و ارزش آن صرفاً نمایشی است (task-122: هزینهٔ تداخل بیش از فایده)."
+    },
+    {
+      "id": "task-138",
+      "title": "گیت کیفیت بازیابی: baseline کامیت‌شدهٔ recall@k مانع افت خاموش RAG",
+      "zone": "rag-quality",
+      "priority": "P1",
+      "assigned_to": "عامل آزاد",
+      "status": "queued",
+      "exclusive_paths": [
+        "tests/unit/test_rag_quality_gate.py",
+        "tests/bench/baseline_rag.json"
+      ],
+      "instructions": "هارنس `rag_core.evaluate_retrieval` را به یک گیت پایتست با baseline کامیت‌شده وصل کن: مجموعهٔ ثابت ۸ سند/۶ پرسش این سشن را گسترش بده (۱۵+ پرسش) و هر انحراف زیر baseline را قرمز کن.",
+      "acceptance_criteria": [
+        "baseline کامیت‌شده",
+        "گیت در CI قرمز می‌شود اگر recall@k افت کند",
+        "گزارش در لاگ CI"
+      ],
+      "toolchain": "فقط stdlib"
+    },
+    {
+      "id": "task-139",
+      "title": "قرارداد re-ranker: تست فیک برای flashrank + مسیر سقوط",
+      "zone": "rag-quality",
+      "priority": "P2",
+      "assigned_to": "عامل آزاد",
+      "status": "queued",
+      "exclusive_paths": [
+        "tests/unit/test_rag_rerank.py"
+      ],
+      "instructions": "مسیر `_rerank_chunks` تنها بخش تست‌نشدهٔ موتور است (ایمپورت تنبل + اختیاری). با ranker فیک: ترتیب خروجی، سقوط هنگام خطا (حفظ ترتیب RRF) و غیرفعال‌سازی با rerank=False.",
+      "acceptance_criteria": [
+        "ترتیب re-rank شده اعمال می‌شود",
+        "خطای ranker پاسخ را نمی‌شکند",
+        "rerank=False پیام لاگ ندارد"
+      ]
+    },
+    {
+      "id": "task-140",
+      "title": "XP واقعی برای رویدادها — سیاست پاداش خالص",
+      "zone": "feature-wiring",
+      "priority": "P2",
+      "assigned_to": "عامل آزاد",
+      "status": "queued",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/features/gamification.py",
+        "tests/unit/test_xp_policy.py"
+      ],
+      "instructions": "`GamificationEngine.add_xp` هیچ فراخوانی در تولید ندارد: XP فقط از /daily می‌آید. یک ماژول سیاست خالص (پیام/فرمان/کوییز) بنویس که امتیاز را محاسبه و سپس یک نقطهٔ فراخوان در on_message آن را اعمال کند.",
+      "acceptance_criteria": [
+        "سیاست خالص و تست‌شده بدون DB",
+        "یک نقطهٔ فراخوان در on_message",
+        "ضدتقلب: سقف روزانه"
+      ]
+    },
+    {
+      "id": "task-141",
+      "title": "پایگاه‌دادهٔ ناهمگام برای موتورهای سنکرون features/",
+      "zone": "core-database",
+      "priority": "P1",
+      "assigned_to": "عامل آزاد (هم‌راستا با task-108)",
+      "status": "queued",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/features/gamification.py",
+        "src/nexus_ai_agent/storage/db.py",
+        "tests/unit/test_gamification_async.py"
+      ],
+      "instructions": "`_sync_engine()` در gamification (و همتاهایش) را به create_async_engine مرکزی کوچ بده و `asyncio.to_thread` را حذف کن؛ سشن این کار را نکرد چون مالکیت storage/db.py با ناحیهٔ core-database است.",
+      "acceptance_criteria": [
+        "هیچ create_engine سنکرون در features/",
+        "تست نگهبان معماری",
+        "تست‌های فعلی gamification همچنان سبز"
+      ]
+    },
+    {
+      "id": "task-142",
+      "title": "i18n برای لایهٔ surface (۱۵ زبان) + تست برابری کلید",
+      "zone": "i18n-parity",
+      "priority": "P2",
+      "assigned_to": "عامل آزاد",
+      "status": "queued",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/surface/",
+        "src/nexus_ai_agent/i18n/locales/",
+        "tests/unit/test_surface_i18n.py"
+      ],
+      "instructions": "رشته‌های فارسیِ bot/surface از مسیر لایهٔ i18n عبور کنند؛ کلیدها در ۱۵ زبان برابر شوند.",
+      "acceptance_criteria": [
+        "هیچ رشتهٔ UI هاردکد در bot/surface",
+        "برابری کلیدها سبز",
+        "سقوط به فارسی هنگام نبود کلید"
+      ]
+    },
+    {
+      "id": "task-143",
+      "title": "حریم خصوصی در /xp_leaderboard — نام نمایشی به‌جای شناسهٔ خام",
+      "zone": "privacy-surface",
+      "priority": "P2",
+      "assigned_to": "عامل آزاد",
+      "status": "queued",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/surface/gamification.py",
+        "tests/unit/test_surface_gamification.py"
+      ],
+      "instructions": "جدول XP شناسهٔ عددی کاربر را چاپ می‌کند؛ به نام نمایشی (با احترام به تنظیم حریم خصوصی) تغییر بده.",
+      "acceptance_criteria": [
+        "هیچ user_id خام در خروجی",
+        "تنظیم خاموش‌سازی برای مالک",
+        "تست بر روی رندر"
+      ]
+    },
+    {
+      "id": "task-144",
+      "title": "استناد در پاسخ‌های /chat_with_doc (آفست + نام سند)",
+      "zone": "rag-quality",
+      "priority": "P3",
+      "assigned_to": "عامل آزاد",
+      "status": "queued",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/features/rag.py",
+        "src/nexus_ai_agent/bot/surface/docs.py",
+        "tests/unit/test_rag_citations.py"
+      ],
+      "instructions": "هر بخش بازیابی‌شده آفست و نام سند را دارد؛ در پاسخ به‌صورت استناد نمایش بده تا کاربر بتواند راستی‌آزمایی کند.",
+      "acceptance_criteria": [
+        "هر نقل‌قول منبع دارد",
+        "آفست در متادیتا",
+        "تست روی format_answer"
+      ]
+    },
+    {
+      "id": "task-145",
+      "title": "ماندگاری نشست‌های چت-با-سند (بقای ری‌استارت)",
+      "zone": "feature-wiring",
+      "priority": "P3",
+      "assigned_to": "عامل آزاد",
+      "status": "queued",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/surface/docs.py",
+        "tests/unit/test_surface_docs.py"
+      ],
+      "instructions": "نشست‌ها اکنون فقط در حافظه‌اند و با ری‌استارت از بین می‌روند؛ در SQLite (جدول سبک با TTL) ذخیره شوند.",
+      "acceptance_criteria": [
+        "نشست پس از ساخت engine تازه زنده است",
+        "TTL پاک‌سازی می‌شود",
+        "سقف تعداد نشست"
+      ]
+    },
+    {
+      "id": "task-146",
+      "title": "نگهبان ضد-استاب: هیچ هندلری مجاز نیست فقط رشتهٔ ثابت برگرداند",
+      "zone": "ci-quality",
+      "priority": "P1",
+      "assigned_to": "عامل آزاد",
+      "status": "queued",
+      "exclusive_paths": [
+        "tests/architecture/test_no_stub_handlers.py"
+      ],
+      "instructions": "ممیزی این سشن را خودکار کن: هر تابع در bot/ که تنها بدنه‌اش یک فراخوان reply با رشتهٔ ثابت است، باید در CI قرمز شود (استثناها در یک فهرست سفید صریح).",
+      "acceptance_criteria": [
+        "تست معماری روی bot/ اجرا می‌شود",
+        "فهرست سفید مستند",
+        "قرمز شدن روی استاب نمونه اثبات شود"
+      ],
+      "toolchain": "فقط stdlib (ast)"
     }
   ]
 }
