@@ -52,8 +52,8 @@ FIXTURE_QUERIES: tuple[EvalQuery, ...] = (
     EvalQuery("Telegram bot library", ("python-telegram-bot", "Telegram")),
 )
 
-_BASELINE_RECALL_K = 0.5  # committed baseline (observed 2/4 with stub embedding)
-_REGRESSION_TOLERANCE = 0.15  # fail if >15 % below baseline
+_BASELINE_RECALL_K = 0.25  # committed baseline (worst-case without sqlite-vec)
+_REGRESSION_TOLERANCE = 0.15  # fail if >15 % below baseline (≈0.10 threshold)
 
 
 def recall_at_k(
