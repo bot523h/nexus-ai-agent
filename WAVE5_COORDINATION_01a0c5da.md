@@ -5,6 +5,7 @@
 > canonical identity**; the letter is a convenience label and is not reused blindly.
 > **Claim:** `wave5-activation-and-gap-closure`, zone `nagar-runtime-activation`, written to
 > `.agents/board.json` and pushed **before** the first line of code (rule 1).
+> **Result:** all ten steps delivered — see `docs/audits/WAVE5_ACTIVATION_2026-09-21.md`.
 > **Gates:** *diagnostic only* (`ruff check`, targeted/full `pytest`) — the full
 > `make lint && make types && make test` gate stays with the **gates owner** (rule 4).
 
@@ -24,24 +25,34 @@ for b in 01a0c58e 01a0c593 01a0c58a 01a0c4c1 01a0c3aa 01a0c34d; do
 done
 ```
 
-| Open PR | Branch | Tip | Merge-base with `main` | Intersection with this wave's paths |
-|---|---|---|---|---|
-| #45 exposure lane | `arena/01a0c58e` | `ee500f5` | `b422512` (clean) | **∅** |
-| #44 board lease fix | `arena/01a0c593` | `54da28a` | `b422512` (clean) | **∅** |
-| #43 storage resilience | `arena/01a0c58a` | `c8910fa` | `b422512` (clean) | **∅** |
-| #39 architecture docs | `arena/01a0c4c1` | `71fc9f6` | **NONE** (unrelated history) | `.agents/board.json` only |
-| #33 packaging/interop | `arena/01a0c3aa` | `8f2029e` | **NONE** (unrelated history) | `.agents/board.json` only |
-| #32 feature wiring | `arena/01a0c34d` | `cda2119` | **NONE** (unrelated history) | `.agents/board.json` only |
+| Open PR | Branch | Tip | Merge-base with `main` (real) | Ahead/behind | Intersection with this wave's paths |
+|---|---|---|---|---|---|
+| #45 exposure lane | `arena/01a0c58e` | `ee500f5` | `b422512` | +1 / 0 | `.agents/board.json` only |
+| #44 board lease fix | `arena/01a0c593` | `54da28a` | `b422512` | +3 / 0 | `.agents/board.json` only |
+| #43 storage resilience | `arena/01a0c58a` | `c8910fa` | `b422512` | +3 / 0 | `.agents/board.json` only |
+| #39 architecture docs | `arena/01a0c4c1` | `71fc9f6` | `7573249` | +2 / −17 | `.agents/board.json` only |
+| #33 packaging/interop | `arena/01a0c3aa` | `8f2029e` | `978ae16` | +7 / −43 | `.agents/board.json` + `cli.py` (different function) |
+| #32 feature wiring | `arena/01a0c34d` | `cda2119` | `5e5009a` | +2 / −45 | `.agents/board.json` only |
 
-Two facts follow from the table:
+> **Correction (measured, recorded rather than hidden).** The claim-time run reported
+> `merge-base = NONE` for #39/#33/#32. That was an artefact of this sandbox being a **shallow
+> clone** (`.git/shallow` pinned at `b422512`): `git fetch --unshallow origin` (30 MB, 1.3 s)
+> restored the true ancestors above, and GitHub's own compare endpoint confirms each of them
+> (`gh api repos/bot523h/nexus-ai-agent/compare/main...<branch>`). The three PRs are therefore
+> *rebase-before-merge*, not unrelated-history — which is exactly what `task-122`/`task-123`
+> already say. No functional conclusion changed; this table is now the accurate version.
 
 1. **Every functional path of this wave is disjoint from every open PR.** The only shared file is
    `.agents/board.json`, the coordination file itself, whose conflicts `AGENTS.md` resolves by
    *“newest forensic state wins”*; the re-apply blob is in §4 below.
-2. PR #39, #33 and #32 have **no merge base** with `main` (`git merge-base` → empty), so GitHub
-   cannot merge them as-is; their owners must rebase (already tracked on the board as `task-122`
-   and `task-123`). This session therefore read their **file lists as a content signal** and stayed
-   outside every path they claim — including the paths they *declare* as their unique scope.
+2. **Merge-level proof, not just file lists.** With full history available,
+   `git merge-tree --write-tree <pr-tip> HEAD` minus the same command against `main` shows Wave 5
+   introduces **zero additional conflicts** for #33 (11 → 11), #32 (7 → 7) and #39 (1 → 1);
+   against #45/#44/#43 the single conflict is `board.json` (they are based on the current `main`).
+   Full table and method: `docs/audits/WAVE5_ACTIVATION_2026-09-21.md` §3.
+3. **The board referee independently agrees:**
+   `python scripts/agent_board.py check --branch arena/01a0c5da-nexus-ai-agent --files <changed paths>`
+   → `no overlap — safe to proceed.`
 
 ### Paths this session touches (exclusive)
 
@@ -189,20 +200,38 @@ python -m venv /home/user/.venv && /home/user/.venv/bin/pip install -e . --no-de
 /home/user/.venv/bin/python -m nexus_ai_agent.cli packs list
 ```
 
-### 5.2–5.5 Per-step results
+### 5.2–5.5 Per-step results (final)
 
-Filled in as each step lands (see `docs/audits/WAVE5_ACTIVATION_2026-09-21.md` for the full table).
+```bash
+pytest -q -m "not slow"                → 1258 passed, 20 skipped (baseline 1181 → +77 new tests)
+pytest -q tests/unit/test_pack_runtime_composition.py          # 18 passed   (W5-3)
+pytest -q tests/architecture/test_pack_activation_completeness.py  # 11 passed (W5-4)
+pytest -q tests/unit/test_opgap_wave5.py                        # 35 passed   (W5-5..7)
+pytest -q tests/unit/test_pack_coverage_harness.py              # 13 passed   (W5-8)
+python scripts/pack_coverage.py        → TOTAL 94.89% (27 modules, bar 85%), exit 0
+python -m nexus_ai_agent.cli packs list --json → six packs, pending=0, all activatable
+ruff check . && ruff format --check .  → clean (397 files)
+mypy src                               → 2 environment-only errors (features/rag.py, optional chromadb absent)
+```
+
+Deliverables on disk: `creative/packs/runtime.py`, the six wired manifests, `cli.py::_packs_registry`,
+`continuum/pack_coverage.py`, `scripts/pack_coverage.py`, the four test files, `docs/ops/PACK_RUNTIME.md`
+and `docs/audits/WAVE5_ACTIVATION_2026-09-21.md`.
 
 ### 5.6 `cli.py` hunk-disjointness proof (shared file with #33)
 
 ```bash
-# PR#33's only change to cli.py, replayed on top of main, then merged with this branch:
-git diff origin/main origin/arena/01a0c3aa-nexus-ai-agent -- src/nexus_ai_agent/cli.py > /tmp/pr33_cli.patch
-git checkout -b probe/pr33-cli-hunk origin/main && git apply /tmp/pr33_cli.patch && git commit -am probe
-git merge-tree --write-tree probe/pr33-cli-hunk arena/01a0c5da-nexus-ai-agent | head -1   # want: no CONFLICT lines
+git fetch --unshallow origin '+refs/heads/*:refs/remotes/origin/*'
+gh api repos/bot523h/nexus-ai-agent/compare/main...arena/01a0c3aa-nexus-ai-agent \
+  --jq '.files[] | select(.filename=="src/nexus_ai_agent/cli.py") | .patch' | grep '^@@'
+# → @@ -390,23 +390,30 @@ def golden_update(          (the ONLY cli.py hunk of PR#33)
+
+git merge-tree --write-tree origin/arena/01a0c3aa-nexus-ai-agent HEAD | grep -c '^CONFLICT'
+# → 11 conflicts, all of them already present when merging PR#33 into main (11) → extra = 0
+#   and cli.py is not in the conflict list; the hunks live in different functions.
 ```
 
-Result: recorded in §5.2 of the audit document.
+Result table: `docs/audits/WAVE5_ACTIVATION_2026-09-21.md` §3.3.
 
 ---
 
@@ -212,8 +241,9 @@ Result: recorded in §5.2 of the audit document.
    landing order, these carry no interaction with this branch.
 2. **This PR** (`arena/01a0c5da`) — independent of the three above; only `board.json` needs the
    newest-state rule.
-3. **#39 → #33 → #32** must be rebased by their owners first (`merge-base = NONE`); the
-   `board.json` conflicts these produce are resolved by re-applying §4.
+3. **#39 → #33 → #32** must be rebased by their owners first (they are behind `main` by 17/43/45
+   commits). Wave 5 adds **zero** conflicts to any of them (§1.2 table); after they land, re-apply
+   §4 of this document to `board.json` and paste the `CHANGELOG` block from the audit §7.
 
 `CHANGELOG.md` intentionally receives **no** entry from this session (owned by #33 until the 3.13.0
 header settles). The ready-to-paste text is in `docs/audits/WAVE5_ACTIVATION_2026-09-21.md §7`.
