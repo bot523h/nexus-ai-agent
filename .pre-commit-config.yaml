@@ -1,11 +1,14 @@
-# Pre-commit hook: pinned ruff version must match CI's ``pip install -e ".[dev]"``.
-# Install once:  pip install pre-commit && pre-commit install
-# Run on demand: pre-commit run --all-files
+# Pre-commit hooks — one-command install:  make hooks
+# Run on demand:  pre-commit run --all-files
+#
+# The ruff `rev` below is the repository's single pinned ruff version: it must equal the
+# `ruff==` pin of the `lint-fast` job in .github/workflows/ci.yml, and pyproject.toml
+# (`ruff>=0.4`) must still admit it.  Bump BOTH files in ONE commit —
+# tests/unit/test_ci_lint_parity.py fails on any disagreement, because ruff's format
+# output changes between minors ("green locally, red in CI").
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    # Pinned to the same minor as dev extra (ruff>=0.4).  Renovate this
-    # alongside pyproject.toml; CI and local hooks must agree.
-    rev: v0.8.6
+    rev: v0.16.8
     hooks:
       - id: ruff
         args: [--fix]

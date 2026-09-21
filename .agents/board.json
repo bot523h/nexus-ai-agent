@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T16:35:24Z",
+  "updated_at": "2026-09-21T18:56:20Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -109,6 +109,14 @@
       "task": "wave4-hardening-10-steps (task-111 expanded)",
       "status": "active_steps1-6_done_7-10_queued",
       "note": "Steps 1-6 done (ruff 0 mypy 0 pytest 1161/20skip green, version CHANGELOG updated), steps 7-10 queued disjoint, ready for next agent. All paths verified no overlap with B."
+    },
+    "agent_h_01a0c54f": {
+      "identity": "عامل H (راه‌آهن‌های CI — job سریع بدون نصب + پین هم‌نسخه ruff)",
+      "branch": "arena/01a0c54f-nexus-ai-agent",
+      "task": "task-113-ci-lint-rail (+ بازماندهٔ R1 تسک ۱۱۱: گارد lockstep پیش از نصب)",
+      "status": "delivered_pending_gates_owner",
+      "note": "DELIVERED task-113-ci-lint-rail (+ task-111 residue R1) on arena/01a0c54f-nexus-ai-agent @ c3b1635. Zero added conflict, proven: `git merge-tree --write-tree` against origin/pr33 and origin/pr39 yields exactly the same conflict sets with and without this branch (11 files / 1 file), and .github/workflows/ci.yml is in neither — the PR#33 conflicts are its own rebase debt with main. Gates deferred to ci-gates-steward per rule 4. Next: PR open, then task-135 once PR#33 lands.",
+      "ci_evidence": "PR#42 (OPEN, MERGEABLE) · CI run 35641927691 completed SUCCESS with all four jobs: lint-fast 10 s (new rail: lockstep script -> pinned ruff check -> format), lint, test, migrate-postgres. The rail reports in 10 s what used to wait ~14 min behind the install."
     }
   },
   "ten_forward_tasks_network": [
@@ -744,7 +752,7 @@
       "agent_branch": "arena/01a0c4bb-nexus-ai-agent",
       "claimed_at": "2026-09-21T16:23:07Z",
       "ttl_hours": 24,
-      "status": "done",
+      "status": "done_partial_residue_queued",
       "gates_owner": false,
       "exclusive_paths": [
         ".github/workflows/ci.yml",
@@ -767,7 +775,86 @@
         "tests/unit/test_opgap_audio_motion.py"
       ],
       "scope": "Wave-4 hardening batch (عامل G — arena/01a0c4bb): 10-step zero-regression engineering. Steps 1-6 implemented this session; steps 7-10 queued for next agents with disjoint paths. Step1 version-lockstep CI guard (VERSION==pyproject==CHANGELOG), Step2 delivery ed25519 signing (delivery/signing.py), Step3 storage resilience (storage/resilience.py), Step4 memory eval harness + architecture guard, Step5 creative surface (bot/creative_surface.py), Step6 bench harness (bench + scripts), Steps 7-10 queued: pack coverage, ops runbook, e2e smoke, opgap.",
-      "note": "Wave4 steps 1-6 delivered (lockstep/signing/resilience/memory/creative/bench) + ruff=0 mypy=0 pytest=1161 — push 2026-09-21, steps 7-10 queued disjoint"
+      "note": "SUPERSEDED RECORD (verified 2026-09-21 by session 01a0c54f): the guard landed on main via PR#41, but PR#40 (which carried this claim) was CLOSED and never merged — so the branch arena/01a0c4bb is not the delivery vehicle. Residue tracked in R1/R2. No active lease remains on this task's exclusive_paths, so the referee no longer fences them.",
+      "delivered_on_main": [
+        "ci.yml lint job runs `pytest -q tests/unit/test_version_command.py -k lockstep` (from 2c2b55e, ancestor of main via PR#41)",
+        "wave4 artifacts steps 2-6 exist on main: delivery/signing.py, storage/resilience.py, memory/eval.py, bot/creative_surface.py, scripts/bench_*.py, docs/ops/RUNBOOK_HARDENING.md"
+      ],
+      "residue": [
+        "R1 (delivered by task-113-ci-lint-rail): lockstep check BEFORE any pip install, stdlib-only, ~30s red rail",
+        "R2 (queued as task-135-lockstep-residue): README.md:5 + .nexus/continuum.json still drifted; owned by PR#33 until merge"
+      ]
+    },
+    {
+      "task": "task-113-ci-lint-rail",
+      "zone": "ci-quality-2",
+      "agent_branch": "arena/01a0c54f-nexus-ai-agent",
+      "claimed_at": "2026-09-21T18:56:20Z",
+      "ttl_hours": 24,
+      "status": "done",
+      "gates_owner": false,
+      "exclusive_paths": [
+        ".github/workflows/ci.yml",
+        ".pre-commit-config.yaml",
+        "CONTRIBUTING.md",
+        "Makefile",
+        "scripts/check_version_lockstep.py",
+        "tests/unit/test_ci_lint_parity.py",
+        "tests/unit/test_version_lockstep_script.py",
+        "COORDINATION_2026-09-21.md"
+      ],
+      "scope": "task-113 (CI همیشه‌سبز): (1) یک job سریع مستقل «lint-fast» که صفر نصب پکیج لازم دارد — گارد lockstep فقط-stdlib + ruff پین‌شده — تا پوش خراب lint در ~۳۰ ثانیه قرمز شود؛ (2) قطع وابستگی `test` از `lint` (حذف needs) تا خرابی lint تست‌ها را قرمز نکند؛ (3) همراستاسازی پین ruff در .pre-commit-config.yaml با CI + تست نگهبان parity؛ (4) نصب یک‌دستوری هوک‌ها (make hooks) و مستندسازی در CONTRIBUTING.",
+      "note": "DELIVERED on branch arena/01a0c54f-nexus-ai-agent @ c3b1635, pushed. Zero touch on src/**, pyproject.toml, README.md, CHANGELOG.md, VERSION, .nexus/continuum.json (PR#33) and on docs/** + the three PR#39 test files. Gates deferred to the gates owner (ci-gates-steward). Residual work for the next agent: after PR#33 merges, unify the duplicate ruff run (the heavy lint job keeps ruff+mypy) and claim task-135-lockstep-residue.",
+      "released_at": "2026-09-21T19:20:00Z",
+      "delivered": [
+        "lint-fast job in .github/workflows/ci.yml: zero package install, stdlib lockstep check first, then pinned ruff check+format",
+        "`test` job no longer declares `needs: lint` (task-113 acceptance: a broken-lint push cannot red the tests)",
+        "one pinned ruff: v0.16.8 in .pre-commit-config.yaml == ruff==0.16.8 in the rail (measured safe on main first: check clean, 384 files formatted)",
+        "tests/unit/test_ci_lint_parity.py: structural guards + red-proofs (split pin, gated job, invisible install)",
+        "scripts/check_version_lockstep.py + tests/unit/test_version_lockstep_script.py: task-111 residue R1 (drift fails before the install)",
+        "make hooks (one command) + make version-check + CONTRIBUTING 'Local quality rails'"
+      ],
+      "evidence": [
+        "ruff check . / ruff format --check . clean repo-wide with the new pin (388 files)",
+        "19 targeted tests pass in 0.32 s (standalone: they need no package install)",
+        "both YAML files parse; jobs = lint, test, migrate-postgres, lint-fast; needs removed only from `test`",
+        "referee exit 0 for the changed files on this branch; negative control (--branch '') exit 1, so the zone is fenced",
+        "merge-tree proof: conflicts vs PR#33 (11 files) and vs PR#39 (1 file) are byte-identical with and without this branch -> zero added conflict; .github/workflows/ci.yml is in neither set"
+      ],
+      "pr": "https://github.com/bot523h/nexus-ai-agent/pull/42",
+      "ci_evidence": "run 35641927691: success — lint-fast 10 s, lint, test, migrate-postgres all green"
+    },
+    {
+      "task": "task-135-lockstep-residue",
+      "zone": "release-metadata",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "queued",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "README.md",
+        ".nexus/continuum.json"
+      ],
+      "scope": "بازماندهٔ تسک ۱۱۱ روی main: README.md:5 هنوز «Version: v3.12.0» می‌گوید و .nexus/continuum.json هنوز test_count_expected=649 دارد (منشأ هر دو: 92dcb47 / نسخهٔ 3.12.0) در حالی که VERSION/pyproject/CHANGELOG روی 3.13.0 هستند. پس از merge شدن PR#33 (که همین دو فایل را در دست دارد): خواندن نسخه از README و شمارش تست را هم به گارد lockstep اضافه کن تا `nexus continuum --verify` روی main سبز شود.",
+      "note": "OWNED BY PR#33 UNTIL MERGED — do not touch these two files before then (PR#33 diff already modifies both). Sequenced: claim after PR#33 lands; evidence = lockstep guard extended to README+continuum and continuum --verify exit 0."
+    },
+    {
+      "task": "pr39-in-review-docs",
+      "zone": "docs-architecture",
+      "agent_branch": "arena/01a0c4c1-nexus-ai-agent",
+      "claimed_at": "2026-09-21T16:33:37Z",
+      "ttl_hours": 24,
+      "status": "active_in_review",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "docs/",
+        "tests/unit/test_docs_integrity.py",
+        "tests/unit/test_agent_board.py",
+        "tests/unit/test_version_lockstep.py"
+      ],
+      "scope": "Record of PR#39 (OPEN, head 71fc9f6): living architecture suite + board schema 2 + three guard tests (task-131, task-111). 26 files. Was invisible on the board before this record — that gap let another session duplicate its scope.",
+      "note": "Coordination files (.agents/board.json, AGENTS.md) are deliberately NOT exclusive: every agent must write claims there, and PR#39's diff rewrites both to board schema 2. ⚠️ MERGE HAZARD for the schema-2 switch: .agents/board.json has two competing rewrites (PR#39 full schema-2 document vs this session's schema-1 additions). The claim entries added today are mirrored in COORDINATION_2026-09-21.md with an exact re-apply blob."
     }
   ],
   "deferred_log": [
@@ -1226,7 +1313,7 @@
       "zone": "hardening-wave4-batch",
       "priority": "P1",
       "assigned_to": "عامل G (arena/01a0c4bb-nexus-ai-agent)",
-      "status": "done",
+      "status": "done_partial",
       "exclusive_paths": [
         ".github/workflows/ci.yml",
         ".pre-commit-config.yaml",
@@ -1238,7 +1325,8 @@
         "job lint جدا",
         "pre-commit یک‌دستوری"
       ],
-      "evidence": "implemented + ruff/mypy/pytest green 2026-09-21 (agent G wave4 batch, technique: version-lockstep/signing/resilience/memory/creative/bench)"
+      "evidence": "implemented + ruff/mypy/pytest green 2026-09-21 (agent G wave4 batch, technique: version-lockstep/signing/resilience/memory/creative/bench)",
+      "residue": "R1 fast pre-install lockstep → task-113-ci-lint-rail (session 01a0c54f); R2 README+continuum drift → task-135-lockstep-residue (post-PR#33)."
     },
     {
       "id": "wave4-step2-delivery-signing",
@@ -1400,6 +1488,65 @@
         "۶ op رجیستر",
         "تست خالص"
       ]
+    }
+  ],
+  "void_claims_log": [
+    {
+      "at": "2026-09-21T18:52:00Z",
+      "recorded_by_branch": "arena/01a0c54f-nexus-ai-agent",
+      "session": "arena/ifk3hadg-nexus-ai-agent (previous session, different sandbox)",
+      "claimed_tasks": [
+        "task-111-version-lockstep-ci",
+        "task-131"
+      ],
+      "claimed_artifacts": [
+        "4 commits + nexus-delivery/ (DELIVERY_REPORT.md, PR_BODY.md, patches/0001..0004, combined patch)",
+        "scripts/version_lockstep.py, README/continuum alignment, ci.yml version gate"
+      ],
+      "verification": [
+        "`git ls-remote origin` → no ref arena/ifk3hadg-nexus-ai-agent (branch does not exist on the remote)",
+        "`gh pr list --state all` → no PR from that branch, ever",
+        "fresh clone of main → no nexus-delivery/ directory, no scripts/version_lockstep.py, no commits",
+        "tooling note: that sandbox had no push credentials (git push --dry-run → could not read Username)"
+      ],
+      "verdict": "VOID for coordination purposes — nothing for other agents to expect; the zone was never fenced. Re-doing it blindly would collide with PR#33 (README/continuum/ci.yml) and PR#39 (test_version_lockstep.py), which is why the residue was re-scoped instead of duplicated.",
+      "diagnosis_was_correct": [
+        "README.md:5 says v3.12.0 while VERSION=3.13.0 → CONFIRMED live on main (origin 92dcb47)",
+        ".nexus/continuum.json test_count_expected=649 while the suite has 772 `def test_` (static) → CONFIRMED live; PR#33 bumps it to 853",
+        "ci.yml runs the lockstep test only AFTER `pip install -e .[dev]` → CONFIRMED; fixed by this session's fast rail (R1)"
+      ]
+    }
+  ],
+  "coordination_log": [
+    {
+      "at": "2026-09-21T18:50:00Z",
+      "by_branch": "arena/01a0c54f-nexus-ai-agent",
+      "action": "visibility fix: recorded PR#39 as pr39-in-review-docs",
+      "evidence_fa": "PR#39 باز بود ولی هیچ کلایمی روی تخته نداشت؛ سشن قبلی به همین دلیل فکر کرد ناحیه آزاد است و کار task-131/111 را دوباره انجام داد که کلاً از دست رفت. از این پس مسیرهای انحصاری PR#39 روی تخته فریز شده‌اند."
+    },
+    {
+      "at": "2026-09-21T18:51:00Z",
+      "by_branch": "arena/01a0c54f-nexus-ai-agent",
+      "action": "region split for .github/workflows/ci.yml (PR#33 vs task-113)",
+      "evidence_fa": "PR#33 بدنهٔ job لینت و job جدید test-extras را در دست دارد؛ سشن 01a0c54f فقط خط needs در job تست و یک job جدید در انتهای فایل را لمس می‌کند. اثبات: `git merge-tree --write-tree origin/pr33 <branch>` بدون تداخل."
+    },
+    {
+      "at": "2026-09-21T18:52:00Z",
+      "by_branch": "arena/01a0c54f-nexus-ai-agent",
+      "action": "void-claim record for arena/ifk3hadg (unpushed session)",
+      "evidence_fa": "قانون خود تخته: «کلایم push‌نشده وجود ندارد». شاخه در remote نیست و هیچ PR/کامیتی از آن ساخته نشده؛ پس تحویل‌های اعلام‌شده در گزارش آن سشن به main نرسیده و نباید مبنای کار نفر بعد قرار گیرد."
+    },
+    {
+      "at": "2026-09-21T19:20:00Z",
+      "by_branch": "arena/01a0c54f-nexus-ai-agent",
+      "action": "task-113 delivered; conflict boundary measured, not asserted",
+      "evidence_fa": "روش: `git merge-tree --write-tree A B` سه‌طرفه است و merge-base واقعی را می‌گیرد. PR#33 با main → ۱۱ تداخل؛ PR#33 با شاخهٔ این سشن → همان ۱۱ تداخل (پس صفر تداخل اضافه) و ci.yml در هیچ‌کدام نیست؛ PR#39 با main → تنها board.json؛ با این شاخه → همان یک مورد. بنابراین مرز خط‌کشی‌شده درست است و تنها نقطهٔ برخورد، فایل هماهنگی board.json است که طبق AGENTS.md با قاعدهٔ «جدیدترین وضعیت فورنزیک» و blob بازاعمال در COORDINATION_2026-09-21.md حل می‌شود."
+    },
+    {
+      "at": "2026-09-21T19:40:00Z",
+      "by_branch": "arena/01a0c54f-nexus-ai-agent",
+      "action": "PR#42 opened; CI verified end-to-end on the real runner",
+      "evidence_fa": "چهار job سبز: lint-fast ۱۰ ثانیه (اسکریپت lockstep + ruff پین‌شده، بدون نصب)، lint، test، migrate-postgres؛ PR قابل merge است. یعنی هم معیار پذیرش task-113 روی واقعیت اجرا تأیید شد و هم ادعای «ثانیه‌ای به‌جای ۱۴ دقیقه» اندازه‌گیری شد."
     }
   ]
 }

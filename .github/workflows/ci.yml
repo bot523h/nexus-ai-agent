@@ -26,7 +26,9 @@ jobs:
   test:
     name: test (pytest -m "not slow")
     runs-on: ubuntu-latest
-    needs: lint
+    # task-113: deliberately NOT `needs: lint`.  A broken-lint push must never be able to
+    # turn the test suite red, and the `lint-fast` rail below already reports lint and
+    # version drift in seconds.  tests/unit/test_ci_lint_parity.py enforces this.
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -88,3 +90,30 @@ jobs:
       # f4a9c2e71b08 lifecycle table revision.
       - run: |
           PGPASSWORD=nexus psql -h localhost -U nexus -d nexus -tAc "SELECT version_num FROM alembic_version" | grep -q 7c2f9d41e8a3
+
+  # ── Fast rail (task-113) ────────────────────────────────────────────────────
+  # Deliberately independent (`needs:` nothing) and dependency-free: it installs no
+  # package, so a broken-lint push is reported in seconds instead of after
+  # `pip install -e ".[dev]"` — and because the `test` job no longer needs `lint`, a
+  # lint failure can never red the test signal either.
+  #
+  # It carries the residue of task-111 (R1): the lock-step check for
+  # VERSION == pyproject.toml == newest released CHANGELOG heading runs *before* any
+  # install, so drift fails here first.  The ruff version is pinned and must equal the
+  # `rev:` of .pre-commit-config.yaml — tests/unit/test_ci_lint_parity.py fails if the
+  # two ever disagree (ruff format output changes between minors, so a split pin means
+  # "green locally, red in CI").
+  lint-fast:
+    name: lint-fast (lockstep + pinned ruff, no install)
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python scripts/check_version_lockstep.py
+      - run: python -m pip install "ruff==0.16.8"
+      - run: ruff check .
+      - run: ruff format --check .
