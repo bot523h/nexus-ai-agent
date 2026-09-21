@@ -11,6 +11,7 @@ Wave 4a registers two operations:
 from __future__ import annotations
 
 import hashlib
+import re
 import uuid
 
 from nexus_ai_agent.creative.packs.caption.formatters import (
@@ -21,16 +22,20 @@ from nexus_ai_agent.creative.packs.caption.formatters import (
 )
 from nexus_ai_agent.creative.packs.caption.models import (
     CAPTION_PACKAGE_ID,
+    OPERATION_BURN_IN,
     OPERATION_GENERATE_ASS,
     OPERATION_GENERATE_SRT,
     OPERATION_HIGHLIGHT_WORDS,
+    OPERATION_SEARCH_TRANSCRIPT,
     OPERATION_STYLE_VAZIRMATN,
     OPERATION_TRANSCRIBE,
     AssStyleConfig,
+    BurnInInput,
     CaptionAsset,
     GenerateAssInput,
     GenerateSrtInput,
     HighlightWordsInput,
+    SearchTranscriptInput,
     StyleVazirmatnInput,
     TranscribeInput,
 )
@@ -330,6 +335,113 @@ def _highlight_words(project: Project, context: OperationContext) -> OperationOu
     )
 
 
+def _search_transcript(project: Project, context: OperationContext) -> OperationOutcome:
+    """Level A (IMMEDIATE) handler for caption.search_transcript.
+
+    Searches across transcript segments and returns matching spans with
+    microsecond boundary hits and word timing occurrences.
+    """
+    payload = SearchTranscriptInput.model_validate(context.input_data)
+    transcript = payload.transcript
+    query = payload.query if payload.case_sensitive else payload.query.lower()
+
+    hits: list[dict[str, object]] = []
+    for seg in transcript.segments:
+        text = seg.text if payload.case_sensitive else seg.text.lower()
+        if payload.exact_word:
+            pattern = r"\b" + re.escape(query) + r"\b"
+            matched = bool(re.search(pattern, text))
+        else:
+            matched = query in text
+
+        if matched:
+            matching_words = [
+                w.model_dump(mode="json")
+                for w in seg.words
+                if (w.word if payload.case_sensitive else w.word.lower()) == query
+                or (
+                    not payload.exact_word
+                    and query in (w.word if payload.case_sensitive else w.word.lower())
+                )
+            ]
+            hits.append(
+                {
+                    "segment_id": seg.segment_id,
+                    "start_us": seg.start_us,
+                    "end_us": seg.end_us,
+                    "text": seg.text,
+                    "speaker": seg.speaker,
+                    "matched_words": matching_words,
+                }
+            )
+
+    return OperationOutcome(
+        project,
+        context.history,
+        {
+            "query": payload.query,
+            "total_hits": len(hits),
+            "hits": hits,
+        },
+    )
+
+
+def _burn_in(project: Project, context: OperationContext) -> OperationOutcome:
+    """Level C (CONFIRMED) handler for caption.burn_in.
+
+    Associates a caption track with a video asset and derives a new burned-in
+    video asset record in project state.
+    """
+    payload = BurnInInput.model_validate(context.input_data)
+    if not payload.confirmed:
+        raise CommandValidationError(
+            "caption.burn_in requires explicit user confirmation (confirmed=true) in Level C"
+        )
+
+    known = _asset_index(project)
+    if payload.video_asset_id not in known:
+        raise CommandValidationError(
+            f"caption.burn_in references unknown video asset: {payload.video_asset_id!r}"
+        )
+    if payload.caption_asset_id not in known:
+        raise CommandValidationError(
+            f"caption.burn_in references unknown caption asset: {payload.caption_asset_id!r}"
+        )
+
+    video_record = known[payload.video_asset_id]
+    caption_record = known[payload.caption_asset_id]
+
+    derived_asset_id = payload.output_asset_id or f"burnin_{uuid.uuid4().hex[:12]}"
+    content_composite = f"{video_record.content_sha256}:{caption_record.content_sha256}"
+    derived_sha256 = hashlib.sha256(content_composite.encode("utf-8")).hexdigest()
+
+    burned_record = AssetRecord(
+        asset_id=derived_asset_id,
+        media_kind="video",
+        content_sha256=derived_sha256,
+        duration_us=video_record.duration_us,
+        parent_asset_ids=(video_record.asset_id, caption_record.asset_id),
+        provenance={
+            "source_video_id": video_record.asset_id,
+            "source_caption_id": caption_record.asset_id,
+            "burn_in": True,
+            "produced_by": "nagar.local.caption.burnin.v1",
+        },
+    )
+
+    new_project = project.model_copy(update={"assets": [*project.assets, burned_record]})
+    return OperationOutcome(
+        new_project,
+        context.history,
+        {
+            "derived_asset_id": derived_asset_id,
+            "video_asset_id": video_record.asset_id,
+            "caption_asset_id": caption_record.asset_id,
+            "derived_sha256": derived_sha256,
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Registration and runtime building
 # ---------------------------------------------------------------------------
@@ -405,6 +517,32 @@ def register_caption_operations(registry: CapabilityRegistry) -> CapabilityRegis
             deterministic=True,
         ),
     )
+    registry.register_operation(
+        DOMAIN,
+        "search_transcript",
+        OperationSpec(
+            operation_id=OPERATION_SEARCH_TRANSCRIPT,
+            description="Search transcript segments for keywords and occurrences (level A).",
+            permission_level=PermissionLevel.IMMEDIATE,
+            input_model=SearchTranscriptInput,
+            handler=_search_transcript,
+            required_packs=(CAPTION_PACKAGE_ID,),
+            deterministic=True,
+        ),
+    )
+    registry.register_operation(
+        DOMAIN,
+        "burn_in",
+        OperationSpec(
+            operation_id=OPERATION_BURN_IN,
+            description="Burn in captions onto video asset with explicit confirmation (level C).",
+            permission_level=PermissionLevel.CONFIRMATION,
+            input_model=BurnInInput,
+            handler=_burn_in,
+            required_packs=(CAPTION_PACKAGE_ID,),
+            deterministic=True,
+        ),
+    )
     return registry
 
 
@@ -417,9 +555,11 @@ def build_caption_registry() -> CapabilityRegistry:
 
 __all__ = [
     "DOMAIN",
+    "OPERATION_BURN_IN",
     "OPERATION_GENERATE_ASS",
     "OPERATION_GENERATE_SRT",
     "OPERATION_HIGHLIGHT_WORDS",
+    "OPERATION_SEARCH_TRANSCRIPT",
     "OPERATION_STYLE_VAZIRMATN",
     "OPERATION_TRANSCRIBE",
     "build_caption_registry",

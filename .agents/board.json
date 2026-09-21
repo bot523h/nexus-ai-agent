@@ -1,11 +1,118 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T10:15:00Z",
-  "notes": [
-    "This file is the machine-readable task/claim registry for multi-agent work on this repository.",
-    "It is the shared coordination channel between agents working in SEPARATE sandboxes.",
-    "The only shared medium between sandboxes is this git repository, so claims must be committed and pushed immediately.",
-    "Rules of engagement live in AGENTS.md and docs/MULTI_AGENT_PROTOCOL.md. The helper CLI is scripts/agent_board.py."
+  "updated_at": "2026-09-21T10:30:00Z",
+  "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
+  "active_agents": {
+    "agent_a": {
+      "identity": "عامل A (امنیت هسته و کلیددار گیت‌ها)",
+      "branch": "arena/01a0c316-nexus-ai-agent",
+      "task": "P0-security-batch",
+      "status": "active"
+    },
+    "agent_b": {
+      "identity": "عامل B (سیم‌کشی فیچرها و احیای موتورها)",
+      "branch": "arena/01a0c34d-nexus-ai-agent",
+      "task": "feature-wiring-batch",
+      "status": "active_deferred_on_handlers"
+    },
+    "agent_c": {
+      "identity": "عامل C (استودیوی نگار، زیرنویس، صوت و هسته شناختی)",
+      "branch": "arena/01a0c36f-nexus-ai-agent",
+      "task": "nagar-wave5-audio-studio-delivery",
+      "status": "active"
+    }
+  },
+  "ten_forward_tasks_network": [
+    {
+      "id": "task-01",
+      "title": "سخت‌سازی امنیت سراسری و احراز هویت",
+      "zone": "core-security",
+      "assigned_to": "عامل A",
+      "status": "in_progress",
+      "exclusive_paths": ["src/nexus_ai_agent/bot/middleware.py", "src/nexus_ai_agent/api/dashboard.py"],
+      "instructions": "پیاده‌سازی Global Auth Middleware و حذف PII در /api/dashboard/recent_users و رفع Path Traversal در کلاود."
+    },
+    {
+      "id": "task-02",
+      "title": "سیم‌کشی ابزارهای مرده به تلگرام",
+      "zone": "feature-wiring",
+      "assigned_to": "عامل B",
+      "status": "queued_waiting_for_task_01",
+      "exclusive_paths": ["src/nexus_ai_agent/features/tools.py", "src/nexus_ai_agent/bot/handlers.py"],
+      "instructions": "اتصال ReminderSystem، Calculator، Translator و UnitConverter به هندلرهای تلگرام."
+    },
+    {
+      "id": "task-03",
+      "title": "احیای بازی‌ها و فعال‌سازی حلقه ریفرال",
+      "zone": "feature-wiring",
+      "assigned_to": "عامل B",
+      "status": "queued_waiting_for_task_01",
+      "exclusive_paths": ["src/nexus_ai_agent/features/games.py", "src/nexus_ai_agent/features/referral.py"],
+      "instructions": "اتصال WordleFA و فراخوانی متد مرده ReferralEngine.process_referral و تزریق بات به فورس‌جوین."
+    },
+    {
+      "id": "task-04",
+      "title": "استودیوی صدای نگار (Nagar Wave 5)",
+      "zone": "nagar-creative-audio",
+      "assigned_to": "عامل C",
+      "status": "in_progress",
+      "exclusive_paths": ["src/nexus_ai_agent/creative/packs/audio/"],
+      "instructions": "ایجاد پکیج nexus.audio.studio شامل تحلیل بیت، نرمال‌سازی EBU R128 و داکینگ هوشمند موسیقی."
+    },
+    {
+      "id": "task-05",
+      "title": "جستجوی زیرنویس و رندر اتمیک نهایی",
+      "zone": "nagar-creative-caption",
+      "assigned_to": "عامل C",
+      "status": "in_progress",
+      "exclusive_paths": ["src/nexus_ai_agent/creative/packs/caption/"],
+      "instructions": "پیاده‌سازی caption.search_transcript و caption.burn_in روی خط رندر استودیو."
+    },
+    {
+      "id": "task-06",
+      "title": "لاغرسازی حیاتی بسته‌های پایتون (Extras)",
+      "zone": "core-packaging",
+      "assigned_to": "عامل بعدی",
+      "status": "available",
+      "exclusive_paths": ["pyproject.toml"],
+      "instructions": "تفکیک وابستگی‌ها به [creative], [rag], [speech] جهت کاهش حجم ایمیج از ۷GB به ۲۰۰MB."
+    },
+    {
+      "id": "task-07",
+      "title": "استانداردسازی ناهمگام دیتابیس (Async DB)",
+      "zone": "core-database",
+      "assigned_to": "عامل بعدی",
+      "status": "available",
+      "exclusive_paths": ["src/nexus_ai_agent/core/async_db.py"],
+      "instructions": "حذف sync engineها و انتقال تمام کوئری‌های دیتابیس به get_session ناهمگام."
+    },
+    {
+      "id": "task-08",
+      "title": "استودیوی رنگ و تحویل (Nagar Wave 7)",
+      "zone": "nagar-creative-delivery",
+      "assigned_to": "عامل بعدی",
+      "status": "available",
+      "exclusive_paths": ["src/nexus_ai_agent/creative/packs/delivery/"],
+      "instructions": "پیاده‌سازی پکیج nexus.color.delivery و اکسپورت استاندارد OpenTimelineIO (OTIO)."
+    },
+    {
+      "id": "task-09",
+      "title": "ضدبرخورد و پایداری پایگاه برداری RAG",
+      "zone": "features-rag",
+      "assigned_to": "عامل بعدی",
+      "status": "available",
+      "exclusive_paths": ["src/nexus_ai_agent/features/rag.py"],
+      "instructions": "اصلاح سیستم چانکینگ با همپوشانی و رفع باگ تکرار کلید در مجموعه Chroma."
+    },
+    {
+      "id": "task-10",
+      "title": "چندزبانه کردن سراسری پاسخ‌های بات",
+      "zone": "core-i18n",
+      "assigned_to": "عامل بعدی",
+      "status": "available",
+      "exclusive_paths": ["src/nexus_ai_agent/i18n/"],
+      "instructions": "متصل کردن کلیدهای ۱۵ زبانه به تمامی خروجی‌های کاربری به جای رشته‌های ثابت انگلیسی."
+    }
   ],
   "zones": [
     {
@@ -36,14 +143,13 @@
       ]
     },
     {
-      "id": "nagar-creative-cognition",
-      "description": "Nagar Wave 4b subtitle styling, ASS/RTL engine, multilingual intent routing, and cognitive graph memory",
+      "id": "nagar-creative-audio",
+      "description": "Nagar Wave 5 audio studio, beat detection, loudness normalization, ducking, and caption search/burn-in",
       "paths": [
+        "src/nexus_ai_agent/creative/packs/audio/",
         "src/nexus_ai_agent/creative/packs/caption/",
-        "src/nexus_ai_agent/orchestration/",
-        "tests/unit/test_caption_ass.py",
-        "tests/unit/test_router_multilingual.py",
-        "tests/unit/test_graph_memory.py"
+        "tests/unit/test_audio_pack.py",
+        "tests/architecture/test_audio_pack_boundary.py"
       ]
     }
   ],
@@ -80,19 +186,19 @@
       "note": "Deferred until security batch merges due to shared lock on bot/handlers.py"
     },
     {
-      "task": "nagar-wave4b-caption-cognition",
-      "zone": "nagar-creative-cognition",
+      "task": "nagar-wave5-audio-studio-delivery",
+      "zone": "nagar-creative-audio",
       "agent_branch": "arena/01a0c36f-nexus-ai-agent",
-      "claimed_at": "2026-09-21T10:15:00Z",
+      "claimed_at": "2026-09-21T10:30:00Z",
       "ttl_hours": 24,
       "status": "active",
       "gates_owner": false,
       "exclusive_paths": [
-        "src/nexus_ai_agent/creative/packs/caption/",
-        "src/nexus_ai_agent/orchestration/"
+        "src/nexus_ai_agent/creative/packs/audio/",
+        "src/nexus_ai_agent/creative/packs/caption/operations.py"
       ],
-      "scope": "Nagar Wave 4b caption ASS/RTL formatting, Vazirmatn typography, word-level highlight/karaoke, multilingual router & cognitive graph memory persistence",
-      "note": "Fully isolated from core-security and feature-wiring zones; zero overlap with bot/handlers.py or features/"
+      "scope": "Nagar Wave 5 audio studio pack (nexus.audio.studio), beat grid detection, EBU-R128 loudness normalization, music ducking curve generation, and transcript search (caption.search_transcript)",
+      "note": "Mathematically disjoint paths; zero overlap with core-security and feature-wiring zones"
     }
   ],
   "deferred_log": [

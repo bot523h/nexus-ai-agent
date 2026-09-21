@@ -26,16 +26,20 @@ from nexus_ai_agent.creative.packs.caption.formatters import (
 )
 from nexus_ai_agent.creative.packs.caption.models import (
     CAPTION_PACKAGE_ID,
+    OPERATION_BURN_IN,
     OPERATION_GENERATE_ASS,
     OPERATION_GENERATE_SRT,
     OPERATION_HIGHLIGHT_WORDS,
+    OPERATION_SEARCH_TRANSCRIPT,
     OPERATION_STYLE_VAZIRMATN,
     OPERATION_TRANSCRIBE,
     AssStyleConfig,
+    BurnInInput,
     CaptionAsset,
     GenerateAssInput,
     GenerateSrtInput,
     HighlightWordsInput,
+    SearchTranscriptInput,
     SpeakerTurn,
     StyleVazirmatnInput,
     TranscribeInput,
@@ -50,13 +54,17 @@ from nexus_ai_agent.creative.packs.caption.operations import (
 )
 
 __all__ = [
+    "BurnInInput",
     "CAPTION_PACKAGE_ID",
     "DOMAIN",
+    "OPERATION_BURN_IN",
     "OPERATION_GENERATE_ASS",
     "OPERATION_GENERATE_SRT",
     "OPERATION_HIGHLIGHT_WORDS",
+    "OPERATION_SEARCH_TRANSCRIPT",
     "OPERATION_STYLE_VAZIRMATN",
     "OPERATION_TRANSCRIBE",
+    "SearchTranscriptInput",
     "AssStyleConfig",
     "CaptionAsset",
     "GenerateAssInput",

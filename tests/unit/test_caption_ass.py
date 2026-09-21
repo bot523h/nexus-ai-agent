@@ -334,3 +334,107 @@ def test_render_ir_with_subtitles_burn_in_filtergraph() -> None:
     assert final_label_srt == "vsub"
     assert "subtitles='/workspace/captions.srt'[vsub]" in filtergraph_srt
 
+
+def test_search_transcript_matches_keywords_and_words() -> None:
+    project, bus = _setup_project()
+    registry = build_caption_registry()
+    spec = registry.get_spec("caption.search_transcript")
+    assert spec.permission_level == PermissionLevel.IMMEDIATE
+
+    tr = _sample_persian_transcript()
+    cmd = TypedCommand(
+        command_id="cmd_search_01",
+        operation="caption.search_transcript",
+        input={
+            "transcript": tr.model_dump(mode="json"),
+            "query": "نگار",
+            "exact_word": False,
+        },
+    )
+    res = bus.dispatch(cmd)
+    assert res.status == "applied"
+    assert res.output["total_hits"] == 1
+    assert res.output["hits"][0]["segment_id"] == "seg_01"
+    assert len(res.output["hits"][0]["matched_words"]) >= 1
+
+    # Search non-matching query
+    cmd_empty = TypedCommand(
+        command_id="cmd_search_none",
+        operation="caption.search_transcript",
+        input={
+            "transcript": tr.model_dump(mode="json"),
+            "query": "کلمه_ناموجود",
+        },
+    )
+    res_empty = bus.dispatch(cmd_empty)
+    assert res_empty.status == "applied"
+    assert res_empty.output["total_hits"] == 0
+
+
+def test_burn_in_level_c_requires_confirmation_and_registers_derived_video() -> None:
+    project, bus = _setup_project()
+    registry = build_caption_registry()
+    spec = registry.get_spec("caption.burn_in")
+    assert spec.permission_level == PermissionLevel.CONFIRMATION
+
+    # Add a mock video asset and caption asset
+    video_rec = AssetRecord(
+        asset_id="asset_video_master",
+        media_kind="video",
+        content_sha256="sha256:videohash999",
+        duration_us=10_000_000,
+    )
+    caption_rec = AssetRecord(
+        asset_id="asset_caption_ass",
+        media_kind="caption",
+        content_sha256="sha256:asshash999",
+        duration_us=10_000_000,
+    )
+    bus._project = bus.project.model_copy(
+        update={"assets": [*bus.project.assets, video_rec, caption_rec]}
+    )
+
+    # Missing confirmation -> fails with PermissionDeniedError at command bus gate
+    cmd_unconfirmed = TypedCommand(
+        command_id="cmd_burn_unconf",
+        operation="caption.burn_in",
+        confirmed=False,
+        input={
+            "video_asset_id": "asset_video_master",
+            "caption_asset_id": "asset_caption_ass",
+        },
+    )
+    from nexus_ai_agent.creative.studio.models import PermissionDeniedError
+
+    with pytest.raises(PermissionDeniedError, match="level C"):
+        bus.dispatch(cmd_unconfirmed)
+
+    # Confirmed -> succeeds
+    cmd_burn = TypedCommand(
+        command_id="cmd_burn_ok",
+        operation="caption.burn_in",
+        confirmed=True,
+        input={
+            "video_asset_id": "asset_video_master",
+            "caption_asset_id": "asset_caption_ass",
+            "output_asset_id": "burned_master_01",
+            "confirmed": True,
+        },
+    )
+    burn_res = bus.dispatch(cmd_burn)
+    assert burn_res.status == "applied"
+    assert burn_res.output["derived_asset_id"] == "burned_master_01"
+
+    # Verify derived asset in project
+    burned_rec = next(a for a in bus.project.assets if a.asset_id == "burned_master_01")
+    assert burned_rec.media_kind == "video"
+    assert burned_rec.parent_asset_ids == ("asset_video_master", "asset_caption_ass")
+    assert burned_rec.provenance["burn_in"] is True
+
+    # Test reversible undo
+    undo_cmd = TypedCommand(command_id="cmd_undo_burn", operation="system.undo", input={})
+    undo_res = bus.dispatch(undo_cmd)
+    assert undo_res.status == "applied"
+    assert "burned_master_01" not in [a.asset_id for a in bus.project.assets]
+
+

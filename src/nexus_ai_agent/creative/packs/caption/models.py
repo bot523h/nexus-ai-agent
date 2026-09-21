@@ -24,6 +24,8 @@ OPERATION_GENERATE_SRT = "caption.generate_srt"
 OPERATION_GENERATE_ASS = "caption.generate_ass_rtl"
 OPERATION_STYLE_VAZIRMATN = "caption.style_vazirmatn"
 OPERATION_HIGHLIGHT_WORDS = "caption.highlight_words"
+OPERATION_SEARCH_TRANSCRIPT = "caption.search_transcript"
+OPERATION_BURN_IN = "caption.burn_in"
 
 
 class WordTiming(BaseModel):
@@ -262,3 +264,25 @@ class HighlightWordsInput(BaseModel):
     transcript: TranscriptRef
     highlight_colour: str = "&H0000E5FF"  # Golden/Cyan highlight
     mode: Literal["karaoke_tag", "span_tag"] = "karaoke_tag"
+
+
+class SearchTranscriptInput(BaseModel):
+    """Input payload for ``caption.search_transcript`` (Level A)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    transcript: TranscriptRef
+    query: str = Field(min_length=1)
+    case_sensitive: bool = False
+    exact_word: bool = False
+
+
+class BurnInInput(BaseModel):
+    """Input payload for ``caption.burn_in`` (Level C)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    video_asset_id: str = Field(min_length=1)
+    caption_asset_id: str = Field(min_length=1)
+    output_asset_id: str | None = None
+    confirmed: bool = False
