@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T18:56:20Z",
+  "updated_at": "2026-09-21T23:08:11Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -67,8 +67,8 @@
       "identity": "عامل B (سیم‌کشی فیچرها و لایه Surface)",
       "branch": "arena/01a0c34d-nexus-ai-agent",
       "task": "feature-wiring-batch",
-      "status": "active_in_review_PR32",
-      "note": "PR#32 green but on ancient base: main moved via PR#34 (8 shared files WILL conflict + semantic double-wiring). See task-122."
+      "status": "superseded_by_new_B_session_01a0c634",
+      "note": "PR#32 green but on ancient base: main moved via PR#34 (8 shared files WILL conflict + semantic double-wiring). See task-122.2026-09-21: سشن جدید عامل B روی 01a0c634 ادامهٔ همین ناحیه است؛ PR#32 در تیک ۱ تریاژ می‌شود."
     },
     "agent_c": {
       "identity": "عامل C (استودیوی نگار — پک‌های edit/audio/motion/caption/delivery)",
@@ -117,6 +117,13 @@
       "status": "delivered_pending_gates_owner",
       "note": "DELIVERED task-113-ci-lint-rail (+ task-111 residue R1) on arena/01a0c54f-nexus-ai-agent @ c3b1635. Zero added conflict, proven: `git merge-tree --write-tree` against origin/pr33 and origin/pr39 yields exactly the same conflict sets with and without this branch (11 files / 1 file), and .github/workflows/ci.yml is in neither — the PR#33 conflicts are its own rebase debt with main. Gates deferred to ci-gates-steward per rule 4. Next: PR open, then task-135 once PR#33 lands.",
       "ci_evidence": "PR#42 (OPEN, MERGEABLE) · CI run 35641927691 completed SUCCESS with all four jobs: lint-fast 10 s (new rail: lockstep script -> pinned ruff check -> format), lint, test, migrate-postgres. The rail reports in 10 s what used to wait ~14 min behind the install."
+    },
+    "agent_b_01a0c634": {
+      "identity": "عامل B (سیم‌کشی فیچرها و لایه Surface — سشن جدید 01a0c634)",
+      "branch": "arena/01a0c634-nexus-ai-agent",
+      "task": "feature-wiring-residual + task-127-rag",
+      "status": "active_tick0_identity_declared",
+      "note_fa": "سشن جدید عامل B روی شاخه 01a0c634 (شاخهٔ قدیمی 01a0c34d = PR#32 است که روی main تداخل دارد و از 15:22Z دیگر پوشی نداشته). نقشهٔ کار: (۱) تریاژ فارنزیک PR#32 در برابر PR#34 لندشده، (۲) task-127 موتور RAG واقعی (چانکینگ بازگشتی + بازیابی هایبرید + هارنس eval)، (۳) تحویل باقیماندهٔ واقعی سطح (gamification + docs) روی bot/surface بدو‌ن لمس handlers.py تا جای ممکن. هر تیک یک کامیت و یک پوش دارد."
     }
   },
   "ten_forward_tasks_network": [
@@ -502,14 +509,14 @@
       "agent_branch": "arena/01a0c34d-nexus-ai-agent",
       "claimed_at": "2026-09-21T10:00:52Z",
       "ttl_hours": 24,
-      "status": "active",
+      "status": "transferred_to_01a0c634",
       "gates_owner": false,
       "exclusive_paths": [
         "src/nexus_ai_agent/bot/surface/",
         "src/nexus_ai_agent/features/"
       ],
       "scope": "PR#32 open: wire dead engines via framework-free bot/surface layer (tools, games, referral, gamification, force-join, anon-chat, rag surface)",
-      "note": "PR#32 OPEN (26 files, checks green @10:38Z on old base). MUST rebase onto post-#34 main: features/{ai_memory,anonymous_chat,force_join,gamification,rag,tools}.py + bot/memory_handlers.py + worker.py + tests/unit/conftest.py all moved. Owner picks surface/ vs feature_handlers/. See task-122."
+      "note": "lease transferred to the new عامل B session branch (01a0c634) at 2026-09-21T23:08:11Z; PR#32 stays OPEN until its triage lands (tick 1)."
     },
     {
       "task": "nagar-wave3-timeline-edit-delivery",
@@ -855,6 +862,28 @@
       ],
       "scope": "Record of PR#39 (OPEN, head 71fc9f6): living architecture suite + board schema 2 + three guard tests (task-131, task-111). 26 files. Was invisible on the board before this record — that gap let another session duplicate its scope.",
       "note": "Coordination files (.agents/board.json, AGENTS.md) are deliberately NOT exclusive: every agent must write claims there, and PR#39's diff rewrites both to board schema 2. ⚠️ MERGE HAZARD for the schema-2 switch: .agents/board.json has two competing rewrites (PR#39 full schema-2 document vs this session's schema-1 additions). The claim entries added today are mirrored in COORDINATION_2026-09-21.md with an exact re-apply blob."
+    },
+    {
+      "task": "feature-wiring-residual-b",
+      "agent_branch": "arena/01a0c634-nexus-ai-agent",
+      "claimed_at": "2026-09-21T23:08:11Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "status": "active",
+      "zone": "feature-wiring",
+      "scope": "Agent B (session 01a0c634): (1) forensic triage of PR#32 vs merged PR#34, (2) task-127 real RAG (recursive chunking + hybrid BM25/vector + recall eval harness), (3) residual framework-free Telegram surface for the still-stubbed commands (/daily /profile /achievements /xp_leaderboard /docs /doc_delete /chat_with_doc).",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/surface/",
+        "src/nexus_ai_agent/features/rag.py",
+        "src/nexus_ai_agent/features/rag_core.py",
+        "tests/unit/surface_fakes.py",
+        "tests/unit/test_rag_chunking.py",
+        "tests/unit/test_rag_eval.py",
+        "tests/unit/test_surface_gamification.py",
+        "tests/unit/test_surface_docs.py",
+        "docs/audits/PR32_TRIAGE_2026-09-21.md"
+      ],
+      "note": "gates deferred to ci-gates-steward (arena/01a0c460, active) per AGENTS.md rule 4."
     }
   ],
   "deferred_log": [
@@ -903,6 +932,20 @@
         "lease heartbeat (claimed 12:00Z) with no code = stale per rule intent; A re-claims on return"
       ],
       "fa": "اسکوپ P0 با PR#34 لند کرد و شاخه A هیچ کد P0 پوش نکرده؛ اجاره بازپس گرفته شد تا قفل کاذب روی core-security نماند."
+    },
+    {
+      "at": "2026-09-21T23:08:11Z",
+      "by_branch": "arena/01a0c634-nexus-ai-agent",
+      "agent": "عامل B",
+      "reclaimed": "feature-wiring-batch (عامل B, arena/01a0c34d-nexus-ai-agent)",
+      "rule": "same-identity session continuation (branch 34d idle since 15:22:33Z; PR#32 CONFLICTING, 176 files behind main)",
+      "evidence": [
+        "PR#32 updatedAt = 2026-09-21T15:22:33Z, no push since; base is 176 files behind main (b422512)",
+        "PR#34 (P0 week-1 + engine wiring) MERGED to main — PR#32's B1-B8 engine wiring is now duplicated on main",
+        "PR#32 mergeable=CONFLICTING; merge_order_recommendation puts #32 last",
+        "new session continues the SAME zone (bot/surface, features/) on a fresh branch; nothing stolen from another letter"
+      ],
+      "note_fa": "اجاره منتقل شد (و نه حذف): وضعیت کلایم قدیمی با برچسب transferred ثبت می‌شود تا تاریخچه شفاف بماند."
     }
   ],
   "ten_forward_tasks_wave2": [
@@ -1304,6 +1347,18 @@
         "tasks 122/123 need B/E#1 action — cannot do for them (their zones)"
       ],
       "fa": "تکرار ۱۱۰ حذف و به #33 واگذار شد؛ تخته با ۱۰ تسک جدید مالک‌دار به‌روز شد؛ PR من (۱۰۴+۱۰۵) آماده باز شدن است."
+    },
+    {
+      "at": "2026-09-21T23:08:11Z",
+      "by_branch": "arena/01a0c634-nexus-ai-agent",
+      "agent": "عامل B (سشن 01a0c634)",
+      "tick": 0,
+      "done": [
+        "identity declared: عامل B on arena/01a0c634-nexus-ai-agent",
+        "lease for the feature-wiring zone transferred (with takeover evidence), not stolen",
+        "exclusive paths fenced: bot/surface/, features/rag*.py, 5 new test files, 1 audit doc"
+      ],
+      "next": "tick 1 — PR#32 forensic triage (task-122/task-103) with per-file verdict vs merged PR#34"
     }
   ],
   "ten_forward_tasks_wave4": [
