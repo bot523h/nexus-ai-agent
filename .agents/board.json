@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T18:56:20Z",
+  "updated_at": "2026-09-21T23:29:18Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -117,6 +117,13 @@
       "status": "delivered_pending_gates_owner",
       "note": "DELIVERED task-113-ci-lint-rail (+ task-111 residue R1) on arena/01a0c54f-nexus-ai-agent @ c3b1635. Zero added conflict, proven: `git merge-tree --write-tree` against origin/pr33 and origin/pr39 yields exactly the same conflict sets with and without this branch (11 files / 1 file), and .github/workflows/ci.yml is in neither — the PR#33 conflicts are its own rebase debt with main. Gates deferred to ci-gates-steward per rule 4. Next: PR open, then task-135 once PR#33 lands.",
       "ci_evidence": "PR#42 (OPEN, MERGEABLE) · CI run 35641927691 completed SUCCESS with all four jobs: lint-fast 10 s (new rail: lockstep script -> pinned ruff check -> format), lint, test, migrate-postgres. The rail reports in 10 s what used to wait ~14 min behind the install."
+    },
+    "agent_a_01a0c649": {
+      "identity": "عامل A (سشن مالک-هدایت‌شدهٔ 2026-09-21 — تثبیت تخته، ادغام‌های سبز، کار مهندسی بعدی)",
+      "branch": "arena/01a0c649-nexus-ai-agent",
+      "task": "board stabilization (nagar-two-half-split restore) → green merges (#44/#43/#45/#46) → next claim",
+      "status": "active",
+      "note_fa": "مالک این سشن را «عامل A» تعیین کرد؛ شناسهٔ متعارف طبق AGENTS.md نام شاخه است (01a0c649) و کارت قدیمی agent_a/01a0c316 (اجاره‌اش بازپس گرفته شده) جایگزین می‌شود. پروتکل الزامی این سشن برای همهٔ عامل‌ها: (۱) push-claim — کلایم بدون پوش وجود ندارد؛ (۲) آزادسازی فقط با CLI release و با شواهد + ثبت در coordination_log؛ (۳) پس از هر مرحله اول تیک روی تخته، بعد کامنت و پوش؛ (۴) هر مرحله سبز (CI) → ادغام خودکار تا کد از دست نرود؛ (۵) صفر تداخل با exclusive_paths عاملان دیگر — داور: scripts/agent_board.py check."
     }
   },
   "ten_forward_tasks_network": [
@@ -855,6 +862,18 @@
       ],
       "scope": "Record of PR#39 (OPEN, head 71fc9f6): living architecture suite + board schema 2 + three guard tests (task-131, task-111). 26 files. Was invisible on the board before this record — that gap let another session duplicate its scope.",
       "note": "Coordination files (.agents/board.json, AGENTS.md) are deliberately NOT exclusive: every agent must write claims there, and PR#39's diff rewrites both to board schema 2. ⚠️ MERGE HAZARD for the schema-2 switch: .agents/board.json has two competing rewrites (PR#39 full schema-2 document vs this session's schema-1 additions). The claim entries added today are mirrored in COORDINATION_2026-09-21.md with an exact re-apply blob."
+    },
+    {
+      "task": "nagar-two-half-split",
+      "zone": "coordination-nagar-split",
+      "agent_branch": "arena/01a0c649-nexus-ai-agent",
+      "claimed_at": "2026-09-21T23:29:18Z",
+      "ttl_hours": 24,
+      "status": "active",
+      "gates_owner": false,
+      "exclusive_paths": [],
+      "scope": "رکورد بازسازی‌شدهٔ تقسیم نگار به دو نیمه (هر دو نیمه فقط فایل .agents/board.json را به‌اشتراک می‌گذارند — نه یک بایت بیشتر): نیمهٔ ۱ = color-exposure-lane-wave (شاخه arena/01a0c58e-nexus-ai-agent، PR#45؛ حصار: src/nexus_ai_agent/creative/rendering/**، tests/unit/test_rendering_lane_exposure.py، tests/unit/test_lane_duration_algebra.py، docs/ops/COLOR_LANE.md، ROADMAP_STATUS.md، docs/DECISION_LOG.md، CHANGELOG.md). نیمهٔ ۲ = wave5-activation-and-gap-closure (شاخه arena/01a0c5da-nexus-ai-agent، PR#46؛ حصار: src/nexus_ai_agent/creative/packs/**، src/nexus_ai_agent/cli.py::_packs_registry، src/nexus_ai_agent/continuum/pack_coverage.py، scripts/pack_coverage.py، tests/unit/test_{pack_runtime_composition,opgap_wave5,pack_coverage_harness}.py، tests/architecture/test_pack_activation_completeness.py، docs/ops/PACK_RUNTIME.md، docs/audits/WAVE5_ACTIVATION_2026-09-21.md). قاعدهٔ مشترک: تداخل فایلی only board.json → حل با «جدیدترین وضعیت فورنزیک برنده است» + blob بازاعمال (AGENTS.md).",
+      "note": ""
     }
   ],
   "deferred_log": [
@@ -1547,6 +1566,17 @@
       "by_branch": "arena/01a0c54f-nexus-ai-agent",
       "action": "PR#42 opened; CI verified end-to-end on the real runner",
       "evidence_fa": "چهار job سبز: lint-fast ۱۰ ثانیه (اسکریپت lockstep + ruff پین‌شده، بدون نصب)، lint، test، migrate-postgres؛ PR قابل merge است. یعنی هم معیار پذیرش task-113 روی واقعیت اجرا تأیید شد و هم ادعای «ثانیه‌ای به‌جای ۱۴ دقیقه» اندازه‌گیری شد."
+    },
+    {
+      "at": "2026-09-21T23:29:00Z",
+      "by_branch": "arena/01a0c649-nexus-ai-agent",
+      "action": "reconstruct nagar-two-half-split + declare agent-A session (owner-directed)",
+      "evidence_fa": "رکورد nagar-two-half-split در هیچ کامیت/شاخه/PR‌ای یافت نشد (git log --all -S + grep روی origin/pr/{32,33,39,43,44,45,46}) — طبق قاعدهٔ «کلایم push‌نشده وجود ندارد» از نو ساخته شد. دو نیمه و حصارهایشان پابرجا: color-exposure-lane-wave (PR#45 board) و wave5-activation-and-gap-closure (PR#46 board)؛ اشتراک فایلی دو نیمه = فقط .agents/board.json. هویت: مالک این سشن را عامل A تعیین کرد؛ کارت agent_a_01a0c649 ثبت شد (کارت 01a0c316 بازنشسته). پروتکل push-claim/release/tick/merge خودکار در session_directive_fa برای همه ثبت شد."
     }
-  ]
+  ],
+  "session_directive_fa": {
+    "at": "2026-09-21T23:29:00Z",
+    "by": "arena/01a0c649-nexus-ai-agent",
+    "text": "پروتکل الزامی مالک برای همهٔ عامل‌ها تا اطلاع ثانوی: «کلایم را قبل از کد با CLI claim ثبت و فوراً پوش کن؛ هر مرحله را که تمام کردی اول با CLI release (با شواهد) روی تخته تیک بزن، بعد کامنت بگذار و پوش کن؛ هر مرحله سبز CI شد ادغام خودکار انجام بده تا کدها گم نشوند؛ بدون تداخل با مسیرهای انحصاری عامل دیگر.»"
+  }
 }
