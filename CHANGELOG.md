@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (wave-4 hardening — agent G `01a0c4bb` — 10-step batch, 6 steps delivered)
+
+- **Version-lockstep CI guard (wave4-1):** `VERSION == pyproject.toml == CHANGELOG`
+  checked by `tests/unit/test_version_command.py` (mismatched fixture → red,
+  green on main) + new `lint` job in `ci.yml` (ruff + mypy + lockstep) and
+  `.pre-commit-config.yaml` (pinned ruff v0.8.6 + mypy v1.10) — prevents the
+  3.12.0-vs-3.13.0 drift the hygiene pass fixed.
+- **Delivery signing spike (wave4-2):** `creative/packs/delivery/signing.py`
+  (Ed25519 via PyNaCl when installed, HMAC-SHA256 fallback, canonical JSON,
+  base64 transport, constant-time verify, fail-closed `SigningError`) with
+  8 unit tests (`test_delivery_signing.py`).
+- **Storage resilience (wave4-3):** `storage/resilience.py` (exponential backoff
+  with jitter, idempotency `sha256` key, secret-safe `redact_secrets`,
+  `retry_with_backoff` for idempotent ops, env-tunable `NEXUS_STORAGE_*`)
+  with 11 unit tests including chaos.
+- **Memory eval harness + architecture guard (wave4-4):** `memory/eval.py`
+  (`recall@k` over deterministic fixture, baseline `0.5` with 15 % tolerance,
+  stub LLM offline) + `test_memory_recall.py` + `test_memory_boundaries.py`
+  (AST guard: `memory/` must not import `features/`/`bot/`).
+- **Creative surface (wave4-5):** `bot/creative_surface.py` (pure mapper +
+  PTB glue, `/edit`/`/caption`/`/grade` via `JobQueuePort` `creative_render`,
+  30 s limit, typed `CreativeFailure` → i18n, zero touch on `handlers.py`)
+  with 7 unit tests.
+- **Bench harness (wave4-6):** `scripts/bench_render.py` + `scripts/bench_caption.py`
+  (pure IR compile / SRT format, deterministic, GPU-free) + committed baselines
+  `tests/bench/baseline_*.json` + `test_render_bench.py` regression gate (15 %
+  threshold, 50 % slack in unit test).
+- **Ops hardening (wave4-8/9):** `docs/ops/RUNBOOK_HARDENING.md` (version bump,
+  signing, resilience, memory, bench, smoke) + `scripts/smoke_e2e.py`
+  (offline contract checks, compose half deferred post-#33).
+
+Queued for next agents (still 10-step board, disjoint paths):
+`wave4-7` pack coverage 95 %/mutation, `wave4-10` op-gap 6 ops — see
+`.agents/board.json → ten_forward_tasks_wave4`.
+
+### Fixed (supersession fix — session `01a0c506`, PR#40 CI root cause)
+
+- **Bench cores moved into the installed package:**
+  `bench_render_ir_compile` → `nexus_ai_agent.creative.rendering.bench`,
+  `bench_caption_format` → `nexus_ai_agent.creative.caption.bench`;
+  `scripts/bench_*.py` remain thin CLIs with identical argparse interfaces.
+  Root cause of the red CI `test` job: the unit bench imported the
+  unpackaged `scripts/` namespace, which is invisible to the console-script
+  `pytest` CI uses (repo root not on `sys.path`) while `python -m pytest`
+  masked it locally.  Adds
+  `tests/architecture/test_scripts_import_boundary.py` (the class of error
+  is now mechanically closed) and allows stdlib `time` in the rendering-lane
+  import allowlist for the pure timing harness.
+  Evidence & A/B reproduction: `docs/audits/FORENSIC_PR40_CI_2026-09-21.md`.
+
 ### Added (session `01a0c460` — tasks 125/129/130/115)
 
 - **Creative op-gap (task-125):** six pure Level-B pack operations —
