@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T11:20:10Z",
+  "updated_at": "2026-09-21T11:52:05Z",
   "notes": [
     "This file is the machine-readable task/claim registry for multi-agent work on this repository.",
     "It is the shared coordination channel between agents working in SEPARATE sandboxes.",
@@ -74,33 +74,92 @@
     {
       "task": "feature-wiring-batch",
       "zone": "feature-wiring",
-      "agent_branch": "arena/01a0c3aa-nexus-ai-agent",
-      "claimed_at": "2026-09-21T11:20:10Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
-      "status": "active",
+      "status": "done",
       "gates_owner": false,
       "exclusive_paths": [
         "src/nexus_ai_agent/bot/handlers.py",
         "src/nexus_ai_agent/features/"
       ],
       "scope": "Wire dead engines (features/tools.py, WordleFA, NumberGuess, QuickPoll, ReferralEngine.process_referral, ForceJoinManager bot injection, AnonymousChatManager bot injection) to live Telegram handlers",
-      "note": ""
+      "note": "",
+      "delivered": [
+        "features/tools.py wired: /calc /convert /tr /remind (ReminderSystem really fires)",
+        "features/games.py wired: /wordle /guess_* /poll /quiz /leaderboard via routed_message_handler",
+        "ReferralEngine.process_referral wired to /start ref_<code>; dead second /start handler removed",
+        "GamificationEngine wired: /daily /xp_leaderboard /achievements (+ first-claim bug fixed)",
+        "AnonymousChatManager gets the bot; anon messages are forwarded ahead of the AI lane"
+      ],
+      "evidence": "tests/unit/test_wired_commands.py (28 tests)"
     },
     {
       "task": "P0-security-code-batch",
       "zone": "core-security",
-      "agent_branch": "arena/01a0c3aa-nexus-ai-agent",
-      "claimed_at": "2026-09-21T11:20:10Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
-      "status": "active",
-      "gates_owner": true,
+      "status": "done",
+      "gates_owner": false,
       "exclusive_paths": [
         "src/nexus_ai_agent/bot/handlers.py",
         "src/nexus_ai_agent/bot/middleware.py",
         "src/nexus_ai_agent/api/",
         "src/nexus_ai_agent/core/"
       ],
-      "scope": "Deliver the code half of P0-security-batch that PR#30 documented but did not ship: single choke-point bot access gate (auth + rate limit for every update), PII removal on /api/dashboard/*, path-traversal containment for /cloud and /download, fail-closed force-join membership check + the 'enabled is True' query bug."
+      "scope": "Deliver the code half of P0-security-batch that PR#30 documented but did not ship: single choke-point bot access gate (auth + rate limit for every update), PII removal on /api/dashboard/*, path-traversal containment for /cloud and /download, fail-closed force-join membership check + the 'enabled is True' query bug.",
+      "delivered": [
+        "bot/middleware.py: BotAccessGate + RateLimiter bound + command_name",
+        "bot/app.py: build_access_gate_handler registered in PTB group -1",
+        "api/dashboard.py: {id, display} only, clamped limit, optional bearer token",
+        "core/paths.py: sanitize_file_name / safe_local_path / safe_remote_key",
+        "features/force_join.py: fail-closed membership + 'enabled is True' query bug",
+        "storage/db.py: get_session() now honours settings.db_path",
+        "bot/handlers.py: 6x AsyncSession.exec() crashes fixed (/myfiles /download /language _upsert_*)"
+      ],
+      "evidence": "tests/unit/test_access_gate.py, test_dashboard_privacy.py, test_safe_paths.py, test_force_join_gate.py"
+    },
+    {
+      "task": "P0-memory-consent-batch",
+      "zone": "feature-wiring",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "queued",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/features/ai_memory.py"
+      ],
+      "scope": "Audit P0-7/P0-8/P0-9: AIMemoryEngine off by default behind an opt-in flag (today every free-text message is sent to Gemini for personal-data extraction with no consent and an unreferenced asyncio.create_task); single-source the engines from bot_data so ConversationStore and GeminiRequestQueue are actually on the /ai path; wire LongTermMemory.store or drop the vector-memory claim."
+    },
+    {
+      "task": "stub-command-truth-batch",
+      "zone": "feature-wiring",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "queued",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/features/"
+      ],
+      "scope": "Implement or remove the stubs listed in the README 'Command status' table: /post /schedule /ban /unban /stats /welcome /pin /vision /newchat /warn /mute /unmute /reputation /docs /doc_delete /chat_with_doc /story_style /storage /model. ModerationEngine and AdvancedRAGEngine already exist and are unwired. features/onboarding.py still has no caller at all."
+    },
+    {
+      "task": "handlers-decomposition-batch",
+      "zone": "core-security",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "queued",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/"
+      ],
+      "scope": "bot/handlers.py is 1,947 lines of nested closures and grew further in v3.13.0. Split by domain the way slideshow_handlers/tool_handlers already are, move the synchronous feature engines behind asyncio.to_thread, and add pytest-cov with a gate on creative/ storage/ core/. Also split pyproject extras into [rag]/[local-llm]."
     }
   ],
   "deferred_log": [

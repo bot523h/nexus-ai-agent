@@ -272,6 +272,31 @@ make run
 
 ---
 
+## Command status — what actually runs
+
+Honesty rule for this repo: a command is **real** only when its callback reaches
+an engine, a database row or an external API. Everything else is listed here as a
+stub instead of being advertised above. Verified against `bot/handlers.py` on
+v3.13.0 (`tests/unit/test_wired_commands.py` fails if a wired command regresses).
+
+| Status | Commands |
+|---|---|
+| ✅ **Real (wired + tested)** | `/ai` `/ask` `/code` `/translate` `/summarize` · `/image` `/imagine` `/slideshow` · `/tts` `/stt` · `/cloud` `/myfiles` `/download` `/cloud_status` · `/referral` `/referral_board` and the `/start ref_<code>` deep link · `/quiz` `/leaderboard` `/guess_start` `/guess_stop` `/wordle` `/wordle_stop` `/poll` · `/remind` `/tr` `/convert` `/calc` · `/profile` `/daily` `/xp_leaderboard` `/achievements` · `/anon_start` `/anon_stop` `/anon_report` plus in-session message forwarding · `/language` · `/analytics*` `/track` · `/forcejoin_*` · `/personality` `/engagement_*` `/viral_*` `/ad_*` `/mod_on` `/mod_off` `/mod_config` · `/agents` `/myagent` `/memory` `/forget_me` · `/health` `/approve` `/reject` `/version` `/update` · `/story` (queued) |
+| ⚠️ **Stub — replies without doing the work** | `/post` `/schedule` `/ban` `/unban` (channel management, "(simulated)") · `/stats` (hard-coded member counts) · `/welcome` `/pin` · `/vision` (fixed description string) · `/newchat` (clears nothing) · `/warn` `/mute` `/unmute` `/reputation` · `/docs` `/doc_delete` `/chat_with_doc` (demo text; the RAG engine exists but is not attached) · `/story_style` · `/storage` `/model` (no reply at all) |
+
+`/start`, `/help` and `/status` are intentionally static text.
+
+### Access control
+
+Since v3.13.0 every update passes one gate before any handler runs
+(`bot/middleware.py::BotAccessGate`, registered by `bot/app.py` in PTB group
+`-1`). With `NEXUS_OWNER_TELEGRAM_ID` or `NEXUS_ALLOWED_USER_IDS` configured the
+bot is allow-list-only and a stranger gets a refusal instead of reaching `/ai`,
+`/imagine`, `/cloud`, `/tts`, … . Without either variable the bot stays public —
+an unconfigured bot must not lock its own owner out. `/start`, `/help`,
+`/language` and `/forcejoin_status` stay reachable so a refused user can learn
+why.
+
 ## Commands Reference
 
 ### 🤖 AI (v2.0.0)

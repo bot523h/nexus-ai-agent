@@ -39,8 +39,16 @@ worktree-style isolation + a shared task board with leases and stale-lease takeo
 | Task | Zone | Status | Owner |
 |---|---|---|---|
 | `P0-security-batch` | core-security (auth, api, core, docs) | **done** — PR#30 merged (`5e5009a`); shipped protocol files + audit report only, the code half of its scope never landed | released |
-| `P0-security-code-batch` | core-security (auth, api, core, handlers) | active | `arena/01a0c3aa-nexus-ai-agent` (gates owner) |
-| `feature-wiring-batch` | feature-wiring (features/, handlers wiring) | active | `arena/01a0c3aa-nexus-ai-agent` |
+| `P0-security-code-batch` | core-security (auth, api, core, handlers) | **done** — v3.13.0 delivered the code half (`delivered` list in the board) | `arena/01a0c3aa-nexus-ai-agent` |
+| `feature-wiring-batch` | feature-wiring (features/, handlers wiring) | **done** — tools/games/referral/gamification/anon-chat wired | `arena/01a0c3aa-nexus-ai-agent` |
+| `P0-memory-consent-batch` | feature-wiring | queued | unclaimed |
+| `stub-command-truth-batch` | feature-wiring | queued | unclaimed |
+| `handlers-decomposition-batch` | core-security | queued | unclaimed |
+
+**Closing a claim.** `release` is not enough on its own: write what was actually
+delivered into the claim's `delivered` list and point `evidence` at the tests that
+prove it. PR#30 merged with an active lease whose declared scope was never
+committed, and the next agent had to rediscover that by reading the code.
 
 **Orphaned-lease rule (learned 2026-09-21).** A claim whose branch has already been
 merged to `main` is finished even if its lease has not expired — the owning sandbox

@@ -153,9 +153,18 @@ async def root() -> str:
         </div>
 
         <script>
+            // The dashboard API can be locked behind NEXUS_API_DASHBOARD_TOKEN.
+            // The token is never rendered into this page (it is public); the
+            // operator pastes it once and it stays in sessionStorage.
+            function authHeaders() {
+                const token = sessionStorage.getItem('nexus_dashboard_token');
+                return token ? { 'Authorization': 'Bearer ' + token } : {};
+            }
+
             async function loadStats() {
                 try {
-                    const res = await fetch('/api/dashboard/stats');
+                    const res = await fetch('/api/dashboard/stats', { headers: authHeaders() });
+                    if (res.status === 401) { renderTokenPrompt(); return; }
                     const data = await res.json();
                     document.getElementById('total_users').innerText = data.total_users;
                     document.getElementById('total_chats').innerText = data.total_chats;
@@ -167,7 +176,9 @@ async def root() -> str:
 
             async function loadRecentUsers() {
                 try {
-                    const res = await fetch('/api/dashboard/recent_users');
+                    const res = await fetch('/api/dashboard/recent_users',
+                                            { headers: authHeaders() });
+                    if (res.status === 401) { renderTokenPrompt(); return; }
                     const data = await res.json();
                     const container = document.getElementById('recent_users');
                     if (data.length === 0) {
@@ -176,14 +187,12 @@ async def root() -> str:
                     }
                     let html = '<ul class="divide-y divide-slate-700">';
                     data.forEach(u => {
-                        const name = u.username || 'بدون نام';
+                        // Only a masked label is served: user identifiers
+                        // and raw usernames never leave the API.
                         html += `
                             <li class="py-3 flex justify-between items-center">
                                 <div>
-                                    <span class="font-bold text-blue-300">${name}</span>
-                                    <span class="text-slate-500 text-sm ml-2">
-                             ID: ${u.telegram_id}
-                         </span>
+                                    <span class="font-bold text-blue-300">${u.display}</span>
                                 </div>
                                 <span class="bg-slate-700 px-2 py-1 rounded text-xs text-slate-300">
                                     User #${u.id}
@@ -194,6 +203,28 @@ async def root() -> str:
                     html += '</ul>';
                     container.innerHTML = html;
                 } catch (e) { console.error(e); }
+            }
+
+            function renderTokenPrompt() {
+                const container = document.getElementById('recent_users');
+                const input = '<input id="dash_token" type="password" ' +
+                    'class="bg-slate-900 border border-slate-700 rounded ' +
+                    'px-3 py-2 text-sm w-2/3" />';
+                const button = '<button onclick="saveToken()" ' +
+                    'class="bg-blue-600 hover:bg-blue-500 px-3 py-2 ' +
+                    'rounded text-sm">ورود</button>';
+                container.innerHTML =
+                    '<p class="text-slate-400 mb-2">' +
+                    'داشبورد قفل است. توکن داشبورد را وارد کنید.</p>' +
+                    input + button;
+            }
+
+            function saveToken() {
+                const value = document.getElementById('dash_token').value.trim();
+                if (!value) { return; }
+                sessionStorage.setItem('nexus_dashboard_token', value);
+                loadStats();
+                loadRecentUsers();
             }
 
             loadStats();

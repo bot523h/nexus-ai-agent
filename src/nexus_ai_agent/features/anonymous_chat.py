@@ -98,6 +98,14 @@ class AnonymousChatManager:
     # Messaging
     # ------------------------------------------------------------------
 
+    def is_active(self, user_id: int) -> bool:
+        """True when *user_id* is currently paired with a partner.
+
+        The message router needs this to decide whether a plain text message
+        belongs to an anonymous conversation or to the AI.
+        """
+        return user_id in self._active
+
     async def send_anon_message(self, user_id: int, text: str) -> bool:
         """Forward *text* to the partner without revealing identity."""
         partner_id = self._active.get(user_id)

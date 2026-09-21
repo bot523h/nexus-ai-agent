@@ -284,6 +284,14 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="NEXUS_API_HMAC_KEY",
     )
+    # Optional bearer token for the read-only dashboard router
+    # (/api/dashboard/*). Unset (default) keeps the router open but it only
+    # serves aggregate counts and masked labels — no telegram_id, no username.
+    # When set, every request needs "Authorization: Bearer <token>".
+    api_dashboard_token: str | None = Field(
+        default=None,
+        validation_alias="NEXUS_API_DASHBOARD_TOKEN",
+    )
     creative_gemini_api_key: str | None = Field(
         default=None,
         validation_alias="NEXUS_CREATIVE_GEMINI_API_KEY",

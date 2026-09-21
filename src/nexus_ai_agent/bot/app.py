@@ -167,6 +167,50 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
     return engines
 
 
+#: PTB group the access gate is registered in. It must run *before* the
+#: handler group (0) that holds every command, so a refused update never
+#: reaches a command callback.
+ACCESS_GATE_GROUP = -1
+
+
+def build_access_gate_handler(settings: Settings) -> Any:
+    """Build the single PTB handler that authorizes *every* incoming update.
+
+    Lives here rather than in ``bot/middleware.py`` because ``middleware.py``
+    must stay ``telegram``-free (see its module docstring) and this file is one
+    of the grandfathered telegram-import sites.
+
+    The gate itself is :class:`BotAccessGate`; this wrapper only translates a
+    refusal into PTB's documented "stop processing this update" signal.
+    """
+    from telegram import Update
+    from telegram.ext import ApplicationHandlerStop, ContextTypes, TypeHandler
+
+    from .middleware import DENIED_MESSAGE, AuthMiddleware, BotAccessGate
+
+    gate = BotAccessGate(AuthMiddleware(settings.allowed_user_ids, settings.owner_telegram_id))
+
+    async def _access_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        decision = gate.decide(update)
+        if decision.allowed:
+            return
+        # Never let a failed notification turn into an unhandled error: the
+        # update is refused either way.
+        try:
+            query = update.callback_query
+            if query is not None:
+                await query.answer(text="⛔ Access denied", show_alert=True)
+            else:
+                message = update.effective_message
+                if message is not None and hasattr(message, "reply_text"):
+                    await message.reply_text(DENIED_MESSAGE)
+        except Exception:  # noqa: BLE001 - the refusal must win over delivery
+            pass
+        raise ApplicationHandlerStop
+
+    return TypeHandler(Update, _access_gate)
+
+
 def build_application(
     settings: Settings,
     graph: Any,
@@ -198,6 +242,9 @@ def build_application(
     # Store engines in bot_data for handler access
     for key, value in engines.items():
         application.bot_data[key] = value
+
+    # Single authorization choke point, ahead of every command handler.
+    application.add_handler(build_access_gate_handler(settings), group=ACCESS_GATE_GROUP)
 
     for handler in build_handlers(
         graph,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,6 +46,12 @@ from nexus_ai_agent.bot.slideshow_handlers import slideshow_cmd, slideshow_photo
 from nexus_ai_agent.bot.tool_handlers import news_cmd, rate_cmd, weather_cmd, youtube_cmd
 from nexus_ai_agent.bot.update_handlers import update_cmd, version_cmd
 from nexus_ai_agent.config.settings import Settings
+from nexus_ai_agent.core.paths import (
+    UnsafeFileName,
+    safe_local_path,
+    safe_remote_key,
+    sanitize_file_name,
+)
 from nexus_ai_agent.creative.image_gen import ImageGenerationError, ImageRequest
 
 # Feature managers — lazy-initialised inside build_handlers
@@ -54,8 +61,8 @@ from nexus_ai_agent.features.ai_memory import AIMemoryEngine
 from nexus_ai_agent.features.analytics import AnalyticsEngine
 from nexus_ai_agent.features.anonymous_chat import AnonymousChatManager
 from nexus_ai_agent.features.engagement import EngagementEngine
-from nexus_ai_agent.features.force_join import ForceJoinManager
-from nexus_ai_agent.features.games import QuizGame
+from nexus_ai_agent.features.force_join import DEFAULT_CHANNEL, ForceJoinManager
+from nexus_ai_agent.features.games import NumberGuess, QuickPoll, QuizGame, WordleFA
 from nexus_ai_agent.features.gamification import GamificationEngine
 from nexus_ai_agent.features.image_gen import ImageGenEngine
 from nexus_ai_agent.features.moderation import ModerationEngine
@@ -64,6 +71,12 @@ from nexus_ai_agent.features.personality import PersonalityEngine
 from nexus_ai_agent.features.referral import ReferralEngine
 from nexus_ai_agent.features.speech import SpeechEngine
 from nexus_ai_agent.features.summarizer import SummarizerEngine
+from nexus_ai_agent.features.tools import (
+    Calculator,
+    ReminderSystem,
+    Translator,
+    UnitConverter,
+)
 from nexus_ai_agent.features.viral_engine import ViralEngine
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.orchestration.state import NexusState
@@ -81,11 +94,18 @@ from .middleware import AuthMiddleware
 logger = get_logger(__name__)
 SessionFactory = Callable[[], Any]
 
+#: ``/tr`` accepts an optional two-letter target language as its first token.
+_LANG_CODE_RE = re.compile(r"[A-Za-z]{2}")
+#: Any Arabic-script character → assume the source language is Persian.
+_PERSIAN_RE = re.compile(r"[\u0600-\u06ff]")
+#: XP handed to the referred user when a deep link is honoured.
+_REFERRAL_XP = 50
+
 
 async def _upsert_user(db_session_factory: SessionFactory, tg_user: Any) -> User:
     async with db_session_factory() as session:
         stmt = select(User).where(User.telegram_id == int(tg_user.id))
-        existing = (await session.exec(stmt)).first()
+        existing = (await session.execute(stmt)).scalars().first()
         if existing:
             existing.username = tg_user.username or existing.username or ""
             await session.commit()
@@ -100,7 +120,7 @@ async def _upsert_user(db_session_factory: SessionFactory, tg_user: Any) -> User
 async def _upsert_chat(db_session_factory: SessionFactory, chat_id: int, thread_id: str) -> Chat:
     async with db_session_factory() as session:
         stmt = select(Chat).where(Chat.chat_id == chat_id)
-        existing = (await session.exec(stmt)).first()
+        existing = (await session.execute(stmt)).scalars().first()
         if existing:
             existing.thread_id = thread_id
             await session.commit()
@@ -178,6 +198,26 @@ def build_handlers(
         internxt_token=settings.internxt_token,
     )
     referral_engine = ReferralEngine(db_path=settings.db_path)
+
+    # ── Utility / game engines ────────────────────────────────────
+    # One instance per process: they hold per-user game state, so building one
+    # per command (as /quiz used to) silently threw every answer away.
+    calculator = Calculator()
+    translator = Translator()
+    converter = UnitConverter()
+    reminders = ReminderSystem()
+    quiz = QuizGame()
+    wordle = WordleFA()
+    number_guess = NumberGuess()
+    quick_poll = QuickPoll()
+
+    def _bind_bot(context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Give stateful engines the live bot the moment one is reachable."""
+        application = getattr(context, "application", None)
+        bot = getattr(application, "bot", None)
+        if bot is not None and reminders.bot is None:
+            reminders.bot = bot
+
     # v2.0.0 specific engines
     gemini_engine: GeminiEngine | None = None
     summarizer_engine: SummarizerEngine | None = None
@@ -192,8 +232,65 @@ def build_handlers(
         )
 
     # ── Command Handlers ──────────────────────────────────────────
+    async def _record_referral(update: Update, start_param: str) -> str | None:
+        """Book a referral from a ``/start ref_<code>`` deep link.
+
+        Returns the reply to send, or ``None`` when nothing should be said
+        (invalid/unknown code, self-referral, already referred, or a failure —
+        the welcome message is a better answer than an error in those cases).
+        """
+        user_id = _user_id(update)
+        if user_id is None:
+            return None
+        chat_id = _chat_id(update)
+        try:
+            # Sync SQLite inside the engine → keep the event loop free.
+            outcome = await asyncio.to_thread(
+                referral_engine.process_referral, user_id, start_param
+            )
+        except Exception:  # noqa: BLE001 - a broken reward must not kill /start
+            logger.exception("referral_processing_failed", user_id=user_id)
+            return None
+        if not outcome.get("success"):
+            logger.info("referral_rejected", user_id=user_id, error=str(outcome.get("error")))
+            return None
+        # Only the referee's XP can be booked here: UserXP is keyed by
+        # (user_id, chat_id) and the referrer's chat is unknown at deep-link
+        # time. The referrer's progress still advances in the referral table.
+        try:
+            await asyncio.to_thread(GamificationEngine.add_xp, user_id, chat_id, _REFERRAL_XP)
+        except Exception:  # noqa: BLE001
+            logger.exception("referral_xp_failed", user_id=user_id)
+        lines = [
+            "👋 خوش آمدید!",
+            "",
+            f"🎁 دعوت شما ثبت شد و {_REFERRAL_XP} XP به حساب شما اضافه شد.",
+        ]
+        reward = outcome.get("current_reward") or {}
+        if reward:
+            lines.append(f"🏅 جایزه فعلی دعوت‌کننده: {reward.get('title', '')}")
+        upcoming = outcome.get("next_reward") or {}
+        if upcoming:
+            lines.append(
+                f"⏭️ جایزه بعدی دعوت‌کننده در {upcoming.get('count')} دعوت: "
+                f"{upcoming.get('title', '')}"
+            )
+        return "\n".join(lines)
+
     async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Welcome message."""
+        """Welcome message, and the referral deep link ``/start ref_<code>``.
+
+        This used to be two ``CommandHandler("start", …)`` registrations; in
+        PTB only the first handler in a group ever sees an update, so the
+        second one was unreachable and ``process_referral`` was never called
+        from anywhere in the codebase.  Both now live here.
+        """
+        args = list(context.args or [])
+        if args and args[0].startswith("ref_"):
+            outcome = await _record_referral(update, args[0])
+            if outcome is not None:
+                await _reply(update, outcome)
+                return
         await _reply(
             update,
             "👋 Welcome to NEXUS AI Agent!\n\n"
@@ -289,25 +386,37 @@ def build_handlers(
     # ── Phase 2: Anonymous Chat ────────────────────────────────────
     anon_mgr = AnonymousChatManager()
 
+    def _bind_anon_bot(context: ContextTypes.DEFAULT_TYPE) -> AnonymousChatManager:
+        """Give the anonymous-chat manager the live bot.
+
+        Every delivery path in ``AnonymousChatManager`` ends in
+        ``bot.send_message``; constructed without one, a successful pairing
+        could not even be announced, and no message could ever be forwarded.
+        """
+        application = getattr(context, "application", None)
+        bot = getattr(application, "bot", None)
+        if bot is not None:
+            anon_mgr.bot = bot
+        return anon_mgr
+
     async def anon_start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user_id = _user_id(update) or 0
-        result = await anon_mgr.join_queue(user_id)
+        result = await _bind_anon_bot(context).join_queue(user_id)
         await _reply(update, result)
 
     async def anon_stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user_id = _user_id(update) or 0
-        result = await anon_mgr.leave_chat(user_id)
+        result = await _bind_anon_bot(context).leave_chat(user_id)
         await _reply(update, result)
 
     async def anon_report_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user_id = _user_id(update) or 0
-        result = await anon_mgr.report_user(user_id, settings.owner_telegram_id)
+        result = await _bind_anon_bot(context).report_user(user_id, settings.owner_telegram_id)
         await _reply(update, result)
 
     # ── Phase 3: Games ─────────────────────────────────────────────
     async def quiz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user_id = _user_id(update) or 0
-        quiz = QuizGame()
         q = quiz.get_question(user_id)
         if q is None:
             await _reply(update, "❓ No question available right now.")
@@ -324,46 +433,210 @@ def build_handlers(
         )
 
     async def quiz_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Grade the answer for real and persist the score."""
         query = update.callback_query
-        if query:
+        if query is None:
+            return
+        try:
+            choice = int((query.data or "").split("_", 1)[1])
+        except (IndexError, ValueError):
             await query.answer()
-            await query.edit_message_text("✅ Answer received! (Simulated)")
+            return
+        user_id = int(query.from_user.id) if query.from_user else 0
+        correct = quiz.check_answer(user_id, choice)
+        quiz.clear(user_id)
+        score = quiz.update_score(user_id, _chat_id(update), correct)
+        await query.answer(text="✅ درست!" if correct else "❌ اشتباه")
+        verdict = "✅ پاسخ درست بود!" if correct else "❌ پاسخ اشتباه بود."
+        await query.edit_message_text(f"{verdict}\n🏆 امتیاز شما: {score}")
 
     async def leaderboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await _reply(update, "🏆 **Leaderboard**\n\n1. UserA: 1500 XP\n2. UserB: 1200 XP")
+        """Real quiz leaderboard for this chat (was a hard-coded pair of rows)."""
+        rows = quiz.get_leaderboard(_chat_id(update), limit=10)
+        if not rows:
+            await _reply(update, "🏆 هنوز کسی در این چت پاسخ نداده است. /quiz را امتحان کنید.")
+            return
+        medals = ["🥇", "🥈", "🥉"]
+        lines = ["🏆 **جدول امتیازات کوییز**\n"]
+        for position, row in enumerate(rows):
+            medal = medals[position] if position < 3 else f"{position + 1}."
+            lines.append(
+                f"{medal} کاربر `{row['user_id']}` — {row['score']} درست از {row['answered']}"
+            )
+        await _reply(update, "\n".join(lines), parse_mode="Markdown")
 
     async def guess_start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await _reply(update, "🔢 Number Guessing started! Guess between 1-100.")
+        user_id = _user_id(update) or 0
+        await _reply(update, number_guess.start(user_id))
 
     async def guess_stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await _reply(update, "🔢 Number Guessing stopped.")
+        user_id = _user_id(update) or 0
+        await _reply(update, number_guess.stop(user_id))
 
     async def wordle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await _reply(update, "🔠 Wordle game started! Type a 5-letter word.")
+        user_id = _user_id(update) or 0
+        await _reply(update, wordle.start(user_id))
 
     async def wordle_stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await _reply(update, "🔠 Wordle stopped.")
+        user_id = _user_id(update) or 0
+        await _reply(update, wordle.stop(user_id))
 
     async def poll_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await _reply(update, "📊 Quick Poll: What is your favorite AI model?")
+        """Create a real inline poll: /poll <question> | <option> | <option> …"""
+        raw = " ".join(context.args or [])
+        parts = [part.strip() for part in raw.split("|") if part.strip()]
+        if len(parts) < 3:
+            await _reply(
+                update,
+                "📊 نظرسنجی سریع\n\n"
+                "استفاده: /poll <سوال> | <گزینه ۱> | <گزینه ۲> […]\n"
+                "مثال: /poll بهترین مدل AI؟ | Gemini | GPT | Claude",
+            )
+            return
+        question, options = parts[0], parts[1:6]
+        poll_id = quick_poll.create(question, options)
+        keyboard = [
+            [InlineKeyboardButton(option, callback_data=f"poll:{poll_id}:{index}")]
+            for index, option in enumerate(options)
+        ]
+        keyboard.append([InlineKeyboardButton("📊 نتایج", callback_data=f"poll:{poll_id}:r")])
+        await _reply(
+            update,
+            f"📊 {question}",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
 
     async def poll_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Count a real vote (one per user per poll) and show live results."""
         query = update.callback_query
-        if query:
-            await query.answer("Vote counted!")
+        if query is None:
+            return
+        parts = (query.data or "").split(":")
+        if len(parts) != 3:
+            await query.answer()
+            return
+        poll_id, action = parts[1], parts[2]
+        user_id = int(query.from_user.id) if query.from_user else 0
+        if action == "r":
+            results = quick_poll.get_results(poll_id)
+            await query.answer()
+            if results is not None:
+                await query.edit_message_text(results)
+            return
+        try:
+            option_index = int(action)
+        except ValueError:
+            await query.answer()
+            return
+        if not quick_poll.vote(poll_id, option_index, user_id):
+            await query.answer(
+                text="⚠️ رأی ثبت نشد: یا قبلاً رأی داده‌اید یا گزینه نامعتبر است.",
+                show_alert=True,
+            )
+            return
+        results = quick_poll.get_results(poll_id) or ""
+        await query.answer(text="✅ رأی شما ثبت شد")
+        await query.edit_message_text(results)
+
+    async def routed_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Send plain text to the lane that owns it: anon chat > game > AI.
+
+        Registered *instead of* the catch-all ``on_message``: PTB only runs the
+        first matching handler inside a group, so this must delegate explicitly
+        or every normal message would be swallowed by the first lane.
+        """
+        user_id = _user_id(update)
+        message = _message(update)
+        text = ((message.text if message else "") or "").strip()
+        if user_id is not None and text:
+            # An anonymous conversation owns the message: routing it to the AI
+            # as well would leak one partner's words to a third party.
+            if anon_mgr.is_active(user_id):
+                forwarded = await _bind_anon_bot(context).send_anon_message(user_id, text)
+                if not forwarded:
+                    await _reply(update, "❌ ارسال پیام ناموفق بود. /anon_stop را بزنید.")
+                return
+            if number_guess.is_active(user_id):
+                normalized = text.replace("٫", "").replace(",", "")
+                if normalized.lstrip("-").isdigit():
+                    await _reply(update, number_guess.guess(user_id, int(normalized)))
+                    return
+            elif wordle.is_active(user_id):
+                await _reply(update, wordle.guess(user_id, text))
+                return
+        await on_message(update, context)
 
     # ── Phase 4: Utility Tools ─────────────────────────────────────
     async def remind_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await _reply(update, "⏰ Reminder set for 30 minutes.")
+        """Persist a real reminder: /remind 30m <text>."""
+        _bind_bot(context)
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        args = list(context.args or [])
+        if len(args) < 2:
+            await _reply(
+                update,
+                "⏰ یادآوری\n\n"
+                "استفاده: /remind <زمان> <متن>\n"
+                "زمان: 30m دقیقه · 2h ساعت · 1d روز\n"
+                "مثال: /remind 30m تماس با مادر",
+            )
+            return
+        result = await reminders.set_reminder(
+            user_id, _chat_id(update), args[0], " ".join(args[1:])
+        )
+        await _reply(update, result)
 
     async def tr_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await _reply(update, "🌐 Translated: Hello -> سلام")
+        """Translate for real: /tr <text> or /tr <target-lang> <text>."""
+        args = list(context.args or [])
+        if not args:
+            await _reply(
+                update,
+                "🌐 ترجمه\n\n"
+                "استفاده: /tr <متن>  یا  /tr en <متن>\n"
+                "زبان مقصد پیش‌فرض: en · زبان مبدأ به‌صورت خودکار تشخیص داده می‌شود.",
+            )
+            return
+        target = "en"
+        if len(args) > 1 and _LANG_CODE_RE.fullmatch(args[0]):
+            target = args[0].lower()
+            args = args[1:]
+        text = " ".join(args)
+        source = "fa" if _PERSIAN_RE.search(text) else "en"
+        await _reply(update, f"🌐 {await translator.translate(text, source=source, target=target)}")
 
     async def convert_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await _reply(update, "💱 100 USD = 6,000,000 IRT")
+        """/convert <amount> <from> <to> — real currency/metric conversion."""
+        args = list(context.args or [])
+        if len(args) < 3:
+            await _reply(
+                update,
+                "💱 تبدیل واحد\n\n"
+                "استفاده: /convert <مقدار> <مبدأ> <مقصد>\n"
+                "مثال: /convert 100 usd irt · /convert 2 km m · /convert 30 c f",
+            )
+            return
+        try:
+            amount = float(args[0])
+        except ValueError:
+            await _reply(update, "❌ مقدار عددی نامعتبر است. مثال: /convert 100 usd irt")
+            return
+        await _reply(update, converter.convert(amount, args[1], args[2]))
 
     async def calc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await _reply(update, "🧮 Result: 2 + 2 = 4")
+        """/calc <expression> — evaluated by the sandboxed calculator."""
+        expression = " ".join(context.args or []).strip()
+        if not expression:
+            await _reply(
+                update,
+                "🧮 ماشین‌حساب\n\n"
+                "استفاده: /calc <عبارت>\n"
+                "مثال: /calc (2+3)*4 · /calc sqrt(144) · /calc 2^10",
+            )
+            return
+        await _reply(update, calculator.evaluate(expression))
 
     # ── v2.0.0: AI Commands ────────────────────────────────────────
     async def ai_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -614,23 +887,29 @@ def build_handlers(
         try:
             file = await doc.get_file()
             file_bytes = await file.download_as_bytearray()
-            # Save to temp file for cloud upload
+            # Save to temp file for cloud upload.  The file name comes from the
+            # client, so it is reduced to a base name and written under a
+            # random token: "../../x" must not be able to leave data/cloud_tmp.
             from pathlib import Path as _Path
 
             tmp_dir = _Path("data/cloud_tmp")
             tmp_dir.mkdir(parents=True, exist_ok=True)
-            tmp_path = tmp_dir / (doc.file_name or "unnamed")
-            tmp_path.write_bytes(bytes(file_bytes))
+            try:
+                staged = safe_local_path(tmp_dir, doc.file_name or "unnamed")
+            except UnsafeFileName:
+                await _reply(update, "❌ نام فایل نامعتبر است و قابل ذخیره نیست.")
+                return
+            staged.path.write_bytes(bytes(file_bytes))
             result = await unified_cloud.upload_file(
-                tmp_path,
-                remote_key=doc.file_name or "unnamed",
+                staged.path,
+                remote_key=safe_remote_key(staged.display_name),
             )
-            tmp_path.unlink(missing_ok=True)
+            staged.path.unlink(missing_ok=True)
             if result.get("success"):
                 async with db_session_factory() as session:
                     cloud_file = CloudFile(
                         user_id=user_id,
-                        file_name=doc.file_name or "unnamed",
+                        file_name=staged.display_name,
                         provider=result.get("provider", "unknown"),
                         remote_path=result.get("remote_path", ""),
                         file_size=len(file_bytes),
@@ -639,7 +918,7 @@ def build_handlers(
                     await session.commit()
                 await _reply(
                     update,
-                    f"☁️ Uploaded!\n📁 {doc.file_name}\n"
+                    f"☁️ Uploaded!\n📁 {staged.display_name}\n"
                     f"📦 {result.get('provider', 'N/A')}\n"
                     f"📊 {len(file_bytes) / 1024:.1f}KB",
                 )
@@ -659,7 +938,7 @@ def build_handlers(
                 .where(CloudFile.user_id == user_id)
                 .order_by(desc(CloudFile.created_at))
             )
-            files = (await session.exec(stmt)).all()
+            files = (await session.execute(stmt)).scalars().all()
         if not files:
             await _reply(update, "📁 No files. Reply to file → /cloud to upload.")
             return
@@ -679,22 +958,30 @@ def build_handlers(
         if not filename:
             await _reply(update, "❌ Usage: /download <filename>")
             return
+        # The argument is attacker-controlled and is used both as a DB lookup
+        # key and as a local file name — sanitize before either use.
+        try:
+            display_name = sanitize_file_name(filename)
+        except UnsafeFileName:
+            await _reply(update, "❌ نام فایل نامعتبر است.")
+            return
         async with db_session_factory() as session:
             stmt = select(CloudFile).where(
-                CloudFile.user_id == user_id, CloudFile.file_name == filename
+                CloudFile.user_id == user_id, CloudFile.file_name == display_name
             )
-            cloud_file = (await session.exec(stmt)).first()
+            cloud_file = (await session.execute(stmt)).scalars().first()
         if cloud_file is None:
-            await _reply(update, f"❌ File '{filename}' not found.")
+            await _reply(update, f"❌ File '{display_name}' not found.")
             return
         from pathlib import Path as _Path2
 
         dl_dir = _Path2("data/cloud_downloads")
         dl_dir.mkdir(parents=True, exist_ok=True)
-        local_path = dl_dir / filename
+        # Random on-disk name: never let the stored/typed name decide the path.
+        staged = safe_local_path(dl_dir, display_name)
         result = await unified_cloud.download_file(
-            cloud_file.remote_path or filename,
-            local_path,
+            cloud_file.remote_path or display_name,
+            staged.path,
         )
         if result.get("error"):
             await _reply(update, f"❌ {result['error']}")
@@ -705,16 +992,21 @@ def build_handlers(
             if msg is not None:
                 await msg.reply_document(
                     document=io.BytesIO(result["data"]),
-                    filename=filename,
+                    filename=display_name,
                 )
-        elif local_path.exists():
+        elif staged.path.exists():
+            import io
+
+            # Read then delete: keeps the file handle closed (the previous
+            # open(..., "rb") was handed to PTB and never closed).
+            payload = staged.path.read_bytes()
+            staged.path.unlink(missing_ok=True)
             msg = _message(update)
             if msg is not None:
                 await msg.reply_document(
-                    document=open(local_path, "rb"),
-                    filename=filename,
+                    document=io.BytesIO(payload),
+                    filename=display_name,
                 )
-            local_path.unlink(missing_ok=True)
         else:
             await _reply(update, "❌ Download failed.")
 
@@ -759,7 +1051,7 @@ def build_handlers(
                 keyboard.append(row)
             async with db_session_factory() as session:
                 stmt = select(UserLanguage).where(UserLanguage.user_id == user_id)
-                ul = (await session.exec(stmt)).first()
+                ul = (await session.execute(stmt)).scalars().first()
             current = ul.language if ul else "en"
             await _reply(
                 update,
@@ -779,7 +1071,7 @@ def build_handlers(
             return
         async with db_session_factory() as session:
             stmt = select(UserLanguage).where(UserLanguage.user_id == user_id)
-            ul = (await session.exec(stmt)).first()
+            ul = (await session.execute(stmt)).scalars().first()
             if ul:
                 ul.language = lang
                 ul.updated_at = datetime.now(timezone.utc)
@@ -985,6 +1277,19 @@ def build_handlers(
     # ── Phase 8: Force Join ────────────────────────────────────────
     force_join_mgr = ForceJoinManager()
 
+    def _force_join(context: ContextTypes.DEFAULT_TYPE) -> ForceJoinManager:
+        """Bind the live bot before any membership check.
+
+        Constructed without a bot the manager cannot verify anything, and
+        until v3.13.0 it answered "member" in that case — so the verify button
+        accepted everybody.
+        """
+        application = getattr(context, "application", None)
+        bot = getattr(application, "bot", None)
+        if bot is not None:
+            force_join_mgr.bot = bot
+        return force_join_mgr
+
     async def forcejoin_on_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Enable force-join for the current chat (owner only)."""
         if not is_owner(update.effective_user.id if update.effective_user else 0):
@@ -1037,12 +1342,19 @@ def build_handlers(
             return
         await query.answer()
         user_id = query.from_user.id
-        is_member = await force_join_mgr.check_membership(user_id)
+        manager = _force_join(context)
+        # Verify against the channel this chat actually configured, not the
+        # built-in default.
+        config = ForceJoinManager.get_config(_chat_id(update))
+        channel = (config.channel_username if config else "") or DEFAULT_CHANNEL
+        manager.invalidate_cache(user_id)
+        is_member = await manager.check_membership(user_id, channel)
         if is_member:
-            force_join_mgr.invalidate_cache(user_id)
             await query.edit_message_text("✅ عضویت شما تأیید شد! می‌تونید از ربات استفاده کنید.")
         else:
-            await query.edit_message_text("❌ شما هنوز در کانال عضو نشدید. لطفاً اول عضو بشید.")
+            await query.edit_message_text(
+                "❌ عضویت شما تأیید نشد. لطفاً ابتدا در کانال عضو شوید و دوباره تلاش کنید."
+            )
 
     # ── Phase 9: Personality Engine ────────────────────────────────
     async def personality_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1216,16 +1528,49 @@ def build_handlers(
         await _reply(update, f"👤 Profile: Level {profile['level']} ({profile['title']})")
 
     async def daily_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Claim daily reward."""
-        await _reply(update, "🎁 Daily reward claimed: +50 XP!")
+        """Claim the real daily reward (streak-aware), not a fixed "+50 XP"."""
+        user_id = _user_id(update) or 0
+        chat_id = _chat_id(update)
+        result = await asyncio.to_thread(GamificationEngine.claim_daily, user_id, chat_id)
+        if not result.get("claimed"):
+            hours = int(result.get("remaining_hours") or 0)
+            await _reply(update, f"⏳ جایزه روزانه را قبلاً گرفته‌اید. ~{hours} ساعت دیگر برگردید.")
+            return
+        lines = [
+            f"🎁 جایزه روزانه دریافت شد: +{result.get('total_reward', 0)} XP",
+            f"🔥 streak: {result.get('streak', 1)} روز"
+            f" (پاداش streak: +{result.get('streak_bonus', 0)} XP)",
+        ]
+        if result.get("leveled_up"):
+            lines.append(f"⬆️ سطح جدید: {result.get('new_level')}")
+        await _reply(update, "\n".join(lines))
 
     async def xp_leaderboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Show XP leaderboard."""
-        await _reply(update, "🏆 **XP Leaderboard**\n\n1. UserX: 5000 XP")
+        """Real XP leaderboard for this chat."""
+        rows = await asyncio.to_thread(GamificationEngine.get_leaderboard, _chat_id(update), 10)
+        if not rows:
+            await _reply(update, "🏆 هنوز امتیازی در این چت ثبت نشده است. /daily را بزنید.")
+            return
+        medals = ["🥇", "🥈", "🥉"]
+        lines = ["🏆 **جدول XP**\n"]
+        for position, row in enumerate(rows):
+            medal = medals[position] if position < 3 else f"{position + 1}."
+            lines.append(
+                f"{medal} کاربر `{row['user_id']}` — {row['xp']} XP "
+                f"(سطح {row['level']} · {row['title']})"
+            )
+        await _reply(update, "\n".join(lines), parse_mode="Markdown")
 
     async def achievements_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Show user achievements."""
-        await _reply(update, "🏅 **Achievements**\n\n- First Message\n- 7 Day Streak")
+        """Show the achievements this user actually unlocked."""
+        user_id = _user_id(update) or 0
+        chat_id = _chat_id(update)
+        unlocked = await asyncio.to_thread(GamificationEngine.get_achievements, user_id, chat_id)
+        await _reply(
+            update,
+            "🏅 **دستاوردها**\n\n" + GamificationEngine.format_achievements(unlocked),
+            parse_mode="Markdown",
+        )
 
     # ── Phase 15: Analytics ────────────────────────────────────────
     async def analytics_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1472,8 +1817,9 @@ def build_handlers(
         CallbackQueryHandler(agent_callback_handler, pattern=r"^agent_"),
         CallbackQueryHandler(menu_callback, pattern=r"^menu_referral$"),
         CallbackQueryHandler(menu_callback, pattern=r"^menu_language$"),
-        # ── v2.0.0: Referral deep-link ──
-        CommandHandler("start", start_referral_handler),
+        # Referral deep-link (/start ref_<code>) is handled by the single
+        # "start" CommandHandler above: PTB gives an update to the first
+        # matching handler in a group only, so a second registration was dead.
         # ── Phase 2: RAG (PDF) ──
         CommandHandler("docs", docs_list_cmd),
         CommandHandler("doc_delete", doc_delete_cmd),
@@ -1485,14 +1831,9 @@ def build_handlers(
         # ── Phase 3: AI Story ──
         CommandHandler("story", story_cmd_handler),
         CommandHandler("story_style", story_style_cmd),
-        # ── Catch-all Message Handler ──
-        MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
+        # ── Catch-all: anon chat / games / AI, in that order ──
+        MessageHandler(filters.TEXT & ~filters.COMMAND, routed_message_handler),
     ]
-
-
-async def start_referral_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /start with referral code."""
-    await _reply(update, "Welcome! You were referred by someone.")
 
 
 def _job_queue_from_context(context: ContextTypes.DEFAULT_TYPE) -> JobQueuePort | None:

@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
-  "plan": "Nagar Phase 6",
-  "step": "52329e6022a0bdd9f3f9e287da581b752204c811",
-  "next": "Review/merge the separate v3.12.0 release metadata PR for Waves 2.5 and 3 image generation. Optional local upscale remains deferred: contract and DECISION_LOG approval before implementation, never implied shipped by the image-generation release.",
+  "plan": "Nagar Phase 6 + product-surface hardening",
+  "step": "5e5009a599b4511c32b357c67b71a4f889c72a82",
+  "next": "Merge the v3.13.0 branch arena/01a0c3aa-nexus-ai-agent: bot access gate, dashboard PII removal, /cloud + /download containment, feature wiring (tools/games/referral/anon-chat) and four production bugs found by the new behavioural tests. Then release the remaining P0 audit items: per-message AIMemory opt-in (P0-7), engine single-sourcing from bot_data (P0-8), LongTermMemory.store or removal of the vector-memory claim (P0-9), and the stub commands listed in the README status table.",
   "ledger": [
     {
       "id": "C1",
@@ -117,9 +117,14 @@
       "id": "release-3.12.0",
       "status": "in_review",
       "scope": "Separate housekeeping commit/PR after PR#26: VERSION/pyproject lock-step, dated Wave 2.5 + Wave 3 changelog, README, roadmap, decision log and continuum; no runtime change or tag publication."
+    },
+    {
+      "id": "v3.13.0-hardening",
+      "status": "on_branch",
+      "scope": "P0-security-code-batch + feature-wiring-batch: BotAccessGate in PTB group -1, core/paths.py containment, dashboard PII removal + optional bearer token, fail-closed force join, tools/games/referral/anon-chat wired to real engines, get_session db-path bug, AsyncSession.exec crashes, first-daily-reward bug, force-join 'enabled is True' bug. 837 passed / 20 skipped, ruff + mypy clean."
     }
   ],
-  "test_count_expected": 649,
+  "test_count_expected": 742,
   "env_fingerprint": {
     "python": "3.11.2",
     "alembic": "1.20.0",

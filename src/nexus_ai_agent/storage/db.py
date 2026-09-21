@@ -340,7 +340,14 @@ async def get_session(db_path: str | None = None) -> AsyncIterator[AsyncSession]
             async with factory() as session:
                 yield session
             return
-        db_path = "data/app.sqlite"
+        # Was a hard-coded "data/app.sqlite": every caller that passes no
+        # argument (dashboard API, bot session factory, ai_memory,
+        # agent_manager, knowledge_manager, approval) therefore ignored
+        # NEXUS_DB_PATH / DB_PATH and silently used a *second* database next
+        # to the one the synchronous feature engines write to.
+        from nexus_ai_agent.config.settings import get_settings
+
+        db_path = get_settings().db_path
 
     await create_all_tables(db_path)
     if _session_factory is None:

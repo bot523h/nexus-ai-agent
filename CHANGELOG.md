@@ -7,6 +7,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.13.0] — 2026-09-21
+
+Semver-minor: **the code half of the P0 security batch plus the queued
+feature-wiring batch.** The 2026-09-21 architecture audit (`AUDIT_REPORT_2026-09-21.md`)
+documented ten P0 findings; PR#30 shipped the audit and the multi-agent protocol
+but none of the code. This release delivers four of the P0 items and the whole
+`feature-wiring-batch` task from `.agents/board.json`, and fixes four production
+bugs found while writing the tests for them.
+
+### Added
+- **One authorization choke point for every update** (`bot/middleware.py::BotAccessGate`
+  + `bot/app.py::build_access_gate_handler`, PTB group `-1`). Previously auth
+  existed on 2 of ~80 commands, so any stranger who found the bot could call
+  `/ai` (burning Gemini quota), `/cloud`, `/tts`, `/summarize`, `/learn`,
+  `/memory` and `/forget_me`. Deny-by-default when an owner or allow-list is
+  configured; open when neither is, so an unconfigured bot does not lock out its
+  own owner. Refusals raise `ApplicationHandlerStop`, so no later handler sees
+  the update. `middleware.py` stays `telegram`-free to respect the frozen import
+  baseline.
+- **`core/paths.py`** — `sanitize_file_name` / `safe_local_path` /
+  `safe_remote_key`: base-name reduction, traversal *rejection* (not silent
+  renaming), control-character and length limits, random on-disk tokens,
+  optional extension allow-list, and a resolved-path containment check that also
+  defeats a symlinked directory.
+- **`NEXUS_API_DASHBOARD_TOKEN`** — optional constant-time bearer lock for the
+  whole `/api/dashboard/*` router; the served page prompts for it instead of
+  embedding it.
+- **64 behavioural tests** (`test_access_gate`, `test_dashboard_privacy`,
+  `test_safe_paths`, `test_force_join_gate`, `test_wired_commands`). They drive
+  real callbacks and assert on outcomes — the calculation, the DB row, the
+  forwarded message — and 29 of them fail against the pre-release code.
+
+### Changed
+- **`/calc`, `/convert`, `/tr`, `/remind` now call the engines that already
+  existed.** `features/tools.py` (379 lines: `Calculator`, `UnitConverter`,
+  `Translator`, `ReminderSystem`) had no importer anywhere in `src`; the commands
+  answered with fixed strings such as `"🧮 Result: 2 + 2 = 4"`.
+- **`/wordle`, `/guess_start`, `/poll`, `/quiz` are real games.** One engine
+  instance per process (per-command construction threw away every answer), a new
+  catch-all `routed_message_handler` that feeds plain text to anon chat → game →
+  AI in that order, real vote counting (one per user per poll) and real quiz
+  scoring into `QuizScore`.
+- **The referral viral loop is closed.** `ReferralEngine.process_referral` was
+  never called from anywhere, and a second `CommandHandler("start", …)` was
+  unreachable because PTB gives an update to the first matching handler only.
+  `/start ref_<code>` now records the referral, books +50 XP for the referred
+  user and reports the referrer's tier.
+- **`/daily`, `/xp_leaderboard`, `/achievements`, `/leaderboard`** read the real
+  gamification and quiz tables instead of `"UserX: 5000 XP"`.
+- **Force join fails closed.** `check_membership` returned `True` when no bot was
+  bound and the handler built `ForceJoinManager()` without one, so the
+  "anti-bypass" gate accepted everybody. The verify button now binds
+  `application.bot`, checks the channel that chat configured, and invalidates the
+  cache first.
+- **`/api/dashboard/recent_users` no longer returns PII.** It answered an
+  unauthenticated request on a published port with real `telegram_id` and
+  `username` values; it now returns `{id, display}` with a masked label, and
+  `limit` is clamped to 1..50 (a negative `LIMIT` means unbounded in SQLite).
+- **`/cloud` and `/download` are contained.** Both built filesystem paths
+  straight from client-controlled names, and `/download` leaked an unclosed file
+  handle.
+- **Both rate limiters are memory-bounded** (`MAX_TRACKED_USERS = 10_000`,
+  oldest-tracked windows evicted) instead of keeping a dict entry per user id
+  forever.
+
+### Fixed
+- **`get_session()` ignored the configured database path.** With no argument it
+  fell back to a hard-coded `"data/app.sqlite"`, so every caller that passes none
+  (dashboard API, bot session factory, `ai_memory`, `agent_manager`,
+  `knowledge_manager`, `approval`) used a *second* database whenever
+  `NEXUS_DB_PATH`/`DB_PATH` was set — the async ORM and the synchronous feature
+  engines were writing to different files.
+- **`AsyncSession` has no `.exec()`.** Six call sites in `bot/handlers.py` used
+  the SQLModel API on the plain SQLAlchemy session `get_session()` yields, so
+  **every free-text message crashed** in `_upsert_user`, and `/myfiles`,
+  `/download` and `/language` crashed too. `features/onboarding.py` had the same
+  bug hidden behind a broad `except` that made every user look first-time.
+- **A new user could never claim a first daily reward.** `claim_daily` created
+  the `UserXP` row with `last_daily=now` and then fell into its own
+  "already claimed today" branch; the next attempt crashed comparing an aware
+  `now` with the naive datetime SQLite returns.
+- **`ForceJoinManager.should_block` never blocked.** The query filtered with
+  `ForceJoinConfig.enabled is True`, a Python identity test SQLAlchemy compiled
+  to `WHERE 0`.
+- **`AnonymousChatManager` gets a bot.** Pairing could not even be announced
+  before, and `send_anon_message` was dead code; anonymous conversations now
+  deliver and are routed ahead of the AI so a partner's words are not leaked to
+  a third party.
+
+### Known gaps (deliberately not in this release)
+- Referrer XP is not booked: `UserXP` is keyed by `(user_id, chat_id)` and the
+  referrer's chat is unknown at deep-link time.
+- Anonymous pairing is in-process; sessions do not survive a restart.
+- `/post` `/schedule` `/ban` `/unban` `/stats` `/welcome` `/pin` `/vision`
+  `/newchat` `/warn` `/mute` `/unmute` `/reputation` `/docs` `/chat_with_doc`
+  remain stubs — see the "Command status" table in the README.
+- `features/onboarding.py` (`send_onboarding`, `is_first_time_user`) still has
+  no caller; i18n remains decorative.
+
+
 ## [3.12.0] — 2026-09-21
 
 Semver-minor: **Nagar Phase 6 — the Wave 2.5 Telegram slideshow surface and

@@ -13,7 +13,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.observability.logging import get_logger
@@ -102,6 +102,8 @@ class ForceJoinManager:
         """Check if *user_id* is a member of *channel*.
 
         Uses a 5-minute cache to avoid hitting the API on every message.
+        **Fail-closed**: without a bound bot instance, or when the Telegram
+        call fails, the answer is "not a member".
         """
         ch = channel or DEFAULT_CHANNEL
         now = time.monotonic()
@@ -113,9 +115,17 @@ class ForceJoinManager:
             if now - ts < _CACHE_TTL:
                 return is_member
 
-        # Ask Telegram API
+        # Ask Telegram API. Fail CLOSED when there is no bot: answering True
+        # here (as this did until v3.13.0) turned the gate into an always-open
+        # door, the exact opposite of "anti-bypass".
         if self.bot is None:
-            return True  # can't verify without bot
+            logger.warning(
+                "forcejoin_unverifiable",
+                user_id=user_id,
+                channel=ch,
+                reason="no bot instance bound to ForceJoinManager",
+            )
+            return False
         try:
             member = await self.bot.get_chat_member(chat_id=ch, user_id=user_id)
             is_member = member.status in ("member", "administrator", "creator")
@@ -144,11 +154,15 @@ class ForceJoinManager:
         if command and self.is_command_allowed(command):
             return False
 
-        # Check if force-join is enabled anywhere
+        # Check if force-join is enabled anywhere.
+        # NOTE: this was `ForceJoinConfig.enabled is True`, which is a Python
+        # identity test on an instrumented attribute — it evaluates to False
+        # and SQLAlchemy compiled it to `WHERE 0`, so the query never matched
+        # and should_block() always answered "do not block".
         engine = _sync_engine()
         with Session(engine) as session:
             enabled_configs = session.exec(
-                select(ForceJoinConfig).where(ForceJoinConfig.enabled is True)  # noqa: E712
+                select(ForceJoinConfig).where(col(ForceJoinConfig.enabled).is_(True))
             ).first()
             if enabled_configs is None:
                 return False  # force-join not enabled anywhere

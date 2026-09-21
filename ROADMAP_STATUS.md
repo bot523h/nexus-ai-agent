@@ -1,4 +1,4 @@
-# ROADMAP_STATUS — NEXUS AI agent (as of 2026-09-21, v3.12.0 housekeeping, Phase 6)
+# ROADMAP_STATUS — NEXUS AI agent (as of 2026-09-21, v3.13.0 hardening batch, Phase 6)
 
 Header: **No hidden migration. No hidden mutation. No implicit repair.**
 Phase 6 adds: **packs are data; commands carry evidence; only the last step
@@ -22,13 +22,39 @@ Phases 0–5 are complete on `main`.
 | Release 3.11.0 | Housekeeping cut after Waves 2a–2c | **MERGED** | PR#24 `8b27625` |
 | **Wave 2.5** | Telegram `/slideshow` surface → `JobQueuePort` → existing render lane → completion delivery; five-image/30-second limits and typed failures | **MERGED** | PR#25 `316ed33` |
 | Wave 3 — image generation | Isolated `ImageGenProvider`, Pollinations default and fail-closed paid Gemini; bounded retry/cache, `/imagine`, opt-in slideshow autofill, cost/consent/cleanup tests and import-boundary checks | **MERGED** | PR#26 `52329e6` |
-| Release 3.12.0 | Version lock-step and release notes for Wave 2.5 + Wave 3 image generation; refresh README, roadmap, continuum and decision log | **THIS PR** — separate release commit, pending merge | base `52329e6` |
+| Release 3.12.0 | Version lock-step and release notes for Wave 2.5 + Wave 3 image generation; refresh README, roadmap, continuum and decision log | **MERGED** — PR#30 shipped it together with the coordination protocol and the audit report | `5e5009a` |
 | Wave 3 — local upscale | Optional local stage, not the main render path; contract and owner approval required before implementation | **DEFERRED / NOT IMPLEMENTED** | decision log r6 and release-scope decision 2026-09-21 |
 | Other 60 TDD operations | Each still needs its own contract, ownership boundary and decision entry | NOT STARTED | — |
 
 Telegram now exposes `/slideshow` and `/imagine`; the latter and slideshow
 `--fill` enforce owner/allowlist access. Plain slideshow rendering remains
 upload-only. No new HTTP API surface or local upscale stage is part of this cut.
+
+## Active workstream: product-surface hardening (v3.13.0)
+
+The 2026-09-21 audit (`AUDIT_REPORT_2026-09-21.md`) scored the repo **B−**:
+the Phase 0–6 core is A-grade engineering, the Telegram product shell was
+largely simulated, and authorization existed on 2 of ~80 commands.  PR#30
+merged the audit and the multi-agent protocol but **none of the code** in the
+`P0-security-batch` scope; the board claim said otherwise.
+
+| Item | Audit ref | State | Evidence |
+|---|---|---|---|
+| Single authorization choke point for every update | P0-2 | **DONE** on `arena/01a0c3aa-nexus-ai-agent` | `bot/middleware.py::BotAccessGate`, `bot/app.py` group `-1`, `tests/unit/test_access_gate.py` |
+| Dashboard PII removal (+ optional bearer lock) | P0-5 | **DONE** | `api/dashboard.py`, `tests/unit/test_dashboard_privacy.py` |
+| `/cloud` + `/download` path traversal and handle leak | P0-6 | **DONE** | `core/paths.py`, `tests/unit/test_safe_paths.py` |
+| Force-join always-accepts | P0-3 | **DONE** (+ the `enabled is True` query bug) | `features/force_join.py`, `tests/unit/test_force_join_gate.py` |
+| Dead engines wired (`tools`, games, referral, anon chat) | P0-1, P0-4, P0-10 | **DONE** for `/calc` `/convert` `/tr` `/remind` `/wordle` `/guess*` `/poll` `/quiz` `/leaderboard` `/daily` `/xp_leaderboard` `/achievements` `/start ref_` | `tests/unit/test_wired_commands.py` |
+| Per-message AIMemory egress without consent | P0-7 | **OPEN** | `handlers.py:on_message` still spawns `AIMemoryEngine` per message |
+| Engines constructed twice, `bot_data` ignored | P0-8 | **OPEN** | `bot/app.py::_init_v2_engines` vs `build_handlers` |
+| `LongTermMemory.store` never called (empty vector memory) | P0-9 | **OPEN** | no caller in `src` |
+| Channel management / moderation / RAG stubs | P0-1 | **OPEN** — documented, not faked | README "Command status" table |
+
+Bugs found while testing the above, all fixed in the same branch:
+`get_session()` ignoring `NEXUS_DB_PATH`; six `AsyncSession.exec()` call sites
+that crashed **every free-text message**; a first-time user never being able to
+claim `/daily`; and `features/onboarding.py` swallowing its own `AttributeError`
+so every user looked first-time.
 
 ## Checkpoint lifecycle workstream (Phases 4–5) — complete
 
@@ -73,11 +99,12 @@ than silently rewriting the snapshot.
 The working tree was verified byte-for-byte against the requested commit, with
 a fresh local virtualenv and disabled Ruff/mypy/pytest caches before merging.
 
-| Gate | Result |
+| Gate | Result (v3.13.0 branch, re-run locally 2026-09-21) |
 |------|--------|
-| `make lint` | green — 295 files already formatted |
-| `make types` | green — 184 source files |
-| `make test` | green — **742 passed, 20 skipped**, one upstream Starlette/AnyIO deprecation warning |
+| `ruff check . && ruff format --check .` | green — 318 files already formatted |
+| `mypy src` | green — 194 source files |
+| `pytest -q -m "not slow"` | green — **837 passed, 20 skipped** in ~45 s (742 test functions), one upstream Starlette/AnyIO deprecation warning |
+| `nexus continuum verify` | green — snapshot matches the checkout |
 | GitHub `test` | **SUCCESS**, both `push` and `pull_request` runs on `471803c` |
 | GitHub `migrate-postgres` | **SUCCESS**, both runs; real PostgreSQL service-container verification |
 

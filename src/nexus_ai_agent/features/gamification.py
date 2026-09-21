@@ -21,6 +21,19 @@ from nexus_ai_agent.storage.models import UserXP
 logger = get_logger(__name__)
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Return *value* as an aware UTC datetime.
+
+    The columns are plain ``DATETIME`` in SQLite, so a stored
+    ``datetime.now(timezone.utc)`` comes back naive; subtracting it from an
+    aware "now" raises ``TypeError``.  Everything written here is UTC, so
+    re-attaching UTC is the correct reading.
+    """
+    if value is None:
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
 def _sync_engine() -> Any:
     """Return a synchronous SQLAlchemy engine for feature CRUD."""
     from sqlalchemy import create_engine as _ce
@@ -220,8 +233,13 @@ class GamificationEngine:
                 return {"streak": 1, "streak_broken": False}
 
             now = datetime.now(timezone.utc)
-            if xp.last_daily is not None:
-                diff = (now - xp.last_daily).total_seconds() / 86400
+            if xp.last_daily is None:
+                # First claim ever for this user/chat.
+                xp.streak = max(xp.streak, 1)
+            else:
+                last = _as_utc(xp.last_daily)
+                assert last is not None  # narrowed by the branch above
+                diff = (now - last).total_seconds() / 86400
                 if diff < 1.0:
                     # Already claimed today
                     return {"streak": xp.streak, "streak_broken": False}
@@ -251,20 +269,27 @@ class GamificationEngine:
                 select(UserXP).where(UserXP.user_id == user_id, UserXP.chat_id == chat_id)
             ).first()
             if xp is None:
+                # NOTE: do not pre-set last_daily here.  This used to create
+                # the row with last_daily=now and then fall into the
+                # "already claimed today" branch below, so a brand-new user
+                # could never collect a first daily reward at all.
                 xp = UserXP(
                     user_id=user_id,
                     chat_id=chat_id,
                     xp=0,
                     level=0,
-                    streak=1,
+                    streak=0,
                     achievements="[]",
-                    last_daily=now,
                 )
                 session.add(xp)
-                session.flush()
-
-            if xp.last_daily is not None:
-                diff = (now - xp.last_daily).total_seconds() / 86400
+                # Commit, not flush: update_streak() below runs in its own
+                # session and must be able to see this row.
+                session.commit()
+                session.refresh(xp)
+            elif xp.last_daily is not None:
+                last = _as_utc(xp.last_daily)
+                assert last is not None  # narrowed by the branch above
+                diff = (now - last).total_seconds() / 86400
                 if diff < 1.0:
                     remaining = 1.0 - diff
                     hours = int(remaining * 24)
