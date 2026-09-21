@@ -69,17 +69,35 @@ tests/bench/test_render_bench.py          → import از پکیج (بدون ه�
 ### پاشنه — آزمون نگهبان (تا این کلاس خطا بازنگردد)
 ```python
 # tests/architecture/test_scripts_import_boundary.py
-"""No test may import the unpackaged `scripts` namespace — CI runs the
-console-script pytest where the repo root is not on sys.path."""
+"""No test may import the unpackaged ``scripts`` namespace.
+
+CI executes the console-script ``pytest`` entrypoint, where the repository
+root is NOT on ``sys.path``; ``scripts/`` has no ``__init__.py`` and is not
+an installed package (src-layout installs only ``nexus_ai_agent``).
+"""
+
+import re
 from pathlib import Path
 
+_TESTS_DIR = Path(__file__).parents[1]
+
+#: Anchored statement-level match only (leading whitespace allowed), so
+#: prose in docstrings/comments can never trigger a false positive.
+_SCRIPTS_IMPORT = re.compile(r"^\s*(?:from|import)\s+scripts\b", re.MULTILINE)
+
+
 def test_no_test_imports_scripts_namespace() -> None:
-    offenders = [
-        p for p in Path(__file__).parents[1].rglob("*.py")
-        if "from scripts" in p.read_text(encoding="utf-8")
-        or "\nimport scripts" in p.read_text(encoding="utf-8")
-    ]
-    assert offenders == [], f"tests importing unpackaged scripts/: {offenders}"
+    offenders: list[str] = []
+    for path in sorted(_TESTS_DIR.rglob("*.py")):
+        if path.resolve() == Path(__file__).resolve():
+            continue
+        hits = _SCRIPTS_IMPORT.findall(path.read_text(encoding="utf-8"))
+        if hits:
+            offenders.append(f"{path.relative_to(_TESTS_DIR)}: {len(hits)} import statement(s)")
+    assert offenders == [], (
+        "tests/ must not import the unpackaged scripts/ namespace — "
+        f"use the installed nexus_ai_agent package instead: {offenders}"
+    )
 ```
 (همچنین job `migrate-postgres` هم `pytest` کنسول‌اسکریپت را روی integrationها اجرا می‌کند — امروز بی‌خطر است، ولی همین نگهبان آن را برای همیشه بی‌خطر نگه می‌دارد.)
 
@@ -103,3 +121,23 @@ def test_no_test_imports_scripts_namespace() -> None:
 1. سطر `pythonpath = ["."]` در `[tool.pytest.ini_options]` → پوش → هر دو ref (push + pull_request) سبز می‌شود.
 2. آزمون نگهبان بخش ۳ را اضافه کن (۳ خط، کلاس خطا را می‌بندد).
 3. گام بعدی session: انتقال منطق بنچ به پکیج (گزینه B) + dedupe تسک ۱۱۱ با #39 طبق بخش ۴.
+
+---
+
+## ۷) پیوست ۲۰۲۶-۰۹-۲۱ (بعد از تحویل گزارش) — رفع، اجرا و راستی‌آزمایی شد
+
+مالک مخزن اجرای رفع را به سشن `01a0c506` سپرد. چون پوش به شاخهٔ مالک (`01a0c4bb`) ممنوع است، رفع از مسیر **supersession شفاف** انجام شد: head شان (`67535f4`) بدون هیچ تغییری با git-merge وارد شاخهٔ این سشن شد (انتساب کامیت‌ها حفظ شد) و سپس «گزینهٔ B معماری + نگهبان» روی آن پیاده شد.
+
+**گیت‌های نهایی — دقیقاً با فرمان‌های CI (کنسول‌اسکریپت pytest، بدون هیچ path-hack):**
+
+| گیت | نتیجه |
+|---|---|
+| `ruff check .` | All checks passed! |
+| `ruff format --check .` | ۳۸۴ فایل فرمت‌پاک (اسنیپت داخل همین گزارش هم پاک شد — ruff جدید بلوک‌های کد Markdown را هم می‌سنجد) |
+| `mypy src` | Success — ۲۲۱ فایل. دو پیام اولیهٔ `rag.py` آرتیافتِ نبودِ chromadb در venv بود؛ با نصب chromadb صفر شد (اثبات) |
+| `pytest -q tests/unit/test_version_command.py -k lockstep` | ۳ passed |
+| `pytest -q -m "not slow"` | **۱۱۶۲ passed / ۲۰ skipped** (۱۱۶۱ قبلی + ۱ آزمون نگهبان جدید) |
+
+**تغییرات رفع:** `creative/rendering/bench.py` و `creative/caption/bench.py` (هسته‌های بنچ داخل پکیج)؛ `scripts/bench_*.py` → CLIهای لاغر با رابط argparse یکسان؛ `tests/bench/test_render_bench.py` → ایمپورت پکیجی؛ `tests/architecture/test_scripts_import_boundary.py` (نگهبان)؛ allow-list لاین رندر += `time` (مستند)؛ بولت CHANGELOG.
+
+**مسیر تصمیم مالک:** (الف) این PR را ادغام کند و #40 را ببندد (کامیت‌های wave-4 عیناً در این تارالاین هستند)، یا (ب) پچ حداقلی بخش ۳ را خودش روی #40 اعمال کند. هر دو مسیر main را سبز می‌کند؛ مسیر (الف) کلاس خطا را هم برای همیشه می‌بندد.
