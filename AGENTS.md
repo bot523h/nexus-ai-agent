@@ -58,12 +58,18 @@ worktree-style isolation + a shared task board with leases and stale-lease takeo
 
 | Agent | Task | Zone | Status | Owner Branch |
 |---|---|---|---|---|
-| **عامل A** | `P0-security-batch` | core-security | active — week-1 batch merged via PR #34 (`93cee5e`); P0-1..P0-10 closure continues | `arena/01a0c316-nexus-ai-agent` |
-| **عامل B** | `feature-wiring-batch` | feature-wiring | active — PR #32 open, **CONFLICTING with main**, needs rebase | `arena/01a0c34d-nexus-ai-agent` |
-| **عامل C** | `nagar-wave3-timeline-edit-delivery` | nagar-creative-edit | ✅ completed — PR #31 merged (`c41b1b0`), lease released | `arena/01a0c36f-nexus-ai-agent` |
-| **عامل D** | `board-gc-engineered-handoff` + `task-101` | coordination / ci-quality | ✅ completed — PR #35 merged (lint 71→0), main CI green | `arena/01a0c3ca-nexus-ai-agent` |
-| **عامل E** | task-104/105/110 (Nagar waves 8/9/10) | nagar render/caption/delivery | active — off-board CI evidence (⚠️ register a board card) | `arena/01a0c460-nexus-ai-agent` |
-| **عامل F** | `repo-hygiene-2026-09-21` | repo-hygiene | active (gates owner for this card) — docs archive, dead-branch deletion, release-metadata alignment | `arena/01a0c484-nexus-ai-agent` |
+> **Identity rule (after the 2026-09-21 letter collisions — "triple-E", "double-F"):** the
+> **branch name is the canonical identity**; letters are convenience labels only.
+
+| Session (canonical) | Task | Zone | Status | Branch |
+|---|---|---|---|---|
+| **عامل A** (`01a0c316`) | `P0-security-batch` | core-security | ✅ completed — week-1 batch merged via PR #34 (`93cee5e`) | `arena/01a0c316-nexus-ai-agent` |
+| **عامل B** (`01a0c34d`) | `feature-wiring-batch` | feature-wiring | active — PR #32 open, **CONFLICTING with main**, needs rebase | `arena/01a0c34d-nexus-ai-agent` |
+| **عامل C** (`01a0c36f`) | `nagar-wave3-timeline-edit-delivery` | nagar-creative-edit | ✅ completed — PR #31 merged (`c41b1b0`) | `arena/01a0c36f-nexus-ai-agent` |
+| **عامل D** (`01a0c3ca`) | `board-gc-engineered-handoff` + `task-101` | coordination / ci-quality | ✅ completed — PR #35 merged (lint 71→0) | `arena/01a0c3ca-nexus-ai-agent` |
+| **عامل E** (`01a0c460` — also self-labels "F" in PR titles; branch wins) | task-104/105 (waves 8/9) + `ci-gates-steward` | nagar render/caption + ci-quality | ✅ task-104/105 merged via PR #36 (`e80b742`); now active as interim `ci-gates-steward`; task-110 routed to PR#33 | `arena/01a0c460-nexus-ai-agent` |
+| **سشن PR#33** (`01a0c3aa`) | `pr33-in-review` (task-110 vehicle: OTIO round-trip + ConversationStorePort adapter) | delivery-interop | active_in_review — **REOPENED** after a same-day supersession closure; needs rebase on current main | `arena/01a0c3aa-nexus-ai-agent` |
+| **عامل F-hygiene** (`01a0c484`) | `repo-hygiene-2026-09-21` | repo-hygiene | ✅ completed — delivered via PR#37 (docs archive, dead-branch deletion, 3.13.0 alignment) | `arena/01a0c484-nexus-ai-agent` |
 
 > **⚠️ INCIDENT (2026-09-21) — RESOLVED by عامل D ✅:** PR #31 was merged to `main` with a red
 > lint gate (71 ruff errors + 16 unformatted files; CI run
@@ -99,9 +105,9 @@ Full details + acceptance criteria: `.agents/board.json` · Analysis: `docs/audi
 ## Merge order
 
 1. ~~**task-101** (lint restore)~~ — ✅ **merged as PR #35**; `main` is green.
-2. **repo-hygiene-2026-09-21** (عامل F): docs archive + release-metadata alignment (`3.13.0`), superseded-PR#33 closure, and deletion of 28 merged/closed remote branches. Rebase-friendly: touches no `src/` runtime code.
-3. **PR #32** rebases, resolves the `.agents/board.json` conflict in favor of *this* handoff state, then merges (coordinate `handlers.py` — the week-1 security batch from PR #34 already landed there).
-4. task-104 / 105 / 107 / 108 / 109 / 110 proceed **in parallel on disjoint paths**.
+2. ~~**repo-hygiene-2026-09-21**~~ — ✅ **delivered via PR#37**: docs archive, 28 dead remote branches deleted, release metadata aligned at `3.13.0`. Touches no `src/` runtime code.
+3. **PR #33** (task-110 vehicle) and **PR #32** rebase on the post-PR#36 main; `.agents/board.json` conflicts resolve in favor of the newest forensic state. Coordinate `handlers.py` explicitly.
+4. task-107 / 108 / 109 / 111 proceed **in parallel on disjoint paths** (111 = version-lockstep CI guard, queued on the board by the hygiene pass).
 5. **task-106** (creative surface) lands after PR #32's `bot/surface` pattern is on `main`.
 
 `src/nexus_ai_agent/bot/handlers.py` remains the single highest-conflict file. The P0 week-1

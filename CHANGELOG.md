@@ -20,11 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Remote-branch janitorial work:** 28 fully merged or closed-superseded
   branches deleted on the remote, with per-branch dispositions recorded in
   `docs/DECISION_LOG.md` (r7). Active session branches preserved.
-- **PR #33 closed as superseded:** its security scope was delivered by merged
-  PR #34, its feature-wiring scope collides with the active agent-B lease
-  (PR #32), and its head was in conflict with `main`. The branch is preserved
-  for archaeology; its unique ConversationStorePort-adapter idea stays tracked
-  as task-110.
+- **PR #33 closed as superseded, then reopened the same day:** the closure
+  cited the duplicated security scope (delivered by merged PR #34) and the
+  conflicting head; afterwards the `ci-gates-steward` board (15:21Z) designated
+  PR #33 as the **task-110 vehicle** (OTIO round-trip + ConversationStorePort
+  adapter), so it was reopened and awaits a rebase on current `main`.
 
 ## [3.13.0] — 2026-09-21
 
