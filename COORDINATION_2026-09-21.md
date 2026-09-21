@@ -217,6 +217,7 @@ commits named in §3.
 | Referee, positive | `agent_board.py check --files <changed> --branch <this branch>` | exit 0 — *no overlap* |
 | Referee, negative control | same with `--branch ""` | exit 1 — the zone **is** fenced against other agents |
 | Untouched zones | `git diff --stat -- src/ pyproject.toml .nexus/ README.md CHANGELOG.md VERSION` | empty |
+| **Real CI** | `gh run view 35641927691 --json jobs` (PR **#42**) | **success** — `lint-fast` **10 s**, `lint`, `test`, `migrate-postgres` all green; PR is `MERGEABLE` |
 
 ### Conflict boundary, measured with a real three-way merge
 

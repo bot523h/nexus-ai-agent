@@ -115,7 +115,8 @@
       "branch": "arena/01a0c54f-nexus-ai-agent",
       "task": "task-113-ci-lint-rail (+ بازماندهٔ R1 تسک ۱۱۱: گارد lockstep پیش از نصب)",
       "status": "delivered_pending_gates_owner",
-      "note": "DELIVERED task-113-ci-lint-rail (+ task-111 residue R1) on arena/01a0c54f-nexus-ai-agent @ c3b1635. Zero added conflict, proven: `git merge-tree --write-tree` against origin/pr33 and origin/pr39 yields exactly the same conflict sets with and without this branch (11 files / 1 file), and .github/workflows/ci.yml is in neither — the PR#33 conflicts are its own rebase debt with main. Gates deferred to ci-gates-steward per rule 4. Next: PR open, then task-135 once PR#33 lands."
+      "note": "DELIVERED task-113-ci-lint-rail (+ task-111 residue R1) on arena/01a0c54f-nexus-ai-agent @ c3b1635. Zero added conflict, proven: `git merge-tree --write-tree` against origin/pr33 and origin/pr39 yields exactly the same conflict sets with and without this branch (11 files / 1 file), and .github/workflows/ci.yml is in neither — the PR#33 conflicts are its own rebase debt with main. Gates deferred to ci-gates-steward per rule 4. Next: PR open, then task-135 once PR#33 lands.",
+      "ci_evidence": "PR#42 (OPEN, MERGEABLE) · CI run 35641927691 completed SUCCESS with all four jobs: lint-fast 10 s (new rail: lockstep script -> pinned ruff check -> format), lint, test, migrate-postgres. The rail reports in 10 s what used to wait ~14 min behind the install."
     }
   },
   "ten_forward_tasks_network": [
@@ -819,7 +820,9 @@
         "both YAML files parse; jobs = lint, test, migrate-postgres, lint-fast; needs removed only from `test`",
         "referee exit 0 for the changed files on this branch; negative control (--branch '') exit 1, so the zone is fenced",
         "merge-tree proof: conflicts vs PR#33 (11 files) and vs PR#39 (1 file) are byte-identical with and without this branch -> zero added conflict; .github/workflows/ci.yml is in neither set"
-      ]
+      ],
+      "pr": "https://github.com/bot523h/nexus-ai-agent/pull/42",
+      "ci_evidence": "run 35641927691: success — lint-fast 10 s, lint, test, migrate-postgres all green"
     },
     {
       "task": "task-135-lockstep-residue",
@@ -1538,6 +1541,12 @@
       "by_branch": "arena/01a0c54f-nexus-ai-agent",
       "action": "task-113 delivered; conflict boundary measured, not asserted",
       "evidence_fa": "روش: `git merge-tree --write-tree A B` سه‌طرفه است و merge-base واقعی را می‌گیرد. PR#33 با main → ۱۱ تداخل؛ PR#33 با شاخهٔ این سشن → همان ۱۱ تداخل (پس صفر تداخل اضافه) و ci.yml در هیچ‌کدام نیست؛ PR#39 با main → تنها board.json؛ با این شاخه → همان یک مورد. بنابراین مرز خط‌کشی‌شده درست است و تنها نقطهٔ برخورد، فایل هماهنگی board.json است که طبق AGENTS.md با قاعدهٔ «جدیدترین وضعیت فورنزیک» و blob بازاعمال در COORDINATION_2026-09-21.md حل می‌شود."
+    },
+    {
+      "at": "2026-09-21T19:40:00Z",
+      "by_branch": "arena/01a0c54f-nexus-ai-agent",
+      "action": "PR#42 opened; CI verified end-to-end on the real runner",
+      "evidence_fa": "چهار job سبز: lint-fast ۱۰ ثانیه (اسکریپت lockstep + ruff پین‌شده، بدون نصب)، lint، test، migrate-postgres؛ PR قابل merge است. یعنی هم معیار پذیرش task-113 روی واقعیت اجرا تأیید شد و هم ادعای «ثانیه‌ای به‌جای ۱۴ دقیقه» اندازه‌گیری شد."
     }
   ]
 }
