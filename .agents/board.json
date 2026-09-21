@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T20:07:41Z",
+  "updated_at": "2026-09-21T20:10:15Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -122,8 +122,8 @@
       "identity": "عامل I (داور برد/کنترل تداخل active_in_review — ادامهٔ مستقل پس از راستی‌آزمایی PR#43)",
       "branch": "arena/01a0c593-nexus-ai-agent",
       "task": "task-136-board-active-in-review-referee",
-      "status": "active",
-      "note": "ورود این سشن روی شاخه ثابت Arena انجام شد؛ شاخهٔ PR#43 یعنی arena/01a0c58a فقط راستی‌آزمایی شد و فایل‌های آن لمس نمی‌شوند. این تسک فقط ابزار هماهنگی را اصلاح می‌کند تا status=active_in_review هم مثل active در check/claim/next دیده شود."
+      "status": "active_verification_and_fix_in_progress",
+      "note": "راستی‌آزمایی PR#43 کامل شد: PR کد با تست‌های storage resilience برابر 69 passed؛ همان تست‌ها روی origin/main با تست boundary افزوده‌شده برابر 36 failed / 33 passed. GitHub CI PR#43 اکنون همهٔ checkها سبز است (۲× lint، ۲× test، ۲× migrate-postgres، ۲× lint-fast) و PR MERGEABLE است. این سشن فایل‌های storage PR#43 را لمس نکرد. اصلاح داور برد انجام شد: active_in_review در check/claim/gc/defer مثل active دیده می‌شود."
     }
   },
   "ten_forward_tasks_network": [
@@ -877,7 +877,174 @@
         "COORDINATION_2026-09-21.md"
       ],
       "scope": "رفع شکاف داور برد: status=active_in_review باید در کنترل تداخل، انتخاب next و GC/lease مثل اجارهٔ فعال حساب شود؛ همراه با تست مستقل که به فایل‌های PR#39 دست نمی‌زند. همچنین ثبت راستی‌آزمایی PR#43 بدون ورود به فایل‌های storage آن.",
-      "note": "No overlap with PR#43 storage files, PR#39 docs/test_agent_board.py, PR#33 packaging/interop, or PR#32 bot surface."
+      "note": "Implemented and locally verified: pytest tests/unit/test_agent_board_active_in_review.py -> 5 passed; ruff check/format on changed files -> green; mypy on changed files -> green; board negative control now blocks pr39 active_in_review docs/**. Awaiting PR creation from this branch."
+    },
+    {
+      "task": "pr43-in-review-storage-resilience",
+      "zone": "storage-resilience",
+      "agent_branch": "arena/01a0c58a-nexus-ai-agent",
+      "claimed_at": "2026-09-21T20:09:53Z",
+      "ttl_hours": 24,
+      "status": "active_in_review",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/resilience.py",
+        "tests/unit/test_storage_resilience_boundaries.py",
+        "tests/unit/test_storage_resilience.py",
+        "STORAGE_RESILIENCE_CHECKUP_2026-09-21.md"
+      ],
+      "scope": "PR#43 OPEN: ten-step storage resilience boundary hardening. Verified from this session without editing those files: PR code -> 69 passed; same tests on origin/main -> 36 failed / 33 passed. Do not touch these files until PR#43 merges or is explicitly superseded.",
+      "note": "Verified complete by agent_i_01a0c593: local A/B = PR#43 69 passed vs origin/main 36 failed/33 passed; GitHub CI all check runs SUCCESS; PR#43 MERGEABLE. Do not touch these storage files until PR#43 merges or is superseded."
+    },
+    {
+      "task": "task-137-storage-r2-retry-integration",
+      "zone": "storage-r2-integration",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "queued_after_PR43",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/providers/r2.py",
+        "tests/unit/test_r2_provider.py"
+      ],
+      "scope": "Wire resilience.retry_with_backoff into R2 provider after PR#43 merges; prove transient boto/client errors are retried only for idempotent put/get/delete operations.",
+      "note": "Added by task-136 as the next ten-step network; obey status/dependency before claiming."
+    },
+    {
+      "task": "task-138-storage-resilience-observability",
+      "zone": "storage-observability",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "queued_after_PR43",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/resilience.py",
+        "tests/unit/test_storage_resilience_observability.py"
+      ],
+      "scope": "Add low-cardinality metrics/counters for retry attempts, exhaustion and cancellation without leaking object keys or credentials.",
+      "note": "Added by task-136 as the next ten-step network; obey status/dependency before claiming."
+    },
+    {
+      "task": "task-139-storage-resilience-r2-smoke",
+      "zone": "storage-r2-smoke",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "queued_after_task137",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "tests/unit/test_r2_resilience_smoke.py",
+        "src/nexus_ai_agent/storage/providers/r2.py"
+      ],
+      "scope": "Create a fake-client R2 smoke harness for retry/no-retry paths; no real Cloudflare credentials, no network.",
+      "note": "Added by task-136 as the next ten-step network; obey status/dependency before claiming."
+    },
+    {
+      "task": "task-140-board-schema2-active-review-port",
+      "zone": "coordination-schema2",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "queued_after_PR39",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "scripts/agent_board.py",
+        "tests/unit/test_agent_board_active_in_review.py",
+        ".agents/board.json"
+      ],
+      "scope": "Port the active_in_review referee semantics into PR#39 board schema 2 after that PR lands; preserve schema-1 regression tests or equivalent.",
+      "note": "Added by task-136 as the next ten-step network; obey status/dependency before claiming."
+    },
+    {
+      "task": "task-141-board-pr-visibility-audit",
+      "zone": "coordination-audit",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "queued",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "scripts/agent_board.py",
+        "tests/unit/test_agent_board_pr_visibility.py"
+      ],
+      "scope": "Add a read-only audit command/report that compares open GitHub PR changed files with board exclusive_paths and reports invisible PR scopes.",
+      "note": "Added by task-136 as the next ten-step network; obey status/dependency before claiming."
+    },
+    {
+      "task": "task-142-lockstep-residue-post-pr33",
+      "zone": "release-metadata",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "queued_after_PR33",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "README.md",
+        ".nexus/continuum.json",
+        "scripts/check_version_lockstep.py",
+        "tests/unit/test_version_lockstep_script.py"
+      ],
+      "scope": "Finish README/.nexus continuum lockstep residue only after PR#33 releases those files; do not touch before then.",
+      "note": "Added by task-136 as the next ten-step network; obey status/dependency before claiming."
+    },
+    {
+      "task": "task-143-pr33-rebase-conflict-map",
+      "zone": "delivery-interop",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "queued_for_pr33_owner",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "COORDINATION_2026-09-21.md"
+      ],
+      "scope": "Produce a conflict map for PR#33 vs current main without editing PR#33 files; include merge-tree evidence for the owner.",
+      "note": "Added by task-136 as the next ten-step network; obey status/dependency before claiming."
+    },
+    {
+      "task": "task-144-pr32-rebase-conflict-map",
+      "zone": "feature-wiring",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "queued_for_pr32_owner",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "COORDINATION_2026-09-21.md"
+      ],
+      "scope": "Produce a conflict map for PR#32 vs current main without editing bot surface files; coordinate handlers.py before any code.",
+      "note": "Added by task-136 as the next ten-step network; obey status/dependency before claiming."
+    },
+    {
+      "task": "task-145-ci-gates-handoff-refresh",
+      "zone": "ci-quality",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "queued_for_gates_owner",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "COORDINATION_2026-09-21.md",
+        ".agents/board.json"
+      ],
+      "scope": "Refresh gates-owner handoff with current open PR matrix; non-gates agents continue targeted checks only.",
+      "note": "Added by task-136 as the next ten-step network; obey status/dependency before claiming."
+    },
+    {
+      "task": "task-146-storage-runbook-after-integration",
+      "zone": "storage-runbook",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "queued_after_task137",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "STORAGE_RESILIENCE_RUNBOOK_2026-09-21.md"
+      ],
+      "scope": "After real R2 retry integration lands, document operator knobs, cancellation guarantees and redaction boundaries; no docs/** edits while PR#39 owns docs.",
+      "note": "Added by task-136 as the next ten-step network; obey status/dependency before claiming."
     }
   ],
   "deferred_log": [
@@ -1570,6 +1737,108 @@
       "by_branch": "arena/01a0c54f-nexus-ai-agent",
       "action": "PR#42 opened; CI verified end-to-end on the real runner",
       "evidence_fa": "چهار job سبز: lint-fast ۱۰ ثانیه (اسکریپت lockstep + ruff پین‌شده، بدون نصب)، lint، test، migrate-postgres؛ PR قابل merge است. یعنی هم معیار پذیرش task-113 روی واقعیت اجرا تأیید شد و هم ادعای «ثانیه‌ای به‌جای ۱۴ دقیقه» اندازه‌گیری شد."
+    }
+  ],
+  "ten_forward_tasks_after_task_136": [
+    {
+      "id": "task-137-storage-r2-retry-integration",
+      "zone": "storage-r2-integration",
+      "status": "queued_after_PR43",
+      "scope": "Wire resilience.retry_with_backoff into R2 provider after PR#43 merges; prove transient boto/client errors are retried only for idempotent put/get/delete operations.",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/providers/r2.py",
+        "tests/unit/test_r2_provider.py"
+      ]
+    },
+    {
+      "id": "task-138-storage-resilience-observability",
+      "zone": "storage-observability",
+      "status": "queued_after_PR43",
+      "scope": "Add low-cardinality metrics/counters for retry attempts, exhaustion and cancellation without leaking object keys or credentials.",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/resilience.py",
+        "tests/unit/test_storage_resilience_observability.py"
+      ]
+    },
+    {
+      "id": "task-139-storage-resilience-r2-smoke",
+      "zone": "storage-r2-smoke",
+      "status": "queued_after_task137",
+      "scope": "Create a fake-client R2 smoke harness for retry/no-retry paths; no real Cloudflare credentials, no network.",
+      "exclusive_paths": [
+        "tests/unit/test_r2_resilience_smoke.py",
+        "src/nexus_ai_agent/storage/providers/r2.py"
+      ]
+    },
+    {
+      "id": "task-140-board-schema2-active-review-port",
+      "zone": "coordination-schema2",
+      "status": "queued_after_PR39",
+      "scope": "Port the active_in_review referee semantics into PR#39 board schema 2 after that PR lands; preserve schema-1 regression tests or equivalent.",
+      "exclusive_paths": [
+        "scripts/agent_board.py",
+        "tests/unit/test_agent_board_active_in_review.py",
+        ".agents/board.json"
+      ]
+    },
+    {
+      "id": "task-141-board-pr-visibility-audit",
+      "zone": "coordination-audit",
+      "status": "queued",
+      "scope": "Add a read-only audit command/report that compares open GitHub PR changed files with board exclusive_paths and reports invisible PR scopes.",
+      "exclusive_paths": [
+        "scripts/agent_board.py",
+        "tests/unit/test_agent_board_pr_visibility.py"
+      ]
+    },
+    {
+      "id": "task-142-lockstep-residue-post-pr33",
+      "zone": "release-metadata",
+      "status": "queued_after_PR33",
+      "scope": "Finish README/.nexus continuum lockstep residue only after PR#33 releases those files; do not touch before then.",
+      "exclusive_paths": [
+        "README.md",
+        ".nexus/continuum.json",
+        "scripts/check_version_lockstep.py",
+        "tests/unit/test_version_lockstep_script.py"
+      ]
+    },
+    {
+      "id": "task-143-pr33-rebase-conflict-map",
+      "zone": "delivery-interop",
+      "status": "queued_for_pr33_owner",
+      "scope": "Produce a conflict map for PR#33 vs current main without editing PR#33 files; include merge-tree evidence for the owner.",
+      "exclusive_paths": [
+        "COORDINATION_2026-09-21.md"
+      ]
+    },
+    {
+      "id": "task-144-pr32-rebase-conflict-map",
+      "zone": "feature-wiring",
+      "status": "queued_for_pr32_owner",
+      "scope": "Produce a conflict map for PR#32 vs current main without editing bot surface files; coordinate handlers.py before any code.",
+      "exclusive_paths": [
+        "COORDINATION_2026-09-21.md"
+      ]
+    },
+    {
+      "id": "task-145-ci-gates-handoff-refresh",
+      "zone": "ci-quality",
+      "status": "queued_for_gates_owner",
+      "scope": "Refresh gates-owner handoff with current open PR matrix; non-gates agents continue targeted checks only.",
+      "exclusive_paths": [
+        "COORDINATION_2026-09-21.md",
+        ".agents/board.json"
+      ]
+    },
+    {
+      "id": "task-146-storage-runbook-after-integration",
+      "zone": "storage-runbook",
+      "status": "queued_after_task137",
+      "scope": "After real R2 retry integration lands, document operator knobs, cancellation guarantees and redaction boundaries; no docs/** edits while PR#39 owns docs.",
+      "exclusive_paths": [
+        "STORAGE_RESILIENCE_RUNBOOK_2026-09-21.md"
+      ]
     }
   ]
 }
