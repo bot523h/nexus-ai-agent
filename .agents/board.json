@@ -90,9 +90,13 @@
       "id": "task-08",
       "title": "استودیوی رنگ و تحویل (Nagar Wave 7)",
       "zone": "nagar-creative-delivery",
-      "assigned_to": "عامل بعدی",
-      "status": "available",
-      "exclusive_paths": ["src/nexus_ai_agent/creative/packs/delivery/"],
+      "assigned_to": "عامل C",
+      "status": "in_progress",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/delivery/",
+        "tests/architecture/test_delivery_pack_boundary.py",
+        "tests/unit/test_delivery_pack.py"
+      ],
       "instructions": "پیاده‌سازی پکیج nexus.color.delivery و اکسپورت استاندارد OpenTimelineIO (OTIO)."
     },
     {
@@ -151,6 +155,15 @@
         "tests/unit/test_audio_pack.py",
         "tests/architecture/test_audio_pack_boundary.py"
       ]
+    },
+    {
+      "id": "nagar-creative-delivery",
+      "description": "Nagar Wave 7 color management, LUT application, 480p proxy, 4K master rendering, and OpenTimelineIO (OTIO) interchange export",
+      "paths": [
+        "src/nexus_ai_agent/creative/packs/delivery/",
+        "tests/unit/test_delivery_pack.py",
+        "tests/architecture/test_delivery_pack_boundary.py"
+      ]
     }
   ],
   "claims": [
@@ -195,9 +208,12 @@
       "gates_owner": false,
       "exclusive_paths": [
         "src/nexus_ai_agent/creative/packs/audio/",
-        "src/nexus_ai_agent/creative/packs/caption/operations.py"
+        "src/nexus_ai_agent/creative/packs/caption/operations.py",
+        "src/nexus_ai_agent/creative/packs/delivery/",
+        "tests/unit/test_delivery_pack.py",
+        "tests/architecture/test_delivery_pack_boundary.py"
       ],
-      "scope": "Nagar Wave 5 audio studio pack (nexus.audio.studio), beat grid detection, EBU-R128 loudness normalization, music ducking curve generation, and transcript search (caption.search_transcript)",
+      "scope": "Nagar Wave 5 audio studio pack (nexus.audio.studio) and Wave 7 color & delivery pack (nexus.color.delivery, OTIO cinema export, LUTs, and master rendering)",
       "note": "Mathematically disjoint paths; zero overlap with core-security and feature-wiring zones"
     }
   ],
