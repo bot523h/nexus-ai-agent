@@ -35,7 +35,15 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
-      - run: pytest -q -m "not slow"
+      - run: |
+          set -o pipefail
+          pytest -v -m "not slow" --tb=short 2>&1 | tee pytest.log
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: pytest-log
+          path: pytest.log
+          retention-days: 2
 
   # Prove the initial Alembic chain on real PostgreSQL.
   # real PostgreSQL before any Neon URL is provided.  Zero cloud credentials:
