@@ -390,6 +390,7 @@ def golden_update(
     import json
 
     from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.optional_deps import OptionalDependencyMissing
     from nexus_ai_agent.storage.db import resolve_database_url
 
     if backend not in ("postgres", "sqlite"):
@@ -397,16 +398,22 @@ def golden_update(
         raise typer.Exit(code=2)
 
     if backend == "postgres":
-        from nexus_ai_agent.storage.checkpoint_pg_adapter import (
-            DEFAULT_PG_GOLDEN,
-            FINGERPRINT_ALGORITHM,
-            PostgresCheckpointAdapter,
-        )
-
+        # Configuration is validated before the optional driver is imported, so a
+        # core-only install still gets the actionable "no URL" error rather than
+        # a driver traceback.
         database_url = url or resolve_database_url()
         if database_url is None:
             typer.echo("no PostgreSQL URL (set NEXUS_DATABASE_URL or pass --url)", err=True)
             raise typer.Exit(code=2)
+        try:
+            from nexus_ai_agent.storage.checkpoint_pg_adapter import (
+                DEFAULT_PG_GOLDEN,
+                FINGERPRINT_ALGORITHM,
+                PostgresCheckpointAdapter,
+            )
+        except OptionalDependencyMissing as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=2) from exc
         adapter: CheckpointReadAdapter = PostgresCheckpointAdapter(database_url)
         golden_path = DEFAULT_PG_GOLDEN
     else:

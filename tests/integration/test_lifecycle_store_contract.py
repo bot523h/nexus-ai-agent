@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from nexus_ai_agent.optional_deps import is_installed
 from nexus_ai_agent.storage.checkpoint_lifecycle import CheckpointRecord
 from nexus_ai_agent.storage.checkpoint_lifecycle_store import (
     SQLiteCheckpointLifecycleStore,
@@ -42,6 +43,13 @@ def store(request: pytest.FixtureRequest, tmp_path: Path):
         s = PostgresCheckpointLifecycleStore(PG_URL)  # type: ignore[arg-type]
     yield s
     s.close()
+
+
+# psycopg ships with the optional [postgres] extra (task-107); these two tests
+# import the PG store unconditionally, so they skip on a core-only install.
+requires_pg_driver = pytest.mark.skipif(
+    not is_installed("psycopg"), reason="requires the [postgres] extra"
+)
 
 
 def _row_for(store, thread_id: str) -> CheckpointRecord | None:
@@ -121,6 +129,7 @@ def test_postgres_read_only_store_is_server_enforced() -> None:
         ro.close()
 
 
+@requires_pg_driver
 def test_postgres_store_never_issues_ddl() -> None:
     """The store assumes the migration created the table; it never DDLs.
 

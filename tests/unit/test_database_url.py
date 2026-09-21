@@ -14,6 +14,7 @@ import pytest
 from sqlmodel import select
 
 from nexus_ai_agent.config import settings as settings_module
+from nexus_ai_agent.optional_deps import is_installed
 from nexus_ai_agent.storage import db as db_module
 from nexus_ai_agent.storage.db import (
     decide_sqlite_bootstrap,
@@ -155,6 +156,19 @@ class TestResolveDatabaseUrl:
             resolve_database_url()
 
 
+@pytest.fixture()
+def _pg_driver_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bypass the optional-dependency guard.
+
+    These tests target engine *selection* (asyncpg URL form, pool_pre_ping,
+    per-URL caching), not the [postgres] install check, which is covered in
+    tests/unit/test_packaging.py. Bypassing the guard keeps them meaningful on a
+    core-only install as well as in the extras CI leg.
+    """
+    monkeypatch.setattr(db_module, "require", lambda *args, **kwargs: None)
+
+
+@pytest.mark.usefixtures("_pg_driver_present")
 class TestPgEngineSelection:
     def test_engine_created_with_asyncpg_and_pre_ping(
         self, monkeypatch: pytest.MonkeyPatch
@@ -188,6 +202,7 @@ class TestPgEngineSelection:
         assert first is second
 
     @pytest.mark.asyncio
+    @pytest.mark.skipif(not is_installed("asyncpg"), reason="requires the [postgres] extra")
     async def test_real_engine_builds_without_network(self) -> None:
         # create_async_engine is a pure object build: no connection is opened,
         # so this proves the asyncpg dialect wiring without any server.

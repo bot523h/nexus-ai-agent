@@ -18,6 +18,7 @@ from nexus_ai_agent.adapters.langgraph.lifecycle_recording import (
     LifecycleRecordingSaver,
     access_context,
 )
+from nexus_ai_agent.optional_deps import is_installed
 from nexus_ai_agent.storage.checkpoint_lifecycle_store import SQLiteCheckpointLifecycleStore
 from nexus_ai_agent.storage.langgraph_checkpoint import (
     AsyncCompatibleSqliteSaver,
@@ -46,6 +47,13 @@ def settings_env(monkeypatch) -> None:
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+# psycopg ships with the optional [postgres] extra (task-107); these two tests
+# import the PG store unconditionally, so they skip on a core-only install.
+requires_pg_driver = pytest.mark.skipif(
+    not is_installed("psycopg"), reason="requires the [postgres] extra"
+)
 
 
 def _store_for(tmp_path: Path) -> SQLiteCheckpointLifecycleStore:
@@ -112,6 +120,7 @@ async def test_kill_switch_removes_wrapper(settings_env, tmp_path: Path, monkeyp
 
 
 @pytest.mark.asyncio
+@requires_pg_driver
 async def test_postgres_kill_switch_on_wraps(settings_env, monkeypatch, tmp_path: Path) -> None:
     """PG + kill-switch on → wrapped (lifecycle metadata in the PG table)."""
     monkeypatch.setenv("NEXUS_DATABASE_URL", "postgresql://nexus:nexus@localhost:5432/nexus")
