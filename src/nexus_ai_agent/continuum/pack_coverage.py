@@ -264,8 +264,8 @@ def measure(
     counts = tracer.results().counts
 
     executed: dict[str, set[int]] = {}
-    for (filename, lineno), hits in counts.items():
-        if hits:
+    for (filename, lineno), hit_count in counts.items():
+        if hit_count:
             executed.setdefault(str(Path(filename).resolve()), set()).add(lineno)
 
     per_group: dict[str, list[ModuleCoverage]] = {}
@@ -274,11 +274,11 @@ def measure(
         if not executable:
             continue
         ran = executed.get(str(path.resolve()), set())
-        hits = sorted(executable & ran)
+        covered = sorted(executable & ran)
         per_group.setdefault(group, []).append(
             ModuleCoverage(
                 path=str(path.relative_to(repo_root)),
-                executed=len(hits),
+                executed=len(covered),
                 executable=len(executable),
                 missing=tuple(sorted(executable - ran)),
             )

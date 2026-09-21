@@ -88,25 +88,29 @@ def _register_caption(registry: CapabilityRegistry) -> object:
 def _register_edit(registry: CapabilityRegistry) -> object:
     from nexus_ai_agent.creative.packs.edit.operations import register_edit_operations
 
-    return register_edit_operations(registry)
+    register_edit_operations(registry)
+    return registry
 
 
 def _register_motion(registry: CapabilityRegistry) -> object:
     from nexus_ai_agent.creative.packs.motion.operations import register_motion_operations
 
-    return register_motion_operations(registry)
+    register_motion_operations(registry)
+    return registry
 
 
 def _register_audio(registry: CapabilityRegistry) -> object:
     from nexus_ai_agent.creative.packs.audio.operations import register_audio_operations
 
-    return register_audio_operations(registry)
+    register_audio_operations(registry)
+    return registry
 
 
 def _register_delivery(registry: CapabilityRegistry) -> object:
     from nexus_ai_agent.creative.packs.delivery.operations import register_delivery_operations
 
-    return register_delivery_operations(registry)
+    register_delivery_operations(registry)
+    return registry
 
 
 @dataclass(frozen=True)
