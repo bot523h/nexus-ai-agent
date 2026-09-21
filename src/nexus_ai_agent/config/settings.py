@@ -145,6 +145,24 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("NEXUS_GEMINI_MAX_DAILY", "GEMINI_MAX_DAILY"),
     )
 
+    # ── P0-7: AI Memory LLM-egress consent gate ───────────────────────
+    # Master kill switch for the AIMemory feature. Egress of user message
+    # text to the external LLM additionally requires the per-user consent
+    # vote (default-deny) — disabling here also stops the consent prompt.
+    ai_memory_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("NEXUS_AI_MEMORY_ENABLED", "AI_MEMORY_ENABLED"),
+    )
+    # Rate limit: at most one consented egress per user per this many
+    # seconds (in-process). Keeps one message flood from burning the
+    # Gemini quota.
+    ai_memory_min_egress_seconds: float = Field(
+        default=120.0,
+        validation_alias=AliasChoices(
+            "NEXUS_AI_MEMORY_MIN_EGRESS_SECONDS", "AI_MEMORY_MIN_EGRESS_SECONDS"
+        ),
+    )
+
     # v2.0.0: Bot username for referral links
     bot_username: str = Field(
         default="nexus_ai_agent_bot",
@@ -283,6 +301,16 @@ class Settings(BaseSettings):
     api_hmac_key: str | None = Field(
         default=None,
         validation_alias="NEXUS_API_HMAC_KEY",
+    )
+    # Bearer token for the dashboard API (P0-5). When set, every
+    # /api/dashboard/* request must send "Authorization: Bearer <token>"
+    # (constant-time comparison). When unset the API is open — the
+    # deployment MUST keep the port private (docker-compose binds
+    # 127.0.0.1 by default). Generate with:
+    #   python -c "import secrets; print(secrets.token_urlsafe(32))"
+    api_dashboard_token: str | None = Field(
+        default=None,
+        validation_alias="NEXUS_DASHBOARD_TOKEN",
     )
     creative_gemini_api_key: str | None = Field(
         default=None,

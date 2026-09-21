@@ -10,7 +10,9 @@ channel member.
 
 from __future__ import annotations
 
+import asyncio
 import time
+from functools import lru_cache
 from typing import Any
 
 from sqlmodel import Session, select
@@ -32,12 +34,22 @@ _CACHE_TTL = 300.0  # 5 minutes
 _PUBLIC_COMMANDS = frozenset({"start", "help", "forcejoin_status"})
 
 
-def _sync_engine() -> Any:
-    """Return a synchronous SQLAlchemy engine for feature CRUD."""
+@lru_cache(maxsize=8)
+def _sync_engine(db_path: str) -> Any:
+    """Return a (cached) synchronous SQLAlchemy engine for feature CRUD.
+
+    P1-2: the gate's DB read runs in worker threads (``asyncio.to_thread``),
+    so the engine is created with ``check_same_thread=False``; caching it
+    per path also removes the per-message engine churn of the old
+    create-per-call behaviour.
+    """
     from sqlalchemy import create_engine as _ce
 
-    settings = get_settings()
-    return _ce(f"sqlite:///{settings.db_path}", echo=False)
+    return _ce(
+        f"sqlite:///{db_path}",
+        echo=False,
+        connect_args={"check_same_thread": False},
+    )
 
 
 class ForceJoinManager:
@@ -46,6 +58,18 @@ class ForceJoinManager:
     def __init__(self, bot: Any | None = None) -> None:
         self.bot = bot
 
+    def bind(self, bot: Any) -> None:
+        """Attach (or replace) the Telegram bot (called at startup).
+
+        Without a bot, :meth:`check_membership` cannot verify membership
+        and fails open; binding at application startup closes that gap.
+        """
+        self.bot = bot
+
+    @property
+    def is_bound(self) -> bool:
+        return self.bot is not None
+
     # ------------------------------------------------------------------
     # Configuration
     # ------------------------------------------------------------------
@@ -53,7 +77,7 @@ class ForceJoinManager:
     @staticmethod
     def get_config(chat_id: int) -> ForceJoinConfig | None:
         """Return the force-join config for *chat_id*, or None."""
-        engine = _sync_engine()
+        engine = _sync_engine(get_settings().db_path)
         with Session(engine) as session:
             return session.exec(
                 select(ForceJoinConfig).where(ForceJoinConfig.chat_id == chat_id)
@@ -68,7 +92,7 @@ class ForceJoinManager:
         welcome_message: str = "",
     ) -> ForceJoinConfig:
         """Create or update force-join config for *chat_id*."""
-        engine = _sync_engine()
+        engine = _sync_engine(get_settings().db_path)
         with Session(engine) as session:
             existing = session.exec(
                 select(ForceJoinConfig).where(ForceJoinConfig.chat_id == chat_id)
@@ -144,18 +168,26 @@ class ForceJoinManager:
         if command and self.is_command_allowed(command):
             return False
 
-        # Check if force-join is enabled anywhere
-        engine = _sync_engine()
-        with Session(engine) as session:
-            enabled_configs = session.exec(
-                select(ForceJoinConfig).where(ForceJoinConfig.enabled is True)  # noqa: E712
-            ).first()
-            if enabled_configs is None:
-                return False  # force-join not enabled anywhere
+        # Check if force-join is enabled anywhere.
+        # P1-2: this runs on every message — the sync DB read goes to a
+        # worker thread so it can never stall the event loop.
+        if not await asyncio.to_thread(self._is_enabled_anywhere_sync):
+            return False  # force-join not enabled anywhere
 
         # Check membership
         channel = DEFAULT_CHANNEL
         return not await self.check_membership(user_id, channel)
+
+    def _is_enabled_anywhere_sync(self) -> bool:
+        """Synchronous DB core for :meth:`should_block` (worker thread)."""
+        engine = _sync_engine(get_settings().db_path)
+        with Session(engine) as session:
+            return (
+                session.exec(
+                    select(ForceJoinConfig).where(ForceJoinConfig.enabled is True)  # noqa: E712
+                ).first()
+                is not None
+            )
 
     # ------------------------------------------------------------------
     # UI helpers
