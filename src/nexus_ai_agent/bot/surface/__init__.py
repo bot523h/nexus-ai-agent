@@ -23,6 +23,9 @@ Modules
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from typing import Any
+
 from .docs import (
     chat_with_doc_cmd,
     clear_session,
@@ -51,7 +54,8 @@ __all__ = [
 ]
 
 #: Command name → handler, for the composition root (``bot/handlers.py``).
-COMMAND_HANDLERS: dict[str, object] = {
+#: Typed as a coroutine, so a future non-async handler cannot slip in.
+COMMAND_HANDLERS: dict[str, Callable[[Any, Any], Awaitable[None]]] = {
     "daily": daily_cmd,
     "profile": profile_cmd,
     "achievements": achievements_cmd,

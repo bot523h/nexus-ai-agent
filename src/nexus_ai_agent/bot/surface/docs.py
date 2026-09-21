@@ -194,7 +194,7 @@ async def docs_list_cmd(update: Any, context: Any) -> None:
 
 async def doc_delete_cmd(update: Any, context: Any) -> None:
     """``/doc_delete <شماره|file_id>`` — remove one document and its chunks."""
-    uid = user_id(update)
+    uid, cid = user_id(update), chat_id(update)
     if uid is None:
         return
     raw = args(context)
@@ -220,8 +220,8 @@ async def doc_delete_cmd(update: Any, context: Any) -> None:
     if not deleted:
         await reply(update, f"❌ سند «{raw[0]}» پیدا نشد. فهرست: /docs")
         return
-    if uid is not None and chat_id(update) is not None:
-        clear_session(uid, int(chat_id(update)))
+    if cid is not None:
+        clear_session(uid, cid)  # a deleted document cannot be chatted with
     await reply(update, f"🗑️ سند «{_document_name(target)}» و همهٔ بخش‌های آن حذف شد.")
 
 
