@@ -11,15 +11,32 @@ Wave 4a registers two operations:
 from __future__ import annotations
 
 import hashlib
+import re
 import uuid
 
-from nexus_ai_agent.creative.packs.caption.formatters import format_srt, format_vtt
+from nexus_ai_agent.creative.packs.caption.formatters import (
+    format_ass,
+    format_karaoke_dialogue,
+    format_srt,
+    format_vtt,
+)
 from nexus_ai_agent.creative.packs.caption.models import (
     CAPTION_PACKAGE_ID,
+    OPERATION_BURN_IN,
+    OPERATION_GENERATE_ASS,
     OPERATION_GENERATE_SRT,
+    OPERATION_HIGHLIGHT_WORDS,
+    OPERATION_SEARCH_TRANSCRIPT,
+    OPERATION_STYLE_VAZIRMATN,
     OPERATION_TRANSCRIBE,
+    AssStyleConfig,
+    BurnInInput,
     CaptionAsset,
+    GenerateAssInput,
     GenerateSrtInput,
+    HighlightWordsInput,
+    SearchTranscriptInput,
+    StyleVazirmatnInput,
     TranscribeInput,
 )
 from nexus_ai_agent.creative.studio.capabilities import (
@@ -147,13 +164,291 @@ def _generate_srt(project: Project, context: OperationContext) -> OperationOutco
     )
 
 
+def _generate_ass_rtl(project: Project, context: OperationContext) -> OperationOutcome:
+    """Level B (REVERSIBLE) handler for caption.generate_ass_rtl.
+
+    Generates Advanced SubStation Alpha (.ass) format with bidirectional
+    Persian/Arabic typography, Vazirmatn layout, and optional karaoke word tags.
+    """
+    payload = GenerateAssInput.model_validate(context.input_data)
+    transcript = payload.transcript
+
+    if project.assets and transcript.source_asset_id:
+        known = _asset_index(project)
+        if transcript.source_asset_id not in known:
+            raise CommandValidationError(
+                f"caption.generate_ass_rtl transcript references unknown source asset: "
+                f"{transcript.source_asset_id!r}"
+            )
+
+    ass_text = format_ass(
+        transcript,
+        style=payload.style,
+        enable_karaoke=payload.enable_karaoke,
+        enable_rtl_wrap=payload.enable_rtl_wrap,
+        play_res_x=payload.play_res_x,
+        play_res_y=payload.play_res_y,
+    )
+    ass_sha256 = hashlib.sha256(ass_text.encode("utf-8")).hexdigest()
+
+    asset_id = payload.output_asset_id or f"caption_ass_{uuid.uuid4().hex[:12]}"
+
+    caption_asset = CaptionAsset(
+        asset_id=asset_id,
+        source_transcript_id=transcript.transcript_id,
+        content=ass_text,
+        content_sha256=ass_sha256,
+        format="ass",
+        companion_renditions={},
+        companion_hashes={},
+        language=transcript.language,
+        line_count=len(transcript.segments),
+        duration_us=transcript.duration_us,
+    )
+
+    parents = (transcript.source_asset_id,) if transcript.source_asset_id else ()
+    record = AssetRecord(
+        asset_id=asset_id,
+        media_kind="caption",
+        content_sha256=ass_sha256,
+        duration_us=transcript.duration_us,
+        parent_asset_ids=parents,
+        provenance={
+            "format": "ass",
+            "source_transcript_id": transcript.transcript_id,
+            "language": transcript.language,
+            "font": payload.style.font_name if payload.style else "Vazirmatn",
+            "karaoke": payload.enable_karaoke,
+            "produced_by": "nagar.local.caption.ass.v1",
+        },
+    )
+
+    new_project = project.model_copy(update={"assets": [*project.assets, record]})
+    return OperationOutcome(
+        new_project,
+        context.history,
+        {
+            "asset_id": asset_id,
+            "caption_asset": caption_asset.model_dump(mode="json"),
+            "ass_sha256": ass_sha256,
+            "format": "ass",
+            "is_derived": bool(parents),
+            "parent_asset_ids": list(parents),
+            "line_count": len(transcript.segments),
+        },
+    )
+
+
+def _style_vazirmatn(project: Project, context: OperationContext) -> OperationOutcome:
+    """Level B (REVERSIBLE) handler for caption.style_vazirmatn.
+
+    Applies Vazirmatn font styling and layout parameters to caption assets.
+    """
+    payload = StyleVazirmatnInput.model_validate(context.input_data)
+    known = _asset_index(project)
+    if payload.caption_asset_id not in known:
+        raise CommandValidationError(
+            f"caption.style_vazirmatn references unknown asset: {payload.caption_asset_id!r}"
+        )
+
+    target_asset = known[payload.caption_asset_id]
+    if target_asset.media_kind != "caption":
+        raise CommandValidationError(
+            f"caption.style_vazirmatn requires a caption asset, got: {target_asset.media_kind!r}"
+        )
+
+    style_cfg = AssStyleConfig(
+        name="Vazirmatn_Custom",
+        font_name="Vazirmatn",
+        font_size=payload.font_size,
+        primary_colour=payload.primary_colour,
+        outline_colour=payload.outline_colour,
+        back_colour=payload.shadow_colour,
+        alignment=payload.alignment,
+        bold=payload.bold,
+    )
+
+    styled_asset_id = f"{payload.caption_asset_id}_vazir"
+    styled_record = AssetRecord(
+        asset_id=styled_asset_id,
+        media_kind="caption",
+        content_sha256=target_asset.content_sha256,
+        duration_us=target_asset.duration_us,
+        parent_asset_ids=(target_asset.asset_id,),
+        provenance={
+            **target_asset.provenance,
+            "font": "Vazirmatn",
+            "style_config": style_cfg.model_dump(mode="json"),
+            "styled_by": "caption.style_vazirmatn",
+        },
+    )
+
+    new_project = project.model_copy(update={"assets": [*project.assets, styled_record]})
+    return OperationOutcome(
+        new_project,
+        context.history,
+        {
+            "styled_asset_id": styled_asset_id,
+            "parent_asset_id": target_asset.asset_id,
+            "font_name": "Vazirmatn",
+            "font_size": payload.font_size,
+            "style": style_cfg.model_dump(mode="json"),
+        },
+    )
+
+
+def _highlight_words(project: Project, context: OperationContext) -> OperationOutcome:
+    """Level A (IMMEDIATE) handler for caption.highlight_words.
+
+    Computes word-level highlight tags and karaoke cue spans for real-time preview.
+    """
+    payload = HighlightWordsInput.model_validate(context.input_data)
+    transcript = payload.transcript
+
+    highlighted_segments: list[dict[str, object]] = []
+    total_highlighted_words = 0
+
+    for seg in transcript.segments:
+        karaoke_text = format_karaoke_dialogue(seg)
+        word_count = len(seg.words)
+        total_highlighted_words += word_count
+        highlighted_segments.append(
+            {
+                "segment_id": seg.segment_id,
+                "start_us": seg.start_us,
+                "end_us": seg.end_us,
+                "karaoke_text": karaoke_text,
+                "word_count": word_count,
+            }
+        )
+
+    return OperationOutcome(
+        project,
+        context.history,
+        {
+            "transcript_id": transcript.transcript_id,
+            "total_segments": len(transcript.segments),
+            "total_highlighted_words": total_highlighted_words,
+            "highlight_colour": payload.highlight_colour,
+            "highlighted_segments": highlighted_segments,
+        },
+    )
+
+
+def _search_transcript(project: Project, context: OperationContext) -> OperationOutcome:
+    """Level A (IMMEDIATE) handler for caption.search_transcript.
+
+    Searches across transcript segments and returns matching spans with
+    microsecond boundary hits and word timing occurrences.
+    """
+    payload = SearchTranscriptInput.model_validate(context.input_data)
+    transcript = payload.transcript
+    query = payload.query if payload.case_sensitive else payload.query.lower()
+
+    hits: list[dict[str, object]] = []
+    for seg in transcript.segments:
+        text = seg.text if payload.case_sensitive else seg.text.lower()
+        if payload.exact_word:
+            pattern = r"\b" + re.escape(query) + r"\b"
+            matched = bool(re.search(pattern, text))
+        else:
+            matched = query in text
+
+        if matched:
+            matching_words = [
+                w.model_dump(mode="json")
+                for w in seg.words
+                if (w.word if payload.case_sensitive else w.word.lower()) == query
+                or (
+                    not payload.exact_word
+                    and query in (w.word if payload.case_sensitive else w.word.lower())
+                )
+            ]
+            hits.append(
+                {
+                    "segment_id": seg.segment_id,
+                    "start_us": seg.start_us,
+                    "end_us": seg.end_us,
+                    "text": seg.text,
+                    "speaker": seg.speaker,
+                    "matched_words": matching_words,
+                }
+            )
+
+    return OperationOutcome(
+        project,
+        context.history,
+        {
+            "query": payload.query,
+            "total_hits": len(hits),
+            "hits": hits,
+        },
+    )
+
+
+def _burn_in(project: Project, context: OperationContext) -> OperationOutcome:
+    """Level C (CONFIRMED) handler for caption.burn_in.
+
+    Associates a caption track with a video asset and derives a new burned-in
+    video asset record in project state.
+    """
+    payload = BurnInInput.model_validate(context.input_data)
+    if not payload.confirmed:
+        raise CommandValidationError(
+            "caption.burn_in requires explicit user confirmation (confirmed=true) in Level C"
+        )
+
+    known = _asset_index(project)
+    if payload.video_asset_id not in known:
+        raise CommandValidationError(
+            f"caption.burn_in references unknown video asset: {payload.video_asset_id!r}"
+        )
+    if payload.caption_asset_id not in known:
+        raise CommandValidationError(
+            f"caption.burn_in references unknown caption asset: {payload.caption_asset_id!r}"
+        )
+
+    video_record = known[payload.video_asset_id]
+    caption_record = known[payload.caption_asset_id]
+
+    derived_asset_id = payload.output_asset_id or f"burnin_{uuid.uuid4().hex[:12]}"
+    content_composite = f"{video_record.content_sha256}:{caption_record.content_sha256}"
+    derived_sha256 = hashlib.sha256(content_composite.encode("utf-8")).hexdigest()
+
+    burned_record = AssetRecord(
+        asset_id=derived_asset_id,
+        media_kind="video",
+        content_sha256=derived_sha256,
+        duration_us=video_record.duration_us,
+        parent_asset_ids=(video_record.asset_id, caption_record.asset_id),
+        provenance={
+            "source_video_id": video_record.asset_id,
+            "source_caption_id": caption_record.asset_id,
+            "burn_in": True,
+            "produced_by": "nagar.local.caption.burnin.v1",
+        },
+    )
+
+    new_project = project.model_copy(update={"assets": [*project.assets, burned_record]})
+    return OperationOutcome(
+        new_project,
+        context.history,
+        {
+            "derived_asset_id": derived_asset_id,
+            "video_asset_id": video_record.asset_id,
+            "caption_asset_id": caption_record.asset_id,
+            "derived_sha256": derived_sha256,
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Registration and runtime building
 # ---------------------------------------------------------------------------
 
 
 def register_caption_operations(registry: CapabilityRegistry) -> CapabilityRegistry:
-    """Register Wave 4a caption operations on an existing capability registry."""
+    """Register Wave 4 caption operations on an existing capability registry."""
     registry.register_domain(
         DOMAIN, "Local Persian and multilingual captions (pack nexus.language.caption)"
     )
@@ -183,6 +478,72 @@ def register_caption_operations(registry: CapabilityRegistry) -> CapabilityRegis
             deterministic=True,
         ),
     )
+    registry.register_operation(
+        DOMAIN,
+        "generate_ass_rtl",
+        OperationSpec(
+            operation_id=OPERATION_GENERATE_ASS,
+            description="Generate Advanced SubStation Alpha (.ass) with "
+            "Persian/RTL formatting (level B).",
+            permission_level=PermissionLevel.REVERSIBLE,
+            input_model=GenerateAssInput,
+            handler=_generate_ass_rtl,
+            required_packs=(CAPTION_PACKAGE_ID,),
+            deterministic=True,
+        ),
+    )
+    registry.register_operation(
+        DOMAIN,
+        "style_vazirmatn",
+        OperationSpec(
+            operation_id=OPERATION_STYLE_VAZIRMATN,
+            description="Apply Vazirmatn typography styling to caption assets (level B).",
+            permission_level=PermissionLevel.REVERSIBLE,
+            input_model=StyleVazirmatnInput,
+            handler=_style_vazirmatn,
+            required_packs=(CAPTION_PACKAGE_ID,),
+            deterministic=True,
+        ),
+    )
+    registry.register_operation(
+        DOMAIN,
+        "highlight_words",
+        OperationSpec(
+            operation_id=OPERATION_HIGHLIGHT_WORDS,
+            description="Compute word-level karaoke and highlight timings (level A).",
+            permission_level=PermissionLevel.IMMEDIATE,
+            input_model=HighlightWordsInput,
+            handler=_highlight_words,
+            required_packs=(CAPTION_PACKAGE_ID,),
+            deterministic=True,
+        ),
+    )
+    registry.register_operation(
+        DOMAIN,
+        "search_transcript",
+        OperationSpec(
+            operation_id=OPERATION_SEARCH_TRANSCRIPT,
+            description="Search transcript segments for keywords and occurrences (level A).",
+            permission_level=PermissionLevel.IMMEDIATE,
+            input_model=SearchTranscriptInput,
+            handler=_search_transcript,
+            required_packs=(CAPTION_PACKAGE_ID,),
+            deterministic=True,
+        ),
+    )
+    registry.register_operation(
+        DOMAIN,
+        "burn_in",
+        OperationSpec(
+            operation_id=OPERATION_BURN_IN,
+            description="Burn in captions onto video asset with explicit confirmation (level C).",
+            permission_level=PermissionLevel.CONFIRMATION,
+            input_model=BurnInInput,
+            handler=_burn_in,
+            required_packs=(CAPTION_PACKAGE_ID,),
+            deterministic=True,
+        ),
+    )
     return registry
 
 
@@ -195,7 +556,12 @@ def build_caption_registry() -> CapabilityRegistry:
 
 __all__ = [
     "DOMAIN",
+    "OPERATION_BURN_IN",
+    "OPERATION_GENERATE_ASS",
     "OPERATION_GENERATE_SRT",
+    "OPERATION_HIGHLIGHT_WORDS",
+    "OPERATION_SEARCH_TRANSCRIPT",
+    "OPERATION_STYLE_VAZIRMATN",
     "OPERATION_TRANSCRIBE",
     "build_caption_registry",
     "register_caption_operations",

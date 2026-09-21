@@ -21,6 +21,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 CAPTION_PACKAGE_ID = "nexus.language.caption"
 OPERATION_TRANSCRIBE = "caption.transcribe"
 OPERATION_GENERATE_SRT = "caption.generate_srt"
+OPERATION_GENERATE_ASS = "caption.generate_ass_rtl"
+OPERATION_STYLE_VAZIRMATN = "caption.style_vazirmatn"
+OPERATION_HIGHLIGHT_WORDS = "caption.highlight_words"
+OPERATION_SEARCH_TRANSCRIPT = "caption.search_transcript"
+OPERATION_BURN_IN = "caption.burn_in"
 
 
 class WordTiming(BaseModel):
@@ -189,3 +194,95 @@ class GenerateSrtInput(BaseModel):
     output_asset_id: str | None = None
     include_vtt: bool = True
     line_policy: dict[str, Any] = Field(default_factory=dict)
+
+
+class AssStyleConfig(BaseModel):
+    """Typography and layout style specification for Advanced SubStation Alpha (ASS)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = "Default"
+    font_name: str = "Vazirmatn"
+    font_size: int = Field(default=48, ge=8, le=144)
+    primary_colour: str = "&H00FFFFFF"  # White (&HAABBGGRR in ASS)
+    secondary_colour: str = "&H000000FF"
+    outline_colour: str = "&H00000000"  # Black outline
+    back_colour: str = "&H80000000"  # Semi-transparent shadow
+    bold: bool = True
+    italic: bool = False
+    underline: bool = False
+    strike_out: bool = False
+    scale_x: int = 100
+    scale_y: int = 100
+    spacing: int = 0
+    angle: int = 0
+    border_style: int = 1
+    outline: float = 3.0
+    shadow: float = 2.0
+    alignment: int = Field(default=2, ge=1, le=9)  # 2 = Bottom-Center in ASS v4+
+    margin_l: int = 40
+    margin_r: int = 40
+    margin_v: int = 40
+    encoding: int = 1
+
+
+class GenerateAssInput(BaseModel):
+    """Input payload for ``caption.generate_ass_rtl`` (Level B)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    transcript: TranscriptRef
+    output_asset_id: str | None = None
+    style: AssStyleConfig | None = None
+    enable_rtl_wrap: bool = True
+    enable_karaoke: bool = False
+    play_res_x: int = Field(default=1280, ge=320)
+    play_res_y: int = Field(default=720, ge=240)
+
+
+class StyleVazirmatnInput(BaseModel):
+    """Input payload for ``caption.style_vazirmatn`` (Level B)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    caption_asset_id: str = Field(min_length=1)
+    font_size: int = Field(default=48, ge=8, le=144)
+    primary_colour: str = "&H00FFFFFF"
+    outline_colour: str = "&H00000000"
+    shadow_colour: str = "&H80000000"
+    alignment: int = Field(default=2, ge=1, le=9)
+    bold: bool = True
+    play_res_x: int = Field(default=1280, ge=320)
+    play_res_y: int = Field(default=720, ge=240)
+
+
+class HighlightWordsInput(BaseModel):
+    """Input payload for ``caption.highlight_words`` (Level A)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    transcript: TranscriptRef
+    highlight_colour: str = "&H0000E5FF"  # Golden/Cyan highlight
+    mode: Literal["karaoke_tag", "span_tag"] = "karaoke_tag"
+
+
+class SearchTranscriptInput(BaseModel):
+    """Input payload for ``caption.search_transcript`` (Level A)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    transcript: TranscriptRef
+    query: str = Field(min_length=1)
+    case_sensitive: bool = False
+    exact_word: bool = False
+
+
+class BurnInInput(BaseModel):
+    """Input payload for ``caption.burn_in`` (Level C)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    video_asset_id: str = Field(min_length=1)
+    caption_asset_id: str = Field(min_length=1)
+    output_asset_id: str | None = None
+    confirmed: bool = False

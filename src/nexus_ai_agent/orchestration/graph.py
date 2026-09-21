@@ -45,15 +45,31 @@ async def _chat_agent(llm: LLMProvider, state: NexusState) -> NexusState:
     return state
 
 
-async def _planner_agent(llm: LLMProvider, state: NexusState) -> NexusState:
-    # Deterministic MVP plan so FakeLLM works in tests.
+async def _planner_agent(
+    llm: LLMProvider,
+    state: NexusState,
+    tool_registry: ToolRegistry | None = None,
+) -> NexusState:
+    existing_task = state.get("current_task")
+    if existing_task and existing_task.get("steps"):
+        return state
+
+    # Deterministic plan with tool detection
     user_msg = state.get("messages", [])[-1]["content"] if state.get("messages") else ""
     action = user_msg or "No-op"
+
+    selected_tool = None
+    if tool_registry:
+        for tool_name in tool_registry._tools:
+            if tool_name in user_msg.lower():
+                selected_tool = tool_name
+                break
+
     steps: list[dict[str, Any]] = [
         {
             "id": 1,
             "action": action,
-            "tool": None,
+            "tool": selected_tool,
             "status": "pending",
         }
     ]
@@ -66,7 +82,10 @@ async def _planner_agent(llm: LLMProvider, state: NexusState) -> NexusState:
     return state
 
 
-async def _executor_agent(state: NexusState) -> NexusState:
+async def _executor_agent(
+    state: NexusState,
+    tool_registry: ToolRegistry | None = None,
+) -> NexusState:
     task = state.get("current_task") or {}
     steps = task.get("steps", [])
     first_pending = next((s for s in steps if s.get("status") == "pending"), None)
@@ -74,21 +93,66 @@ async def _executor_agent(state: NexusState) -> NexusState:
         state["tool_results"] = state.get("tool_results", [])
         return state
 
-    # Tools are wired in later; mark as done for MVP.
-    first_pending["status"] = "done"
-    state["tool_results"] = state.get("tool_results", []) + [
-        {"step_id": first_pending.get("id"), "success": True, "output": "noop"}
-    ]
-    state["response"] = state.get("response") or "Task executed."
+    tool_name = first_pending.get("tool")
+    if tool_registry and tool_name:
+        tool_inputs = first_pending.get("inputs", {})
+        try:
+            res = await tool_registry.run(tool_name, tool_inputs)
+            is_success = res.get("success", False)
+            first_pending["status"] = "done" if is_success else "failed"
+            output_text = res.get("output", "") or res.get("error", "")
+            state["tool_results"] = state.get("tool_results", []) + [
+                {
+                    "step_id": first_pending.get("id"),
+                    "tool": tool_name,
+                    "success": is_success,
+                    "output": output_text,
+                }
+            ]
+            state["response"] = output_text or f"Tool {tool_name} executed."
+        except Exception as e:
+            first_pending["status"] = "failed"
+            state["tool_results"] = state.get("tool_results", []) + [
+                {
+                    "step_id": first_pending.get("id"),
+                    "tool": tool_name,
+                    "success": False,
+                    "output": str(e),
+                }
+            ]
+            state["response"] = f"Failed to execute {tool_name}: {e}"
+    else:
+        # Default MVP step execution
+        first_pending["status"] = "done"
+        state["tool_results"] = state.get("tool_results", []) + [
+            {"step_id": first_pending.get("id"), "success": True, "output": "noop"}
+        ]
+        state["response"] = state.get("response") or "Task executed."
+
     state["current_task"] = task
     return state
 
 
-async def _memory_writer(state: NexusState) -> NexusState:
+async def _memory_writer(
+    state: NexusState,
+    long_term_memory: LongTermMemory | None = None,
+) -> NexusState:
     # Persist short turn-level state updates.
     response = state.get("response", "")
     if response:
         state["messages"] = state.get("messages", []) + [{"role": "assistant", "content": response}]
+
+    # Store turn into durable long-term memory for semantic recall across sessions
+    thread_id = state.get("thread_id")
+    messages = state.get("messages", [])
+    if long_term_memory and thread_id and len(messages) >= 2:
+        last_user = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
+        if last_user and response:
+            try:
+                turn_text = f"User: {last_user}\nAssistant: {response}"
+                await long_term_memory.store(thread_id, turn_text)
+            except Exception:
+                pass  # Fail-safe: memory write failures never abort the conversation
     return state
 
 
@@ -108,7 +172,7 @@ def compile_graph(
     graph: StateGraph[NexusState] = StateGraph(NexusState)
 
     async def planner_node(state: NexusState) -> NexusState:
-        return await _planner_agent(llm, state)
+        return await _planner_agent(llm, state, tool_registry=tool_registry)
 
     async def memory_reader_task_node(state: NexusState) -> NexusState:
         return await _memory_reader(long_term_memory, state)
@@ -150,17 +214,23 @@ def compile_graph(
             return "phi_agent"
         return "gemma_agent"
 
+    async def executor_agent_node(state: NexusState) -> NexusState:
+        return await _executor_agent(state, tool_registry=tool_registry)
+
+    async def memory_writer_node(state: NexusState) -> NexusState:
+        return await _memory_writer(state, long_term_memory=long_term_memory)
+
     graph.add_node("router", _router_node)
     graph.add_node("memory_reader_task", memory_reader_task_node)
     graph.add_node("memory_reader_chat", memory_reader_chat_node)
     graph.add_node("planner_agent", planner_node)
-    graph.add_node("executor_agent", _executor_agent)
+    graph.add_node("executor_agent", executor_agent_node)
     graph.add_node("route_persona", lambda s: s)
     graph.add_node("phi_agent", phi_node)
     graph.add_node("qwen_agent", qwen_node)
     graph.add_node("gemma_agent", gemma_node)
     graph.add_node("moderation", moderation_node)
-    graph.add_node("memory_writer", _memory_writer)
+    graph.add_node("memory_writer", memory_writer_node)
 
     graph.add_edge(START, "router")
     graph.add_conditional_edges(

@@ -108,6 +108,7 @@ class RenderIR:
     fade_in_us: int = 0
     fade_out_us: int = 0
     loudness_lufs: float | None = None
+    subtitle_path: str | None = None
 
     @property
     def input_durations_us(self) -> tuple[int, ...]:
@@ -348,6 +349,15 @@ def build_filtergraph(ir: RenderIR) -> tuple[str, str, bool]:
             accumulated = accumulated + ir.input_durations_us[index] - transition_us
             previous_label = label
         final_label = previous_label
+
+    if ir.subtitle_path is not None:
+        sub_escaped = (
+            str(ir.subtitle_path).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+        )
+        filter_name = "ass" if str(ir.subtitle_path).endswith(".ass") else "subtitles"
+        sub_label = "vsub"
+        lines.append(f"[{final_label}]{filter_name}='{sub_escaped}'[{sub_label}]")
+        final_label = sub_label
 
     has_audio = ir.audio_path is not None
     if has_audio:
