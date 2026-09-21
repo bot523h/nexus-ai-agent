@@ -158,6 +158,8 @@ module = [
     "telegram",
     "telegram.ext",
     "chromadb",
+    "chromadb.utils",
+    "chromadb.utils.embedding_functions",
     "flashrank",
     "arabic_reshaper",
     "bidi.algorithm",
@@ -166,3 +168,12 @@ module = [
     "botocore.config",
 ]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# features/rag.py only type-checks meaningfully with the [rag] extra installed:
+# chromadb's own signatures decide whether the embedding-function ignore is
+# needed, so on a core-only install that same ignore reads as "unused" and
+# warn_unused_ignores would fail the CI `test` leg. The override is scoped to
+# this one module; every other module keeps the strict setting.
+module = ["nexus_ai_agent.features.rag"]
+warn_unused_ignores = false
