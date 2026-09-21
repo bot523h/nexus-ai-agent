@@ -593,7 +593,8 @@ def test_operation_inputs_reject_unknown_fields() -> None:
 def test_pack_registry_activates_the_builtin_pack_for_real() -> None:
     """Wave 2a registered it as *pending*; Wave 2b makes activation real."""
     registry = PackRegistry(build_slideshow_registry(), current_version="3.10.0")
-    pack = registry.register_builtin(root=PACKS_DIR)[0]
+    packs = registry.register_builtin(root=PACKS_DIR)
+    pack = next(p for p in packs if p.package_id == "nexus.slideshow.compose")
     assert pack.package_id == "nexus.slideshow.compose"
     assert pack.pending_capabilities == ()
     activated = registry.activate("nexus.slideshow.compose")

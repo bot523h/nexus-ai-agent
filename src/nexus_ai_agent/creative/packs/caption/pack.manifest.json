@@ -1,0 +1,100 @@
+{
+  "manifest_schema": "nexus.capability-pack.v1",
+  "package_id": "nexus.language.caption",
+  "version": "1.0.0",
+  "display_name": "Local Persian and multilingual captions",
+  "download_size_mb": 384.0,
+  "capabilities": [
+    "caption.transcribe",
+    "caption.align_words",
+    "caption.diarize",
+    "caption.translate_local",
+    "caption.generate_srt",
+    "caption.generate_ass_rtl",
+    "caption.style_vazirmatn",
+    "caption.highlight_words",
+    "caption.search_transcript",
+    "caption.burn_in"
+  ],
+  "runtime": {
+    "native": {
+      "adapter_id": "nagar.local.whisperx.caption.v1",
+      "sandbox": "process_isolated",
+      "network_required": false
+    },
+    "browser": {
+      "preferred": "onnx_webgpu",
+      "fallback": "onnx_wasm_simd",
+      "worker_required": true
+    }
+  },
+  "permissions": [
+    "read_project_audio",
+    "read_project_video_frames",
+    "write_transcript_assets",
+    "write_derived_caption_assets",
+    "write_timeline_layers"
+  ],
+  "network_policy": {
+    "upload_media": false,
+    "runtime_network": false,
+    "pack_update": "optional_signed_download"
+  },
+  "hardware_requirements": {
+    "minimum_ram_mb": 4096,
+    "recommended_ram_mb": 8192,
+    "minimum_cpu_threads": 4,
+    "gpu": {
+      "optional": true,
+      "webgpu": true,
+      "features": [
+        "shader-f16"
+      ]
+    },
+    "disk_free_mb": 1200
+  },
+  "artifacts": [
+    {
+      "artifact_id": "whisper-small-int8",
+      "kind": "onnx_model",
+      "path": "models/whisper-small-int8.ort",
+      "size_mb": 142.0,
+      "sha256": "sha256:replace-with-real-digest",
+      "license": "model-license-reference"
+    },
+    {
+      "artifact_id": "persian-aligner",
+      "kind": "onnx_model",
+      "path": "models/fa-aligner.ort",
+      "size_mb": 68.0,
+      "sha256": "sha256:replace-with-real-digest",
+      "license": "model-license-reference"
+    },
+    {
+      "artifact_id": "vazirmatn-regular",
+      "kind": "font",
+      "path": "fonts/Vazirmatn-Regular.ttf",
+      "size_mb": 1.2,
+      "sha256": "sha256:replace-with-real-digest",
+      "license": "OFL-1.1"
+    }
+  ],
+  "resource_budget": {
+    "max_resident_model_mb": 900,
+    "max_audio_minutes_in_memory": 2.0,
+    "max_preview_resolution": "1280x720"
+  },
+  "compatibility": {
+    "min_nagar_version": "3.10.0",
+    "protocol_version": "nagar.command.v1",
+    "state_schema": "nagar.state.v1"
+  },
+  "security": {
+    "signature_algorithm": "ed25519",
+    "signature": "base64:replace-with-signed-manifest",
+    "trusted_publisher": "nagar-core",
+    "allow_arbitrary_native_code": false,
+    "allow_arbitrary_wasm_imports": false
+  },
+  "external_binaries": []
+}

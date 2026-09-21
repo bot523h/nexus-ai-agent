@@ -85,7 +85,8 @@ def test_declared_capabilities_match_the_registered_operations() -> None:
 
 def test_the_pack_activates_against_its_own_manifest() -> None:
     registry = PackRegistry(build_slideshow_registry(), current_version=None)
-    pack = registry.register_builtin(root=PACKS)[0]
+    packs = registry.register_builtin(root=PACKS)
+    pack = next(p for p in packs if p.package_id == "nexus.slideshow.compose")
     assert registry.activate(pack.package_id).active is True
     assert registry.unknown_capabilities(pack.package_id) == ()
 
