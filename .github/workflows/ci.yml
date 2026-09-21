@@ -3,7 +3,8 @@ name: CI
 on: [push, pull_request]
 
 jobs:
-  test:
+  lint:
+    name: lint (ruff + mypy + version lockstep)
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -16,7 +17,33 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy src
-      - run: pytest -q -m "not slow"
+      # Version-lockstep guard: VERSION == pyproject.toml == latest CHANGELOG
+      # heading.  Fails fast with a human-readable message; the same check
+      # also lives in tests/unit/test_version_command.py so ``make test``
+      # alone catches drift locally.
+      - run: pytest -q tests/unit/test_version_command.py -k lockstep
+
+  test:
+    name: test (pytest -m "not slow")
+    runs-on: ubuntu-latest
+    needs: lint
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: |
+          set -o pipefail
+          pytest -v -m "not slow" --tb=short 2>&1 | tee pytest.log
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: pytest-log
+          path: pytest.log
+          retention-days: 2
 
   # Prove the initial Alembic chain on real PostgreSQL.
   # real PostgreSQL before any Neon URL is provided.  Zero cloud credentials:

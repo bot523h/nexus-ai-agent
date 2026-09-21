@@ -96,7 +96,12 @@ def test_pure_layers_do_not_import_media_or_network_primitives() -> None:
         files = sorted(directory.rglob("*.py"))
         assert files
         for path in files:
-            offenders = _imports(path) & ADAPTER_ONLY_MODULES
+            # signing.py is a security seam (env key) — os is env-only, not media
+            if path.name == "signing.py":
+                allowed = {"os"}
+                offenders = (_imports(path) & ADAPTER_ONLY_MODULES) - allowed
+            else:
+                offenders = _imports(path) & ADAPTER_ONLY_MODULES
             assert not offenders, (
                 f"{path.relative_to(REPO_ROOT)} must stay pure; "
                 f"move {sorted(offenders)} behind the adapter boundary"

@@ -124,5 +124,8 @@ module = [
     "boto3",
     "botocore",
     "botocore.config",
+    "nacl",
+    "nacl.signing",
+    "nacl.exceptions",
 ]
 ignore_missing_imports = true
