@@ -24,6 +24,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `streak_broken`, `title`, `xp` and `remaining_minutes`. (`tests/unit/test_gamification_daily.py`,
   10 tests, A/B proven: 10 fail against the previous blob, 10 pass against this one.)
 
+### Added (agent B · `arena/01a0c634-nexus-ai-agent`)
+
+- **Document RAG is now a real retriever (task-127).** The 96-line engine on `main` sliced every
+  document into fixed 1000-character windows with no overlap and imported `chromadb` +
+  `flashrank` eagerly. It is replaced by a two-layer design:
+  - `features/rag_core.py` — **stdlib-only**: a lossless recursive chunker (paragraph → line →
+    sentence → clause → word, 384-token windows, 15 % overlap, offsets into the source text), an
+    Okapi BM25 index with Persian/Arabic folding (`كتاب` = `کتاب`, `۴۲` = `42`), weighted
+    reciprocal-rank fusion, cosine similarity, a hybrid retriever with an injectable embedder, and
+    a `recall@k` / MRR / hit-rate evaluation harness.
+  - `features/rag.py` — a thin **adapter**: `chromadb`/`flashrank`/the embedding model are imported
+    lazily, `client` / `embedding_fn` / `ranker` are constructor-injected, blocking calls run in a
+    worker thread, documents are idempotent per `file_id`, and a missing vector stack raises
+    `RAGUnavailable` with an install hint instead of silently storing nothing.
+  Measured on the frozen 8-document corpus (6 labelled probes, `k=3`): **BM25-only recall@3
+  `0.8333`** (it cannot answer the paraphrased probe) → **hybrid recall@3 `1.0000`**, and the
+  engine scores the same `1.0000` end-to-end. `AdvancedRAGEngine.add_document/query` keep their
+  signatures, so `worker.py` is untouched.
+
 ### Audit (agent B)
 
 - `docs/audits/PR32_TRIAGE_2026-09-21.md` — forensic triage of PR#32 against the merged PR#34:

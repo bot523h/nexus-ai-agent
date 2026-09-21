@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T23:16:46Z",
+  "updated_at": "2026-09-21T23:29:06Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -401,7 +401,7 @@
         "recall@k موتور RAG روی fixture ثابت گزارش شود",
         "ruff/mypy/pytest هدفمند سبز؛ گیت‌های کامل واگذار به ci-gates-steward"
       ],
-      "progress": "tick2_done_gamification_fix"
+      "progress": "tick3_done_rag_engine"
     }
   ],
   "zones": [
@@ -1290,8 +1290,8 @@
       "title": "RAG واقعی روی stub چهارکیلوبایتی (چانکینگ+هایبرید+eval)",
       "zone": "features-rag",
       "priority": "P2",
-      "assigned_to": "عامل B (دنباله طبیعی #32 — همان فایل)",
-      "status": "assigned_to_B_next",
+      "assigned_to": "عامل B (سشن 01a0c634)",
+      "status": "done",
       "exclusive_paths": [
         "src/nexus_ai_agent/features/rag.py",
         "tests/unit/test_rag_chunking.py",
@@ -1302,7 +1302,8 @@
         "recall@k گزارش‌شده روی fixture",
         "بدون torch جداگانه (chroma موجود)",
         "تست eval سبز"
-      ]
+      ],
+      "evidence": "features/rag_core.py (stdlib-only) + features/rag.py rewritten on top of it. Measured on the frozen 8-doc corpus (6 labelled probes, k=3): BM25-only recall@3 = 0.8333 (misses the paraphrase probe), hybrid recall@3 = 1.0000, engine end-to-end recall@3 = 1.0000. 80 new tests green (53 chunking + 17 eval + 10 gamification)."
     },
     {
       "id": "task-128",
@@ -1422,6 +1423,20 @@
         "tests/unit/test_gamification_daily.py: 10 tests — A/B proven: 10 failed against main's blob, 10 passed against the fix"
       ],
       "next": "tick 3 — real RAG engine (task-127): recursive chunking + hybrid BM25/vector + recall@k harness"
+    },
+    {
+      "at": "2026-09-21T23:29:06Z",
+      "by_branch": "arena/01a0c634-nexus-ai-agent",
+      "agent": "عامل B (سشن 01a0c634)",
+      "tick": 3,
+      "done": [
+        "features/rag_core.py: stdlib-only core — recursive chunker (lossless, bounded, overlapping, deterministic), Okapi BM25 with Persian/Arabic folding, weighted RRF, cosine, HybridRetriever, recall@k harness",
+        "features/rag.py rewritten as a thin adapter: lazy chromadb/flashrank, injectable client/embedding_fn/ranker, hybrid retrieval, list/delete/clear, fail-loud RAGUnavailable",
+        "chunker bug found and fixed during verification (relative spans used as absolute → duplicate + gapped chunks)",
+        "measured: BM25-only 0.8333 vs hybrid 1.0000 recall@3; engine end-to-end 1.0000",
+        "zero-regression A/B on tests/integration/test_in_process_job_queue.py: 12 passed/1 pre-existing env failure/2 skipped — identical with and without the branch"
+      ],
+      "next": "tick 4 — bot/surface: framework-free /daily /profile /achievements /xp_leaderboard + /docs /doc_delete /chat_with_doc"
     }
   ],
   "ten_forward_tasks_wave4": [
