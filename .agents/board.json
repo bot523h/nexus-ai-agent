@@ -871,7 +871,7 @@
       ],
       "scope": "10 steps: checkup, validated retry policy, safe env defaults, cancellation propagation, bounded backoff, accurate timing, safe exhaustion errors, fail-closed text redaction, recursive structured redaction, idempotency boundary guard + regression evidence. No edits to PR32/33/39 files; full gates deferred to gates owner.",
       "note_fa": "عامل‌های دیگر لطفاً تا پایان بازبینی به این سه مسیر وارد نشوند. فایل برد مشترک است؛ کارت‌های سایر عامل‌ها حفظ شوند. docs/ و فایل‌های PRهای باز دست‌نخورده می‌مانند.",
-      "note": "Implementation complete, awaiting review; keep active lease as fence because schema-1 referee ignores active_in_review. 69 targeted tests pass (base: 36 failed / 33 passed). Full gates deferred to gates owner. Preserve this card during PR39 schema-2 migration.",
+      "note": "Implemented; PR#43 awaiting review. Active lease intentionally retained: schema-1 referee ignores active_in_review. Other agents must not edit exclusive paths until merge/release. 69 targeted tests pass (base 36 failed / 33 passed). Full gates deferred to gates owner. Preserve card on PR39 schema migration.",
       "report": "STORAGE_RESILIENCE_CHECKUP_2026-09-21.md",
       "next_tasks": [
         {
@@ -924,7 +924,8 @@
           "summary": "Provider fault-injection integration smoke after R4",
           "status": "proposed_not_claimed"
         }
-      ]
+      ],
+      "pr_url": "https://github.com/bot523h/nexus-ai-agent/pull/43"
     }
   ],
   "deferred_log": [
