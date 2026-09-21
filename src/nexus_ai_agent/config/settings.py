@@ -262,6 +262,32 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("NEXUS_OPENROUTER_MODEL", "OPENROUTER_MODEL"),
     )
 
+    # ── v3.12.0: llama.cpp server (local, optional) ────────────────────
+    # Points the engine at a locally running `llama-server` (OpenAI-compatible
+    # HTTP API) via LocalLlamaServerProvider. Empty (default) disables it and
+    # keeps the legacy priority: routing chain → GGUF file → FakeLLM.
+    # No extra install needed (plain httpx); start a server e.g. with:
+    #   llama-server -m models/model.gguf --port 8080 --ctx-size 4096
+    llama_server_base_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("NEXUS_LLAMA_SERVER_BASE_URL", "LLAMA_SERVER_BASE_URL"),
+    )
+    # Model name sent in API payloads; llama-server serves its loaded model
+    # regardless, but the OpenAI API requires the field.
+    llama_server_model: str = Field(
+        default="local-model",
+        validation_alias=AliasChoices("NEXUS_LLAMA_SERVER_MODEL", "LLAMA_SERVER_MODEL"),
+    )
+    # Local inference can be slow on CPU — default higher than the cloud cap.
+    llama_server_timeout: int = Field(
+        default=120,
+        validation_alias=AliasChoices("NEXUS_LLAMA_SERVER_TIMEOUT", "LLAMA_SERVER_TIMEOUT"),
+    )
+    llama_server_max_tokens: int = Field(
+        default=512,
+        validation_alias=AliasChoices("NEXUS_LLAMA_SERVER_MAX_TOKENS", "LLAMA_SERVER_MAX_TOKENS"),
+    )
+
     # ── v3.8.0: Telegram webhook mode (scale-to-zero deployments) ─────
     # "polling" (default) keeps the legacy always-on long-poll loop;
     # "webhook" serves Telegram updates over HTTP for web-type services
