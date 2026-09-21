@@ -1,3 +1,5 @@
+# Deploy shape validated by `python scripts/deploy_smoke.py` (task-130).
+# Runbook: docs/ops/DEPLOY_RUNBOOK.md
 name: nexus-ai
 services:
   - name: bot
