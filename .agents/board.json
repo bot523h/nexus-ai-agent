@@ -1,396 +1,133 @@
 {
-  "schema": 1,
-  "updated_at": "2026-09-21T16:21:42Z",
-  "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
-  "board_gc_log": [
-    {
-      "at": "2026-09-21T11:54:00Z",
-      "by_branch": "arena/01a0c3ca-nexus-ai-agent",
-      "agent": "عامل D",
-      "action": "board-gc + engineered handoff",
-      "evidence": {
-        "merged_prs": [
-          "#31 (nagar waves 3/4b/5/6/7) → main @ c41b1b0",
-          "#30 (protocol + audit)"
-        ],
-        "open_prs": [
-          "#32 (agent B feature-wiring B1–B8)"
-        ],
-        "main_ci_status": "RED — run 35594818988, step `ruff check .` FAILED before pytest ran",
-        "lint_debt_from_pr31": "71 ruff check errors (40×E501, 28×F401, 2×I001, 1×F841) + 16 files needing ruff format — all in PR#31 files",
-        "packs_pending_state": "nexus packs list: edit 8/8 pending, motion 5/5 pending, audio 4/4 pending, delivery 7/7 pending, caption 7/10 registered (pending: align_words, diarize, translate_local); only slideshow is fully active",
-        "verified_locally": "targeted pytest on merged state: 180 passed (architecture + pack + studio + router_multilingual + graph_memory) — pack logic itself is green; only the lint gate is red"
+  "schema": 2,
+  "updated_at": "2026-09-21T16:45:00Z",
+  "protocol": {
+    "protocol_version": 2,
+    "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
+    "identity_rule": "شاخه، هویت متعارف است (branch name is the canonical identity)؛ حروف (A/B/C…) فقط برچسب‌اند. هر سشن جدید باید ابتدا `git ls-remote origin \"arena/*\"`، PRهای باز و این تخته را بخواند.",
+    "lease_ttl_hours": 24,
+    "gates_rule": "دقیقاً یک عامل (دارندهٔ gates_owner) گیت‌های کامل را روی کارِ main-bound اجرا می‌کند؛ بقیه «deferred to gates owner» را در PR قید می‌کنند. بررسی‌های تشخیصی محلی (ruff check، pytest هدفمند) برای همه آزاد است.",
+    "overlap_rule_fa": "پیش از push: `python scripts/agent_board.py check --files <changed files> --branch <you>` باید کد خروج ۰ بدهد. اگر ناحیه گرفته است: تسک دیگر یا ثبت defer با دلیل فارسی.",
+    "verification_rule": "هر تسک باید acceptance_criteria و evidence_required داشته باشد؛ ساختار تخته با tests/unit/test_agent_board.py تضمین می‌شود و یک تسک بدون معیار پذیرش قابل claim نیست.",
+    "merge_order": [
+      "task-123 (PR#33 slim-down) — cli.py را آزاد می‌کند",
+      "task-122 (PR#32 rebase + dedupe)",
+      "task-126 (packs registry) پس از آزاد شدن cli.py",
+      "task-121 / task-128 / task-106 / task-124 روی مسیرهای گسسته",
+      "task-132 / task-134 / task-127 در امواج بعدی"
+    ],
+    "ten_forward_rule_fa": "هر عاملی که کارش تمام می‌شود باید ۱۰ کار بعدی را با معیار پذیرش و مسیر انحصاری به next_work اضافه کند تا نفر بعد نقشهٔ دقیق داشته باشد.",
+    "deferred_improvements": [
+      {
+        "id": "docs-toolchain-trigger",
+        "what": "markdownlint-cli2 + Lychee + mermaid-lint در یک job CI جدا",
+        "trigger": "docs/ از ۳۰ فایل Markdown بگذرد یا مستندات غیرانگلیسی اضافه شود",
+        "decision": "ADR 0002"
       },
-      "removed_completed_tasks": [
-        "task-04 (wave3 edit)",
-        "task-05 (wave6 motion)",
-        "task-06 (wave5 audio)",
-        "task-07 (wave7 delivery)"
-      ],
-      "note_fa": "تخته پاک‌سازی شد؛ وظایف تکمیل‌شده حذف و ۱۰ وظیفه مهندسی‌شده بعدی با معیار پذیرش، ابزار تحقیق‌شده و مسیر انحصاری جدید جایگزین شد. سند کامل: docs/HANDOFF_ANALYSIS_2026-09-21.md"
-    },
-    {
-      "at": "2026-09-21T12:45:00Z",
-      "by_branch": "arena/01a0c3ca-nexus-ai-agent",
-      "agent": "عامل D",
-      "action": "task-101 executed end-to-end (lint gate restore on main lineage)",
-      "evidence": {
-        "ruff_check": "71 -> 0 errors",
-        "ruff_format": "16 unformatted -> 336 files clean",
-        "tests": "180/180 targeted, 45/45 slideshow surface, 749 passed in wide run; 20 pre-existing env failures reproduced on base commit via git stash A/B",
-        "diff": "24 files, +158/-160 — mechanical only (imports, line-length, formatting)"
+      {
+        "id": "owner-rebranding",
+        "what": "ادغام DECISION_LOG.md و adr/ در یک ابزار log4brains",
+        "trigger": "اگر تعداد ADRها از ۲۰ بگذرد",
+        "decision": "ADR 0001"
       }
-    },
-    {
-      "at": "2026-09-21T13:05:00Z",
-      "by_branch": "arena/01a0c3a0-nexus-ai-agent",
-      "agent": "عامل E",
-      "action": "rebase of PR#34 onto post-task-101 main (978ae16); board conflict resolved by handoff rule (main version wins)",
-      "evidence": {
-        "pr34_scope": "P0-2/3/4/5/6 + engine wiring (tools/games/referral/force-join/anon) + README honesty + 108 tests",
-        "pr34_ci": "run 35596904752: test PASS (7m50s) + migrate-postgres PASS (5m42s) on pre-rebase head",
-        "overlap": "PR#34 overlaps task-102 (agent A) and task-103/PR#32 (agent B); coordination notes written into both claims",
-        "claim_state": "no claims stolen: P0 stays with agent A, feature-wiring stays with agent B; PR#34 recorded as agent_e card"
-      },
-      "note_fa": "تعارض board.json با قاعده «آخرین وضعیت واگذاری برنده است» حل شد؛ کارت عامل E اضافه و یادداشت هماهنگی روی هر دو کلایم درگیر نوشته شد."
-    }
-  ],
-  "active_agents": {
-    "agent_a": {
-      "identity": "عامل A (امنیت هسته و کلیددار گیت‌ها)",
-      "branch": "arena/01a0c316-nexus-ai-agent",
-      "task": "P0-security-batch",
-      "status": "lease_reclaimed_scope_delivered_PR34",
-      "note_fa": "شاخه 316 از عصر قدیمی جلو نرفته (HEAD=c1cdaf9) و اسکوپ P0 با PR#34 لند کرده؛ اجاره بازپس گرفته شد. با بازگشت: اول rebase/dedupe، بعد تسک ۱۲۴."
-    },
-    "agent_b": {
-      "identity": "عامل B (سیم‌کشی فیچرها و لایه Surface)",
-      "branch": "arena/01a0c34d-nexus-ai-agent",
-      "task": "feature-wiring-batch",
-      "status": "active_in_review_PR32",
-      "note": "PR#32 green but on ancient base: main moved via PR#34 (8 shared files WILL conflict + semantic double-wiring). See task-122."
-    },
-    "agent_c": {
-      "identity": "عامل C (استودیوی نگار — پک‌های edit/audio/motion/caption/delivery)",
-      "branch": "arena/01a0c36f-nexus-ai-agent",
-      "task": "nagar-wave3-timeline-edit-delivery",
-      "status": "completed_released_PR31"
-    },
-    "agent_d": {
-      "identity": "عامل D (تحلیل سیستم، پاک‌سازی تخته و واگذاری مهندسی‌شده)",
-      "branch": "arena/01a0c3ca-nexus-ai-agent",
-      "task": "board-gc-engineered-handoff",
-      "status": "completed_released_same_commit"
-    },
-    "agent_e_pr34": {
-      "identity": "عامل E (ادامه‌ی سشن PR#34 — امنیت هفته‌ی ۱ + سیم‌کشی موتورهای features + calculator/Reminder)",
-      "branch": "arena/01a0c3a0-nexus-ai-agent",
-      "task": "PR#34 (P0 Week-1 security + feature-engine wiring), CI green, in review",
-      "status": "completed_merged_PR34",
-      "note": "PR#34 MERGED to main (branch ancestor of main @93cee5e). Self-declared عامل E; disambiguated by branch."
-    },
-    "agent_e_pr33": {
-      "identity": "عامل E (تسک ۱۰۷ بسته‌بندی + تسک ۱۱۰ پورت/OTIO)",
-      "branch": "arena/01a0c3aa-nexus-ai-agent",
-      "task": "task-107 + task-110",
-      "status": "active_in_review_PR33",
-      "note": "PR#33 OPEN, CI green (test/test-extras/migrate-postgres SUCCESS @13:48Z). Self-declared عامل E; disambiguated by branch."
-    },
-    "agent_f": {
-      "identity": "عامل F (لاین رندر ۱۰۴ + گفتار ۱۰۵ + نگهبان موقت گیت‌ها)",
-      "branch": "arena/01a0c460-nexus-ai-agent",
-      "task": "PR(104+105) → task-121 markers supplement → gates steward",
-      "status": "active",
-      "note": "This session first mis-declared عامل E (E was taken twice already); corrected to F. Mis-declared commits remain in history."
-    }
+    ]
   },
-  "ten_forward_tasks_network": [
-    {
-      "id": "task-101",
-      "title": "P0 — نجات گیت‌های کیفیت: `main` قرمز است (بدهی Lint پول‌ریکوئست #31)",
-      "zone": "ci-quality",
-      "priority": "P0_BLOCKER",
-      "assigned_to": "عامل D (این سشن — arena/01a0c3ca-nexus-ai-agent)",
-      "status": "completed_delivered_in_PR",
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/packs/edit/",
-        "src/nexus_ai_agent/creative/packs/audio/",
-        "src/nexus_ai_agent/creative/packs/motion/",
-        "src/nexus_ai_agent/creative/packs/delivery/",
-        "src/nexus_ai_agent/creative/packs/caption/",
-        "src/nexus_ai_agent/creative/slideshow/ffmpeg.py",
-        "src/nexus_ai_agent/orchestration/router.py",
-        "tests/unit/test_edit_pack.py",
-        "tests/unit/test_audio_pack.py",
-        "tests/unit/test_motion_pack.py",
-        "tests/unit/test_delivery_pack.py",
-        "tests/unit/test_caption_ass.py",
-        "tests/architecture/test_edit_pack_boundary.py",
-        "tests/architecture/test_audio_pack_boundary.py",
-        "tests/architecture/test_motion_pack_boundary.py",
-        "tests/architecture/test_delivery_pack_boundary.py"
-      ],
-      "instructions": "PR#31 روی main با گیت قرمز ادغام شد: روی c41b1b0 دستور `ruff check .` دقیقاً ۷۱ خطا می‌دهد (۴۰×E501 خط بلند، ۲۸×F401 ایمپورت مرده، ۲×I001 ترتیب ایمپورت، ۱×F841 متغیر بلااستفاده) و `ruff format --check .` نیز ۱۶ فایل را غیرفرمت‌شده گزارش می‌کند؛ به همین دلیل CI (run 35594818988) حتی به pytest نرسیده است. ابتکار عمل: (۱) `ruff check . --fix` برای ۳۰ مورد خودکار (F401/I001)، (۲) شکستن دستی خطوط E501 (سقف ۱۰۰ کاراکتر طبق پیکربندی مخزن) بدون تغییر هیچ رفتاری، (۳) حذف متغیر F841، (۴) `ruff format .` برای ۱۶ فایل، (۵) اثبات: `make lint` کد ۰، سپس اجرای کامل `make test` توسط gates_owner. قید سخت: تغییری در منطق/رفتار آزمون‌ها ممنوع؛ فقط تمیزکاری مکانیکی. زیر-وظیفه اختیاری (با تایید عامل A روی .github/): افزودن pre-commit با نسخه پین‌شده ruff + یک job سبک «lint» جدا از «test» تا خطای lint هرگز pytest را بلاک نکند.",
-      "acceptance_criteria": [
-        "`ruff check .` → 0 errors  ✅ (was 71)",
-        "`ruff format --check .` → all formatted  ✅ (336 files)",
-        "targeted pytest روی شاخه: 180/180 passed + slideshow surface 45/45 + suite گسترده 749 passed",
-        "20 pre-existing env failures اثباتاً روی base commit هم تکرار شدند (git stash A/B) — zero regression"
-      ],
-      "toolchain": "ruff (نسخه پین‌شده مطابق CI)، pre-commit framework — هر دو رایگان و OSS"
-    },
-    {
-      "id": "task-102",
-      "title": "P0 — بچ امنیتی هسته (P0-security-batch) — اجرای کامل P0-1 تا P0-10 گزارش ممیزی",
-      "zone": "core-security",
-      "priority": "P0",
-      "assigned_to": "عامل A",
-      "status": "completed_delivered_via_PR34",
-      "exclusive_paths": [
-        "src/nexus_ai_agent/bot/middleware.py",
-        "src/nexus_ai_agent/api/",
-        "src/nexus_ai_agent/core/"
-      ],
-      "instructions": "همچنان به نام عامل A فعال است (اجاره تا 2026-09-22T12:00Z). معیار پذیرش دقیق بر اساس AUDIT_REPORT_2026-09-21.md: (P0-2) AuthMiddleware موجود در bot/middleware.py باید روی «تمام» مسیرهای خصوصی اعمال شود نه ۲ مسیر از ~۸۰ فرمان؛ (P0-5) حذف نشت PII در GET /api/dashboard/recent_users (فیلد telegram_id/نام کاربر نباید بدون نقش owner برگردد)؛ (P0-6) مسیر عبور در /cloud و /download با الگوی `Path.resolve()` + بررسی `is_relative_to(base_dir)` بسته شود؛ (P0-3) دکمه تأیید فورس‌جوین با getChatMember واقعی؛ (P0-7) گیت رضایت قبل از ارسال هر پیام آزاد به LLM ابری؛ (P0-8/P0-9/P0-10) طبق گزارش. روی bot/handlers.py مشترک با عامل B کار نکنید؛ ترتیب ادغام پیشنهادی: این بچ بعد از task-101 روی main سبز.",
-      "acceptance_criteria": [
-        "تست واحد برای هر کدام از P0-2/5/6/7 که fail-بدون-fix باشد",
-        "هیچ مسیر خصوصی بدون چک allowlist/owner باقی نماند (آزمون معماری مسیرها)",
-        "CI سبز پس از merge"
-      ],
-      "evidence": "PR#34 MERGED @93cee5e (P0-7/2/5/6/3 + wiring); residual P0-8/P0-9 → wave-3 task-124"
-    },
-    {
-      "id": "task-103",
-      "title": "ادغام PR#32 — سیم‌کشی فیچرها از مسیر bot/surface (عامل B)",
-      "zone": "feature-wiring",
-      "priority": "P1",
-      "assigned_to": "عامل B",
-      "status": "in_review_rebase_required",
-      "exclusive_paths": [
-        "src/nexus_ai_agent/bot/surface/",
-        "src/nexus_ai_agent/bot/memory_handlers.py",
-        "src/nexus_ai_agent/features/"
-      ],
-      "instructions": "PR#32 (B1–B8) باز است و موتورهای مرده (tools/games/referral/gamification/force-join/anon-chat/rag) را از طریق لایه جدید bot/surface سیم‌کشی می‌کند. اقدامات: (۱) پس از سبز شدن main (task-101)، rebase روی main جدید؛ (۲) تداخل حتمی `.agents/board.json` را با قاعده «آخرین وضعیت واگذاری (این نسخه) برنده است» حل کن و فقط flip وضعیت کارت‌های خودت را دوباره اعمال کن؛ (۳) چون فایل bot/handlers.py در اجاره عامل A است، ادغام را هماهنگ با تسک ۱۰۲ انجام بده؛ (۴) در بدنه PR بنویس «deferred to gates owner».",
-      "acceptance_criteria": [
-        "PR#32 با مینیمم تداخل روی main سبز ادغام شود",
-        "ReminderSystem/Calculator/Translator/UnitConverter/WordleFA/QuickPoll/ReferralEngine.process_referral/ForceJoin/AnonChat از surface قابل دسترس باشند",
-        "تست‌های جدید tests/unit/test_feature_*.py سبز"
-      ],
-      "note": "PR#32 green-on-old-base; 8 shared files moved on main via PR#34 + semantic double-wiring. See task-122. DO NOT merge as-is."
-    },
-    {
-      "id": "task-104",
-      "title": "نگار موج ۸ — «لاین اعمال» (Apply Lane): از IR خالص پک‌ها تا انکد واقعی FFmpeg",
-      "zone": "nagar-render-lane",
-      "priority": "P1",
-      "assigned_to": "عامل F ✅",
-      "status": "completed_by_agent_f",
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/rendering/",
-        "tests/unit/test_rendering_lane.py",
-        "tests/architecture/test_rendering_lane_boundary.py"
-      ],
-      "instructions": "پک‌های edit/motion/audio فقط «زیرساخت خالص» هستند: عملیات روی Project IR محاسبه می‌شوند ولی هیچ مصرف‌کننده‌ای بیرون creative/packs/* ندارند و registry آن‌ها pending است. الگوی اثبات‌شده موج 2c (slideshow) را تکرار کن: plan → RenderIR → filtergraph compiler → argv → «یک» پروسه FFmpeg (بدون shell، فایل staging + publish اتصالی، پیش‌فرض no-overwrite، NEXUS_FFMPEG_BIN) → probe همان باینری به‌عنوان evidence. نگاشت فنی عملیات: trim/ripple_delete → `atrim`+`asetpts`؛ speed_ramp → `setpts` پویا (+`minterpolate` اختیاری)؛ reverse_segment → `reverse`/`areverse`؛ freeze_frame → `tpad=stop_mode=clone`؛ add_transition → `xfade` (crossfade) و `wipe` با mask؛ add_title → `drawtext` با fontfile وزیرمتن + fade؛ add_glow → `split+gblur+blend=screen`؛ motion_blur → `tmix`؛ loudness → `loudnorm` دو-پاسه (measured → applied، EBU R128)؛ duck_music → `sidechaincompress`؛ beat_sync_cut → برش‌ها روی گرید BPM موجود. همه دترمینیستیک: برای هر عملیات یک تست golden از argv تولیدشده (بدون انکد) + یک تست انکد واقعی با imageio-ffmpeg در گروه dev.",
-      "acceptance_criteria": [
-        "هیچ subprocess با shell=True؛ هیچ overwrite بدون پرچم صریح",
-        "تست golden دترمینیستیک برای فیلترگراف هر عملیات",
-        "probe خروجی، مدت/رزولوشن واقعی را به‌عنوان evidence برمی‌گرداند",
-        "بدهی صفر: `make lint/types/test` سبز (deferred to gates owner در PR)"
-      ],
-      "toolchain": "فقط FFmpeg (باینری بیرونی اعلام‌شده) + numpy/pillow موجود — صفر وابستگی جدید؛ الگو: OpenTimelineIO برای مدل زمان (RationalTime) و film-standard two-pass loudnorm",
-      "evidence": "24/24 green; in F PR with 105"
-    },
-    {
-      "id": "task-105",
-      "title": "نگار موج ۹ — موتور محلی ASR زیر CaptionEnginePort + تکمیل ۳ قابلیت pending کپشن",
-      "zone": "nagar-caption-engine",
-      "priority": "P1",
-      "assigned_to": "عامل F ✅",
-      "status": "completed_by_agent_f",
-      "exclusive_paths": [
-        "src/nexus_ai_agent/adapters/",
-        "src/nexus_ai_agent/creative/caption/",
-        "tests/unit/test_caption_engine_adapters.py",
-        "tests/architecture/test_caption_substrate_boundary.py"
-      ],
-      "instructions": "caption.transcribe امروز fail-closed است (adapters/caption_unavailable.py) و ۳ قابلیت manifest (align_words, diarize, translate_local) هیچ هندلری ندارند (۷ از ۱۰). یک آداپتور محلی پشت CaptionEnginePort بساز با faster-whisper (بک‌اند CTranslate2، int8، CPU-only، بدون torch — برنده دسته self-hosted/CPU در مقایسه‌های ۲۰۲۶) به‌عنوان extra اختیاری `[speech]`؛ در غیاب آن، fail-closed تایپ‌شده فعلی دست‌نخورده بماند. align_words با timestamp‌های سطح کلمه faster-whisper برآورده می‌شود؛ diarize نسخه ۱ ساده با VAD انرژی + خوشه‌بندی روی anchorها (بدون pyannote)؛ translate_local با argos-translate (کاملاً آفلاین، پشتیبانی رسمی فارسی، extra اختیاری `[translate]`). در پایان `nexus packs list` باید caption را pending=0 و activated نشان دهد. مدل‌ها در زمان اجرا دانلود می‌شوند — هیچ مدل باینری‌ای به مخزن اضافه نشود.",
-      "acceptance_criteria": [
-        "بدون faster-whisper نصب‌شده: همه تست‌ها سبز (fail-closed با پیام تایپ‌شده)",
-        "با extra `[speech]`: transcribe+align روی WAV ۶۰ ثانیه‌ای fixture زیر ۳۰s روی CPU انجام شود",
-        "pending کپشن → 0 و فعال‌سازی پک موفق",
-        "هیچ فراخوانی شبکه‌ای در مسیر درخواست کاربر (دانلود مدل فقط با رضایت صریح owner)"
-      ],
-      "toolchain": "faster-whisper (OSS/MIT) + argos-translate (OSS/MIT) — هر دو رایگان/آفلاین؛ فقط به‌صورت extras",
-      "evidence": "caption pending 3→0; 13/13 green; [speech]/[translate] extras unique; in F PR with 104"
-    },
-    {
-      "id": "task-106",
-      "title": "نگار موج ۱۰ — سطح تلگرام استودیوی نگار (Creative Surface)",
-      "zone": "creative-surface",
-      "priority": "P2",
-      "assigned_to": "عامل آزاد",
-      "status": "available_rescoped",
-      "exclusive_paths": [
-        "src/nexus_ai_agent/bot/creative_surface.py",
-        "tests/unit/test_creative_surface.py"
-      ],
-      "instructions": "تنها راه کاربر برای استفاده از نگار امروز /slideshow و /imagine است؛ پنج پک جدید هیچ سطح کاربری ندارند. با الگوی bot/surface عامل B (بدون لمس bot/handlers.py — فایل جدید creative_surface.py) سه فرمان حداقلی بساز: /edit (تریم/سرعت/ریورس روی ویدیوی reply شده)، /caption (زیرنویس‌سازی و burn-in با وزیرمتن)، /grade (LUT/اکسپوژر/پروکسی/خروجی OTIO). همه از مسیر JobQueuePort + لاین رندر تسک ۱۰۴ عبور کنند؛ سقف حجم/مدت مثل slideshow (۵ تصویر/۳۰ ثانیه الگو)؛ پاسخ‌ها از i18n (۱۵ زبان) و خطاها typed failures. اجباراً بعد از ادغام security batch، gating owner/allowlist همین الگو.",
-      "acceptance_criteria": [
-        "هیچ تغییری در bot/handlers.py (صفر تداخل با A/B)",
-        "برای هر فرمان: تست واحد با فیک surface (الگوی tests/unit/surface_fakes.py عامل B)",
-        "لغو/timeout job به‌درستی وضعیت job را تمیز می‌کند"
-      ],
-      "note": "RESCOPED 2026-09-21: main chose feature_handlers/ over surface/ (PR#34). Follow main pattern, NOT PR#32 surface (unless owner picks surface in task-122)."
-    },
-    {
-      "id": "task-107",
-      "title": "بسته‌بندی مدرن — تفکیک وابستگی‌ها با PEP 735 + uv (کاهش حجم هسته از ~۷GB به <۲۵۰MB)",
-      "zone": "core-packaging",
-      "priority": "P1",
-      "assigned_to": "عامل E شعبه 3aa",
-      "status": "in_review_PR33",
-      "exclusive_paths": [
-        "pyproject.toml",
-        "Dockerfile",
-        "docker-compose.yml",
-        "requirements*.txt"
-      ],
-      "instructions": "همه چیز امروز در `[project.dependencies]` هست: sentence-transformers (پایتور را می‌کشد)، llama-cpp-python (کامپایل C++)، chromadb، flashrank، sqlite-vec، boto3، litellm. طرح استاندارد ۲۰۲۵/۲۰۲۶: (۱) dev/test tools → `[dependency-groups]` (PEP 735 — منتشرشونده نیست و مال توسعه‌دهنده است، جای درست pytest/ruff/mypy/imageio-ffmpeg)؛ (۲) قابلیت‌های کاربری → extras واقعی: `[rag]` = chromadb+flashrank+sqlite-vec+sentence-transformers، `[local-llm]` = llama-cpp-python، `[speech]` = faster-whisper، `[translate]` = argos-translate، `[r2]` = boto3؛ (۳) هسته لاغر فقط: bot+api+db+slideshow+packs (numpy/pillow/httpx/fastapi/ptb/sqlalchemy/litellm). نصب CI با uv (rust-based، ده‌ها برابر سریع‌تر، رایگان) + کش pip. Docker: multi-stage با هدف `slim` و `pip install --no-cache-dir .` بدون extras به‌عنوان پیش‌فرض. هر extra باید یک تست import-guard داشته باشد (fail-closed تایپ‌شده مثل الگوی caption_unavailable).",
-      "acceptance_criteria": [
-        "`pip install .` هسته بدون torch/chroma/llama قابل نصب و `make test` هسته سبز",
-        "هر extra: نصب + import-guard test",
-        "اندازه ایمیج slim در README مستند و <۲۵۰MB (بدون extras)",
-        "CI با uv حداقل ۲× سریع‌تر از pip (زمان در لاگ CI ثبت شود)"
-      ],
-      "toolchain": "PEP 735 dependency-groups (استاندارد رسمی پایتون ۲۰۲۴→)، uv (OSS، رایگان)، multi-stage Docker",
-      "note": "Delivered in PR#33 (green). NOBODY touches pyproject/Dockerfile/workflows until #33 merges. F extras hunk rebases onto it."
-    },
-    {
-      "id": "task-108",
-      "title": "همگام‌سازی ناهمگام دیتابیس — حذف کامل sync engineها از ماژول‌های فیچر",
-      "zone": "core-database",
-      "priority": "P1",
-      "assigned_to": "عامل بعدی (آزاد)",
-      "status": "blocked_until_32_33_resolve",
-      "exclusive_paths": [
-        "src/nexus_ai_agent/core/async_db.py",
-        "src/nexus_ai_agent/features/conversation_store.py",
-        "src/nexus_ai_agent/features/ads.py",
-        "src/nexus_ai_agent/features/analytics.py",
-        "src/nexus_ai_agent/features/anonymous_chat.py",
-        "src/nexus_ai_agent/features/channel_manager.py",
-        "src/nexus_ai_agent/features/engagement.py",
-        "src/nexus_ai_agent/features/force_join.py",
-        "src/nexus_ai_agent/features/gamification.py",
-        "src/nexus_ai_agent/features/referral.py",
-        "tests/unit/test_async_db_harmonization.py"
-      ],
-      "instructions": "شواهد فعلی: features/*.py هنوز `create_engine` سنکرون می‌سازند (ads, analytics, anonymous_chat, channel_manager, conversation_store, engagement, force_join, ...) و هر کوئری، لوپ تلگرام را بلاک می‌کند. الگوی استاندارد SQLAlchemy 2.0 async: فقط «یک» `create_async_engine` مرکزی در core/async_db.py (aiosqlite/asyncgp از طریق NEXUS_DATABASE_URL)، `async_sessionmaker(expire_on_commit=False)`، session-per-request/task با `async with`، تراکنش صریح `async with session.begin()`، ممنوعیت session سراسری مشترک. برای هر ماژول مهاجرت‌یافته: همان API عمومی حفظ شود (تست‌های موجود نباید بشکنند). یک آزمون معماری اضافه کن که وجود `create_engine(` در src/nexus_ai_agent/features/ را fail کند تا پس‌رفت غیرممکن شود. توجه: این مسیرها بعد از ادغام PR#32 ممکن است جابه‌جا شده باشند — اول rebase و inventory تازه.",
-      "acceptance_criteria": [
-        "صفر مورد `create_engine` سنکرون در features/ (تست معماری نگهبان)",
-        "هیچ Event-loop-is-closed یا blocking در لاگ تست‌ها",
-        "تست‌های موجود features سبز بمانند (Zero Regression)"
-      ],
-      "toolchain": "SQLAlchemy 2.0 async (موجود در deps) + aiosqlite/asyncpg — صفر وابستگی جدید",
-      "note": "features/* hot (PR#32 open + PR#33 open). Resume after both land. core/async_db.py half is free (core-security lease reclaimed) — see task-128."
-    },
-    {
-      "id": "task-109",
-      "title": "ارتقای RAG (چانکینگ بازگشتی + هایبرید BM25/برداری) و اتصال i18n به همه خروجی‌ها",
-      "zone": "features-rag-i18n",
-      "priority": "P2",
-      "assigned_to": "عامل بعدی (آزاد)",
-      "status": "blocked_until_32_33_resolve",
-      "exclusive_paths": [
-        "src/nexus_ai_agent/features/rag.py",
-        "src/nexus_ai_agent/i18n/",
-        "tests/unit/test_rag_chunking.py",
-        "tests/unit/test_i18n_key_parity.py"
-      ],
-      "instructions": "شواهد فعلی: features/rag.py چانک ساده ثابت ۱۰۰۰ کاراکتری «بدون همپوشانی» می‌سازد و کلیدهای ۱۵ زبانه (locales/ کامل است) به همه خروجی‌ها وصل نیست. چانکینگ استاندارد متون پژوهشی ۲۰۲۵/۲۰۲۶: recursive/structure-aware (پاراگراف→جمله)، سایز ۲۵۶–۵۱۲ توکن، همپوشانی ۱۰–۲۰٪ (در بنچمارک‌ها تا ~۱۵٪ بهبود precision)، و parent-child (اینdex چانک کوچک، بازگشت پاراگراف والد برای context). بازیابی هایبرید: BM25 سبک (rank_bm25 یا FTS5 خود sqlite — صفر وابستگی سنگین) + وکتور Chroma موجود + rerank با flashrank موجود. یک هارنس ارزیابی کوچک golden (۱۰ پرسش/پاس فارسی+انگلیسی) با متریک recall@k به‌عنوان pytest اضافه شود تا بهبود «قابل اندازه‌گیری» باشد نه ادعایی. i18n: تابع مرکزی `t(user_id, key, **kwargs)` و یک lint آزمون‌محور که برابری کلیدها بین ۱۵ locale و کشف کلید بلااستفاده را چک می‌کند؛ خروجی‌های bot (پیام‌های خطا، موفقیت، راهنما) به کلیدها مهاجرت شوند.",
-      "acceptance_criteria": [
-        "چانکینگ recursive با overlap قابل پیکربندی + تست golden پایدار",
-        "recall@k هارنس سبز و عدد پایه در README ثبت شود",
-        "آزمون برابری کلیدها بین ۱۵ زبان سبز",
-        "هیچ رگرسیونی در رفتار chat_with_doc"
-      ],
-      "toolchain": "rank_bm25 یا SQLite FTS5 (رایگان/بدون سرویس)، Chroma + flashrank موجود — صفر هزینه ابری",
-      "note": "features/rag.py hot (B touches it in #32). i18n/ half is FREE now → wave-3 task-129."
-    },
-    {
-      "id": "task-110",
-      "title": "اعتبارسنجی OTIO واقعی + بستن بدهی پورت‌ها (ConversationStorePort) و طراحی امضای manifest",
-      "zone": "delivery-interop",
-      "priority": "P2",
-      "assigned_to": "عامل E شعبه 3aa",
-      "status": "in_review_PR33",
-      "exclusive_paths": [
-        "tests/unit/test_otio_interop.py",
-        "src/nexus_ai_agent/application/ports/conversation_store.py",
-        "src/nexus_ai_agent/adapters/conversation_store_sqlite.py",
-        "docs/DECISION_LOG.md"
-      ],
-      "instructions": "(۱) خروجی delivery.export_otio امروز JSON دست‌ساز با OTIO_SCHEMA دستی است و هرگز با کتابخانه واقعی OpenTimelineIO اعتبارسنجی نشده — یک dev-extra `[dev-otio]` = opentimelineio اضافه کن و تست round-trip بنویس: خروجی export_otio باید با `otio.adapters.read_from_string` باز شود و RationalTime/fps/ترتیب کلیپ‌ها دقیقاً حفظ شود؛ هر انحراف schema در همین تست اصلاح شود (کتابخانه پایدار Academy Software Foundation است؛ پس از v0.16 هسته در PyPI جدا از plugins منتشر می‌شود). (۲) شکاف شناخته‌شده roadmap: ConversationStorePort هیچ آداپتوری ندارد و بات مستقیم features/conversation_store.py را صدا می‌زند — آداپتور sqlite سبک بنویس یا در DECISION_LOG با ADR پورت را بازنشسته اعلام کن. (۳) امضای manifest هنوز placeholder/format_only_unverified است — یک spike مستند برای ed25519 (کتابخانه cryptography فقط dev) با کلید عمومی در مخزن بنویس؛ پیاده‌سازی کامل نیازمند تصمیم owner است.",
-      "acceptance_criteria": [
-        "تست round-trip OTIO با کتابخانه واقعی سبز (در غیاب dev-extra: skip تایپ‌شده)",
-        "ConversationStorePort: آداپتور یا ADR بازنشستگی — شکاف بسته شود",
-        "سند spike امضا در docs/DECISION_LOG.md"
-      ],
-      "toolchain": "opentimelineio (ASWF/OSS، فقط dev)، ed25519 از cryptography (فقط dev) — صفر هزینه",
-      "note": "Delivered in PR#33 (OTIO ExternalReference + aiosqlite conv-store, green) WITHOUT markers. F duplicate reverted (see deferred_log). Markers → task-121."
-    },
-    {
-      "id": "task-111",
-      "title": "گیت CI قفل نسخه (VERSION ↔ pyproject ↔ CHANGELOG)",
-      "zone": "ci-quality",
-      "priority": "P2",
-      "assigned_to": "آزاد",
-      "status": "queued",
-      "origin": "repo-hygiene pass 2026-09-21 (سشن 01a0c484) — ضعف شماره ۱۱ گزارش بهداشت"
-    }
-  ],
+  "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
+  "gates_rule": "دقیقاً یک عامل (دارندهٔ gates_owner) گیت‌های کامل را روی کارِ main-bound اجرا می‌کند؛ بقیه «deferred to gates owner» را در PR قید می‌کنند. بررسی‌های تشخیصی محلی آزاد است.",
+  "merge_order_note": "۱) task-123 (کوچک‌سازی #33) → ۲) task-122 (ریبیس #32) → ۳) task-126 (رجیستری پک‌ها) → ۴) تسک‌های گسسته ۱۲۴/۱۲۱/۱۲۸/۱۰۶ موازی → ۵) موج بعدی ۱۳۲/۱۳۴/۱۲۷. کانفلیکت board.json/AGENTS.md با قاعدهٔ «جدیدترین وضعیت برنده است و schema 2 باید تست tests/unit/test_agent_board.py را پاس کند» حل می‌شود.",
   "zones": [
     {
-      "id": "core-security",
-      "description": "Auth enforcement, dashboard PII, path-traversal, LLM egress consent, coordination docs",
+      "id": "coordination",
+      "description": "Board, protocol, multi-agent contract",
       "paths": [
-        "src/nexus_ai_agent/bot/middleware.py",
-        "src/nexus_ai_agent/bot/rate_limiter.py",
-        "src/nexus_ai_agent/api/",
-        "src/nexus_ai_agent/core/",
-        ".github/",
+        ".agents/",
         "AGENTS.md",
-        ".agents/"
+        "docs/MULTI_AGENT_PROTOCOL.md",
+        "docs/MULTI_AGENT_PROTOCOL.fa.md"
       ]
     },
     {
-      "id": "feature-wiring",
-      "description": "Wire the real feature engines to the Telegram surface via bot/surface (PR#32 pattern)",
+      "id": "docs-architecture",
+      "description": "Architecture documentation suite, doc gates, board schema",
       "paths": [
-        "src/nexus_ai_agent/bot/surface/",
-        "src/nexus_ai_agent/features/",
-        "tests/unit/test_feature_*"
+        "docs/architecture/",
+        "docs/architecture.md",
+        "docs/README.md",
+        "docs/audits/",
+        "docs/history/",
+        ".agents/",
+        "AGENTS.md",
+        "tests/unit/test_docs_integrity.py",
+        "tests/unit/test_agent_board.py"
       ]
     },
     {
       "id": "ci-quality",
-      "description": "Lint/format debt from PR#31 on main, CI gate hygiene, pre-commit hygiene",
+      "description": "CI gates, release lock-step guards, lint/type quality",
       "paths": [
-        "src/nexus_ai_agent/creative/packs/",
-        "src/nexus_ai_agent/creative/slideshow/ffmpeg.py",
-        "src/nexus_ai_agent/orchestration/router.py",
-        "tests/unit/test_edit_pack.py",
-        "tests/unit/test_audio_pack.py",
-        "tests/unit/test_motion_pack.py",
-        "tests/unit/test_delivery_pack.py",
-        "tests/unit/test_caption_ass.py",
-        "tests/architecture/test_*_pack_boundary.py"
+        ".github/",
+        "Makefile",
+        "tests/unit/test_version_command.py",
+        "tests/unit/test_version_lockstep.py",
+        "tests/unit/test_optional_extras.py"
+      ]
+    },
+    {
+      "id": "core-security",
+      "description": "Auth enforcement, PII, path traversal, egress consent",
+      "paths": [
+        "src/nexus_ai_agent/bot/middleware.py",
+        "src/nexus_ai_agent/bot/rate_limiter.py",
+        "src/nexus_ai_agent/bot/access_guard.py",
+        "src/nexus_ai_agent/api/",
+        "src/nexus_ai_agent/core/"
+      ]
+    },
+    {
+      "id": "feature-wiring",
+      "description": "Wire feature engines to the Telegram surface",
+      "paths": [
+        "src/nexus_ai_agent/bot/surface/",
+        "src/nexus_ai_agent/features/",
+        "src/nexus_ai_agent/bot/memory_handlers.py",
+        "tests/unit/test_feature_*",
+        "tests/unit/surface_fakes.py"
+      ]
+    },
+    {
+      "id": "packaging+interop",
+      "description": "Packaging (extras/uv/slim image) and interop",
+      "paths": [
+        "pyproject.toml",
+        "Dockerfile",
+        "docker-compose.yml",
+        ".env.example",
+        "src/nexus_ai_agent/optional_deps.py",
+        "src/nexus_ai_agent/adapters/conversation_store_sqlite.py"
+      ]
+    },
+    {
+      "id": "delivery-interop",
+      "description": "Timeline interop, port debt, manifest signing",
+      "paths": [
+        "src/nexus_ai_agent/creative/packs/delivery/",
+        "tests/unit/test_otio_interop.py",
+        "src/nexus_ai_agent/application/ports/",
+        "src/nexus_ai_agent/adapters/",
+        "docs/DECISION_LOG.md"
+      ]
+    },
+    {
+      "id": "delivery-interop-markers",
+      "description": "OTIO marker round-trip (task-121)",
+      "paths": [
+        "src/nexus_ai_agent/creative/packs/delivery/",
+        "tests/unit/test_otio_interop.py"
       ]
     },
     {
       "id": "nagar-render-lane",
-      "description": "Wave 8: the impure apply lane — plan → IR → filtergraph → single FFmpeg encode → measured evidence for edit/motion/audio operations",
+      "description": "Wave 8 apply lane",
       "paths": [
         "src/nexus_ai_agent/creative/rendering/",
         "tests/unit/test_rendering_lane.py",
@@ -399,827 +136,1055 @@
     },
     {
       "id": "nagar-caption-engine",
-      "description": "Wave 9: local ASR behind CaptionEnginePort (faster-whisper optional extra), align/diarize/translate_local, pack activation",
+      "description": "Wave 9 local speech + caption pool",
       "paths": [
-        "src/nexus_ai_agent/adapters/",
-        "src/nexus_ai_agent/creative/caption/",
+        "src/nexus_ai_agent/adapters/whisper_local.py",
+        "src/nexus_ai_agent/creative/packs/caption/",
         "tests/unit/test_caption_engine_adapters.py"
       ]
     },
     {
+      "id": "nagar-opgap",
+      "description": "TDD op-gap slices for audio/motion",
+      "paths": [
+        "src/nexus_ai_agent/creative/packs/audio/",
+        "src/nexus_ai_agent/creative/packs/motion/",
+        "tests/unit/test_opgap_audio_motion.py"
+      ]
+    },
+    {
+      "id": "nagar-portrait",
+      "description": "Wave 10 portrait family (TDD portrait.* operations)",
+      "paths": [
+        "src/nexus_ai_agent/creative/packs/portrait/",
+        "tests/unit/test_portrait_pack.py",
+        "tests/architecture/test_portrait_pack_boundary.py"
+      ]
+    },
+    {
       "id": "creative-surface",
-      "description": "Wave 10: Telegram commands /edit /caption /grade via new creative_surface file (no handlers.py edits)",
+      "description": "Wave 10 Telegram commands for the studio",
       "paths": [
         "src/nexus_ai_agent/bot/creative_surface.py",
         "tests/unit/test_creative_surface.py"
       ]
     },
     {
-      "id": "core-packaging",
-      "description": "PEP 735 dependency-groups + extras split ([rag]/[speech]/[translate]/[local-llm]/[r2]), uv in CI, slim Docker",
+      "id": "cli-packs-registry",
+      "description": "Unified runtime pack registry",
       "paths": [
-        "pyproject.toml",
-        "Dockerfile",
-        "docker-compose.yml"
+        "src/nexus_ai_agent/cli.py",
+        "tests/unit/test_packs_cli.py"
       ]
     },
     {
       "id": "core-database",
-      "description": "Async-only DB access: one async engine, session-per-task, guard test against sync engines in features/",
+      "description": "Async-only database access",
       "paths": [
         "src/nexus_ai_agent/core/async_db.py",
-        "src/nexus_ai_agent/features/*.py (db access)"
+        "tests/unit/test_async_db_harmonization.py",
+        "src/nexus_ai_agent/features/"
       ]
     },
     {
-      "id": "features-rag-i18n",
-      "description": "Recursive overlapped chunking, hybrid BM25+vector+rerank, retrieval eval harness, 15-locale key parity binding",
+      "id": "features-rag",
+      "description": "Real RAG: recursive chunking, hybrid retrieval, eval harness",
       "paths": [
         "src/nexus_ai_agent/features/rag.py",
-        "src/nexus_ai_agent/i18n/"
+        "tests/unit/test_rag_chunking.py",
+        "tests/unit/test_rag_eval.py"
       ]
     },
     {
-      "id": "delivery-interop",
-      "description": "Real-OTIO round-trip validation, ConversationStorePort adapter/ADR, manifest signing spike",
+      "id": "audit-remainder",
+      "description": "P0-8 single-wiring + P0-9 graph memory write path",
       "paths": [
-        "tests/unit/test_otio_interop.py",
-        "src/nexus_ai_agent/application/ports/",
-        "src/nexus_ai_agent/adapters/",
-        "docs/DECISION_LOG.md"
+        "src/nexus_ai_agent/memory/",
+        "src/nexus_ai_agent/features/rag.py",
+        "tests/unit/test_audit_remainder.py"
+      ]
+    },
+    {
+      "id": "i18n-parity",
+      "description": "Locale key parity and Persian audit",
+      "paths": [
+        "src/nexus_ai_agent/i18n/",
+        "tests/unit/test_i18n_parity.py"
+      ]
+    },
+    {
+      "id": "e2e-deploy",
+      "description": "Deployment smoke + runbooks",
+      "paths": [
+        "koyeb.yaml",
+        "scripts/deploy_smoke.py",
+        "docs/ops/",
+        "docker-compose.yml",
+        "Dockerfile"
+      ]
+    },
+    {
+      "id": "llm-local",
+      "description": "Optional local LLM providers",
+      "paths": [
+        "src/nexus_ai_agent/llm/",
+        "tests/unit/test_local_server_provider.py"
       ]
     },
     {
       "id": "repo-hygiene",
-      "description": "Root/docs cleanup, archival, release metadata alignment, remote-branch janitorial work",
+      "description": "Release metadata, root docs, archival",
       "paths": [
-        "todo*.md",
-        "termux_install.sh",
-        "docs/audits/",
-        "docs/history/",
-        "README.md",
-        "CHANGELOG.md",
         "VERSION",
-        "pyproject.toml"
+        "CHANGELOG.md",
+        "README.md",
+        "ROADMAP_STATUS.md",
+        "REQUIREMENTS_LEDGER.md",
+        "docs/history/",
+        "scripts/"
       ]
     }
   ],
   "claims": [
     {
-      "task": "P0-security-batch",
-      "zone": "core-security",
-      "agent_branch": "",
-      "claimed_at": null,
-      "ttl_hours": 24,
-      "status": "completed_delivered_via_PR34",
-      "gates_owner": false,
-      "exclusive_paths": [
-        "src/nexus_ai_agent/bot/middleware.py",
-        "src/nexus_ai_agent/api/",
-        "src/nexus_ai_agent/core/"
-      ],
-      "scope": "Audit P0-1..P0-10 closure: global auth enforcement, /api/dashboard PII redaction, /cloud + /download path traversal guards, force-join real verification, LLM egress consent",
-      "note": "Takeover per orphaned-lease rule: scope delivered by PR#34 (branch 3a0, ancestor of main). See takeover_log. A re-claims on return."
-    },
-    {
-      "task": "feature-wiring-batch",
-      "zone": "feature-wiring",
-      "agent_branch": "arena/01a0c34d-nexus-ai-agent",
-      "claimed_at": "2026-09-21T10:00:52Z",
-      "ttl_hours": 24,
+      "task": "task-131",
+      "title": "Architecture & documentation suite + board rewrite",
+      "title_fa": "سوئیت معماری و مستندسازی + بازنویسی تخته",
+      "zone": "docs-architecture",
+      "priority": "P0",
       "status": "active",
-      "gates_owner": false,
-      "exclusive_paths": [
-        "src/nexus_ai_agent/bot/surface/",
-        "src/nexus_ai_agent/features/"
+      "scope": "مستندات معماری C4/arc42، نقشه مرزهای اجرایی، جریان‌های runtime، ممیزی صادقانه پوشش، گارد docs-integrity و بازنویسی تخته به schema 2.",
+      "scope_fa": "مستندات معماری C4/arc42، نقشه مرزهای اجرایی، جریان‌های runtime، ممیزی صادقانه پوشش، گارد docs-integrity و بازنویسی تخته به schema 2.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "هر قاعدهٔ مرزی نام تست نگهبانش را می‌آورد",
+        "هر سند در docs/README.md فهرست شده و لینک‌ها زنده‌اند (tests/unit/test_docs_integrity.py)",
+        "تخته schema 2 با تست ساختاری (tests/unit/test_agent_board.py)",
+        "هیچ فایل src/ لمس نشده"
       ],
-      "scope": "PR#32 open: wire dead engines via framework-free bot/surface layer (tools, games, referral, gamification, force-join, anon-chat, rag surface)",
-      "note": "PR#32 OPEN (26 files, checks green @10:38Z on old base). MUST rebase onto post-#34 main: features/{ai_memory,anonymous_chat,force_join,gamification,rag,tools}.py + bot/memory_handlers.py + worker.py + tests/unit/conftest.py all moved. Owner picks surface/ vs feature_handlers/. See task-122."
-    },
-    {
-      "task": "nagar-wave3-timeline-edit-delivery",
-      "zone": "nagar-creative-edit",
-      "agent_branch": "arena/01a0c36f-nexus-ai-agent",
-      "claimed_at": "2026-09-21T11:00:00Z",
-      "released_at": "2026-09-21T11:54:00Z",
-      "ttl_hours": 24,
-      "status": "completed_released",
-      "gates_owner": false,
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/packs/edit/",
-        "tests/unit/test_edit_pack.py",
-        "tests/architecture/test_edit_pack_boundary.py"
+      "evidence_required": [
+        "pytest tests/unit/test_docs_integrity.py tests/unit/test_agent_board.py",
+        "CI سبز روی PR"
       ],
-      "scope": "Delivered via PR#31 (merged c41b1b0): 8 timeline edit ops + boundary tests. Left lint debt on main (71 ruff errors + 16 unformatted files) — handed to task-101",
-      "note": "Lease released; zone re-opens only through task-101 (lint restore) and task-104 (apply lane, new files)"
-    },
-    {
-      "task": "board-gc-engineered-handoff",
-      "zone": "coordination",
-      "agent_branch": "arena/01a0c3ca-nexus-ai-agent",
-      "claimed_at": "2026-09-21T11:48:00Z",
-      "released_at": "2026-09-21T11:54:00Z",
-      "ttl_hours": 24,
-      "status": "completed_released",
-      "gates_owner": false,
       "exclusive_paths": [
-        ".agents/board.json",
+        ".agents/",
         "AGENTS.md",
-        "docs/HANDOFF_ANALYSIS_2026-09-21.md"
+        "docs/architecture/",
+        "docs/architecture.md",
+        "docs/README.md",
+        "tests/unit/test_docs_integrity.py",
+        "tests/unit/test_agent_board.py"
       ],
-      "scope": "Full done/not-done analysis with CI evidence, board cleanup (removed 4 completed nagar tasks), engineered 10-task handoff with acceptance criteria and researched zero-cost toolchains",
-      "note": "Atomic single-commit session: claim, work, and release landed together; verification runs were diagnostic only — gates deferred to gates owner"
-    },
-    {
-      "task": "task-101",
-      "zone": "ci-quality",
-      "agent_branch": "arena/01a0c3ca-nexus-ai-agent",
-      "claimed_at": "2026-09-21T12:10:00Z",
-      "ttl_hours": 24,
-      "status": "completed_released",
-      "gates_owner": false,
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/packs/edit/",
-        "src/nexus_ai_agent/creative/packs/audio/",
-        "src/nexus_ai_agent/creative/packs/motion/",
-        "src/nexus_ai_agent/creative/packs/delivery/",
-        "src/nexus_ai_agent/creative/packs/caption/",
-        "src/nexus_ai_agent/creative/slideshow/ffmpeg.py",
-        "src/nexus_ai_agent/orchestration/router.py",
-        "tests/unit/test_edit_pack.py",
-        "tests/unit/test_audio_pack.py",
-        "tests/unit/test_motion_pack.py",
-        "tests/unit/test_delivery_pack.py",
-        "tests/unit/test_caption_ass.py",
-        "tests/architecture/test_edit_pack_boundary.py",
-        "tests/architecture/test_audio_pack_boundary.py",
-        "tests/architecture/test_motion_pack_boundary.py",
-        "tests/architecture/test_delivery_pack_boundary.py"
-      ],
-      "scope": "DONE: 71 ruff errors -> 0 (28 F401 auto-fix, 2 I001, 40 E501 via identical-concat string splits + docstring rewrap, 1 F841 converted to bare fail-fast lookup preserving KeyError semantics), 16 files formatted. Zero semantic change proven: 180/180 targeted + 749 suite passed; 20 env failures identical on base commit.",
-      "note_fa": "✅ عامل D تحویل داد — محدوده آزاد شد. PR باز است؛ merge پس از سبز شدن CI.",
-      "released_at": "2026-09-21T12:45:00Z"
-    },
-    {
-      "task": "task-104",
-      "zone": "nagar-render-lane",
-      "agent_branch": "arena/01a0c460-nexus-ai-agent",
-      "claimed_at": null,
-      "ttl_hours": 24,
-      "status": "done",
-      "gates_owner": false,
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/rendering/",
-        "tests/unit/test_rendering_lane.py",
-        "tests/architecture/test_rendering_lane_boundary.py"
-      ],
-      "scope": "Wave 8 apply lane",
-      "note": "",
-      "delivered": [
-        "creative/rendering/ ir→filtergraph→argv compiler (8 ops) + single-process executor",
-        "20 lane tests (16 golden + 4 real FFmpeg encodes) + 4 boundary gates"
-      ],
-      "evidence": "tests/unit/test_rendering_lane.py (20) + tests/architecture/test_rendering_lane_boundary.py (4) — green; ruff+mypy clean; in F PR (104+105)"
-    },
-    {
-      "task": "task-105",
-      "zone": "nagar-caption-engine",
-      "agent_branch": "arena/01a0c460-nexus-ai-agent",
-      "claimed_at": null,
-      "ttl_hours": 24,
-      "status": "done",
-      "gates_owner": false,
-      "exclusive_paths": [
-        "src/nexus_ai_agent/adapters/whisper_local.py",
-        "src/nexus_ai_agent/creative/packs/caption/",
-        "tests/unit/test_caption_engine_adapters.py",
-        "pyproject.toml[speech/translate extras only]"
-      ],
-      "scope": "Wave 9 local speech",
-      "note": "pyproject hunk (2 extras) WILL textually conflict with PR#33 packaging rewrite — re-apply 6 lines at rebase, both sides keep theirs.",
-      "delivered": [
-        "WhisperLocalCaptionEngine + ArgosLocalTranslator (lazy, to_thread, offline-first)",
-        "3 pure pack ops → caption pending 3→0 + activates",
-        "[speech]/[translate] extras (unique — PR#33 has none)"
-      ],
-      "evidence": "tests/unit/test_caption_engine_adapters.py (13) — green; caption pending=() verified; in F PR (104+105)"
-    },
-    {
-      "task": "task-110-duplicate-F",
-      "zone": "delivery-interop",
-      "agent_branch": "arena/01a0c460-nexus-ai-agent",
-      "claimed_at": null,
-      "ttl_hours": 24,
-      "status": "superseded_by_PR33",
-      "gates_owner": false,
-      "exclusive_paths": [],
-      "scope": "F duplicate of task-110 (ExternalReference + markers + conv-store) — REVERTED, see deferred_log",
-      "note": "Split-brain: base predated PR#33; same work already green in PR#33. Unique remainder (markers) reserved as wave-3 task-121 for F post-merge. Reverted code recoverable from branch history pre-reset (commit c18ee8a).",
-      "delivered": [],
-      "evidence": "deferred_log entry 2026-09-21 (F → PR#33)"
-    },
-    {
-      "task": "pr34-merged",
-      "zone": "core-security + feature-wiring",
-      "agent_branch": "arena/01a0c3a0-nexus-ai-agent",
-      "claimed_at": "2026-09-21T13:05:00Z",
-      "ttl_hours": 24,
-      "status": "completed_merged",
-      "gates_owner": false,
-      "exclusive_paths": [],
-      "scope": "Record: PR#34 delivered P0 week-1 + feature-engine wiring to main.",
-      "delivered": [
-        "P0-7 consent gate + migration 7c2f9d41e8a3",
-        "P0-2 access guard",
-        "P0-5 dashboard token",
-        "P0-6 safe paths",
-        "P0-3 force-join",
-        "feature_handlers wiring + calculators/reminders"
-      ],
-      "evidence": "PR#34 state=MERGED; main @93cee5e; CI run 35613892356 SUCCESS"
-    },
-    {
-      "task": "pr33-in-review",
-      "zone": "packaging + interop + security + wiring",
-      "agent_branch": "arena/01a0c3aa-nexus-ai-agent",
-      "claimed_at": "2026-09-21T12:28:56Z",
-      "ttl_hours": 24,
-      "status": "active_in_review",
-      "gates_owner": false,
-      "exclusive_paths": [],
-      "scope": "Record of PR#33 (OPEN, green) scope so overlaps are visible on the board, not just in git.",
-      "delivered": [
-        "task-107 packaging (extras/uv/slim)",
-        "task-110 OTIO ExternalReference (NO markers — flag still ignored) + aiosqlite conv-store (15 tests)",
-        "P0 security batch (OVERLAPS merged PR#34 — needs rescope)",
-        "feature wiring (OVERLAPS PR#32 + PR#34 — owner picks one)"
-      ],
-      "evidence": "PR#33 checks: test/test-extras/migrate-postgres SUCCESS; collision_map in task-123; F 110-duplicate reverted 2026-09-21",
-      "note": "Empty paths by design (record-claim, cf. E#1 precedent): blocks nothing mechanically; humans read the map."
-    },
-    {
-      "task": "ci-gates-steward",
-      "zone": "ci-quality",
-      "agent_branch": "arena/01a0c460-nexus-ai-agent",
-      "claimed_at": "2026-09-21T15:21:39Z",
-      "ttl_hours": 24,
-      "status": "active",
-      "gates_owner": true,
-      "exclusive_paths": [],
-      "scope": "Interim gates stewardship after A orphaned (vacant gates_owner).",
-      "note": "F runs/reads full gates (branch CI + main CI) until E#1 merges #33 or A returns. E#1 backup (green-gates evidence). No code paths locked."
-    },
-    {
-      "task": "task-125",
-      "zone": "nagar-opgap",
-      "agent_branch": "",
-      "claimed_at": null,
-      "ttl_hours": 24,
-      "status": "done",
-      "gates_owner": false,
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/packs/audio/",
-        "src/nexus_ai_agent/creative/packs/motion/",
-        "tests/unit/test_opgap_audio_motion.py"
-      ],
-      "scope": "شکاف TDD: اسلایس صوت/موشن (۱۵ عملیات جامانده) — فاز خالص",
-      "note": ""
-    },
-    {
-      "task": "task-129",
-      "zone": "i18n-parity",
-      "agent_branch": "",
-      "claimed_at": null,
-      "ttl_hours": 24,
-      "status": "done",
-      "gates_owner": false,
-      "exclusive_paths": [
-        "src/nexus_ai_agent/i18n/",
-        "tests/unit/test_i18n_parity.py"
-      ],
-      "scope": "برابری کلیدهای i18n در ۱۵ زبان + ممیزی فارسی (اکنون — صفر تداخل)",
-      "note": ""
-    },
-    {
-      "task": "task-130",
-      "zone": "e2e-deploy",
-      "agent_branch": "",
-      "claimed_at": null,
-      "ttl_hours": 24,
-      "status": "done",
-      "gates_owner": false,
-      "exclusive_paths": [
-        "koyeb.yaml",
-        "scripts/deploy_smoke.py",
-        "docs/ops/"
-      ],
-      "scope": "دودکش E2E + ران‌بوک استقرار (نیمه آزاد؛ compose پس از #33)",
-      "note": ""
-    },
-    {
-      "task": "task-115",
-      "zone": "llm-local",
-      "agent_branch": "",
-      "claimed_at": null,
-      "ttl_hours": 24,
-      "status": "done",
-      "gates_owner": false,
-      "exclusive_paths": [
-        "src/nexus_ai_agent/llm/local_server_provider.py",
-        "tests/unit/test_local_server_provider.py"
-      ],
-      "scope": "ارائه‌دهنده LLM محلی (llama.cpp server) به‌صورت extra اختیاری",
-      "note": ""
-    },
-    {
-      "task": "task-111-version-lockstep-ci",
-      "zone": "ci-quality",
+      "owner_hint": "",
       "agent_branch": "arena/01a0c4c1-nexus-ai-agent",
       "claimed_at": "2026-09-21T16:21:42Z",
       "ttl_hours": 24,
-      "status": "active",
       "gates_owner": false,
+      "delivered": [
+        "docs/architecture/{OVERVIEW,MODULE_MAP,RUNTIME_FLOWS,CREATIVE_STUDIO,DATA_AND_STORAGE,SECURITY,OBSERVABILITY,TESTING,REFERENCES,OVERVIEW.fa}.md",
+        "docs/architecture/adr/{README,template,0001..0004}",
+        "docs/architecture.md front door + v2.0.0 page archived",
+        "docs/README.md single index",
+        "tests/unit/test_docs_integrity.py + tests/unit/test_agent_board.py",
+        ".agents/board.json schema 2"
+      ],
+      "note": "Owner-directed session work (arena/01a0c4c1)."
+    },
+    {
+      "task": "task-111-version-lockstep-ci",
+      "title": "Release version lock-step guard (tests-only)",
+      "title_fa": "گارد قفل نسخهٔ انتشار (فقط تست)",
+      "zone": "ci-quality",
+      "priority": "P1",
+      "status": "active",
+      "scope": "جلوگیری از دریفت 3.12.0/3.13.0: VERSION == pyproject == آخرین سکشن CHANGELOG == dist نصب‌شده.",
+      "scope_fa": "جلوگیری از دریفت 3.12.0/3.13.0: VERSION == pyproject == آخرین سکشن CHANGELOG == dist نصب‌شده.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "fixture ناهماهنگ قرمز است و ریپو سبز",
+        "درصد بدون وابستگی جدید",
+        "بدون دست‌زدن به .github/workflows/ci.yml (PR#33 مالک آن است)"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_version_lockstep.py"
+      ],
       "exclusive_paths": [
         "tests/unit/test_version_lockstep.py",
         "tests/unit/test_version_command.py"
       ],
-      "scope": "Prevent the 3.12.0-vs-v3.13.0 drift that the hygiene pass fixed: a CI guard asserting VERSION == pyproject version == latest CHANGELOG section (extends the existing test_version_command.py chain to the changelog). Acceptance: failing case demonstrably red on a mismatched fixture, green on current main; no new dependencies. AMENDED by task-131 session (arena/01a0c4c1): implemented tests-only — .github/workflows/ci.yml is dropped from the exclusive paths because PR#33 rewrites it; the guard is enforced by the pytest step that already exists, so no workflow edit is needed.",
-      "note": ""
-    },
-    {
-      "task": "task-131",
-      "zone": "docs-architecture",
+      "owner_hint": "",
       "agent_branch": "arena/01a0c4c1-nexus-ai-agent",
       "claimed_at": "2026-09-21T16:21:42Z",
       "ttl_hours": 24,
-      "status": "active",
       "gates_owner": false,
-      "exclusive_paths": [
-        "docs/architecture/",
-        "docs/architecture.md",
-        "docs/README.md",
-        ".agents/board.json",
-        "AGENTS.md",
-        "tests/unit/test_docs_integrity.py",
-        "tests/unit/test_agent_board.py"
+      "delivered": [
+        "tests/unit/test_version_lockstep.py (fixture-red + repository-green + dist check)"
       ],
-      "scope": "Architecture-as-code documentation suite: C4/arc42 views, module-boundary map bound to the existing fitness tests, runtime flows, security/observability/testing references — plus a docs-integrity guard test so the docs cannot drift from the tree.",
-      "acceptance_criteria": [
-        "Every documented boundary rule names the test file that enforces it",
-        "docs/README.md indexes every file under docs/ (enforced by tests/unit/test_docs_integrity.py)",
-        "All relative links + mermaid fences validated in CI (pytest, no new dependency)",
-        "No source file is touched: docs/, AGENTS.md, .agents/board.json and two new test files only"
-      ],
-      "note": ""
-    }
-  ],
-  "deferred_log": [
+      "note": "AMENDED scope: ci.yml dropped from exclusive paths because PR#33 rewrites it; the existing pytest step enforces the guard."
+    },
     {
-      "task": "feature-wiring-batch",
-      "deferred_by_branch": "arena/01a0c316-nexus-ai-agent",
-      "at": "2026-09-21T12:00:00Z",
-      "resolved": true,
-      "resolution_fa": "عامل B به‌جای انتظار، با لایه جدید bot/surface (بدون لمس bot/handlers.py) مسیر خود را باز کرد و PR#32 را در وضعیت in_review تحویل داد؛ ممنوعیت لمس handlers.py تا ادغام بچ امنیتی پابرجاست.",
-      "reason_fa": "چون عامل امنیتی روی فایل مشترک bot/handlers.py کار می‌کرد، این وظیفه متوقف شد و به زمان دیگری موکول گردید تا فراموش نشود.",
-      "reason_en": "Deferred because another agent holds the active lease on the shared file bot/handlers.py (P0-security-batch). Resolved: PR#32 delivered via new surface files; handlers.py lock stands until the security batch merges.",
-      "resume_when": "PR#32 rebase on green main (after task-101) and coordinate handlers.py with agent A"
+      "task": "ci-gates-steward",
+      "title": "Interim CI gates stewardship",
+      "title_fa": "نگهبان موقت گیت‌ها",
+      "zone": "ci-quality",
+      "priority": "P0",
+      "status": "active",
+      "scope": "عامل E (شاخه 460) تا ادغام #33 یا بازگشت عامل A، مالک اجرای گیت‌ها روی main است.",
+      "scope_fa": "عامل E (شاخه 460) تا ادغام #33 یا بازگشت عامل A، مالک اجرای گیت‌ها روی main است.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "گیت‌های branch و main خوانده و ثبت شوند",
+        "هیچ مسیر کدی توسط این claim قفل نشود"
+      ],
+      "evidence_required": [],
+      "exclusive_paths": [],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0c460-nexus-ai-agent",
+      "claimed_at": "2026-09-21T15:21:39Z",
+      "ttl_hours": 24,
+      "gates_owner": true,
+      "note": "gates_owner=true. سایر عامل‌ها فقط diagnostic محلی اجرا می‌کنند."
     },
     {
       "task": "feature-wiring-batch",
-      "deferred_by_branch": "arena/01a0c3a0-nexus-ai-agent",
-      "at": "2026-09-21T11:20:00Z",
-      "resolved": true,
-      "resolution_fa": "ادغام نشد؛ به‌جای آن PR#34 با همان scope باز است (agent_e).",
-      "reason_fa": "ادامه‌ی کار سشن قبلی (محافظت ماشین‌حساب + ReminderSystem + سیم‌کشی موتورها) بر اساس دستور مالک ریپو؛ کلایم قدیمی P0-security-batch آزاد شد چون PR آن merge شده و سشنش تمام شده است.",
-      "reason_en": "Resumed per repo owner: continue previous session's work (calculator hardening, ReminderSystem, engine wiring). Stale P0-security-batch lease released because its PR (#30) is merged and the session is finished.",
-      "resume_when": "superseded by PR#34 (agent_e card)"
-    },
-    {
-      "task": "task-110",
-      "deferred_by_branch": "arena/01a0c460-nexus-ai-agent",
-      "at": "2026-09-21T15:21:39Z",
-      "reason_fa": "کار تکراری بود: PR#33 (عامل E شعبه 3aa) همان تسک ۱۱۰ را زودتر، سبز و در ریویو تحویل داده بود ولی Claimش روی main نبود و بیس من قدیمی بود. برای صفر تداخل، کد ۱۱۰ خودم را از شاخه برگرداندم. تنها ارزش یکتای من (مارکرهای OTIO که در PR#33 نیست) به‌صورت تسک ۱۲۱ پس از مرج #33 دوباره لند می‌شود.",
-      "reason_en": "Duplicate: PR#33 (branch 3aa) already delivered task-110 first, green, in review; its claim was invisible (never pushed to main) and my base predated it. Reverted my 110 (conv-store + OTIO) to zero the overlap. Unique remainder (OTIO markers, absent from #33) reserved as wave-3 task-121 post-merge.",
-      "resume_when": "PR#33 merged → F lands markers-only supplement (task-121); conv-store: keep theirs (aiosqlite, 15 tests)."
-    }
-  ],
-  "merge_order_note": "۱) task-101 (lint restore) → ۲) PR#32 rebase+merge → ۳) task-102 (security) و task-104/105/107/108/109/110 موازی روی مسیرهای گسسته → ۴) task-106 بعد از ادغام الگوی surface. تداخل .agents/board.json بین PR#32 و این واگذاری با قاعده «آخرین وضعیت واگذاری برنده است» حل می‌شود.",
-  "gates_rule": "Exactly ONE agent (the gates_owner of the active claim) runs make lint / make types / make test on main-bound work. Other agents must NOT run overlapping gates in parallel; they note 'deferred to gates owner' in their PR body. Exception: read-only diagnostic checks (ruff check, targeted pytest) are always allowed for analysis.",
-  "takeover_log": [
-    {
-      "at": "2026-09-21T15:21:39Z",
-      "by_branch": "arena/01a0c460-nexus-ai-agent",
-      "agent": "عامل F",
-      "reclaimed": "P0-security-batch (agent A, arena/01a0c316-nexus-ai-agent)",
-      "rule": "orphaned-lease (AGENTS.md, learned 2026-09-21)",
-      "evidence": [
-        "PR#34 MERGED (P0 week-1 + wiring) from arena/01a0c3a0 — branch is ancestor of main @93cee5e",
-        "A branch HEAD c1cdaf9 = pre-P0 era (protocol+audit only), zero P0 code pushed",
-        "no PR ever opened from 316 for P0 code",
-        "lease heartbeat (claimed 12:00Z) with no code = stale per rule intent; A re-claims on return"
-      ],
-      "fa": "اسکوپ P0 با PR#34 لند کرد و شاخه A هیچ کد P0 پوش نکرده؛ اجاره بازپس گرفته شد تا قفل کاذب روی core-security نماند."
-    }
-  ],
-  "ten_forward_tasks_wave2": [
-    {
-      "id": "task-111",
-      "title": "نگار — رجیستری runtime یکپارچه همه پک‌ها (nexus packs list سبز)",
-      "zone": "nagar-pack-activation",
-      "priority": "P1",
-      "assigned_to": "عامل آزاد (پس از ۱۰۴/۱۰۵/۱۱۰)",
-      "status": "available",
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/packs/edit/",
-        "src/nexus_ai_agent/creative/packs/motion/",
-        "src/nexus_ai_agent/creative/packs/audio/",
-        "src/nexus_ai_agent/creative/packs/delivery/",
-        "src/nexus_ai_agent/creative/packs/registry.py",
-        "tests/unit/test_pack_activation.py"
-      ],
-      "instructions": "پس از لاین رندر (۱۰۴) و موتور گفتار (۱۰۵)، رجیستری هر پک را از pending خارج کن: برای هر عملیات pending یا هندلر خالص بنویس یا با ADR از manifest حذفش کن. معیار: `nexus packs list` همه پک‌ها activated و pending=0.",
-      "acceptance_criteria": [
-        "pending همه پک‌ها = 0",
-        "تست فعال‌سازی سبز",
-        "صفر تغییر در API پک‌های فعال"
-      ],
-      "note": "REFINED 2026-09-21: per-pack pending ALREADY 0 (verified); the gap is cli._packs_registry (slideshow+caption only). Sequenced post-#33 (they touch cli.py). See also task-126."
-    },
-    {
-      "id": "task-112",
-      "title": "امضای ed25519 مانیفست تحویل + تأییدکننده آفلاین (تکمیل spike تسک ۱۱۰)",
-      "zone": "delivery-signing",
-      "priority": "P1",
-      "assigned_to": "عامل آزاد (پس از ۱۱۰)",
-      "status": "available",
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/packs/delivery/signing.py",
-        "tests/unit/test_delivery_signing.py"
-      ],
-      "instructions": "با PyNaCl (BSD، چرخ آماده) مانیفست delivery را امضا کن؛ کلید از env (NEXUS_SIGNING_KEY)، تأیید آفلاین در consumer؛ تست round-trip امضا/تأیید + تست دست‌کاری (tamper → reject).",
-      "acceptance_criteria": [
-        "امضا/تأیید round-trip سبز",
-        "دست‌کاری → خطای تایپ‌شده",
-        "بدون کلید → fail-closed با پیام"
-      ]
-    },
-    {
-      "id": "task-113",
-      "title": "CI همیشه‌سبز: job سبک lint جدا + pre-commit پین‌شده",
-      "zone": "ci-quality-2",
-      "priority": "P1",
-      "assigned_to": "عامل آزاد",
-      "status": "available",
-      "exclusive_paths": [
-        ".github/",
-        ".pre-commit-config.yaml"
-      ],
-      "instructions": "ادامه task-101: یک workflow/job جدا برای ruff (check+format) که pytest را بلاک نکند + pre-commit با ruff پین‌شده هم‌نسخه CI. معیار: پوش خراب lint، تست‌ها را قرمز نکند.",
-      "acceptance_criteria": [
-        "job lint جدا در CI",
-        "pre-commit نصب‌شدنی با یک دستور",
-        "مستند در CONTRIBUTING"
-      ],
-      "note": "Sequenced post-#33 (they rewrite workflows/ci.yml + setup-uv)."
-    },
-    {
-      "id": "task-114",
-      "title": "بنچمارک‌های perf لاین رندر و موتور گفتار + آستانه CI",
-      "zone": "creative-bench",
-      "priority": "P2",
-      "assigned_to": "عامل آزاد (پس از ۱۰۴/۱۰۵)",
-      "status": "available",
-      "exclusive_paths": [
-        "tests/bench/",
-        "scripts/bench_render.py",
-        "scripts/bench_caption.py"
-      ],
-      "instructions": "بنچ دترمینیستیک: زمان کامپایل argv لاین رندر (بدون انکد) + توان transcribe روی fixture ثابت؛ آستانه رگرسیون در CI (fail اگر >۱۵٪ کندتر از baseline کامیت‌شده).",
-      "acceptance_criteria": [
-        "baseline کامیت‌شده",
-        "گیت رگرسیون perf در CI",
-        "بدون نیاز به GPU"
-      ]
-    },
-    {
-      "id": "task-115",
-      "title": "ارائه‌دهنده LLM محلی (llama.cpp server) به‌صورت extra اختیاری",
-      "zone": "llm-local",
-      "priority": "P2",
-      "assigned_to": "عامل آزاد",
-      "status": "available",
-      "exclusive_paths": [
-        "src/nexus_ai_agent/llm/local_provider.py",
-        "tests/unit/test_llm_local.py"
-      ],
-      "instructions": "پشت پورت LLM موجود: کلاینت OpenAI-compatible به llama-server محلی (بدون وابستگی torch)؛ در غیاب سرور fail-closed تایپ‌شده؛ extra `[local-llm]` فقط با httpx موجود.",
-      "acceptance_criteria": [
-        "بدون سرور: تست‌ها سبز (fail-closed)",
-        "با سرور: یک round-trip واقعی",
-        "هیچ ترافیک ابری"
-      ]
-    },
-    {
-      "id": "task-116",
-      "title": "سخت‌سازی آداپتور ذخیره‌سازی (R2/S3) + تست‌های قطع شبکه",
-      "zone": "storage-hardening",
-      "priority": "P2",
-      "assigned_to": "عامل آزاد",
-      "status": "available",
-      "exclusive_paths": [
-        "src/nexus_ai_agent/storage/",
-        "tests/unit/test_storage_resilience.py"
-      ],
-      "instructions": "retry با backoff نمایی + idempotency-key روی آپلود + تست قطع/وصل با moto یا fake transport؛ هیچ secret در لاگ.",
-      "acceptance_criteria": [
-        "تست chaos قطع شبکه سبز",
-        "لاگ‌ها بدون secret",
-        "retry قابل تنظیم از env"
-      ]
-    },
-    {
-      "id": "task-117",
-      "title": "ران‌بوک‌های عملیات + اسکریپت smoke استقرار",
-      "zone": "ops-runbooks",
-      "priority": "P2",
-      "assigned_to": "عامل آزاد",
-      "status": "available",
-      "exclusive_paths": [
-        "docs/ops/",
-        "scripts/smoke_deploy.py"
-      ],
-      "instructions": "ران‌بوک فارسی/انگلیسی: استقرار koyeb، چرخش secret، بازیابی DB، اسکیل worker؛ اسکریپت smoke که health/readiness را پس از deploy چک کند.",
-      "acceptance_criteria": [
-        "۴ ران‌بوک کامل",
-        "smoke با exit-code معنادار",
-        "لینک از README"
-      ]
-    },
-    {
-      "id": "task-118",
-      "title": "حافظه گراف: هارنس recall + تست‌های نگهبان معماری",
-      "zone": "memory-eval",
-      "priority": "P2",
-      "assigned_to": "عامل آزاد",
-      "status": "available",
-      "exclusive_paths": [
-        "src/nexus_ai_agent/memory/",
-        "tests/unit/test_memory_recall.py"
-      ],
-      "instructions": "هارنس recall@k روی fixture ثابت + گارد: هیچ import از features/ یا bot/ در memory/ (تست معماری)؛ baseline کامیت‌شده.",
-      "acceptance_criteria": [
-        "recall@k گزارش‌شده",
-        "گارد معماری سبز",
-        "بدون وابستگی جدید"
-      ]
-    },
-    {
-      "id": "task-119",
-      "title": "دودکش E2E: استقرار koyeb + docker-compose سبز",
-      "zone": "e2e-deploy",
-      "priority": "P3",
-      "assigned_to": "عامل آزاد",
-      "status": "available",
-      "exclusive_paths": [
-        "koyeb.yaml",
-        "scripts/smoke_e2e.py",
-        "Dockerfile.smoke"
-      ],
-      "instructions": "پس از ۱۰۷: بیلد slim، بالا آمدن compose، اجرای smoke_e2e (health + یک فلوی ربات با Bot API ساختگی)؛ ترتیب‌بندی با ۱۰۷ (compose مال ۱۰۷).",
-      "acceptance_criteria": [
-        "compose بالا می‌آید",
-        "smoke E2E سبز",
-        "لاگ evidence در CI artifact"
-      ],
-      "note": "Sequenced post-#33 (they touch Dockerfile). koyeb.yaml + scripts half free now → task-130."
-    },
-    {
-      "id": "task-120",
-      "title": "کاورژ ۹۵٪ پک‌های نگار + موتاسیون‌تست سبک عملیات خالص",
-      "zone": "nagar-coverage",
-      "priority": "P3",
-      "assigned_to": "عامل آزاد (پس از ۱۱۱)",
-      "status": "available",
-      "exclusive_paths": [
-        "tests/unit/test_edit_pack2.py",
-        "tests/unit/test_motion_pack2.py",
-        "tests/unit/test_audio_pack2.py",
-        "tests/unit/test_delivery_pack2.py",
-        "tests/unit/test_caption_pack2.py"
-      ],
-      "instructions": "بدون لمس تست‌های موجود (فایل‌های *2 جدید): کاورژ خط‌به‌خط عملیات خالص به ۹۵٪ + نمونه موتاسیون (cosmic-ray یا mutmut روی یک ماژول) با kill-rate گزارش‌شده.",
-      "acceptance_criteria": [
-        "کاورژ ≥۹۵٪ روی packs",
-        "گزارش mutation kill-rate",
-        "صفر تغییر در تست‌های موجود"
-      ]
-    }
-  ],
-  "ten_forward_tasks_wave3": [
-    {
-      "id": "task-121",
-      "title": "OTIO: مارکرها (مکمل PR#33 — تنها شکاف باقی‌مانده ۱۱۰)",
-      "zone": "delivery-interop-markers",
-      "priority": "P1",
-      "assigned_to": "عامل F (پس از مرج #33)",
-      "status": "available_sequenced_post_33",
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/packs/delivery/",
-        "tests/unit/test_otio_interop.py"
-      ],
-      "instructions": "PR#33 فیلد include_markers را نگه داشت ولی نادیده‌اش می‌گیرد (ops هیچ ارجاعی به marker ندارد — اثبات با grep). پس از مرج: مدل OtioMarker (Marker.2 روی Stack، point→1frame، نگاشت پالت+حفظ رنگ در metadata) + emission از timeline.markers + ۲ تست round-trip با OTIO واقعی. کد مرجع: هیستوری شاخه F قبل از reset (کامیت c18ee8a، قابل cherry-pick تکه‌ای).",
-      "acceptance_criteria": [
-        "include_markers=False → صفر مارکر (تست)",
-        "round-trip واقعی: نام/فریم/رنگ مارکرها",
-        "رگرسیون صفر روی تست‌های #33"
-      ]
-    },
-    {
-      "id": "task-122",
-      "title": "تriage شماره PR#32: rebase + dedupe در برابر PR#34 (مالک: یکی را انتخاب می‌کند)",
+      "title": "PR#32 feature wiring batch",
+      "title_fa": "بچ سیم‌کشی فیچرها",
       "zone": "feature-wiring",
       "priority": "P0",
-      "assigned_to": "عامل B (شاخه 34d — کار خودش)",
-      "status": "assigned_to_B",
+      "status": "active",
+      "scope": "PR#32 باز است و روی بیس باستانی سبز است؛ باید روی main فعلی rebase و با #34 dedupe شود.",
+      "scope_fa": "PR#32 باز است و روی بیس باستانی سبز است؛ باید روی main فعلی rebase و با #34 dedupe شود.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "دیف پس از rebase فقط یکتاها باشد",
+        "هیچ سیم‌کشی موازی با #34 باقی نماند",
+        "CI سبز روی main تازه"
+      ],
+      "evidence_required": [],
       "exclusive_paths": [
         "src/nexus_ai_agent/bot/surface/",
-        "src/nexus_ai_agent/bot/memory_handlers.py",
         "src/nexus_ai_agent/features/"
       ],
-      "instructions": "PR#32 روی بیس باستانی سبز است؛ main با #34 جلو رفته: ۸ فایل مشترک (features/ai_memory,anonymous_chat,force_join,gamification,rag,tools + bot/memory_handlers + worker + tests/unit/conftest) حتماً کانفلیکت متنی + معنایی (دو سیم‌کشی موازی) دارند. گام‌ها: (۱) merge/rebase روی main، (۲) dedupe سیم‌کشی: اگر مالک surface را انتخاب کرد feature_handlers را کوچک کن و بالعکس — هرگز هر دو، (۳) CI سبز روی بیس جدید. دایرکتوری surface/ در main نیست پس فایل‌های جدیدش سالم‌اند.",
-      "acceptance_criteria": [
-        "PR#32 روی main جدید بدون کانفلیکت",
-        "یک سیم‌کشی واحد برای هر انجین (تست Wiring ONE-OWNER)",
-        "CI سبز"
-      ]
+      "owner_hint": "عامل B (شاخه 34d — کار خودش)",
+      "agent_branch": "arena/01a0c34d-nexus-ai-agent",
+      "claimed_at": "2026-09-21T10:00:52Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "handlers.py و memory_handlers.py نیازمند هماهنگی صریح با عامل A/E است."
     },
     {
-      "id": "task-123",
-      "title": "کوچک‌سازی PR#33: حذف بخش‌های لندشده #34، نگه‌داشتن یکتاها (بسته‌بندی/OTIO/کانو-store/داک)",
+      "task": "task-122",
+      "title": "PR#32 rebase + dedupe against merged #34",
+      "title_fa": "ریبیس و رفع دوگانگی PR#32",
+      "zone": "feature-wiring",
+      "priority": "P0",
+      "status": "assigned_to_B",
+      "scope": "۸ فایل مشترک با #34 کانفلیکت متنی و معنایی دارند؛ سیم‌کشی موازی باید یکی شود.",
+      "scope_fa": "۸ فایل مشترک با #34 کانفلیکت متنی و معنایی دارند؛ سیم‌کشی موازی باید یکی شود.",
+      "prerequisites": [
+        "task-131"
+      ],
+      "acceptance_criteria": [
+        "دیف نهایی فقط یکتای‌های #32 را دارد",
+        "تست‌های feature_* سبز",
+        "board.json به سود وضعیت جدید حل شود"
+      ],
+      "evidence_required": [
+        "CI سبز",
+        "گزارش dedupe فایل‌به‌فایل"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/surface/",
+        "src/nexus_ai_agent/features/",
+        "src/nexus_ai_agent/bot/memory_handlers.py"
+      ],
+      "owner_hint": "عامل B",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false
+    },
+    {
+      "task": "task-123",
+      "title": "PR#33 slim-down to its unique remainder",
+      "title_fa": "کوچک‌سازی PR#33 به بخش‌های یکتا",
       "zone": "packaging+interop",
       "priority": "P0",
-      "assigned_to": "عامل E شعبه 3aa (کار خودش)",
       "status": "assigned_to_E_pr33",
-      "exclusive_paths": [],
-      "instructions": "بخش امنیت/سیم‌کشی #33 (۲۸ فایل، 1273+/1897- در برابر main) با #34 مرج‌شده هم‌پوشانی دارد. گام‌ها: (۱) rebase روی main، (۲) حذف هانک‌های امنیت/سیم‌کشیِ تکراری — نگه‌داشتن فقط: packaging (pyproject/uv/Docker)، OTIO ExternalReference، conv-store، تست‌ها و داک یکتا، (۳) به‌روزرسانی delivered روی Claim، (۴) CI سبز. سپس آماده مرج.",
+      "scope": "بخش امنیت/سیم‌کشی #33 با #34 لندشده هم‌پوشانی دارد؛ فقط بسته‌بندی، OTIO، conv-store و داک بماند.",
+      "scope_fa": "بخش امنیت/سیم‌کشی #33 با #34 لندشده هم‌پوشانی دارد؛ فقط بسته‌بندی، OTIO، conv-store و داک بماند.",
+      "prerequisites": [],
       "acceptance_criteria": [
-        "دیف #33 در برابر main فقط یکتاها باشد",
-        "delivered/evidence روی برد دقیق",
-        "CI سبز + آماده مرج"
-      ]
+        "دیف #33 در برابر main فقط یکتاها",
+        "delivered/evidence به‌روز",
+        "CI سبز"
+      ],
+      "evidence_required": [
+        "لیست هانک‌های حذف‌شده",
+        "CI سبز"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "شاخه 3aa (کار خودش)",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false
     },
     {
-      "id": "task-124",
-      "title": "باقی‌مانده ممیزی: P0-8 سیم‌کشی سه‌گانه + P0-9 حافظه گراف فقط-خواندنی",
+      "task": "task-124",
+      "title": "Audit remainder: P0-8 single wiring + P0-9 graph memory write path",
+      "title_fa": "باقی‌ماندهٔ ممیزی: P0-8 و P0-9",
       "zone": "audit-remainder",
       "priority": "P0",
-      "assigned_to": "عامل A (با بازگشت؛ وگرنه عامل آزاد)",
       "status": "available_sequenced_post_32_33",
+      "scope": "هر انجین دقیقاً یک مسیر سیم‌کشی داشته باشد (تست ONE-OWNER) و مسیر نوشتن حافظهٔ گراف با round-trip.",
+      "scope_fa": "هر انجین دقیقاً یک مسیر سیم‌کشی داشته باشد (تست ONE-OWNER) و مسیر نوشتن حافظهٔ گراف با round-trip.",
+      "prerequisites": [
+        "task-122",
+        "task-123"
+      ],
+      "acceptance_criteria": [
+        "تست ONE-OWNER سبز؛ موتور بایپس‌شده یا حذف یا آداپت شده",
+        "write→read گراف با تست round-trip",
+        "صفر رگرسیون"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_audit_remainder.py",
+        "CI سبز"
+      ],
       "exclusive_paths": [
         "src/nexus_ai_agent/memory/",
         "src/nexus_ai_agent/features/rag.py",
         "tests/unit/test_audit_remainder.py"
       ],
-      "instructions": "پس از حل #32/#33: (۱) P0-8: تصمیم تک‌سیم‌کشی را اجرایی کن — موتور بایپس‌شده را حذف یا آداپت کن + تست نگهبان ONE-OWNER، (۲) P0-9: مسیر نوشتن گراف (نه فقط خواندن) + تست round-trip. پیش‌نیاز: A اول rebase/dedupe کند چون features/ داغ است.",
-      "acceptance_criteria": [
-        "هر انجین دقیقاً یک مسیر سیم‌کشی (تست)",
-        "write→read گراف round-trip سبز"
-      ]
+      "owner_hint": "عامل A (با بازگشت) وگرنه عامل آزاد",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false
     },
     {
-      "id": "task-125",
-      "title": "شکاف TDD: اسلایس صوت/موشن (۱۵ عملیات جامانده) — فاز خالص",
-      "zone": "nagar-opgap",
-      "priority": "P1",
-      "assigned_to": "عامل آزاد (اکنون — صفر تداخل)",
-      "status": "available",
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/packs/audio/",
-        "src/nexus_ai_agent/creative/packs/motion/",
-        "tests/unit/test_opgap_audio_motion.py"
-      ],
-      "instructions": "از ۵۴ op-id یکتای TDD فقط ~۳۲ پیاده شده. اسلایس ۱ (خالص، stdlib+pydantic): audio.remove_noise/deess/eq_voice/time_stretch + motion.stabilize/add_parallax (مدل ورودی+هندلر+رجیستر+تست، الگوی ۱۰۵). zones آزاد است (هیچ اجاره فعالی روی packs نیست).",
-      "acceptance_criteria": [
-        "۶ op جدید رجیستر + deterministic",
-        "تست خالص برای هر op",
-        "گیت‌های boundary سبز"
-      ]
-    },
-    {
-      "id": "task-126",
-      "title": "رجیستری runtime یکپارچه: همه پک‌ها در nexus packs (فعال‌سازی واقعی)",
+      "task": "task-126",
+      "title": "Unified runtime pack registry (activate all six packs)",
+      "title_fa": "رجیستری یکپارچهٔ پک‌ها (فعال‌سازی واقعی)",
       "zone": "cli-packs-registry",
-      "priority": "P1",
-      "assigned_to": "عامل آزاد (پس از #33)",
+      "priority": "P0",
       "status": "available_sequenced_post_33",
+      "scope": "رجیستری CLI فقط ۲۱ عملیات را می‌شناسد؛ edit/motion/audio/delivery در وضعیت pending هستند.",
+      "scope_fa": "رجیستری CLI فقط ۲۱ عملیات را می‌شناسد؛ edit/motion/audio/delivery در وضعیت pending هستند.",
+      "prerequisites": [
+        "task-123"
+      ],
+      "acceptance_criteria": [
+        "nexus packs list: ۶ پک، pending=0",
+        "activate برای همهٔ پک‌ها موفق",
+        "تست CLI سبز"
+      ],
+      "evidence_required": [
+        "خروجی قبل/بعد `nexus packs list`"
+      ],
       "exclusive_paths": [
         "src/nexus_ai_agent/cli.py",
         "tests/unit/test_packs_cli.py"
       ],
-      "instructions": "per-pack pending همین حالا ۰ است ولی _packs_registry فقط slideshow+caption را می‌شناسد. پس از #33 (دست روی cli.py دارد): رجیسترهای edit/motion/audio/delivery را هم سوار کن + تست `packs list` (همه pending=0) و `packs activate`. (جایگزین دقیق‌شده تسک ۱۱۱.)",
-      "acceptance_criteria": [
-        "nexus packs list: ۶ پک، pending=0",
-        "activate همه موفق",
-        "تست CLI سبز"
-      ]
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Evidence (2026-09-21T16:2xZ, main@7573249): pending 8/0/7/8/7/0 and `nexus packs activate nexus.audio.studio` → «the runtime does not know audio.detect_beats, …» (8 ids). The earlier board note claiming pending=0 was wrong and is corrected here."
     },
     {
-      "id": "task-127",
-      "title": "RAG واقعی روی stub چهارکیلوبایتی (چانکینگ+هایبرید+eval)",
+      "task": "task-121",
+      "title": "OTIO markers round-trip",
+      "title_fa": "مارکرهای OTIO",
+      "zone": "delivery-interop-markers",
+      "priority": "P1",
+      "status": "available_sequenced_post_33",
+      "scope": "مدل OtioMarker (Marker.2 روی Stack، point→1frame، پالت رنگ در metadata) + emission از timeline.markers + ۲ تست round-trip با OTIO واقعی.",
+      "scope_fa": "مدل OtioMarker (Marker.2 روی Stack، point→1frame، پالت رنگ در metadata) + emission از timeline.markers + ۲ تست round-trip با OTIO واقعی.",
+      "prerequisites": [
+        "task-123"
+      ],
+      "acceptance_criteria": [
+        "include_markers دیگر نادیده گرفته نشود",
+        "۲ تست round-trip با کتابخانهٔ واقعی سبز"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_otio_interop.py"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/delivery/",
+        "tests/unit/test_otio_interop.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false
+    },
+    {
+      "task": "task-128",
+      "title": "Async database phase 1: central engine + two pilots",
+      "title_fa": "فاز ۱ پایگاه‌دادهٔ ناهمگام",
+      "zone": "core-database",
+      "priority": "P1",
+      "status": "available_sequenced_post_32",
+      "scope": "~۱۲ فایل features هنوز create_engine سینک دارند؛ فاز ۱: انجین مرکزی + session-per-task + ۲ پایلوت.",
+      "scope_fa": "~۱۲ فایل features هنوز create_engine سینک دارند؛ فاز ۱: انجین مرکزی + session-per-task + ۲ پایلوت.",
+      "prerequisites": [
+        "task-122"
+      ],
+      "acceptance_criteria": [
+        "انجین مرکزی + ۲ پایلوت",
+        "گارد معماری سبز",
+        "صفر رگرسیون تست‌های DB"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_async_db_harmonization.py"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/core/async_db.py",
+        "tests/unit/test_async_db_harmonization.py",
+        "src/nexus_ai_agent/features/"
+      ],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false
+    },
+    {
+      "task": "task-127",
+      "title": "Real RAG on the 4 KB stub",
+      "title_fa": "RAG واقعی روی استاب",
       "zone": "features-rag",
       "priority": "P2",
-      "assigned_to": "عامل B (دنباله طبیعی #32 — همان فایل)",
       "status": "assigned_to_B_next",
+      "scope": "چانکینگ بازگشتی ۲۵۶–۵۱۲ توکن با همپوشانی ۱۰–۲۰٪ + بازیابی هایبرید BM25+وکتور + هارنس recall@k.",
+      "scope_fa": "چانکینگ بازگشتی ۲۵۶–۵۱۲ توکن با همپوشانی ۱۰–۲۰٪ + بازیابی هایبرید BM25+وکتور + هارنس recall@k.",
+      "prerequisites": [
+        "task-122"
+      ],
+      "acceptance_criteria": [
+        "recall@k روی fixture ثابت گزارش شود",
+        "بدون وابستگی سنگین جدید",
+        "تست eval سبز"
+      ],
+      "evidence_required": [
+        "گزارش recall@k"
+      ],
       "exclusive_paths": [
         "src/nexus_ai_agent/features/rag.py",
         "tests/unit/test_rag_chunking.py",
         "tests/unit/test_rag_eval.py"
       ],
-      "instructions": "rag.py فقط ۳.۷KB/۵ تابع (stub) است و B در #32 همان فایل را لمس می‌کند — پس دنباله‌اش مال B است (پس از #32): چانکینگ بازگشتی ۲۵۶–۵۱۲ + هایبرید BM25+وکتور + هارنس recall@k روی fixture ثابت. بدون وابستگی جدید.",
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false
+    },
+    {
+      "task": "task-106",
+      "title": "Nagar wave 10: Telegram studio commands",
+      "title_fa": "موج ۱۰ نگار: فرمان‌های استودیو",
+      "zone": "creative-surface",
+      "priority": "P1",
+      "status": "available_sequenced_post_32",
+      "scope": "فرمان‌های /edit /caption /grade روی فایل جدید bot/creative_surface.py (بدون لمس handlers.py) از مسیر JobQueuePort و لاین رندر.",
+      "scope_fa": "فرمان‌های /edit /caption /grade روی فایل جدید bot/creative_surface.py (بدون لمس handlers.py) از مسیر JobQueuePort و لاین رندر.",
+      "prerequisites": [
+        "task-122"
+      ],
       "acceptance_criteria": [
-        "recall@k گزارش‌شده روی fixture",
-        "بدون torch جداگانه (chroma موجود)",
-        "تست eval سبز"
+        "سه فرمان با تست سبز",
+        "handlers.py دست‌نخورده",
+        "خطاهای تایپ‌شده و بومی‌شده"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_creative_surface.py"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/creative_surface.py",
+        "tests/unit/test_creative_surface.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false
+    },
+    {
+      "task": "task-134",
+      "title": "Nagar wave 10: portrait family slice",
+      "title_fa": "موج ۱۰ نگار: خانوادهٔ پرتره",
+      "zone": "nagar-portrait",
+      "priority": "P2",
+      "status": "queued",
+      "scope": "۵ عملیات خالص از خانوادهٔ portrait.* (detect_landmarks, smooth_skin, whiten_teeth, enhance_eyes, retouch_blemish) با مدل ورودی، هندلر، رجیستری و گیت پاکی.",
+      "scope_fa": "۵ عملیات خالص از خانوادهٔ portrait.* (detect_landmarks, smooth_skin, whiten_teeth, enhance_eyes, retouch_blemish) با مدل ورودی، هندلر، رجیستری و گیت پاکی.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "۵ op جدید رجیستر + deterministic",
+        "گیت مرزی پک سبز",
+        "دفتر پوشش CREATIVE_STUDIO به‌روز"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_portrait_pack.py tests/architecture/test_portrait_pack_boundary.py"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/portrait/",
+        "tests/unit/test_portrait_pack.py",
+        "tests/architecture/test_portrait_pack_boundary.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false
+    },
+    {
+      "task": "task-132",
+      "title": "Extras smoke matrix in CI",
+      "title_fa": "ماتریس دود اختیاری‌ها در CI",
+      "zone": "ci-quality",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "مسیرهای اختیاری ([speech]/[translate]/[pdf]/[local-llm]) در CI پیش‌فرض اجرا نمی‌شوند؛ یک job ماتریسی باید نصب هر extra و اجرای تست مربوطه را ثابت کند.",
+      "scope_fa": "مسیرهای اختیاری ([speech]/[translate]/[pdf]/[local-llm]) در CI پیش‌فرض اجرا نمی‌شوند؛ یک job ماتریسی باید نصب هر extra و اجرای تست مربوطه را ثابت کند.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "job ماتریسی extra-به-extra",
+        "شکست نصب = شکست CI",
+        "زمان اجرا < ۱۵ دقیقه"
+      ],
+      "evidence_required": [
+        "لینک اجرای سبز ماتریس"
+      ],
+      "exclusive_paths": [
+        "tests/unit/test_optional_extras.py",
+        ".github/"
+      ],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false
+    },
+    {
+      "task": "pr33-in-review",
+      "title": "PR#33 (legacy record)",
+      "title_fa": "رکورد PR#33",
+      "zone": "packaging+interop",
+      "priority": "P1",
+      "status": "active_in_review",
+      "scope": "رکورد دامنهٔ PR#33 تا هم‌پوشانی‌ها روی تخته دیده شود، نه فقط در گیت.",
+      "scope_fa": "رکورد دامنهٔ PR#33 تا هم‌پوشانی‌ها روی تخته دیده شود، نه فقط در گیت.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "پس از ادغام یا بستن، به history منتقل شود"
+      ],
+      "evidence_required": [],
+      "exclusive_paths": [],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0c3aa-nexus-ai-agent",
+      "claimed_at": "2026-09-21T12:28:56Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "exclusive_paths عمداً خالی است تا ادعای مسیر تکراری ایجاد نکند."
+    },
+    {
+      "task": "pr34-merged",
+      "title": "PR#34 (legacy record)",
+      "title_fa": "رکورد PR#34",
+      "zone": "core-security",
+      "priority": "P0",
+      "status": "completed_merged",
+      "scope": "P0 هفتهٔ اول + سیم‌کشی موتورها به main رسید.",
+      "scope_fa": "P0 هفتهٔ اول + سیم‌کشی موتورها به main رسید.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "—"
+      ],
+      "evidence_required": [],
+      "exclusive_paths": [],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0c3a0-nexus-ai-agent",
+      "claimed_at": "2026-09-21T13:05:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "evidence": "PR#34 state=MERGED; main @93cee5e; CI 35613892356 SUCCESS"
+    },
+    {
+      "task": "task-110-duplicate-F",
+      "title": "Duplicate task-110 (superseded)",
+      "title_fa": "تسک ۱۱۰ تکراری",
+      "zone": "delivery-interop",
+      "priority": "P1",
+      "status": "superseded_by_PR33",
+      "scope": "همان کار در PR#33 سبز بود؛ نسخهٔ تکراری برگشت داده شد و باقی‌مانده (markers) تسک ۱۲۱ شد.",
+      "scope_fa": "همان کار در PR#33 سبز بود؛ نسخهٔ تکراری برگشت داده شد و باقی‌مانده (markers) تسک ۱۲۱ شد.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "—"
+      ],
+      "evidence_required": [],
+      "exclusive_paths": [],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0c460-nexus-ai-agent",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "split-brain base؛ کد قابل بازیابی از تاریخچهٔ شاخه."
+    },
+    {
+      "task": "task-131-history-101",
+      "title": "task-101 lint rescue (record)",
+      "title_fa": "رکورد نجات گیت‌ها",
+      "zone": "ci-quality",
+      "priority": "P0",
+      "status": "completed_merged",
+      "scope": "۷۱ خطای ruff → ۰ و فرمت ۱۶ فایل، بدون تغییر معنایی.",
+      "scope_fa": "۷۱ خطای ruff → ۰ و فرمت ۱۶ فایل، بدون تغییر معنایی.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "—"
+      ],
+      "evidence_required": [],
+      "exclusive_paths": [],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "evidence": "PR#35 merged; main green run 35613892356"
+    }
+  ],
+  "deferred_log": [
+    {
+      "task": "task-106",
+      "deferred_by_branch": "arena/01a0c460-nexus-ai-agent",
+      "at": "2026-09-21T15:40:00Z",
+      "reason_fa": "چون الگوی surface (PR#32) هنوز روی main نیست و handlers.py پرترافیک است، تسک ۱۰۶ به بعد از ادغام #32 منتقل شد.",
+      "reason_en": "The surface pattern must land first; handlers.py is the highest-conflict file.",
+      "resume_when": "PR#32 merged to main"
+    },
+    {
+      "task": "task-110-duplicate-F",
+      "deferred_by_branch": "arena/01a0c460-nexus-ai-agent",
+      "at": "2026-09-21T15:05:00Z",
+      "reason_fa": "چون کار روی دو شاخه تکرار شده بود، نسخهٔ تکراری برگشت و باقی‌ماندهٔ یکتا (مارکرها) به تسک ۱۲۱ منتقل شد.",
+      "reason_en": "Split-brain with PR#33; only the unique remainder (markers) survives as task-121.",
+      "resume_when": "task-121 claimed after PR#33 closes"
+    }
+  ],
+  "takeover_log": [
+    {
+      "task": "P0-security-batch",
+      "from": "orphaned lease (عامل A)",
+      "by": "arena/01a0c3a0-nexus-ai-agent",
+      "at": "2026-09-21T13:05:00Z",
+      "reason": "Orphaned-lease rule: scope was delivered by PR#34 (ancestor of main) and re-recorded."
+    }
+  ],
+  "next_work": [
+    {
+      "id": "task-126",
+      "priority": "P0",
+      "zone": "cli-packs-registry",
+      "title": "Unified runtime pack registry — activate all six packs",
+      "title_fa": "رجیستری یکپارچهٔ پک‌ها: فعال‌سازی هر شش پک",
+      "why_fa": "چهار پک پیاده‌شده در CLI ناشناخته‌اند (pending 8/7/8/7) و فعال نمی‌شوند؛ بزرگ‌ترین شکاف قابل‌رفع.",
+      "acceptance_criteria": [
+        "`nexus packs list` → ۶ پک، pending=0",
+        "activate همه موفق",
+        "تست CLI سبز (tests/unit/test_packs_cli.py)"
+      ],
+      "prerequisites": [
+        "task-123"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/cli.py",
+        "tests/unit/test_packs_cli.py"
+      ]
+    },
+    {
+      "id": "task-124",
+      "priority": "P0",
+      "zone": "audit-remainder",
+      "title": "P0-8 single wiring + P0-9 graph memory write path",
+      "title_fa": "بستن P0-8 و P0-9",
+      "why_fa": "دو یافتهٔ باز ممیزی امنیتی/کارکردی با معیار پذیرش روشن.",
+      "acceptance_criteria": [
+        "تست ONE-OWNER سبز",
+        "write→read گراف با round-trip",
+        "صفر رگرسیون"
+      ],
+      "prerequisites": [
+        "task-122",
+        "task-123"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/memory/",
+        "src/nexus_ai_agent/features/rag.py",
+        "tests/unit/test_audit_remainder.py"
+      ]
+    },
+    {
+      "id": "task-122",
+      "priority": "P0",
+      "zone": "feature-wiring",
+      "title": "PR#32 rebase + dedupe",
+      "title_fa": "ریبیس و رفع دوگانگی PR#32",
+      "why_fa": "بزرگ‌ترین PR باز روی بیس باستانی؛ ریسک دو سیم‌کشی موازی.",
+      "acceptance_criteria": [
+        "دیف یکتا",
+        "تست‌های feature_* سبز",
+        "CI سبز روی main تازه"
+      ],
+      "prerequisites": [],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/surface/",
+        "src/nexus_ai_agent/features/"
+      ]
+    },
+    {
+      "id": "task-123",
+      "priority": "P0",
+      "zone": "packaging+interop",
+      "title": "PR#33 slim-down",
+      "title_fa": "کوچک‌سازی PR#33",
+      "why_fa": "برای باز شدن مسیر بسته‌بندی/داک و آزادسازی cli.py.",
+      "acceptance_criteria": [
+        "دیف فقط یکتاها",
+        "CI سبز"
+      ],
+      "prerequisites": [],
+      "exclusive_paths": []
+    },
+    {
+      "id": "task-121",
+      "priority": "P1",
+      "zone": "delivery-interop-markers",
+      "title": "OTIO marker round-trip",
+      "title_fa": "مارکرهای OTIO",
+      "why_fa": "تنها شکاف باقی‌ماندهٔ تسک ۱۱۰؛ include_markers فعلاً بی‌اثر است.",
+      "acceptance_criteria": [
+        "include_markers مؤثر",
+        "۲ تست round-trip با OTIO واقعی"
+      ],
+      "prerequisites": [
+        "task-123"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/delivery/",
+        "tests/unit/test_otio_interop.py"
       ]
     },
     {
       "id": "task-128",
-      "title": "دیتابیس ناهمگام فاز ۱: انجین مرکزی + ۲ پایلوت (پس از #32)",
-      "zone": "core-database",
       "priority": "P1",
-      "assigned_to": "عامل آزاد (پس از #32)",
-      "status": "available_sequenced_post_32",
-      "exclusive_paths": [
-        "src/nexus_ai_agent/core/async_db.py",
-        "tests/unit/test_async_db_harmonization.py"
-      ],
-      "instructions": "~۱۲ فایل features/* هنوز create_engine سینک دارند (core/ پس از بازپس‌گیری A آزاد است ولی features/ در اجاره B). فاز ۱: ماژول create_async_engine مرکزی + session-per-task + ۲ فایل پایلوت features (پس از مرج #32) + تست نگهبان (هیچ create_engine جدیدی در features).",
+      "zone": "core-database",
+      "title": "Async DB phase 1",
+      "title_fa": "فاز ۱ دیتابیس ناهمگام",
+      "why_fa": "حذف create_engine سینک از features با آزمون نگهبان معماری.",
       "acceptance_criteria": [
         "انجین مرکزی + ۲ پایلوت",
-        "گارد معماری سبز",
-        "رگرسیون صفر روی تست‌های DB"
+        "گارد معماری سبز"
+      ],
+      "prerequisites": [
+        "task-122"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/core/async_db.py",
+        "src/nexus_ai_agent/features/"
       ]
     },
     {
-      "id": "task-129",
-      "title": "برابری کلیدهای i18n در ۱۵ زبان + ممیزی فارسی (اکنون — صفر تداخل)",
-      "zone": "i18n-parity",
+      "id": "task-106",
+      "priority": "P1",
+      "zone": "creative-surface",
+      "title": "Telegram studio commands",
+      "title_fa": "فرمان‌های استودیو در تلگرام",
+      "why_fa": "اتصال لاین رندر به کاربر نهایی بدون لمس handlers.py.",
+      "acceptance_criteria": [
+        "/edit /caption /grade با تست",
+        "handlers.py دست‌نخورده"
+      ],
+      "prerequisites": [
+        "task-122"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/creative_surface.py",
+        "tests/unit/test_creative_surface.py"
+      ]
+    },
+    {
+      "id": "task-132",
+      "priority": "P1",
+      "zone": "ci-quality",
+      "title": "Extras smoke matrix",
+      "title_fa": "ماتریس دود اختیاری‌ها",
+      "why_fa": "مسیرهای اختیاری خارج از CI پیش‌فرض می‌توانند بی‌صدا بشکنند (شکاف مستند در TESTING §7).",
+      "acceptance_criteria": [
+        "job ماتریسی per-extra",
+        "شکست نصب = شکست CI"
+      ],
+      "prerequisites": [],
+      "exclusive_paths": [
+        "tests/unit/test_optional_extras.py",
+        ".github/"
+      ]
+    },
+    {
+      "id": "task-134",
       "priority": "P2",
-      "assigned_to": "عامل آزاد (اکنون)",
-      "status": "available",
-      "exclusive_paths": [
-        "src/nexus_ai_agent/i18n/",
-        "tests/unit/test_i18n_key_parity.py"
-      ],
-      "instructions": "۱۵ locale موجود است (ar/de/en/es/fa/fr/hi/id/it/ja/ko/pt/ru/tr/zh) ولی هیچ تستی برابری کلیدها را تضمین نمی‌کند (نیمه آزاد تسک ۱۰۹ — i18n در هیچ اجاره فعالی نیست). تست برابری strict + گزارش پوشش fa + اتصال خروجی‌های جدید (render lane/گفتار) به کلیدها.",
+      "zone": "nagar-portrait",
+      "title": "Portrait family slice (5 ops)",
+      "title_fa": "اسلایس خانوادهٔ پرتره",
+      "why_fa": "۲۹ شناسهٔ TDD باقی‌مانده؛ بزرگ‌ترین خانواده پیاده‌نشده.",
       "acceptance_criteria": [
-        "تست parity سبز (۱۵/۱۵)",
-        "گزارش پوشش fa",
-        "بدون کلید یتیم"
+        "۵ op رجیستر",
+        "گیت مرزی پک سبز"
+      ],
+      "prerequisites": [],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/portrait/",
+        "tests/unit/test_portrait_pack.py"
       ]
     },
     {
-      "id": "task-130",
-      "title": "دودکش E2E + ران‌بوک استقرار (نیمه آزاد؛ compose پس از #33)",
-      "zone": "e2e-deploy",
-      "priority": "P3",
-      "assigned_to": "عامل آزاد (اکنون، اسکوپ محدود)",
-      "status": "available",
-      "exclusive_paths": [
-        "koyeb.yaml",
-        "scripts/smoke_e2e.py",
-        "docs/ops/"
-      ],
-      "instructions": "اسکوپ امنِ اکنون: koyeb.yaml + اسکریپت smoke (health/readiness پس از deploy) + ۴ ران‌بوک (استقرار/چرخش سکرت/بازیابی DB/اسکیل). دست به docker-compose.yml و Dockerfile نزن (در #33 داغ‌اند) — آن نیمه پس از مرج #33.",
+      "id": "task-127",
+      "priority": "P2",
+      "zone": "features-rag",
+      "title": "Real RAG",
+      "title_fa": "RAG واقعی",
+      "why_fa": "rag.py استاب ۳.۷KB است؛ کیفیت پاسخ به بازیابی وابسته است.",
       "acceptance_criteria": [
-        "smoke با exit-code معنادار",
-        "۴ ران‌بوک + لینک README",
-        "بدون لمس compose/Dockerfile"
+        "recall@k روی fixture",
+        "بدون وابستگی سنگین جدید"
+      ],
+      "prerequisites": [
+        "task-122"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/features/rag.py",
+        "tests/unit/test_rag_chunking.py"
       ]
     }
   ],
-  "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins.",
-  "merge_order_recommendation": "Owner picks; F recommends by blast-radius: 1) F PR (104+105 — smallest, functionally disjoint from #33/#32; only pyproject/board/log touch) → 2) PR#33 after rescope+rebase (task-123; biggest value: packaging+interop) → 3) PR#32 last (task-122; needs most rework). Never merge #32+#33 un-rebased in sequence (E#1 overlapping-PRs rule).",
-  "execution_log": [
-    {
-      "at": "2026-09-21T15:21:39Z",
-      "by_branch": "arena/01a0c460-nexus-ai-agent",
-      "agent": "عامل F (corrected from mis-declared E)",
-      "done": [
-        "deep forensic: main/PR#32/#33/#34/branches mapped; triple-E identity collision found",
-        "task-110 DUPLICATE reverted (branch reset to 105; conv-store+OTIO removed) + deferral recorded",
-        "mypy fix (warn_unreachable) committed",
-        "main merged (93cee5e) — only board conflicted",
-        "P0-security-batch reclaimed via takeover_log (A stale, scope in PR#34); interim gates steward claimed",
-        "board: identities disambiguated, fwd flipped, wave2 restored+refined, wave3 (121-130) milled with owners"
-      ],
-      "not_done": [
-        "F PR (104+105) open + green (next step this session)",
-        "PR#33 comments (deferral notice + markers finding + pyproject heads-up)",
-        "task-121 markers (post-#33)",
-        "tasks 122/123 need B/E#1 action — cannot do for them (their zones)"
-      ],
-      "fa": "تکرار ۱۱۰ حذف و به #33 واگذار شد؛ تخته با ۱۰ تسک جدید مالک‌دار به‌روز شد؛ PR من (۱۰۴+۱۰۵) آماده باز شدن است."
-    }
-  ]
+  "history": {
+    "waves_closed": [
+      {
+        "wave": "Nagar 1",
+        "content": "Green cockpit core: command envelope, registry, bus, 5 ops",
+        "anchor": "PR#19 ac6c25b",
+        "release": "v3.10.0"
+      },
+      {
+        "wave": "Pack substrate 2a",
+        "content": "Data-only manifests, verifier, PackRegistry",
+        "anchor": "PR#21 865780e",
+        "release": "v3.11.0"
+      },
+      {
+        "wave": "Slideshow 2b/2c",
+        "content": "Slideshow pack + deterministic render lane (one FFmpeg)",
+        "anchor": "PR#22 aa7b2f4 · PR#23 ebe995a",
+        "release": "v3.11.0"
+      },
+      {
+        "wave": "Slideshow surface 2.5",
+        "content": "Telegram /slideshow → JobQueuePort → render lane",
+        "anchor": "PR#25 316ed33",
+        "release": "v3.12.0"
+      },
+      {
+        "wave": "Image generation 3",
+        "content": "Isolated provider (Pollinations default, Gemini opt-in)",
+        "anchor": "PR#26 52329e6",
+        "release": "v3.12.0"
+      },
+      {
+        "wave": "Caption 4a + Speech 9",
+        "content": "Caption substrate + local ASR behind CaptionEnginePort",
+        "anchor": "PR#29 · PR#36",
+        "release": "v3.13.0"
+      },
+      {
+        "wave": "Audio 5 / Motion 6 / Color+Delivery 7",
+        "content": "23 pure operations + OTIO export",
+        "anchor": "PR#31 c41b1b0",
+        "release": "v3.13.0"
+      },
+      {
+        "wave": "Apply lane 8",
+        "content": "LaneIR → filtergraph → argv → one FFmpeg + measured evidence",
+        "anchor": "PR#36 e80b742",
+        "release": "v3.13.0"
+      },
+      {
+        "wave": "Security P0 week-1",
+        "content": "Access guard, dashboard token, safe paths, consent gate, force-join",
+        "anchor": "PR#34 93cee5e",
+        "release": "v3.13.0"
+      },
+      {
+        "wave": "Quality rescue",
+        "content": "71 ruff errors → 0 (zero semantic change) + docs reorg + release alignment",
+        "anchor": "PR#35 · PR#37 c25f7fe",
+        "release": "v3.13.0"
+      },
+      {
+        "wave": "Op-gap + parity + ops",
+        "content": "6 audio/motion ops, 15×63 i18n key parity, deploy smoke, llama.cpp provider",
+        "anchor": "PR#38 7573249",
+        "release": "v3.13.0"
+      }
+    ],
+    "pull_requests": [
+      {
+        "pr": 19,
+        "state": "MERGED",
+        "anchor": "ac6c25b"
+      },
+      {
+        "pr": 20,
+        "state": "MERGED",
+        "anchor": "c550420"
+      },
+      {
+        "pr": 21,
+        "state": "MERGED",
+        "anchor": "865780e"
+      },
+      {
+        "pr": 22,
+        "state": "MERGED",
+        "anchor": "aa7b2f4"
+      },
+      {
+        "pr": 23,
+        "state": "MERGED",
+        "anchor": "ebe995a"
+      },
+      {
+        "pr": 24,
+        "state": "MERGED",
+        "anchor": "8b27625"
+      },
+      {
+        "pr": 25,
+        "state": "MERGED",
+        "anchor": "316ed33"
+      },
+      {
+        "pr": 26,
+        "state": "MERGED",
+        "anchor": "52329e6"
+      },
+      {
+        "pr": 27,
+        "state": "MERGED"
+      },
+      {
+        "pr": 28,
+        "state": "MERGED"
+      },
+      {
+        "pr": 29,
+        "state": "MERGED"
+      },
+      {
+        "pr": 30,
+        "state": "MERGED"
+      },
+      {
+        "pr": 31,
+        "state": "MERGED",
+        "anchor": "c41b1b0"
+      },
+      {
+        "pr": 32,
+        "state": "OPEN",
+        "owner": "عامل B",
+        "note": "needs rebase on post-#38 main"
+      },
+      {
+        "pr": 33,
+        "state": "OPEN",
+        "owner": "شاخه 3aa",
+        "note": "needs slim-down (task-123)"
+      },
+      {
+        "pr": 34,
+        "state": "MERGED",
+        "anchor": "93cee5e"
+      },
+      {
+        "pr": 35,
+        "state": "MERGED"
+      },
+      {
+        "pr": 36,
+        "state": "MERGED",
+        "anchor": "e80b742"
+      },
+      {
+        "pr": 37,
+        "state": "MERGED",
+        "anchor": "c25f7fe"
+      },
+      {
+        "pr": 38,
+        "state": "MERGED",
+        "anchor": "7573249"
+      }
+    ],
+    "incidents": [
+      {
+        "date": "2026-09-21",
+        "id": "identity-collision",
+        "what": "سه سشن خود را «عامل E» معرفی کردند (شاخه‌های 3a0/3aa/460) چون AGENTS.md فقط A–D را تعریف کرده بود.",
+        "resolution": "قانون «شاخه = هویت متعارف»؛ حروف فقط برچسب‌اند. آینهٔ آن در protocol.identity_rule."
+      },
+      {
+        "date": "2026-09-21",
+        "id": "red-lint-gate",
+        "what": "PR#31 با گیت lint قرمز مرج شد (۷۱ خطای ruff).",
+        "resolution": "task-101: رفع مکانیکی با اثبات صفر-رگرسیون (PR#35)؛ main سبز."
+      },
+      {
+        "date": "2026-09-21",
+        "id": "duplicate-security-scope",
+        "what": "PR#33 و PR#34 هم‌زمان دامنهٔ امنیت/سیم‌کشی را ادعا کردند.",
+        "resolution": "PR#34 مرج شد؛ PR#33 به تسک‌های یکتا کوچک می‌شود (task-123)."
+      },
+      {
+        "date": "2026-09-21",
+        "id": "task-110-split-brain",
+        "what": "کار تسک ۱۱۰ روی دو شاخه پیاده شد.",
+        "resolution": "نسخهٔ تکراری برگشت؛ باقی‌مانده (markers) تسک ۱۲۱ شد."
+      },
+      {
+        "date": "2026-09-21",
+        "id": "pack-pending-correction",
+        "what": "یادداشت قبلی تخته «pending همین حالا ۰ است» را ادعا می‌کرد.",
+        "resolution": "اندازه‌گیری واقعی (main@7573249): pending = 8/0/7/8/7/0 و activate شکست می‌خورد؛ تصحیح در task-126 ثبت شد."
+      }
+    ],
+    "board_revisions": [
+      {
+        "rev": 1,
+        "date": "2026-09-21",
+        "note": "schema 1: claims + three wave arrays (accreted)."
+      },
+      {
+        "rev": 2,
+        "date": "2026-09-21",
+        "note": "schema 2: protocol block, structured next_work with acceptance criteria, history split, structural tests (ADR 0004)."
+      }
+    ]
+  }
 }
