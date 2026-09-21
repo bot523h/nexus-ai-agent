@@ -25,6 +25,27 @@ OPERATION_DETECT_BEATS = "audio.detect_beats"
 OPERATION_NORMALIZE_LOUDNESS = "audio.normalize_loudness"
 OPERATION_DUCK_MUSIC = "audio.duck_music"
 OPERATION_BEAT_SYNC_CUT = "audio.beat_sync_cut"
+OPERATION_REMOVE_NOISE = "audio.remove_noise"
+OPERATION_DEESS = "audio.deess"
+OPERATION_EQ_VOICE = "audio.eq_voice"
+OPERATION_TIME_STRETCH = "audio.time_stretch"
+
+#: Deterministic voice-EQ preset tables: band name → gain in dB (master
+#: ``gain_db`` is added on top by the handler). Pure data, no DSP here.
+VOICE_EQ_PRESETS: dict[str, dict[str, float]] = {
+    "warm": {"low_shelf_120hz": 3.0, "presence_3khz": -1.5, "air_12khz": -2.0},
+    "bright": {"low_shelf_120hz": -2.0, "presence_3khz": 2.5, "air_12khz": 3.0},
+    "broadcast": {"body_250hz": 1.5, "presence_3khz": 2.0, "air_12khz": 1.0},
+    "telephone": {"presence_2khz": 3.0},
+}
+
+#: High/low-pass cuts applied per preset (names only — the lane compiles them).
+VOICE_EQ_CUTS: dict[str, tuple[str, ...]] = {
+    "warm": (),
+    "bright": (),
+    "broadcast": ("high_pass_80hz",),
+    "telephone": ("high_pass_300hz", "low_pass_3400hz"),
+}
 
 
 class BeatMarker(BaseModel):
@@ -120,3 +141,53 @@ class BeatSyncCutInput(BaseModel):
         default=4, ge=1, description="Number of beats per clip cut boundary."
     )
     timeline_track_id: str = Field(default="video_main", min_length=1)
+
+
+class RemoveNoiseInput(BaseModel):
+    """Input payload for ``audio.remove_noise`` (Level B)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    audio_asset_id: str = Field(min_length=1)
+    strength: float = Field(default=0.6, ge=0.0, le=1.0)
+    preserve_speech: bool = True
+    output_asset_id: str | None = None
+
+
+class DeessInput(BaseModel):
+    """Input payload for ``audio.deess`` (Level B)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    audio_asset_id: str = Field(min_length=1)
+    frequency_hz: float = Field(default=6500.0, ge=2000.0, le=12000.0)
+    threshold_db: float = Field(default=-24.0, ge=-60.0, le=0.0)
+    output_asset_id: str | None = None
+
+
+class EqVoiceInput(BaseModel):
+    """Input payload for ``audio.eq_voice`` (Level B)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    audio_asset_id: str = Field(min_length=1)
+    preset: str = Field(default="broadcast")
+    gain_db: float = Field(default=0.0, ge=-12.0, le=12.0)
+    output_asset_id: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_preset(self) -> EqVoiceInput:
+        if self.preset not in VOICE_EQ_PRESETS:
+            raise ValueError(f"unknown voice EQ preset: {self.preset!r}")
+        return self
+
+
+class TimeStretchInput(BaseModel):
+    """Input payload for ``audio.time_stretch`` (Level B)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    audio_asset_id: str = Field(min_length=1)
+    factor: float = Field(default=1.0, ge=0.25, le=4.0)
+    preserve_pitch: bool = True
+    output_asset_id: str | None = None
