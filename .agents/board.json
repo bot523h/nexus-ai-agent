@@ -117,6 +117,20 @@
       "status": "delivered_pending_gates_owner",
       "note": "DELIVERED task-113-ci-lint-rail (+ task-111 residue R1) on arena/01a0c54f-nexus-ai-agent @ c3b1635. Zero added conflict, proven: `git merge-tree --write-tree` against origin/pr33 and origin/pr39 yields exactly the same conflict sets with and without this branch (11 files / 1 file), and .github/workflows/ci.yml is in neither — the PR#33 conflicts are its own rebase debt with main. Gates deferred to ci-gates-steward per rule 4. Next: PR open, then task-135 once PR#33 lands.",
       "ci_evidence": "PR#42 (OPEN, MERGEABLE) · CI run 35641927691 completed SUCCESS with all four jobs: lint-fast 10 s (new rail: lockstep script -> pinned ruff check -> format), lint, test, migrate-postgres. The rail reports in 10 s what used to wait ~14 min behind the install."
+    },
+    "agent_a_nagar_split": {
+      "identity": "عامل A (نیمه‌ی خالص/معنایی استودیوی نگار — ارجاعات معنایی + دو پک بینایی)",
+      "branch": "arena/01a0c625-nexus-ai-agent",
+      "task": "nagar-half-a-semantics",
+      "status": "active",
+      "note_fa": "طبق قید مالک این سشن: «من عامل A هستم؛ عامل دیگر B». صندلی B تا زمان claim دست‌نخورده رزرو است. کارت claim پیش از اولین خط کد ثبت و پوش شد (قانون ۱)."
+    },
+    "agent_b_nagar_seat": {
+      "identity": "عامل B (نیمه‌ی ناخالص/اجرایی استودیوی نگار — تحویل OTIO، سطح خلاقیت، ران‌بوک، E2E)",
+      "branch": "",
+      "task": "nagar-half-b-surface",
+      "status": "seat_reserved_claim_when_ready",
+      "note": "Seat B is reserved by the two-half split. The agent that seats as B claims `nagar-half-b-surface` with its own arena/… branch and must obey every constraint in nagar_two_half_split. No branch may take half A's paths (fenced by the active claim of arena/01a0c625)."
     }
   },
   "ten_forward_tasks_network": [
@@ -855,6 +869,128 @@
       ],
       "scope": "Record of PR#39 (OPEN, head 71fc9f6): living architecture suite + board schema 2 + three guard tests (task-131, task-111). 26 files. Was invisible on the board before this record — that gap let another session duplicate its scope.",
       "note": "Coordination files (.agents/board.json, AGENTS.md) are deliberately NOT exclusive: every agent must write claims there, and PR#39's diff rewrites both to board schema 2. ⚠️ MERGE HAZARD for the schema-2 switch: .agents/board.json has two competing rewrites (PR#39 full schema-2 document vs this session's schema-1 additions). The claim entries added today are mirrored in COORDINATION_2026-09-21.md with an exact re-apply blob."
+    },
+    {
+      "task": "pr46-in-review-wave5",
+      "zone": "in-flight-visibility",
+      "agent_branch": "arena/01a0c5da-nexus-ai-agent",
+      "claimed_at": "2026-09-21T22:53:49Z",
+      "ttl_hours": 24,
+      "status": "active",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/runtime.py",
+        "src/nexus_ai_agent/creative/packs/registry.py",
+        "src/nexus_ai_agent/creative/packs/audio/",
+        "src/nexus_ai_agent/creative/packs/edit/",
+        "src/nexus_ai_agent/creative/packs/motion/",
+        "src/nexus_ai_agent/cli.py",
+        "src/nexus_ai_agent/continuum/pack_coverage.py",
+        "scripts/pack_coverage.py",
+        "tests/unit/test_pack_runtime_composition.py",
+        "tests/unit/test_opgap_wave5.py",
+        "tests/unit/test_pack_coverage_harness.py",
+        "tests/architecture/test_pack_activation_completeness.py",
+        "docs/ops/PACK_RUNTIME.md",
+        "docs/audits/WAVE5_ACTIVATION_2026-09-21.md",
+        "WAVE5_COORDINATION_01a0c5da.md"
+      ],
+      "scope": "PR#46 (MERGEABLE, draft, CI 4/4 green): unified pack runtime + 6 TDD ops + coverage harness",
+      "note": "RECORD+FENCE claim written by عامل A (arena/01a0c625) so the two-half split can never double-do in-flight work (the arena/ifk3hadg void-claim lesson: an invisible claim is a future collision). Fences are mechanical (agent_board check). After the PR merges, release this claim."
+    },
+    {
+      "task": "pr45-in-review-color-lane",
+      "zone": "in-flight-visibility",
+      "agent_branch": "arena/01a0c58e-nexus-ai-agent",
+      "claimed_at": "2026-09-21T22:53:49Z",
+      "ttl_hours": 24,
+      "status": "active",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/rendering/",
+        "tests/unit/test_rendering_lane_exposure.py",
+        "tests/unit/test_lane_duration_algebra.py",
+        "docs/ops/COLOR_LANE.md"
+      ],
+      "scope": "PR#45 (MERGEABLE): exposure lane op — rendering compiler/ir",
+      "note": "RECORD+FENCE claim written by عامل A (arena/01a0c625) so the two-half split can never double-do in-flight work (the arena/ifk3hadg void-claim lesson: an invisible claim is a future collision). Fences are mechanical (agent_board check). After the PR merges, release this claim."
+    },
+    {
+      "task": "pr44-in-review-board-lease",
+      "zone": "in-flight-visibility",
+      "agent_branch": "arena/01a0c593-nexus-ai-agent",
+      "claimed_at": "2026-09-21T22:53:49Z",
+      "ttl_hours": 24,
+      "status": "active",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "scripts/agent_board.py",
+        "tests/unit/test_agent_board_active_in_review.py"
+      ],
+      "scope": "PR#44 (MERGEABLE): honor active_in_review leases in agent_board",
+      "note": "RECORD+FENCE claim written by عامل A (arena/01a0c625) so the two-half split can never double-do in-flight work (the arena/ifk3hadg void-claim lesson: an invisible claim is a future collision). Fences are mechanical (agent_board check). After the PR merges, release this claim."
+    },
+    {
+      "task": "pr43-in-review-storage",
+      "zone": "in-flight-visibility",
+      "agent_branch": "arena/01a0c58a-nexus-ai-agent",
+      "claimed_at": "2026-09-21T22:53:49Z",
+      "ttl_hours": 24,
+      "status": "active",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/resilience.py",
+        "tests/unit/test_storage_resilience_boundaries.py",
+        "STORAGE_RESILIENCE_CHECKUP_2026-09-21.md"
+      ],
+      "scope": "PR#43 (MERGEABLE): storage resilience boundary hardening",
+      "note": "RECORD+FENCE claim written by عامل A (arena/01a0c625) so the two-half split can never double-do in-flight work (the arena/ifk3hadg void-claim lesson: an invisible claim is a future collision). Fences are mechanical (agent_board check). After the PR merges, release this claim."
+    },
+    {
+      "task": "nagar-half-a-semantics",
+      "zone": "nagar-two-half-a",
+      "agent_branch": "arena/01a0c625-nexus-ai-agent",
+      "claimed_at": "2026-09-21T22:53:49Z",
+      "ttl_hours": 24,
+      "status": "active",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/studio/semantic.py",
+        "src/nexus_ai_agent/creative/packs/scene/",
+        "src/nexus_ai_agent/creative/packs/portrait/",
+        "src/nexus_ai_agent/creative/packs/vision_composition.py",
+        "tests/unit/test_semantic_refs.py",
+        "tests/unit/test_scene_pack.py",
+        "tests/unit/test_portrait_pack.py",
+        "tests/unit/test_vision_composition.py",
+        "tests/architecture/test_vision_pack_boundary.py",
+        "NAGAR_STUDIO_SPLIT_2026-09-21.md",
+        "NAGAR_HALF_A_REASONING_FA.md"
+      ],
+      "scope": "نیمه‌ی A (خالص/معنایی): (A1) زیرساخت ارجاعات معنایی creative/studio/semantic.py — SubjectRef/MaskRef/ClipRef/StateDelta/FaceTrackSet/ObjectTrack/ShotBoundarySet/CandidateMomentSet/TransformCurve/AlphaLayerRef؛ (A2) پک nexus.vision.scene ده عملیات خالص TDD §1.4؛ (A3) پک nexus.vision.portrait ده عملیات خالص TDD §1.3 با ایمنی هویت (confidence+provenance، correct_gaze سطح C)؛ (A4) creative/packs/vision_composition.py (سازنده‌های رجیستری + قلاب یکپارچه‌سازی)؛ (A5) پنج فایل تست (واحد+معماری)؛ (A6) سند تقسیم + سند استدلال خط‌به‌خط.",
+      "note": "Zero import/export seam with half B: A never imports B modules and vice versa. Integration hunk H1 into creative/packs/runtime.py COMPOSITION is sequenced post-PR#46 (≤12 lines) and recorded in nagar_two_half_split.integration_hunks."
+    },
+    {
+      "task": "nagar-half-b-surface",
+      "zone": "nagar-two-half-b",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "queued_reserved_for_B",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/delivery/",
+        "src/nexus_ai_agent/bot/creative_surface.py",
+        "tests/unit/test_creative_surface.py",
+        "tests/unit/test_otio_interop.py",
+        "tests/unit/test_smoke_e2e_contract.py",
+        "scripts/smoke_e2e.py",
+        "docs/ops/RUNBOOK_HARDENING.md",
+        "docs/ops/NAGAR_OPERATIONS_FA.md",
+        "NAGAR_HALF_B_REASONING_FA.md"
+      ],
+      "scope": "نیمه‌ی B (ناخالص/اجرایی): (B1) تسک ۱۲۱ مارکرهای OTIO (مدل OtioMarker + emission از timeline.markers با OTIO واقعی round-trip)؛ (B2) تسک ۱۰۶-rescope تکمیل سطح خلاقیت (/edit /caption /grade از مسیر JobQueuePort با شکست‌های تایپ‌شده)؛ (B3) موج۴-قدم۸ تکمیل ران‌بوک عملیات (فارسی/انگلیسی)؛ (B4) موج۴-قدم۹ تکمیل دودکش E2E (نیمه‌ی compose توالی‌یافته پس از #33)؛ (B5) سند استدلال خط‌به‌خط نیمه‌ی B.",
+      "note": "Reserved seat for عامل B. Claim with your own arena/… branch then push immediately (rule 1). Task-121's delivery/operations.py emission hunk is sequenced post-PR#33 (region rule) — see nagar_two_half_split.integration_hunks.H2. B must not touch half A paths, in-flight fences, or studio core files."
     }
   ],
   "deferred_log": [
@@ -1547,6 +1683,187 @@
       "by_branch": "arena/01a0c54f-nexus-ai-agent",
       "action": "PR#42 opened; CI verified end-to-end on the real runner",
       "evidence_fa": "چهار job سبز: lint-fast ۱۰ ثانیه (اسکریپت lockstep + ruff پین‌شده، بدون نصب)، lint، test، migrate-postgres؛ PR قابل merge است. یعنی هم معیار پذیرش task-113 روی واقعیت اجرا تأیید شد و هم ادعای «ثانیه‌ای به‌جای ۱۴ دقیقه» اندازه‌گیری شد."
+    },
+    {
+      "at": "2026-09-21T22:53:49Z",
+      "by_branch": "arena/01a0c625-nexus-ai-agent",
+      "action": "two-half split of Studio-Nagar remaining work pinned on the board (nagar-half-a-semantics / nagar-half-b-surface) + in-flight fences for PRs #43–#46",
+      "evidence_fa": "استودیوی نگار به دو نیمه‌ی بدون حتی یک میلی‌متر تداخل تقسیم شد: نیمه‌ی خالص/معنایی (ارجاعات معنایی + پک‌های vision.scene و vision.portrait + ترکیب) مال عامل A (arena/01a0c625) و نیمه‌ی ناخالص/اجرایی (OTIO markers، سطح خلاقیت، ران‌بوک، E2E) مال صندلی رزروشده‌ی عامل B. چهار claim ثبتی برای PRهای در پرواز #43–#46 با مسیرهای انحصاری نوشته شد تا کار تکراری (درس void-claims) هرگز رخ ندهد. سند کامل: NAGAR_STUDIO_SPLIT_2026-09-21.md"
     }
-  ]
+  ],
+  "nagar_two_half_split": {
+    "at": "2026-09-21T22:53:49Z",
+    "by_branch": "arena/01a0c625-nexus-ai-agent",
+    "author": "عامل A (قید مالک: من عامل A؛ عامل دیگر B)",
+    "pool": "کارهای نیمه‌تمام + زیرساخت استودیوی نگار (Phase 6) پس از کسر تحویل‌های در پرواز #43–#46",
+    "fault_line_fa": "خط گسل بر اساس دوگانگی بنیادین خود TDD: نیمه‌ی خالص/معنایی (مدل‌های تایپ‌شده، reducerهای دترمینیستیک، ارجاعات معنایی، صفر I/O) در برابر نیمه‌ی ناخالص/اجرایی (کتابخانه‌ها، انکدرها، تلگرام، OTIO، Docker). هر نیمه یک اسلایس عمودی کامل است؛ هیچ فایلی مالک دوتایی ندارد و هیچ ایمپورتی بین دو نیمه برقرار نیست.",
+    "shared_files_by_protocol": [
+      ".agents/board.json"
+    ],
+    "merge_rule_for_shared": "AGENTS.md → newest forensic state wins; entries mirrored in NAGAR_STUDIO_SPLIT_2026-09-21.md (re-apply blob)",
+    "interface_freeze": {
+      "frozen_for_both": [
+        "src/nexus_ai_agent/creative/studio/models.py",
+        "src/nexus_ai_agent/creative/studio/capabilities.py",
+        "src/nexus_ai_agent/creative/studio/bus.py",
+        "src/nexus_ai_agent/creative/studio/references.py",
+        "src/nexus_ai_agent/creative/packs/manifest.py",
+        "src/nexus_ai_agent/creative/packs/verify.py"
+      ],
+      "a_public_api_frozen_for_b": [
+        "nexus_ai_agent.creative.studio.semantic:* (model names frozen)",
+        "nexus_ai_agent.creative.packs.scene.operations:build_scene_registry()",
+        "nexus_ai_agent.creative.packs.portrait.operations:build_portrait_registry()",
+        "nexus_ai_agent.creative.packs.vision_composition:build_vision_registry(),register_vision_operations()"
+      ],
+      "b_public_api_frozen_for_a": [
+        "creative/packs/delivery:OtioMarker + export_otio marker emission contract",
+        "bot/creative_surface:CreativeSurfaceMapper.map(),job_payload(),build_creative_handlers()",
+        "scripts/smoke_e2e:offline_checks()"
+      ],
+      "rule_fa": "هیچ نیمه‌ای ماژول نیمه‌ی دیگر را import نمی‌کند؛ قراردادهای عمومی بالا پس از اعلان ثابت‌اند (breaking change = هماهنگی روی تخته پیش از کد)."
+    },
+    "integration_hunks": {
+      "H1": {
+        "owner": "A",
+        "when": "پس از merge شدن PR#46",
+        "file": "src/nexus_ai_agent/creative/packs/runtime.py",
+        "region": "فقط افزودن دو ورودی به COMPOSITION با فراخوانی register_scene_operations / register_portrait_operations (حداکثر ۱۲ خط) — اثبات با merge-tree؛ سپس nexus packs list: 8 پک، pending=0"
+      },
+      "H2": {
+        "owner": "B",
+        "when": "پس از merge شدن PR#33",
+        "file": "src/nexus_ai_agent/creative/packs/delivery/operations.py",
+        "region": "فقط emission مارکرها در export_otio (include_markers) + نیمه‌ی compose در scripts/smoke_e2e.py — طبق تسک ۱۲۱ و قید task-130"
+      }
+    },
+    "zero_overlap_proof_protocol": [
+      "python scripts/agent_board.py check --files <changed,comma> --branch <you> → exit 0",
+      "negative control: same with --branch \"\" → exit 1 (zone is fenced)",
+      "git merge-tree --write-tree <half-a-tip> <half-b-tip> → conflict-free (measure, don't assert)",
+      "path-set intersection of the two exclusive_paths lists = ∅ (byte-level)"
+    ],
+    "constraints_fa": [
+      "S1 هویت: نام شاخه هویت قطعی است؛ A=arena/01a0c625-nexus-ai-agent، B=هر صندلی دیگر که nagar-half-b-surface را claim کند.",
+      "S2 صفر میلی‌متر تداخل: هیچ ویرایشی در exclusive_paths طرف مقابل؛ agent_board check پیش از هر push اجباری.",
+      "S3 قرارداد رابط مشترک منجمد است (interface_freeze)؛ نه A ماژول B را import می‌کند نه بالعکس.",
+      "S4 فایل‌های در پرواز (#43–#46) تا merge منجمد؛ هانک‌های یکپارچه‌سازی H1/H2 توالی‌یافته و ناحیه‌ای.",
+      "S5 تک‌مالک گیت‌ها: gates_owner همچنان ci-gates-steward (01a0c460)؛ دو نیمه فقط diagnostics اجرا می‌کنند و در PR می‌نویسند deferred to gates owner.",
+      "S6 اجاره ۲۴ ساعته + heartbeat با re-claim؛ پایان زودهنگام = release.",
+      "S7 صفر رگرسیون: مجموعه تست موجود سبز می‌ماند؛ هیچ تغییر رفتاری در API پک‌های فعال.",
+      "S8 بدون وابستگی runtime جدید (خالص: stdlib+pydantic؛ ناخالص: فقط کتابخانه‌های موجود مانند opentimelineio در dev-extra).",
+      "S9 عملیات سطح C (portrait.correct_gaze, scene.remove_logo) فقط با confirmed=True؛ هر op چهره confidence+provenance ثبت می‌کند (اصل ایمنی TDD §1.3).",
+      "S10 مانیفست‌ها data-only (nexus.capability-pack.v1)؛ capability در namespace بسته؛ آرتیفکت‌ها sha256 واقعی یا placeholder مستند.",
+      "S11 هر handler خالص و دترمینیستیک (deterministic=True)؛ خروجی مشتق با content-addressed sha256 از والد+پارامترها.",
+      "S12 پس از تکمیل هر نیمه: ۱۰ کار بعدی روی تخته + شواهد اندازه‌گیری‌شده (فرهنگ HANDOFF)."
+    ],
+    "half_a": {
+      "card": "nagar-half-a-semantics",
+      "tasks": [
+        {
+          "id": "A1",
+          "title": "زیرساخت ارجاعات معنایی (creative/studio/semantic.py)",
+          "acceptance": [
+            "مدل‌های TDD «انواع مشترک» + خروجی‌های بینایی",
+            "فقط stdlib+pydantic (گارد isolation سبز)",
+            "تست‌های مرزی confidence/range"
+          ]
+        },
+        {
+          "id": "A2",
+          "title": "پک nexus.vision.scene — ۱۰ op خالص TDD §1.4",
+          "acceptance": [
+            "۱۰ op ثبت‌شده و دترمینیستیک",
+            "هندلر خالص + digest محتوایی",
+            "سطح C فقط با confirmed (تست bus)"
+          ]
+        },
+        {
+          "id": "A3",
+          "title": "پک nexus.vision.portrait — ۱۰ op خالص TDD §1.3",
+          "acceptance": [
+            "۱۰ op ثبت‌شده؛ ایمنی هویت: confidence+provenance در همه",
+            "correct_gaze سطح C + تست ردِ بدون تأیید",
+            "تست ریاضی stabilize_face/gaze"
+          ]
+        },
+        {
+          "id": "A4",
+          "title": "سازنده‌ی ترکیب بینایی + قلاب H1",
+          "acceptance": [
+            "build_vision_registry اجتماع ۲۰ op بدون تداخل",
+            "فعال‌سازی واقعی هر دو پک با PackRegistry",
+            "قلاب H1 مستند و توالی‌یافته"
+          ]
+        },
+        {
+          "id": "A5",
+          "title": "پوشش تست + گارد معماری vision",
+          "acceptance": [
+            "۵ فایل تست سبز",
+            "گارد boundary (بدون وابستگی سنگین، بدون عبور بسته)",
+            "manifest==registry liveness"
+          ]
+        },
+        {
+          "id": "A6",
+          "title": "سند تقسیم + سند استدلال خط‌به‌خط",
+          "acceptance": [
+            "توضیحات کامل فارسی",
+            "استدلال هر تصمیم/خط غیربدیهی",
+            "شواهد صفر تداخل"
+          ]
+        }
+      ]
+    },
+    "half_b": {
+      "card": "nagar-half-b-surface",
+      "tasks": [
+        {
+          "id": "B1",
+          "title": "مارکرهای OTIO (تسک ۱۲۱؛ emission توالی‌یافته H2)",
+          "acceptance": [
+            "include_markers=False → صفر مارکر",
+            "round-trip واقعی نام/فریم/رنگ",
+            "صفر رگرسیون تست‌های #33"
+          ]
+        },
+        {
+          "id": "B2",
+          "title": "تکمیل سطح خلاقیت (تسک ۱۰۶-rescope)",
+          "acceptance": [
+            "/edit /caption /grade از JobQueuePort",
+            "شکست‌های تایپ‌شده + i18n",
+            "صفر لمس handlers.py"
+          ]
+        },
+        {
+          "id": "B3",
+          "title": "تکمیل ران‌بوک عملیات (موج۴-قدم۸)",
+          "acceptance": [
+            "ران‌بوک fa/en کامل",
+            "smoke با exit-code",
+            "لینک از docs/ops"
+          ]
+        },
+        {
+          "id": "B4",
+          "title": "تکمیل دودکش E2E (موج۴-قدم۹)",
+          "acceptance": [
+            "نیمه‌ی offline سبز",
+            "نیمه‌ی compose توالی‌یافته H2",
+            "تست قرارداد smoke"
+          ]
+        },
+        {
+          "id": "B5",
+          "title": "سند استدلال خط‌به‌خط نیمه‌ی B",
+          "acceptance": [
+            "فارسی، سطح خط",
+            "شواهد اندازه‌گیری‌شده"
+          ]
+        }
+      ]
+    }
+  }
 }
