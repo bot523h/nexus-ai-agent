@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T23:08:11Z",
+  "updated_at": "2026-09-21T23:11:34Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -186,8 +186,8 @@
       "title": "ادغام PR#32 — سیم‌کشی فیچرها از مسیر bot/surface (عامل B)",
       "zone": "feature-wiring",
       "priority": "P1",
-      "assigned_to": "عامل B",
-      "status": "in_review_rebase_required",
+      "assigned_to": "عامل B (سشن 01a0c634)",
+      "status": "triaged_ported_forward_by_01a0c634",
       "exclusive_paths": [
         "src/nexus_ai_agent/bot/surface/",
         "src/nexus_ai_agent/bot/memory_handlers.py",
@@ -199,7 +199,8 @@
         "ReminderSystem/Calculator/Translator/UnitConverter/WordleFA/QuickPoll/ReferralEngine.process_referral/ForceJoin/AnonChat از surface قابل دسترس باشند",
         "تست‌های جدید tests/unit/test_feature_*.py سبز"
       ],
-      "note": "PR#32 green-on-old-base; 8 shared files moved on main via PR#34 + semantic double-wiring. See task-122. DO NOT merge as-is."
+      "note": "PR#32 green-on-old-base; 8 shared files moved on main via PR#34 + semantic double-wiring. See task-122. DO NOT merge as-is.",
+      "evidence": "docs/audits/PR32_TRIAGE_2026-09-21.md — 26 files judged blob-vs-blob: 15 superseded by merged PR#34, 4 conflict-debt, 3 port, 4 adapt."
     },
     {
       "id": "task-104",
@@ -370,6 +371,36 @@
       "assigned_to": "آزاد",
       "status": "queued",
       "origin": "repo-hygiene pass 2026-09-21 (سشن 01a0c484) — ضعف شماره ۱۱ گزارش بهداشت"
+    },
+    {
+      "id": "task-136-feature-wiring-residual",
+      "title": "باقیماندهٔ سیم‌کشی فیچرها: gamification + docs روی لایهٔ bot/surface (بعد از PR#34)",
+      "zone": "feature-wiring",
+      "priority": "P1",
+      "assigned_to": "عامل B (سشن 01a0c634)",
+      "status": "in_progress",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/surface/",
+        "src/nexus_ai_agent/features/gamification.py",
+        "src/nexus_ai_agent/features/rag.py",
+        "src/nexus_ai_agent/features/rag_core.py",
+        "src/nexus_ai_agent/worker.py",
+        "tests/unit/surface_fakes.py",
+        "tests/unit/test_surface_gamification.py",
+        "tests/unit/test_surface_docs.py",
+        "tests/unit/test_rag_chunking.py",
+        "tests/unit/test_rag_eval.py",
+        "tests/unit/test_gamification_daily.py",
+        "docs/audits/PR32_TRIAGE_2026-09-21.md"
+      ],
+      "instructions": "جایگزینی شش فرمان استابِ handlers.py (/daily /xp_leaderboard /achievements /profile /docs /doc_delete /chat_with_doc) با سطح بدون-فریمورک bot/surface روی mainِ پس از PR#34؛ به‌همراه رفع ددلاک claim_daily و موتور RAG واقعی (task-127).",
+      "acceptance_criteria": [
+        "هیچ رشتهٔ ثابت استابی در شش فرمان باقی نمانده باشد",
+        "bot/surface هیچ ایمپورت telegram نداشته باشد (تست مرزی سبز)",
+        "claim_daily در یک session اجرا شود + تست ددلاک",
+        "recall@k موتور RAG روی fixture ثابت گزارش شود",
+        "ruff/mypy/pytest هدفمند سبز؛ گیت‌های کامل واگذار به ci-gates-steward"
+      ]
     }
   ],
   "zones": [
@@ -874,13 +905,16 @@
       "scope": "Agent B (session 01a0c634): (1) forensic triage of PR#32 vs merged PR#34, (2) task-127 real RAG (recursive chunking + hybrid BM25/vector + recall eval harness), (3) residual framework-free Telegram surface for the still-stubbed commands (/daily /profile /achievements /xp_leaderboard /docs /doc_delete /chat_with_doc).",
       "exclusive_paths": [
         "src/nexus_ai_agent/bot/surface/",
+        "src/nexus_ai_agent/features/gamification.py",
         "src/nexus_ai_agent/features/rag.py",
         "src/nexus_ai_agent/features/rag_core.py",
+        "src/nexus_ai_agent/worker.py",
         "tests/unit/surface_fakes.py",
-        "tests/unit/test_rag_chunking.py",
-        "tests/unit/test_rag_eval.py",
         "tests/unit/test_surface_gamification.py",
         "tests/unit/test_surface_docs.py",
+        "tests/unit/test_rag_chunking.py",
+        "tests/unit/test_rag_eval.py",
+        "tests/unit/test_gamification_daily.py",
         "docs/audits/PR32_TRIAGE_2026-09-21.md"
       ],
       "note": "gates deferred to ci-gates-steward (arena/01a0c460, active) per AGENTS.md rule 4."
@@ -1359,6 +1393,19 @@
         "exclusive paths fenced: bot/surface/, features/rag*.py, 5 new test files, 1 audit doc"
       ],
       "next": "tick 1 — PR#32 forensic triage (task-122/task-103) with per-file verdict vs merged PR#34"
+    },
+    {
+      "at": "2026-09-21T23:11:34Z",
+      "by_branch": "arena/01a0c634-nexus-ai-agent",
+      "agent": "عامل B (سشن 01a0c634)",
+      "tick": 1,
+      "done": [
+        "task-122: forensic triage of PR#32 (26 files, blob-vs-blob vs main)",
+        "verdict table: 15 superseded / 4 drop / 3 port / 4 adapt",
+        "claim_daily SQLite deadlock confirmed LIVE on main (single-session fix identified)",
+        "task-136-feature-wiring-residual opened on the board with acceptance criteria"
+      ],
+      "next": "tick 2 — port the gamification fix (single-session claim_daily) + regression test"
     }
   ],
   "ten_forward_tasks_wave4": [
@@ -1602,6 +1649,12 @@
       "by_branch": "arena/01a0c54f-nexus-ai-agent",
       "action": "PR#42 opened; CI verified end-to-end on the real runner",
       "evidence_fa": "چهار job سبز: lint-fast ۱۰ ثانیه (اسکریپت lockstep + ruff پین‌شده، بدون نصب)، lint، test، migrate-postgres؛ PR قابل merge است. یعنی هم معیار پذیرش task-113 روی واقعیت اجرا تأیید شد و هم ادعای «ثانیه‌ای به‌جای ۱۴ دقیقه» اندازه‌گیری شد."
+    },
+    {
+      "at": "2026-09-21T23:11:34Z",
+      "by_branch": "arena/01a0c634-nexus-ai-agent",
+      "action": "task-122/task-103: PR#32 triaged blob-vs-blob against post-PR#34 main",
+      "evidence_fa": "۲۶ فایل PR#32 تک‌تک با main مقایسه شد: ۱۵ فایل منسوخ (PR#34 لند کرده)، ۴ فایل فقط بدهی تداخل، ۳ فایل قابل انتقال خالص و ۴ فایل نیازمند انطباق API. نتیجه: PR#32 قابل rebase-and-merge نیست (۱۷۶ فایل عقب‌تر، mergeable=CONFLICTING، پنج گروه فرمان دوبل‌سیم‌کشی می‌شد). سند: docs/audits/PR32_TRIAGE_2026-09-21.md"
     }
   ]
 }
