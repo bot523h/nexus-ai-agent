@@ -451,25 +451,23 @@ def golden_update(
 def _packs_registry() -> Any:
     """The runtime registry a pack must fit into.
 
-    Wave 1 kept this to the frozen five-operation catalog; Wave 2 composes that
-    catalog with the slideshow pack's operation specs, which is exactly what
-    turns ``nexus.slideshow.compose`` from "pending" into "activatable".
-    Wave 4a adds the caption pack substrate operations (transcribe and generate_srt).
+    Wave 1 kept this to the frozen five-operation catalog; Wave 2 composed it with
+    the slideshow pack and Wave 4a with the caption pack — one call site at a time,
+    which is why five of the six builtin packs were reported as ``pending`` even
+    though their operations shipped in this repository.
+
+    Wave 5 removes that failure mode: the composition lives in exactly one module,
+    :mod:`nexus_ai_agent.creative.packs.runtime`, and the CLI consumes it.  The
+    Wave-1 catalog plus all six builtin packs' operations is what makes every
+    builtin manifest verify clean, and every builtin pack activatable.
+
+    Scope note: this helper answers *"what does the runtime know?"* only.
+    Activation remains an explicit, auditable step (``nexus packs activate``), so
+    ``packs list`` keeps reporting ``active: false`` until an operator says so.
     """
-    from importlib.metadata import PackageNotFoundError
-    from importlib.metadata import version as distribution_version
+    from nexus_ai_agent.creative.packs.runtime import build_pack_registry
 
-    from nexus_ai_agent.creative.packs.caption.operations import register_caption_operations
-    from nexus_ai_agent.creative.packs.registry import PackRegistry
-    from nexus_ai_agent.creative.packs.slideshow.operations import build_slideshow_registry
-
-    try:
-        current = distribution_version("nexus-ai-agent")
-    except PackageNotFoundError:  # pragma: no cover - uninstalled source checkout
-        current = None
-    registry = build_slideshow_registry()
-    register_caption_operations(registry)
-    return PackRegistry(registry, current_version=current)
+    return build_pack_registry()
 
 
 @packs_app.command("list")
