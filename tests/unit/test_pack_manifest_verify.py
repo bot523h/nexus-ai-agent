@@ -60,6 +60,7 @@ def test_slideshow_manifest_is_valid_and_truthful() -> None:
         "slideshow.score_images",
         "slideshow.compose",
         "slideshow.render",
+        "slideshow.upscale",
     )
     assert manifest.compatibility.protocol_version == "nagar.command.v1"
     assert manifest.compatibility.state_schema == "nagar.state.v1"
@@ -87,6 +88,7 @@ def test_slideshow_manifest_verifies_against_the_wave1_runtime() -> None:
         "slideshow.score_images",
         "slideshow.compose",
         "slideshow.render",
+        "slideshow.upscale",
     }
     assert report.signature_state == "placeholder"
     assert {issue.code for issue in report.warnings} == {"unsigned_manifest"}
@@ -279,7 +281,7 @@ def test_builtin_pack_registers_with_pending_capabilities_but_cannot_activate() 
     pack = registry.register_builtin(root=PACKS_DIR)[0]
 
     assert pack.package_id == "nexus.slideshow.compose"
-    assert len(pack.pending_capabilities) == 5
+    assert len(pack.pending_capabilities) == 6
     assert registry.active_packs() == []
 
     with pytest.raises(PackRegistryError, match="cannot activate"):
@@ -362,11 +364,11 @@ def test_cli_packs_list_human_output() -> None:
     result = CliRunner().invoke(app, ["packs", "list"])
     assert result.exit_code == 0, result.output
     assert "nexus.slideshow.compose" in result.output
-    assert "capabilities=5" in result.output
+    assert "capabilities=6" in result.output
 
 
 def test_cli_packs_verify_accepts_the_builtin_manifest() -> None:
-    """Wave 2b: the runtime knows the five operations, so verification passes."""
+    """Wave 2b: the runtime knows the six operations, so verification passes."""
     result = CliRunner().invoke(app, ["packs", "verify", str(SLIDESHOW_MANIFEST), "--json"])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)

@@ -1,4 +1,4 @@
-"""The slideshow pack's five pure operations.
+"""The slideshow pack's six pure operations.
 
 Design contract (inherited from Wave 1 and the TDD):
 
@@ -27,11 +27,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from nexus_ai_agent.creative.packs.slideshow.models import (
     OPERATION_COMPOSE,
     OPERATION_RENDER,
+    OPERATION_UPSCALE,
     AssetEvidence,
     ComposeInput,
     ImageScore,
     RenderInput,
     ShotPlan,
+    UpscaleInput,
 )
 from nexus_ai_agent.creative.packs.slideshow.planning import (
     plan_slideshow,
@@ -426,6 +428,46 @@ def _compose(project: Project, context: OperationContext) -> OperationOutcome:
     )
 
 
+def _upscale(project: Project, context: OperationContext) -> OperationOutcome:
+    payload = UpscaleInput.model_validate(context.input_data)
+    source = _require_asset(project, payload.source_asset_id, kind="image")
+    if source.content_sha256 != payload.source_sha256:
+        raise CommandValidationError(
+            f"asset {payload.source_asset_id!r} changed after it was registered "
+            "(content hash mismatch); re-run slideshow.scan_assets"
+        )
+    asset_id = f"derived_{uuid.uuid4().hex[:12]}"
+    target = payload.target_resolution or f"{payload.scale_factor:g}x"
+    record = AssetRecord(
+        asset_id=asset_id,
+        media_kind="image",
+        content_sha256=payload.output_sha256,
+        duration_us=0,
+        parent_asset_ids=(payload.source_asset_id,),
+        provenance={
+            "output_path": payload.output_path,
+            "source_dimensions": f"{payload.source_width}x{payload.source_height}",
+            "resolution": f"{payload.width}x{payload.height}",
+            "target": target,
+            "filter": f"scale={payload.width}:{payload.height}:flags={payload.filter_flags}",
+            "produced_by": "nagar.local.slideshow.upscale.v1",
+        },
+    )
+    new_project = project.model_copy(update={"assets": [*project.assets, record]})
+    return OperationOutcome(
+        new_project,
+        context.history,
+        {
+            "asset_id": asset_id,
+            "output_path": payload.output_path,
+            "is_derived": True,
+            "parent_asset_ids": [payload.source_asset_id],
+            "width": payload.width,
+            "height": payload.height,
+        },
+    )
+
+
 def _render(project: Project, context: OperationContext) -> OperationOutcome:
     payload = RenderInput.model_validate(context.input_data)
     for parent_id in payload.parent_asset_ids:
@@ -467,7 +509,7 @@ def _render(project: Project, context: OperationContext) -> OperationOutcome:
 def register_slideshow_operations(
     registry: CapabilityRegistry, *, library: ToneTemplateLibrary | None = None
 ) -> CapabilityRegistry:
-    """Register the pack's five operations on an existing capability registry."""
+    """Register the pack's six operations on an existing capability registry."""
     if library is not None:
         use_tone_library(library)
     registry.register_domain(DOMAIN, "Slideshow composition (pack nexus.slideshow.compose)")
@@ -525,6 +567,19 @@ def register_slideshow_operations(
     )
     registry.register_operation(
         DOMAIN,
+        "enhancement",
+        OperationSpec(
+            operation_id=OPERATION_UPSCALE,
+            description="Record a local FFmpeg Lanczos upscale as a derived image.",
+            permission_level=PermissionLevel.REVERSIBLE,
+            input_model=UpscaleInput,
+            handler=_upscale,
+            required_packs=("nexus.slideshow.compose",),
+            deterministic=True,
+        ),
+    )
+    registry.register_operation(
+        DOMAIN,
         "delivery",
         OperationSpec(
             operation_id=OPERATION_RENDER,
@@ -540,7 +595,7 @@ def register_slideshow_operations(
 
 
 def build_slideshow_registry(*, library: ToneTemplateLibrary | None = None) -> CapabilityRegistry:
-    """The Wave 1 catalog plus the slideshow pack's five operations.
+    """The Wave 1 catalog plus the slideshow pack's six operations.
 
     ``build_wave1_registry()`` stays untouched (the frozen Wave 1 catalog): the
     Wave 2 surface is a *composition* of the frozen skeleton and the pack.
@@ -560,6 +615,7 @@ __all__ = [
     "OPERATION_SCAN",
     "OPERATION_SCORE",
     "OPERATION_SUGGEST_TONE",
+    "OPERATION_UPSCALE",
     "ScanAssetsInput",
     "ScoreImagesInput",
     "SuggestToneInput",

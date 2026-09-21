@@ -32,6 +32,7 @@ from nexus_ai_agent.creative.slideshow.ffmpeg import FfmpegUnavailableError, Ren
 from nexus_ai_agent.creative.slideshow.image_fill import generate_missing_images
 from nexus_ai_agent.creative.slideshow.probe import IMAGE_SUFFIXES, ProbeError
 from nexus_ai_agent.creative.slideshow.service import PlanningRequest, render_from_files
+from nexus_ai_agent.creative.slideshow.upscale import upscale_from_file
 
 #: The job type registered in ``nexus_ai_agent.worker.default_job_handlers``.
 SLIDESHOW_JOB_TYPE = "slideshow_render"
@@ -100,6 +101,7 @@ class SlideshowRenderPayload(BaseModel):
     target_images: int | None = Field(default=None, ge=1, le=MAX_IMAGES, strict=True)
     generate_missing: bool = Field(default=False, strict=True)
     generation_prompt: str | None = Field(default=None, min_length=1, max_length=2000)
+    upscale_factor: int | None = Field(default=None, ge=2, le=4, strict=True)
 
     @model_validator(mode="after")
     def _generation_requires_consent(self) -> SlideshowRenderPayload:
@@ -136,6 +138,7 @@ class _JobSpec:
     project_name: str
     target_images: int
     generation_prompt: str | None
+    upscale_factor: int | None
 
 
 def _inside(workspace: Path, raw: str, label: str) -> Path:
@@ -170,6 +173,7 @@ def _parse_payload(payload: Mapping[str, Any]) -> _JobSpec:
         project_name=model.project_name,
         target_images=model.target_images or len(images),
         generation_prompt=model.generation_prompt if model.generate_missing else None,
+        upscale_factor=model.upscale_factor,
     )
 
 
@@ -193,8 +197,22 @@ def _render_sync(spec: _JobSpec) -> dict[str, Any]:
     """Plan + encode in this thread; the engine does one FFmpeg process."""
     settings = get_settings()
     spec.output_path.parent.mkdir(parents=True, exist_ok=True)
+    images = spec.images
+    if spec.upscale_factor is not None:
+        upscaled: list[Path] = []
+        for index, image in enumerate(images):
+            output = spec.workspace_dir / f"upscaled_{index:02d}.png"
+            upscale_from_file(
+                image,
+                output,
+                scale_factor=float(spec.upscale_factor),
+                ffmpeg_bin=settings.ffmpeg_bin,
+                timeout=settings.slideshow_render_timeout_seconds,
+            )
+            upscaled.append(output)
+        images = tuple(upscaled)
     request = PlanningRequest(
-        images=spec.images,
+        images=images,
         target_duration_us=spec.duration_us,
         mode="auto",
         # Free lane by default: both switches come from the recorded fail-closed

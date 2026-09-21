@@ -127,7 +127,7 @@ def test_packs_list_reports_the_pack_as_activatable() -> None:
 def test_packs_list_human_output_mentions_all_capabilities() -> None:
     result = RUNNER.invoke(app, ["packs", "list"])
     assert result.exit_code == 0, result.output
-    assert "capabilities=5" in result.output
+    assert "capabilities=6" in result.output
     assert "pending=" not in result.output
 
 
@@ -136,7 +136,7 @@ def test_packs_activate_turns_the_pack_on() -> None:
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["active"] is True
-    assert len(payload["capabilities"]) == 5
+    assert len(payload["capabilities"]) == 6
 
 
 def test_packs_activate_rejects_an_unknown_pack() -> None:

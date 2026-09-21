@@ -495,3 +495,50 @@ The full rerun used the dependency's documented
 `LITELLM_LOCAL_MODEL_COST_MAP=True` to read its packaged price map; no source,
 test assertions, skip marks or CI workflow were changed to conceal the failure.
 Hosted CI for the release commit must still be observed independently.
+
+## 2026-09-21 — Nagar Wave 3 local upscale: optional FFmpeg Lanczos stage
+
+**Status:** Accepted by the owner and implemented; pending PR review/merge.
+
+**Problem:** The slideshow pack can compose and render stills, but it has no
+explicit, auditable way to enlarge a low-resolution source before planning. A
+model-based upscaler would add a large runtime/model download and violate the
+light adapter boundary; silently scaling inside the main render would also hide
+a separate derived-media operation from the command history.
+
+**Decision:** Add `slideshow.upscale` as a level-B reversible operation. FFmpeg
+runs above the pure command bus and pins measured source/output hashes and
+sizes into the command; the handler records a derived image with its parent and
+Lanczos provenance. The adapter emits a lossless PNG via the allow-listed
+`scale=<width>:<height>:flags=lanczos` filter, uses argv without a shell,
+protects the source and existing destinations, writes through a staging file,
+and caps scale/dimensions at 4x and roughly 8K pixels. The opt-in Telegram
+surface is `/slideshow --upscale 2 <title>`; it executes inside the existing
+bounded queue workspace before planning/render and is never inferred. The
+standalone adapter also accepts an exact target resolution. There is no new
+runtime dependency or external binary: the existing FFmpeg resolver remains
+the only process boundary.
+
+**Rejected alternatives:** Real-ESRGAN, torch or ONNX Runtime in this stage
+(model/runtime weight and deployment pressure); adding upscale to `/imagine`
+(which would put local FFmpeg work into that command's direct hosted-generation
+response path); implicit upscale on every render; lossy JPEG output; shell
+commands or agent-authored filtergraphs; overwriting uploaded source media.
+Model-based super-resolution remains a later optional pack, not a quality claim
+made by Lanczos interpolation.
+
+**Impact on contracts:** the slideshow manifest advances to pack version 0.2.0
+and declares six capabilities; the frozen Wave 1 registry remains unchanged.
+The FFmpeg adapter still contains the repository's sole subprocess call site,
+now shared by render/probe/upscale argv. Existing `/slideshow` requests and job
+payloads remain valid because `upscale_factor` is optional. VERSION, pyproject,
+release files, migrations and workflows are unchanged.
+
+**Verification:** `tests/unit/test_slideshow_upscale.py` runs genuine FFmpeg on
+a generated 8x6 PNG and reads back a 16x12 lossless PNG; it also covers exact
+resolution, bounded dimensions, overwrite protection, level B, derived-parent
+provenance and undo. Command parsing/payload, manifest/catalog coherence and
+the one-spawner architecture gate are covered by the existing suites extended
+for the sixth operation. Final Ruff, mypy and non-slow pytest results are
+recorded on the implementation commit and must be independently confirmed by
+GitHub CI before merge.

@@ -12,7 +12,7 @@ runtime's :class:`~nexus_ai_agent.creative.studio.capabilities.CapabilityRegistr
   is the TDD rule “a pack cannot register an operation by name alone”.
 
 Wave 2a registers the eighth pack (``nexus.slideshow.compose``) as a builtin
-manifest; its five operations are added to the runtime registry in Wave 2b, at
+manifest; its six operations are added to the runtime registry in Wave 2b, at
 which point activation succeeds without changing this module.
 """
 

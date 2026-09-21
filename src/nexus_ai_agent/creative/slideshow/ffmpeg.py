@@ -370,6 +370,40 @@ def build_filtergraph(ir: RenderIR) -> tuple[str, str, bool]:
     return ";".join(lines), final_label, has_audio
 
 
+def build_upscale_command(
+    input_path: Path,
+    *,
+    width: int,
+    height: int,
+    output_path: Path,
+    binary: str = "ffmpeg",
+) -> list[str]:
+    """Build the allow-listed lossless still-image upscale argv."""
+    if width < 2 or height < 2 or width > 8192 or height > 8192:
+        raise RenderError(f"upscale dimensions outside 2..8192: {width}x{height}")
+    if width * height > 33_177_600:  # bounded at roughly 8K UHD pixels
+        raise RenderError(f"upscale exceeds the 8K pixel budget: {width}x{height}")
+    return [
+        binary,
+        "-hide_banner",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-i",
+        str(input_path),
+        "-vf",
+        f"scale={width}:{height}:flags=lanczos",
+        "-frames:v",
+        "1",
+        "-c:v",
+        "png",
+        "-compression_level",
+        "6",
+        "-y",
+        str(output_path),
+    ]
+
+
 def build_command(ir: RenderIR, *, output_path: Path, binary: str = "ffmpeg") -> list[str]:
     """The exact argv the encoder will run — assertable without running it."""
     filtergraph, final_label, has_audio = build_filtergraph(ir)
@@ -457,6 +491,18 @@ class VideoInfo:
 
 
 @dataclass(frozen=True)
+class UpscaleArtifact:
+    """A lossless PNG produced by the local Lanczos stage."""
+
+    path: str
+    sha256: str
+    size_bytes: int
+    width: int
+    height: int
+    binary: str
+
+
+@dataclass(frozen=True)
 class RenderArtifact:
     """What the encoder actually produced — measured, not assumed."""
 
@@ -519,6 +565,55 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return "sha256:" + digest.hexdigest()
+
+
+def upscale_image(
+    input_path: Path,
+    output_path: Path,
+    *,
+    width: int,
+    height: int,
+    binary: str | None = None,
+    timeout: int = 120,
+    overwrite: bool = False,
+) -> UpscaleArtifact:
+    """Upscale one still with Lanczos into an atomically published PNG."""
+    source = Path(input_path)
+    if not source.is_file():
+        raise RenderError(f"upscale input not found: {source}")
+    destination = Path(output_path)
+    if destination.suffix.lower() != ".png":
+        raise RenderError("upscale output must use .png to avoid lossy re-encoding")
+    if source.resolve() == destination.resolve():
+        raise RenderError("upscale never overwrites its source image")
+    if destination.exists() and not overwrite:
+        raise RenderError(f"{destination} already exists; pass overwrite=True")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staging = destination.with_name(f".{destination.stem}.part.png")
+    staging.unlink(missing_ok=True)
+    resolved = resolve_ffmpeg_bin(binary)
+    args = build_upscale_command(
+        source, width=width, height=height, output_path=staging, binary=resolved
+    )
+    try:
+        result = _run(args, timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        staging.unlink(missing_ok=True)
+        raise RenderError(f"ffmpeg upscale timed out after {timeout}s") from error
+    if result.returncode != 0 or not staging.is_file():
+        staging.unlink(missing_ok=True)
+        raise RenderError(
+            f"ffmpeg upscale exited {result.returncode}: {(result.stderr or '').strip()[-600:]}"
+        )
+    staging.replace(destination)
+    return UpscaleArtifact(
+        path=str(destination),
+        sha256=sha256_file(destination),
+        size_bytes=destination.stat().st_size,
+        width=width,
+        height=height,
+        binary=resolved,
+    )
 
 
 def encode(
@@ -593,9 +688,11 @@ __all__ = [
     "RenderError",
     "RenderIR",
     "RenderShot",
+    "UpscaleArtifact",
     "VideoInfo",
     "build_command",
     "build_filtergraph",
+    "build_upscale_command",
     "encode",
     "probe_video",
     "render_ir_dict",
@@ -603,4 +700,5 @@ __all__ = [
     "render_ir_hash",
     "resolve_ffmpeg_bin",
     "sha256_file",
+    "upscale_image",
 ]

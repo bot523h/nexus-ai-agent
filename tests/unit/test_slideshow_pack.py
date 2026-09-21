@@ -33,6 +33,7 @@ from nexus_ai_agent.creative.packs.slideshow.operations import (
     OPERATION_SCAN,
     OPERATION_SCORE,
     OPERATION_SUGGEST_TONE,
+    OPERATION_UPSCALE,
     ScanAssetsInput,
     ScoreImagesInput,
     SuggestToneInput,
@@ -604,6 +605,7 @@ def test_pack_registry_activates_the_builtin_pack_for_real() -> None:
         OPERATION_SUGGEST_TONE,
         OPERATION_COMPOSE,
         OPERATION_RENDER,
+        OPERATION_UPSCALE,
     }
 
 
@@ -660,11 +662,13 @@ def test_permission_levels_match_the_pack_design() -> None:
     assert registry.get_spec(OPERATION_SUGGEST_TONE).permission_level is PermissionLevel.IMMEDIATE
     assert registry.get_spec(OPERATION_COMPOSE).permission_level is PermissionLevel.REVERSIBLE
     assert registry.get_spec(OPERATION_RENDER).permission_level is PermissionLevel.CONFIRMATION
+    assert registry.get_spec(OPERATION_UPSCALE).permission_level is PermissionLevel.REVERSIBLE
     for operation in (
         OPERATION_SCAN,
         OPERATION_SCORE,
         OPERATION_SUGGEST_TONE,
         OPERATION_COMPOSE,
         OPERATION_RENDER,
+        OPERATION_UPSCALE,
     ):
         assert registry.get_spec(operation).deterministic is True

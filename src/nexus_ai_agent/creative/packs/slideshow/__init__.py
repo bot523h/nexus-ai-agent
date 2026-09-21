@@ -12,7 +12,7 @@ Surface:
 * :mod:`nexus_ai_agent.creative.packs.slideshow.models` — the typed payloads;
 * :mod:`nexus_ai_agent.creative.packs.slideshow.templates` — the tone library;
 * :mod:`nexus_ai_agent.creative.packs.slideshow.planning` — the planning rules;
-* :mod:`nexus_ai_agent.creative.packs.slideshow.operations` — the five pure
+* :mod:`nexus_ai_agent.creative.packs.slideshow.operations` — the six pure
   operations and the Wave 2 registry builder.
 """
 
@@ -31,6 +31,7 @@ from nexus_ai_agent.creative.packs.slideshow.models import (
     ShotSelection,
     SlideshowAnalysis,
     SlideshowPlan,
+    UpscaleInput,
 )
 from nexus_ai_agent.creative.packs.slideshow.operations import (
     LAYER_GRADE,
@@ -43,6 +44,7 @@ from nexus_ai_agent.creative.packs.slideshow.operations import (
     OPERATION_SCAN,
     OPERATION_SCORE,
     OPERATION_SUGGEST_TONE,
+    OPERATION_UPSCALE,
     ScanAssetsInput,
     ScoreImagesInput,
     SuggestToneInput,
@@ -81,6 +83,7 @@ __all__ = [
     "OPERATION_SCAN",
     "OPERATION_SCORE",
     "OPERATION_SUGGEST_TONE",
+    "OPERATION_UPSCALE",
     "RECOMMENDED_IMAGE_COUNT",
     "RenderInput",
     "SLIDESHOW_PACKAGE_ID",
@@ -92,6 +95,7 @@ __all__ = [
     "SlideshowPlan",
     "SuggestToneInput",
     "TARGET_DURATIONS_US",
+    "UpscaleInput",
     "TEMPLATES_PATH",
     "TemplateError",
     "ToneTemplate",
