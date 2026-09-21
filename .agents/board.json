@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T23:29:06Z",
+  "updated_at": "2026-09-21T23:39:49Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -401,7 +401,7 @@
         "recall@k موتور RAG روی fixture ثابت گزارش شود",
         "ruff/mypy/pytest هدفمند سبز؛ گیت‌های کامل واگذار به ci-gates-steward"
       ],
-      "progress": "tick3_done_rag_engine"
+      "progress": "tick4_done_surface_layer"
     }
   ],
   "zones": [
@@ -1437,6 +1437,21 @@
         "zero-regression A/B on tests/integration/test_in_process_job_queue.py: 12 passed/1 pre-existing env failure/2 skipped — identical with and without the branch"
       ],
       "next": "tick 4 — bot/surface: framework-free /daily /profile /achievements /xp_leaderboard + /docs /doc_delete /chat_with_doc"
+    },
+    {
+      "at": "2026-09-21T23:39:49Z",
+      "by_branch": "arena/01a0c634-nexus-ai-agent",
+      "agent": "عامل B (سشن 01a0c634)",
+      "tick": 4,
+      "done": [
+        "src/nexus_ai_agent/bot/surface/: framework-free package — _ptb.py (duck-typed PTB accessors), gamification.py (4 commands), docs.py (3 commands + free-text routing)",
+        "zero `telegram` import → frozen import boundary respected (asserted by a test in the package itself)",
+        "sync SQLite engine calls off-loaded with asyncio.to_thread (same convention as bot/feature_handlers.py)",
+        "bounded doc-chat sessions: TTL 30 min + MAX_SESSIONS cap + per (user, chat) scoping",
+        "fail-closed Persian message on RAGUnavailable; no stack trace ever reaches the chat",
+        "tests: surface_fakes.py + 63 tests (18 gamification, 28 docs, 17 _ptb) — 143 tests green in this session so far"
+      ],
+      "next": "tick 5 — wire the seven commands in bot/handlers.py (registration lines untouched: only the imported symbols change) + doc-chat routing in on_message"
     }
   ],
   "ten_forward_tasks_wave4": [

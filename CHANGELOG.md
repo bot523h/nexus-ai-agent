@@ -43,6 +43,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine scores the same `1.0000` end-to-end. `AdvancedRAGEngine.add_document/query` keep their
   signatures, so `worker.py` is untouched.
 
+### Added (agent B · `arena/01a0c634-nexus-ai-agent`)
+
+- **`bot/surface/` — a framework-free command layer for the seven commands that were still
+  hard-coded stubs** (`/daily` always answered `+50 XP!`, `/docs` always claimed to be empty,
+  `/doc_delete` always claimed success, `/chat_with_doc` always claimed to be active).
+  - `_ptb.py` — duck-typed accessors over PTB's `update`/`context`, so no module in the package
+    imports `telegram` (frozen import boundary) and every handler is testable with fakes.
+  - `gamification.py` — `/daily`, `/profile`, `/achievements`, `/xp_leaderboard` on the real
+    `GamificationEngine`, scoped per (user, chat), with the synchronous SQLite calls off-loaded via
+    `asyncio.to_thread` so the event loop stays free.
+  - `docs.py` — `/docs`, `/doc_delete`, `/chat_with_doc` on the real document store and the hybrid
+    retriever, plus free-text routing while doc-chat mode is active. Sessions have a 30-minute TTL
+    and a hard cap (no per-user memory leak), the vector stack failing closed raises a Persian
+    "not available on this server" message instead of a stack trace, and nothing is ever claimed to
+    have happened when it did not.
+
 ### Audit (agent B)
 
 - `docs/audits/PR32_TRIAGE_2026-09-21.md` — forensic triage of PR#32 against the merged PR#34:

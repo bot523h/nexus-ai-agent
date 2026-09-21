@@ -26,10 +26,10 @@ import pytest
 from sqlalchemy import create_engine
 from sqlmodel import Session, SQLModel, select
 
-from nexus_ai_agent.storage import models as _models  # noqa: F401  (registers tables)
 from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.features import gamification as gamification_module
 from nexus_ai_agent.features.gamification import GamificationEngine
+from nexus_ai_agent.storage import models as _models  # noqa: F401  (registers tables)
 from nexus_ai_agent.storage.models import UserXP
 
 #: A first claim must never wait longer than this for a lock; the deadlock it
