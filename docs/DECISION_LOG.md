@@ -542,3 +542,39 @@ the one-spawner architecture gate are covered by the existing suites extended
 for the sixth operation. Final Ruff, mypy and non-slow pytest results are
 recorded on the implementation commit and must be independently confirmed by
 GitHub CI before merge.
+
+## 2026-09-21 — Nagar Wave 4a: Caption pack substrate (nexus.language.caption)
+
+**Status:** Accepted by the owner and implemented; pending PR review/merge.
+
+**Problem:** Video creation and playback in Nagar requires captioning capabilities
+(speech-to-text, timestamps, Persian/RTL subtitles). However, introducing heavy
+deep-learning frameworks (WhisperX, Faster-Whisper, PyTorch, pyannote) immediately
+drags massive binary weights, GPU memory pressure, and deployment friction.
+
+**Decision:** Implement Wave 4a strictly as a pure substrate without adding any
+heavy dependencies or modifying pyproject.toml:
+1. **Manifest:** Add `nexus.language.caption` pack manifest (`pack.manifest.json`)
+   declaring 10 capabilities (TDD Section 2.5), data-only, with fail-closed security.
+2. **Typed models:** Add `TranscriptSegment`, `WordTiming`, `SpeakerTurn`,
+   `TranscriptRef`, and `CaptionAsset` using pydantic models and microsecond timecodes.
+3. **Pure operations:** Register `caption.transcribe` (Level A, IMMEDIATE) and
+   `caption.generate_srt` (Level B, REVERSIBLE) in the capability registry.
+4. **Deterministic formatters:** Implement pure SRT and WebVTT formatters. VTT is
+   stored as a companion rendition on the same `CaptionAsset` and derived
+   `AssetRecord` rather than a separate operation.
+5. **Port and unavailable adapter:** Add `CaptionEnginePort` in `application/ports`
+   and `UnavailableCaptionAdapter` which fails closed by raising a typed
+   `CaptionProfileUnavailableError` (`caption_profile_unavailable`) whenever
+   invoked on unconfigured installations (strict prohibition of silent fallback).
+6. **Architecture gate:** Add `test_caption_substrate_boundary.py` to forbid
+   imports of `torch`, `whisperx`, `pyannote`, and other heavy speech packages
+   in the substrate.
+
+**Verification:**
+- `tests/architecture/test_caption_substrate_boundary.py` enforces zero heavy imports,
+  pure pack boundaries, port separation, data-only manifest, and typed fail-closed errors.
+- `tests/unit/test_caption_pack.py` covers byte-identical golden SRT and VTT outputs,
+  Unicode/Persian/ZWNJ text preservation, multiline cues, character escaping,
+  timestamp rollover (seconds, minutes, hours, >24h), Level A/B bus dispatch, and undo.
+

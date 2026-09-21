@@ -139,7 +139,7 @@ class MediaRef(BaseModel):
 
     asset_id: str
     content_sha256: str
-    media_kind: Literal["video", "audio", "image"]
+    media_kind: Literal["video", "audio", "image", "caption"]
     duration_us: int = Field(ge=0)
     timebase: TimeBase = Field(default_factory=_default_timebase)
     color_space: str | None = None
@@ -212,7 +212,7 @@ class AssetRecord(BaseModel):
     """
 
     asset_id: str
-    media_kind: Literal["video", "audio", "image"]
+    media_kind: Literal["video", "audio", "image", "caption"]
     content_sha256: str
     duration_us: int = Field(ge=0, default=0)
     parent_asset_ids: tuple[str, ...] = ()

@@ -117,7 +117,7 @@ def test_packs_list_reports_the_pack_as_activatable() -> None:
     result = RUNNER.invoke(app, ["packs", "list", "--json"])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    pack = payload[0]
+    pack = next(p for p in payload if p["package_id"] == "nexus.slideshow.compose")
     assert pack["package_id"] == "nexus.slideshow.compose"
     assert pack["pending_capabilities"] == []
     assert pack["active"] is False
@@ -127,8 +127,10 @@ def test_packs_list_reports_the_pack_as_activatable() -> None:
 def test_packs_list_human_output_mentions_all_capabilities() -> None:
     result = RUNNER.invoke(app, ["packs", "list"])
     assert result.exit_code == 0, result.output
+    assert "nexus.slideshow.compose" in result.output
     assert "capabilities=6" in result.output
-    assert "pending=" not in result.output
+    slideshow_line = next(line for line in result.output.splitlines() if "capabilities=6" in line)
+    assert "pending=" not in slideshow_line
 
 
 def test_packs_activate_turns_the_pack_on() -> None:

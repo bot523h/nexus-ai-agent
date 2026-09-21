@@ -278,7 +278,8 @@ def test_external_pack_cannot_introduce_unknown_operations() -> None:
 
 def test_builtin_pack_registers_with_pending_capabilities_but_cannot_activate() -> None:
     registry = PackRegistry(build_wave1_registry(), current_version="3.10.0")
-    pack = registry.register_builtin(root=PACKS_DIR)[0]
+    packs = registry.register_builtin(root=PACKS_DIR)
+    pack = next(p for p in packs if p.package_id == "nexus.slideshow.compose")
 
     assert pack.package_id == "nexus.slideshow.compose"
     assert len(pack.pending_capabilities) == 6
@@ -349,15 +350,18 @@ def test_unreadable_manifest_raises_a_typed_error(tmp_path: Path) -> None:
 
 
 def test_cli_packs_list_reports_the_builtin_pack() -> None:
-    """Wave 2b: the runtime knows the pack's operations, so nothing is pending."""
+    """Builtin packs are discovered and reported; slideshow operations are all known."""
     result = CliRunner().invoke(app, ["packs", "list", "--json"])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert [pack["package_id"] for pack in payload] == ["nexus.slideshow.compose"]
-    assert payload[0]["pending_capabilities"] == []
-    assert payload[0]["active"] is False  # activation stays an explicit step
-    assert payload[0]["signature_state"] == "placeholder"
-    assert payload[0]["external_binaries"] == ["ffmpeg"]
+    by_id = {pack["package_id"]: pack for pack in payload}
+    assert "nexus.slideshow.compose" in by_id
+    assert "nexus.language.caption" in by_id
+    slideshow = by_id["nexus.slideshow.compose"]
+    assert slideshow["pending_capabilities"] == []
+    assert slideshow["active"] is False  # activation stays an explicit step
+    assert slideshow["signature_state"] == "placeholder"
+    assert slideshow["external_binaries"] == ["ffmpeg"]
 
 
 def test_cli_packs_list_human_output() -> None:

@@ -30,6 +30,7 @@ ALLOWED_TOP_LEVEL = {
     "collections",
     "dataclasses",
     "datetime",
+    "hashlib",
     "importlib",
     "json",
     "pathlib",

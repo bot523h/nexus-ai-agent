@@ -454,10 +454,12 @@ def _packs_registry() -> Any:
     Wave 1 kept this to the frozen five-operation catalog; Wave 2 composes that
     catalog with the slideshow pack's operation specs, which is exactly what
     turns ``nexus.slideshow.compose`` from "pending" into "activatable".
+    Wave 4a adds the caption pack substrate operations (transcribe and generate_srt).
     """
     from importlib.metadata import PackageNotFoundError
     from importlib.metadata import version as distribution_version
 
+    from nexus_ai_agent.creative.packs.caption.operations import register_caption_operations
     from nexus_ai_agent.creative.packs.registry import PackRegistry
     from nexus_ai_agent.creative.packs.slideshow.operations import build_slideshow_registry
 
@@ -465,7 +467,9 @@ def _packs_registry() -> Any:
         current = distribution_version("nexus-ai-agent")
     except PackageNotFoundError:  # pragma: no cover - uninstalled source checkout
         current = None
-    return PackRegistry(build_slideshow_registry(), current_version=current)
+    registry = build_slideshow_registry()
+    register_caption_operations(registry)
+    return PackRegistry(registry, current_version=current)
 
 
 @packs_app.command("list")

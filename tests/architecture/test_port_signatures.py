@@ -1,6 +1,7 @@
 from inspect import signature
 from typing import get_type_hints
 
+from nexus_ai_agent.application.ports.caption_engine import CaptionEnginePort
 from nexus_ai_agent.application.ports.checkpoint_lifecycle import CheckpointLifecyclePort
 from nexus_ai_agent.application.ports.conversation_store import ConversationStorePort
 from nexus_ai_agent.application.ports.job_queue import JobQueuePort
@@ -21,6 +22,7 @@ def test_required_port_methods_are_present_and_typed() -> None:
         JobQueuePort: ("enqueue", "get_status", "get_result"),
         LLMPort: ("complete",),
         ObjectStoragePort: ("put", "delete"),
+        CaptionEnginePort: ("transcribe", "is_available"),
     }
     for port, methods in ports.items():
         for name in methods:
@@ -41,5 +43,6 @@ def test_ports_do_not_import_adapters() -> None:
         JobQueuePort,
         LLMPort,
         ObjectStoragePort,
+        CaptionEnginePort,
     ):
         assert "adapters" not in vars(__import__(port.__module__, fromlist=["* "]))
