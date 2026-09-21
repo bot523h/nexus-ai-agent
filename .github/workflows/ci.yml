@@ -33,6 +33,31 @@ jobs:
       - run: mypy src
       - run: pytest -q -m "not slow"
 
+  # The suite must also pass with the optional drivers installed: the
+  # PostgreSQL-only unit tests skip in the core-only `test` job above.
+  test-extras:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+      - name: Install dependencies with uv
+        run: |
+          start=$(date +%s%N)
+          uv pip install --system -e ".[dev,postgres,media,pdf,otio]"
+          end=$(date +%s%N)
+          ms=$(( (end - start) / 1000000 ))
+          echo "uv install (core + dev + extras): ${ms} ms" | tee "$GITHUB_STEP_SUMMARY"
+      # -rs so the skip list is visible: a silently skipped leg is a coverage loss.
+      - run: pytest -q -m "not slow" -rs
+
   # Prove the initial Alembic chain on real PostgreSQL.
   # real PostgreSQL before any Neon URL is provided.  Zero cloud credentials:
   # a local service container plays the part of Neon.  When NEXUS_DATABASE_URL

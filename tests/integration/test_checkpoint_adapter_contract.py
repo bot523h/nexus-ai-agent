@@ -14,10 +14,10 @@ import os
 import sqlite3
 import uuid
 
-import psycopg
 import pytest
 from langgraph.checkpoint.sqlite import SqliteSaver
 
+from nexus_ai_agent.optional_deps import OptionalDependencyMissing
 from nexus_ai_agent.storage.checkpoint_adapter import (
     FINGERPRINT_ALGORITHM,
     POST_V1_DELETE_MARKER,
@@ -26,16 +26,37 @@ from nexus_ai_agent.storage.checkpoint_adapter import (
     CleanupDisabled,
     SQLiteCheckpointAdapter,
 )
-from nexus_ai_agent.storage.checkpoint_pg_adapter import (
-    DEFAULT_PG_GOLDEN,
-    PostgresCheckpointAdapter,
-)
-from nexus_ai_agent.storage.checkpoint_pg_adapter import (
-    FINGERPRINT_ALGORITHM as PG_FINGERPRINT_ALGORITHM,
-)
+
+try:  # the PG leg only exists with the optional [postgres] extra (task-107)
+    from nexus_ai_agent.storage.checkpoint_pg_adapter import (
+        DEFAULT_PG_GOLDEN,
+        PostgresCheckpointAdapter,
+    )
+    from nexus_ai_agent.storage.checkpoint_pg_adapter import (
+        FINGERPRINT_ALGORITHM as PG_FINGERPRINT_ALGORITHM,
+    )
+except (ModuleNotFoundError, OptionalDependencyMissing):  # core-only install
+    DEFAULT_PG_GOLDEN = None
+    PostgresCheckpointAdapter = None  # type: ignore[assignment,misc]
+    PG_FINGERPRINT_ALGORITHM = None
+
+# psycopg ships with the optional [postgres] extra (task-107). Only the PG leg of
+# this shared contract needs it, so the SQLite leg must keep running without it.
+try:
+    import psycopg
+except ModuleNotFoundError:
+    psycopg = None  # type: ignore[assignment]
+
+
+def _is_pg_adapter(adapter: object) -> bool:
+    """True when *adapter* is the Postgres adapter (False when the extra is absent)."""
+    return PostgresCheckpointAdapter is not None and isinstance(adapter, PostgresCheckpointAdapter)
+
 
 PG_URL = os.getenv("NEXUS_DATABASE_URL")
-requires_pg = pytest.mark.skipif(not PG_URL, reason="requires PostgreSQL")
+requires_pg = pytest.mark.skipif(
+    not PG_URL or psycopg is None, reason="requires PostgreSQL ([postgres] extra)"
+)
 
 # One id namespace per test session so re-runs against a persistent PG
 # database never collide with earlier seeds.
@@ -190,11 +211,7 @@ def test_schema_fingerprint_deterministic(adapter: CheckpointReadAdapter) -> Non
 
 
 def test_assert_golden_semantics(tmp_path, adapter: CheckpointReadAdapter) -> None:
-    algorithm = (
-        PG_FINGERPRINT_ALGORITHM
-        if isinstance(adapter, PostgresCheckpointAdapter)
-        else FINGERPRINT_ALGORITHM
-    )
+    algorithm = PG_FINGERPRINT_ALGORITHM if _is_pg_adapter(adapter) else FINGERPRINT_ALGORITHM
     actual = adapter.schema_fingerprint()
 
     wrong_fp = tmp_path / "wrong.json"
@@ -222,7 +239,7 @@ def test_assert_golden_semantics(tmp_path, adapter: CheckpointReadAdapter) -> No
 
 def test_core_head_agrees_with_source_of_truth(adapter: CheckpointReadAdapter) -> None:
     """The adapter must report exactly what ``alembic_version`` holds (or None)."""
-    if isinstance(adapter, PostgresCheckpointAdapter):
+    if _is_pg_adapter(adapter):
         conn = psycopg.connect(adapter.database_url, autocommit=True)
         try:
             exists = conn.execute(

@@ -10,7 +10,6 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
-import psycopg
 import pytest
 
 from nexus_ai_agent.adapters.langgraph.lifecycle_recording import (
@@ -22,6 +21,10 @@ from nexus_ai_agent.storage.langgraph_checkpoint import (
     PostgresCheckpointer,
     get_checkpointer,
 )
+
+# These tests script psycopg's own exception classes, so the optional [postgres]
+# extra is required even though no server is contacted (task-107).
+psycopg = pytest.importorskip("psycopg", reason="requires the [postgres] extra")
 
 URL = "postgres://nexus:secret@db.example.com:5432/nexusdb"
 NORMALIZED_URL = "postgresql://nexus:secret@db.example.com:5432/nexusdb"
