@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T14:32:03Z",
+  "updated_at": "2026-09-21T14:39:37Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -503,10 +503,10 @@
     {
       "task": "task-104",
       "zone": "nagar-render-lane",
-      "agent_branch": "arena/01a0c460-nexus-ai-agent",
-      "claimed_at": "2026-09-21T14:32:03Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
-      "status": "active",
+      "status": "done",
       "gates_owner": false,
       "exclusive_paths": [
         "src/nexus_ai_agent/creative/rendering/",
@@ -519,10 +519,10 @@
     {
       "task": "task-105",
       "zone": "nagar-caption-engine",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0c460-nexus-ai-agent",
+      "claimed_at": "2026-09-21T14:39:37Z",
       "ttl_hours": 24,
-      "status": "queued",
+      "status": "active",
       "gates_owner": false,
       "exclusive_paths": [
         "src/nexus_ai_agent/adapters/",
@@ -532,7 +532,7 @@
         "src/nexus_ai_agent/creative/packs/caption/"
       ],
       "scope": "نگار موج ۹ — موتور محلی ASR زیر CaptionEnginePort + تکمیل ۳ قابلیت pending کپشن",
-      "note": "impl needs pure-logic handlers in packs/caption (align/diarize/translate) — released by task-101, no active lease"
+      "note": ""
     },
     {
       "task": "task-107",
