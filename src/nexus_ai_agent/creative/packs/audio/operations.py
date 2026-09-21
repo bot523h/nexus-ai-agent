@@ -12,6 +12,8 @@ This module implements the Nagar Command Bus operations for audio studio feature
 * ``audio.deess`` (Level B, REVERSIBLE): Sibilance taming derivation.
 * ``audio.eq_voice`` (Level B, REVERSIBLE): Voice EQ preset derivation.
 * ``audio.time_stretch`` (Level B, REVERSIBLE): Duration-ratio retime derivation.
+* ``audio.remove_vocal`` (Level B, REVERSIBLE): Source-separated stem set derivation.
+* ``audio.align_music`` (Level B, REVERSIBLE): Beat-grid offset map for a timeline range.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ import uuid
 from nexus_ai_agent.creative.packs.audio.models import (
     AUDIO_PACKAGE_ID,
     DOMAIN,
+    OPERATION_ALIGN_MUSIC,
     OPERATION_BEAT_SYNC_CUT,
     OPERATION_DEESS,
     OPERATION_DETECT_BEATS,
@@ -29,9 +32,12 @@ from nexus_ai_agent.creative.packs.audio.models import (
     OPERATION_EQ_VOICE,
     OPERATION_NORMALIZE_LOUDNESS,
     OPERATION_REMOVE_NOISE,
+    OPERATION_REMOVE_VOCAL,
     OPERATION_TIME_STRETCH,
+    STEM_LAYOUTS,
     VOICE_EQ_CUTS,
     VOICE_EQ_PRESETS,
+    AlignMusicInput,
     BeatGridRef,
     BeatMarker,
     BeatSyncCutInput,
@@ -41,6 +47,7 @@ from nexus_ai_agent.creative.packs.audio.models import (
     EqVoiceInput,
     NormalizeLoudnessInput,
     RemoveNoiseInput,
+    RemoveVocalInput,
     TimeStretchInput,
 )
 from nexus_ai_agent.creative.studio.capabilities import (
@@ -477,6 +484,126 @@ def _time_stretch(project: Project, context: OperationContext) -> OperationOutco
     )
 
 
+def _remove_vocal(project: Project, context: OperationContext) -> OperationOutcome:
+    """Level B (REVERSIBLE) handler for audio.remove_vocal.
+
+    Derives one content-addressed asset per stem of the requested layout.  Each
+    stem hash is a function of the *source* hash, the policy, the stem name and
+    the separation strength, so the same request always yields the same set —
+    and the original track is never mutated.
+    """
+    payload = RemoveVocalInput.model_validate(context.input_data)
+    known = _asset_index(project)
+    source = _require_audio_asset(known, payload.audio_asset_id, OPERATION_REMOVE_VOCAL)
+
+    prefix = payload.output_asset_id
+    stem_records: list[AssetRecord] = []
+    stem_ids: dict[str, str] = {}
+    for stem in STEM_LAYOUTS[payload.stem_policy]:
+        stem_id = f"{prefix}_{stem}" if prefix else f"{stem}_{uuid.uuid4().hex[:12]}"
+        digest_seed = (
+            f"{source.content_sha256}:stems:{payload.stem_policy}:{stem}:{payload.strength}"
+        )
+        derived_sha256 = hashlib.sha256(digest_seed.encode("utf-8")).hexdigest()
+        stem_records.append(
+            AssetRecord(
+                asset_id=stem_id,
+                media_kind="audio",
+                content_sha256=f"sha256:{derived_sha256}",
+                duration_us=source.duration_us,
+                parent_asset_ids=(source.asset_id,),
+                provenance={
+                    "effect": "stem_separation",
+                    "stem": stem,
+                    "stem_policy": payload.stem_policy,
+                    "strength": payload.strength,
+                    "source_asset_id": source.asset_id,
+                    "processor": "nagar.audio.studio.stems.v1",
+                },
+            )
+        )
+        stem_ids[stem] = stem_id
+
+    new_project = project.model_copy(update={"assets": [*project.assets, *stem_records]})
+    return OperationOutcome(
+        new_project,
+        context.history,
+        {
+            "source_asset_id": source.asset_id,
+            "stem_policy": payload.stem_policy,
+            "strength": payload.strength,
+            "stem_count": len(stem_records),
+            "stem_asset_ids": stem_ids,
+            "content_sha256": {
+                stem: record.content_sha256
+                for stem, record in zip(stem_ids, stem_records, strict=True)
+            },
+        },
+    )
+
+
+def _align_music(project: Project, context: OperationContext) -> OperationOutcome:
+    """Level B (REVERSIBLE) handler for audio.align_music.
+
+    Walks the beat grid (``first_beat_us + k * 60/tempo``) to the beat selected by
+    the anchor policy, clamps the resulting shift to ``max_shift_us`` and reports
+    a confidence that degrades linearly with the residual shift.  The operation
+    is a pure computation: no asset is derived, no timeline is mutated.
+    """
+    payload = AlignMusicInput.model_validate(context.input_data)
+    known = _asset_index(project)
+    if payload.music_asset_id not in known:
+        raise CommandValidationError(
+            f"{OPERATION_ALIGN_MUSIC} references unknown music asset: {payload.music_asset_id!r}"
+        )
+    music = known[payload.music_asset_id]
+    if music.media_kind not in ("audio", "video"):
+        raise CommandValidationError(
+            f"{OPERATION_ALIGN_MUSIC} requires audio or video media, got: {music.media_kind!r}"
+        )
+
+    beat_period_us = int(round((60.0 / payload.tempo_bpm) * 1_000_000))
+    if beat_period_us <= 0:  # pragma: no cover - guarded by the model (tempo <= 400)
+        raise CommandValidationError("beat period is not positive; tempo_bpm is out of range")
+
+    target = payload.target_start_us
+    if payload.anchor == "first_beat":
+        beats_elapsed = (target - payload.first_beat_us + beat_period_us - 1) // beat_period_us
+        beat_index = max(0, beats_elapsed)
+    else:  # nearest_beat
+        beats_elapsed = round((target - payload.first_beat_us) / beat_period_us)
+        beat_index = max(0, int(beats_elapsed))
+
+    beat_time_us = payload.first_beat_us + beat_index * beat_period_us
+    raw_offset_us = beat_time_us - target
+    offset_us = max(-payload.max_shift_us, min(payload.max_shift_us, raw_offset_us))
+    clamped = offset_us != raw_offset_us
+    if payload.max_shift_us == 0:
+        confidence = 1.0
+    else:
+        residual = min(abs(offset_us), payload.max_shift_us) / payload.max_shift_us
+        confidence = round(1.0 - residual, 4)
+
+    return OperationOutcome(
+        project,
+        context.history,
+        {
+            "music_asset_id": payload.music_asset_id,
+            "anchor": payload.anchor,
+            "tempo_bpm": payload.tempo_bpm,
+            "beat_period_us": beat_period_us,
+            "aligned_beat_index": beat_index,
+            "beat_time_us": beat_time_us,
+            "target_start_us": target,
+            "offset_us": offset_us,
+            "raw_offset_us": raw_offset_us,
+            "clamped": clamped,
+            "max_shift_us": payload.max_shift_us,
+            "confidence": confidence,
+        },
+    )
+
+
 def register_audio_operations(registry: CapabilityRegistry) -> None:
     """Register all audio studio operations with the capability registry."""
     registry.register_operation(
@@ -579,6 +706,32 @@ def register_audio_operations(registry: CapabilityRegistry) -> None:
             permission_level=PermissionLevel.REVERSIBLE,
             input_model=TimeStretchInput,
             handler=_time_stretch,
+            required_packs=(AUDIO_PACKAGE_ID,),
+            deterministic=True,
+        ),
+    )
+    registry.register_operation(
+        DOMAIN,
+        "remove_vocal",
+        OperationSpec(
+            operation_id=OPERATION_REMOVE_VOCAL,
+            description="Derive a stem set (2-stem or 4-stem) from an audio asset (Level B).",
+            permission_level=PermissionLevel.REVERSIBLE,
+            input_model=RemoveVocalInput,
+            handler=_remove_vocal,
+            required_packs=(AUDIO_PACKAGE_ID,),
+            deterministic=True,
+        ),
+    )
+    registry.register_operation(
+        DOMAIN,
+        "align_music",
+        OperationSpec(
+            operation_id=OPERATION_ALIGN_MUSIC,
+            description="Compute a beat-grid offset map for a timeline range (Level B).",
+            permission_level=PermissionLevel.REVERSIBLE,
+            input_model=AlignMusicInput,
+            handler=_align_music,
             required_packs=(AUDIO_PACKAGE_ID,),
             deterministic=True,
         ),

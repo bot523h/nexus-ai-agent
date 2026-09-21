@@ -287,9 +287,7 @@ class PackRuntime:
             manifest = self._manifest_for(path)
             if manifest.package_id in known:
                 continue
-            discovered.append(
-                self._register_manifest(manifest, path, anchor="builtin")
-            )
+            discovered.append(self._register_manifest(manifest, path, anchor="builtin"))
         return discovered
 
     def activate_all(self) -> list[RegisteredPack]:
@@ -423,13 +421,14 @@ def composition_issues(root: Path | None = None) -> tuple[str, ...]:
 
     issues: list[str] = []
     for directory, manifest in sorted(on_disk.items()):
-        if directory not in COMPOSITION_BY_DIRECTORY:
+        entry = COMPOSITION_BY_DIRECTORY.get(directory)
+        if entry is None:
             issues.append(
                 f"pack directory {directory!r} ships a manifest but has no composition entry"
             )
-        elif COMPOSITION_BY_DIRECTORY[directory].package_id != manifest.package_id:
+        elif entry.package_id != manifest.package_id:
             issues.append(
-                f"pack directory {directory!r} declares {COMPOSITION_BY_DIRECTORY[directory].package_id!r} "
+                f"pack directory {directory!r} declares {entry.package_id!r} "
                 f"but its manifest says {manifest.package_id!r}"
             )
     for entry in COMPOSITION:

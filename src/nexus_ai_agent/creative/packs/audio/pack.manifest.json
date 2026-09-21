@@ -12,7 +12,9 @@
     "audio.remove_noise",
     "audio.deess",
     "audio.eq_voice",
-    "audio.time_stretch"
+    "audio.time_stretch",
+    "audio.remove_vocal",
+    "audio.align_music"
   ],
   "runtime": {
     "native": {

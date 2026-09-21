@@ -62,9 +62,7 @@ EXPECTED_PACKAGE_IDS = (
 
 
 def _manifest_dict() -> dict[str, Any]:
-    return json.loads(
-        (PACKS_DIR / "slideshow" / "pack.manifest.json").read_text(encoding="utf-8")
-    )
+    return json.loads((PACKS_DIR / "slideshow" / "pack.manifest.json").read_text(encoding="utf-8"))
 
 
 # ---------------------------------------------------------------------------
@@ -81,9 +79,11 @@ def test_every_shipped_manifest_has_exactly_one_composition_entry() -> None:
 def test_composition_package_ids_match_the_manifests() -> None:
     for path in MANIFEST_PATHS:
         entry = COMPOSITION_BY_DIRECTORY[path.parent.name]
-        assert load_manifest(path).package_id == entry.package_id == COMPOSITION_BY_PACKAGE_ID[
-            entry.package_id
-        ].package_id
+        assert (
+            load_manifest(path).package_id
+            == entry.package_id
+            == COMPOSITION_BY_PACKAGE_ID[entry.package_id].package_id
+        )
 
 
 def test_composition_order_is_the_documented_six_pack_order() -> None:
