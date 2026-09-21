@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T18:56:20Z",
+  "updated_at": "2026-09-21T20:29:09Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -855,6 +855,35 @@
       ],
       "scope": "Record of PR#39 (OPEN, head 71fc9f6): living architecture suite + board schema 2 + three guard tests (task-131, task-111). 26 files. Was invisible on the board before this record — that gap let another session duplicate its scope.",
       "note": "Coordination files (.agents/board.json, AGENTS.md) are deliberately NOT exclusive: every agent must write claims there, and PR#39's diff rewrites both to board schema 2. ⚠️ MERGE HAZARD for the schema-2 switch: .agents/board.json has two competing rewrites (PR#39 full schema-2 document vs this session's schema-1 additions). The claim entries added today are mirrored in COORDINATION_2026-09-21.md with an exact re-apply blob."
+    },
+    {
+      "task": "color-exposure-lane-wave",
+      "zone": "nagar-render-lane",
+      "agent_branch": "arena/01a0c58e-nexus-ai-agent",
+      "claimed_at": "2026-09-21T20:29:09Z",
+      "ttl_hours": 24,
+      "status": "active_in_review",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/rendering/ir.py",
+        "src/nexus_ai_agent/creative/rendering/compiler.py",
+        "src/nexus_ai_agent/creative/rendering/__init__.py",
+        "tests/unit/test_rendering_lane_exposure.py",
+        "tests/unit/test_lane_duration_algebra.py",
+        "docs/ops/COLOR_LANE.md"
+      ],
+      "scope": "ExposureOp lane twin of color.adjust_exposure: photometric gamma=clamp(2**EV,0.1,10), contrast pass-through, colortemperature 1000-40000 (6500 neutral), tint/50 -> colorbalance gm, explicit pl, neutral-stage elision, one shared yuv->rgb->yuv round trip, audio-only fail-closed. 178 new tests (16 golden + 162 algebra property). Decisions D-0005..D-0008. Runbook docs/ops/COLOR_LANE.md.",
+      "note": "OVERLAP DECLARED, not stolen: (1) docs/DECISION_LOG.md and docs/ops/ are inside PR#39's active_in_review docs/ lease (arena/01a0c4c1) — this branch only APPENDS a new dated section and adds one new file, so the merge is textual-append-only; if PR#39 rewrites the log, this section is the one to re-apply. (2) CHANGELOG.md sits in the repo-hygiene zone: only [Unreleased] gained a section, no version heading, so scripts/check_version_lockstep.py is unaffected ([Unreleased] never matches _RELEASED_HEADING). (3) README.md and .nexus/continuum.json were deliberately NOT touched — task-135's lease (D-0006).",
+      "evidence": {
+        "base_commit": "b422512911fd9f70068c05d001fab3485d373029",
+        "baseline_pytest": "1181 passed, 20 skipped (measured on the base commit before any edit)",
+        "post_change_pytest": "1359 passed, 20 skipped (+178, no new skips)",
+        "ruff_check": "0 errors",
+        "ruff_format": "nothing to reformat",
+        "mypy": "Success: no issues found in 221 source files",
+        "mutation_checks": "6 deliberate breaks of the mapping/elision/guards and 4 breaks of the duration algebra each turned the suite red; a new op added to the LaneOp union is caught by the restatement-vocabulary guard",
+        "ffmpeg_bounds_source": "libavfilter/vf_eq.c, vf_colortemperature.c, vf_colorbalance.c (FFmpeg master), not prose docs"
+      }
     }
   ],
   "deferred_log": [
@@ -1304,6 +1333,25 @@
         "tasks 122/123 need B/E#1 action — cannot do for them (their zones)"
       ],
       "fa": "تکرار ۱۱۰ حذف و به #33 واگذار شد؛ تخته با ۱۰ تسک جدید مالک‌دار به‌روز شد؛ PR من (۱۰۴+۱۰۵) آماده باز شدن است."
+    },
+    {
+      "at": "2026-09-21T20:29:09Z",
+      "by_branch": "arena/01a0c58e-nexus-ai-agent",
+      "agent": "color/exposure lane (session 01a0c58e)",
+      "done": [
+        "FFmpeg bounds taken from the filter sources, not docs: eq gamma [0.1,10] / contrast [-1000,1000] via av_clipf; colortemperature {.dbl=6500},1000,40000; colorbalance gm {.dbl=0},-1,1",
+        "found and exploited two facts the prose docs omit: eq's LUT is v**(1/gamma) (so 2**EV brightens) and eq self-short-circuits at neutral via check_values",
+        "found the pixel-format trap: eq is YUV-only while colortemperature/colorbalance are RGB-only (disjoint sets) -> exactly one shared round trip",
+        "kelvin2rgb(6500) computed from source ~= (1.000, 0.997, 0.981) -> not an exact identity, so neutral RGB stages are elided",
+        "ExposureOp + _exposure_stage + audio-only fail-closed guard; exports updated",
+        "16 golden pins + 162-case algebra property guard, all mutation-checked",
+        "D-0005..D-0008 recorded; docs/ops/COLOR_LANE.md added; ROADMAP appendix + CHANGELOG [Unreleased]",
+        "forensic correction recorded: the reported ae1b9ef / 1228-test / WAVE5-7 wave does not exist in this repo, and arena/01a0c506 was already merged as PR#41"
+      ],
+      "not_done": [
+        "README.md and .nexus/continuum.json untouched on purpose (task-135 lease, D-0006)",
+        "no SplitOp (D-0005), no tonemap=hable (D-0008), no real-encode evidence for exposure yet (staged as color-lane-real-encode-evidence)"
+      ]
     }
   ],
   "ten_forward_tasks_wave4": [
@@ -1547,6 +1595,217 @@
       "by_branch": "arena/01a0c54f-nexus-ai-agent",
       "action": "PR#42 opened; CI verified end-to-end on the real runner",
       "evidence_fa": "چهار job سبز: lint-fast ۱۰ ثانیه (اسکریپت lockstep + ruff پین‌شده، بدون نصب)، lint، test، migrate-postgres؛ PR قابل merge است. یعنی هم معیار پذیرش task-113 روی واقعیت اجرا تأیید شد و هم ادعای «ثانیه‌ای به‌جای ۱۴ دقیقه» اندازه‌گیری شد."
+    },
+    {
+      "at": "2026-09-21T20:29:09Z",
+      "by_branch": "arena/01a0c58e-nexus-ai-agent",
+      "action": "color/exposure lane claim registered with its overlap declared; forward batch of 8 milled",
+      "evidence_fa": "کلایم جدید color-exposure-lane-wave ثبت شد و هم‌پوشانی‌ها صریح اعلام شده‌اند نه تصاحب: docs/DECISION_LOG.md و docs/ops/ داخل lease فعال PR#39 هستند (فقط الحاق بخش تاریخ‌دار و یک فایل جدید، یعنی merge صرفاً متنی-الحاقی)؛ CHANGELOG فقط در [Unreleased] بخش گرفت پس گیت lockstep دست‌نخورده می‌ماند؛ README.md و .nexus/continuum.json عمداً لمس نشدند چون در lease تسک ۱۳۵ هستند (تصمیم D-0006). هشت تسک بعدی با مسیرهای منفک و apply_commands دقیق در forward_tasks_color_lane ثبت شد."
     }
-  ]
+  ],
+  "forward_tasks_color_lane": {
+    "milled_at": "2026-09-21T20:29:09Z",
+    "milled_by_branch": "arena/01a0c58e-nexus-ai-agent",
+    "note": "Next 8 engineered tasks after the color/exposure lane. The manifesto asks for 10; 8 are milled because two obvious candidates were consciously converted into recorded deferrals instead of queued work (SplitOp -> D-0005 / color-lane-multi-output, and tonemap=hable -> D-0008, which reopens on color-lane-probe-colour-metadata). Paths are disjoint from every active lease; see coordination_log for the docs/ overlap with PR#39.",
+    "tasks": [
+      {
+        "id": "color-lane-lut-twin",
+        "title": "lane twin for color.apply_lut (lut3d) — the second colour stage",
+        "zone": "nagar-render-lane",
+        "priority": "P1",
+        "assigned_to": "unclaimed",
+        "status": "staged",
+        "exclusive_paths": [
+          "src/nexus_ai_agent/creative/rendering/ir.py",
+          "src/nexus_ai_agent/creative/rendering/compiler.py",
+          "tests/unit/test_rendering_lane_lut.py"
+        ],
+        "instructions": "LutOp carrying a staged .cube path + intensity. lut3d accepts RGB only, so it joins the same single yuv->rgb->yuv round trip the exposure op already opens (do NOT open a second one). Intensity needs a blend, which lut3d does not do: mix via a split/overlay or reject intensity != 1.0 and record why. Fail closed if the .cube is not a staged path.",
+        "acceptance_criteria": [
+          "golden argv pin, byte-exact, no FFmpeg execution",
+          "at most one format=rgb24 across the whole exposure+lut chain (assert on the graph)",
+          "unknown/unstaged lut path -> LaneError",
+          "duration unchanged (covered automatically by the algebra guard once the op kind is classified)"
+        ],
+        "apply_commands": [
+          "ruff check .",
+          "ruff format --check .",
+          "mypy src",
+          "pytest -q -m \"not slow\"",
+          "pytest -q tests/unit/test_rendering_lane_lut.py tests/unit/test_lane_duration_algebra.py"
+        ]
+      },
+      {
+        "id": "color-lane-saturation",
+        "title": "saturation/vibrance stage (eq saturation is declared 0.0..3.0)",
+        "zone": "nagar-render-lane",
+        "priority": "P2",
+        "assigned_to": "unclaimed",
+        "status": "staged",
+        "exclusive_paths": [
+          "src/nexus_ai_agent/creative/rendering/ir.py",
+          "tests/unit/test_rendering_lane_exposure.py"
+        ],
+        "instructions": "eq's saturation is clipped to [0.0, 3.0] by vf_eq.c set_saturation (verified). Either widen ExposureOp with a saturation field or add a VibranceOp. Decide first whether the pack twin color.adjust_exposure should carry it too — the two layers must not drift, and the pack is the stricter contract today.",
+        "acceptance_criteria": [
+          "the bound is pinned against vf_eq.c, not against prose docs",
+          "neutral saturation emits no extra stage",
+          "D-0007 table in docs/ops/COLOR_LANE.md gains the row in the same commit"
+        ],
+        "apply_commands": [
+          "ruff check .",
+          "ruff format --check .",
+          "mypy src",
+          "pytest -q -m \"not slow\"",
+          "pytest -q tests/unit/test_rendering_lane_exposure.py"
+        ]
+      },
+      {
+        "id": "color-lane-probe-colour-metadata",
+        "title": "probe colour metadata into LaneSource (unblocks D-0008 tonemap)",
+        "zone": "nagar-render-lane",
+        "priority": "P1",
+        "assigned_to": "unclaimed",
+        "status": "staged",
+        "exclusive_paths": [
+          "src/nexus_ai_agent/creative/rendering/executor.py",
+          "src/nexus_ai_agent/creative/slideshow/probe.py",
+          "tests/unit/test_rendering_lane.py"
+        ],
+        "instructions": "The executor already probes for evidence. Extend it to record color_space, color_transfer and color_primaries into LaneSource, and pin them in the IR hash. D-0008 (no tonemap=hable) reopens exactly when the transfer function is a recorded input instead of an assumption. Do not add tonemap in this task.",
+        "acceptance_criteria": [
+          "probed values land in the compiled digest (two different tags -> two different ir_hash)",
+          "missing/unknown metadata is explicit, never defaulted silently",
+          "still exactly one subprocess site (architecture guard stays green)"
+        ],
+        "apply_commands": [
+          "ruff check .",
+          "ruff format --check .",
+          "mypy src",
+          "pytest -q -m \"not slow\"",
+          "pytest -q tests/architecture/test_rendering_lane_boundary.py tests/unit/test_rendering_lane.py"
+        ]
+      },
+      {
+        "id": "color-lane-real-encode-evidence",
+        "title": "real FFmpeg encode evidence for the exposure op (measured luma shift)",
+        "zone": "nagar-render-lane",
+        "priority": "P2",
+        "assigned_to": "unclaimed",
+        "status": "staged",
+        "exclusive_paths": [
+          "tests/unit/test_rendering_lane_exposure_encode.py"
+        ],
+        "instructions": "The existing lane suite already runs real encodes through the static imageio-ffmpeg wheel and skips when no binary exists. Add the exposure equivalent: encode a known grey ramp at EV -1 / 0 / +1 and assert the measured mean luma is monotonic. Measured, not assumed. Keep the skip mark out of the default count by using the same resolve_ffmpeg_bin() pattern.",
+        "acceptance_criteria": [
+          "monotonic mean luma across EV -1/0/+1 on a real encode",
+          "skips cleanly with no FFmpeg binary, no new skip marks on the default path",
+          "no new dependency"
+        ],
+        "apply_commands": [
+          "ruff check .",
+          "ruff format --check .",
+          "mypy src",
+          "pytest -q -m \"not slow\"",
+          "pytest -q tests/unit/test_rendering_lane_exposure_encode.py"
+        ]
+      },
+      {
+        "id": "pack-lane-parity-guard",
+        "title": "architecture guard: every Level-B colour pack op has a lane twin or a recorded deferral",
+        "zone": "nagar-render-lane",
+        "priority": "P2",
+        "assigned_to": "unclaimed",
+        "status": "staged",
+        "exclusive_paths": [
+          "tests/architecture/test_pack_lane_parity.py"
+        ],
+        "instructions": "color.adjust_exposure now has an executable twin; color.apply_lut / auto_balance / match_shot do not. Pin that gap as data: enumerate the pack's colour operations and require each to appear either in a TWINNED set or an explicit DEFERRED set with a decision id. A new pack op then fails loudly instead of silently having no way to reach a master file.",
+        "acceptance_criteria": [
+          "AST/registry-driven, no hardcoded list of file names",
+          "a new colour pack op with no twin and no deferral turns the gate red",
+          "deferral entries must name a D-00NN decision id"
+        ],
+        "apply_commands": [
+          "ruff check .",
+          "ruff format --check .",
+          "mypy src",
+          "pytest -q -m \"not slow\"",
+          "pytest -q tests/architecture/test_pack_lane_parity.py"
+        ]
+      },
+      {
+        "id": "color-lane-multi-output",
+        "title": "D-0005 reopen: multi-output encode with per-output probed evidence",
+        "zone": "nagar-render-lane",
+        "priority": "P3",
+        "assigned_to": "unclaimed",
+        "status": "staged_deferred",
+        "exclusive_paths": [
+          "src/nexus_ai_agent/creative/rendering/executor.py",
+          "src/nexus_ai_agent/creative/rendering/compiler.py"
+        ],
+        "instructions": "Only when a real consumer needs proxy+master atomically. SplitOp stays deferred until the executor can emit and probe more than one artifact per process; one process must still mean one set of evidence per output. Supersede D-0005 in the decision log rather than deleting it.",
+        "acceptance_criteria": [
+          "one FFmpeg process, N staged outputs, N atomic publishes, N probed evidences",
+          "each output gets its own journal entry",
+          "D-0005 explicitly superseded by a new dated entry"
+        ],
+        "apply_commands": [
+          "ruff check .",
+          "ruff format --check .",
+          "mypy src",
+          "pytest -q -m \"not slow\""
+        ]
+      },
+      {
+        "id": "release-cut-v3.14-continuum",
+        "title": "v3.14 release cut: continuum + README refresh (absorbs task-135 residue)",
+        "zone": "release-metadata",
+        "priority": "P2",
+        "assigned_to": "unclaimed — sequence AFTER task-135/PR#33 lands",
+        "status": "staged_blocked",
+        "exclusive_paths": [
+          ".nexus/continuum.json",
+          "README.md"
+        ],
+        "instructions": "D-0006 defers the continuum refresh to a release cut on purpose: test_count_expected is 649 while the suite is now 1359, and both this file and README.md are under task-135-lockstep-residue's exclusive-path lease. Do not touch either from a feature branch. At the cut, refresh VERSION / pyproject / CHANGELOG / README / continuum together and extend the lockstep guard to cover the README version line and the test count.",
+        "acceptance_criteria": [
+          "python scripts/check_version_lockstep.py exit 0",
+          "test_count_expected equals the real suite count",
+          "README version line agrees with VERSION"
+        ],
+        "apply_commands": [
+          "python scripts/check_version_lockstep.py",
+          "pytest -q tests/unit/test_version_command.py -k lockstep",
+          "pytest -q tests/unit/test_version_lockstep_script.py"
+        ]
+      },
+      {
+        "id": "grade-surface-tint-convention",
+        "title": "bot /grade surface: expose the tint sign convention to users",
+        "zone": "creative-surface",
+        "priority": "P3",
+        "assigned_to": "unclaimed",
+        "status": "staged",
+        "exclusive_paths": [
+          "src/nexus_ai_agent/bot/creative_surface.py",
+          "src/nexus_ai_agent/i18n/locales/"
+        ],
+        "instructions": "bot/creative_surface.py already routes /grade. Positive tint means GREEN in this lane (D-0007, verified in vf_colorbalance.c). If the surface ever labels tint as magenta-positive it will invert every user's intent silently, so the label and the i18n strings must state the convention. Keep handlers.py untouched.",
+        "acceptance_criteria": [
+          "i18n parity test stays green for every locale touched",
+          "the tint label states the direction explicitly in each locale",
+          "zero edits to handlers.py"
+        ],
+        "apply_commands": [
+          "ruff check .",
+          "ruff format --check .",
+          "mypy src",
+          "pytest -q -m \"not slow\"",
+          "pytest -q tests/unit/test_creative_surface.py tests/unit/test_i18n_parity.py"
+        ]
+      }
+    ]
+  }
 }
