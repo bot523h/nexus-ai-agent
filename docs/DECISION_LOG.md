@@ -578,3 +578,30 @@ heavy dependencies or modifying pyproject.toml:
   Unicode/Persian/ZWNJ text preservation, multiline cues, character escaping,
   timestamp rollover (seconds, minutes, hours, >24h), Level A/B bus dispatch, and undo.
 
+## 2026-09-21 — Nagar Wave 4b: Advanced SubStation Alpha (ASS), Persian/Arabic RTL, and Cognitive Memory
+
+**Status:** Accepted and implemented by Agent C (`arena/01a0c36f-nexus-ai-agent`).
+
+**Problem:** Wave 4a introduced simple SRT and WebVTT formatting, but complex video
+typography, Persian/Arabic right-to-left layout, and word-by-word karaoke timing
+require Advanced SubStation Alpha (ASS v4.00+). Additionally, LangGraph cognitive
+memory writes were not persisted to `LongTermMemory`, and router intent classification
+depended strictly on English keywords.
+
+**Decision:**
+1. **ASS v4.00+ and RTL Formatter:** Implement pure `format_ass` with microsecond-to-centisecond
+   rollover (`H:MM:SS.cc`), bidirectional punctuation anchoring (`\u200F`), and `\N` newline handling.
+2. **Pure Operations:** Register `caption.generate_ass_rtl` (Level B, REVERSIBLE),
+   `caption.style_vazirmatn` (Level B, REVERSIBLE), and `caption.highlight_words` (Level A, IMMEDIATE)
+   in `CapabilityRegistry`.
+3. **Burn-in RenderIR Extension:** Extend `RenderIR` with optional `subtitle_path` in `creative/slideshow/ffmpeg.py`
+   to build allow-listed `ass` and `subtitles` filtergraphs cleanly.
+4. **Multilingual Intent Router:** Add Persian keyword normalization and tokenization in
+   `orchestration/router.py` to route Persian user requests accurately across task, memory, and personas.
+5. **Cognitive Memory Persistence:** Wire `LongTermMemory.store` into LangGraph's `_memory_writer`
+   and wire `ToolRegistry` into `_executor_agent`.
+
+**Verification:**
+- 47 architecture boundary tests passed (`tests/architecture/`).
+- 63 unit and integration tests passed (`test_caption_ass.py`, `test_caption_pack.py`, `test_router_multilingual.py`, `test_graph_memory.py`, `test_graph.py`, `test_router.py`, `test_persona_routing.py`).
+- Pre-push coordination check passed with zero overlap against Agent A and Agent B leases.
