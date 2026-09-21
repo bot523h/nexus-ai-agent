@@ -1,9 +1,9 @@
 # NEXUS AI — Architecture Decision Log
 
-**Status:** Canonical historical record; revision 6 effective 2026-09-20  
-**Scope:** Architectural, operational, and roadmap decisions from Phase 0 through the released v3.11.0 baseline, the accepted Phase 6 Nagar design, the implemented Nagar Waves 1–2 (2a substrate, 2b pack, 2c render lane), and the owner decisions that sequence what comes next (Wave 2.5 bot surface first; image generation behind an adapter).  
-**Main baseline for this revision:** `ebe995a` (the PR#23 merge — Wave 2c render lane). The live head may have advanced; consult `git log origin/main`.  
-**Current release baseline:** `v3.11.0` (Phase 6 Waves 1–2c on `main`; cut by the housekeeping PR that carries this revision).
+**Status:** Canonical historical record; revision 7 effective 2026-09-21  
+**Scope:** Architectural, operational, and roadmap decisions from Phase 0 through the released v3.13.0 baseline (P0 week-1 security batch + feature-engine wiring), the accepted Phase 6 Nagar design, the implemented Nagar Waves 1–3 (2a substrate, 2b pack, 2c render lane, 3 image generation) and the owner decisions that sequence what comes next.  
+**Main baseline for this revision:** `93cee5e` (the PR#34 squash merge — P0 week-1 security batch; PR#35 lint rescue merged on top). The live head may have advanced; consult `git log origin/main`.  
+**Current release baseline:** `v3.13.0` (cut by the repo-hygiene housekeeping PR that carries this revision).
 
 **Revision history**
 
@@ -12,6 +12,7 @@
 - **r3 (2026-09-20, PR#19 + the v3.10.0 release commit):** recorded the implemented Nagar Wave 1 core as an accepted decision, moved the release baseline to `v3.10.0`, corrected the Phase 6 “implementation has not started” status, added the PR#18/PR#19 rows to the PR snapshot, marked the D1–D4 bundle as merged (`d9f5cf9`), and locked the Celery/Redis scan result into the record.
 - **r4 (2026-09-20, PR#21 + the Wave 2 slideshow pack):** recorded Nagar Wave 2 — the capability-pack substrate and the slideshow pack — as an accepted and implemented decision, including the “evidence above the bus, pure handlers inside it” split, the additive state extension (`Project.assets` / `Clip.effects` / `AssetRecord` / `EffectLayerRef`), the level assignments of the five new operations, and the dependency verdicts (librosa deferred, Real-ESRGAN deferred, hosted image *generation* left out of the render path).
 - **r5 (2026-09-20, PR#23):** recorded Nagar Wave 2c — the render lane (pure `RenderIR` → filtergraph → argv, one FFmpeg process, staging publish, measured evidence) — as an accepted and implemented decision with its rejected alternatives (agent-authored filtergraphs, `-y` against the destination, trusting the plan's duration, a second `ffprobe` binary, encoding inside a handler, a Python video library).
+- **r7 (2026-09-21, repo-hygiene pass — owner-directed, session `arena/01a0c484`):** release baseline moved to `v3.13.0` (the merged P0 week-1 security batch — README already described its behavior as v3.13.0 while VERSION/pyproject still said 3.12.0); docs reorganized without content loss (`docs/audits/`, `docs/history/`, `docs/ops/`, `docs/README.md` index); the broken root `termux_install.sh` removed and `scripts/termux_install.sh` repaired (canonical `nexus run-bot` entrypoint); PR #33 closed as superseded (security scope already delivered by merged PR #34; feature-wiring scope double-claims agent B's active lease — evidence: `mergeable=CONFLICTING`, head checks green but base-diverged), then **reopened the same day** when the `ci-gates-steward` board (15:21Z) re-designated it as the task-110 vehicle; 28 merged/closed remote branches deleted with per-branch dispositions below.
 - **r6 (2026-09-20, v3.11.0 housekeeping PR):** moved the release baseline to `v3.11.0`; recorded two owner decisions — *image generation behind an adapter (Pollinations by default, Gemini opt-in)*, which resolves the open question left by Wave 2 item 7, and *Wave 2.5 (Telegram surface for the slideshow pack) precedes Wave 3*; corrected the Phase 6 status text to Waves 1–2c merged; updated the PR snapshot (PR#23 merged as `ebe995a`, PR#1/PR#2 closed); noted that the lifecycle PR1/PR2/PR3 line has been on `main` since PR#7 (`acdbcb7`, v3.6.0) — the roadmap file had still called it unmerged.
 
 This document is the single reference point for architectural decisions in this repository. A new decision must be appended here with its date, status, rationale, rejected alternatives, and repository evidence. Existing historical documents remain useful as detailed records, but this log is authoritative when summaries differ.
@@ -276,7 +277,7 @@ Nagar is accepted as the Phase 6 design baseline because it makes operation inte
 
 ### Zombie / abandoned branches
 
-The following branches are historical, open, or abandoned proposals and are not part of the active mainline decision path. **They must be deleted manually on GitHub by the owner** — deletion is a remote administrative action and is deliberately not performed by documentation changes:
+The following branches are historical, open, or abandoned proposals and are not part of the active mainline decision path. **They must be deleted manually on GitHub by the owner** — deletion is a remote administrative action and is deliberately not performed by documentation changes. **Update (r7, 2026-09-21):** the owner directed the repo-hygiene session to perform this deletion; all four are no longer present on the remote:
 
 | Branch | Status | Reason / evidence |
 |---|---|---|
@@ -284,6 +285,45 @@ The following branches are historical, open, or abandoned proposals and are not 
 | `feat/phase1-control-plane` | Abandoned — origin unclear | The “phase one control plane foundation” proposal (open as PR#1 historically). Never merged into `main`; its rate-limiter/control-plane ideas survive only as history. Treat as unowned. |
 | `feat/phase2-local-llm` | Abandoned — stacked on an unmerged base | “Provider-agnostic local LLM engine” built **on top of the unmerged `feat/phase1-control-plane`**, so it can never merge cleanly. The underlying need (a provider seam) was satisfied properly by litellm routing in v3.7.0 (Phase 3). |
 | `circleci-project-setup` | Irrelevant — CI platform cut | Only adds `.circleci/config.yml` (commits `265d6a0`, `2818d9d`). `.circleci/` does not exist on `main`; the project standardizes on GitHub Actions (`.github/workflows/ci.yml`, `maintenance.yml`). |
+
+### Remote branch deletion — dispositions (r7, 2026-09-21)
+
+Executed by the `repo-hygiene-2026-09-21` session on owner instruction. Each deletion was
+verified against the GitHub compare API (`main...<head>`) before deletion. Preserved branches:
+`main`, active session branches (`arena/01a0c316` — agent A active lease; `arena/01a0c34d` —
+agent B, PR #32 open; `arena/01a0c3aa` — PR #33 archive, kept despite closure; `arena/01a0c460`
+— agent E active work; `arena/01a0c484` — hygiene session).
+
+| Branch | Evidence | Disposition |
+|---|---|---|
+| `arena/01a0ac24` | PR#3 merged | deleted (behind main) |
+| `arena/01a0ae59` | 1 unique commit: C1 Postgres support — delivered via PR#7 lineage | deleted (superseded) |
+| `arena/01a0af6a` | PR#4 merged | deleted (behind main) |
+| `arena/01a0b0bf` | PR#6 merged | deleted (behind main) |
+| `arena/01a0b123` | fully behind main (session rescued via `arena/01a0b1e8`) | deleted (behind main) |
+| `arena/01a0b1e8` | 1 unique commit: rescue merge of Stage-1 + partial PR2 — delivered via PR#7 lineage | deleted (superseded) |
+| `arena/01a0b5d7` | PR#7 merged; unique commit is bookkeeping only | deleted (superseded) |
+| `arena/01a0bace` | PR#8 merged | deleted (behind main) |
+| `arena/01a0bb1d` | PR#9 merged | deleted (behind main) |
+| `arena/01a0bb93` | PR#10 merged | deleted (behind main) |
+| `arena/01a0bd16` | PR#11 merged | deleted (behind main) |
+| `arena/01a0bd99` | fully behind main | deleted (behind main) |
+| `arena/01a0beae` | PR#15 closed — superseded by `feat/d1-d4-clean-rebuild` (PR#18) | deleted (closed-superseded) |
+| `arena/01a0bf3b` | 3 unique commits, self-documented "already superseded by the merged main line" (wave-1 duplicate) | deleted (superseded) |
+| `arena/01a0c0eb` | PR#26 + PR#27 merged | deleted (behind main) |
+| `arena/01a0c05a` | PR#24 merged | deleted (behind main) |
+| `arena/01a0c099` | PR#25 merged | deleted (behind main) |
+| `arena/01a0c286` | PR#28 merged | deleted (behind main) |
+| `arena/01a0c2d5` | PR#29 merged | deleted (behind main) |
+| `arena/01a0c2ec` | 4 unique commits, self-archived "superseded by PR#29" | deleted (self-archived) |
+| `arena/01a0c36f` | PR#31 merged (squash `c41b1b0`); pre-squash wave commits | deleted (delivered via squash) |
+| `arena/01a0c3a0` | PR#34 merged (squash `93cee5e`) | deleted (delivered via squash) |
+| `arena/01a0c3ca` | PR#35 merged; unique commit is board bookkeeping | deleted (delivered via squash) |
+| `chore/release-v3.10.0` | PR#20 merged | deleted (behind main) |
+| `docs/decision-log-history` | PR#17 merged | deleted (behind main) |
+| `feat/nagar-wave1-green-cockpit` | PR#19 merged | deleted (behind main) |
+| `feat/security-hardening` | PR#16 merged | deleted (behind main) |
+| `feat/wave2a-pack-substrate` | PR#21 merged | deleted (behind main) |
 
 ### Pull-request snapshot at this revision (2026-09-20)
 
@@ -298,6 +338,9 @@ The following branches are historical, open, or abandoned proposals and are not 
 - **PR#23** — Nagar Phase 6 Wave 2c, the render lane (`feat/wave2c-slideshow-render`, head `934f70b`): **MERGED 2026-09-20** (`ebe995a`), CI green (`test` ×2, `migrate-postgres` ×2); head branch deleted.
 - **PR#1 / PR#2** — the abandoned `feat/phase1-control-plane` and `feat/phase2-local-llm` proposals: **CLOSED** (unmerged; see the zombie-branch table).
 - **v3.11.0 housekeeping PR** (opened from the session branch `arena/01a0c05a-nexus-ai-agent`, 2026-09-20): release lock-step, continuum refresh, roadmap rewrite, this revision (r6). Wave 2.5 follows on its own PR once this one is merged.
+- **PR#33** — “v3.13.0 — deliver the P0 security code, wire the dead engines, fix 4 production bugs” (`arena/01a0c3aa`): **CLOSED 2026-09-21 as superseded** — its security scope landed through merged PR#34 (`93cee5e`), its head was `CONFLICTING` with `main`, and its feature-wiring portion overlaps agent B's active `feature-wiring` lease (PR#32). **REOPENED the same day** after the `ci-gates-steward` board (15:21Z, merged via PR#36) designated it the **task-110 vehicle** (OTIO round-trip validation + ConversationStorePort adapter + manifest-signature spike); disposition: keep open, rebase on post-PR#36 main before merge.
+- **PR#34** — P0 week-1 security batch + feature-engine wiring: **MERGED 2026-09-21** (`93cee5e`, squashed).
+- **PR#35** — task-101 lint rescue: **MERGED 2026-09-21**; `main` CI green (run 35613892356).
 
 The repository contains several numbering systems from different workstreams. They must not be interpreted as one chronological sequence. The final roadmap is the **seven-phase plan** documented above: Phase 0 (control plane/security) → 1 (core product) → 2 (local-LLM direction) → 3 (multi-provider routing, scale-to-zero) → 4 (schema management, PostgreSQL/Neon) → 5 (durable storage, lifecycle, R2) → 6 (Nagar creative studio, design accepted).
 

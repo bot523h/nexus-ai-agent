@@ -1,6 +1,6 @@
 # Phase 5 — periodic maintenance only. Deliberately NOT on push/pull_request;
 # those gates live in ci.yml. Scheduled workflows only run on the default
-# branch and require the repo secrets to be set (docs/r2-storage.md).
+# branch and require the repo secrets to be set (docs/ops/r2-storage.md).
 name: maintenance
 
 on:

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T15:21:39Z",
+  "updated_at": "2026-09-21T16:05:00Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -339,6 +339,15 @@
       ],
       "toolchain": "opentimelineio (ASWF/OSS، فقط dev)، ed25519 از cryptography (فقط dev) — صفر هزینه",
       "note": "Delivered in PR#33 (OTIO ExternalReference + aiosqlite conv-store, green) WITHOUT markers. F duplicate reverted (see deferred_log). Markers → task-121."
+    },
+    {
+      "id": "task-111",
+      "title": "گیت CI قفل نسخه (VERSION ↔ pyproject ↔ CHANGELOG)",
+      "zone": "ci-quality",
+      "priority": "P2",
+      "assigned_to": "آزاد",
+      "status": "queued",
+      "origin": "repo-hygiene pass 2026-09-21 (سشن 01a0c484) — ضعف شماره ۱۱ گزارش بهداشت"
     }
   ],
   "zones": [
@@ -438,6 +447,20 @@
         "src/nexus_ai_agent/application/ports/",
         "src/nexus_ai_agent/adapters/",
         "docs/DECISION_LOG.md"
+      ]
+    },
+    {
+      "id": "repo-hygiene",
+      "description": "Root/docs cleanup, archival, release metadata alignment, remote-branch janitorial work",
+      "paths": [
+        "todo*.md",
+        "termux_install.sh",
+        "docs/audits/",
+        "docs/history/",
+        "README.md",
+        "CHANGELOG.md",
+        "VERSION",
+        "pyproject.toml"
       ]
     }
   ],
@@ -645,6 +668,20 @@
       "exclusive_paths": [],
       "scope": "Interim gates stewardship after A orphaned (vacant gates_owner).",
       "note": "F runs/reads full gates (branch CI + main CI) until E#1 merges #33 or A returns. E#1 backup (green-gates evidence). No code paths locked."
+    },
+    {
+      "task": "task-111-version-lockstep-ci",
+      "zone": "ci-quality",
+      "agent_branch": null,
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "queued",
+      "gates_owner": false,
+      "exclusive_paths": [
+        ".github/workflows/ci.yml",
+        "tests/unit/test_version_command.py"
+      ],
+      "scope": "Prevent the 3.12.0-vs-v3.13.0 drift that the hygiene pass fixed: a CI guard asserting VERSION == pyproject version == latest CHANGELOG section (extends the existing test_version_command.py chain to the changelog). Acceptance: failing case demonstrably red on a mismatched fixture, green on current main; no new dependencies."
     }
   ],
   "deferred_log": [
