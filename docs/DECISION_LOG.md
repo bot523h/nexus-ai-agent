@@ -446,3 +446,52 @@ claim live local-model inference, live hosted image-provider availability, or
 real-account billing verification. The complete non-slow repository suite above
 was run unchanged (no tests disabled or marks added to make the gates pass).
 The final verification record is committed before the last push/PR update.
+
+## 2026-09-21 — v3.12.0 release metadata after Waves 2.5 and 3
+
+**Status:** Accepted; separate release PR, pending review/merge.
+**Problem:** PR#26 merged as `52329e6022a0bdd9f3f9e287da581b752204c811`,
+following Wave 2.5 in PR#25 (`316ed33`), but VERSION and pyproject still report
+3.11.0 and the changelog has no released entry for either user-facing addition.
+New commands/providers must not ship silently under the old minor version.
+
+**Decision:** Follow the PR#24 housekeeping pattern: synchronize VERSION and
+pyproject at **3.12.0**, move Wave 2.5's Unreleased notes into a dated 3.12.0
+entry, add Wave 3 notes, and refresh README, roadmap and continuum. This is a
+backward-compatible **minor**, not a patch (new `/imagine`, provider adapters and
+optional slideshow autofill) or major (no removed command, changed existing
+payload requirement or schema migration). The optional local upscale stage is
+still unimplemented and is explicitly excluded from the release scope.
+
+**Rejected alternatives:** keep 3.11.0 unchanged; record only a changelog note
+without changing installed package metadata; claim all planned Wave 3 work is
+complete; fold release bookkeeping into the already-approved feature PR.
+**Contracts:** metadata/documentation only; no runtime code, dependency version,
+pack minimum-version requirement, database schema, golden or public port change.
+`/version` continues reading installed distribution metadata; refresh the editable
+installation before testing it. No tag or hosted GitHub Release is created by
+this PR, and it must not auto-merge under the authorization for PR#26.
+
+**Pre-merge evidence:** On the exact PR#26 head `471803c`, all three local gates
+were re-run in a fresh Python 3.11.2 environment with Ruff/mypy/pytest caches
+disabled: lint (295 files), types (184 files), tests (742 passed / 20 PostgreSQL
+skips). Actual GitHub runs `35542282107` (pull_request) and `35542278734` (push)
+completed successfully, each with both `test` and `migrate-postgres` jobs. The
+merge was head-locked to the tested commit; see the PR#26 verification comment.
+**Verification plan:** rerun all three gates after reinstalling version metadata,
+verify `nexus continuum verify` and version lock-step; let real CI run on the
+release PR. Keep the existing session branch, fast-forwarded to the merged main,
+so the new PR contains one release commit only and no duplicate feature changes.
+
+**Release-local results:** all three gates passed after refreshing the editable
+installation: lint 295 files, types 184 files, tests **742 passed / 20
+PostgreSQL-dependent skips** (one upstream deprecation warning). VERSION,
+pyproject, installed metadata and `/version` all report 3.12.0.
+`nexus continuum verify` passed with 649 AST-counted test functions.
+The first release-suite attempt exposed an existing network-timing flake: a
+LiteLLM background remote-cost-map warning entered the CLI runner's captured JSON
+and failed `test_plan_command_emits_the_plan_as_json` (741 passed, one failed).
+The full rerun used the dependency's documented
+`LITELLM_LOCAL_MODEL_COST_MAP=True` to read its packaged price map; no source,
+test assertions, skip marks or CI workflow were changed to conceal the failure.
+Hosted CI for the release commit must still be observed independently.

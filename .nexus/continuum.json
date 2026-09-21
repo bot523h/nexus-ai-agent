@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
   "plan": "Nagar Phase 6",
-  "step": "f32c30c",
-  "next": "v3.12.0 housekeeping cut after Wave 2.5 merges (VERSION/pyproject, changelog move, roadmap to Wave 3); then Wave 3 — optional local upscale stage + image generation behind an adapter (Pollinations sole free default; a paid Gemini adapter only behind an explicit opt-in setting with a per-call cost line logged first) — plan and DECISION_LOG detail first, code only after the owner's final approval.",
+  "step": "52329e6022a0bdd9f3f9e287da581b752204c811",
+  "next": "Review/merge the separate v3.12.0 release metadata PR for Waves 2.5 and 3 image generation. Optional local upscale remains deferred: contract and DECISION_LOG approval before implementation, never implied shipped by the image-generation release.",
   "ledger": [
     {
       "id": "C1",
@@ -103,12 +103,23 @@
     },
     {
       "id": "nagar-wave2.5",
-      "commit": "13809ed",
+      "commit": "316ed33",
+      "status": "merged",
+      "scope": "Telegram slideshow surface (up to five photos, 30 seconds), existing in-process render queue and completion delivery, workspace cleanup and typed failures; PR#25 merged 2026-09-20."
+    },
+    {
+      "id": "nagar-wave3-image-generation",
+      "commit": "52329e6",
+      "status": "merged",
+      "scope": "PR#26: isolated Pollinations/Gemini providers, bounded retries and prompt cache, paid-tier/cost guards, /imagine, opt-in slideshow autofill, architecture and failure tests; optional local upscale NOT implemented."
+    },
+    {
+      "id": "release-3.12.0",
       "status": "in_review",
-      "scope": "Telegram surface for the slideshow pack — /slideshow session buffer (5 photos, 30s, workspace confinement) -> slideshow_render queue job -> render_from_files in a thread -> D4 delivery of the measured master with typed, path-free failures (PR#25; decision-log Wave 2.5 + revision r7)"
+      "scope": "Separate housekeeping commit/PR after PR#26: VERSION/pyproject lock-step, dated Wave 2.5 + Wave 3 changelog, README, roadmap, decision log and continuum; no runtime change or tag publication."
     }
   ],
-  "test_count_expected": 656,
+  "test_count_expected": 649,
   "env_fingerprint": {
     "python": "3.11.2",
     "alembic": "1.20.0",

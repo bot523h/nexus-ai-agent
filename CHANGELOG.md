@@ -7,15 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Semver-minor: **Nagar Phase 6, Wave 2.5 — the Telegram surface for the
-slideshow pack.** A user can now reach the Wave 2c render lane from chat:
-`/slideshow` collects up to five photos, validates the envelope, queues one
-`slideshow_render` job, and the D4 completion hook returns the measured master
-(or a plain failure message) to the originating chat. No inline rendering, no
-new dependency, no new binary. The decision-log records this as Wave 2.5 +
-revision r7.
+## [3.12.0] — 2026-09-21
+
+Semver-minor: **Nagar Phase 6 — the Wave 2.5 Telegram slideshow surface and
+Wave 3 image generation adapters.** These are additive, user-facing features,
+not fixes to v3.11.0: `/imagine`, opt-in slideshow autofill and a new provider
+contract. Existing `/image` behavior, upload-only slideshows, public ports and
+database schemas remain compatible. Merged through PR#25 (`316ed33`) and
+PR#26 (`52329e6`). The planned optional local upscale stage is **not included**.
 
 ### Added
+- **Wave 3 image generation adapters** (`creative/image_gen/`): the asynchronous
+  `ImageGenProvider` contract, Pollinations default and explicitly paid Gemini;
+  bounded transport/429/5xx retry with backoff, jitter and capped Retry-After;
+  validated image bytes and bounded response sizes; no redirect or paid fallback.
+- **Process-local prompt-hash cache:** SHA-256 over provider, model and request
+  fields; one-hour TTL, 16 entries / 32 MiB, LRU eviction and serialized requests
+  to avoid duplicate in-flight calls. Failures/cancellations are not cached.
+- **`/imagine <description>`** sends text to the configured image provider and
+  delivers image bytes. New generation paths require the existing owner/allowlist;
+  `/imagine` also uses the existing request limiter. Legacy `/image` is unchanged.
+- **Opt-in slideshow autofill:** `/slideshow --slides 5 --fill <title>` uses three
+  uploaded photos plus exactly two generated images in the existing queue/render
+  lane. A count alone is not consent; uploaded photos never go to the generator.
+  The worker revalidates consent/counts, preserves five-image/30-second limits,
+  and removes partial generated files on failure/cancellation. Successful MP4
+  delivery and deletion remain owned by the notifier.
+- **Fail-closed paid generation and cost events:** Gemini requires `paid_tier`,
+  an API key and a positive operator estimate even before serving a cache hit.
+  Cost events record successful HTTP responses, including undecodable responses
+  that may be billed; rejected guards and cache hits add no cost event. Estimates
+  are not an invoice/spending cap, and ambiguous failures may still incur charges.
+- **Regression and architecture coverage:** offline network failures, precise
+  cost-log guards, TTL/LRU/byte limits, cancellation, real command registration,
+  queue autofill and cleanup; AST checks prevent direct/transitive imports of
+  `bot` or `storage` from the image adapters, including relative imports.
+- **Wave 2.5 Telegram slideshow surface** (details below): `/slideshow` collects
+  photos, queues a single render and returns the measured master through the
+  existing completion hook rather than rendering inline.
 - **The pack gains its fourth approved target duration**
   (`creative/packs/slideshow/models.py`): `30_000_000` µs joins
   `TARGET_DURATIONS_US`/`TargetDurationUS` so the Wave 2.5 30-second ceiling is
@@ -66,8 +95,18 @@ revision r7.
   grandfathered entries — the import-boundary gate stays frozen otherwise.
 
 ### Changed
+- Release metadata is synchronized at 3.12.0; README/environment examples explain
+  generation consent, provider setup and billing caveats. Roadmap and continuum
+  distinguish the shipped image adapters from the still-deferred upscale stage.
+- The manual RTL debug script is replaced by an isolated `tmp_path` regression
+  test with assertions, avoiding generated files in the repository root.
 - `nexus.worker.default_job_handlers()` now maps `slideshow_render`; the queue,
   `JobQueuePort`, the bus, the manifest and the render IR are unchanged.
+
+### Removed
+- Stale root lint/type/test reports, the generated `test_story.png` and the unused
+  downloaded font ZIP; the actual runtime font asset is retained. Ignore rules
+  prevent disposable reports and the root test render from returning.
 
 ## [3.11.0] — 2026-09-20
 
