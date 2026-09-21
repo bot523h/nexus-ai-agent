@@ -36,11 +36,26 @@ from nexus_ai_agent.bot.agent_handlers import (
     agents_cmd,
     myagent_cmd,
 )
+from nexus_ai_agent.bot.feature_handlers import (
+    FeatureEngines,
+    build_feature_command_handlers,
+    build_feature_engines,
+    forcejoin_gate,
+    join_keyboard,
+)
 
 # ── v3.1.0 imports ──
 from nexus_ai_agent.bot.knowledge_handlers import learn_cmd, search_cmd, wiki_cmd
-from nexus_ai_agent.bot.memory_handlers import forget_me_cmd, memory_cmd
+from nexus_ai_agent.bot.memory_handlers import (
+    build_memory_handlers,
+    ensure_consent_prompted,
+)
 from nexus_ai_agent.bot.monitor_handlers import approve_cmd, health_cmd, reject_cmd
+from nexus_ai_agent.bot.safe_paths import (
+    UnsafeFileNameError,
+    safe_join,
+    sanitize_file_name,
+)
 from nexus_ai_agent.bot.slideshow_handlers import slideshow_cmd, slideshow_photo
 from nexus_ai_agent.bot.tool_handlers import news_cmd, rate_cmd, weather_cmd, youtube_cmd
 from nexus_ai_agent.bot.update_handlers import update_cmd, version_cmd
@@ -50,18 +65,15 @@ from nexus_ai_agent.creative.image_gen import ImageGenerationError, ImageRequest
 # Feature managers — lazy-initialised inside build_handlers
 # ── v2.0.0 imports ──
 from nexus_ai_agent.features.ai_chat import GeminiEngine
-from nexus_ai_agent.features.ai_memory import AIMemoryEngine
+from nexus_ai_agent.features.ai_memory import CONSENT_GRANTED
 from nexus_ai_agent.features.analytics import AnalyticsEngine
-from nexus_ai_agent.features.anonymous_chat import AnonymousChatManager
 from nexus_ai_agent.features.engagement import EngagementEngine
 from nexus_ai_agent.features.force_join import ForceJoinManager
-from nexus_ai_agent.features.games import QuizGame
 from nexus_ai_agent.features.gamification import GamificationEngine
 from nexus_ai_agent.features.image_gen import ImageGenEngine
 from nexus_ai_agent.features.moderation import ModerationEngine
 from nexus_ai_agent.features.owner_control import OwnerControl, is_owner
 from nexus_ai_agent.features.personality import PersonalityEngine
-from nexus_ai_agent.features.referral import ReferralEngine
 from nexus_ai_agent.features.speech import SpeechEngine
 from nexus_ai_agent.features.summarizer import SummarizerEngine
 from nexus_ai_agent.features.viral_engine import ViralEngine
@@ -159,6 +171,7 @@ def build_handlers(
     settings: Settings,
     presence: PresenceStore,
     storage: Any,
+    feature_engines: FeatureEngines | None = None,
 ) -> list[Any]:
     # ── Middleware & Utilities ────────────────────────────────────
     auth = AuthMiddleware(settings.allowed_user_ids, settings.owner_telegram_id)
@@ -177,7 +190,20 @@ def build_handlers(
         pcloud_token=settings.pcloud_token,
         internxt_token=settings.internxt_token,
     )
-    referral_engine = ReferralEngine(db_path=settings.db_path)
+    # Shared feature engines — single source of truth (P0-8). The
+    # application passes its own container so ``bot_data`` and the
+    # handlers reference the SAME instances; when absent (tests) a
+    # fresh container is built here. Referral is reused rather than
+    # re-constructed.
+    engines = feature_engines or build_feature_engines(settings)
+    referral_engine = engines.referral
+    feature_cmds = build_feature_command_handlers(engines, settings)
+    force_gate = forcejoin_gate(engines)
+    # P0-7: /memory + /forget_me bind to the SHARED engine instance.
+    memory_cmd, forget_me_cmd, aimem_consent_callback = build_memory_handlers(engines.ai_memory)
+    # Strong references to in-flight background tasks (fire-and-forget
+    # create_task() without a held reference may be GC'd mid-execution).
+    _held_background_tasks: set[asyncio.Task[Any]] = set()
     # v2.0.0 specific engines
     gemini_engine: GeminiEngine | None = None
     summarizer_engine: SummarizerEngine | None = None
@@ -192,14 +218,10 @@ def build_handlers(
         )
 
     # ── Command Handlers ──────────────────────────────────────────
-    async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Welcome message."""
-        await _reply(
-            update,
-            "👋 Welcome to NEXUS AI Agent!\n\n"
-            "I am a multi-agent system designed for power users.\n"
-            "Use /help to see what I can do.",
-        )
+    # /start also parses referral deep links (P0-4): one real handler
+    # instead of a shadowed second CommandHandler("start") that could
+    # never fire.
+    start: Any = feature_cmds["start"]
 
     async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Help menu."""
@@ -286,84 +308,35 @@ def build_handlers(
             for member in update.message.new_chat_members:
                 await _reply(update, f"Welcome {member.full_name} to the group!")
 
-    # ── Phase 2: Anonymous Chat ────────────────────────────────────
-    anon_mgr = AnonymousChatManager()
+    # ── Phase 2: Anonymous Chat (bot-injected manager) ────────────
+    # See bot/feature_handlers.py: the manager is built once, the bot is
+    # bound at startup (and lazily per use), and plain messages from
+    # paired users are routed to their partner (anon_message_handler,
+    # registered before the catch-all on_message).
+    anon_start_cmd = feature_cmds["anon_start"]
+    anon_stop_cmd = feature_cmds["anon_stop"]
+    anon_report_cmd = feature_cmds["anon_report"]
+    anon_message_handler = feature_cmds["anon_message_handler"]
 
-    async def anon_start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        user_id = _user_id(update) or 0
-        result = await anon_mgr.join_queue(user_id)
-        await _reply(update, result)
-
-    async def anon_stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        user_id = _user_id(update) or 0
-        result = await anon_mgr.leave_chat(user_id)
-        await _reply(update, result)
-
-    async def anon_report_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        user_id = _user_id(update) or 0
-        result = await anon_mgr.report_user(user_id, settings.owner_telegram_id)
-        await _reply(update, result)
-
-    # ── Phase 3: Games ─────────────────────────────────────────────
-    async def quiz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        user_id = _user_id(update) or 0
-        quiz = QuizGame()
-        q = quiz.get_question(user_id)
-        if q is None:
-            await _reply(update, "❓ No question available right now.")
-            return
-        keyboard = [
-            [InlineKeyboardButton(opt, callback_data=f"quiz_{i}")]
-            for i, opt in enumerate(q["options"])
-        ]
-        await _reply(
-            update,
-            f"❓ **Quiz Time!**\n\n{q['q']}",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown",
-        )
-
-    async def quiz_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        query = update.callback_query
-        if query:
-            await query.answer()
-            await query.edit_message_text("✅ Answer received! (Simulated)")
+    # ── Phase 3: Games (real shared engines — feature_handlers.py) ─
+    quiz_cmd = feature_cmds["quiz"]
+    quiz_callback = feature_cmds["quiz_callback"]
 
     async def leaderboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _reply(update, "🏆 **Leaderboard**\n\n1. UserA: 1500 XP\n2. UserB: 1200 XP")
 
-    async def guess_start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await _reply(update, "🔢 Number Guessing started! Guess between 1-100.")
+    guess_start_cmd = feature_cmds["guess_start"]
+    guess_stop_cmd = feature_cmds["guess_stop"]
+    wordle_cmd = feature_cmds["wordle"]
+    wordle_stop_cmd = feature_cmds["wordle_stop"]
+    poll_cmd = feature_cmds["poll"]
+    poll_callback = feature_cmds["poll_callback"]
 
-    async def guess_stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await _reply(update, "🔢 Number Guessing stopped.")
-
-    async def wordle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await _reply(update, "🔠 Wordle game started! Type a 5-letter word.")
-
-    async def wordle_stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await _reply(update, "🔠 Wordle stopped.")
-
-    async def poll_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await _reply(update, "📊 Quick Poll: What is your favorite AI model?")
-
-    async def poll_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        query = update.callback_query
-        if query:
-            await query.answer("Vote counted!")
-
-    # ── Phase 4: Utility Tools ─────────────────────────────────────
-    async def remind_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await _reply(update, "⏰ Reminder set for 30 minutes.")
-
-    async def tr_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await _reply(update, "🌐 Translated: Hello -> سلام")
-
-    async def convert_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await _reply(update, "💱 100 USD = 6,000,000 IRT")
-
-    async def calc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await _reply(update, "🧮 Result: 2 + 2 = 4")
+    # ── Phase 4: Utility Tools (real engines — feature_handlers.py) ─
+    remind_cmd = feature_cmds["remind"]
+    tr_cmd = feature_cmds["tr"]
+    convert_cmd = feature_cmds["convert"]
+    calc_cmd = feature_cmds["calc"]
 
     # ── v2.0.0: AI Commands ────────────────────────────────────────
     async def ai_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -614,12 +587,20 @@ def build_handlers(
         try:
             file = await doc.get_file()
             file_bytes = await file.download_as_bytearray()
-            # Save to temp file for cloud upload
+            # Save to temp file for cloud upload. The (user-controlled)
+            # file name is sanitised before touching the filesystem
+            # (P0-6): base name only + a unique suffix + containment
+            # check, so `../../x` can never escape the temp dir.
             from pathlib import Path as _Path
 
             tmp_dir = _Path("data/cloud_tmp")
             tmp_dir.mkdir(parents=True, exist_ok=True)
-            tmp_path = tmp_dir / (doc.file_name or "unnamed")
+            try:
+                safe_name = sanitize_file_name(doc.file_name or "unnamed")
+                tmp_path = safe_join(tmp_dir, safe_name, suffix=f"_{uuid4().hex[:8]}")
+            except UnsafeFileNameError as exc:
+                await _reply(update, f"❌ نام فایل نامعتبر است: {exc}")
+                return
             tmp_path.write_bytes(bytes(file_bytes))
             result = await unified_cloud.upload_file(
                 tmp_path,
@@ -687,13 +668,21 @@ def build_handlers(
         if cloud_file is None:
             await _reply(update, f"❌ File '{filename}' not found.")
             return
+        # P0-6: the raw command argument / stored name is NEVER used to
+        # build a filesystem path. We resolve the safe base name and
+        # verify containment before any I/O.
+        try:
+            display_name = sanitize_file_name(cloud_file.file_name or filename)
+        except UnsafeFileNameError as exc:
+            await _reply(update, f"❌ نام فایل نامعتبر است: {exc}")
+            return
         from pathlib import Path as _Path2
 
         dl_dir = _Path2("data/cloud_downloads")
         dl_dir.mkdir(parents=True, exist_ok=True)
-        local_path = dl_dir / filename
+        local_path = safe_join(dl_dir, display_name, suffix=f"_{uuid4().hex[:8]}")
         result = await unified_cloud.download_file(
-            cloud_file.remote_path or filename,
+            cloud_file.remote_path or display_name,
             local_path,
         )
         if result.get("error"):
@@ -705,16 +694,14 @@ def build_handlers(
             if msg is not None:
                 await msg.reply_document(
                     document=io.BytesIO(result["data"]),
-                    filename=filename,
+                    filename=display_name,
                 )
         elif local_path.exists():
             msg = _message(update)
             if msg is not None:
-                await msg.reply_document(
-                    document=open(local_path, "rb"),
-                    filename=filename,
-                )
-            local_path.unlink(missing_ok=True)
+                with open(local_path, "rb") as handle:  # was an unclosed leak
+                    await msg.reply_document(document=handle, filename=display_name)
+                local_path.unlink(missing_ok=True)
         else:
             await _reply(update, "❌ Download failed.")
 
@@ -728,7 +715,9 @@ def build_handlers(
         user_id = _user_id(update)
         if user_id is None:
             return
-        formatted = referral_engine.format_stats(
+        # P1-2: sync SQLite read off the event loop (call-site offload).
+        formatted = await asyncio.to_thread(
+            referral_engine.format_stats,
             user_id,
             settings.bot_username,
         )
@@ -736,7 +725,8 @@ def build_handlers(
 
     # ── v2.0.0: /referral_board — Referral leaderboard ──
     async def referral_board_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        formatted = referral_engine.format_leaderboard()
+        # P1-2: sync SQLite read off the event loop (call-site offload).
+        formatted = await asyncio.to_thread(referral_engine.format_leaderboard)
         await _reply(update, formatted)
 
     # ── v2.0.0: /language — Set language preference ──
@@ -861,6 +851,14 @@ def build_handlers(
             await _reply(update, "⚠️ شما بیش از حد مجاز پیام ارسال کرده‌اید. لطفاً یک دقیقه صبر کنید.")
             return
 
+        # Force-join gate (P0-3): when the owner has enabled force-join,
+        # non-members of the required channel get the join keyboard
+        # instead of reaching the AI. No-op while force-join is off.
+        gate_text = await force_gate(user_id)
+        if gate_text is not None:
+            await _reply(update, gate_text, reply_markup=join_keyboard())
+            return
+
         correlation_id = str(uuid4())
         structlog.contextvars.bind_contextvars(correlation_id=correlation_id)
         chat_id = _chat_id(update)
@@ -870,9 +868,28 @@ def build_handlers(
         await _upsert_chat(db_session_factory, chat_id, thread_id)
 
         # ── v3.2.0: Agent Store & AI Memory integration ──
-        memory_engine = AIMemoryEngine()
-        # Update memory in background
-        asyncio.create_task(memory_engine.update_from_message(user_id, update.message.text))
+        # P0-7: the shared engine (one per process) owns the consent gate —
+        # global switch → per-user vote (default-deny) → per-user rate limit.
+        # Unset users see a one-time consent question and never egress until
+        # they explicitly grant; the AI reply itself is unaffected.
+        memory_engine = engines.ai_memory
+        # P0-7: one-time consent question (default-deny egress), then the
+        # background extraction only for users who explicitly granted.
+        memory_consent = await ensure_consent_prompted(
+            memory_engine,
+            settings.ai_memory_enabled,
+            user_id,
+            lambda text, **kw: _reply(update, text, **kw),
+        )
+        if memory_consent == CONSENT_GRANTED:
+            # Held task reference: an un-referenced create_task() can be
+            # garbage-collected mid-flight (the documented fire-and-forget
+            # hazard), which would lose the extraction *and* its error log.
+            task = asyncio.create_task(
+                memory_engine.update_from_message(user_id, update.message.text)
+            )
+            _held_background_tasks.add(task)
+            task.add_done_callback(_held_background_tasks.discard)
 
         active_agent = await AgentManager.get_active(user_id)
         if active_agent:
@@ -982,8 +999,12 @@ def build_handlers(
             lines.append(f"• [{log['action']}] {log['target']} — {log['details'][:50]}")
         await _reply(update, "\n".join(lines))
 
-    # ── Phase 8: Force Join ────────────────────────────────────────
-    force_join_mgr = ForceJoinManager()
+    # ── Phase 8: Force Join (bot-injected manager — P0-3) ──────────
+    # The manager is the shared instance from feature_engines; its bot is
+    # bound at application startup (and lazily per use), so
+    # check_membership performs a REAL Telegram membership check instead
+    # of failing open ("can't verify without bot → True").
+    forcejoin_verify_callback = feature_cmds["forcejoin_verify"]
 
     async def forcejoin_on_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Enable force-join for the current chat (owner only)."""
@@ -991,8 +1012,12 @@ def build_handlers(
             await _reply(update, "⛔ Access denied")
             return
         chat_id = _chat_id(update)
-        cfg = ForceJoinManager.set_config(
-            chat_id, enabled=True, channel_username="@nexus_ai_official"
+        # P1-2: sync SQLite write off the event loop (call-site offload).
+        cfg = await asyncio.to_thread(
+            ForceJoinManager.set_config,
+            chat_id,
+            enabled=True,
+            channel_username="@nexus_ai_official",
         )
         await _reply(update, f"✅ عضوگیری اجباری فعال شد.\n📢 کانال: {cfg.channel_username}")
 
@@ -1002,13 +1027,15 @@ def build_handlers(
             await _reply(update, "⛔ Access denied")
             return
         chat_id = _chat_id(update)
-        ForceJoinManager.set_config(chat_id, enabled=False)
+        # P1-2: sync SQLite write off the event loop (call-site offload).
+        await asyncio.to_thread(ForceJoinManager.set_config, chat_id, enabled=False)
         await _reply(update, "❌ عضوگیری اجباری غیرفعال شد.")
 
     async def forcejoin_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show force-join status."""
         chat_id = _chat_id(update)
-        cfg = ForceJoinManager.get_config(chat_id)
+        # P1-2: sync SQLite read off the event loop (call-site offload).
+        cfg = await asyncio.to_thread(ForceJoinManager.get_config, chat_id)
         if cfg is None or not cfg.enabled:
             await _reply(update, "📋 عضوگیری اجباری: غیرفعال")
             return
@@ -1027,22 +1054,11 @@ def build_handlers(
             await _reply(update, "❌ متن را وارد کنید: /forcejoin_message <text>")
             return
         chat_id = _chat_id(update)
-        ForceJoinManager.set_config(chat_id, enabled=True, welcome_message=text)
+        # P1-2: sync SQLite write off the event loop (call-site offload).
+        await asyncio.to_thread(
+            ForceJoinManager.set_config, chat_id, enabled=True, welcome_message=text
+        )
         await _reply(update, "✅ پیام عضوگیری اجباری تغییر کرد.")
-
-    async def forcejoin_verify_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle the 'verify' button press."""
-        query = update.callback_query
-        if query is None:
-            return
-        await query.answer()
-        user_id = query.from_user.id
-        is_member = await force_join_mgr.check_membership(user_id)
-        if is_member:
-            force_join_mgr.invalidate_cache(user_id)
-            await query.edit_message_text("✅ عضویت شما تأیید شد! می‌تونید از ربات استفاده کنید.")
-        else:
-            await query.edit_message_text("❌ شما هنوز در کانال عضو نشدید. لطفاً اول عضو بشید.")
 
     # ── Phase 9: Personality Engine ────────────────────────────────
     async def personality_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1336,11 +1352,15 @@ def build_handlers(
         CommandHandler("anon_start", anon_start_cmd),
         CommandHandler("anon_stop", anon_stop_cmd),
         CommandHandler("anon_report", anon_report_cmd),
+        # Plain messages from paired anon users go to their partner, not
+        # the AI graph. Must be registered before the catch-all on_message.
+        anon_message_handler,
         # Phase 3: Games
         CommandHandler("quiz", quiz_cmd),
         CommandHandler("leaderboard", leaderboard_cmd),
         CommandHandler("guess_start", guess_start_cmd),
         CommandHandler("guess_stop", guess_stop_cmd),
+        CommandHandler("guess", feature_cmds["guess"]),
         CommandHandler("wordle", wordle_cmd),
         CommandHandler("wordle_stop", wordle_stop_cmd),
         CommandHandler("poll", poll_cmd),
@@ -1348,6 +1368,8 @@ def build_handlers(
         CallbackQueryHandler(poll_callback, pattern=r"^poll"),
         # Phase 4: Utility Tools
         CommandHandler("remind", remind_cmd),
+        CommandHandler("cancel_remind", feature_cmds["cancel_remind"]),
+        CommandHandler("reminds", feature_cmds["reminds"]),
         CommandHandler("tr", tr_cmd),
         CommandHandler("convert", convert_cmd),
         CommandHandler("calc", calc_cmd),
@@ -1462,6 +1484,8 @@ def build_handlers(
         # ── v3.2.0: AI Memory ──
         CommandHandler("memory", memory_cmd),
         CommandHandler("forget_me", forget_me_cmd),
+        # ── P0-7: AI Memory consent vote ──
+        CallbackQueryHandler(aimem_consent_callback, pattern=r"^aimem:(grant|deny)$"),
         # ── v2.1: Onboarding callbacks ──
         CallbackQueryHandler(onboarding_callback_handler, pattern=r"^onboarding_"),
         CallbackQueryHandler(menu_callback, pattern=r"^lang_"),
@@ -1472,8 +1496,6 @@ def build_handlers(
         CallbackQueryHandler(agent_callback_handler, pattern=r"^agent_"),
         CallbackQueryHandler(menu_callback, pattern=r"^menu_referral$"),
         CallbackQueryHandler(menu_callback, pattern=r"^menu_language$"),
-        # ── v2.0.0: Referral deep-link ──
-        CommandHandler("start", start_referral_handler),
         # ── Phase 2: RAG (PDF) ──
         CommandHandler("docs", docs_list_cmd),
         CommandHandler("doc_delete", doc_delete_cmd),
@@ -1488,11 +1510,6 @@ def build_handlers(
         # ── Catch-all Message Handler ──
         MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
     ]
-
-
-async def start_referral_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /start with referral code."""
-    await _reply(update, "Welcome! You were referred by someone.")
 
 
 def _job_queue_from_context(context: ContextTypes.DEFAULT_TYPE) -> JobQueuePort | None:

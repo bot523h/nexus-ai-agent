@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any
 
 from sqlmodel import Session, select
@@ -20,12 +21,21 @@ from nexus_ai_agent.storage.models import AnonSession
 logger = get_logger(__name__)
 
 
-def _sync_engine() -> Any:
-    """Return a synchronous SQLAlchemy engine for feature CRUD."""
+@lru_cache(maxsize=8)
+def _sync_engine(db_path: str) -> Any:
+    """Return a (cached) synchronous SQLAlchemy engine for feature CRUD.
+
+    P1-2: the async methods' DB blocks run in worker threads (``asyncio.to_thread``),
+    so the engine is created with ``check_same_thread=False`` and cached
+    to remove the per-call engine construction.
+    """
     from sqlalchemy import create_engine as _ce
 
-    settings = get_settings()
-    return _ce(f"sqlite:///{settings.db_path}", echo=False)
+    return _ce(
+        f"sqlite:///{db_path}",
+        echo=False,
+        connect_args={"check_same_thread": False},
+    )
 
 
 class AnonymousChatManager:
@@ -40,6 +50,18 @@ class AnonymousChatManager:
         if self.bot is None:
             raise RuntimeError("Bot instance not set on AnonymousChatManager")
         return self.bot
+
+    def bind(self, bot: Any) -> None:
+        """Attach (or replace) the Telegram bot (called at startup)."""
+        self.bot = bot
+
+    @property
+    def is_bound(self) -> bool:
+        return self.bot is not None
+
+    def has_active_session(self, user_id: int) -> bool:
+        """True when *user_id* is currently paired with an anonymous partner."""
+        return self._active.get(user_id) is not None
 
     # ------------------------------------------------------------------
     # Queue & matching
@@ -66,16 +88,8 @@ class AnonymousChatManager:
 
     async def _create_session(self, user1: int, user2: int) -> str:
         """Create an AnonSession in DB and wire up active map."""
-        engine = _sync_engine()
-        with Session(engine) as session:
-            anon = AnonSession(
-                user1_id=user1,
-                user2_id=user2,
-                started_at=datetime.now(timezone.utc),
-                status="active",
-            )
-            session.add(anon)
-            session.commit()
+        # P1-2: sync SQLite write off the event loop.
+        await asyncio.to_thread(self._create_session_sync, user1, user2)
 
         self._active[user1] = user2
         self._active[user2] = user1
@@ -93,6 +107,19 @@ class AnonymousChatManager:
             logger.exception("anon_notify_failed", user1=user1, user2=user2)
 
         return "🔗 وصل شدید! الان می‌تونید پیام ناشناس بفرستید."
+
+    def _create_session_sync(self, user1: int, user2: int) -> None:
+        """Synchronous DB core for :meth:`_create_session` (worker thread)."""
+        engine = _sync_engine(get_settings().db_path)
+        with Session(engine) as session:
+            anon = AnonSession(
+                user1_id=user1,
+                user2_id=user2,
+                started_at=datetime.now(timezone.utc),
+                status="active",
+            )
+            session.add(anon)
+            session.commit()
 
     # ------------------------------------------------------------------
     # Messaging
@@ -126,8 +153,21 @@ class AnonymousChatManager:
 
         self._active.pop(partner_id, None)
 
-        # Mark session as ended in DB
-        engine = _sync_engine()
+        # P1-2: sync SQLite write off the event loop.
+        await asyncio.to_thread(self._end_sessions_sync, user_id)
+
+        # Notify partner
+        bot = self._require_bot()
+        try:
+            await bot.send_message(chat_id=partner_id, text="🔌 طرف مقابل چت ناشناس را ترک کرد.")
+        except Exception:  # noqa: BLE001
+            logger.exception("anon_leave_notify_failed", partner_id=partner_id)
+
+        return "✅ چت ناشناس پایان یافت."
+
+    def _end_sessions_sync(self, user_id: int) -> None:
+        """Synchronous DB core for :meth:`leave_chat` (worker thread)."""
+        engine = _sync_engine(get_settings().db_path)
         with Session(engine) as session:
             stmt = (
                 select(AnonSession)
@@ -138,15 +178,6 @@ class AnonymousChatManager:
             for s in results:
                 s.status = "ended"
             session.commit()
-
-        # Notify partner
-        bot = self._require_bot()
-        try:
-            await bot.send_message(chat_id=partner_id, text="🔌 طرف مقابل چت ناشناس را ترک کرد.")
-        except Exception:  # noqa: BLE001
-            logger.exception("anon_leave_notify_failed", partner_id=partner_id)
-
-        return "✅ چت ناشناس پایان یافت."
 
     # ------------------------------------------------------------------
     # Report
@@ -161,20 +192,8 @@ class AnonymousChatManager:
         # End the session
         await self.leave_chat(reporter_id)
 
-        # Update DB status
-        engine = _sync_engine()
-        with Session(engine) as session:
-            stmt = (
-                select(AnonSession)
-                .where(AnonSession.status == "ended")
-                .where(
-                    (AnonSession.user1_id == reporter_id) | (AnonSession.user2_id == reporter_id)
-                )
-            )
-            results = session.exec(stmt).all()
-            for s in results:
-                s.status = "reported"
-            session.commit()
+        # P1-2: sync SQLite write off the event loop.
+        await asyncio.to_thread(self._report_sessions_sync, reporter_id)
 
         # Notify owner
         if owner_id:
@@ -191,13 +210,29 @@ class AnonymousChatManager:
 
         return "🚨 کاربر گزارش شد. چت پایان یافت. ادمین مطلع شد."
 
+    def _report_sessions_sync(self, reporter_id: int) -> None:
+        """Synchronous DB core for :meth:`report_user` (worker thread)."""
+        engine = _sync_engine(get_settings().db_path)
+        with Session(engine) as session:
+            stmt = (
+                select(AnonSession)
+                .where(AnonSession.status == "ended")
+                .where(
+                    (AnonSession.user1_id == reporter_id) | (AnonSession.user2_id == reporter_id)
+                )
+            )
+            results = session.exec(stmt).all()
+            for s in results:
+                s.status = "reported"
+            session.commit()
+
     # ------------------------------------------------------------------
     # Owner inspection (safety)
     # ------------------------------------------------------------------
 
     def get_active_sessions(self) -> list[dict[str, Any]]:
         """Return active sessions for the owner to inspect."""
-        engine = _sync_engine()
+        engine = _sync_engine(get_settings().db_path)
         with Session(engine) as session:
             stmt = select(AnonSession).where(AnonSession.status == "active")
             results = session.exec(stmt).all()

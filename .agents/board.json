@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T12:45:00Z",
+  "updated_at": "2026-09-21T13:05:00Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -40,6 +40,19 @@
         "tests": "180/180 targeted, 45/45 slideshow surface, 749 passed in wide run; 20 pre-existing env failures reproduced on base commit via git stash A/B",
         "diff": "24 files, +158/-160 — mechanical only (imports, line-length, formatting)"
       }
+    },
+    {
+      "at": "2026-09-21T13:05:00Z",
+      "by_branch": "arena/01a0c3a0-nexus-ai-agent",
+      "agent": "عامل E",
+      "action": "rebase of PR#34 onto post-task-101 main (978ae16); board conflict resolved by handoff rule (main version wins)",
+      "evidence": {
+        "pr34_scope": "P0-2/3/4/5/6 + engine wiring (tools/games/referral/force-join/anon) + README honesty + 108 tests",
+        "pr34_ci": "run 35596904752: test PASS (7m50s) + migrate-postgres PASS (5m42s) on pre-rebase head",
+        "overlap": "PR#34 overlaps task-102 (agent A) and task-103/PR#32 (agent B); coordination notes written into both claims",
+        "claim_state": "no claims stolen: P0 stays with agent A, feature-wiring stays with agent B; PR#34 recorded as agent_e card"
+      },
+      "note_fa": "تعارض board.json با قاعده «آخرین وضعیت واگذاری برنده است» حل شد؛ کارت عامل E اضافه و یادداشت هماهنگی روی هر دو کلایم درگیر نوشته شد."
     }
   ],
   "active_agents": {
@@ -66,6 +79,12 @@
       "branch": "arena/01a0c3ca-nexus-ai-agent",
       "task": "board-gc-engineered-handoff",
       "status": "completed_released_same_commit"
+    },
+    "agent_e": {
+      "identity": "عامل E (ادامه‌ی سشن PR#34 — امنیت هفته‌ی ۱ + سیم‌کشی موتورهای features + calculator/Reminder)",
+      "branch": "arena/01a0c3a0-nexus-ai-agent",
+      "task": "PR#34 (P0 Week-1 security + feature-engine wiring), CI green, in review",
+      "status": "active_in_review_PR34"
     }
   },
   "ten_forward_tasks_network": [
@@ -411,7 +430,7 @@
         "src/nexus_ai_agent/core/"
       ],
       "scope": "Audit P0-1..P0-10 closure: global auth enforcement, /api/dashboard PII redaction, /cloud + /download path traversal guards, force-join real verification, LLM egress consent",
-      "note": "bot/handlers.py remains co-owned during PR#32 merge window only; task-101 (CI restore) may touch released nagar pack files but NOT this zone"
+      "note": "agent A (task-102) is the claim owner. COORDINATION: arena/01a0c3a0-nexus-ai-agent (this session — PR#34, CI green): independently delivers overlapping scope; coordinate before merging. PR#34 already delivers P0-2 (global access guard, group -1), P0-3 (bot-injected force-join verify + message gate), P0-4 (single /start with referral deep-link), P0-5 (dashboard PII-free + NEXUS_DASHBOARD_TOKEN bearer + 127.0.0.1 bind) and P0-6 (safe_paths for /cloud + /download), with behavioural tests. Recommended: agent A descope task-102 to P0-7 (LLM egress consent) / P0-8 / P0-9 and merge PR#34 first (or merge task-102 first and drop the duplicated files from PR#34)."
     },
     {
       "task": "feature-wiring-batch",
@@ -426,7 +445,7 @@
         "src/nexus_ai_agent/features/"
       ],
       "scope": "PR#32 open: wire dead engines via framework-free bot/surface layer (tools, games, referral, gamification, force-join, anon-chat, rag surface)",
-      "note": "Rebase on green main after task-101; board.json conflict resolves in favor of this newest handoff state"
+      "note": "agent B (PR#32, bot/surface/ pattern) is the claim owner. COORDINATION: arena/01a0c3a0-nexus-ai-agent (this session — PR#34, CI green): independently delivers overlapping scope; coordinate before merging. PR#34 wires the same engines (tools/games/referral/force-join/anon) via bot/feature_handlers.py + bot/handlers.py registration + bot/app.py wiring, with ReminderSystem rewrite (originating-chat delivery, cancel, restart-safe restore) and an AST-safe calculator (features/calculator.py). File ownership: PR#34 touches bot/handlers.py + bot/app.py; PR#32 uses bot/surface/ + features/. Suggested merge order: the earlier-merged one rebases the other; features/tools.py (ReminderSystem/Calculator) belongs to whichever merges first — the second PR adopts it as-is."
     },
     {
       "task": "nagar-wave3-timeline-edit-delivery",
@@ -503,6 +522,16 @@
       "reason_fa": "چون عامل امنیتی روی فایل مشترک bot/handlers.py کار می‌کرد، این وظیفه متوقف شد و به زمان دیگری موکول گردید تا فراموش نشود.",
       "reason_en": "Deferred because another agent holds the active lease on the shared file bot/handlers.py (P0-security-batch). Resolved: PR#32 delivered via new surface files; handlers.py lock stands until the security batch merges.",
       "resume_when": "PR#32 rebase on green main (after task-101) and coordinate handlers.py with agent A"
+    },
+    {
+      "task": "feature-wiring-batch",
+      "deferred_by_branch": "arena/01a0c3a0-nexus-ai-agent",
+      "at": "2026-09-21T11:20:00Z",
+      "resolved": true,
+      "resolution_fa": "ادغام نشد؛ به‌جای آن PR#34 با همان scope باز است (agent_e).",
+      "reason_fa": "ادامه‌ی کار سشن قبلی (محافظت ماشین‌حساب + ReminderSystem + سیم‌کشی موتورها) بر اساس دستور مالک ریپو؛ کلایم قدیمی P0-security-batch آزاد شد چون PR آن merge شده و سشنش تمام شده است.",
+      "reason_en": "Resumed per repo owner: continue previous session's work (calculator hardening, ReminderSystem, engine wiring). Stale P0-security-batch lease released because its PR (#30) is merged and the session is finished.",
+      "resume_when": "superseded by PR#34 (agent_e card)"
     }
   ],
   "merge_order_note": "۱) task-101 (lint restore) → ۲) PR#32 rebase+merge → ۳) task-102 (security) و task-104/105/107/108/109/110 موازی روی مسیرهای گسسته → ۴) task-106 بعد از ادغام الگوی surface. تداخل .agents/board.json بین PR#32 و این واگذاری با قاعده «آخرین وضعیت واگذاری برنده است» حل می‌شود.",

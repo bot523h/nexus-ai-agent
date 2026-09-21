@@ -605,3 +605,174 @@ depended strictly on English keywords.
 - 47 architecture boundary tests passed (`tests/architecture/`).
 - 63 unit and integration tests passed (`test_caption_ass.py`, `test_caption_pack.py`, `test_router_multilingual.py`, `test_graph_memory.py`, `test_graph.py`, `test_router.py`, `test_persona_routing.py`).
 - Pre-push coordination check passed with zero overlap against Agent A and Agent B leases.
+
+## 2026-09-21 — P0 Week-1 security batch + feature-engine wiring (audit follow-through)
+
+**Status:** Implemented on `arena/01a0c3a0-nexus-ai-agent`; pending review/merge.
+**Problem:** The 2026-09-21 audit (`AUDIT_REPORT_2026-09-21.md`) found four
+critical P0 gaps — bot auth consulted in only two of ~80 command paths
+(P0-2), public PII on the dashboard API (P0-5), path traversal in
+`/cloud` + `/download` (P0-6) and a duplicate shadowed `CommandHandler("start")`
+that left the referral loop dead (P0-4) — plus 379 lines of "documented"
+feature engines (`features/tools.py`, WordleFA, NumberGuess, QuickPoll) that
+nothing imported (P0-1/P0-8).
+
+**Decisions:**
+
+1. **Global access guard as a conditional-check handler (P0-2).**
+   `AccessGuardHandler` (PTB `BaseHandler`) is registered in group -1 and
+   its `check_update` returns True *only for denied users*. PTB then runs
+   the denial callback (rate-limited reply + structured audit log) and
+   blocks the update; allowed users are invisible to the guard. This gives
+   one choke point with zero per-command edits and no double-processing,
+   while keeping the existing per-command checks (defense in depth).
+   *Rejected alternatives:* wrapping every handler (unmaintainable); a
+   `TypeHandler(Update)` that always claims (would also block allowed
+   users, since blocking is decided by `check_update`, not the callback
+   return value); middleware at the HTTP layer only (polling mode has no
+   HTTP layer).
+2. **AST-whitelist calculator instead of `eval` (P0-1).** The engine parses
+   with `ast.parse(mode="eval")` and walks a closed node whitelist
+   (numeric constants, the six arithmetic ops + pow/mod, whitelisted math
+   functions/constants). Attribute access, subscripts, strings and
+   containers are unrepresentable, which kills the classic
+   `().__class__.__bases__[0].__subclasses__()` class of escapes outright;
+   bounds on length (200), node count (128), depth (64), integer exponents
+   (≤1000), factorial (0–170) and result magnitude stop `9**9**9`-style DoS.
+   Persian/Arabic-Indic digits and `^`/`×`/`÷` are normalized.
+   *Rejected alternatives:* `simpleeval`/`asteval` dependencies (new
+   supply-chain surface for a 150-line stdlib module); keeping `eval` with
+   a tighter regex (regex gates are the thing that failed the audit);
+   keeping `%` as "÷100" (silently wrong for `100%20`; modulo is the
+   calculator-correct semantics — documented as a behaviour change).
+3. **One shared `FeatureEngines` container (P0-8).** Engines are built once
+   in `_init_v2_engines`, stored in `bot_data["feature_engines"]`, and
+   passed into `build_handlers` (optional kwarg; tests may omit it).
+   Commands are closures from `build_feature_command_handlers` bound to
+   that container. This fixes per-call engine construction (which dropped
+   quiz/wordle/guess state between messages), the double `ReferralEngine`
+   construction, and makes every command unit-testable without a bot.
+   **Lazy bot binding:** the Telegram bot only exists at runtime, so
+   bindable engines (`ReminderSystem.bind`, `ForceJoinManager.bind`,
+   `AnonymousChatManager.bind`) are bound in `post_init` and defensively
+   re-checked per use (`_ensure_bot`). *Rejected alternatives:* passing
+   `application.bot` through `build_handlers` (build-time API does not
+   have it, and would couple tests to a live bot); constructing engines
+   inside each handler (the bug being fixed).
+4. **Dashboard: PII-free responses + optional bearer gate + private bind
+   (P0-5).** Responses are PII-free in *all* modes (only the internal
+   surrogate id + join time). `NEXUS_DASHBOARD_TOKEN` enables a constant-time
+   bearer check (401 fail-closed when set and wrong). When unset the API
+   is open *by design* for local development, and `docker-compose.yml`
+   binds 8000 to `127.0.0.1` so the default deployment cannot leak it.
+   *Rejected alternative:* always-503 when no token is set (would break
+   every existing local/CI consumer of `/api/dashboard/stats`); CORS-only
+   (CORS does not stop `curl`).
+5. **Path sanitization as a reusable helper (P0-6).** `bot/safe_paths.py`
+   (`sanitize_file_name` = base-name-only + control-char/length checks;
+   `safe_join` = suffix + `resolve()` + `is_relative_to`) is used by both
+   `/cloud` (upload temp file, unique suffix against overwrite) and
+   `/download` (DB name → safe local path). The raw command argument is
+   never joined to a path; the unclosed file handle in the download
+   fallback is fixed.
+
+**Contracts:** new public settings `NEXUS_DASHBOARD_TOKEN`; new commands
+`/guess`, `/cancel_remind`, `/reminds`; `/calc` `%` semantics change
+(percent → modulo); unlisted users are now denied on all surfaces
+(deployments must configure `NEXUS_ALLOWED_USER_IDS`/owner id); two new
+files registered in `tests/architecture/legacy_baseline.json`
+(`bot/access_guard.py`, `bot/feature_handlers.py` — bot-layer `telegram`
+imports, same category as every existing `bot/*` file). No schema
+migration: `Reminder.status` is a free-form string (`pending|sent|
+cancelled|failed`).
+
+**Evidence:** 108 new tests (behavioural + security payloads + DoS inputs);
+881 passed / 20 PostgreSQL-only skips; `ruff check` + `ruff format --check`
+clean; `mypy src` clean (197 files). The stale `P0-security-batch` lease
+from the finished session `arena/01a0c316-nexus-ai-agent` (PR#30 merged as
+`5e5009a`) was released with an explanatory board note and re-claimed by
+this session per owner instruction; see `.agents/board.json`.
+
+## 2026-09-21 — P0-7 LLM-egress consent gate + P1-2 event-loop non-blocking
+
+**Status:** Implemented on `arena/01a0c3a0-nexus-ai-agent`; pending merge in PR#34.
+
+### P0-7: AIMemory consent gate
+
+**Problem.** The main message handler (`on_message`) created a fresh
+`AIMemoryEngine()` per message and fire-and-forget'd
+`update_from_message(user_id, text)` — sending *every* user's raw
+message text to the external Gemini model with no consent, no opt-out,
+no rate limit, and one new provider per message.
+
+**Decisions:**
+
+1. **Default-deny, consent tri-state.** `UserMemory.ai_memory_consent` is
+   `str | None` (tri-state: `None` = unset, `"granted"`, `"denied"`).
+   No egress unless exactly `"granted"`. Rejected: opt-out model
+   (pre-existing users would egress without knowing), checkbox in
+   /settings (too hidden for a privacy gate).
+
+2. **One-time inline-keyboard question.** Shown exactly once per user
+   (tracked via `ai_memory_prompted: bool | None`). Ignoring the question
+   does not re-prompt (no prompt spam). Rejected: a persistent /consent
+   command (would require users to know the command exists).
+
+3. **Gate enforced inside the engine, not at call sites.** Returns an
+   outcome string (`EGRESSED` / `SKIP_*`). No future caller can bypass
+   the gate. `ensure_consent_prompted()` is a pure-orchestration helper
+   (testable, in `memory_handlers.py`).
+
+4. **New Alembic revision `7c2f9d41e8a3`.** Three nullable columns on
+   `usermemory` (no server default → zero drift on `alembic check` on
+   both SQLite and PostgreSQL). CI pinned from `f4a9c2e71b08` to
+   `7c2f9d41e8a3`.
+
+5. **Shared engine instance.** `FeatureEngines.ai_memory` is built once
+   in `build_feature_engines` (single Gemini provider, single rate-limit
+   dict). `/memory`, `/forget_me`, `on_message` and the consent callback
+   all share it.
+
+6. **`forget_user` = consent revoke.** The row is deleted (including
+   `ai_memory_consent`), so any future egress requires a fresh vote.
+   Rejected: soft-delete (complex, privacy-unfriendly).
+
+**Tests.** 17 new tests in `test_ai_memory_consent.py` (engine gate,
+global kill switch, one-time prompt, callback, rate limit, forget-wipes,
+shared instance, schema + migration chain). 2 pre-existing tests in
+`test_ai_memory.py` rewritten to the new contract with proper DB
+isolation.
+
+### P1-2: Event-loop non-blocking
+
+**Problem.** All four sync-DB feature engines (`ReminderSystem`,
+`ReferralEngine`, `ForceJoinManager`, `AnonymousChatManager`) executed
+synchronous `Session(engine)` blocks inside `async` handler coroutines,
+blocking the event loop on every message.
+
+**Decisions:**
+
+1. **`asyncio.to_thread(sync_core)` reference pattern.** Each public
+   async method is a thin wrapper over a `*_sync` core. The task
+   management (`_schedule`, `task.cancel()`) stays on the loop thread.
+   Rejected: migrating to `AsyncSession` (too invasive for a batch
+   change, touches every engine and its tests).
+
+2. **Cached engines with `check_same_thread=False`.** `_sync_engine` is
+   `@lru_cache`'d per `db_path` (or stored on `self`). Sessions are
+   created and used within a single worker thread (safe), but the
+   connection pool may be accessed from both the loop and worker threads
+   (requires the flag).
+
+3. **Call-site offload for owner commands.** `ForceJoinManager.set_config`
+   / `get_config` (sync classmethod calls from `handlers.py`) wrapped at
+   the call site with `asyncio.to_thread`. Same for referral
+   `format_stats` / `format_leaderboard` / `process_referral` /
+   `get_referral_link`.
+
+**Tests.** All 990 existing tests pass (20 PG-only skips). The sync
+methods are exercised through the existing behavioural tests which now
+go through the async wrapper + `to_thread`.
+
+**Evidence.** `make lint` ✅, `make types` ✅ (209 files), `make test` ✅
+(990 passed, 20 skipped, 53.58s).

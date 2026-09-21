@@ -57,5 +57,7 @@ jobs:
       # idempotent re-run must be a no-op (revision already at head).
       - run: nexus migrate
       # Confirm the migration stamp on a real Postgres.
+      # Head is 7c2f9d41e8a3 (ai_memory_consent, P0-7), which revises the
+      # f4a9c2e71b08 lifecycle table revision.
       - run: |
-          PGPASSWORD=nexus psql -h localhost -U nexus -d nexus -tAc "SELECT version_num FROM alembic_version" | grep -q f4a9c2e71b08
+          PGPASSWORD=nexus psql -h localhost -U nexus -d nexus -tAc "SELECT version_num FROM alembic_version" | grep -q 7c2f9d41e8a3

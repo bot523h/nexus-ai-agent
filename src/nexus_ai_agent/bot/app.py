@@ -13,12 +13,15 @@ from typing import Any
 from telegram.ext import Application, ApplicationBuilder
 
 from nexus_ai_agent.config.settings import Settings
+from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.presence import PresenceStore
 from nexus_ai_agent.storage.ai_storage import AIStorageManager, ProviderConfig
 
 from .handlers import (
     build_handlers,
 )
+
+logger = get_logger(__name__)
 
 
 def _build_default_storage(settings: Settings) -> AIStorageManager:
@@ -164,6 +167,15 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
         internxt_token=settings.internxt_token,
     )
 
+    # Shared feature-engine container (feature-wiring batch). Reuses the
+    # referral instance above so exactly ONE ReferralEngine exists per
+    # process (P0-8: single source of truth for documented engines).
+    from nexus_ai_agent.bot.feature_handlers import build_feature_engines
+
+    engines["feature_engines"] = build_feature_engines(
+        settings, referral=engines["referral_engine"]
+    )
+
     return engines
 
 
@@ -185,11 +197,34 @@ def build_application(
     # Initialize all v2.0.0+ engines
     engines = _init_v2_engines(settings)
     job_queue = engines["job_queue"]
+    feature_engines = engines["feature_engines"]
 
-    async def _resume_jobs(_: Any) -> None:
+    async def _post_init(application: Any) -> None:
+        # Bind the runtime bot to the bindable engines (reminders,
+        # force-join, anonymous chat) and restore pending reminders so
+        # a restart does not silently drop them.
+        try:
+            feature_engines.reminders.bind(application.bot)
+            feature_engines.force_join.bind(application.bot)
+            feature_engines.anon.bind(application.bot)
+            await feature_engines.reminders.restore_pending()
+        except Exception:  # noqa: BLE001 — startup wiring must not kill the bot
+            logger.exception("feature_engines_startup_failed")
         await job_queue.resume_pending()
 
-    application = ApplicationBuilder().token(token).post_init(_resume_jobs).build()
+    async def _post_shutdown(application: Any) -> None:
+        try:
+            feature_engines.reminders.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    application = (
+        ApplicationBuilder()
+        .token(token)
+        .post_init(_post_init)
+        .post_shutdown(_post_shutdown)
+        .build()
+    )
     application.bot_data["graph"] = graph
     application.bot_data["presence"] = presence_store
     application.bot_data["storage"] = storage_manager
@@ -199,12 +234,19 @@ def build_application(
     for key, value in engines.items():
         application.bot_data[key] = value
 
+    # P0-2: global deny-by-default access guard, group -1 = before every
+    # other handler (commands, callbacks, and free text alike).
+    from nexus_ai_agent.bot.access_guard import build_access_guard
+
+    application.add_handler(build_access_guard(settings), group=-1)
+
     for handler in build_handlers(
         graph,
         db_session_factory=session_factory or _get_session_factory(),
         settings=settings,
         presence=presence_store,
         storage=storage_manager,
+        feature_engines=feature_engines,
     ):
         application.add_handler(handler)
     # Custom command handlers removed as they should be part of build_handlers or imported correctly
