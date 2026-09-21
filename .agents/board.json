@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T23:11:34Z",
+  "updated_at": "2026-09-21T23:16:46Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -400,7 +400,8 @@
         "claim_daily در یک session اجرا شود + تست ددلاک",
         "recall@k موتور RAG روی fixture ثابت گزارش شود",
         "ruff/mypy/pytest هدفمند سبز؛ گیت‌های کامل واگذار به ci-gates-steward"
-      ]
+      ],
+      "progress": "tick2_done_gamification_fix"
     }
   ],
   "zones": [
@@ -1406,6 +1407,21 @@
         "task-136-feature-wiring-residual opened on the board with acceptance criteria"
       ],
       "next": "tick 2 — port the gamification fix (single-session claim_daily) + regression test"
+    },
+    {
+      "at": "2026-09-21T23:16:46Z",
+      "by_branch": "arena/01a0c634-nexus-ai-agent",
+      "agent": "عامل B (سشن 01a0c634)",
+      "tick": 2,
+      "done": [
+        "features/gamification.py: claim_daily rewritten to a single session (PR#32's deadlock claim corrected by measurement)",
+        "defect A measured on main: a brand-new user can NEVER claim /daily (row created with last_daily=now → 'already_claimed' → rollback, 0 rows)",
+        "defect B measured on main: lost update — update_streak commits streak=1 on connection B, connection A clobbers it back to 0",
+        "defect C measured on main: TypeError on naive last_daily rows (unhandled inside a command handler)",
+        "_as_utc() added; update_streak kept its signature and gained the same normalisation",
+        "tests/unit/test_gamification_daily.py: 10 tests — A/B proven: 10 failed against main's blob, 10 passed against the fix"
+      ],
+      "next": "tick 3 — real RAG engine (task-127): recursive chunking + hybrid BM25/vector + recall@k harness"
     }
   ],
   "ten_forward_tasks_wave4": [

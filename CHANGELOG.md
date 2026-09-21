@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 2026-09-21 — agent B (`arena/01a0c634-nexus-ai-agent`)
+
+### Fixed (agent B · `arena/01a0c634-nexus-ai-agent`)
+
+- **Gamification — `/daily` was unreachable and its streak bonus was silently lost.**
+  `GamificationEngine.claim_daily` created the user's row with `last_daily = now` and then ran the
+  24 h window check against it, so a brand-new user always got `already_claimed` and the pending
+  INSERT was rolled back (no row, no XP — ever). For a pre-existing row the method called
+  `update_streak()`, which commits on a **second** connection; the first session then wrote its
+  stale object back over it (SQLAlchemy writes every column), resetting the streak to `0` and
+  dropping the streak bonus. Legacy rows additionally raised
+  `TypeError: can't subtract offset-naive and offset-aware datetimes`.
+  The whole reward is now computed and committed in **one** session, `last_daily` is no longer
+  prefilled, `_as_utc()` normalises naive SQLite timestamps, and the payload gained
+  `streak_broken`, `title`, `xp` and `remaining_minutes`. (`tests/unit/test_gamification_daily.py`,
+  10 tests, A/B proven: 10 fail against the previous blob, 10 pass against this one.)
+
+### Audit (agent B)
+
+- `docs/audits/PR32_TRIAGE_2026-09-21.md` — forensic triage of PR#32 against the merged PR#34:
+  15/26 files superseded, 4 conflict-debt, 3 port, 4 adapt; PR#32 is not rebase-and-merge material.
+
+
 ### Added (wave-4 hardening — agent G `01a0c4bb` — 10-step batch, 6 steps delivered)
 
 - **Version-lockstep CI guard (wave4-1):** `VERSION == pyproject.toml == CHANGELOG`
