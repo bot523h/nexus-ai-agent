@@ -776,3 +776,15 @@ go through the async wrapper + `to_thread`.
 
 **Evidence.** `make lint` ✅, `make types` ✅ (209 files), `make test` ✅
 (990 passed, 20 skipped, 53.58s).
+
+### Nagar Wave 8/9 — apply lane + local speech (agent F, task-104/105) + task-110 deferral
+
+**Date:** 2026-09-21; implemented on `arena/01a0c460-nexus-ai-agent` (this session first mis-declared عامل E; corrected to F — E was taken twice already, see board `identity_map_note`).
+**Status:** Accepted **and implemented** (PR: 104+105 only).
+
+**Decision:**
+1. **Apply lane (`nexus.apply.lane`, `creative/rendering/`):** typed `LaneOp` values → validated `LaneIR` → pure compiler (filtergraph + byte-exact argv, golden-pinned) → exactly one FFmpeg process (no shell, staging + atomic publish, probed evidence). Loudness is film-standard two-pass. 8 composable ops: trim/speed/reverse/freeze/xfade/title/loudnorm/duck.
+2. **Local speech (`adapters/whisper_local.py`, `[speech]`/`[translate]` extras):** faster-whisper (CTranslate2, int8 CPU, no torch) behind `CaptionEnginePort`, lazy import, `to_thread`, offline-first (hub forced offline without explicit consent). Diarization v1 = energy-VAD anchors + the pack's pure merge-then-stamp. Three pure pack ops registered → **caption `pending=0`, pack activates**. The `[speech]`/`[translate]` extras are unique to this PR (PR#33 has none).
+3. **task-110 DEFERRED to PR#33 (no code shipped):** this session also implemented OTIO interop + a sync conv-store, then discovered PR#33 (branch 3aa) had already delivered task-110 first, green, in review — its claim was invisible because it never reached `main` and this base predated it (split-brain). Per the overlapping-PRs rule the duplicate was fully reverted (branch history pre-reset preserved the work). Forensic finding kept for a post-merge supplement (wave-3 task-121): PR#33 keeps `include_markers` but ignores it (zero marker references in its ops) — markers (Marker.2 on the Stack) remain open. Conv-store: PR#33's aiosqlite adapter (15 tests) is the keeper.
+
+**Verification:** `tests/unit/test_rendering_lane.py` (20: 16 golden + 4 real FFmpeg 7.0.2 encodes), `test_caption_engine_adapters.py` (13), `test_rendering_lane_boundary.py` (4); `ruff check` + `format --check` + `mypy` clean; pre-push `agent_board check` zero overlap vs agent B's active lease.
