@@ -62,8 +62,8 @@
       "title": "P0 — نجات گیت‌های کیفیت: `main` قرمز است (بدهی Lint پول‌ریکوئست #31)",
       "zone": "ci-quality",
       "priority": "P0_BLOCKER",
-      "assigned_to": "عامل A (gates_owner) یا هر عامل آزاد با تایید نهایی گیت‌ها توسط عامل A",
-      "status": "available_ready_to_claim",
+      "assigned_to": "عامل D (این سشن — arena/01a0c3ca-nexus-ai-agent)",
+      "status": "in_progress_owned_by_agent_d",
       "exclusive_paths": [
         "src/nexus_ai_agent/creative/packs/edit/",
         "src/nexus_ai_agent/creative/packs/audio/",
@@ -82,7 +82,7 @@
         "tests/architecture/test_motion_pack_boundary.py",
         "tests/architecture/test_delivery_pack_boundary.py"
       ],
-      "instructions": "PR#31 روی main با گیت قرمز ادغام شد: روی c41b1b0 دستور `ruff check .` دقیقاً ۷۱ خطا می‌دهد (۴۰×E501 خط بلند، ۲۸×F401 ایمپورت مرده، ۲×I001 ترتیب ایمپورت، ۱×F841 متغیر بلااستفاده) و `ruff format --check .` نیز ۱۶ فایل را غیرفرمت‌شده گزارش می‌کند؛ به همین دلیل CI (run 35594818988) حتی به pytest نرسیده است. ابتکار عمل: (۱) `ruff check . --fix` برای ۳۰ مورد خودکار (F401/I001)، (۲) شکستن دستی خطوط E501 (سقف ۱۰۰ کاراکتر طبق پیکربندی مخزن) بدون تغییر هیچ رفتاری، (۳) حذف متغیر F841، (۴) `ruff format .` برای ۱۶ فایل، (۵) اثبات: `make lint` کد ۰، سپس اجرای کامل `make test` توسط gates_owner. قید سخت: تغییری در منطق/رفتار آزمون‌ها ممنوع؛ فقط تمیزکاری مکانیکی. زیر-وظیفه اختیاری (با تایید عامل A روی .github/): افزودن pre-commit با نسخه پین‌شده ruff + یک job سبک «lint» جدا از «test» تا خطای lint هرگز pytest را بلاک نکند.",
+      "instructions": "⛔️ مالک انحصاری: عامل D — هیچ عامل دیگری حق ورود به این محدوده را ندارد تا اجاره آزاد شود. PR#31 روی main با گیت قرمز ادغام شد: روی c41b1b0 دستور `ruff check .` دقیقاً ۷۱ خطا می‌دهد (۴۰×E501 خط بلند، ۲۸×F401 ایمپورت مرده، ۲×I001 ترتیب ایمپورت، ۱×F841 متغیر بلااستفاده) و `ruff format --check .` نیز ۱۶ فایل را غیرفرمت‌شده گزارش می‌کند؛ به همین دلیل CI (run 35594818988) حتی به pytest نرسیده است. ابتکار عمل: (۱) `ruff check . --fix` برای ۳۰ مورد خودکار (F401/I001)، (۲) شکستن دستی خطوط E501 (سقف ۱۰۰ کاراکتر طبق پیکربندی مخزن) بدون تغییر هیچ رفتاری، (۳) حذف متغیر F841، (۴) `ruff format .` برای ۱۶ فایل، (۵) اثبات: `make lint` کد ۰، سپس اجرای کامل `make test` توسط gates_owner. قید سخت: تغییری در منطق/رفتار آزمون‌ها ممنوع؛ فقط تمیزکاری مکانیکی. زیر-وظیفه اختیاری (با تایید عامل A روی .github/): افزودن pre-commit با نسخه پین‌شده ruff + یک job سبک «lint» جدا از «test» تا خطای lint هرگز pytest را بلاک نکند.",
       "acceptance_criteria": [
         "`ruff check .` → 0 errors",
         "`ruff format --check .` → all formatted",
@@ -449,6 +449,35 @@
       ],
       "scope": "Full done/not-done analysis with CI evidence, board cleanup (removed 4 completed nagar tasks), engineered 10-task handoff with acceptance criteria and researched zero-cost toolchains",
       "note": "Atomic single-commit session: claim, work, and release landed together; verification runs were diagnostic only — gates deferred to gates owner"
+    },
+    {
+      "task": "task-101",
+      "zone": "ci-quality",
+      "agent_branch": "arena/01a0c3ca-nexus-ai-agent",
+      "claimed_at": "2026-09-21T12:10:00Z",
+      "ttl_hours": 24,
+      "status": "active",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/edit/",
+        "src/nexus_ai_agent/creative/packs/audio/",
+        "src/nexus_ai_agent/creative/packs/motion/",
+        "src/nexus_ai_agent/creative/packs/delivery/",
+        "src/nexus_ai_agent/creative/packs/caption/",
+        "src/nexus_ai_agent/creative/slideshow/ffmpeg.py",
+        "src/nexus_ai_agent/orchestration/router.py",
+        "tests/unit/test_edit_pack.py",
+        "tests/unit/test_audio_pack.py",
+        "tests/unit/test_motion_pack.py",
+        "tests/unit/test_delivery_pack.py",
+        "tests/unit/test_caption_ass.py",
+        "tests/architecture/test_edit_pack_boundary.py",
+        "tests/architecture/test_audio_pack_boundary.py",
+        "tests/architecture/test_motion_pack_boundary.py",
+        "tests/architecture/test_delivery_pack_boundary.py"
+      ],
+      "scope": "Restore green gates on main: fix exactly 71 ruff errors (40 E501, 28 F401, 2 I001, 1 F841) + format 16 files — mechanical-only, zero semantic change",
+      "note_fa": "⛔️ این کار را عامل D انجام می‌دهد؛ عامل‌های دیگر تا آزاد شدن اجاره (release) وارد این محدوده نشوید. گیت‌های نهایی main-bound با تایید gates_owner (عامل A)."
     }
   ],
   "deferred_log": [
