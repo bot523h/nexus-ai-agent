@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "updated_at": "2026-09-21T09:00:54Z",
+  "notes": [
+    "This file is the machine-readable task/claim registry for multi-agent work on this repository.",
+    "It is the shared coordination channel between agents working in SEPARATE sandboxes.",
+    "The only shared medium between sandboxes is this git repository, so claims must be committed and pushed immediately.",
+    "Rules of engagement live in AGENTS.md and docs/MULTI_AGENT_PROTOCOL.md. The helper CLI is scripts/agent_board.py."
+  ],
+  "zones": [
+    {
+      "id": "core-security",
+      "description": "Auth enforcement, dashboard hardening, path-traversal fixes, coordination docs",
+      "paths": [
+        "src/nexus_ai_agent/bot/middleware.py",
+        "src/nexus_ai_agent/bot/rate_limiter.py",
+        "src/nexus_ai_agent/api/",
+        "src/nexus_ai_agent/core/",
+        "src/nexus_ai_agent/tools/",
+        ".github/",
+        "docs/",
+        "scripts/",
+        "AGENTS.md",
+        ".agents/",
+        "CONTRIBUTING.md"
+      ]
+    },
+    {
+      "id": "feature-wiring",
+      "description": "Wire the real feature engines (tools/games/referral/force-join/anon-chat) to the Telegram surface",
+      "paths": [
+        "src/nexus_ai_agent/features/",
+        "tests/unit/test_handlers.py",
+        "tests/unit/test_tools*",
+        "tests/unit/test_games*"
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "task": "P0-security-batch",
+      "zone": "core-security",
+      "agent_branch": "arena/01a0c316-nexus-ai-agent",
+      "claimed_at": "2026-09-21T12:00:00Z",
+      "ttl_hours": 24,
+      "status": "active",
+      "gates_owner": true,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/bot/middleware.py",
+        "src/nexus_ai_agent/api/",
+        "src/nexus_ai_agent/core/"
+      ],
+      "scope": "Global auth middleware, /api/dashboard PII removal, /cloud + /download path traversal fixes, coordination protocol files, audit report"
+    },
+    {
+      "task": "feature-wiring-batch",
+      "zone": "feature-wiring",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "status": "queued",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/features/"
+      ],
+      "scope": "Wire dead engines (features/tools.py, WordleFA, NumberGuess, QuickPoll, ReferralEngine.process_referral, ForceJoinManager bot injection, AnonymousChatManager bot injection) to live Telegram handlers"
+    }
+  ],
+  "deferred_log": [
+    {
+      "task": "feature-wiring-batch",
+      "deferred_by_branch": "arena/01a0c316-nexus-ai-agent",
+      "at": "2026-09-21T12:00:00Z",
+      "reason_fa": "چون عامل امنیتی روی فایل مشترک bot/handlers.py کار می‌کرد، این وظیفه متوقف شد و به زمان دیگری موکول گردید تا فراموش نشود.",
+      "reason_en": "Deferred because another agent holds the active lease on the shared file bot/handlers.py (P0-security-batch). Resume after that PR merges to main.",
+      "resume_when": "P0-security-batch PR is merged to main and its claim is released"
+    }
+  ],
+  "gates_rule": "Exactly ONE agent (the gates_owner of the active claim) runs make lint / make types / make test on main-bound work. Other agents must NOT run overlapping gates in parallel; they note 'deferred to gates owner' in their PR body."
+}
