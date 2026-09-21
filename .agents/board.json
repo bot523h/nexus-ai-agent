@@ -102,6 +102,13 @@
       "task": "PR(104+105) → task-121 markers supplement → gates steward",
       "status": "active",
       "note": "This session first mis-declared عامل E (E was taken twice already); corrected to F. Mis-declared commits remain in history."
+    },
+    "agent_g_wave4": {
+      "identity": "عامل G (سخت‌سازی Wave4 — ۱۰گام مهندسی)",
+      "branch": "arena/01a0c4bb-nexus-ai-agent",
+      "task": "wave4-hardening-10-steps (task-111 expanded)",
+      "status": "active",
+      "note": "Hardening batch 1-6 active this session, 7-10 queued. All paths disjoint from B/feature-wiring. Gates deferred to F steward."
     }
   },
   "ten_forward_tasks_network": [
@@ -733,7 +740,7 @@
     },
     {
       "task": "task-111-version-lockstep-ci",
-      "zone": "ci-quality",
+      "zone": "hardening-wave4-batch",
       "agent_branch": "arena/01a0c4bb-nexus-ai-agent",
       "claimed_at": "2026-09-21T16:23:07Z",
       "ttl_hours": 24,
@@ -741,10 +748,26 @@
       "gates_owner": false,
       "exclusive_paths": [
         ".github/workflows/ci.yml",
-        "tests/unit/test_version_command.py"
+        ".pre-commit-config.yaml",
+        "tests/unit/test_version_command.py",
+        "src/nexus_ai_agent/creative/packs/delivery/signing.py",
+        "tests/unit/test_delivery_signing.py",
+        "src/nexus_ai_agent/storage/resilience.py",
+        "tests/unit/test_storage_resilience.py",
+        "src/nexus_ai_agent/memory/eval.py",
+        "tests/unit/test_memory_recall.py",
+        "tests/architecture/test_memory_boundaries.py",
+        "src/nexus_ai_agent/bot/creative_surface.py",
+        "tests/unit/test_creative_surface.py",
+        "tests/bench/",
+        "scripts/bench_render.py",
+        "scripts/bench_caption.py",
+        "docs/ops/RUNBOOK_HARDENING.md",
+        "scripts/smoke_e2e.py",
+        "tests/unit/test_opgap_audio_motion.py"
       ],
-      "scope": "Prevent the 3.12.0-vs-v3.13.0 drift that the hygiene pass fixed: a CI guard asserting VERSION == pyproject version == latest CHANGELOG section (extends the existing test_version_command.py chain to the changelog). Acceptance: failing case demonstrably red on a mismatched fixture, green on current main; no new dependencies.",
-      "note": ""
+      "scope": "Wave-4 hardening batch (عامل G — arena/01a0c4bb): 10-step zero-regression engineering. Steps 1-6 implemented this session; steps 7-10 queued for next agents with disjoint paths. Step1 version-lockstep CI guard (VERSION==pyproject==CHANGELOG), Step2 delivery ed25519 signing (delivery/signing.py), Step3 storage resilience (storage/resilience.py), Step4 memory eval harness + architecture guard, Step5 creative surface (bot/creative_surface.py), Step6 bench harness (bench + scripts), Steps 7-10 queued: pack coverage, ops runbook, e2e smoke, opgap.",
+      "note": "Expanded 2026-09-21 to 10-step batch; all paths disjoint from active feature-wiring (bot/surface, features). Gates deferred to F steward; local gates verified."
     }
   ],
   "deferred_log": [
@@ -1194,6 +1217,183 @@
         "tasks 122/123 need B/E#1 action — cannot do for them (their zones)"
       ],
       "fa": "تکرار ۱۱۰ حذف و به #33 واگذار شد؛ تخته با ۱۰ تسک جدید مالک‌دار به‌روز شد؛ PR من (۱۰۴+۱۰۵) آماده باز شدن است."
+    }
+  ],
+  "ten_forward_tasks_wave4": [
+    {
+      "id": "wave4-step1-version-lockstep",
+      "title": "Wave4-1 — گیت CI قفل نسخه (VERSION ↔ pyproject ↔ CHANGELOG)",
+      "zone": "hardening-wave4-batch",
+      "priority": "P1",
+      "assigned_to": "عامل G (arena/01a0c4bb-nexus-ai-agent)",
+      "status": "active",
+      "exclusive_paths": [
+        ".github/workflows/ci.yml",
+        ".pre-commit-config.yaml",
+        "tests/unit/test_version_command.py"
+      ],
+      "instructions": "بسط تست test_version_command: VERSION == pyproject version == آخرین هدر CHANGELOG. CI job جداگانه + pre-commit. بدون وابستگی جدید.",
+      "acceptance_criteria": [
+        "تست mismatch قرمز، روی main سبز",
+        "job lint جدا",
+        "pre-commit یک‌دستوری"
+      ]
+    },
+    {
+      "id": "wave4-step2-delivery-signing",
+      "title": "Wave4-2 — امضای ed25519 مانیفست delivery",
+      "zone": "hardening-wave4-batch",
+      "priority": "P1",
+      "assigned_to": "عامل G",
+      "status": "active",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/delivery/signing.py",
+        "tests/unit/test_delivery_signing.py"
+      ],
+      "instructions": "PyNaCl اد25519: sign/verify، کلید از ENV NEXUS_SIGNING_KEY، fail-closed، تست tamper.",
+      "acceptance_criteria": [
+        "round-trip سبز",
+        "tamper→reject",
+        "بدون کلید→fail-closed"
+      ]
+    },
+    {
+      "id": "wave4-step3-storage-resilience",
+      "title": "Wave4-3 — سخت‌سازی ذخیره‌سازی (retry+idempotency)",
+      "zone": "hardening-wave4-batch",
+      "priority": "P2",
+      "assigned_to": "عامل G",
+      "status": "active",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/resilience.py",
+        "tests/unit/test_storage_resilience.py"
+      ],
+      "instructions": "Exponential backoff + jitter، idempotency-key، لاگ بدون secret، تست chaos.",
+      "acceptance_criteria": [
+        "retry قابل تنظیم",
+        "لاگ بدون secret",
+        "chaos سبز"
+      ]
+    },
+    {
+      "id": "wave4-step4-memory-eval",
+      "title": "Wave4-4 — هارنس recall حافظه + گارد معماری",
+      "zone": "hardening-wave4-batch",
+      "priority": "P2",
+      "assigned_to": "عامل G",
+      "status": "active",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/memory/eval.py",
+        "tests/unit/test_memory_recall.py",
+        "tests/architecture/test_memory_boundaries.py"
+      ],
+      "instructions": "recall@k روی fixture ثابت + گارد import (memory نباید features/bot را import کند).",
+      "acceptance_criteria": [
+        "recall@k گزارش‌شده",
+        "گارد سبز"
+      ]
+    },
+    {
+      "id": "wave4-step5-creative-surface",
+      "title": "Wave4-5 — سطح تلگرام نگار /edit /caption /grade",
+      "zone": "hardening-wave4-batch",
+      "priority": "P2",
+      "assigned_to": "عامل G",
+      "status": "active",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/creative_surface.py",
+        "tests/unit/test_creative_surface.py"
+      ],
+      "instructions": "فایل جدید creative_surface.py (بدون لمس handlers.py) با JobQueuePort + لاین رندر، i18n، typed failures.",
+      "acceptance_criteria": [
+        "صفر لمس handlers.py",
+        "تست واحد با فیک",
+        "job lifecycle تمیز"
+      ]
+    },
+    {
+      "id": "wave4-step6-bench",
+      "title": "Wave4-6 — بنچمارک لاین رندر/گفتار",
+      "zone": "hardening-wave4-batch",
+      "priority": "P2",
+      "assigned_to": "عامل G",
+      "status": "active",
+      "exclusive_paths": [
+        "tests/bench/",
+        "scripts/bench_render.py",
+        "scripts/bench_caption.py"
+      ],
+      "instructions": "بنچ دترمینیستیک argv compile + fixture، آستانه ۱۵٪ رگرسیون.",
+      "acceptance_criteria": [
+        "baseline کامیت‌شده",
+        "گیت رگرسیون"
+      ]
+    },
+    {
+      "id": "wave4-step7-coverage",
+      "title": "Wave4-7 — کاورژ ۹۵٪ پک‌ها + موتاسیون سبک",
+      "zone": "hardening-wave4-batch",
+      "priority": "P3",
+      "assigned_to": "عامل بعدی (آزاد)",
+      "status": "queued",
+      "exclusive_paths": [
+        "tests/unit/test_edit_pack2.py",
+        "tests/unit/test_motion_pack2.py"
+      ],
+      "instructions": "فایل‌های *2 جدید، کاورژ ۹۵٪ عملیات خالص، گزارش kill-rate.",
+      "acceptance_criteria": [
+        "کاورژ ≥۹۵٪",
+        "گزارش mutation"
+      ]
+    },
+    {
+      "id": "wave4-step8-ops-runbook",
+      "title": "Wave4-8 — ران‌بوک عملیات تکمیل + smoke",
+      "zone": "hardening-wave4-batch",
+      "priority": "P2",
+      "assigned_to": "عامل بعدی (آزاد)",
+      "status": "queued",
+      "exclusive_paths": [
+        "docs/ops/RUNBOOK_HARDENING.md"
+      ],
+      "instructions": "ران‌بوک فارسی/انگلیسی: چرخش secret، بازیابی DB، اسکیل worker؛ smoke با exit-code.",
+      "acceptance_criteria": [
+        "ران‌بوک کامل",
+        "smoke سبز"
+      ]
+    },
+    {
+      "id": "wave4-step9-e2e",
+      "title": "Wave4-9 — دودکش E2E koyeb+compose",
+      "zone": "hardening-wave4-batch",
+      "priority": "P3",
+      "assigned_to": "عامل بعدی (آزاد)",
+      "status": "queued",
+      "exclusive_paths": [
+        "scripts/smoke_e2e.py"
+      ],
+      "instructions": "پس از ۱۰۷: بیلد slim، smoke E2E (health + فیک Bot API).",
+      "acceptance_criteria": [
+        "compose بالا",
+        "smoke سبز"
+      ]
+    },
+    {
+      "id": "wave4-step10-opgap",
+      "title": "Wave4-10 — شکاف TDD صوت/موشن (۶ عملیات باقی)",
+      "zone": "hardening-wave4-batch",
+      "priority": "P1",
+      "assigned_to": "عامل بعدی (آزاد)",
+      "status": "queued",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/audio/",
+        "tests/unit/test_opgap_audio_motion.py"
+      ],
+      "instructions": "۶ عملیات خالص جدید: audio.time_stretch etc + motion.",
+      "acceptance_criteria": [
+        "۶ op رجیستر",
+        "تست خالص"
+      ]
     }
   ]
 }
