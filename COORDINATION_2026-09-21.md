@@ -237,3 +237,57 @@ and the new `test-extras` job) and this session's two regions are textually disj
 The single unavoidable conflict is `.agents/board.json` — the coordination file every agent must write
 to, which PR#39 rewrites wholesale to schema 2. Resolve it per `AGENTS.md` (*newest forensic state*)
 using the re-apply blob in §4.
+
+---
+
+# Coordination record — session `01a0c649` (2026-09-21, owner-directed *عامل A*)
+
+> **Who:** session **`arena/01a0c649-nexus-ai-agent`**, designated *عامل A* by the repo owner this
+> session. Per the AGENTS.md identity rule the **branch name is the canonical identity**
+> (`01a0c649`); the old `agent_a` card (`01a0c316`, lease already reclaimed) is superseded by
+> `agent_a_01a0c649`.
+> **First act (rule 1):** claim `nagar-two-half-split` reconstructed and **pushed before any code**
+> (`ef54847`).
+
+## 1. What was lost, and how it was rebuilt
+
+The claim **`nagar-two-half-split`** no longer existed anywhere: `git log --all -S` over every local
+and remote ref, plus `git grep` across `origin/pr/{32,33,39,43,44,45,46}`, found zero hits — a
+concurrent board edit/merge (another agent's GC) had dropped the coordination record while the
+**fences and the two halves themselves survived on their PR branches**:
+
+| Half | Claim (verified where it still lives) | Branch / PR | Fence (exclusive_paths) |
+|---|---|---|---|
+| 1 — colour/exposure lane | `color-exposure-lane-wave` (board `updated_at 20:29:09Z`) | `arena/01a0c58e` / PR#45 | `creative/rendering/**`, `test_rendering_lane_exposure.py`, `test_lane_duration_algebra.py`, `docs/ops/COLOR_LANE.md`, `ROADMAP_STATUS.md`, `docs/DECISION_LOG.md`, `CHANGELOG.md` |
+| 2 — pack runtime / activation | `wave5-activation-and-gap-closure` (board `updated_at 22:05:00Z`) | `arena/01a0c5da` / PR#46 | `creative/packs/**`, `cli.py::_packs_registry`, `continuum/pack_coverage.py`, `scripts/pack_coverage.py`, four pack tests, `docs/ops/PACK_RUNTIME.md`, `docs/audits/WAVE5_…`, `WAVE5_COORDINATION_….md` |
+
+**File-set intersection of PR#45 × PR#46 = exactly `{.agents/board.json}`** — the standing warning
+«هر دو نیمه فقط تخته را به‌اشتراک می‌گذارند» is literally true: the halves never share a code byte,
+only the coordination medium. Rebuild: the claim entry was recreated in `.agents/board.json` (empty
+`exclusive_paths` — record-claim pattern of `pr33-in-review`; the real fences live on the halves)
+and activated **through the CLI** (`agent_board.py claim … --branch arena/01a0c649-…`), referee
+`check` exit 0, committed and pushed immediately.
+
+## 2. Release rule (push-claim / release + documentation) — the loop every agent must follow
+
+Pinned on the board as `session_directive_fa` (owner-mandated, applies to **all** agents):
+
+1. **push-claim** — `agent_board.py claim` → commit → push **before** the first line of code; an
+   unpushed claim does not exist (see `void_claims_log` precedent).
+2. Finish a step → **`agent_board.py release <task> --branch <you>`** (the CLI's shape — not a
+   hand-edit of JSON) **with evidence** recorded in the claim note + `coordination_log`.
+3. **Tick first, then move on:** board tick (release) → PR comment → push. Never leave a finished
+   step only in a sandbox.
+4. **CI green → merge automatically** so delivered code cannot be lost again (the failure mode this
+   board's void-claim and split records were built to prevent).
+5. **Zero interference:** before every push, `agent_board.py check --files … --branch <you>` must
+   exit 0; only board.json may ever be shared.
+
+## 3. Stabilization rail (this session's merge plan)
+
+Concurrent PRs #43/#44/#45/#46 all edit `.agents/board.json` from the same base — sequential merges
+would conflict three times over. Fix: a **super-union board X** (3-way union, *newest forensic state
+wins*; 35 claims / 12 identities / all logs preserved) was pushed **byte-identical** to all four PR
+heads. Merge order **#44 → #43 → #45 → #46**: the first merge installs X on main; the remaining
+three are board-identical and land clean. Each PR's claims are then released through the CLI with
+evidence. PRs #32/#33/#39 stay with their owners (`task-122`/`task-123` rebase debt) — untouched.
