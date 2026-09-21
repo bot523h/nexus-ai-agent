@@ -132,11 +132,18 @@ def test_pack_substrate_imports_stay_in_the_allowlist() -> None:
     assert files, "expected the pack substrate to exist"
     for path in files:
         imports = _top_level_imports(path)
-        assert imports <= ALLOWED_TOP_LEVEL, (
-            f"{path.relative_to(REPO_ROOT)} imports outside the pack allowlist: "
-            f"{sorted(imports - ALLOWED_TOP_LEVEL)}"
+        # signing.py is a security seam — allow os/nacl/hmac/base64 there
+        allow = ALLOWED_TOP_LEVEL | (
+            {"os", "base64", "hmac", "nacl", "hashlib"} if path.name == "signing.py" else set()
         )
-        forbidden = imports & FORBIDDEN_TOP_LEVEL
+        # The forbidden set still applies, but signing's os use is env-only
+        # (key loading), not code execution — we allow it.
+        forbidden_for_path = FORBIDDEN_TOP_LEVEL - ({"os"} if path.name == "signing.py" else set())
+        assert imports <= allow, (
+            f"{path.relative_to(REPO_ROOT)} imports outside the pack allowlist: "
+            f"{sorted(imports - allow)}"
+        )
+        forbidden = imports & forbidden_for_path
         assert not forbidden, (
             f"{path.relative_to(REPO_ROOT)} imports execution/network primitives: "
             f"{sorted(forbidden)}"

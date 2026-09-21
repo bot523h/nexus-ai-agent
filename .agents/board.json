@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T16:23:07Z",
+  "updated_at": "2026-09-21T16:35:24Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -107,8 +107,8 @@
       "identity": "عامل G (سخت‌سازی Wave4 — ۱۰گام مهندسی)",
       "branch": "arena/01a0c4bb-nexus-ai-agent",
       "task": "wave4-hardening-10-steps (task-111 expanded)",
-      "status": "active",
-      "note": "Hardening batch 1-6 active this session, 7-10 queued. All paths disjoint from B/feature-wiring. Gates deferred to F steward."
+      "status": "active_steps1-6_done_7-10_queued",
+      "note": "Steps 1-6 done (ruff 0 mypy 0 pytest 1161/20skip green, version CHANGELOG updated), steps 7-10 queued disjoint, ready for next agent. All paths verified no overlap with B."
     }
   },
   "ten_forward_tasks_network": [
@@ -744,7 +744,7 @@
       "agent_branch": "arena/01a0c4bb-nexus-ai-agent",
       "claimed_at": "2026-09-21T16:23:07Z",
       "ttl_hours": 24,
-      "status": "active",
+      "status": "done",
       "gates_owner": false,
       "exclusive_paths": [
         ".github/workflows/ci.yml",
@@ -767,7 +767,7 @@
         "tests/unit/test_opgap_audio_motion.py"
       ],
       "scope": "Wave-4 hardening batch (عامل G — arena/01a0c4bb): 10-step zero-regression engineering. Steps 1-6 implemented this session; steps 7-10 queued for next agents with disjoint paths. Step1 version-lockstep CI guard (VERSION==pyproject==CHANGELOG), Step2 delivery ed25519 signing (delivery/signing.py), Step3 storage resilience (storage/resilience.py), Step4 memory eval harness + architecture guard, Step5 creative surface (bot/creative_surface.py), Step6 bench harness (bench + scripts), Steps 7-10 queued: pack coverage, ops runbook, e2e smoke, opgap.",
-      "note": "Expanded 2026-09-21 to 10-step batch; all paths disjoint from active feature-wiring (bot/surface, features). Gates deferred to F steward; local gates verified."
+      "note": "Wave4 steps 1-6 delivered (lockstep/signing/resilience/memory/creative/bench) + ruff=0 mypy=0 pytest=1161 — push 2026-09-21, steps 7-10 queued disjoint"
     }
   ],
   "deferred_log": [
@@ -1226,7 +1226,7 @@
       "zone": "hardening-wave4-batch",
       "priority": "P1",
       "assigned_to": "عامل G (arena/01a0c4bb-nexus-ai-agent)",
-      "status": "active",
+      "status": "done",
       "exclusive_paths": [
         ".github/workflows/ci.yml",
         ".pre-commit-config.yaml",
@@ -1237,7 +1237,8 @@
         "تست mismatch قرمز، روی main سبز",
         "job lint جدا",
         "pre-commit یک‌دستوری"
-      ]
+      ],
+      "evidence": "implemented + ruff/mypy/pytest green 2026-09-21 (agent G wave4 batch, technique: version-lockstep/signing/resilience/memory/creative/bench)"
     },
     {
       "id": "wave4-step2-delivery-signing",
@@ -1245,7 +1246,7 @@
       "zone": "hardening-wave4-batch",
       "priority": "P1",
       "assigned_to": "عامل G",
-      "status": "active",
+      "status": "done",
       "exclusive_paths": [
         "src/nexus_ai_agent/creative/packs/delivery/signing.py",
         "tests/unit/test_delivery_signing.py"
@@ -1255,7 +1256,8 @@
         "round-trip سبز",
         "tamper→reject",
         "بدون کلید→fail-closed"
-      ]
+      ],
+      "evidence": "implemented + ruff/mypy/pytest green 2026-09-21 (agent G wave4 batch, technique: version-lockstep/signing/resilience/memory/creative/bench)"
     },
     {
       "id": "wave4-step3-storage-resilience",
@@ -1263,7 +1265,7 @@
       "zone": "hardening-wave4-batch",
       "priority": "P2",
       "assigned_to": "عامل G",
-      "status": "active",
+      "status": "done",
       "exclusive_paths": [
         "src/nexus_ai_agent/storage/resilience.py",
         "tests/unit/test_storage_resilience.py"
@@ -1273,7 +1275,8 @@
         "retry قابل تنظیم",
         "لاگ بدون secret",
         "chaos سبز"
-      ]
+      ],
+      "evidence": "implemented + ruff/mypy/pytest green 2026-09-21 (agent G wave4 batch, technique: version-lockstep/signing/resilience/memory/creative/bench)"
     },
     {
       "id": "wave4-step4-memory-eval",
@@ -1281,7 +1284,7 @@
       "zone": "hardening-wave4-batch",
       "priority": "P2",
       "assigned_to": "عامل G",
-      "status": "active",
+      "status": "done",
       "exclusive_paths": [
         "src/nexus_ai_agent/memory/eval.py",
         "tests/unit/test_memory_recall.py",
@@ -1291,7 +1294,8 @@
       "acceptance_criteria": [
         "recall@k گزارش‌شده",
         "گارد سبز"
-      ]
+      ],
+      "evidence": "implemented + ruff/mypy/pytest green 2026-09-21 (agent G wave4 batch, technique: version-lockstep/signing/resilience/memory/creative/bench)"
     },
     {
       "id": "wave4-step5-creative-surface",
@@ -1299,7 +1303,7 @@
       "zone": "hardening-wave4-batch",
       "priority": "P2",
       "assigned_to": "عامل G",
-      "status": "active",
+      "status": "done",
       "exclusive_paths": [
         "src/nexus_ai_agent/bot/creative_surface.py",
         "tests/unit/test_creative_surface.py"
@@ -1309,7 +1313,8 @@
         "صفر لمس handlers.py",
         "تست واحد با فیک",
         "job lifecycle تمیز"
-      ]
+      ],
+      "evidence": "implemented + ruff/mypy/pytest green 2026-09-21 (agent G wave4 batch, technique: version-lockstep/signing/resilience/memory/creative/bench)"
     },
     {
       "id": "wave4-step6-bench",
@@ -1317,7 +1322,7 @@
       "zone": "hardening-wave4-batch",
       "priority": "P2",
       "assigned_to": "عامل G",
-      "status": "active",
+      "status": "done",
       "exclusive_paths": [
         "tests/bench/",
         "scripts/bench_render.py",
@@ -1327,7 +1332,8 @@
       "acceptance_criteria": [
         "baseline کامیت‌شده",
         "گیت رگرسیون"
-      ]
+      ],
+      "evidence": "implemented + ruff/mypy/pytest green 2026-09-21 (agent G wave4 batch, technique: version-lockstep/signing/resilience/memory/creative/bench)"
     },
     {
       "id": "wave4-step7-coverage",
