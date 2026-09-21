@@ -16,9 +16,9 @@
       "status": "active_deferred_on_handlers"
     },
     "agent_c": {
-      "identity": "عامل C (استودیوی نگار، زیرنویس، صوت و هسته شناختی)",
+      "identity": "عامل C (استودیوی نگار، زیرنویس، صوت، رنگ، موشن گرافیک و هسته شناختی)",
       "branch": "arena/01a0c36f-nexus-ai-agent",
-      "task": "nagar-wave5-audio-studio-delivery",
+      "task": "nagar-wave6-motion-graphics-delivery",
       "status": "active"
     }
   },
@@ -52,24 +52,41 @@
     },
     {
       "id": "task-04",
-      "title": "استودیوی صدای نگار (Nagar Wave 5)",
-      "zone": "nagar-creative-audio",
+      "title": "استودیوی موشن گرافیک و ترنزیشن (Nagar Wave 6)",
+      "zone": "nagar-creative-motion",
       "assigned_to": "عامل C",
       "status": "in_progress",
-      "exclusive_paths": ["src/nexus_ai_agent/creative/packs/audio/"],
-      "instructions": "ایجاد پکیج nexus.audio.studio شامل تحلیل بیت، نرمال‌سازی EBU R128 و داکینگ هوشمند موسیقی."
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/motion/",
+        "tests/unit/test_motion_pack.py",
+        "tests/architecture/test_motion_pack_boundary.py"
+      ],
+      "instructions": "پیاده‌سازی پکیج nexus.motion.graphics شامل ترنزیشن‌های xfade، کی‌فریم ترنسفورم، موشن بلور، درخشش و تایتل متحرک."
     },
     {
       "id": "task-05",
-      "title": "جستجوی زیرنویس و رندر اتمیک نهایی",
-      "zone": "nagar-creative-caption",
+      "title": "استودیوی صدای نگار (Nagar Wave 5)",
+      "zone": "nagar-creative-audio",
       "assigned_to": "عامل C",
-      "status": "in_progress",
-      "exclusive_paths": ["src/nexus_ai_agent/creative/packs/caption/"],
-      "instructions": "پیاده‌سازی caption.search_transcript و caption.burn_in روی خط رندر استودیو."
+      "status": "completed",
+      "exclusive_paths": ["src/nexus_ai_agent/creative/packs/audio/"],
+      "instructions": "پکیج nexus.audio.studio شامل تحلیل تمپو، نرمال‌سازی EBU R128 و داکینگ هوشمند موسیقی تکمیل و تحویل داده شد."
     },
     {
       "id": "task-06",
+      "title": "استودیوی رنگ و تحویل (Nagar Wave 7)",
+      "zone": "nagar-creative-delivery",
+      "assigned_to": "عامل C",
+      "status": "completed",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/delivery/",
+        "tests/architecture/test_delivery_pack_boundary.py",
+        "tests/unit/test_delivery_pack.py"
+      ],
+      "instructions": "پکیج nexus.color.delivery، اعمال 3D LUT، اکسپورت استاندارد OpenTimelineIO و رندر 4K تکمیل و تحویل داده شد."
+    },
+    {
+      "id": "task-07",
       "title": "لاغرسازی حیاتی بسته‌های پایتون (Extras)",
       "zone": "core-packaging",
       "assigned_to": "عامل بعدی",
@@ -78,26 +95,13 @@
       "instructions": "تفکیک وابستگی‌ها به [creative], [rag], [speech] جهت کاهش حجم ایمیج از ۷GB به ۲۰۰MB."
     },
     {
-      "id": "task-07",
+      "id": "task-08",
       "title": "استانداردسازی ناهمگام دیتابیس (Async DB)",
       "zone": "core-database",
       "assigned_to": "عامل بعدی",
       "status": "available",
       "exclusive_paths": ["src/nexus_ai_agent/core/async_db.py"],
       "instructions": "حذف sync engineها و انتقال تمام کوئری‌های دیتابیس به get_session ناهمگام."
-    },
-    {
-      "id": "task-08",
-      "title": "استودیوی رنگ و تحویل (Nagar Wave 7)",
-      "zone": "nagar-creative-delivery",
-      "assigned_to": "عامل C",
-      "status": "in_progress",
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/packs/delivery/",
-        "tests/architecture/test_delivery_pack_boundary.py",
-        "tests/unit/test_delivery_pack.py"
-      ],
-      "instructions": "پیاده‌سازی پکیج nexus.color.delivery و اکسپورت استاندارد OpenTimelineIO (OTIO)."
     },
     {
       "id": "task-09",
@@ -164,6 +168,15 @@
         "tests/unit/test_delivery_pack.py",
         "tests/architecture/test_delivery_pack_boundary.py"
       ]
+    },
+    {
+      "id": "nagar-creative-motion",
+      "description": "Nagar Wave 6 motion graphics, transitions, keyframing, motion blur, glow, and kinetic titles",
+      "paths": [
+        "src/nexus_ai_agent/creative/packs/motion/",
+        "tests/unit/test_motion_pack.py",
+        "tests/architecture/test_motion_pack_boundary.py"
+      ]
     }
   ],
   "claims": [
@@ -199,21 +212,19 @@
       "note": "Deferred until security batch merges due to shared lock on bot/handlers.py"
     },
     {
-      "task": "nagar-wave5-audio-studio-delivery",
-      "zone": "nagar-creative-audio",
+      "task": "nagar-wave6-motion-graphics-delivery",
+      "zone": "nagar-creative-motion",
       "agent_branch": "arena/01a0c36f-nexus-ai-agent",
-      "claimed_at": "2026-09-21T10:30:00Z",
+      "claimed_at": "2026-09-21T10:45:00Z",
       "ttl_hours": 24,
       "status": "active",
       "gates_owner": false,
       "exclusive_paths": [
-        "src/nexus_ai_agent/creative/packs/audio/",
-        "src/nexus_ai_agent/creative/packs/caption/operations.py",
-        "src/nexus_ai_agent/creative/packs/delivery/",
-        "tests/unit/test_delivery_pack.py",
-        "tests/architecture/test_delivery_pack_boundary.py"
+        "src/nexus_ai_agent/creative/packs/motion/",
+        "tests/unit/test_motion_pack.py",
+        "tests/architecture/test_motion_pack_boundary.py"
       ],
-      "scope": "Nagar Wave 5 audio studio pack (nexus.audio.studio) and Wave 7 color & delivery pack (nexus.color.delivery, OTIO cinema export, LUTs, and master rendering)",
+      "scope": "Nagar Wave 6 motion graphics pack (nexus.motion.graphics): video transitions, keyframe transform animations, glow, motion blur, and kinetic titles",
       "note": "Mathematically disjoint paths; zero overlap with core-security and feature-wiring zones"
     }
   ],

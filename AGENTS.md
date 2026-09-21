@@ -56,23 +56,23 @@ worktree-style isolation + a shared task board with leases and stale-lease takeo
 | Agent | Task | Zone | Status | Owner Branch |
 |---|---|---|---|---|
 | **عامل A** | `P0-security-batch` | core-security | active | `arena/01a0c316-nexus-ai-agent` |
-| **عامل B** | `feature-wiring-batch` | feature-wiring | active (deferred on handlers.py) | `arena/01a0c34d-nexus-ai-agent` |
-| **عامل C** | `nagar-wave5-audio-studio-delivery` | nagar-creative-audio | active | `arena/01a0c36f-nexus-ai-agent` |
+| **عامل B** | `feature-wiring-batch` | feature-wiring | active (PR #32 open) | `arena/01a0c34d-nexus-ai-agent` |
+| **عامل C** | `nagar-wave6-motion-graphics-delivery` | nagar-creative-motion | active | `arena/01a0c36f-nexus-ai-agent` |
 
 ---
 
 ## شبکه ۱۰ وظیفه کلیدی بعدی (10 Forward Tasks Network)
 
-برای ایجاد هماهنگی بی‌نقص موازی در سشن‌های آینده، ۱۰ کار اولویت‌دار بعدی به تفکیک حوزه و مسیرهای انحصاری ترسیم شده‌اند:
+برای ایجاد هماهنگی بی‌نقص موازی در سشن‌های آینده، ۱۰ کار اولویت‌دار بعدی به تفکیک حوزه و مسیرهای انحصاری به‌روزرسانی شده‌اند:
 
 1. **[عامل A] تسک ۱ — سخت‌سازی امنیت سراسری (`P0-security-batch`):** پیاده‌سازی Global Auth Middleware در `bot/middleware.py` و رفع PII در `/api/dashboard` (مسیرهای اختصاصی هسته و امنیت).
-2. **[عامل B] تسک ۲ — سیم‌کشی ابزارهای تلگرام (`feature-tools-wiring`):** اتصال موتورهای `features/tools.py` (ماشین‌حساب، یادآور، مترجم) به هندلرهای تلگرام پس از مرج تسک ۱.
+2. **[عامل B] تسک ۲ — سیم‌کشی ابزارهای تلگرام (`feature-tools-wiring`):** اتصال موتورهای `features/tools.py` (ماشین‌حساب، یادآور، مترجم) به هندلرهای تلگرام.
 3. **[عامل B] تسک ۳ — احیای بازی‌ها و ریفرال (`feature-games-referral-wiring`):** اتصال WordleFA، نظرسنجی و فعال‌سازی متد `ReferralEngine.process_referral` و تزریق بات به فورس‌جوین.
-4. **[عامل C] تسک ۴ — استودیوی صدای نگار (`nagar-wave5-audio-studio`):** پیاده‌سازی پکیج `nexus.audio.studio` (تحلیل بیت، نرمال‌سازی EBU R128، منحنی Ducking موزیک).
-5. **[عامل C] تسک ۵ — تکمیل جستجوی زیرنویس و رندر نهایی (`caption-burn-in-delivery`):** پیاده‌سازی `caption.search_transcript` و `caption.burn_in` در گذرگاه استودیو.
-6. **[عامل بعدی] تسک ۶ — لاغرسازی بسته‌های پایتون (`core-packaging-slimming`):** تفکیک extras در `pyproject.toml` به `[creative]`, `[rag]`, `[speech]` جهت کاهش حجم ایمیج از ۷GB به زیر ۲۰۰MB.
-7. **[عامل بعدی] تسک ۷ — همگام‌سازی ناهمگام دیتابیس (`async-db-harmonization`):** حذف sync engineها از ماژول‌های فیچر و انتقال به `core/async_db.py` جهت رفع بلاک شدن لوپ تلگرام.
-8. **[عامل بعدی] تسک ۸ — استودیوی رنگ و تحویل (`nagar-color-delivery-pack`):** پیاده‌سازی پکیج `nexus.color.delivery` طبق سند ۷۰ عملیات (پروفایل‌های رنگی و اکسپورت OTIO).
+4. **[عامل C] تسک ۴ — استودیوی موشن گرافیک و ترنزیشن (`nagar-wave6-motion-graphics`):** پیاده‌سازی پکیج `nexus.motion.graphics` (ترنزیشن‌های xfade، کی‌فریم، موشن بلور، درخشش و تایتل متحرک).
+5. **[عامل C] تسک ۵ — استودیوی صدای نگار (`nagar-wave5-audio-studio`):** پیاده‌سازی پکیج `nexus.audio.studio` (تحلیل تمپو، نرمال‌سازی EBU R128، منحنی Ducking موزیک) — [تکمیل شد ✅].
+6. **[عامل C] تسک ۶ — استودیوی رنگ و تحویل استاندارد سینمایی (`nagar-color-delivery-pack`):** پیاده‌سازی پکیج `nexus.color.delivery` (3D LUTs، اکسپورت OpenTimelineIO، پروکسی و رندر 4K) — [تکمیل شد ✅].
+7. **[عامل بعدی] تسک ۷ — لاغرسازی حیاتی بسته‌های پایتون (`core-packaging-slimming`):** تفکیک extras در `pyproject.toml` به `[creative]`, `[rag]`, `[speech]` جهت کاهش حجم ایمیج از ۷GB به زیر ۲۰۰MB.
+8. **[عامل بعدی] تسک ۸ — همگام‌سازی ناهمگام دیتابیس (`async-db-harmonization`):** حذف sync engineها از ماژول‌های فیچر و انتقال به `core/async_db.py` جهت رفع بلاک شدن لوپ تلگرام.
 9. **[عامل بعدی] تسک ۹ — بهینه‌سازی و ضدبرخورد RAG (`rag-chroma-sanitization`):** اصلاح تقسیم‌بندی اسناد با overlap و شناسه یکتا جهت جلوگیری از کرش پایگاه داده برداری.
 10. **[عامل بعدی] تسک ۱۰ — اتصال چندزبانه کامل پاسخ‌های بات (`i18n-handler-binding`):** اتصال فرهنگ لغت ۱۵ زبانه به تمامی خروجی‌های کاربری بات تلگرام به جای رشته‌های ثابت انگلیسی.
 
