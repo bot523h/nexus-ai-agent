@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — feature-wiring batch (B1–B8, `bot/surface/`)
+- **`bot/surface/` package:** framework-free (no `telegram` import) command
+  implementations that replace the demo stubs in `bot/handlers.py`; they are
+  registrable as-is with `CommandHandler`. Registration itself is deferred until
+  the security batch releases `bot/handlers.py` (see the PR body).
+- **B1** `/calc` (AST allow-list evaluator, no `eval`; length/exponent/
+  factorial/result-size caps), `/tr` (MyMemory, `fa>en`, `>it`, auto
+  direction), `/convert`, `/remind` + `/reminders [cancel <id>]`
+  (persistent, delivered to the originating chat, restored after restart).
+- **B2** `/wordle`, `/guess_start` `/guess` `/guess_stop`, `/poll` (native
+  Telegram poll tallied by `QuickPoll`), `/poll_results`, `/quiz` (native quiz
+  poll scored by `QuizGame` + XP), `/leaderboard`; plain-text guesses via
+  `route_game_text`. Engines are process-wide singletons.
+- **B3** `apply_start_referral` hook for `/start ref_<CODE>` →
+  `ReferralEngine.process_referral`, XP for both sides, referrer notified.
+- **B4** `ForceJoinManager` / `AnonymousChatManager` get `bind_bot()`; the
+  surface binds `context.bot` on every call. Anonymous relay
+  (`route_anon_text`), queue leave, no duplicate queue entries.
+- **B6** `/daily` → `GamificationEngine.claim_daily` (+ `/profile`,
+  `/xp_leaderboard`, `/achievements`).
+- **B8** `AdvancedRAGEngine.list_documents/delete_document/retrieve`, lazy
+  heavy imports, injectable client/embedding/ranker, thread-offloaded calls,
+  re-upload replaces; real `/docs`, `/doc_delete <n|id>`,
+  `/chat_with_doc [question]` (Gemini answers from retrieved excerpts).
+
+### Changed
+- **B7 — AI memory is opt-in only:** `AIMemoryEngine.update_from_message` never
+  calls Gemini unless the user enabled memory (`/memory on`); `/memory off` and
+  `/forget_me` wipe and revoke. The provider is created lazily. Consent is the
+  existence of the `UserMemory` row (no schema change).
+- `GamificationEngine.claim_daily` runs in one session (first claim no longer
+  deadlocks SQLite via the nested `update_streak` connection); naive SQLite
+  timestamps are treated as UTC; returns `remaining_minutes`, `streak_broken`,
+  `title`, `xp`.
+- `worker.process_pdf_task` stores `file_name` when the payload carries it.
+
+### Fixed
+- `ForceJoinManager.should_block` compared the column with `is True` and could
+  never engage; the gate now checks the per-chat config (bot-wide fallback),
+  **fails closed** without a bot, caches positive results only, and keys the
+  cache per channel.
+- `Calculator.evaluate` used regex + `eval` (arbitrary code / CPU exhaustion).
+
+### Deferred
+- B5 (duplicate engine construction in `bot/handlers.py` + `bot/app.py`) and
+  all handler registrations: چون عامل دیگری روی این محدوده کار می‌کرد متوقف
+  شدم؛ پس از آزاد شدن ناحیه انجام می‌شود تا فراموش نشود.
+
 ## [3.12.0] — 2026-09-21
 
 Semver-minor: **Nagar Phase 6 — the Wave 2.5 Telegram slideshow surface and

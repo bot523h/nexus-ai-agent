@@ -9,11 +9,13 @@ Includes:
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import math
+import operator
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from sqlmodel import Session, select
@@ -59,27 +61,74 @@ def _parse_remind_time(text: str) -> tuple[timedelta, str] | None:
     return None
 
 
+#: Upper bound for a single reminder (``asyncio.sleep`` on a 32-bit float is fine,
+#: but a bot process rarely lives longer than this and the DB row survives restarts).
+MAX_REMINDER_DELAY = timedelta(days=30)
+#: Reminder text is truncated to this many characters (Telegram-friendly, DB-friendly).
+MAX_REMINDER_TEXT = 500
+
+
 class ReminderSystem:
-    """Persistent reminder system with asyncio-based scheduling."""
+    """Persistent reminder system with asyncio-based scheduling.
+
+    The Telegram ``bot`` may be attached after construction via
+    :meth:`bind_bot` (the PTB context only exposes it inside a handler), so a
+    process-wide instance can be created at import time and wired later.
+    Reminders are delivered to the *chat* they were created in.
+    """
 
     def __init__(self, bot: Any | None = None) -> None:
         self.bot = bot
         self._tasks: dict[int, asyncio.Task[Any]] = {}  # reminder_id → task
+
+    def bind_bot(self, bot: Any) -> None:
+        """Attach (or replace) the bot used for delivery."""
+        if bot is not None:
+            self.bot = bot
 
     def _require_bot(self) -> Any:
         if self.bot is None:
             raise RuntimeError("Bot instance not set on ReminderSystem")
         return self.bot
 
+    @property
+    def scheduled_count(self) -> int:
+        """Number of in-process timers still pending."""
+        return sum(1 for t in self._tasks.values() if not t.done())
+
+    async def _deliver(self, rid: int, chat_id: int, text: str, delay: float) -> None:
+        await asyncio.sleep(max(delay, 0.0))
+        try:
+            await self._require_bot().send_message(chat_id=chat_id, text=f"⏰ یادآوری: {text}")
+        except Exception:  # noqa: BLE001 - delivery failure must not kill the loop
+            logger.exception("reminder_send_failed", reminder_id=rid)
+        engine = _sync_engine()
+        with Session(engine) as session:
+            obj = session.get(Reminder, rid)
+            if obj is not None and obj.status == "pending":
+                obj.status = "sent"
+                session.commit()
+        self._tasks.pop(rid, None)
+
+    def _schedule(self, rid: int, chat_id: int, text: str, delay: float) -> None:
+        task = asyncio.create_task(self._deliver(rid, chat_id, text, delay))
+        self._tasks[rid] = task  # strong reference: never GC'd mid-flight
+
     async def set_reminder(self, user_id: int, chat_id: int, time_str: str, text: str) -> str:
-        """Set a reminder. *time_str* is like '30m', '2h', '1d'."""
+        """Set a reminder. *time_str* is like ``30m``, ``2h``, ``1d``."""
         parsed = _parse_remind_time(time_str)
         if parsed is None:
-            return "❌ فرمت نادرست. مثال: /remind 30m نماز"
+            return "❌ فرمت زمان نادرست است. مثال: /remind 30m نماز  (واحدها: s, m, h, d)"
         delta, _ = parsed
+        if delta <= timedelta(0):
+            return "❌ زمان یادآوری باید بزرگ‌تر از صفر باشد."
+        if delta > MAX_REMINDER_DELAY:
+            return f"❌ حداکثر فاصله یادآوری {MAX_REMINDER_DELAY.days} روز است."
+        text = text.strip()[:MAX_REMINDER_TEXT]
+        if not text:
+            return "❌ متن یادآوری خالی است. مثال: /remind 30m نماز"
         remind_at = datetime.now(timezone.utc) + delta
 
-        # Save to DB
         engine = _sync_engine()
         with Session(engine) as session:
             reminder = Reminder(
@@ -94,69 +143,55 @@ class ReminderSystem:
             session.refresh(reminder)
             rid: int = reminder.id if reminder.id is not None else 0
 
-        # Schedule the background task
-        async def _fire() -> None:
-            await asyncio.sleep(delta.total_seconds())
-            bot = self._require_bot()
-            try:
-                await bot.send_message(chat_id=user_id, text=f"⏰ یادآوری: {text}")
-            except Exception:  # noqa: BLE001
-                logger.exception("reminder_send_failed", reminder_id=rid)
-            engine2 = _sync_engine()
-            with Session(engine2) as s2:
-                obj = s2.get(Reminder, rid)
-                if obj is not None:
-                    obj.status = "sent"
-                    s2.commit()
+        self._schedule(rid, chat_id, text, delta.total_seconds())
+        return f"✅ یادآوری #{rid} تنظیم شد: {text} ({time_str})"
 
-        task = asyncio.create_task(_fire())
-        self._tasks[rid] = task
-        return f"✅ یادآوری تنظیم شد: {text} ({time_str})"
+    def list_pending(self, user_id: int, chat_id: int | None = None) -> list[dict[str, Any]]:
+        """Pending reminders for *user_id* (optionally limited to *chat_id*)."""
+        engine = _sync_engine()
+        with Session(engine) as session:
+            stmt = select(Reminder).where(Reminder.user_id == user_id, Reminder.status == "pending")
+            if chat_id is not None:
+                stmt = stmt.where(Reminder.chat_id == chat_id)
+            rows = session.exec(stmt).all()
+        return [
+            {"id": r.id, "text": r.text, "remind_at": r.remind_at, "chat_id": r.chat_id}
+            for r in sorted(rows, key=lambda r: r.remind_at)
+        ]
+
+    def cancel(self, user_id: int, reminder_id: int) -> bool:
+        """Cancel a pending reminder owned by *user_id*. Returns ``True`` when cancelled."""
+        engine = _sync_engine()
+        with Session(engine) as session:
+            obj = session.get(Reminder, reminder_id)
+            if obj is None or obj.user_id != user_id or obj.status != "pending":
+                return False
+            obj.status = "cancelled"
+            session.commit()
+        task = self._tasks.pop(reminder_id, None)
+        if task is not None:
+            task.cancel()
+        return True
 
     async def restore_pending(self) -> int:
-        """Restore pending reminders from DB (after restart). Returns count."""
+        """Re-arm pending reminders from the DB (after a restart). Returns the count.
+
+        Overdue reminders are delivered immediately rather than silently dropped.
+        """
         engine = _sync_engine()
-        count = 0
         with Session(engine) as session:
-            stmt = select(Reminder).where(Reminder.status == "pending")
-            results = session.exec(stmt).all()
-            now = datetime.now(timezone.utc)
-            for r in results:
-                if r.remind_at <= now:
-                    # Already overdue — send immediately
-                    r.status = "sent"
-                    count += 1
-                    continue
-                delay = (r.remind_at - now).total_seconds()
-                rid: int = r.id if r.id is not None else 0
-
-                async def _fire(
-                    _rid: int = rid,
-                    _chat_id: int = r.chat_id,
-                    _text: str = r.text,
-                    _delay: float = delay,
-                ) -> None:
-                    await asyncio.sleep(_delay)
-                    bot = self._require_bot()
-                    try:
-                        await bot.send_message(
-                            chat_id=_chat_id,
-                            text=f"⏰ یادآوری: {_text}",
-                        )
-                    except Exception:  # noqa: BLE001
-                        logger.exception("reminder_send_failed", reminder_id=_rid)
-                    engine2 = _sync_engine()
-                    with Session(engine2) as s2:
-                        obj = s2.get(Reminder, _rid)
-                        if obj is not None:
-                            obj.status = "sent"
-                            s2.commit()
-
-                task = asyncio.create_task(_fire())
-                self._tasks[rid] = task
-                count += 1
-            session.commit()
-        return count
+            rows = session.exec(select(Reminder).where(Reminder.status == "pending")).all()
+            pending = [
+                (r.id or 0, r.chat_id, r.text, r.remind_at)
+                for r in rows
+                if r.id is not None and r.id not in self._tasks
+            ]
+        now = datetime.now(timezone.utc)
+        for rid, chat_id, text, remind_at in pending:
+            if remind_at.tzinfo is None:
+                remind_at = remind_at.replace(tzinfo=timezone.utc)
+            self._schedule(rid, chat_id, text, (remind_at - now).total_seconds())
+        return len(pending)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -330,50 +365,215 @@ class UnitConverter:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Safe Calculator
+# Safe Calculator — AST allow-list evaluator (no ``eval``)
 # ═══════════════════════════════════════════════════════════════════════
 
-# Only allow safe math operations
-_SAFE_NAMES: dict[str, Any] = {
+#: Longest expression the calculator accepts (keeps parsing and error text short).
+MAX_EXPRESSION_LENGTH = 200
+#: Integer results wider than this are refused *before* they are materialised
+#: (~4 000 decimal digits — safely under CPython's int→str conversion limit).
+_MAX_RESULT_BITS = 13_300
+#: ``a ** b`` is refused when ``|b|`` exceeds this (for any ``|a| > 1``).
+_MAX_EXPONENT = 10_000
+#: ``factorial(n)`` is refused beyond this (1000! has 2 568 digits).
+_MAX_FACTORIAL = 1_000
+#: ``round(x, n)`` is refused beyond this many digits either side of the point.
+_MAX_ROUND_DIGITS = 100
+
+
+class CalculatorError(ValueError):
+    """Raised for any expression the safe evaluator refuses."""
+
+
+def _guard_size(value: Any) -> Any:
+    """Refuse integers that would be too wide to print or keep computing with."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        if value.bit_length() > _MAX_RESULT_BITS:
+            raise CalculatorError("نتیجه بیش از حد بزرگ است.")
+    return value
+
+
+def _safe_pow(base: Any, exp: Any) -> Any:
+    if isinstance(exp, int) and abs(exp) > _MAX_EXPONENT and abs(base) > 1:
+        raise CalculatorError("توان بیش از حد بزرگ است.")
+    if isinstance(exp, float) and abs(exp) > _MAX_EXPONENT:
+        raise CalculatorError("توان بیش از حد بزرگ است.")
+    if isinstance(base, int) and isinstance(exp, int) and exp > 0 and abs(base) > 1:
+        # Estimate the result width before touching it: bits(base) * exp.
+        if abs(base).bit_length() * exp > _MAX_RESULT_BITS:
+            raise CalculatorError("نتیجه بیش از حد بزرگ است.")
+    try:
+        return _guard_size(operator.pow(base, exp))
+    except OverflowError as exc:
+        raise CalculatorError("نتیجه بیش از حد بزرگ است.") from exc
+    except ZeroDivisionError as exc:
+        raise CalculatorError("تقسیم بر صفر ممکن نیست.") from exc
+
+
+def _safe_factorial(n: Any) -> int:
+    if isinstance(n, float) and n.is_integer():
+        n = int(n)
+    if not isinstance(n, int) or isinstance(n, bool) or n < 0:
+        raise CalculatorError("factorial فقط برای اعداد صحیح نامنفی تعریف شده است.")
+    if n > _MAX_FACTORIAL:
+        raise CalculatorError(f"factorial حداکثر تا {_MAX_FACTORIAL} پشتیبانی می‌شود.")
+    return math.factorial(n)
+
+
+def _safe_round(value: Any, ndigits: Any = None) -> Any:
+    if ndigits is None:
+        return round(value)
+    if not isinstance(ndigits, int) or abs(ndigits) > _MAX_ROUND_DIGITS:
+        raise CalculatorError(f"round حداکثر تا {_MAX_ROUND_DIGITS} رقم پشتیبانی می‌شود.")
+    return round(value, ndigits)
+
+
+_SAFE_FUNCS: dict[str, Any] = {
     "abs": abs,
-    "round": round,
+    "round": _safe_round,
     "min": min,
     "max": max,
-    "pow": pow,
-    "sum": sum,
+    "sum": lambda *xs: sum(xs),
+    "pow": _safe_pow,
+    "factorial": _safe_factorial,
     "sin": math.sin,
     "cos": math.cos,
     "tan": math.tan,
     "sqrt": math.sqrt,
     "log": math.log,
     "log10": math.log10,
-    "pi": math.pi,
-    "e": math.e,
+    "log2": math.log2,
     "ceil": math.ceil,
     "floor": math.floor,
-    "factorial": math.factorial,
-    "gcd": math.gcd,
     "exp": math.exp,
+    "gcd": math.gcd,
 }
+_SAFE_CONSTS: dict[str, float] = {"pi": math.pi, "e": math.e, "tau": math.tau}
+
+_BIN_OPS: dict[type[ast.operator], Any] = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+}
+_UNARY_OPS: dict[type[ast.unaryop], Any] = {ast.UAdd: operator.pos, ast.USub: operator.neg}
+
+# ``20%`` (a percent literal with no operand after it) → ``(20/100)``;
+# ``10 % 3`` keeps its modulo meaning.
+_PERCENT_LITERAL_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%(?!\s*[\d(\w])")
+_PERSIAN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+
+
+class _SafeEvaluator:
+    """Evaluate a parsed arithmetic expression using only allow-listed nodes."""
+
+    def visit(self, node: ast.AST) -> Any:
+        method = getattr(self, f"visit_{type(node).__name__}", None)
+        if method is None:
+            raise CalculatorError("عبارت نامعتبر است.")
+        return method(node)
+
+    def visit_Expression(self, node: ast.Expression) -> Any:  # noqa: N802
+        return self.visit(node.body)
+
+    def visit_Constant(self, node: ast.Constant) -> Any:  # noqa: N802
+        if isinstance(node.value, bool) or not isinstance(node.value, int | float):
+            raise CalculatorError("فقط اعداد مجاز هستند.")
+        return _guard_size(node.value)
+
+    def visit_Name(self, node: ast.Name) -> Any:  # noqa: N802
+        try:
+            return _SAFE_CONSTS[node.id]
+        except KeyError:
+            raise CalculatorError(f"نام ناشناخته: {node.id}") from None
+
+    def visit_UnaryOp(self, node: ast.UnaryOp) -> Any:  # noqa: N802
+        op = _UNARY_OPS.get(type(node.op))
+        if op is None:
+            raise CalculatorError("عملگر پشتیبانی نمی‌شود.")
+        return op(self.visit(node.operand))
+
+    def visit_BinOp(self, node: ast.BinOp) -> Any:  # noqa: N802
+        left = self.visit(node.left)
+        right = self.visit(node.right)
+        if isinstance(node.op, ast.Pow):
+            return _safe_pow(left, right)
+        op = _BIN_OPS.get(type(node.op))
+        if op is None:
+            raise CalculatorError("عملگر پشتیبانی نمی‌شود.")
+        try:
+            return _guard_size(op(left, right))
+        except ZeroDivisionError as exc:
+            raise CalculatorError("تقسیم بر صفر ممکن نیست.") from exc
+        except OverflowError as exc:
+            raise CalculatorError("نتیجه بیش از حد بزرگ است.") from exc
+
+    def visit_Call(self, node: ast.Call) -> Any:  # noqa: N802
+        if not isinstance(node.func, ast.Name) or node.keywords:
+            raise CalculatorError("فراخوانی نامعتبر است.")
+        func = _SAFE_FUNCS.get(node.func.id)
+        if func is None:
+            raise CalculatorError(f"تابع ناشناخته: {node.func.id}")
+        if len(node.args) > 8:
+            raise CalculatorError("تعداد آرگومان‌ها زیاد است.")
+        args = [self.visit(a) for a in node.args]
+        try:
+            return _guard_size(func(*args))
+        except CalculatorError:
+            raise
+        except (ValueError, TypeError, OverflowError, ZeroDivisionError) as exc:
+            raise CalculatorError(f"خطا در {node.func.id}: {exc}") from exc
+
+
+def normalize_expression(expr: str) -> str:
+    """Normalise user input: Persian digits, ``^`` power, ``×``/``÷``, percent literals."""
+    cleaned = expr.strip().translate(_PERSIAN_DIGITS)
+    cleaned = cleaned.replace("^", "**").replace("×", "*").replace("÷", "/").replace("،", ",")
+    return _PERCENT_LITERAL_RE.sub(r"(\1/100)", cleaned)
+
+
+def safe_eval(expr: str) -> float | int:
+    """Evaluate an arithmetic expression without ``eval``.
+
+    Raises :class:`CalculatorError` for anything outside the allow-list
+    (names, attribute access, strings, comprehensions, lambdas, ...) and for
+    results that would be too expensive to compute or print.
+    """
+    if not expr or not expr.strip():
+        raise CalculatorError("عبارتی وارد نشده است.")
+    if len(expr) > MAX_EXPRESSION_LENGTH:
+        raise CalculatorError(f"عبارت طولانی‌تر از {MAX_EXPRESSION_LENGTH} کاراکتر است.")
+    cleaned = normalize_expression(expr)
+    try:
+        tree = ast.parse(cleaned, mode="eval")
+    except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:
+        raise CalculatorError("عبارت نامعتبر است.") from exc
+    result = _SafeEvaluator().visit(tree)
+    if isinstance(result, float) and (math.isnan(result) or math.isinf(result)):
+        raise CalculatorError("نتیجه تعریف‌نشده است.")
+    return cast(float | int, result)
+
+
+def format_number(value: float | int) -> str:
+    """Render a result compactly (``4`` not ``4.0``; floats trimmed to 10 significant digits)."""
+    if isinstance(value, bool):
+        return str(int(value))
+    if isinstance(value, int):
+        return f"{value:,}" if abs(value) >= 10_000 else str(value)
+    if value.is_integer() and abs(value) < 1e15:
+        return format_number(int(value))
+    return f"{value:.10g}"
 
 
 class Calculator:
-    """Safe math expression evaluator."""
+    """Safe math expression evaluator (AST allow-list; never calls ``eval``)."""
 
     def evaluate(self, expr: str) -> str:
-        """Safely evaluate a math expression."""
-        # Replace ^ with ** for exponentiation
-        cleaned = expr.replace("^", "**").strip()
-        # Remove percent-style
-        cleaned = cleaned.replace("%", "/100")
-        # Basic safety: only digits, operators, parens, dots, spaces
-        # Allow letters for function names
-        check = cleaned.replace("**", "  ").replace(" ", "")
-        # We need to allow letters for sin, cos, etc.
-        if not re.match(r"^[\d\s\+\-\*/\.\(\),a-zA-Z_]+$", check):
-            return "❌ عبارت نامعتبر است."
+        """Evaluate *expr* and return a user-facing line (never raises)."""
         try:
-            result = eval(cleaned, {"__builtins__": {}}, _SAFE_NAMES)  # noqa: S307
-            return f"🧮 {expr} = {result}"
-        except Exception as exc:  # noqa: BLE001
-            return f"❌ خطا در محاسبه: {exc}"
+            result = safe_eval(expr)
+        except CalculatorError as exc:
+            return f"❌ {exc}"
+        return f"🧮 {expr.strip()} = {format_number(result)}"

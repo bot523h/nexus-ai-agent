@@ -62,20 +62,26 @@ async def extract_pdf_text(file_path: str) -> str:
     return await asyncio.to_thread(_extract)
 
 
-async def process_pdf_task(user_id: int, file_path: str, file_id: str) -> str:
+async def process_pdf_task(
+    user_id: int, file_path: str, file_id: str, file_name: str | None = None
+) -> str:
     """Process a PDF job and return a durable success message.
 
     Extraction runs first: a missing ``pypdf`` must surface as the clear
     dependency error before the heavier RAG stack is even imported.
     Failures are raised so the queue can persist ``failed`` rather than
-    reporting success.
+    reporting success.  ``file_name`` (when the upload handler supplies it)
+    is stored alongside the chunks so ``/docs`` can show a readable title.
     """
     try:
         text = await extract_pdf_text(file_path)
         from nexus_ai_agent.features.rag import AdvancedRAGEngine
 
         engine = AdvancedRAGEngine()
-        await engine.add_document(user_id, text, {"file_id": file_id})
+        metadata: dict[str, object] = {"file_id": file_id}
+        if file_name:
+            metadata["file_name"] = file_name
+        await engine.add_document(user_id, text, metadata)
     except Exception as exc:  # noqa: BLE001 - queue owns durable failure mapping
         raise RuntimeError(f"Error processing {file_id}: {exc}") from exc
     return f"Successfully processed {file_id}"
@@ -94,10 +100,12 @@ async def generate_story_task(user_id: int, text: str, output_path: str) -> str:
 
 
 async def process_pdf_job(payload: dict[str, object]) -> dict[str, object]:
+    file_name = payload.get("file_name")
     result = await process_pdf_task(
         int(str(payload["user_id"])),
         str(payload["file_path"]),
         str(payload["file_id"]),
+        str(file_name) if file_name else None,
     )
     return {"message": result}
 

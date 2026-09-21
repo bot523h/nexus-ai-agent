@@ -1,13 +1,14 @@
 """Anonymous chat feature for NEXUS AI Telegram bot.
 
 Connects two users for a private conversation without revealing identities.
-Uses SQLite (AnonSession model) for persistence and a simple in-memory queue
-for matching. The owner can inspect sessions for safety.
+Uses SQLite (AnonSession model) for persistence and a simple in-memory FIFO
+for matching (pairings do not survive a restart). The owner can inspect
+sessions for safety.
 """
 
 from __future__ import annotations
 
-import asyncio
+from collections import deque
 from datetime import datetime, timezone
 from typing import Any
 
@@ -33,8 +34,21 @@ class AnonymousChatManager:
 
     def __init__(self, bot: Any | None = None) -> None:
         self.bot = bot
-        self._queue: asyncio.Queue[int] = asyncio.Queue()
+        self._waiting: deque[int] = deque()
         self._active: dict[int, int] = {}  # user_id → partner_user_id
+
+    def bind_bot(self, bot: Any) -> None:
+        """Attach (or replace) the bot used to relay messages (PTB exposes it per handler)."""
+        if bot is not None:
+            self.bot = bot
+
+    def partner_of(self, user_id: int) -> int | None:
+        """The partner currently paired with *user_id*, if any."""
+        return self._active.get(user_id)
+
+    def is_waiting(self, user_id: int) -> bool:
+        """True while *user_id* sits in the matching queue."""
+        return user_id in self._waiting
 
     def _require_bot(self) -> Any:
         if self.bot is None:
@@ -51,17 +65,17 @@ class AnonymousChatManager:
         if user_id in self._active:
             return "⚠️ شما قبلاً در یک چت ناشناس هستید. اول /anon_stop بزنید."
 
-        # Try to match immediately
-        if not self._queue.empty():
-            try:
-                partner_id = self._queue.get_nowait()
-            except asyncio.QueueEmpty:
-                partner_id = None
-            if partner_id is not None and partner_id != user_id and partner_id not in self._active:
+        if self.is_waiting(user_id):
+            return "⏳ همچنان در صف انتظار هستید؛ به‌محض پیدا شدن هم‌صحبت خبر می‌دهیم."
+
+        # Try to match immediately (skip stale entries that got paired meanwhile)
+        while self._waiting:
+            partner_id = self._waiting.popleft()
+            if partner_id != user_id and partner_id not in self._active:
                 return await self._create_session(user_id, partner_id)
 
         # No match yet — add to queue
-        await self._queue.put(user_id)
+        self._waiting.append(user_id)
         return "⏳ در صف انتظار هستید... لطفاً صبر کنید تا کاربر دیگری متصل شود."
 
     async def _create_session(self, user1: int, user2: int) -> str:
@@ -118,10 +132,19 @@ class AnonymousChatManager:
     # Disconnect
     # ------------------------------------------------------------------
 
+    def _leave_queue(self, user_id: int) -> bool:
+        """Drop *user_id* from the waiting queue. Returns True when it was queued."""
+        if user_id not in self._waiting:
+            return False
+        self._waiting.remove(user_id)
+        return True
+
     async def leave_chat(self, user_id: int) -> str:
-        """End the active session for *user_id*."""
+        """End the active session for *user_id* (or leave the waiting queue)."""
         partner_id = self._active.pop(user_id, None)
         if partner_id is None:
+            if self._leave_queue(user_id):
+                return "🚪 از صف انتظار خارج شدید."
             return "⚠️ شما در هیچ چت ناشناسی نیستید."
 
         self._active.pop(partner_id, None)
