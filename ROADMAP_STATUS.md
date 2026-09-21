@@ -119,3 +119,54 @@ genuine encode on any machine; production uses the system FFmpeg
   item.
 - ~~`docs/architecture/DATA_LIFECYCLE.md` described a `nexus_operation_journal`
   table~~ — resolved earlier; the journal table remains forbidden until Stage 3.
+
+## Appendix — 2026-09-21, color/exposure lane (session `arena/01a0c58e-nexus-ai-agent`)
+
+Appended, not rewritten: the tables above remain the record of Waves 1–3 and the
+lifecycle line. This appendix records one wave plus a forensic correction.
+
+**Baseline this wave started from.** `main` at `b422512` (the PR#42 merge,
+`ci(task-113)` lint-fast rail). Measured on that base before any edit:
+`pytest -q -m "not slow"` → **1181 passed, 20 skipped**; `ruff check .` → 0
+errors; `ruff format --check .` → nothing to reformat; `mypy src` → clean, 221
+source files.
+
+**What this wave added.**
+
+| Item | Content | State |
+|---|---|---|
+| `exposure` lane op | `ExposureOp` in `creative/rendering/ir.py` — the executable twin of the pack op `color.adjust_exposure`. Photometric `gamma = clamp(2**EV, 0.1, 10.0)`, contrast pass-through, `temperature_k` 1000–40000 (6500 = the filter's own neutral), `tint/50 → colorbalance gm`, explicit `pl` | **IMPLEMENTED** |
+| Compiler stage | `_exposure_stage()` in `creative/rendering/compiler.py`: `eq` in YUV, then at most one shared `yuv420p → rgb24 → yuv420p` round trip for the RGB-only filters; both RGB stages elided at neutral; audio-only lane with an exposure op is a `LaneError` | **IMPLEMENTED** |
+| Golden pins | `tests/unit/test_rendering_lane_exposure.py` — 16 cases, including both clamp ends as contracts against FFmpeg's declared ranges | **IMPLEMENTED** |
+| Algebra property guard | `tests/unit/test_lane_duration_algebra.py` — 162 cases: 40 seeded random lanes × 4 invariants + 2 structural guards; duration algebra restated independently, argv `-t` cross-checked, byte-identical recompile | **IMPLEMENTED** |
+| Decisions | D-0005 (no `SplitOp`), D-0006 (continuum only at a release cut), D-0007 (EV mapping + every colour bound sourced from FFmpeg's filter code), D-0008 (no `tonemap=hable` yet) | **RECORDED** in `docs/DECISION_LOG.md` |
+| Runbook | `docs/ops/COLOR_LANE.md` — mapping table, seven hard contracts, FFmpeg-free validation command, troubleshooting table | **ADDED** |
+
+Gates after the wave: **1359 passed, 20 skipped** (+178, no new skips, no
+regressions); `ruff check .` 0 errors; `ruff format --check .` nothing to
+reformat; `mypy src` clean.
+
+**Numbering warning.** "Wave 8" is overloaded in this repository. PR#36 shipped
+*"wave 8 apply lane"* (the lane itself). This wave is the colour/exposure stage
+*inside* that lane and is deliberately labelled by session id rather than by a
+second "wave 8". The same hazard applies to the decision ids: `D-0007` is not
+the historical `D7`.
+
+**Forensic correction — a reported wave that left no artifact.** A prior session
+reported six committed "wave 5–8" commits (`ae1b9ef`), 1228 passing tests, a
+`docs/ops/COLOR_LANE.md`, `docs/audits/WAVE5..WAVE7`, decisions D-0005..D-0008,
+and a pending `git push` + `gh pr create` from `arena/01a0c506-nexus-ai-agent`.
+None of that is in this repository:
+
+- `git cat-file -t ae1b9ef` → `fatal: Not a valid object name` (checked against
+  all 292 commits of `main` *and* the remote tip of that branch, `f265995`);
+- `arena/01a0c506-nexus-ai-agent` is **already an ancestor of `main`** — it was
+  merged as **PR#41** on 2026-09-21 18:38Z, so pushing it again is a no-op and
+  opening a PR from it is impossible;
+- at this base commit `ExposureOp`, `colortemperature`, `deband` and `SplitOp`
+  had **zero** occurrences under `src/` and `tests/`, and no `COLOR_LANE.md` or
+  `WAVE5..7` audit existed;
+- the reported test count did not match either: the real base was 1181.
+
+The substance was therefore rebuilt here from the FFmpeg sources rather than
+restored. Everything above is verifiable in this working tree.

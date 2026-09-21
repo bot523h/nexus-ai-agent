@@ -22,6 +22,7 @@ from nexus_ai_agent.creative.rendering.executor import (
 from nexus_ai_agent.creative.rendering.ir import (
     LANE_PACKAGE_ID,
     DuckOp,
+    ExposureOp,
     FreezeOp,
     LaneError,
     LaneIR,
@@ -34,13 +35,16 @@ from nexus_ai_agent.creative.rendering.ir import (
     TitleOp,
     TrimOp,
     XfadeOp,
+    ev_to_gamma,
     lane_ir_from_project,
+    tint_to_gm,
 )
 
 __all__ = [
     "LANE_PACKAGE_ID",
     "CompiledLane",
     "DuckOp",
+    "ExposureOp",
     "FreezeOp",
     "LaneArtifact",
     "LaneError",
@@ -59,7 +63,9 @@ __all__ = [
     "compile_lane",
     "compile_measure",
     "encode_lane",
+    "ev_to_gamma",
     "lane_ir_from_project",
     "measure_loudness",
     "render_lane",
+    "tint_to_gm",
 ]

@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (color/exposure lane — session `arena/01a0c58e-nexus-ai-agent`)
+
+- **`exposure` lane op (`creative/rendering/`):** `ExposureOp`, the executable
+  twin of the pack operation `color.adjust_exposure`. Photometric mapping
+  `gamma = clamp(2**EV, 0.1, 10.0)` — correct by construction because `vf_eq.c`'s
+  LUT is `v ** (1/gamma)`, so `2**EV` doubles exposure per stop and positive EV
+  brightens. Contrast passes straight through into `eq`; `temperature_k` accepts
+  the full 1000–40000 K `colortemperature` declares (6500 = the filter's own
+  neutral); `tint/50` maps onto `colorbalance`'s `gm` with **positive = green**;
+  `pl` is always emitted explicitly rather than left to each filter's default.
+- **Clamping happens in the IR, never in FFmpeg.** `eq` clips gamma to
+  `[0.1, 10.0]` and contrast to `[-1000, 1000]` *silently* via `av_clipf`, so the
+  lane clamps first: what the argv says is what the pixels get. The usable
+  unclamped band is therefore ±log2(10) ≈ ±3.32 EV, and both clamp ends are
+  pinned as golden contracts — a future FFmpeg range change turns the suite red
+  on purpose instead of quietly altering a master file.
+- **One shared pixel-format round trip.** `eq` accepts planar YUV only while
+  `colortemperature`/`colorbalance` accept RGB only (disjoint sets), so a
+  conversion is unavoidable; it happens once each way and both RGB filters share
+  it. At neutral both RGB stages are **elided** — `kelvin2rgb(6500)` is
+  ≈ `(1.000, 0.997, 0.981)`, not an exact identity, and neither filter
+  short-circuits — which also removes the round trip for a plain exposure edit.
+  `eq` is always emitted because `vf_eq.c` `check_values` makes it a genuine
+  no-op at neutral.
+- **Fail-closed guards:** an `exposure` op on an audio-only lane is a
+  `LaneError` (the video chain is never built, so the grade would vanish while
+  the journal still claimed it); out-of-range values are rejected by the model,
+  and `extra="forbid"` keeps undocumented knobs out.
+- **16 golden pins** (`tests/unit/test_rendering_lane_exposure.py`) covering the
+  photometric mapping, both clamp ends, the monotonicity of gamma in EV, the
+  contrast pass-through and `eq`'s non-LUT fast path (`|contrast| < 7.9`), the
+  tint→`gm` endpoints, neutral elision, the shared round trip, explicit `pl`,
+  and composition with `trim`/`title`.
+- **Duration-algebra property guard** (`tests/unit/test_lane_duration_algebra.py`,
+  162 cases): 40 seeded random lanes of 24–32 ops, each checked three ways —
+  against a from-scratch restatement of the microsecond algebra that shares no
+  code with the compiler, against the `-t` in the real argv (two-sided
+  accounting), and for byte-identical recompilation. A new `LaneOp` that the
+  restatement has not classified fails a structural guard, so an op that moves
+  the clock cannot slip through an `isinstance` chain.
+- **Docs:** `docs/ops/COLOR_LANE.md` (mapping table, seven hard contracts, an
+  FFmpeg-free validation command, troubleshooting table) and decisions
+  **D-0005…D-0008** in `docs/DECISION_LOG.md` — no `SplitOp` until a
+  multi-output encode exists; `.nexus/continuum.json` refreshed only at a
+  release cut (it is under `task-135`'s exclusive-path lease); every colour
+  bound sourced from FFmpeg's filter code rather than prose docs; no
+  `tonemap=hable` until the lane can read the source's colour metadata.
+- **Real-encode evidence (local, not a committed test):** five grades encoded
+  through FFmpeg 7.0.2 (static `imageio-ffmpeg` wheel) on a real 2 s source;
+  measured mean luma is monotonic in EV (67.97 → 92.84 → 133.37 for −1/0/+1, a
+  65.4-level two-stop spread), white balance measurably moves pixels, duration
+  is unchanged, and every graph — including the `yuv420p → rgb24 → yuv420p`
+  round trip and `pl=1` — was accepted. Tables in `docs/ops/COLOR_LANE.md`;
+  turning this into a permanent gate is staged as
+  `color-lane-real-encode-evidence`.
+
 ### Added (wave-4 hardening — agent G `01a0c4bb` — 10-step batch, 6 steps delivered)
 
 - **Version-lockstep CI guard (wave4-1):** `VERSION == pyproject.toml == CHANGELOG`
