@@ -1,15 +1,16 @@
 {
   "manifest_schema": "nexus.capability-pack.v1",
   "package_id": "nexus.slideshow.compose",
-  "version": "0.1.0",
-  "display_name": "Slideshow composer — tone-templated stills to a beat-aligned master",
+  "version": "0.2.0",
+  "display_name": "Slideshow composer \u2014 tone-templated stills to a beat-aligned master",
   "download_size_mb": 0.2,
   "capabilities": [
     "slideshow.scan_assets",
     "slideshow.suggest_tone",
     "slideshow.score_images",
     "slideshow.compose",
-    "slideshow.render"
+    "slideshow.render",
+    "slideshow.upscale"
   ],
   "runtime": {
     "native": {

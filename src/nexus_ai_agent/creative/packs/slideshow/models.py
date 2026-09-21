@@ -27,6 +27,7 @@ from nexus_ai_agent.creative.studio.models import TimeRangeUS
 SLIDESHOW_PACKAGE_ID = "nexus.slideshow.compose"
 OPERATION_COMPOSE = "slideshow.compose"
 OPERATION_RENDER = "slideshow.render"
+OPERATION_UPSCALE = "slideshow.upscale"
 
 #: The owner-approved target durations (30 s, 1, 2 and 5 minutes).  The 30 s
 #: entry was added by the Wave 2.5 revision r7: the Telegram surface caps every
@@ -209,6 +210,46 @@ class SlideshowPlan(BaseModel):
         return self
 
 
+class UpscaleInput(BaseModel):
+    """Pinned evidence for one local Lanczos image upscale (level B).
+
+    FFmpeg runs above the command bus.  This payload records its measured
+    result, keeping the handler pure and the derived image undoable.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_asset_id: NonEmptyStr
+    source_sha256: NonEmptyStr
+    output_path: NonEmptyStr
+    output_sha256: NonEmptyStr
+    source_width: int = Field(gt=0)
+    source_height: int = Field(gt=0)
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+    scale_factor: float | None = Field(default=None, gt=1.0, le=4.0)
+    target_resolution: str | None = Field(default=None, pattern=r"^\d{2,5}x\d{2,5}$")
+    filter_flags: Literal["lanczos"] = "lanczos"
+
+    @model_validator(mode="after")
+    def _one_target_and_measured_dimensions(self) -> UpscaleInput:
+        if (self.scale_factor is None) == (self.target_resolution is None):
+            raise ValueError("provide exactly one of scale_factor or target_resolution")
+        if self.scale_factor is not None:
+            expected = (
+                round(self.source_width * self.scale_factor),
+                round(self.source_height * self.scale_factor),
+            )
+        else:
+            raw_width, raw_height = (self.target_resolution or "").split("x", 1)
+            expected = (int(raw_width), int(raw_height))
+        if (self.width, self.height) != expected:
+            raise ValueError(
+                f"measured output dimensions {(self.width, self.height)} do not match {expected}"
+            )
+        return self
+
+
 class RenderInput(BaseModel):
     """The typed payload of ``slideshow.render`` (level C, needs ``confirmed``).
 
@@ -238,6 +279,7 @@ __all__ = [
     "ImageScore",
     "OPERATION_COMPOSE",
     "OPERATION_RENDER",
+    "OPERATION_UPSCALE",
     "RECOMMENDED_IMAGE_COUNT",
     "RenderInput",
     "SLIDESHOW_PACKAGE_ID",
@@ -247,4 +289,5 @@ __all__ = [
     "SlideshowPlan",
     "TARGET_DURATIONS_US",
     "TargetDurationUS",
+    "UpscaleInput",
 ]

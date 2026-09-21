@@ -135,7 +135,8 @@ def usage_text() -> str:
         f"۲) تا {MAX_IMAGES} تصویر بفرستید (در این گفتگو).\n"
         f"۳) سپس /slideshow <عنوان> بفرستید تا رندر در صف بنشیند "
         f"(حداکثر {BOT_TARGET_DURATION_US // 1_000_000} ثانیه، {DEFAULT_RESOLUTION}).\n"
-        "اختیاری: /slideshow --slides 5 --fill <عنوان>\n"
+        "اختیاری: /slideshow --upscale 2 <عنوان>\n"
+        "یا: /slideshow --slides 5 --fill <عنوان>\n"
         "گزینهٔ --fill اجازهٔ ارسال عنوان به سرویس تولید تصویر و تولید کمبودهاست؛ "
         "در سرویس پولیِ فعال‌شده توسط مدیر، هزینه دارد. عکس‌های شما ارسال نمی‌شوند."
     )
@@ -217,6 +218,7 @@ class SlideshowOptions:
     project_name: str | None
     target_images: int | None = None
     generate_missing: bool = False
+    upscale_factor: int | None = None
 
     def validate_count(self, count: int) -> None:
         if self.target_images is not None:
@@ -231,10 +233,18 @@ def parse_slideshow_options(args: list[str]) -> SlideshowOptions:
     args = list(args)
     target: int | None = None
     fill = False
+    upscale: int | None = None
     while args and args[0].startswith("--"):
         flag = args.pop(0)
         if flag == "--fill" and not fill:
             fill = True
+        elif flag == "--upscale" and upscale is None and args:
+            try:
+                upscale = int(args.pop(0))
+            except ValueError:
+                raise ValueError("❌ --upscale باید عددی بین ۲ تا ۴ باشد.") from None
+            if not 2 <= upscale <= 4:
+                raise ValueError("❌ --upscale باید عددی بین ۲ تا ۴ باشد.")
         elif flag == "--slides" and target is None and args:
             try:
                 target = int(args.pop(0))
@@ -243,10 +253,10 @@ def parse_slideshow_options(args: list[str]) -> SlideshowOptions:
             if not 1 <= target <= MAX_IMAGES:
                 raise ValueError("❌ --slides باید عددی بین ۱ تا ۵ باشد.")
         else:
-            raise ValueError("❌ استفاده: /slideshow --slides 5 --fill <عنوان>")
+            raise ValueError("❌ استفاده: /slideshow --upscale 2 --slides 5 --fill <عنوان>")
     project_name, error = validate_prompt(" ".join(args))
     if error:
         raise ValueError(error)
     if fill and (target is None or not project_name):
         raise ValueError("❌ --fill به --slides و عنوان نیاز دارد.")
-    return SlideshowOptions(project_name, target, fill)
+    return SlideshowOptions(project_name, target, fill, upscale)

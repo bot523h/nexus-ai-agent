@@ -41,6 +41,7 @@ async def test_fill_options_reach_render_queue(
         file_ids=["file-0", "file-1", "file-2"],
         target_images=5,
         generate_missing=True,
+        upscale_factor=None,
     )
     assert not sessions.is_active((7, 42))
 
@@ -98,3 +99,36 @@ async def test_fill_does_not_allow_unlisted_users_to_spend_operator_credit(
     queue.enqueue.assert_not_awaited()
     context.bot.get_file.assert_not_awaited()
     assert "مجاز نیست" in update.message.reply_text.await_args.args[0]
+
+
+async def test_upscale_option_reaches_render_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    sessions = handlers.get_slideshow_sessions()
+    sessions.clear()
+    sessions.start((7, 42))
+    sessions.add_image((7, 42), "file-0")
+    begin = AsyncMock()
+    monkeypatch.setattr(handlers, "_begin_render", begin)
+    update = SimpleNamespace(
+        effective_chat=SimpleNamespace(id=7),
+        effective_user=SimpleNamespace(id=42),
+        message=SimpleNamespace(reply_text=AsyncMock()),
+    )
+    context = SimpleNamespace(args=["--upscale", "2", "Trip"])
+    await handlers.slideshow_cmd(update, context)
+    begin.assert_awaited_once_with(
+        update,
+        context,
+        project_name="Trip",
+        file_ids=["file-0"],
+        target_images=None,
+        generate_missing=False,
+        upscale_factor=2,
+    )
+
+
+@pytest.mark.parametrize("factor", ["1", "5", "two"])
+def test_upscale_option_rejects_unsafe_factors(factor: str) -> None:
+    from nexus_ai_agent.bot.slideshow import parse_slideshow_options
+
+    with pytest.raises(ValueError, match="upscale"):
+        parse_slideshow_options(["--upscale", factor, "Trip"])

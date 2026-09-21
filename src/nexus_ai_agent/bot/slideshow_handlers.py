@@ -103,6 +103,7 @@ async def slideshow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         file_ids=file_ids,
         target_images=options.target_images,
         generate_missing=options.generate_missing,
+        upscale_factor=options.upscale_factor,
     )
 
 
@@ -143,6 +144,7 @@ async def slideshow_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             file_ids=collected,
             target_images=options.target_images,
             generate_missing=options.generate_missing,
+            upscale_factor=options.upscale_factor,
         )
         return
 
@@ -172,6 +174,7 @@ async def _begin_render(
     file_ids: list[str],
     target_images: int | None = None,
     generate_missing: bool = False,
+    upscale_factor: int | None = None,
 ) -> None:
     """Download the buffered photos into a private workspace and enqueue the job."""
     queue = _job_queue(context)
@@ -212,6 +215,8 @@ async def _begin_render(
     }
     if target_images is not None:
         payload["target_images"] = target_images
+    if upscale_factor is not None:
+        payload["upscale_factor"] = upscale_factor
     if generate_missing:
         payload["generate_missing"] = True
         payload["generation_prompt"] = project_name
@@ -228,6 +233,11 @@ async def _begin_render(
         await _reply(update, f"❌ صف رندر در دسترس نیست: {exc}")
         return
     missing = max(0, (target_images or len(image_paths)) - len(image_paths))
+    upscale_notice = (
+        f"\n🔍 تصاویر پیش از رندر با Lanczos و ضریب {upscale_factor} بزرگ می‌شوند."
+        if upscale_factor is not None
+        else ""
+    )
     generation_notice = (
         f"\n🎨 {missing} تصویر تکمیلی با سرویس تولید تصویر ساخته می‌شود." if missing else ""
     )
@@ -235,7 +245,7 @@ async def _begin_render(
     await _reply(
         update,
         f"⏳ ساخت اسلایدشو در صف داخلی قرار گرفت ({len(image_paths)} تصویر، سقف {seconds} ثانیه).\n"
-        f"شناسه: {job_id}{generation_notice}",
+        f"شناسه: {job_id}{upscale_notice}{generation_notice}",
     )
 
 
