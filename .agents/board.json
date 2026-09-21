@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T15:56:57Z",
+  "updated_at": "2026-09-21T16:21:42Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -734,16 +734,43 @@
     {
       "task": "task-111-version-lockstep-ci",
       "zone": "ci-quality",
-      "agent_branch": null,
-      "claimed_at": null,
+      "agent_branch": "arena/01a0c4c1-nexus-ai-agent",
+      "claimed_at": "2026-09-21T16:21:42Z",
       "ttl_hours": 24,
-      "status": "queued",
+      "status": "active",
       "gates_owner": false,
       "exclusive_paths": [
-        ".github/workflows/ci.yml",
+        "tests/unit/test_version_lockstep.py",
         "tests/unit/test_version_command.py"
       ],
-      "scope": "Prevent the 3.12.0-vs-v3.13.0 drift that the hygiene pass fixed: a CI guard asserting VERSION == pyproject version == latest CHANGELOG section (extends the existing test_version_command.py chain to the changelog). Acceptance: failing case demonstrably red on a mismatched fixture, green on current main; no new dependencies."
+      "scope": "Prevent the 3.12.0-vs-v3.13.0 drift that the hygiene pass fixed: a CI guard asserting VERSION == pyproject version == latest CHANGELOG section (extends the existing test_version_command.py chain to the changelog). Acceptance: failing case demonstrably red on a mismatched fixture, green on current main; no new dependencies. AMENDED by task-131 session (arena/01a0c4c1): implemented tests-only — .github/workflows/ci.yml is dropped from the exclusive paths because PR#33 rewrites it; the guard is enforced by the pytest step that already exists, so no workflow edit is needed.",
+      "note": ""
+    },
+    {
+      "task": "task-131",
+      "zone": "docs-architecture",
+      "agent_branch": "arena/01a0c4c1-nexus-ai-agent",
+      "claimed_at": "2026-09-21T16:21:42Z",
+      "ttl_hours": 24,
+      "status": "active",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "docs/architecture/",
+        "docs/architecture.md",
+        "docs/README.md",
+        ".agents/board.json",
+        "AGENTS.md",
+        "tests/unit/test_docs_integrity.py",
+        "tests/unit/test_agent_board.py"
+      ],
+      "scope": "Architecture-as-code documentation suite: C4/arc42 views, module-boundary map bound to the existing fitness tests, runtime flows, security/observability/testing references — plus a docs-integrity guard test so the docs cannot drift from the tree.",
+      "acceptance_criteria": [
+        "Every documented boundary rule names the test file that enforces it",
+        "docs/README.md indexes every file under docs/ (enforced by tests/unit/test_docs_integrity.py)",
+        "All relative links + mermaid fences validated in CI (pytest, no new dependency)",
+        "No source file is touched: docs/, AGENTS.md, .agents/board.json and two new test files only"
+      ],
+      "note": ""
     }
   ],
   "deferred_log": [
