@@ -370,7 +370,7 @@ class Settings(BaseSettings):
 
     # ── v3.9.0: Cloudflare R2 — technical blob tier (DB backups, heavy RAG docs) ──
     # Not part of the user-file round-robin. Create an R2 API token scoped to a
-    # single bucket (Object Read & Write); see docs/r2-storage.md.
+    # single bucket (Object Read & Write); see docs/ops/r2-storage.md.
     r2_account_id: str | None = Field(
         default=None,
         validation_alias=AliasChoices("R2_ACCOUNT_ID", "NEXUS_R2_ACCOUNT_ID"),

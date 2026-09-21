@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Maintenance (repo hygiene pass, 2026-09-21 — owner-directed)
+
+- **Docs reorganized.** Session audits moved to `docs/audits/`; v1/v2-era plans,
+  phase records and stale todo checklists archived under `docs/history/`;
+  ops runbooks grouped in `docs/ops/`. `docs/README.md` added as the single
+  documentation index. No content was deleted — archival only.
+- **Removed the broken root `termux_install.sh`** (it installed from a
+  nonexistent `requirements.txt`); `scripts/termux_install.sh` repaired to use
+  the canonical entrypoint (`python -m nexus_ai_agent.cli run-bot`) and the real
+  env-var names (`TELEGRAM_BOT_TOKEN`, `NEXUS_OWNER_TELEGRAM_ID`).
+- **Remote-branch janitorial work:** 28 fully merged or closed-superseded
+  branches deleted on the remote, with per-branch dispositions recorded in
+  `docs/DECISION_LOG.md` (r7). Active session branches preserved.
+- **PR #33 closed as superseded:** its security scope was delivered by merged
+  PR #34, its feature-wiring scope collides with the active agent-B lease
+  (PR #32), and its head was in conflict with `main`. The branch is preserved
+  for archaeology; its unique ConversationStorePort-adapter idea stays tracked
+  as task-110.
+
+## [3.13.0] — 2026-09-21
+
 Semver-minor: **P0 Week-1 security batch + feature-engine wiring.** Delivers
 the four "stop the bleeding" items from the 2026-09-21 audit
 (global auth, dashboard PII, path traversal, README honesty) and wires the
