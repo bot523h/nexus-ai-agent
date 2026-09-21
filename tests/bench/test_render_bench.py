@@ -1,12 +1,21 @@
 """Bench regression gate — wave-4 step6.
 
 Deterministic, GPU-free, offline: p50 vs committed baseline.
+
+The bench cores are imported from the installed package
+(``nexus_ai_agent.creative.rendering.bench`` / ``...caption.bench``) — never
+from the unpackaged ``scripts/`` namespace, which is invisible to the
+console-script ``pytest`` CI runs (see
+``tests/architecture/test_scripts_import_boundary.py``).
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+
+from nexus_ai_agent.creative.caption.bench import bench_caption_format
+from nexus_ai_agent.creative.rendering.bench import bench_render_ir_compile
 
 BASELINE = Path(__file__).parent / "baseline_render.json"
 BASELINE_CAPTION = Path(__file__).parent / "baseline_caption.json"
@@ -25,8 +34,6 @@ def test_baseline_files_exist() -> None:
 
 
 def test_render_bench_within_tolerance() -> None:
-    from scripts.bench_render import bench_render_ir_compile
-
     stats = bench_render_ir_compile(iterations=10)
     # Smoke: bench must be positive and not catastrophically slow.  The
     # committed baseline is informational (CI runners vary 2-3×), so we
@@ -41,8 +48,6 @@ def test_render_bench_within_tolerance() -> None:
 
 
 def test_caption_bench_within_tolerance() -> None:
-    from scripts.bench_caption import bench_caption_format
-
     stats = bench_caption_format(iterations=10)
     assert 0 < stats["p50_ms"] < 1000, f"caption bench p50 out of range: {stats['p50_ms']}"
     if BASELINE_CAPTION.is_file():

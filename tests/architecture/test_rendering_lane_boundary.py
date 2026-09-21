@@ -36,6 +36,10 @@ ALLOWED_TOP_LEVEL = {
     "pathlib",
     "re",
     "subprocess",
+    # bench.py is a pure stdlib timing harness (p50/p95 of compile_lane);
+    # it never participates in the encode path.  Same carve-out pattern as
+    # the delivery-pack gate for signing.py (wave-4).
+    "time",
     "typing",
     "pydantic",
     "nexus_ai_agent",

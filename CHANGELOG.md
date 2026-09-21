@@ -42,6 +42,21 @@ Queued for next agents (still 10-step board, disjoint paths):
 `wave4-7` pack coverage 95 %/mutation, `wave4-10` op-gap 6 ops — see
 `.agents/board.json → ten_forward_tasks_wave4`.
 
+### Fixed (supersession fix — session `01a0c506`, PR#40 CI root cause)
+
+- **Bench cores moved into the installed package:**
+  `bench_render_ir_compile` → `nexus_ai_agent.creative.rendering.bench`,
+  `bench_caption_format` → `nexus_ai_agent.creative.caption.bench`;
+  `scripts/bench_*.py` remain thin CLIs with identical argparse interfaces.
+  Root cause of the red CI `test` job: the unit bench imported the
+  unpackaged `scripts/` namespace, which is invisible to the console-script
+  `pytest` CI uses (repo root not on `sys.path`) while `python -m pytest`
+  masked it locally.  Adds
+  `tests/architecture/test_scripts_import_boundary.py` (the class of error
+  is now mechanically closed) and allows stdlib `time` in the rendering-lane
+  import allowlist for the pure timing harness.
+  Evidence & A/B reproduction: `docs/audits/FORENSIC_PR40_CI_2026-09-21.md`.
+
 ### Added (session `01a0c460` — tasks 125/129/130/115)
 
 - **Creative op-gap (task-125):** six pure Level-B pack operations —

@@ -1,63 +1,20 @@
 #!/usr/bin/env python3
-"""Render-lane bench — wave-4 step6 (pure compile, no FFmpeg).
+"""Render-lane bench CLI — thin wrapper over the packaged bench core.
 
-Measures ``compile_lane`` (IR → filtergraph → argv) so the bench is
-deterministic, GPU-free and offline.  The result is stored as a JSON
-baseline in ``tests/bench/baseline_render.json``; CI fails when the
-current p50 is >15 % above the committed baseline.
+The measurable logic lives in
+:func:`nexus_ai_agent.creative.rendering.bench.bench_render_ir_compile`
+(installed package, importable by tests and CI).  This script only parses
+arguments and prints — it must stay free of logic so the test suite never
+needs to import the unpackaged ``scripts/`` namespace.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import time
 from pathlib import Path
 
-from nexus_ai_agent.creative.rendering.compiler import compile_lane
-from nexus_ai_agent.creative.rendering.ir import (
-    LaneIR,
-    LaneProfile,
-    LaneSource,
-    SpeedOp,
-    TrimOp,
-)
-
-
-def _fixture_ir() -> LaneIR:
-    main = LaneSource(
-        asset_id="main", path="/tmp/fake_main.mp4", media_kind="video", duration_us=5_000_000
-    )
-    return LaneIR(
-        main=main,
-        ops=(TrimOp(in_us=0, out_us=2_500_000), SpeedOp(factor=1.5)),
-        profile=LaneProfile(width=1280, height=720, fps=30),
-    )
-
-
-def bench_render_ir_compile(iterations: int = 50) -> dict[str, float]:
-    """Compile ``LaneIR → argv`` ``iterations`` times, return timing stats (ms)."""
-    ir = _fixture_ir()
-    # Warm up once so any lazy import is not timed
-    compile_lane(ir).argv(Path("/tmp/out.mp4"))
-
-    times: list[float] = []
-    for _ in range(iterations):
-        t0 = time.perf_counter()
-        compiled = compile_lane(ir)
-        cmd = compiled.argv(Path("/tmp/out.mp4"))
-        _ = " ".join(cmd)
-        times.append((time.perf_counter() - t0) * 1000.0)
-
-    times.sort()
-    return {
-        "iterations": float(iterations),
-        "p50_ms": times[len(times) // 2],
-        "p95_ms": times[int(len(times) * 0.95)],
-        "mean_ms": sum(times) / len(times),
-        "min_ms": times[0],
-        "max_ms": times[-1],
-    }
+from nexus_ai_agent.creative.rendering.bench import bench_render_ir_compile
 
 
 def main() -> int:

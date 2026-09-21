@@ -1,42 +1,20 @@
 #!/usr/bin/env python3
-"""Caption-engine bench — wave-4 step6 (pure formatting, no Whisper)."""
+"""Caption-engine bench CLI — thin wrapper over the packaged bench core.
+
+The measurable logic lives in
+:func:`nexus_ai_agent.creative.caption.bench.bench_caption_format`
+(installed package, importable by tests and CI).  This script only parses
+arguments and prints — it must stay free of logic so the test suite never
+needs to import the unpackaged ``scripts/`` namespace.
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
-import time
 from pathlib import Path
 
-
-def bench_caption_format(iterations: int = 200) -> dict[str, float]:
-    from nexus_ai_agent.creative.packs.caption.formatters import format_srt
-    from nexus_ai_agent.creative.packs.caption.models import TranscriptSegment
-
-    segs = [
-        TranscriptSegment(start_us=0, end_us=500_000, text="سلام"),
-        TranscriptSegment(start_us=500_000, end_us=1_000_000, text="دنیا"),
-        TranscriptSegment(start_us=1_000_000, end_us=1_500_000, text="نگار"),
-    ]
-    # Warm up
-    format_srt(segs)
-
-    times: list[float] = []
-    for _ in range(iterations):
-        t0 = time.perf_counter()
-        out = format_srt(segs)
-        _ = len(out)
-        times.append((time.perf_counter() - t0) * 1000.0)
-
-    times.sort()
-    return {
-        "iterations": float(iterations),
-        "p50_ms": times[len(times) // 2],
-        "p95_ms": times[int(len(times) * 0.95)],
-        "mean_ms": sum(times) / len(times),
-        "min_ms": times[0],
-        "max_ms": times[-1],
-    }
+from nexus_ai_agent.creative.caption.bench import bench_caption_format
 
 
 def main() -> int:
