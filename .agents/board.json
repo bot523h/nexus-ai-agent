@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T23:39:49Z",
+  "updated_at": "2026-09-21T23:42:53Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -378,7 +378,7 @@
       "zone": "feature-wiring",
       "priority": "P1",
       "assigned_to": "عامل B (سشن 01a0c634)",
-      "status": "in_progress",
+      "status": "delivered_pending_review",
       "exclusive_paths": [
         "src/nexus_ai_agent/bot/surface/",
         "src/nexus_ai_agent/features/gamification.py",
@@ -401,7 +401,7 @@
         "recall@k موتور RAG روی fixture ثابت گزارش شود",
         "ruff/mypy/pytest هدفمند سبز؛ گیت‌های کامل واگذار به ci-gates-steward"
       ],
-      "progress": "tick4_done_surface_layer"
+      "progress": "tick5_done_wiring"
     }
   ],
   "zones": [
@@ -1452,6 +1452,20 @@
         "tests: surface_fakes.py + 63 tests (18 gamification, 28 docs, 17 _ptb) — 143 tests green in this session so far"
       ],
       "next": "tick 5 — wire the seven commands in bot/handlers.py (registration lines untouched: only the imported symbols change) + doc-chat routing in on_message"
+    },
+    {
+      "at": "2026-09-21T23:42:53Z",
+      "by_branch": "arena/01a0c634-nexus-ai-agent",
+      "agent": "عامل B (سشن 01a0c634)",
+      "tick": 5,
+      "done": [
+        "bot/handlers.py: the seven stub commands now resolve to bot/surface imports; registration lines byte-identical",
+        "stub closures deleted (they were dead code answering with fixed strings)",
+        "on_message: free text routed to route_doc_text BEFORE the LLM path (no egress while doc-chat is active)",
+        "tests/unit/test_surface_registration.py: 9 AST contract tests (import source, one registration per command, no shadowing, no stub reply, routing order)",
+        "full-suite A/B in this sandbox: 22 failed / 943 passed / 7 skipped / 27 collection errors vs 22 / 934 / 7 / 27 on the pristine tree → zero regression, +9"
+      ],
+      "next": "tick 6 — 10 forward tasks on the board, docs alignment, PR open"
     }
   ],
   "ten_forward_tasks_wave4": [
@@ -1701,6 +1715,12 @@
       "by_branch": "arena/01a0c634-nexus-ai-agent",
       "action": "task-122/task-103: PR#32 triaged blob-vs-blob against post-PR#34 main",
       "evidence_fa": "۲۶ فایل PR#32 تک‌تک با main مقایسه شد: ۱۵ فایل منسوخ (PR#34 لند کرده)، ۴ فایل فقط بدهی تداخل، ۳ فایل قابل انتقال خالص و ۴ فایل نیازمند انطباق API. نتیجه: PR#32 قابل rebase-and-merge نیست (۱۷۶ فایل عقب‌تر، mergeable=CONFLICTING، پنج گروه فرمان دوبل‌سیم‌کشی می‌شد). سند: docs/audits/PR32_TRIAGE_2026-09-21.md"
+    },
+    {
+      "at": "2026-09-21T23:42:53Z",
+      "by_branch": "arena/01a0c634-nexus-ai-agent",
+      "action": "bot/handlers.py touched — 7 stub commands re-pointed at bot/surface, registration lines untouched",
+      "evidence_fa": "تنها بلوک import و تعریف‌های استاب تغییر کرد (+۳۰/-۳۰ خط)؛ هفت خط CommandHandler دست‌نخورده ماندند چون اسامی هندلرها همان است و فقط مبدأ ایمپورت عوض شده. متن آزاد در on_message پیش از مسیر LLM به route_doc_text سپرده شد. قرارداد سیم‌کشی با تست AST (tests/unit/test_surface_registration.py) قفل شده تا هیچ ریبِیسی نتواند بی‌صدا استاب محلی را برگرداند."
     }
   ]
 }

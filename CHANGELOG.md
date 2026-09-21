@@ -59,6 +59,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     "not available on this server" message instead of a stack trace, and nothing is ever claimed to
     have happened when it did not.
 
+### Changed (agent B · `arena/01a0c634-nexus-ai-agent`)
+
+- **`bot/handlers.py` — the seven stub commands now run real code.** Only the import block and the
+  stub definitions changed (`+30/-30`); every `CommandHandler(...)` registration line is untouched,
+  because the handlers kept their names and only their import source changed. The stub closures were
+  deleted rather than bypassed — dead code that answers with a fixed string is worse than no command.
+  Free text is now offered to the document retriever inside `on_message` **before** the LLM path, so
+  `/chat_with_doc` costs no egress and no tokens. The wiring is locked down by an AST contract test
+  (`tests/unit/test_surface_registration.py`): which symbols are imported, one registration per
+  command, no local definition shadowing an imported handler, no stub literal ever passed to a reply,
+  and doc-chat routing ordered ahead of the correlation-id/LLM section.
+
 ### Audit (agent B)
 
 - `docs/audits/PR32_TRIAGE_2026-09-21.md` — forensic triage of PR#32 against the merged PR#34:
