@@ -5,7 +5,8 @@ These gates mechanically enforce the Wave 6 contract:
    ``wgpu``, or external C-extensions in the pure motion graphics pack substrate;
 2. **declarative pack purity** — ``creative/packs/motion/`` contains only pure
    data models and handlers (stdlib + pydantic + studio);
-3. **boundary isolation** — motion pack files may only import from creative.packs and creative.studio;
+3. **boundary isolation** — motion pack files may only import from creative.packs
+   and creative.studio;
 4. **data-only manifest** — ``pack.manifest.json`` contains no executable keys
    and declares zero arbitrary execution permissions.
 """

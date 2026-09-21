@@ -111,8 +111,8 @@ def test_no_heavy_video_imports_in_edit_substrate() -> None:
         if hit:
             violations.append(f"{file_path.relative_to(REPO_ROOT)} imports: {sorted(hit)}")
 
-    assert not violations, (
-        "heavy video/ML imports found in Wave 3 edit substrate:\n" + "\n".join(violations)
+    assert not violations, "heavy video/ML imports found in Wave 3 edit substrate:\n" + "\n".join(
+        violations
     )
 
 

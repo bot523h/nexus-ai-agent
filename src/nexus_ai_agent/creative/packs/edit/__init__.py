@@ -1,4 +1,5 @@
-"""``nexus.edit.timeline`` — Local non-destructive timeline editing, trimming, ripple delete, and speed ramping (Wave 3 substrate).
+"""``nexus.edit.timeline`` — Local non-destructive timeline editing, trimming,
+ripple delete, and speed ramping (Wave 3 substrate).
 
 This package provides the pure substrate for Nagar timeline editing:
 * typed data models (:class:`TrimInput`, :class:`RippleDeleteInput`, :class:`InsertGapInput`,

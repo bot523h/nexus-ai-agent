@@ -5,7 +5,8 @@ These gates mechanically enforce the Wave 5 contract:
    ``scipy``, ``soundfile``, ``aubio``, or ``pydub`` imports anywhere in the audio pack substrate;
 2. **declarative pack purity** — ``creative/packs/audio/`` contains only pure
    data models and handlers (stdlib + pydantic + studio);
-3. **boundary isolation** — audio pack files may only import from creative.packs and creative.studio;
+3. **boundary isolation** — audio pack files may only import from creative.packs
+   and creative.studio;
 4. **data-only manifest** — ``pack.manifest.json`` contains no executable keys
    and declares zero arbitrary execution permissions.
 """
@@ -111,8 +112,8 @@ def test_no_heavy_audio_imports_in_substrate() -> None:
         if hit:
             violations.append(f"{file_path.relative_to(REPO_ROOT)} imports: {sorted(hit)}")
 
-    assert not violations, (
-        "heavy ML/DSP imports found in Wave 5 audio substrate:\n" + "\n".join(violations)
+    assert not violations, "heavy ML/DSP imports found in Wave 5 audio substrate:\n" + "\n".join(
+        violations
     )
 
 

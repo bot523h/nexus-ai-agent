@@ -61,12 +61,14 @@ worktree-style isolation + a shared task board with leases and stale-lease takeo
 | **عامل C** | `nagar-wave3-timeline-edit-delivery` | nagar-creative-edit | ✅ completed — PR #31 merged (`c41b1b0`), lease released | `arena/01a0c36f-nexus-ai-agent` |
 | **عامل D** | `board-gc-engineered-handoff` | coordination | ✅ completed — board cleanup + 10-task engineered handoff | `arena/01a0c3ca-nexus-ai-agent` |
 
-> **⚠️ INCIDENT (2026-09-21, registered by عامل D):** PR #31 was merged to `main` with a red
-> lint gate. On `c41b1b0`, `ruff check .` reports **71 errors** and `ruff format --check .`
-> flags **16 files**, so CI run [35594818988](https://github.com/bot523h/nexus-ai-agent/actions/runs/35594818988)
-> fails at `ruff check .` before pytest ever runs. The Nagar pack *tests* are green
-> (verified locally), but `main` must be considered **RED until task-101 merges**.
-> Full evidence and the complete done/not-done analysis: `docs/HANDOFF_ANALYSIS_2026-09-21.md`.
+> **⚠️ INCIDENT (2026-09-21) — RESOLVED by عامل D ✅:** PR #31 was merged to `main` with a red
+> lint gate (71 ruff errors + 16 unformatted files; CI run
+> [35594818988](https://github.com/bot523h/nexus-ai-agent/actions/runs/35594818988) died at `ruff check .`).
+> عامل D claimed **task-101**, fixed all 71 errors mechanically (zero semantic change — proven by
+> 180/180 targeted tests, 749 suite passes, and an A/B `git stash` reproduction of the 20
+> pre-existing env failures on the base commit), and opened the restore PR from
+> `arena/01a0c3ca-nexus-ai-agent`. Full evidence: `docs/HANDOFF_ANALYSIS_2026-09-21.md`.
+> Until that PR merges, treat `main` as RED.
 
 ---
 
@@ -76,7 +78,7 @@ worktree-style isolation + a shared task board with leases and stale-lease takeo
 ۱۰ وظیفه بعدی با معیار پذیرش، مسیر انحصاری گسسته و ابزارهای تحقیق‌شده رایگان در
 `.agents/board.json` مستند شده‌اند؛ خلاصه اولویت‌بندی شده:
 
-1. **[P0 — هر عامل + تایید گیت‌ها با عامل A] تسک ۱۰۱ — نجات گیت‌های کیفیت (`ci-restore`):** رفع دقیقاً ۷۱ خطای ruff (40×E501، 28×F401، 2×I001، 1×F841) + فرمت ۱۶ فایل — فقط تمیزکاری مکانیکی، صفر تغییر معنایی، تا CI روی `main` سبز شود.
+1. **[P0 — ✅ انجام شد توسط عامل D] تسک ۱۰۱ — نجات گیت‌های کیفیت (`ci-restore`):** ۷۱ خطای ruff → ۰ (۲۸×F401 خودکار، ۲×I001، ۴۰×E501 با شکست رشته‌های همسان-بایت، ۱×F841 به fail-fast بدون انتساب) + فرمت ۱۶ فایل. اثبات صفر-رگرسیون: 180/180 هدفمند + 749 گسترده + بازتولید A/B شکست‌های محیطی روی commit پایه. PR از شاخه سشن عامل D باز است.
 2. **[P0 — عامل A] تسک ۱۰۲ — بچ امنیتی (`P0-security-batch`):** بستن P0-1 تا P0-10 ممیزی؛ معیار پذیرش: AuthMiddleware روی تمام مسیرهای خصوصی، حذف PII از `/api/dashboard/recent_users`، گارد Path Traversal با `resolve()+is_relative_to`، احراز واقعی فورس‌جوین، گیت رضایت خروجی LLM.
 3. **[P1 — عامل B] تسک ۱۰۳ — ادغام PR#32 (`feature-wiring`):** rebase روی main سبز، حل تداخل `board.json` به سود آخرین وضعیت واگذاری، هماهنگی `handlers.py` با عامل A.
 4. **[P1 — عامل آزاد] تسک ۱۰۴ — نگار موج ۸، «لاین اعمال» (`nagar-render-lane`):** از IR خالص پک‌ها تا یک انکد واقعی FFmpeg — الگوی موج 2c: plan → IR → filtergraph → argv → یک پروسه → probe اثبات‌شده؛ نگاشت فنی هر عملیات (atrim/xfade/loudnorm دوماسه/sidechaincompress/tpad/tmix) در تخته.
@@ -91,7 +93,7 @@ Full details + acceptance criteria: `.agents/board.json` · Analysis: `docs/HAND
 
 ## Merge order
 
-1. **task-101** (lint restore) merges first — everything else rebases on a green `main`.
+1. **task-101** (lint restore — ✅ delivered by عامل D, PR open from `arena/01a0c3ca-nexus-ai-agent`) merges first — everything else rebases on a green `main`.
 2. **PR #32** rebases, resolves the `.agents/board.json` conflict in favor of *this* handoff state, then merges (handlers.py coordination with عامل A).
 3. task-102 / 104 / 105 / 107 / 108 / 109 / 110 proceed **in parallel on disjoint paths**.
 4. **task-106** (creative surface) lands after PR #32's `bot/surface` pattern is on `main`.

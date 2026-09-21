@@ -483,7 +483,8 @@ def register_caption_operations(registry: CapabilityRegistry) -> CapabilityRegis
         "generate_ass_rtl",
         OperationSpec(
             operation_id=OPERATION_GENERATE_ASS,
-            description="Generate Advanced SubStation Alpha (.ass) with Persian/RTL formatting (level B).",
+            description="Generate Advanced SubStation Alpha (.ass) with "
+            "Persian/RTL formatting (level B).",
             permission_level=PermissionLevel.REVERSIBLE,
             input_model=GenerateAssInput,
             handler=_generate_ass_rtl,

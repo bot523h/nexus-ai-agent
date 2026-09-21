@@ -14,7 +14,6 @@ This module implements the Nagar Command Bus operations for non-destructive time
 from __future__ import annotations
 
 import hashlib
-import uuid
 
 from nexus_ai_agent.creative.packs.edit.models import (
     DOMAIN,
@@ -86,9 +85,7 @@ def _trim(project: Project, context: OperationContext) -> OperationOutcome:
         },
     )
 
-    new_project = project.model_copy(
-        update={"assets": [*project.assets, trimmed_rec]}
-    )
+    new_project = project.model_copy(update={"assets": [*project.assets, trimmed_rec]})
     return OperationOutcome(
         new_project,
         context.history,
@@ -108,9 +105,7 @@ def _ripple_delete(project: Project, context: OperationContext) -> OperationOutc
     payload = RippleDeleteInput.model_validate(context.input_data)
     new_duration_us = max(0, project.timeline.duration_us - payload.duration_us)
 
-    updated_timeline = project.timeline.model_copy(
-        update={"duration_us": new_duration_us}
-    )
+    updated_timeline = project.timeline.model_copy(update={"duration_us": new_duration_us})
     new_project = project.model_copy(update={"timeline": updated_timeline})
 
     return OperationOutcome(
@@ -130,9 +125,7 @@ def _insert_gap(project: Project, context: OperationContext) -> OperationOutcome
     payload = InsertGapInput.model_validate(context.input_data)
     new_duration_us = project.timeline.duration_us + payload.duration_us
 
-    updated_timeline = project.timeline.model_copy(
-        update={"duration_us": new_duration_us}
-    )
+    updated_timeline = project.timeline.model_copy(update={"duration_us": new_duration_us})
     new_project = project.model_copy(update={"timeline": updated_timeline})
 
     return OperationOutcome(
@@ -161,7 +154,9 @@ def _speed_ramp(project: Project, context: OperationContext) -> OperationOutcome
     new_dur = max(1, int(original_dur / payload.speed_factor))
     output_id = payload.output_asset_id or f"{payload.clip_asset_id}_speed_{payload.speed_factor}"
 
-    digest_seed = f"{source_rec.content_sha256}:speed:{payload.speed_factor}:{payload.maintain_pitch}"
+    digest_seed = (
+        f"{source_rec.content_sha256}:speed:{payload.speed_factor}:{payload.maintain_pitch}"
+    )
     derived_sha256 = hashlib.sha256(digest_seed.encode("utf-8")).hexdigest()
 
     ramped_rec = AssetRecord(
@@ -180,9 +175,7 @@ def _speed_ramp(project: Project, context: OperationContext) -> OperationOutcome
         },
     )
 
-    new_project = project.model_copy(
-        update={"assets": [*project.assets, ramped_rec]}
-    )
+    new_project = project.model_copy(update={"assets": [*project.assets, ramped_rec]})
     return OperationOutcome(
         new_project,
         context.history,
@@ -225,9 +218,7 @@ def _reverse_segment(project: Project, context: OperationContext) -> OperationOu
         },
     )
 
-    new_project = project.model_copy(
-        update={"assets": [*project.assets, reversed_rec]}
-    )
+    new_project = project.model_copy(update={"assets": [*project.assets, reversed_rec]})
     return OperationOutcome(
         new_project,
         context.history,
@@ -270,9 +261,7 @@ def _freeze_frame(project: Project, context: OperationContext) -> OperationOutco
         },
     )
 
-    new_project = project.model_copy(
-        update={"assets": [*project.assets, freeze_rec]}
-    )
+    new_project = project.model_copy(update={"assets": [*project.assets, freeze_rec]})
     return OperationOutcome(
         new_project,
         context.history,
@@ -304,7 +293,10 @@ def _attach_b_roll(project: Project, context: OperationContext) -> OperationOutc
     dur = payload.duration_us or broll_rec.duration_us or 3_000_000
     output_id = payload.output_asset_id or f"broll_{payload.main_clip_id}_{payload.b_roll_asset_id}"
 
-    digest_seed = f"{main_rec.content_sha256}:{broll_rec.content_sha256}:broll:{payload.start_offset_us}:{dur}"
+    digest_seed = (
+        f"{main_rec.content_sha256}:{broll_rec.content_sha256}:broll:"
+        f"{payload.start_offset_us}:{dur}"
+    )
     derived_sha256 = hashlib.sha256(digest_seed.encode("utf-8")).hexdigest()
 
     broll_layer_rec = AssetRecord(
@@ -323,9 +315,7 @@ def _attach_b_roll(project: Project, context: OperationContext) -> OperationOutc
         },
     )
 
-    new_project = project.model_copy(
-        update={"assets": [*project.assets, broll_layer_rec]}
-    )
+    new_project = project.model_copy(update={"assets": [*project.assets, broll_layer_rec]})
     return OperationOutcome(
         new_project,
         context.history,

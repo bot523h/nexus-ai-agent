@@ -3,16 +3,18 @@ from __future__ import annotations
 import re
 
 # Arabic to Persian character mapping and diacritics removal
-_ARABIC_TO_PERSIAN = str.maketrans({
-    "ي": "ی",
-    "ى": "ی",
-    "ك": "ک",
-    "ة": "ه",
-    "ؤ": "و",
-    "إ": "ا",
-    "أ": "ا",
-    "ء": "",
-})
+_ARABIC_TO_PERSIAN = str.maketrans(
+    {
+        "ي": "ی",
+        "ى": "ی",
+        "ك": "ک",
+        "ة": "ه",
+        "ؤ": "و",
+        "إ": "ا",
+        "أ": "ا",
+        "ء": "",
+    }
+)
 
 _DIACRITICS_RE = re.compile(r"[\u064B-\u0652\u0658]")
 

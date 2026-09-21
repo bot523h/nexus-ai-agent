@@ -5,7 +5,8 @@ These gates mechanically enforce the Wave 7 contract:
    ``colour``, ``ffmpeg``, or external C-extensions in the pure delivery pack substrate;
 2. **declarative pack purity** — ``creative/packs/delivery/`` contains only pure
    data models and handlers (stdlib + pydantic + studio);
-3. **boundary isolation** — delivery pack files may only import from creative.packs and creative.studio;
+3. **boundary isolation** — delivery pack files may only import from creative.packs
+   and creative.studio;
 4. **data-only manifest** — ``pack.manifest.json`` contains no executable keys
    and declares zero arbitrary execution permissions.
 """

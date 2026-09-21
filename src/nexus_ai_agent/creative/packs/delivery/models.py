@@ -65,7 +65,9 @@ class AdjustExposureInput(BaseModel):
     clip_asset_id: str = Field(min_length=1)
     exposure_ev: float = Field(default=0.0, ge=-4.0, le=4.0, description="Exposure shift in EV.")
     contrast: float = Field(default=1.0, ge=0.2, le=3.0, description="Contrast curve slope.")
-    temperature_k: int = Field(default=6500, ge=2000, le=12000, description="Color temperature in Kelvin.")
+    temperature_k: int = Field(
+        default=6500, ge=2000, le=12000, description="Color temperature in Kelvin."
+    )
     tint: float = Field(default=0.0, ge=-50.0, le=50.0, description="Green-magenta tint shift.")
     output_asset_id: str | None = None
 

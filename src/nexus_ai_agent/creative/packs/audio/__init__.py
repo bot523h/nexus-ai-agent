@@ -1,4 +1,5 @@
-"""``nexus.audio.studio`` — Local studio audio processing, loudness normalization, and beat sync (Wave 5 substrate).
+"""``nexus.audio.studio`` — Local studio audio processing, loudness normalization,
+and beat sync (Wave 5 substrate).
 
 This package provides the pure substrate for Nagar audio studio editing:
 * typed data models (:class:`BeatMarker`, :class:`BeatGridRef`, :class:`DetectBeatsInput`,
