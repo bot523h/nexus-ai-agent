@@ -1,8 +1,8 @@
 """Storage resilience: retry, idempotency, secret-safe logging (wave-4 step3).
 
-Every cloud blob (R2/S3) and every checkpoint upload runs through this
-module.  The core is three primitives that compose without any new
-dependency:
+Opt-in primitives for cloud blob and checkpoint adapters. Provider wiring
+is separate: importing this module does not enable retries globally.
+The core is three primitives that compose without any new dependency:
 
 * :func:`retry_with_backoff` — exponential backoff with full jitter for
   idempotent operations (upload, download, delete).  Non-idempotent ops
@@ -32,12 +32,14 @@ import asyncio
 import hashlib
 import os
 import random
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
 from nexus_ai_agent.observability.logging import get_logger
+from nexus_ai_agent.observability.logging import redact_secrets as _redact_text
 
 logger = get_logger(__name__)
 
@@ -48,7 +50,8 @@ T = TypeVar("T")
 
 def _int_env(name: str, default: int) -> int:
     try:
-        return int(os.environ.get(name, str(default)).strip() or default)
+        value = int(os.environ.get(name, str(default)).strip() or default)
+        return value if value >= 0 else default
     except (ValueError, TypeError):
         return default
 
@@ -75,8 +78,11 @@ def idempotency_key(user_id: str | int, object_key: str, content: bytes | None =
     provided) binds the key to the exact bytes so a changed file gets a
     fresh key.  The output is hex ``sha256`` — safe for header/metadata.
     """
+    user = str(user_id)
+    if "\x00" in user or "\x00" in object_key:
+        raise ValueError("idempotency components must not contain NUL")
     h = hashlib.sha256()
-    h.update(str(user_id).encode("utf-8"))
+    h.update(user.encode("utf-8"))
     h.update(b"\x00")
     h.update(object_key.encode("utf-8"))
     if content is not None:
@@ -89,36 +95,65 @@ def idempotency_key(user_id: str | int, object_key: str, content: bytes | None =
 
 
 _REDACT_MARKER = "[REDACTED]"
+_SENSITIVE_KEY = re.compile(
+    r"(?i)(token|secret|password|api[_-]?key|access[_-]?key|signing[_-]?key|"
+    r"authorization|bearer|credential)"
+)
+_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)(?:[\w-]*(?:api[_-]?key|secret|token|password|signing[_-]?key|credential)"
+    r"[\w-]*)[\"']?\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;}]+)"
+)
+_HEX_SECRET = re.compile(r"\b[0-9a-fA-F]{64}\b")
+_LOG_LEVELS = frozenset({"debug", "info", "warning", "error", "critical", "exception"})
 
 
 def redact_secrets(message: str) -> str:
-    """Strip obvious secret material from a log message.
+    """Best-effort known-shape redaction, failing closed on sanitizer errors.
 
-    This is a *first* line of defence; the structlog processor in
-    ``observability/logging.py`` is the second.  The function never
-    raises — on any internal error the original message is returned with
-    ``[REDACTED?]`` appended so the log still shows the operation was
-    redacted.
+    Not a general secret detector: callers must not log arbitrary credentials.
     """
     try:
-        import re
-
-        # Replace key=value / key: value patterns for known secret markers
-        # e.g. ``token=secret123`` or ``password: hunter2`` → ``[REDACTED]``
-        pattern = re.compile(r"(?i)(api_key|secret|token|password|signing_key)\s*[:=]\s*\S+")
-        message = pattern.sub(_REDACT_MARKER, message)
-        # Also scrub any bare 32-byte hex that looks like a signing key (64 hex)
-        message = re.sub(r"\b[0-9a-fA-F]{64}\b", _REDACT_MARKER, message)
-        return message
+        message = _SECRET_ASSIGNMENT.sub(_REDACT_MARKER, message)
+        return _HEX_SECRET.sub(_REDACT_MARKER, _redact_text(message))
     except Exception:
-        return message + " [REDACTED?]"
+        return _REDACT_MARKER
+
+
+def _safe_field(value: Any, depth: int = 0) -> Any:
+    """Copy JSON-like fields; bound recursion and never render opaque objects."""
+    if depth >= 8:
+        return _REDACT_MARKER
+    if isinstance(value, str):
+        return redact_secrets(value)
+    if value is None or type(value) in (bool, int, float):
+        return value
+    if type(value) is dict:
+        return {
+            key: _REDACT_MARKER if _SENSITIVE_KEY.search(key) else _safe_field(item, depth + 1)
+            for key, item in value.items()
+            if isinstance(key, str)
+        }
+    if type(value) in (list, tuple):
+        return [_safe_field(item, depth + 1) for item in value]
+    return _REDACT_MARKER
 
 
 def redacted_log(level: str, msg: str, **kwargs: Any) -> None:
+    """Scrub event and fields before the sink, without mutating caller data.
+
+    Raw traceback fields are suppressed; they bypass string redaction in many
+    logging pipelines. Log exception *types*, not exception payloads.
+    """
     safe = redact_secrets(msg)
-    # Structured logger already redacts, but we pre-scrub for defence in depth.
-    log_fn = getattr(logger, level, logger.info)
-    log_fn(safe, **kwargs)
+    fields = _safe_field(kwargs)
+    for key in ("exc_info", "stack_info"):
+        if key in fields:
+            fields[key] = False
+    log_fn = getattr(logger, level if level in _LOG_LEVELS else "info")
+    # logger.exception implicitly enables raw traceback output.
+    if level == "exception":
+        fields["exc_info"] = False
+    log_fn(safe, **fields)
 
 
 # -- retry core -------------------------------------------------------------
@@ -134,13 +169,13 @@ class RetryExhausted(RuntimeError):
     """Raised when all retry attempts failed; carries the last exception."""
 
     def __init__(self, last_exc: BaseException, attempts: int, elapsed_ms: int) -> None:
-        super().__init__(f"retry exhausted after {attempts} attempts: {last_exc}")
+        super().__init__(f"retry exhausted after {attempts} attempts ({type(last_exc).__name__})")
         self.last_exc = last_exc
         self.attempts = attempts
         self.elapsed_ms = elapsed_ms
 
 
-# Canonical retryable errors: transport hiccups, 429, 5xx.
+# Default retryable errors: Python transport errors (not HTTP status codes).
 # Callers may broaden/narrow by passing ``retry_on``.
 _DEFAULT_RETRYABLE = (ConnectionError, TimeoutError, asyncio.TimeoutError)
 
@@ -179,37 +214,50 @@ async def retry_with_backoff(
 
     Raises:
         ``RetryExhausted`` when the retry budget is exhausted — carries
-        the last exception as ``.last_exc``.
+        the last exception as ``.last_exc`` (sensitive; never log it).
+        ``ValueError`` for invalid explicit retry counts/delays, before I/O.
+        Cancellation and process-control exceptions always propagate.
         Non-retryable exceptions are raised immediately without wrapping.
     """
+    start = time.monotonic()
     if not idempotent:
         # No retry for non-idempotent writes — fail fast
         result = await func()
-        return result, RetryOutcome(attempts=1, elapsed_ms=0)
+        elapsed = int((time.monotonic() - start) * 1000)
+        return result, RetryOutcome(attempts=1, elapsed_ms=elapsed)
 
     attempts = max_attempts if max_attempts is not None else max_retries() + 1
     b_base = base_ms if base_ms is not None else backoff_base_ms()
     b_max = max_ms if max_ms is not None else backoff_max_ms()
 
-    start = time.monotonic()
+    for name, value, minimum in (
+        ("max_attempts", attempts, 1),
+        ("base_ms", b_base, 0),
+        ("max_ms", b_max, 0),
+    ):
+        if type(value) is not int or value < minimum:
+            raise ValueError(f"{name} must be an integer >= {minimum}")
+    backoff = min(b_base, b_max)
     last_exc: BaseException | None = None
     for attempt in range(1, attempts + 1):
         try:
             result = await func()
             elapsed = int((time.monotonic() - start) * 1000)
             return result, RetryOutcome(attempts=attempt, elapsed_ms=elapsed)
-        except BaseException as exc:  # noqa: BLE001
+        except Exception as exc:
             last_exc = exc
             if not _should_retry(exc, retry_on):
                 raise
             if attempt == attempts:
                 break
-            # Backoff: base * 2**(attempt-1), capped, with optional jitter
-            backoff = min(b_base * (2 ** (attempt - 1)), b_max)
+            # Saturating recurrence avoids constructing enormous powers of two.
             sleep_ms = random.uniform(0, backoff) if jitter else backoff
-            redacted_log("warning", f"storage retry {attempt}/{attempts} — {exc!r}")
+            redacted_log(
+                "warning", f"storage retry {attempt}/{attempts}", error_type=type(exc).__name__
+            )
             await asyncio.sleep(sleep_ms / 1000.0)
+            backoff = min(backoff * 2, b_max)
 
     assert last_exc is not None
     elapsed = int((time.monotonic() - start) * 1000)
-    raise RetryExhausted(last_exc, attempts=attempts, elapsed_ms=elapsed)
+    raise RetryExhausted(last_exc, attempts=attempts, elapsed_ms=elapsed) from None
