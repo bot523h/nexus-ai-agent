@@ -52,6 +52,12 @@ nexus = "nexus_ai_agent.cli:app"
 pdf = [
   "pypdf>=5.1",  # D3: real PDF text extraction (clear error when missing)
 ]
+speech = [
+  "faster-whisper>=1.0,<2",  # Wave 9: local CTranslate2 ASR (int8 CPU, no torch)
+]
+translate = [
+  "argostranslate>=1.9,<2",  # Wave 9: fully-offline neural translation (incl. Persian)
+]
 dev = [
   "pytest>=8.0",
   "pytest-asyncio>=0.23",
