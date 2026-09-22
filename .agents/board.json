@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-22T22:46:36Z",
+  "updated_at": "2026-09-22T22:47:38Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1650,32 +1650,12 @@
       "title_fa": "سیم‌کشی سه موتور مرده پشت فرمان‌های زنده از طریق bot/surface",
       "zone": "feature-wiring-dead-engines",
       "priority": "P0",
-      "status": "active_in_review",
-      "agent_branch": "arena/01a0cb38-nexus-ai-agent",
-      "claimed_at": "2026-09-22T22:46:00Z",
+      "status": "done",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "exclusive_paths": [
-        "src/nexus_ai_agent/bot/surface/__init__.py",
-        "src/nexus_ai_agent/bot/surface/_ptb.py",
-        "src/nexus_ai_agent/bot/surface/ads.py",
-        "src/nexus_ai_agent/bot/surface/channel_management.py",
-        "src/nexus_ai_agent/bot/surface/onboarding.py",
-        "tests/unit/test_surface_ads.py",
-        "tests/unit/test_surface_channel_management.py",
-        "tests/unit/test_surface_onboarding.py",
-        "tests/unit/test_surface_registration.py",
-        "tests/unit/test_surface_ptb.py",
-        "tests/unit/surface_fakes.py",
-        "docs/audits/DEAD_ENGINES_2026-09-22.md",
-        "docs/DECISION_LOG.md",
-        "docs/architecture/SECURITY.md",
-        "docs/architecture/MODULE_MAP.md",
-        "docs/README.md",
-        "CHANGELOG.md",
-        "src/nexus_ai_agent/bot/handlers.py",
-        "src/nexus_ai_agent/features/ads.py"
-      ],
+      "exclusive_paths": [],
       "scope": "13 commands in bot/handlers.py answered with constants while features/ads.py, features/channel_manager.py and features/onboarding.py had ZERO importers in src/. New: bot/surface/{ads,channel_management,onboarding}.py (framework-free, asyncio.to_thread), +3 accessors in _ptb.py, handlers.py loses the stub bodies (imports only), AdManager.create_campaign annotation widened int->float to match its Float column, and an ownership check for the engine's id-only pause/resume/delete (IDOR, SECURITY T14). Ratchet: registration test EXPECTED 7->20 commands + callback map + 13 forbidden stub strings; new R12 (surface package importable without telegram).",
       "acceptance_criteria": [
         "no command in the batch replies with a literal any more — enforced by test_surface_registration (AST) and by behavioural tests that read the DB row / the bot double's recorded calls",
@@ -1695,9 +1675,13 @@
         "zero_importer_proof": "grep -rn over src/ tests/ scripts/ migrations/ for each engine returned only two comments in bot/handlers.py; get_due_campaigns / mark_delivered / run_nightly_tasks / post_viral_content / is_first_time_user / send_onboarding had no caller at all",
         "record": "docs/audits/DEAD_ENGINES_2026-09-22.md",
         "decision": "D-0009 (five-option comparison: handlers-inline, surface, feature_handlers, DI-first, truth-only)",
-        "environment": "venv, `pip install --no-deps -e .` + the deps the touched paths import; torch/sentence-transformers/llama-cpp/chromadb deliberately not installed (lazy or optional). Gates status: no gates_owner on the board (ci-gates-steward released), so this session ran local diagnostics only and states 'deferred to gates owner' in the PR body."
+        "environment": "venv, `pip install --no-deps -e .` + the deps the touched paths import; torch/sentence-transformers/llama-cpp/chromadb deliberately not installed (lazy or optional). Gates status: no gates_owner on the board (ci-gates-steward released), so this session ran local diagnostics only and states 'deferred to gates owner' in the PR body.",
+        "delivered_at": "2026-09-22T22:47:38Z",
+        "pull_request": "PR#54 (https://github.com/bot523h/nexus-ai-agent/pull/54)",
+        "head_commit": "988d047dfd5ce50326b49487d204ac173a58e957",
+        "gates": "deferred to gates owner (no gates_owner on the board); local diagnostics recorded above; CI runs on the PR head"
       },
-      "note": "handlers.py is the highest-conflict file (AGENTS.md §6): this claim records the touch explicitly — the delta is one extended import block + deletion of the 13 stub bodies + one CallbackQueryHandler symbol; no logic was added there. PR#33 (arena/01a0c3aa, OPEN, mergeable=CONFLICTING, last touched 2026-09-21T15:40Z) owns features/onboarding.py, worker.py, bot/app.py, README.md — untouched here; the onboarding engine keeps its own bugfix for #33 to carry. Residuals are queued as task-159 rather than left implicit."
+      "note": "delivered via PR#54 @ 988d047 — engine wiring + 94 tests + D-0009/R12/T14; lease released with terminal status (history and evidence stay in the claim). Residuals are queued as task-159-ad-delivery-tick, not dropped. handlers.py touch was announced here before pushing, per AGENTS.md §6."
     },
     {
       "task": "task-159-ad-delivery-tick",
