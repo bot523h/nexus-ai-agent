@@ -66,12 +66,26 @@ from nexus_ai_agent.bot.slideshow_handlers import slideshow_cmd, slideshow_photo
 # unchanged: only the symbols they resolve to moved.
 from nexus_ai_agent.bot.surface import (
     achievements_cmd,
+    ad_create_cmd,
+    ad_delete_cmd,
+    ad_list_cmd,
+    ad_pause_cmd,
+    ad_resume_cmd,
+    ad_stats_cmd,
+    ban_cmd,
     chat_with_doc_cmd,
     daily_cmd,
     doc_delete_cmd,
     docs_list_cmd,
+    onboarding_callback_cmd,
+    pin_cmd,
+    post_cmd,
     profile_cmd,
     route_doc_text,
+    schedule_cmd,
+    stats_cmd,
+    unban_cmd,
+    welcome_cmd,
     xp_leaderboard_cmd,
 )
 from nexus_ai_agent.bot.tool_handlers import news_cmd, rate_cmd, weather_cmd, youtube_cmd
@@ -282,41 +296,11 @@ def build_handlers(
             await _reply(update, "📴 You are now marked as offline.")
 
     # ── Phase 1: Group/Channel Management ─────────────────────────
-    async def post_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Post to channel (owner only)."""
-        if not is_owner(update.effective_user.id if update.effective_user else 0):
-            await _reply(update, "⛔ Access denied")
-            return
-        text = " ".join(context.args) if context.args else ""
-        if not text:
-            await _reply(update, "❌ Usage: /post <text>")
-            return
-        # In a real app, this would use ChannelManager
-        await _reply(update, "✅ Post sent to channel (simulated).")
-
-    async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Schedule a post."""
-        await _reply(update, "📅 Post scheduled (simulated).")
-
-    async def ban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Ban user from group."""
-        await _reply(update, "🚫 User banned (simulated).")
-
-    async def unban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Unban user."""
-        await _reply(update, "✅ User unbanned (simulated).")
-
-    async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Show group stats."""
-        await _reply(update, "📊 Group stats: 150 members, 1.2k messages/day.")
-
-    async def welcome_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Set welcome message."""
-        await _reply(update, "👋 Welcome message updated.")
-
-    async def pin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Pin a message."""
-        await _reply(update, "📌 Message pinned.")
+    # /post /schedule /pin /ban /unban /stats /welcome are imported from
+    # bot/surface/channel_management.py: the real ChannelManager, memoised in
+    # bot_data and bound to the live bot, owner-gated, and replying with what
+    # the API actually did. Until this swap the seven commands answered
+    # "(simulated)" — and /ban answered *any* user with a fake ban success.
 
     async def new_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle new members joining."""
@@ -836,13 +820,11 @@ def build_handlers(
             await start(update, context)
 
     # ── Phase 5: Menu Callbacks ────────────────────────────────────
-    async def onboarding_callback_handler(
-        update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
-        query = update.callback_query
-        if query:
-            await query.answer()
-            await query.edit_message_text("✅ Onboarding step completed!")
+    # onboarding_callback_cmd is imported from bot/surface/onboarding.py. The
+    # stub that lived here claimed every tap had completed a step and edited the
+    # message away; the real handler answers with the engine's per-button hint
+    # (onboarding.ai_hint / image_hint / explore_hint, all 15 locales) and
+    # leaves the message alone for payloads with no branch.
 
     async def newchat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Reset conversation history."""
@@ -1172,35 +1154,12 @@ def build_handlers(
         """Manage pending viral posts."""
         await _reply(update, "📋 Pending viral posts: 3 in queue.")
 
-    # ── Phase 12: Advertisement System ─────────────────────────────
-    # ad_manager = AdManager()
-
-    async def ad_create_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Create a new ad campaign (owner only)."""
-        if not is_owner(update.effective_user.id if update.effective_user else 0):
-            await _reply(update, "⛔ Access denied")
-            return
-        await _reply(update, "📢 Ad campaign created successfully.")
-
-    async def ad_list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """List all ads."""
-        await _reply(update, "📢 Active Ads: 2, Paused: 1.")
-
-    async def ad_pause_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Pause an ad."""
-        await _reply(update, "⏸️ Ad paused.")
-
-    async def ad_resume_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Resume an ad."""
-        await _reply(update, "▶️ Ad resumed.")
-
-    async def ad_delete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Delete an ad."""
-        await _reply(update, "🗑️ Ad deleted.")
-
-    async def ad_stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Show ad stats."""
-        await _reply(update, "📊 Ad Stats: 5k impressions, 200 clicks.")
+    # ── Phase 12: Advertisement System ────────────────────────────
+    # /ad_create /ad_list /ad_pause /ad_resume /ad_delete /ad_stats are
+    # imported from bot/surface/ads.py: the real AdManager (the engine had no
+    # importer at all), chat-scoped reads, an authorisation check on the id-only
+    # write methods, and row counts instead of the previous "5k impressions,
+    # 200 clicks" — numbers no column in the schema can produce.
 
     # ── Phase 13: Smart Moderation ─────────────────────────────────
     async def mod_on_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1494,7 +1453,7 @@ def build_handlers(
         # ── P0-7: AI Memory consent vote ──
         CallbackQueryHandler(aimem_consent_callback, pattern=r"^aimem:(grant|deny)$"),
         # ── v2.1: Onboarding callbacks ──
-        CallbackQueryHandler(onboarding_callback_handler, pattern=r"^onboarding_"),
+        CallbackQueryHandler(onboarding_callback_cmd, pattern=r"^onboarding_"),
         CallbackQueryHandler(menu_callback, pattern=r"^lang_"),
         CallbackQueryHandler(menu_callback, pattern=r"^menu_ai$"),
         CallbackQueryHandler(menu_callback, pattern=r"^menu_image$"),
