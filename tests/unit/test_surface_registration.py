@@ -30,6 +30,27 @@ EXPECTED: dict[str, str] = {
     "docs": "docs_list_cmd",
     "doc_delete": "doc_delete_cmd",
     "chat_with_doc": "chat_with_doc_cmd",
+    # dead engines batch (see docs/DECISION_LOG.md D-0009): the advertisement
+    # engine and the channel manager were never imported anywhere in ``src/``.
+    "ad_create": "ad_create_cmd",
+    "ad_list": "ad_list_cmd",
+    "ad_pause": "ad_pause_cmd",
+    "ad_resume": "ad_resume_cmd",
+    "ad_delete": "ad_delete_cmd",
+    "ad_stats": "ad_stats_cmd",
+    "post": "post_cmd",
+    "schedule": "schedule_cmd",
+    "pin": "pin_cmd",
+    "ban": "ban_cmd",
+    "unban": "unban_cmd",
+    "stats": "stats_cmd",
+    "welcome": "welcome_cmd",
+}
+
+#: callback pattern → the surface symbol that must handle it. Kept separate from
+#: ``EXPECTED`` because these are ``CallbackQueryHandler`` registrations.
+EXPECTED_CALLBACKS: dict[str, str] = {
+    "^onboarding_": "onboarding_callback_cmd",
 }
 
 #: The complete sentences the stubs answered with — verbatim, punctuation
@@ -42,6 +63,21 @@ STUB_STRINGS = (
     "📚 لیست اسناد شما خالی است (نسخه دمو).",
     "🗑️ سند حذف شد.",
     "🔍 حالت چت با سند فعال شد. سوال خود را بپرسید.",
+    # Phase 12: the advertisement engine had no importer at all.
+    "📢 Ad campaign created successfully.",
+    "📢 Active Ads: 2, Paused: 1.",
+    "⏸️ Ad paused.",
+    "▶️ Ad resumed.",
+    "🗑️ Ad deleted.",
+    "📊 Ad Stats: 5k impressions, 200 clicks.",
+    # Phase 1: "simulated" replies — the operator was told the action ran.
+    "✅ Post sent to channel (simulated).",
+    "📅 Post scheduled (simulated).",
+    "🚫 User banned (simulated).",
+    "✅ User unbanned (simulated).",
+    "📊 Group stats: 150 members, 1.2k messages/day.",
+    "👋 Welcome message updated.",
+    "📌 Message pinned.",
 )
 
 
@@ -76,7 +112,7 @@ def test_handlers_module_parses(tree: ast.Module) -> None:
     assert tree.body, "handlers.py parsed to an empty module"
 
 
-def test_the_seven_handlers_come_from_the_surface_package(tree: ast.Module) -> None:
+def test_the_surface_handlers_are_imported_from_the_surface_package(tree: ast.Module) -> None:
     imported: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module == "nexus_ai_agent.bot.surface":
@@ -88,6 +124,56 @@ def test_every_command_is_registered_once_with_the_surface_handler(tree: ast.Mod
     registrations = _command_registrations(tree)
     for command, handler in EXPECTED.items():
         assert registrations.get(command) == handler, f"/{command} → {registrations.get(command)!r}"
+
+
+def _local_defs(tree: ast.Module) -> set[str]:
+    """Every function name defined anywhere in the module (incl. nested ones)."""
+    return {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    }
+
+
+def _callback_registrations(tree: ast.Module) -> dict[str, str]:
+    """Map ``CallbackQueryHandler(symbol, pattern="…")`` → pattern to symbol."""
+    registrations: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Name) and func.id == "CallbackQueryHandler"):
+            continue
+        if not node.args or not isinstance(node.args[0], ast.Name):
+            continue
+        keyword = next((k for k in node.keywords if k.arg == "pattern"), None)
+        if keyword is None or not isinstance(keyword.value, ast.Constant):
+            continue
+        registrations[str(keyword.value.value)] = node.args[0].id
+    return registrations
+
+
+def test_the_onboarding_callback_is_owned_by_the_surface(tree: ast.Module) -> None:
+    """``^onboarding_`` must route to the surface, not to a local stub.
+
+    The handler this replaced answered every callback id under that pattern
+    with a success sentence and edited the message; this test is what keeps a
+    stub from creeping back into either side of the registration.
+    """
+    registrations = _callback_registrations(tree)
+    for pattern, symbol in EXPECTED_CALLBACKS.items():
+        assert registrations.get(pattern) == symbol, f"{pattern} → {registrations.get(pattern)!r}"
+
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "nexus_ai_agent.bot.surface":
+            imported.update(alias.asname or alias.name for alias in node.names)
+    assert set(EXPECTED_CALLBACKS.values()) <= imported, (
+        "callback handler not imported from surface"
+    )
+
+    shadowed = _local_defs(tree) & set(EXPECTED_CALLBACKS.values())
+    assert shadowed == set(), f"local definitions shadow the surface callback: {sorted(shadowed)}"
 
 
 def test_no_command_is_registered_twice(tree: ast.Module) -> None:
