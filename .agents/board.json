@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-22T13:10:53Z",
+  "updated_at": "2026-09-22T13:27:26Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -1367,6 +1367,20 @@
       "note": "",
       "exclusive_paths": [
         "tests/unit/test_delivery_signing.py"
+      ]
+    },
+    {
+      "task": "task-151-board-test-clock-time-bomb",
+      "zone": "ci-quality",
+      "agent_branch": "arena/01a0c920-nexus-ai-agent",
+      "claimed_at": "2026-09-22T13:27:26Z",
+      "ttl_hours": 24,
+      "status": "active",
+      "gates_owner": false,
+      "scope": "CI gate goes red for every push after 2026-09-22T12:00Z: tests/unit/test_agent_board_active_in_review.py uses hardcoded claimed_at=2026-09-21T12:00:00Z without pinning agent_board._now (3 lease-liveness tests expire with wall clock). Fix locally with the repo's own hermetic pattern (autouse monkeypatch of _now, as in test_agent_board_pr_visibility.py). Evidence: CI run 35731858043 test job red; 3 tests fail locally, reproduce on any tree incl. main.",
+      "note": "",
+      "exclusive_paths": [
+        "tests/unit/test_agent_board_active_in_review.py"
       ]
     }
   ],
