@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-22T19:50:02Z",
+  "updated_at": "2026-09-22T20:07:07Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1619,11 +1619,11 @@
       "title_fa": "ادغام PR#51 — سبز کردن جاب تست (۳ تایم‌بامب + تست RAG وابسته به محیط + یک ریس)",
       "zone": "pr51-ci-repair",
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "agent_branch": "arena/01a0ca9c-nexus-ai-agent",
       "claimed_at": "2026-09-22T19:50:02Z",
       "ttl_hours": 24,
-      "gates_owner": true,
+      "gates_owner": false,
       "exclusive_paths": [
         "tests/unit/test_agent_board.py",
         "tests/unit/test_rag_eval.py",
@@ -1641,7 +1641,7 @@
         "pytest per-fix A/B output (pre-fix red, post-fix green) and the full-suite summary",
         "PR link with the commands and observed results (AGENTS.md §2)"
       ],
-      "note": "Integration vehicle for PR#51 (head 7fb5634 = agent B's residual feature wiring, session arena/01a0c992). This session cannot push to another session's branch, so the repair is carried on arena/01a0ca9c with PR#51's history fast-forwarded in (its authorship is preserved) — the same pattern PR#51 itself used for PR#47."
+      "note": "Integration vehicle for PR#51 (head 7fb5634 = agent B's residual feature wiring, session arena/01a0c992). This session cannot push to another session's branch, so the repair is carried on arena/01a0ca9c with PR#51's history fast-forwarded in (its authorship is preserved) — the same pattern PR#51 itself used for PR#47. || RELEASE EVIDENCE 2026-09-22T20:0xZ: PR#52 MERGED → main 315d38a (2026-09-22T20:06:39Z); CI run 35776958516 4/4 SUCCESS on head 3895ad5 (test 6m18s, lint, lint-fast, migrate-postgres). PR#51 auto-marked MERGED at the same moment (head 7fb5634) and PR#47 with it (head b4b1414). Verification on this tree: `pytest -m \"not slow\"` → 1747 passed, 20 skipped, 0 failed (baseline before repair: 4 failed); the same suite is green under a frozen future clock (2027-03-01) → no wall-clock bombs left; ruff check + ruff format --check + mypy src (228 files) + version lockstep clean; board referee `check` → no overlap."
     }
   ],
   "deferred_log": [
@@ -1935,6 +1935,12 @@
         "content": "unified pack runtime, six packs active pending=0, stdlib coverage harness",
         "anchor": "PR#46",
         "release": "v3.13.0"
+      },
+      {
+        "wave": "PR#47/#51 integration + CI root-cause repair",
+        "content": "agent B's residual feature wiring landed (real RAG rag_core + eval harness, gamification /daily single-session fix, framework-free bot/surface, PR#32 triage); the red test job was root-caused without CI logs (log-receiver EOF) and repaired: 3 board clock bombs, an environment-dependent RAG test, a queue-hook ordering race; hostile-clock sweep clean.",
+        "anchor": "PR#52 315d38a",
+        "release": "v3.13.0"
       }
     ],
     "pull_requests": [
@@ -2082,8 +2088,21 @@
       },
       {
         "pr": 51,
-        "state": "OPEN",
-        "title": "PR#47 integration vehicle (gamification /daily fix, real RAG, bot/surface) — test job repaired on this branch"
+        "state": "MERGED",
+        "title": "integration of PR#47 + repair of the red test job (clock bombs / RAG test / queue race)",
+        "note": "head arena/01a0c992, MERGED via PR#52 → main 315d38a; authorship preserved."
+      },
+      {
+        "pr": 47,
+        "state": "MERGED",
+        "title": "agent B — residual feature wiring (gamification fix, real RAG, bot/surface)",
+        "note": "head arena/01a0c634; MERGED via the PR#51 integration vehicle (PR#52 → main 315d38a)."
+      },
+      {
+        "pr": 52,
+        "state": "MERGED",
+        "title": "PR#51 integration — green the test job (3 board clock bombs, env-dependent RAG test, queue hook race)",
+        "note": "head arena/01a0ca9c, MERGED → main 315d38a; CI run 35776958516 4/4 SUCCESS."
       }
     ],
     "incidents": [

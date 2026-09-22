@@ -255,6 +255,13 @@ Queued for next agents (still 10-step board, disjoint paths):
   The test now asserts the contract per job: exactly two notifications, one per
   terminal state, each carrying its own status/result/error/payload.
 
+- **Merged to `main` as `315d38a` (PR#52)** together with the PR#51 content it integrates: agent B's
+  residual feature wiring — real RAG (`features/rag_core.py` + eval harness), the gamification `/daily`
+  single-session fix, the framework-free `bot/surface` package — with PR#47 and PR#51 both auto-marked
+  merged. CI run `35776958516`: 4/4 checks green (`test`, `lint`, `lint-fast`, `migrate-postgres`);
+  `pytest -m "not slow"` → 1747 passed / 20 skipped / 0 failed. The suite is also green under a frozen
+  future clock (2027-03-01), i.e. no remaining wall-clock time bombs.
+
 ## [3.13.0] — 2026-09-21
 
 Semver-minor: **P0 Week-1 security batch + feature-engine wiring.** Delivers
