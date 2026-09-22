@@ -19,6 +19,11 @@ Commands
                                 Exit 1 if any file overlaps another branch's
                                 active or active-in-review exclusive paths
                                 (pre-push / CI referee)
+  praudit [--pr-json F | --repo owner/name] [--fail-on-invisible] [--json]
+                                Read-only audit: compare open GitHub PR changed
+                                files against board exclusive_paths and report
+                                PRs whose scope is invisible (no claim for the
+                                head branch, or files outside every fence).
 
 All state lives in .agents/board.json (schema 1). Pure stdlib.
 
@@ -33,12 +38,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BOARD = ROOT / ".agents" / "board.json"
+
+# Files every PR is expected to touch (coordination medium) — never counted as
+# "uncovered scope" by praudit, because no claim exclusively owns them.
+COORDINATION_FILES = frozenset({".agents/board.json"})
 
 STOP_BANNER = """
 ╔══════════════════════════════════════════════════════════════════╗
@@ -121,6 +133,23 @@ def _find(board: dict, task: str) -> dict | None:
     return next((c for c in board.get("claims", []) if c["task"] == task), None)
 
 
+def _path_matches(excl: str, fp: str) -> bool:
+    """Directory (`dir/`) or exact-file membership of *fp* in an exclusive path."""
+    if excl.endswith("/"):
+        return fp.startswith(excl) or fp == excl.rstrip("/")
+    return fp == excl
+
+
+def _claim_live(claim: dict) -> bool:
+    """True when the claim currently fences its exclusive_paths (unexpired)."""
+    if not _is_active_claim(claim):
+        return False
+    claimed = _parse(claim.get("claimed_at"))
+    if claimed is None:
+        return False
+    return _now() <= claimed + timedelta(hours=int(claim.get("ttl_hours", 24)))
+
+
 def _conflicting_paths(board: dict, branch: str, files: list[str]) -> list[tuple[str, str]]:
     """Return overlaps between *files* and other branches' live exclusive paths."""
     hits: list[tuple[str, str]] = []
@@ -140,10 +169,7 @@ def _conflicting_paths(board: dict, branch: str, files: list[str]) -> list[tuple
                 fp = f.strip()
                 if not fp:
                     continue
-                if excl.endswith("/"):
-                    if fp.startswith(excl) or fp == excl.rstrip("/"):
-                        hits.append((claim["task"], fp))
-                elif fp == excl:
+                if _path_matches(excl, fp):
                     hits.append((claim["task"], fp))
     return hits
 
@@ -299,6 +325,160 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0
 
 
+# ── praudit: open-PR × board visibility (read-only) ───────────────────
+
+
+def audit_pr_visibility(board: dict, prs: list[dict]) -> dict:
+    """Compare open PR changed files with the board's live exclusive paths.
+
+    A PR is **invisible** when the board cannot tell who owns its scope:
+      * no live claim exists for the PR's head branch, or
+      * at least one changed file (coordination files excluded) sits outside
+        every live claim's ``exclusive_paths`` — the claim exists but does not
+        actually fence what the PR is rewriting.
+
+    Foreign fences (hits from *other* branches' claims) are reported per PR so
+    collisions are visible before a push, not after a conflicting merge.
+    """
+    results: list[dict] = []
+    live_claims = [c for c in board.get("claims", []) if _claim_live(c)]
+    for pr in prs:
+        number = pr.get("number")
+        title = pr.get("title", "")
+        head = pr.get("head_branch") or (pr.get("head") or {}).get("ref") or ""
+        raw_files = pr.get("files") or []
+        files = [f if isinstance(f, str) else str(f.get("filename", "")) for f in raw_files]
+        files = [f for f in files if f]
+
+        own_claims = [c["task"] for c in live_claims if head and c.get("agent_branch") == head]
+        foreign = sorted({task for task, _path in _conflicting_paths(board, head, files)})
+
+        def covered(fp: str) -> bool:
+            return any(
+                any(_path_matches(excl, fp) for excl in claim.get("exclusive_paths", []))
+                for claim in live_claims
+            )
+
+        audited_files = [f for f in files if f not in COORDINATION_FILES]
+        uncovered = [f for f in audited_files if not covered(f)]
+
+        reasons: list[str] = []
+        if not head:
+            reasons.append("missing head branch")
+        if not own_claims:
+            reasons.append("no live board claim for head branch")
+        if uncovered:
+            reasons.append(f"{len(uncovered)} file(s) outside every exclusive_paths")
+
+        results.append(
+            {
+                "number": number,
+                "title": title,
+                "head_branch": head,
+                "files": files,
+                "own_claims": own_claims,
+                "foreign_fences": foreign,
+                "uncovered_files": uncovered,
+                "invisible": bool(reasons),
+                "reasons": reasons,
+            }
+        )
+    invisible = [r for r in results if r["invisible"]]
+    return {
+        "prs": results,
+        "total": len(results),
+        "invisible_count": len(invisible),
+        "invisible_numbers": [r["number"] for r in invisible],
+    }
+
+
+def _gh_get(url: str, token: str | None) -> object:
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "nexus-agent-board",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310 (github api only)
+        return json.load(response)
+
+
+def fetch_open_prs(repo: str, token: str | None = None) -> list[dict]:
+    """Live open-PR snapshot (GitHub REST, stdlib urllib)."""
+    pulls = _gh_get(f"https://api.github.com/repos/{repo}/pulls?state=open&per_page=100", token)
+    out: list[dict] = []
+    for pr in pulls:  # type: ignore[assignment]
+        number = pr["number"]
+        rows = _gh_get(
+            f"https://api.github.com/repos/{repo}/pulls/{number}/files?per_page=100", token
+        )
+        out.append(
+            {
+                "number": number,
+                "title": pr.get("title", ""),
+                "head_branch": (pr.get("head") or {}).get("ref", ""),
+                "files": [row["filename"] for row in rows],  # type: ignore[index]
+                "files_truncated": len(rows) >= 100,  # type: ignore[arg-type]
+            }
+        )
+    return out
+
+
+def _load_pr_fixture(path: str) -> list[dict]:
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(data, dict):
+        data = data["prs"]
+    if not isinstance(data, list):
+        sys.exit(f"invalid --pr-json fixture: {path}")
+    return data
+
+
+def cmd_praudit(args: argparse.Namespace) -> int:
+    """Read-only visibility audit — never writes the board."""
+    board = load_board()
+    gc_expired(board)  # in-memory only: no save_board() in this command
+
+    if args.pr_json:
+        prs = _load_pr_fixture(args.pr_json)
+    else:
+        repo = args.repo or os.environ.get("GITHUB_REPOSITORY", "")
+        if "/" not in repo:
+            print("praudit: provide --repo owner/name (or GITHUB_REPOSITORY) or --pr-json")
+            return 2
+        try:
+            prs = fetch_open_prs(repo, args.token or None)
+        except urllib.error.URLError as exc:  # network/HTTP failure → actionable exit
+            print(f"praudit: GitHub API error: {exc}")
+            return 2
+
+    result = audit_pr_visibility(board, prs)
+
+    if args.as_json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        print(
+            f"praudit: {result['total']} open PR(s), "
+            f"{result['invisible_count']} invisible on the board"
+        )
+        for row in result["prs"]:
+            mark = "INVISIBLE" if row["invisible"] else "visible"
+            own = ", ".join(row["own_claims"]) or "—"
+            print(f"  PR#{row['number']} [{mark}] head={row['head_branch'] or '?'} claims={own}")
+            if row["reasons"]:
+                print(f"    reasons: {'; '.join(row['reasons'])}")
+            if row["foreign_fences"]:
+                print(f"    fences hit from other branches: {', '.join(row['foreign_fences'])}")
+            for fp in row["uncovered_files"][:10]:
+                print(f"    uncovered: {fp}")
+            if len(row["uncovered_files"]) > 10:
+                print(f"    … +{len(row['uncovered_files']) - 10} more uncovered")
+
+    if args.fail_on_invisible and result["invisible_count"]:
+        return 1
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="NEXUS multi-agent claim board")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -333,6 +513,23 @@ def main() -> int:
     p.add_argument("--files", required=True, help="comma-separated changed file paths")
     p.add_argument("--branch", default="")
     p.set_defaults(func=cmd_check)
+
+    p = sub.add_parser("praudit")
+    p.add_argument(
+        "--pr-json",
+        dest="pr_json",
+        default="",
+        help="offline fixture: JSON list of {number,title,head_branch,files:[...]}",
+    )
+    p.add_argument("--repo", default="", help="GitHub repo owner/name for live mode")
+    p.add_argument("--token", default="", help="GitHub token (else GITHUB_TOKEN env)")
+    p.add_argument(
+        "--fail-on-invisible",
+        action="store_true",
+        help="exit 1 when any open PR scope is invisible on the board",
+    )
+    p.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
+    p.set_defaults(func=cmd_praudit)
 
     args = parser.parse_args()
     return int(args.func(args))

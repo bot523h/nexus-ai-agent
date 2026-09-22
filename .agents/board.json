@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-22T00:02:06Z",
+  "updated_at": "2026-09-22T00:05:00Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -1056,17 +1056,17 @@
     {
       "task": "task-141-board-pr-visibility-audit",
       "zone": "coordination-audit",
-      "agent_branch": "arena/01a0c649-nexus-ai-agent",
-      "claimed_at": "2026-09-22T00:02:06Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
-      "status": "active",
+      "status": "done",
       "gates_owner": false,
       "exclusive_paths": [
         "scripts/agent_board.py",
         "tests/unit/test_agent_board_pr_visibility.py"
       ],
       "scope": "Add a read-only audit command/report that compares open GitHub PR changed files with board exclusive_paths and reports invisible PR scopes.",
-      "note": ""
+      "note": "DELIVERED 2026-09-22T00:10Z by arena/01a0c649 (agent A): `praudit` read-only command added to scripts/agent_board.py — offline --pr-json fixture mode + live GitHub REST (--repo/--token, stdlib urllib only), report = per-PR own_claims / foreign fences / uncovered files / INVISIBLE verdict (no claim for head branch, or files outside every live exclusive_paths; .agents/board.json skipped as shared coordination medium). Evidence: 26/26 targeted tests green (--noconftest: 12 new pr_visibility + 5 active_in_review regressions + 9 ci_lint_parity), ruff check+format clean with CI pin 0.16.8, smoke on the REAL board: PR#32 flagged (tests/unit/conftest.py uncovered) and undeclared-head PRs flagged. `--fail-on-invisible` gives exit 1 for optional CI gating. Zero change to existing referee semantics (_conflicting_paths refactored onto shared _path_matches/_claim_live, behavior pinned by the regression suite)."
     },
     {
       "task": "task-142-lockstep-residue-post-pr33",
@@ -2171,6 +2171,12 @@
       "by_branch": "arena/01a0c649-nexus-ai-agent",
       "action": "post-merge CLI releases ×6 with evidence + PR#47 visibility fence",
       "evidence_fa": "آزادسازی با CLI release (شکل درست): nagar-two-half-split، task-136 referee، pr43-in-review، task-136-storage، color-exposure-lane-wave، wave5-activation — هر شش مورد با شواهد PR/CI در note. PR#47 (شاخه 01a0c634، خود-اعلامی عامل B) تازه باز شد و CI قرمز دارد؛ برای جلوگیری از کار تکراری با فهرست فایل‌های واقعی‌اش نرده شد (شامل bot/handlers.py و CHANGELOG — نقاط هماهنگی حساس)."
+    },
+    {
+      "at": "2026-09-22T00:10:00Z",
+      "by_branch": "arena/01a0c649-nexus-ai-agent",
+      "action": "task-141 delivered: praudit visibility command + live findings for PR owners",
+      "evidence_fa": "فرمان praudit ساخته شد (فقط‌خواندنی؛ stdlib). یافته‌های زنده روی تختهٔ واقعی: PR#32 یک فایل خارج از هر حصار دارد (tests/unit/conftest.py) و PR#33 به‌عنوان record-claim مسیرهای خالی دارد (بیشتر فایل‌هایش پوشاب‌نشده) — مالکان task-122/123 قبل از rebase این‌ها را ببینند. PR#47 کامل پوشاب‌شده و visible است (نردهٔ این سشن جواب داد)."
     }
   ],
   "session_directive_fa": {
