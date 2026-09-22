@@ -941,3 +941,53 @@ against a measured base-commit baseline of **1181 passed, 20 skipped** — +178
 cases, no new skips, no regressions. `ruff check .` → 0 errors;
 `ruff format --check .` → no files to reformat; `mypy src` → clean, 221 source
 files. The exact invocations are in §3 of that runbook.
+
+---
+
+## 2026-09-22 — dead engines behind live handlers: wire through `bot/surface` (D-0009)
+
+**Status:** Accepted and implemented on `arena/01a0cb38-nexus-ai-agent` (PR#54).
+**Evidence:** `docs/audits/DEAD_ENGINES_2026-09-22.md`.
+
+**D-0009 — Wiring a dead engine goes through the framework-free surface, and the surface owns
+the authorisation the engine never had.**
+
+*Problem.* `features/ads.py` (242 lines, ten methods), `features/channel_manager.py` (239 lines)
+and `features/onboarding.py` (122 lines) had **no importer anywhere in `src/`** — verified by
+`grep -rn` over `src/ tests/ scripts/ migrations/` — while `bot/handlers.py` answered thirteen
+commands with constants (`"(simulated)"`, `"Ad campaign created successfully."`, `"Onboarding step
+completed!"`). Two properties make this a design decision rather than a bug fix: (a) the fake
+replies *cannot* be distinguished from working code by reading the handler list alone, and (b) the
+engines' write APIs are id-only (`AdManager.pause_campaign(campaign_id)`), so a naive wiring turns
+a dead module into a cross-chat IDOR.
+
+*Decision.* Add one module per engine under `bot/surface/` and change nothing but imports in
+`handlers.py`; keep every engine call behind `asyncio.to_thread`; put the chat-scope authorisation
+in the surface (`_load_owned`); render only fields the schema stores; and let
+`tests/unit/test_surface_registration.py` act as the ratchet — its `EXPECTED` map (now 20 commands
+plus a callback-pattern map) and its forbidden-string list make a stub re-introduction a test
+failure rather than a code-review miss. `features/onboarding.py`, `worker.py`, `bot/app.py` and
+`README.md` were left untouched because PR#33 is actively editing them.
+
+*Rejected alternatives.* (1) inline calls in `handlers.py` — adds ~200 lines to the highest-conflict
+file and is only testable through `build_handlers`, which needs PTB; (2) extending
+`bot/feature_handlers.py` — inside PR#33's diff and inside the unfixed `P0-8` double-construction
+problem, so a "one owner per engine" claim could not have been made truthfully; (3) DI-first (single
+`bot_data` engine registry) — correct, but it pre-empts `task-124`/`P0-8`; the accepted shape is a
+step toward it (`manager_for` memoises into `application.bot_data`); (4) truth-only deletion of the
+stubs with a "not wired in this build" reply — honest, but it removes thirteen working commands to
+fix a lie that real code could have fixed. The full comparison table, with the collision measurements,
+is §3 of the audit.
+
+*Consequences.* Two facts are now guaranteed by tests rather than by intent: a `bot/surface` module
+that needs a PTB-coupled engine must import it lazily (R12 in `docs/architecture/MODULE_MAP.md`,
+enforced by `test_surface_onboarding.py::test_the_surface_package_imports_without_telegram`), and an
+engine mutation reachable from a command must carry an ownership check (T14 in
+`docs/architecture/SECURITY.md`). Known residuals — no ad-delivery tick yet, `/start` still not
+onboarding first-time users, owner-only moderation instead of admin-aware — are enumerated in §6 of
+the audit and queued as `task-159`, not left implicit.
+
+*Reopens when* `P0-8` lands a single engine registry: at that point `manager_for` and the ad/channel
+read paths should move onto it, and D-0009's surface-owns-authorisation rule should be re-examined
+for whether the check belongs one layer down, in the engine, where a second caller (the delivery
+tick) would otherwise have to duplicate it.

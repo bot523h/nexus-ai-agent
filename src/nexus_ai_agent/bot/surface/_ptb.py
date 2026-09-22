@@ -32,7 +32,10 @@ __all__ = [
     "message_of",
     "message_text",
     "reply",
+    "reply_to_message_id",
+    "reply_to_user_id",
     "user_id",
+    "user_language_code",
     "user_name",
 ]
 
@@ -115,6 +118,43 @@ def callback_data(update: Any) -> str:
     """Payload of an inline-keyboard callback; ``""`` for plain updates."""
     data = _attr(_attr(update, "callback_query"), "data")
     return data if isinstance(data, str) else ""
+
+
+def user_language_code(update: Any) -> str | None:
+    """Telegram's claimed UI language for the caller (``"fa-IR"``, ``"en"``, …).
+
+    ``None`` when the update carries no user or no language — Telegram omits it
+    for some API clients — which the i18n layer maps onto the default language.
+    """
+    query_user = _attr(_attr(update, "callback_query"), "from_user")
+    for source in (_attr(update, "effective_user"), query_user):
+        code = _attr(source, "language_code")
+        if isinstance(code, str) and code.strip():
+            return code.strip()
+    return None
+
+
+def _reply_to(update: Any) -> Any | None:
+    """The message the triggering message quotes, if any."""
+    return _attr(message_of(update), "reply_to_message")
+
+
+def reply_to_message_id(update: Any) -> int | None:
+    """``message_id`` of the quoted message; ``None`` when nothing is quoted."""
+    identifier = _attr(_reply_to(update), "message_id")
+    try:
+        return int(identifier) if identifier is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def reply_to_user_id(update: Any) -> int | None:
+    """``user_id`` of the author of the quoted message (``/ban`` shorthand)."""
+    identifier = _attr(_attr(_reply_to(update), "from_user"), "id")
+    try:
+        return int(identifier) if identifier is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 async def reply(update: Any, text: str, **kwargs: Any) -> Any | None:

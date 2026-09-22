@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (dead-engine wiring — session `arena/01a0cb38-nexus-ai-agent`)
+
+- **`bot/surface/ads.py`** — `/ad_create` `/ad_list` `/ad_pause` `/ad_resume` `/ad_delete`
+  `/ad_stats` now drive `AdManager`, which previously had **no importer in `src/`** while the six
+  commands answered with constants ("Active Ads: 2, Paused: 1", "5k impressions, 200 clicks" —
+  numbers no column can produce). Reads are scoped to the chat; `pause/resume/delete`, which the
+  engine keys on a bare `campaign_id`, go through an ownership check first (T14).
+- **`bot/surface/channel_management.py`** — `/post` `/schedule` `/pin` `/ban` `/unban` `/stats`
+  `/welcome` now call `ChannelManager` instead of replying `"(simulated)"`. One manager per
+  application, memoised in `application.bot_data` and bound to the live bot; Telegram failures are
+  reported instead of masked by a success string; `/stats` shows the live member count and states
+  plainly that messages-per-day is not measured.
+- **`bot/surface/onboarding.py`** — the `^onboarding_` callbacks reach
+  `handle_onboarding_callback`, so the three keyboard buttons show the engine's hint in the
+  caller's language (15 locales) instead of one "step completed" sentence that also destroyed the
+  message for unknown payloads.
+- **`bot/surface/_ptb.py`** — three accessors: `reply_to_message_id`, `reply_to_user_id`,
+  `user_language_code`, each tolerant of malformed updates.
+- **Guards that keep the stubs out** — `test_surface_registration.py` `EXPECTED` grows from 7 to
+  20 commands, gains a callback-pattern map, and forbids 13 more literal replies; a subprocess probe
+  asserts `bot/surface` stays importable without `telegram` (MODULE_MAP §3 R12).
+  94 new tests: **1728 passed, 1 skipped** against a measured base baseline of
+  **1634 passed, 1 skipped**; three injected regressions (a stub lambda, a removed ownership check,
+  a dropped registry entry) turn five tests red and are then restored.
+  Record: `docs/audits/DEAD_ENGINES_2026-09-22.md`, decision D-0009.
+
+### Fixed
+
+- `AdManager.create_campaign` annotated `interval_hours: int` while `AdCampaign.interval_hours` is
+  a `Float`; the first real caller (this wiring) made `mypy` catch it. Intervals such as `0.5` h
+  are now type-legal.
+
 ### Added (color/exposure lane — session `arena/01a0c58e-nexus-ai-agent`)
 
 - **`exposure` lane op (`creative/rendering/`):** `ExposureOp`, the executable

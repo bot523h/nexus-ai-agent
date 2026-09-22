@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from surface_fakes import make_context, make_update
+from surface_fakes import FakeMessage, make_context, make_update
 
 from nexus_ai_agent.bot.surface import _ptb
 
@@ -119,8 +119,63 @@ def test_the_surface_package_imports_no_telegram() -> None:
 
 
 @pytest.mark.parametrize(
-    "attribute", ["user_id", "chat_id", "user_name", "message_text", "callback_data"]
+    "attribute",
+    [
+        "user_id",
+        "chat_id",
+        "user_name",
+        "message_text",
+        "callback_data",
+        "reply_to_message_id",
+        "reply_to_user_id",
+        "user_language_code",
+    ],
 )
 def test_accessors_never_raise_on_a_foreign_object(attribute: str) -> None:
     accessor: Any = getattr(_ptb, attribute)
     accessor(object())
+
+
+# ── the quoted-message and language accessors (added with the dead-engine batch) ──
+
+
+def test_reply_to_message_id_reads_the_quoted_message() -> None:
+    quoted = FakeMessage("x", message_id=421)
+    update = make_update(reply_to=quoted)
+    assert _ptb.reply_to_message_id(update) == 421
+
+
+@pytest.mark.parametrize("payload", [make_update(), make_update(text=None), object()])
+def test_reply_to_message_id_is_none_without_a_quote(payload: Any) -> None:
+    assert _ptb.reply_to_message_id(payload) is None
+
+
+def test_reply_to_message_id_tolerates_a_junk_id() -> None:
+    broken = make_update(reply_to=FakeMessage("x", message_id="not-a-number"))
+    assert _ptb.reply_to_message_id(broken) is None
+
+
+def test_reply_to_user_id_reads_the_quoted_author() -> None:
+    quoted = FakeMessage("spam", author_id=777)
+    assert _ptb.reply_to_user_id(make_update(reply_to=quoted)) == 777
+    assert _ptb.reply_to_user_id(make_update()) is None
+
+
+def test_user_language_code_prefers_the_effective_user() -> None:
+    assert _ptb.user_language_code(make_update(language_code="fa-IR")) == "fa-IR"
+    assert _ptb.user_language_code(make_update(language_code=None)) is None
+    assert _ptb.user_language_code(object()) is None
+
+
+def test_user_language_code_falls_back_to_the_callback_sender() -> None:
+    callback_only = type(
+        "Update",
+        (),
+        {
+            "effective_user": None,
+            "callback_query": type(
+                "Q", (), {"from_user": type("U", (), {"language_code": " de "})(), "data": "x"}
+            )(),
+        },
+    )()
+    assert _ptb.user_language_code(callback_only) == "de"
