@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-21T23:36:00Z",
+  "updated_at": "2026-09-22T00:02:06Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -950,22 +950,22 @@
     {
       "task": "nagar-two-half-split",
       "zone": "coordination-nagar-split",
-      "agent_branch": "arena/01a0c649-nexus-ai-agent",
-      "claimed_at": "2026-09-21T23:29:18Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
-      "status": "active",
+      "status": "done",
       "gates_owner": false,
       "exclusive_paths": [],
       "scope": "رکورد بازسازی‌شدهٔ تقسیم نگار به دو نیمه (هر دو نیمه فقط فایل .agents/board.json را به‌اشتراک می‌گذارند — نه یک بایت بیشتر): نیمهٔ ۱ = color-exposure-lane-wave (شاخه arena/01a0c58e-nexus-ai-agent، PR#45؛ حصار: src/nexus_ai_agent/creative/rendering/**، tests/unit/test_rendering_lane_exposure.py، tests/unit/test_lane_duration_algebra.py، docs/ops/COLOR_LANE.md، ROADMAP_STATUS.md، docs/DECISION_LOG.md، CHANGELOG.md). نیمهٔ ۲ = wave5-activation-and-gap-closure (شاخه arena/01a0c5da-nexus-ai-agent، PR#46؛ حصار: src/nexus_ai_agent/creative/packs/**، src/nexus_ai_agent/cli.py::_packs_registry، src/nexus_ai_agent/continuum/pack_coverage.py، scripts/pack_coverage.py، tests/unit/test_{pack_runtime_composition,opgap_wave5,pack_coverage_harness}.py، tests/architecture/test_pack_activation_completeness.py، docs/ops/PACK_RUNTIME.md، docs/audits/WAVE5_ACTIVATION_2026-09-21.md). قاعدهٔ مشترک: تداخل فایلی only board.json → حل با «جدیدترین وضعیت فورنزیک برنده است» + blob بازاعمال (AGENTS.md).",
-      "note": ""
+      "note": "RELEASE EVIDENCE 2026-09-21T23:55Z: هر دو نیمه روی main ادغام شد — نیمهٔ رنگ/اکسپوژر PR#45 @ bfea40d و نیمهٔ رانتایم/اکتیواسیون PR#46 @ ea24fb7؛ CI هر دو سبز (8/8 و 4/4 چک). اشتراک فایلی دو نیمه در سرتاسر کار دقیقاً {.agents/board.json} باقی ماند (هشدار «فقط تخته را به‌اشتراک می‌گذارند» تأیید و رعایت شد). رکورد بازسازی‌شده به‌عنوان claim فعال ثبت، اجرا و اکنون با شواهد آزاد می‌شود."
     },
     {
       "task": "task-136-board-active-in-review-referee",
       "zone": "coordination-referee",
-      "agent_branch": "arena/01a0c593-nexus-ai-agent",
-      "claimed_at": "2026-09-21T20:07:41Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
-      "status": "active_in_review",
+      "status": "done",
       "gates_owner": false,
       "exclusive_paths": [
         "scripts/agent_board.py",
@@ -973,15 +973,15 @@
         "COORDINATION_2026-09-21.md"
       ],
       "scope": "رفع شکاف داور برد: status=active_in_review باید در کنترل تداخل، انتخاب next و GC/lease مثل اجارهٔ فعال حساب شود؛ همراه با تست مستقل که به فایل‌های PR#39 دست نمی‌زند. همچنین ثبت راستی‌آزمایی PR#43 بدون ورود به فایل‌های storage آن.",
-      "note": "Delivered in PR#44: active_in_review is now honored by check/claim/gc/defer. Local verification green: pytest 5/5, ruff check/format, mypy; negative control blocks PR#39 docs/**. Full gates deferred to gates owner."
+      "note": "RELEASE EVIDENCE: PR#44 MERGED → main @123c761; CI run 35668065170 — lint/lint-fast/test/migrate-postgres ALL SUCCESS (23:40Z). referee فعال active_in_review اکنون روی main است."
     },
     {
       "task": "pr43-in-review-storage-resilience",
       "zone": "storage-resilience",
-      "agent_branch": "arena/01a0c58a-nexus-ai-agent",
-      "claimed_at": "2026-09-21T20:09:53Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
-      "status": "active_in_review",
+      "status": "done",
       "gates_owner": false,
       "exclusive_paths": [
         "src/nexus_ai_agent/storage/resilience.py",
@@ -990,7 +990,7 @@
         "STORAGE_RESILIENCE_CHECKUP_2026-09-21.md"
       ],
       "scope": "PR#43 OPEN: ten-step storage resilience boundary hardening. Verified from this session without editing those files: PR code -> 69 passed; same tests on origin/main -> 36 failed / 33 passed. Do not touch these files until PR#43 merges or is explicitly superseded.",
-      "note": "Verified complete by agent_i_01a0c593: local A/B = PR#43 69 passed vs origin/main 36 failed/33 passed; GitHub CI all check runs SUCCESS; PR#43 MERGEABLE. Do not touch these storage files until PR#43 merges or is superseded."
+      "note": "RELEASE EVIDENCE: PR#43 MERGED → main @bccdaf5; CI 8/8 checks SUCCESS on head f778adc; A/B test evidence recorded in PR body (69 pass on PR vs 36 fail on base)."
     },
     {
       "task": "task-137-storage-r2-retry-integration",
@@ -1056,17 +1056,17 @@
     {
       "task": "task-141-board-pr-visibility-audit",
       "zone": "coordination-audit",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0c649-nexus-ai-agent",
+      "claimed_at": "2026-09-22T00:02:06Z",
       "ttl_hours": 24,
-      "status": "queued",
+      "status": "active",
       "gates_owner": false,
       "exclusive_paths": [
         "scripts/agent_board.py",
         "tests/unit/test_agent_board_pr_visibility.py"
       ],
       "scope": "Add a read-only audit command/report that compares open GitHub PR changed files with board exclusive_paths and reports invisible PR scopes.",
-      "note": "Added by task-136 as the next ten-step network; obey status/dependency before claiming."
+      "note": ""
     },
     {
       "task": "task-142-lockstep-residue-post-pr33",
@@ -1145,9 +1145,9 @@
     {
       "task": "task-136-storage-resilience-boundaries",
       "zone": "storage-resilience-boundaries",
-      "status": "active",
-      "agent_branch": "arena/01a0c58a-nexus-ai-agent",
-      "claimed_at": "2026-09-21T20:01:19Z",
+      "status": "done",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "exclusive_paths": [
@@ -1157,7 +1157,7 @@
       ],
       "scope": "10 steps: checkup, validated retry policy, safe env defaults, cancellation propagation, bounded backoff, accurate timing, safe exhaustion errors, fail-closed text redaction, recursive structured redaction, idempotency boundary guard + regression evidence. No edits to PR32/33/39 files; full gates deferred to gates owner.",
       "note_fa": "عامل‌های دیگر لطفاً تا پایان بازبینی به این سه مسیر وارد نشوند. فایل برد مشترک است؛ کارت‌های سایر عامل‌ها حفظ شوند. docs/ و فایل‌های PRهای باز دست‌نخورده می‌مانند.",
-      "note": "Implemented; PR#43 awaiting review. Active lease intentionally retained: schema-1 referee ignores active_in_review. Other agents must not edit exclusive paths until merge/release. 69 targeted tests pass (base 36 failed / 33 passed). Full gates deferred to gates owner. Preserve card on PR39 schema migration.",
+      "note": "RELEASE EVIDENCE: delivered by PR#43, MERGED → main @bccdaf5 (2026-09-21T23:5xZ) with green CI; zone storage/resilience.py + boundary tests released to the next agent (task-138 can claim).",
       "report": "STORAGE_RESILIENCE_CHECKUP_2026-09-21.md",
       "next_tasks": [
         {
@@ -1216,10 +1216,10 @@
     {
       "task": "color-exposure-lane-wave",
       "zone": "nagar-render-lane",
-      "agent_branch": "arena/01a0c58e-nexus-ai-agent",
-      "claimed_at": "2026-09-21T20:29:09Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
-      "status": "active_in_review",
+      "status": "done",
       "gates_owner": false,
       "exclusive_paths": [
         "src/nexus_ai_agent/creative/rendering/ir.py",
@@ -1230,7 +1230,7 @@
         "docs/ops/COLOR_LANE.md"
       ],
       "scope": "ExposureOp lane twin of color.adjust_exposure: photometric gamma=clamp(2**EV,0.1,10), contrast pass-through, colortemperature 1000-40000 (6500 neutral), tint/50 -> colorbalance gm, explicit pl, neutral-stage elision, one shared yuv->rgb->yuv round trip, audio-only fail-closed. 178 new tests (16 golden + 162 algebra property). Decisions D-0005..D-0008. Runbook docs/ops/COLOR_LANE.md.",
-      "note": "OVERLAP DECLARED, not stolen: (1) docs/DECISION_LOG.md and docs/ops/ are inside PR#39's active_in_review docs/ lease (arena/01a0c4c1) — this branch only APPENDS a new dated section and adds one new file, so the merge is textual-append-only; if PR#39 rewrites the log, this section is the one to re-apply. (2) CHANGELOG.md sits in the repo-hygiene zone: only [Unreleased] gained a section, no version heading, so scripts/check_version_lockstep.py is unaffected ([Unreleased] never matches _RELEASED_HEADING). (3) README.md and .nexus/continuum.json were deliberately NOT touched — task-135's lease (D-0006).",
+      "note": "RELEASE EVIDENCE: PR#45 MERGED → main @bfea40d; CI 8/8 SUCCESS on head 28088ac; +178 tests / measured FFmpeg encodes documented in PR body.",
       "evidence": {
         "base_commit": "b422512911fd9f70068c05d001fab3485d373029",
         "baseline_pytest": "1181 passed, 20 skipped (measured on the base commit before any edit)",
@@ -1245,10 +1245,10 @@
     {
       "task": "wave5-activation-and-gap-closure",
       "zone": "nagar-runtime-activation",
-      "agent_branch": "arena/01a0c5da-nexus-ai-agent",
-      "claimed_at": "2026-09-21T21:28:25Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
-      "status": "delivered_pending_gates_owner",
+      "status": "done",
       "gates_owner": false,
       "exclusive_paths": [
         "src/nexus_ai_agent/creative/packs/runtime.py",
@@ -1269,7 +1269,7 @@
         "tests/unit/test_pack_coverage_harness.py"
       ],
       "scope": "۱۰ گام مهندسی‌شده: (W5-1) ترکیب واحد runtime برای همه پک‌ها — ماژول جدید creative/packs/runtime.py؛ (W5-2) واگذاری _packs_registry به ترکیب واحد تا `nexus packs list` شش پک را active و pending=0 نشان دهد؛ (W5-3) تست واحد ترکیب (idempotency/duplicate/external-policy)؛ (W5-4) دروازه معماری کامل‌بودن فعال‌سازی (manifest ↔ runtime)؛ (W5-5) سه عمل جامانده motion (apply_mask/warp/add_particles)؛ (W5-6) دو عمل جامانده audio (remove_vocal/align_music)؛ (W5-7) آخرین عمل timeline (sync_multicam)؛ (W5-8) هارنس پوشش فقط-stdlib روی پک‌ها با آستانه و کد خروج (scripts/pack_coverage.py)؛ (W5-9) مستند عملیات PACK_RUNTIME.md؛ (W5-10) حسابرسی حقیقت تخته + مستند سشن + شبکه ۱۰ وظیفه بعدی.",
-      "note": "diagnostic-only gates (ruff check + targeted/full pytest) — full `make lint/types/test` deferred to the gates owner per AGENTS.md rule 4.",
+      "note": "RELEASE EVIDENCE: PR#46 MERGED → main @ea24fb7; CI run 35659821660 4/4 SUCCESS on head 35a4ea7; six packs pending=0, coverage 94.89% (PR body). Draft lifted by agent A per owner directive on CI green.",
       "delivered": {
         "at": "2026-09-21T21:48:00Z",
         "branch": "arena/01a0c5da-nexus-ai-agent",
@@ -1326,6 +1326,34 @@
           "cli_hunk_disjointness": "PR#33 cli.py @@ -390 (golden_update) vs Wave5 @@ ≈-448 (_packs_registry); not in PR#33's 11-conflict set."
         }
       }
+    },
+    {
+      "task": "pr47-feature-wiring-continuation",
+      "zone": "feature-wiring-continuation",
+      "agent_branch": "arena/01a0c634-nexus-ai-agent",
+      "claimed_at": "2026-09-21T23:55:00Z",
+      "ttl_hours": 24,
+      "status": "active_in_review",
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/bot/surface/",
+        "src/nexus_ai_agent/features/gamification.py",
+        "src/nexus_ai_agent/features/rag.py",
+        "src/nexus_ai_agent/features/rag_core.py",
+        "tests/unit/surface_fakes.py",
+        "tests/unit/test_gamification_daily.py",
+        "tests/unit/test_rag_chunking.py",
+        "tests/unit/test_rag_eval.py",
+        "tests/unit/test_surface_docs.py",
+        "tests/unit/test_surface_gamification.py",
+        "tests/unit/test_surface_ptb.py",
+        "tests/unit/test_surface_registration.py",
+        "docs/audits/PR32_TRIAGE_2026-09-21.md",
+        "CHANGELOG.md"
+      ],
+      "scope": "RECORD of OPEN PR#47 (head arena/01a0c634, self-declared «agent B» continuation, opened 2026-09-21T23:45Z): residual feature wiring after PR#34 — gamification fix, real RAG (rag_core), bot/surface registry, PR32 triage. Fences recorded from the PR file list so nobody duplicates it.",
+      "note": "Visibility record by agent A (01a0c649) per the pr39-invisibility lesson. CI was RED on the pre-23:45Z runs (owner still pushing). ⚠ overlaps to coordinate, not to steal: bot/handlers.py (highest-conflict file, historically agent A/B shared), CHANGELOG.md (PR#33 packaging owner), features/+surface/ (claim feature-wiring-batch @01a0c34d still active until 2026-09-22T10:00Z — same zone, different session)."
     }
   ],
   "deferred_log": [
@@ -2131,6 +2159,18 @@
       "by_branch": "arena/01a0c5da-nexus-ai-agent",
       "action": "CI کامل روی شاخه سبز شد (۴/۴ job)",
       "evidence_fa": "run 35659132669: lint-fast ۹ ثانیه، lint (ruff+mypy+lockstep) ۷m۸s، test (pytest not slow) ۷m۵s، migrate-postgres ۶m۹s — همه pass. PR#46 MERGEABLE/CLEAN. همچنین بررسی شد شاخهٔ 4bb (wave4) با این موج صفر تداخل دارد و مسیرهای audio/motion را لمس نکرده (merge-tree=0)."
+    },
+    {
+      "at": "2026-09-21T23:55:00Z",
+      "by_branch": "arena/01a0c649-nexus-ai-agent",
+      "action": "merged #44→#43→#45→#46 on CI-green (owner directive) via super-union board rail",
+      "evidence_fa": "ریل X (ابر-اتحاد board.json روی هر ۴ سر شاخه، بایت‌به‌بایت یکسان) جواب داد: هر ۴ ادغام با mergeable=MERGEABLE و mergeState=CLEAN و 8/8 چک سبز انجام شد — صفر تداخل تخته. main: #44@123c761 ← #43@bccdaf5 ← #45@bfea40d ← #46@ea24fb7. CI main پس از هر ادغام در حال اجرا."
+    },
+    {
+      "at": "2026-09-21T23:55:00Z",
+      "by_branch": "arena/01a0c649-nexus-ai-agent",
+      "action": "post-merge CLI releases ×6 with evidence + PR#47 visibility fence",
+      "evidence_fa": "آزادسازی با CLI release (شکل درست): nagar-two-half-split، task-136 referee، pr43-in-review، task-136-storage، color-exposure-lane-wave، wave5-activation — هر شش مورد با شواهد PR/CI در note. PR#47 (شاخه 01a0c634، خود-اعلامی عامل B) تازه باز شد و CI قرمز دارد؛ برای جلوگیری از کار تکراری با فهرست فایل‌های واقعی‌اش نرده شد (شامل bot/handlers.py و CHANGELOG — نقاط هماهنگی حساس)."
     }
   ],
   "session_directive_fa": {
