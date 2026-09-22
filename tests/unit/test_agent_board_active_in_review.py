@@ -25,6 +25,24 @@ agent_board = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(agent_board)
 
 
+@pytest.fixture(autouse=True)
+def _pin_board_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Freeze board time so lease-liveness assertions never read the wall clock.
+
+    The claim fixtures pin ``claimed_at`` to ``2026-09-21T12:00:00Z``; without
+    a pinned ``agent_board._now`` the liveness tests went red the instant real
+    time passed ``claimed_at + ttl_hours`` (first red CI run: 2026-09-22T12:44Z,
+    every push afterwards).  Same hermetic pattern as
+    ``tests/unit/test_agent_board_pr_visibility.py``; 13:00Z keeps every
+    default-claim fixture exactly one hour old.
+    """
+    monkeypatch.setattr(
+        agent_board,
+        "_now",
+        lambda: datetime(2026, 9, 21, 13, 0, tzinfo=timezone.utc),
+    )
+
+
 def _claim(
     *,
     task: str = "pr-open",
