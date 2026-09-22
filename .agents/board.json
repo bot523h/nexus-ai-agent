@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-22T23:09:57Z",
+  "updated_at": "2026-09-22T23:13:49Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1723,7 +1723,7 @@
       "title_fa": "موج بهداشت مخزن: حذف شاخه‌های مردهٔ ادغام‌شده، انتقال اسناد مورخهٔ ریشه به docs/audits و اثبات صفر-دریفت",
       "zone": "repo-hygiene",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "Owner-ordered janitorial pass: (1) delete remote arena branches whose PRs are MERGED or closed-superseded (per-branch evidence) while preserving branches of open PRs (PR#33 arena/01a0c3aa, PR#55 arena/01a0cb38), the two live agents (arena/01a0c992 gates owner, arena/01a0ca9c active_in_review) and brand-new sessions; (2) git mv the three dated root reports (COORDINATION_2026-09-21.md, WAVE5_COORDINATION_01a0c5da.md, STORAGE_RESILIENCE_CHECKUP_2026-09-21.md) into docs/audits/ and index them in docs/README.md; (3) read-only diagnostics (ruff 0.16.8 check+format, targeted guard tests, version lockstep) as evidence; (4) record everything in docs/audits/REPO_HYGIENE_2026-09-22.md. Zero runtime code touched; zero PR#33 files touched; zero live exclusive_paths touched; full gates deferred to gates owner.",
       "scope_fa": "پاک‌سازی به فرمان مالک: حذف شاخه‌های ریموتی که PRشان merge شده (با شواهت تک‌تک)، نگه‌داشت شاخه‌های PRهای باز (۳۳ و ۵۵)، دو عامل فعال (992 و a9c) و سشن‌های تازه؛ انتقال سه سند مورخهٔ ریشه به docs/audits با git mv و ایندکس در docs/README.md؛ تشخیص‌های فقط‌خواندنی (ruff پین‌شده، تست‌های نگهبان هدفمند، lockstep)؛ ثبت در گزارش docs/audits/REPO_HYGIENE_2026-09-22.md. صفر لمس کد runtime، صفر لمس فایل‌های PR#33، صفر لمس حصارهای زنده؛ گیت‌های کامل به gates owner واگذار شد.",
       "prerequisites": [],
@@ -1751,9 +1751,9 @@
         "WAVE5_COORDINATION_01a0c5da.md",
         "STORAGE_RESILIENCE_CHECKUP_2026-09-21.md"
       ],
-      "note": "",
-      "agent_branch": "arena/01a0cb43-nexus-ai-agent",
-      "claimed_at": "2026-09-22T23:09:57Z",
+      "note": "DELIVERED 2026-09-22: 15 merged/superseded remote branches deleted (evidence table in docs/audits/REPO_HYGIENE_2026-09-22.md §3.1); 8 refs kept (open #33, live leases 992/a9c, new sessions, unreviewed 01a0c625 -> owner decision). 3 dated root docs archived to docs/audits/ via git mv (0-byte content change) + indexed; ruff 0 findings/447 formatted; board+docs+lockstep guards green (47+39); agent_board check exit 0; full gates deferred to gates owner. Residue listed in report §6.",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false
     }
