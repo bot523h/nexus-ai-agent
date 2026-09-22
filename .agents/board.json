@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-22T22:47:38Z",
+  "updated_at": "2026-09-22T22:56:19Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1679,9 +1679,10 @@
         "delivered_at": "2026-09-22T22:47:38Z",
         "pull_request": "PR#54 (https://github.com/bot523h/nexus-ai-agent/pull/54)",
         "head_commit": "988d047dfd5ce50326b49487d204ac173a58e957",
-        "gates": "deferred to gates owner (no gates_owner on the board); local diagnostics recorded above; CI runs on the PR head"
+        "gates": "deferred to gates owner (no gates_owner on the board); local diagnostics recorded above; CI runs on the PR head",
+        "release": "RELEASE EVIDENCE: PR#54 MERGED → main @aab5dea (Merge pull request #54 from bot523h/arena/01a0cb38-nexus-ai-agent); CI run 35794242871 4/4 SUCCESS on head 5c1f970 — test 7m7s, lint 7m10s (ruff + mypy + version lockstep), lint-fast 7s, migrate-postgres 5m41s; mergeable=MERGEABLE/CLEAN before merging. The single local mypy error (chromadb.utils, absent in this sandbox) did not reproduce in CI, confirming it was environmental."
       },
-      "note": "delivered via PR#54 @ 988d047 — engine wiring + 94 tests + D-0009/R12/T14; lease released with terminal status (history and evidence stay in the claim). Residuals are queued as task-159-ad-delivery-tick, not dropped. handlers.py touch was announced here before pushing, per AGENTS.md §6."
+      "note": "delivered via PR#54 @ 988d047 → main @aab5dea — engine wiring + 94 tests + D-0009/R12/T14; lease released with terminal status (evidence stays in the claim). Residuals queued as task-159-ad-delivery-tick with acceptance criteria, not dropped. The handlers.py touch was announced on the board before pushing (AGENTS.md §6); PR#33's files were left untouched."
     },
     {
       "task": "task-159-ad-delivery-tick",
