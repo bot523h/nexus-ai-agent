@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-22T20:07:07Z",
+  "updated_at": "2026-09-22T22:45:58Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -427,6 +427,27 @@
         "tests/unit/test_rag_eval.py",
         "tests/integration/test_in_process_job_queue.py",
         "CHANGELOG.md"
+      ]
+    },
+    {
+      "id": "ops-wiring-159",
+      "description": "Ads, channel-manager, and onboarding wiring (task-159/160/161) without touching live foreign fences",
+      "paths": [
+        "src/nexus_ai_agent/features/ads.py",
+        "src/nexus_ai_agent/features/channel_manager.py",
+        "src/nexus_ai_agent/features/onboarding.py",
+        "src/nexus_ai_agent/bot/feature_handlers.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "tests/unit/test_ads_feature.py",
+        "tests/unit/test_channel_manager_feature.py",
+        "tests/unit/test_onboarding_feature.py",
+        "tests/architecture/test_ads_reachability.py",
+        "tests/architecture/test_channel_manager_reachability.py",
+        "tests/architecture/test_onboarding_reachability.py",
+        "NEXUS_ENGINEERING_CONTRACT.md",
+        "AGENTS.md",
+        "docs/audits/TASK159_160_161_2026-09-22.md",
+        "docs/README.md"
       ]
     }
   ],
@@ -1490,7 +1511,7 @@
         "CHANGELOG.md"
       ],
       "scope": "RECORD of OPEN PR#47 (head arena/01a0c634, self-declared «agent B» continuation, opened 2026-09-21T23:45Z): residual feature wiring after PR#34 — gamification fix, real RAG (rag_core), bot/surface registry, PR32 triage. Fences recorded from the PR file list so nobody duplicates it.",
-      "note": "Visibility record by agent A (01a0c649) per the pr39-invisibility lesson. CI was RED on the pre-23:45Z runs (owner still pushing). ⚠ overlaps to coordinate, not to steal: bot/handlers.py (highest-conflict file, historically agent A/B shared), CHANGELOG.md (PR#33 packaging owner), features/+surface/ (claim feature-wiring-batch @01a0c34d still active until 2026-09-22T10:00Z — same zone, different session). | INTEGRATION 2026-09-22T19:5xZ: the unmerged content moved from session arena/01a0c992 (PR#51, red test job, idle since 15:41Z) to arena/01a0ca9c-nexus-ai-agent — that branch carries PR#51's history verbatim (head 7fb5634) plus the CI repair, so it is the live vehicle for this fence; PR#47's head branch stays arena/01a0c634 (authorship preserved) and this identity field follows the vehicle until merge, exactly as it did for the previous two sessions. Fence completes at merge."
+      "note": "Visibility record by agent A (01a0c649) per the pr39-invisibility lesson. CI was RED on the pre-23:45Z runs (owner still pushing). ⚠ overlaps to coordinate, not to steal: bot/handlers.py (highest-conflict file, historically agent A/B shared), CHANGELOG.md (PR#33 packaging owner), features/+surface/ (claim feature-wiring-batch @01a0c34d still active until 2026-09-22T10:00Z — same zone, different session). | INTEGRATION 2026-09-22T19:5xZ: the unmerged content moved from session arena/01a0c992 (PR#51, red test job, idle since 15:41Z) to arena/01a0ca9c-nexus-ai-agent — that branch carries PR#51's history verbatim (head 7fb5634) plus the CI repair, so it is the live vehicle for this fence; PR#47's head branch stays arena/01a0c634 (authorship preserved) and this identity field follows the vehicle until merge, exactly as it did for the previous two sessions. Fence completes at merge. || AUDIT 2026-09-22T22:4xZ by arena/01a0cb3f: PR#47 state=MERGED (mergedAt 2026-09-22T20:06:40Z, vehicle PR#51/#52, main 192b227). Classification KEEP — merged content stays; this session does not close, rewrite, or shrink the fence. Own note says the fence completes at merge, but the lease is still inside TTL (claimed_at 2026-09-22T17:30:00Z + 24h) and belongs to arena/01a0ca9c. Foreign release refused. handlers.py and CHANGELOG.md remain untouched."
     },
     {
       "task": "task-142-delivery-signing-coverage-95",
@@ -1642,6 +1663,141 @@
         "PR link with the commands and observed results (AGENTS.md §2)"
       ],
       "note": "Integration vehicle for PR#51 (head 7fb5634 = agent B's residual feature wiring, session arena/01a0c992). This session cannot push to another session's branch, so the repair is carried on arena/01a0ca9c with PR#51's history fast-forwarded in (its authorship is preserved) — the same pattern PR#51 itself used for PR#47. || RELEASE EVIDENCE 2026-09-22T20:0xZ: PR#52 MERGED → main 315d38a (2026-09-22T20:06:39Z); CI run 35776958516 4/4 SUCCESS on head 3895ad5 (test 6m18s, lint, lint-fast, migrate-postgres). PR#51 auto-marked MERGED at the same moment (head 7fb5634) and PR#47 with it (head b4b1414). Verification on this tree: `pytest -m \"not slow\"` → 1747 passed, 20 skipped, 0 failed (baseline before repair: 4 failed); the same suite is green under a frozen future clock (2027-03-01) → no wall-clock bombs left; ruff check + ruff format --check + mypy src (228 files) + version lockstep clean; board referee `check` → no overlap."
+    },
+    {
+      "task": "task-159",
+      "title": "Wire the advertisement engine (owner-gated campaigns, persistence, at-most-once delivery)",
+      "title_fa": "سیم‌کشی موتور تبلیغات",
+      "zone": "ops-wiring-159",
+      "priority": "P1",
+      "status": "active",
+      "scope": "AdManager exists but /ad_* handlers are simulated stubs and nothing delivers due campaigns. Implement validation, persistence, in-process at-most-once claim, and a startup/shutdown loop. Do not edit handlers.py (live pr47 fence).",
+      "scope_fa": "AdManager exists but /ad_* handlers are simulated stubs and nothing delivers due campaigns. Implement validation, persistence, in-process at-most-once claim, and a startup/shutdown loop. Do not edit handlers.py (live pr47 fence).",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "owner-only /ad_create /ad_list /ad_pause /ad_resume /ad_delete /ad_stats call AdManager",
+        "bad input writes no row",
+        "due campaigns are claimed once per process before send",
+        "startup starts the loop and shutdown stops it",
+        "tests/unit/test_ads_feature.py and tests/architecture/test_ads_reachability.py green"
+      ],
+      "evidence_required": [
+        "targeted pytest output for the task's tests",
+        "git diff proving leased files were not edited"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/features/ads.py",
+        "tests/unit/test_ads_feature.py",
+        "tests/architecture/test_ads_reachability.py"
+      ],
+      "owner_hint": "arena/01a0cb3f-nexus-ai-agent",
+      "agent_branch": "arena/01a0cb3f-nexus-ai-agent",
+      "claimed_at": "2026-09-22T22:45:58Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Claimed by arena/01a0cb3f after verifying task-159/160/161 were absent from the board and unimplemented in handlers (simulated replies). Does not release or shrink pr47-feature-wiring-continuation."
+    },
+    {
+      "task": "task-160",
+      "title": "Wire channel manager commands with persisted schedules and welcome",
+      "title_fa": "سیم‌کشی مدیر کانال",
+      "zone": "ops-wiring-159",
+      "priority": "P1",
+      "status": "active",
+      "scope": "/post /schedule /ban /unban /stats /welcome /pin and NEW_CHAT_MEMBERS are simulated in handlers.py. Persist schedules, restore them on startup, cancel tasks on shutdown, persist welcome, and gate destructive commands. Do not edit handlers.py.",
+      "scope_fa": "/post /schedule /ban /unban /stats /welcome /pin and NEW_CHAT_MEMBERS are simulated in handlers.py. Persist schedules, restore them on startup, cancel tasks on shutdown, persist welcome, and gate destructive commands. Do not edit handlers.py.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "the seven commands perform the real ChannelManager operation or return a validation error",
+        "a pending schedule survives a new manager via restore_pending and is not sent twice",
+        "shutdown cancels pending tasks",
+        "NEW_CHAT_MEMBERS uses the stored welcome when set, otherwise the existing generic welcome",
+        "non-owner calls do not write or call Telegram"
+      ],
+      "evidence_required": [
+        "targeted pytest output for the task's tests",
+        "git diff proving leased files were not edited"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/features/channel_manager.py",
+        "tests/unit/test_channel_manager_feature.py",
+        "tests/architecture/test_channel_manager_reachability.py"
+      ],
+      "owner_hint": "arena/01a0cb3f-nexus-ai-agent",
+      "agent_branch": "arena/01a0cb3f-nexus-ai-agent",
+      "claimed_at": "2026-09-22T22:45:58Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Claimed by arena/01a0cb3f after verifying task-159/160/161 were absent from the board and unimplemented in handlers (simulated replies). Does not release or shrink pr47-feature-wiring-continuation."
+    },
+    {
+      "task": "task-161",
+      "title": "First-run onboarding without regressing /start",
+      "title_fa": "آنبوردینگ اولین اجرا",
+      "zone": "ops-wiring-159",
+      "priority": "P1",
+      "status": "active",
+      "scope": "features/onboarding.py is unreachable: /start never calls it and the onboarding callback is a stub. Persist language, distinguish first visit from an existing UserLanguage row, tolerate a missing language_code, and keep the referral /start contract.",
+      "scope_fa": "features/onboarding.py is unreachable: /start never calls it and the onboarding callback is a stub. Persist language, distinguish first visit from an existing UserLanguage row, tolerate a missing language_code, and keep the referral /start contract.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "first /start persists UserLanguage and sends the onboarding keyboard",
+        "second /start and a pre-existing UserLanguage row do not send the keyboard",
+        "missing language_code stores en",
+        "onboarding_* callbacks edit the real hint, unknown data does not",
+        "existing /start referral tests still pass"
+      ],
+      "evidence_required": [
+        "targeted pytest output for the task's tests",
+        "git diff proving leased files were not edited"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/features/onboarding.py",
+        "tests/unit/test_onboarding_feature.py",
+        "tests/architecture/test_onboarding_reachability.py"
+      ],
+      "owner_hint": "arena/01a0cb3f-nexus-ai-agent",
+      "agent_branch": "arena/01a0cb3f-nexus-ai-agent",
+      "claimed_at": "2026-09-22T22:45:58Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Claimed by arena/01a0cb3f after verifying task-159/160/161 were absent from the board and unimplemented in handlers (simulated replies). Does not release or shrink pr47-feature-wiring-continuation."
+    },
+    {
+      "task": "task-159-160-161-integration",
+      "title": "Integration owner for 159/160/161 — composition root, contract, audit",
+      "title_fa": "مالک ادغام ۱۵۹/۱۶۰/۱۶۱",
+      "zone": "ops-wiring-159",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Shared wiring for task-159/160/161. handlers.py and CHANGELOG.md stay fenced by pr47-feature-wiring-continuation (active_in_review, other branch, expires 2026-09-23T17:30Z). Real handlers are registered in app.py before the stubs. Root engineering contract installed. Board records the absence of task-159/160/161 prior to this claim.",
+      "scope_fa": "Shared wiring for task-159/160/161. handlers.py and CHANGELOG.md stay fenced by pr47-feature-wiring-continuation (active_in_review, other branch, expires 2026-09-23T17:30Z). Real handlers are registered in app.py before the stubs. Root engineering contract installed. Board records the absence of task-159/160/161 prior to this claim.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "register_ops_handlers runs before build_handlers in app.py",
+        "NEXUS_ENGINEERING_CONTRACT.md exists and AGENTS.md points at it without contradicting lease rules",
+        "audit doc indexed in docs/README.md",
+        "python scripts/agent_board.py check exits 0 for the changed files on this branch",
+        "no edit to handlers.py, surface/, gamification.py, rag.py, rag_core.py, CHANGELOG.md, .github/workflows/"
+      ],
+      "evidence_required": [
+        "targeted pytest output for the task's tests",
+        "git diff proving leased files were not edited"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/feature_handlers.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "NEXUS_ENGINEERING_CONTRACT.md",
+        "AGENTS.md",
+        "docs/audits/TASK159_160_161_2026-09-22.md",
+        "docs/README.md"
+      ],
+      "owner_hint": "arena/01a0cb3f-nexus-ai-agent",
+      "agent_branch": "arena/01a0cb3f-nexus-ai-agent",
+      "claimed_at": "2026-09-22T22:45:58Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Claimed by arena/01a0cb3f after verifying task-159/160/161 were absent from the board and unimplemented in handlers (simulated replies). Does not release or shrink pr47-feature-wiring-continuation."
     }
   ],
   "deferred_log": [

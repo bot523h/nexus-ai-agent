@@ -8,6 +8,13 @@
 
 # AGENTS.md — Multi-Agent Coordination Contract (protocol v2)
 
+Implementation quality is governed by [`NEXUS_ENGINEERING_CONTRACT.md`](NEXUS_ENGINEERING_CONTRACT.md)
+at the repository root (research before code, five-solution selection, security-first
+design, evidence-based verification, no fabricated results). That contract does **not**
+replace the five coordination rules below. File ownership, leases, branch identity, and
+the single gates owner are decided here; how owned work is designed and proved is
+decided there. A live lease always wins over a desire to edit the leased path.
+
 Several agents work on this repository **in parallel, from separate sandboxes**. The only shared
 medium between sandboxes is **this git repository**, so coordination is file-based: a claim board
 committed and pushed through git, backed by a zero-dependency CLI
