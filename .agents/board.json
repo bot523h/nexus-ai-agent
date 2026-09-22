@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-22T20:07:07Z",
+  "updated_at": "2026-09-22T22:46:36Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -231,6 +231,23 @@
       "note": "PR#47 vehicle zone (record fence)"
     },
     {
+      "id": "feature-wiring-dead-engines",
+      "paths": [
+        "src/nexus_ai_agent/bot/surface/",
+        "tests/unit/test_surface_",
+        "tests/unit/surface_fakes.py",
+        "docs/audits/DEAD_ENGINES_2026-09-22.md",
+        "docs/DECISION_LOG.md",
+        "docs/architecture/SECURITY.md",
+        "docs/architecture/MODULE_MAP.md",
+        "docs/README.md",
+        "CHANGELOG.md",
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/features/ads.py"
+      ],
+      "note": "task-158 (arena/01a0cb38): bot/surface wiring of the ads/channel_manager/onboarding engines + the docs that record it. handlers.py is fenced to the single import/stub-deletion delta; features/onboarding.py, worker.py, bot/app.py and README.md stay with PR#33 and are deliberately NOT in this zone."
+    },
+    {
       "id": "features-rag",
       "description": "Real RAG: recursive chunking, hybrid retrieval, eval harness",
       "paths": [
@@ -344,6 +361,16 @@
       ]
     },
     {
+      "id": "pr51-ci-repair",
+      "description": "PR#51 integration: CI red-root-cause repair (RAG test, board clock bombs, job-queue hook race)",
+      "paths": [
+        "tests/unit/test_agent_board.py",
+        "tests/unit/test_rag_eval.py",
+        "tests/integration/test_in_process_job_queue.py",
+        "CHANGELOG.md"
+      ]
+    },
+    {
       "id": "quality-packs",
       "paths": [
         "scripts/pack_coverage.py",
@@ -418,16 +445,6 @@
         "docs/ops/"
       ],
       "note": "storage runbook (queued)"
-    },
-    {
-      "id": "pr51-ci-repair",
-      "description": "PR#51 integration: CI red-root-cause repair (RAG test, board clock bombs, job-queue hook race)",
-      "paths": [
-        "tests/unit/test_agent_board.py",
-        "tests/unit/test_rag_eval.py",
-        "tests/integration/test_in_process_job_queue.py",
-        "CHANGELOG.md"
-      ]
     }
   ],
   "claims": [
@@ -1467,30 +1484,14 @@
     {
       "task": "pr47-feature-wiring-continuation",
       "zone": "feature-wiring-continuation",
-      "agent_branch": "arena/01a0ca9c-nexus-ai-agent",
-      "claimed_at": "2026-09-22T17:30:00Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
-      "status": "active_in_review",
+      "status": "done",
       "gates_owner": false,
-      "exclusive_paths": [
-        "src/nexus_ai_agent/bot/handlers.py",
-        "src/nexus_ai_agent/bot/surface/",
-        "src/nexus_ai_agent/features/gamification.py",
-        "src/nexus_ai_agent/features/rag.py",
-        "src/nexus_ai_agent/features/rag_core.py",
-        "tests/unit/surface_fakes.py",
-        "tests/unit/test_gamification_daily.py",
-        "tests/unit/test_rag_chunking.py",
-        "tests/unit/test_rag_eval.py",
-        "tests/unit/test_surface_docs.py",
-        "tests/unit/test_surface_gamification.py",
-        "tests/unit/test_surface_ptb.py",
-        "tests/unit/test_surface_registration.py",
-        "docs/audits/PR32_TRIAGE_2026-09-21.md",
-        "CHANGELOG.md"
-      ],
+      "exclusive_paths": [],
       "scope": "RECORD of OPEN PR#47 (head arena/01a0c634, self-declared «agent B» continuation, opened 2026-09-21T23:45Z): residual feature wiring after PR#34 — gamification fix, real RAG (rag_core), bot/surface registry, PR32 triage. Fences recorded from the PR file list so nobody duplicates it.",
-      "note": "Visibility record by agent A (01a0c649) per the pr39-invisibility lesson. CI was RED on the pre-23:45Z runs (owner still pushing). ⚠ overlaps to coordinate, not to steal: bot/handlers.py (highest-conflict file, historically agent A/B shared), CHANGELOG.md (PR#33 packaging owner), features/+surface/ (claim feature-wiring-batch @01a0c34d still active until 2026-09-22T10:00Z — same zone, different session). | INTEGRATION 2026-09-22T19:5xZ: the unmerged content moved from session arena/01a0c992 (PR#51, red test job, idle since 15:41Z) to arena/01a0ca9c-nexus-ai-agent — that branch carries PR#51's history verbatim (head 7fb5634) plus the CI repair, so it is the live vehicle for this fence; PR#47's head branch stays arena/01a0c634 (authorship preserved) and this identity field follows the vehicle until merge, exactly as it did for the previous two sessions. Fence completes at merge."
+      "note": "RELEASED AS STEWARDSHIP by arena/01a0cb38 at 2026-09-22T22:46:36Z: this was a visibility record of an OPEN PR#47, and PR#47 is no longer open — `gh pr view 47 --json state,mergedAt` → state=MERGED, mergedAt=2026-09-22T20:06:40Z. A record of a merged PR must not keep a live lease on bot/surface/, surface_fakes.py or CHANGELOG.md (same rule that freed these paths for the schema-2 merge). exclusive_paths released with terminal status; history stays in scope. No work was taken over: nothing was pending in it."
     },
     {
       "task": "task-142-delivery-signing-coverage-95",
@@ -1642,6 +1643,88 @@
         "PR link with the commands and observed results (AGENTS.md §2)"
       ],
       "note": "Integration vehicle for PR#51 (head 7fb5634 = agent B's residual feature wiring, session arena/01a0c992). This session cannot push to another session's branch, so the repair is carried on arena/01a0ca9c with PR#51's history fast-forwarded in (its authorship is preserved) — the same pattern PR#51 itself used for PR#47. || RELEASE EVIDENCE 2026-09-22T20:0xZ: PR#52 MERGED → main 315d38a (2026-09-22T20:06:39Z); CI run 35776958516 4/4 SUCCESS on head 3895ad5 (test 6m18s, lint, lint-fast, migrate-postgres). PR#51 auto-marked MERGED at the same moment (head 7fb5634) and PR#47 with it (head b4b1414). Verification on this tree: `pytest -m \"not slow\"` → 1747 passed, 20 skipped, 0 failed (baseline before repair: 4 failed); the same suite is green under a frozen future clock (2027-03-01) → no wall-clock bombs left; ruff check + ruff format --check + mypy src (228 files) + version lockstep clean; board referee `check` → no overlap."
+    },
+    {
+      "task": "task-158-dead-engines-wiring",
+      "title": "Dead engines behind live handlers: wire ads / channel_manager / onboarding through bot/surface",
+      "title_fa": "سیم‌کشی سه موتور مرده پشت فرمان‌های زنده از طریق bot/surface",
+      "zone": "feature-wiring-dead-engines",
+      "priority": "P0",
+      "status": "active_in_review",
+      "agent_branch": "arena/01a0cb38-nexus-ai-agent",
+      "claimed_at": "2026-09-22T22:46:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/surface/__init__.py",
+        "src/nexus_ai_agent/bot/surface/_ptb.py",
+        "src/nexus_ai_agent/bot/surface/ads.py",
+        "src/nexus_ai_agent/bot/surface/channel_management.py",
+        "src/nexus_ai_agent/bot/surface/onboarding.py",
+        "tests/unit/test_surface_ads.py",
+        "tests/unit/test_surface_channel_management.py",
+        "tests/unit/test_surface_onboarding.py",
+        "tests/unit/test_surface_registration.py",
+        "tests/unit/test_surface_ptb.py",
+        "tests/unit/surface_fakes.py",
+        "docs/audits/DEAD_ENGINES_2026-09-22.md",
+        "docs/DECISION_LOG.md",
+        "docs/architecture/SECURITY.md",
+        "docs/architecture/MODULE_MAP.md",
+        "docs/README.md",
+        "CHANGELOG.md",
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/features/ads.py"
+      ],
+      "scope": "13 commands in bot/handlers.py answered with constants while features/ads.py, features/channel_manager.py and features/onboarding.py had ZERO importers in src/. New: bot/surface/{ads,channel_management,onboarding}.py (framework-free, asyncio.to_thread), +3 accessors in _ptb.py, handlers.py loses the stub bodies (imports only), AdManager.create_campaign annotation widened int->float to match its Float column, and an ownership check for the engine's id-only pause/resume/delete (IDOR, SECURITY T14). Ratchet: registration test EXPECTED 7->20 commands + callback map + 13 forbidden stub strings; new R12 (surface package importable without telegram).",
+      "acceptance_criteria": [
+        "no command in the batch replies with a literal any more — enforced by test_surface_registration (AST) and by behavioural tests that read the DB row / the bot double's recorded calls",
+        "every engine call is off the event loop (asyncio.to_thread) and every mutation of a by-id campaign carries a chat-ownership check",
+        "bot/surface stays importable with telegram blocked (subprocess probe) and no new legacy import violation",
+        "zero regressions: pytest tests/unit tests/architecture measured against the base-commit baseline, plus the three negative controls",
+        "PR#33's files are not edited (features/onboarding.py, worker.py, bot/app.py, README.md) — coordination instead of collision"
+      ],
+      "evidence": {
+        "base_commit": "192b227ae3d8cbe9428666e304844d382cd1759c",
+        "baseline_pytest": "1634 passed, 1 skipped (tests/unit + tests/architecture, 2 postgres-only files ignored; measured on the base commit before any edit)",
+        "post_change_pytest": "1728 passed, 1 skipped (+94 new tests, no new skips)",
+        "ruff_check": "All checks passed!",
+        "ruff_format": "446 files already formatted",
+        "mypy": "1 error, pre-existing and environmental (features/rag.py:187 chromadb.utils import-not-found); reproduced identically on the base commit via `git stash -u` (228 files checked there vs 231 here)",
+        "negative_controls": "3 injected regressions -> 5 targeted tests red (stub lambda in /ad_list: 3 registration guards; removed chat-ownership check: the IDOR test; dropped registry entry: the export-parity test); restored -> 120 passed",
+        "zero_importer_proof": "grep -rn over src/ tests/ scripts/ migrations/ for each engine returned only two comments in bot/handlers.py; get_due_campaigns / mark_delivered / run_nightly_tasks / post_viral_content / is_first_time_user / send_onboarding had no caller at all",
+        "record": "docs/audits/DEAD_ENGINES_2026-09-22.md",
+        "decision": "D-0009 (five-option comparison: handlers-inline, surface, feature_handlers, DI-first, truth-only)",
+        "environment": "venv, `pip install --no-deps -e .` + the deps the touched paths import; torch/sentence-transformers/llama-cpp/chromadb deliberately not installed (lazy or optional). Gates status: no gates_owner on the board (ci-gates-steward released), so this session ran local diagnostics only and states 'deferred to gates owner' in the PR body."
+      },
+      "note": "handlers.py is the highest-conflict file (AGENTS.md §6): this claim records the touch explicitly — the delta is one extended import block + deletion of the 13 stub bodies + one CallbackQueryHandler symbol; no logic was added there. PR#33 (arena/01a0c3aa, OPEN, mergeable=CONFLICTING, last touched 2026-09-21T15:40Z) owns features/onboarding.py, worker.py, bot/app.py, README.md — untouched here; the onboarding engine keeps its own bugfix for #33 to carry. Residuals are queued as task-159 rather than left implicit."
+    },
+    {
+      "task": "task-159-ad-delivery-tick",
+      "title": "Ad delivery tick: make a scheduled campaign actually post (and the onboarding first-run entry point)",
+      "title_fa": "حلقهٔ ارسال آگهی: کمپین زمان‌بندی‌شده واقعاً ارسال شود + ورودی اونبوردینگ برای کاربر تازه",
+      "zone": "feature-wiring",
+      "priority": "P1",
+      "status": "queued",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": [],
+      "scope": "AdManager.get_due_campaigns + mark_delivered still have no caller after task-158: the CRUD is live, the delivery loop is not. Host it on the existing InProcessJobQueue/worker lane and requeue the pending ChannelSchedule rows alongside it. Second half: call features/onboarding.send_onboarding + is_first_time_user from /start once PR#33's AsyncSession fix lands. CAVEAT (measured): ChannelSchedule.scheduled_at and AdCampaign.next_run are plain DateTime columns — SQLite round-trips them WITHOUT a tzinfo marker, so a reconciler must decide (and test) the naive-as-UTC convention; a 1-second drift in tests is not a bug.",
+      "acceptance_criteria": [
+        "a due campaign is delivered exactly once per interval, repeat_count/next_run advance through mark_delivered, and a max_repeats-exhausted campaign reaches status 'completed'",
+        "the tick is crash-safe: a restart resumes pending rows (resume_pending pattern) and no double-post occurs for the same next_run",
+        "naive-datetime convention pinned by a test (row read back => interpreted as UTC)",
+        "no import of telegram in bot/surface (R12) and zero new legacy baseline violations (R2)",
+        "/start onboarding only for first-time users, in the caller's language, with the callback path task-158 already wired",
+        "baseline comparison recorded: pytest tests/unit tests/architecture vs the base commit, no new skips"
+      ],
+      "evidence_required": [
+        "a test that creates a campaign whose next_run is due, runs the tick, and asserts the bot double received the ad text exactly once",
+        "a restart-safety test (requeue after a simulated crash) and the measured before/after pytest totals"
+      ],
+      "note": "queued by task-158 (arena/01a0cb38) so the residual is not lost: the honest half of 'the ads system works now'. Sequenced after PR#33 because worker.py/bot/app.py are in its diff."
     }
   ],
   "deferred_log": [
@@ -2169,6 +2252,14 @@
       "by": "arena/01a0c992-nexus-ai-agent",
       "what": "ci-gates stewardship",
       "why": "ci-gates-steward lease (arena/01a0c460) expired 2026-09-22T15:21:39Z without renewal; claimed via task-145 per AGENTS.md stale-lease rules; no contention (no other active gates claim)"
+    },
+    {
+      "at": "2026-09-22T22:46:36Z",
+      "by_branch": "arena/01a0cb38-nexus-ai-agent",
+      "action": "stewardship-release",
+      "task": "pr47-feature-wiring-continuation",
+      "reason": "PR#47 reached a terminal state (MERGED 2026-09-22T20:06:40Z, verified with gh). The record was still active_in_review and therefore held bot/handlers.py, bot/surface/*, tests/unit/surface_fakes.py and CHANGELOG.md against every other agent — `agent_board.py check` returned STOP for task-158 on those paths. cmd_release refuses cross-branch release, so the paths are freed here and the reason is recorded, per the orphaned-lease rule documented in AGENTS.md / the PR#33 precedent.",
+      "evidence": "gh pr view 47 --json state,mergedAt → {\"state\":\"MERGED\",\"mergedAt\":\"2026-09-22T20:06:40Z\"}"
     }
   ],
   "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins."
