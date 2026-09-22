@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-09-22T00:05:00Z",
+  "updated_at": "2026-09-22T13:10:53Z",
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
   "board_gc_log": [
     {
@@ -593,14 +593,14 @@
       "agent_branch": "arena/01a0c34d-nexus-ai-agent",
       "claimed_at": "2026-09-21T10:00:52Z",
       "ttl_hours": 24,
-      "status": "active",
+      "status": "expired",
       "gates_owner": false,
       "exclusive_paths": [
         "src/nexus_ai_agent/bot/surface/",
         "src/nexus_ai_agent/features/"
       ],
       "scope": "PR#32 open: wire dead engines via framework-free bot/surface layer (tools, games, referral, gamification, force-join, anon-chat, rag surface)",
-      "note": "PR#32 OPEN (26 files, checks green @10:38Z on old base). MUST rebase onto post-#34 main: features/{ai_memory,anonymous_chat,force_join,gamification,rag,tools}.py + bot/memory_handlers.py + worker.py + tests/unit/conftest.py all moved. Owner picks surface/ vs feature_handlers/. See task-122."
+      "note": "auto-released by gc at 2026-09-22T12:43:26Z (stale active lease)"
     },
     {
       "task": "nagar-wave3-timeline-edit-delivery",
@@ -750,7 +750,7 @@
       "agent_branch": "arena/01a0c3aa-nexus-ai-agent",
       "claimed_at": "2026-09-21T12:28:56Z",
       "ttl_hours": 24,
-      "status": "active_in_review",
+      "status": "expired",
       "gates_owner": false,
       "exclusive_paths": [],
       "scope": "Record of PR#33 (OPEN, green) scope so overlaps are visible on the board, not just in git.",
@@ -761,7 +761,7 @@
         "feature wiring (OVERLAPS PR#32 + PR#34 — owner picks one)"
       ],
       "evidence": "PR#33 checks: test/test-extras/migrate-postgres SUCCESS; collision_map in task-123; F 110-duplicate reverted 2026-09-21",
-      "note": "Empty paths by design (record-claim, cf. E#1 precedent): blocks nothing mechanically; humans read the map."
+      "note": "auto-released by gc at 2026-09-22T12:43:26Z (stale active_in_review lease)"
     },
     {
       "task": "ci-gates-steward",
@@ -1354,6 +1354,20 @@
       ],
       "scope": "RECORD of OPEN PR#47 (head arena/01a0c634, self-declared «agent B» continuation, opened 2026-09-21T23:45Z): residual feature wiring after PR#34 — gamification fix, real RAG (rag_core), bot/surface registry, PR32 triage. Fences recorded from the PR file list so nobody duplicates it.",
       "note": "Visibility record by agent A (01a0c649) per the pr39-invisibility lesson. CI was RED on the pre-23:45Z runs (owner still pushing). ⚠ overlaps to coordinate, not to steal: bot/handlers.py (highest-conflict file, historically agent A/B shared), CHANGELOG.md (PR#33 packaging owner), features/+surface/ (claim feature-wiring-batch @01a0c34d still active until 2026-09-22T10:00Z — same zone, different session)."
+    },
+    {
+      "task": "task-142-delivery-signing-coverage-95",
+      "zone": "quality-packs",
+      "agent_branch": "arena/01a0c920-nexus-ai-agent",
+      "claimed_at": "2026-09-22T13:10:53Z",
+      "ttl_hours": 24,
+      "status": "active",
+      "gates_owner": false,
+      "scope": "Wave5 forward network task-142: raise measured line coverage of nexus.color.delivery (weakest pack; signing.py weakest module) to >=95% in scripts/pack_coverage.py by extending tests only. Zero behavior change to signing.py/models.py/operations.py.",
+      "note": "",
+      "exclusive_paths": [
+        "tests/unit/test_delivery_signing.py"
+      ]
     }
   ],
   "deferred_log": [
