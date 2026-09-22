@@ -202,7 +202,8 @@ def build_application(
     async def _post_init(application: Any) -> None:
         # Bind the runtime bot to the bindable engines (reminders,
         # force-join, anonymous chat) and restore pending reminders so
-        # a restart does not silently drop them.
+        # a restart does not silently drop them. Ads and channel restore
+        # are separate so a reminder failure cannot skip them.
         try:
             feature_engines.reminders.bind(application.bot)
             feature_engines.force_join.bind(application.bot)
@@ -210,9 +211,37 @@ def build_application(
             await feature_engines.reminders.restore_pending()
         except Exception:  # noqa: BLE001 — startup wiring must not kill the bot
             logger.exception("feature_engines_startup_failed")
+        try:
+            feature_engines.ads.bind(application.bot)
+            await feature_engines.ads.start()
+        except Exception:  # noqa: BLE001
+            logger.exception("ad_engine_startup_failed")
+        try:
+            feature_engines.channel.bind(application.bot)
+            await feature_engines.channel.restore_pending()
+        except Exception:  # noqa: BLE001
+            logger.exception("channel_engine_startup_failed")
         await job_queue.resume_pending()
 
     async def _post_shutdown(application: Any) -> None:
+        # Stop delivery before disposing engines. Channel shutdown cancels
+        # in-process schedule tasks; ads.close disposes the SQLite engine.
+        try:
+            await feature_engines.ads.stop()
+        except Exception:  # noqa: BLE001
+            logger.exception("ad_engine_stop_failed")
+        try:
+            await feature_engines.channel.shutdown()
+        except Exception:  # noqa: BLE001
+            logger.exception("channel_engine_shutdown_failed")
+        try:
+            feature_engines.ads.close()
+        except Exception:  # noqa: BLE001
+            logger.exception("ad_engine_close_failed")
+        try:
+            feature_engines.onboarding.close()
+        except Exception:  # noqa: BLE001
+            logger.exception("onboarding_close_failed")
         try:
             feature_engines.reminders.close()
         except Exception:  # noqa: BLE001
@@ -239,6 +268,20 @@ def build_application(
     from nexus_ai_agent.bot.access_guard import build_access_guard
 
     application.add_handler(build_access_guard(settings), group=-1)
+
+    # Real ads/channel/onboarding handlers must precede the leased stubs in
+    # handlers.py (pr47 fence, active_in_review until 2026-09-23T17:30Z).
+    # PTB group 0 is first-match, block=True. Do not remove this prepend
+    # until that lease is released and the stubs themselves are replaced.
+    from nexus_ai_agent.bot.feature_handlers import (
+        build_feature_command_handlers,
+        register_ops_handlers,
+    )
+
+    register_ops_handlers(
+        application,
+        build_feature_command_handlers(feature_engines, settings),
+    )
 
     for handler in build_handlers(
         graph,
