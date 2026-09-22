@@ -446,9 +446,12 @@ def cmd_praudit(args: argparse.Namespace) -> int:
         if "/" not in repo:
             print("praudit: provide --repo owner/name (or GITHUB_REPOSITORY) or --pr-json")
             return 2
+        token = args.token or os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or None
         try:
-            prs = fetch_open_prs(repo, args.token or None)
-        except urllib.error.URLError as exc:  # network/HTTP failure → actionable exit
+            prs = fetch_open_prs(repo, token)
+        except (urllib.error.URLError, OSError) as exc:
+            # URLError covers HTTP errors; OSError covers socket timeouts —
+            # both must degrade to an actionable exit, never an unhandled trace.
             print(f"praudit: GitHub API error: {exc}")
             return 2
 

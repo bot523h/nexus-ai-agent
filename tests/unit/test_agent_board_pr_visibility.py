@@ -11,7 +11,10 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+from datetime import datetime, timezone
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).parents[2]
 AGENT_BOARD_PATH = REPO_ROOT / "scripts" / "agent_board.py"
@@ -20,6 +23,21 @@ spec = importlib.util.spec_from_file_location("agent_board", AGENT_BOARD_PATH)
 assert spec is not None and spec.loader is not None
 agent_board = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(agent_board)
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the clock and scrub CI env so this module cannot touch the network.
+
+    GitHub Actions sets ``GITHUB_REPOSITORY`` on every runner; without scrubbing
+    it, ``praudit`` live mode would silently engage inside a unit test (this
+    exact leak turned CI red once — reproduced locally before the fix).
+    """
+    fixed = datetime(2026, 9, 21, 13, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(agent_board, "_now", lambda: fixed)
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
 
 
 def _claim(
@@ -194,7 +212,9 @@ def test_cmd_praudit_fixture_exit_codes_and_json(tmp_path: Path, capsys: object)
         agent_board.load_board = original  # type: ignore[assignment]
 
 
-def test_cmd_praudit_refuses_live_mode_without_repo(tmp_path: Path) -> None:
+def test_cmd_praudit_refuses_live_mode_without_repo() -> None:
+    # _hermetic_env already removed GITHUB_REPOSITORY/GITHUB_TOKEN: without a
+    # --repo and without the fixture env, live mode must refuse (exit 2).
     args = argparse.Namespace(pr_json="", repo="", token="", fail_on_invisible=False, as_json=False)
     code = agent_board.cmd_praudit(args)
     assert code == 2
