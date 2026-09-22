@@ -206,11 +206,16 @@ async def test_completion_hook_fires_on_terminal_states(tmp_path: Path) -> None:
 
     await _wait_for_status(queue, ok_id, JobStatus.COMPLETED)
     await _wait_for_status(queue, failed_id, JobStatus.FAILED)
-    assert [(c.job_id, c.status) for c in log] == [
-        (ok_id, JobStatus.COMPLETED),
-        (failed_id, JobStatus.FAILED),
-    ]
-    completed, failed = log
+    # `enqueue` schedules one task per job, so the two jobs run concurrently and
+    # the *order* of the notifications is a scheduling accident (it flips under
+    # full-suite load). The contract is per job: each terminal state notifies
+    # exactly once, with its own payload/result/error.
+    assert len(log) == 2, f"expected one notification per terminal job, got {log}"
+    by_job = {completion.job_id: completion for completion in log}
+    assert set(by_job) == {ok_id, failed_id}, f"hook fired for the wrong jobs: {log}"
+    completed, failed = by_job[ok_id], by_job[failed_id]
+    assert completed.status is JobStatus.COMPLETED
+    assert failed.status is JobStatus.FAILED
     assert completed.result == {"echo": 1}
     assert completed.payload == {"value": 1, "chat_id": 42}
     assert completed.error is None
