@@ -62,6 +62,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   round trip and `pl=1` — was accepted. Tables in `docs/ops/COLOR_LANE.md`;
   turning this into a permanent gate is staged as
   `color-lane-real-encode-evidence`.
+### 2026-09-21 — agent B (`arena/01a0c634-nexus-ai-agent`)
+
+### Fixed (agent B · `arena/01a0c634-nexus-ai-agent`)
+
+- **Gamification — `/daily` was unreachable and its streak bonus was silently lost.**
+  `GamificationEngine.claim_daily` created the user's row with `last_daily = now` and then ran the
+  24 h window check against it, so a brand-new user always got `already_claimed` and the pending
+  INSERT was rolled back (no row, no XP — ever). For a pre-existing row the method called
+  `update_streak()`, which commits on a **second** connection; the first session then wrote its
+  stale object back over it (SQLAlchemy writes every column), resetting the streak to `0` and
+  dropping the streak bonus. Legacy rows additionally raised
+  `TypeError: can't subtract offset-naive and offset-aware datetimes`.
+  The whole reward is now computed and committed in **one** session, `last_daily` is no longer
+  prefilled, `_as_utc()` normalises naive SQLite timestamps, and the payload gained
+  `streak_broken`, `title`, `xp` and `remaining_minutes`. (`tests/unit/test_gamification_daily.py`,
+  10 tests, A/B proven: 10 fail against the previous blob, 10 pass against this one.)
+
+### Added (agent B · `arena/01a0c634-nexus-ai-agent`)
+
+- **Document RAG is now a real retriever (task-127).** The 96-line engine on `main` sliced every
+  document into fixed 1000-character windows with no overlap and imported `chromadb` +
+  `flashrank` eagerly. It is replaced by a two-layer design:
+  - `features/rag_core.py` — **stdlib-only**: a lossless recursive chunker (paragraph → line →
+    sentence → clause → word, 384-token windows, 15 % overlap, offsets into the source text), an
+    Okapi BM25 index with Persian/Arabic folding (`كتاب` = `کتاب`, `۴۲` = `42`), weighted
+    reciprocal-rank fusion, cosine similarity, a hybrid retriever with an injectable embedder, and
+    a `recall@k` / MRR / hit-rate evaluation harness.
+  - `features/rag.py` — a thin **adapter**: `chromadb`/`flashrank`/the embedding model are imported
+    lazily, `client` / `embedding_fn` / `ranker` are constructor-injected, blocking calls run in a
+    worker thread, documents are idempotent per `file_id`, and a missing vector stack raises
+    `RAGUnavailable` with an install hint instead of silently storing nothing.
+  Measured on the frozen 8-document corpus (6 labelled probes, `k=3`): **BM25-only recall@3
+  `0.8333`** (it cannot answer the paraphrased probe) → **hybrid recall@3 `1.0000`**, and the
+  engine scores the same `1.0000` end-to-end. `AdvancedRAGEngine.add_document/query` keep their
+  signatures, so `worker.py` is untouched.
+
+### Added (agent B · `arena/01a0c634-nexus-ai-agent`)
+
+- **`bot/surface/` — a framework-free command layer for the seven commands that were still
+  hard-coded stubs** (`/daily` always answered `+50 XP!`, `/docs` always claimed to be empty,
+  `/doc_delete` always claimed success, `/chat_with_doc` always claimed to be active).
+  - `_ptb.py` — duck-typed accessors over PTB's `update`/`context`, so no module in the package
+    imports `telegram` (frozen import boundary) and every handler is testable with fakes.
+  - `gamification.py` — `/daily`, `/profile`, `/achievements`, `/xp_leaderboard` on the real
+    `GamificationEngine`, scoped per (user, chat), with the synchronous SQLite calls off-loaded via
+    `asyncio.to_thread` so the event loop stays free.
+  - `docs.py` — `/docs`, `/doc_delete`, `/chat_with_doc` on the real document store and the hybrid
+    retriever, plus free-text routing while doc-chat mode is active. Sessions have a 30-minute TTL
+    and a hard cap (no per-user memory leak), the vector stack failing closed raises a Persian
+    "not available on this server" message instead of a stack trace, and nothing is ever claimed to
+    have happened when it did not.
+
+### Changed (agent B · `arena/01a0c634-nexus-ai-agent`)
+
+- **`bot/handlers.py` — the seven stub commands now run real code.** Only the import block and the
+  stub definitions changed (`+30/-30`); every `CommandHandler(...)` registration line is untouched,
+  because the handlers kept their names and only their import source changed. The stub closures were
+  deleted rather than bypassed — dead code that answers with a fixed string is worse than no command.
+  Free text is now offered to the document retriever inside `on_message` **before** the LLM path, so
+  `/chat_with_doc` costs no egress and no tokens. The wiring is locked down by an AST contract test
+  (`tests/unit/test_surface_registration.py`): which symbols are imported, one registration per
+  command, no local definition shadowing an imported handler, no stub literal ever passed to a reply,
+  and doc-chat routing ordered ahead of the correlation-id/LLM section.
+
+### Audit (agent B)
+
+- `docs/audits/PR32_TRIAGE_2026-09-21.md` — forensic triage of PR#32 against the merged PR#34:
+  15/26 files superseded, 4 conflict-debt, 3 port, 4 adapt; PR#32 is not rebase-and-merge material.
+
 
 ### Added (wave-4 hardening — agent G `01a0c4bb` — 10-step batch, 6 steps delivered)
 

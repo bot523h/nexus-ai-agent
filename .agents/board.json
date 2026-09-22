@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-22T15:45:00Z",
+  "updated_at": "2026-09-22T17:30:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1457,8 +1457,8 @@
     {
       "task": "pr47-feature-wiring-continuation",
       "zone": "feature-wiring-continuation",
-      "agent_branch": "arena/01a0c634-nexus-ai-agent",
-      "claimed_at": "2026-09-21T23:55:00Z",
+      "agent_branch": "arena/01a0c992-nexus-ai-agent",
+      "claimed_at": "2026-09-22T17:30:00Z",
       "ttl_hours": 24,
       "status": "active_in_review",
       "gates_owner": false,
@@ -1480,7 +1480,7 @@
         "CHANGELOG.md"
       ],
       "scope": "RECORD of OPEN PR#47 (head arena/01a0c634, self-declared «agent B» continuation, opened 2026-09-21T23:45Z): residual feature wiring after PR#34 — gamification fix, real RAG (rag_core), bot/surface registry, PR32 triage. Fences recorded from the PR file list so nobody duplicates it.",
-      "note": "Visibility record by agent A (01a0c649) per the pr39-invisibility lesson. CI was RED on the pre-23:45Z runs (owner still pushing). ⚠ overlaps to coordinate, not to steal: bot/handlers.py (highest-conflict file, historically agent A/B shared), CHANGELOG.md (PR#33 packaging owner), features/+surface/ (claim feature-wiring-batch @01a0c34d still active until 2026-09-22T10:00Z — same zone, different session)."
+      "note": "Visibility record by agent A (01a0c649) per the pr39-invisibility lesson. CI was RED on the pre-23:45Z runs (owner still pushing). ⚠ overlaps to coordinate, not to steal: bot/handlers.py (highest-conflict file, historically agent A/B shared), CHANGELOG.md (PR#33 packaging owner), features/+surface/ (claim feature-wiring-batch @01a0c34d still active until 2026-09-22T10:00Z — same zone, different session). | INTEGRATION: being merged to main via session arena/01a0c992 (supersedes same-session claim feature-wiring-residual-b on the PR#47 branch board); fence completes at merge."
     },
     {
       "task": "task-142-delivery-signing-coverage-95",

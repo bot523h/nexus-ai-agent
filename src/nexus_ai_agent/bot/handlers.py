@@ -57,6 +57,23 @@ from nexus_ai_agent.bot.safe_paths import (
     sanitize_file_name,
 )
 from nexus_ai_agent.bot.slideshow_handlers import slideshow_cmd, slideshow_photo
+
+# ── agent B (v3.13.x): framework-free command surface ────────────────
+# These seven commands used to be hard-coded stubs inside build_handlers()
+# ("/daily" always answered "+50 XP!", "/docs" always claimed to be empty).
+# The real implementations live in bot/surface/ — no `telegram` import, so
+# they are unit-testable with fakes — and the registration lines below are
+# unchanged: only the symbols they resolve to moved.
+from nexus_ai_agent.bot.surface import (
+    achievements_cmd,
+    chat_with_doc_cmd,
+    daily_cmd,
+    doc_delete_cmd,
+    docs_list_cmd,
+    profile_cmd,
+    route_doc_text,
+    xp_leaderboard_cmd,
+)
 from nexus_ai_agent.bot.tool_handlers import news_cmd, rate_cmd, weather_cmd, youtube_cmd
 from nexus_ai_agent.bot.update_handlers import update_cmd, version_cmd
 from nexus_ai_agent.config.settings import Settings
@@ -69,7 +86,6 @@ from nexus_ai_agent.features.ai_memory import CONSENT_GRANTED
 from nexus_ai_agent.features.analytics import AnalyticsEngine
 from nexus_ai_agent.features.engagement import EngagementEngine
 from nexus_ai_agent.features.force_join import ForceJoinManager
-from nexus_ai_agent.features.gamification import GamificationEngine
 from nexus_ai_agent.features.image_gen import ImageGenEngine
 from nexus_ai_agent.features.moderation import ModerationEngine
 from nexus_ai_agent.features.owner_control import OwnerControl, is_owner
@@ -859,6 +875,12 @@ def build_handlers(
             await _reply(update, gate_text, reply_markup=join_keyboard())
             return
 
+        # Document-chat mode (agent B): while /chat_with_doc is active the
+        # message is answered from the user's own documents — no LLM egress,
+        # no cost. Inert (returns False) for every user outside that mode.
+        if await route_doc_text(update, context):
+            return
+
         correlation_id = str(uuid4())
         structlog.contextvars.bind_contextvars(correlation_id=correlation_id)
         chat_id = _chat_id(update)
@@ -1224,24 +1246,9 @@ def build_handlers(
         await _reply(update, "👤 User Reputation: 85/100 (Good).")
 
     # ── Phase 14: Gamification ─────────────────────────────────────
-    async def profile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Show user profile."""
-        user_id = _user_id(update) or 0
-        chat_id = _chat_id(update)
-        profile = GamificationEngine.get_profile(user_id, chat_id)
-        await _reply(update, f"👤 Profile: Level {profile['level']} ({profile['title']})")
-
-    async def daily_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Claim daily reward."""
-        await _reply(update, "🎁 Daily reward claimed: +50 XP!")
-
-    async def xp_leaderboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Show XP leaderboard."""
-        await _reply(update, "🏆 **XP Leaderboard**\n\n1. UserX: 5000 XP")
-
-    async def achievements_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Show user achievements."""
-        await _reply(update, "🏅 **Achievements**\n\n- First Message\n- 7 Day Streak")
+    # /profile /daily /xp_leaderboard /achievements are imported from
+    # bot/surface/gamification.py: the real GamificationEngine, scoped
+    # per (user, chat), with the event loop kept free (asyncio.to_thread).
 
     # ── Phase 15: Analytics ────────────────────────────────────────
     async def analytics_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1561,16 +1568,9 @@ async def pdf_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
 
 
-async def docs_list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _reply(update, "📚 لیست اسناد شما خالی است (نسخه دمو).")
-
-
-async def doc_delete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _reply(update, "🗑️ سند حذف شد.")
-
-
-async def chat_with_doc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _reply(update, "🔍 حالت چت با سند فعال شد. سوال خود را بپرسید.")
+# /docs /doc_delete /chat_with_doc are imported from bot/surface/docs.py:
+# the real document store and the hybrid retriever, with a fail-closed
+# Persian message when the vector stack is not installed.
 
 
 async def story_cmd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
