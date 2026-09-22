@@ -243,6 +243,27 @@ async def test_self_referral_stays_silent(env: SimpleNamespace) -> None:
     assert not any("🎁" in text for text in texts)
 
 
+async def test_onboard_replays_without_writing_language(env: SimpleNamespace) -> None:
+    update = make_update(user_id=12, language_code="de")
+    await env.cmds["onboard"](update, make_context())
+    assert any(markup is not None for markup in _markups(update))
+    assert _languages(env.db) == []
+    env.engines.onboarding.remember(12, "fa")
+    again = make_update(user_id=12, language_code="en")
+    await env.cmds["onboard"](again, make_context())
+    assert _languages(env.db)[0].language == "fa"
+
+
+async def test_callback_uses_stored_language(env: SimpleNamespace) -> None:
+    from nexus_ai_agent.i18n import i18n
+
+    env.engines.onboarding.remember(13, "fa")
+    callback = make_callback(13, "onboarding_ai")
+    await env.cmds["onboarding_callback"](callback, make_context())
+    edited = callback.callback_query.edit_message_text.call_args.args[0]
+    assert i18n.t("onboarding.ai_hint", lang="fa") in edited
+
+
 async def test_sqlalchemy_execute_path_and_operational_failure() -> None:
     empty = _ExecuteSession(None)
     assert await is_first_time_user(1, lambda: empty) is True

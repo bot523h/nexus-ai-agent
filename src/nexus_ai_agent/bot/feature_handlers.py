@@ -49,6 +49,7 @@ from nexus_ai_agent.features.channel_manager import (
     ChannelManager,
     ChannelValidationError,
     parse_schedule_when,
+    render_welcome,
 )
 from nexus_ai_agent.features.force_join import ForceJoinManager
 from nexus_ai_agent.features.games import NumberGuess, QuickPoll, QuizGame, WordleFA
@@ -56,6 +57,7 @@ from nexus_ai_agent.features.onboarding import (
     OnboardingStore,
     handle_onboarding_callback,
     maybe_onboard,
+    send_onboarding,
 )
 from nexus_ai_agent.features.owner_control import _get_owner_id
 from nexus_ai_agent.features.referral import ReferralEngine
@@ -99,6 +101,8 @@ OPS_COMMANDS: tuple[str, ...] = (
     "ad_resume",
     "ad_delete",
     "ad_stats",
+    "ad_health",
+    "onboard",
 )
 
 
@@ -577,7 +581,12 @@ def build_feature_command_handlers(engines: FeatureEngines, settings: Settings) 
         except AdValidationError as exc:
             await _reply(update, str(exc))
             return
-        await _reply(update, f"✅ کمپین #{campaign_id} ذخیره شد و در همین چت منتشر می‌شود.")
+        stored = await asyncio.to_thread(engines.ads.get_campaign, campaign_id)
+        when = stored["next_run"] if stored else "نامشخص"
+        await _reply(
+            update,
+            f"✅ کمپین #{campaign_id} ذخیره شد و در همین چت منتشر می‌شود.\nاجرای بعدی: {when}",
+        )
 
     async def ad_list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         del context
@@ -589,14 +598,17 @@ def build_feature_command_handlers(engines: FeatureEngines, settings: Settings) 
         if not rows:
             await _reply(update, "📢 کمپینی در این چت نیست.")
             return
+        shown = rows[:20]
         lines = ["📢 کمپین‌های این چت:"]
-        for row in rows[:20]:
+        for row in shown:
             cap = row["max_repeats"] or "∞"
             hours = row["interval_hours"]
             lines.append(
                 f"#{row['id']} [{row['status']}] هر {hours:g}س "
                 f"×{row['repeat_count']}/{cap} — {row['text']}"
             )
+        if len(rows) > len(shown):
+            lines.append(f"... و {len(rows) - len(shown)} مورد دیگر")
         await _reply(update, "\n".join(lines))
 
     async def _ad_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int | None:
@@ -614,30 +626,33 @@ def build_feature_command_handlers(engines: FeatureEngines, settings: Settings) 
         gated = await _guard(update)
         if gated is None:
             return
+        _, chat_id = gated
         campaign_id = await _ad_id(update, context)
         if campaign_id is None:
             return
-        ok = await asyncio.to_thread(engines.ads.pause_campaign, campaign_id)
+        ok = await asyncio.to_thread(engines.ads.pause_campaign, campaign_id, chat_id)
         await _reply(update, "⏸ کمپین متوقف شد." if ok else "❌ کمپین فعال پیدا نشد.")
 
     async def ad_resume_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         gated = await _guard(update)
         if gated is None:
             return
+        _, chat_id = gated
         campaign_id = await _ad_id(update, context)
         if campaign_id is None:
             return
-        ok = await asyncio.to_thread(engines.ads.resume_campaign, campaign_id)
+        ok = await asyncio.to_thread(engines.ads.resume_campaign, campaign_id, chat_id)
         await _reply(update, "▶️ کمپین دوباره فعال شد." if ok else "❌ کمپین متوقف پیدا نشد.")
 
     async def ad_delete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         gated = await _guard(update)
         if gated is None:
             return
+        _, chat_id = gated
         campaign_id = await _ad_id(update, context)
         if campaign_id is None:
             return
-        ok = await asyncio.to_thread(engines.ads.delete_campaign, campaign_id)
+        ok = await asyncio.to_thread(engines.ads.delete_campaign, campaign_id, chat_id)
         await _reply(update, "🗑 کمپین حذف شد." if ok else "❌ کمپین پیدا نشد.")
 
     async def ad_stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -653,6 +668,30 @@ def build_feature_command_handlers(engines: FeatureEngines, settings: Settings) 
             f"کل {stats['total']} · فعال {stats['active']} · "
             f"متوقف {stats['paused']} · تمام‌شده {stats['completed']}",
         )
+
+    async def ad_health_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        del context
+        gated = await _guard(update)
+        if gated is None:
+            return
+        snap = engines.ads.snapshot()
+        state = "در حال اجرا" if snap["running"] else "متوقف"
+        bound = "بله" if snap["bound"] else "خیر"
+        line = (
+            f"🩺 تبلیغات: {state} · متصل {bound} · "
+            f"ارسال {snap['delivered']} · شکست {snap['failed']}"
+        )
+        if snap["last_error"]:
+            line += f" · آخرین خطا {snap['last_error']}"
+        await _reply(update, line)
+
+    async def onboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user = update.effective_user
+        if user is None:
+            return
+        # Replay only. Never insert or overwrite UserLanguage.
+        lang = engines.onboarding.language_for(int(user.id))
+        await send_onboarding(update, context, lang)
 
     async def post_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         gated = await _guard(update)
@@ -722,9 +761,15 @@ def build_feature_command_handlers(engines: FeatureEngines, settings: Settings) 
         if not rows:
             await _reply(update, "🗓 پست زمان‌بندی‌شده‌ای در این چت نیست.")
             return
+        shown = rows[:20]
+        now = datetime.now(timezone.utc)
         lines = ["🗓 پست‌های در انتظار:"]
-        for row in rows[:20]:
-            lines.append(f"#{row['id']} {row['scheduled_at']} — {row['text']}")
+        for row in shown:
+            when = datetime.fromisoformat(row["scheduled_at"])
+            mark = "⚠️ " if when <= now else ""
+            lines.append(f"{mark}#{row['id']} {row['scheduled_at']} — {row['text']}")
+        if len(rows) > len(shown):
+            lines.append(f"... و {len(rows) - len(shown)} مورد دیگر")
         await _reply(update, "\n".join(lines))
 
     async def ban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -768,7 +813,8 @@ def build_feature_command_handlers(engines: FeatureEngines, settings: Settings) 
             logger.exception("member_count_failed", chat_id=chat_id)
             await _reply(update, "❌ دریافت آمار ناموفق بود.")
             return
-        await _reply(update, f"📊 اعضای این چت: {count}")
+        pending = len(await asyncio.to_thread(engines.channel.list_pending, chat_id))
+        await _reply(update, f"📊 اعضای این چت: {count}\n🗓 پست‌های در انتظار: {pending}")
 
     async def welcome_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         gated = await _guard(update)
@@ -785,6 +831,13 @@ def build_feature_command_handlers(engines: FeatureEngines, settings: Settings) 
                 )
             else:
                 await _reply(update, f"👋 خوشامد فعلی:\n{current}")
+            return
+        if args[0].lower() == "preview":
+            sample = " ".join(args[1:]).strip() or engines.channel.get_welcome_message(chat_id)
+            if not sample:
+                await _reply(update, "❌ متنی برای پیش‌نمایش نیست.")
+                return
+            await _reply(update, "👁 پیش‌نمایش (ارسال نشد):\n" + render_welcome(sample, "نگار"))
             return
         if len(args) == 1 and args[0].lower() == "clear":
             engines.channel.clear_welcome_message(chat_id)
@@ -901,6 +954,8 @@ def build_feature_command_handlers(engines: FeatureEngines, settings: Settings) 
         "ad_resume": ad_resume_cmd,
         "ad_delete": ad_delete_cmd,
         "ad_stats": ad_stats_cmd,
+        "ad_health": ad_health_cmd,
+        "onboard": onboard_cmd,
         "onboarding_callback": onboarding_callback,
         "new_member": new_member_cmd,
     }

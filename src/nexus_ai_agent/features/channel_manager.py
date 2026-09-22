@@ -62,6 +62,12 @@ def parse_schedule_when(raw_date: str, raw_time: str, *, now: datetime) -> datet
     return when
 
 
+def render_welcome(text: str, user_name: str = "نگار") -> str:
+    """Substitute ``{name}`` only. Other braces stay literal."""
+    safe_name = user_name.replace("\n", " ").strip()[:64] or "friend"
+    return text.replace("{name}", safe_name)
+
+
 def _validate_text(text: str, *, limit: int, empty_message: str) -> str:
     cleaned = text.strip()
     if not cleaned:
@@ -226,7 +232,13 @@ class ChannelManager:
         ]
 
     async def restore_pending(self) -> int:
-        """Reschedule persisted pending posts. Already-running ids are skipped."""
+        """Reschedule persisted pending posts. Already-running ids are skipped.
+
+        A row left in ``sending`` by a crash is marked ``failed`` and is not
+        sent again. That is the at-most-once rule, made visible instead of
+        leaving an invisible stuck row.
+        """
+        await asyncio.to_thread(self._fail_stuck_sending_sync)
         now = datetime.now(timezone.utc)
         rows = await asyncio.to_thread(self._pending_rows_sync)
         restored = 0
@@ -240,6 +252,18 @@ class ChannelManager:
         if restored:
             logger.info("channel_schedules_restored", count=restored)
         return restored
+
+    def _fail_stuck_sending_sync(self) -> int:
+        with self._lock, Session(self._engine_ref()) as session:
+            rows = session.exec(
+                select(ChannelSchedule).where(ChannelSchedule.status == "sending")
+            ).all()
+            for row in rows:
+                row.status = "failed"
+                session.add(row)
+            if rows:
+                session.commit()
+            return len(rows)
 
     def _pending_rows_sync(self) -> list[tuple[int, int, str, datetime]]:
         with Session(self._engine_ref()) as session:
@@ -390,8 +414,7 @@ class ChannelManager:
         text = self.get_welcome_message(chat_id)
         if not text:
             return None
-        safe_name = user_name.replace("\n", " ").strip()[:64] or "friend"
-        formatted = text.replace("{name}", safe_name)
+        formatted = render_welcome(text, user_name)
         bot = self._require_bot()
         await asyncio.wait_for(
             bot.send_message(chat_id=chat_id, text=formatted),

@@ -330,7 +330,8 @@ async def test_ban_unban_stats_and_pin(env: SimpleNamespace) -> None:
     assert bot.unbanned == [(CHAT, 42)]
     stats = make_update()
     await env.cmds["stats"](stats, make_context(bot=bot))
-    assert reply_text(stats) == "📊 اعضای این چت: 42"
+    assert "📊 اعضای این چت: 42" in reply_text(stats)
+    assert "پست‌های در انتظار: 0" in reply_text(stats)
     pin = make_update(reply_to=77)
     await env.cmds["pin"](pin, make_context(bot=bot))
     assert bot.pinned == [(CHAT, 77)]
@@ -343,6 +344,66 @@ async def test_pin_failure_is_not_reported_as_success(env: SimpleNamespace) -> N
     await env.cmds["pin"](update, make_context(["15"], bot=bot))
     assert "ناموفق" in reply_text(update)
     assert "سنجاق شد" not in reply_text(update)
+
+
+async def test_overdue_schedule_is_marked_and_long_lists_truncate(env: SimpleNamespace) -> None:
+    when = datetime.now(timezone.utc) - timedelta(minutes=10)
+    engine = create_engine(f"sqlite:///{env.db}")
+    with Session(engine) as session:
+        session.add(ChannelSchedule(chat_id=CHAT, text="دیر", scheduled_at=when, status="pending"))
+        for index in range(20):
+            session.add(
+                ChannelSchedule(
+                    chat_id=CHAT,
+                    text=f"بعد {index}",
+                    scheduled_at=when + timedelta(days=1),
+                    status="pending",
+                )
+            )
+        session.commit()
+    engine.dispose()
+    update = make_update()
+    await env.cmds["schedules"](update, make_context())
+    text = reply_text(update)
+    assert "⚠️" in text
+    assert "مورد دیگر" in text
+
+
+async def test_welcome_preview_does_not_persist_or_send(env: SimpleNamespace) -> None:
+    bot = FakeBot()
+    update = make_update()
+    await env.cmds["welcome"](update, make_context(["preview", "سلام", "{name}"], bot=bot))
+    assert "نگار" in reply_text(update)
+    assert "ارسال نشد" in reply_text(update)
+    assert bot.sent == []
+    assert env.engines.channel.get_welcome_message(CHAT) == ""
+
+
+async def test_stuck_sending_row_is_failed_not_resent(env: SimpleNamespace) -> None:
+    bot = FakeBot()
+    manager = env.engines.channel
+    manager.bind(bot)
+    engine = create_engine(f"sqlite:///{env.db}")
+    with Session(engine) as session:
+        session.add(
+            ChannelSchedule(
+                chat_id=CHAT,
+                text="نیمه‌کاره",
+                scheduled_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+                status="sending",
+            )
+        )
+        session.commit()
+    engine.dispose()
+    assert await manager.restore_pending() == 0
+    assert bot.sent == []
+    assert _schedules(env.db)[0].status == "failed"
+
+
+async def test_close_after_shutdown_is_idempotent(env: SimpleNamespace) -> None:
+    await env.engines.channel.shutdown()
+    env.engines.channel.close()
+    env.engines.channel.close()
 
 
 async def test_pending_cap(env: SimpleNamespace) -> None:

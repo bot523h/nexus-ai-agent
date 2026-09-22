@@ -207,13 +207,17 @@ class AdManager:
             stmt = stmt.order_by(col(AdCampaign.id).desc())
             return [_campaign_dict(row, text_limit=80) for row in session.exec(stmt).all()]
 
-    def pause_campaign(self, campaign_id: int) -> bool:
-        return self._set_status(campaign_id, expected="active", new_status="paused")
+    def pause_campaign(self, campaign_id: int, chat_id: int | None = None) -> bool:
+        return self._set_status(
+            campaign_id, expected="active", new_status="paused", chat_id=chat_id
+        )
 
-    def resume_campaign(self, campaign_id: int) -> bool:
+    def resume_campaign(self, campaign_id: int, chat_id: int | None = None) -> bool:
         with self._claim_lock, Session(self._engine_ref()) as session:
             campaign = session.get(AdCampaign, campaign_id)
             if campaign is None or campaign.status != "paused":
+                return False
+            if chat_id is not None and campaign.chat_id != chat_id:
                 return False
             campaign.status = "active"
             campaign.next_run = datetime.now(timezone.utc)
@@ -221,19 +225,30 @@ class AdManager:
             session.commit()
             return True
 
-    def delete_campaign(self, campaign_id: int) -> bool:
+    def delete_campaign(self, campaign_id: int, chat_id: int | None = None) -> bool:
         with self._claim_lock, Session(self._engine_ref()) as session:
             campaign = session.get(AdCampaign, campaign_id)
             if campaign is None:
+                return False
+            if chat_id is not None and campaign.chat_id != chat_id:
                 return False
             session.delete(campaign)
             session.commit()
             return True
 
-    def _set_status(self, campaign_id: int, *, expected: str, new_status: str) -> bool:
+    def _set_status(
+        self,
+        campaign_id: int,
+        *,
+        expected: str,
+        new_status: str,
+        chat_id: int | None = None,
+    ) -> bool:
         with self._claim_lock, Session(self._engine_ref()) as session:
             campaign = session.get(AdCampaign, campaign_id)
             if campaign is None or campaign.status != expected:
+                return False
+            if chat_id is not None and campaign.chat_id != chat_id:
                 return False
             campaign.status = new_status
             session.add(campaign)

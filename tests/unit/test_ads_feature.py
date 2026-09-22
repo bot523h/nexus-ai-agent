@@ -262,6 +262,58 @@ async def test_loop_start_stop_is_idempotent(env: SimpleNamespace) -> None:
     assert manager.snapshot()["running"] is False
 
 
+async def test_health_is_owner_only_and_reports_unbound(env: SimpleNamespace) -> None:
+    denied = make_update(user_id=999)
+    await env.cmds["ad_health"](denied, make_context())
+    assert reply_text(denied) == "⛔ Access denied"
+    update = make_update()
+    await env.cmds["ad_health"](update, make_context())
+    assert "متوقف" in reply_text(update)
+    assert "متصل خیر" in reply_text(update)
+
+
+async def test_create_reply_names_next_run(env: SimpleNamespace) -> None:
+    update = make_update()
+    await env.cmds["ad_create"](update, make_context(["6", "1", "زمان"]))
+    assert "اجرای بعدی:" in reply_text(update)
+
+
+async def test_mutations_are_scoped_to_the_current_chat(env: SimpleNamespace) -> None:
+    campaign_id = env.engines.ads.create_campaign(CHAT, "مال این چت", 6, 0, OWNER)
+    other = make_update(chat_id=-2002)
+    await env.cmds["ad_delete"](other, make_context([str(campaign_id)]))
+    assert "پیدا نشد" in reply_text(other)
+    assert env.engines.ads.get_campaign(campaign_id) is not None
+    home = make_update()
+    await env.cmds["ad_pause"](home, make_context([str(campaign_id)]))
+    assert "متوقف شد" in reply_text(home)
+
+
+async def test_list_truncates_after_twenty(env: SimpleNamespace) -> None:
+    engine = create_engine(f"sqlite:///{env.db}")
+    with Session(engine) as session:
+        for index in range(21):
+            session.add(
+                AdCampaign(
+                    chat_id=CHAT,
+                    text=f"ردیف {index}",
+                    interval_hours=6,
+                    status="completed",
+                    created_by=OWNER,
+                )
+            )
+        session.commit()
+    engine.dispose()
+    update = make_update()
+    await env.cmds["ad_list"](update, make_context())
+    assert "مورد دیگر" in reply_text(update)
+
+
+def test_close_is_idempotent(env: SimpleNamespace) -> None:
+    env.engines.ads.close()
+    env.engines.ads.close()
+
+
 def test_future_campaign_is_not_due(env: SimpleNamespace) -> None:
     manager: AdManager = env.engines.ads
     campaign_id = manager.create_campaign(CHAT, "آینده", 6, 0, OWNER)
