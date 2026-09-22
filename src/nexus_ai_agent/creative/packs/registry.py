@@ -88,6 +88,18 @@ class PackRegistry:
     def active_packs(self) -> list[str]:
         return sorted(pack_id for pack_id, pack in self._packs.items() if pack.active)
 
+    def builtin_packs(self) -> list[RegisteredPack]:
+        """Registered packs that ship with this repository, sorted by id.
+
+        Wave 5 addition: the composition layer needs to talk about *builtin*
+        packs as a group (status table, activation sweep, completeness gate)
+        without re-globbing the filesystem or re-deriving ``anchor``.
+        """
+        return sorted(
+            (pack for pack in self._packs.values() if pack.anchor == "builtin"),
+            key=lambda pack: pack.package_id,
+        )
+
     def get(self, package_id: str) -> RegisteredPack:
         try:
             return self._packs[package_id]

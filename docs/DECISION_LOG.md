@@ -831,3 +831,113 @@ go through the async wrapper + `to_thread`.
 3. **task-110 DEFERRED to PR#33 (no code shipped):** this session also implemented OTIO interop + a sync conv-store, then discovered PR#33 (branch 3aa) had already delivered task-110 first, green, in review — its claim was invisible because it never reached `main` and this base predated it (split-brain). Per the overlapping-PRs rule the duplicate was fully reverted (branch history pre-reset preserved the work). Forensic finding kept for a post-merge supplement (wave-3 task-121): PR#33 keeps `include_markers` but ignores it (zero marker references in its ops) — markers (Marker.2 on the Stack) remain open. Conv-store: PR#33's aiosqlite adapter (15 tests) is the keeper.
 
 **Verification:** `tests/unit/test_rendering_lane.py` (20: 16 golden + 4 real FFmpeg 7.0.2 encodes), `test_caption_engine_adapters.py` (13), `test_rendering_lane_boundary.py` (4); `ruff check` + `format --check` + `mypy` clean; pre-push `agent_board check` zero overlap vs agent B's active lease.
+
+### D-0005 … D-0008 — color/exposure lane ownership decisions (wave 8, ADR-lite)
+
+**Date:** 2026-09-21; implemented on `arena/01a0c58e-nexus-ai-agent`.
+**Status:** Accepted **and implemented** (D-0005/D-0006/D-0008 are deferrals —
+accepted as *not now*, with the trigger that reopens each one named).
+
+**On the identifier family.** These use a new zero-padded `D-00NN` ADR series.
+They are **not** the historical `D1–D10` Phase-D schema bundle in the numbering
+table above, and `D-0007` is not `D7`. The log's own rule is that an identifier
+is optional and only for traceability; the padding exists precisely so the two
+families cannot be confused in a grep.
+
+---
+
+**D-0005 — No `SplitOp`: the lane stays one-input/one-output until a
+multi-output encode exists.**
+
+*Problem.* A colour/exposure lane makes fan-out tempting: grade once, emit a
+proxy *and* a master from the same pass.
+*Decision.* Deferred. `CompiledLane` exposes exactly one `video_out` and one
+`audio_out`, `argv()` writes exactly one `-y` destination, and the executor runs
+exactly one FFmpeg process with staging + atomic publish. A split would break
+the single-encode invariant that makes the artifact's provenance auditable
+(one process ⇒ one set of probed evidence ⇒ one journal entry).
+*Rejected alternatives.* (a) FFmpeg's multi-output argv (`-map ... out1 -map ...
+out2`) — one process but *two* artifacts, so the "one artifact per encode"
+evidence model needs a redesign, not a flag; (b) two sequential encodes — doubles
+decode cost and makes the two outputs non-identical by construction.
+*Reopens when* a real consumer needs proxy+master atomically, and the executor
+gains per-output probed evidence.
+
+**D-0006 — `.nexus/continuum.json` is refreshed only in a release cut, not per
+wave.**
+
+*Problem.* This wave adds 178 test cases; the continuum's `test_count_expected`
+is already stale on `main` at `649`.
+*Decision.* Do not touch it here. Two independent reasons: (1) the file is under
+another task's **exclusive-path lease** — board claim `task-135-lockstep-residue`
+holds `["README.md", ".nexus/continuum.json"]`, and the coordination rule is that
+an exclusive path is not touched by a second branch; (2) a per-wave counter is
+guaranteed to churn into merge conflicts across parallel branches for zero
+safety benefit, because nothing gates on it. It is refreshed deliberately at a
+release cut (next: v3.14), together with `VERSION`/`pyproject`/`CHANGELOG`.
+*Rejected alternative.* Bumping it in this PR — it would collide with PR#33's
+diff on the same file and steal task-135's scope.
+*Consequence, stated plainly.* `test_count_expected` remains wrong after this
+wave. That is pre-existing drift with an owner, not new drift; task-135 stays
+queued.
+
+**D-0007 — The EV→`eq` gamma mapping, and the source of every colour bound.**
+
+*Problem.* Three FFmpeg filters, three different notions of "out of range", and
+the popular documentation disagrees with itself (`eq` contrast is quoted as
+`-2.0…2.0` in some places and `-1000.0…1000.0` in others).
+*Decision.* Take the bounds from the filter **sources**, and clamp in the IR:
+
+| Fact | Source (FFmpeg `master`) |
+|---|---|
+| gamma clipped to `[0.1, 10.0]`, contrast to `[-1000.0, 1000.0]`, brightness `[-1,1]`, saturation `[0,3]`, `gamma_weight` `[0,1]` | `libavfilter/vf_eq.c` — `set_gamma` / `set_contrast` / `set_brightness` / `set_saturation` all use `av_clipf` |
+| `eq`'s LUT is `v → v ** (1/gamma)`, hence `gamma = 2**EV` brightens on positive EV | `vf_eq.c` `create_lut` (`double g = 1.0 / param->gamma`) |
+| `eq` is a *true* no-op at neutral | `vf_eq.c` `check_values` → `param->adjust = NULL` when contrast 1.0, brightness 0.0, gamma 1.0 |
+| `eq` takes the non-LUT fast path only while `\|contrast\| < 7.9` | `vf_eq.c` `check_values` |
+| `temperature` = `{.dbl=6500}, 1000, 40000` | `libavfilter/vf_colortemperature.c` `colortemperature_options[]` |
+| `kelvin2rgb(6500)` ≈ `(1.000, 0.997, 0.981)` — **not** an exact identity | `vf_colortemperature.c` `kelvin2rgb` |
+| `eq` accepts planar YUV/gray only; `colortemperature`/`colorbalance` accept RGB only (disjoint sets) | `vf_eq.c` `pixel_fmts_eq[]` vs `vf_colortemperature.c` `pixel_fmts[]` / `vf_colorbalance.c` `pix_fmts[]` |
+| `gm` = "set green midtones", `{.dbl=0}, -1, 1`, **added** to green | `libavfilter/vf_colorbalance.c` `colorbalance_options[]` + `get_component` |
+
+*Consequences adopted.* `gamma = clamp(2**EV, 0.1, 10.0)` clamped in Python, so
+the argv never claims a grade FFmpeg would have silently clipped; the unclamped
+band is therefore ±log2(10) ≈ ±3.32 EV and both ends are pinned as golden
+contracts. `tint/50 → gm`, positive = green. `6500 K` is neutral because it is
+the filter's own default, and the RGB stages are elided there because they do
+*not* short-circuit. The disjoint pixel-format sets are the reason for the single
+`yuv420p → rgb24 → yuv420p` round trip, shared by both RGB filters.
+*Rejected alternatives.* Reading the bounds from prose docs (they conflict);
+letting FFmpeg clip (the argv would lie); `eq=brightness` instead of gamma
+(brightness is a linear offset that clips highlights, gamma is the curve that
+matches a stop).
+
+**D-0008 — No filmic tone-mapping (`tonemap=hable`) in this lane.**
+
+*Problem.* Once an exposure op exists, the obvious next step is a filmic
+highlight roll-off; `hable` is the well-known style.
+*Decision.* Not now. `tonemap` requires linear-light float input, which means a
+`zscale` transfer-primaries/matrix chain and a working knowledge of the source's
+tagged colour space. Guessing the input transfer function is worse than not
+tone-mapping: it silently re-grades every clip differently depending on its
+metadata. The lane currently guarantees a *predictable* transform.
+*Rejected alternatives.* (a) `tonemap=hable` on assumed BT.709 input — mislabels
+any HLG/PQ source; (b) `eq` with `gamma_weight < 1.0` as a cheap highlight
+protect — plausible, but it changes the meaning of the EV mapping in D-0007 and
+needs its own photometric contract.
+*Reopens when* the lane can read the source's colour metadata via `ffprobe`
+(already the executor's evidence path) and pin it in the IR, so the transfer
+function is a recorded input rather than an assumption.
+
+---
+
+**Verification (this wave).** New: `tests/unit/test_rendering_lane_exposure.py`
+(16 golden pins) and `tests/unit/test_lane_duration_algebra.py` (162 cases:
+40 seeded lanes × 4 invariants + 2 structural guards). Both files were
+mutation-checked — six deliberate breaks of the mapping/elision/guards and four
+breaks of the duration algebra each turned the suite red, and a new op added to
+the `LaneOp` union is caught by the restatement-vocabulary guard. Runbook:
+`docs/ops/COLOR_LANE.md`. Full suite on this branch: **1359 passed, 20 skipped**
+against a measured base-commit baseline of **1181 passed, 20 skipped** — +178
+cases, no new skips, no regressions. `ruff check .` → 0 errors;
+`ruff format --check .` → no files to reformat; `mypy src` → clean, 221 source
+files. The exact invocations are in §3 of that runbook.

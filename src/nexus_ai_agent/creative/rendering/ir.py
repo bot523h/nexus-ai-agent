@@ -12,7 +12,12 @@ Duration algebra (microseconds, integer math — no float drift):
 * ``reverse`` → unchanged
 * ``freeze``  → ``hold_us`` (the stream becomes the held still)
 * ``xfade``   → ``d_main + d_other - overlap_us``
-* ``title`` / ``loudnorm`` / ``duck`` → unchanged
+* ``title`` / ``loudnorm`` / ``duck`` / ``exposure`` → unchanged
+
+Photometric exposure (the ``exposure`` op) is a pure value mapping and lives
+here next to the IR so the pack twin (``color.adjust_exposure``), the compiler
+and the golden tests all read the same numbers — see D-0007 in
+``docs/DECISION_LOG.md`` for the sources.
 """
 
 from __future__ import annotations
@@ -36,9 +41,58 @@ XFADE_KINDS = (
     "dissolve",
 )
 
+# ── Photometric exposure mapping ─────────────────────────────────────────────
+# Every bound below is read off FFmpeg's own sources rather than prose, because
+# the three filters disagree about what "out of range" means:
+#
+# * ``libavfilter/vf_eq.c`` — ``set_gamma`` runs
+#   ``av_clipf(..., 0.1, 10.0)`` and ``set_contrast`` runs
+#   ``av_clipf(..., -1000.0, 1000.0)``: out-of-range values are **silently
+#   clipped**, so an unclamped gamma of 16 would render as 10 with no warning.
+# * ``libavfilter/vf_colortemperature.c`` — ``temperature`` is declared
+#   ``AV_OPT_TYPE_FLOAT, {.dbl=6500}, 1000, 40000``: 6500 K is the filter's own
+#   default, which is why 6500 K is this lane's neutral.
+# * ``libavfilter/vf_colorbalance.c`` — ``gm`` ("set green midtones") is
+#   declared ``AV_OPT_TYPE_FLOAT, {.dbl=0}, -1, 1``.
+#
+# Clipping in the IR (not in FFmpeg) keeps the emitted argv honest: what the
+# argv says is what the pixels get.
+EQ_GAMMA_MIN = 0.1
+EQ_GAMMA_MAX = 10.0
+EQ_CONTRAST_MIN = -1000.0
+EQ_CONTRAST_MAX = 1000.0
+COLOR_TEMPERATURE_MIN_K = 1000
+COLOR_TEMPERATURE_MAX_K = 40000
+COLOR_TEMPERATURE_NEUTRAL_K = 6500
+COLORBALANCE_LIMIT = 1.0
+TINT_FULL_SCALE = 50.0
+
 
 class LaneError(ValueError):
     """A typed, fail-closed lane failure (bad op, unknown asset, missing media)."""
+
+
+def ev_to_gamma(exposure_ev: float) -> float:
+    """Map an EV exposure shift onto ``eq``'s gamma, clamped to FFmpeg's range.
+
+    ``eq``'s LUT (``vf_eq.c`` ``create_lut``) is ``v -> v ** (1 / gamma)``, so
+    ``gamma = 2 ** EV`` doubles the exposure per stop: positive EV brightens,
+    which is the photographic convention callers expect.  The clamp is a real
+    ceiling, not a formality — ``2 ** 4 = 16`` exceeds ``EQ_GAMMA_MAX``, so the
+    usable unclamped band is ±log2(10) ≈ ±3.32 EV and the golden tests pin both
+    ends as a contract (see ``tests/unit/test_rendering_lane_exposure.py``).
+    """
+    return max(EQ_GAMMA_MIN, min(EQ_GAMMA_MAX, 2.0**exposure_ev))
+
+
+def tint_to_gm(tint: float) -> float:
+    """Map the pack's −50..+50 tint onto ``colorbalance``'s ``gm`` (−1..+1).
+
+    Sign convention (D-0007): **positive tint pushes green**, negative pushes
+    magenta, because ``vf_colorbalance.c`` adds ``gm`` to the *green* midtones.
+    The endpoints land exactly on the filter's declared bounds.
+    """
+    return tint / TINT_FULL_SCALE
 
 
 class TrimOp(BaseModel):
@@ -139,8 +193,77 @@ class DuckOp(BaseModel):
     release_ms: int = Field(default=400, ge=1, le=5000)
 
 
+class ExposureOp(BaseModel):
+    """Photometric exposure + white balance — the executable twin of ``color.adjust_exposure``.
+
+    Field bounds mirror the delivery pack's :class:`AdjustExposureInput` where
+    the pack is the stricter of the two (EV ±4, contrast 0.2–3.0, tint ±50), and
+    widen only where the pack is artificially tight: ``temperature_k`` accepts
+    the full 1000–40000 K that ``colortemperature`` declares, so the lane can
+    render anything the pack can describe and more.  Duration is unaffected.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    op: Literal["exposure"] = "exposure"
+    exposure_ev: float = Field(
+        default=0.0,
+        ge=-4.0,
+        le=4.0,
+        description="Exposure shift in stops; compiled as eq gamma = clamp(2**EV, 0.1, 10).",
+    )
+    contrast: float = Field(
+        default=1.0,
+        ge=0.2,
+        le=3.0,
+        description="Contrast slope, passed straight to eq (declared range -1000..1000).",
+    )
+    temperature_k: int = Field(
+        default=COLOR_TEMPERATURE_NEUTRAL_K,
+        ge=COLOR_TEMPERATURE_MIN_K,
+        le=COLOR_TEMPERATURE_MAX_K,
+        description="White-balance target in Kelvin; 6500 is the filter's neutral default.",
+    )
+    tint: float = Field(
+        default=0.0,
+        ge=-TINT_FULL_SCALE,
+        le=TINT_FULL_SCALE,
+        description="Green-magenta tint; compiled as colorbalance gm = tint/50.",
+    )
+    preserve_lightness: bool = Field(
+        default=True,
+        description="Emit pl=1 on the RGB stages so white balance does not shift luma.",
+    )
+
+    @property
+    def gamma(self) -> float:
+        """The clamped ``eq`` gamma this op compiles to."""
+        return ev_to_gamma(self.exposure_ev)
+
+    @property
+    def tint_gm(self) -> float:
+        """The ``colorbalance`` ``gm`` coefficient this op compiles to."""
+        return tint_to_gm(self.tint)
+
+    @property
+    def gamma_is_clamped(self) -> bool:
+        """True when the EV lies outside the band ``eq`` can represent exactly."""
+        return 2.0**self.exposure_ev != self.gamma
+
+    @property
+    def needs_rgb_pass(self) -> bool:
+        """True when a white-balance stage is emitted (and so a yuv→rgb→yuv round trip).
+
+        ``eq`` is YUV-only; ``colortemperature`` and ``colorbalance`` are
+        RGB-only.  At neutral both RGB stages are elided — ``kelvin2rgb(6500)``
+        is *not* an exact identity and neither filter short-circuits — which
+        also removes the pixel-format round trip entirely.
+        """
+        return self.temperature_k != COLOR_TEMPERATURE_NEUTRAL_K or self.tint != 0.0
+
+
 LaneOp = Annotated[
-    TrimOp | SpeedOp | ReverseOp | FreezeOp | XfadeOp | TitleOp | LoudnormOp | DuckOp,
+    TrimOp | SpeedOp | ReverseOp | FreezeOp | XfadeOp | TitleOp | LoudnormOp | DuckOp | ExposureOp,
     Field(discriminator="op"),
 ]
 
@@ -235,9 +358,19 @@ def lane_ir_from_project(
 
 
 __all__ = [
+    "COLORBALANCE_LIMIT",
+    "COLOR_TEMPERATURE_MAX_K",
+    "COLOR_TEMPERATURE_MIN_K",
+    "COLOR_TEMPERATURE_NEUTRAL_K",
+    "EQ_CONTRAST_MAX",
+    "EQ_CONTRAST_MIN",
+    "EQ_GAMMA_MAX",
+    "EQ_GAMMA_MIN",
     "LANE_PACKAGE_ID",
+    "TINT_FULL_SCALE",
     "XFADE_KINDS",
     "DuckOp",
+    "ExposureOp",
     "FreezeOp",
     "LaneError",
     "LaneIR",
@@ -250,5 +383,7 @@ __all__ = [
     "TitleOp",
     "TrimOp",
     "XfadeOp",
+    "ev_to_gamma",
     "lane_ir_from_project",
+    "tint_to_gm",
 ]

@@ -17,7 +17,8 @@ Commands
   next --branch BRANCH          Suggest the first claimable task
   check --files a,b,c --branch BRANCH
                                 Exit 1 if any file overlaps another branch's
-                                ACTIVE exclusive paths (pre-push / CI referee)
+                                active or active-in-review exclusive paths
+                                (pre-push / CI referee)
 
 All state lives in .agents/board.json (schema 1). Pure stdlib.
 
@@ -56,6 +57,20 @@ _DEFAULT_FA = (
     "این کار پس از آزاد شدن ناحیه انجام خواهد شد تا فراموش نشود."
 )
 
+ACTIVE_STATUSES = frozenset({"active", "active_in_review"})
+
+
+def _is_active_claim(claim: dict) -> bool:
+    """True when a claim owns its zone and exclusive paths right now.
+
+    ``active_in_review`` is intentionally treated as an active lease: an open PR
+    can still conflict even though the author has stopped coding.  Older boards
+    only checked the literal string ``active``, which made review-phase PRs
+    invisible to the referee.
+    """
+
+    return claim.get("status") in ACTIVE_STATUSES
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -90,11 +105,14 @@ def gc_expired(board: dict) -> list[str]:
     freed: list[str] = []
     for claim in board.get("claims", []):
         claimed = _parse(claim.get("claimed_at"))
-        if claim.get("status") == "active" and claimed is not None:
+        if _is_active_claim(claim) and claimed is not None:
             expires = claimed + timedelta(hours=int(claim.get("ttl_hours", 24)))
             if _now() > expires:
+                previous_status = claim.get("status")
                 claim["status"] = "expired"
-                claim["note"] = f"auto-released by gc at {_iso(_now())} (stale lease)"
+                claim["note"] = (
+                    f"auto-released by gc at {_iso(_now())} (stale {previous_status} lease)"
+                )
                 freed.append(claim["task"])
     return freed
 
@@ -104,10 +122,10 @@ def _find(board: dict, task: str) -> dict | None:
 
 
 def _conflicting_paths(board: dict, branch: str, files: list[str]) -> list[tuple[str, str]]:
-    """Return [(task, path)] overlaps between *files* and other branches' ACTIVE exclusive paths."""
+    """Return overlaps between *files* and other branches' live exclusive paths."""
     hits: list[tuple[str, str]] = []
     for claim in board.get("claims", []):
-        if claim.get("status") != "active":
+        if not _is_active_claim(claim):
             continue
         if branch and claim.get("agent_branch") == branch:
             continue
@@ -168,7 +186,7 @@ def cmd_claim(args: argparse.Namespace) -> int:
     if claim is None:
         print(f"task not found: {args.task}")
         return 2
-    if claim["status"] == "active":
+    if _is_active_claim(claim):
         claimed = _parse(claim.get("claimed_at"))
         expires = (
             _iso(claimed + timedelta(hours=int(claim.get("ttl_hours", 24)))) if claimed else "?"
@@ -180,7 +198,7 @@ def cmd_claim(args: argparse.Namespace) -> int:
             return 0
         print(
             f"task {args.task} is ACTIVELY claimed by"
-            f" {claim.get('agent_branch')} (expires {expires})"
+            f" {claim.get('agent_branch')} (status {claim.get('status')}, expires {expires})"
         )
         print(STOP_BANNER)
         return 2
@@ -232,11 +250,7 @@ def cmd_defer(args: argparse.Namespace) -> int:
             "resume_when": args.resume_when or (f"claim {args.task} is free"),
         }
     )
-    if (
-        claim is not None
-        and claim.get("agent_branch") == args.branch
-        and claim["status"] == "active"
-    ):
+    if claim is not None and claim.get("agent_branch") == args.branch and _is_active_claim(claim):
         claim.update(status="deferred", claimed_at=None, gates_owner=False)
     save_board(board)
     print(f"DEFERRED {args.task} by {args.branch} — note recorded so nothing is forgotten.")
@@ -249,13 +263,13 @@ def cmd_next(args: argparse.Namespace) -> int:
     save_board(board)
     for claim in board.get("claims", []):
         if claim["status"] in ("queued", "expired", "deferred"):
-            blockers = [
-                e["task"]
-                for e in board.get("deferred_log", [])
-                if e["task"] == claim["task"]
-                and _find(board, e["task"])
-                and _find(board, e["task"])["status"] == "active"
-            ]
+            blockers = []
+            for entry in board.get("deferred_log", []):
+                if entry["task"] != claim["task"]:
+                    continue
+                blocked_claim = _find(board, entry["task"])
+                if blocked_claim is not None and _is_active_claim(blocked_claim):
+                    blockers.append(entry["task"])
             if blockers:
                 print(
                     f"BLOCKED {claim['task']} — waiting on active claim(s): {', '.join(blockers)}"
@@ -276,7 +290,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     files = [f for f in args.files.split(",") if f.strip()]
     hits = _conflicting_paths(board, args.branch or "", files)
     if hits:
-        print("OVERLAP with another agent's ACTIVE exclusive paths:")
+        print("OVERLAP with another agent's active or active-in-review exclusive paths:")
         for task, path in hits:
             print(f"  {path}  ← claimed by {task}")
         print(STOP_BANNER)

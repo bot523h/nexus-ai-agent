@@ -21,7 +21,9 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from nexus_ai_agent.creative.rendering.ir import (
+    COLOR_TEMPERATURE_NEUTRAL_K,
     DuckOp,
+    ExposureOp,
     FreezeOp,
     LaneError,
     LaneIR,
@@ -163,6 +165,10 @@ def _track_durations(ir: LaneIR) -> list[int]:
                     f"other clip duration ({other.duration_us})"
                 )
             current = current + other.duration_us - op.duration_us
+        # TitleOp / LoudnormOp / DuckOp / ExposureOp deliberately fall through:
+        # they touch pixels or samples, never the clock, so `current` carries
+        # over unchanged.  test_lane_duration_algebra.py restates this algebra
+        # independently over seeded random lanes and pins the agreement.
         durations.append(current)
     return durations
 
@@ -172,6 +178,38 @@ def _normalize_video(width: int, height: int, fps: int) -> str:
         f"format=yuv420p,scale={width}:{height}:force_original_aspect_ratio=decrease,"
         f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps={fps}"
     )
+
+
+def _exposure_stage(op: ExposureOp) -> str:
+    """The exposure filter chain for one :class:`ExposureOp`.
+
+    Two hard facts about FFmpeg drive the shape of this string (both verified in
+    the filter sources, recorded as D-0007):
+
+    * ``eq`` accepts only planar YUV/gray, and at neutral it is a *true* no-op —
+      ``vf_eq.c`` ``check_values`` sets ``adjust = NULL`` when contrast is 1.0,
+      brightness 0.0 and gamma 1.0.  So ``eq`` is always emitted, in place, with
+      no pixel-format cost.
+    * ``colortemperature`` and ``colorbalance`` accept only RGB, and neither
+      short-circuits; ``kelvin2rgb(6500)`` is ≈ (1.000, 0.997, 0.981), **not** an
+      exact identity.  So both are elided at neutral — which also removes the
+      whole ``yuv420p → rgb24 → yuv420p`` round trip for an exposure-only edit.
+
+    When a white-balance stage is needed the round trip happens exactly once and
+    both filters share it, and the stream returns to ``yuv420p`` so every
+    downstream op sees the format it would have seen anyway.
+    """
+    chain = [f"eq=gamma={op.gamma:.6f}:contrast={op.contrast:.6f}"]
+    if not op.needs_rgb_pass:
+        return ",".join(chain)
+    preserve = 1 if op.preserve_lightness else 0
+    rgb_stages = ["format=rgb24"]
+    if op.temperature_k != COLOR_TEMPERATURE_NEUTRAL_K:
+        rgb_stages.append(f"colortemperature=temperature={op.temperature_k}:pl={preserve}")
+    if op.tint != 0.0:
+        rgb_stages.append(f"colorbalance=gm={op.tint_gm:.6f}:pl={preserve}")
+    rgb_stages.append("format=yuv420p")
+    return ",".join([*chain, *rgb_stages])
 
 
 _TITLE_POSITIONS = {
@@ -219,6 +257,11 @@ def _compile(
 
     lines: list[str] = []
     has_video = ir.main.media_kind == "video"
+    if not has_video and any(isinstance(op, ExposureOp) for op in ir.ops):
+        # Fail closed: on an audio-only lane the video chain is never built, so
+        # an exposure op would be silently dropped and the master would come
+        # back ungraded while the journal claimed it was graded.
+        raise LaneError("exposure op needs a video main asset")
 
     # -- video chain ---------------------------------------------------------
     video_label: str | None = None
@@ -269,6 +312,8 @@ def _compile(
                     f"text='{_escape_drawtext(op.text)}':fontsize={op.font_size}:"
                     f"fontcolor={op.color}:x={x}:y={y}:enable='{enable}'[{nxt}]"
                 )
+            elif isinstance(op, ExposureOp):
+                lines.append(f"[{video_label}]{_exposure_stage(op)}[{nxt}]")
             else:
                 continue
             video_label = nxt
