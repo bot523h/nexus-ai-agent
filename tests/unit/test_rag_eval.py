@@ -13,6 +13,7 @@ without regressing the exact-match queries.
 from __future__ import annotations
 
 import inspect
+import sys
 from typing import Any
 
 import pytest
@@ -363,11 +364,28 @@ async def test_ingestion_rejects_empty_and_oversized_documents() -> None:
         await engine.add_document(USER_ID, "x" * 1_000_001, {"file_id": "huge"})
 
 
-def test_missing_vector_stack_fails_loudly() -> None:
-    """No chromadb → a precise, actionable error, never a silent no-op."""
+def test_missing_vector_stack_fails_loudly(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No chromadb → a precise, actionable error, never a silent no-op.
+
+    ``chromadb`` is a **core** dependency (``pyproject.toml``), so it is
+    installed in CI and in a correct ``pip install -e ".[dev]"`` tree: the
+    absence this test is about cannot be observed there, it has to be
+    *simulated*.  ``sys.modules[name] = None`` is the documented way to make
+    ``import name`` raise ``ImportError`` — exactly the failure mode of a tree
+    without the vector stack — so the assertion holds whichever way the
+    developer's venv happens to be built.  (As written before, the test only
+    passed where chromadb was missing, which is precisely where CI is not.)
+    """
+    monkeypatch.setitem(sys.modules, "chromadb", None)
     engine = AdvancedRAGEngine()
-    with pytest.raises(RAGUnavailable, match="chromadb is not installed"):
+
+    with pytest.raises(RAGUnavailable) as excinfo:
         engine.client()
+
+    message = str(excinfo.value)
+    assert "chromadb is not installed" in message
+    # …and it stays actionable: the user is told how to repair the tree.
+    assert "pip install" in message
 
 
 def test_worker_contract_is_preserved() -> None:

@@ -222,6 +222,39 @@ Queued for next agents (still 10-step board, disjoint paths):
   PR #33 as the **task-110 vehicle** (OTIO round-trip + ConversationStorePort
   adapter), so it was reopened and awaits a rebase on current `main`.
 
+### Fixed (PR#51 integration — session `arena/01a0ca9c-nexus-ai-agent`, 2026-09-22)
+
+- **CI `test` job — three board tests were wall-clock time bombs.**
+  `tests/unit/test_agent_board.py` read the *repository's* board and asserted lease
+  behaviour against the real clock, so the three lease-liveness tests detonated the
+  moment the first real `active` lease crossed `claimed_at + ttl_hours`
+  (2026-09-22T16:21Z → every push after it was red, while `lint`, `lint-fast` and
+  `migrate-postgres` stayed green). Failure modes, exactly as predicted by the
+  arithmetic: overlap detection saw an expired lease and reported none, a foreign
+  `claim` was accepted instead of refused, and a heartbeat renewal took the
+  `--ttl` flag (`assert 10 == 24`). The sibling file had been fixed by task-151
+  (PR#49); this one was missed. New `_pin_clock_inside_lease()` freezes
+  `agent_board._now` one second inside the claim's own lease window — the same
+  hermetic pattern the other two board suites use. **A/B proof, hostile clock
+  (2027-03-01): the previous file 3 failed / 15 passed, the repaired file
+  18 passed**; on the real clock both agree.
+- **CI `test` job — `test_rag_eval.py::test_missing_vector_stack_fails_loudly`
+  asserted the state of the machine, not the contract.** It expected
+  `AdvancedRAGEngine.client()` to raise "chromadb is not installed", but
+  `chromadb` is a **core** dependency (`pyproject.toml`), so CI and every correct
+  `pip install -e ".[dev]"` tree have it: the test only passed where the package
+  was absent. The absence is now *simulated* (`sys.modules["chromadb"] = None`
+  makes `import chromadb` raise `ImportError`, the exact failure mode of a tree
+  without the vector stack) and the assertion also pins that the message stays
+  actionable (`pip install`). Green in both legs: chromadb installed, and
+  chromadb import-blocked.
+- **`test_completion_hook_fires_on_terminal_states` raced on notification
+  order.** `enqueue` schedules one task per job, so two jobs complete
+  concurrently and the order of the two hook notifications is a scheduling
+  accident (it flipped under full-suite load — green alone, red in the suite).
+  The test now asserts the contract per job: exactly two notifications, one per
+  terminal state, each carrying its own status/result/error/payload.
+
 ## [3.13.0] — 2026-09-21
 
 Semver-minor: **P0 Week-1 security batch + feature-engine wiring.** Delivers

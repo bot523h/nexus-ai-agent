@@ -16,6 +16,10 @@ reads. These tests pin both halves:
 The CLI is loaded from ``scripts/agent_board.py`` by path (stdlib only) and
 pointed at a temporary board copy, so the repository's real board is never
 mutated by a test run.
+
+Because lease liveness is wall-clock arithmetic, every test that acts on a real
+lease pins ``agent_board._now`` inside that lease
+(:func:`_pin_clock_inside_lease`) instead of trusting the day the suite runs.
 """
 
 from __future__ import annotations
@@ -79,6 +83,40 @@ def board() -> dict:
 
 def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _first_active_claim(board: dict) -> dict:
+    """The lease the CLI tests exercise: the board's first *path-fencing* active claim."""
+    return next(
+        claim
+        for claim in board["claims"]
+        if claim["status"] == "active" and claim.get("exclusive_paths")
+    )
+
+
+def _pin_clock_inside_lease(
+    monkeypatch: pytest.MonkeyPatch, module: ModuleType, claim: dict
+) -> None:
+    """Freeze ``agent_board._now`` inside *claim*'s lease window.
+
+    Lease liveness is wall-clock arithmetic (``claimed_at + ttl_hours``), so a
+    test that reads the repository's real board is a time bomb: 24 h after that
+    board was last rehearsed every ``active`` lease is expired and three
+    assertions below invert (overlap detected → none; foreign claim refused →
+    accepted; heartbeat keeps its TTL → the ``--ttl`` flag wins).  That is not a
+    hypothetical — it is the red CI of 2026-09-22, where the first red run was
+    simply the first push after the clock crossed the fence.
+
+    Pinning the clock one second after the claim's own ``claimed_at`` makes the
+    lease live *by construction*, whatever today's date is, so these tests
+    report on the CLI instead of on the calendar.  Same hermetic pattern as
+    ``test_agent_board_pr_visibility.py`` and
+    ``test_agent_board_active_in_review.py`` (task-151).
+    """
+    claimed_at = datetime.strptime(claim["claimed_at"], "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=timezone.utc
+    )
+    monkeypatch.setattr(module, "_now", lambda: claimed_at + timedelta(seconds=1))
 
 
 # --------------------------------------------------------------------------- #
@@ -212,9 +250,12 @@ def _first_claimable(board_path: Path) -> str:
     )
 
 
-def test_check_detects_overlap_and_allows_disjoint_work(board_module: ModuleType) -> None:
+def test_check_detects_overlap_and_allows_disjoint_work(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
     board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
-    active = next(claim for claim in board["claims"] if claim["status"] == "active")
+    active = _first_active_claim(board)
+    _pin_clock_inside_lease(monkeypatch, board_module, active)
     mine = active["exclusive_paths"][0].rstrip("/") + "/intruder.py"
     assert (
         board_module.cmd_check(type("A", (), {"files": mine, "branch": "arena/999-other-agent"})())
@@ -228,9 +269,12 @@ def test_check_detects_overlap_and_allows_disjoint_work(board_module: ModuleType
     )
 
 
-def test_claim_refuses_a_foreign_active_lease(board_module: ModuleType) -> None:
+def test_claim_refuses_a_foreign_active_lease(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
     board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
-    active = next(claim for claim in board["claims"] if claim["status"] == "active")
+    active = _first_active_claim(board)
+    _pin_clock_inside_lease(monkeypatch, board_module, active)
     code = board_module.cmd_claim(
         type(
             "A",
@@ -241,9 +285,12 @@ def test_claim_refuses_a_foreign_active_lease(board_module: ModuleType) -> None:
     assert code == 2
 
 
-def test_claim_renews_its_own_lease(board_module: ModuleType) -> None:
+def test_claim_renews_its_own_lease(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
     board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
-    active = next(claim for claim in board["claims"] if claim["status"] == "active")
+    active = _first_active_claim(board)
+    _pin_clock_inside_lease(monkeypatch, board_module, active)
     code = board_module.cmd_claim(
         type(
             "A",
