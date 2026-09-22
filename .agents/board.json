@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-22T22:45:58Z",
+  "updated_at": "2026-09-22T23:06:10Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1670,7 +1670,7 @@
       "title_fa": "سیم‌کشی موتور تبلیغات",
       "zone": "ops-wiring-159",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "AdManager exists but /ad_* handlers are simulated stubs and nothing delivers due campaigns. Implement validation, persistence, in-process at-most-once claim, and a startup/shutdown loop. Do not edit handlers.py (live pr47 fence).",
       "scope_fa": "AdManager exists but /ad_* handlers are simulated stubs and nothing delivers due campaigns. Implement validation, persistence, in-process at-most-once claim, and a startup/shutdown loop. Do not edit handlers.py (live pr47 fence).",
       "prerequisites": [],
@@ -1691,11 +1691,11 @@
         "tests/architecture/test_ads_reachability.py"
       ],
       "owner_hint": "arena/01a0cb3f-nexus-ai-agent",
-      "agent_branch": "arena/01a0cb3f-nexus-ai-agent",
-      "claimed_at": "2026-09-22T22:45:58Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Claimed by arena/01a0cb3f after verifying task-159/160/161 were absent from the board and unimplemented in handlers (simulated replies). Does not release or shrink pr47-feature-wiring-continuation."
+      "note": "Claimed by arena/01a0cb3f after verifying task-159/160/161 were absent from the board and unimplemented in handlers (simulated replies). Does not release or shrink pr47-feature-wiring-continuation. Done on arena/01a0cb3f: commits 6706d3c (wiring) and d4fa5bb (ten follow-ups). Targeted pytest 76 passed on the ops modules plus feature-wiring; ruff and mypy clean on the touched modules. handlers.py not edited. Full make lint/types/test not claimed — this branch is not the gates owner."
     },
     {
       "task": "task-160",
@@ -1703,7 +1703,7 @@
       "title_fa": "سیم‌کشی مدیر کانال",
       "zone": "ops-wiring-159",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "/post /schedule /ban /unban /stats /welcome /pin and NEW_CHAT_MEMBERS are simulated in handlers.py. Persist schedules, restore them on startup, cancel tasks on shutdown, persist welcome, and gate destructive commands. Do not edit handlers.py.",
       "scope_fa": "/post /schedule /ban /unban /stats /welcome /pin and NEW_CHAT_MEMBERS are simulated in handlers.py. Persist schedules, restore them on startup, cancel tasks on shutdown, persist welcome, and gate destructive commands. Do not edit handlers.py.",
       "prerequisites": [],
@@ -1724,11 +1724,11 @@
         "tests/architecture/test_channel_manager_reachability.py"
       ],
       "owner_hint": "arena/01a0cb3f-nexus-ai-agent",
-      "agent_branch": "arena/01a0cb3f-nexus-ai-agent",
-      "claimed_at": "2026-09-22T22:45:58Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Claimed by arena/01a0cb3f after verifying task-159/160/161 were absent from the board and unimplemented in handlers (simulated replies). Does not release or shrink pr47-feature-wiring-continuation."
+      "note": "Claimed by arena/01a0cb3f after verifying task-159/160/161 were absent from the board and unimplemented in handlers (simulated replies). Does not release or shrink pr47-feature-wiring-continuation. Done on arena/01a0cb3f: commits 6706d3c (wiring) and d4fa5bb (ten follow-ups). Targeted pytest 76 passed on the ops modules plus feature-wiring; ruff and mypy clean on the touched modules. handlers.py not edited. Full make lint/types/test not claimed — this branch is not the gates owner."
     },
     {
       "task": "task-161",
@@ -1736,7 +1736,7 @@
       "title_fa": "آنبوردینگ اولین اجرا",
       "zone": "ops-wiring-159",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "features/onboarding.py is unreachable: /start never calls it and the onboarding callback is a stub. Persist language, distinguish first visit from an existing UserLanguage row, tolerate a missing language_code, and keep the referral /start contract.",
       "scope_fa": "features/onboarding.py is unreachable: /start never calls it and the onboarding callback is a stub. Persist language, distinguish first visit from an existing UserLanguage row, tolerate a missing language_code, and keep the referral /start contract.",
       "prerequisites": [],
@@ -1757,11 +1757,11 @@
         "tests/architecture/test_onboarding_reachability.py"
       ],
       "owner_hint": "arena/01a0cb3f-nexus-ai-agent",
-      "agent_branch": "arena/01a0cb3f-nexus-ai-agent",
-      "claimed_at": "2026-09-22T22:45:58Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Claimed by arena/01a0cb3f after verifying task-159/160/161 were absent from the board and unimplemented in handlers (simulated replies). Does not release or shrink pr47-feature-wiring-continuation."
+      "note": "Claimed by arena/01a0cb3f after verifying task-159/160/161 were absent from the board and unimplemented in handlers (simulated replies). Does not release or shrink pr47-feature-wiring-continuation. Done on arena/01a0cb3f: commits 6706d3c (wiring) and d4fa5bb (ten follow-ups). Targeted pytest 76 passed on the ops modules plus feature-wiring; ruff and mypy clean on the touched modules. handlers.py not edited. Full make lint/types/test not claimed — this branch is not the gates owner."
     },
     {
       "task": "task-159-160-161-integration",
@@ -1769,7 +1769,7 @@
       "title_fa": "مالک ادغام ۱۵۹/۱۶۰/۱۶۱",
       "zone": "ops-wiring-159",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "Shared wiring for task-159/160/161. handlers.py and CHANGELOG.md stay fenced by pr47-feature-wiring-continuation (active_in_review, other branch, expires 2026-09-23T17:30Z). Real handlers are registered in app.py before the stubs. Root engineering contract installed. Board records the absence of task-159/160/161 prior to this claim.",
       "scope_fa": "Shared wiring for task-159/160/161. handlers.py and CHANGELOG.md stay fenced by pr47-feature-wiring-continuation (active_in_review, other branch, expires 2026-09-23T17:30Z). Real handlers are registered in app.py before the stubs. Root engineering contract installed. Board records the absence of task-159/160/161 prior to this claim.",
       "prerequisites": [],
@@ -1793,11 +1793,251 @@
         "docs/README.md"
       ],
       "owner_hint": "arena/01a0cb3f-nexus-ai-agent",
-      "agent_branch": "arena/01a0cb3f-nexus-ai-agent",
-      "claimed_at": "2026-09-22T22:45:58Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Claimed by arena/01a0cb3f after verifying task-159/160/161 were absent from the board and unimplemented in handlers (simulated replies). Does not release or shrink pr47-feature-wiring-continuation."
+      "note": "Claimed by arena/01a0cb3f after verifying task-159/160/161 were absent from the board and unimplemented in handlers (simulated replies). Does not release or shrink pr47-feature-wiring-continuation. Done on arena/01a0cb3f: commits 6706d3c (wiring) and d4fa5bb (ten follow-ups). Targeted pytest 76 passed on the ops modules plus feature-wiring; ruff and mypy clean on the touched modules. handlers.py not edited. Full make lint/types/test not claimed — this branch is not the gates owner."
+    },
+    {
+      "task": "task-162",
+      "title": "Remove simulated stubs in handlers.py after the pr47 lease ends",
+      "title_fa": "Remove simulated stubs in handlers.py after the pr47 lease ends",
+      "zone": "ops-wiring-159",
+      "priority": "P2",
+      "status": "queued",
+      "scope": "After 2026-09-23T17:30Z or an owner release, delete the simulated replies and the app.py prepend. Until then do not edit handlers.py.",
+      "scope_fa": "After 2026-09-23T17:30Z or an owner release, delete the simulated replies and the app.py prepend. Until then do not edit handlers.py.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "After 2026-09-23T17:30Z or an owner release, delete the simulated replies and the app.py prepend. Until then do not edit handlers.py."
+      ],
+      "evidence_required": [
+        "a failing test before the change, then the same test green"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Forward proposal from arena/01a0cb3f after task-159/160/161. Not a fence. next_work was left at its existing 10 entries because replacing it would drop still-open items owned by other sessions."
+    },
+    {
+      "task": "task-163",
+      "title": "Persist ad delivery counters across restart",
+      "title_fa": "Persist ad delivery counters across restart",
+      "zone": "ops-wiring-159",
+      "priority": "P2",
+      "status": "queued",
+      "scope": "In-process /ad_health counters reset on restart. Decide whether a counter table is worth a migration; do not invent a second store casually.",
+      "scope_fa": "In-process /ad_health counters reset on restart. Decide whether a counter table is worth a migration; do not invent a second store casually.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "In-process /ad_health counters reset on restart. Decide whether a counter table is worth a migration; do not invent a second store casually."
+      ],
+      "evidence_required": [
+        "a failing test before the change, then the same test green"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Forward proposal from arena/01a0cb3f after task-159/160/161. Not a fence. next_work was left at its existing 10 entries because replacing it would drop still-open items owned by other sessions."
+    },
+    {
+      "task": "task-164",
+      "title": "Edit a pending scheduled post",
+      "title_fa": "Edit a pending scheduled post",
+      "zone": "ops-wiring-159",
+      "priority": "P2",
+      "status": "queued",
+      "scope": "/schedule_cancel exists. Add an owner-only edit that changes text without resetting a row already in sending.",
+      "scope_fa": "/schedule_cancel exists. Add an owner-only edit that changes text without resetting a row already in sending.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "/schedule_cancel exists. Add an owner-only edit that changes text without resetting a row already in sending."
+      ],
+      "evidence_required": [
+        "a failing test before the change, then the same test green"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Forward proposal from arena/01a0cb3f after task-159/160/161. Not a fence. next_work was left at its existing 10 entries because replacing it would drop still-open items owned by other sessions."
+    },
+    {
+      "task": "task-165",
+      "title": "Make the 30-day schedule horizon configurable",
+      "title_fa": "Make the 30-day schedule horizon configurable",
+      "zone": "ops-wiring-159",
+      "priority": "P2",
+      "status": "queued",
+      "scope": "The horizon is a constant. If the owner needs a different cap, put it in settings with the same past-skew rule.",
+      "scope_fa": "The horizon is a constant. If the owner needs a different cap, put it in settings with the same past-skew rule.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "The horizon is a constant. If the owner needs a different cap, put it in settings with the same past-skew rule."
+      ],
+      "evidence_required": [
+        "a failing test before the change, then the same test green"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Forward proposal from arena/01a0cb3f after task-159/160/161. Not a fence. next_work was left at its existing 10 entries because replacing it would drop still-open items owned by other sessions."
+    },
+    {
+      "task": "task-166",
+      "title": "Document /ad_health and /onboard in help",
+      "title_fa": "Document /ad_health and /onboard in help",
+      "zone": "ops-wiring-159",
+      "priority": "P2",
+      "status": "queued",
+      "scope": "Help text lives near the leased handlers. Do this only after task-162, or from an unleased help path.",
+      "scope_fa": "Help text lives near the leased handlers. Do this only after task-162, or from an unleased help path.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Help text lives near the leased handlers. Do this only after task-162, or from an unleased help path."
+      ],
+      "evidence_required": [
+        "a failing test before the change, then the same test green"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Forward proposal from arena/01a0cb3f after task-159/160/161. Not a fence. next_work was left at its existing 10 entries because replacing it would drop still-open items owned by other sessions."
+    },
+    {
+      "task": "task-167",
+      "title": "List failed scheduled posts",
+      "title_fa": "List failed scheduled posts",
+      "zone": "ops-wiring-159",
+      "priority": "P2",
+      "status": "queued",
+      "scope": "/schedules shows pending only. A failed filter would make the at-most-once skip visible to the owner.",
+      "scope_fa": "/schedules shows pending only. A failed filter would make the at-most-once skip visible to the owner.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "/schedules shows pending only. A failed filter would make the at-most-once skip visible to the owner."
+      ],
+      "evidence_required": [
+        "a failing test before the change, then the same test green"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Forward proposal from arena/01a0cb3f after task-159/160/161. Not a fence. next_work was left at its existing 10 entries because replacing it would drop still-open items owned by other sessions."
+    },
+    {
+      "task": "task-168",
+      "title": "Onboarding skip that still remembers the language",
+      "title_fa": "Onboarding skip that still remembers the language",
+      "zone": "ops-wiring-159",
+      "priority": "P2",
+      "status": "queued",
+      "scope": "A skip button should persist language so the keyboard is not shown on every later /start.",
+      "scope_fa": "A skip button should persist language so the keyboard is not shown on every later /start.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "A skip button should persist language so the keyboard is not shown on every later /start."
+      ],
+      "evidence_required": [
+        "a failing test before the change, then the same test green"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Forward proposal from arena/01a0cb3f after task-159/160/161. Not a fence. next_work was left at its existing 10 entries because replacing it would drop still-open items owned by other sessions."
+    },
+    {
+      "task": "task-169",
+      "title": "Replace session.query in the new ops tests",
+      "title_fa": "Replace session.query in the new ops tests",
+      "zone": "ops-wiring-159",
+      "priority": "P2",
+      "status": "queued",
+      "scope": "SQLModel warns on session.query. Switch the new tests to session.exec without changing assertions.",
+      "scope_fa": "SQLModel warns on session.query. Switch the new tests to session.exec without changing assertions.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "SQLModel warns on session.query. Switch the new tests to session.exec without changing assertions."
+      ],
+      "evidence_required": [
+        "a failing test before the change, then the same test green"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Forward proposal from arena/01a0cb3f after task-159/160/161. Not a fence. next_work was left at its existing 10 entries because replacing it would drop still-open items owned by other sessions."
+    },
+    {
+      "task": "task-170",
+      "title": "Exercise the 100-row ad delivery tick cap",
+      "title_fa": "Exercise the 100-row ad delivery tick cap",
+      "zone": "ops-wiring-159",
+      "priority": "P2",
+      "status": "queued",
+      "scope": "claim_due limits each tick to 100. Add a test that the 101st waits for the next tick.",
+      "scope_fa": "claim_due limits each tick to 100. Add a test that the 101st waits for the next tick.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "claim_due limits each tick to 100. Add a test that the 101st waits for the next tick."
+      ],
+      "evidence_required": [
+        "a failing test before the change, then the same test green"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Forward proposal from arena/01a0cb3f after task-159/160/161. Not a fence. next_work was left at its existing 10 entries because replacing it would drop still-open items owned by other sessions."
+    },
+    {
+      "task": "task-171",
+      "title": "Ask the pr47 owner to release the merged fence",
+      "title_fa": "Ask the pr47 owner to release the merged fence",
+      "zone": "ops-wiring-159",
+      "priority": "P2",
+      "status": "queued",
+      "scope": "PR#47 is MERGED. The board card is still active_in_review. Only arena/01a0ca9c may release it. Do not self-release.",
+      "scope_fa": "PR#47 is MERGED. The board card is still active_in_review. Only arena/01a0ca9c may release it. Do not self-release.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "PR#47 is MERGED. The board card is still active_in_review. Only arena/01a0ca9c may release it. Do not self-release."
+      ],
+      "evidence_required": [
+        "a failing test before the change, then the same test green"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Forward proposal from arena/01a0cb3f after task-159/160/161. Not a fence. next_work was left at its existing 10 entries because replacing it would drop still-open items owned by other sessions."
     }
   ],
   "deferred_log": [
