@@ -49,6 +49,7 @@ flowchart LR
 | T11 | **Tampering (supply chain)** | a pack ships executable code or an unknown operation | data-only manifests (no executable key at any depth), external packs cannot register unknown operations, activation refuses pending capabilities | `tests/architecture/test_pack_manifest_is_data_only.py`, `tests/unit/test_pack_manifest_verify.py` | closed |
 | T12 | **Elevation** | media command escapes the studio permission ladder | `PermissionLevel` A–D enforced in the bus before any handler runs | `tests/unit/test_creative_studio.py`, `tests/unit/test_nagar_wave1_green_cockpit.py` | closed |
 | T13 | **Information disclosure** | destructive cleanup deletes history | messages never deleted by checkpoint cleanup; unknown state ⇒ no delete; human-only golden updates | `tests/unit/test_checkpoint_lifecycle.py`, `tests/unit/test_lifecycle_adversarial.py`, `tests/unit/test_reconciler.py` | closed |
+| T14 | **Elevation** | any user mutates another chat's data by guessing an id (the ad engine's `pause/resume/delete_campaign` take a bare `campaign_id`) | `bot/surface/ads.py::_load_owned` re-reads the row and compares `chat_id`; the owner bypasses; channel moderation commands are owner-gated and no longer answer anyone with a fake success | `tests/unit/test_surface_ads.py::test_pausing_another_chats_campaign_is_refused_and_changes_nothing`, `tests/unit/test_surface_channel_management.py::test_ban_is_owner_only_and_sends_nothing` | closed (D-0009) |
 
 ## 3. P0 audit follow-through (honest status)
 

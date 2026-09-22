@@ -66,6 +66,7 @@ Dependencies point **downward**. A lower layer may never import a higher one, an
 | R9 | The render lane is lean: no ML/CV imports, an import allow-list, **exactly one `subprocess` site** (`rendering/executor.py`), never `shell=True`, no spawning from packs | `test_rendering_lane_boundary.py`, `test_slideshow_adapter_boundary.py::test_only_the_render_lane_spawns_a_process` |
 | R10 | Image generation never imports the bot/storage layers, directly or dynamically | `test_image_gen_boundary.py` |
 | R11 | The domain glossary and retention constants stay live (a deleted guarantee is a failing test) | `test_glossary_liveness.py` |
+| R12 | `bot/surface/` is importable without `telegram`: no module in the package imports PTB directly, **and** no top-level import pulls an engine that does (such engines are imported lazily inside the function). Every stub-replaced command resolves to a surface symbol | `test_surface_onboarding.py::test_the_surface_package_imports_without_telegram` (subprocess probe), `test_surface_ptb.py::test_the_surface_package_imports_no_telegram`, `test_surface_registration.py` (20-command `EXPECTED` map, callback map, forbidden stub strings) |
 
 **Legacy baseline.** `tests/architecture/legacy_baseline.json` freezes the pre-existing `langgraph`/`sqlmodel`/`telegram` import set with an explicit `approval: ARCH_BASELINE_APPROVED`. New violations fail; removing a baseline entry is allowed (and should be celebrated, not blocked).
 
