@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-22T22:56:19Z",
+  "updated_at": "2026-09-23T05:16:18Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1690,9 +1690,9 @@
       "title_fa": "حلقهٔ ارسال آگهی: کمپین زمان‌بندی‌شده واقعاً ارسال شود + ورودی اونبوردینگ برای کاربر تازه",
       "zone": "feature-wiring",
       "priority": "P1",
-      "status": "queued",
-      "agent_branch": "",
-      "claimed_at": null,
+      "status": "active",
+      "agent_branch": "arena/01a0ccab-nexus-ai-agent",
+      "claimed_at": "2026-09-23T05:16:18Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "exclusive_paths": [],
@@ -1709,7 +1709,7 @@
         "a test that creates a campaign whose next_run is due, runs the tick, and asserts the bot double received the ad text exactly once",
         "a restart-safety test (requeue after a simulated crash) and the measured before/after pytest totals"
       ],
-      "note": "queued by task-158 (arena/01a0cb38) so the residual is not lost: the honest half of 'the ads system works now'. Sequenced after PR#33 because worker.py/bot/app.py are in its diff."
+      "note": ""
     }
   ],
   "deferred_log": [
