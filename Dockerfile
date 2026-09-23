@@ -2,9 +2,16 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies.
+# `ffmpeg` is the single declared external binary of the slideshow pack
+# (ROADMAP_STATUS.md, "Dependencies"): the shipped /slideshow surface (Wave 2.5)
+# and `nexus slideshow render` resolve the encoder as NEXUS_FFMPEG_BIN -> PATH
+# -> imageio-ffmpeg wheel, and the imageio-ffmpeg fallback is a [dev] extra
+# that this core-only image does not install — without this package every
+# encode fails with FfmpegUnavailableError (task-163).
 RUN apt-get update && apt-get install -y \
     build-essential \
+    ffmpeg \
     libmagic1 \
     libgl1 \
     fonts-liberation \

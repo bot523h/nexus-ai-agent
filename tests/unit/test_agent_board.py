@@ -250,15 +250,50 @@ def _first_claimable(board_path: Path) -> str:
     )
 
 
+def _synthetic_directory_claim_board() -> dict:
+    """A minimal board with one active, directory-scoped lease.
+
+    The overlap check must be proven against *known* fence shape, not against
+    whatever the first live claim on the real board happens to be: when that
+    claim fences a single file (e.g. ``Dockerfile``), ``path + "/intruder.py"``
+    is legitimately outside the fence and the check must return 0.  The
+    fixture writes into the ``board_module.BOARD`` tmp copy, so the real board
+    is never touched (same hermeticity as ``_pin_clock_inside_lease``).
+    """
+    return {
+        "schema": 2,
+        "protocol": {"protocol_version": 2},
+        "claims": [
+            {
+                "task": "synthetic-dir-claim",
+                "status": "active",
+                "zone": "synthetic",
+                "agent_branch": "arena/111-someone-else",
+                "claimed_at": "2026-01-01T00:00:00Z",
+                "ttl_hours": 24,
+                "gates_owner": False,
+                "exclusive_paths": ["src/synthetic/"],
+            }
+        ],
+        "zones": [{"id": "synthetic", "paths": ["src/synthetic/"]}],
+        "deferred_log": [],
+        "next_work": [],
+        "history": {"waves_closed": [], "pull_requests": [], "incidents": []},
+    }
+
+
 def test_check_detects_overlap_and_allows_disjoint_work(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
-    active = _first_active_claim(board)
-    _pin_clock_inside_lease(monkeypatch, board_module, active)
-    mine = active["exclusive_paths"][0].rstrip("/") + "/intruder.py"
+    board = _synthetic_directory_claim_board()
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
     assert (
-        board_module.cmd_check(type("A", (), {"files": mine, "branch": "arena/999-other-agent"})())
+        board_module.cmd_check(
+            type(
+                "A", (), {"files": "src/synthetic/intruder.py", "branch": "arena/999-other-agent"}
+            )()
+        )
         == 1
     )
     assert (

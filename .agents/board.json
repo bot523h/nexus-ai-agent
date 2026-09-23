@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-22T22:56:19Z",
+  "updated_at": "2026-09-23T21:35:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -445,6 +445,15 @@
         "docs/ops/"
       ],
       "note": "storage runbook (queued)"
+    },
+    {
+      "id": "release-docker-ffmpeg",
+      "description": "task-163 (arena/01a0cfcd): production image FFmpeg fix — Dockerfile, its contract ratchet, and the board-CLI overlap test the file-scoped lease forces hermetic",
+      "paths": [
+        "Dockerfile",
+        "tests/unit/test_dockerfile_contract.py",
+        "tests/unit/test_agent_board.py"
+      ]
     }
   ],
   "claims": [
@@ -1296,13 +1305,13 @@
       "agent_branch": "arena/01a0c992-nexus-ai-agent",
       "claimed_at": "2026-09-22T15:45:00Z",
       "ttl_hours": 24,
-      "status": "active",
+      "status": "expired",
       "gates_owner": false,
       "exclusive_paths": [
         ".github/workflows/"
       ],
       "scope": "Refresh gates-owner handoff with current open PR matrix; non-gates agents continue targeted checks only.",
-      "note": "takeover after ci-gates-steward lease expiry (15:21:39Z, non-renewed). Handoff: PR#39=REPAIR+INTEGRATE, PR#47=INTEGRATE (merged tree 1677 green CI-sim), PR#32=SUPERSEDED (15/26 files superseded by #34, unique value ported in #47), PR#33=CONFLICT MAP + SPLIT (11 conflicting files incl. core security code). || HANDOFF 2026-09-22T19:5xZ: PR#51 was still red (test job), owner session arena/01a0c992 idle since 15:41Z. Stewardship for the PR#51 integration moved to arena/01a0ca9c-nexus-ai-agent (claim task-157-pr51-ci-repair, gates_owner=true): full gates re-run, red root-caused locally (CI logs unavailable: log-receiver EOF on both runs). task-145's fence (.github/workflows/) was NOT touched by that work.",
+      "note": "auto-released by gc at 2026-09-23T19:51:08Z (stale active lease)",
       "acceptance_criteria": [
         "handoff note records the open-PR matrix (#32/#33/#39/#47) with per-PR verdicts",
         "gates rule respected: full make lint/types/test only by the gates owner",
@@ -1710,6 +1719,69 @@
         "a restart-safety test (requeue after a simulated crash) and the measured before/after pytest totals"
       ],
       "note": "queued by task-158 (arena/01a0cb38) so the residual is not lost: the honest half of 'the ads system works now'. Sequenced after PR#33 because worker.py/bot/app.py are in its diff."
+    },
+    {
+      "task": "task-163-dockerfile-ffmpeg",
+      "title": "Production Docker image lacks FFmpeg — /slideshow and `nexus slideshow render` cannot encode (release blocker)",
+      "title_fa": "دادهٔ داکر Production فاقد FFmpeg است — /slideshow و nexus slideshow render نمی‌توانند encode کنند (بلوک Release)",
+      "zone": "release-docker-ffmpeg",
+      "priority": "P0",
+      "status": "active",
+      "scope": "The Dockerfile (canonical production packaging per docs/ops/DEPLOY_RUNBOOK.md, last updated v3.8.0) installs no FFmpeg and `pip install .` is core-only (imageio-ffmpeg is a [dev] extra). resolve_ffmpeg_bin (creative/slideshow/ffmpeg.py) resolves NEXUS_FFMPEG_BIN -> PATH -> imageio-ffmpeg wheel; in the deployed image all three sources are absent, so every encode of the shipped Wave 2.5 /slideshow surface (v3.12.0, advertised in README) fails with FfmpegUnavailableError. Fix: add `ffmpeg` to the Dockerfile apt-get layer + a Dockerfile contract ratchet test.",
+      "scope_fa": "Dockerfile (بسته‌بندی رسمی Production، آخرین به‌روزرسانی v3.8.0) FFmpeg نصب نمی‌کند و pip install . فقط core است (imageio-ffmpeg در [dev] است). resolve_ffmpeg_bin ترتیب NEXUS_FFMPEG_BIN -> PATH -> چرخهٔ imageio-ffmpeg را می‌سازد؛ در container هر سه منبع غایب‌اند و encode هر /slideshow (ویژگی منتشرشدهٔ Wave 2.5) با FfmpegUnavailableError می‌شکند. رفع: افزودن ffmpeg به لایهٔ apt-get Dockerfile + تست رتکات قرارداد Dockerfile.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Dockerfile installs the `ffmpeg` apt package in its system-dependency layer",
+        "a contract test fails if the ffmpeg install line is removed from the Dockerfile (ratchet)",
+        "make lint / make types / make test green with zero regression (full local suite where the environment allows)",
+        "no pyproject.toml change, no new Python dependency, no migration"
+      ],
+      "evidence_required": [
+        "git diff of the Dockerfile change",
+        "pytest tests/unit/test_dockerfile_contract.py green + red-when-removed demo",
+        "local gate results (lint/types/test) with exact commands and observed output",
+        "record of what could NOT be executed locally (docker build) and why"
+      ],
+      "exclusive_paths": [
+        "Dockerfile",
+        "tests/unit/test_dockerfile_contract.py",
+        "tests/unit/test_agent_board.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0cfcd-nexus-ai-agent",
+      "claimed_at": "2026-09-23T19:51:22Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": " | Zone widened to release-docker-ffmpeg: the file-scoped Dockerfile lease exposed a latent assumption in tests/unit/test_agent_board.py::test_check_detects_overlap_and_allows_disjoint_work (it read the real board's first active claim and assumed a directory-scoped fence; a single-file lease makes path+'/intruder.py' legitimately disjoint). Fixed hermetically with a synthetic-board fixture, same class of repair as the task-157 clock-bomb fix recorded in history.incidents."
+    },
+    {
+      "task": "task-164",
+      "title": "Nightly DB backup has never succeeded (3/3 red) — make the production backup pipeline actually work",
+      "title_fa": "بکاپ شبانهٔ دیتابیس هرگز موفق نشده (۳ از ۳ سرخ) — مسیر بکاپ Production واقعاً کار کند",
+      "zone": "ci-quality",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "maintenance.yml backup-db fails 3/3 scheduled runs (35580701817, 35705502209, 35838057275 — the 'Run nexus maintenance backup' step exits 1; the 2026-09-21 'success' 35586584833 was housekeeping-only with backup-db skipped, verified via the job API). backup.py/r2.py unchanged across those runs, so the failure is environmental (R2 secrets missing => by-design red, or R2+Neon misconfiguration). Read the job log, record the exact root cause, fix configuration (owner secrets per docs/ops/r2-storage.md §4) and/or the workflow preflight, then prove a real upload under backups/db/<stamp>/ via workflow_dispatch.",
+      "scope_fa": "backup-db در سه اجرا پیاپی سرخ است؛ کد backup.py/r2.py در بازهٔ آن اجراها دست‌نخورده مانده، پس شکست محیطی است (R2 secrets / پیکربندی Neon). لوق جاب باید خوانده، ریشه ثبت و با یک اجرای دستی موفق (آپلود واقع‌زیر backups/db/<stamp>/) اثبات شود.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "a manual workflow_dispatch run of maintenance/backup-db completes SUCCESS with a visible upload under backups/db/<UTC-stamp>/",
+        "the failing step's error from the three recorded runs is read and its root cause recorded on the board",
+        "if the root cause is missing/misconfigured secrets: the repo secrets per docs/ops/r2-storage.md §4 are set by the owner and the next scheduled run is green"
+      ],
+      "evidence_required": [
+        "job log excerpt of one failed run naming the exact error",
+        "green workflow_dispatch run id + the uploaded R2 key"
+      ],
+      "exclusive_paths": [
+        ".github/workflows/maintenance.yml"
+      ],
+      "owner_hint": "owner action for the secrets; any free agent for the forensics/preflight",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Forensics recorded 2026-09-23 by arena/01a0cfcd-nexus-ai-agent during the task-163 release audit (incident 'nightly-backup-never-succeeded')."
     }
   ],
   "deferred_log": [
@@ -1742,25 +1814,22 @@
   ],
   "next_work": [
     {
-      "id": "task-126",
-      "priority": "P0",
-      "zone": "cli-packs-registry",
-      "title": "Unified runtime pack registry — activate all six packs",
-      "title_fa": "رجیستری یکپارچهٔ پک‌ها: فعال‌سازی هر شش پک",
-      "why_fa": "چهار پک پیاده‌شده در CLI ناشناخته‌اند (pending 8/7/8/7) و فعال نمی‌شوند؛ بزرگ‌ترین شکاف قابل‌رفع.",
+      "id": "task-164",
+      "priority": "P1",
+      "zone": "ci-quality",
+      "title": "Nightly DB backup has never succeeded (3/3 red) — make the production backup pipeline actually work",
+      "title_fa": "بکاپ شبانهٔ دیتابیس هرگز موفق نشده (۳ از ۳ سرخ) — مسیر بکاپ Production واقعاً کار کند",
+      "why_fa": "تنها مکانیسم DR برای دیتابیس Production (R2 blob tier) سه اجرا پیاپی شکست خورده و هیچ بکاپی تولید نشده؛ ریشهٔ دقیق بدون لوق جاب نامشخص است (R2 secrets؟ پیکربندی Neon؟).",
       "acceptance_criteria": [
-        "`nexus packs list` → ۶ پک، pending=0",
-        "activate همه موفق",
-        "تست CLI سبز (tests/unit/test_packs_cli.py)"
+        "a manual workflow_dispatch run of maintenance/backup-db completes SUCCESS with a visible upload under backups/db/<UTC-stamp>/",
+        "the failing step's error from runs 35580701817 / 35705502209 / 35838057275 is read and its root cause recorded on the board",
+        "if the root cause is missing/misconfigured secrets: the repo secrets per docs/ops/r2-storage.md §4 are set by the owner and the next scheduled run is green"
       ],
-      "prerequisites": [
-        "task-123"
-      ],
+      "prerequisites": [],
       "exclusive_paths": [
-        "src/nexus_ai_agent/cli.py",
-        "tests/unit/test_packs_cli.py"
+        ".github/workflows/maintenance.yml"
       ],
-      "status_note": "delivered: wave-5 unified runtime activation via PR#46 (six packs active, pending=0)"
+      "status_note": "Forensics recorded by arena/01a0cfcd-nexus-ai-agent (task-163 release audit) on 2026-09-23: job/step-level API shows the backup step itself fails 3/3; the 2026-09-21 'success' was housekeeping-only. Rotated out: task-126 (delivered via PR#46 — six packs active, pending=0)."
     },
     {
       "id": "task-124",
@@ -2209,6 +2278,12 @@
         "id": "board-clock-time-bomb",
         "what": "جاب تست CI از 2026-09-22T16:21Z (پس از انقضای لیز task-131) برای هر پوش سرخ شد: سه تست lease-liveness در tests/unit/test_agent_board.py ساعت دیواری را با تختهٔ واقعی می‌سنجیدند. همین کلاس باگ پیش‌تر در tests/unit/test_agent_board_active_in_review.py توسط task-151 (PR#49) رفع شده بود، اما فایل خواهر از قلم افتاده بود.",
         "resolution": "تست‌ها هرmetically شدند: «_pin_clock_inside_lease» ساعت agent_board._now را داخل پنجرهٔ همان لیز قفل می‌کند (الگوی hermetic خود مخزن). اثبات: اجرای همان تست‌ها با ساعت خصمانهٔ 2027-03-01 → نسخهٔ قبلی ۳ شکست، نسخهٔ اصلاح‌شده ۱۸ قبولی. دو تست وابسته به محیط/ترتیب هم اصلاح شد: تست RAG (شبیه‌سازی نبودِ chromadb با sys.modules=None) و ریس ترتیب نوتیفیکیشن هوک صف کار."
+      },
+      {
+        "date": "2026-09-23",
+        "id": "nightly-backup-never-succeeded",
+        "what": "The maintenance workflow's backup-db job (nightly 03:17 UTC, the production DB backup to the R2 blob tier) has failed EVERY run since it was introduced: runs 35580701817 (2026-09-21, 04d8820), 35705502209 (2026-09-22, 40327bc) and 35838057275 (2026-09-23, main @a997aab) — all with the 'Run nexus maintenance backup' step exiting 1. The one 'success' in the series (35586584833, 2026-09-21 10:02Z) was the Monday housekeeping job with backup-db SKIPPED (job-level API verified). Since 09-21 the backup path code (maintenance/backup.py, storage/providers/r2.py) is unchanged, so the failure is environmental: either the R2 secrets are not configured (by-design red, 'fail loudly'), or the R2+Neon combination is misconfigured. The exact error text is UNVERIFIED from this sandbox (Actions log download EOFs here). Consequence: no production database backup has ever been produced by this pipeline.",
+        "resolution": "Owner action required: read the failed job log (any of the three runs), set/verify the R2_* and NEXUS_DATABASE_URL repo secrets per docs/ops/r2-storage.md §4, then trigger a manual run (workflow_dispatch) and confirm an upload under backups/db/<stamp>/. Tracked as task-164 (next_work). NOTE: if NEXUS_DATABASE_URL is unset in CI the job can never back up real data — the runner has no local SQLite file (settings default data/app.sqlite does not exist there), so the documented 'local SQLite fallback' is only meaningful on a host that actually runs the bot."
       }
     ],
     "board_revisions": [
