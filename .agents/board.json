@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-23T21:10:00Z",
+  "updated_at": "2026-09-23T21:35:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -445,6 +445,15 @@
         "docs/ops/"
       ],
       "note": "storage runbook (queued)"
+    },
+    {
+      "id": "release-docker-ffmpeg",
+      "description": "task-163 (arena/01a0cfcd): production image FFmpeg fix — Dockerfile, its contract ratchet, and the board-CLI overlap test the file-scoped lease forces hermetic",
+      "paths": [
+        "Dockerfile",
+        "tests/unit/test_dockerfile_contract.py",
+        "tests/unit/test_agent_board.py"
+      ]
     }
   ],
   "claims": [
@@ -1715,7 +1724,7 @@
       "task": "task-163-dockerfile-ffmpeg",
       "title": "Production Docker image lacks FFmpeg — /slideshow and `nexus slideshow render` cannot encode (release blocker)",
       "title_fa": "دادهٔ داکر Production فاقد FFmpeg است — /slideshow و nexus slideshow render نمی‌توانند encode کنند (بلوک Release)",
-      "zone": "e2e-deploy",
+      "zone": "release-docker-ffmpeg",
       "priority": "P0",
       "status": "active",
       "scope": "The Dockerfile (canonical production packaging per docs/ops/DEPLOY_RUNBOOK.md, last updated v3.8.0) installs no FFmpeg and `pip install .` is core-only (imageio-ffmpeg is a [dev] extra). resolve_ffmpeg_bin (creative/slideshow/ffmpeg.py) resolves NEXUS_FFMPEG_BIN -> PATH -> imageio-ffmpeg wheel; in the deployed image all three sources are absent, so every encode of the shipped Wave 2.5 /slideshow surface (v3.12.0, advertised in README) fails with FfmpegUnavailableError. Fix: add `ffmpeg` to the Dockerfile apt-get layer + a Dockerfile contract ratchet test.",
@@ -1734,14 +1743,16 @@
         "record of what could NOT be executed locally (docker build) and why"
       ],
       "exclusive_paths": [
-        "Dockerfile"
+        "Dockerfile",
+        "tests/unit/test_dockerfile_contract.py",
+        "tests/unit/test_agent_board.py"
       ],
       "owner_hint": "",
       "agent_branch": "arena/01a0cfcd-nexus-ai-agent",
       "claimed_at": "2026-09-23T19:51:22Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": ""
+      "note": " | Zone widened to release-docker-ffmpeg: the file-scoped Dockerfile lease exposed a latent assumption in tests/unit/test_agent_board.py::test_check_detects_overlap_and_allows_disjoint_work (it read the real board's first active claim and assumed a directory-scoped fence; a single-file lease makes path+'/intruder.py' legitimately disjoint). Fixed hermetically with a synthetic-board fixture, same class of repair as the task-157 clock-bomb fix recorded in history.incidents."
     },
     {
       "task": "task-164",
