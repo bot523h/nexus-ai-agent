@@ -2,7 +2,7 @@
 
 **Rule:** a contradiction is only entered here when **both** sides are quotable from a located source. Near-misses discovered by inspection are recorded in §2 as *resolved*, because the answer to "why do two numbers exist?" is itself evidence.
 **Fields:** CLAIM A / SOURCE A / CLAIM B / SOURCE B / WHY THEY DIFFER / WHAT CAN BE VERIFIED / CURRENT STATUS.
-**Count:** **14** open contradictions (`K-01`…`K-14`) + **3** resolved non-contradictions (`K-R1`…`K-R3`).
+**Count:** **16** open contradictions (`K-01`…`K-16`) + **3** resolved non-contradictions (`K-R1`…`K-R3`).
 
 Status vocabulary: **OPEN** (both sides currently citable), **OPEN[NEED-PRIMARY]** (one side is a secondary source and needs a vendor/primary citation), **RESOLVED-AS-CLASS-CONFUSION**, **RESOLVED-AS-STALE**.
 
@@ -12,9 +12,10 @@ Status vocabulary: **OPEN** (both sides currently citable), **OPEN[NEED-PRIMARY]
 
 - **CLAIM A:** "The queue survives restarts because it is a SQLite sidecar on **durable storage** … in webhook/scale-to-zero mode, anything that must survive a redeploy lives in Postgres or R2 — **never on local disk**." — **SOURCE A:** `docs/architecture/DATA_AND_STORAGE.md:94` (verified against `main` @ `7573249`).
 - **CLAIM B:** the deployed service has **no volume** and a 2 GB SSD local disk; the queue path defaults to the local filesystem, and the platform scales to zero — **SOURCE B:** `koyeb.yaml` (no `volumes:`, no `NEXUS_DATABASE_URL`), `E-02` (Koyeb free instance: "no volumes", 2 GB SSD), `E-04` (scale-to-zero after ~1 h idle).
-- **WHY THEY DIFFER:** the sentence is internally inconsistent — it asserts the rule ("never local disk") and then exempts the queue on the grounds that its file is durable, which is true in local dev and false in the cloud topology. The doc was written for the dev topology; the platform chose the other one.
-- **WHAT CAN BE VERIFIED:** whether a volume is attached or `NEXUS_DATABASE_URL` is set in the console (not in the repo); whether a redeploy preserves the file (one controlled redeploy + a queued job settles it).
-- **STATUS:** **OPEN** — this is the single most consequential contradiction in the review (it decides whether Phase 4 C-04 and Phase 3 F-04 are "risk" or "current behaviour").
+- **CLAIM C (the sharpest form):** the deploy runbook's own incident table says **"State lost after idle → `NEXUS_DATABASE_URL` set? → scale-to-zero wiped local disk — use Neon"** — i.e. the operator-facing doc acknowledges exactly the loss that `DATA_AND_STORAGE.md` denies. And the recommended remedy does not reach the queue: the queue path is `job_queue_db_path(settings.db_path)` (`worker.py:17–23`), derived from the **local `db_path`**, not from `NEXUS_DATABASE_URL` — so setting Neon fixes the app DB and leaves the job sidecar on the ephemeral disk. The adapter's own docstring calls it "the same **durable** queue". — **SOURCE C:** `docs/ops/DEPLOY_RUNBOOK.md` §6 incident table, `src/nexus_ai_agent/worker.py:17–23`, `bot/app.py:111–114`, `cli.py:894–897`.
+- **WHY THEY DIFFER:** the sentence is internally inconsistent — it asserts the rule ("never local disk") and then exempts the queue on the grounds that its file is durable, which is true in local dev and false in the cloud topology. The doc was written for the dev topology; the platform chose the other one. The runbook shows the team already knows the disk is wiped, but treats "use Neon" as the whole cure.
+- **WHAT CAN BE VERIFIED:** whether a volume is attached or `NEXUS_DATABASE_URL` is set in the console (not in the repo); whether a redeploy preserves the file (one controlled redeploy + a queued job settles it); whether the queue path follows the DB setting (verified: it does **not**).
+- **STATUS:** **OPEN** — this is the single most consequential contradiction in the review (it decides whether Phase 4 C-04 and Phase 3 F-04 are "risk" or "current behaviour"); it is also the one where the docs contradict *each other*, not just the code.
 
 ## K-02 — One data plane or two?
 
@@ -66,11 +67,11 @@ Status vocabulary: **OPEN** (both sides currently citable), **OPEN[NEED-PRIMARY]
 
 ## K-08 — What is the rate limit for a user?
 
-- **CLAIM A:** the docs' operational description ("10 messages / 60 s") — **SOURCE A:** `docs/architecture/SECURITY.md` (access/abuse section) and `bot/middleware.py:8` (`max_messages: int = 10, window_seconds: int = 60`).
-- **CLAIM B (apparent):** an earlier reading in this review found "5/60" — **SOURCE B:** `bot/access_guard.py:40–41` `_DENIAL_REPLY_LIMIT = 3, _DENIAL_REPLY_WINDOW = 60` plus a separate limiter instantiation at `access_guard.py:55`.
-- **WHY THEY DIFFER:** there are **two or three distinct limiters** (per-user message limiter, denial-reply limiter, plus any feature-level limits); a grep for "max_messages" returns constants that belong to different controls. This was a *classification* error on my side, not a product contradiction.
-- **WHAT CAN BE VERIFIED:** instantiate each limiter and read its fields (done); enumerate all limiter classes.
-- **STATUS:** **RESOLVED-AS-CLASS-CONFUSION** — recorded because the resolution changes the finding: the protection is real (10/60 for messages, 3/60 for denial spam) and the docs match the message limiter.
+- **CLAIM A:** the per-user message limiter is `max_messages = 10, window_seconds = 60` — **SOURCE A:** `src/nexus_ai_agent/bot/middleware.py:8` (code default; the value is **not stated** in `docs/architecture/SECURITY.md`).
+- **CLAIM B:** "denial reply capped at 3/60 s" — **SOURCE B:** `docs/architecture/SECURITY.md:27` and `bot/access_guard.py:40–41` (`_DENIAL_REPLY_LIMIT = 3`, `_DENIAL_REPLY_WINDOW = 60`, instantiated as a separate limiter at `access_guard.py:55`).
+- **WHY THEY DIFFER:** there are **two distinct limiter classes** with similar-looking constants (messages vs denial replies); an earlier reading in this review recorded "5/60", which matches neither and was a misclassification on my side.
+- **WHAT CAN BE VERIFIED:** instantiate each limiter and read its fields (done: 10/60 messages, 3/60 denial replies).
+- **STATUS:** **RESOLVED-AS-CLASS-CONFUSION** — recorded because the resolution changes the finding: protection is real (10/60 per user, 3/60 denial), the docs state the denial cap but omit the message cap, and the *in-process* nature of both is the separate, genuine issue captured in K-15.
 
 ## K-09 — Which commit are the architecture docs true for?
 
@@ -120,6 +121,22 @@ Status vocabulary: **OPEN** (both sides currently citable), **OPEN[NEED-PRIMARY]
 - **WHAT CAN BE VERIFIED:** add a CI matrix job (previous release image × migrated DB) and see whether the first non-additive migration is caught — that is the test of the claim.
 - **STATUS:** **OPEN** (low probability, high blast radius: it materialises only during deploys).
 
+## K-15 — Is denial-of-service "closed"?
+
+- **CLAIM A:** STRIDE row T10 ("message flooding, LLM quota drain") is **closed**, mitigated by "rate limiter; per-provider cooldowns; one bounded retry policy for images; one timeout per media process" — **SOURCE A:** `docs/architecture/SECURITY.md:48`.
+- **CLAIM B:** every one of those four mechanisms is **process-local**: the rate limiter is constructed per process (`bot/middleware.py:8`, `bot/rate_limiter.py`) and resets on the platform's scale-to-zero; provider cooldowns are litellm router state with `cooldown_time=86 400 s`, created afresh in each process (`llm/litellm_provider.py`); the in-flight job guard is an in-process dict (`adapters/in_process_job_queue.py`). A cold start restores full sending capacity and re-probes drained providers. — **SOURCE B:** code (`R-12`, `R-13`, `R-01`) + `E-04` (scale-to-zero after ~1 h idle).
+- **WHY THEY DIFFER:** the row was written from *features* (a limiter exists, cooldowns exist) rather than from *lifetime and sharing* (they exist for one process for a while). "Closed" is true within a process lifetime; the deployment's normal state is many short lifetimes.
+- **WHAT CAN BE VERIFIED:** restart the service and observe that limiter counters and cooldowns are gone (one test); count cold starts per day from the platform (unknown `U-05`).
+- **STATUS:** **OPEN** — the mitigation is real but its *duration* is not what the word "closed" implies.
+
+## K-16 — Does a restore procedure exist?
+
+- **CLAIM A:** "**Backups** … Restore procedure and rotation: [`../ops/DEPLOY_RUNBOOK.md`]" — **SOURCE A:** `docs/architecture/DATA_AND_STORAGE.md:93`.
+- **CLAIM B:** that runbook contains **no** restore procedure: a case-insensitive search for `restore`/`recovery` over the whole file returns nothing, and its six sections are Preflight, Deploy, Smoke, Rollback, Wiring smoke into CI, Incident quick-reference. There is also no restore command in the CLI or maintenance package. — **SOURCE B:** `docs/ops/DEPLOY_RUNBOOK.md` (108 lines, headings enumerated), `R-17`, Phase 7 §3.
+- **WHY THEY DIFFER:** the pointer was written when a restore section was *planned* (or believed present); the section was never added, and no test or link-checker follows a prose pointer.
+- **WHAT CAN BE VERIFIED:** `grep -i restore docs/ops/DEPLOY_RUNBOOK.md` (zero hits); attempt a restore by hand from a dump and time it (also yields the missing RTO).
+- **STATUS:** **OPEN** — this upgrades Phase 7's "no restore path" from an absence to a *documented capability that does not exist*, i.e. a broken reference rather than an omission.
+
 ---
 
 ## 2. Resolved non-contradictions (evidence that the method is discriminating)
@@ -134,9 +151,9 @@ Status vocabulary: **OPEN** (both sides currently citable), **OPEN[NEED-PRIMARY]
 
 ## 3. FACTS vs ANALYSIS
 
-**FACTS.** K-01, K-02, K-03, K-04, K-06, K-07, K-09, K-13 and K-14 are all citable at exact file/line or by a re-measured count (`M-01`…`M-08`). K-05 and K-10 are `OPEN[NEED-PRIMARY]` because one side is a secondary source. K-08 is resolved against my own earlier reading; K-R1…K-R3 exist so that this register is not a list of everything that looked odd.
+**FACTS.** K-01, K-02, K-03, K-04, K-06, K-07, K-09, K-13, K-14, K-15 and K-16 are all citable at exact file/line or by a re-measured count (`M-01`…`M-08`). K-05 and K-10 are `OPEN[NEED-PRIMARY]` because one side is a secondary source. K-08 is resolved against my own earlier reading; K-R1…K-R3 exist so that this register is not a list of everything that looked odd.
 
 **ANALYSIS.**
-1. **The contradictions cluster into one root cause: documents and code were each internally consistent at the moment they were written, and nothing measures the gap afterwards.** Four of the six `[V]` contradictions (K-03, K-04, K-06, K-09) are *drift*, not design error: a port gained a claim it never implemented, a security row gained a "closed" that a later route reopened, a diagram kept a recovery command that had been narrowed, and a verification commit was never refreshed.
+1. **The contradictions cluster into one root cause: documents and code were each internally consistent at the moment they were written, and nothing measures the gap afterwards.** Five of the `[V]` contradictions (K-03, K-04, K-06, K-09, K-16) are *drift*, not design error: a port gained a claim it never implemented, a security row gained a "closed" that a later route reopened, a diagram kept a recovery command that had been narrowed, and a verification commit was never refreshed.
 2. **Two contradictions are *design* contradictions rather than drift** and deserve the main team's attention regardless of drift: K-01 (the durability rule vs the queue's location) and **K-13** (what "queued" promises). They cannot be fixed by documentation alone; they require a decision — which is why `10-adr-candidates.md` contains ADR-C-01, -02, -05, -06 as the direct responses.
 3. **A cheap anti-drift control exists and is already half-built:** `test_docs_integrity.py` gates structure; extending it to gate **two or three load-bearing numbers** (current HEAD vs the doc's stated commit; the port/implementation signature match) would have caught K-03, K-07 and K-09 mechanically. That single change prevents the whole drift family — and it is a test, not an architecture change.

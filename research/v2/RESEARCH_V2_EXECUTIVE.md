@@ -5,7 +5,7 @@
 **Isolation:** no product source, board, migration, dependency or PR was modified. All outputs live in `research/v2/`. No claim of a "best architecture" is made anywhere in this package.
 **Package:** 12 phase files + source registry + lab index + this synthesis (**15 files total**). Evidence ids referenced below are defined in the phase files and `SOURCES.md`.
 
-**Corpus counts:** 36 assumptions audited · 45 failure modes · 18 consistency scenarios · 10 delivery surfaces · 35 attacks · 15 disaster scenarios · 28 ADR candidates · 14 open contradictions (+3 resolved) · 36 unknowns · 21 external sources + 7 explicitly unverifiable claims · 26 repo sources + 8 re-measurements.
+**Corpus counts:** 36 assumptions audited · 45 failure modes · 18 consistency scenarios · 10 delivery surfaces · 35 attacks · 15 disaster scenarios · 28 ADR candidates · 16 open contradictions (+3 resolved) · 36 unknowns · 21 external sources + 7 explicitly unverifiable claims · 26 repo sources + 8 re-measurements.
 
 ---
 
@@ -13,7 +13,7 @@
 
 | # | Architecture risk | Evidence | Severity per S1–S5 rules | Phase |
 |---|---|---|---|---|
-| **AR-01** | **The job queue is not durable in the documented topology.** A SQLite sidecar on an ephemeral disk, in a service with no volume, behind scale-to-zero — while the docs assert the opposite (`DATA_AND_STORAGE.md:94` says "never on local disk" and then exempts the queue). | `K-01`, `F-04`, `C-04`, `A-02`, `R-20`, `E-02` | S1 (user-visible loss) + S4 (operability) | 1, 3, 4, 11 |
+| **AR-01** | **The job queue is not durable in the documented topology.** A SQLite sidecar on an ephemeral disk, in a service with no volume, behind scale-to-zero — while `DATA_AND_STORAGE.md:94` asserts "never on local disk" and the runbook's own incident table admits "state lost after idle — scale-to-zero wiped local disk". The recommended fix (set `NEXUS_DATABASE_URL`) does **not** move the queue: its path is `job_queue_db_path(settings.db_path)`. | `K-01` (docs-vs-docs), `F-04`, `C-04`, `A-02`, `R-20`, `E-02` | S1 (user-visible loss) + S4 (operability) | 1, 3, 4, 11 |
 | **AR-02** | **Two persistence planes.** 14 feature modules own sync SQLite engines while `storage/db.py` may be writing PostgreSQL; 3 tables are created by raw DDL outside Alembic; CI grandfathers 37 boundary violations. | `K-02`, `C-16`, `F-09/F-10/F-11`, `M-05`, `A-09/A-10` | S1 (data appears/disappears by read path) | 1, 3, 4, 11 |
 | **AR-03** | **No atomic claim on jobs.** `_mark_processing` accepts `pending` **or** `processing` and checks no affected row; duplicate protection is an in-process dict; `resume_pending()` re-arms `processing` rows at start-up. | `X-03`, `C-02`, `F-01/F-02`, `A-04/A-05` | S1 (duplicate side effects: sends, uploads, XP) | 4, 5 |
 | **AR-04** | **Coordination state lives in process memory.** Rate-limit windows, provider cooldowns (86 400 s, `allowed_fails=1`), in-flight task maps, and the PTB update queue all reset on every cold start — i.e. exactly when drained quota is re-probed. | `F-31/F-36`, `S-24/S-30`, `A-19/A-31` | S5 (cost/quota) + S2 (abuse surface) | 1, 2, 6 |
@@ -214,7 +214,7 @@
 | **08 Cost model** | Complete | ~12 ids (+E-16, E-17, E-18) | SMALL/MEDIUM/LARGE line items; 5 provider strategies; 8 cost cliffs; SOURCE DATE on every price | quotas (`[C]`), embedding price, real token counts | MEDIUM — prices dated, quotas conflicting, marked `[NEED-PRIMARY]` |
 | **09 Evolution map** | Complete | 15 ids (+E-15, E-21) | Stages A→B→C; 10 B-breaks, 9 C-breaks, 8-step push order, backward-compat matrix | real DeployOverlap duration; platform replica controls | HIGH (mechanisms) |
 | **10 ADR candidates** | Complete | cross-phase | 28 candidates ADR-C-01…ADR-C-28 (no ADR finalised) | the evidence each ADR names as missing | HIGH (questions are grounded) |
-| **11 Contradictions** | Complete | 12 ids + docs/code | 14 open (K-01…K-14) + 3 resolved (K-R1…K-R3) | `[NEED-PRIMARY]` on K-05, K-10 | HIGH (both sides quotable) |
+| **11 Contradictions** | Complete | 12 ids + docs/code | 16 open (K-01…K-16) + 3 resolved (K-R1…K-R3); K-01 is docs-vs-docs, K-16 is a broken restore pointer | `[NEED-PRIMARY]` on K-05, K-10 | HIGH (both sides quotable) |
 | **12 Unknowns** | Complete | cross-phase | 36 unknowns U-01…U-36 in 6 families with owners and closure cost | the unknowns themselves | HIGH (closure actions are testable) |
 | **Executive synthesis** | Complete | all of the above | 10×6 top lists + scalability/consistency/DR pressure points + 10 next-phase questions | — | HIGH for evidence-linked rows; MEDIUM where external sources conflict |
 

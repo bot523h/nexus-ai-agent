@@ -67,12 +67,14 @@
 | Migrate schema | `nexus migrate` (idempotent; CI asserts the stamp) | `[V]` | no downgrade path |
 | Smoke test | `scripts/deploy_smoke.py` | `[V]` | checks `/healthz` + webhook; **not** end-to-end (no LLM, no queue drain) |
 | Backup | `nexus maintenance backup` → R2 (`pg_dump` or SQLite online backup) | `[V]` code; **untested restore** | SQLite path backs up the *wrong* file in the documented topology if `db_path` ≠ the queue file |
-| Restore | **NO TOOL** | — | No `restore` entry point exists in the CLI (verified: no `restore` command in maintenance/CLI surface) |
+| Restore | **NO TOOL** | — | No `restore` entry point exists in the CLI (verified: `grep -i restore` over `cli.py` and `maintenance/*.py` → zero hits), **and** `DATA_AND_STORAGE.md:93` points to a `DEPLOY_RUNBOOK.md` restore section that does not exist (`K-16`; the runbook has no `restore`/`recovery` text at all) |
 | Rotate secret | runbook lines | `[V]` (text) / untested | per-secret, manual |
 | Purge temps/backups | `nexus maintenance housekeeping` | `[V]` | run by scheduled workflow |
 | Inspect queue | `nexus jobs status`; `nexus jobs resume` (pending only) | `[V]` | cannot rescue `processing` rows |
 
-**The two hardest gaps in this table:** (1) **no restore path at all** — the backup's only consumer is the prune job, so "backup" is currently a *hope*, not a capability; (2) `nexus jobs resume` cannot recover the exact state a crash creates (Phase 4 C-04).
+**The two hardest gaps in this table:** (1) **no restore path at all** — the backup's only consumer is the prune job, and the documented pointer to a restore procedure resolves to a runbook section that does not exist (`K-16`), so "backup" is currently a *hope*, not a capability; (2) `nexus jobs resume` cannot recover the exact state a crash creates (Phase 4 C-04).
+
+**Detection footnote:** the only "detection" artefacts found in the repository for the incidents in this table are the runbook's *human triage* rows (`DEPLOY_RUNBOOK.md` §6) — including the admission that **"state [is] lost after idle… scale-to-zero wiped local disk"** — not monitoring. No alert, probe, or automated check exists for any row above (`K-01`, `K-15`, ADR-C-23).
 
 ---
 
@@ -94,7 +96,7 @@
 
 **FACTS.**
 1. No RTO/RPO appears anywhere in the repository (searched).
-2. No restore command/script exists; the backup has no verified consumer.
+2. No restore command/script exists; the backup has no verified consumer, and the documentation's restore pointer is broken (`K-16`). The runbook does, however, acknowledge idle-state loss in its incident table — so the risk is *known and unwritten as a requirement*.
 3. `koyeb.yaml` has no volume and no `NEXUS_DATABASE_URL`; the runs on ephemeral disk.
 4. Backups run 2×/day via GitHub Actions when the schedule fires, and are pruned after 30 days.
 5. Redis is not part of the architecture (rejected in the decision log) — the DR checklist item is **N/A**, and saying so is part of the finding.
