@@ -1766,7 +1766,7 @@
         "mutation run transcript: BAD → FAIL, RESTORED → PASS for both mutation A and B",
         "effect-semantics table stating at-least-once vs at-most-once per effect class"
       ],
-      "note": "DELIVERED (PR#57, verification in repo): 44 new tests (tests/unit/test_{effect_key,outbox_policy,effect_dedup,outbox_dispatcher}.py + tests/integration/test_outbox_crash_matrix.py) — pytest -m 'not slow' on this branch: 1885 passed, 20 skipped, 0 failures; ruff check 0 errors; mypy clean on the 7 new source files; mutation A (random per-retry effect key) → 5 tests RED, restored → GREEN; mutation B (UNIQUE dedupe removed) → 6 tests RED, restored → GREEN; docs/architecture/{DATA_AND_STORAGE,MODULE_MAP,OBSERVABILITY,PORTS}.md updated in place. DECISION_LOG append + PORT wiring (Task C) queued: docs/DECISION_LOG.md fenced by PR#33/D-0009 ownership; wiring depends on async_db Phase 1 (task-128). See EFFECT_CONSISTENCY_P3P4_2026-09-23.md for the full report."
+      "note": "DELIVERED (PR#59, verification in repo): 44 new tests (tests/unit/test_{effect_key,outbox_policy,effect_dedup,outbox_dispatcher}.py + tests/integration/test_outbox_crash_matrix.py) — pytest -m 'not slow' on this branch: 1885 passed, 20 skipped, 0 failures; ruff check 0 errors; mypy clean on the 7 new source files; mutation A (random per-retry effect key) → 5 tests RED, restored → GREEN; mutation B (UNIQUE dedupe removed) → 6 tests RED, restored → GREEN; docs/architecture/{DATA_AND_STORAGE,MODULE_MAP,OBSERVABILITY,PORTS}.md updated in place. DECISION_LOG append + PORT wiring (Task C) queued: docs/DECISION_LOG.md fenced by PR#33/D-0009 ownership; wiring depends on async_db Phase 1 (task-128). See EFFECT_CONSISTENCY_P3P4_2026-09-23.md for the full report."
     }
   ],
   "deferred_log": [
@@ -2210,7 +2210,7 @@
         "note": "head arena/01a0ca9c, MERGED → main 315d38a; CI run 35776958516 4/4 SUCCESS."
       },
       {
-        "pr": 57,
+        "pr": 59,
         "state": "OPEN",
         "head": "arena/01a0cf31-nexus-ai-agent",
         "note": "P3/P4 effect consistency (task-160): transactional outbox + deterministic effect-key, delivered by the effect-consistency owner (session arena/01a0cf31)."
