@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-22T22:56:19Z",
+  "updated_at": "2026-09-23T17:00:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1710,6 +1710,41 @@
         "a restart-safety test (requeue after a simulated crash) and the measured before/after pytest totals"
       ],
       "note": "queued by task-158 (arena/01a0cb38) so the residual is not lost: the honest half of 'the ads system works now'. Sequenced after PR#33 because worker.py/bot/app.py are in its diff."
+    },
+    {
+      "task": "task-160-security-correctness-iaa",
+      "title": "Security & correctness wave: IAA-S1, S2, S3, S4, S5 resolution",
+      "title_fa": "موج امنیت و صحت: حل یافته‌های ممیزی مستقل IAA-S1 تا S5",
+      "zone": "core-security",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Production-grade closure of independent audit 2026-09-23 security findings: sync check_update in AccessGuardHandler with ApplicationHandlerStop (IAA-S1), ForceJoinConfig enabled filter (S2), structural Telegram bot token redaction in logs/HTTP (S3), Gemini API key exposure in queries/exceptions (S4), creative video_url SSRF guard (S5).",
+      "scope_fa": "بستن یافته‌های امنیتی و صحت ممیزی مستقل ۲۰۲۶-۰۹-۲۳ در محدوده core-security: اصلاح گارد دسترسی سراسری، اصلاح فیلتر فورس‌جوین، سانسور توکن تلگرام در لاگ و درخواست‌های HTTP، عدم نشت کلید گمینی، و گارد SSRF برای video_url کریتیو.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "check_update is synchronous, unauthorized update stops dispatcher via ApplicationHandlerStop and receives denial, authorized update passes to main handlers without denial",
+        "force-join is_enabled_anywhere query correctly checks enabled == True with tests for enabled=True, enabled=False, missing config, and membership failure",
+        "Telegram bot token is structurally redacted from logs, HTTP request URLs, and exception messages",
+        "Gemini API key is not exposed in query strings, exceptions, logs, or responses",
+        "video_url download in api/app.py enforces SafeAsyncTransport and validate_url, rejecting loopback, RFC1918, metadata, non-https schemes before fetch",
+        "negative mutation tests verify red-to-green proof for critical findings"
+      ],
+      "evidence_required": [
+        "pytest test output for targeted unit tests",
+        "ruff check and ruff format --check passing for modified files",
+        "git diff --check passing"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/access_guard.py",
+        "src/nexus_ai_agent/bot/middleware.py",
+        "src/nexus_ai_agent/api/"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0cf27-nexus-ai-agent",
+      "claimed_at": "2026-09-23T17:00:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Claimed by arena/01a0cf27-nexus-ai-agent: independent audit security & correctness wave (IAA-S1..S5)."
     }
   ],
   "deferred_log": [
