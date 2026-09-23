@@ -15,7 +15,12 @@ reads. These tests pin both halves:
 
 The CLI is loaded from ``scripts/agent_board.py`` by path (stdlib only) and
 pointed at a temporary board copy, so the repository's real board is never
-mutated by a test run.
+mutated by a test run.  The copy always carries one synthetic active
+directory-scoped lease (``board_module``), so these tests prove lease *semantics*
+without depending on whether the live board currently holds any active lease —
+leases come and go as work is claimed and released, and a test that needs
+"somewhere there is an active lease" on the real board is a time bomb (the
+same fragility class as the 2026-09-22 clock-bomb incident).
 
 Because lease liveness is wall-clock arithmetic, every test that acts on a real
 lease pins ``agent_board._now`` inside that lease
@@ -67,11 +72,39 @@ def _load_board_cli() -> ModuleType:
     return module
 
 
+def _synthetic_active_lease() -> dict:
+    """An active, directory-scoped lease owned by a branch no real session uses."""
+    return {
+        "task": "synthetic-dir-claim",
+        "status": "active",
+        "zone": "synthetic",
+        "agent_branch": "arena/111-someone-else",
+        "claimed_at": "2026-01-01T00:00:00Z",
+        "ttl_hours": 24,
+        "gates_owner": False,
+        "exclusive_paths": ["src/synthetic/"],
+    }
+
+
 @pytest.fixture()
 def board_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+    """CLI module pointed at a tmp board copy that always carries a known lease.
+
+    The copy mirrors the real board, but one synthetic active directory-scoped
+    lease is always inserted first: the CLI-behaviour tests exercise *lease
+    semantics* (foreign refusal, own-branch renewal, overlap, GC), and those
+    must not depend on whether the live board happens to hold any active lease
+    — leases come and go as work is claimed and released, so a test that
+    requires "some active lease exists" on the real board is a time bomb (the
+    same fragility class as the 2026-09-22 clock-bomb incident).
+    """
     module = _load_board_cli()
+    board = json.loads(BOARD_PATH.read_text(encoding="utf-8"))
+    board["claims"].insert(0, _synthetic_active_lease())
+    if not any(zone["id"] == "synthetic" for zone in board["zones"]):
+        board["zones"].append({"id": "synthetic", "paths": ["src/synthetic/"]})
     board_copy = tmp_path / "board.json"
-    board_copy.write_text(BOARD_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+    board_copy.write_text(json.dumps(board, indent=2, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setattr(module, "BOARD", board_copy)
     return module
 
