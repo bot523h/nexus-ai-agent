@@ -58,6 +58,14 @@ def is_public_ip(ip: str) -> bool:
         addr = ipaddress.ip_address(ip)
     except ValueError:
         return False
+    # IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1) must be judged by the embedded
+    # IPv4 — otherwise is_reserved/is_private on the outer IPv6 wrapper
+    # either over-blocks public (::ffff:8.8.8.8) or under-blocks private via
+    # the alternate hex form. Strip and recurse.
+    if addr.version == 6 and getattr(addr, "ipv4_mapped", None) is not None:
+        mapped = addr.ipv4_mapped  # type: ignore[attr-defined]
+        if mapped is not None:
+            return is_public_ip(str(mapped))
     if (
         addr.is_loopback
         or addr.is_link_local

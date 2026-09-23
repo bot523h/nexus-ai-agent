@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hmac as hmac_mod
 import os
 import secrets
@@ -16,6 +17,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from nexus_ai_agent.api.dashboard import router as dashboard_router
 from nexus_ai_agent.config.settings import get_settings
+from nexus_ai_agent.core.ssrf_guard import SafeAsyncTransport, SSRFBlockError, validate_url
 from nexus_ai_agent.creative import image_post
 from nexus_ai_agent.creative.ffmpeg_executor import execute_ffmpeg_commands
 from nexus_ai_agent.creative.job_registry import JobRegistry
@@ -234,6 +236,15 @@ async def _save_upload_to_temp(upload: StarletteUploadFile) -> str:
 
 
 async def _download_video_to_temp(video_url: str) -> str:
+    # SSRF guard: validate_url is sync (DNS) so offload to thread; then
+    # SafeAsyncTransport re-validates every connection including redirects.
+    try:
+        await asyncio.to_thread(validate_url, video_url)
+    except SSRFBlockError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     settings = get_settings()
     temp_dir = Path(settings.creative_temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
@@ -241,14 +252,22 @@ async def _download_video_to_temp(video_url: str) -> str:
     fd, temp_path = tempfile.mkstemp(prefix="creative-url-", suffix=suffix, dir=temp_dir)
     os.close(fd)
     try:
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=60.0, transport=SafeAsyncTransport(), follow_redirects=True
+        ) as client:
             async with client.stream("GET", video_url) as response:
                 response.raise_for_status()
                 with Path(temp_path).open("wb") as handle:
                     async for chunk in response.aiter_bytes():
                         handle.write(chunk)
-    except Exception:
+    except HTTPException:
         Path(temp_path).unlink(missing_ok=True)
+        raise
+    except Exception as exc:
+        Path(temp_path).unlink(missing_ok=True)
+        # SSRF errors from transport are wrapped as httpx exceptions — unwrap
+        if isinstance(exc, SSRFBlockError) or "SSRF" in str(exc) or "private" in str(exc).lower():
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         raise
     return temp_path
 
@@ -328,6 +347,11 @@ async def create_video_edit_job(
         normalized_url = (video_url or "").strip()
         if not normalized_url:
             raise HTTPException(status_code=400, detail="video_url must not be empty")
+        # Fail-fast SSRF check at request time (background task re-validates via SafeAsyncTransport)
+        try:
+            await asyncio.to_thread(validate_url, normalized_url)
+        except (SSRFBlockError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         source = normalized_url
         input_data = {
             "source_type": "url",

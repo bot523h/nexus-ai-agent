@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-22T22:56:19Z",
+  "updated_at": "2026-09-23T17:28:34Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -445,6 +445,29 @@
         "docs/ops/"
       ],
       "note": "storage runbook (queued)"
+    },
+    {
+      "id": "security-boundary",
+      "description": "Security boundary hardening — access guard, force-join, secret redaction, SSRF, Gemini header auth",
+      "paths": [
+        "src/nexus_ai_agent/bot/access_guard.py",
+        "src/nexus_ai_agent/bot/middleware.py",
+        "src/nexus_ai_agent/features/force_join.py",
+        "src/nexus_ai_agent/observability/logging.py",
+        "src/nexus_ai_agent/infrastructure/observability/",
+        "src/nexus_ai_agent/api/app.py",
+        "src/nexus_ai_agent/core/ssrf_guard.py",
+        "src/nexus_ai_agent/core/http_client.py",
+        "src/nexus_ai_agent/features/ai_chat.py",
+        "src/nexus_ai_agent/features/summarizer.py",
+        "src/nexus_ai_agent/creative/video_director.py",
+        "src/nexus_ai_agent/creative/image_gen/",
+        "tests/unit/test_access_guard.py",
+        "tests/unit/test_force_join_gate.py",
+        "tests/unit/test_observability.py",
+        "tests/unit/test_http_client_ssrf.py",
+        "tests/unit/test_summarizer_ssrf.py"
+      ]
     }
   ],
   "claims": [
@@ -1296,13 +1319,13 @@
       "agent_branch": "arena/01a0c992-nexus-ai-agent",
       "claimed_at": "2026-09-22T15:45:00Z",
       "ttl_hours": 24,
-      "status": "active",
+      "status": "expired",
       "gates_owner": false,
       "exclusive_paths": [
         ".github/workflows/"
       ],
       "scope": "Refresh gates-owner handoff with current open PR matrix; non-gates agents continue targeted checks only.",
-      "note": "takeover after ci-gates-steward lease expiry (15:21:39Z, non-renewed). Handoff: PR#39=REPAIR+INTEGRATE, PR#47=INTEGRATE (merged tree 1677 green CI-sim), PR#32=SUPERSEDED (15/26 files superseded by #34, unique value ported in #47), PR#33=CONFLICT MAP + SPLIT (11 conflicting files incl. core security code). || HANDOFF 2026-09-22T19:5xZ: PR#51 was still red (test job), owner session arena/01a0c992 idle since 15:41Z. Stewardship for the PR#51 integration moved to arena/01a0ca9c-nexus-ai-agent (claim task-157-pr51-ci-repair, gates_owner=true): full gates re-run, red root-caused locally (CI logs unavailable: log-receiver EOF on both runs). task-145's fence (.github/workflows/) was NOT touched by that work.",
+      "note": "auto-released by gc at 2026-09-23T17:25:45Z (stale active lease)",
       "acceptance_criteria": [
         "handoff note records the open-PR matrix (#32/#33/#39/#47) with per-PR verdicts",
         "gates rule respected: full make lint/types/test only by the gates owner",
@@ -1710,6 +1733,45 @@
         "a restart-safety test (requeue after a simulated crash) and the measured before/after pytest totals"
       ],
       "note": "queued by task-158 (arena/01a0cb38) so the residual is not lost: the honest half of 'the ads system works now'. Sequenced after PR#33 because worker.py/bot/app.py are in its diff."
+    },
+    {
+      "task": "sec-boundary-01a0cf4c",
+      "title": "Security Boundary forensic hardening — S1/S2/S3/S4/S5",
+      "title_fa": "سخت‌سازی مرز امنیتی — S1 تا S5",
+      "zone": "security-boundary",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Forensic audit of security boundary: fix access_guard propagation (ApplicationHandlerStop), force_join SQL predicate (is True → == True), SSRF in api/app video_url, Gemini key query-string exposure → header, secret redaction gaps. Provide 5-search evidence, behavior tests, mutation proof.",
+      "scope_fa": "ممیزی forensic مرز امنیتی: اصلاح انتشار access_guard، گزاره SQL force_join، SSRF در video_url، نشت کلید Gemini در query string، و شکاف‌های redaction.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "S1: unauthorized /calc and callback blocked before surface, authorized passes — tested via real Application dispatcher",
+        "S2: force-join enabled=True blocks, enabled=False passes, cache and error paths covered, SQL predicate correct",
+        "S3: secrets redacted from every log path including httpx and exception strings — mutation-resistant",
+        "S4: no GEMINI_API_KEY in query string; header x-goog-api-key used, no log exposure",
+        "S5: video_url SSRF via 127.0.0.1/localhost/metadata/redirect blocked before fetch",
+        "All security tests green, ruff + mypy clean, overlap check passes"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_access_guard.py tests/unit/test_force_join_gate.py tests/unit/test_observability.py tests/unit/test_http_client_ssrf.py",
+        "Reproduction script for each defect before/after",
+        "5-search research comparison per decision"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/access_guard.py",
+        "src/nexus_ai_agent/features/force_join.py",
+        "src/nexus_ai_agent/observability/logging.py",
+        "src/nexus_ai_agent/infrastructure/observability/redaction.py",
+        "src/nexus_ai_agent/api/app.py",
+        "src/nexus_ai_agent/core/ssrf_guard.py",
+        "src/nexus_ai_agent/features/ai_chat.py",
+        "src/nexus_ai_agent/features/summarizer.py",
+        "src/nexus_ai_agent/creative/video_director.py"
+      ],
+      "agent_branch": "arena/01a0cf4c-nexus-ai-agent",
+      "claimed_at": "2026-09-23T17:28:34Z",
+      "ttl_hours": 24,
+      "gates_owner": false
     }
   ],
   "deferred_log": [
