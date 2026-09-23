@@ -461,7 +461,7 @@
         "docs/architecture/OBSERVABILITY_M0.md",
         "docs/architecture/RELIABILITY_M0.md",
         "docs/audits/OBSERVABILITY_M0_2026-09-23.md",
-        "src/nexus_ai_agent/adapters/job_instrumentation.py",
+        "src/nexus_ai_agent/adapters/instrumentation/",
         "src/nexus_ai_agent/bot/app.py",
         "src/nexus_ai_agent/cli.py",
         "docs/DECISION_LOG.md",
@@ -1832,7 +1832,7 @@
         "PR link with rebase-hazard note for PR#33 files (bot/app.py, cli.py, DECISION_LOG.md)"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/adapters/job_instrumentation.py",
+        "src/nexus_ai_agent/adapters/instrumentation/",
         "src/nexus_ai_agent/bot/app.py",
         "src/nexus_ai_agent/cli.py",
         "src/nexus_ai_agent/observability/metrics.py",

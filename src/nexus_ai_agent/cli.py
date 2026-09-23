@@ -888,13 +888,13 @@ def jobs_resume(
     Handlers are the standard application ones, so resumed jobs run exactly
     as they would inside the bot.
     """
-    from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+    from nexus_ai_agent.adapters.instrumentation import InstrumentedJobQueue
     from nexus_ai_agent.application.ports.job_queue import JobStatus
     from nexus_ai_agent.config.settings import get_settings
     from nexus_ai_agent.worker import default_job_handlers, job_queue_db_path
 
     async def _run() -> None:
-        queue = InProcessJobQueue(job_queue_db_path(get_settings().db_path))
+        queue = InstrumentedJobQueue(job_queue_db_path(get_settings().db_path))
         for job_type, handler in default_job_handlers().items():
             queue.register_handler(job_type, handler)
         job_ids = await queue.resume_pending_jobs()

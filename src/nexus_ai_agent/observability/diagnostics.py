@@ -198,6 +198,34 @@ def log_job_recovered(job_id: str, reason: str, correlation_id: str | None = Non
         pass
 
 
+def classify_failure_error(error: str) -> str:
+    """Map a raw queue error string to a bounded ``error_code`` label.
+
+    Deterministic and PII-safe: only fixed substrings are matched; the raw
+    error text never becomes a metric label. Unknown shapes collapse to
+    ``handler_exception`` (the dominant terminal class in this queue) rather
+    than ``unknown`` so alert rates stay meaningful; truly unclassifiable
+    input (empty) maps to ``unknown``.
+    """
+    lowered = error.lower()
+    if not lowered.strip():
+        return "unknown"
+    if "no handler registered" in lowered:
+        return "handler_not_found"
+    if "invalid persisted payload" in lowered or "expecting value" in lowered:
+        # json.JSONDecodeError starts with "Expecting value"
+        return "payload_invalid"
+    if "must return a dictionary" in lowered:
+        return "payload_invalid"
+    if "timeout" in lowered or "timed out" in lowered:
+        return "timeout"
+    if "cancelled" in lowered or "canceled" in lowered:
+        return "cancelled"
+    if "validation" in lowered:
+        return "validation_error"
+    return "handler_exception"
+
+
 # Helper to measure duration
 class JobTimer:
     """Simple timer for job duration — hostile-clock safe (monotonic)."""
@@ -220,6 +248,7 @@ __all__ = [
     "EVENT_JOB_RECOVERED",
     "JobFailureContext",
     "JobTimer",
+    "classify_failure_error",
     "log_job_claimed",
     "log_job_completed",
     "log_job_created",

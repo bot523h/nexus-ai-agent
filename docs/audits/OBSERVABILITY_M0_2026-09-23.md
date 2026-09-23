@@ -210,6 +210,87 @@ M0 also provides observability substrate that makes future P1/P2 delivery observ
 
 ---
 
+## 9b. Runtime Integration Evidence (task-172, 2026-09-23)
+
+Claim: `task-172-m0-runtime-integration` on
+`arena/01a0cf50-nexus-ai-agent`. All items below are runtime proofs on the
+real `InstrumentedJobQueue` (SQLite sidecar, asyncio tasks, real handlers) —
+`tests/integration/test_m0_queue_runtime.py` (24 tests),
+`tests/unit/test_m0_instrumentation.py` + `test_m0_readyz_router.py` +
+`test_m0_alert_boundaries.py` (43 tests),
+`tests/architecture/test_m0_wiring.py` (9 tests). Combined with the M0
+substrates: **160 passed**, `ruff check` clean.
+
+**Q1–Q5 (real execution):**
+
+- **Q1 created** — counter + `job_created` event + correlation injected
+  before persist; idempotent re-enqueue does NOT double-count
+  (`test_q1_created_counts_once_and_injects_correlation`,
+  `test_q1_idempotent_reenqueue_does_not_double_count`).
+- **Q2 claimed** — exactly one `job_claimed` per real pending→processing
+  transition (single emission point: `log_job_claimed` increments internally);
+  wrapped handler sees the payload's correlation id
+  (`test_q2_claim_counted_once_with_correlation_restored`).
+- **Q3 completed** — durable `completed` state first, then counter +
+  histogram sample; monotonic duration ≥ 0; gauges settle to 0/0
+  (`test_q3_completed_durable_first_then_counter_and_histogram`).
+- **Q4 failed** — durable `failed`, bounded `error_code` label
+  (`handler_exception`, `handler_not_found`), raw message never a label;
+  histogram observed for failures too (`test_q4_*`).
+- **Q5 recovered** — `startup_recovery` vs `operator_resume` reasons stay
+  separate per entry point; graceful-shutdown drain is NOT counted as
+  recovery (`test_q5_*`).
+
+**Order / hostile-clock / fault:**
+
+- Order: `created → claimed → completed|failed` event sequences pinned
+  (`test_order_*`).
+- Hostile clock: naive `now` → UTC, clock-before-creation ages clamp to 0,
+  injected +90s clock measured deterministically
+  (`test_saturation_report_hostile_clock_clamps`).
+- Fault injection: broken created/claimed/terminal/histogram/gauge
+  emissions, broken gauge-refresh method, and broken correlation bind all
+  leave jobs completing/failing with durable state intact — observability
+  never breaks the queue (`test_fault_injection_*`).
+
+**M1–M4 mutation detectors (each silences one emission; the corresponding
+Q assertion goes red — CI pins the wiring):**
+
+- **M1** silence `log_job_created` → Q1 counter/event go to zero.
+- **M2** silence `log_job_claimed` → Q2 counter/event go to zero (job still
+  completes).
+- **M3** silence correlation injection → persisted payload loses
+  `correlation_id` (chain broken before persist).
+- **M4** silence terminal emission (`log_job_completed` + histogram) → Q3
+  counter/histogram/event go to zero; **M4b** silence `log_job_recovered` →
+  Q5 goes to zero.
+
+**Correlation chain (≠ effect-key ≠ update_id):** payload > ambient >
+fresh priority; restored into context on consume; cleared handler context
+does not break the terminal event (read from persisted payload); ambient
+restored after handler; correlation id never a metric label
+(`test_correlation_*`).
+
+**Saturation from the real queue:** `queue_depth`/`jobs_inflight` gauges and
+`saturation_report()` counts agree with live rows mid-flight and after
+completion (`test_saturation_report_counts_real_rows`).
+
+**readyz contract (TestClient):** healthy 200; startup failure / missing
+required dep / migration drift / shutdown → 503; optional dep → 200 degraded;
+raising probe fails closed; response matches contract shape, no secrets
+(`tests/unit/test_m0_readyz_router.py`, 10 tests).
+
+**Alert boundaries:** all three evaluators pinned at exact threshold (strict
+`>` → no alert on the boundary), ±ε, no-data, startup, post-reset
+(`tests/unit/test_m0_alert_boundaries.py`).
+
+**Static wiring:** both composition roots construct the subclass; zero
+`isinstance` checks on the base queue; base queue has no reverse dependency;
+readyz router does not import `api/`; instrumentation import surface narrow;
+no forbidden framework imports (`tests/architecture/test_m0_wiring.py`).
+
+---
+
 ## 10. Final Notes
 
 - M0 is SEE: system can now say how many jobs created/claimed/completed/failed/recovered, last activity, readiness real vs process alive, correlation/idempotency evidence

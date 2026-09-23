@@ -49,6 +49,11 @@ ALL_JOB_METRICS: Final[tuple[str, ...]] = (
     JOBS_RECOVERED_TOTAL,
 )
 
+# Histogram + gauge names (M0 runtime integration; buckets frozen at M0).
+JOBS_DURATION_SECONDS: Final[str] = "job_duration_seconds"
+QUEUE_DEPTH: Final[str] = "queue_depth"
+JOBS_INFLIGHT: Final[str] = "jobs_inflight"
+
 # Bounded label values
 BOUNDED_ERROR_CODES: Final[frozenset[str]] = frozenset(
     {
@@ -214,7 +219,28 @@ def inc_jobs_recovered(reason: str = "unknown") -> None:
     )
 
 
-def snapshot() -> dict[str, int]:
+def set_queue_depth(value: int) -> None:
+    """Gauge: current pending rows — set() from a SELECT COUNT, never tracked."""
+    if value < 0:
+        raise ValueError(f"queue_depth must be non-negative, got {value}")
+    get_metrics_registry().set_gauge("queue_depth", float(value))
+
+
+def set_jobs_inflight(value: int) -> None:
+    """Gauge: current processing rows — set() from a SELECT COUNT, never tracked."""
+    if value < 0:
+        raise ValueError(f"jobs_inflight must be non-negative, got {value}")
+    get_metrics_registry().set_gauge("jobs_inflight", float(value))
+
+
+def observe_job_duration(job_type: str, seconds: float) -> None:
+    """Histogram: one claim-to-terminal duration observation (frozen M0 buckets)."""
+    get_metrics_registry().observe(
+        JOBS_DURATION_SECONDS, seconds, labels={"job_type": _normalize_job_type(job_type)}
+    )
+
+
+def snapshot() -> dict[str, float]:
     return get_metrics_registry().snapshot()
 
 
@@ -236,15 +262,21 @@ __all__ = [
     "JOBS_CLAIMED_TOTAL",
     "JOBS_COMPLETED_TOTAL",
     "JOBS_CREATED_TOTAL",
+    "JOBS_DURATION_SECONDS",
     "JOBS_FAILED_TOTAL",
+    "JOBS_INFLIGHT",
     "JOBS_RECOVERED_TOTAL",
     "METRIC_CONTRACTS",
     "MetricContract",
+    "QUEUE_DEPTH",
     "inc_jobs_claimed",
     "inc_jobs_completed",
     "inc_jobs_created",
     "inc_jobs_failed",
     "inc_jobs_recovered",
+    "observe_job_duration",
     "reset_for_tests",
+    "set_jobs_inflight",
+    "set_queue_depth",
     "snapshot",
 ]

@@ -154,3 +154,18 @@ These wirings are NOT done in M0 to avoid stealing delivery engine. M0 provides 
 - `research/v2/13-target-architecture.md` — target architecture (P1-P4)
 - `docs/architecture/RUNTIME_FLOWS.md` — job queue flow
 - `docs/architecture/OBSERVABILITY.md` — O1 observability
+
+---
+
+## 9. Runtime Integration Touchpoint (task-172, 2026-09-23)
+
+`InstrumentedJobQueue` (`adapters/instrumentation/`) is the runtime carrier
+for M0 observability events. Reliability contracts in this document remain
+CONTRACT-ONLY (P1/P2/P4 wiring deferred per §6); what changed is the event
+substrate they will observe: the five queue events now fire at both
+composition roots (`bot/app.py`, `cli.py jobs resume`) with correlation,
+bounded labels, histogram, and saturation gauges — proven by
+`tests/integration/test_m0_queue_runtime.py` (Q1–Q5 + M1–M4) and
+`tests/architecture/test_m0_wiring.py` (static import graph). Correlation
+chain, effect-key, and update_id remain three distinct identifiers: only the
+first is wired today.

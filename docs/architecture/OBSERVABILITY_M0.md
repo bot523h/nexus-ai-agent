@@ -241,17 +241,35 @@ If Postgres contract needed: interface + acceptance tests provided, not migratio
 
 ## 9. Integration with Existing Job Queue
 
-M0 metrics are designed to be wired into `InProcessJobQueue` without stealing delivery:
+**Delivered (task-172-m0-runtime-integration).** The wiring described here is
+now live at runtime via `adapters/instrumentation/job_instrumentation.py`
+(`InstrumentedJobQueue`, a subclass of `InProcessJobQueue` — the fenced queue
+file itself stays untouched):
 
-- `log_job_created` in `_insert_or_get` after new row
-- `log_job_claimed` in `_mark_processing`
-- `log_job_completed` in `_mark_completed`
-- `log_job_failure` in `_mark_failed`
-- `log_job_recovered` in `_reset_unfinished`
+- `_insert_or_get` → correlation injected into payload **before** persist,
+  then `log_job_created` (idempotent hit not counted)
+- `_mark_processing` → `log_job_claimed` on the real pending→processing
+  transition only, plus a monotonic claim timer
+- `_mark_completed` / `_mark_failed` → durable flip first, then
+  `log_job_completed` / `log_job_failure` + `job_duration_seconds` histogram
+  observation (bounded `error_code`, never raw text as label)
+- the two public resume entry points → `log_job_recovered` with entry-point
+  reason (`startup_recovery` / `operator_resume`); graceful-shutdown drains
+  are deliberately NOT counted
+- every state transition refreshes `queue_depth` / `jobs_inflight` gauges
+  from `SELECT COUNT(*)` (self-correcting `set()`, not inc/dec tracking)
 
-This wiring is **not** done in M0 to avoid touching `adapters/in_process_job_queue.py` which is not in observability zone? Actually `adapters/` is in `delivery-interop` zone (not active), but to be safe M0 provides the helpers and tests; wiring can be done by job queue owner or next wave.
+The subclass is constructed at both composition roots: `bot/app.py`
+(`_init_v2_engines`) and `cli.py` (`jobs resume`). Zero `isinstance` checks
+against the base class exist in `src/` (pinned by
+`tests/architecture/test_m0_wiring.py`), so the subclass cannot be rejected.
+All emissions route through a fail-safe `_emit` wrapper — broken telemetry
+never breaks a job (fault-injection proof in
+`tests/integration/test_m0_queue_runtime.py`).
 
-Blocker recorded in audit doc if needed.
+`GET /readyz` is provided as a tested router factory in
+`observability/readyz_router.py` (contract-not-steal: `api/app.py` remains
+fenced; wiring is one `include_router` call when that zone frees).
 
 ---
 
