@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-23T16:49:04Z",
+  "updated_at": "2026-09-23T17:06:57Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1734,7 +1734,7 @@
       "title_fa": "زیرساخت مشاهده‌پذیری M0: متریک‌ها، همبستگی، آمادگی، سیگنال‌های SLO",
       "zone": "observability-reliability",
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "scope": "M0 SEE: define canonical job metrics (created/claimed/completed/failed/recovered), correlation-id lifecycle audit, readiness vs liveness contract, diagnostic visibility for failures, golden signals + 3 alert policies, P1/P2 contracts without stealing delivery. Implementation in src/nexus_ai_agent/observability/ and infrastructure/observability/, tests deterministic, no high-cardinality labels, no secret leakage.",
       "scope_fa": "M0 SEE: تعریف متریک‌های canonical جاب، چرخه حیات correlation-id، قرارداد readiness در برابر liveness، دید تشخیصی برای شکست‌ها، سیگنال‌های طلایی + 3 سیاست هشدار، قراردادهای P1/P2 بدون سرقت delivery.",
       "prerequisites": [],
@@ -1768,12 +1768,29 @@
         "docs/audits/OBSERVABILITY_M0_2026-09-23.md"
       ],
       "owner_hint": "",
-      "agent_branch": "arena/01a0cf29-nexus-ai-agent",
-      "claimed_at": "2026-09-23T16:49:04Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "delivered": [],
-      "note": ""
+      "delivered": [
+        "src/nexus_ai_agent/observability/metrics.py — canonical job metrics",
+        "src/nexus_ai_agent/observability/correlation.py — lifecycle audit",
+        "src/nexus_ai_agent/observability/readiness.py — readiness vs liveness",
+        "src/nexus_ai_agent/observability/diagnostics.py — failure visibility",
+        "src/nexus_ai_agent/observability/slo.py — golden signals + 3 alert policies",
+        "src/nexus_ai_agent/observability/reliability.py — P1/P2/P4 contracts",
+        "src/nexus_ai_agent/infrastructure/observability/metrics.py — enhanced",
+        "tests/unit/test_metrics_m0.py (16 tests)",
+        "tests/unit/test_correlation_m0.py (13 tests)",
+        "tests/unit/test_health_m0.py (10 tests)",
+        "tests/unit/test_reliability_m0.py (14 tests)",
+        "tests/unit/test_slo_m0.py (15 tests)",
+        "tests/unit/test_observability_m0.py (9 tests)",
+        "docs/architecture/OBSERVABILITY_M0.md living view",
+        "docs/architecture/RELIABILITY_M0.md living view",
+        "docs/audits/OBSERVABILITY_M0_2026-09-23.md audit record"
+      ],
+      "note": "DELIVERED M0 SEE substrate: 77 tests passed, ruff clean, mutation BAD->FAIL RESTORED->PASS, order shuffle ok, no big infra, no secret leakage, blocked /readyz endpoint (core-security zone) documented"
     }
   ],
   "deferred_log": [
