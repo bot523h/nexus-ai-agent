@@ -991,3 +991,59 @@ the audit and queued as `task-159`, not left implicit.
 read paths should move onto it, and D-0009's surface-owns-authorisation rule should be re-examined
 for whether the check belongs one layer down, in the engine, where a second caller (the delivery
 tick) would otherwise have to duplicate it.
+
+---
+
+## 2026-09-23 — InstrumentedJobQueue subclass at composition roots (D-0010)
+
+*Status.* Accepted. Evidence: `tests/integration/test_m0_queue_runtime.py`
+(Q1–Q5 runtime proofs, order/hostile-clock/fault, M1–M4 mutation detectors),
+`tests/unit/test_m0_{instrumentation,readyz_router,alert_boundaries}.py`,
+`tests/architecture/test_m0_wiring.py` — 76 new tests green, full M0
+substrates 160 passed, `ruff check` clean; claim
+`task-172-m0-runtime-integration`.
+
+*Problem.* M0 delivered the metrics/correlation/diagnostics helpers but no
+runtime emitted them: `InProcessJobQueue` (and its zones) are fenced by the
+Research-V2 claim-lease PR, and `api/` by core-security, while
+`bot/app.py`/`cli.py` sit in PR#33's rebase-care list. The mission requires
+the five queue events on the real path, not merely existing helpers.
+
+*Decision.* Add `adapters/instrumentation/job_instrumentation.py` with
+`InstrumentedJobQueue(InProcessJobQueue)` and construct it at exactly the two
+composition roots (`bot/app.py:_init_v2_engines`, `cli.py` `jobs resume`).
+Instrumentation attaches at the base class's existing overridable seams
+(`_insert_or_get`, `_mark_processing`, `_mark_completed`, `_mark_failed`,
+`resume_pending*`) — the fenced file is not edited. `GET /readyz` ships as a
+tested router factory in `observability/readyz_router.py` (contract-not-steal;
+`api/app.py` wiring is one `include_router` call when the fence drops).
+Terminal marks are durable-first; emissions are single-point
+(`log_job_*` helpers own their counter increments) and wrapped in a fail-safe
+`_emit`; gauges are `set()` from `SELECT COUNT(*)` after every transition;
+duration uses a `time.monotonic()` claim timer; recovered reasons are
+per-entry-point and shutdown drains are not recovery; histogram buckets are
+frozen at M0; correlation priority is payload > ambient > fresh and is never
+a metric label.
+
+*Rejected alternatives.* (1) Edit `InProcessJobQueue` directly — steals the
+fenced queue file from PR#57; (2) monkeypatch/wrap at call sites outside the
+composition roots — invisible to `isinstance`-free call graphs and unprovable
+by static wiring tests; (3) wait for the fences to drop — leaves the mission's
+Q1–Q5 acceptance on the helper layer only ("helper exists" ≠ "runtime
+integration"); (4) put the router in `api/app.py` — fenced, so the factory
+pattern preserves the contract without the steal; (5) inc/dec gauge tracking —
+rejected in favour of queryable-source `set()` (self-correcting after any
+missed transition).
+
+*Consequences.* Two construction sites must stay on the subclass — pinned by
+`test_m0_wiring.py` (any revert to `InProcessJobQueue(` fails CI) and by zero
+`isinstance` checks against the base class. The documented TOCTOU residual:
+same-key concurrent enqueue inside one process can over-count `created` by 1
+(UNIQUE still prevents a second row). When PR#57 lands, re-check whether
+instrumentation should move into the queue file itself; when core-security
+frees `api/`, wire `create_readyz_router` into `app.py`. Emission fault
+injection proves telemetry outages cannot fail a job.
+
+*Reopens when* the queue-file fence (PR#57) or the `api/` fence drops, or if
+a third composition root constructs the bare queue — the static wiring tests
+are the tripwire.

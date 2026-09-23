@@ -53,7 +53,7 @@ def _bot_token(settings: Settings) -> str:
 def _build_job_completion_notifier(token: str) -> Any:
     """D4: notify the origin chat when a background job finishes.
 
-    Returns the hook injected into ``InProcessJobQueue``. The queue
+    Returns the hook injected into ``InstrumentedJobQueue``. The queue
     guarantees fail-safety (hook exceptions are logged and swallowed), so
     this only formats and sends. Payloads without an origin ``chat_id``
     (e.g. CLI-drained jobs) stay silent.
@@ -93,7 +93,7 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
 
     Returns a dict suitable for storing in application.bot_data.
     """
-    from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+    from nexus_ai_agent.adapters.instrumentation import InstrumentedJobQueue
     from nexus_ai_agent.features.ai_chat import GeminiEngine
     from nexus_ai_agent.features.conversation_store import ConversationStore
     from nexus_ai_agent.features.image_gen import ImageGenEngine
@@ -108,9 +108,11 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
     # Application-owned background jobs. The queue is a SQLite sidecar owned
     # by this adapter; execution remains on the bot process event loop.
     # D4: finished jobs notify the origin Telegram chat (fail-safe hook).
+    # M0: InstrumentedJobQueue adds the five queue events -> metrics+logs,
+    # correlation_id injection/restore, and saturation gauges.
     from nexus_ai_agent.worker import default_job_handlers, job_queue_db_path
 
-    job_queue = InProcessJobQueue(
+    job_queue = InstrumentedJobQueue(
         job_queue_db_path(settings.db_path),
         on_job_finished=_build_job_completion_notifier(_bot_token(settings)),
     )
