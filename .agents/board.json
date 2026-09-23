@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-23T20:10:31Z",
+  "updated_at": "2026-09-23T20:55:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1772,7 +1772,8 @@
         "not_executed": [
           "docker build / container run — no Docker daemon in the sandbox; the apt layer uses the standard Debian bookworm `ffmpeg` package (main). The Koyeb build of the merged head (or any local docker build) is the authoritative verification."
         ],
-        "ci": "PR#61 head 6227fa2 — CI run 35913271064 4/4 SUCCESS: test 7m14s, lint 7m4s (ruff + mypy + version lockstep), lint-fast 15s, migrate-postgres 6m0s. MERGED to main as fe4cdaa at 2026-09-23T20:10:14Z."
+        "ci": "PR#61 head 6227fa2 — CI run 35913271064 4/4 SUCCESS: test 7m14s, lint 7m4s (ruff + mypy + version lockstep), lint-fast 15s, migrate-postgres 6m0s. MERGED to main as fe4cdaa at 2026-09-23T20:10:14Z.",
+        "follow_up": "PR#62 (board release evidence) first went red in its own test job: releasing the task-163 lease left the real board with NO active lease, and the CLI-behaviour tests that read the live board for 'an active claim' died with StopIteration. Repaired in e015b75 by making the board_module fixture always carry a synthetic active directory-scoped lease (hermetic; structural tests still read the real board). Full suite green locally before push."
       }
     },
     {
