@@ -98,8 +98,9 @@ class SummarizerEngine:
 
         try:
             resp = await self._http.post(
-                f"{self._base_url}/models/{self._model}:generateContent?key={self._api_key}",
+                f"{self._base_url}/models/{self._model}:generateContent",
                 json=payload,
+                headers={"x-goog-api-key": self._api_key},
             )
             resp.raise_for_status()
             data = resp.json()

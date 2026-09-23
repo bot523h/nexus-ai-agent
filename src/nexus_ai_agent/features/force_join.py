@@ -184,7 +184,7 @@ class ForceJoinManager:
         with Session(engine) as session:
             return (
                 session.exec(
-                    select(ForceJoinConfig).where(ForceJoinConfig.enabled is True)  # noqa: E712
+                    select(ForceJoinConfig).where(ForceJoinConfig.enabled == True)  # noqa: E712
                 ).first()
                 is not None
             )

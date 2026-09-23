@@ -25,7 +25,7 @@ from collections.abc import Callable
 from typing import Any
 
 from telegram import Update
-from telegram.ext import BaseHandler, CallbackContext
+from telegram.ext import ApplicationHandlerStop, BaseHandler, CallbackContext
 
 from nexus_ai_agent.bot.middleware import AuthMiddleware, RateLimiter
 from nexus_ai_agent.config.settings import Settings
@@ -73,7 +73,7 @@ class AccessGuardHandler(BaseHandler[Update, CallbackContext, None]):
         if not self._limiter.is_allowed(user_id):
             # Flooded denials: drop silently, keep the audit trail.
             logger.warning("access_denied_dropped", user_id=user_id, command=command)
-            return
+            raise ApplicationHandlerStop
 
         logger.warning("access_denied", user_id=user_id, command=command)
         query = update.callback_query
@@ -82,12 +82,13 @@ class AccessGuardHandler(BaseHandler[Update, CallbackContext, None]):
                 await query.answer(_DENIAL_ALERT, show_alert=True)
             except Exception:  # noqa: BLE001 — denial UX must never raise
                 logger.exception("access_denial_answer_failed", user_id=user_id)
-            return
+            raise ApplicationHandlerStop
         if message is not None:
             try:
                 await message.reply_text(_DENIAL_TEXT)
             except Exception:  # noqa: BLE001
                 logger.exception("access_denial_reply_failed", user_id=user_id)
+        raise ApplicationHandlerStop
 
 
 def build_access_guard(settings: Settings) -> AccessGuardHandler:

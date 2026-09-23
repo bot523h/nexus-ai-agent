@@ -261,7 +261,7 @@ def analyze_with_gemini(
     url = GEMINI_ENDPOINT.format(model=config.model)
     try:
         with httpx.Client(timeout=config.timeout_seconds, transport=config.transport) as client:
-            response = client.post(url, params={"key": config.api_key}, json=payload)
+            response = client.post(url, json=payload, headers={"x-goog-api-key": config.api_key})
             response.raise_for_status()
             body = response.json()
     except httpx.HTTPError as exc:
