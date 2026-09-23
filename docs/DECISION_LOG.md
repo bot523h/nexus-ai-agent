@@ -991,3 +991,44 @@ the audit and queued as `task-159`, not left implicit.
 read paths should move onto it, and D-0009's surface-owns-authorisation rule should be re-examined
 for whether the check belongs one layer down, in the engine, where a second caller (the delivery
 tick) would otherwise have to duplicate it.
+
+## 2026-09-23 — Research V2 P1 CLAIM+LEASE and P2 INBOX/RECEIPT substrate
+
+**Status:** Accepted and implemented on branch `arena/01a0cf30-nexus-ai-agent` (`task-160-research-v2-p1-p2`).
+**Date:** 2026-09-23.
+**Deciders:** session `arena/01a0cf30-nexus-ai-agent` (implementation agent 3).
+
+**Problem:** The durable job queue could mark a row `processing` without multi-worker
+ownership, lease expiry, or fencing. A crashed or concurrent worker could double-run
+a job. Telegram webhook delivery is at-least-once and the tree only rejected missing
+`update_id` — it did not durable-dedup replays. Research V2 needs these two primitives
+before higher layers (P3/P4).
+
+**Decision:**
+
+1. **P1 — CLAIM + LEASE** on the existing `nexus_job_queue` SQLite sidecar (additive
+   columns: `owner_id`, `lease_token`, `lease_version`, `lease_expires_at`). Claim uses
+   `BEGIN IMMEDIATE` + CAS `UPDATE` with `rowcount == 1`. Every mutating write is fenced
+   by token+version. Stale/unfenced processing rows remain reclaimable.
+2. **P2 — INBOX / RECEIPT** in a new queue-owned table `nexus_update_inbox` with
+   `update_id` PRIMARY KEY, receipt state machine
+   `received → processing → processed|dead` (plus `processing → received` reclaim),
+   and accept semantics `ACCEPTED` vs `DUPLICATE`.
+3. **Do not** introduce Redis/Celery, change `JobQueuePort` method names, mix P3/P4,
+   or wire the webhook call site in this change (excluded surfaces / sequencing).
+
+**Evidence trail:** five independent prior-art searches per primitive are tabulated in
+`docs/architecture/RESEARCH_V2_P1_P2.md` with VERIFIED / INFERENCE / RECOMMENDATION /
+UNKNOWN separation. Tests: `tests/unit/test_job_claim_lease.py`,
+`tests/unit/test_update_inbox_receipt.py`,
+`tests/integration/test_claim_lease_concurrency.py`,
+`tests/integration/test_inbox_receipt_dedup.py`.
+
+**Consequences:** Multi-worker ownership becomes an explicit, testable API
+(`ClaimLeaseStore`, `UpdateInboxStore`, `nexus_ai_agent.research`). Single-process
+`InProcessJobQueue` keeps executing jobs; `resume_pending` no longer steals live
+non-expired leases. Webhook composition onto the inbox is a follow-up that must touch
+bot/API surfaces under a separate claim.
+
+**Reopens when:** a second bot-token namespace needs `(bot_id, update_id)` inbox keys;
+or the queue moves off SQLite (would require revisiting SKIP LOCKED vs BEGIN IMMEDIATE).

@@ -233,7 +233,13 @@ class InProcessJobQueue:
             )
 
     def _initialize_db(self) -> None:
-        """Create only the queue-owned table; no application migration is run."""
+        """Create only the queue-owned table; no application migration is run.
+
+        P1 (CLAIM + LEASE) additive columns are present on new installs and
+        back-filled with ``ALTER TABLE`` on pre-P1 sidecars so
+        :class:`~nexus_ai_agent.adapters.job_claim_lease.ClaimLeaseStore` can
+        share the same table without Alembic.
+        """
         with self._connection() as connection:
             connection.execute(
                 """
@@ -247,10 +253,26 @@ class InProcessJobQueue:
                     error TEXT,
                     created_at TEXT NOT NULL,
                     started_at TEXT,
-                    finished_at TEXT
+                    finished_at TEXT,
+                    owner_id TEXT,
+                    lease_token TEXT,
+                    lease_version INTEGER NOT NULL DEFAULT 0,
+                    lease_expires_at TEXT
                 )
                 """
             )
+            existing = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(nexus_job_queue)").fetchall()
+            }
+            for name, decl in (
+                ("owner_id", "TEXT"),
+                ("lease_token", "TEXT"),
+                ("lease_version", "INTEGER NOT NULL DEFAULT 0"),
+                ("lease_expires_at", "TEXT"),
+            ):
+                if name not in existing:
+                    connection.execute(f"ALTER TABLE nexus_job_queue ADD COLUMN {name} {decl}")
 
     def _insert_or_get(
         self,
@@ -295,25 +317,47 @@ class InProcessJobQueue:
             ).fetchone()
 
     def _reset_unfinished(self) -> list[str]:
+        """Reset unfinished rows for single-process crash recovery.
+
+        Pending rows are always requeued. Processing rows with a *live*
+        (non-expired) P1 lease are left alone so a multi-worker owner is not
+        stolen by ``resume_pending``. Unfenced legacy processing rows
+        (``lease_expires_at IS NULL``) and expired leases are reclaimed —
+        matching the P1 stale-lease recovery contract.
+        """
+        now = _now()
         with self._db_lock, self._connection() as connection:
             rows = connection.execute(
                 """
                 SELECT id FROM nexus_job_queue
-                WHERE status IN (?, ?)
+                WHERE status = ?
+                   OR (
+                        status = ?
+                    AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+                   )
                 ORDER BY created_at, id
                 """,
-                (JobStatus.PENDING.value, JobStatus.PROCESSING.value),
+                (JobStatus.PENDING.value, JobStatus.PROCESSING.value, now),
             ).fetchall()
             connection.execute(
                 """
                 UPDATE nexus_job_queue
-                SET status = ?, started_at = NULL
-                WHERE status IN (?, ?)
+                SET status = ?,
+                    started_at = NULL,
+                    owner_id = NULL,
+                    lease_token = NULL,
+                    lease_expires_at = NULL
+                WHERE status = ?
+                   OR (
+                        status = ?
+                    AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+                   )
                 """,
                 (
                     JobStatus.PENDING.value,
                     JobStatus.PENDING.value,
                     JobStatus.PROCESSING.value,
+                    now,
                 ),
             )
         return [str(row[0]) for row in rows]
