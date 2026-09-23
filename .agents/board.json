@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-23T17:06:57Z",
+  "updated_at": "2026-09-23T18:57:29Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -460,7 +460,16 @@
         "tests/unit/test_correlation*.py",
         "docs/architecture/OBSERVABILITY_M0.md",
         "docs/architecture/RELIABILITY_M0.md",
-        "docs/audits/OBSERVABILITY_M0_2026-09-23.md"
+        "docs/audits/OBSERVABILITY_M0_2026-09-23.md",
+        "src/nexus_ai_agent/adapters/job_instrumentation.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/cli.py",
+        "docs/DECISION_LOG.md",
+        "tests/unit/test_m0_instrumentation.py",
+        "tests/unit/test_m0_readyz_router.py",
+        "tests/unit/test_m0_alert_boundaries.py",
+        "tests/integration/test_m0_queue_runtime.py",
+        "tests/architecture/test_m0_wiring.py"
       ]
     }
   ],
@@ -1791,6 +1800,65 @@
         "docs/audits/OBSERVABILITY_M0_2026-09-23.md audit record"
       ],
       "note": "DELIVERED M0 SEE substrate: 77 tests passed, ruff clean, mutation BAD->FAIL RESTORED->PASS, order shuffle ok, no big infra, no secret leakage, blocked /readyz endpoint (core-security zone) documented"
+    },
+    {
+      "task": "task-172-m0-runtime-integration",
+      "title": "M0 runtime integration: instrumented queue, /readyz router, saturation gauges, alert boundaries",
+      "title_fa": "یکپارچه‌سازی runtime مُهر M0: صف instrumentated، روتر /readyz، گیج‌های saturation و مرزهای هشدار",
+      "zone": "observability-reliability",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Wire the M0 observability substrate into the real runtime without touching fenced files: InstrumentedJobQueue subclass constructed at the two composition roots (bot/app.py, cli.py jobs resume), correlation_id injected at enqueue and restored in wrapped handlers, five queue events -> canonical counters + structured lifecycle logs, job_duration_seconds histogram with frozen buckets, queue_depth/jobs_inflight gauges set() from real SQLite counts, saturation snapshot (depth, inflight, oldest pending age, seconds since last completion, injectable now), /readyz router factory proven with TestClient while api/app.py stays fenced, three alert evaluators boundary-tested, Q1-Q5 real-execution proofs, M1-M4 mutation proofs, order/hostile-clock/fault tests, static import-graph test, Five-Search Law evidence and Research V2 conformance audit. CLAIM -> COMMIT -> PUSH precede all runtime code.",
+      "scope_fa": "اتصال زیرساخت مشاهده‌پذیری M0 به runtime واقعی بدون دست‌زدن به فایل‌های محصور: زیرکلاس InstrumentedJobQueue در دو composition root، تزریق correlation_id هنگام enqueue و بازیابی در handlerها، پنج رویداد صف به شمارنده‌ها و لاگ ساخت‌یافته، هیستوگرام job_duration_seconds با سطل‌های ثابت، گیج‌های queue_depth/jobs_inflight از شمارش SQLite واقعی، روتر /readyz با TestClient بدون لمس api/، سه ارزیاب هشدار با تست مرزی، اثبات‌های Q1-Q5 و M1-M4، تست‌های ترتیب/ساعت خصمانه/خطا، گراف import ایستا و ممیزی انطباق Research V2. ابتدا claim سپس commit و push، بعد کد.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Zero diff on adapters/in_process_job_queue.py and application/ports/job_queue.py (fenced, PR#57)",
+        "bot/app.py queue construction and cli.py jobs-resume construct InstrumentedJobQueue; zero isinstance(InProcessJobQueue) checks introduced",
+        "Q1-Q5: real enqueue/claim/complete/fail/resume each increment exactly one canonical counter and emit one structured lifecycle event carrying correlation_id (tests/integration/test_m0_queue_runtime.py)",
+        "correlation chain: contextvar at enqueue -> persisted payload correlation_id -> restored inside wrapped handler -> present on terminal logs; unchanged across idempotent re-enqueue; never a metric label",
+        "job_duration_seconds histogram with frozen buckets exposes bucket/sum/count in snapshot; observe() placement tests for fast/medium/slow/outlier",
+        "queue_depth and jobs_inflight gauges set() from real SQLite counts after every state transition; saturation snapshot exposes depth, inflight, oldest pending age, seconds since last completion with injectable now and non-negative clamp",
+        "/readyz router factory proven via fastapi TestClient: healthy 200; startup failure, missing required dep, migration drift, shutdown -> 503; optional dep failure -> 200 degraded; raising probe -> fail-closed 503; api/app.py untouched with blocker recorded",
+        "Three alert evaluators boundary-tested: exact threshold, plus/minus epsilon, no-data, startup, post-reset; policy threshold/window/comparison pinned",
+        "Static import-graph test enforces layering directions and absence of forbidden imports",
+        "Order permutations green; hostile-clock cases (UTC-12/UTC+14, future dates, backward jumps) green; fault injection (broken completion hook, raising probe, raising handler) green; M1-M4 mutation transcripts recorded fail->restore->pass",
+        "Five-Search Law evidence table (15/15) and Research V2 P1/P2/P3/P4 conformance audit recorded in docs/audits/OBSERVABILITY_M0_2026-09-23.md; inherited docs-gate failure documented without editing fenced docs/README.md"
+      ],
+      "evidence_required": [
+        "git diff on the two fenced queue files is empty",
+        "pytest tests/unit/test_m0_instrumentation.py tests/unit/test_m0_readyz_router.py tests/unit/test_m0_alert_boundaries.py tests/integration/test_m0_queue_runtime.py tests/architecture/test_m0_wiring.py",
+        "order-permutation and M1-M4 mutation transcripts in docs/audits/OBSERVABILITY_M0_2026-09-23.md",
+        "ruff check on every touched file",
+        "PR link with rebase-hazard note for PR#33 files (bot/app.py, cli.py, DECISION_LOG.md)"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/adapters/job_instrumentation.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/cli.py",
+        "src/nexus_ai_agent/observability/metrics.py",
+        "src/nexus_ai_agent/observability/readiness.py",
+        "src/nexus_ai_agent/observability/readyz_router.py",
+        "src/nexus_ai_agent/observability/slo.py",
+        "src/nexus_ai_agent/observability/diagnostics.py",
+        "src/nexus_ai_agent/observability/correlation.py",
+        "src/nexus_ai_agent/observability/__init__.py",
+        "src/nexus_ai_agent/infrastructure/observability/metrics.py",
+        "tests/unit/test_m0_instrumentation.py",
+        "tests/unit/test_m0_readyz_router.py",
+        "tests/unit/test_m0_alert_boundaries.py",
+        "tests/integration/test_m0_queue_runtime.py",
+        "tests/architecture/test_m0_wiring.py",
+        "docs/architecture/OBSERVABILITY_M0.md",
+        "docs/architecture/RELIABILITY_M0.md",
+        "docs/audits/OBSERVABILITY_M0_2026-09-23.md",
+        "docs/DECISION_LOG.md"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0cf50-nexus-ai-agent",
+      "claimed_at": "2026-09-23T18:57:29Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": ""
     }
   ],
   "deferred_log": [
