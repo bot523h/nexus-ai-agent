@@ -1,7 +1,7 @@
 # Application Port Contracts
 
 **Status:** Living document (supersedes the short v1 list; content unchanged, surface completed)
-**Scope:** the six hexagonal ports, their invariants, adapters, and the tests that lock them
+**Scope:** the seven hexagonal ports, their invariants, adapters, and the tests that lock them
 **Verified against:** `main` @ `7573249`
 
 Ports are framework-free contracts in `src/nexus_ai_agent/application/ports/`. **Ports never import adapters**; adapters implement ports; only a composition root (`bot/app.py`, `api/app.py`, `cli.py`) wires an adapter to a port. This is the seam that lets the runtime swap SQLite for PostgreSQL, in-process for Whisper, or local disk for R2 without touching product code.
@@ -18,6 +18,7 @@ Ports are framework-free contracts in `src/nexus_ai_agent/application/ports/`. *
 | `JobQueuePort` | `ports/job_queue.py` | `enqueue(...) -> str`, `get_status(job_id) -> JobStatus`, `get_result(job_id)` | `adapters/in_process_job_queue.py` |
 | `ObjectStoragePort` | `ports/object_storage.py` | `put(*, key, content, idempotency_key) -> str`, `delete(*, key, idempotency_key)` | `storage/providers/r2.py`, `storage/ai_storage_manager.py` |
 | `CaptionEnginePort` | `ports/caption_engine.py` | `transcribe(audio_path, *, language=None) -> TranscriptRef`, `is_available() -> bool` | `adapters/whisper_local.py` (extra `[speech]`), `creative/caption/unavailable_adapter.py` (fail-closed default) |
+| `OutboxPort` (P3/P4) | `ports/outbox_port.py` | `append_intent(*)` (durable delivery intent with the owning transaction), `inspect_intent(effect_key)`; sibling contracts `EffectAdapter.deliver(*, effect_key, payload, destination)` + `DeliveryError(retryable)` | `adapters/outbox_dispatcher.py` (reference: sidecar store + claim/lease/outcome) |
 
 ## Safety invariants
 
@@ -27,6 +28,8 @@ Ports are framework-free contracts in `src/nexus_ai_agent/application/ports/`. *
 - `inspect()` is read-only and never updates access timestamps.
 - Unknown lineage, metadata, schema, or lock state blocks deletion (fail closed).
 - Idempotent writes reuse the same idempotency key and cannot create a second effect (`put`, `enqueue`, `delete_thread`).
+- `append_intent` is durable **with** the business change (the owning transaction or an explicit `EffectConsistencyError`); a committed intent is a dispatch contract, never a "best effort" fire-and-forget.
+- `DeliveryError(retryable=False)` means the destination definitively refused — the effect goes terminal, no noisy retries.
 - `JobQueue` is the SQLite-backed in-process implementation; **Redis/Celery are forbidden** in the modular monolith ([`MODULE_MAP.md`](MODULE_MAP.md) §3 R4).
 - `CaptionEnginePort` fails closed: an unconfigured installation raises `CaptionProfileUnavailableError` (`code = "caption_profile_unavailable"`). Silent fallbacks to mock or cloud providers are prohibited.
 

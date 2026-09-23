@@ -37,6 +37,7 @@ flowchart LR
 |---|---|---|---|---|
 | Application DB | `storage/models.py` (+ 2 tables in `features/referral.py`) | SQLite (WAL) or PostgreSQL | durable | 31 tables; the product's source of truth for user-visible history |
 | Job queue | `adapters/in_process_job_queue.py` | SQLite sidecar `<db>.jobs.sqlite3` | durable, disposable | owns its table and **no** Alembic migration; payloads must pass adapter validation |
+| Effect outbox | `adapters/outbox_dispatcher.py` (+ pure policy `domain/policies/outbox_policy.py`) | SQLite sidecar (own DDL) | durable | `nexus_effect_outbox`: delivery intent + lease + outcome; `UNIQUE(operation_type, effect_key)` is the dedupe backstop; **no** Alembic revision (schema authority stays put) |
 | Checkpoints | `storage/langgraph_checkpoint.py` (`get_checkpointer`) | SQLite or PostgreSQL | disposable | LangGraph runtime state only; deletion never touches messages |
 | Lifecycle index | `storage/checkpoint_lifecycle*.py` | PG table `nexus_checkpoint_lifecycle` / SQLite sidecar table | durable | metadata about checkpoints: age, lineage, lock state, access |
 | Vector store | `features/rag.py` (`vector_path`, `chroma_db_path`) | SQLite/Chroma on disk | rebuildable | derived from documents; safe to drop and re-ingest |
@@ -93,9 +94,42 @@ Full policy text: [`DATA_LIFECYCLE.md`](DATA_LIFECYCLE.md), [`RETENTION_DECISION
 - **Backups**: `nexus maintenance backup` writes to the R2 tier behind `ObjectStoragePort` (idempotency keys make repeated runs safe). Restore procedure and rotation: [`../ops/DEPLOY_RUNBOOK.md`](../ops/DEPLOY_RUNBOOK.md).
 - **Ephemeral-disk rule**: in webhook/scale-to-zero mode, anything that must survive a redeploy lives in Postgres or R2 — never on local disk. The queue survives restarts because it is a SQLite sidecar on durable storage, and `nexus jobs resume` re-schedules *pending-only* work.
 
+## 5b. Effect consistency (P3/P4) — semantic ladder per effect
+
+The outbox delivers **at-least-once**; the effect key collapses repeated attempts
+into **at-most-one logical effect**. The two are different claims and are told
+apart everywhere. Enforced by `tests/unit/test_effect_dedup.py` and
+`tests/integration/test_outbox_crash_matrix.py`.
+
+| Effect class | Delivery semantics | Logical-effect semantics | Why |
+|---|---|---|---|
+| `telegram.send` | at-least-once | at-most-once intent (duplicate attempt visible, not silently "solved") | Telegram has no server-side idempotency token; a connect-lost-after-send then retry *is* a second message. The outbox cannot stop the network — it must not claim to. |
+| `telegram.edit` | at-least-once | effectively-once (idempotent by value: same text, same message) | editing the same message to the same text is observationally one effect, but delivery is still at-least-once. |
+| `r2.upload` (PUT) | at-least-once | effectively-once | the object key names the destination; a second PUT of identical content is a no-op overwrite. |
+| `http.callback` | at-least-once | at-least-once unless the receiver honours `Idempotency-Key` (adapter adds it per attempt) | external receiver policy is outside this process; the key makes receiver-side dedupe *possible*. |
+| DB insert | exactly-once *by the UNIQUE(operation_type, effect_key) constraint* | effectively-once | the database serialises writes; the constraint is the atomic dedupe, not an in-memory set. |
+
+- **Effect key** (`domain/policies/effect_key.py`) is a SHA-256 over the
+  canonical JSON of `(operation_type, logical_entity, logical_revision,
+  destination, logical_slot)` — deterministic, retry-stable, distinct per
+  intent, and *independent of the attempt id* (P4). Mutation A (random key per
+  retry) turns the suite red.
+- **Outbox state machine** (`domain/policies/outbox_policy.py`):
+  `PENDING → CLAIMED → SUCCEEDED | FAILED_RETRYABLE | FAILED_PERMANENT`, with
+  `FAILED_RETRYABLE → PENDING` on bounded backoff. No dead-letter state without
+  the explicit evidence-gated toggle (`would_dead_letter`) — permanent failures
+  stay in the table, visible, awaiting the reconciliation contract or an
+  operator command.
+- **Reconciliation contract** (`classify_row` / `recovered_rows`): stale
+  `CLAIMED` past the lease, old `PENDING`, due `FAILED_RETRYABLE`, and terminal
+  rows carrying a ghost lease owner (C4 residue) are each classified
+  deterministically — recovered, waited on, or surfaced as `unknown`, never
+  guessed into `SUCCEEDED`.
+
 ## 6. What never enters a store
 
 - No credentials, tokens, or raw prompts in the operation journal or lifecycle metadata (redacted error codes only).
+- No effect-key token, `telegram_id`, or payload field ever becomes an observability label; effect events carry a truncated digest only (`adapters/observability_backend.py::effect_key_prefix`).
 - No PII in dashboard responses (`api/dashboard.py`, `tests/unit/test_dashboard_privacy.py`).
 - No user prompt egress to a training-capable free endpoint unless the strict-privacy flag is off and the user consented (`features/ai_memory.py` consent gate + `LLM_PROVIDERS.md`).
 - No manifest, tone template, or pack resource may contain an executable key (§[`CREATIVE_STUDIO.md`](CREATIVE_STUDIO.md) §3).

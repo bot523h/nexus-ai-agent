@@ -29,7 +29,7 @@ Dependencies point **downward**. A lower layer may never import a higher one, an
 | Package | Layer | Role | Notable entry symbols |
 |---|---|---|---|
 | `domain/` | L1 | vocabulary, retention/reconciler policies — pure functions and enums | `EntityType`, `SOURCE_OF_TRUTH`, `purge_allowed`, `health_gate_ok` |
-| `application/ports/` | L1 | the six hexagonal contracts (`LLMPort`, `JobQueuePort`, `ObjectStoragePort`, `ConversationStorePort`, `CheckpointLifecyclePort`, `CaptionEnginePort`) | see [`PORTS.md`](PORTS.md) |
+| `application/ports/` | L1 | the seven hexagonal contracts (`LLMPort`, `JobQueuePort`, `ObjectStoragePort`, `ConversationStorePort`, `CheckpointLifecyclePort`, `CaptionEnginePort`, `OutboxPort`) | see [`PORTS.md`](PORTS.md) |
 | `creative/studio/` | L1 | Nagar core: typed `Project`, `CommandBus`, `CapabilityRegistry`, `PermissionLevel`, reference resolver | `build_wave1_registry`, `CommandBus.dispatch` |
 | `creative/packs/` | L2 | seven data-only packs + manifest schema, verifier, registry | `register_*_operations`, `PackRegistry.register_builtin` |
 | `i18n/` | L1 | 15 locales × 63 keys, key-parity guarded | `I18n`, `i18n` |
@@ -38,7 +38,7 @@ Dependencies point **downward**. A lower layer may never import a higher one, an
 | `infrastructure/observability/` | L3 | metrics registry, structured lifecycle events, redaction | `MetricsRegistry`, `log_lifecycle_event`, `redact` |
 | `continuum/`, `maintenance/`, `integrations/` | L3 | project-state snapshot, housekeeping/backup, external integrations | `snapshot`, `housekeeping` |
 | `storage/` | L4 | SQLModel tables, Alembic bootstrap, checkpoint adapters, lifecycle store, reconciler, R2 | `get_session`, `get_checkpointer`, `CheckpointReconciler` |
-| `adapters/` | L4 | port implementations: in-process job queue, Whisper caption engine, LangGraph lifecycle hooks | `InProcessJobQueue`, `WhisperLocalCaptionEngine` |
+| `adapters/` | L4 | port implementations: in-process job queue, outbox dispatcher + effect delivery, Whisper caption engine, LangGraph lifecycle hooks | `InProcessJobQueue`, `OutboxDispatcher`, `WhisperLocalCaptionEngine` |
 | `llm/` | L4 | provider chain (litellm router), local llama.cpp server provider, fake provider for tests | `build_router`, `LocalServerProvider`, `FakeLLMProvider` |
 | `orchestration/` | L4 | LangGraph state machine + intent router + persona selection | `compile_graph`, `classify_intent` |
 | `features/` | L4 | 26 product engines (chat, memory, gamification, RAG, moderation, …) | per-module services |
@@ -67,6 +67,7 @@ Dependencies point **downward**. A lower layer may never import a higher one, an
 | R10 | Image generation never imports the bot/storage layers, directly or dynamically | `test_image_gen_boundary.py` |
 | R11 | The domain glossary and retention constants stay live (a deleted guarantee is a failing test) | `test_glossary_liveness.py` |
 | R12 | `bot/surface/` is importable without `telegram`: no module in the package imports PTB directly, **and** no top-level import pulls an engine that does (such engines are imported lazily inside the function). Every stub-replaced command resolves to a surface symbol | `test_surface_onboarding.py::test_the_surface_package_imports_without_telegram` (subprocess probe), `test_surface_ptb.py::test_the_surface_package_imports_no_telegram`, `test_surface_registration.py` (20-command `EXPECTED` map, callback map, forbidden stub strings) |
+| R13 | The effect-consistency layer is framework-pure: `domain/policies/{outbox_policy,effect_key}.py` and `application/ports/outbox_port.py` import no `langgraph`/`sqlmodel`/`telegram`/`adapters` (frozen baseline), and the dispatcher's dedupe lives in the `UNIQUE(operation_type, effect_key)` constraint, not an in-memory set | `test_import_boundaries.py` (baseline + no-adapter rules), `test_effect_dedup.py::test_unique_constraint_is_the_cross_process_dedupe_backstop`, `test_effect_key.py` (determinism/stability/distinctness), `test_outbox_dispatcher.py` (claim fencing + isolated schema) |
 
 **Legacy baseline.** `tests/architecture/legacy_baseline.json` freezes the pre-existing `langgraph`/`sqlmodel`/`telegram` import set with an explicit `approval: ARCH_BASELINE_APPROVED`. New violations fail; removing a baseline entry is allowed (and should be celebrated, not blocked).
 

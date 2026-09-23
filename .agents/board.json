@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-22T22:56:19Z",
+  "updated_at": "2026-09-23T17:06:34Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -445,6 +445,21 @@
         "docs/ops/"
       ],
       "note": "storage runbook (queued)"
+    },
+    {
+      "id": "effect-consistency",
+      "description": "P3 transactional outbox + P4 effect-key/idempotent effect. Durable delivery-intent (pending-effect record + dispatcher contract + reconciliation), deterministic logical effect identity, dedupe and crash matrix. Database-first, no broker.",
+      "paths": [
+        "src/nexus_ai_agent/application/ports/outbox_port.py",
+        "src/nexus_ai_agent/domain/policies/outbox_policy.py",
+        "src/nexus_ai_agent/domain/policies/effect_key.py",
+        "src/nexus_ai_agent/adapters/effect/",
+        "tests/unit/test_outbox_policy.py",
+        "tests/unit/test_effect_key.py",
+        "tests/unit/test_outbox_dispatcher.py",
+        "tests/unit/test_effect_dedup.py",
+        "tests/integration/test_outbox_crash_matrix.py"
+      ]
     }
   ],
   "claims": [
@@ -1296,13 +1311,13 @@
       "agent_branch": "arena/01a0c992-nexus-ai-agent",
       "claimed_at": "2026-09-22T15:45:00Z",
       "ttl_hours": 24,
-      "status": "active",
+      "status": "expired",
       "gates_owner": false,
       "exclusive_paths": [
         ".github/workflows/"
       ],
       "scope": "Refresh gates-owner handoff with current open PR matrix; non-gates agents continue targeted checks only.",
-      "note": "takeover after ci-gates-steward lease expiry (15:21:39Z, non-renewed). Handoff: PR#39=REPAIR+INTEGRATE, PR#47=INTEGRATE (merged tree 1677 green CI-sim), PR#32=SUPERSEDED (15/26 files superseded by #34, unique value ported in #47), PR#33=CONFLICT MAP + SPLIT (11 conflicting files incl. core security code). || HANDOFF 2026-09-22T19:5xZ: PR#51 was still red (test job), owner session arena/01a0c992 idle since 15:41Z. Stewardship for the PR#51 integration moved to arena/01a0ca9c-nexus-ai-agent (claim task-157-pr51-ci-repair, gates_owner=true): full gates re-run, red root-caused locally (CI logs unavailable: log-receiver EOF on both runs). task-145's fence (.github/workflows/) was NOT touched by that work.",
+      "note": "auto-released by gc at 2026-09-23T16:55:44Z (stale active lease)",
       "acceptance_criteria": [
         "handoff note records the open-PR matrix (#32/#33/#39/#47) with per-PR verdicts",
         "gates rule respected: full make lint/types/test only by the gates owner",
@@ -1710,6 +1725,48 @@
         "a restart-safety test (requeue after a simulated crash) and the measured before/after pytest totals"
       ],
       "note": "queued by task-158 (arena/01a0cb38) so the residual is not lost: the honest half of 'the ads system works now'. Sequenced after PR#33 because worker.py/bot/app.py are in its diff."
+    },
+    {
+      "task": "task-160",
+      "title": "P3/P4 — effect consistency: transactional outbox + effect-key / idempotent effect",
+      "title_fa": "سازگاری افکت: اوت‌باکس تراکنشی + کلید-افکت / افکت idempotent",
+      "zone": "effect-consistency",
+      "priority": "P1",
+      "status": "active",
+      "agent_branch": "arena/01a0cf31-nexus-ai-agent",
+      "claimed_at": "2026-09-23T17:06:34Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "prerequisites": [],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/adapters/effect/",
+        "src/nexus_ai_agent/application/ports/outbox_port.py",
+        "src/nexus_ai_agent/domain/policies/outbox_policy.py",
+        "src/nexus_ai_agent/domain/policies/effect_key.py",
+        "tests/unit/test_outbox_policy.py",
+        "tests/unit/test_effect_key.py",
+        "tests/unit/test_outbox_dispatcher.py",
+        "tests/unit/test_effect_dedup.py",
+        "tests/integration/test_outbox_crash_matrix.py"
+      ],
+      "scope": "Close the trust gap where DB says done but the external effect did not happen (or happened and DB does not know; or a retry double-sends/uploads). P3: pure deterministic outbox state machine (PENDING/CLAIMED/SUCCEEDED/FAILED_RETRYABLE — no dead-letter without evidence), an OutboxPort delivery-intent contract, a reference dispatcher with lease+claim+dedupe in a single-session-safe sidecar, and a deterministic reconciliation contract (recovery of stale CLAIMED / old PENDING / retryable FAILED / unknown outcome). P4: deterministic logical effect-key derived from intent (operation type + logical entity + logical revision + destination + logical slot), never a per-attempt UUID; told-apart from the attempt id; dedupe of repeated attempts. At-least-once delivery + at-most-once logical effect, with the semantics written honestly per effect class (DB insert vs Telegram send vs upload vs HTTP callback). Five independent investigations per design choice; concurrency/crash property tests T1-T7 with zero sleeps; two mutation tests (random-per-retry effect key FAILS, removed dedupe FAILS).",
+      "acceptance_criteria": [
+        "Deterministic 4-state outbox machine with explicit allowed/invalid transitions, retry classification (retryable vs permanent) and lease semantics, pure and framework-free (imports) — enforced by tests/unit/test_outbox_policy.py",
+        "effect_key is a stable hash of logical intent (operation+entity+revision+destination+slot), deterministic across retries, distinct from attempt id, and told apart from distinct logical effects — enforced by tests/unit/test_effect_key.py",
+        "Reference dispatcher claims with lease, records an attempt, and a second claim on the same effect_key cannot re-create the logical effect (dedupe), while distinct effects are not collapsed — tests/unit/test_outbox_dispatcher.py + tests/unit/test_effect_dedup.py",
+        "Crash matrix C1-C5 pinned by deterministic tests (commit→crash→pending; effect→crash→retry same key; two dispatchers→one effect; timeout→unknown; stale lease→safe reclaim) with zero sleep-based coordination — tests/integration/test_outbox_crash_matrix.py",
+        "Mutation proof: (A) effect_key randomized per retry ⇒ suite goes RED; (B) dedupe/unique protection removed ⇒ suite goes RED; restore ⇒ GREEN",
+        "Observability contract: effect_created/claimed/succeeded/failed/recovered/duplicate events + low-cardinality counters, never telegram_id/raw payload/secrets/high-cardinality ids as labels",
+        "Zero overlap with zones owned by other agents (bot/*, features/*, core/async_db.py, storage/db.py, worker.py, .agents/*, AGENTS.md, docs/README.md, PR#33/PR#56 files); `python scripts/agent_board.py check --files …` exit 0",
+        "No destructive migration, no new Alembic revision, no Redis/Celery/Kafka/CDC; reference dispatcher uses an additive sidecar store, schema-owner coordination recorded"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_outbox_policy.py tests/unit/test_effect_key.py tests/unit/test_outbox_dispatcher.py tests/unit/test_effect_dedup.py tests/integration/test_outbox_crash_matrix.py tests/architecture/test_import_boundaries.py -q",
+        "ruff check on the new files (0 errors)",
+        "mutation run transcript: BAD → FAIL, RESTORED → PASS for both mutation A and B",
+        "effect-semantics table stating at-least-once vs at-most-once per effect class"
+      ],
+      "note": "DELIVERED (PR#59, verification in repo): 44 new tests (tests/unit/test_{effect_key,outbox_policy,effect_dedup,outbox_dispatcher}.py + tests/integration/test_outbox_crash_matrix.py) — pytest -m 'not slow' on this branch: 1885 passed, 20 skipped, 0 failures; ruff check 0 errors; mypy clean on the 7 new source files; mutation A (random per-retry effect key) → 5 tests RED, restored → GREEN; mutation B (UNIQUE dedupe removed) → 6 tests RED, restored → GREEN; docs/architecture/{DATA_AND_STORAGE,MODULE_MAP,OBSERVABILITY,PORTS}.md updated in place. DECISION_LOG append + PORT wiring (Task C) queued: docs/DECISION_LOG.md fenced by PR#33/D-0009 ownership; wiring depends on async_db Phase 1 (task-128). See EFFECT_CONSISTENCY_P3P4_2026-09-23.md for the full report."
     }
   ],
   "deferred_log": [
@@ -1742,192 +1799,172 @@
   ],
   "next_work": [
     {
-      "id": "task-126",
-      "priority": "P0",
-      "zone": "cli-packs-registry",
-      "title": "Unified runtime pack registry — activate all six packs",
-      "title_fa": "رجیستری یکپارچهٔ پک‌ها: فعال‌سازی هر شش پک",
-      "why_fa": "چهار پک پیاده‌شده در CLI ناشناخته‌اند (pending 8/7/8/7) و فعال نمی‌شوند؛ بزرگ‌ترین شکاف قابل‌رفع.",
-      "acceptance_criteria": [
-        "`nexus packs list` → ۶ پک، pending=0",
-        "activate همه موفق",
-        "تست CLI سبز (tests/unit/test_packs_cli.py)"
-      ],
-      "prerequisites": [
-        "task-123"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/cli.py",
-        "tests/unit/test_packs_cli.py"
-      ],
-      "status_note": "delivered: wave-5 unified runtime activation via PR#46 (six packs active, pending=0)"
-    },
-    {
-      "id": "task-124",
-      "priority": "P0",
-      "zone": "audit-remainder",
-      "title": "P0-8 single wiring + P0-9 graph memory write path",
-      "title_fa": "بستن P0-8 و P0-9",
-      "why_fa": "دو یافتهٔ باز ممیزی امنیتی/کارکردی با معیار پذیرش روشن.",
-      "acceptance_criteria": [
-        "تست ONE-OWNER سبز",
-        "write→read گراف با round-trip",
-        "صفر رگرسیون"
-      ],
-      "prerequisites": [
-        "task-122",
-        "task-123"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/memory/",
-        "src/nexus_ai_agent/features/rag.py",
-        "tests/unit/test_audit_remainder.py"
-      ]
-    },
-    {
-      "id": "task-122",
-      "priority": "P0",
-      "zone": "feature-wiring",
-      "title": "PR#32 rebase + dedupe",
-      "title_fa": "ریبیس و رفع دوگانگی PR#32",
-      "why_fa": "بزرگ‌ترین PR باز روی بیس باستانی؛ ریسک دو سیم‌کشی موازی.",
-      "acceptance_criteria": [
-        "دیف یکتا",
-        "تست‌های feature_* سبز",
-        "CI سبز روی main تازه"
-      ],
-      "prerequisites": [],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/bot/surface/",
-        "src/nexus_ai_agent/features/"
-      ],
-      "status_note": "delivered via PR#47 (forensic triage docs/audits/PR32_TRIAGE_2026-09-21.md + port-forward)"
-    },
-    {
-      "id": "task-123",
-      "priority": "P0",
-      "zone": "packaging+interop",
-      "title": "PR#33 slim-down",
-      "title_fa": "کوچک‌سازی PR#33",
-      "why_fa": "برای باز شدن مسیر بسته‌بندی/داک و آزادسازی cli.py.",
-      "acceptance_criteria": [
-        "دیف فقط یکتاها",
-        "CI سبز"
-      ],
-      "prerequisites": [],
-      "exclusive_paths": []
-    },
-    {
-      "id": "task-121",
+      "id": "task-161",
       "priority": "P1",
-      "zone": "delivery-interop-markers",
-      "title": "OTIO marker round-trip",
-      "title_fa": "مارکرهای OTIO",
-      "why_fa": "تنها شکاف باقی‌ماندهٔ تسک ۱۱۰؛ include_markers فعلاً بی‌اثر است.",
+      "zone": "effect-consistency",
+      "title": "Log the P3/P4 decision in docs/DECISION_LOG.md (next D-number)",
+      "title_fa": "ثبت تصمیم P3/P4 در DECISION_LOG",
       "acceptance_criteria": [
-        "include_markers مؤثر",
-        "۲ تست round-trip با OTIO واقعی"
+        "append D-0010 (outbox + effect-key) with 5-search decisions, rejected alternatives, and the semantic ladder",
+        "docs-integrity + full suite green"
       ],
       "prerequisites": [
-        "task-123"
+        "task-160"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/creative/packs/delivery/",
-        "tests/unit/test_otio_interop.py"
+        "docs/DECISION_LOG.md"
       ]
     },
     {
-      "id": "task-128",
+      "id": "task-162",
       "priority": "P1",
       "zone": "core-database",
-      "title": "Async DB phase 1",
-      "title_fa": "فاز ۱ دیتابیس ناهمگام",
-      "why_fa": "حذف create_engine سینک از features با آزمون نگهبان معماری.",
+      "title": "Wire OutboxPort.append_intent into a real shared-transaction business write",
+      "title_fa": "اتصال اوت‌باکس به تراکنش واقعی",
       "acceptance_criteria": [
-        "انجین مرکزی + ۲ پایلوت",
-        "گارد معماری سبز"
+        "one business mutation records its delivery intent in the same transaction",
+        "crash-after-commit test still passes on the shared path"
       ],
       "prerequisites": [
-        "task-122"
+        "task-128"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/core/async_db.py",
         "src/nexus_ai_agent/features/"
       ]
     },
     {
-      "id": "task-106",
+      "id": "task-163",
       "priority": "P1",
-      "zone": "creative-surface",
-      "title": "Telegram studio commands",
-      "title_fa": "فرمان‌های استودیو در تلگرام",
-      "why_fa": "اتصال لاین رندر به کاربر نهایی بدون لمس handlers.py.",
+      "zone": "effect-consistency",
+      "title": "Wrap ObjectStoragePort.put (R2) with effect keys for upload idempotency proofs",
+      "title_fa": "ممیزی افکت R2 از لایهٔ کلید-افکت",
       "acceptance_criteria": [
-        "/edit /caption /grade با تست",
-        "handlers.py دست‌نخورده"
+        "a duplicate upload with the same effect key performs one PUT (or proves the no-op key overwrite)",
+        "tests/unit/test_r2_provider.py idempotency gate green"
       ],
       "prerequisites": [
-        "task-122"
+        "task-160"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/bot/creative_surface.py",
-        "tests/unit/test_creative_surface.py"
+        "tests/unit/test_r2_provider.py"
       ]
     },
     {
-      "id": "task-132",
-      "priority": "P1",
-      "zone": "ci-quality",
-      "title": "Extras smoke matrix",
-      "title_fa": "ماتریس دود اختیاری‌ها",
-      "why_fa": "مسیرهای اختیاری خارج از CI پیش‌فرض می‌توانند بی‌صدا بشکنند (شکاف مستند در TESTING §7).",
+      "id": "task-164",
+      "priority": "P2",
+      "zone": "effect-consistency",
+      "title": "Make the dispatcher async-native end to end (asyncio.to_thread for store I/O)",
+      "title_fa": "ناهمگام‌سازی واقعی دیسپچر",
       "acceptance_criteria": [
-        "job ماتریسی per-extra",
-        "شکست نصب = شکست CI"
+        "dispatch runs without blocking the event loop under an async loop probe",
+        "T1-T7 + crash matrix still green"
       ],
-      "prerequisites": [],
+      "prerequisites": [
+        "task-160"
+      ],
       "exclusive_paths": [
-        "tests/unit/test_optional_extras.py",
-        ".github/"
+        "src/nexus_ai_agent/adapters/effect/outbox_dispatcher.py"
       ]
     },
     {
-      "id": "task-134",
+      "id": "task-165",
       "priority": "P2",
-      "zone": "nagar-portrait",
-      "title": "Portrait family slice (5 ops)",
-      "title_fa": "اسلایس خانوادهٔ پرتره",
-      "why_fa": "۲۹ شناسهٔ TDD باقی‌مانده؛ بزرگ‌ترین خانواده پیاده‌نشده.",
+      "zone": "effect-consistency",
+      "title": "Deterministic multi-process claim test (two real processes, one SQLite file)",
+      "title_fa": "تست چندفرایندی claim",
       "acceptance_criteria": [
-        "۵ op رجیستر",
-        "گیت مرزی پک سبز"
-      ],
-      "prerequisites": [],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/packs/portrait/",
-        "tests/unit/test_portrait_pack.py"
-      ],
-      "status_note": "renumbered: portrait work tracked as task-152-portrait-pack (canonical-ID resolution 2026-09-22)"
-    },
-    {
-      "id": "task-127",
-      "priority": "P2",
-      "zone": "features-rag",
-      "title": "Real RAG",
-      "title_fa": "RAG واقعی",
-      "why_fa": "rag.py استاب ۳.۷KB است؛ کیفیت پاسخ به بازیابی وابسته است.",
-      "acceptance_criteria": [
-        "recall@k روی fixture",
-        "بدون وابستگی سنگین جدید"
+        "two OS processes racing on one effect file → one winner, one log row",
+        "no sleep-based coordination"
       ],
       "prerequisites": [
-        "task-122"
+        "task-160"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/features/rag.py",
-        "tests/unit/test_rag_chunking.py"
+        "tests/integration/test_outbox_multiprocess.py"
+      ]
+    },
+    {
+      "id": "task-166",
+      "priority": "P2",
+      "zone": "effect-consistency",
+      "title": "Reconciliation CLI: list recovered/stale/unknown outbox rows (read-only, then a reviewed apply)",
+      "title_fa": "CLI بازآشتی‌گر اوت‌باکس",
+      "acceptance_criteria": [
+        "nexus effects reconcile --list deterministic; --apply behind the same fail-closed policy as checkpoints"
       ],
-      "status_note": "delivered via PR#47 (rag_core stdlib core + lazy engine + eval harness)"
+      "prerequisites": [
+        "task-160"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/adapters/effect/"
+      ]
+    },
+    {
+      "id": "task-167",
+      "priority": "P2",
+      "zone": "effect-consistency",
+      "title": "Bind effect-lifecycle events to a real dispatched effect (recording adapter)",
+      "title_fa": "اتصال رویدادهای چرخهٔ افکت به مسیر واقعی",
+      "acceptance_criteria": [
+        "each of effect_created/claimed/succeeded/failed/recovered/duplicate observable on one real flow",
+        "no high-cardinality labels"
+      ],
+      "prerequisites": [
+        "task-161"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/adapters/effect/observability_backend.py"
+      ]
+    },
+    {
+      "id": "task-168",
+      "priority": "P2",
+      "zone": "effect-consistency",
+      "title": "Dead-letter evidence gate (operator toggle + replay) — only if evidence is produced",
+      "title_fa": "گیت مبتنی بر شواهد برای dead-letter",
+      "acceptance_criteria": [
+        "produce evidence that a FAILED_PERMANENT row needs quarantine before flipping DEAD_LETTER on",
+        "replay path preserves the effect key"
+      ],
+      "prerequisites": [
+        "task-160"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/domain/policies/outbox_policy.py"
+      ]
+    },
+    {
+      "id": "task-169",
+      "priority": "P2",
+      "zone": "core-database",
+      "title": "RTO/RPO from undefined to a measurable DR contract for the effect outbox",
+      "title_fa": "قرارداد RTO/RPO قابل‌اندازه‌گیری",
+      "acceptance_criteria": [
+        "documented recovery drill: insert→crash→restart→reclaim→complete→verify no duplicate logical effect",
+        "drill executable as a deterministic test"
+      ],
+      "prerequisites": [
+        "task-160"
+      ],
+      "exclusive_paths": [
+        "docs/ops/"
+      ]
+    },
+    {
+      "id": "task-170",
+      "priority": "P2",
+      "zone": "effect-consistency",
+      "title": "Effect-key prefix index + storage growth bound for the outbox table",
+      "title_fa": "کران رشد جدول اوت‌باکس",
+      "acceptance_criteria": [
+        "terminal rows are cheap to skip (indexed status) and a bounded retention answer is recorded"
+      ],
+      "prerequisites": [
+        "task-160"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/adapters/effect/outbox_dispatcher.py"
+      ]
     }
   ],
   "history": {
@@ -2171,6 +2208,12 @@
         "state": "MERGED",
         "title": "PR#51 integration — green the test job (3 board clock bombs, env-dependent RAG test, queue hook race)",
         "note": "head arena/01a0ca9c, MERGED → main 315d38a; CI run 35776958516 4/4 SUCCESS."
+      },
+      {
+        "pr": 59,
+        "state": "OPEN",
+        "head": "arena/01a0cf31-nexus-ai-agent",
+        "note": "P3/P4 effect consistency (task-160): transactional outbox + deterministic effect-key, delivered by the effect-consistency owner (session arena/01a0cf31)."
       }
     ],
     "incidents": [
