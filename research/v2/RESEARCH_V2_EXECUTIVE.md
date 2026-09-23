@@ -3,7 +3,7 @@
 **Subject:** `nexus-ai-agent` (Telegram assistant + Nagar creative studio) at branch `arena/01a0cca8-nexus-ai-agent`, HEAD `a997aab` (merge PR#55, 350 commits after `7573249`).
 **Method:** read-only inspection of the pinned tree + primary/independent external sources; every mechanism carries an evidence id from `SOURCES.md`; every number is `ASSUMED` or `VERIFIED`; unprovable statements are `[U]` and named as unknowns.
 **Isolation:** no product source, board, migration, dependency or PR was modified. All outputs live in `research/v2/`. No claim of a "best architecture" is made anywhere in this package.
-**Package:** 12 phase files + source registry + lab index + this synthesis (**15 files total**). Evidence ids referenced below are defined in the phase files and `SOURCES.md`.
+**Package:** 12 phase files + source registry + lab index + **Phase-13 target architecture** + this synthesis (**16 files total**). Evidence ids referenced below are defined in the phase files and `SOURCES.md`.
 
 **Corpus counts:** 36 assumptions audited · 45 failure modes · 18 consistency scenarios · 10 delivery surfaces · 35 attacks · 15 disaster scenarios · 28 ADR candidates · 16 open contradictions (+3 resolved) · 36 unknowns · 21 external sources + 7 explicitly unverifiable claims · 26 repo sources + 8 re-measurements.
 
@@ -216,6 +216,7 @@
 | **10 ADR candidates** | Complete | cross-phase | 28 candidates ADR-C-01…ADR-C-28 (no ADR finalised) | the evidence each ADR names as missing | HIGH (questions are grounded) |
 | **11 Contradictions** | Complete | 12 ids + docs/code | 16 open (K-01…K-16) + 3 resolved (K-R1…K-R3); K-01 is docs-vs-docs, K-16 is a broken restore pointer | `[NEED-PRIMARY]` on K-05, K-10 | HIGH (both sides quotable) |
 | **12 Unknowns** | Complete | cross-phase | 36 unknowns U-01…U-36 in 6 families with owners and closure cost | the unknowns themselves | HIGH (closure actions are testable) |
+| **13 Target architecture** | Complete (proposal) | +12 new ids (`E-22`…`E-33`) | one truth plane + 4 primitives (P1–P4), 3 choke points, 5 golden counters, M0–M6 roadmap with falsifiable acceptance tests | depends on 8 console unknowns (`U-01…U-04`) | MEDIUM-HIGH (each primitive is sourced: `E-22`…`E-33`) |
 | **Executive synthesis** | Complete | all of the above | 10×6 top lists + scalability/consistency/DR pressure points + 10 next-phase questions | — | HIGH for evidence-linked rows; MEDIUM where external sources conflict |
 
 Nothing in the product was modified, and nothing in this package constitutes a decision, a plan of record, or a claim of a best architecture.

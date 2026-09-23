@@ -1,6 +1,6 @@
 # RESEARCH V2 — INDEPENDENT ARCHITECTURE LAB
 
-**Status:** COMPLETE (12/12 phases) · **Date:** 2026-09-23 · **Namespace:** `research/v2/` only
+**Status:** COMPLETE (12/12 phases + Phase-13 target architecture + executive) · **Date:** 2026-09-23 · **Namespace:** `research/v2/` only
 **Repo pin:** `main` @ `a997aab` (v3.13.0 line) · **Mode:** READ-ONLY, zero product modification
 **Predecessor:** Research v1 (10-phase study) is treated as **input**, not repeated. This lab *audits* it.
 
@@ -46,6 +46,7 @@ All five are developed with evidence in the phase documents, and ranked in [`RES
 | 11 | Contradiction Engine | [`11-contradictions.md`](11-contradictions.md) | CLAIM A/B + SOURCE A/B + why different + verifiable + status | **16 open contradictions** (`K-01`…`K-16`) + **3 resolved** non-contradictions |
 | 12 | Unknown Register | [`12-unknowns.md`](12-unknowns.md) | UNKNOWN / why / how to verify / who / when it matters | **36 unknowns** in 6 families, each with owner class + closure cost |
 | — | Synthesis | [`RESEARCH_V2_EXECUTIVE.md`](RESEARCH_V2_EXECUTIVE.md) | the ten lists + pressure points + next-phase questions | — |
+| 13 | Target Architecture (proposal) | [`13-target-architecture.md`](13-target-architecture.md) | one truth plane + four primitives (claim/lease, inbox, outbox, effect-key) + 5 layers + M0–M6 roadmap + global prior art | engineered proposal, **no decision taken** |
 | — | Source registry | [`SOURCES.md`](SOURCES.md) | every id used above | 26 repo sources (`R-01`…`R-26`), 8 re-measurements, **21 external sources** (`E-01`…`E-21`), 7 unverifiables |
 
 ---
