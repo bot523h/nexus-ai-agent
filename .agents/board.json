@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-23T21:35:00Z",
+  "updated_at": "2026-09-23T20:55:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1726,7 +1726,7 @@
       "title_fa": "دادهٔ داکر Production فاقد FFmpeg است — /slideshow و nexus slideshow render نمی‌توانند encode کنند (بلوک Release)",
       "zone": "release-docker-ffmpeg",
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "scope": "The Dockerfile (canonical production packaging per docs/ops/DEPLOY_RUNBOOK.md, last updated v3.8.0) installs no FFmpeg and `pip install .` is core-only (imageio-ffmpeg is a [dev] extra). resolve_ffmpeg_bin (creative/slideshow/ffmpeg.py) resolves NEXUS_FFMPEG_BIN -> PATH -> imageio-ffmpeg wheel; in the deployed image all three sources are absent, so every encode of the shipped Wave 2.5 /slideshow surface (v3.12.0, advertised in README) fails with FfmpegUnavailableError. Fix: add `ffmpeg` to the Dockerfile apt-get layer + a Dockerfile contract ratchet test.",
       "scope_fa": "Dockerfile (بسته‌بندی رسمی Production، آخرین به‌روزرسانی v3.8.0) FFmpeg نصب نمی‌کند و pip install . فقط core است (imageio-ffmpeg در [dev] است). resolve_ffmpeg_bin ترتیب NEXUS_FFMPEG_BIN -> PATH -> چرخهٔ imageio-ffmpeg را می‌سازد؛ در container هر سه منبع غایب‌اند و encode هر /slideshow (ویژگی منتشرشدهٔ Wave 2.5) با FfmpegUnavailableError می‌شکند. رفع: افزودن ffmpeg به لایهٔ apt-get Dockerfile + تست رتکات قرارداد Dockerfile.",
       "prerequisites": [],
@@ -1748,11 +1748,33 @@
         "tests/unit/test_agent_board.py"
       ],
       "owner_hint": "",
-      "agent_branch": "arena/01a0cfcd-nexus-ai-agent",
-      "claimed_at": "2026-09-23T19:51:22Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": " | Zone widened to release-docker-ffmpeg: the file-scoped Dockerfile lease exposed a latent assumption in tests/unit/test_agent_board.py::test_check_detects_overlap_and_allows_disjoint_work (it read the real board's first active claim and assumed a directory-scoped fence; a single-file lease makes path+'/intruder.py' legitimately disjoint). Fixed hermetically with a synthetic-board fixture, same class of repair as the task-157 clock-bomb fix recorded in history.incidents."
+      "note": " | Zone widened to release-docker-ffmpeg: the file-scoped Dockerfile lease exposed a latent assumption in tests/unit/test_agent_board.py::test_check_detects_overlap_and_allows_disjoint_work (it read the real board's first active claim and assumed a directory-scoped fence; a single-file lease makes path+'/intruder.py' legitimately disjoint). Fixed hermetically with a synthetic-board fixture, same class of repair as the task-157 clock-bomb fix recorded in history.incidents.",
+      "delivered": [
+        "Dockerfile: `ffmpeg` added to the apt-get system-dependency layer (with a root-cause comment)",
+        "tests/unit/test_dockerfile_contract.py: 4-test text ratchet (repo-green + pre-fix red fixture + version pin + binary-path negative)",
+        "tests/unit/test_agent_board.py::test_check_detects_overlap_and_allows_disjoint_work made hermetic (synthetic directory-lease board) — the file-scoped Dockerfile lease exposed its latent 'first active claim is directory-scoped' assumption",
+        ".agents/board.json: zone release-docker-ffmpeg, incident nightly-backup-never-succeeded, next_work task-126 slot rotated to task-164"
+      ],
+      "evidence": {
+        "acceptance_criteria_met": "all four board criteria met; the third (full local gates) was met locally AND by CI",
+        "commands": {
+          "make lint": "ruff check . && ruff format --check . -> All checks passed! / 448 files already formatted (ruff 0.16.8, CI-pinned)",
+          "make types": "mypy src -> Success: no issues found in 231 source files",
+          "make test": "pytest -q -m \"not slow\" -> 1845 passed, 20 skipped (PG-only leg, documented), 0 failed (98s, Python 3.11.2, editable install)",
+          "pytest tests/unit/test_dockerfile_contract.py -v --noconftest": "4 passed in 0.03s",
+          "functional repro": "resolve_ffmpeg_bin with no ffmpeg on PATH and no imageio_ffmpeg (core-only image condition) -> FfmpegUnavailableError; with ffmpeg on PATH (post-fix image) -> resolves",
+          "agent_board.py check": "exit 0 pre-push (no overlap); post-claim: Dockerfile -> exit 1 (fenced), Dockerfile/intruder.py -> exit 0 (correctly outside a file-scoped lease)"
+        },
+        "not_executed": [
+          "docker build / container run — no Docker daemon in the sandbox; the apt layer uses the standard Debian bookworm `ffmpeg` package (main). The Koyeb build of the merged head (or any local docker build) is the authoritative verification."
+        ],
+        "ci": "PR#61 head 6227fa2 — CI run 35913271064 4/4 SUCCESS: test 7m14s, lint 7m4s (ruff + mypy + version lockstep), lint-fast 15s, migrate-postgres 6m0s. MERGED to main as fe4cdaa at 2026-09-23T20:10:14Z.",
+        "follow_up": "PR#62 (board release evidence) first went red in its own test job: releasing the task-163 lease left the real board with NO active lease, and the CLI-behaviour tests that read the live board for 'an active claim' died with StopIteration. Repaired in e015b75 by making the board_module fixture always carry a synthetic active directory-scoped lease (hermetic; structural tests still read the real board). Full suite green locally before push."
+      }
     },
     {
       "task": "task-164",
