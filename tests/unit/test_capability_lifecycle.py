@@ -17,7 +17,6 @@ from __future__ import annotations
 import pytest
 
 from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
-from nexus_ai_agent.creative.studio.bus import CommandBus
 from nexus_ai_agent.creative.studio.lifecycle import (
     PACK_LIFECYCLE,
     LifecycleState,
@@ -28,9 +27,9 @@ from nexus_ai_agent.creative.studio.lifecycle import (
 )
 from nexus_ai_agent.creative.studio.models import (
     Timeline,
-    TypedCommand,
     new_project,
 )
+from nagar_helpers import authorized_bus, command_for
 
 
 def _record(state: LifecycleState) -> PackLifecycle:
@@ -147,11 +146,12 @@ def _project() -> object:
 def test_bus_refuses_experimental_pack_without_opt_in() -> None:
     from nexus_ai_agent.creative.packs.audio.operations import build_audio_registry
 
-    bus = CommandBus(_project(), registry=build_audio_registry())  # type: ignore[arg-type]
+    bus = authorized_bus(_project(), registry=build_audio_registry())
     before = (bus.state_revision, bus.state_hash)
     with pytest.raises(PackRequirementError, match="nexus.audio.studio"):
         bus.dispatch(
-            TypedCommand(
+            command_for(
+                bus,
                 command_id="c1",
                 operation="audio.detect_beats",
                 input={"audio_asset_id": "x", "sensitivity": 0.5},
@@ -177,9 +177,10 @@ def test_bus_passes_experimental_pack_with_opt_in() -> None:
             ]
         }
     )
-    bus = CommandBus(project, registry=build_audio_registry(), allow_experimental=True)  # type: ignore[arg-type]
+    bus = authorized_bus(project, registry=build_audio_registry(), allow_experimental=True)
     result = bus.dispatch(
-        TypedCommand(
+        command_for(
+            bus,
             command_id="c1",
             operation="audio.detect_beats",
             input={"audio_asset_id": "music", "sensitivity": 0.5},
@@ -191,9 +192,10 @@ def test_bus_passes_experimental_pack_with_opt_in() -> None:
 def test_bus_passes_available_pack_without_opt_in() -> None:
     from nexus_ai_agent.creative.packs.slideshow.operations import build_slideshow_registry
 
-    bus = CommandBus(_project(), registry=build_slideshow_registry())  # type: ignore[arg-type]
+    bus = authorized_bus(_project(), registry=build_slideshow_registry())
     result = bus.dispatch(
-        TypedCommand(
+        command_for(
+            bus,
             command_id="c1",
             operation="slideshow.suggest_tone",
             input={"tempo_bpm": 100.0, "image_count": 5},
@@ -211,10 +213,11 @@ def test_bus_refuses_unknown_pack_id() -> None:
     spec = registry.get_spec("audio.detect_beats")
     tampered = replace(spec, required_packs=("nexus.typo.pack",))
     registry._index["audio.detect_beats"] = tampered  # simulate a typo'd declaration
-    bus = CommandBus(_project(), registry=registry, allow_experimental=True)  # type: ignore[arg-type]
+    bus = authorized_bus(_project(), registry=registry, allow_experimental=True)
     with pytest.raises(PackRequirementError, match="unknown pack"):
         bus.dispatch(
-            TypedCommand(
+            command_for(
+                bus,
                 command_id="c1",
                 operation="audio.detect_beats",
                 input={"audio_asset_id": "x", "sensitivity": 0.5},

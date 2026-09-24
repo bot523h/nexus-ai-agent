@@ -46,6 +46,7 @@ from nexus_ai_agent.creative.studio.models import (
     UnknownOperationError,
     new_project,
 )
+from nagar_helpers import authorized_bus, command_for
 
 REPO_ROOT = Path(__file__).parents[2]
 SCENE_DIR = REPO_ROOT / "src" / "nexus_ai_agent" / "creative" / "packs" / "scene"
@@ -92,7 +93,7 @@ def _setup_bus() -> CommandBus:
             ]
         }
     )
-    return CommandBus(project, registry=build_scene_registry(), allow_experimental=True)
+    return authorized_bus(project, registry=build_scene_registry(), allow_experimental=True)
 
 
 def _cmd(
@@ -104,14 +105,14 @@ def _cmd(
     confirmed: bool = False,
 ) -> CommandResult:
     return bus.dispatch(
-        {
-            "protocol_version": "nagar.command.v1",
-            "command_id": command_id,
-            "session_id": "session_t",
-            "operation": operation,
-            "input": input_data,
-            "confirmed": confirmed,
-        }
+        command_for(
+            bus,
+            command_id=command_id,
+            session_id="session_t",
+            operation=operation,
+            input=input_data,
+            confirmed=confirmed,
+        )
     )
 
 

@@ -29,7 +29,6 @@ from nexus_ai_agent.creative.packs.caption.operations import build_caption_regis
 from nexus_ai_agent.creative.packs.delivery.operations import build_delivery_registry
 from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
 from nexus_ai_agent.creative.rendering.plan import EFFECT_TO_LANE_OP
-from nexus_ai_agent.creative.studio.bus import CommandBus
 from nexus_ai_agent.creative.studio.models import (
     AssetRecord,
     PermissionLevel,
@@ -39,6 +38,7 @@ from nexus_ai_agent.creative.studio.models import (
     UnknownOperationError,
     new_project,
 )
+from nagar_helpers import authorized_bus, command_for
 
 
 def _project_with_assets() -> Project:
@@ -150,9 +150,10 @@ def test_missing_primitives_cover_every_effect_description() -> None:
 
 def test_srt_emission_carries_real_document_bytes() -> None:
     project = _project_with_assets()
-    bus = CommandBus(project, registry=build_caption_registry())
+    bus = authorized_bus(project, registry=build_caption_registry())
     result = bus.dispatch(
-        TypedCommand(
+        command_for(
+            bus,
             command_id="cmd-srt",
             operation="caption.generate_srt",
             input={"transcript": _transcript().model_dump(mode="json")},
@@ -170,9 +171,10 @@ def test_srt_emission_carries_real_document_bytes() -> None:
 
 def test_ass_emission_carries_real_document_bytes() -> None:
     project = _project_with_assets()
-    bus = CommandBus(project, registry=build_caption_registry())
+    bus = authorized_bus(project, registry=build_caption_registry())
     result = bus.dispatch(
-        TypedCommand(
+        command_for(
+            bus,
             command_id="cmd-ass",
             operation="caption.generate_ass_rtl",
             input={"transcript": _transcript().model_dump(mode="json")},
@@ -187,9 +189,9 @@ def test_ass_emission_carries_real_document_bytes() -> None:
 
 def test_export_otio_emission_carries_a_real_otio_document() -> None:
     project = _project_with_assets()
-    bus = CommandBus(project, registry=build_delivery_registry(), allow_experimental=True)
+    bus = authorized_bus(project, registry=build_delivery_registry(), allow_experimental=True)
     result = bus.dispatch(
-        TypedCommand(command_id="cmd-otio", operation="delivery.export_otio", input={})
+        command_for(bus, command_id="cmd-otio", operation="delivery.export_otio", input={})
     )
     document = json.loads(result.output["otio_json"])
     assert document["OTIO_SCHEMA"].startswith("Timeline.")

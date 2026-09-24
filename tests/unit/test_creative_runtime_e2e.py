@@ -58,6 +58,7 @@ from nexus_ai_agent.creative.studio.models import (
     TypedCommand,
     new_project,
 )
+from nagar_helpers import TEST_ACTOR, TEST_PROVENANCE, authorized_bus
 
 
 def _asset(asset_id: str, duration_us: int) -> AssetRecord:
@@ -117,7 +118,7 @@ def _scenario_project():  # type: ignore[no-untyped-def]
 def _runtime_bus(project):  # type: ignore[no-untyped-def]
     from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
 
-    return CommandBus(project, registry=build_runtime_registry())
+    return authorized_bus(project, registry=build_runtime_registry())
 
 
 def test_bus_split_then_plan_is_pure_and_deterministic() -> None:
@@ -125,8 +126,12 @@ def test_bus_split_then_plan_is_pure_and_deterministic() -> None:
     result = bus.dispatch(
         TypedCommand(
             command_id="cmd-split",
+            actor=TEST_ACTOR,
+            provenance=TEST_PROVENANCE,
             operation="timeline.split_at_playhead",
-            target=TargetRef(track_id="video_01", clip_id="clip_a"),
+            target=TargetRef(
+                project_id=bus.project.project_id, track_id="video_01", clip_id="clip_a"
+            ),
             input={},
         )
     )
@@ -150,8 +155,12 @@ def test_plan_to_compiled_assembly_is_one_deterministic_process() -> None:
     bus.dispatch(
         TypedCommand(
             command_id="cmd-split",
+            actor=TEST_ACTOR,
+            provenance=TEST_PROVENANCE,
             operation="timeline.split_at_playhead",
-            target=TargetRef(track_id="video_01", clip_id="clip_a"),
+            target=TargetRef(
+                project_id=bus.project.project_id, track_id="video_01", clip_id="clip_a"
+            ),
             input={},
         )
     )
@@ -243,8 +252,12 @@ def test_full_path_renders_one_verified_artifact(tmp_path: Path) -> None:
     bus.dispatch(
         TypedCommand(
             command_id="cmd-split",
+            actor=TEST_ACTOR,
+            provenance=TEST_PROVENANCE,
             operation="timeline.split_at_playhead",
-            target=TargetRef(track_id="video_01", clip_id="clip_a"),
+            target=TargetRef(
+                project_id=bus.project.project_id, track_id="video_01", clip_id="clip_a"
+            ),
             input={},
         )
     )
