@@ -72,6 +72,16 @@ Run `35994439928` — all four jobs pass:
 Previous run `35993537741` (head `a28fa52`) was also all-green; the final head
 only adds a board note.
 
+## Postscript: the unindexed-record incident (same day)
+
+The commit adding this very file (`7749f85`, docs-only) turned CI `test` red —
+not a flake: `test_every_document_is_indexed_in_docs_readme` requires every
+`docs/**/*.md` to be indexed in `docs/README.md`, and the new record was not.
+The failure reproduced locally in 0.52s once the right test file was run
+(`tests/unit/test_docs_integrity.py`). Fix: one row in the Audits table of
+`docs/README.md` (rule 1 of the docs map). Lesson recorded: docs commits must
+run the docs-integrity test before push, like any other suite.
+
 ## Local proof battery (clean worktree, `/tmp/commitcheck`)
 
 `419 passed, 1 skipped`: execution semantics, artifact truth, LUT twins,
