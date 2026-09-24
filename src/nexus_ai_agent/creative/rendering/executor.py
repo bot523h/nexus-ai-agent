@@ -169,12 +169,13 @@ def render_lane(
     timeout: int = FFMPEG_TIMEOUT_SECONDS,
     overwrite: bool = False,
     fontfile: str | None = None,
+    fontsdir: str | None = None,
 ) -> LaneArtifact:
     """Convenience: measure (if a loudnorm op exists) then single-process encode."""
     measured: MeasuredLoudness | None = None
     if any(getattr(op, "op", None) == "loudnorm" for op in ir.ops):
         measured = measure_loudness(ir, binary=binary, fontfile=fontfile)
-    compiled = compile_lane(ir, measured=measured, fontfile=fontfile)
+    compiled = compile_lane(ir, measured=measured, fontfile=fontfile, fontsdir=fontsdir)
     artifact = encode_lane(
         compiled, output_path, binary=binary, timeout=timeout, overwrite=overwrite
     )

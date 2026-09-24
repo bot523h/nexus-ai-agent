@@ -53,7 +53,7 @@ def _setup_delivery_bus() -> tuple[Project, CommandBus]:
     timeline = Timeline(timeline_id="tl_delivery", duration_us=10_000_000)
     project = new_project("p_delivery_01", "Cinema Delivery Project", timeline)
     project = project.model_copy(update={"assets": [clip_1, clip_2, audio_1]})
-    bus = CommandBus(project, registry=registry)
+    bus = CommandBus(project, registry=registry, allow_experimental=True)
     return project, bus
 
 

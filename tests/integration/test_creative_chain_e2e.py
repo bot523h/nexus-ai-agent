@@ -187,10 +187,12 @@ async def test_typed_failure_reaches_user_translated(harness) -> None:  # noqa: 
     workspace.mkdir(parents=True)
     _clip(workspace / "input.mp4")
 
+    # Session 3: grade/lut is honestly executable now, so the unsupported
+    # path is proven with an op outside the surface map instead.
     job_id = await queue.enqueue(
         job_type="creative_render",
         idempotency_key=key,
-        payload=_payload(workspace, key, operation="lut", command="grade"),
+        payload=_payload(workspace, key, operation="noir", command="grade"),
     )
     status = await _drain(queue, job_id)
     assert status is JobStatus.COMPLETED
@@ -200,7 +202,7 @@ async def test_typed_failure_reaches_user_translated(harness) -> None:  # noqa: 
     assert bot.messages, "typed failure must reach the user"
     text = bot.messages[-1]
     assert text == i18n.t("creative.failed.unsupported_operation", lang="fa", detail="x")
-    assert "creative." not in text and "lut" not in text.replace("creative.failed", "")
+    assert "creative." not in text and "noir" not in text.replace("creative.failed", "")
 
 
 @pytest.mark.asyncio

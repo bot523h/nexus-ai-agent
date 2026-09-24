@@ -81,6 +81,7 @@ placeholder text.
 | [audits/PR32_TRIAGE_2026-09-21.md](audits/PR32_TRIAGE_2026-09-21.md) | Forensic per-file triage of PR#32 vs merged PR#34 (15 SUPERSEDED / 4 DROP / 3 PORT / 4 ADAPT) — basis of the supersession. |
 | [audits/P0_STABILIZATION_2026-09-24.md](audits/P0_STABILIZATION_2026-09-24.md) | Owner-directed P0 day (task-165/166/167): legacy `/creative/*` lane disposition, studio surface wiring, verifiable backups — repro/evidence-first report. |
 | [audits/DEAD_ENGINES_2026-09-22.md](audits/DEAD_ENGINES_2026-09-22.md) | Dead-engine verification (zero importers, measured gates), five-option wiring analysis, negative controls, and the recorded residuals. |
+| [audits/SESSION3_CREATIVE_RUNTIME_2026-09-24.md](audits/SESSION3_CREATIVE_RUNTIME_2026-09-24.md) | Session 3 record (task-177): artifact-producing Creative Runtime, CI triage, evidence, follow-ups. |
 
 ## History (archived — read-only, never a source of truth)
 

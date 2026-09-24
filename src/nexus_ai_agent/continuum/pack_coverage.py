@@ -76,6 +76,17 @@ DEFAULT_TEST_TARGETS: tuple[str, ...] = (
     # pack-surface tests that also execute pack code
     "tests/unit/test_slideshow_30s_target.py",
     "tests/unit/test_slideshow_upscale.py",
+    # task-152/153 vision packs (shared vision primitives exercised by both)
+    "tests/unit/test_portrait_pack.py",
+    "tests/unit/test_scene_pack.py",
+    # task-165 creative interop + render-plan bridge
+    "tests/unit/test_otio_roundtrip.py",
+    "tests/unit/test_render_plan.py",
+    # task-176 creative runtime (semantics + availability + assembly + e2e)
+    "tests/unit/test_execution_semantics.py",
+    "tests/unit/test_pack_status_availability.py",
+    "tests/unit/test_render_plan_assembly.py",
+    "tests/unit/test_creative_runtime_e2e.py",
     # architecture gates that import and exercise every pack
     "tests/architecture/test_pack_activation_completeness.py",
     "tests/architecture/test_pack_manifest_is_data_only.py",
@@ -85,6 +96,8 @@ DEFAULT_TEST_TARGETS: tuple[str, ...] = (
     "tests/architecture/test_delivery_pack_boundary.py",
     "tests/architecture/test_edit_pack_boundary.py",
     "tests/architecture/test_motion_pack_boundary.py",
+    "tests/architecture/test_portrait_pack_boundary.py",
+    "tests/architecture/test_scene_pack_boundary.py",
 )
 
 #: Files directly under ``creative/packs/`` (the substrate) are grouped here.

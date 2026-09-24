@@ -46,13 +46,14 @@ builtin packs exist in the runtime:
 | Symbol | Meaning |
 |---|---|
 | `PackComposition` | one pack: `directory`, `package_id`, registrar, summary |
-| `COMPOSITION` | the six builtin packs, in deterministic order (slideshow → caption → edit → motion → audio → delivery) |
+| `COMPOSITION` | the eight builtin packs, in deterministic order (slideshow → caption → edit → motion → audio → delivery → portrait → scene) |
 | `COMPOSITION_BY_DIRECTORY` / `COMPOSITION_BY_PACKAGE_ID` | O(1) lookups used by the gate and the CLI |
-| `build_runtime_registry()` | Wave-1 catalog + every pack's operations (57 operations today) |
+| `build_runtime_registry()` | Wave-1 catalog + every pack's operations (77 operations today) |
 | `build_pack_registry()` | the same registry wrapped in a `PackRegistry` (what the CLI consumes) |
 | `build_pack_runtime()` | `PackRuntime`: composition + builtin registration + optional activation |
 | `PackRuntime.status()` | one `PackStatus` row per pack: capabilities, pending, active, signature, binaries |
 | `PackRuntime.activate_all()` | activates every *complete* pack (incomplete packs are skipped, never forced) |
+| `PackRuntime.availability()` | one `PackAvailability` row per pack: `REGISTERED / AVAILABLE / MISSING_DEPENDENCY / MISSING_BINARY / DISABLED / FAILED` (session 2 — registered ≠ runnable; see `CREATIVE_RUNTIME_S3.md` §6) |
 | `composition_issues()` | the verifier: a manifest without a builder, a builder without a manifest, or a mismatched `package_id` is a finding |
 | `stale_capabilities()` | `package_id → capabilities the runtime cannot execute`; must be `{}` |
 | `installed_version()` | the single implementation of the distribution-version lookup |

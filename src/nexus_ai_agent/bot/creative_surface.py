@@ -81,7 +81,7 @@ class CreativeFailure:
 @dataclass(frozen=True)
 class CreativeRequest:
     command: str  # edit | caption | grade
-    operation: str  # trim | speed | reverse | transcribe | exposure | proxy | otio
+    operation: str  # trim | speed | reverse | transcribe | burnin | exposure | lut | proxy | otio
     args: tuple[str, ...]
     media_file_id: str | None
     media_duration_s: float | None
@@ -92,17 +92,17 @@ class CreativeSurfaceMapper:
     """Pure mapper: validate + normalize a user request.
 
     The allowed set is the *executable* matrix (task-166): every entry maps
-    to a canonical pack operation the worker can actually run. Operations
-    with no honest execution path today (``lut`` — no .cube assets and no
-    lane op; ``burnin`` — no subtitles op in the lane IR) are refused here,
-    at the surface, instead of being accepted and faked later.
+    to a canonical pack operation the worker can actually run.  Session 3
+    adds ``lut`` (shipped ``.cube`` assets + the ``lut3d`` lane instrument)
+    and ``burnin`` (staged SRT + the ``subtitles`` lane instrument) — both
+    refused here before those honest paths existed, accepted now that they do.
     """
 
     # Allowed ops per command (allow-list, closed set)
     ALLOWED: dict[str, frozenset[str]] = {
         "edit": frozenset({"trim", "speed", "reverse"}),
-        "caption": frozenset({"transcribe"}),
-        "grade": frozenset({"exposure", "proxy", "otio"}),
+        "caption": frozenset({"transcribe", "burnin"}),
+        "grade": frozenset({"exposure", "lut", "proxy", "otio"}),
     }
     # Operations that can run without a staged media file.
     MEDIALESS_OPS: frozenset[str] = frozenset({"otio"})
@@ -159,6 +159,10 @@ class CreativeSurfaceMapper:
             "chat_id": chat_id,
             "lang": lang,
             "idempotency_key": idempotency_key,
+            # Session 3: grade/* runs on the EXPERIMENTAL delivery pack, so
+            # the surface opts those jobs in explicitly (the bus gate refuses
+            # them otherwise).  caption/edit packs are AVAILABLE — no opt-in.
+            "allow_experimental": req.command == "grade",
         }
 
 
