@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-24T13:56:11Z",
+  "updated_at": "2026-09-24T13:56:25Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1953,7 +1953,7 @@
       "title": "Gate 2: Operation Contract Reconciliation → Capability Contract → Command Envelope",
       "title_fa": "Gate 2: تطبیق قرارداد عملیات → قرارداد قابلیت → پاکت فرمان تایپ‌دار",
       "zone": "nagar-contract",
-      "status": "active",
+      "status": "done",
       "priority": "P0",
       "agent_branch": "arena/01a0d3a8-nexus-ai-agent",
       "claimed_at": "2026-09-24T13:56:11Z",
@@ -1992,7 +1992,21 @@
       "scope_fa": "عامل 2 Gate 2: ساخت ماتریس قرارداد عملیات (70 در مقابل 57)، قرارداد قابلیت، پاکت فرمان تایپ‌دار، اعتبارسنجی، L0-L4، T20، ADRهای اختلاف پک، تست‌های قرارداد A-J",
       "owner_hint": "Agent 2",
       "gates_owner": false,
-      "note": ""
+      "note": "DONE 2026-09-24: Gate 2 contract reconciliation complete. 70 catalog vs 57 runtime verified, pack discrepancy resolved (7 product vs 6 runtime), T20=portrait.stabilize_face, L0-L4 canonical, Capability Contract + Command Envelope v2 with auth/locality/idempotency. No fake impl. Board check no overlap. Commit c867351.",
+      "delivered": [
+        "docs/contracts/OPERATION_CONTRACT_MATRIX.md + OPERATION_MATRIX.json (80 rows, 26 cols)",
+        "docs/contracts/RECONCILIATION.md + RECONCILIATION.json (70-20-3+10=57)",
+        "docs/contracts/CAPABILITY_CONTRACT.md + src/.../contracts/capability.py",
+        "docs/contracts/COMMAND_ENVELOPE.md + src/.../contracts/command_envelope.py",
+        "docs/contracts/L0_L4_MATURITY.md + src/.../contracts/l0_l4.py",
+        "docs/architecture/adr/0005-canonical-pack-partition.md",
+        "docs/architecture/adr/0006-70-vs-57-reconciliation.md",
+        "docs/architecture/adr/0007-l0-l4-maturity.md",
+        "docs/architecture/adr/0008-t20-identity.md",
+        "src/.../contracts/operation_matrix.py + validation.py",
+        "tests/unit/test_contract_matrix.py (25 passed, A-J)",
+        "tests/architecture/test_contract_boundaries.py (13 passed)"
+      ]
     }
   ],
   "deferred_log": [
