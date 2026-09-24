@@ -36,7 +36,7 @@ The split is the load-bearing decision: **evidence is gathered above the bus** (
 | Domain | `Domain` | first id segment: `media`, `timeline`, `motion`, `audio`, `caption`, `color`, `delivery`, `slideshow`, `system` |
 | Capability | `Capability` | a named grouping inside a domain (for example `timeline.edit`) |
 | Operation | `OperationSpec` | `operation_id`, typed `input_model` (pydantic, `extra="forbid"`), handler, `permission_level`, `undoable` |
-| Envelope | `TypedCommand` | `operation`, `input`, `target`, `preconditions`, `idempotency_key`, `confirmed`, `protocol_version` |
+| Envelope | `TypedCommand` | Protocol `nagar.command.v1`, envelope schema 1 (legacy) or 2 (explicit `actor`, `target.project_id`, `provenance`); typed `input_refs`, execution policy, request context, optional capability snapshot, idempotency key, preconditions. See [Gate 2](COMMAND_CAPABILITY_CONTRACT.md). |
 
 **Permission ladder** (`PermissionLevel`):
 
