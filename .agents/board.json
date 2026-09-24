@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-24T19:15:00Z",
+  "updated_at": "2026-09-24T20:05:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -501,7 +501,9 @@
         "tests/unit/test_access_guard.py",
         "tests/unit/test_observability.py",
         "tests/unit/test_force_join_gate.py",
-        "tests/unit/test_api_ssrf_download.py"
+        "tests/unit/test_api_ssrf_download.py",
+        "tests/unit/test_creative_studio.py",
+        "tests/unit/test_gemini_key_transport.py"
       ]
     }
   ],
@@ -1995,7 +1997,9 @@
         "tests/unit/test_access_guard.py",
         "tests/unit/test_observability.py",
         "tests/unit/test_force_join_gate.py",
-        "tests/unit/test_api_ssrf_download.py"
+        "tests/unit/test_api_ssrf_download.py",
+        "tests/unit/test_creative_studio.py",
+        "tests/unit/test_gemini_key_transport.py"
       ],
       "agent_branch": "arena/01a0d4c7-nexus-ai-agent",
       "claimed_at": "2026-09-24T19:15:00Z"

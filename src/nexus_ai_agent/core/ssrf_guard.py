@@ -29,6 +29,7 @@ import asyncio
 import ipaddress
 import socket
 import ssl
+from collections.abc import AsyncIterable
 from typing import Any, cast
 
 import httpcore
@@ -183,10 +184,16 @@ class SafeAsyncTransport(httpx.AsyncBaseTransport):
                 resp = await self._pool.handle_async_request(req)
         except SSRFBlockError as exc:
             raise httpx.ConnectError(str(exc), request=request) from exc
+        # Wrap the httpcore stream exactly like httpx's own default
+        # transport does (AsyncClient asserts the response stream is an
+        # httpx.AsyncByteStream — the raw httpcore stream is not one, so
+        # a *successful* fetch would crash without this wrapper).
         return httpx.Response(
             status_code=resp.status,
             headers=resp.headers,
-            stream=cast(httpx.AsyncByteStream, resp.stream),
+            stream=httpx._transports.default.AsyncResponseStream(
+                cast(AsyncIterable[bytes], resp.stream)
+            ),
             extensions=resp.extensions,
         )
 

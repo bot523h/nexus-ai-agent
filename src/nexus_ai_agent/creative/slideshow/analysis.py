@@ -260,8 +260,11 @@ def analyze_with_gemini(
     }
     url = GEMINI_ENDPOINT.format(model=config.model)
     try:
+        # API key in the x-goog-api-key header, never in the URL query
+        # (params= would render it into the request line, which httpx
+        # logs at INFO and proxies record).
         with httpx.Client(timeout=config.timeout_seconds, transport=config.transport) as client:
-            response = client.post(url, params={"key": config.api_key}, json=payload)
+            response = client.post(url, json=payload, headers={"x-goog-api-key": config.api_key})
             response.raise_for_status()
             body = response.json()
     except httpx.HTTPError as exc:
