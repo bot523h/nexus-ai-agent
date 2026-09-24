@@ -19,7 +19,7 @@
   },
   "failure_matrix": {
     "artifact_verification_failure": {
-      "observed": "verify_artifact raises on tampered bytes; in-job probe failure → FAILED, never COMPLETED-with-success",
+      "observed": "verify_artifact raises on tampered bytes; in-job verification failure → durable FAILED_RETRYABLE, never COMPLETED-with-success",
       "verdict": "PASS"
     },
     "authorization_failure": {
@@ -27,7 +27,7 @@
       "verdict": "PASS"
     },
     "capability_unavailable_caption": {
-      "observed": "caption_profile_unavailable typed; runtime calls=0; no artifact",
+      "observed": "caption_profile_unavailable typed + retryable (optional extra); runtime calls=0; no artifact; durable FAILED_RETRYABLE",
       "verdict": "PASS"
     },
     "capability_unavailable_lifecycle": {
@@ -39,7 +39,7 @@
       "verdict": "PASS"
     },
     "invalid_schema": {
-      "observed": "CommandValidationError @ bus; invalid_request @ worker; state untouched",
+      "observed": "CommandValidationError @ bus; invalid_request @ worker; state untouched; durable TERMINAL_FAILED",
       "verdict": "PASS"
     },
     "revision_conflict": {
@@ -47,11 +47,11 @@
       "verdict": "PASS"
     },
     "runtime_failure": {
-      "observed": "typed lane failure → COMPLETED+success=False+render_failed; post-typed crash → durable FAILED; (FAILED_RETRYABLE/TERMINAL_FAILED split does not exist in this JobStatus enum → see report limitations)",
+      "observed": "typed lane failure → durable FAILED_RETRYABLE + success=False + render_failed; post-typed crash → durable FAILED (unclassified); the Gate-5 lifecycle owns the retryable/terminal split asserted here",
       "verdict": "PASS"
     },
     "unknown_operation": {
-      "observed": "UnknownOperationError @ bus; unsupported_operation @ worker; runtime calls=0",
+      "observed": "UnknownOperationError @ bus; unsupported_operation @ worker; runtime calls=0; durable TERMINAL_FAILED",
       "verdict": "PASS"
     }
   },

@@ -76,6 +76,8 @@
   "creative.failed.media_missing": "❌ O arquivo preparado está ausente; envie o comando novamente.",
   "creative.failed.caption_profile_unavailable": "❌ As legendas não estão disponíveis nesta instalação (sem motor de fala).",
   "creative.failed.render_failed": "❌ A renderização falhou; tente uma mídia mais curta ou outros parâmetros.",
+  "creative.failed.artifact_verification_failed": "❌ A renderização terminou, mas o arquivo não passou na verificação; nada foi entregue.",
+  "creative.failed.artifact_destination_conflict": "❌ Já existe um resultado verificado para este trabalho e ele não pode ser substituído automaticamente.",
   "creative.failed.ffmpeg_unavailable": "❌ O motor de renderização não está instalado nesta implantação.",
   "creative.failed.internal": "❌ Ocorreu um erro interno; os detalhes estão visíveis para a equipe."
 }

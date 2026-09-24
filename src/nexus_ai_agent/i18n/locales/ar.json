@@ -76,6 +76,8 @@
   "creative.failed.media_missing": "❌ ملف الوسائط المُجهَّز مفقود؛ أعد إرسال الأمر.",
   "creative.failed.caption_profile_unavailable": "❌ الترجمة غير متاحة في هذا التثبيت (لا يوجد محرك كلام).",
   "creative.failed.render_failed": "❌ فشل العرض؛ جرّب وسائط أقصر أو معطيات أخرى.",
+  "creative.failed.artifact_verification_failed": "❌ انتهى العرض لكن الملف لم يجتز التحقق؛ لم يُسلَّم شيء.",
+  "creative.failed.artifact_destination_conflict": "❌ يوجد مخرج مُتحقَّق منه لهذه المهمة ولا يمكن استبداله تلقائيًا.",
   "creative.failed.ffmpeg_unavailable": "❌ محرك العرض غير مثبَّت في هذا النشر.",
   "creative.failed.internal": "❌ حدث خطأ داخلي؛ التفاصيل متاحة للفريق."
 }

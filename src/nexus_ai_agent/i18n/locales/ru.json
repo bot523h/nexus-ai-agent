@@ -76,6 +76,8 @@
   "creative.failed.media_missing": "❌ Подготовленный файл не найден; отправьте команду снова.",
   "creative.failed.caption_profile_unavailable": "❌ Субтитры недоступны в этой установке (нет речевого движка).",
   "creative.failed.render_failed": "❌ Рендер не удался; попробуйте более короткое медиа или другие параметры.",
+  "creative.failed.artifact_verification_failed": "❌ Рендер завершён, но файл не прошёл проверку; ничего не отправлено.",
+  "creative.failed.artifact_destination_conflict": "❌ Для этой задачи уже есть проверенный результат, и его нельзя заменить автоматически.",
   "creative.failed.ffmpeg_unavailable": "❌ Движок рендера не установлен в этом развёртывании.",
   "creative.failed.internal": "❌ Произошла внутренняя ошибка; детали доступны команде."
 }

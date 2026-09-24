@@ -18,6 +18,7 @@ from uuid import uuid4
 import pytest
 
 from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue, JobCompletion
+from nexus_ai_agent.application.job_lifecycle import is_terminal
 from nexus_ai_agent.application.ports.job_queue import JobStatus
 from nexus_ai_agent.creative.slideshow import worker_adapter
 from nexus_ai_agent.creative.slideshow.probe import ProbeError
@@ -72,7 +73,7 @@ def _payload(workspace: Path, images: list[Path], **overrides: Any) -> dict[str,
 
 async def _drain(queue: InProcessJobQueue, job_id: str) -> None:
     async def _poll() -> None:
-        while await queue.get_status(job_id) not in (JobStatus.COMPLETED, JobStatus.FAILED):
+        while not is_terminal(await queue.get_status(job_id)):
             await asyncio.sleep(0.01)
 
     await asyncio.wait_for(_poll(), timeout=5.0)
@@ -164,7 +165,9 @@ async def test_engine_failure_maps_to_a_code_and_cleans_everything(
     assert "unsupported image type" not in str(result)
     assert not workspace.exists()  # failed runs are fully removed (r7 item 4)
     await asyncio.sleep(0.05)
-    assert completions and completions[0].status is JobStatus.COMPLETED
+    # Gate 5: a typed slideshow failure is a *failure* status (no failure_class
+    # in its envelope → fail-closed TERMINAL_FAILED), never a completed row.
+    assert completions and completions[0].status is JobStatus.TERMINAL_FAILED
 
 
 async def test_payload_envelope_is_a_trust_boundary(

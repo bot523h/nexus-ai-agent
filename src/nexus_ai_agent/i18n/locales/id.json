@@ -76,6 +76,8 @@
   "creative.failed.media_missing": "❌ Berkas media yang disiapkan hilang; kirim ulang perintahnya.",
   "creative.failed.caption_profile_unavailable": "❌ Teks tidak tersedia di instalasi ini (tanpa mesin suara).",
   "creative.failed.render_failed": "❌ Render gagal; coba media lebih pendek atau parameter lain.",
+  "creative.failed.artifact_verification_failed": "❌ Render selesai tetapi berkas tidak lolos verifikasi; tidak ada yang dikirim.",
+  "creative.failed.artifact_destination_conflict": "❌ Hasil terverifikasi untuk tugas ini sudah ada dan tidak dapat diganti otomatis.",
   "creative.failed.ffmpeg_unavailable": "❌ Mesin render tidak terpasang pada deployment ini.",
   "creative.failed.internal": "❌ Terjadi kesalahan internal; detailnya dapat dilihat tim."
 }

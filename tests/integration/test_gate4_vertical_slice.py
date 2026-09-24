@@ -37,6 +37,7 @@ from typing import Any
 import pytest
 
 from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+from nexus_ai_agent.application.job_lifecycle import is_terminal
 from nexus_ai_agent.application.ports.job_queue import JobStatus
 from nexus_ai_agent.bot.creative_surface import CreativeRequest, CreativeSurfaceMapper
 from nexus_ai_agent.config import settings as settings_module
@@ -150,7 +151,7 @@ async def _drain(queue: InProcessJobQueue, job_id: str, timeout: float = 120.0) 
     deadline = asyncio.get_event_loop().time() + timeout
     while asyncio.get_event_loop().time() < deadline:
         status = await queue.get_status(job_id)
-        if status in {JobStatus.COMPLETED, JobStatus.FAILED}:
+        if is_terminal(status):
             return status
         await asyncio.sleep(0.05)
     raise TimeoutError(f"job {job_id} did not reach a terminal state")
@@ -601,16 +602,20 @@ async def test_f1_unknown_operation_rejected_before_job_execution(
         idempotency_key=key,
         payload=_payload(workspace, key, command="edit", operation="split"),
     )
-    assert await _drain(queue, job_id) is JobStatus.COMPLETED
+    assert await _drain(queue, job_id) is JobStatus.TERMINAL_FAILED
     result = await queue.get_result(job_id)
     assert result is not None and result["success"] is False
     assert result["error_code"] == "unsupported_operation"
+    assert result["failure_class"] == "terminal"
     assert spy["count"] == 0, "unknown operation must never reach the runtime"
     status = await queue.get_status(job_id)
-    assert status is JobStatus.COMPLETED  # typed refusal completes; no FAILED noise
+    # Gate 5: an unsupported operation is a *classified terminal failure*; the
+    # row can never read COMPLETED (that was GAP-B, corrected by the lifecycle).
+    assert status is JobStatus.TERMINAL_FAILED
     _record_failure(
         "unknown_operation",
-        "UnknownOperationError @ bus; unsupported_operation @ worker; runtime calls=0",
+        "UnknownOperationError @ bus; unsupported_operation @ worker; "
+        "runtime calls=0; durable TERMINAL_FAILED",
     )
 
 
@@ -654,12 +659,15 @@ async def test_f2_invalid_schema_rejected_before_execution(
             "idempotency_key": key,
         },
     )
-    assert await _drain(queue, job_id) is JobStatus.COMPLETED
+    assert await _drain(queue, job_id) is JobStatus.TERMINAL_FAILED
     result = await queue.get_result(job_id)
     assert result is not None and result["success"] is False
     assert result["error_code"] == "invalid_request"
+    assert result["failure_class"] == "terminal"
     _record_failure(
-        "invalid_schema", "CommandValidationError @ bus; invalid_request @ worker; state untouched"
+        "invalid_schema",
+        "CommandValidationError @ bus; invalid_request @ worker; state untouched; "
+        "durable TERMINAL_FAILED",
     )
 
 
@@ -697,15 +705,17 @@ async def test_f3b_caption_engine_unavailable_completes_typed_without_runtime(
         idempotency_key=key,
         payload=_payload(workspace, key, command="caption", operation="transcribe", args=[]),
     )
-    assert await _drain(queue, job_id) is JobStatus.COMPLETED
+    assert await _drain(queue, job_id) is JobStatus.FAILED_RETRYABLE
     result = await queue.get_result(job_id)
     assert result is not None and result["success"] is False
     assert result["error_code"] == "caption_profile_unavailable"
+    assert result["failure_class"] == "retryable"
     assert spy["count"] == 0, "no runtime for an unavailable capability"
     assert not list(workspace.glob("captions.*")), "no artifact was produced"
     _record_failure(
         "capability_unavailable_caption",
-        "caption_profile_unavailable typed; runtime calls=0; no artifact",
+        "caption_profile_unavailable typed + retryable (optional extra); runtime calls=0; "
+        "no artifact; durable FAILED_RETRYABLE",
     )
 
 
@@ -762,8 +772,9 @@ async def test_f5_runtime_failure_never_reports_success(
     workspace.mkdir(parents=True)
     _clip(workspace / "input.mp4")
 
-    # (a) typed render failure (lane raises) → durable COMPLETED with
-    #     success=False + typed code — Agent-3 semantics on this baseline.
+    # (a) typed render failure (lane raises) → durable FAILED_RETRYABLE with
+    #     success=False + typed code (Gate 5: the transient encode class is
+    #     classified retryable; it is never reported as a completion).
     import nexus_ai_agent.creative.rendering.executor as executor
 
     def _boom(*_args: Any, **_kwargs: Any) -> Any:
@@ -777,25 +788,24 @@ async def test_f5_runtime_failure_never_reports_success(
         idempotency_key=key_a,
         payload=_payload(workspace, key_a),
     )
-    assert await _drain(queue, job_a) is JobStatus.COMPLETED
+    assert await _drain(queue, job_a) is JobStatus.FAILED_RETRYABLE
     result_a = await queue.get_result(job_a)
     assert result_a is not None
     assert result_a["success"] is False and result_a["error_code"] == "render_failed"
+    assert result_a["failure_class"] == "retryable"
     assert "artifact_path" not in result_a, "typed failure carries no artifact claim"
     lane_patch.undo()
 
-    # (b) unexpected post-typed failure (output probe blows up) → durable
-    #     FAILED — never COMPLETED, never success.
-    from nexus_ai_agent.creative.slideshow import ffmpeg as ffmpeg_mod
+    # (b) unexpected failure *outside* every typed gate → durable FAILED —
+    #     never COMPLETED, never success. (Gate 5: the verification stage is
+    #     itself a typed gate now, so the crash path is fault-injected before
+    #     it, where an unclassified error really can escape.)
+    import nexus_ai_agent.creative.render_jobs as render_jobs_mod
 
-    real_probe = ffmpeg_mod.probe_video
+    def _crash(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("staged media probe exploded")
 
-    def _probe_tamper(path: Path, **kwargs: Any):
-        if path.name == "output.mp4":
-            raise RuntimeError("probe exploded: corrupt container")
-        return real_probe(path, **kwargs)
-
-    monkeypatch.setattr(ffmpeg_mod, "probe_video", _probe_tamper)
+    monkeypatch.setattr(render_jobs_mod, "_guarded_input", _crash)
     key_b = "gate:42:4242:2005"
     payload_b = _payload(workspace, key_b)
     payload_b["input_path"] = str(workspace / "input.mp4")
@@ -807,9 +817,9 @@ async def test_f5_runtime_failure_never_reports_success(
 
     _record_failure(
         "runtime_failure",
-        "typed lane failure → COMPLETED+success=False+render_failed; "
-        "post-typed crash → durable FAILED; (FAILED_RETRYABLE/TERMINAL_FAILED "
-        "split does not exist in this JobStatus enum → see report limitations)",
+        "typed lane failure → durable FAILED_RETRYABLE + success=False + render_failed; "
+        "post-typed crash → durable FAILED (unclassified); the Gate-5 lifecycle "
+        "owns the retryable/terminal split asserted here",
     )
 
 
@@ -853,13 +863,16 @@ async def test_f6_artifact_verification_failure_never_succeeds(
         idempotency_key=key,
         payload=_payload(workspace, key),
     )
-    assert await _drain(queue, job_id) is JobStatus.FAILED
+    assert await _drain(queue, job_id) is JobStatus.FAILED_RETRYABLE
     row_result = await queue.get_result(job_id)
-    assert row_result is None, "an unverifiable artifact can never be a success payload"
+    assert row_result is not None and row_result["success"] is False
+    assert row_result["error_code"] == "artifact_verification_failed"
+    assert row_result["failure_class"] == "retryable"
+    assert "artifact_path" not in row_result, "a failed verification claims no artifact"
     _record_failure(
         "artifact_verification_failure",
-        "verify_artifact raises on tampered bytes; in-job probe failure → FAILED, "
-        "never COMPLETED-with-success",
+        "verify_artifact raises on tampered bytes; in-job verification failure → "
+        "durable FAILED_RETRYABLE, never COMPLETED-with-success",
     )
 
 

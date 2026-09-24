@@ -61,6 +61,7 @@ async def _notify_creative_completion(completion: Any, token: str) -> None:
     """
     from telegram import Bot  # noqa: PLC0415
 
+    from nexus_ai_agent.application.job_lifecycle import is_failure
     from nexus_ai_agent.creative.render_jobs import ERROR_CODES, cleanup_workspace
     from nexus_ai_agent.i18n import i18n
 
@@ -72,7 +73,10 @@ async def _notify_creative_completion(completion: Any, token: str) -> None:
         return
     bot = Bot(token=token)
     try:
-        failed = completion.status.value == "failed" or result.get("success") is False
+        # Failure-ness comes from the lifecycle (every failure status), never
+        # from one literal value: a new classified failure must not be rendered
+        # as a completed run, and a success must require the verified flag.
+        failed = is_failure(completion.status) or result.get("success") is False
         command = str(payload.get("command", "edit"))
         operation = str(payload.get("operation", ""))
         if failed:
@@ -116,7 +120,7 @@ def _build_job_completion_notifier(token: str) -> Any:
     (e.g. CLI-drained jobs) stay silent.
     """
     from nexus_ai_agent.adapters.in_process_job_queue import JobCompletion
-    from nexus_ai_agent.application.ports.job_queue import JobStatus
+    from nexus_ai_agent.application.job_lifecycle import is_failure
 
     async def _notify(completion: JobCompletion) -> None:
         raw_chat_id = completion.payload.get("chat_id")
@@ -124,7 +128,7 @@ def _build_job_completion_notifier(token: str) -> Any:
             return
         from telegram import Bot
 
-        if completion.status is JobStatus.FAILED:
+        if is_failure(completion.status):
             text = (
                 f"❌ پردازش «{completion.job_type}» ناموفق بود.\n"
                 f"شناسه: {completion.job_id}\n"

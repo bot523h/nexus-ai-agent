@@ -7,12 +7,13 @@ REAL queue and REAL render binary (imageio-ffmpeg wheel):
       → InProcessJobQueue persists + schedules
       → default_job_handlers routes to creative/render_jobs.py
       → packs registry → CommandBus → lane → FFmpeg → measured artifact
-      → durable JobStatus.COMPLETED / FAILED
+      → durable JobStatus.COMPLETED / classified failure (Gate 5)
       → JobCompletion notifier (translated, artifact attached, cleanup)
       → Telegram (PTB faked only at the telegram.Bot boundary)
 
-Failure sides proven too: typed failure (unsupported op → COMPLETED with
-translated typed failure), durable FAILED (unexpected exception →
+Failure sides proven too: typed failure (unsupported op → a *failure* status
+with the translated typed failure — Gate 5 closed the older
+``COMPLETED + success=False`` reading), durable FAILED (unexpected exception →
 creative.failed.internal, never raw traceback/path), idempotent re-enqueue
 (same key = same job, no double effect).
 """
@@ -28,6 +29,7 @@ from typing import Any
 import pytest
 
 from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+from nexus_ai_agent.application.job_lifecycle import is_terminal
 from nexus_ai_agent.application.ports.job_queue import JobStatus
 from nexus_ai_agent.bot.app import _notify_creative_completion
 from nexus_ai_agent.config import settings as settings_module
@@ -124,7 +126,7 @@ async def _drain(queue: InProcessJobQueue, job_id: str, timeout: float = 120.0) 
     deadline = asyncio.get_event_loop().time() + timeout
     while asyncio.get_event_loop().time() < deadline:
         status = await queue.get_status(job_id)
-        if status in {JobStatus.COMPLETED, JobStatus.FAILED}:
+        if is_terminal(status):
             return status
         await asyncio.sleep(0.1)
     raise TimeoutError(f"job {job_id} did not reach a terminal state")
@@ -195,7 +197,9 @@ async def test_typed_failure_reaches_user_translated(harness) -> None:  # noqa: 
         payload=_payload(workspace, key, operation="noir", command="grade"),
     )
     status = await _drain(queue, job_id)
-    assert status is JobStatus.COMPLETED
+    # Gate 5: an unsupported operation is a *classified terminal failure*; the
+    # durable row must never say COMPLETED for it (that was GAP-B).
+    assert status is JobStatus.TERMINAL_FAILED
     result = await queue.get_result(job_id)
     assert result is not None and result["success"] is False
     assert result["error_code"] == "unsupported_operation"

@@ -76,6 +76,8 @@
   "creative.failed.media_missing": "❌ The staged media file is missing. Send the command again.",
   "creative.failed.caption_profile_unavailable": "❌ Captions are unavailable on this installation (no speech engine).",
   "creative.failed.render_failed": "❌ Rendering failed. Try shorter media or different parameters.",
+  "creative.failed.artifact_verification_failed": "❌ The render finished but its file failed verification; nothing was delivered.",
+  "creative.failed.artifact_destination_conflict": "❌ A verified output already exists for this job and cannot be replaced automatically.",
   "creative.failed.ffmpeg_unavailable": "❌ The render engine isn't installed on this deployment.",
   "creative.failed.internal": "❌ An internal error occurred. The details are visible to the team."
 }

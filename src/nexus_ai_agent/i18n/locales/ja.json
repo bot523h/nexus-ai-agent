@@ -76,6 +76,8 @@
   "creative.failed.media_missing": "❌ 準備されたメディアが見つかりません。コマンドを再送してください。",
   "creative.failed.caption_profile_unavailable": "❌ この環境では字幕を利用できません（音声エンジン未導入）。",
   "creative.failed.render_failed": "❌ レンダリングに失敗しました。短いメディアや別のパラメータをお試しください。",
+  "creative.failed.artifact_verification_failed": "❌ レンダリングは完了しましたが、ファイルが検証を通りませんでした。配信は行われていません。",
+  "creative.failed.artifact_destination_conflict": "❌ このジョブの検証済み出力が既に存在するため、自動置換はできません。",
   "creative.failed.ffmpeg_unavailable": "❌ このデプロイにはレンダーエンジンがインストールされていません。",
   "creative.failed.internal": "❌ 内部エラーが発生しました。詳細はチームが確認できます。"
 }

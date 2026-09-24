@@ -76,6 +76,8 @@
   "creative.failed.media_missing": "❌ Die bereitgestellte Datei fehlt. Sende den Befehl erneut.",
   "creative.failed.caption_profile_unavailable": "❌ Untertitel sind in dieser Installation nicht verfügbar (keine Sprach-Engine).",
   "creative.failed.render_failed": "❌ Das Rendern ist fehlgeschlagen. Versuche kürzeres Material oder andere Parameter.",
+  "creative.failed.artifact_verification_failed": "❌ Das Rendern endete, aber die Datei hat die Prüfung nicht bestanden; nichts wurde gesendet.",
+  "creative.failed.artifact_destination_conflict": "❌ Für diesen Auftrag existiert bereits ein geprüftes Ergebnis, das nicht automatisch ersetzt werden kann.",
   "creative.failed.ffmpeg_unavailable": "❌ Die Render-Engine ist in dieser Bereitstellung nicht installiert.",
   "creative.failed.internal": "❌ Ein interner Fehler ist aufgetreten; Details sind für das Team sichtbar."
 }

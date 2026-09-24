@@ -7,6 +7,24 @@ to continue rows left pending or processing by an earlier process, or
 ``resume_pending_jobs`` (CLI/operator entry point) to requeue only rows
 still sitting in ``pending``. Terminal states fan out to an optional,
 strictly fail-safe completion hook (job-finished notifications).
+
+Outcome contract (Gate 5). A handler returns a dict; when that dict carries an
+explicit boolean ``success`` the queue classifies it:
+
+* ``success is True``  → ``COMPLETED`` — the handler's contract asserts the
+  artifact was verified (``creative_render`` proves this through the canonical
+  verifier; the queue cannot verify media itself and never pretends to);
+* ``success is False`` → ``FAILED_RETRYABLE`` / ``TERMINAL_FAILED`` from the
+  declared ``failure_class`` (fail-closed default: ``TERMINAL_FAILED``), with
+  the typed failure envelope stored as the row's result so the notifier can
+  translate it and the artifact is never claimed;
+* **no** ``success`` key → the legacy shape (``pdf_extract``/``story``/...)
+  keeps completing as before — an honest, documented boundary, not a claim.
+
+A handler that raises is an *unclassified* failure → ``FAILED``. Only
+``COMPLETED`` is a success status, and terminality itself is defined once in
+:mod:`nexus_ai_agent.application.job_lifecycle` (the resume paths depend on it,
+so a new status can never be silently re-executed).
 """
 
 from __future__ import annotations
@@ -23,6 +41,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from nexus_ai_agent.application.job_lifecycle import (
+    ACTIVE_STATUSES,
+    RESULT_ERROR_CODE,
+    RESULT_ERROR_DETAIL,
+    is_terminal,
+    result_job_status,
+    stamp_job_id,
+)
 from nexus_ai_agent.application.ports.job_queue import JobStatus
 
 JobHandler = Callable[[dict[str, object]], Awaitable[dict[str, object]]]
@@ -173,7 +199,9 @@ class InProcessJobQueue:
         row = await asyncio.to_thread(self._fetch_row, job_id)
         if row is None:
             return
-        if row["status"] in {JobStatus.COMPLETED.value, JobStatus.FAILED.value}:
+        # Terminality comes from the lifecycle contract, never from a literal
+        # pair: a newly classified failure status must never be re-executed.
+        if is_terminal(_parse_status(str(row["status"]))):
             return
 
         await asyncio.to_thread(self._mark_processing, job_id)
@@ -189,7 +217,51 @@ class InProcessJobQueue:
             result = await handler(payload)
             if not isinstance(result, dict):
                 raise TypeError("job handler must return a dictionary")
-            await asyncio.to_thread(self._mark_completed, job_id, result)
+            status = result_job_status(result)
+            if status is None:
+                # Legacy handler shape: no outcome contract to classify.
+                await asyncio.to_thread(self._mark_completed, job_id, result)
+                await self._notify_completion(
+                    JobCompletion(
+                        job_id=job_id,
+                        job_type=str(row["job_type"]),
+                        status=JobStatus.COMPLETED,
+                        result=result,
+                        error=None,
+                        payload=payload,
+                    )
+                )
+                return
+            stamped = stamp_job_id(result, job_id)
+            if status is JobStatus.COMPLETED:
+                await asyncio.to_thread(self._mark_completed, job_id, stamped)
+                await self._notify_completion(
+                    JobCompletion(
+                        job_id=job_id,
+                        job_type=str(row["job_type"]),
+                        status=JobStatus.COMPLETED,
+                        result=stamped,
+                        error=None,
+                        payload=payload,
+                    )
+                )
+                return
+            # Declared failure: the durable status is a failure status, never
+            # COMPLETED, and the envelope stays readable for the notifier.
+            error = str(
+                stamped.get(RESULT_ERROR_CODE) or stamped.get(RESULT_ERROR_DETAIL) or status.value
+            )
+            await asyncio.to_thread(self._mark_failure, job_id, status, error, stamped)
+            await self._notify_completion(
+                JobCompletion(
+                    job_id=job_id,
+                    job_type=str(row["job_type"]),
+                    status=status,
+                    result=stamped,
+                    error=error,
+                    payload=payload,
+                )
+            )
         except asyncio.CancelledError:
             # Cancellation is a process-lifecycle event, not a business
             # failure. Keep the row recoverable for the next process.
@@ -204,17 +276,6 @@ class InProcessJobQueue:
                     status=JobStatus.FAILED,
                     result=None,
                     error=str(exc),
-                    payload=payload,
-                )
-            )
-        else:
-            await self._notify_completion(
-                JobCompletion(
-                    job_id=job_id,
-                    job_type=str(row["job_type"]),
-                    status=JobStatus.COMPLETED,
-                    result=result,
-                    error=None,
                     payload=payload,
                 )
             )
@@ -316,7 +377,7 @@ class InProcessJobQueue:
                 WHERE status IN (?, ?)
                 ORDER BY created_at, id
                 """,
-                (JobStatus.PENDING.value, JobStatus.PROCESSING.value),
+                _active_values(),
             ).fetchall()
             connection.execute(
                 """
@@ -324,11 +385,7 @@ class InProcessJobQueue:
                 SET status = ?, started_at = NULL
                 WHERE status IN (?, ?)
                 """,
-                (
-                    JobStatus.PENDING.value,
-                    JobStatus.PENDING.value,
-                    JobStatus.PROCESSING.value,
-                ),
+                (JobStatus.PENDING.value, *_active_values()),
             )
         return [str(row[0]) for row in rows]
 
@@ -390,6 +447,7 @@ class InProcessJobQueue:
             )
 
     def _mark_failed(self, job_id: str, error: str) -> None:
+        """Unclassified failure (a handler raised): ``FAILED``, no result payload."""
         with self._db_lock, self._connection() as connection:
             connection.execute(
                 """
@@ -398,6 +456,30 @@ class InProcessJobQueue:
                 WHERE id = ?
                 """,
                 (JobStatus.FAILED.value, error, _now(), job_id),
+            )
+
+    def _mark_failure(
+        self,
+        job_id: str,
+        status: JobStatus,
+        error: str,
+        result: dict[str, object],
+    ) -> None:
+        """Declared failure: classified status + the typed envelope as the result."""
+        with self._db_lock, self._connection() as connection:
+            connection.execute(
+                """
+                UPDATE nexus_job_queue
+                SET status = ?, error = ?, result_json = ?, finished_at = ?
+                WHERE id = ?
+                """,
+                (
+                    status.value,
+                    error,
+                    json.dumps(result, ensure_ascii=False, sort_keys=True),
+                    _now(),
+                    job_id,
+                ),
             )
 
     @contextmanager
@@ -423,6 +505,19 @@ class InProcessJobQueue:
             connection.commit()
         finally:
             connection.close()
+
+
+def _active_values() -> tuple[str, ...]:
+    """The persisted values of the non-terminal statuses (resume entry points)."""
+    return tuple(status.value for status in sorted(ACTIVE_STATUSES, key=lambda s: s.value))
+
+
+def _parse_status(raw: str) -> JobStatus:
+    """Parse a persisted status (fail-closed: an unknown value is never resumed)."""
+    try:
+        return JobStatus(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"invalid persisted job status: {raw!r}") from exc
 
 
 def _now() -> str:

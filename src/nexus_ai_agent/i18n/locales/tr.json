@@ -76,6 +76,8 @@
   "creative.failed.media_missing": "❌ Hazırlanan medya dosyası bulunamadı; komutu tekrar gönderin.",
   "creative.failed.caption_profile_unavailable": "❌ Bu kurulumda altyazı kullanılamıyor (konuşma motoru yok).",
   "creative.failed.render_failed": "❌ Render başarısız oldu; daha kısa medya veya farklı parametreler deneyin.",
+  "creative.failed.artifact_verification_failed": "❌ Render tamamlandı ama dosya doğrulamayı geçemedi; hiçbir şey gönderilmedi.",
+  "creative.failed.artifact_destination_conflict": "❌ Bu iş için doğrulanmış bir çıktı zaten var ve otomatik olarak değiştirilemez.",
   "creative.failed.ffmpeg_unavailable": "❌ Render motoru bu dağıtımda kurulu değil.",
   "creative.failed.internal": "❌ Dahili bir hata oluştu; ayrıntılar ekip tarafından görülebilir."
 }

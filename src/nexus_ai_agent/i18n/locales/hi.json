@@ -76,6 +76,8 @@
   "creative.failed.media_missing": "❌ तैयार की गई मीडिया फ़ाइल नहीं मिली; कमांड दोबारा भेजें।",
   "creative.failed.caption_profile_unavailable": "❌ इस इंस्टॉलेशन पर कैप्शन उपलब्ध नहीं है (कोई स्पीच इंजन नहीं)।",
   "creative.failed.render_failed": "❌ रेंडर विफल; छोटा मीडिया या अन्य पैरामीटर आज़माएँ।",
+  "creative.failed.artifact_verification_failed": "❌ रेंडर पूरा हुआ पर फ़ाइल सत्यापन में विफल रही; कुछ भी वितरित नहीं हुआ।",
+  "creative.failed.artifact_destination_conflict": "❌ इस कार्य के लिए एक सत्यापित परिणाम पहले से मौजूद है और उसे स्वतः बदला नहीं जा सकता।",
   "creative.failed.ffmpeg_unavailable": "❌ इस डिप्लॉयमेंट पर रेंडर इंजन इंस्टॉल नहीं है।",
   "creative.failed.internal": "❌ आंतरिक त्रुटि हुई; विवरण टीम को दिखाई देता है।"
 }

@@ -76,6 +76,8 @@
   "creative.failed.media_missing": "❌ 暂存的媒体文件缺失，请重新发送命令。",
   "creative.failed.caption_profile_unavailable": "❌ 此安装未提供字幕功能（无语音引擎）。",
   "creative.failed.render_failed": "❌ 渲染失败，请尝试更短的媒体或其他参数。",
+  "creative.failed.artifact_verification_failed": "❌ 渲染已完成，但文件未通过校验；未交付任何内容。",
+  "creative.failed.artifact_destination_conflict": "❌ 此任务已有通过校验的输出，无法自动替换。",
   "creative.failed.ffmpeg_unavailable": "❌ 此部署未安装渲染引擎。",
   "creative.failed.internal": "❌ 发生内部错误；团队可查看详情。"
 }

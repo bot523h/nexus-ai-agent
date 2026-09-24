@@ -76,6 +76,8 @@
   "creative.failed.media_missing": "❌ فایل رسانهٔ آماده‌شده پیدا نشد؛ فرمان را دوباره بفرست.",
   "creative.failed.caption_profile_unavailable": "❌ زیرنویس روی این نصب در دسترس نیست (موتور گفتار نصب نشده).",
   "creative.failed.render_failed": "❌ رندر ناموفق بود؛ رسانهٔ کوتاه‌تر یا پارامترهای دیگر را امتحان کن.",
+  "creative.failed.artifact_verification_failed": "❌ رندر تمام شد اما فایل خروجی از راستی‌آزمایی عبور نکرد؛ چیزی تحویل داده نشد.",
+  "creative.failed.artifact_destination_conflict": "❌ خروجی راستی‌آزمایی‌شدهٔ دیگری برای این کار وجود دارد و جایگزینی خودکار ممکن نیست.",
   "creative.failed.ffmpeg_unavailable": "❌ موتور رندر روی این استقرار نصب نیست.",
   "creative.failed.internal": "❌ خطای داخلی رخ داد؛ جزئیات برای تیم فنی قابل مشاهده است."
 }

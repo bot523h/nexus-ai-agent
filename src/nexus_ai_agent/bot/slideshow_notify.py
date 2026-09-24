@@ -16,7 +16,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from nexus_ai_agent.application.ports.job_queue import JobStatus
+from nexus_ai_agent.application.job_lifecycle import is_failure
 from nexus_ai_agent.bot.slideshow import friendly_render_error, friendly_success
 from nexus_ai_agent.config.settings import get_settings
 
@@ -61,7 +61,7 @@ async def notify_slideshow_completion(completion: Any, token: str) -> None:
         from telegram import Bot
 
         bot = Bot(token=token)
-        failed = completion.status is JobStatus.FAILED or not result.get("success")
+        failed = is_failure(completion.status) or not result.get("success")
         if not failed:
             from telegram import InputFile
 

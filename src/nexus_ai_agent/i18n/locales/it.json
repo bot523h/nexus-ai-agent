@@ -76,6 +76,8 @@
   "creative.failed.media_missing": "❌ Il file multimediale preparato è mancante; invia di nuovo il comando.",
   "creative.failed.caption_profile_unavailable": "❌ I sottotitoli non sono disponibili in questa installazione (nessun motore vocale).",
   "creative.failed.render_failed": "❌ Rendering non riuscito; prova un media più breve o parametri diversi.",
+  "creative.failed.artifact_verification_failed": "❌ Il rendering è terminato ma il file non ha superato la verifica; nulla è stato consegnato.",
+  "creative.failed.artifact_destination_conflict": "❌ Esiste già un risultato verificato per questo lavoro e non può essere sostituito automaticamente.",
   "creative.failed.ffmpeg_unavailable": "❌ Il motore di rendering non è installato in questo deployment.",
   "creative.failed.internal": "❌ Si è verificato un errore interno; i dettagli sono visibili al team."
 }

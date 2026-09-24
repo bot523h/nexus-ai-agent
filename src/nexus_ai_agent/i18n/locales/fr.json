@@ -76,6 +76,8 @@
   "creative.failed.media_missing": "❌ Le média préparé est introuvable ; renvoyez la commande.",
   "creative.failed.caption_profile_unavailable": "❌ Les sous-titres ne sont pas disponibles sur cette installation (aucun moteur vocal).",
   "creative.failed.render_failed": "❌ Échec du rendu ; essayez un média plus court ou d'autres paramètres.",
+  "creative.failed.artifact_verification_failed": "❌ Le rendu est terminé mais le fichier n'a pas passé la vérification ; rien n'a été livré.",
+  "creative.failed.artifact_destination_conflict": "❌ Un résultat vérifié existe déjà pour cette tâche et ne peut pas être remplacé automatiquement.",
   "creative.failed.ffmpeg_unavailable": "❌ Le moteur de rendu n'est pas installé sur ce déploiement.",
   "creative.failed.internal": "❌ Une erreur interne est survenue ; les détails sont visibles par l'équipe."
 }
