@@ -30,7 +30,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from nexus_ai_agent.creative.rendering.ir import (
+    AssemblyGap,
     ExposureOp,
+    LaneAssembly,
     LaneError,
     LaneIR,
     LaneProfile,
@@ -199,11 +201,55 @@ def segment_lane_ir(
     return lane_ir_from_project(project, media_paths, segment.asset_id, ops, profile)
 
 
+def assemble_execution_plan(
+    plan: ExecutionPlan,
+    media_paths: dict[str, str],
+    *,
+    project: Any,
+    profile: LaneProfile | None = None,
+) -> LaneAssembly:
+    """Bind every planned segment into one timeline-ordered :class:`LaneAssembly`.
+
+    Segments keep their trim + mapped effects; the editorial space *between*
+    two consecutive segments becomes an :class:`AssemblyGap` (black video +
+    silence), so ``Segment A, Gap, Segment B`` renders with its timeline
+    positions intact.  Adjacent segments (zero space) produce no gap piece.
+
+    The assembly compiles through :func:`compile_assembly` and executes through
+    the unchanged :func:`encode_lane` — one filtergraph, one process, no second
+    pipeline.  This closes the ``concat_required`` limitation the plan bridge
+    proved: ``concat_required=True`` now means "assemble, then render".
+    """
+    if not plan.segments:
+        raise PlanError(f"track {plan.track_id!r} has no segments to assemble")
+    lane_profile = profile or LaneProfile()
+    pieces: list[LaneIR | AssemblyGap] = []
+    previous_end_us: int | None = None
+    for segment in plan.segments:
+        if previous_end_us is not None:
+            gap_us = segment.timeline_start_us - previous_end_us
+            if gap_us < 0:
+                raise PlanError(
+                    f"track {plan.track_id!r} segments overlap at "
+                    f"{segment.timeline_start_us}µs (previous ends {previous_end_us}µs)"
+                )
+            if gap_us > 0:
+                pieces.append(AssemblyGap(duration_us=gap_us))
+        pieces.append(
+            segment_lane_ir(
+                plan, segment, media_paths, profile=lane_profile, project=project
+            )
+        )
+        previous_end_us = segment.timeline_end_us
+    return LaneAssembly(pieces=tuple(pieces), profile=lane_profile)
+
+
 __all__ = [
     "EFFECT_TO_LANE_OP",
     "ExecutionPlan",
     "PlanError",
     "SegmentPlan",
+    "assemble_execution_plan",
     "compile_execution_plan",
     "segment_lane_ir",
 ]
