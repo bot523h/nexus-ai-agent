@@ -147,20 +147,47 @@ were simply absent from the sandbox venv. `ruff check .` = **All checks passed**
 All twelve turn their guardian red on the final tree; the mutated file is restored byte-identical
 after each run (asserted in the harness).
 
-## 9. CI / remote
+## 9. `main` moved during the work (parallel P0 pass) — read this before merging
+
+`main` advanced from `2cf2213` to `035a896` (*Merge pull request #65*, **task-165/166/167 P0
+stabilization*) while this branch was in flight. PR#66 is therefore **textually conflicting**, and
+the overlap must be resolved deliberately, not mechanically. Verified state of `main`:
+
+| Requirement | `main` @ `035a896` | this branch |
+|---|---|---|
+| Request-path SSRF guard on the legacy URL branch | **still open**: `_download_video_to_temp` uses a bare `httpx.AsyncClient(timeout=60.0, follow_redirects=True)`, no `validate_url`, no size cap, no redirect restriction | closed: `validate_url` before any job row, `SafeAsyncTransport` on connect *and* redirect hops, 200 MiB bounded read, media-type allow-list |
+| Minimized legacy job read | HMAC-gated (task-165) but the handler still returns the **raw row** (`input_data`, raw `error`) | `_public_job_view` projection: no `input_data`, no paths, no raw error |
+| Failure semantics for typed render failures | typed errors return `{"success": False}` ⇒ the durable row **COMPLETES** | typed errors raise ⇒ durable **FAILED** + localized message |
+| Handler location | `creative/render_jobs.py` (creative tree), registered in `worker.default_job_handlers()` | `adapters/creative_render_job.py`, registered in the same map |
+| Backup verification | verified pre-upload + round-trip | same, plus source-vs-restore inventory drift detection |
+| Decision-log numbering | D-0010 … D-0012 taken | this branch's entry renumbered **D-0013** |
+
+Consequences: (a) exactly one of the two `creative_render` handlers may be registered in the final
+tree — both are now spec'd to do the same job, and `docs/ops/CREATIVE_PRODUCTION_PATH.md` §5 names
+`adapters/creative_render_job.py::build_lane_ir` as the seam; (b) the security controls in the table
+above are absent from `main` and are the part of this branch that must not be lost if the two are
+reconciled; (c) deleting or replacing the merged `creative/render_jobs.py` touches Agent B's tree and
+needs the explicit handoff below.
+
+## 10. CI / remote
 
 Local gates above are green except the environment gaps named in §7. CI has not been run for this
 branch from here; the repository's maintenance workflow is red for the operator-side reason in §6.
 
-## 10. Remaining blockers / handoff to Agent B
+## 11. Remaining blockers / handoff to Agent B
 
-1. **R2 secrets** (operator action) — without them the nightly backup stays red by design; the chain
+1. **Reconciliation with the merged P0 pass** — see §9. Recommended order: land the security
+   controls (SSRF guard, minimized read, durable-FAILED semantics) on top of `main` first, then
+   decide which single `creative_render` handler survives (this record recommends
+   `adapters/creative_render_job.py`, whose verification compares the artifact with the lane's own
+   evidence); deleting the merged `creative/render_jobs.py` is Agent B's call.
+2. **R2 secrets** (operator action) — without them the nightly backup stays red by design; the chain
    itself is verified by the 13-test suite.
-2. **Render-plan bridge** — `build_lane_ir` in `adapters/creative_render_job.py` is deliberately the
+3. **Render-plan bridge** — `build_lane_ir` in `adapters/creative_render_job.py` is deliberately the
    only seam that maps a validated request to lane ops. When `creative/rendering/plan.py`
    (`compile_execution_plan`, PR#64) lands, replace that one function's body; the surface, queue
    envelope, handler contract, notifier and end-to-end test shape stay unchanged.
-3. **Refused operations** stay refused until the missing primitives exist: `caption.transcribe`,
+4. **Refused operations** stay refused until the missing primitives exist: `caption.transcribe`,
    `caption.burn_in` (libass/speech stage), `color.apply_lut` (lut3d asset stage),
    `delivery.make_proxy_480p` (produces a proxy record, not a 480p file), OTIO export. They are
    advertised and answered honestly instead of being queued.

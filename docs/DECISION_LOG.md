@@ -995,10 +995,18 @@ tick) would otherwise have to duplicate it.
 
 ---
 
-## 2026-09-24 — one creative production path, a closed legacy lane, and verified restores (D-0010)
+## 2026-09-24 — one creative production path, a closed legacy lane, and verified restores (D-0013)
 
-**Date:** 2026-09-24. **Status:** Accepted **and implemented** (P0 creative integration, owner
-directive of the same date; PR on `arena/01a0d2d6-nexus-ai-agent`).
+**Date:** 2026-09-24. **Status:** Accepted **and implemented** on
+`arena/01a0d2d6-nexus-ai-agent` (owner directive of the same date; PR#66).
+**Relationship to the merged P0 stabilization day (D-0010 … D-0012).** `main` gained a parallel
+P0 pass while this branch was in flight (PR#65, `035a896`): the surface wiring, the HMAC gate on the
+legacy read, an alternative `creative_render` handler in `creative/render_jobs.py` and a verified
+backup chain. This record keeps the parts of that day that are *not* yet closed on `main` — the
+request-path SSRF guard with a bounded, re-validated download, the minimized job read, and durable
+FAILED for typed render failures — and states the single-path requirement once more; the two
+handlers (theirs in `creative/`, this one in `adapters/`) must not both be registered, and exactly
+one of them may exist in the final tree.
 **Supersedes by replacement:** nothing; this decision *closes* the gap between the accepted Nagar
 design (`docs/NAGAR_70_OPERATIONS_TDD.md`) and what production actually executed.
 
