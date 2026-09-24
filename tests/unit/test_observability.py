@@ -232,3 +232,144 @@ def test_metrics_allow_only_low_cardinality_labels() -> None:
     assert metrics.snapshot()['nexus_touch_failures_total{backend="sqlite"}'] == 1
     with pytest.raises(ValueError):
         metrics.increment("bad", labels={"thread_id": "secret"})
+
+
+# --------------------------------------------------------------------- #
+# Adversarial closure (S3): real stdlib rendering shapes — these record
+# shapes are formatted lazily at handler-emit time, i.e. AFTER filters
+# run, so the boundary must normalise them or the secret reaches the
+# final rendered line raw.
+# --------------------------------------------------------------------- #
+
+BASIC_CREDENTIAL = "dXNlcjpwYXNzd29yZA=="  # base64("user:password")
+
+
+def test_captured_stdlib_mapping_args_are_redacted_and_record_survives(
+    captured_root_logs: _Capture,
+) -> None:
+    """``logger.warning("%(password)s", {...})`` is a documented stdlib
+    shape. The record must render (no ``TypeError: format requires a
+    mapping``) AND the value must be masked."""
+    logging.getLogger("app").error(
+        "login failed: %(user)s / %(password)s",
+        {"user": "bob", "password": "pw-secret-42"},
+    )
+    rendered = "\n".join(captured_root_logs.lines)
+    assert "pw-secret-42" not in rendered, "raw secret via mapping-style args"
+    # the record must still render — a broken filter destroys it with a
+    # logging error instead of emitting it
+    assert "bob" in rendered
+
+
+def test_captured_stdlib_mapping_args_secret_in_format_string(
+    captured_root_logs: _Capture,
+) -> None:
+    logging.getLogger("app").error(
+        f"auth failed: Basic {BASIC_CREDENTIAL} for %(user)s", {"user": "bob"}
+    )
+    rendered = "\n".join(captured_root_logs.lines)
+    assert BASIC_CREDENTIAL not in rendered
+
+
+def test_captured_stdlib_nondict_args_rendered_safely(
+    captured_root_logs: _Capture,
+) -> None:
+    """Non-string args (dict / list / object repr) are %-rendered after
+    the filter runs — their contents must be masked before rendering."""
+    logging.getLogger("app").error("request context: %s", {"authorization": f"Basic {BASIC_CREDENTIAL}"})
+    logging.getLogger("app").error("retries: %s", [{"password": "pw-secret-43"}])
+    rendered = "\n".join(captured_root_logs.lines)
+    assert BASIC_CREDENTIAL not in rendered
+    assert "pw-secret-43" not in rendered
+
+
+def test_captured_stdlib_exc_info_traceback_redacted(
+    captured_root_logs: _Capture,
+) -> None:
+    """Formatter renders exc_info at emit time, after handler filters —
+    the boundary must pre-render + redact the traceback itself."""
+    try:
+        raise RuntimeError(f"telegram call failed: https://api.telegram.org/bot{BOT_TOKEN}/sendMessage")
+    except RuntimeError:
+        logging.getLogger("app").exception("send failed")
+    rendered = "\n".join(captured_root_logs.lines)
+    assert BOT_TOKEN not in rendered, "raw bot token reached a rendered traceback"
+
+
+def test_captured_stdlib_exc_info_traceback_rendered_through_production_formatter() -> None:
+    """Production shape: a real StreamHandler with a real Formatter — the
+    traceback must still be RENDERED (masked), not lost."""
+    import io as _io
+
+    stream = _io.StringIO()
+    production = logging.StreamHandler(stream)
+    root = logging.getLogger()
+    saved_handlers = list(root.handlers)
+    saved_level = root.level
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    try:
+        root.addHandler(production)
+        configure_logging(level="INFO")  # boundary attaches filter + formatter wrap
+        try:
+            raise RuntimeError(
+                f"telegram call failed: https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+            )
+        except RuntimeError:
+            logging.getLogger("app").exception("send failed")
+        production.flush()
+    finally:
+        root.removeHandler(production)
+        for h in saved_handlers:
+            root.addHandler(h)
+        root.setLevel(saved_level)
+    rendered = stream.getvalue()
+    assert BOT_TOKEN not in rendered, "raw bot token reached a rendered traceback"
+    assert "Traceback (most recent call last)" in rendered
+    assert "send failed" in rendered
+
+
+def test_captured_stdlib_basic_scheme_arg_redacted(
+    captured_root_logs: _Capture,
+) -> None:
+    logging.getLogger("httpx").info("HTTP Request: GET https://internal.example.com/ %s", f"Basic {BASIC_CREDENTIAL}")
+    rendered = "\n".join(captured_root_logs.lines)
+    assert BASIC_CREDENTIAL not in rendered
+
+
+def test_basic_scheme_redacted_in_every_surface() -> None:
+    from nexus_ai_agent.observability.logging import _redact_processor
+
+    cases = [
+        f"Authorization: Basic {BASIC_CREDENTIAL}",
+        f"auth failed with Basic {BASIC_CREDENTIAL}",
+        f"https://api.example.com/x -H 'Basic {BASIC_CREDENTIAL}'",
+    ]
+    for text in cases:
+        assert BASIC_CREDENTIAL not in redact_secrets(text), text
+    assert BASIC_CREDENTIAL not in str(_redact_processor(None, "info", {"header": f"Basic {BASIC_CREDENTIAL}"}))
+
+
+def test_basic_word_in_prose_is_not_over_redacted() -> None:
+    samples = [
+        "basic settings here",
+        "Basic Authentication flow is documented",
+        "keep it basic: 12345 main street",
+        "basic instructions for setup",
+    ]
+    for text in samples:
+        assert redact_secrets(text) == text, text
+
+
+def test_captured_stdlib_object_arg_repr_redacted_by_final_boundary(
+    captured_root_logs: _Capture,
+) -> None:
+    """Arbitrary objects passed as %s args are repr()-rendered lazily —
+    the filter cannot rewrite them in place, so the wrapped formatter
+    (final boundary) must mask the rendered line."""
+    class _LeakyClient:  # noqa: D401 — repr carries a header dump
+        def __repr__(self) -> str:  # noqa: D105
+            return f"<Client headers={{'Authorization': 'Basic {BASIC_CREDENTIAL}'}}>"
+    logging.getLogger("app").error("client: %s", _LeakyClient())
+    rendered = "\n".join(captured_root_logs.lines)
+    assert BASIC_CREDENTIAL not in rendered, "object repr leaked through the final boundary"

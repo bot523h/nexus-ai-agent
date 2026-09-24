@@ -21,8 +21,10 @@ monkeypatches the guard logic itself — that would be a fake success.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
+import ipaddress
 import socket
 import time
 from pathlib import Path
@@ -318,3 +320,113 @@ def test_download_transport_is_the_validating_one() -> None:
     source = inspect.getsource(app_module._download_video_to_temp)
     assert "SafeAsyncTransport()" in source, "download client must use the validating transport"
     assert "follow_redirects=True" in source
+
+
+# ------------------------------------------------------------------ #
+# 6. Adversarial closure (S5): CGNAT, scheme-downgrade redirects,
+#    malformed-host contract — each pinned by a real runtime proof.
+# ------------------------------------------------------------------ #
+
+
+def _closure_getaddrinfo(host: str, port: Any = None, *a: Any, **k: Any) -> list[tuple[Any, ...]]:
+    """IP literals resolve to themselves; names resolve to a public IP."""
+    try:
+        ipaddress.ip_address(host)
+        addr: str = host
+    except ValueError:
+        addr = "93.184.216.34"
+    return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (addr, port or 443))]
+
+
+class _ClosureScriptedBackend(httpcore.AsyncNetworkBackend):
+    """Serves a *queue* of raw responses, one per connection (the PR's
+    single-response backend cannot drive a multi-hop scripted exchange)."""
+
+    def __init__(self, responses: list[bytes]) -> None:
+        self._responses = list(responses)
+        self.connects: list[str] = []
+
+    async def connect_tcp(
+        self, host: str, port: int, timeout: Any = None,
+        local_address: Any = None, socket_options: Any = None,
+    ) -> httpcore.AsyncNetworkStream:
+        self.connects.append(f"{host}:{port}")
+        payload = self._responses.pop(0) if self._responses else b"HTTP/1.1 500 X\r\nContent-Length: 0\r\n\r\n"
+        return _ScriptedStream(payload)
+
+    async def connect_unix_socket(self, path: str, timeout: Any = None, socket_options: Any = None) -> Any:
+        raise AssertionError("unix sockets must not be used")
+
+    async def sleep(self, seconds: float) -> None:
+        return None
+
+
+@pytest.mark.parametrize(
+    ("url", "label"),
+    [
+        ("https://100.64.0.1/x.mp4", "CGNAT low edge"),
+        ("https://100.100.100.100/latest/meta-data/", "CGNAT metadata (alibaba)"),
+        ("https://[::ffff:100.64.0.1]/x.mp4", "IPv4-mapped CGNAT"),
+    ],
+)
+def test_validate_url_blocks_cgnat(url: str, label: str) -> None:
+    """100.64.0.0/10 must be blocked explicitly — stdlib ``is_private``
+    coverage for CGNAT is Python-version dependent."""
+    with pytest.raises(SSRFBlockError):
+        validate_url(url)
+
+
+def test_validate_url_reports_malformed_host_as_ssrf_block() -> None:
+    """Hosts httpx refuses to parse (octal IPv4 ``0177.0.0.1``) must fail
+    closed through the contract exception, not leak ``InvalidURL``."""
+    with pytest.raises(SSRFBlockError):
+        validate_url("https://0177.0.0.1/x.mp4")
+
+
+async def test_https_to_http_redirect_is_refused_not_followed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 302 to an http:// URL must NOT be followed: no second (plaintext)
+    connection may be established and no body may be consumed."""
+    hop1 = b"HTTP/1.1 302 Found\r\nLocation: http://93.184.216.34:80/payload.bin\r\nContent-Length: 0\r\n\r\n"
+    hop2_payload = b"DOWNGRADED-CONTENT"
+    hop2 = b"HTTP/1.1 200 OK\r\nContent-Length: " + str(len(hop2_payload)).encode() + b"\r\n\r\n" + hop2_payload
+    backend = _ClosureScriptedBackend([hop1, hop2])
+    transport = SafeAsyncTransport()
+    transport._pool._network_backend._inner = backend
+    monkeypatch.setattr(socket, "getaddrinfo", _closure_getaddrinfo)
+    try:
+        async with httpx.AsyncClient(transport=transport, follow_redirects=True) as client:
+            with pytest.raises(httpx.ConnectError) as excinfo:
+                await client.get("https://public.example.com/v.mp4", timeout=5.0)
+        assert "Only https" in str(excinfo.value)
+        # hop 1 only — the http hop never even attempted a TCP connect
+        assert backend.connects == ["93.184.216.34:443"]
+        assert hop2_payload not in (str(excinfo.value),)
+    finally:
+        await transport.aclose()
+
+
+def test_transport_refuses_plain_http_at_request_time() -> None:
+    """Connect-time scheme gate: an http:// request through the safe
+    transport is refused before any backend usage (redirect hops and
+    direct abuse of the transport both flow through here)."""
+    import pytest as _pytest
+
+    class _Never(httpcore.AsyncNetworkBackend):
+        async def connect_tcp(self, *a: Any, **k: Any) -> Any:
+            raise AssertionError("no connection may be attempted for http scheme")
+
+    transport = SafeAsyncTransport()
+    transport._pool._network_backend._inner = _Never()
+
+    async def _run() -> None:
+        try:
+            async with httpx.AsyncClient(transport=transport) as client:
+                with _pytest.raises(httpx.ConnectError) as excinfo:
+                    await client.get("http://93.184.216.34/x", timeout=5.0)
+            assert "Only https" in str(excinfo.value)
+        finally:
+            await transport.aclose()
+
+    asyncio.run(_run())
