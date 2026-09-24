@@ -19,6 +19,15 @@ canonical Gate 2 order (D-0013), each step failing closed:
    available, and version-match; a client capability snapshot is an advisory
    hint that is verified against the authoritative registry, never trusted.
    The grant's permissions must cover the operation's required permissions.
+4b. **Capability lifecycle / pack gate** (task-183 seam) -- every pack the
+   *registry* declares for the operation must resolve to ``AVAILABLE``, or to
+   ``EXPERIMENTAL`` with the bus-level ``allow_experimental`` opt-in. Unknown
+   pack ids, ``STUB`` and ``RETIRED`` refuse. The gate runs after the actor
+   grant (so lifecycle can never grant what authorization denied) and before
+   policy, reference pinning, idempotency reservation and the handler (so a
+   refused pack performs zero work and leaves state and reservations
+   untouched). ``allow_experimental`` is composition-root state, never an
+   envelope field -- a client cannot opt itself into experimental packs.
 5. **Execution policy** -- the requested mode must be advertised by the spec
    (``local`` only today) and the A/B/C/D ladder must allow the command.
 6. **Reference validation** -- every declared ``input_refs`` entry is checked
@@ -65,6 +74,7 @@ from nexus_ai_agent.creative.studio.capabilities import (
     OperationSpec,
     build_wave1_registry,
 )
+from nexus_ai_agent.creative.studio.lifecycle import check_required_packs
 from nexus_ai_agent.creative.studio.models import (
     PROTOCOL_VERSION,
     AuthorizationError,
@@ -146,10 +156,14 @@ class CommandBus:
         resolver: ReferenceResolver | None = None,
         *,
         authorizer: ProjectAuthorizer | None = None,
+        allow_experimental: bool = False,
     ) -> None:
         self._registry = registry if registry is not None else build_wave1_registry()
         self._resolver = resolver if resolver is not None else ReferenceResolver()
         self._authorizer = authorizer
+        # Trusted composition-root opt-in for EXPERIMENTAL packs. Deliberately
+        # not an envelope field: a command must never widen its own lifecycle.
+        self._allow_experimental = allow_experimental
         self._lock = threading.RLock()
         # model_copy(update=...) bypasses Pydantic's derived state_hash and
         # validation (the worker uses it when registering its staged asset).
@@ -234,6 +248,14 @@ class CommandBus:
         descriptor = self._registry.check_capability(command)
         if access is not None:
             access.require_permissions(descriptor.required_permissions)
+
+        # 4b. Capability lifecycle / pack gate (PR#67 implementation, task-183
+        # seam). The registry -- never the client -- names the required packs.
+        # Runs after the actor grant and before policy/refs/reservation/handler.
+        if descriptor.required_packs:
+            check_required_packs(
+                descriptor.required_packs, allow_experimental=self._allow_experimental
+            )
 
         # 5. Execution policy: only an advertised mode; A/B/C/D ladder remains
         # authoritative. The envelope cannot opt into egress or a shell.

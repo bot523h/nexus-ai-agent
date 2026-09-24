@@ -48,7 +48,9 @@ The split is the load-bearing decision: **evidence is gathered above the bus** (
 | D | Denied | refused by policy: shell, raw upload, code execution, anything unregistered | — |
 
 **Dispatch pipeline** (`creative/studio/bus.py::_dispatch_locked`) — strict order, each step failing closed:
-1. envelope validation (protocol v1) → 2. idempotency replay → 3. registry lookup (`UnknownOperationError`) → 4. permission gate (`PermissionDeniedError`) → 5. typed input validation → 6. precondition check (`state_revision` / `state_hash`) → 7. atomic apply + `EditTransaction` push → 8. deep-copied `project` snapshot for safe reads.
+1. parse → 2. envelope + operation schema → 3. actor/project grant → 4. capability + version + permissions → **4b. capability lifecycle / pack gate** (`creative/studio/lifecycle.py`: `required_packs` must be `AVAILABLE`, or `EXPERIMENTAL` with the bus-level `allow_experimental=True`; unknown / `STUB` / `RETIRED` refuse) → 5. execution policy + A/B/C/D → 6. input refs + pinned time refs → 7. idempotency reserve/replay → 8. revision preconditions → 9. atomic apply + `EditTransaction` push (deep-copied `project` snapshots for safe reads).
+
+The lifecycle gate is the single seam between the canonical Gate-2 contract and the pack runtime (board task-183): it runs after the actor grant (so an unauthorized actor can never be granted anything by pack metadata) and before the idempotency reservation and the handler (so a refused pack performs zero work). `allow_experimental` is composition-root state — the render-job queue carries it as an explicit per-job operator opt-in (`CreativeRenderPayload.allow_experimental`, set for `grade/*` by the surface mapper), never as a command-envelope field. Lifecycle = pack *maturity*; `packs/availability.py` = pack *runnability* at render/preflight time. See [`COMMAND_CAPABILITY_CONTRACT.md`](COMMAND_CAPABILITY_CONTRACT.md) §2.
 
 `Project.state_hash` is **derived** from a canonical JSON serialization on every construction (revision excluded, so revision+hash preconditions survive undo cycles). A stored hash therefore cannot drift from the state it describes.
 

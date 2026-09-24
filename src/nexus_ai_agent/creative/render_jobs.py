@@ -94,6 +94,11 @@ class CreativeRenderPayload(BaseModel):
     chat_id: int
     lang: str = "en"
     idempotency_key: str = Field(min_length=1)
+    allow_experimental: bool = False
+    """Per-job opt-in for EXPERIMENTAL packs (delivery/audio/motion).
+
+    The bus capability-lifecycle gate (step 4b) refuses experimental packs
+    without it; queueing a job with this flag is the explicit operator act."""
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +185,7 @@ def _dispatch(
     operation: str,
     input_data: dict[str, Any],
     idempotency_key: str,
+    allow_experimental: bool = False,
 ) -> dict[str, Any]:
     """Registry lookup → bus dispatch. Bad args become typed
     ``invalid_request`` (a retry with the same payload fails identically)."""
@@ -187,7 +193,11 @@ def _dispatch(
     from nexus_ai_agent.creative.studio.bus import CommandBus
     from nexus_ai_agent.creative.studio.models import TargetRef, TypedCommand
 
-    bus = CommandBus(state=project, registry=build_runtime_registry())
+    bus = CommandBus(
+        state=project,
+        registry=build_runtime_registry(),
+        allow_experimental=allow_experimental,
+    )
     command = TypedCommand(
         command_id=f"cmd-{idempotency_key}-{operation}",
         operation=operation,
@@ -328,6 +338,7 @@ async def _run_render_branch(
         operation=canonical_id,
         input_data=_operation_inputs(payload, duration_us),
         idempotency_key=payload.idempotency_key,
+        allow_experimental=payload.allow_experimental,
     )
     render_project = project  # lane instrumentation below mirrors the SAME op
 
@@ -378,6 +389,7 @@ async def _run_otio_branch(payload: CreativeRenderPayload, workspace: Path) -> d
         operation="delivery.export_otio",
         input_data=_operation_inputs(payload, duration_us),
         idempotency_key=payload.idempotency_key,
+        allow_experimental=payload.allow_experimental,
     )
     otio_text = output.get("otio_json")
     if not isinstance(otio_text, str) or not otio_text.strip():
@@ -429,6 +441,7 @@ async def _run_caption_branch(
             "transcript": transcript.model_dump(mode="json"),
         },
         idempotency_key=payload.idempotency_key,
+        allow_experimental=payload.allow_experimental,
     )
 
     out_path = workspace / "captions.srt"

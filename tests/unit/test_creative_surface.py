@@ -93,6 +93,25 @@ def test_mapper_rejects_lut_and_burnin_as_invalid() -> None:
     assert isinstance(m.map(CreativeRequest("caption", "burnin", (), "f", 5.0)), CreativeFailure)
 
 
+def test_job_payload_opts_grade_jobs_into_the_experimental_lifecycle() -> None:
+    """Only grade/* (EXPERIMENTAL delivery pack) carries the lifecycle opt-in."""
+    m = CreativeSurfaceMapper()
+    kwargs = {
+        "user_id": 1,
+        "chat_id": 2,
+        "lang": "en",
+        "idempotency_key": "creative:1:2:3",
+        "workspace_dir": "/tmp/creative_x",
+        "input_path": "/tmp/creative_x/input.mp4",
+    }
+    grade = m.job_payload(CreativeRequest("grade", "exposure", ("1.0",), "fid", 10.0), **kwargs)
+    caption = m.job_payload(CreativeRequest("caption", "transcribe", (), "fid", 10.0), **kwargs)
+    edit = m.job_payload(CreativeRequest("edit", "trim", ("0", "5"), "fid", 10.0), **kwargs)
+    assert grade["allow_experimental"] is True
+    assert caption["allow_experimental"] is False
+    assert edit["allow_experimental"] is False
+
+
 def test_job_payload_contains_ids_and_workspace() -> None:
     m = CreativeSurfaceMapper()
     req = CreativeRequest("caption", "transcribe", (), "fid", 10.0)

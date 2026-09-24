@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-24T17:24:56Z",
+  "updated_at": "2026-09-24T19:21:03Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2068,7 +2068,7 @@
       "title_fa": "",
       "zone": "coordination",
       "priority": "P2",
-      "status": "queued",
+      "status": "active",
       "scope": "PR#67 adds required_packs + a lifecycle bus gate; Gate 2 could not verify against it. After both land, wire the seam (stage 4, after grant+registry, before reservation) and prove pack-required vs pack-absent dispatch.",
       "scope_fa": "",
       "prerequisites": [
@@ -2080,7 +2080,12 @@
         "contract doc integration section flipped from NOT VERIFIED with evidence"
       ],
       "exclusive_paths": [],
-      "owner_hint": "Gate 2 follow-up; fence set at claim time"
+      "owner_hint": "Gate 2 follow-up; fence set at claim time",
+      "agent_branch": "arena/01a0d4c8-nexus-ai-agent",
+      "claimed_at": "2026-09-24T19:21:03Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": ""
     }
   ],
   "deferred_log": [

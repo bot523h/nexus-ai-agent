@@ -159,6 +159,10 @@ class CreativeSurfaceMapper:
             "chat_id": chat_id,
             "lang": lang,
             "idempotency_key": idempotency_key,
+            # grade/* runs on the EXPERIMENTAL delivery pack, so the surface
+            # opts those jobs in explicitly (the bus capability-lifecycle gate
+            # refuses them otherwise). caption/edit packs are AVAILABLE.
+            "allow_experimental": req.command == "grade",
         }
 
 

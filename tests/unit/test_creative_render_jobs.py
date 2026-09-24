@@ -163,17 +163,33 @@ def test_edit_operations_render_real_artifacts(
 
 def test_grade_exposure_renders(workspace: Path) -> None:
     _make_clip(workspace / "input.mp4")
-    result = _run(_payload(workspace, command="grade", operation="exposure", args=["1.0"]))
+    result = _run(
+        _payload(
+            workspace, command="grade", operation="exposure", args=["1.0"], allow_experimental=True
+        )
+    )
     assert result["success"] is True, result
     assert result["operation"] == "color.adjust_exposure"
 
 
 def test_grade_proxy_renders_480p(workspace: Path) -> None:
     _make_clip(workspace / "input.mp4")
-    result = _run(_payload(workspace, command="grade", operation="proxy", args=[]))
+    result = _run(
+        _payload(workspace, command="grade", operation="proxy", args=[], allow_experimental=True)
+    )
     assert result["success"] is True, result
     assert result["operation"] == "delivery.make_proxy_480p"
     assert result.get("height") == 480
+
+
+def test_experimental_pack_needs_the_payload_opt_in(workspace: Path) -> None:
+    """The capability-lifecycle gate reaches the queue: a grade job without
+    ``allow_experimental`` fails typed, naming the gate."""
+    _make_clip(workspace / "input.mp4")
+    result = _run(_payload(workspace, command="grade", operation="exposure", args=["1.0"]))
+    assert result["success"] is False
+    assert result["error_code"] == "invalid_request"
+    assert "experimental" in result["error_detail"]
 
 
 def test_trim_rejects_bad_points_as_typed_failure(workspace: Path) -> None:
@@ -197,7 +213,9 @@ def test_lut_is_not_silently_accepted(workspace: Path) -> None:
 
 def test_grade_otio_writes_a_document(workspace: Path) -> None:
     _make_clip(workspace / "input.mp4")
-    result = _run(_payload(workspace, command="grade", operation="otio", args=[]))
+    result = _run(
+        _payload(workspace, command="grade", operation="otio", args=[], allow_experimental=True)
+    )
     assert result["success"] is True, result
     artifact = Path(result["artifact_path"])
     assert artifact.suffix == ".otio" and artifact.exists()

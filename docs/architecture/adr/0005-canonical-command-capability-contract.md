@@ -96,6 +96,17 @@ and every page there must be indexed and linked.
   owner lands explicit grants (board task-181).
 - (−) Expected textual conflicts with PR#68 (same studio/docs files) and
   PR#67 (`bus.py`, `CREATIVE_STUDIO.md`); merge order resolves them.
+- (+) **Amendment, task-183 (stacked integration, no new ADR):** PR#67's
+  capability-lifecycle gate is consumed unchanged
+  (`creative/studio/lifecycle.py`, byte-identical to PR#67 @ `9c3a34f`) and
+  wired into this pipeline as sub-stage **4b** — after the actor/capability
+  grant, before policy, references, the idempotency reservation and the
+  handler. The opt-in stays composition-root state
+  (`CommandBus(..., allow_experimental=...)`), never an envelope field; the
+  render-job queue carries it as an explicit per-job operator flag. Proofs:
+  `tests/unit/test_gate2_lifecycle_seam.py` (A–H),
+  `tests/unit/test_gate2_lifecycle_mutations.py` (M1–M5),
+  `tests/architecture/test_lifecycle_gate_boundary.py`.
 - (~) Salvaged from Agent 2: advisory capability snapshots, fail-closed
   locality, the reserved `preview` mode, and the operation-matrix question
   answered from live builders.
