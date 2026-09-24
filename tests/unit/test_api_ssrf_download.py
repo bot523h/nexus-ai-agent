@@ -449,3 +449,18 @@ def test_transport_refuses_plain_http_at_request_time() -> None:
             await transport.aclose()
 
     asyncio.run(_run())
+
+
+def test_is_public_ip_normalizes_ipv4_mapped_before_checking() -> None:
+    """IPv4-mapped IPv6 must be judged by its embedded IPv4 against the
+    explicit v4 block list — stdlib semantics for mapped addresses and
+    for CGNAT changed across versions (CVE-2024-4032); the guard must be
+    deterministic and fail-closed on every supported Python."""
+    from nexus_ai_agent.core.ssrf_guard import is_public_ip
+
+    assert is_public_ip("::ffff:100.64.0.1") is False, "mapped CGNAT must be blocked"
+    assert is_public_ip("::ffff:100.100.100.100") is False, "mapped CGNAT metadata must be blocked"
+    assert is_public_ip("::ffff:127.0.0.1") is False
+    assert is_public_ip("::ffff:169.254.169.254") is False
+    assert is_public_ip("::ffff:10.0.0.5") is False
+    assert is_public_ip("::ffff:8.8.8.8") is True, "mapped public address stays fetchable"

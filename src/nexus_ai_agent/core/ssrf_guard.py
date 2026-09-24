@@ -67,6 +67,14 @@ def is_public_ip(ip: str) -> bool:
         addr = ipaddress.ip_address(ip)
     except ValueError:
         return False
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        # Check the embedded IPv4 against the IPv4 block list explicitly:
+        # stdlib semantics for mapped addresses (and for CGNAT 100.64/10
+        # specifically) changed across versions (CVE-2024-4032 made
+        # ``100.64.0.0/10`` NOT private on 3.12+, and ``is_private`` of a
+        # mapped address delegates to the embedded IPv4) — normalisation
+        # makes the guard deterministic and fail-closed on every Python.
+        addr = addr.ipv4_mapped
     if (
         addr.is_loopback
         or addr.is_link_local
