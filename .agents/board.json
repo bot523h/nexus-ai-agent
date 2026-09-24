@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-24T09:41:42Z",
+  "updated_at": "2026-09-24T11:19:42Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -482,6 +482,41 @@
         ".github/workflows/maintenance.yml",
         "CHANGELOG.md",
         "docs/ops/r2-storage.md"
+      ]
+    },
+    {
+      "id": "creative-runtime-s3",
+      "description": "Session 3B canonical creative runtime: time algebra, execution plan compiler, single-renderer assembly, artifact verifier, execution truth table, 4-state capability lifecycle, canonical OTIO bridge, LUT + subtitle lane instruments (task-177). Locked out: delivery/models+operations (PR#33), render_jobs/surface/worker/api/backup/storage/llm (production integration).",
+      "paths": [
+        "src/nexus_ai_agent/creative/timebase.py",
+        "src/nexus_ai_agent/creative/execution.py",
+        "src/nexus_ai_agent/creative/lifecycle.py",
+        "src/nexus_ai_agent/creative/artifacts.py",
+        "src/nexus_ai_agent/creative/otio/",
+        "src/nexus_ai_agent/creative/rendering/plan.py",
+        "src/nexus_ai_agent/creative/rendering/ir.py",
+        "src/nexus_ai_agent/creative/rendering/compiler.py",
+        "src/nexus_ai_agent/creative/rendering/executor.py",
+        "src/nexus_ai_agent/creative/rendering/__init__.py",
+        "tests/unit/test_runtime_timebase.py",
+        "tests/unit/test_runtime_plan.py",
+        "tests/unit/test_runtime_assembly.py",
+        "tests/unit/test_runtime_execution.py",
+        "tests/unit/test_runtime_lifecycle.py",
+        "tests/unit/test_runtime_otio.py",
+        "tests/unit/test_runtime_otio_real.py",
+        "tests/unit/test_runtime_lut.py",
+        "tests/unit/test_runtime_burnin.py",
+        "tests/unit/test_runtime_artifacts.py",
+        "tests/unit/test_runtime_packaging.py",
+        "tests/architecture/test_runtime_single_path.py",
+        "tests/fixtures/lut/",
+        "assets/luts/",
+        "docs/ops/CREATIVE_RUNTIME.md",
+        "docs/architecture/CREATIVE_STUDIO.md",
+        "docs/README.md",
+        "CHANGELOG.md",
+        "pyproject.toml"
       ]
     }
   ],
@@ -1836,11 +1871,10 @@
     },
     {
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "prerequisites": [],
       "ttl_hours": 48,
-      "gates_owner": false,
-      "note": "",
+      "note": "RECONCILED 2026-09-24: delivered by merged PR#65; terminal status recorded during Session 3B zero-state (same rule as the PR#51 integration and PR#47 stewardship releases: a merged PR must not keep a live lease). exclusive_paths released.",
       "task": "task-165-legacy-creative-hardening",
       "title": "P0-A: auth for GET /creative/jobs/{id} + upload size cap + legacy deprecation ratchet (ADR)",
       "title_fa": "P0-A: احراز هویت GET /creative/jobs + سقف حجم آپلود + ترکمن‌های رسمی deprecation پایپ‌لاین legacy",
@@ -1856,24 +1890,18 @@
       "evidence_required": [
         "pytest tests/unit/test_security_hardening.py tests/architecture/test_legacy_creative_boundary.py"
       ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/api/app.py",
-        "src/nexus_ai_agent/creative/legacy_boundary.py",
-        "tests/unit/test_security_hardening.py",
-        "tests/architecture/test_legacy_creative_boundary.py",
-        "docs/architecture/adr/0006-legacy-creative-pipeline.md",
-        "docs/architecture/adr/README.md"
-      ],
+      "exclusive_paths": [],
       "agent_branch": "arena/01a0d23e-nexus-ai-agent",
-      "claimed_at": "2026-09-24T07:36:43Z"
+      "claimed_at": "2026-09-24T07:36:43Z",
+      "released_at": "2026-09-24T11:19:42Z",
+      "evidence": "PR#65 MERGED → main 035a896 (035a896dd2ed1293de6accf2ef4309da2fd64c89) at 2026-09-24T09:56:32Z; P0-A/B/C scope verified on the merge commit (HMAC GET gate + upload cap + ADR 0006; creative_surface registration + creative/render_jobs.py canonical chain + i18n; backup sha256/download-verify/restore verification + tests). Reconciled by arena/01a0d317-nexus-ai-agent (Session 3B zero-state gate): stale active lease retired, never to be revived."
     },
     {
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "prerequisites": [],
       "ttl_hours": 48,
-      "gates_owner": false,
-      "note": "",
+      "note": "RECONCILED 2026-09-24: delivered by merged PR#65; terminal status recorded during Session 3B zero-state (same rule as the PR#51 integration and PR#47 stewardship releases: a merged PR must not keep a live lease). exclusive_paths released.",
       "task": "task-166-creative-surface-wiring",
       "title": "P0-B: wire creative surface end-to-end — registration, creative_render worker, idempotency, i18n",
       "title_fa": "P0-B: سیم‌کشی انتها به انتهای سطح خلاقیت — رجیستر، worker، idempotency، بومی‌سازی",
@@ -1890,26 +1918,18 @@
       "evidence_required": [
         "pytest tests/unit/test_creative_surface.py tests/unit/test_creative_render_jobs.py tests/unit/test_i18n_parity.py"
       ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/bot/creative_surface.py",
-        "src/nexus_ai_agent/creative/render_jobs.py",
-        "src/nexus_ai_agent/worker.py",
-        "src/nexus_ai_agent/bot/app.py",
-        "src/nexus_ai_agent/i18n/locales/",
-        "tests/unit/test_creative_surface.py",
-        "tests/unit/test_creative_render_jobs.py",
-        "docs/architecture/CREATIVE_STUDIO.md"
-      ],
+      "exclusive_paths": [],
       "agent_branch": "arena/01a0d23e-nexus-ai-agent",
-      "claimed_at": "2026-09-24T07:36:43Z"
+      "claimed_at": "2026-09-24T07:36:43Z",
+      "released_at": "2026-09-24T11:19:42Z",
+      "evidence": "PR#65 MERGED → main 035a896 (035a896dd2ed1293de6accf2ef4309da2fd64c89) at 2026-09-24T09:56:32Z; P0-A/B/C scope verified on the merge commit (HMAC GET gate + upload cap + ADR 0006; creative_surface registration + creative/render_jobs.py canonical chain + i18n; backup sha256/download-verify/restore verification + tests). Reconciled by arena/01a0d317-nexus-ai-agent (Session 3B zero-state gate): stale active lease retired, never to be revived."
     },
     {
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "prerequisites": [],
       "ttl_hours": 48,
-      "gates_owner": false,
-      "note": "",
+      "note": "RECONCILED 2026-09-24: delivered by merged PR#65; terminal status recorded during Session 3B zero-state (same rule as the PR#51 integration and PR#47 stewardship releases: a merged PR must not keep a live lease). exclusive_paths released.",
       "task": "task-167-backup-verifiability",
       "title": "P0-C: backup success criteria = uploaded + integrity-verified + restore-proven; precise failure diagnosis",
       "title_fa": "P0-C: موفقیت بکاپ = آپلود + راستی‌آزمایی یکپارچگی + اثبات restore؛ تشخیص دقیق خرابی",
@@ -1925,14 +1945,72 @@
       "evidence_required": [
         "pytest tests/unit/test_maintenance_backup.py"
       ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/maintenance/backup.py",
-        "tests/unit/test_maintenance_backup.py",
-        ".github/workflows/maintenance.yml",
-        "docs/ops/r2-storage.md"
-      ],
+      "exclusive_paths": [],
       "agent_branch": "arena/01a0d23e-nexus-ai-agent",
-      "claimed_at": "2026-09-24T07:36:43Z"
+      "claimed_at": "2026-09-24T07:36:43Z",
+      "released_at": "2026-09-24T11:19:42Z",
+      "evidence": "PR#65 MERGED → main 035a896 (035a896dd2ed1293de6accf2ef4309da2fd64c89) at 2026-09-24T09:56:32Z; P0-A/B/C scope verified on the merge commit (HMAC GET gate + upload cap + ADR 0006; creative_surface registration + creative/render_jobs.py canonical chain + i18n; backup sha256/download-verify/restore verification + tests). Reconciled by arena/01a0d317-nexus-ai-agent (Session 3B zero-state gate): stale active lease retired, never to be revived."
+    },
+    {
+      "task": "task-177-creative-runtime-s3",
+      "title": "Session 3B canonical creative runtime: plan compiler, real OTIO, lifecycle gate, real LUT/burn-in lanes",
+      "title_fa": "ران‌تایم متعارف نگار (نشست ۳): کامپایلر پلن، OTIO واقعی، دروازه چرخه‌حیات، لین‌های واقعی LUT و زیرنویس",
+      "zone": "creative-runtime-s3",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Freeze one production graph Project→ExecutionPlan→LaneIR/assembly→compiler→render_lane→verified artifact; integer-µs time algebra; E1 segment isolation; 3-segment RGB proof; canonical Nagar↔OTIO converter proven by the real OpenTimelineIO 0.18.1 parser/writer (zero skips); REGISTERED/INSTALLED/AVAILABLE/RUNNABLE lifecycle with fail-closed required-pack gate; honest execution truth table; real lut3d + ASS burn-in lane instruments with shipped .cube fixture; single-renderer + single-converter ratchets.",
+      "scope_fa": "انجماد یک گراف اجرایی متعارف با شواهد بایتی واقعی، مبدل متعارف OTIO با کتابخانه واقعی، دروازه چرخه‌حیات چهارحالته و لین‌های واقعی LUT و burn-in.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "E1: compile A/B/C + recompile A identical (referential isolation, no shared compiler state)",
+        "3-segment RGB proof: one process, exact duration, physical SHA, probe duration, order-sensitive",
+        "time algebra frozen on integer µs with 0/1µs/frame/half-frame/24/30/29.97 tests + documented quantization",
+        "real OTIO 0.18.1 round trip executes (parser+writer), zero skips; matrix incl. gaps/markers/colors/include_markers",
+        "lifecycle denies missing/inactive/unprobed packs with typed errors before mutation (anti-vacuity RED proofs)",
+        "LUT + burn-in render real bytes with observable pixel difference, or typed unavailable (no fake green)",
+        "ruff + format + mypy + targeted + full non-slow + architecture + docs + board gates green; CI 4/4 on the PR head"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_runtime_*.py tests/architecture/test_runtime_single_path.py",
+        "CI run: test + lint + lint-fast + migrate-postgres SUCCESS on the session PR head"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/timebase.py",
+        "src/nexus_ai_agent/creative/execution.py",
+        "src/nexus_ai_agent/creative/lifecycle.py",
+        "src/nexus_ai_agent/creative/artifacts.py",
+        "src/nexus_ai_agent/creative/otio/",
+        "src/nexus_ai_agent/creative/rendering/plan.py",
+        "src/nexus_ai_agent/creative/rendering/ir.py",
+        "src/nexus_ai_agent/creative/rendering/compiler.py",
+        "src/nexus_ai_agent/creative/rendering/executor.py",
+        "src/nexus_ai_agent/creative/rendering/__init__.py",
+        "tests/unit/test_runtime_timebase.py",
+        "tests/unit/test_runtime_plan.py",
+        "tests/unit/test_runtime_assembly.py",
+        "tests/unit/test_runtime_execution.py",
+        "tests/unit/test_runtime_lifecycle.py",
+        "tests/unit/test_runtime_otio.py",
+        "tests/unit/test_runtime_otio_real.py",
+        "tests/unit/test_runtime_lut.py",
+        "tests/unit/test_runtime_burnin.py",
+        "tests/unit/test_runtime_artifacts.py",
+        "tests/unit/test_runtime_packaging.py",
+        "tests/architecture/test_runtime_single_path.py",
+        "tests/fixtures/lut/",
+        "assets/luts/",
+        "docs/ops/CREATIVE_RUNTIME.md",
+        "docs/architecture/CREATIVE_STUDIO.md",
+        "docs/README.md",
+        "CHANGELOG.md",
+        "pyproject.toml"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0d317-nexus-ai-agent",
+      "claimed_at": "2026-09-24T11:19:42Z",
+      "ttl_hours": 48,
+      "gates_owner": false,
+      "note": "Session 3B zero-state: base origin/main 035a896 (PR#65 merged); stale P0 leases 165/166/167 reconciled to done with merge evidence in this same revision; PR#64/#66 used as evidence only (no wholesale port); delivery models/operations + production integration files explicitly out of scope."
     }
   ],
   "deferred_log": [
