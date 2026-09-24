@@ -1,0 +1,3120 @@
+{
+  "schema": "nagar.operation_truth.v1",
+  "generated": {
+    "generated_from": [
+      {
+        "source": "product_catalog",
+        "path": "docs/NAGAR_70_OPERATIONS_TDD.md",
+        "rule": "rows of the seven pack tables, document order (T01..T70)"
+      },
+      {
+        "source": "runtime_registry",
+        "path": "nexus_ai_agent.creative.packs.runtime.build_runtime_registry()"
+      },
+      {
+        "source": "executable_surface",
+        "path": "nexus_ai_agent.bot.creative_surface + nexus_ai_agent.creative.render_jobs + src/nexus_ai_agent/creative/slideshow/service.py"
+      },
+      {
+        "source": "gate4_evidence",
+        "path": "docs/audits/GATE4_TRUTH_MATRIX.json",
+        "consumed": "runtime/artifact/command/job layer verdicts"
+      }
+    ],
+    "generation_command": "python -m nexus_ai_agent.nagar",
+    "source_revision": "b405e12113173fbf980ee90755cacddb1c8f98ac",
+    "generated_at": "2026-09-24T17:57:50Z",
+    "deterministic_fields": [
+      "reconciliation",
+      "operations[*].status",
+      "operations[*].identity.t_id",
+      "operations[*].registrar_pack",
+      "surface.probes",
+      "contract_drift",
+      "provenance.links.operation_id",
+      "provenance.links.command_id",
+      "artifact_evidence.sha256_well_formed"
+    ],
+    "non_deterministic_fields": [
+      "generated.generated_at",
+      "generated.source_revision",
+      "provenance.links.artifact.sha256",
+      "provenance.links.artifact.size_bytes",
+      "provenance.links.artifact.duration_us"
+    ],
+    "non_deterministic_note": "artifact digests and sizes are produced by the local FFmpeg encoder and vary by build; the gate checks their *shape* and the reopen equality, never a hard-coded value"
+  },
+  "reconciliation": {
+    "catalog_count": 70,
+    "runtime_count": 57,
+    "overlap_count": 47,
+    "missing_count": 23,
+    "runtime_only_count": 10,
+    "universe_count": 80,
+    "surface_count": 12,
+    "missing_by_category": {
+      "color": 3,
+      "portrait": 10,
+      "scene": 10
+    },
+    "runtime_only_by_category": {
+      "media": 2,
+      "slideshow": 6,
+      "system": 1,
+      "timeline": 1
+    },
+    "missing": [
+      "color.deband_denoise",
+      "color.hdr_tonemap",
+      "color.white_balance",
+      "portrait.background_blur",
+      "portrait.correct_gaze",
+      "portrait.detect_landmarks",
+      "portrait.enhance_eyes",
+      "portrait.mask_hair",
+      "portrait.relight_face",
+      "portrait.retouch_blemish",
+      "portrait.smooth_skin",
+      "portrait.stabilize_face",
+      "portrait.whiten_teeth",
+      "scene.auto_reframe_subject",
+      "scene.detect_shot_boundaries",
+      "scene.find_subject_moment",
+      "scene.remove_background",
+      "scene.remove_logo",
+      "scene.remove_object",
+      "scene.replace_sky",
+      "scene.segment_subject",
+      "scene.track_face",
+      "scene.track_object"
+    ],
+    "runtime_only": [
+      "media.pause",
+      "media.play",
+      "slideshow.compose",
+      "slideshow.render",
+      "slideshow.scan_assets",
+      "slideshow.score_images",
+      "slideshow.suggest_tone",
+      "slideshow.upscale",
+      "system.undo",
+      "timeline.mark"
+    ]
+  },
+  "surface": {
+    "commands": [
+      "caption",
+      "edit",
+      "grade"
+    ],
+    "pairs": [
+      [
+        "caption",
+        "transcribe"
+      ],
+      [
+        "edit",
+        "reverse"
+      ],
+      [
+        "edit",
+        "speed"
+      ],
+      [
+        "edit",
+        "trim"
+      ],
+      [
+        "grade",
+        "exposure"
+      ],
+      [
+        "grade",
+        "otio"
+      ],
+      [
+        "grade",
+        "proxy"
+      ]
+    ],
+    "probes": {
+      "surface_allow_list": {
+        "count": 7,
+        "operations": [
+          "caption.transcribe",
+          "color.adjust_exposure",
+          "delivery.export_otio",
+          "delivery.make_proxy_480p",
+          "timeline.reverse_segment",
+          "timeline.speed_ramp",
+          "timeline.trim"
+        ],
+        "unresolved": [],
+        "source": "nexus_ai_agent.bot.creative_surface.CreativeSurfaceMapper.ALLOWED"
+      },
+      "worker_closed_set": {
+        "count": 7,
+        "operations": [
+          "caption.transcribe",
+          "color.adjust_exposure",
+          "delivery.export_otio",
+          "delivery.make_proxy_480p",
+          "timeline.reverse_segment",
+          "timeline.speed_ramp",
+          "timeline.trim"
+        ],
+        "source": "nexus_ai_agent.creative.render_jobs.SURFACE_TO_CANONICAL"
+      },
+      "slideshow_entrypoint": {
+        "count": 5,
+        "operations": [
+          "slideshow.compose",
+          "slideshow.render",
+          "slideshow.scan_assets",
+          "slideshow.score_images",
+          "slideshow.suggest_tone"
+        ],
+        "source": "src/nexus_ai_agent/creative/slideshow/service.py bus.dispatch(_command(OPERATION_*, …))"
+      }
+    },
+    "derived_operation_count": 12,
+    "render_lane_operations": [
+      "caption.transcribe",
+      "color.adjust_exposure",
+      "delivery.export_otio",
+      "delivery.make_proxy_480p",
+      "timeline.reverse_segment",
+      "timeline.speed_ramp",
+      "timeline.trim"
+    ],
+    "disagreements": []
+  },
+  "operations": [
+    {
+      "operation_id": "audio.align_music",
+      "identity": {
+        "t_id": "T49",
+        "category": "audio",
+        "catalog_line": 395
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:395",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.audio.models.AlignMusicInput",
+        "handler": "_align_music",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.audio.studio"
+    },
+    {
+      "operation_id": "audio.beat_sync_cut",
+      "identity": {
+        "t_id": "T42",
+        "category": "audio",
+        "catalog_line": 388
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:388",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.audio.models.BeatSyncCutInput",
+        "handler": "_beat_sync_cut",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.audio.studio"
+    },
+    {
+      "operation_id": "audio.deess",
+      "identity": {
+        "t_id": "T48",
+        "category": "audio",
+        "catalog_line": 394
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:394",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.audio.models.DeessInput",
+        "handler": "_deess",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.audio.studio"
+    },
+    {
+      "operation_id": "audio.detect_beats",
+      "identity": {
+        "t_id": "T41",
+        "category": "audio",
+        "catalog_line": 387
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:387",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.audio.models.DetectBeatsInput",
+        "handler": "_detect_beats",
+        "permission_level": "A"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.audio.studio"
+    },
+    {
+      "operation_id": "audio.duck_music",
+      "identity": {
+        "t_id": "T45",
+        "category": "audio",
+        "catalog_line": 391
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:391",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.audio.models.DuckMusicInput",
+        "handler": "_duck_music",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.audio.studio"
+    },
+    {
+      "operation_id": "audio.eq_voice",
+      "identity": {
+        "t_id": "T47",
+        "category": "audio",
+        "catalog_line": 393
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:393",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.audio.models.EqVoiceInput",
+        "handler": "_eq_voice",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.audio.studio"
+    },
+    {
+      "operation_id": "audio.normalize_loudness",
+      "identity": {
+        "t_id": "T46",
+        "category": "audio",
+        "catalog_line": 392
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:392",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.audio.models.NormalizeLoudnessInput",
+        "handler": "_normalize_loudness",
+        "permission_level": "C"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.audio.studio"
+    },
+    {
+      "operation_id": "audio.remove_noise",
+      "identity": {
+        "t_id": "T43",
+        "category": "audio",
+        "catalog_line": 389
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:389",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.audio.models.RemoveNoiseInput",
+        "handler": "_remove_noise",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.audio.studio"
+    },
+    {
+      "operation_id": "audio.remove_vocal",
+      "identity": {
+        "t_id": "T44",
+        "category": "audio",
+        "catalog_line": 390
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:390",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.audio.models.RemoveVocalInput",
+        "handler": "_remove_vocal",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.audio.studio"
+    },
+    {
+      "operation_id": "audio.time_stretch",
+      "identity": {
+        "t_id": "T50",
+        "category": "audio",
+        "catalog_line": 396
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:396",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.audio.models.TimeStretchInput",
+        "handler": "_time_stretch",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.audio.studio"
+    },
+    {
+      "operation_id": "caption.align_words",
+      "identity": {
+        "t_id": "T52",
+        "category": "caption",
+        "catalog_line": 425
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:425",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.caption.models.AlignWordsInput",
+        "handler": "_align_words",
+        "permission_level": "A"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.language.caption"
+    },
+    {
+      "operation_id": "caption.burn_in",
+      "identity": {
+        "t_id": "T60",
+        "category": "caption",
+        "catalog_line": 433
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:433",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.caption.models.BurnInInput",
+        "handler": "_burn_in",
+        "permission_level": "C"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.language.caption"
+    },
+    {
+      "operation_id": "caption.diarize",
+      "identity": {
+        "t_id": "T53",
+        "category": "caption",
+        "catalog_line": 426
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:426",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.caption.models.DiarizeInput",
+        "handler": "_diarize",
+        "permission_level": "A"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.language.caption"
+    },
+    {
+      "operation_id": "caption.generate_ass_rtl",
+      "identity": {
+        "t_id": "T56",
+        "category": "caption",
+        "catalog_line": 429
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:429",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.caption.models.GenerateAssInput",
+        "handler": "_generate_ass_rtl",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.language.caption"
+    },
+    {
+      "operation_id": "caption.generate_srt",
+      "identity": {
+        "t_id": "T55",
+        "category": "caption",
+        "catalog_line": 428
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:428",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.caption.models.GenerateSrtInput",
+        "handler": "_generate_srt",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.language.caption"
+    },
+    {
+      "operation_id": "caption.highlight_words",
+      "identity": {
+        "t_id": "T58",
+        "category": "caption",
+        "catalog_line": 431
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:431",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.caption.models.HighlightWordsInput",
+        "handler": "_highlight_words",
+        "permission_level": "A"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.language.caption"
+    },
+    {
+      "operation_id": "caption.search_transcript",
+      "identity": {
+        "t_id": "T59",
+        "category": "caption",
+        "catalog_line": 432
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:432",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.caption.models.SearchTranscriptInput",
+        "handler": "_search_transcript",
+        "permission_level": "A"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.language.caption"
+    },
+    {
+      "operation_id": "caption.style_vazirmatn",
+      "identity": {
+        "t_id": "T57",
+        "category": "caption",
+        "catalog_line": 430
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:430",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.caption.models.StyleVazirmatnInput",
+        "handler": "_style_vazirmatn",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.language.caption"
+    },
+    {
+      "operation_id": "caption.transcribe",
+      "identity": {
+        "t_id": "T51",
+        "category": "caption",
+        "catalog_line": 424
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:424",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": "nexus_ai_agent.creative.render_jobs.SURFACE_TO_CANONICAL"
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": true,
+        "surface_reachable": true,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "/caption transcribe",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "src/nexus_ai_agent/creative/render_jobs.py `canonical_id == …` execution branches",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.caption.models.TranscribeInput",
+        "handler": "_transcribe",
+        "permission_level": "A"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.language.caption"
+    },
+    {
+      "operation_id": "caption.translate_local",
+      "identity": {
+        "t_id": "T54",
+        "category": "caption",
+        "catalog_line": 427
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:427",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.caption.models.TranslateLocalInput",
+        "handler": "_translate_local",
+        "permission_level": "A"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.language.caption"
+    },
+    {
+      "operation_id": "color.adjust_exposure",
+      "identity": {
+        "t_id": "T62",
+        "category": "color",
+        "catalog_line": 469
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:469",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": "nexus_ai_agent.creative.render_jobs.SURFACE_TO_CANONICAL"
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": true,
+        "surface_reachable": true,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "/grade exposure",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "src/nexus_ai_agent/creative/render_jobs.py `canonical_id == …` execution branches",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.delivery.models.AdjustExposureInput",
+        "handler": "_adjust_exposure",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.color.delivery"
+    },
+    {
+      "operation_id": "color.apply_lut",
+      "identity": {
+        "t_id": "T65",
+        "category": "color",
+        "catalog_line": 472
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:472",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.delivery.models.ApplyLutInput",
+        "handler": "_apply_lut",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.color.delivery"
+    },
+    {
+      "operation_id": "color.auto_balance",
+      "identity": {
+        "t_id": "T61",
+        "category": "color",
+        "catalog_line": 468
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:468",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.delivery.models.AutoBalanceInput",
+        "handler": "_auto_balance",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.color.delivery"
+    },
+    {
+      "operation_id": "color.deband_denoise",
+      "identity": {
+        "t_id": "T67",
+        "category": "color",
+        "catalog_line": 474
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:474",
+        "registered_in": null,
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": false,
+        "domain_ready": false,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "color.hdr_tonemap",
+      "identity": {
+        "t_id": "T66",
+        "category": "color",
+        "catalog_line": 473
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:473",
+        "registered_in": null,
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": false,
+        "domain_ready": false,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "color.match_shot",
+      "identity": {
+        "t_id": "T64",
+        "category": "color",
+        "catalog_line": 471
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:471",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "MISSING",
+        "gate4_artifact_verdict": "MISSING",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.delivery.models.MatchShotInput",
+        "handler": "_match_shot",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.color.delivery"
+    },
+    {
+      "operation_id": "color.white_balance",
+      "identity": {
+        "t_id": "T63",
+        "category": "color",
+        "catalog_line": 470
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:470",
+        "registered_in": null,
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": false,
+        "domain_ready": false,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "delivery.export_otio",
+      "identity": {
+        "t_id": "T70",
+        "category": "delivery",
+        "catalog_line": 477
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:477",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": "nexus_ai_agent.creative.render_jobs.SURFACE_TO_CANONICAL"
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": true,
+        "surface_reachable": true,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "/grade otio",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "src/nexus_ai_agent/creative/render_jobs.py `canonical_id == …` execution branches",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.delivery.models.ExportOtioInput",
+        "handler": "_export_otio",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.color.delivery"
+    },
+    {
+      "operation_id": "delivery.make_proxy_480p",
+      "identity": {
+        "t_id": "T68",
+        "category": "delivery",
+        "catalog_line": 475
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:475",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": "nexus_ai_agent.creative.render_jobs.SURFACE_TO_CANONICAL"
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": true,
+        "surface_reachable": true,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "/grade proxy",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "src/nexus_ai_agent/creative/render_jobs.py `canonical_id == …` execution branches",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.delivery.models.MakeProxyInput",
+        "handler": "_make_proxy",
+        "permission_level": "A"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.color.delivery"
+    },
+    {
+      "operation_id": "delivery.render_master_4k",
+      "identity": {
+        "t_id": "T69",
+        "category": "delivery",
+        "catalog_line": 476
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:476",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.delivery.models.RenderMaster4KInput",
+        "handler": "_render_master_4k",
+        "permission_level": "C"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.color.delivery"
+    },
+    {
+      "operation_id": "media.pause",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "media",
+        "catalog_line": null
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": false,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.studio.capabilities.PauseCommandInput",
+        "handler": "_media_pause",
+        "permission_level": "A"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus_ai_agent.creative.studio.capabilities.build_wave1_registry()"
+    },
+    {
+      "operation_id": "media.play",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "media",
+        "catalog_line": null
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": false,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.studio.capabilities.PlayCommandInput",
+        "handler": "_media_play",
+        "permission_level": "A"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus_ai_agent.creative.studio.capabilities.build_wave1_registry()"
+    },
+    {
+      "operation_id": "motion.add_glow",
+      "identity": {
+        "t_id": "T35",
+        "category": "motion",
+        "catalog_line": 358
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:358",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.motion.models.AddGlowInput",
+        "handler": "_add_glow",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.motion.graphics"
+    },
+    {
+      "operation_id": "motion.add_motion_blur",
+      "identity": {
+        "t_id": "T36",
+        "category": "motion",
+        "catalog_line": 359
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:359",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.motion.models.AddMotionBlurInput",
+        "handler": "_add_motion_blur",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.motion.graphics"
+    },
+    {
+      "operation_id": "motion.add_parallax",
+      "identity": {
+        "t_id": "T33",
+        "category": "motion",
+        "catalog_line": 356
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:356",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.motion.models.AddParallaxInput",
+        "handler": "_add_parallax",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.motion.graphics"
+    },
+    {
+      "operation_id": "motion.add_particles",
+      "identity": {
+        "t_id": "T40",
+        "category": "motion",
+        "catalog_line": 363
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:363",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.motion.models.AddParticlesInput",
+        "handler": "_add_particles",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.motion.graphics"
+    },
+    {
+      "operation_id": "motion.add_title",
+      "identity": {
+        "t_id": "T39",
+        "category": "motion",
+        "catalog_line": 362
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:362",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.motion.models.AddTitleInput",
+        "handler": "_add_title",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.motion.graphics"
+    },
+    {
+      "operation_id": "motion.add_transition",
+      "identity": {
+        "t_id": "T31",
+        "category": "motion",
+        "catalog_line": 354
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:354",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "MISSING",
+        "gate4_artifact_verdict": "MISSING",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.motion.models.AddTransitionInput",
+        "handler": "_add_transition",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.motion.graphics"
+    },
+    {
+      "operation_id": "motion.apply_mask",
+      "identity": {
+        "t_id": "T34",
+        "category": "motion",
+        "catalog_line": 357
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:357",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.motion.models.ApplyMaskInput",
+        "handler": "_apply_mask",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.motion.graphics"
+    },
+    {
+      "operation_id": "motion.keyframe_transform",
+      "identity": {
+        "t_id": "T32",
+        "category": "motion",
+        "catalog_line": 355
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:355",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.motion.models.KeyframeTransformInput",
+        "handler": "_keyframe_transform",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.motion.graphics"
+    },
+    {
+      "operation_id": "motion.stabilize",
+      "identity": {
+        "t_id": "T37",
+        "category": "motion",
+        "catalog_line": 360
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:360",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.motion.models.StabilizeInput",
+        "handler": "_stabilize",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.motion.graphics"
+    },
+    {
+      "operation_id": "motion.warp",
+      "identity": {
+        "t_id": "T38",
+        "category": "motion",
+        "catalog_line": 361
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:361",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.motion.models.WarpInput",
+        "handler": "_warp",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.motion.graphics"
+    },
+    {
+      "operation_id": "portrait.background_blur",
+      "identity": {
+        "t_id": "T19",
+        "category": "portrait",
+        "catalog_line": 286
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:286",
+        "registered_in": null,
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": false,
+        "domain_ready": false,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "portrait.correct_gaze",
+      "identity": {
+        "t_id": "T16",
+        "category": "portrait",
+        "catalog_line": 283
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:283",
+        "registered_in": null,
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": false,
+        "domain_ready": false,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "portrait.detect_landmarks",
+      "identity": {
+        "t_id": "T11",
+        "category": "portrait",
+        "catalog_line": 278
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:278",
+        "registered_in": null,
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": false,
+        "domain_ready": false,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "portrait.enhance_eyes",
+      "identity": {
+        "t_id": "T17",
+        "category": "portrait",
+        "catalog_line": 284
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:284",
+        "registered_in": null,
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": false,
+        "domain_ready": false,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "portrait.mask_hair",
+      "identity": {
+        "t_id": "T18",
+        "category": "portrait",
+        "catalog_line": 285
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:285",
+        "registered_in": null,
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": false,
+        "domain_ready": false,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "portrait.relight_face",
+      "identity": {
+        "t_id": "T14",
+        "category": "portrait",
+        "catalog_line": 281
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:281",
+        "registered_in": null,
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": false,
+        "domain_ready": false,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "portrait.retouch_blemish",
+      "identity": {
+        "t_id": "T13",
+        "category": "portrait",
+        "catalog_line": 280
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:280",
+        "registered_in": null,
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": false,
+        "domain_ready": false,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "portrait.smooth_skin",
+      "identity": {
+        "t_id": "T12",
+        "category": "portrait",
+        "catalog_line": 279
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:279",
+        "registered_in": null,
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": false,
+        "domain_ready": false,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "portrait.stabilize_face",
+      "identity": {
+        "t_id": "T20",
+        "category": "portrait",
+        "catalog_line": 287
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:287",
+        "registered_in": null,
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": false,
+        "domain_ready": false,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "portrait.whiten_teeth",
+      "identity": {
+        "t_id": "T15",
+        "category": "portrait",
+        "catalog_line": 282
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:282",
+        "registered_in": null,
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": false,
+        "domain_ready": false,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "scene.auto_reframe_subject",
+      "identity": {
+        "t_id": "T30",
+        "category": "scene",
+        "catalog_line": 324
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:324",
+        "registered_in": null,
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": false,
+        "domain_ready": false,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "scene.detect_shot_boundaries",
+      "identity": {
+        "t_id": "T27",
+        "category": "scene",
+        "catalog_line": 321
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:321",
+        "registered_in": null,
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": false,
+        "domain_ready": false,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "scene.find_subject_moment",
+      "identity": {
+        "t_id": "T28",
+        "category": "scene",
+        "catalog_line": 322
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:322",
+        "registered_in": null,
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": false,
+        "domain_ready": false,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "scene.remove_background",
+      "identity": {
+        "t_id": "T24",
+        "category": "scene",
+        "catalog_line": 318
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:318",
+        "registered_in": null,
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": false,
+        "domain_ready": false,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "scene.remove_logo",
+      "identity": {
+        "t_id": "T29",
+        "category": "scene",
+        "catalog_line": 323
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:323",
+        "registered_in": null,
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": false,
+        "domain_ready": false,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "scene.remove_object",
+      "identity": {
+        "t_id": "T22",
+        "category": "scene",
+        "catalog_line": 316
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:316",
+        "registered_in": null,
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": false,
+        "domain_ready": false,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "MISSING",
+        "gate4_artifact_verdict": "MISSING",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "scene.replace_sky",
+      "identity": {
+        "t_id": "T23",
+        "category": "scene",
+        "catalog_line": 317
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:317",
+        "registered_in": null,
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": false,
+        "domain_ready": false,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "scene.segment_subject",
+      "identity": {
+        "t_id": "T21",
+        "category": "scene",
+        "catalog_line": 315
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:315",
+        "registered_in": null,
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": false,
+        "domain_ready": false,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "scene.track_face",
+      "identity": {
+        "t_id": "T26",
+        "category": "scene",
+        "catalog_line": 320
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:320",
+        "registered_in": null,
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": false,
+        "domain_ready": false,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "scene.track_object",
+      "identity": {
+        "t_id": "T25",
+        "category": "scene",
+        "catalog_line": 319
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:319",
+        "registered_in": null,
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": false,
+        "domain_ready": false,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "slideshow.compose",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "slideshow",
+        "catalog_line": null
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": "src/nexus_ai_agent/creative/slideshow/service.py bus.dispatch(_command(OPERATION_*, …))"
+      },
+      "status": {
+        "defined": false,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": true,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "/slideshow",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.slideshow.models.ComposeInput",
+        "handler": "_compose",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.slideshow.compose"
+    },
+    {
+      "operation_id": "slideshow.render",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "slideshow",
+        "catalog_line": null
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": "src/nexus_ai_agent/creative/slideshow/service.py bus.dispatch(_command(OPERATION_*, …))"
+      },
+      "status": {
+        "defined": false,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": true,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "/slideshow",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.slideshow.models.RenderInput",
+        "handler": "_render",
+        "permission_level": "C"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.slideshow.compose"
+    },
+    {
+      "operation_id": "slideshow.scan_assets",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "slideshow",
+        "catalog_line": null
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": "src/nexus_ai_agent/creative/slideshow/service.py bus.dispatch(_command(OPERATION_*, …))"
+      },
+      "status": {
+        "defined": false,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": true,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "/slideshow",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.slideshow.operations.ScanAssetsInput",
+        "handler": "_scan_assets",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.slideshow.compose"
+    },
+    {
+      "operation_id": "slideshow.score_images",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "slideshow",
+        "catalog_line": null
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": "src/nexus_ai_agent/creative/slideshow/service.py bus.dispatch(_command(OPERATION_*, …))"
+      },
+      "status": {
+        "defined": false,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": true,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "/slideshow",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.slideshow.operations.ScoreImagesInput",
+        "handler": "_score_images",
+        "permission_level": "A"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.slideshow.compose"
+    },
+    {
+      "operation_id": "slideshow.suggest_tone",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "slideshow",
+        "catalog_line": null
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": "src/nexus_ai_agent/creative/slideshow/service.py bus.dispatch(_command(OPERATION_*, …))"
+      },
+      "status": {
+        "defined": false,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": true,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "/slideshow",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.slideshow.operations.SuggestToneInput",
+        "handler": "_suggest_tone",
+        "permission_level": "A"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.slideshow.compose"
+    },
+    {
+      "operation_id": "slideshow.upscale",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "slideshow",
+        "catalog_line": null
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": false,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.slideshow.models.UpscaleInput",
+        "handler": "_upscale",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.slideshow.compose"
+    },
+    {
+      "operation_id": "system.undo",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "system",
+        "catalog_line": null
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": false,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.studio.capabilities.UndoCommandInput",
+        "handler": "_system_undo",
+        "permission_level": "A"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus_ai_agent.creative.studio.capabilities.build_wave1_registry()"
+    },
+    {
+      "operation_id": "timeline.attach_b_roll",
+      "identity": {
+        "t_id": "T08",
+        "category": "timeline",
+        "catalog_line": 244
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:244",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.edit.models.AttachBRollInput",
+        "handler": "_attach_b_roll",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.edit.timeline"
+    },
+    {
+      "operation_id": "timeline.freeze_frame",
+      "identity": {
+        "t_id": "T07",
+        "category": "timeline",
+        "catalog_line": 243
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:243",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.edit.models.FreezeFrameInput",
+        "handler": "_freeze_frame",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.edit.timeline"
+    },
+    {
+      "operation_id": "timeline.insert_gap",
+      "identity": {
+        "t_id": "T04",
+        "category": "timeline",
+        "catalog_line": 240
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:240",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.edit.models.InsertGapInput",
+        "handler": "_insert_gap",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.edit.timeline"
+    },
+    {
+      "operation_id": "timeline.mark",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "timeline",
+        "catalog_line": null
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": false,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.studio.capabilities.MarkCommandInput",
+        "handler": "_timeline_mark",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus_ai_agent.creative.studio.capabilities.build_wave1_registry()"
+    },
+    {
+      "operation_id": "timeline.retime_to_music",
+      "identity": {
+        "t_id": "T10",
+        "category": "timeline",
+        "catalog_line": 246
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:246",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.edit.models.RetimeToMusicInput",
+        "handler": "_retime_to_music",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.edit.timeline"
+    },
+    {
+      "operation_id": "timeline.reverse_segment",
+      "identity": {
+        "t_id": "T06",
+        "category": "timeline",
+        "catalog_line": 242
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:242",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": "nexus_ai_agent.creative.render_jobs.SURFACE_TO_CANONICAL"
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": true,
+        "surface_reachable": true,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "/edit reverse",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "src/nexus_ai_agent/creative/render_jobs.py `canonical_id == …` execution branches",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.edit.models.ReverseSegmentInput",
+        "handler": "_reverse_segment",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.edit.timeline"
+    },
+    {
+      "operation_id": "timeline.ripple_delete",
+      "identity": {
+        "t_id": "T03",
+        "category": "timeline",
+        "catalog_line": 239
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:239",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.edit.models.RippleDeleteInput",
+        "handler": "_ripple_delete",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.edit.timeline"
+    },
+    {
+      "operation_id": "timeline.speed_ramp",
+      "identity": {
+        "t_id": "T05",
+        "category": "timeline",
+        "catalog_line": 241
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:241",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": "nexus_ai_agent.creative.render_jobs.SURFACE_TO_CANONICAL"
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": true,
+        "surface_reachable": true,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "/edit speed",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "src/nexus_ai_agent/creative/render_jobs.py `canonical_id == …` execution branches",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.edit.models.SpeedRampInput",
+        "handler": "_speed_ramp",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.edit.timeline"
+    },
+    {
+      "operation_id": "timeline.split_at_playhead",
+      "identity": {
+        "t_id": "T01",
+        "category": "timeline",
+        "catalog_line": 237
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:237",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "MISSING",
+        "gate4_artifact_verdict": "MISSING",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.studio.capabilities.SplitCommandInput",
+        "handler": "_timeline_split_at_playhead",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus_ai_agent.creative.studio.capabilities.build_wave1_registry()"
+    },
+    {
+      "operation_id": "timeline.sync_multicam",
+      "identity": {
+        "t_id": "T09",
+        "category": "timeline",
+        "catalog_line": 245
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:245",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": false,
+        "surface_reachable": false,
+        "runtime_proven": false,
+        "artifact_proven": false,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "gate4_artifact_verdict": "NOT_AVAILABLE",
+        "executor_lane": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.edit.models.SyncMulticamInput",
+        "handler": "_sync_multicam",
+        "permission_level": "A"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.edit.timeline"
+    },
+    {
+      "operation_id": "timeline.trim",
+      "identity": {
+        "t_id": "T02",
+        "category": "timeline",
+        "catalog_line": 238
+      },
+      "source": {
+        "defined_in": "docs/NAGAR_70_OPERATIONS_TDD.md:238",
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": "nexus_ai_agent.creative.render_jobs.SURFACE_TO_CANONICAL"
+      },
+      "status": {
+        "defined": true,
+        "registered": true,
+        "domain_ready": true,
+        "executor_ready": true,
+        "surface_reachable": true,
+        "runtime_proven": true,
+        "artifact_proven": true,
+        "production_like": null
+      },
+      "evidence": {
+        "surface_entrypoint": "/edit trim",
+        "gate4_runtime_verdict": "PASS",
+        "gate4_artifact_verdict": "PASS",
+        "executor_lane": "src/nexus_ai_agent/creative/render_jobs.py `canonical_id == …` execution branches",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording it would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.edit.models.TrimInput",
+        "handler": "_trim",
+        "permission_level": "B"
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.edit.timeline"
+    }
+  ],
+  "provenance": {
+    "T02": {
+      "operation_id": "timeline.trim",
+      "links": {
+        "operation_id": "timeline.trim",
+        "t_id": "T02",
+        "command_id": "cmd-gate:42:4242:1001-timeline.trim",
+        "idempotency_key": "gate:42:4242:1001",
+        "job_id": "NOT_AVAILABLE",
+        "job_id_evidence": "Per-run values asserted in-test but excluded from this deterministic artifact: queue job_id (uuid4), bus transaction_id (tx_{uuid4}), project state_hash (digests that tx uuid). Stable provenance kept here: command_id → operation_id → revision 1..5 → artifact sha256/size/duration.",
+        "revision": 2,
+        "artifact": {
+          "sha256": "sha256:3bc1bd622af7e81cb0357feec84332064ec61e7c80977919beb00179d1c2f135",
+          "size_bytes": 51611,
+          "duration_us": 1000000,
+          "height": 720
+        },
+        "verification": {
+          "reopen_status": "completed",
+          "reopen_digest_matches": true,
+          "resume_pending_reexecuted": 0
+        },
+        "bus_state_limitation": "Project/EditTransaction state is in-memory per CommandBus by contract (PR#68): durable reopen covers job rows + artifact facts; bus history reopen across restart is NOT_VERIFIED (no persistence layer exists)."
+      },
+      "findings": [],
+      "intact": true
+    }
+  },
+  "artifact_evidence": {
+    "T02": {
+      "operation_id": "timeline.trim",
+      "exists": true,
+      "size_bytes": 51611,
+      "size_positive": true,
+      "sha256": "sha256:3bc1bd622af7e81cb0357feec84332064ec61e7c80977919beb00179d1c2f135",
+      "sha256_well_formed": true,
+      "probe": {
+        "duration_us": 1000000,
+        "height": 720
+      },
+      "verification_status": "completed",
+      "logical_identity": "NOT_AVAILABLE",
+      "spec_identity": "NOT_AVAILABLE",
+      "physical_identity": "NOT_AVAILABLE",
+      "identity_reason": "the JobQueuePort row and the render record carry a path and a digest, not logical/spec/physical artifact identities; Agent 1 owns that schema"
+    }
+  },
+  "job_boundary": {
+    "implemented_here": false,
+    "consumed_fields": {
+      "job_exists": {
+        "available": true,
+        "evidence": "docs/audits/GATE4_TRUTH_MATRIX.json reopen.fresh_instance_status"
+      },
+      "job_terminal_state": {
+        "available": true,
+        "evidence": "JobStatus = [pending, processing, completed, failed]"
+      },
+      "runtime_outcome": {
+        "available": true,
+        "evidence": "creative/render_jobs.py typed error_code taxonomy"
+      },
+      "artifact_verification": {
+        "available": true,
+        "evidence": "reopen digest equality + probe facts"
+      },
+      "artifact_identity": {
+        "available": false,
+        "evidence": "NOT_AVAILABLE",
+        "reason": "no logical/spec/physical identity field exists in the port or the record"
+      },
+      "job_id_in_deterministic_artifact": {
+        "available": false,
+        "evidence": "NOT_AVAILABLE",
+        "reason": "uuid4 per run; Gate 4 excludes it from the deterministic artifact as volatile"
+      },
+      "retry_terminal_split": {
+        "available": false,
+        "evidence": "NOT_AVAILABLE",
+        "reason": "JobStatus has no FAILED_RETRYABLE/TERMINAL_FAILED states (a Gate 4 limitation)"
+      }
+    }
+  },
+  "contract_drift": [
+    {
+      "kind": "maturity_vocabulary_fingerprints",
+      "detail": {
+        "docs/L0_L4_MATURITY.md:1:L0": "696dc97975857cc3",
+        "docs/L0_L4_MATURITY.md:1:L4": "696dc97975857cc3",
+        "docs/L0_L4_MATURITY.md:20:L0": "4b35a9e83f8bbed5",
+        "docs/L0_L4_MATURITY.md:21:L1": "e4981180956c9d59",
+        "docs/L0_L4_MATURITY.md:22:L2": "39a07047d32964fa",
+        "docs/L0_L4_MATURITY.md:23:L3": "0825cd6343e6271b",
+        "docs/L0_L4_MATURITY.md:24:L4": "634278ec6c5de37b",
+        "docs/architecture/MODULE_MAP.md:31:L1": "e6cd11014eb7512a",
+        "docs/architecture/MODULE_MAP.md:32:L1": "d9abbed78d6f1e23",
+        "docs/architecture/MODULE_MAP.md:33:L1": "36243c8d80cbc7fe",
+        "docs/architecture/MODULE_MAP.md:34:L2": "7b9e4b756d66b277",
+        "docs/architecture/MODULE_MAP.md:35:L1": "625afa99d1a1dd9f",
+        "docs/architecture/MODULE_MAP.md:36:L3": "5fdb9d7068577797",
+        "docs/architecture/MODULE_MAP.md:37:L3": "2abb8284e3dffd85",
+        "docs/architecture/MODULE_MAP.md:38:L3": "537fe0e16e827312",
+        "docs/architecture/MODULE_MAP.md:39:L3": "86bc8533761588fe",
+        "docs/architecture/MODULE_MAP.md:40:L4": "a1c51432e88efcbc",
+        "docs/architecture/MODULE_MAP.md:41:L4": "4c63b24757f6a1c0",
+        "docs/architecture/MODULE_MAP.md:42:L4": "7fff0eb193ab8de2",
+        "docs/architecture/MODULE_MAP.md:43:L4": "6a3c3e95b15b5b85",
+        "docs/architecture/MODULE_MAP.md:44:L4": "51cff8c33fa00a85",
+        "docs/architecture/MODULE_MAP.md:45:L4": "08f1fb35dff37a90",
+        "docs/architecture/MODULE_MAP.md:46:L4": "1a5b0fe42cdb529a",
+        "docs/architecture/MODULE_MAP.md:47:L4": "a1a4de40d06a70a2"
+      },
+      "note": "declared L0–L4 definition fingerprints; the gate reds when one of these lines changes or a new ladder appears in a declared source"
+    }
+  ]
+}

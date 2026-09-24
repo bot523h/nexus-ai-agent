@@ -37,9 +37,26 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
+      # ── Gate 2.2: Operation Truth drift ────────────────────────────────────
+      # A named step, so a drifted projection reports "Operation Truth drift"
+      # instead of a generic test failure.  It recomputes the catalogue/runtime/
+      # surface measurement and fails when OPERATION_TRUTH.json no longer
+      # matches its sources.  tests/architecture/test_operation_truth_gate.py
+      # runs the same comparison from inside pytest; this step exists for the
+      # signal's *name*, not for extra coverage.
+      - name: Operation Truth drift (Gate 2.2)
+        run: python -m nexus_ai_agent.nagar --check
       - run: |
           set -o pipefail
           pytest -v -m "not slow" --tb=short 2>&1 | tee pytest.log
+      # ── Gate 2.2: runtime confirmation (needs a real FFmpeg) ───────────────
+      # The architecture gate derives the /slideshow surface by *parsing* the
+      # service module; these tests execute it and require the two derivations
+      # to agree.  Marked `slow` (one real encode, ~2.5 min) and therefore
+      # excluded above — but run here, so the confirmation is never dropped,
+      # only *named*.
+      - name: Operation Truth runtime confirmation (Gate 2.2)
+        run: pytest -q -m slow tests/unit/test_operation_truth_runtime_confirmation.py --tb=short
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

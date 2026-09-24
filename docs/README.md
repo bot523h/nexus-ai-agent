@@ -36,6 +36,7 @@ placeholder text.
 | [architecture/adr/0002-docs-as-code-enforcement.md](architecture/adr/0002-docs-as-code-enforcement.md) | Enforce documentation in Python now; Node toolchain on a recorded trigger. |
 | [architecture/adr/0003-mermaid-flowchart-for-c4-views.md](architecture/adr/0003-mermaid-flowchart-for-c4-views.md) | Express C4 views with Mermaid `flowchart`. |
 | [architecture/adr/0004-board-schema-2.md](architecture/adr/0004-board-schema-2.md) | Coordination board schema 2: prerequisites, acceptance criteria, history split. |
+| [architecture/adr/0005-three-layer-operation-truth.md](architecture/adr/0005-three-layer-operation-truth.md) | Decoupling Product Catalog, Runtime Registry, and Executable Surface. |
 
 ## Authoritative records
 
@@ -45,7 +46,10 @@ placeholder text.
 | [../ROADMAP_STATUS.md](../ROADMAP_STATUS.md) | Living roadmap status with per-wave commit anchors. |
 | [../REQUIREMENTS_LEDGER.md](../REQUIREMENTS_LEDGER.md) | PR1/PR2/PR3 checkpoint-lifecycle requirements ledger. |
 | [../AGENTS.md](../AGENTS.md) | Multi-agent coordination contract + current board summary. |
-| [NAGAR_70_OPERATIONS_TDD.md](NAGAR_70_OPERATIONS_TDD.md) | Phase 6 (Nagar creative studio) technical design baseline — 71 operation ids. |
+| [NAGAR_70_OPERATIONS_TDD.md](NAGAR_70_OPERATIONS_TDD.md) | Phase 6 (Nagar creative studio) technical design baseline — 70 operation ids across seven pack tables (re-measured in Gate 2.2; see `OPERATION_TRUTH.json`). |
+| [OPERATION_CONTRACT_MATRIX.md](OPERATION_CONTRACT_MATRIX.md) | Living operation contract matrix & truth table across all 80 universe operations. |
+| [RECONCILIATION.md](RECONCILIATION.md) | Reconciling Product Catalog (70) vs Runtime Registry (57) vs Executable Surface (9) and preserving 23 gaps. |
+| [L0_L4_MATURITY.md](L0_L4_MATURITY.md) | Nagar operation capability maturity model (L0 Not Implemented to L4 Surface Proven). |
 | [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) | End-user guide: bring any NEXUS database to the Alembic head. |
 
 ## Protocols
@@ -81,6 +85,8 @@ placeholder text.
 | [audits/PR32_TRIAGE_2026-09-21.md](audits/PR32_TRIAGE_2026-09-21.md) | Forensic per-file triage of PR#32 vs merged PR#34 (15 SUPERSEDED / 4 DROP / 3 PORT / 4 ADAPT) — basis of the supersession. |
 | [audits/P0_STABILIZATION_2026-09-24.md](audits/P0_STABILIZATION_2026-09-24.md) | Owner-directed P0 day (task-165/166/167): legacy `/creative/*` lane disposition, studio surface wiring, verifiable backups — repro/evidence-first report. |
 | [audits/DEAD_ENGINES_2026-09-22.md](audits/DEAD_ENGINES_2026-09-22.md) | Dead-engine verification (zero importers, measured gates), five-option wiring analysis, negative controls, and the recorded residuals. |
+| [audits/GATE22_OPERATION_TRUTH_AUDIT_2026-09-24.md](audits/GATE22_OPERATION_TRUTH_AUDIT_2026-09-24.md) | Gate 2.2: Operation Truth as an executable evidence gate — independent recomputation, mutation probes, PR #67/#68/#69/#70 reconciliation, and the corrected L4/READY claims. |
+| [audits/FINAL_CLOSURE_2026-09-24.md](audits/FINAL_CLOSURE_2026-09-24.md) | Final closure pass: repository/CI/Git truth re-read from GitHub, the #74→#71 ancestry, independent re-execution of GAP-A/B/C, a measured RAG-receipt gap, and GAP-D recorded as an accepted open gap. |
 
 ## History (archived — read-only, never a source of truth)
 
