@@ -276,7 +276,9 @@ def test_captured_stdlib_nondict_args_rendered_safely(
 ) -> None:
     """Non-string args (dict / list / object repr) are %-rendered after
     the filter runs — their contents must be masked before rendering."""
-    logging.getLogger("app").error("request context: %s", {"authorization": f"Basic {BASIC_CREDENTIAL}"})
+    logging.getLogger("app").error(
+        "request context: %s", {"authorization": f"Basic {BASIC_CREDENTIAL}"}
+    )
     logging.getLogger("app").error("retries: %s", [{"password": "pw-secret-43"}])
     rendered = "\n".join(captured_root_logs.lines)
     assert BASIC_CREDENTIAL not in rendered
@@ -289,7 +291,9 @@ def test_captured_stdlib_exc_info_traceback_redacted(
     """Formatter renders exc_info at emit time, after handler filters —
     the boundary must pre-render + redact the traceback itself."""
     try:
-        raise RuntimeError(f"telegram call failed: https://api.telegram.org/bot{BOT_TOKEN}/sendMessage")
+        raise RuntimeError(
+            f"telegram call failed: https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        )
     except RuntimeError:
         logging.getLogger("app").exception("send failed")
     rendered = "\n".join(captured_root_logs.lines)
@@ -332,7 +336,9 @@ def test_captured_stdlib_exc_info_traceback_rendered_through_production_formatte
 def test_captured_stdlib_basic_scheme_arg_redacted(
     captured_root_logs: _Capture,
 ) -> None:
-    logging.getLogger("httpx").info("HTTP Request: GET https://internal.example.com/ %s", f"Basic {BASIC_CREDENTIAL}")
+    logging.getLogger("httpx").info(
+        "HTTP Request: GET https://internal.example.com/ %s", f"Basic {BASIC_CREDENTIAL}"
+    )
     rendered = "\n".join(captured_root_logs.lines)
     assert BASIC_CREDENTIAL not in rendered
 
@@ -347,7 +353,9 @@ def test_basic_scheme_redacted_in_every_surface() -> None:
     ]
     for text in cases:
         assert BASIC_CREDENTIAL not in redact_secrets(text), text
-    assert BASIC_CREDENTIAL not in str(_redact_processor(None, "info", {"header": f"Basic {BASIC_CREDENTIAL}"}))
+    assert BASIC_CREDENTIAL not in str(
+        _redact_processor(None, "info", {"header": f"Basic {BASIC_CREDENTIAL}"})
+    )
 
 
 def test_basic_word_in_prose_is_not_over_redacted() -> None:
@@ -367,9 +375,11 @@ def test_captured_stdlib_object_arg_repr_redacted_by_final_boundary(
     """Arbitrary objects passed as %s args are repr()-rendered lazily —
     the filter cannot rewrite them in place, so the wrapped formatter
     (final boundary) must mask the rendered line."""
+
     class _LeakyClient:  # noqa: D401 — repr carries a header dump
         def __repr__(self) -> str:  # noqa: D105
             return f"<Client headers={{'Authorization': 'Basic {BASIC_CREDENTIAL}'}}>"
+
     logging.getLogger("app").error("client: %s", _LeakyClient())
     rendered = "\n".join(captured_root_logs.lines)
     assert BASIC_CREDENTIAL not in rendered, "object repr leaked through the final boundary"
@@ -383,11 +393,13 @@ def test_captured_stdlib_object_arg_repr_fresh_credential_redacted(
     filter (cannot rewrite opaque objects) nor shape-regexes on the value
     can save this — only the final-boundary rendered-line redaction with
     repr-aware key matching can."""
+
     class _LeakySession:  # noqa: D401
         def __repr__(self) -> str:  # noqa: D105
             # the exact shape repr({'api_key': ...}) renders:
             # single-quoted KEY, colon, quoted value
             return "<Session {'api_key': 'fresh-credential-xyz-987654'}>"
+
     logging.getLogger("app").error("session: %s", _LeakySession())
     rendered = "\n".join(captured_root_logs.lines)
     assert "fresh-credential-xyz-987654" not in rendered, "fresh credential in object repr leaked"

@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal, cast
 from urllib.parse import urlsplit, urlunsplit
 
 import structlog
@@ -197,9 +197,7 @@ class SecretRedactionFilter(logging.Filter):
         elif args:
             record.args = tuple(_redact_value(arg) for arg in args)
         if record.exc_info and not record.exc_text:
-            record.exc_text = redact_secrets(
-                self._exc_formatter.formatException(record.exc_info)
-            )
+            record.exc_text = redact_secrets(self._exc_formatter.formatException(record.exc_info))
         if record.stack_info:
             record.stack_info = redact_secrets(record.stack_info)
         return True
@@ -222,7 +220,7 @@ class RedactingFormatter(logging.Formatter):
         super().__init__(
             fmt=getattr(base, "_fmt", None) or "%(message)s",
             datefmt=getattr(base, "datefmt", None),
-            style=style_char,
+            style=cast(Literal["%", "{", "$"], style_char),
         )
         self._base = base
 

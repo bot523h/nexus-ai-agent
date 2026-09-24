@@ -347,14 +347,24 @@ class _ClosureScriptedBackend(httpcore.AsyncNetworkBackend):
         self.connects: list[str] = []
 
     async def connect_tcp(
-        self, host: str, port: int, timeout: Any = None,
-        local_address: Any = None, socket_options: Any = None,
+        self,
+        host: str,
+        port: int,
+        timeout: Any = None,
+        local_address: Any = None,
+        socket_options: Any = None,
     ) -> httpcore.AsyncNetworkStream:
         self.connects.append(f"{host}:{port}")
-        payload = self._responses.pop(0) if self._responses else b"HTTP/1.1 500 X\r\nContent-Length: 0\r\n\r\n"
+        payload = (
+            self._responses.pop(0)
+            if self._responses
+            else b"HTTP/1.1 500 X\r\nContent-Length: 0\r\n\r\n"
+        )
         return _ScriptedStream(payload)
 
-    async def connect_unix_socket(self, path: str, timeout: Any = None, socket_options: Any = None) -> Any:
+    async def connect_unix_socket(
+        self, path: str, timeout: Any = None, socket_options: Any = None
+    ) -> Any:
         raise AssertionError("unix sockets must not be used")
 
     async def sleep(self, seconds: float) -> None:
@@ -388,9 +398,18 @@ async def test_https_to_http_redirect_is_refused_not_followed(
 ) -> None:
     """A 302 to an http:// URL must NOT be followed: no second (plaintext)
     connection may be established and no body may be consumed."""
-    hop1 = b"HTTP/1.1 302 Found\r\nLocation: http://93.184.216.34:80/payload.bin\r\nContent-Length: 0\r\n\r\n"
+    hop1 = (
+        b"HTTP/1.1 302 Found\r\n"
+        b"Location: http://93.184.216.34:80/payload.bin\r\n"
+        b"Content-Length: 0\r\n\r\n"
+    )
     hop2_payload = b"DOWNGRADED-CONTENT"
-    hop2 = b"HTTP/1.1 200 OK\r\nContent-Length: " + str(len(hop2_payload)).encode() + b"\r\n\r\n" + hop2_payload
+    hop2 = (
+        b"HTTP/1.1 200 OK\r\nContent-Length: "
+        + str(len(hop2_payload)).encode()
+        + b"\r\n\r\n"
+        + hop2_payload
+    )
     backend = _ClosureScriptedBackend([hop1, hop2])
     transport = SafeAsyncTransport()
     transport._pool._network_backend._inner = backend
