@@ -90,6 +90,13 @@ async def test_delivers_to_originating_chat_not_user_id(reminder_sys: ReminderSy
     chat_id, text = bot.sent[0]
     assert chat_id == -1001234567  # the originating chat, NOT user 111
     assert "آب بنوش" in text
+    # Poll the durable status (the reminder subsystem persists 'sent' right
+    # after the send lands — an instant read races the persist; see the flake
+    # forensics in docs/audits/GATE5_FINAL_REPAIR_2026-09-25.md).
+    await _sleep_until(
+        lambda: rows(reminder_sys._db_path)[0].status == "sent",  # type: ignore[arg-type]
+        seconds=3.0,
+    )
     saved = rows(reminder_sys._db_path)  # type: ignore[arg-type]
     assert saved[0].status == "sent"
 

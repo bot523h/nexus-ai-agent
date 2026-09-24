@@ -171,13 +171,18 @@ def classify_exception(exc: BaseException) -> FailureClass:
 def is_typed_user_failure(result: dict[str, object]) -> bool:
     """True for the repository's typed user-failure dialect.
 
-    The dialect is exactly ``{"success": False, "error_code": <str>, ...}``.
-    A result in this shape is a **failure of the job** (task-181, GAP-A): it
-    must reach a failure status — never ``COMPLETED`` — whatever any verifier
-    would answer about it.
+    The canonical dialect is exactly ``{"success": False, "error_code":
+    <str>, ...}``.  A result in this shape is a **failure of the job**
+    (task-181, GAP-A): it must reach a failure status — never ``COMPLETED`` —
+    whatever any verifier would answer about it.
+
+    Gate-5 repair (NEW LAW 1 explicit item): a bare ``{"success": False}``
+    with a missing/empty ``error_code`` is *also* a failure (the handler
+    announced failure; nothing may turn it into success).  It classifies as
+    ``typed_failure:untyped_failure`` — an unknown code is TERMINAL
+    (fail-closed) — instead of falling through to verification/completion.
     """
-    code = result.get("error_code")
-    return result.get("success") is False and isinstance(code, str) and bool(code)
+    return result.get("success") is False
 
 
 TYPED_FAILURE_ERROR_PREFIX = "typed_failure:"

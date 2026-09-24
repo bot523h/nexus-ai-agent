@@ -195,7 +195,12 @@ def _mark_pending(self, job_id: str) -> bool:
         cursor = connection.execute(
             """UPDATE nexus_job_queue SET status = ?, started_at = NULL
                WHERE id = ? AND status IN (?, ?)""",
-            (JobStatus.PENDING.value, job_id, JobStatus.PROCESSING.value, JobStatus.VERIFYING.value),
+            (
+                JobStatus.PENDING.value,
+                job_id,
+                JobStatus.PROCESSING.value,
+                JobStatus.VERIFYING.value,
+            ),
         )
         return cursor.rowcount > 0
 ```

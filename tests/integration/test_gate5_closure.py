@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -728,12 +729,12 @@ async def test_crash_after_publish_before_persist_recovers_on_resume(
     original_mark_completed = queue_module.InProcessJobQueue._mark_completed
     crashed = False
 
-    def _crash_once(self: Any, job_id: str, result: dict[str, object]) -> None:
+    def _crash_once(self: Any, job_id: str, result: dict[str, object], token: Any) -> Any:
         nonlocal crashed
         if not crashed:
             crashed = True
             raise RuntimeError("process died after atomic rename")
-        original_mark_completed(self, job_id, result)
+        return original_mark_completed(self, job_id, result, token)
 
     monkeypatch.setattr(queue_module.InProcessJobQueue, "_mark_completed", _crash_once)
     job_id = await queue.enqueue(
@@ -747,7 +748,17 @@ async def test_crash_after_publish_before_persist_recovers_on_resume(
         await asyncio.sleep(0.02)
     assert crashed, "the injected crash must fire"
 
-    # recovery: a fresh process reclaims the unfinished row
+    # The crash killed the owning process: under the execution-ownership
+    # contract a fresh process may only take over after the dead owner's
+    # lease expires (fresh-lease rows are never reclaimed).  Backdate
+    # started_at to express the expired lease of the dead generation.
+    with sqlite3.connect(tmp_path / "jobs.sqlite3") as connection:
+        connection.execute(
+            "UPDATE nexus_job_queue SET started_at = ? WHERE id = ?",
+            ("2020-01-01T00:00:00+00:00", job_id),
+        )
+
+    # recovery: a fresh process reclaims the lease-expired row
     monkeypatch.setattr(queue_module.InProcessJobQueue, "_mark_completed", original_mark_completed)
     reclaimed = await queue.resume_pending()
     assert job_id in reclaimed

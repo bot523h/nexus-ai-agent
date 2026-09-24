@@ -1344,3 +1344,70 @@ opt-in-completeness test go red on any other resolution.
 `tests/unit/test_capability_lifecycle.py`,
 `tests/architecture/test_lifecycle_gate_boundary.py`, and the task-183
 trust-boundary tests in `tests/unit/test_creative_render_jobs.py`.
+
+## 2026-09-25 — Gate-5 FINAL REPAIR: execution ownership, publication transaction, notification truth (D-0016, D-0017)
+
+Evidence-first record: `docs/audits/GATE5_FINAL_REPAIR_2026-09-25.md` (R1–R5
+OLD-RED at `6b86633` → NEW-GREEN, T1–T15, M1–M10 16/16 killed, negative-space
+scan). Research basis in its section 2 (Kleppmann fencing tokens; river
+PR#1373 stale-rescue predicates; maritime-claims PR#455 lease-fingerprint
+revalidation; shizzle PR#42 lease-fenced stage outcomes; running PR#470
+LeaseBefore CAS reclaim; Python `os.replace` + atomic-write/backup patterns;
+SQLite single-writer conditional-UPDATE CAS; microservices.io transactional
+outbox — evaluated and rejected here).
+
+### D-0016 — One fenced execution generation per job; COMMIT_CONFIRMED fan-out; truth over delivery
+
+*Decision (options A–E compared in the repair report §5 — chosen: E hybrid).*
+Every reservation mints one **execution generation**: the row's `attempt`
+increments (the monotone fence — Kleppmann's ratchet; a UUID alone is
+explicitly *not* a fence) and a fresh `owner_token` is stored (durable
+identity). The lease fingerprint `(id, attempt, owner_token)` is validated
+inside **one** shared predicate (`InProcessJobQueue._fence_update`) used by
+every post-reservation transition; a stale worker's writes match zero rows.
+Reservation is a strict `PENDING → PROCESSING` CAS (rowcount must be 1) — the
+old `PROCESSING → PROCESSING` re-claim is retired (it was the R5 dual-claim
+ownership bug, reclassified from "contract" to BUG with reproduction).
+Takeover (`resume_pending`) is explicit and fenced: lease-expired rows only
+(`started_at` + TTL; legacy NULL `started_at` = expired), and reclaiming
+invalidates `owner_token`. `_mark_pending` is a fenced self-release (the old
+bare `UPDATE … WHERE id=?` could reopen terminal and newer executions — F2).
+
+*Notification contract (explicit mission-section-12 decision):* **truth
+("never lie") enforced, delivery ("eventually notify") best-effort.** All
+terminal fan-out fires only when the fenced terminal UPDATE applied
+(COMMIT_CONFIRMED); a displaced generation is silent. No delivery retry and
+**no transactional outbox** — the durable row already is the truth record and
+outbox would only buy delivery-grade retry, a declared non-goal (evaluated,
+rejected as unjustified migration). `_mark_completed`/`_mark_failed` return an
+observable `bool` for exactly this gate.
+
+*Also closed here:* bare `{"success": false}` (missing/empty `error_code`) is
+a typed failure `typed_failure:untyped_failure` (fail-closed, TERMINAL) — it
+can never complete (R4; previously it completed whenever verifiers were
+opted out). Tests: T1–T8, T12–T15; mutations M1–M5, M9, M10.
+
+### D-0017 — Publication is a journaled, inode-guarded transaction; the re-probe stays
+
+*Decision (options A–E compared in the repair report §14 — chosen: hardened
+A + E's transaction shape).* `ArtifactPublication` is a four-verb protocol:
+*publish* = backup (`<name>.bak`, hardlink/copy) + swap journal
+(`_publication{backup, published_inode}`, persisted fenced) + atomic
+`os.replace`; *retract* = staged cleanup + **inode-guarded restore** of the
+backup (the destination returns to its pre-swap bytes iff it is still this
+swap's inode — a newer owner's publication is never overwritten);
+*recover* = crash-window resolution before the next execution (journaled
+uncommitted swap → restore; journal-less backup → duplicate dropped);
+*retire* = post-COMMIT_CONFIRMED backup cleanup. The durable commit (fenced
+`_mark_completed`) is the transaction's commit point; any refusal after the
+swap rolls back.
+
+*The post-publish re-probe is KEPT* (the mission asked this seriously,
+section 15): it is the only independent measurement of a **pluggable**
+publisher's claim at the final name, the T/M lists require its decision
+guard (T9/M8), and its failure path is now safe — which was the only real
+argument against it. "Previous artifact is never touched on refusal" now
+survives **with proof** (R1 OLD-RED showed the old claim was false for the
+post-replace window). Backup-orphan residuals (crash after commit before
+retire; steal-convoy chains) are bounded and recorded as accepted risks in
+the repair report §32. Tests: T8–T11; mutations M6–M8.

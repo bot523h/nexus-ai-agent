@@ -120,8 +120,11 @@ class TransitionRule:
 TRANSITIONS: Final[dict[tuple[JobStatus, JobStatus], TransitionRule]] = {
     (JobStatus.PENDING, JobStatus.PROCESSING): TransitionRule(
         owner="queue (reservation CAS)",
-        invariant="row exists, not terminal; started_at recorded; at most one "
-        "live execution per row per process (task table dedupes)",
+        invariant="row exists and is PENDING (strict CAS — a processing row "
+        "is never re-claimed as a fresh execution); started_at recorded; "
+        "attempt increments (the monotone execution-generation fence) and a "
+        "fresh owner_token is minted — the (id, attempt, owner_token) lease "
+        "fingerprint every later transition must match",
     ),
     (JobStatus.PENDING, JobStatus.FAILED_RETRYABLE): TransitionRule(
         owner="queue (claim-time structural failure)",
@@ -136,11 +139,6 @@ TRANSITIONS: Final[dict[tuple[JobStatus, JobStatus], TransitionRule]] = {
         "classified TERMINAL (e.g. no handler — a deploy must change); typed "
         "error persisted; no side effect has occurred",
     ),
-    (JobStatus.PROCESSING, JobStatus.PROCESSING): TransitionRule(
-        owner="queue (resume reclaim)",
-        invariant="a previous process died mid-execution; row is re-claimed "
-        "by resume_pending and attempt increments",
-    ),
     (JobStatus.PROCESSING, JobStatus.VERIFYING): TransitionRule(
         owner="queue",
         invariant="handler returned a dict (execution finished); nothing is "
@@ -149,11 +147,15 @@ TRANSITIONS: Final[dict[tuple[JobStatus, JobStatus], TransitionRule]] = {
         "publication + re-probe)",
     ),
     (JobStatus.VERIFYING, JobStatus.COMPLETED): TransitionRule(
-        owner="queue",
+        owner="queue (fenced commit)",
         invariant="artifact verification succeeded (and, for published "
         "lanes, the staged artifact was atomically published and re-probed); "
-        "the verified facts are persisted inside the result under the "
-        "queue-owned 'artifact_verification' key",
+        "the transition matches the execution's (id, attempt, owner_token) "
+        "lease fingerprint — only the current generation may commit — and "
+        "is the durable success point (COMMIT_CONFIRMED); the verified facts "
+        "are persisted inside the result under the queue-owned "
+        "'artifact_verification' key; the success notification fires only "
+        "after this commit",
     ),
     (JobStatus.VERIFYING, JobStatus.FAILED_RETRYABLE): TransitionRule(
         owner="queue",
@@ -184,14 +186,25 @@ TRANSITIONS: Final[dict[tuple[JobStatus, JobStatus], TransitionRule]] = {
         "render_failed / contract violation); error persisted",
     ),
     (JobStatus.PROCESSING, JobStatus.PENDING): TransitionRule(
-        owner="queue (cancellation / shutdown)",
+        owner="queue (cancellation / shutdown self-release, or startup "
+        "recovery of a lease-expired row)",
         invariant="process-lifecycle event, not a business failure; row "
-        "stays recoverable; started_at cleared",
+        "stays recoverable. Two fenced modes: (a) self-release by the live "
+        "owner's execution token (a stale worker's cancel matches zero "
+        "rows — it can never reopen a newer execution); (b) explicit "
+        "takeover at startup recovery, only for rows whose lease "
+        "(started_at + TTL) expired, which invalidates the owner token so "
+        "every late write of the displaced generation fails its predicate. "
+        "started_at cleared; the attempt generation is preserved (it "
+        "advances only at reservation).",
     ),
     (JobStatus.VERIFYING, JobStatus.PENDING): TransitionRule(
-        owner="queue (cancellation / shutdown)",
+        owner="queue (cancellation / shutdown self-release, or startup "
+        "recovery of a lease-expired row)",
         invariant="verification is read-only, so abandoning it is safe; the "
-        "next resume re-runs verification from scratch",
+        "next execution re-runs verification from scratch. Same two fenced "
+        "modes as PROCESSING → PENDING (owner token or lease-expired "
+        "takeover) — no stale worker can reset a newer execution's row.",
     ),
 }
 

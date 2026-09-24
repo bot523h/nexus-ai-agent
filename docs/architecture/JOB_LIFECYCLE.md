@@ -81,17 +81,17 @@ edge):
 
 | Edge | Owner | Invariant |
 |---|---|---|
-| `pending → processing` | queue (reservation CAS) | row not terminal; `started_at` set; one live execution per row per process; `attempt += 1` |
-| `pending → failed_retryable` | queue (claim-time) | structural failure classified RETRYABLE (a deploy can make the identical job succeed); zero side effects |
-| `pending → failed_terminal` | queue (claim-time) | structural failure classified TERMINAL (e.g. no handler); zero side effects |
-| `processing → verifying` | queue | handler returned a dict; nothing trusted yet |
-| `verifying → completed` | queue | verification OK (+ atomic publish + re-probe on published lanes); verified facts persisted under `artifact_verification` |
-| `verifying → failed_retryable` | queue | typed `verification_failed:<code>` persisted (artifact-damage class); staged temps retracted |
-| `verifying → failed_terminal` | queue | deterministic handler defect (no claim / malformed sha / mis-routed publication); staged temps retracted |
-| `processing → failed_retryable` | queue (fail-closed) | typed user failure / raise classified RETRYABLE — NEVER converted to success |
-| `processing → failed_terminal` | queue (fail-closed) | typed user failure / raise classified TERMINAL |
-| `processing/verifying → pending` | queue (cancel/shutdown) | process-lifecycle recovery, not a business failure |
-| terminal states (incl. both failures) | — | no outgoing edges (guarded UPDATEs); `failed_retryable → pending` is RESERVED for a future scheduler — not implemented, fail-closed |
+| `pending → processing` | queue (reservation CAS) | row exists and is `pending` (strict CAS — a `processing` row is never re-claimed as a fresh execution); `started_at` set; `attempt += 1` (monotone execution-generation fence) + fresh `owner_token` minted — the `(id, attempt, owner_token)` lease fingerprint every later write must match |
+| `pending → failed_retryable` | queue (claim-time) | structural failure classified RETRYABLE (a deploy can make the identical job succeed); zero side effects; only a still-`pending` row |
+| `pending → failed_terminal` | queue (claim-time) | structural failure classified TERMINAL (e.g. no handler); zero side effects; only a still-`pending` row |
+| `processing → verifying` | queue (fenced) | handler returned a dict; nothing trusted yet; lease fingerprint validated |
+| `verifying → completed` | queue (fenced commit) | verification OK (+ journaled atomic publish + re-probe on published lanes); rowcount>0 = **COMMIT_CONFIRMED** — the only durable success point and the only gate for success notification; verified facts persisted under `artifact_verification` |
+| `verifying → failed_retryable` | queue (fenced) | typed `verification_failed:<code>` persisted (artifact-damage class); staged temps retracted + journaled swap rolled back (inode-guarded) |
+| `verifying → failed_terminal` | queue (fenced) | deterministic handler defect (no claim / malformed sha / mis-routed publication); staged temps retracted + swap rolled back |
+| `processing → failed_retryable` | queue (fenced, fail-closed) | typed user failure / raise classified RETRYABLE — NEVER converted to success |
+| `processing → failed_terminal` | queue (fenced, fail-closed) | typed user failure / raise classified TERMINAL |
+| `processing/verifying → pending` | queue (fenced self-release **or** lease-expired startup recovery) | process-lifecycle recovery, not a business failure. (a) self-release requires the live owner's execution token — a stale worker's cancel matches zero rows and can never reopen a newer execution; (b) takeover at `resume_pending` only for rows whose lease (`started_at` + TTL; legacy NULL `started_at` counts as expired) lapsed, and it **invalidates** the owner token; `attempt` is preserved (it advances only at reservation) |
+| terminal states (incl. both failures) | — | no outgoing edges (matrix + fenced UPDATEs + `attempt`/token validation); `failed_retryable → pending` is RESERVED for a future scheduler — not implemented, fail-closed; `PROCESSING → PROCESSING` re-claim was RETIRED by the Gate-5 repair (it was a real dual-claim ownership bug — R5) |
 
 **Q1 — when does a Job become RUNNING?** At the reservation compare-and-set
 (`_mark_processing`), *before* the handler is invoked. It is not "after
@@ -99,10 +99,23 @@ authorization" (authorization/preflight lives inside the handler, where the
 capability registry and payload schema actually are) and it is not defined
 by "the first side effect" (unknowable from the queue). Evidence: the
 reservation must be durable *before* the world is touched, so crash
-recovery (`resume_pending` claims orphaned `processing` rows) has exactly
-one owner to blame, and `started_at`/`attempt` are meaningful. The
-side-effect boundary itself is defined below and enforced by contract +
-runtime staging.
+recovery (`resume_pending` reclaims only **lease-expired** `processing`/
+`verifying` rows) has exactly one owner to blame per generation, and
+`started_at`/`attempt`/`owner_token` are meaningful.
+
+**Execution generations (Gate-5 repair, D-0016).** Ownership of one job's
+execution is the lease fingerprint `(id, attempt, owner_token)`:
+`jobs/fencing.ExecutionToken`. Every post-reservation transition is one
+fenced UPDATE (`InProcessJobQueue._fence_update`):
+
+    UPDATE … WHERE id = ? AND attempt = ? AND owner_token = ? AND status IN (…)
+
+A displaced or cancelled worker matches **zero rows** (Kleppmann fencing at
+the storage side: `attempt` is the monotone ratchet, `owner_token` the
+durable identity) — it can never move a newer generation's state, journal
+over its publication, publish over its artifact, or announce its outcome.
+Proven by `tests/integration/test_execution_fencing.py` (T1–T15) and killed
+guard-by-guard by `scripts/gate5_mutation_probes.py` (M1–M10).
 
 ## 3. Side-effect boundary (exactly one)
 
@@ -167,24 +180,39 @@ carry valid probe evidence (a probe failure is exactly "ffprobe failed" by
 runtime semantics). Document artifacts are verified structurally (SubRip
 timing-block syntax; OTIO must parse as a JSON object).
 
-**Publication order (task-181, D-0015).** For lanes whose artifact
-destination lives *outside* the job workspace — today exactly
-`pdf_extract`, its `<stem>.extracted.txt` sidecar — the order is:
+**Publication order (task-181, D-0015; hardened by the Gate-5 repair,
+D-0017).** For lanes whose artifact destination lives *outside* the job
+workspace — today exactly `pdf_extract`, its `<stem>.extracted.txt` sidecar
+— the order is:
 
 ```
-execute → stage → verify → publish atomically → re-probe published bytes → persist success
+execute → stage → verify → BACKUP + JOURNAL + atomic swap → re-probe → fenced commit → retire backup → notify
 ```
 
 The handler stages at the payload-derived `*.staged` name and claims it; the
-queue verifies the staged bytes, publishes via `os.replace` (registered
-`ArtifactPublication.publish`), re-runs the same verifier against the
-published claim, and only then persists `completed`. A refusal (verification,
-publish, or re-probe) retracts the staged temp and **never** touches a
-previously published artifact: a failed extraction can no longer destroy a
-valid `<stem>.extracted.txt`, and a partial artifact never occupies a final
-name. Workspace-scoped lanes (`creative_render`, `slideshow_render`,
-`story`) map the same order as: stage in workspace → verify → publish at
-delivery (the notifier sends the verified bytes and owns cleanup).
+queue verifies the staged bytes, publishes via the registered
+`ArtifactPublication` protocol — *publish* backs the destination up to
+`<name>.bak` (hardlink, copy fallback) and journals the swap
+(`_publication{backup, published_inode}`, persisted fenced) before the
+atomic `os.replace` — re-runs the same verifier against the published claim,
+and only then commits (`_mark_completed`, fenced, rowcount>0 =
+COMMIT_CONFIRMED) and retires the backup.
+
+**Previous-artifact preservation (proven, not asserted):** any refusal after
+the swap (re-probe failure, publish exception, refused fenced commit) runs
+*retract* — inode-guarded restore of the backup (the destination is restored
+to its pre-swap bytes **iff it is still this swap's inode**; a newer owner's
+publication is never overwritten) — and a crashed predecessor's journaled
+swap is rolled back the same way by *recover* before the next execution
+starts (a backup without a journal is a byte-duplicate and is dropped). The
+pre-repair lane here was **false**: a post-publish re-probe failure left the
+refused bytes at the destination and destroyed the previous artifact
+(reproduced as R1 at `6b86633`; fixed and proven T9–T11 + R1 NEW-GREEN).
+A partial artifact never occupies a final name (stage/swap semantics
+unchanged). Workspace-scoped lanes (`creative_render`,
+`slideshow_render`, `story`) map the same order as: stage in workspace →
+verify → publish at delivery (the notifier sends the verified bytes and owns
+cleanup).
 
 Typed user failures (`{"success": false, "error_code": …}`, the durable
 dialect of this repository) claim **no artifact** and — since task-181
@@ -304,13 +332,26 @@ scenarios, trace `job_id`, idempotency matrix, crash-window recovery) and
 mutation harness `scripts/gate5_mutation_probes.py` (6 probes, each
 GREEN→RED→restore→GREEN — see `docs/audits/GATE5_CLOSURE_2026-09-24.md`).
 
-## 9. Notification contract (task-181)
+## 9. Notification contract (task-181; Gate-5 repair decision, D-0016)
 
-**The durable lifecycle state is the notifier's only source of truth.**
+**Truth ("never lie") is the enforced contract; delivery ("eventually
+notify") is best-effort and explicitly weaker.** Concretely:
+
+* the durable lifecycle state is the notifier's only source of truth, and a
+  terminal fan-out fires **only** when the fenced terminal UPDATE actually
+  applied (COMMIT_CONFIRMED): one truthful notification per durable outcome;
+  a displaced generation is silent — its outcome is void and the current
+  owner announces its own (T4/T15);
+* the hook stays strictly fail-safe (a broken notifier can never corrupt the
+  queue), but there is **no delivery retry**: delivery is at-most-once per
+  outcome. A transactional outbox was evaluated and rejected as an
+  unjustified migration — the durable row already *is* the truth record;
+  an outbox would only buy delivery-grade retry, which is a declared non-goal
+  here (D-0016).
 
 | durable state | user-visible outcome |
 |---|---|
-| `completed` | success notification / artifact delivery |
+| `completed` | success notification / artifact delivery (fires only after COMMIT_CONFIRMED) |
 | `failed_retryable` | failure notification (visibly "temporary / retryable") |
 | `failed_terminal` | terminal-failure notification (visibly "definitive") |
 | `verifying` / `pending` / `processing` | silent — a success message is impossible outside `completed` |
@@ -318,9 +359,12 @@ GREEN→RED→restore→GREEN — see `docs/audits/GATE5_CLOSURE_2026-09-24.md`)
 
 `result.success == true` under a failure status can never produce a success
 notification (the claim is a second, independent refusal, never the truth
-source). Evidence: `tests/integration/test_gate5_closure.py`
-(notification matrix + lying-result regression), `tests/unit/test_creative_notify.py`,
-`tests/unit/test_bot_slideshow_notify.py`.
+source), and a bare `{"success": false}` (missing/empty `error_code`) is a
+typed failure `typed_failure:untyped_failure` — it can never complete
+(Gate-5 repair R4). Evidence:
+`tests/integration/test_gate5_closure.py` (notification matrix + lying-result
+regression), `tests/integration/test_execution_fencing.py` (T4/T15),
+`tests/unit/test_creative_notify.py`, `tests/unit/test_bot_slideshow_notify.py`.
 
 ## 10. Trace contract (task-181)
 

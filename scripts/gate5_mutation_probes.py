@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Gate 5 mutation probes (task-181) — a small, deterministic mutation harness.
 
-Six adversarial mutations of the invariants this closure exists to protect:
+Sixteen adversarial mutations of the invariants this closure exists to
+protect (legacy #1-#6 of the task-181 closure + the Gate-5 repair M1-M10
+of execution ownership / artifact publication / notification truth):
 
 ======  ==========================================  ==============================
 probe   mutation                                     killed by
@@ -41,6 +43,7 @@ class Probe:
     anchor: str  # exact text to replace (must be unique in the file)
     mutant: str  # replacement
     tests: tuple[str, ...]  # targeted tests that must flip GREEN → RED
+    extra_mutations: tuple[tuple[str, str], ...] = ()  # further anchor/mutant pairs
 
 
 PROBES: tuple[Probe, ...] = (
@@ -60,10 +63,7 @@ PROBES: tuple[Probe, ...] = (
     Probe(
         name="#2 force COMPLETED on typed failure",
         target=REPO / "src/nexus_ai_agent/jobs/failure_semantics.py",
-        anchor=(
-            '    code = result.get("error_code")\n'
-            '    return result.get("success") is False and isinstance(code, str) and bool(code)'
-        ),
+        anchor='    return result.get("success") is False',
         mutant="    return False  # MUTATION: typed failures no longer detected",
         tests=(
             "tests/unit/test_job_lifecycle.py::test_creative_verifier_typed_user_failure_is_refused_fail_closed",
@@ -117,6 +117,244 @@ PROBES: tuple[Probe, ...] = (
             "tests/integration/test_gate5_closure.py::test_typed_render_failure_lands_in_a_failure_status_never_completed",
         ),
     ),
+    # ------------------------------------------------------------------
+    # Gate-5 FINAL REPAIR — M1-M10 (execution ownership / publication /
+    # notification truth).  Each kills a fence the T1-T15 suite guards.
+    # ------------------------------------------------------------------
+    Probe(
+        name="M1 remove ownership predicate",
+        target=REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        anchor=(
+            "        sql = (\n"
+            '            f"UPDATE nexus_job_queue SET {assignments} "\n'
+            '            f"WHERE id = ? AND attempt = ? AND owner_token = ? '
+            'AND status IN ({marks})"\n'
+            "        )"
+        ),
+        mutant=(
+            "        sql = (\n"
+            '            f"UPDATE nexus_job_queue SET {assignments} "\n'
+            '            f"WHERE id = ? AND ? IS NOT NULL AND ? IS NOT NULL '
+            'AND status IN ({marks})"\n'
+            "        )  # MUTATION: lease fingerprint no longer validated"
+        ),
+        tests=(
+            "tests/integration/test_execution_fencing.py::test_t1_stale_cancel_cannot_reopen_newer_execution",
+            "tests/integration/test_execution_fencing.py::test_t2_t3_stale_worker_cannot_mark_newer_attempt_completed_or_failed",
+            "tests/integration/test_execution_fencing.py::test_t8_stale_publication_cannot_overwrite_current_owner_artifact",
+        ),
+    ),
+    Probe(
+        name="M2 allow stale pending transition",
+        target=REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        anchor=(
+            "        released = self._fence_update(\n"
+            "            job_id,\n"
+            "            token,\n"
+            "            (JobStatus.PROCESSING, JobStatus.VERIFYING),\n"
+            '            "status = ?, started_at = NULL, owner_token = NULL",\n'
+            "            (JobStatus.PENDING.value,),\n"
+            "        )"
+        ),
+        mutant=(
+            "        with self._db_lock, self._connection() as _c:  # MUTATION: blind release\n"
+            "            _c.execute(\n"
+            '                "UPDATE nexus_job_queue SET status = ?, started_at = NULL, "\n'
+            '                "owner_token = NULL WHERE id = ?",\n'
+            "                (JobStatus.PENDING.value, job_id),\n"
+            "            )\n"
+            "        released = True"
+        ),
+        tests=(
+            "tests/integration/test_execution_fencing.py::test_t1_stale_cancel_cannot_reopen_newer_execution",
+            "tests/integration/test_execution_fencing.py::test_t12_t13_terminal_states_never_reopen",
+        ),
+    ),
+    Probe(
+        name="M3 allow duplicate PROCESSING claim",
+        target=REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        anchor=(
+            "                UPDATE nexus_job_queue\n"
+            "                SET status = ?, started_at = ?, attempt = attempt + 1, "
+            "owner_token = ?\n"
+            "                WHERE id = ? AND status = ?"
+        ),
+        mutant=(
+            "                UPDATE nexus_job_queue\n"
+            "                SET status = ?, started_at = ?, attempt = attempt + 1, "
+            "owner_token = ?\n"
+            "                WHERE id = ? AND status IN (?, ?)  # MUTATION: re-claims live work"
+        ),
+        extra_mutations=(
+            (
+                "                    job_id,\n"
+                "                    JobStatus.PENDING.value,\n"
+                "                ),",
+                "                    job_id,\n"
+                "                    JobStatus.PENDING.value,\n"
+                "                    JobStatus.PROCESSING.value,\n"
+                "                ),  # MUTATION param",
+            ),
+        ),
+        tests=(
+            "tests/integration/test_execution_fencing.py::test_t5_two_processes_cannot_both_own_one_execution",
+            "tests/integration/test_execution_fencing.py::test_t7_takeover_without_valid_expiry_rejected",
+        ),
+    ),
+    Probe(
+        name="M4 drop rowcount/transition-result check",
+        target=REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        anchor=(
+            "        committed = self._fence_update(\n"
+            "            job_id,\n"
+            "            token,\n"
+            "            (JobStatus.PROCESSING, JobStatus.VERIFYING),\n"
+            '            "status = ?, result_json = ?, error = NULL, finished_at = ?",\n'
+            "            (\n"
+            "                JobStatus.COMPLETED.value,\n"
+            "                json.dumps(result, ensure_ascii=False, sort_keys=True),\n"
+            "                _now(),\n"
+            "            ),\n"
+            "        )"
+        ),
+        mutant=(
+            "        self._fence_update(\n"
+            "            job_id,\n"
+            "            token,\n"
+            "            (JobStatus.PROCESSING, JobStatus.VERIFYING),\n"
+            '            "status = ?, result_json = ?, error = NULL, finished_at = ?",\n'
+            "            (\n"
+            "                JobStatus.COMPLETED.value,\n"
+            "                json.dumps(result, ensure_ascii=False, sort_keys=True),\n"
+            "                _now(),\n"
+            "            ),\n"
+            "        )\n"
+            "        committed = True  # MUTATION: transition-result check dropped"
+        ),
+        tests=(
+            "tests/integration/test_execution_fencing.py::test_t2_t3_stale_worker_cannot_mark_newer_attempt_completed_or_failed",
+            "tests/integration/test_execution_fencing.py::test_t4_t15_no_success_notification_without_durable_completed",
+        ),
+    ),
+    Probe(
+        name="M5 notify regardless of CAS",
+        target=REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        anchor=(
+            "            committed = await asyncio.to_thread("
+            "self._mark_completed, job_id, result, token)\n"
+            "            if not committed:"
+        ),
+        mutant=(
+            "            committed = await asyncio.to_thread("
+            "self._mark_completed, job_id, result, token)\n"
+            "            if not committed and False:  # MUTATION: notify regardless of CAS"
+        ),
+        tests=(
+            "tests/integration/test_execution_fencing.py::test_t4_t15_no_success_notification_without_durable_completed",
+        ),
+    ),
+    Probe(
+        name="M6 remove artifact protection",
+        target=REPO / "src/nexus_ai_agent/jobs/feature_verification.py",
+        anchor=(
+            "        if had_previous:\n"
+            "            backup.unlink(missing_ok=True)\n"
+            "            try:\n"
+            "                os.link(published, backup)\n"
+            "            except OSError:  # pragma: no cover - cross-device fallback\n"
+            "                shutil.copy2(published, backup)"
+        ),
+        mutant="        had_previous = False  # MUTATION: no backup of the previous artifact",
+        tests=(
+            "tests/integration/test_execution_fencing.py::test_t9_reprobe_failure_preserves_previous_artifact",
+            "tests/integration/test_execution_fencing.py::test_t11_crash_during_publication_recovers_correctly",
+        ),
+    ),
+    Probe(
+        name="M7 break previous-artifact preservation",
+        target=REPO / "src/nexus_ai_agent/jobs/feature_verification.py",
+        anchor="        restored = _restore_backup_if_mine(published, backup, inode)",
+        mutant="        restored = True  # MUTATION: never restore the previous artifact",
+        tests=(
+            "tests/integration/test_execution_fencing.py::test_t9_reprobe_failure_preserves_previous_artifact",
+            "tests/integration/test_execution_fencing.py::test_t11_crash_during_publication_recovers_correctly",
+        ),
+    ),
+    Probe(
+        name="M8 remove re-probe decision guard",
+        target=REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        anchor="        reprobed = await self._verify_safely(verifier, payload, published)",
+        mutant=(
+            "        reprobed = VerificationOutcome(ok=True, reason_code=None, "
+            'summary={"status": "passed", "reason_code": None})  # MUTATION: re-probe skipped'
+        ),
+        tests=(
+            "tests/integration/test_execution_fencing.py::test_t9_reprobe_failure_preserves_previous_artifact",
+        ),
+    ),
+    Probe(
+        name="M9 remove fencing from publication",
+        target=REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        anchor=(
+            "        return self._fence_update(\n"
+            "            job_id,\n"
+            "            token,\n"
+            "            (JobStatus.PROCESSING, JobStatus.VERIFYING),\n"
+            '            "result_json = ?",\n'
+            "            (json.dumps(result, ensure_ascii=False, sort_keys=True),),\n"
+            "        )"
+        ),
+        mutant=(
+            "        with self._db_lock, self._connection() as _c:  # MUTATION: unfenced journal\n"
+            "            _c.execute(\n"
+            '                "UPDATE nexus_job_queue SET result_json = ? WHERE id = ?",\n'
+            "                (json.dumps(result, ensure_ascii=False, sort_keys=True), job_id),\n"
+            "            )\n"
+            "        return True"
+        ),
+        tests=(
+            "tests/integration/test_execution_fencing.py::test_t8_stale_publication_cannot_overwrite_current_owner_artifact",
+        ),
+    ),
+    Probe(
+        name="M10 bypass current-attempt validation",
+        target=REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        anchor=(
+            "        committed = self._fence_update(\n"
+            "            job_id,\n"
+            "            token,\n"
+            "            (JobStatus.PROCESSING, JobStatus.VERIFYING),\n"
+            '            "status = ?, result_json = ?, error = NULL, finished_at = ?",\n'
+            "            (\n"
+            "                JobStatus.COMPLETED.value,\n"
+            "                json.dumps(result, ensure_ascii=False, sort_keys=True),\n"
+            "                _now(),\n"
+            "            ),\n"
+            "        )"
+        ),
+        mutant=(
+            "        with self._db_lock, self._connection() as _c:  "
+            "# MUTATION: legacy un-fenced commit\n"
+            "            _cur = _c.execute(\n"
+            '                "UPDATE nexus_job_queue SET status = ?, result_json = ?, '
+            'error = NULL, "\n'
+            '                "finished_at = ? WHERE id = ? AND status IN (?, ?)",\n'
+            "                (\n"
+            "                    JobStatus.COMPLETED.value,\n"
+            "                    json.dumps(result, ensure_ascii=False, sort_keys=True),\n"
+            "                    _now(),\n"
+            "                    job_id,\n"
+            "                    JobStatus.PROCESSING.value,\n"
+            "                    JobStatus.VERIFYING.value,\n"
+            "                ),\n"
+            "            )\n"
+            "            committed = _cur.rowcount > 0"
+        ),
+        tests=(
+            "tests/integration/test_execution_fencing.py::test_t2_t3_stale_worker_cannot_mark_newer_attempt_completed_or_failed",
+            "tests/integration/test_execution_fencing.py::test_t4_t15_no_success_notification_without_durable_completed",
+        ),
+    ),
 )
 
 
@@ -131,12 +369,15 @@ def _run_tests(tests: tuple[str, ...]) -> int:
 
 def _apply(probe: Probe) -> None:
     text = probe.target.read_text()
-    if text.count(probe.anchor) != 1:
-        raise SystemExit(
-            f"anchor for {probe.name} is not unique in {probe.target}: "
-            f"{text.count(probe.anchor)} matches"
-        )
-    probe.target.write_text(text.replace(probe.anchor, probe.mutant))
+    pairs = ((probe.anchor, probe.mutant), *probe.extra_mutations)
+    for anchor, mutant in pairs:
+        if text.count(anchor) != 1:
+            raise SystemExit(
+                f"anchor for {probe.name} is not unique in {probe.target}: "
+                f"{text.count(anchor)} matches"
+            )
+        text = text.replace(anchor, mutant)
+    probe.target.write_text(text)
 
 
 def _restore(probe: Probe, original: bytes) -> None:

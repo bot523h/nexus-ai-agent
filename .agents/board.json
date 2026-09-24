@@ -524,7 +524,7 @@
     },
     {
       "id": "job-lifecycle-gate5-closure",
-      "description": "Gate 5 closure/reconciliation: failure semantics, 6-state failure taxonomy, notifier lifecycle-state truth, trace job_id, staging-leak + atomic publication",
+      "description": "Gate 5 closure/reconciliation: failure semantics, 6-state failure taxonomy, notifier lifecycle-state truth, trace job_id, staging-leak + atomic publication + the CI-blocking reminder-status flake test repair (test-side poll; Gate-5 FINAL REPAIR)",
       "paths": [
         "src/nexus_ai_agent/application/ports/job_queue.py",
         "src/nexus_ai_agent/jobs/",
@@ -551,7 +551,8 @@
         "docs/audits/GATE5_CLOSURE_2026-09-24.md",
         "docs/audits/GATE5_TRUTH_MATRIX.json",
         "src/nexus_ai_agent/cli.py",
-        "docs/audits/VERIFICATION_TRUTH_MATRIX.json"
+        "docs/audits/VERIFICATION_TRUTH_MATRIX.json",
+        "tests/unit/test_reminder_system.py"
       ]
     },
     {

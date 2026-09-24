@@ -160,9 +160,11 @@ def test_every_open_vocabulary_code_is_classified() -> None:
 def test_typed_user_failure_dialect_detection() -> None:
     assert is_typed_user_failure({"success": False, "error_code": "render_failed"})
     assert not is_typed_user_failure({"success": True})
-    assert not is_typed_user_failure({"success": False})  # no code ⇒ not the dialect
-    assert not is_typed_user_failure({"success": False, "error_code": ""})
-    assert not is_typed_user_failure({"error_code": "render_failed"})
+    # Gate-5 repair (D-0016, NEW LAW 1): a bare success=False is a FAILURE
+    # announcement whatever the code field holds — nothing may complete it.
+    assert is_typed_user_failure({"success": False})  # no code ⇒ typed_failure:untyped_failure
+    assert is_typed_user_failure({"success": False, "error_code": ""})  # empty code ⇒ untyped
+    assert not is_typed_user_failure({"error_code": "render_failed"})  # no success=False claim
 
 
 def test_typed_failure_error_round_trip() -> None:

@@ -1,5 +1,18 @@
 # Gate 5 Closure & Task Reconciliation — 2026-09-24 (Agent E)
 
+> **SUPERSEDED IN PART (2026-09-25, Gate-5 FINAL REPAIR).** The publication
+> claims in this document ("a refusal … never touches a previously published
+> artifact", "6/6 mutation probes") were hypothesis-only: the post-publish
+> re-probe failure path **did** destroy the previous artifact (reproduced R1
+> at `6b86633`), `_mark_pending` was unguarded (R2), completions notified
+> without COMMIT_CONFIRMED (R3), the reservation double-claimed (R5), bare
+> `{"success": false}` completed (R4), and parts of the companion truth
+> matrix were fabricated (F7: fake SHA `9e9c75358e3e…`, phantom ref
+> `feature/verification-gap-closure`). The authoritative, proven record is
+> [`GATE5_FINAL_REPAIR_2026-09-25.md`](GATE5_FINAL_REPAIR_2026-09-25.md)
+> (T1–T15, M1–M10, R1–R5 OLD-RED→NEW-GREEN). This document remains the
+> history of the task-181 delivery phase.
+
 **Scope:** task-181 — close Gate 5 and reconcile `#71`/`#74` conflicts against the mission Gate 5
 acceptance; audit every prior Gate-5 claim against GitHub (`gh pr view 71`, `gh run view <id>`,…);
 reproduce and fix any claim that cannot be independently proven green **with tests**. Branch
