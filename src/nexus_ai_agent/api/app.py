@@ -61,6 +61,13 @@ _HMAC_MAX_AGE_SECONDS = 300.0
 _HMAC_TIMESTAMP_HEADER = "X-NEXUS-Timestamp"
 _HMAC_SIGNATURE_HEADER = "X-NEXUS-Signature"
 
+#: Resource cap for legacy upload bodies (task-165, ADR 0006). Enforced
+#: while streaming the multipart body to temp storage; an oversized upload
+#: is rejected with 413 before any job row exists and the partial file is
+#: unlinked. Legacy route only — the canonical surface caps media by
+#: duration (bot/creative_surface.py, 30 s) at validation time.
+_MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 MiB
+
 
 async def require_hmac_signature(request: Request) -> None:
     """HMAC-SHA256 request signing for state-changing dashboard endpoints.
@@ -223,12 +230,24 @@ async def _save_upload_to_temp(upload: StarletteUploadFile) -> str:
     suffix = Path(upload.filename or "upload.bin").suffix or ".bin"
     fd, temp_path = tempfile.mkstemp(prefix="creative-upload-", suffix=suffix, dir=temp_dir)
     os.close(fd)
-    with Path(temp_path).open("wb") as handle:
-        while True:
-            chunk = await upload.read(1024 * 1024)
-            if not chunk:
-                break
-            handle.write(chunk)
+    written = 0
+    try:
+        with Path(temp_path).open("wb") as handle:
+            while True:
+                chunk = await upload.read(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > _MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"upload exceeds the {_MAX_UPLOAD_BYTES}-byte limit",
+                    )
+                handle.write(chunk)
+    except Exception:
+        # A rejected (or failed) upload never leaves a partial file behind.
+        Path(temp_path).unlink(missing_ok=True)
+        raise
     await upload.close()
     return temp_path
 
@@ -288,7 +307,11 @@ async def _process_video_edit_job(
             Path(local_input_path).unlink(missing_ok=True)
 
 
-@app.post("/creative/video-edit")
+# Legacy lane (ADR 0006): the canonical media path is the Telegram creative
+# surface → durable job queue → packs registry → render lane. These two
+# routes are frozen (tests/architecture/test_legacy_creative_boundary.py) and
+# fail-closed; removal is sequenced after PR#58's hardening lands.
+@app.post("/creative/video-edit", deprecated=True)
 async def create_video_edit_job(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -341,8 +364,13 @@ async def create_video_edit_job(
     return {"job_id": job_id, "status": "pending"}
 
 
-@app.get("/creative/jobs/{job_id}")
-async def get_job_status(job_id: str) -> dict[str, object]:
+@app.get("/creative/jobs/{job_id}", deprecated=True)
+async def get_job_status(job_id: str, request: Request) -> dict[str, object]:
+    # Legacy read gate (task-165, ADR 0006): job rows carry local paths and
+    # source URLs — the same fail-closed HMAC gate as the POST. A GET signs
+    # "{timestamp}:" + empty body, so any caller that can create jobs (it
+    # must hold the key) can also read them; unsigned callers cannot.
+    await require_hmac_signature(request)
     job = await get_creative_registry().get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
