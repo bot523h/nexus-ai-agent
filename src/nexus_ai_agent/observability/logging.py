@@ -56,7 +56,7 @@ _QUERY_KEY_RE = re.compile(
 #: ``token=%s`` in ``logger.warning("token=%s", ...)``) — never redact it.
 _KEY_VALUE_RE = re.compile(
     r"(?i)(\"?(?:api[_-]?key|access[_-]?key(?:_id)?|secret(?:_key)?|token|"
-    r"password|authorization)\"?\s*[:=]\s*)(\"[^\"]*\"|'[^']*'|(?![%])[^\s,;}&]+)"
+    r"password|authorization)[\"\\']?\s*[:=]\s*)(\"[^\"]*\"|'[^']*'|(?![%])[^\s,;}&]+)"
 )
 _REDACTED = "[REDACTED]"
 #: Event-dict keys whose *values* are secret-ish. ``key``/``token``/…

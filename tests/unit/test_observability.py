@@ -373,3 +373,22 @@ def test_captured_stdlib_object_arg_repr_redacted_by_final_boundary(
     logging.getLogger("app").error("client: %s", _LeakyClient())
     rendered = "\n".join(captured_root_logs.lines)
     assert BASIC_CREDENTIAL not in rendered, "object repr leaked through the final boundary"
+
+
+def test_captured_stdlib_object_arg_repr_fresh_credential_redacted(
+    captured_root_logs: _Capture,
+) -> None:
+    """Worst case: an object repr carrying a FRESH credential (matching no
+    known secret shape) under a single-quoted dict-repr key. Neither the
+    filter (cannot rewrite opaque objects) nor shape-regexes on the value
+    can save this — only the final-boundary rendered-line redaction with
+    repr-aware key matching can."""
+    class _LeakySession:  # noqa: D401
+        def __repr__(self) -> str:  # noqa: D105
+            # the exact shape repr({'api_key': ...}) renders:
+            # single-quoted KEY, colon, quoted value
+            return "<Session {'api_key': 'fresh-credential-xyz-987654'}>"
+    logging.getLogger("app").error("session: %s", _LeakySession())
+    rendered = "\n".join(captured_root_logs.lines)
+    assert "fresh-credential-xyz-987654" not in rendered, "fresh credential in object repr leaked"
+    assert "api_key" in rendered and "[REDACTED]" in rendered, "key context must survive redaction"
