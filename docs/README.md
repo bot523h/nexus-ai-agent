@@ -36,6 +36,23 @@ placeholder text.
 | [architecture/adr/0002-docs-as-code-enforcement.md](architecture/adr/0002-docs-as-code-enforcement.md) | Enforce documentation in Python now; Node toolchain on a recorded trigger. |
 | [architecture/adr/0003-mermaid-flowchart-for-c4-views.md](architecture/adr/0003-mermaid-flowchart-for-c4-views.md) | Express C4 views with Mermaid `flowchart`. |
 | [architecture/adr/0004-board-schema-2.md](architecture/adr/0004-board-schema-2.md) | Coordination board schema 2: prerequisites, acceptance criteria, history split. |
+| [architecture/adr/0005-canonical-pack-partition.md](architecture/adr/0005-canonical-pack-partition.md) | Canonical capability pack partition for the 70-operation contract. |
+| [architecture/adr/0006-70-vs-57-reconciliation.md](architecture/adr/0006-70-vs-57-reconciliation.md) | 70 vs 57 reconciliation — product catalog ≠ runtime registry ≠ executable surface. |
+| [architecture/adr/0007-l0-l4-maturity.md](architecture/adr/0007-l0-l4-maturity.md) | L0–L4 maturity model — canonical definitions. |
+| [architecture/adr/0008-t20-identity.md](architecture/adr/0008-t20-identity.md) | T20 identity — canonical meaning and drift prevention. |
+
+## Contracts (Gate 2 — Operation Contract Reconciliation)
+
+| Document | What it is |
+|---|---|
+| [contracts/README.md](contracts/README.md) | Gate 2 contract index — 70 vs 57 reconciliation, evidence model. |
+| [contracts/OPERATION_CONTRACT_MATRIX.md](contracts/OPERATION_CONTRACT_MATRIX.md) | Human-readable matrix: 70 product catalog vs 57 runtime reality. |
+| [contracts/OPERATION_MATRIX.json](contracts/OPERATION_MATRIX.json) | Machine-readable matrix (80 rows). |
+| [contracts/RECONCILIATION.md](contracts/RECONCILIATION.md) | Explicit A-I reconciliation tables. |
+| [contracts/RECONCILIATION.json](contracts/RECONCILIATION.json) | Machine-readable reconciliation (formula, missing, extra). |
+| [contracts/CAPABILITY_CONTRACT.md](contracts/CAPABILITY_CONTRACT.md) | Capability Contract — what runtime can execute, with policy. |
+| [contracts/COMMAND_ENVELOPE.md](contracts/COMMAND_ENVELOPE.md) | Typed Command Envelope — versioned, validated, authorized. |
+| [contracts/L0_L4_MATURITY.md](contracts/L0_L4_MATURITY.md) | L0–L4 maturity model with evidence requirements. |
 
 ## Authoritative records
 

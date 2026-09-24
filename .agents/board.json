@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-24T09:41:42Z",
+  "updated_at": "2026-09-24T13:56:11Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -482,6 +482,20 @@
         ".github/workflows/maintenance.yml",
         "CHANGELOG.md",
         "docs/ops/r2-storage.md"
+      ]
+    },
+    {
+      "id": "nagar-contract",
+      "description": "Gate 2 — Operation Contract Matrix, Capability Contract, Command Envelope",
+      "paths": [
+        "docs/contracts/",
+        "src/nexus_ai_agent/creative/contracts/",
+        "tests/unit/test_contract_matrix.py",
+        "tests/architecture/test_contract_boundaries.py",
+        "docs/architecture/adr/0005-canonical-pack-partition.md",
+        "docs/architecture/adr/0006-70-vs-57-reconciliation.md",
+        "docs/architecture/adr/0007-l0-l4-maturity.md",
+        "docs/architecture/adr/0008-t20-identity.md"
       ]
     }
   ],
@@ -1933,6 +1947,52 @@
       ],
       "agent_branch": "arena/01a0d23e-nexus-ai-agent",
       "claimed_at": "2026-09-24T07:36:43Z"
+    },
+    {
+      "task": "task-200-nagar-gate2-contract-reconciliation",
+      "title": "Gate 2: Operation Contract Reconciliation → Capability Contract → Command Envelope",
+      "title_fa": "Gate 2: تطبیق قرارداد عملیات → قرارداد قابلیت → پاکت فرمان تایپ‌دار",
+      "zone": "nagar-contract",
+      "status": "active",
+      "priority": "P0",
+      "agent_branch": "arena/01a0d3a8-nexus-ai-agent",
+      "claimed_at": "2026-09-24T13:56:11Z",
+      "ttl_hours": 48,
+      "exclusive_paths": [
+        "docs/contracts/",
+        "src/nexus_ai_agent/creative/contracts/",
+        "tests/unit/test_contract_matrix.py",
+        "tests/architecture/test_contract_boundaries.py",
+        "docs/architecture/adr/0005-canonical-pack-partition.md",
+        "docs/architecture/adr/0006-70-vs-57-reconciliation.md",
+        "docs/architecture/adr/0007-l0-l4-maturity.md",
+        "docs/architecture/adr/0008-t20-identity.md"
+      ],
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "70 catalog fully reconciled with evidence",
+        "57 registry reality independently proven",
+        "pack discrepancy resolved with ADR",
+        "T20 discrepancy resolved with ADR and test",
+        "canonical L0-L4 documented with ADR",
+        "Capability Contract exists with locality/reversibility",
+        "Command Envelope exists with versioning/auth/locality/idempotency",
+        "contract validation tests A-J pass",
+        "architecture/type/lint/docs checks pass",
+        "CI verified",
+        "working tree clean after commit"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_contract_matrix.py tests/architecture/test_contract_boundaries.py tests/unit/test_docs_integrity.py",
+        "ruff check + mypy",
+        "docs/contracts/OPERATION_CONTRACT_MATRIX.md and JSON",
+        "docs/contracts/RECONCILIATION.md and JSON"
+      ],
+      "scope": "Agent 2 Gate 2: build canonical Operation Contract Matrix (70 vs 57), Capability Contract, Typed Command Envelope, validation, L0-L4, T20, pack discrepancy ADRs, contract tests A-J",
+      "scope_fa": "عامل 2 Gate 2: ساخت ماتریس قرارداد عملیات (70 در مقابل 57)، قرارداد قابلیت، پاکت فرمان تایپ‌دار، اعتبارسنجی، L0-L4، T20، ADRهای اختلاف پک، تست‌های قرارداد A-J",
+      "owner_hint": "Agent 2",
+      "gates_owner": false,
+      "note": ""
     }
   ],
   "deferred_log": [
