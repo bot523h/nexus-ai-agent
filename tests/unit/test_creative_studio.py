@@ -216,7 +216,21 @@ def test_background_task_flow(
     payload = response.json()
     assert payload["status"] == "pending"
 
-    job_response = client.get(f"/creative/jobs/{payload['job_id']}")
+    # GET is the same HMAC gate as the POST (task-165): timestamp over an
+    # empty body, constant-time verified by the app.
+    read_timestamp = str(int(time.time()))
+    read_signature = hmac_module.new(
+        b"test-signing-key",
+        f"{read_timestamp}:".encode() + b"",
+        hashlib.sha256,
+    ).hexdigest()
+    job_response = client.get(
+        f"/creative/jobs/{payload['job_id']}",
+        headers={
+            "X-NEXUS-Timestamp": read_timestamp,
+            "X-NEXUS-Signature": read_signature,
+        },
+    )
     assert job_response.status_code == 200
     job = job_response.json()
     assert job["status"] == "done"

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from telegram.ext import Application, ApplicationBuilder
@@ -50,6 +51,62 @@ def _bot_token(settings: Settings) -> str:
     return os.environ.get("TELEGRAM_BOT_TOKEN", settings.telegram_bot_token)
 
 
+async def _notify_creative_completion(completion: Any, token: str) -> None:
+    """task-166 (P0-B): deliver one-shot /edit·/caption·/grade results.
+
+    Translated, typed failures for expected problems; the measured artifact
+    (video or document) for successes; the workspace is owned and cleaned
+    here, exactly like the slideshow notifier. Telegram I/O lives in this
+    grandfathered file (frozen import-boundary test).
+    """
+    from telegram import Bot  # noqa: PLC0415
+
+    from nexus_ai_agent.creative.render_jobs import ERROR_CODES, cleanup_workspace
+    from nexus_ai_agent.i18n import i18n
+
+    payload = completion.payload or {}
+    result = completion.result or {}
+    lang = i18n.detect_language(str(payload.get("lang") or "en"))
+    chat_id = int(payload.get("chat_id") or 0)
+    if not chat_id:
+        return
+    bot = Bot(token=token)
+    try:
+        failed = completion.status.value == "failed" or result.get("success") is False
+        command = str(payload.get("command", "edit"))
+        operation = str(payload.get("operation", ""))
+        if failed:
+            code = str(result.get("error_code") or "internal")
+            key = f"creative.failed.{code}" if code in ERROR_CODES else "creative.failed.internal"
+            text = i18n.t(
+                key,
+                lang=lang,
+                detail=str(result.get("error_detail") or "—"),
+            )
+            await bot.send_message(chat_id=chat_id, text=text)
+            return
+        caption = i18n.t("creative.completed", lang=lang, command=command, operation=operation)
+        artifact = result.get("artifact_path")
+        if artifact and Path(str(artifact)).exists():
+            path = Path(str(artifact))
+            if result.get("artifact_kind") == "video":
+                duration_us = result.get("duration_us")
+                with path.open("rb") as handle:
+                    await bot.send_video(
+                        chat_id=chat_id,
+                        video=handle,
+                        caption=caption,
+                        duration=int(duration_us / 1_000_000) if duration_us else None,
+                    )
+            else:
+                with path.open("rb") as handle:
+                    await bot.send_document(chat_id=chat_id, document=handle, caption=caption)
+        else:
+            await bot.send_message(chat_id=chat_id, text=caption)
+    finally:
+        cleanup_workspace({**payload, **result})
+
+
 def _build_job_completion_notifier(token: str) -> Any:
     """D4: notify the origin chat when a background job finishes.
 
@@ -81,6 +138,11 @@ def _build_job_completion_notifier(token: str) -> Any:
             from nexus_ai_agent.bot.slideshow_notify import notify_slideshow_completion
 
             await notify_slideshow_completion(completion, token)
+            return
+        if completion.job_type == "creative_render":
+            # task-166 (P0-B): translated, typed failures; measured artifact
+            # delivery; workspace owned and cleaned by the notifier.
+            await _notify_creative_completion(completion, token)
             return
         bot = Bot(token=token)
         await bot.send_message(chat_id=int(str(raw_chat_id)), text=text)
@@ -249,6 +311,16 @@ def build_application(
         feature_engines=feature_engines,
     ):
         application.add_handler(handler)
+
+    # task-166 (P0-B): register the creative studio surface (/edit /caption
+    # /grade) against the same job queue the worker drains, so the canonical
+    # Telegram → queue → registry → bus → lane → artifact chain is live.
+    from telegram.ext import CommandHandler as _CommandHandler
+
+    from nexus_ai_agent.bot.creative_surface import build_creative_handlers
+
+    for _name, _fn in build_creative_handlers(job_queue).items():
+        application.add_handler(_CommandHandler(_name, _fn))
     # Custom command handlers removed as they should be part of build_handlers or imported correctly
     # install_presence_heartbeat(application) # Removed as it was an unawaited mock
     return application

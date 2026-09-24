@@ -1,6 +1,8 @@
 # NEXUS AI — Architecture Decision Log
 
-**Status:** Canonical historical record; revision 7 effective 2026-09-21  
+**Status:** Canonical historical record; revision 8 effective 2026-09-24  
+**r8 scope:** owner-directed P0 stabilization day (session `arena/01a0d23e-nexus-ai-agent`, board claims task-165/166/167): the legacy `/creative/*` HTTP lane disposition (D-0010), wiring the creative studio surface onto the canonical chain (D-0011), and verifiable backup success (D-0012). Evidence root: `docs/audits/P0_STABILIZATION_2026-09-24.md`.
+
 **Scope:** Architectural, operational, and roadmap decisions from Phase 0 through the released v3.13.0 baseline (P0 week-1 security batch + feature-engine wiring), the accepted Phase 6 Nagar design, the implemented Nagar Waves 1–3 (2a substrate, 2b pack, 2c render lane, 3 image generation) and the owner decisions that sequence what comes next.  
 **Main baseline for this revision:** `93cee5e` (the PR#34 squash merge — P0 week-1 security batch; PR#35 lint rescue merged on top). The live head may have advanced; consult `git log origin/main`.  
 **Current release baseline:** `v3.13.0` (cut by the repo-hygiene housekeeping PR that carries this revision).
@@ -14,6 +16,7 @@
 - **r5 (2026-09-20, PR#23):** recorded Nagar Wave 2c — the render lane (pure `RenderIR` → filtergraph → argv, one FFmpeg process, staging publish, measured evidence) — as an accepted and implemented decision with its rejected alternatives (agent-authored filtergraphs, `-y` against the destination, trusting the plan's duration, a second `ffprobe` binary, encoding inside a handler, a Python video library).
 - **r7 (2026-09-21, repo-hygiene pass — owner-directed, session `arena/01a0c484`):** release baseline moved to `v3.13.0` (the merged P0 week-1 security batch — README already described its behavior as v3.13.0 while VERSION/pyproject still said 3.12.0); docs reorganized without content loss (`docs/audits/`, `docs/history/`, `docs/ops/`, `docs/README.md` index); the broken root `termux_install.sh` removed and `scripts/termux_install.sh` repaired (canonical `nexus run-bot` entrypoint); PR #33 closed as superseded (security scope already delivered by merged PR #34; feature-wiring scope double-claims agent B's active lease — evidence: `mergeable=CONFLICTING`, head checks green but base-diverged), then **reopened the same day** when the `ci-gates-steward` board (15:21Z) re-designated it as the task-110 vehicle; 28 merged/closed remote branches deleted with per-branch dispositions below.
 - **r6 (2026-09-20, v3.11.0 housekeeping PR):** moved the release baseline to `v3.11.0`; recorded two owner decisions — *image generation behind an adapter (Pollinations by default, Gemini opt-in)*, which resolves the open question left by Wave 2 item 7, and *Wave 2.5 (Telegram surface for the slideshow pack) precedes Wave 3*; corrected the Phase 6 status text to Waves 1–2c merged; updated the PR snapshot (PR#23 merged as `ebe995a`, PR#1/PR#2 closed); noted that the lifecycle PR1/PR2/PR3 line has been on `main` since PR#7 (`acdbcb7`, v3.6.0) — the roadmap file had still called it unmerged.
+- **r8 (2026-09-24, P0 stabilization day):** D-0010 legacy `/creative/*` HTTP lane = keep+harden (strictly harden-edged) on a deprecation track gated on open PR#58's SSRF scope, never a competitor pipeline; D-0011 `/edit` `/caption` `/grade` wired through the canonical chain with message-anchored idempotency, the bogus `mapper` handler key removed, honest op matrix (`lut`/`burnin` refused, not faked), all replies through the i18n catalog; D-0012 backup success must be measured and round-trip-verified, never asserted — plus the r8 coordination facts (task-106 superseded into task-166, task-164 narrowed to owner-secrets, docs number-resync against measured values: 57 registered ops).
 
 This document is the single reference point for architectural decisions in this repository. A new decision must be appended here with its date, status, rationale, rejected alternatives, and repository evidence. Existing historical documents remain useful as detailed records, but this log is authoritative when summaries differ.
 
@@ -991,3 +994,111 @@ the audit and queued as `task-159`, not left implicit.
 read paths should move onto it, and D-0009's surface-owns-authorisation rule should be re-examined
 for whether the check belongs one layer down, in the engine, where a second caller (the delivery
 tick) would otherwise have to duplicate it.
+
+## 2026-09-24 — P0 stabilization day: legacy creative HTTP lane, studio surface wiring, verifiable backups (D-0010 … D-0012)
+
+**Status:** Accepted and implemented on `arena/01a0d23e-nexus-ai-agent` (board claims
+`task-165` / `task-166` / `task-167`, zone `p0-stabilization`).
+**Evidence:** `docs/audits/P0_STABILIZATION_2026-09-24.md` (repro scripts, before/after
+transcripts, merge-file measurements). Owner directive of 2026-09-24 (Persian, three P0s).
+
+### D-0010 — Legacy `/creative/*` HTTP lane: keep+harden (strictly harden-edged) → deprecate → remove
+
+*Problem.* `api/app.py` carries a pre-Nagar pipeline — `POST /creative/video-edit` +
+`GET /creative/jobs/{job_id}` writing into `creative/job_registry.py`’s own registry,
+driving `creative/video_director.py` + `creative/ffmpeg_executor.py` directly — beside the
+canonical Capability/Command/Job chain. On the audited baseline the GET answered **200 to
+any unsigned caller with full job data** (local paths, source URLs), uploads had no byte
+cap, and the downloader followed redirects with no SSRF guard (open PR#58 owns the SSRF
+fix). Two hardened parallel creative pipelines is exactly the architectural duplication
+the owner forbade.
+
+*Decision.* One canonical creative execution path: the studio chain
+(`creative_surface → JobQueuePort → worker → packs registry → CommandBus → lane →
+measured artifact → translated notify`). The legacy lane survives only as a
+keep+hardened, deprecated, contract-frozen edge — strictly to not collide with the
+in-flight SSRF repair (PR#58) and not to orphan the job-format consumers that CHANGELOG
+v3.0 recorded as live — on a deprecation track whose removal task lands after PR#58
+merges. Hardening shipped now: the GET runs the same fail-closed HMAC gate as the POST
+(503 without `NEXUS_API_HMAC_KEY`, 401 unsigned/stale/wrong; no new auth stack), multipart
+uploads over `_MAX_UPLOAD_BYTES` (500 MiB) die 413 before a job row exists with partial
+temp files unlinked, and both routes are `deprecated = True` in OpenAPI.
+An architecture ratchet freezes the `/creative` route set, whitelists every importer of
+the three legacy modules, and requires both handlers to call the gate — so the legacy
+surface can only shrink from here. GET HMAC signs `"{timestamp}:"+b""` (empty body).
+
+*Rejected alternatives.* (1) *Immediate removal* — would orphan the in-flight PR#58 SSRF
+repair and the signed consumers the v3.0 changelog documents; removal is sequenced, not
+abandoned. (2) *Migrate into packs* — the legacy lane's Gemini-Vertex freedom is
+incompatible with the typed-operation command bus; migration without a typed-op
+substitute is a rewrite, not a stabilization. (3) *Leave as-is with a docs warning* —
+the unsigned-GET data exposure is a live vulnerability, not a documentation issue.
+
+*Reopens when* PR#58 merges: removal PR (routes + three legacy modules + registry),
+evidence = ratchet suite + zero callers in `grep` + a release note.
+
+### D-0011 — `/edit` `/caption` `/grade`: the only Telegram face of the canonical chain
+
+*Problem.* On the audited baseline the studio surface was dead and lying: the handlers
+were never registered in `bot/app.py`, the worker had no `creative_render` handler, the
+command map leaked a bogus `mapper` key, idempotency used `uuid4()` (Telegram redelivery
+= duplicate jobs), users saw raw `creative.not_replied`-style keys, and queued /
+completion flows had no translations (`creative.*` absent from all 15 locale files).
+
+*Decision.* One one-shot surface, one chain. The surface validates via the pure mapper,
+stages the replied media into a deterministic job workspace
+(`creative_<sha256(idempotency)[:12]>`), enqueues `creative_render` with an idempotency
+key anchored to the Telegram message id (`creative:{user}:{chat}:{message}` — redelivery
+dedupes at the durable UNIQUE key), and speaks only i18n catalog strings (16 new
+`creative.*` keys × 15 locales; parity-gate enforced). The worker
+(`creative/render_jobs.py`) treats the queue row as an untrusted trust boundary
+(workspace containment under `creative_temp_dir`, input inside workspace, extra keys
+forbidden), dispatches the canonical op through `build_runtime_registry` +
+`CommandBus` with the same idempotency key, renders with the allow-listed FFmpeg, and
+returns measured facts (probe + sha256). Execution honesty: the op matrix is exactly
+what exists — `edit trim|speed|reverse`, `grade exposure|proxy|otio`,
+`caption transcribe` — while `lut` (no shipped `.cube` assets / no lane LUT op) and
+`burnin` (no subtitles instrument in the lane IR) are **refused typed at the surface**,
+never accepted and faked; caption chains fail closed typed (`caption_profile_unavailable`)
+when the `[speech]` engine is absent, mirroring the §7 rule of CREATIVE_STUDIO.md.
+The OTIO and caption→SRT branches deliver real document artifacts. Completion notify
+(translated, typed failures, workspace ownership + cleanup) lives in the grandfathered
+`bot/app.py` since the frozen import-boundary bars telegram from new modules.
+
+*Rejected alternatives.* (1) touch `bot/handlers.py` — task-106's original constraint,
+kept; the registration is one dedicated block in `build_application`. (2) Ship
+`lut`/`burnin` as stubs — explicitly forbidden by the anti-silent-degradation rule.
+(3) A new notify module outside the grandfathered set — violates the frozen
+import-boundary ratchet.
+
+*Reopens when* a lane LUT/subtitles instrument or shipped LUT assets exist — at that
+point the two refused ops re-enter the matrix with their own regression tests.
+
+### D-0012 — Backup "success" must be measured and round-trip-verified, never asserted
+
+*Problem.* `maintenance/backup.py` returned `uploaded=True` the moment the upload call
+returned: a corrupt, truncated or wrong-key artifact in R2 was indistinguishable from a
+healthy backup, and the summary carried no timestamp, so "nightly backups exist" was an
+unverifiable sentence while the scheduled workflow's failures were invisible to the
+success path. Separately, `sqlite3.backup()` against a 0-byte or corrupt source silently
+yields a valid-looking but empty dump (measured: 4096-byte header-only artifact) — a
+perfect false-success masquerade.
+
+*Decision.* The success contract is now: artifact exists AND non-empty AND sha256-measured
+AND locally verified (SQLite: restore into an isolated temp DB → `PRAGMA integrity_check`
+= `ok` AND non-trivial user-table inventory; PostgreSQL: pg_dump completion footer +
+non-empty — restore-into-cluster needs a live target the job has none of, recorded as the
+typed limitation) AND round-trip-verified after upload (re-download remote bytes, must be
+byte-identical) — else the run hard-fails (non-zero exit, never mislabeled). Success ⇒
+summary + structured log carry `sha256` / `size_bytes` / `verified` / `timestamp`.
+No new backup tooling was imposed: engine selection (`pg_dump` for
+`NEXUS_DATABASE_URL`, sqlite online-backup otherwise) and the R2 provider chain were
+kept from the repo; `R2Provider.download` already existed, so no `storage/` change was
+needed. Residual (owner-side, task-164): repository secrets for R2 must be configured
+before a real dispatch can prove end-to-end truth in Actions — with validity of the
+pipeline now test-covered, the remaining failure would be loud and typed.
+
+*Rejected alternatives.* (1) rclone/sqlite3 CLI/rsync tooling — rejected *after* reading
+the engine: the repo's own dump primitives and provider already expose download, so new
+dependencies would solve a problem the repo had already solved. (2) Treating a
+successful `upload()` return as proof — that was the reported bug.

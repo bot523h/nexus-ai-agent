@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-23T20:55:00Z",
+  "updated_at": "2026-09-24T09:41:42Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -454,6 +454,35 @@
         "tests/unit/test_dockerfile_contract.py",
         "tests/unit/test_agent_board.py"
       ]
+    },
+    {
+      "id": "p0-stabilization",
+      "description": "Owner directive 2026-09-24: P0-A legacy creative pipeline hardening, P0-B creative surface runtime wiring, P0-C backup reliability (repo-side)",
+      "paths": [
+        "src/nexus_ai_agent/api/app.py",
+        "src/nexus_ai_agent/creative/legacy_boundary.py",
+        "src/nexus_ai_agent/bot/creative_surface.py",
+        "src/nexus_ai_agent/worker.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/config/settings.py",
+        "src/nexus_ai_agent/creative/render_jobs.py",
+        "src/nexus_ai_agent/maintenance/backup.py",
+        "src/nexus_ai_agent/i18n/locales/",
+        "tests/unit/test_creative_surface.py",
+        "tests/unit/test_creative_render_jobs.py",
+        "tests/unit/test_security_hardening.py",
+        "tests/unit/test_maintenance_backup.py",
+        "tests/architecture/test_legacy_creative_boundary.py",
+        "docs/architecture/adr/0006-legacy-creative-pipeline.md",
+        "docs/architecture/adr/README.md",
+        "docs/architecture/CREATIVE_STUDIO.md",
+        "docs/architecture/OBSERVABILITY.md",
+        "docs/audits/P0_STABILIZATION_2026-09-24.md",
+        "docs/README.md",
+        ".github/workflows/maintenance.yml",
+        "CHANGELOG.md",
+        "docs/ops/r2-storage.md"
+      ]
     }
   ],
   "claims": [
@@ -782,7 +811,7 @@
       "title_fa": "موج ۱۰ نگار: فرمان‌های استودیو",
       "zone": "creative-surface",
       "priority": "P1",
-      "status": "available_sequenced_post_32",
+      "status": "done",
       "scope": "فرمان‌های /edit /caption /grade روی فایل جدید bot/creative_surface.py (بدون لمس handlers.py) از مسیر JobQueuePort و لاین رندر.",
       "scope_fa": "فرمان‌های /edit /caption /grade روی فایل جدید bot/creative_surface.py (بدون لمس handlers.py) از مسیر JobQueuePort و لاین رندر.",
       "prerequisites": [
@@ -802,7 +831,7 @@
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "exclusive_paths released with terminal status during schema-2 merge (history in scope)"
+      "note": "Scope absorbed and delivered by task-166-creative-surface-wiring (P0-B owner directive 2026-09-24); broader wiring scope (registration, worker, idempotency, i18n)."
     },
     {
       "task": "task-134",
@@ -1803,7 +1832,107 @@
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Forensics recorded 2026-09-23 by arena/01a0cfcd-nexus-ai-agent during the task-163 release audit (incident 'nightly-backup-never-succeeded')."
+      "note": "Forensics recorded 2026-09-23. Repo-side verifiability absorbed by task-167-backup-verifiability (P0-C, 2026-09-24). This task keeps ONLY the owner-action part: set R2/Neon secrets (docs/ops/r2-storage.md §4) and prove one green workflow_dispatch run with upload under backups/db/<stamp>/."
+    },
+    {
+      "priority": "P0",
+      "status": "active",
+      "prerequisites": [],
+      "ttl_hours": 48,
+      "gates_owner": false,
+      "note": "",
+      "task": "task-165-legacy-creative-hardening",
+      "title": "P0-A: auth for GET /creative/jobs/{id} + upload size cap + legacy deprecation ratchet (ADR)",
+      "title_fa": "P0-A: احراز هویت GET /creative/jobs + سقف حجم آپلود + ترکمن‌های رسمی deprecation پایپ‌لاین legacy",
+      "zone": "p0-stabilization",
+      "scope": "Deploy-verified on main: GET /creative/jobs/{job_id} answers 200 with full input_data to any unsigned caller (reproduced 2026-09-24). SSRF on POST video_url is fixed by open PR#58 (lease on its branch) and is NOT duplicated here. This task: add the fail-closed HMAC gate to the GET (same signature scheme as POST — no new auth stack), cap upload body size, declare the HTTP media pipeline legacy in an ADR with a removal path after PR#58 resolves, and pin the route set with an architecture ratchet test.",
+      "scope_fa": "بستن نشت دادهٔ GET jobs بدون auth (بازتولیدشده روی main)، بدون تکرار کار PR#58 (SSRF). اعمال همان گیت HMAC fail-closed روی GET، سقف حجم آپلود، ADR با مسیر حذف و تست معماری ratchet روی مجموعهٔ مسیرهای legacy.",
+      "acceptance_criteria": [
+        "unsigned GET /creative/jobs/{id} -> 401 (key configured) / 503 (no key); signed caller unchanged",
+        "upload larger than cap -> 413 before any job row is created",
+        "tests prove auth matrix + legacy-route ratchet; no new importers of job_registry/video_director/ffmpeg_executor",
+        "ADR 0006 records KEEP+HARDEN (bounded) with removal sequenced after PR#58"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_security_hardening.py tests/architecture/test_legacy_creative_boundary.py"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/api/app.py",
+        "src/nexus_ai_agent/creative/legacy_boundary.py",
+        "tests/unit/test_security_hardening.py",
+        "tests/architecture/test_legacy_creative_boundary.py",
+        "docs/architecture/adr/0006-legacy-creative-pipeline.md",
+        "docs/architecture/adr/README.md"
+      ],
+      "agent_branch": "arena/01a0d23e-nexus-ai-agent",
+      "claimed_at": "2026-09-24T07:36:43Z"
+    },
+    {
+      "priority": "P0",
+      "status": "active",
+      "prerequisites": [],
+      "ttl_hours": 48,
+      "gates_owner": false,
+      "note": "",
+      "task": "task-166-creative-surface-wiring",
+      "title": "P0-B: wire creative surface end-to-end — registration, creative_render worker, idempotency, i18n",
+      "title_fa": "P0-B: سیم‌کشی انتها به انتهای سطح خلاقیت — رجیستر، worker، idempotency، بومی‌سازی",
+      "zone": "p0-stabilization",
+      "scope": "Absorbs task-106 scope (superseded: broader than bot/creative_surface.py alone). Reproduced on main 2026-09-24: build_creative_handlers never called in build_application; default_job_handlers lacks creative_render; handler dict leaks a bogus 'mapper' key; idempotency key is uuid4-per-call (same Telegram message -> duplicate jobs); replies show raw i18n keys (0 creative.* keys in 15 locales). Fix: register exactly {edit,caption,grade} in bot/app.py on the shared job_queue; add creative/render_jobs.py worker adapter routing through packs runtime registry + render lane; message-id anchored idempotency key; full i18n incl. completion/failure notices in bot/app completion hook.",
+      "scope_fa": "جذب دامنهٔ task-106. اثبات‌شده: ثبت‌نشدن سطح در build_application، نبود هندلر creative_render، کلید اشتباه mapper، کلید idempotency تصادفی، نمایش کلید خام i18n. رفع: ثبت دقیق سه فرمان، worker واقعی از رجیستری پک‌ها و لاین رندر، کلید مبتنی بر message_id، i18n کامل.",
+      "acceptance_criteria": [
+        "Telegram /edit|/caption|/grade registered exactly once; no 'mapper' command exists (ratchet test)",
+        "creative_render executes through packs runtime registry + render lane; deterministic artifact (probe+sha256) in a dev-environment test",
+        "same Telegram message retried -> one job; two distinct messages -> two jobs",
+        "no raw i18n key reaches a user (unit test asserts locale text, not key); parity ratchet stays green",
+        "handlers.py untouched"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_creative_surface.py tests/unit/test_creative_render_jobs.py tests/unit/test_i18n_parity.py"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/creative_surface.py",
+        "src/nexus_ai_agent/creative/render_jobs.py",
+        "src/nexus_ai_agent/worker.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/i18n/locales/",
+        "tests/unit/test_creative_surface.py",
+        "tests/unit/test_creative_render_jobs.py",
+        "docs/architecture/CREATIVE_STUDIO.md"
+      ],
+      "agent_branch": "arena/01a0d23e-nexus-ai-agent",
+      "claimed_at": "2026-09-24T07:36:43Z"
+    },
+    {
+      "priority": "P0",
+      "status": "active",
+      "prerequisites": [],
+      "ttl_hours": 48,
+      "gates_owner": false,
+      "note": "",
+      "task": "task-167-backup-verifiability",
+      "title": "P0-C: backup success criteria = uploaded + integrity-verified + restore-proven; precise failure diagnosis",
+      "title_fa": "P0-C: موفقیت بکاپ = آپلود + راستی‌آزمایی یکپارچگی + اثبات restore؛ تشخیص دقیق خرابی",
+      "zone": "p0-stabilization",
+      "scope": "Repo-side half of queued task-164 (owner-secrets part stays in task-164). Evidence: backup-db red 3/3 (job API); the 09-21 'success' was housekeeping-only; log-archive + secret list endpoints unreachable from this sandbox (UNVERIFIED exact runner error). Code gaps measured on main: create_backup declares success right after upload() with no integrity/restore verification, no status/timestamp in summary and zero direct tests. Fix: sha256 + post-upload download-verify + restore into isolated temp DB (PRAGMA integrity_check + schema sanity) for SQLite and marker check for pg_dump output; summary carries status/timestamp; failure cannot print success; preflight names exactly which config is missing.",
+      "scope_fa": "نیمهٔ داخلِ ریپوی task-164. شکاف‌های اندازه‌گیری‌شده: موفقیت بلافاصله پس از upload اعلام می‌شود؛ نه یکپارچگی، نه restore، نه status/timestamp، نه تست مستقیم. رفع: sha256، دانلود-تأییدی، restore در DB موقت ایزوله، خلاصه با status ،پیام دقیق پیکربندی گمشده.",
+      "acceptance_criteria": [
+        "success is reported only after artifact exists, is non-empty, integrity-verified and restore-proven (sqlite) or marker-verified (pg dump)",
+        "each failure mode exits non-zero and names its cause (missing R2 vars listed individually; DB not found; upload error)",
+        "housekeeping maintenance NEVER reports backup success (unchanged: separate jobs) and backup failure cannot be green",
+        "unit tests with injected fake client cover: full round-trip, integrity mismatch, unconfigured R2, missing DB, dry-run"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_maintenance_backup.py"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/maintenance/backup.py",
+        "tests/unit/test_maintenance_backup.py",
+        ".github/workflows/maintenance.yml",
+        "docs/ops/r2-storage.md"
+      ],
+      "agent_branch": "arena/01a0d23e-nexus-ai-agent",
+      "claimed_at": "2026-09-24T07:36:43Z"
     }
   ],
   "deferred_log": [
@@ -1843,15 +1972,15 @@
       "title_fa": "بکاپ شبانهٔ دیتابیس هرگز موفق نشده (۳ از ۳ سرخ) — مسیر بکاپ Production واقعاً کار کند",
       "why_fa": "تنها مکانیسم DR برای دیتابیس Production (R2 blob tier) سه اجرا پیاپی شکست خورده و هیچ بکاپی تولید نشده؛ ریشهٔ دقیق بدون لوق جاب نامشخص است (R2 secrets؟ پیکربندی Neon؟).",
       "acceptance_criteria": [
-        "a manual workflow_dispatch run of maintenance/backup-db completes SUCCESS with a visible upload under backups/db/<UTC-stamp>/",
-        "the failing step's error from runs 35580701817 / 35705502209 / 35838057275 is read and its root cause recorded on the board",
-        "if the root cause is missing/misconfigured secrets: the repo secrets per docs/ops/r2-storage.md §4 are set by the owner and the next scheduled run is green"
+        "a manual workflow_dispatch run of maintenance/backup-db completes SUCCESS with a visible object under backups/ in R2 including sha256/verified/timestamp in the step log",
+        "NEXUS_R2_* secrets are configured in GitHub Actions (owner-side)",
+        "the scheduled (cron) run after that also completes SUCCESS"
       ],
       "prerequisites": [],
       "exclusive_paths": [
         ".github/workflows/maintenance.yml"
       ],
-      "status_note": "Forensics recorded by arena/01a0cfcd-nexus-ai-agent (task-163 release audit) on 2026-09-23: job/step-level API shows the backup step itself fails 3/3; the 2026-09-21 'success' was housekeeping-only. Rotated out: task-126 (delivered via PR#46 — six packs active, pending=0)."
+      "status_note": "repo-side verifiability delivered by task-167 (verified backup contract, round-trip byte identity, restore-into-temp-SQLite verification); what remains is owner-secrets configuration + one real green dispatch"
     },
     {
       "id": "task-124",
@@ -1947,25 +2076,6 @@
       ]
     },
     {
-      "id": "task-106",
-      "priority": "P1",
-      "zone": "creative-surface",
-      "title": "Telegram studio commands",
-      "title_fa": "فرمان‌های استودیو در تلگرام",
-      "why_fa": "اتصال لاین رندر به کاربر نهایی بدون لمس handlers.py.",
-      "acceptance_criteria": [
-        "/edit /caption /grade با تست",
-        "handlers.py دست‌نخورده"
-      ],
-      "prerequisites": [
-        "task-122"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/bot/creative_surface.py",
-        "tests/unit/test_creative_surface.py"
-      ]
-    },
-    {
       "id": "task-132",
       "priority": "P1",
       "zone": "ci-quality",
@@ -1983,42 +2093,68 @@
       ]
     },
     {
-      "id": "task-134",
-      "priority": "P2",
-      "zone": "nagar-portrait",
-      "title": "Portrait family slice (5 ops)",
-      "title_fa": "اسلایس خانوادهٔ پرتره",
-      "why_fa": "۲۹ شناسهٔ TDD باقی‌مانده؛ بزرگ‌ترین خانواده پیاده‌نشده.",
       "acceptance_criteria": [
-        "۵ op رجیستر",
-        "گیت مرزی پک سبز"
+        "routes + creative/job_registry.py + video_director.py + ffmpeg_executor.py removed; creative/__init__ exports cleaned",
+        "importer-ratchet test updated to assert ABSENCE; GET HMAC tests removed with the routes",
+        "grep proves zero remaining callers; full suite green; release note added"
       ],
-      "prerequisites": [],
       "exclusive_paths": [
-        "src/nexus_ai_agent/creative/packs/portrait/",
-        "tests/unit/test_portrait_pack.py"
-      ],
-      "status_note": "renumbered: portrait work tracked as task-152-portrait-pack (canonical-ID resolution 2026-09-22)"
-    },
-    {
-      "id": "task-127",
-      "priority": "P2",
-      "zone": "features-rag",
-      "title": "Real RAG",
-      "title_fa": "RAG واقعی",
-      "why_fa": "rag.py استاب ۳.۷KB است؛ کیفیت پاسخ به بازیابی وابسته است.",
-      "acceptance_criteria": [
-        "recall@k روی fixture",
-        "بدون وابستگی سنگین جدید"
+        "src/nexus_ai_agent/api/app.py",
+        "src/nexus_ai_agent/creative/job_registry.py",
+        "src/nexus_ai_agent/creative/video_director.py",
+        "src/nexus_ai_agent/creative/ffmpeg_executor.py",
+        "tests/architecture/test_legacy_creative_boundary.py",
+        "tests/unit/test_security_hardening.py"
       ],
       "prerequisites": [
-        "task-122"
+        "PR#58 merged"
+      ],
+      "status_note": "evidence: D-0010 in DECISION_LOG; removal only after PR#58 merges",
+      "id": "task-173",
+      "priority": "P1",
+      "zone": "p0-stabilization",
+      "title": "Remove the legacy /creative/* HTTP lane (D-0010 reopen clause) after PR#58 lands",
+      "title_fa": "حذف مسیر قدیمی /creative/* بعد از ادغام PR#58",
+      "why_fa": "AD-0010: مسیر legacy فقط برای عدم برخورد با رفع SSRF درحال انجام (PR#58) نگه داشته شده؛ بعد از مرج باید حذف شود تا یک مسیر اجرایی Creative یگانه بماند."
+    },
+    {
+      "acceptance_criteria": [
+        "lane op(s) with golden argv tests + a decision on shipping reference .cube assets",
+        "worker map + surface ALLOWED updated in the same PR; real-render regression tests",
+        "no silent degradation: unavailable inputs stay typed failures"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/features/rag.py",
-        "tests/unit/test_rag_chunking.py"
+        "src/nexus_ai_agent/creative/rendering/ir.py",
+        "src/nexus_ai_agent/creative/rendering/compiler.py",
+        "src/nexus_ai_agent/creative/render_jobs.py",
+        "src/nexus_ai_agent/bot/creative_surface.py"
       ],
-      "status_note": "delivered via PR#47 (rag_core stdlib core + lazy engine + eval harness)"
+      "prerequisites": [],
+      "status_note": "owned by the creative-runtime agent; surface/worker files change atomically with the lane instrument",
+      "id": "task-174",
+      "priority": "P2",
+      "zone": "creative-runtime",
+      "title": "Lane instruments for LUT (color.apply_lut) and subtitles (caption.burn_in) so the refused surface ops can enter the matrix",
+      "title_fa": "ابزارهای lane برای LUT و subtitles تا دو عمل ردشدهٔ surface وارد ماتریس واقعی شوند",
+      "why_fa": "D-0011: lut/burnin به دلیل نبود مسیر اجرای صادقانه (بدون .cube shipped و بدون subtitles op در lane IR) typed refuse می‌شوند؛ با ابزار واقعی lane قابل برگشت‌اند."
+    },
+    {
+      "acceptance_criteria": [
+        "real user sends /edit trim on staging and receives translated queued + video artifact",
+        "caption transcribe on default install returns the typed unavailable message (localized)",
+        "job rows show durable COMPLETED/not FAILED for the typed paths"
+      ],
+      "exclusive_paths": [],
+      "prerequisites": [
+        "staging bot token + a test chat"
+      ],
+      "status_note": "owner/staging action; evidence = staging screenshots + job row dump",
+      "id": "task-175",
+      "priority": "P2",
+      "zone": "p0-stabilization",
+      "title": "Staging smoke of /edit /caption /grade against the live bot (PTB runtime)",
+      "title_fa": "اسموک استیجینگ سه فرمان creative روی ربات زنده",
+      "why_fa": "زنجیره در سطح unit/integration با artifact واقعی اثبات شده؛ اثبات نهایی کاربر-واقعی به کانتکست PTB زنده و توکن استیجینگ نیاز دارد (external dependency)."
     }
   ],
   "history": {

@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security (P0 hardening day — session `arena/01a0d23e-nexus-ai-agent`, tasks 165–167)
+
+- **`GET /creative/jobs/{job_id}` is now behind the same fail-closed HMAC gate as the
+  POST** (unsigned → 401; no key configured → 503). On the previous baseline it answered
+  `200` with full job data — local staging paths and source URLs — to any caller.
+- **Upload byte cap on the legacy lane** — multipart bodies over 500 MiB die `413`
+  before a job row exists; partial temp files are unlinked on every failure.
+- **Both legacy `/creative/*` routes are deprecated** (OpenAPI `deprecated=true`,
+  DECISION_LOG D-0010): route set frozen by an architecture ratchet; removal is sequenced
+  after PR#58's SSRF scope lands.
+
+### Added (P0 hardening day — creative studio surface, task-166)
+
+- **`/edit` `/caption` `/grade` are wired end-to-end (D-0011)** — Telegram →
+  `creative_surface` (pure mapper + workspace staging) → `JobQueuePort.enqueue`
+  (`creative_render`, idempotency key anchored to the Telegram message id) → worker
+  adapter `creative/render_jobs.py` → packs runtime registry → `CommandBus` → render
+  lane → measured artifact (probe + sha256) → translated completion notify with
+  workspace ownership. The bogus `mapper` handler key is gone.
+- **Honest op matrix** — `edit trim|speed|reverse`, `grade exposure|proxy|otio`,
+  `caption transcribe`; `lut` (no shipped `.cube` assets / no lane op) and `burnin`
+  (no subtitles instrument in the lane IR) are refused typed at the surface, never
+  faked; caption chains fail closed typed when the `[speech]` engine is absent.
+- **16 `creative.*` i18n keys × all 15 locales** — raw keys can no longer reach users.
+
+### Fixed (P0 hardening day — backups, task-167)
+
+- **Backup success is now verified, never asserted (D-0012)** — artifacts must exist,
+  be non-empty, be sha256-measured, survive a restore-into-temp-SQLite verification
+  (`PRAGMA integrity_check` + user-table inventory; the silent empty-dump masquerade
+  is rejected) or the pg_dump footer check, and re-download byte-identical after
+  upload; any mismatch hard-fails the run (non-zero exit). Success summaries carry
+  `sha256` / `size_bytes` / `verified` / `timestamp`.
+
 ### Added (dead-engine wiring — session `arena/01a0cb38-nexus-ai-agent`)
 
 - **`bot/surface/ads.py`** — `/ad_create` `/ad_list` `/ad_pause` `/ad_resume` `/ad_delete`

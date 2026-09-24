@@ -61,5 +61,21 @@
   "onboarding.ai_hint": "💡 *Tipp:* Tipp einfach eine Nachricht und ich antworte mit KI!\n\nDu kannst auch nutzen:\n• `/ask <Frage>` — Schnelle Q&A\n• `/code <Code>` — Code-Review\n• `/translate <Text>` — Intelligente Übersetzung",
   "onboarding.image_hint": "💡 *Tipp:* Nutze `/image <Beschreibung>` zum Generieren von Bildern!\n\nVersuch: `/image eine Katze im Weltraum digital-art`\n\nStile: realistic, anime, digital-art, oil-painting, pixel-art, watercolor, cyberpunk, fantasy, 3d, sketch",
   "onboarding.go_chat": "💬 Sende eine Nachricht, um zu chatten!",
-  "onboarding.explore_hint": "🗺️ **Alle Befehle:**\n\n🤖 `/ai` — Chat mit Gemini\n🎨 `/image` — Bilder generieren\n🔊 `/tts` — Text zu Sprache\n☁️ `/cloud` — Dateien hochladen\n🔗 `/referral` — Freunde einladen\n🎮 `/quiz` — Spielen\n🌐 `/language` — Sprache ändern\n❓ `/help` — Vollständige Befehlsliste"
+  "onboarding.explore_hint": "🗺️ **Alle Befehle:**\n\n🤖 `/ai` — Chat mit Gemini\n🎨 `/image` — Bilder generieren\n🔊 `/tts` — Text zu Sprache\n☁️ `/cloud` — Dateien hochladen\n🔗 `/referral` — Freunde einladen\n🎮 `/quiz` — Spielen\n🌐 `/language` — Sprache ändern\n❓ `/help` — Vollständige Befehlsliste",
+  "creative.invalid_command": "❌ Unbekannter Studio-Befehl. Nutze /edit, /caption oder /grade.",
+  "creative.invalid_operation": "❌ Vorgang für /{command} nicht unterstützt. Optionen: {operations}",
+  "creative.not_replied": "❌ Antworte mit diesem Befehl auf eine Video- (oder Audio-)Nachricht.",
+  "creative.limit_exceeded": "❌ Das Medium darf höchstens {max_seconds} Sekunden lang sein.",
+  "creative.media_too_large": "❌ Das Medium ist größer als {max_mb} MB.",
+  "creative.media_download_failed": "❌ Das Medium konnte nicht von Telegram geladen werden. Bitte erneut versuchen.",
+  "creative.queue_failed": "❌ Die Render-Warteschlange ist gerade nicht verfügbar. Bitte erneut versuchen.",
+  "creative.queued": "⏳ /{command} {operation} eingereiht — Auftrag {job_id}",
+  "creative.completed": "✅ /{command} {operation} abgeschlossen",
+  "creative.failed.invalid_request": "❌ Ungültige Anfrage ({detail}).",
+  "creative.failed.unsupported_operation": "❌ Dieser Vorgang wird für Ein-Schritt-Renders nicht unterstützt.",
+  "creative.failed.media_missing": "❌ Die bereitgestellte Datei fehlt. Sende den Befehl erneut.",
+  "creative.failed.caption_profile_unavailable": "❌ Untertitel sind in dieser Installation nicht verfügbar (keine Sprach-Engine).",
+  "creative.failed.render_failed": "❌ Das Rendern ist fehlgeschlagen. Versuche kürzeres Material oder andere Parameter.",
+  "creative.failed.ffmpeg_unavailable": "❌ Die Render-Engine ist in dieser Bereitstellung nicht installiert.",
+  "creative.failed.internal": "❌ Ein interner Fehler ist aufgetreten; Details sind für das Team sichtbar."
 }
