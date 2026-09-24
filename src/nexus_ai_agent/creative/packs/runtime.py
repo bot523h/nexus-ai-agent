@@ -57,6 +57,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from nexus_ai_agent.creative.packs.availability import (
+    BinaryResolver,
+    DependencyProbe,
+    PackAvailability,
+    default_dependency_probe,
+    pack_availability,
+)
 from nexus_ai_agent.creative.packs.manifest import CapabilityPackManifest
 from nexus_ai_agent.creative.packs.registry import Anchor, PackRegistry, RegisteredPack
 from nexus_ai_agent.creative.studio.capabilities import CapabilityRegistry, build_wave1_registry
@@ -359,6 +366,48 @@ class PackRuntime:
             for pack in self.packs.builtin_packs()
             if self.packs.unknown_capabilities(pack.package_id)
         }
+
+    def availability(
+        self,
+        *,
+        resolve_binary: BinaryResolver,
+        disabled: frozenset[str] | set[str] | tuple[str, ...] = (),
+        python_dependencies: dict[str, tuple[str, ...]] | None = None,
+        check_dependency: DependencyProbe = default_dependency_probe,
+    ) -> list[PackAvailability]:
+        """A row per builtin pack: registered vs. actually runnable right now.
+
+        ``status()`` answers the composition question ("does the runtime know
+        every capability?"); this answers the runtime question ("can the pack
+        run here, now?") by probing declared external binaries through the
+        injected ``resolve_binary``.  The resolver is injected — not defaulted —
+        so a pack can never be reported ``AVAILABLE`` by a probe that was
+        never wired; wire the canonical
+        ``creative.slideshow.ffmpeg.resolve_ffmpeg_bin`` (six lines — see
+        ``docs/ops/CREATIVE_RUNTIME.md``).
+        """
+        self.register_builtin()
+        disabled_ids = frozenset(disabled)
+        declared = python_dependencies or {}
+        rows: list[PackAvailability] = []
+        by_id = {pack.package_id: pack for pack in self.packs.builtin_packs()}
+        for entry in self.composition:
+            pack = by_id.get(entry.package_id)
+            if pack is None:  # pragma: no cover - guarded by composition_issues()
+                continue
+            rows.append(
+                pack_availability(
+                    entry.package_id,
+                    manifest=pack.manifest,
+                    active=pack.active,
+                    pending_capabilities=self.packs.unknown_capabilities(entry.package_id),
+                    disabled=entry.package_id in disabled_ids,
+                    resolve_binary=resolve_binary,
+                    python_dependencies=tuple(declared.get(entry.package_id, ())),
+                    check_dependency=check_dependency,
+                )
+            )
+        return rows
 
     @property
     def complete(self) -> bool:
