@@ -93,23 +93,36 @@ def test_mapper_rejects_lut_and_burnin_as_invalid() -> None:
     assert isinstance(m.map(CreativeRequest("caption", "burnin", (), "f", 5.0)), CreativeFailure)
 
 
-def test_job_payload_opts_grade_jobs_into_the_experimental_lifecycle() -> None:
-    """Only grade/* (EXPERIMENTAL delivery pack) carries the lifecycle opt-in."""
+@pytest.mark.parametrize(
+    ("command", "operation", "args"),
+    [
+        ("grade", "exposure", ("1.0",)),
+        ("grade", "proxy", ()),
+        ("grade", "otio", ()),
+        ("caption", "transcribe", ()),
+        ("edit", "trim", ("0", "5")),
+    ],
+)
+def test_job_payload_carries_no_lifecycle_opt_in(
+    command: str, operation: str, args: tuple[str, ...]
+) -> None:
+    """task-183: the surface never writes a lifecycle opt-in into the job row
+    (the worker derives it from server policy), and every row it produces is a
+    valid worker payload (positive control for the surface→queue contract)."""
+    from nexus_ai_agent.creative.render_jobs import CreativeRenderPayload
+
     m = CreativeSurfaceMapper()
-    kwargs = {
-        "user_id": 1,
-        "chat_id": 2,
-        "lang": "en",
-        "idempotency_key": "creative:1:2:3",
-        "workspace_dir": "/tmp/creative_x",
-        "input_path": "/tmp/creative_x/input.mp4",
-    }
-    grade = m.job_payload(CreativeRequest("grade", "exposure", ("1.0",), "fid", 10.0), **kwargs)
-    caption = m.job_payload(CreativeRequest("caption", "transcribe", (), "fid", 10.0), **kwargs)
-    edit = m.job_payload(CreativeRequest("edit", "trim", ("0", "5"), "fid", 10.0), **kwargs)
-    assert grade["allow_experimental"] is True
-    assert caption["allow_experimental"] is False
-    assert edit["allow_experimental"] is False
+    payload = m.job_payload(
+        CreativeRequest(command, operation, args, "fid", 10.0),
+        user_id=1,
+        chat_id=2,
+        lang="en",
+        idempotency_key="creative:1:2:3",
+        workspace_dir="/tmp/creative_x",
+        input_path="/tmp/creative_x/input.mp4",
+    )
+    assert "allow_experimental" not in payload
+    CreativeRenderPayload.model_validate(payload)
 
 
 def test_job_payload_contains_ids_and_workspace() -> None:

@@ -90,3 +90,51 @@ def test_allow_experimental_is_never_read_from_a_command_envelope() -> None:
     """The opt-in is composition-root state; no envelope field may carry it."""
     source = (STUDIO / "models.py").read_text(encoding="utf-8")
     assert "allow_experimental" not in source
+
+
+# ---------------------------------------------------------------------------
+# task-183 trust boundary: the EXPERIMENTAL opt-in is server policy
+# ---------------------------------------------------------------------------
+
+RENDER_JOBS = SRC / "creative/render_jobs.py"
+OPT_IN_POLICY = "EXPERIMENTAL_OPT_IN_OPERATIONS"
+
+
+def test_no_production_code_reads_an_opt_in_off_an_object() -> None:
+    """``<anything>.allow_experimental`` would mean the opt-in is carried by a
+    data structure (a queue row, a request, a command) -- i.e. by the caller.
+    The only legal holders are the bus's private ``_allow_experimental`` and
+    plain parameters of the lifecycle gate."""
+    readers = sorted(
+        f"{path.relative_to(ROOT)}:{node.lineno}"
+        for path in SRC.rglob("*.py")
+        for node in ast.walk(_tree(path))
+        if isinstance(node, ast.Attribute) and node.attr == "allow_experimental"
+    )
+    assert readers == []
+
+
+def test_bus_opt_in_is_only_ever_derived_from_the_server_policy() -> None:
+    """Every production ``CommandBus(..., allow_experimental=...)`` lives in the
+    render worker and is computed from ``EXPERIMENTAL_OPT_IN_OPERATIONS`` --
+    never a literal, a parameter, or a payload value."""
+    sites: list[tuple[str, ast.expr]] = []
+    for path in sorted(SRC.rglob("*.py")):
+        if path == BUS:
+            continue
+        for node in ast.walk(_tree(path)):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "CommandBus"
+            ):
+                sites.extend(
+                    (str(path.relative_to(ROOT)), kw.value)
+                    for kw in node.keywords
+                    if kw.arg == "allow_experimental" or kw.arg is None
+                )
+    assert [site for site, _ in sites] == [str(RENDER_JOBS.relative_to(ROOT))]
+    (_, value) = sites[0]
+    names = {n.id for n in ast.walk(value) if isinstance(n, ast.Name)}
+    assert OPT_IN_POLICY in names
+    assert not any(isinstance(n, ast.Constant) and n.value is True for n in ast.walk(value))

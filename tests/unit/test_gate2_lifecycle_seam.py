@@ -50,7 +50,14 @@ from nexus_ai_agent.creative.studio.lifecycle import (
     PackLifecycle,
     PackRequirementError,
 )
-from nexus_ai_agent.creative.studio.models import Preconditions, TargetRef
+from nexus_ai_agent.creative.studio.models import (
+    ExecutionPolicy,
+    ExecutionPolicyError,
+    InputRef,
+    InputReferenceError,
+    Preconditions,
+    TargetRef,
+)
 
 AVAILABLE_PACK = "nexus.slideshow.compose"
 EXPERIMENTAL_PACK = "nexus.audio.studio"
@@ -189,9 +196,12 @@ def stub_and_retired(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def assert_untouched(bus: CommandBus, calls: Calls, revision: int) -> None:
+    """Zero execution *and* zero project mutation (revision, hash, history)."""
     assert calls.count == 0
     assert bus.state_revision == revision
     assert bus.history == ()
+    assert bus.state_hash == bus.project.state_hash
+    assert bus.project.state_revision == revision
 
 
 # ---------------------------------------------------------------------------
@@ -328,6 +338,38 @@ class TestSeamPlacement:
         stale = command(project, preconditions=Preconditions(state_revision=999))
         with pytest.raises(PackRequirementError):
             bus.dispatch(stale)
+        assert calls.count == 0
+
+    def test_lifecycle_runs_before_execution_policy(self, project: Project, calls: Calls) -> None:
+        """4b before 5: an unadvertised mode on a refused pack reports the pack."""
+        preview = command(project).model_copy(
+            update={"execution_policy": ExecutionPolicy(mode="preview")}
+        )
+        with pytest.raises(PackRequirementError):
+            make_bus(project, calls, (EXPERIMENTAL_PACK,)).dispatch(preview)
+        # Positive control: with the gate open, the same command reaches stage 5.
+        with pytest.raises(ExecutionPolicyError):
+            make_bus(project, calls, (EXPERIMENTAL_PACK,), allow_experimental=True).dispatch(
+                preview
+            )
+        assert calls.count == 0
+
+    def test_lifecycle_runs_before_reference_validation(
+        self, project: Project, calls: Calls
+    ) -> None:
+        """4b before 6: a dangling input ref on a refused pack reports the pack."""
+        ghost = command(project).model_copy(
+            update={
+                "input_refs": (
+                    InputRef(ref_type="asset", project_id=project.project_id, ref_id="ghost"),
+                )
+            }
+        )
+        with pytest.raises(PackRequirementError):
+            make_bus(project, calls, (EXPERIMENTAL_PACK,)).dispatch(ghost)
+        # Positive control: with the gate open, the same command reaches stage 6.
+        with pytest.raises(InputReferenceError):
+            make_bus(project, calls, (EXPERIMENTAL_PACK,), allow_experimental=True).dispatch(ghost)
         assert calls.count == 0
 
     def test_unknown_operation_never_reaches_the_lifecycle_gate(

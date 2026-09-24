@@ -159,10 +159,9 @@ class CreativeSurfaceMapper:
             "chat_id": chat_id,
             "lang": lang,
             "idempotency_key": idempotency_key,
-            # grade/* runs on the EXPERIMENTAL delivery pack, so the surface
-            # opts those jobs in explicitly (the bus capability-lifecycle gate
-            # refuses them otherwise). caption/edit packs are AVAILABLE.
-            "allow_experimental": req.command == "grade",
+            # No lifecycle opt-in travels in the job row: the worker derives
+            # the EXPERIMENTAL-pack opt-in from the canonical operation
+            # (render_jobs.EXPERIMENTAL_OPT_IN_OPERATIONS, task-183).
         }
 
 

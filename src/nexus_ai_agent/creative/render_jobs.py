@@ -54,6 +54,25 @@ SURFACE_TO_CANONICAL: dict[tuple[str, str], str] = {
     ("grade", "otio"): "delivery.export_otio",
 }
 
+#: Server-controlled EXPERIMENTAL-pack opt-in (task-183 trust boundary).
+#: The canonical operations below run on the ``EXPERIMENTAL``
+#: ``nexus.color.delivery`` pack, and the bus lifecycle gate (Gate-2 stage 4b)
+#: refuses them unless the composition root opts in. That opt-in is decided
+#: *here*, by the worker, from the canonical operation id -- never from the
+#: queue row. A payload is an untrusted structure (see the containment
+#: section below), so a row cannot carry, widen, or narrow its own lifecycle:
+#: ``CreativeRenderPayload`` has no opt-in field and ``extra="forbid"`` rejects
+#: one. Adding an operation here is the explicit, reviewed operator act;
+#: ``tests/unit/test_creative_render_jobs.py`` pins that the set is exactly the
+#: surface operations whose packs are EXPERIMENTAL (no over-grant, no gap).
+EXPERIMENTAL_OPT_IN_OPERATIONS: frozenset[str] = frozenset(
+    {
+        "color.adjust_exposure",
+        "delivery.make_proxy_480p",
+        "delivery.export_otio",
+    }
+)
+
 #: Typed failure codes surfaced to users via ``creative.failed.<code>``.
 ERROR_CODES: frozenset[str] = frozenset(
     {
@@ -94,11 +113,9 @@ class CreativeRenderPayload(BaseModel):
     chat_id: int
     lang: str = "en"
     idempotency_key: str = Field(min_length=1)
-    allow_experimental: bool = False
-    """Per-job opt-in for EXPERIMENTAL packs (delivery/audio/motion).
-
-    The bus capability-lifecycle gate (step 4b) refuses experimental packs
-    without it; queueing a job with this flag is the explicit operator act."""
+    # Deliberately no lifecycle opt-in field: the EXPERIMENTAL-pack opt-in is
+    # server policy (``EXPERIMENTAL_OPT_IN_OPERATIONS``), and ``extra="forbid"``
+    # rejects a row that tries to carry one (task-183 trust boundary).
 
 
 # ---------------------------------------------------------------------------
@@ -185,10 +202,13 @@ def _dispatch(
     operation: str,
     input_data: dict[str, Any],
     idempotency_key: str,
-    allow_experimental: bool = False,
 ) -> dict[str, Any]:
     """Registry lookup → bus dispatch. Bad args become typed
-    ``invalid_request`` (a retry with the same payload fails identically)."""
+    ``invalid_request`` (a retry with the same payload fails identically).
+
+    The bus's EXPERIMENTAL opt-in is derived from the canonical operation via
+    the server-controlled ``EXPERIMENTAL_OPT_IN_OPERATIONS``; no caller (and no
+    queue row) can pass it in."""
     from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
     from nexus_ai_agent.creative.studio.bus import CommandBus
     from nexus_ai_agent.creative.studio.models import TargetRef, TypedCommand
@@ -196,7 +216,7 @@ def _dispatch(
     bus = CommandBus(
         state=project,
         registry=build_runtime_registry(),
-        allow_experimental=allow_experimental,
+        allow_experimental=operation in EXPERIMENTAL_OPT_IN_OPERATIONS,
     )
     command = TypedCommand(
         command_id=f"cmd-{idempotency_key}-{operation}",
@@ -338,7 +358,6 @@ async def _run_render_branch(
         operation=canonical_id,
         input_data=_operation_inputs(payload, duration_us),
         idempotency_key=payload.idempotency_key,
-        allow_experimental=payload.allow_experimental,
     )
     render_project = project  # lane instrumentation below mirrors the SAME op
 
@@ -389,7 +408,6 @@ async def _run_otio_branch(payload: CreativeRenderPayload, workspace: Path) -> d
         operation="delivery.export_otio",
         input_data=_operation_inputs(payload, duration_us),
         idempotency_key=payload.idempotency_key,
-        allow_experimental=payload.allow_experimental,
     )
     otio_text = output.get("otio_json")
     if not isinstance(otio_text, str) or not otio_text.strip():
@@ -441,7 +459,6 @@ async def _run_caption_branch(
             "transcript": transcript.model_dump(mode="json"),
         },
         idempotency_key=payload.idempotency_key,
-        allow_experimental=payload.allow_experimental,
     )
 
     out_path = workspace / "captions.srt"
