@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-24T18:05:00Z",
+  "updated_at": "2026-09-24T19:20:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -527,7 +527,9 @@
         "docs/architecture/FAILURE_SEMANTICS.md",
         "docs/architecture/adr/0005-job-lifecycle-verification-gate.md",
         "docs/audits/GATE5_JOB_LIFECYCLE_2026-09-24.md",
-        "docs/audits/GATE5_TRUTH_MATRIX.json"
+        "docs/audits/GATE5_TRUTH_MATRIX.json",
+        "docs/DECISION_LOG.md",
+        "docs/architecture/adr/README.md"
       ]
     }
   ],
@@ -2111,13 +2113,15 @@
         "docs/architecture/FAILURE_SEMANTICS.md",
         "docs/architecture/adr/0005-job-lifecycle-verification-gate.md",
         "docs/audits/GATE5_JOB_LIFECYCLE_2026-09-24.md",
-        "docs/audits/GATE5_TRUTH_MATRIX.json"
+        "docs/audits/GATE5_TRUTH_MATRIX.json",
+        "docs/DECISION_LOG.md",
+        "docs/architecture/adr/README.md"
       ],
       "agent_branch": "arena/01a0d458-nexus-ai-agent",
       "claimed_at": "2026-09-24T17:06:33Z",
       "ttl_hours": 48,
       "gates_owner": false,
-      "note": "Design pivot (recorded): the lifecycle contract lives in src/nexus_ai_agent/application/ (job_lifecycle.py, artifact_publication.py) and the ports/adapter, not in creative/ — the original plan's creative/job_lifecycle.py, creative/artifact_destination.py and tests/unit/* collided with task-177's tests/unit/ + creative/ fences and were abandoned before creation. All Gate 5 test files live under tests/integration/ (outside every live fence)."
+      "note": "Design pivot (recorded): the lifecycle contract lives in src/nexus_ai_agent/application/ (job_lifecycle.py, artifact_publication.py) and the ports/adapter, not in creative/ — the original plan's creative/job_lifecycle.py, creative/artifact_destination.py and tests/unit/* collided with task-177's tests/unit/ + creative/ fences and were abandoned before creation. All Gate 5 test files live under tests/integration/ (outside every live fence). Scope extension (recorded): DECISION_LOG.md gains D-0014 and docs/architecture/adr/README.md gains the ADR-0005 index row — addenda to files no other claim owns; declared here before editing."
     }
   ],
   "deferred_log": [
