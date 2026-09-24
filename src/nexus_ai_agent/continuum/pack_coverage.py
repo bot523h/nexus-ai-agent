@@ -66,6 +66,12 @@ DEFAULT_TEST_TARGETS: tuple[str, ...] = (
     "tests/unit/test_audio_pack.py",
     "tests/unit/test_delivery_pack.py",
     "tests/unit/test_delivery_signing.py",
+    # task-152/153 vision packs (shared vision primitives exercised by both)
+    "tests/unit/test_portrait_pack.py",
+    "tests/unit/test_scene_pack.py",
+    # task-165 creative interop + render-plan bridge
+    "tests/unit/test_otio_roundtrip.py",
+    "tests/unit/test_render_plan.py",
     # the substrate that composes and verifies them
     "tests/unit/test_pack_manifest_verify.py",
     "tests/unit/test_pack_runtime_composition.py",
@@ -85,6 +91,8 @@ DEFAULT_TEST_TARGETS: tuple[str, ...] = (
     "tests/architecture/test_delivery_pack_boundary.py",
     "tests/architecture/test_edit_pack_boundary.py",
     "tests/architecture/test_motion_pack_boundary.py",
+    "tests/architecture/test_portrait_pack_boundary.py",
+    "tests/architecture/test_scene_pack_boundary.py",
 )
 
 #: Files directly under ``creative/packs/`` (the substrate) are grouped here.

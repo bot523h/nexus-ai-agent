@@ -113,6 +113,20 @@ def _register_delivery(registry: CapabilityRegistry) -> object:
     return registry
 
 
+def _register_portrait(registry: CapabilityRegistry) -> object:
+    from nexus_ai_agent.creative.packs.portrait.operations import register_portrait_operations
+
+    register_portrait_operations(registry)
+    return registry
+
+
+def _register_scene(registry: CapabilityRegistry) -> object:
+    from nexus_ai_agent.creative.packs.scene.operations import register_scene_operations
+
+    register_scene_operations(registry)
+    return registry
+
+
 @dataclass(frozen=True)
 class PackComposition:
     """One builtin pack: where it lives, what it declares, how it is registered."""
@@ -127,10 +141,11 @@ class PackComposition:
         return f"{self.directory} ({self.package_id})"
 
 
-#: The six builtin packs, in registration order.  The order is deterministic and
+#: The eight builtin packs, in registration order.  The order is deterministic and
 #: part of the public contract: it is what ``nexus packs list`` prints and what
 #: the activation snapshot records.  ``slideshow`` first (the pack every other
-#: lane builds on), then the language, edit, motion, audio and delivery lanes.
+#: lane builds on), then the language, edit, motion, audio and delivery lanes,
+#: and finally the vision lane (portrait → scene, task-152/153).
 COMPOSITION: tuple[PackComposition, ...] = (
     PackComposition(
         "slideshow",
@@ -167,6 +182,18 @@ COMPOSITION: tuple[PackComposition, ...] = (
         "nexus.color.delivery",
         _register_delivery,
         "colour transforms, proxies, OTIO delivery (Wave 7)",
+    ),
+    PackComposition(
+        "portrait",
+        "nexus.vision.portrait",
+        _register_portrait,
+        "face tracks, beauty retouch, masks, relight (task-152)",
+    ),
+    PackComposition(
+        "scene",
+        "nexus.vision.scene",
+        _register_scene,
+        "segmentation, tracking, semantic scene edits (task-153)",
     ),
 )
 
