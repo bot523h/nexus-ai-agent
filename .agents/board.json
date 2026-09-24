@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-23T20:55:00Z",
+  "updated_at": "2026-09-24T07:27:49Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -453,6 +453,22 @@
         "Dockerfile",
         "tests/unit/test_dockerfile_contract.py",
         "tests/unit/test_agent_board.py"
+      ]
+    },
+    {
+      "id": "nagar-creative-interop",
+      "description": "Creative OTIO interchange core (serialize+parse+round-trip), minimal render-plan bridge, and the uncontested pack-composition extension points for the vision packs (arena/01a0d244)",
+      "paths": [
+        "src/nexus_ai_agent/creative/otio/",
+        "src/nexus_ai_agent/creative/rendering/plan.py",
+        "src/nexus_ai_agent/creative/packs/runtime.py",
+        "src/nexus_ai_agent/continuum/pack_coverage.py",
+        "tests/architecture/test_pack_activation_completeness.py",
+        "tests/unit/test_pack_runtime_composition.py",
+        "tests/unit/test_otio_roundtrip.py",
+        "tests/unit/test_render_plan.py",
+        "docs/architecture/CREATIVE_STUDIO.md",
+        "docs/ops/PACK_RUNTIME.md"
       ]
     }
   ],
@@ -1532,7 +1548,7 @@
       "title_fa": "",
       "zone": "nagar-portrait",
       "priority": "P1",
-      "status": "queued",
+      "status": "active",
       "scope": "portrait pack: models + pure operations + pack.manifest.json, registered through the wave-5 unified runtime; composition per docs/ops/PACK_RUNTIME.md",
       "scope_fa": "portrait pack: models + pure operations + pack.manifest.json, registered through the wave-5 unified runtime; composition per docs/ops/PACK_RUNTIME.md",
       "prerequisites": [],
@@ -1541,7 +1557,20 @@
         "pack.manifest.json validates; registry verify passes; `nexus packs list` shows the pack",
         "pack coverage harness >= 95% on the new pack; architecture boundary test added"
       ],
-      "note": "canonical ID resolved 2026-09-22 (collision: board task-143 = PR#33 conflict map, delivered)"
+      "note": "",
+      "agent_branch": "arena/01a0d244-nexus-ai-agent",
+      "claimed_at": "2026-09-24T07:27:49Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/portrait/",
+        "tests/unit/test_portrait_pack.py",
+        "tests/architecture/test_portrait_pack_boundary.py"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_portrait_pack.py tests/architecture/test_portrait_pack_boundary.py",
+        "composition_issues() == () and stale_capabilities() == {}"
+      ]
     },
     {
       "task": "task-153-scene-pack",
@@ -1549,7 +1578,7 @@
       "title_fa": "",
       "zone": "nagar-scene",
       "priority": "P1",
-      "status": "queued",
+      "status": "active",
       "scope": "scene pack: models + pure operations + manifest; shares the op-gap template with task-152; do not blindly copy — compare 5 implementation strategies (duplication vs shared abstraction) first",
       "scope_fa": "scene pack: models + pure operations + manifest; shares the op-gap template with task-152; do not blindly copy — compare 5 implementation strategies (duplication vs shared abstraction) first",
       "prerequisites": [],
@@ -1558,7 +1587,20 @@
         "manifest verifies; runtime activation gate green; coverage >= 95%",
         "shared-abstraction decision vs duplication recorded with evidence"
       ],
-      "note": "canonical ID resolved 2026-09-22"
+      "note": "",
+      "agent_branch": "arena/01a0d244-nexus-ai-agent",
+      "claimed_at": "2026-09-24T07:27:49Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/scene/",
+        "tests/unit/test_scene_pack.py",
+        "tests/architecture/test_scene_pack_boundary.py"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_scene_pack.py tests/architecture/test_scene_pack_boundary.py",
+        "composition_issues() == () and stale_capabilities() == {}"
+      ]
     },
     {
       "task": "task-147-coverage-baseline-drift",
@@ -1804,6 +1846,47 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "Forensics recorded 2026-09-23 by arena/01a0cfcd-nexus-ai-agent during the task-163 release audit (incident 'nightly-backup-never-succeeded')."
+    },
+    {
+      "task": "task-165-creative-interop",
+      "title": "Creative OTIO interchange core (Nagar↔OTIO round-trip, markers/gaps/tracks) + minimal deterministic render-plan bridge + vision-pack composition wiring",
+      "title_fa": "هستهٔ تعامل OTIO نگار (رفت‌وبرگشت Nagar↔OTIO با مارکر/گپ/ترک) + پل کمینهٔ برنامهٔ رندر قطعی + سیم‌کشی ترکیب پک‌های بینایی",
+      "zone": "nagar-creative-interop",
+      "priority": "P1",
+      "status": "active",
+      "scope": "NEW discrete files only (creative/otio/, creative/rendering/plan.py, tests/unit/test_otio_roundtrip.py, tests/unit/test_render_plan.py) plus the documented pack-composition extension points (runtime.py COMPOSITION entry, pack_coverage DEFAULT_TEST_TARGETS, activation-completeness BUILDERS, composition EXPECTED ids) and the creative docs (CREATIVE_STUDIO ledger, PACK_RUNTIME counts). Explicitly NOT task-121 (sequenced post-33) and NOT the delivery pack files held by open PR#33.",
+      "scope_fa": "فقط فایل‌های گسستهٔ جدید + نقاط افزودن مستند ترکیب پک + مستندات creative. عمداً نه تسک ۱۲۱ (ترتیب‌بندی‌شده بعد از ۳۳) و نه فایل‌های پک delivery در اختیار PR#33 باز.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Nagar timeline → OTIO JSON → parse → Nagar round-trip tests green for clip/gap/multi-track/marker/trim/range/metadata (documented loss where intentionally lossy)",
+        "include_markers gap of delivery.export_otio recorded as BLOCKED_SHARED_CONTRACT (PR#33 holds delivery/operations.py) with the exact suggested patch",
+        "render-plan bridge compiles deterministically (same project → same plan hash) and proves the lane-concat limitation with a test",
+        "portrait+scene packs registered through the wave-5 unified runtime: composition_issues() == () and stale_capabilities() == {}",
+        "board structural tests + targeted creative suite green (no full gates — deferred to gates owner)"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_otio_roundtrip.py tests/unit/test_render_plan.py",
+        "pytest tests/unit/test_pack_runtime_composition.py tests/architecture/test_pack_activation_completeness.py",
+        "python -c 'from nexus_ai_agent.creative.packs.runtime import composition_issues, stale_capabilities'"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/otio/",
+        "src/nexus_ai_agent/creative/rendering/plan.py",
+        "src/nexus_ai_agent/creative/packs/runtime.py",
+        "src/nexus_ai_agent/continuum/pack_coverage.py",
+        "tests/architecture/test_pack_activation_completeness.py",
+        "tests/unit/test_pack_runtime_composition.py",
+        "tests/unit/test_otio_roundtrip.py",
+        "tests/unit/test_render_plan.py",
+        "docs/architecture/CREATIVE_STUDIO.md",
+        "docs/ops/PACK_RUNTIME.md"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0d244-nexus-ai-agent",
+      "claimed_at": "2026-09-24T07:27:49Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": ""
     }
   ],
   "deferred_log": [
