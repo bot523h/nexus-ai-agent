@@ -134,7 +134,7 @@ Decision record: `docs/DECISION_LOG.md` r8 (D-0010/0011/0012).
   `caption transcribe`; `lut`/`burnin` refused typed at the surface AND in the
   worker map — never faked; caption chains fail closed typed without the
   `[speech]` engine (OTIO + caption→SRT deliver real document artifacts).
-- i18n: 17 `creative.*` keys × 15 locales (parity gate green); a raw key can
+- i18n: 16 `creative.*` keys × 15 locales (parity gate green); a raw key can
   no longer leak to Telegram.
 - Real-execution tests render 2-second clips through the whole chain via the
   imageio-ffmpeg static binary (trim ~1 s artifacts measured, speed 2x ≈ 1 s,

@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `caption transcribe`; `lut` (no shipped `.cube` assets / no lane op) and `burnin`
   (no subtitles instrument in the lane IR) are refused typed at the surface, never
   faked; caption chains fail closed typed when the `[speech]` engine is absent.
-- **17 `creative.*` i18n keys × all 15 locales** — raw keys can no longer reach users.
+- **16 `creative.*` i18n keys × all 15 locales** — raw keys can no longer reach users.
 
 ### Fixed (P0 hardening day — backups, task-167)
 

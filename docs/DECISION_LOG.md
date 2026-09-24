@@ -1049,7 +1049,7 @@ completion flows had no translations (`creative.*` absent from all 15 locale fil
 stages the replied media into a deterministic job workspace
 (`creative_<sha256(idempotency)[:12]>`), enqueues `creative_render` with an idempotency
 key anchored to the Telegram message id (`creative:{user}:{chat}:{message}` — redelivery
-dedupes at the durable UNIQUE key), and speaks only i18n catalog strings (17 new
+dedupes at the durable UNIQUE key), and speaks only i18n catalog strings (16 new
 `creative.*` keys × 15 locales; parity-gate enforced). The worker
 (`creative/render_jobs.py`) treats the queue row as an untrusted trust boundary
 (workspace containment under `creative_temp_dir`, input inside workspace, extra keys
