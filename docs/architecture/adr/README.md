@@ -16,6 +16,7 @@ This directory holds **decisions about how the architecture documentation and it
 | [0002](0002-docs-as-code-enforcement.md) | Enforce documentation in Python (no Node toolchain yet) | accepted | 2026-09-21 |
 | [0003](0003-mermaid-flowchart-for-c4-views.md) | Express C4 views with Mermaid `flowchart` | accepted | 2026-09-21 |
 | [0004](0004-board-schema-2.md) | Coordination board schema 2: declared prerequisites and acceptance criteria | accepted | 2026-09-21 |
+| [0005](0005-canonical-command-capability-contract.md) | Canonical command and capability contract: versioning, location, and reconciliation | accepted | 2026-09-24 |
 
 ## Rules
 

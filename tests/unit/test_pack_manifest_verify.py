@@ -298,13 +298,13 @@ def test_activation_succeeds_once_the_runtime_knows_the_operations() -> None:
         registry.activate(manifest.package_id)
 
     # Simulate Wave 2b: the pack's own code registers its operation specs.
-    from pydantic import BaseModel
+    from pydantic import BaseModel, ConfigDict
 
     from nexus_ai_agent.creative.studio.capabilities import OperationSpec
     from nexus_ai_agent.creative.studio.models import PermissionLevel
 
     class _NoInput(BaseModel):
-        pass
+        model_config = ConfigDict(extra="forbid")
 
     def _noop(project: Any, context: Any) -> Any:  # pragma: no cover - never dispatched
         raise AssertionError("not executed by this test")

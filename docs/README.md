@@ -21,6 +21,7 @@ placeholder text.
 | [architecture/MODULE_MAP.md](architecture/MODULE_MAP.md) | Layer diagram, package inventory, boundary laws → the tests that enforce them, extension recipes. |
 | [architecture/RUNTIME_FLOWS.md](architecture/RUNTIME_FLOWS.md) | Message, slideshow, render-lane, checkpoint, migration, and webhook flows — each with its failure contract. |
 | [architecture/CREATIVE_STUDIO.md](architecture/CREATIVE_STUDIO.md) | Nagar: capability model, permission ladder, packs, activation gap, TDD coverage ledger, render lane. |
+| [architecture/COMMAND_CAPABILITY_CONTRACT.md](architecture/COMMAND_CAPABILITY_CONTRACT.md) | Nagar Gate 2: canonical command envelope, authorization/capability/policy/reference pipeline, idempotency, revision, and evidence limits. |
 | [architecture/DATA_AND_STORAGE.md](architecture/DATA_AND_STORAGE.md) | Every store, ownership, Alembic chain, retention, portability, and what never enters a store. |
 | [architecture/SECURITY.md](architecture/SECURITY.md) | Trust boundaries, STRIDE threat → control → evidence table, P0 audit follow-through, review checklist. |
 | [architecture/OBSERVABILITY.md](architecture/OBSERVABILITY.md) | Structured events, metric policy, health semantics, inspection commands, the short alert list. |
@@ -36,6 +37,7 @@ placeholder text.
 | [architecture/adr/0002-docs-as-code-enforcement.md](architecture/adr/0002-docs-as-code-enforcement.md) | Enforce documentation in Python now; Node toolchain on a recorded trigger. |
 | [architecture/adr/0003-mermaid-flowchart-for-c4-views.md](architecture/adr/0003-mermaid-flowchart-for-c4-views.md) | Express C4 views with Mermaid `flowchart`. |
 | [architecture/adr/0004-board-schema-2.md](architecture/adr/0004-board-schema-2.md) | Coordination board schema 2: prerequisites, acceptance criteria, history split. |
+| [architecture/adr/0005-canonical-command-capability-contract.md](architecture/adr/0005-canonical-command-capability-contract.md) | Canonical command and capability contract: versioning, location, and reconciliation. |
 
 ## Authoritative records
 

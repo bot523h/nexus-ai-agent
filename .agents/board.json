@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-24T16:32:01Z",
+  "updated_at": "2026-09-24T17:14:12Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -490,9 +490,24 @@
       "paths": [
         "src/nexus_ai_agent/creative/studio/",
         "tests/unit/test_command_capability_contract.py",
+        "tests/unit/test_pack_manifest_verify.py",
         "tests/architecture/test_command_capability_boundary.py",
         "docs/architecture/COMMAND_CAPABILITY_CONTRACT.md",
-        "docs/architecture/adr/0005-canonical-command-capability-contract.md"
+        "docs/architecture/adr/",
+        "docs/architecture/CREATIVE_STUDIO.md",
+        "docs/architecture/MODULE_MAP.md",
+        "docs/architecture/TESTING.md",
+        "docs/README.md",
+        "docs/DECISION_LOG.md"
+      ]
+    },
+    {
+      "id": "nagar-runtime-call-sites",
+      "description": "Runtime-owned in-process bus call sites (slideshow service/upscale, render_jobs): explicit service grants + source refs. Owner: runtime lane (Agent 1).",
+      "paths": [
+        "src/nexus_ai_agent/creative/slideshow/service.py",
+        "src/nexus_ai_agent/creative/slideshow/upscale.py",
+        "src/nexus_ai_agent/creative/render_jobs.py"
       ]
     }
   ],
@@ -1981,6 +1996,85 @@
       "ttl_hours": 48,
       "gates_owner": true,
       "note": "Agent A (Gate 2 reconciliation). Supersedes the contract scope of open PR#68 (same studio files; its queue+slideshow migrations stay valid follow-ups for lifecycle/runtime owners) and rejects the un-PR'd arena/01a0d3a8 v2-protocol proposal (parallel package, no bus integration, gate weakening, hardcoded matrix). Expected textual conflicts with PR#68 (studio/docs) and PR#67 (bus.py lifecycle gate + CREATIVE_STUDIO.md): merge-order issue, recorded in the PR body; integration with PR#67's required_packs gate is NOT VERIFIED until both land."
+    },
+    {
+      "task": "task-180-adr0006-residual",
+      "title": "Residual: deliver or retract the dangling ADR 0006 (legacy /creative pipeline KEEP+HARDEN)",
+      "title_fa": "",
+      "zone": "docs-architecture",
+      "priority": "P2",
+      "status": "queued",
+      "scope": "task-165 acceptance criterion unmet on main: the ADR file does not exist while CREATIVE_STUDIO.md §9 references it.",
+      "scope_fa": "",
+      "prerequisites": [
+        "task-179-gate2-command-reconciliation"
+      ],
+      "acceptance_criteria": [
+        "either adr/0006-legacy-creative-pipeline.md exists, indexed and linked, or the CREATIVE_STUDIO.md reference is removed with a DECISION_LOG note",
+        "tests/unit/test_docs_integrity.py green"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "Gate 2 follow-up; fence set at claim time"
+    },
+    {
+      "task": "task-181-runtime-service-grants",
+      "title": "RUNTIME GAP (owner Agent 1): bind explicit service grants + source input_refs at the three local bus call sites",
+      "title_fa": "",
+      "zone": "nagar-runtime-call-sites",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "After Gate 2, claim-less schema-1 dispatches run under deprecated implicit local trust; the runtime owner must inject authorizer= with service grants at the three in-process call sites, then the implicit path can be retired.",
+      "scope_fa": "",
+      "prerequisites": [
+        "task-179-gate2-command-reconciliation"
+      ],
+      "acceptance_criteria": [
+        "creative/slideshow/service.py, creative/slideshow/upscale.py, creative/render_jobs.py pass authorizer= with a service grant and declare owned source refs",
+        "an architecture guard requires authorizer= at those call sites (Gate 2 guard deliberately does not, to avoid owning runtime files)",
+        "full suite green; no contract-layer change needed"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "Gate 2 follow-up; fence set at claim time"
+    },
+    {
+      "task": "task-182-durable-idempotency-conflict",
+      "title": "LIFECYCLE GAP: durable idempotency conflict (same key + different payload) in the SQLite job queue",
+      "title_fa": "",
+      "zone": "storage-resilience",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "Gate 2 proves conflicts at the bus; the durable queue above it (src/nexus_ai_agent/adapters/in_process_job_queue.py) still returns the original job id for a reused key without comparing payloads. Open PR#68 already implements exactly this fix; salvage or close as duplicate.",
+      "scope_fa": "",
+      "prerequisites": [
+        "task-179-gate2-command-reconciliation"
+      ],
+      "acceptance_criteria": [
+        "enqueue with a reused key + different job type/payload raises a typed conflict",
+        "same key + same payload across adapter instances/processes returns the original job",
+        "tests/integration/test_in_process_job_queue.py covers both incl. concurrency"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "Gate 2 follow-up; fence set at claim time"
+    },
+    {
+      "task": "task-183-pr67-lifecycle-integration",
+      "title": "Post-merge integration check: Gate 2 bus vs PR#67 pack-lifecycle/required_packs gate",
+      "title_fa": "",
+      "zone": "coordination",
+      "priority": "P2",
+      "status": "queued",
+      "scope": "PR#67 adds required_packs + a lifecycle bus gate; Gate 2 could not verify against it. After both land, wire the seam (stage 4, after grant+registry, before reservation) and prove pack-required vs pack-absent dispatch.",
+      "scope_fa": "",
+      "prerequisites": [
+        "task-179-gate2-command-reconciliation"
+      ],
+      "acceptance_criteria": [
+        "PR#67 lifecycle check sits in stage 4 (after trusted grant + registry, before reservation)",
+        "Gate 2 negative suite + PR#67 lifecycle tests green on the merged tree",
+        "contract doc integration section flipped from NOT VERIFIED with evidence"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "Gate 2 follow-up; fence set at claim time"
     }
   ],
   "deferred_log": [
@@ -2203,83 +2297,6 @@
       "title": "Staging smoke of /edit /caption /grade against the live bot (PTB runtime)",
       "title_fa": "اسموک استیجینگ سه فرمان creative روی ربات زنده",
       "why_fa": "زنجیره در سطح unit/integration با artifact واقعی اثبات شده؛ اثبات نهایی کاربر-واقعی به کانتکست PTB زنده و توکن استیجینگ نیاز دارد (external dependency)."
-    },
-    {
-      "id": "task-180",
-      "priority": "P2",
-      "zone": "p0-stabilization",
-      "title": "Residual: deliver or retract the dangling ADR 0006 (legacy /creative pipeline KEEP+HARDEN)",
-      "title_fa": "باقیمانده: تحویل یا پس‌گیری ADR 0006 معلق",
-      "why_fa": "معیار پذیرش task-165 روی main محقق نشده (فایل ADR وجود ندارد) و ارجاع CREATIVE_STUDIO §9 معلق است.",
-      "acceptance_criteria": [
-        "either adr/0006-legacy-creative-pipeline.md exists, indexed and linked, or the CREATIVE_STUDIO.md reference is removed with a DECISION_LOG note",
-        "tests/unit/test_docs_integrity.py green"
-      ],
-      "prerequisites": [],
-      "exclusive_paths": [
-        "docs/architecture/adr/0006-legacy-creative-pipeline.md",
-        "docs/architecture/adr/README.md",
-        "docs/architecture/CREATIVE_STUDIO.md"
-      ]
-    },
-    {
-      "id": "task-181",
-      "priority": "P1",
-      "zone": "creative-runtime",
-      "title": "RUNTIME GAP (owner Agent 1): bind explicit service grants + source input_refs at the three local bus call sites",
-      "title_fa": "شکاف runtime: اتصال grant صریح در سه نقطهٔ فراخوانی bus",
-      "why_fa": "پس از Gate 2، دیکت‌های legacy بدون actor تحت 'اعتماد محلی' منسوخ اجرا می‌شوند؛ مالک runtime باید grant صریح تزریق کند.",
-      "acceptance_criteria": [
-        "creative/slideshow/service.py, creative/slideshow/upscale.py, creative/render_jobs.py pass authorizer= with a service grant and declare owned source refs",
-        "an architecture guard requires authorizer= at those call sites (Gate 2 guard deliberately does not, to avoid owning runtime files)",
-        "full suite green; no contract-layer change needed"
-      ],
-      "prerequisites": [
-        "task-179-gate2-command-reconciliation"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/slideshow/service.py",
-        "src/nexus_ai_agent/creative/slideshow/upscale.py",
-        "src/nexus_ai_agent/creative/render_jobs.py"
-      ]
-    },
-    {
-      "id": "task-182",
-      "priority": "P1",
-      "zone": "storage-resilience",
-      "title": "LIFECYCLE GAP: durable idempotency conflict (same key + different payload) in the SQLite job queue",
-      "title_fa": "شکاف چرخه‌حیات: conflict بادوام idempotency در صف کار",
-      "why_fa": "روی main، صف کلید تکراری را بدون مقایسهٔ payload برمی‌گرداند؛ تضمین cross-restart اثبات‌نشده است.",
-      "acceptance_criteria": [
-        "enqueue with a reused key + different job type/payload raises a typed conflict (no silent overwrite, no second schedule)",
-        "same key + same payload across adapter instances/processes returns the original id without double-scheduling",
-        "tests/integration/test_in_process_job_queue.py covers both incl. concurrent collision"
-      ],
-      "prerequisites": [],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
-        "tests/integration/test_in_process_job_queue.py"
-      ],
-      "status_note": "open PR#68 already implements exactly this; salvage or close-out on Gate 2 merge"
-    },
-    {
-      "id": "task-183",
-      "priority": "P1",
-      "zone": "nagar-contract-gate",
-      "title": "Post-merge integration check: Gate 2 bus vs PR#67 pack-lifecycle/required_packs gate",
-      "title_fa": "بررسی یکپارچگی پس از ادغام: bus گیت ۲ با گیت lifecycle پک",
-      "why_fa": "هر دو روی studio/bus.py هستند؛ ترتیب canonical باید حفظ شود.",
-      "acceptance_criteria": [
-        "PR#67 lifecycle check sits in stage 4 (after trusted grant + registry, before reservation/execution)",
-        "Gate 2 negative suite + PR#67 lifecycle tests green on the merged tree",
-        "contract doc integration section flipped from NOT VERIFIED with evidence"
-      ],
-      "prerequisites": [
-        "task-179-gate2-command-reconciliation"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/studio/bus.py"
-      ]
     }
   ],
   "history": {
