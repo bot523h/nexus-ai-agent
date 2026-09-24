@@ -13,6 +13,7 @@
 - **r4 (2026-09-20, PR#21 + the Wave 2 slideshow pack):** recorded Nagar Wave 2 — the capability-pack substrate and the slideshow pack — as an accepted and implemented decision, including the “evidence above the bus, pure handlers inside it” split, the additive state extension (`Project.assets` / `Clip.effects` / `AssetRecord` / `EffectLayerRef`), the level assignments of the five new operations, and the dependency verdicts (librosa deferred, Real-ESRGAN deferred, hosted image *generation* left out of the render path).
 - **r5 (2026-09-20, PR#23):** recorded Nagar Wave 2c — the render lane (pure `RenderIR` → filtergraph → argv, one FFmpeg process, staging publish, measured evidence) — as an accepted and implemented decision with its rejected alternatives (agent-authored filtergraphs, `-y` against the destination, trusting the plan's duration, a second `ffprobe` binary, encoding inside a handler, a Python video library).
 - **r7 (2026-09-21, repo-hygiene pass — owner-directed, session `arena/01a0c484`):** release baseline moved to `v3.13.0` (the merged P0 week-1 security batch — README already described its behavior as v3.13.0 while VERSION/pyproject still said 3.12.0); docs reorganized without content loss (`docs/audits/`, `docs/history/`, `docs/ops/`, `docs/README.md` index); the broken root `termux_install.sh` removed and `scripts/termux_install.sh` repaired (canonical `nexus run-bot` entrypoint); PR #33 closed as superseded (security scope already delivered by merged PR #34; feature-wiring scope double-claims agent B's active lease — evidence: `mergeable=CONFLICTING`, head checks green but base-diverged), then **reopened the same day** when the `ci-gates-steward` board (15:21Z) re-designated it as the task-110 vehicle; 28 merged/closed remote branches deleted with per-branch dispositions below.
+- **r8 (2026-09-24, owner-directed P0 creative integration — session `arena/01a0d2d6`):** recorded the creative production path as a decision (D-0010): one lane from Telegram `/edit` `/caption` `/grade` through the durable queue to `creative_render`, the render lane and a *verified* artifact; the legacy HTTP creative lane is deprecated and fail-closed (HMAC authn, minimized job read, canonical SSRF guard, resource caps); the completion contract is "COMPLETED only with a verified artifact, every other outcome a durable FAILED"; and the backup chain gained pre-upload/round-trip/restore verification after the recorded incident `nightly-backup-never-succeeded` (all four `backup-db` runs red, only the housekeeping cron ever green).
 - **r6 (2026-09-20, v3.11.0 housekeeping PR):** moved the release baseline to `v3.11.0`; recorded two owner decisions — *image generation behind an adapter (Pollinations by default, Gemini opt-in)*, which resolves the open question left by Wave 2 item 7, and *Wave 2.5 (Telegram surface for the slideshow pack) precedes Wave 3*; corrected the Phase 6 status text to Waves 1–2c merged; updated the PR snapshot (PR#23 merged as `ebe995a`, PR#1/PR#2 closed); noted that the lifecycle PR1/PR2/PR3 line has been on `main` since PR#7 (`acdbcb7`, v3.6.0) — the roadmap file had still called it unmerged.
 
 This document is the single reference point for architectural decisions in this repository. A new decision must be appended here with its date, status, rationale, rejected alternatives, and repository evidence. Existing historical documents remain useful as detailed records, but this log is authoritative when summaries differ.
@@ -991,3 +992,90 @@ the audit and queued as `task-159`, not left implicit.
 read paths should move onto it, and D-0009's surface-owns-authorisation rule should be re-examined
 for whether the check belongs one layer down, in the engine, where a second caller (the delivery
 tick) would otherwise have to duplicate it.
+
+---
+
+## 2026-09-24 — one creative production path, a closed legacy lane, and verified restores (D-0010)
+
+**Date:** 2026-09-24. **Status:** Accepted **and implemented** (P0 creative integration, owner
+directive of the same date; PR on `arena/01a0d2d6-nexus-ai-agent`).
+**Supersedes by replacement:** nothing; this decision *closes* the gap between the accepted Nagar
+design (`docs/NAGAR_70_OPERATIONS_TDD.md`) and what production actually executed.
+
+**Problem.** Three P0 defects were verified from zero, each reproduced before it was fixed:
+
+1. **NAG-001 — the surface was not connected.** `/edit`, `/caption` and `/grade` existed with tests
+   but no production caller: `bot/app.py` never registered them, and `worker.default_job_handlers()`
+   had no `creative_render` entry, so any queued job died as an unhandled job type. A user could
+   issue a creative command and no render could ever happen.
+2. **NAG-002 — the canonical render lane had no production caller.** `creative/rendering`
+   (`render_lane`) was reachable only from tests and from the slideshow lane, so the accepted
+   "one encode, measured evidence" design was not on any production path at all.
+3. **NAG-003 — success could be claimed without an artifact.** The legacy HTTP lane returned a job
+   id and backgrounded a task whose failures were written into a row nobody verified; a "job"
+   could finish without any file existing.
+
+Two live security defects were reproduced as well: **SSRF** on `POST /creative/video-edit` (a
+`video_url` of `http://127.0.0.1:<port>/...` reached a loopback listener on `main`) and **IDOR** on
+`GET /creative/jobs/{job_id}` (200 for any caller, including `input_data` with staged paths and
+source URLs).
+
+**Decision.**
+
+1. **Exactly one production path.** Telegram `/edit` `/caption` `/grade` → typed request
+   (`bot/creative_surface.py`) → `JobQueuePort.enqueue("creative_render")` with an idempotency key
+   anchored to the Telegram message → `adapters/creative_render_job.py` (the handler registered in
+   `worker.default_job_handlers()`) → `build_lane_ir` → **one** `render_lane` process →
+   `verify_lane_artifact` → COMPLETED with measured evidence → `bot/creative_notify.py` delivers
+   the master (or a localized failure). Forbidden and now guarded by
+   `tests/architecture/test_creative_single_path.py`: Telegram→legacy FFmpeg, a second renderer, an
+   inline bot render, a private API renderer, and the creative surface spawning a process.
+2. **Honest operation set.** Only operations with a real lane primitive are executable
+   (`timeline.trim`, `timeline.speed_ramp`, `timeline.reverse_segment`, `color.adjust_exposure`).
+   `caption.transcribe`, `caption.burn_in`, `color.apply_lut`, `delivery.make_proxy_480p` and OTIO
+   export are refused *typed* — twice, in the surface (user copy) and in the handler (trust
+   boundary) — instead of being queued and then reported as a render.
+3. **Completion contract.** COMPLETED iff the artifact exists, is non-empty, re-hashes to the
+   lane's digest and re-probes to the lane's duration (±50 000 µs). Every other outcome raises a
+   typed `CreativeRenderError`, which the queue persists as FAILED with a redacted detail
+   (`"[<code>] <detail>"`, absolute paths reduced to basenames). A notifier failure can never flip
+   the verdict: the durable row is written before the hook runs, and the hook never re-raises.
+4. **The legacy HTTP creative lane is deprecated and fail-closed, not deleted.** Both routes carry
+   `deprecated=True`; both require the existing HMAC gate (503 without a key, 401 unsigned/stale,
+   ±300 s, constant-time); the read route answers a minimized projection (no `input_data`, no
+   paths, no raw error) and an identical 404 for unknown ids; the URL branch goes through the
+   canonical `core/ssrf_guard.py` in the request path (400 before any job row) with
+   `SafeAsyncTransport` re-validating every connect and redirect hop; caps are 500 MiB uploads,
+   200 MiB bounded URL reads, 60 s timeout, ≤5 redirects and a media-type allow-list. New
+   integrations use the canonical path.
+5. **Verified restores (P0-C).** `nexus maintenance backup` now dumps, verifies the artifact
+   *before* upload (SQLite `integrity_check` + user-table inventory; `pg_dump` footer), uploads,
+   downloads the remote object, compares sha256 and size, then restores — SQLite is reopened
+   read-only and its inventory compared with the source; a PostgreSQL dump is footer-checked and
+   round-tripped (server-side restore needs a live instance, stated in the summary). Missing R2
+   configuration still fails loudly *before* any dump.
+
+**Rejected alternatives.** (a) *Delete the legacy HTTP lane entirely* — it has external callers that
+already hold the API key; deleting it would break them silently, while `deprecated` + fail-closed
+controls preserve the contract and make the canonical path the only advertised one. (b) *Route the
+surface through the studio bus and a PR#64 execution plan now* — `.agents/board.json` shows PR#64
+unmerged and conflicting; a private copy of its `plan.py`/`execution.py` would be a second engine
+(the same defect NAG-002 records). The seam is therefore one function (`build_lane_ir`), named in
+§5 of the runbook for Agent B to replace when the plan bridge lands. (c) *Wrap the legacy lane in a
+verification layer* — that hides fake success behind a new wrapper instead of removing it. (d)
+*Accept "no handler" as a failed job* — a P0 that lets a completed user command die silently is not
+acceptable; the handler map and the registration test are the fix.
+
+**Confirmation (the decision stays true only while these pass).**
+`tests/architecture/test_creative_single_path.py` (single-path ratchet: one handler definition, one
+`render_lane` caller, one `httpx.AsyncClient` with `SafeAsyncTransport`, SSRF ranges only in the
+guard, `deprecated` + HMAC on both legacy routes),
+`tests/integration/test_creative_chain_e2e.py` (real queue, real handler map, real FFmpeg: verified
+artifact delivered and hashed at delivery time; runtime failure ⇒ durable FAILED + localized copy),
+`tests/unit/test_creative_render_job.py`, `tests/unit/test_creative_notify.py`,
+`tests/unit/test_legacy_creative_security.py` (SSRF/IDOR, real loopback listener),
+`tests/unit/test_maintenance_backup.py` (every failure class of the backup chain).
+Each guardian was mutation-checked: removing the registration, the auth gate, the owner
+projection, the SSRF validation, the artifact verification, the remote round-trip check or the
+restore inventory check turns its test red (matrix in
+[`audits/P0_CREATIVE_INTEGRATION_2026-09-24.md`](audits/P0_CREATIVE_INTEGRATION_2026-09-24.md)).

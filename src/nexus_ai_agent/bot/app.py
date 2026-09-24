@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from telegram.ext import Application, ApplicationBuilder
 
@@ -20,6 +20,9 @@ from nexus_ai_agent.storage.ai_storage import AIStorageManager, ProviderConfig
 from .handlers import (
     build_handlers,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from pathlib import Path
 
 logger = get_logger(__name__)
 
@@ -50,6 +53,31 @@ def _bot_token(settings: Settings) -> str:
     return os.environ.get("TELEGRAM_BOT_TOKEN", settings.telegram_bot_token)
 
 
+class TelegramCreativeSender:
+    """The one place that turns a creative outcome into Telegram calls.
+
+    ``bot/creative_notify.py`` decides *what* to deliver and stays
+    framework-free; this adapter (in the composition root, which already owns
+    the Telegram client) performs the send.  It is deliberately a thin object
+    so the notifier's unit tests inject a recorder instead.
+    """
+
+    def __init__(self, token: str) -> None:
+        self._token = token
+
+    async def send_document(self, chat_id: int, document: Path, caption: str) -> None:
+        from telegram import Bot, InputFile
+
+        await Bot(token=self._token).send_document(
+            chat_id=chat_id, document=InputFile(str(document)), caption=caption
+        )
+
+    async def send_message(self, chat_id: int, text: str) -> None:
+        from telegram import Bot
+
+        await Bot(token=self._token).send_message(chat_id=chat_id, text=text)
+
+
 def _build_job_completion_notifier(token: str) -> Any:
     """D4: notify the origin chat when a background job finishes.
 
@@ -64,6 +92,14 @@ def _build_job_completion_notifier(token: str) -> Any:
     async def _notify(completion: JobCompletion) -> None:
         raw_chat_id = completion.payload.get("chat_id")
         if raw_chat_id is None:
+            return
+        if completion.job_type == "creative_render":
+            # P0 (owner directive 2026-09-24 §6/§8): one-shot studio jobs get
+            # localized copy in both terminal states; a durable FAILED row is
+            # never re-labelled as success, and the notifier never re-raises.
+            from nexus_ai_agent.bot.creative_notify import notify_creative_completion
+
+            await notify_creative_completion(completion, TelegramCreativeSender(token))
             return
         from telegram import Bot
 
@@ -249,7 +285,21 @@ def build_application(
         feature_engines=feature_engines,
     ):
         application.add_handler(handler)
-    # Custom command handlers removed as they should be part of build_handlers or imported correctly
+
+    # P0 (owner directive 2026-09-24 §6): the studio surface — /edit /caption
+    # /grade — is registered HERE, at the composition root, exactly once. The
+    # command table lives in bot/creative_surface.py so the highest-conflict
+    # file (bot/handlers.py) stays untouched. Until this loop existed the
+    # surface was unreachable from Telegram: the enqueue chain had no entry.
+    from telegram.ext import CommandHandler
+
+    from nexus_ai_agent.bot.creative_surface import build_creative_handlers
+
+    for command, callback in build_creative_handlers(job_queue).items():
+        # The surface stays framework-free on purpose (duck-typed update/context,
+        # so it is unit-testable without PTB).  This registration site is the one
+        # place where those objects are real PTB ones, hence the single ignore.
+        application.add_handler(CommandHandler(command, callback))  # type: ignore[arg-type]
     # install_presence_heartbeat(application) # Removed as it was an unawaited mock
     return application
 

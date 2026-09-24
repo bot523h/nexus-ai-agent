@@ -63,7 +63,7 @@ Why no Prometheus exporter: the deployment target is a single scale-to-zero proc
 |---|---|---|
 | `GET /healthz` | 200 `{"status": "ok"}`, **touches no database and no engine** | a platform health gate must not mark a healthy process unhealthy because the DB is cold, and must not hold a connection open on a scale-to-zero deploy |
 | `POST /webhook/telegram` | 403 on secret mismatch, 400 on malformed payload, **503 when the application is not yet published** | 503 makes Telegram retry instead of dropping an update — a "ready" signal, not a "healthy" one |
-| `GET /creative/jobs/{job_id}` | job status or 404 | the queue is the source of truth for long work; the surface never guesses |
+| `GET /creative/jobs/{job_id}` | HMAC-authenticated; minimized job projection or 404 (503 without the key) | the queue is the source of truth for long work; the deprecated read route stays fail-closed, and the projection excludes `input_data`, paths and raw error text |
 
 ## 5. Inspection tooling
 

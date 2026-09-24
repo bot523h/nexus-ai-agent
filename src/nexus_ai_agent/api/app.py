@@ -16,6 +16,11 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from nexus_ai_agent.api.dashboard import router as dashboard_router
 from nexus_ai_agent.config.settings import get_settings
+from nexus_ai_agent.core.ssrf_guard import (
+    SafeAsyncTransport,
+    SSRFBlockError,
+    validate_url,
+)
 from nexus_ai_agent.creative import image_post
 from nexus_ai_agent.creative.ffmpeg_executor import execute_ffmpeg_commands
 from nexus_ai_agent.creative.job_registry import JobRegistry
@@ -60,6 +65,33 @@ app.add_middleware(
 _HMAC_MAX_AGE_SECONDS = 300.0
 _HMAC_TIMESTAMP_HEADER = "X-NEXUS-Timestamp"
 _HMAC_SIGNATURE_HEADER = "X-NEXUS-Signature"
+
+#: Resource caps for the deprecated legacy lane (owner directive 2026-09-24 §3).
+#: The canonical path (Telegram surface → queue → render lane) never touches
+#: these; they exist so the legacy HTTP lane cannot be used as an amplifier.
+_MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 MiB
+_MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024  # 200 MiB
+_DOWNLOAD_TIMEOUT_SECONDS = 60.0
+_MAX_REDIRECTS = 5
+#: Only media-ish bodies are accepted from a caller-supplied URL.
+_ALLOWED_DOWNLOAD_PREFIXES = (
+    "video/",
+    "application/octet-stream",
+    "binary/octet-stream",
+)
+
+#: Keys of a legacy job row that may leave the process.  Everything else —
+#: ``input_data`` (local paths, source URLs), the raw ``error`` text (paths and
+#: internal exceptions) — stays inside (owner directive §5).
+_PUBLIC_JOB_RESULT_KEYS = (
+    "success",
+    "output_sha256",
+    "size_bytes",
+    "duration_us",
+    "width",
+    "height",
+    "has_audio",
+)
 
 
 async def require_hmac_signature(request: Request) -> None:
@@ -223,30 +255,108 @@ async def _save_upload_to_temp(upload: StarletteUploadFile) -> str:
     suffix = Path(upload.filename or "upload.bin").suffix or ".bin"
     fd, temp_path = tempfile.mkstemp(prefix="creative-upload-", suffix=suffix, dir=temp_dir)
     os.close(fd)
-    with Path(temp_path).open("wb") as handle:
-        while True:
-            chunk = await upload.read(1024 * 1024)
-            if not chunk:
-                break
-            handle.write(chunk)
-    await upload.close()
+    written = 0
+    try:
+        with Path(temp_path).open("wb") as handle:
+            while True:
+                chunk = await upload.read(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > _MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"upload exceeds the {_MAX_UPLOAD_BYTES}-byte limit",
+                    )
+                handle.write(chunk)
+    except Exception:
+        # A rejected or failed upload never leaves a partial file behind.
+        Path(temp_path).unlink(missing_ok=True)
+        raise
+    finally:
+        await upload.close()
+    if written == 0:
+        Path(temp_path).unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="uploaded file is empty")
     return temp_path
 
 
+def _download_suffix(video_url: str) -> str:
+    return Path(urlparse(video_url).path).suffix or ".mp4"
+
+
 async def _download_video_to_temp(video_url: str) -> str:
+    """Fetch a caller-supplied URL through the repository's canonical guard.
+
+    Owner directive §4: the download path uses ``core/ssrf_guard`` — there is
+    no second downloader in this codebase.  ``validate_url`` runs *before* the
+    fetch (https-only, and every address the host resolves to must be public)
+    and :class:`SafeAsyncTransport` re-resolves and re-checks the address at
+    every TCP connect, so a redirect or a DNS rebind towards loopback / RFC1918
+    / link-local / cloud-metadata space fails at connect time.  The read is
+    bounded and a rejected fetch leaves no partial file behind.
+    """
+    try:
+        validate_url(video_url)
+    except SSRFBlockError as exc:
+        raise HTTPException(
+            status_code=400, detail="video_url is not an allowed remote source"
+        ) from exc
+
     settings = get_settings()
     temp_dir = Path(settings.creative_temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
-    suffix = Path(urlparse(video_url).path).suffix or ".mp4"
-    fd, temp_path = tempfile.mkstemp(prefix="creative-url-", suffix=suffix, dir=temp_dir)
+    fd, temp_path = tempfile.mkstemp(
+        prefix="creative-url-", suffix=_download_suffix(video_url), dir=temp_dir
+    )
     os.close(fd)
+    written = 0
     try:
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=_DOWNLOAD_TIMEOUT_SECONDS,
+            follow_redirects=True,
+            max_redirects=_MAX_REDIRECTS,
+            transport=SafeAsyncTransport(),
+        ) as client:
             async with client.stream("GET", video_url) as response:
-                response.raise_for_status()
+                if response.status_code >= 400:
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"remote source answered {response.status_code}",
+                    )
+                content_type = str(response.headers.get("content-type", "")).lower()
+                if content_type and not content_type.startswith(_ALLOWED_DOWNLOAD_PREFIXES):
+                    raise HTTPException(
+                        status_code=415, detail="remote source is not media content"
+                    )
+                declared = response.headers.get("content-length")
+                if declared is not None:
+                    try:
+                        too_big = int(declared) > _MAX_DOWNLOAD_BYTES
+                    except ValueError:
+                        too_big = False
+                    if too_big:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"remote source exceeds {_MAX_DOWNLOAD_BYTES} bytes",
+                        )
                 with Path(temp_path).open("wb") as handle:
                     async for chunk in response.aiter_bytes():
+                        written += len(chunk)
+                        if written > _MAX_DOWNLOAD_BYTES:
+                            raise HTTPException(
+                                status_code=413,
+                                detail=f"remote source exceeds {_MAX_DOWNLOAD_BYTES} bytes",
+                            )
                         handle.write(chunk)
+        if written == 0:
+            raise HTTPException(status_code=502, detail="remote source returned no bytes")
+    except HTTPException:
+        Path(temp_path).unlink(missing_ok=True)
+        raise
+    except (httpx.HTTPError, SSRFBlockError) as exc:
+        Path(temp_path).unlink(missing_ok=True)
+        raise HTTPException(status_code=502, detail="could not fetch the remote source") from exc
     except Exception:
         Path(temp_path).unlink(missing_ok=True)
         raise
@@ -288,11 +398,21 @@ async def _process_video_edit_job(
             Path(local_input_path).unlink(missing_ok=True)
 
 
-@app.post("/creative/video-edit")
+@app.post("/creative/video-edit", deprecated=True)
 async def create_video_edit_job(
     request: Request,
     background_tasks: BackgroundTasks,
 ) -> dict[str, str]:
+    """Legacy one-shot edit lane — deprecated, fail-closed, SSRF-safe.
+
+    Architecture decision (owner directive §3): the canonical production path
+    for creative work is Telegram surface → durable queue → ``creative_render``
+    → render lane; this HTTP route is *not* wired to the bot and is kept only
+    for external callers that already hold the HMAC key.  It is therefore
+    fail-closed (503 without ``NEXUS_API_HMAC_KEY``), authenticated, capped
+    (500 MiB uploads / 200 MiB URL fetches), and its URL branch goes through
+    the canonical SSRF guard.  New integrations must use the canonical path.
+    """
     # Fail-closed HMAC gate runs BEFORE any form parsing so the raw body is
     # read exactly once here (starlette caches it in request._body, and the
     # multipart parser below reuses that cache).
@@ -328,6 +448,17 @@ async def create_video_edit_job(
         normalized_url = (video_url or "").strip()
         if not normalized_url:
             raise HTTPException(status_code=400, detail="video_url must not be empty")
+        # Validate the URL *in the request path*, before a job row exists: an
+        # internal/loopback/unsupported target must be a visible 400, never a
+        # background job that quietly fails after the caller got a job id.
+        # (_download_video_to_temp validates again at fetch time, and the
+        # transport re-checks every connect — including redirect hops.)
+        try:
+            validate_url(normalized_url)
+        except SSRFBlockError as exc:
+            raise HTTPException(
+                status_code=400, detail="video_url is not an allowed remote source"
+            ) from exc
         source = normalized_url
         input_data = {
             "source_type": "url",
@@ -341,12 +472,48 @@ async def create_video_edit_job(
     return {"job_id": job_id, "status": "pending"}
 
 
-@app.get("/creative/jobs/{job_id}")
-async def get_job_status(job_id: str) -> dict[str, object]:
+def _public_job_view(job: dict[str, object]) -> dict[str, object]:
+    """Minimal, safe projection of a legacy job row (owner directive §5).
+
+    Never returned to a caller: ``input_data`` (staged local paths, source
+    URLs, filenames), the raw ``error`` string (may embed paths or internal
+    exception text) and anything else the row happens to carry.
+    """
+    result = job.get("result")
+    safe_result: dict[str, object] | None = None
+    if isinstance(result, dict):
+        safe_result = {key: result[key] for key in _PUBLIC_JOB_RESULT_KEYS if key in result}
+    status = str(job.get("status", ""))
+    return {
+        "job_id": str(job.get("id", "")),
+        "job_type": str(job.get("job_type", "")),
+        "status": status,
+        "created_at": job.get("created_at"),
+        "updated_at": job.get("updated_at"),
+        "result": safe_result,
+        # A closed vocabulary: the raw exception text stays server-side.
+        "failure_code": "job_failed" if status == "failed" else None,
+    }
+
+
+@app.get("/creative/jobs/{job_id}", deprecated=True)
+async def get_job_status(job_id: str, request: Request) -> dict[str, object]:
+    """Legacy job read — deprecated, authenticated and minimized.
+
+    Authentication/authorization uses the same fail-closed HMAC gate as the
+    POST: without ``NEXUS_API_HMAC_KEY`` the route is disabled (503), an
+    unsigned or stale request is rejected (401), and a caller holding a
+    different key cannot read jobs it did not create.  The legacy registry has
+    no per-user column (and no migration is allowed), so the *principal* of
+    this lane is the API-key holder; the response is minimized as well, so a
+    future gate regression still cannot leak paths or internals.
+    """
+    await require_hmac_signature(request)
     job = await get_creative_registry().get_job(job_id)
     if job is None:
+        # Unknown and unauthorized-looking ids answer identically (no oracle).
         raise HTTPException(status_code=404, detail="Job not found")
-    return job
+    return _public_job_view(job)
 
 
 @app.post("/webhook/telegram")

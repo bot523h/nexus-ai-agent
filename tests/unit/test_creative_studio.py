@@ -216,9 +216,25 @@ def test_background_task_flow(
     payload = response.json()
     assert payload["status"] == "pending"
 
-    job_response = client.get(f"/creative/jobs/{payload['job_id']}")
+    # The read route is fail-closed and minimized (owner directive §5): the
+    # signed caller gets the status, never the staged path or the source URL.
+    import hashlib
+    import hmac as hmac_module
+    import time as time_module
+
+    stamp = str(int(time_module.time()))
+    signature = hmac_module.new(
+        b"test-signing-key", f"{stamp}:".encode(), hashlib.sha256
+    ).hexdigest()
+    job_response = client.get(
+        f"/creative/jobs/{payload['job_id']}",
+        headers={"X-NEXUS-Timestamp": stamp, "X-NEXUS-Signature": signature},
+    )
     assert job_response.status_code == 200
     job = job_response.json()
     assert job["status"] == "done"
-    assert job["result"]["output_path"].endswith(f"{payload['job_id']}.mp4")
-    assert not Path(job["input_data"]["path"]).exists()
+    assert "input_data" not in job
+    assert "path" not in job_response.text
+
+    unsigned = client.get(f"/creative/jobs/{payload['job_id']}")
+    assert unsigned.status_code == 401
