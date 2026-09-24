@@ -7,13 +7,26 @@
   "supersedes": {
     "document": "GATE5_TRUTH_MATRIX.json v1 (task-181 delivery phase)",
     "reason": "F7: fabricated evidence found live (fake git object 9e9c75358e3e673d788e0c3549896016b11b112a — git cat-file fails; phantom ref feature/verification-gap-closure — no such ref; '5 runs green' without run ids). Every row below was re-read live or executed in this session.",
-    "live_read_tools": ["gh pr view / gh run list / gh run view", "git rev-parse / git log / git cat-file", "pytest", "scripts/gate5_mutation_probes.py"]
+    "live_read_tools": [
+      "gh pr view / gh run list / gh run view",
+      "git rev-parse / git log / git cat-file",
+      "pytest",
+      "scripts/gate5_mutation_probes.py"
+    ]
   },
   "sha_lock": {
     "old_main": "035a896dd2ed1293de6accf2ef4309da2fd64c89",
     "new_main": "16daebcede5f914e950fb1aeb6757f74d1985ab9",
     "pr78_head": "5f273f08f543ae7916ccdf1eeee8544a44cbf81b",
-    "pr78_lineage": ["85f4444b", "9e9c753082c5 (PR#71)", "59f807d6", "05d647e9 (PR#74)", "10a09bff", "b0304429", "5f273f08"],
+    "pr78_lineage": [
+      "85f4444b",
+      "9e9c753082c5 (PR#71)",
+      "59f807d6",
+      "05d647e9 (PR#74)",
+      "10a09bff",
+      "b0304429",
+      "5f273f08"
+    ],
     "lineage_merge_commit": "2449194",
     "old_red_baseline": "6b8663307bce7f10f35434215de3c53ed0015339",
     "note": "repair commits follow old_red_baseline on arena/01a0d567; the CI run on the pushed head is recorded in the PR body and .agents/board.json evidence (docs-only follow-up)."
@@ -26,8 +39,17 @@
       "reproduced": true,
       "reproduction": "R1 at 6b86633: previous_artifact_destroyed=True published_now=b'NEW GENERATION' durable=failed_retryable",
       "fix": "publish = backup(<name>.bak) + journal(_publication{backup,published_inode}) + os.replace; retract/recover = inode-guarded restore; retire after COMMIT_CONFIRMED",
-      "tests": ["tests/integration/test_execution_fencing.py::test_t9_reprobe_failure_preserves_previous_artifact", "tests/integration/test_execution_fencing.py::test_t10_publish_failure_preserves_previous_artifact", "tests/integration/test_execution_fencing.py::test_t11_crash_during_publication_recovers_correctly"],
-      "mutations": ["M6 remove artifact protection", "M7 break previous-artifact preservation", "M8 remove re-probe decision guard", "#3 skip atomic publish"],
+      "tests": [
+        "tests/integration/test_execution_fencing.py::test_t9_reprobe_failure_preserves_previous_artifact",
+        "tests/integration/test_execution_fencing.py::test_t10_publish_failure_preserves_previous_artifact",
+        "tests/integration/test_execution_fencing.py::test_t11_crash_during_publication_recovers_correctly"
+      ],
+      "mutations": [
+        "M6 remove artifact protection",
+        "M7 break previous-artifact preservation",
+        "M8 remove re-probe decision guard",
+        "#3 skip atomic publish"
+      ],
       "disposition": "FIXED"
     },
     {
@@ -37,8 +59,14 @@
       "reproduced": true,
       "reproduction": "R2 at 6b86633: completed reopened to pending (durable must stay completed)",
       "fix": "_mark_pending = fenced self-release ((id, attempt, owner_token) + expected states processing|verifying); takeover only via lease-expired _reclaim_stale (owner_token invalidated)",
-      "tests": ["tests/integration/test_execution_fencing.py::test_t1_stale_cancel_cannot_reopen_newer_execution", "tests/integration/test_execution_fencing.py::test_t12_t13_terminal_states_never_reopen"],
-      "mutations": ["M2 allow stale pending transition", "M1 remove ownership predicate"],
+      "tests": [
+        "tests/integration/test_execution_fencing.py::test_t1_stale_cancel_cannot_reopen_newer_execution",
+        "tests/integration/test_execution_fencing.py::test_t12_t13_terminal_states_never_reopen"
+      ],
+      "mutations": [
+        "M2 allow stale pending transition",
+        "M1 remove ownership predicate"
+      ],
       "disposition": "FIXED"
     },
     {
@@ -48,8 +76,13 @@
       "reproduced": true,
       "reproduction": "R3 at 6b86633: durable=pending announced=['completed'] (announced 'completed' without COMMIT_CONFIRMED durable state)",
       "fix": "_mark_completed/_mark_failed return bool (rowcount>0 = COMMIT_CONFIRMED); every _notify_completion gated on it; displaced generations are silent",
-      "tests": ["tests/integration/test_execution_fencing.py::test_t4_t15_no_success_notification_without_durable_completed"],
-      "mutations": ["M4 drop rowcount/transition-result check", "M5 notify regardless of CAS"],
+      "tests": [
+        "tests/integration/test_execution_fencing.py::test_t4_t15_no_success_notification_without_durable_completed"
+      ],
+      "mutations": [
+        "M4 drop rowcount/transition-result check",
+        "M5 notify regardless of CAS"
+      ],
       "disposition": "FIXED"
     },
     {
@@ -60,8 +93,15 @@
       "reproduced": true,
       "reproduction": "R5 at 6b86633: attempt=2 after two _mark_processing calls (both processes own one execution)",
       "fix": "strict CAS PENDING→PROCESSING (rowcount must be 1, mints attempt+1 + owner_token); PROCESSING→PROCESSING edge retired from TRANSITIONS; resume_pending reclaims only lease-expired rows",
-      "tests": ["tests/integration/test_execution_fencing.py::test_t5_two_processes_cannot_both_own_one_execution", "tests/integration/test_execution_fencing.py::test_t6_takeover_after_valid_expiry_works", "tests/integration/test_execution_fencing.py::test_t7_takeover_without_valid_expiry_rejected"],
-      "mutations": ["M3 allow duplicate PROCESSING claim", "M10 bypass current-attempt validation"],
+      "tests": [
+        "tests/integration/test_execution_fencing.py::test_t5_two_processes_cannot_both_own_one_execution",
+        "tests/integration/test_execution_fencing.py::test_t6_takeover_after_valid_expiry_works",
+        "tests/integration/test_execution_fencing.py::test_t7_takeover_without_valid_expiry_rejected"
+      ],
+      "mutations": [
+        "M3 allow duplicate PROCESSING claim",
+        "M10 bypass current-attempt validation"
+      ],
       "disposition": "RECLASSIFIED → FIXED"
     },
     {
@@ -72,12 +112,21 @@
       "reproduction": "git cat-file -e 9e9c75358e3e... -> fatal (not an object); git show-ref feature/verification-gap-closure -> no ref",
       "real_values": {
         "pr71_head": "9e9c753082c5",
-        "pr71_runs": ["36031844422", "36031809903"],
+        "pr71_runs": [
+          "36031844422",
+          "36031809903"
+        ],
         "pr74_head": "05d647e9",
-        "pr74_runs": ["36040556195", "36040549601"],
+        "pr74_runs": [
+          "36040556195",
+          "36040549601"
+        ],
         "pr78_head": "5f273f08",
         "pr78_green_run": "36060596005",
-        "b0304429_runs": ["36057676037", "36056456707"]
+        "b0304429_runs": [
+          "36057676037",
+          "36056456707"
+        ]
       },
       "fix": "this file rewritten with live-verified evidence + verification commands per row",
       "disposition": "FIXED"
@@ -89,8 +138,12 @@
       "reproduced": true,
       "reproduction": "R4 at 6b86633: bare {success:false} reached COMPLETED (must fail closed)",
       "fix": "is_typed_user_failure = (success is False); missing/empty code -> typed_failure:untyped_failure (TERMINAL, fail-closed)",
-      "tests": ["tests/unit/test_failure_semantics.py::test_typed_user_failure_dialect_detection"],
-      "mutations": ["#2 force COMPLETED on typed failure"],
+      "tests": [
+        "tests/unit/test_failure_semantics.py::test_typed_user_failure_dialect_detection"
+      ],
+      "mutations": [
+        "#2 force COMPLETED on typed failure"
+      ],
       "disposition": "FIXED"
     }
   ],
@@ -98,11 +151,26 @@
     "harness": "/tmp/repro_gate5_final.py (same scenarios + assertions pre/post; takeover expressed as lease-expiry post-repair)",
     "old_red_at": "6b8663307bce7f10f35434215de3c53ed0015339",
     "old_red_captured_at": "2026-09-24T23:08:54Z",
-    "R1": {"old": "VIOLATED previous_artifact_destroyed=True published_now=b'NEW GENERATION' durable=failed_retryable", "new": "OK previous artifact preserved after refused publication; durable=failed_retryable"},
-    "R2": {"old": "VIOLATED completed reopened to pending (durable must stay completed)", "new": "OK completed stayed completed after stale release"},
-    "R3": {"old": "VIOLATED durable=pending announced=['completed']", "new": "OK no success notification without durable completed (durable=pending, silent)"},
-    "R4": {"old": "VIOLATED bare {success:false} reached COMPLETED", "new": "OK bare {success:false} failed closed: failed_terminal"},
-    "R5": {"old": "VIOLATED dual claim ... attempt=2 after two _mark_processing calls", "new": "OK single execution per job (attempt=1, second claim refused=True)"}
+    "R1": {
+      "old": "VIOLATED previous_artifact_destroyed=True published_now=b'NEW GENERATION' durable=failed_retryable",
+      "new": "OK previous artifact preserved after refused publication; durable=failed_retryable"
+    },
+    "R2": {
+      "old": "VIOLATED completed reopened to pending (durable must stay completed)",
+      "new": "OK completed stayed completed after stale release"
+    },
+    "R3": {
+      "old": "VIOLATED durable=pending announced=['completed']",
+      "new": "OK no success notification without durable completed (durable=pending, silent)"
+    },
+    "R4": {
+      "old": "VIOLATED bare {success:false} reached COMPLETED",
+      "new": "OK bare {success:false} failed closed: failed_terminal"
+    },
+    "R5": {
+      "old": "VIOLATED dual claim ... attempt=2 after two _mark_processing calls",
+      "new": "OK single execution per job (attempt=1, second claim refused=True)"
+    }
   },
   "tests": {
     "suite": "tests/integration/test_execution_fencing.py (12 tests covering T1-T15)",
@@ -126,28 +194,113 @@
     "harness": "scripts/gate5_mutation_probes.py",
     "protocol": "BASELINE GREEN -> apply mutant -> RED (exit 1) -> byte restore -> SHA match -> GREEN",
     "result": "16/16 caught (M1-M10 + legacy #1-#6), every mutant exit 1",
-    "M1": {"mutation": "remove ownership predicate in _fence_update", "killed_by": ["T1", "T2/T3", "T8"]},
-    "M2": {"mutation": "allow stale pending transition (blind _mark_pending)", "killed_by": ["T1", "T12/T13"]},
-    "M3": {"mutation": "allow duplicate PROCESSING claim", "killed_by": ["T5", "T7"]},
-    "M4": {"mutation": "drop rowcount/transition-result check", "killed_by": ["T2/T3", "T4/T15"]},
-    "M5": {"mutation": "notify regardless of CAS", "killed_by": ["T4/T15"]},
-    "M6": {"mutation": "remove artifact protection (no backup)", "killed_by": ["T9", "T11"]},
-    "M7": {"mutation": "break previous-artifact preservation (no restore)", "killed_by": ["T9", "T11"]},
-    "M8": {"mutation": "remove re-probe decision guard", "killed_by": ["T9"]},
-    "M9": {"mutation": "remove fencing from publication (unfenced journal)", "killed_by": ["T8"]},
-    "M10": {"mutation": "bypass current-attempt validation (legacy un-fenced commit)", "killed_by": ["T2/T3", "T4/T15"]}
+    "M1": {
+      "mutation": "remove ownership predicate in _fence_update",
+      "killed_by": [
+        "T1",
+        "T2/T3",
+        "T8"
+      ]
+    },
+    "M2": {
+      "mutation": "allow stale pending transition (blind _mark_pending)",
+      "killed_by": [
+        "T1",
+        "T12/T13"
+      ]
+    },
+    "M3": {
+      "mutation": "allow duplicate PROCESSING claim",
+      "killed_by": [
+        "T5",
+        "T7"
+      ]
+    },
+    "M4": {
+      "mutation": "drop rowcount/transition-result check",
+      "killed_by": [
+        "T2/T3",
+        "T4/T15"
+      ]
+    },
+    "M5": {
+      "mutation": "notify regardless of CAS",
+      "killed_by": [
+        "T4/T15"
+      ]
+    },
+    "M6": {
+      "mutation": "remove artifact protection (no backup)",
+      "killed_by": [
+        "T9",
+        "T11"
+      ]
+    },
+    "M7": {
+      "mutation": "break previous-artifact preservation (no restore)",
+      "killed_by": [
+        "T9",
+        "T11"
+      ]
+    },
+    "M8": {
+      "mutation": "remove re-probe decision guard",
+      "killed_by": [
+        "T9"
+      ]
+    },
+    "M9": {
+      "mutation": "remove fencing from publication (unfenced journal)",
+      "killed_by": [
+        "T8"
+      ]
+    },
+    "M10": {
+      "mutation": "bypass current-attempt validation (legacy un-fenced commit)",
+      "killed_by": [
+        "T2/T3",
+        "T4/T15"
+      ]
+    }
   },
   "ci": {
     "note": "LOCAL GREEN != CI GREEN != MERGED != POST-MERGE VERIFIED. Log/artifact downloads are dead (Azure EOF) — conclusions from step status + local reproduction only.",
     "pre_existing_failures": {
-      "runs": ["36058609988", "36058604853", "36056491410"],
+      "runs": [
+        "36058609988",
+        "36058604853",
+        "36056491410"
+      ],
       "failure": "assert 'pending' == 'sent' at tests/unit/test_reminder_system.py:94",
       "base_reproduced": true,
       "disposition": "test-side poll fix (ACCEPTED production delivery order); flake class closed"
     },
-    "own_red_run": {"run": "36067414925", "sha": "765d9f89", "cause": "ruff format --check on the audit .md's embedded code block (fixed) + the same reminder flake class", "disposition": "FIXED on this branch"},
-    "green_reference_runs": {"main_16daebce": "36065905806", "pr78_head_5f273f08": "36060596005", "b0304429": ["36057676037", "36056456707"], "pr71_9e9c7530": ["36031844422", "36031809903"], "pr74_05d647e9": ["36040556195", "36040549601"]},
-    "repair_head_run": "PENDING at write time — recorded in the PR body and board evidence follow-up (docs-only commit); if red, status reverts to NEEDS-REPAIR"
+    "own_red_run": {
+      "run": "36067414925",
+      "sha": "765d9f89",
+      "cause": "ruff format --check on the audit .md's embedded code block (fixed) + the same reminder flake class",
+      "disposition": "FIXED on this branch"
+    },
+    "green_reference_runs": {
+      "main_16daebce": "36065905806",
+      "pr78_head_5f273f08": "36060596005",
+      "b0304429": [
+        "36057676037",
+        "36056456707"
+      ],
+      "pr71_9e9c7530": [
+        "36031844422",
+        "36031809903"
+      ],
+      "pr74_05d647e9": [
+        "36040556195",
+        "36040549601"
+      ]
+    },
+    "repair_head_run": "36073258516",
+    "repair_head_sha": "a2108a73168c3bba9e1856d4ce13e402c3045693",
+    "repair_head_conclusion": "success (gh run view 36073258516 --json conclusion)",
+    "evidence_followup_note": "This JSON update is a docs-only commit on top of a2108a73; its own CI run is recorded in the PR body (code diff vs a2108a73 is empty — docs/board only)."
   },
   "contract_changes": [
     "_mark_pending/_mark_verifying/_mark_completed/_mark_failed require ExecutionToken (stale identity = zero rows)",
@@ -172,7 +325,7 @@
     "12_mutation_red_evidence": "YES (16/16 exit 1)",
     "13_targeted_tests_green": "YES",
     "14_regression_green": "YES (pytest -m 'not slow': 2173 passed, 20 skipped)",
-    "15_ci_green_on_current_sha": "PENDING-THE-RUN (see ci.repair_head_run; LOCAL gates green)",
+    "15_ci_green_on_current_sha": "YES — run 36073258516 success on code head a2108a73168c3bba9e1856d4ce13e402c3045693",
     "16_docs_truthful": "YES (D-0016/D-0017 + supersession banner + proven publication contract)",
     "17_no_undispositioned_finding": "YES (section 29 table + accepted risks list)",
     "18_no_fabricated_evidence": "YES (every row live-read or executed)"

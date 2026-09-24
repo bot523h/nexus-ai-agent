@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-24T22:50:05Z",
+  "updated_at": "2026-09-24T23:41:09Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2279,7 +2279,7 @@
       "title_fa": "بستن و سازش‌دهی Gate 5: معناشناسی خطا + طبقه‌بندی شش‌حالته + حقیقت نوتیفایر + job_id در ردیابی + نشت استیجینگ",
       "zone": "job-lifecycle-gate5-closure",
       "priority": "P0",
-      "status": "active",
+      "status": "active_in_review",
       "gates_owner": false,
       "prerequisites": [
         "task-178-job-lifecycle",
@@ -2332,10 +2332,10 @@
         "CI run URL green on the exact final head"
       ],
       "agent_branch": "arena/01a0d567-nexus-ai-agent",
-      "claimed_at": "2026-09-24T22:50:05Z",
+      "claimed_at": "2026-09-24T23:41:09Z",
       "ttl_hours": 48,
       "released_at": null,
-      "evidence": " | TAKEOVER 2026-09-25: merged origin/arena/01a0d4b6@5f273f08 (PR#78 lineage) + origin/main@16daebcede5f into arena/01a0d567; claim heartbeat re-armed on the session branch."
+      "evidence": " | TAKEOVER 2026-09-25: merged origin/arena/01a0d4b6@5f273f08 (PR#78 lineage) + origin/main@16daebcede5f into arena/01a0d567; claim heartbeat re-armed on the session branch. | GATE-5 FINAL REPAIR DELIVERED at a2108a73 (docs/board follow-up above): R1-R5 OLD-RED@6b86633 -> NEW-GREEN; T1-T15 green; M1-M10 + legacy #1-#6 16/16 killed (exit 1 each); regression 2173 passed/20 skipped; ruff check+format clean (490 files); mypy src clean (241); CI run 36073258516 SUCCESS on a2108a73 (gh run view 36073258516 --json conclusion). Evidence record: docs/audits/GATE5_FINAL_REPAIR_2026-09-25.md + GATE5_TRUTH_MATRIX.json (v2, F7 fixed)."
     }
   ],
   "deferred_log": [

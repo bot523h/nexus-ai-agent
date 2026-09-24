@@ -302,9 +302,15 @@ After the repair (same scenarios; takeover expressed as lease-expiry, per contra
 Pre-existing failures classified (base-reproduced): runs `36058609988`/`36058604853`/`36056491410`
 (`assert 'pending' == 'sent'`, `test_reminder_system.py:94` — the flake class now repaired
 test-side). Own red run `36067414925` (765d9f8): lint/lint-fast `ruff format --check` = the audit
-.md's embedded code block (fixed); test step = the same flake class. LOCAL GREEN ≠ CI GREEN ≠
-MERGED ≠ POST-MERGE VERIFIED: the CI run on the repair head is the gate; its run id is recorded by
-the evidence-only follow-up (board + PR body) which carries no code delta.
+.md's embedded code block (fixed); test step = the same flake class.
+
+**CI GATE: GREEN.** Run `36073258516` on the code head
+`a2108a73168c3bba9e1856d4ce13e402c3045693` — `conclusion: success`
+(`gh run view 36073258516 --json status,conclusion,headSha`). The follow-up
+evidence commit (this field update + board heartbeat) carries **no code
+delta** (docs/board only); its own run is recorded in the PR body.
+LOCAL GREEN ≠ CI GREEN ≠ MERGED ≠ POST-MERGE VERIFIED: the code head's CI is
+green; merge has not happened — see §31.
 
 ## 28. Current-SHA invalidation
 
@@ -374,9 +380,9 @@ new SHAs in the board/PR body (LAW 2).
 
 ## 31. Final status
 
-**MERGE-READY** (subject to section 27's CI gate on the pushed head: LOCAL GREEN ≠ CI GREEN; the
-live run is recorded in the PR body/board evidence follow-up). NOT "MERGED + POST-MERGE VERIFIED" —
-this branch is not merged.
+**MERGE-READY.** CI green on the code head `a2108a73` (run `36073258516`,
+`conclusion: success`); all §32 items YES. NOT "MERGED + POST-MERGE VERIFIED"
+— this branch is not merged yet.
 
 ## 32. Zero-BS 18-item check (mission §32 — ANY NO ⇒ not MERGE-READY)
 
@@ -396,7 +402,7 @@ this branch is not merged.
 | 12 | mutation RED evidence exists | YES | section 20 (16/16, exit 1) |
 | 13 | targeted tests green | YES | section 19/26 |
 | 14 | regression green | YES | section 26 (2173/0 fails) |
-| 15 | CI green on CURRENT SHA | PENDING-THE-RUN | section 27: local gates green; live CI run recorded in the PR body/board evidence commit (docs-only). If that run is red the status reverts to NEEDS-REPAIR — no merge claim before it. |
+| 15 | CI green on CURRENT SHA | YES | run `36073258516` `conclusion: success` on code head `a2108a73168c3bba9e1856d4ce13e402c3045693` (`gh run view`); the docs-only evidence commit above it carries no code delta (recorded in the PR body) |
 | 16 | docs truthful (no unproven superlatives) | YES | section 22–23 + D-0016/D-0017 + supersession banner |
 | 17 | no undispositioned finding | YES | section 29 + ACCEPTED RISKS below |
 | 18 | no fabricated evidence | YES | every run/SHA/test claim above was live-read or executed |
