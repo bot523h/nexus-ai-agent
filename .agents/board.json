@@ -2041,10 +2041,10 @@
         "docs/audits/GATE4_TRUTH_MATRIX.json"
       ],
       "agent_branch": "arena/01a0d3af-nexus-ai-agent",
-      "claimed_at": "2026-09-24T15:57:15Z",
+      "claimed_at": "2026-09-24T17:05:00Z",
       "ttl_hours": 48,
       "gates_owner": false,
-      "note": "Agent 4 (Gate 4). Baseline = main + PR#67 + PR#68 merged into this branch per owner directive; only integration composition resolved, no foreign-layer semantics patched."
+      "note": "Agent 4 (Gate 4). Baseline = main + PR#67 + PR#68 merged per owner directive; only integration composition resolved, no foreign-layer semantics patched. EVIDENCE 2026-09-24: pytest tests/integration/test_gate4_vertical_slice.py → 14 passed (~3s, writes GATE4_TRUTH_MATRIX.json, byte-deterministic across reruns); full local diagnostic sweep unit+arch 2045 passed/6 skipped, integration 96 passed/21 skipped; ruff check . clean, ruff format --check . clean (502 files). check --files on my four exclusive paths → exit 0 'no overlap'; full-diff check exit 1 = 84 paths all task-177 (owner-directed merge composition, disclosed in takeover_log + PR body). Report: docs/audits/GATE4_CROSS_LAYER_SLICE_2026-09-24.md. Gates deferred to gates owner."
     }
   ],
   "deferred_log": [
@@ -2596,6 +2596,13 @@
       "task": "pr47-feature-wiring-continuation",
       "reason": "PR#47 reached a terminal state (MERGED 2026-09-22T20:06:40Z, verified with gh). The record was still active_in_review and therefore held bot/handlers.py, bot/surface/*, tests/unit/surface_fakes.py and CHANGELOG.md against every other agent — `agent_board.py check` returned STOP for task-158 on those paths. cmd_release refuses cross-branch release, so the paths are freed here and the reason is recorded, per the orphaned-lease rule documented in AGENTS.md / the PR#33 precedent.",
       "evidence": "gh pr view 47 --json state,mergedAt → {\"state\":\"MERGED\",\"mergedAt\":\"2026-09-22T20:06:40Z\"}"
+    },
+    {
+      "at": "2026-09-24T17:05:00Z",
+      "by_branch": "arena/01a0d3af-nexus-ai-agent",
+      "task": "task-178-gate4-cross-layer",
+      "action": "owner-directed-baseline-composition",
+      "reason": "Owner's all_layers directive: merge PR#67 (task-177 fence, active_in_review) and PR#68 into the Gate-4 branch as the integration baseline. Full-diff `check --files` therefore reports 84 paths against task-177 — those are merged read-only, not concurrent edits. Direct deltas inside their fences are limited to: documented merge-conflict resolution (commits b93f398/e2ba4c3), ruff I001/F401 auto-fix on 5 test files my own port commit left unsorted, and the docs/README.md Gate-4 index row. Zero foreign product semantics patched. My four exclusive deliverables check exits 0. task-177's fence releases with PR#67's own merge by its owner — not forced from here."
     }
   ],
   "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins."

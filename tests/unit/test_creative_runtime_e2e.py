@@ -29,6 +29,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from nagar_helpers import TEST_ACTOR, TEST_PROVENANCE, authorized_bus
 
 from nexus_ai_agent.creative.execution import ExecutionClass, classify_operation
 from nexus_ai_agent.creative.packs.availability import Availability
@@ -44,7 +45,6 @@ from nexus_ai_agent.creative.slideshow.ffmpeg import (
     probe_video,
     resolve_ffmpeg_bin,
 )
-from nexus_ai_agent.creative.studio.bus import CommandBus
 from nexus_ai_agent.creative.studio.models import (
     AssetRecord,
     Clip,
@@ -58,7 +58,6 @@ from nexus_ai_agent.creative.studio.models import (
     TypedCommand,
     new_project,
 )
-from nagar_helpers import TEST_ACTOR, TEST_PROVENANCE, authorized_bus
 
 
 def _asset(asset_id: str, duration_us: int) -> AssetRecord:

@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 
+from nagar_helpers import authorized_bus, command_for
+
 from nexus_ai_agent.creative.execution import (
     MISSING_RENDER_PRIMITIVES,
     RENDERED_ARTIFACT_OPS,
@@ -34,11 +36,9 @@ from nexus_ai_agent.creative.studio.models import (
     PermissionLevel,
     Project,
     Timeline,
-    TypedCommand,
     UnknownOperationError,
     new_project,
 )
-from nagar_helpers import authorized_bus, command_for
 
 
 def _project_with_assets() -> Project:

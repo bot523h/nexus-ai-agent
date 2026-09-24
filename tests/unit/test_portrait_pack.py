@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 
 import pytest
+from nagar_helpers import authorized_bus, command_for
 from pydantic import ValidationError
 
 from nexus_ai_agent.creative.packs.portrait.models import (
@@ -52,7 +53,6 @@ from nexus_ai_agent.creative.studio.models import (
     UnknownOperationError,
     new_project,
 )
-from nagar_helpers import authorized_bus, command_for
 
 REPO_ROOT = Path(__file__).parents[2]
 MANIFEST_PATH = (

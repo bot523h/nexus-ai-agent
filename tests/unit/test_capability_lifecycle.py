@@ -15,6 +15,7 @@ checked it.  This file pins the full (state × gate) matrix:
 from __future__ import annotations
 
 import pytest
+from nagar_helpers import authorized_bus, command_for
 
 from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
 from nexus_ai_agent.creative.studio.lifecycle import (
@@ -29,7 +30,6 @@ from nexus_ai_agent.creative.studio.models import (
     Timeline,
     new_project,
 )
-from nagar_helpers import authorized_bus, command_for
 
 
 def _record(state: LifecycleState) -> PackLifecycle:

@@ -1,0 +1,238 @@
+{
+  "baseline": {
+    "agent1_runtime_pr67": "9c3a34f107b4b5f3c878a0ec2a7d82e8c24614d3",
+    "agent2_command_pr68": "eef827641b0627f3581976d494eb0e71f4dd16b6",
+    "branch": "arena/01a0d3af-nexus-ai-agent",
+    "main": "035a896dd2ed1293de6accf2ef4309da2fd64c89"
+  },
+  "cell_legend": [
+    "FAIL",
+    "MISSING",
+    "NOT_VERIFIED",
+    "PASS"
+  ],
+  "distinctions_held": {
+    "artifact_verified": true,
+    "job_succeeded": true,
+    "note": "the three facts are asserted independently; failure cases F5/F6 prove they can diverge (runtime can complete while artifact verification or job success fails)",
+    "runtime_completed": true
+  },
+  "failure_matrix": {
+    "artifact_verification_failure": {
+      "observed": "verify_artifact raises on tampered bytes; in-job probe failure → FAILED, never COMPLETED-with-success",
+      "verdict": "PASS"
+    },
+    "authorization_failure": {
+      "observed": "AuthorizationError for intruder/mismatched-project/absent-authorizer; zero side effects",
+      "verdict": "PASS"
+    },
+    "capability_unavailable_caption": {
+      "observed": "caption_profile_unavailable typed; runtime calls=0; no artifact",
+      "verdict": "PASS"
+    },
+    "capability_unavailable_lifecycle": {
+      "observed": "PackRequirementError before handler; state untouched",
+      "verdict": "PASS"
+    },
+    "duplicate_command": {
+      "observed": "queue: 3 enqueues → 1 job/1 render; bus: replay → same tx",
+      "verdict": "PASS"
+    },
+    "invalid_schema": {
+      "observed": "CommandValidationError @ bus; invalid_request @ worker; state untouched",
+      "verdict": "PASS"
+    },
+    "revision_conflict": {
+      "observed": "PreconditionError(stale revision/hash) + queue payload-conflict ValueError",
+      "verdict": "PASS"
+    },
+    "runtime_failure": {
+      "observed": "typed lane failure → COMPLETED+success=False+render_failed; post-typed crash → durable FAILED; (FAILED_RETRYABLE/TERMINAL_FAILED split does not exist in this JobStatus enum → see report limitations)",
+      "verdict": "PASS"
+    },
+    "unknown_operation": {
+      "observed": "UnknownOperationError @ bus; unsupported_operation @ worker; runtime calls=0",
+      "verdict": "PASS"
+    }
+  },
+  "gate": 4,
+  "matrix": {
+    "Artifact": {
+      "T01": "MISSING",
+      "T02": "PASS",
+      "T22": "MISSING",
+      "T31": "MISSING",
+      "T64": "MISSING"
+    },
+    "Capability": {
+      "T01": "PASS",
+      "T02": "PASS",
+      "T22": "PASS",
+      "T31": "PASS",
+      "T64": "PASS"
+    },
+    "Command": {
+      "T01": "PASS",
+      "T02": "PASS",
+      "T22": "PASS",
+      "T31": "PASS",
+      "T64": "PASS"
+    },
+    "E2E": {
+      "T01": "MISSING",
+      "T02": "PASS",
+      "T22": "MISSING",
+      "T31": "MISSING",
+      "T64": "MISSING"
+    },
+    "Job": {
+      "T01": "MISSING",
+      "T02": "PASS",
+      "T22": "MISSING",
+      "T31": "MISSING",
+      "T64": "MISSING"
+    },
+    "Product": {
+      "T01": "MISSING",
+      "T02": "PASS",
+      "T22": "MISSING",
+      "T31": "MISSING",
+      "T64": "MISSING"
+    },
+    "Reopen": {
+      "T01": "MISSING",
+      "T02": "PASS",
+      "T22": "MISSING",
+      "T31": "MISSING",
+      "T64": "MISSING"
+    },
+    "Runtime": {
+      "T01": "MISSING",
+      "T02": "PASS",
+      "T22": "MISSING",
+      "T31": "MISSING",
+      "T64": "MISSING"
+    }
+  },
+  "per_step_distinctions": {
+    "T01": {
+      "ARTIFACT": "MISSING",
+      "CONTRACT": "PASS",
+      "DOMAIN": "PASS",
+      "E2E": "MISSING",
+      "JOB": "MISSING",
+      "PRODUCT": "MISSING",
+      "REAL_RUNTIME": "MISSING",
+      "REOPEN": "MISSING"
+    },
+    "T02": {
+      "ARTIFACT": "PASS",
+      "CONTRACT": "PASS",
+      "DOMAIN": "PASS",
+      "E2E": "PASS",
+      "JOB": "PASS",
+      "PRODUCT": "PASS",
+      "REAL_RUNTIME": "PASS",
+      "REOPEN": "PASS"
+    },
+    "T22": {
+      "ARTIFACT": "MISSING",
+      "CONTRACT": "PASS",
+      "DOMAIN": "PASS",
+      "E2E": "MISSING",
+      "JOB": "MISSING",
+      "PRODUCT": "MISSING",
+      "REAL_RUNTIME": "MISSING",
+      "REOPEN": "MISSING"
+    },
+    "T31": {
+      "ARTIFACT": "MISSING",
+      "CONTRACT": "PASS",
+      "DOMAIN": "PASS",
+      "E2E": "MISSING",
+      "JOB": "MISSING",
+      "PRODUCT": "MISSING",
+      "REAL_RUNTIME": "MISSING",
+      "REOPEN": "MISSING"
+    },
+    "T64": {
+      "ARTIFACT": "MISSING",
+      "CONTRACT": "PASS",
+      "DOMAIN": "PASS",
+      "E2E": "MISSING",
+      "JOB": "MISSING",
+      "PRODUCT": "MISSING",
+      "REAL_RUNTIME": "MISSING",
+      "REOPEN": "MISSING"
+    }
+  },
+  "per_step_provenance": {
+    "T01": {
+      "command_id": "cmd-gate4-T01",
+      "operation_id": "timeline.split_at_playhead",
+      "revision": 1
+    },
+    "T02": {
+      "artifact": {
+        "duration_us": 1000000,
+        "height": 720,
+        "sha256": "sha256:3bc1bd622af7e81cb0357feec84332064ec61e7c80977919beb00179d1c2f135",
+        "size_bytes": 51611
+      },
+      "command_id": "cmd-gate:42:4242:1001-timeline.trim",
+      "idempotency_key": "gate:42:4242:1001",
+      "operation_id": "timeline.trim",
+      "revision": 2
+    },
+    "T22": {
+      "command_id": "cmd-gate4-T22",
+      "operation_id": "scene.remove_object",
+      "revision": 3
+    },
+    "T31": {
+      "command_id": "cmd-gate4-T31",
+      "operation_id": "motion.add_transition",
+      "revision": 4
+    },
+    "T64": {
+      "command_id": "cmd-gate4-T64",
+      "operation_id": "color.match_shot",
+      "revision": 5
+    }
+  },
+  "provenance": {
+    "artifact": {
+      "duration_us": 1000000,
+      "height": 720,
+      "sha256": "sha256:3bc1bd622af7e81cb0357feec84332064ec61e7c80977919beb00179d1c2f135",
+      "size_bytes": 51611
+    },
+    "command_id": "cmd-gate:42:4242:1001-timeline.trim",
+    "idempotency_key": "gate:42:4242:1001",
+    "operation_id": "timeline.trim"
+  },
+  "reopen": {
+    "bus_state_limitation": "Project/EditTransaction state is in-memory per CommandBus by contract (PR#68): durable reopen covers job rows + artifact facts; bus history reopen across restart is NOT_VERIFIED (no persistence layer exists).",
+    "fresh_instance_status": "completed",
+    "fresh_interpreter": {
+      "exists": true,
+      "file_sha256": "sha256:3bc1bd622af7e81cb0357feec84332064ec61e7c80977919beb00179d1c2f135",
+      "operation": "timeline.trim",
+      "sha256": "sha256:3bc1bd622af7e81cb0357feec84332064ec61e7c80977919beb00179d1c2f135",
+      "size": 51611,
+      "status": "completed"
+    },
+    "resume_pending_reexecuted": 0
+  },
+  "schema": "gate4-truth-matrix-v1",
+  "slice": {
+    "T01": "timeline.split_at_playhead",
+    "T02": "timeline.trim",
+    "T22": "scene.remove_object",
+    "T31": "motion.add_transition",
+    "T64": "color.match_shot"
+  },
+  "tdd_catalog_rows": 70,
+  "tdd_catalog_rule": "T01..T70 = rows of the seven pack tables in docs/NAGAR_70_OPERATIONS_TDD.md, document order (engineered rule; the ids were undefined in-tree before this gate)",
+  "volatile_ids_note": "Per-run values asserted in-test but excluded from this deterministic artifact: queue job_id (uuid4), bus transaction_id (tx_{uuid4}), project state_hash (digests that tx uuid). Stable provenance kept here: command_id → operation_id → revision 1..5 → artifact sha256/size/duration."
+}
