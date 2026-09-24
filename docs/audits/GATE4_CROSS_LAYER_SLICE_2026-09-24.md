@@ -228,6 +228,10 @@ docs/audits/GATE4_CROSS_LAYER_SLICE_2026-09-24.md,docs/audits/GATE4_TRUTH_MATRIX
 Full `make lint/types/test` gates: **deferred to gates owner** (AGENTS.md rule 4 —
 this session ran diagnostic checks only).
 
+**CI observation on PR#69** (passive visibility, run 36028367871, `gh pr checks 69` → exit 0):
+`lint` pass 6m56s · `lint-fast` pass 12s · `migrate-postgres` pass 6m18s ·
+`test (pytest -m "not slow")` pass 7m51s.
+
 ## 10. What this gate does NOT claim
 
 * Not L4/production: no authenticated multi-user API, no cross-process bus journal,
