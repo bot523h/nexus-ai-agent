@@ -171,8 +171,13 @@ needs the explicit handoff below.
 
 ## 10. CI / remote
 
-Local gates above are green except the environment gaps named in §7. CI has not been run for this
-branch from here; the repository's maintenance workflow is red for the operator-side reason in §6.
+Branch `arena/01a0d2d6-nexus-ai-agent` is pushed; PR **#66** is open against `main`.
+All four CI checks passed on commit `08e09a1` (the commit before this documentation-only update):
+`lint (ruff + mypy + version lockstep)` 7 m 05 s, `lint-fast` 7 s, `migrate-postgres` 5 m 55 s,
+`test (pytest -m "not slow")` 7 m 20 s — run
+[35987319844](https://github.com/bot523h/nexus-ai-agent/actions/runs/35987319844). CI installs the
+base dependencies, which is why the two environment failures of §7 do not appear there.
+The repository's `maintenance` workflow stays red for the operator-side reason in §6.
 
 ## 11. Remaining blockers / handoff to Agent B
 
