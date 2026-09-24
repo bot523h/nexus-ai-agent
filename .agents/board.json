@@ -493,7 +493,15 @@
         "src/nexus_ai_agent/observability/logging.py",
         "src/nexus_ai_agent/infrastructure/observability/",
         "src/nexus_ai_agent/core/ssrf_guard.py",
-        "src/nexus_ai_agent/api/app.py"
+        "src/nexus_ai_agent/api/app.py",
+        "src/nexus_ai_agent/features/ai_chat.py",
+        "src/nexus_ai_agent/features/summarizer.py",
+        "src/nexus_ai_agent/creative/video_director.py",
+        "src/nexus_ai_agent/creative/slideshow/analysis.py",
+        "tests/unit/test_access_guard.py",
+        "tests/unit/test_observability.py",
+        "tests/unit/test_force_join_gate.py",
+        "tests/unit/test_api_ssrf_download.py"
       ]
     }
   ],
