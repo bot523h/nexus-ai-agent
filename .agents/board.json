@@ -483,6 +483,18 @@
         "CHANGELOG.md",
         "docs/ops/r2-storage.md"
       ]
+    },
+    {
+      "id": "nagar-opgap-reconciliation",
+      "paths": [
+        "docs/OPERATION_CONTRACT_MATRIX.md",
+        "OPERATION_MATRIX.json",
+        "docs/RECONCILIATION.md",
+        "RECONCILIATION.json",
+        "docs/L0_L4_MATURITY.md",
+        "docs/architecture/adr/0005-three-layer-operation-truth.md",
+        "tests/unit/test_operation_matrix_reconciliation.py"
+      ]
     }
   ],
   "claims": [
@@ -1958,7 +1970,7 @@
         "docs/RECONCILIATION.md",
         "RECONCILIATION.json",
         "docs/L0_L4_MATURITY.md",
-        "docs/architecture/adr/0007-three-layer-operation-truth.md",
+        "docs/architecture/adr/0005-three-layer-operation-truth.md",
         "tests/unit/test_operation_matrix_reconciliation.py"
       ],
       "exclusive_paths": [
@@ -1967,7 +1979,7 @@
         "docs/RECONCILIATION.md",
         "RECONCILIATION.json",
         "docs/L0_L4_MATURITY.md",
-        "docs/architecture/adr/0007-three-layer-operation-truth.md",
+        "docs/architecture/adr/0005-three-layer-operation-truth.md",
         "tests/unit/test_operation_matrix_reconciliation.py"
       ],
       "owner_hint": "Agent B",
