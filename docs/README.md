@@ -36,6 +36,7 @@ placeholder text.
 | [architecture/adr/0002-docs-as-code-enforcement.md](architecture/adr/0002-docs-as-code-enforcement.md) | Enforce documentation in Python now; Node toolchain on a recorded trigger. |
 | [architecture/adr/0003-mermaid-flowchart-for-c4-views.md](architecture/adr/0003-mermaid-flowchart-for-c4-views.md) | Express C4 views with Mermaid `flowchart`. |
 | [architecture/adr/0004-board-schema-2.md](architecture/adr/0004-board-schema-2.md) | Coordination board schema 2: prerequisites, acceptance criteria, history split. |
+| [architecture/adr/0005-three-layer-operation-truth.md](architecture/adr/0005-three-layer-operation-truth.md) | Decoupling Product Catalog, Runtime Registry, and Executable Surface. |
 
 ## Authoritative records
 
@@ -46,6 +47,9 @@ placeholder text.
 | [../REQUIREMENTS_LEDGER.md](../REQUIREMENTS_LEDGER.md) | PR1/PR2/PR3 checkpoint-lifecycle requirements ledger. |
 | [../AGENTS.md](../AGENTS.md) | Multi-agent coordination contract + current board summary. |
 | [NAGAR_70_OPERATIONS_TDD.md](NAGAR_70_OPERATIONS_TDD.md) | Phase 6 (Nagar creative studio) technical design baseline — 71 operation ids. |
+| [OPERATION_CONTRACT_MATRIX.md](OPERATION_CONTRACT_MATRIX.md) | Living operation contract matrix & truth table across all 80 universe operations. |
+| [RECONCILIATION.md](RECONCILIATION.md) | Reconciling Product Catalog (70) vs Runtime Registry (57) vs Executable Surface (9) and preserving 23 gaps. |
+| [L0_L4_MATURITY.md](L0_L4_MATURITY.md) | Nagar operation capability maturity model (L0 Not Implemented to L4 Surface Proven). |
 | [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) | End-user guide: bring any NEXUS database to the Alembic head. |
 
 ## Protocols
