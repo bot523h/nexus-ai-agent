@@ -37,9 +37,11 @@ from nexus_ai_agent.creative.rendering import (
     LaneOp,
     LaneSource,
     LoudnormOp,
+    LutOp,
     MeasuredLoudness,
     ReverseOp,
     SpeedOp,
+    SubtitleOp,
     TitleOp,
     TrimOp,
     XfadeOp,
@@ -64,7 +66,9 @@ MEASURED = MeasuredLoudness.model_validate(
 )
 
 # Every op kind the restatement below knows how to account for.
-DURATION_NEUTRAL_KINDS = frozenset({"reverse", "title", "loudnorm", "duck", "exposure"})
+DURATION_NEUTRAL_KINDS = frozenset(
+    {"reverse", "title", "loudnorm", "duck", "exposure", "lut", "subtitle"}
+)
 DURATION_AFFECTING_KINDS = frozenset({"trim", "speed", "freeze", "xfade"})
 HANDLED_KINDS = DURATION_NEUTRAL_KINDS | DURATION_AFFECTING_KINDS
 
@@ -111,7 +115,18 @@ def _random_op(rng: random.Random, *, loudnorm_used: bool, running_us: int) -> t
     valid by construction — the compiler rejects an overlap past either clip and
     the restatement is only meaningful on lanes the compiler accepts.
     """
-    choices = ["trim", "speed", "reverse", "freeze", "xfade", "title", "duck", "exposure"]
+    choices = [
+        "trim",
+        "speed",
+        "reverse",
+        "freeze",
+        "xfade",
+        "title",
+        "duck",
+        "exposure",
+        "lut",
+        "subtitle",
+    ]
     if not loudnorm_used:
         choices.append("loudnorm")
     kind = rng.choice(choices)
@@ -147,6 +162,17 @@ def _random_op(rng: random.Random, *, loudnorm_used: bool, running_us: int) -> t
         return TitleOp(text=f"card {rng.randrange(1000)}", start_us=0), loudnorm_used
     if kind == "duck":
         return DuckOp(voice_asset_id="voice"), loudnorm_used
+    if kind == "lut":
+        return (
+            LutOp(
+                lut_name="warm",
+                lut_path="/stage/warm.cube",
+                intensity=rng.choice([0.0, 0.5, 1.0]),
+            ),
+            loudnorm_used,
+        )
+    if kind == "subtitle":
+        return SubtitleOp(subtitle_path="/stage/cap.srt"), loudnorm_used
     if kind == "exposure":
         return (
             ExposureOp(
@@ -181,8 +207,11 @@ def _random_lane(seed: int) -> LaneIR:
         ops.append(op)
     if not any(isinstance(op, ExposureOp) for op in ops):
         # Guarantee the exposure op is exercised on every seed, so the
-        # duration-neutrality test below never has to skip.
-        ops[rng.randrange(len(ops))] = ExposureOp(exposure_ev=1.0, temperature_k=3200)
+        # duration-neutrality test below never has to skip.  Appended — never
+        # spliced over a clock-moving op: replacing a trim/speed/freeze/xfade
+        # after the fact would invalidate later xfade offsets (session 3 fix;
+        # seed 7 caught it when the choice list grew to ten kinds).
+        ops.append(ExposureOp(exposure_ev=1.0, temperature_k=3200))
     return LaneIR(
         main=MAIN,
         ops=tuple(ops),
