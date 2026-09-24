@@ -1348,3 +1348,82 @@ observed RenderError path — repository behavior wins over its old docstring), 
 harness `scripts/gate5_mutation_probes.py`: 6/6 probes (remove verification / force COMPLETED on
 typed failure / skip atomic publish / drop job_id / notifier trusts result.success / bypass
 failure_status) each GREEN→RED→restore→SHA-restored→GREEN.
+
+### D-0016 — Execution ownership is a fencing token (`attempt`); worker transitions are fenced CAS; publication keeps the previous artifact recoverable until the durable commit
+
+*Problem.* The final Gate 5 repair (task-181, branch `arena/01a0d5a1-nexus-ai-agent`, base
+`947173c` = main + PR#78) reproduced five defects that the previous closure had either declared
+fixed or filed as "documented limitations": (R1) a refused **re-probe** destroyed the previous
+`<stem>.extracted.txt` (`publish` had already renamed over it; `retract` only knew the staged
+name); (R2) a cancelled worker's `_mark_pending` (`WHERE id = ?`) reopened a job that a newer
+execution had meanwhile **completed**; (R3) `_mark_completed` returned nothing and the ✅ hook
+fired even when the row was no longer ours; (R4) a bare `{"success": false}` (no `error_code`)
+completed; (R5) `_mark_processing` claimed `status IN ('pending','processing')` without checking
+`rowcount`, so two processes on one database both ran the handler for one job. R2/R3/R5 share
+one root cause: **no execution owned a row** — every worker-side UPDATE was conditioned on status
+at best, never on *which execution* was writing. This is the pattern pg-boss fixed in issue #925
+(stale `complete()` settling the newer attempt) and the textbook fencing-token failure (Kleppmann,
+"How to do distributed locking").
+
+*Decision.*
+1. **Who owns a job:** the execution whose `pending → processing` CAS committed. The reservation
+   is `UPDATE … SET status='processing', attempt = attempt + 1 WHERE id = ? AND status = 'pending'`
+   with `rowcount == 1`; the `attempt` it minted is the execution's **fencing token**
+   (`jobs.lifecycle.ExecutionClaim`, `FENCING_COLUMN = "attempt"`). A `processing` row is never
+   re-claimable by a reservation (the `(PROCESSING, PROCESSING)` edge is removed from `TRANSITIONS`).
+2. **Every worker transition is a fenced CAS:** `_mark_verifying/_pending/_completed/_failed` add
+   `AND attempt = ?` to their status-conditioned `UPDATE` and return `rowcount == 1`. A `False`
+   means "not ours any more": the worker logs `job_transition_rejected` and performs **no** state
+   change, notification, publication or retraction. Claim-time structural failures (no handler)
+   use an unfenced PENDING-only CAS (`_fail_unclaimed`) because no execution exists yet.
+3. **Takeover is explicit:** only `resume_pending` moves live `processing/verifying` rows back to
+   `pending` — at startup (rows this process is not itself executing) or expiry-gated
+   (`stale_after=Δ`: rows whose `started_at` is younger than Δ are left to their owner). `attempt`
+   is left untouched; the next reservation mints a new token and fences the previous owner out.
+4. **Notification contract = "never lie":** hooks fire only after the fenced UPDATE committed. A
+   crash between commit and hook loses that notification; durable state remains the truth.
+5. **Publication (F1, option A — backup/restore):** `publish` keeps the previous artifact as
+   `<stem>.extracted.txt.prev` (same-directory `os.link`, `copy2` fallback) before `os.replace`;
+   ownership is re-read immediately before publication (`_owns_execution(claim, VERIFYING)` —
+   the side-effect fencing point); a refused re-probe restores `.prev` by one atomic rename (or
+   removes the refused bytes when no previous artifact existed); `finalize` removes `.prev` only
+   after the fenced `completed` commit. The re-probe is kept — it measures the bytes under the
+   final name (what readers see) and is not a duplicate of the staged-bytes verification.
+6. **Bare `success: false`** is a failure with code `unspecified` (TERMINAL — a retry repeats the
+   same unspecified refusal); `failure_code_of()` is the queue's single "handler said it failed"
+   check.
+
+*Options compared for the fence.* A `attempt` (chosen): minted atomically with the claim, strictly
+monotonic per row, zero schema change, trivially testable, backward compatible (existing rows
+already carry it). B execution UUID: same guarantees but a new column + no ordering (cannot
+tell "older" from "different"). C lease + owner + expiry as the fence: wall-clock dependent, clock
+skew across processes, and still needs a token for the write-side check — kept only as the
+*takeover policy* (`stale_after`). D single-process invariant + fail-closed: no executable
+invariant exists (bot, webhook and CLI each open a queue on the same db path). E hybrid A+C:
+this is what was built (A fences, C-style expiry governs takeover).
+
+*Options compared for publication.* A backup/restore (chosen); B versioned files + pointer
+(new naming contract for every consumer); C stage + verify + atomic replace, drop the re-probe
+(re-probe proven not redundant — it is the only check after the rename); D two-phase journal and
+E "publish transaction" (both more machinery than the guarantee needs). **This supersedes the
+D-0015 rejection of backup-then-replace**: D-0015 feared `.prev` orphans; the lane now removes a
+stray `.prev` before publishing, `finalize` removes it after commit, and the crash between publish
+and commit is covered by `test_t11_crash_between_publish_and_reprobe_recovers`. Stage-then-swap
+alone was proven to destroy the previous artifact on a refused re-probe (R1).
+
+*Rejected.* Transactional outbox for notifications — it solves dual-write *delivery* (DB + broker,
+at-least-once + consumer idempotency); Gate 5 requires only that a success is never announced
+without a committed `completed`, which the fenced CAS result already gives. Token-aware storage to
+close the residual window between the ownership re-read and `os.replace` — out of scope; the
+window is documented in JOB_LIFECYCLE.md §2a and can only be entered by a takeover during that
+interval, never by a concurrent reservation.
+
+*Evidence.* OLD RED on `947173c`: `tests/integration/test_gate5_execution_fencing.py` 19 failed /
+1 passed (R1 `'fresh extraction' == 'OLD VALID EXTRACTION'`, R2 `PENDING is COMPLETED`, R3
+`['me'] == []`, R5 `2 == 1`). NEW GREEN: 21 passed; full `pytest -m "not slow"` green; mutation
+harness `scripts/gate5_mutation_probes.py` 17/17 (M1–M10 + the six D-0015 probes) with
+BASELINE GREEN → MUTANT RED → SHA-restored → GREEN. Sources: pg-boss issue #925; M. Kleppmann,
+"How to do distributed locking" (fencing tokens); Python `sqlite3.Cursor.rowcount`; SQLite
+atomic commit; Python `os.replace` (atomic same-filesystem replace, previous inode not
+preserved); Oban's `fetch_jobs` (available-only claim minting `attempt`) and `Lifeline` rescue
+(expiry-gated takeover) as the mature-implementation reference for options A/E.

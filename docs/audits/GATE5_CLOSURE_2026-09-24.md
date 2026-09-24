@@ -136,3 +136,52 @@ nothing is double-counted.
 were **never merged**, and the four GAP claims existed only as conversation assertions with the
 opposite executable evidence on the tree. All four are now reproduced, fixed, regression-tested,
 and mutation-pinned on a branch that supersedes #71/#74 with their full lineage preserved.
+
+---
+
+## 8. Final repair (owner session on `arena/01a0d5a1-nexus-ai-agent`, base `947173c` = main `16daebc` + PR#78 `5f273f08`)
+
+Everything above was treated as a hypothesis and re-checked against live GitHub and git objects.
+Corrections to this document's own claims:
+
+| Prior claim (above) | Measured truth | Disposition |
+|---|---|---|
+| §1 "PR #71 CI green — `9e9c753`, 5 workflow runs … 8 gates" | the sha cited in the JSON (`9e9c75358e3e…`) does not exist; real head `9e9c753082c5…` on `arena/01a0d43e-nexus-ai-agent` had **2** runs × 4 jobs, all green | corrected in `GATE5_TRUTH_MATRIX.json` (`retracted_claims`) |
+| §7 "CI green on the PR head — CLOSED" | runs 36058609988 / 36058604853 on `5f273f08` **failed** (1 test: `test_reminder_system.py::test_delivers_to_originating_chat_not_user_id`, pre-existing flaky, outside Gate-5 paths) | was never CLOSED; re-measured on the new head (§8.4) |
+| §4 #3 "refusal … preserves the previous artifact" | true before publication, **false** for a refused re-probe (R1 reproduced) | fixed (F1) |
+| JSON `known_non_verified` "_mark_processing cross-process race — documented, unchanged" | a real ownership bug (R5 reproduced: handler ran twice across two processes) | fixed (F4/R5) |
+| JSON test names for GATE5-A1/A3/A4 | 7 of 9 cited functions do not exist | replaced by grepped names |
+
+### 8.1 Shared root cause and the one abstraction
+
+F2 (cancel/reclaim race), F3 (durable completion vs notification) and R5 (two workers) are one
+defect: no worker-side write was conditioned on *which execution* wrote it. The repair is a single
+fencing token — `jobs.lifecycle.ExecutionClaim(job_id, attempt)` minted by a PENDING-only
+reservation CAS — and the rule that every worker transition is `UPDATE … WHERE id=? AND status IN
+(expected) AND attempt=?` with `rowcount == 1` as the verdict (D-0016; JOB_LIFECYCLE.md §2a).
+F1 is the same rule applied to the filesystem step (ownership re-read immediately before the
+rename) plus a recoverable previous artifact (`.prev` backup → restore on refused re-probe →
+removed only after the committed `completed`).
+
+### 8.2 OLD RED → NEW GREEN
+
+`tests/integration/test_gate5_execution_fencing.py` on `947173c` (pre-repair): **19 failed / 1
+passed** — R1 `'fresh extraction' == 'OLD VALID EXTRACTION'`, R2 `PENDING is COMPLETED`, R3
+`['me'] == []`, R4 bare `success=False` → `completed`, R5 handler calls `2 == 1`, T6/T7/T14
+`TypeError: resume_pending() got an unexpected keyword 'stale_after'`, T12 `ImportError:
+ExecutionClaim`. On the repaired tree: **21 passed**. Full `pytest -m "not slow"`: green (see
+truth matrix for the count); `ruff check`, `ruff format --check`, `mypy src`: clean.
+
+### 8.3 Mutations M1–M10 (real RED evidence)
+
+`scripts/gate5_mutation_probes.py` now carries 17 probes (the 6 above + M1–M10, M5 split into the
+verified / unverified commit paths). Result on the repaired tree: **17/17 caught**, every probe
+BASELINE GREEN → MUTANT RED (exit 1) → bytes restored (sha256 equal) → GREEN. Honesty note: the
+first run of M5 **survived** — T15 exercised only the unverified commit path; T15 was parametrized
+over both paths and M5 split before the harness went 17/17. No probe is counted from prose.
+
+### 8.4 CI on the new head
+
+Filled after push from `gh api repos/bot523h/nexus-ai-agent/actions/runs?head_sha=<head>` — see
+the PR description and `GATE5_TRUTH_MATRIX.json` → `acceptance_gates` → "CI green on the PR
+head". Local evidence before the push is not CI evidence.

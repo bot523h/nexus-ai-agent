@@ -210,19 +210,20 @@ async def test_typed_failure_reaching_a_verifier_still_cannot_complete(
         return {"success": False, "error_code": "render_failed"}
 
     queue.register_handler("creative_render", handler)
-    # Simulate a mutated queue that forgot the typed short-circuit by
-    # monkeypatching is_typed_user_failure at the queue module.
+    # Simulate a mutated queue that forgot the failure short-circuit by
+    # monkeypatching failure_code_of at the queue module (the queue's single
+    # "handler said it failed" check; it subsumes is_typed_user_failure).
     import nexus_ai_agent.adapters.in_process_job_queue as queue_module
 
-    original = queue_module.is_typed_user_failure
-    queue_module.is_typed_user_failure = lambda result: False  # type: ignore[assignment]
+    original = queue_module.failure_code_of
+    queue_module.failure_code_of = lambda result: None  # type: ignore[assignment]
     try:
         job_id = await queue.enqueue(
             job_type="creative_render", idempotency_key="defense", payload={"chat_id": 1}
         )
         status = await _drain(queue, job_id)
     finally:
-        queue_module.is_typed_user_failure = original  # type: ignore[assignment]
+        queue_module.failure_code_of = original  # type: ignore[assignment]
     assert status in {JobStatus.FAILED_RETRYABLE, JobStatus.FAILED_TERMINAL}
 
 
@@ -728,12 +729,12 @@ async def test_crash_after_publish_before_persist_recovers_on_resume(
     original_mark_completed = queue_module.InProcessJobQueue._mark_completed
     crashed = False
 
-    def _crash_once(self: Any, job_id: str, result: dict[str, object]) -> None:
+    def _crash_once(self: Any, claim: Any, result: dict[str, object]) -> bool:
         nonlocal crashed
         if not crashed:
             crashed = True
             raise RuntimeError("process died after atomic rename")
-        original_mark_completed(self, job_id, result)
+        return bool(original_mark_completed(self, claim, result))
 
     monkeypatch.setattr(queue_module.InProcessJobQueue, "_mark_completed", _crash_once)
     job_id = await queue.enqueue(

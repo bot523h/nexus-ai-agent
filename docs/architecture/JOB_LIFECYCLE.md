@@ -52,20 +52,33 @@ contract had one undifferentiated terminal failure).
 ```mermaid
 stateDiagram-v2
     [*] --> pending : enqueue (durable, UNIQUE key)
-    pending --> processing : reservation CAS (queue)
-    pending --> failed_terminal : claim-time structural failure (no handler)
-    processing --> verifying : handler returned a dict (queue)
-    processing --> failed_retryable : typed failure / raise classified RETRYABLE
-    processing --> failed_terminal : typed failure / raise classified TERMINAL
-    verifying --> completed : verification OK (+ publish + re-probe)
-    verifying --> failed_retryable : verification refusal classified RETRYABLE
-    verifying --> failed_terminal : verification refusal classified TERMINAL
-    processing --> pending : cancel / shutdown (recoverable)
-    verifying --> pending : cancel / shutdown (verification is read-only)
+    pending --> processing : ① reservation CAS — WHERE status='pending', attempt+=1 mints the fencing token
+    pending --> failed_terminal : claim-time structural failure (no handler; unfenced PENDING-only CAS)
+    processing --> verifying : ② fenced CAS (attempt = claim) — handler returned a dict
+    processing --> failed_retryable : ② fenced CAS — typed failure / raise RETRYABLE
+    processing --> failed_terminal : ② fenced CAS — typed / bare success:false / raise TERMINAL
+    verifying --> completed : ③ ownership re-read → publish (.prev kept) → re-probe → ④ fenced CAS = DURABLE COMMIT → notify ✅ → finalize (.prev dropped)
+    verifying --> failed_retryable : refusal → retract (staged temp, or .prev restored) → fenced CAS → notify ⚠
+    verifying --> failed_terminal : refusal → retract → fenced CAS → notify ❌
+    processing --> pending : cancel / shutdown — fenced (own row only)
+    verifying --> pending : cancel / shutdown — fenced (own row only)
+    processing --> pending : ⑤ takeover — resume_pending (startup, or started_at older than stale_after)
+    verifying --> pending : ⑤ takeover — resume_pending
     completed --> [*]
     failed_retryable --> [*]
     failed_terminal --> [*]
 ```
+
+Legend — ① ownership boundary (R5); ② fencing token on every worker
+transition (F2); ③ side-effect fencing point (`_owns_execution` immediately
+before the rename); ④ the only licence to notify success is `rowcount == 1`
+of this UPDATE (F3); ⑤ the only takeover path — never a reservation. A
+stale execution's ②/④ write matches zero rows → `job_transition_rejected`,
+nothing announced, nothing published, nothing retracted. Crash recovery:
+a crash anywhere before ④ leaves a `processing`/`verifying` row that ⑤
+reopens; the next ① mints a higher token, so a zombie of the crashed
+execution is fenced out; a crash between publish and ④ leaves the
+published bytes + `.prev`, which the re-execution replaces (§6).
 
 **Both failure states are terminal as implemented.** The reserved
 `failed_retryable → pending` scheduler retry edge is deliberately **outside**
@@ -76,22 +89,71 @@ happened.
 
 Transition matrix with owner + invariant (`jobs/lifecycle.TRANSITIONS`,
 unit-enforced; the adapter enforces each edge with a status-conditioned
-`UPDATE … WHERE status IN (…)` — a blind write cannot produce an illegal
-edge):
+`UPDATE … WHERE status IN (…)` and — for every edge a *worker* performs —
+`AND attempt = <claim>` (§2a), reading `rowcount` as the verdict — a blind
+write cannot produce an illegal edge, and a stale execution's write affects
+zero rows):
 
 | Edge | Owner | Invariant |
 |---|---|---|
-| `pending → processing` | queue (reservation CAS) | row not terminal; `started_at` set; one live execution per row per process; `attempt += 1` |
+| `pending → processing` | queue (reservation CAS) | **PENDING-only** CAS (`WHERE status = 'pending'`, `rowcount == 1`); `started_at` set; `attempt += 1` mints this execution's fencing token (`ExecutionClaim`); a `processing` row is **not** re-claimable — takeover happens only through `resume_pending` (§2a) |
 | `pending → failed_retryable` | queue (claim-time) | structural failure classified RETRYABLE (a deploy can make the identical job succeed); zero side effects |
 | `pending → failed_terminal` | queue (claim-time) | structural failure classified TERMINAL (e.g. no handler); zero side effects |
-| `processing → verifying` | queue | handler returned a dict; nothing trusted yet |
-| `verifying → completed` | queue | verification OK (+ atomic publish + re-probe on published lanes); verified facts persisted under `artifact_verification` |
-| `verifying → failed_retryable` | queue | typed `verification_failed:<code>` persisted (artifact-damage class); staged temps retracted |
-| `verifying → failed_terminal` | queue | deterministic handler defect (no claim / malformed sha / mis-routed publication); staged temps retracted |
-| `processing → failed_retryable` | queue (fail-closed) | typed user failure / raise classified RETRYABLE — NEVER converted to success |
-| `processing → failed_terminal` | queue (fail-closed) | typed user failure / raise classified TERMINAL |
-| `processing/verifying → pending` | queue (cancel/shutdown) | process-lifecycle recovery, not a business failure |
+| `processing → verifying` | queue (fenced) | handler returned a dict; nothing trusted yet; `attempt = claim` |
+| `verifying → completed` | queue (fenced) | verification OK (+ ownership re-check + atomic publish + re-probe on published lanes); verified facts persisted under `artifact_verification`; `attempt = claim`; **the `rowcount == 1` of this UPDATE is the only licence to notify success** |
+| `verifying → failed_retryable` | queue (fenced) | typed `verification_failed:<code>` persisted (artifact-damage class); this attempt retracted (staged temp, or previous artifact restored after a refused re-probe) |
+| `verifying → failed_terminal` | queue (fenced) | deterministic handler defect (no claim / malformed sha / mis-routed publication); this attempt retracted |
+| `processing → failed_retryable` | queue (fenced, fail-closed) | typed user failure / bare `success: false` (`unspecified`) / raise classified RETRYABLE — NEVER converted to success |
+| `processing → failed_terminal` | queue (fenced, fail-closed) | typed user failure / raise classified TERMINAL |
+| `processing/verifying → pending` | queue (cancel/shutdown, fenced) | process-lifecycle recovery of **this execution's own row only** (`attempt = claim`); a newer owner's row is never reopened |
+| `processing/verifying → pending` | `resume_pending` (takeover, unfenced by design) | startup recovery (`stale_after=None`: rows this process is not executing) or expiry-gated reclaim (`stale_after=Δ`: only rows with `started_at` older than Δ); `attempt` untouched — the next reservation mints a new token and fences the previous owner out |
 | terminal states (incl. both failures) | — | no outgoing edges (guarded UPDATEs); `failed_retryable → pending` is RESERVED for a future scheduler — not implemented, fail-closed |
+
+### 2a. Execution ownership (Gate 5 final repair — fencing token)
+
+**Who owns a job?** Exactly one *execution* at a time: the one whose
+`pending → processing` CAS committed. That CAS increments `attempt`, and the
+value it minted is the execution's **fencing token** (`ExecutionClaim(job_id,
+attempt)`, `jobs/lifecycle.py`; `FENCING_COLUMN = "attempt"`). Every
+transition a worker performs afterwards (`_mark_verifying`, `_mark_pending`,
+`_mark_completed`, `_mark_failed`) is one SQL statement of the form
+
+```sql
+UPDATE nexus_job_queue SET status = ?, … WHERE id = ? AND status IN (<expected>) AND attempt = ?
+```
+
+and returns `cursor.rowcount == 1`. A superseded execution (cancelled worker,
+crashed-and-recovered row, a second process) holds an older token: its
+writes match zero rows, it is told so, and it must then **do nothing** — no
+state change, no notification, no publication, no retraction of the
+destination. This is Kleppmann's fencing-token rule applied to the row
+itself (the storage compares the token, not the client), the same repair
+pg-boss adopted for its stale-`complete()` bug (pg-boss #925).
+
+Why `attempt` and not a UUID / lease column (D-0016): the token must be
+minted atomically with the claim, be strictly monotonic per row, and cost
+no schema change — `attempt` already is all three. Wall-clock leases were
+rejected as the *fence* (clock skew, no ordering) and kept only as the
+*takeover policy* (`resume_pending(stale_after=…)`).
+
+Takeover is explicit and never silent: only `resume_pending` may move a
+live `processing`/`verifying` row back to `pending`, either at process
+startup (`stale_after=None` — the pre-existing recovery, now skipping rows
+this process is itself executing) or expiry-gated (`stale_after=Δ` —
+rows younger than Δ are left to their owner). A reservation never takes a
+`processing` row over (the pre-repair `status IN ('pending','processing')`
+claim let two processes own one execution — R5).
+
+**Side-effect fencing point.** For published lanes the irreversible step is
+the rename onto the final name. Ownership is re-read immediately before it
+(`_owns_execution(claim, VERIFYING)`): a stale execution publishes nothing
+(`verification_failed:stale_execution`, no retract). **Residual window
+(documented, not hidden):** between that read and the `os.replace` there is
+no token the filesystem could check; the window is bounded to microseconds
+of a single worker and can only be entered if a takeover happened *in that
+interval*, which requires `resume_pending` (startup or expiry) — never a
+concurrent reservation. Closing it fully would require token-aware storage
+(D-0016 records this as out of scope).
 
 **Q1 — when does a Job become RUNNING?** At the reservation compare-and-set
 (`_mark_processing`), *before* the handler is invoked. It is not "after
@@ -176,15 +238,39 @@ execute → stage → verify → publish atomically → re-probe published bytes
 ```
 
 The handler stages at the payload-derived `*.staged` name and claims it; the
-queue verifies the staged bytes, publishes via `os.replace` (registered
-`ArtifactPublication.publish`), re-runs the same verifier against the
-published claim, and only then persists `completed`. A refusal (verification,
-publish, or re-probe) retracts the staged temp and **never** touches a
-previously published artifact: a failed extraction can no longer destroy a
-valid `<stem>.extracted.txt`, and a partial artifact never occupies a final
-name. Workspace-scoped lanes (`creative_render`, `slideshow_render`,
-`story`) map the same order as: stage in workspace → verify → publish at
-delivery (the notifier sends the verified bytes and owns cleanup).
+queue verifies the staged bytes, re-checks execution ownership (§2a),
+publishes via `os.replace` (registered `ArtifactPublication.publish`),
+re-runs the same verifier against the published claim, persists `completed`
+(fenced CAS), and only then finalizes (`ArtifactPublication.finalize`).
+
+**Recoverability of the previous artifact (F1, option A — backup/restore,
+D-0016).** `publish` first makes the currently published bytes reachable
+under `<stem>.extracted.txt.prev` (same-directory hard link; copy fallback),
+then renames the staged file onto the final name. The three refusal points
+behave as follows:
+
+| refusal | what is undone | previous artifact |
+|---|---|---|
+| verification of the staged bytes | staged temp removed | never touched |
+| `publish` raises | staged temp + `.prev` removed | never renamed away |
+| re-probe of the published bytes | `.prev` renamed back onto the final name (atomic); with no previous artifact the refused bytes are removed | **restored** |
+
+Only a committed `completed` removes `.prev`. Before this repair the
+re-probe refusal deleted nothing but the staged name — the previous artifact
+had already been replaced and was lost (reproduced in
+`test_gate5_execution_fencing.py::test_t9_*`; the earlier "never touches a
+previously published artifact" claim was true for the first two rows of the
+table and false for the third). The re-probe is **kept**: it is not a
+duplicate of the staged-bytes verification — it measures the bytes under the
+final name after the rename (the claim that downstream readers will see) and
+is the only check that catches a wrong-destination or truncated rename.
+
+Workspace-scoped lanes (`creative_render`, `slideshow_render`, `story`) map
+the same order as: stage in workspace → verify → publish at delivery (the
+notifier sends the verified bytes and owns cleanup). Their handler-side
+writes are key-scoped to the job's own workspace and are **handler-owned**,
+not fenced by the queue (documented residual; a stale handler can only
+overwrite its own key's staging files).
 
 Typed user failures (`{"success": false, "error_code": …}`, the durable
 dialect of this repository) claim **no artifact** and — since task-181
@@ -257,7 +343,9 @@ as implemented (both failure states have no outgoing edges).
 | same key, different payload | **first payload wins**: same job id, original effect; conflict logged (`job_idempotency_payload_conflict`) — a retry can never smuggle a second, different effect (M6/M7) |
 | retry after valid artifact exists (completed job) | same job id + stored verified result; handler not called again (M8) |
 | revision changes | revision is part of the payload ⇒ same-key revision = conflict row above; a genuinely revised request takes a new key ⇒ new job + new workspace |
-| crash mid-execution / mid-verification | row recoverable (`resume_pending` resets `pending/processing/verifying`); verification is read-only so re-running it is idempotent; `attempt` counts executions |
+| crash mid-execution / mid-verification | row recoverable (`resume_pending` takes over orphaned `processing/verifying` rows → `pending`); the next reservation mints a new token, so a zombie of the crashed execution is fenced out; verification is read-only so re-running it is idempotent; `attempt` counts executions |
+| crash between publish and re-probe / before `completed` | the published bytes and `.prev` survive; recovery re-executes, re-stages, re-publishes (a stray `.prev` is replaced) and completes; `.prev` is removed at finalize |
+| concurrent workers (two processes, one DB) | exactly one `pending → processing` CAS wins; the loser's handler never runs (T5) |
 
 Hard rule: **a retry cannot covertly overwrite a valid existing artifact.**
 Terminal jobs never re-execute; non-terminal retries only ever replace
@@ -318,7 +406,13 @@ GREEN→RED→restore→GREEN — see `docs/audits/GATE5_CLOSURE_2026-09-24.md`)
 
 `result.success == true` under a failure status can never produce a success
 notification (the claim is a second, independent refusal, never the truth
-source). Evidence: `tests/integration/test_gate5_closure.py`
+source). Inside the queue, `on_job_finished` fires **only after the fenced
+UPDATE reported `rowcount == 1`** — a CAS miss (row no longer ours) is
+logged (`job_transition_rejected`) and announces nothing. The contract is
+"never lie", not "eventual delivery": a crash between the commit and the
+notification loses that notification (the durable state remains true and
+`get_status` reflects it); a transactional outbox was evaluated and rejected
+for this scope (D-0016). Evidence: `tests/integration/test_gate5_closure.py`
 (notification matrix + lying-result regression), `tests/unit/test_creative_notify.py`,
 `tests/unit/test_bot_slideshow_notify.py`.
 

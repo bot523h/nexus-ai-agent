@@ -180,6 +180,30 @@ def is_typed_user_failure(result: dict[str, object]) -> bool:
     return result.get("success") is False and isinstance(code, str) and bool(code)
 
 
+#: Code recorded for a handler result that says ``"success": False`` without
+#: a usable ``error_code`` (bare failure claim).  Not in
+#: :data:`TYPED_CODE_CLASSES` on purpose ⇒ classifies TERMINAL (fail-closed:
+#: a lane that fails without saying why must be fixed, not retried blindly).
+UNSPECIFIED_FAILURE_CODE = "unspecified"
+
+
+def failure_code_of(result: dict[str, object]) -> str | None:
+    """The failure code claimed by a handler result, or ``None`` for success.
+
+    ``{"success": False, "error_code": <str>}`` → that code (the typed
+    dialect, :func:`is_typed_user_failure`); a bare ``{"success": False}``
+    (missing / empty / non-string code) → :data:`UNSPECIFIED_FAILURE_CODE`.
+    Either way the handler declared a failure and the job must end in a
+    failure state — the queue never completes a result that says
+    ``success: False`` (Gate 5 R4).
+    """
+    if result.get("success") is not False:
+        return None
+    if is_typed_user_failure(result):
+        return str(result["error_code"])
+    return UNSPECIFIED_FAILURE_CODE
+
+
 TYPED_FAILURE_ERROR_PREFIX = "typed_failure:"
 
 
@@ -198,11 +222,13 @@ def parse_typed_failure_error(error: str | None) -> str | None:
 __all__ = [
     "TYPED_CODE_CLASSES",
     "TYPED_FAILURE_ERROR_PREFIX",
+    "UNSPECIFIED_FAILURE_CODE",
     "VERIFICATION_REASON_CLASSES",
     "FailureClass",
     "classify_exception",
     "classify_typed_code",
     "classify_verification_reason",
+    "failure_code_of",
     "failure_status",
     "is_typed_user_failure",
     "parse_typed_failure_error",

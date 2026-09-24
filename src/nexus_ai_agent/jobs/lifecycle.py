@@ -58,6 +58,31 @@ Every transition row in :data:`TRANSITIONS` names its owner and the
 invariant that must hold when the edge is taken; the queue adapter enforces
 the edges with guarded, status-conditioned UPDATEs (a compare-and-set, never
 a blind write).
+
+Execution ownership (Gate 5 final repair)
+-----------------------------------------
+*Who owns a job?*  The execution that won the reservation CAS.  Ownership is
+represented durably by the row's ``attempt`` counter: the reservation
+``PENDING → RUNNING`` is the **only** edge that increments it, and the value
+it minted is the execution's **fencing token** (:class:`ExecutionClaim`).
+
+* every later worker-owned edge (``→ VERIFYING``, ``→ SUCCEEDED``,
+  ``→ FAILED_*``, ``→ PENDING`` on cancellation) is a CAS on
+  ``id AND status AND attempt = token`` and reports commit-confirmed as a
+  ``bool`` — the caller may announce, publish or clean up **only** on
+  ``True``;
+* ownership is transferred only by an explicit **takeover**
+  (``RUNNING/VERIFYING → PENDING`` by process-startup recovery, or by the
+  expiry-gated variant) followed by a fresh reservation that mints a higher
+  token; the old token can never match again;
+* a stale worker proves it is stale by a rejected CAS (``rowcount == 0``);
+  a current worker proves it is current by a confirmed one.  There is no
+  ``RUNNING → RUNNING`` re-claim: a live row is never re-reserved.
+
+The pattern is the classic fencing token (Kleppmann, *How to do distributed
+locking*, 2016) applied inside one SQLite row, the same shape pg-boss adopted
+after issue #925 ("stale worker's complete() settles a newer attempt") and
+Oban's ``attempt``/``attempted_by`` claim columns.
 """
 
 from __future__ import annotations
@@ -92,6 +117,7 @@ PREFLIGHT_REQUIREMENTS: Final[tuple[str, ...]] = (
     "revision/precondition",  # guarded status CAS: row must be in the
     #                            expected source state to move forward
     "job reservation",  # PENDING→RUNNING compare-and-set owns the execution
+    #                     and mints its fencing token (attempt)
 )
 
 SIDE_EFFECT_BOUNDARY: Final[str] = (
@@ -110,6 +136,33 @@ class TransitionRule:
     invariant: str
 
 
+@dataclass(frozen=True)
+class ExecutionClaim:
+    """The fencing token of one execution of one job.
+
+    Minted by the reservation CAS (``PENDING → RUNNING`` increments
+    ``attempt`` and returns the new value).  Every worker-owned transition
+    after the reservation carries the claim and is persisted only if the
+    row still holds ``attempt == claim.attempt`` in the expected source
+    state — so an execution that was cancelled, reclaimed or superseded can
+    prove nothing about the row any more (``rowcount == 0``), and can
+    therefore complete, fail, reopen, publish or notify nothing.
+    """
+
+    job_id: str
+    attempt: int
+
+    def __post_init__(self) -> None:
+        if not self.job_id:
+            raise ValueError("ExecutionClaim.job_id must not be empty")
+        if self.attempt < 1:
+            raise ValueError("ExecutionClaim.attempt must be >= 1 (minted by a reservation)")
+
+
+#: Name of the durable column that carries the fencing token.
+FENCING_COLUMN: Final[str] = "attempt"
+
+
 #: The canonical transition matrix. Anything not listed is illegal and the
 #: adapter's guarded UPDATEs make it impossible to persist.
 #:
@@ -120,8 +173,12 @@ class TransitionRule:
 TRANSITIONS: Final[dict[tuple[JobStatus, JobStatus], TransitionRule]] = {
     (JobStatus.PENDING, JobStatus.PROCESSING): TransitionRule(
         owner="queue (reservation CAS)",
-        invariant="row exists, not terminal; started_at recorded; at most one "
-        "live execution per row per process (task table dedupes)",
+        invariant="source state is PENDING only (a PROCESSING/VERIFYING row is "
+        "owned and is never re-reserved); started_at recorded; attempt "
+        "increments and the new value is the execution's fencing token "
+        "(ExecutionClaim) carried by every later worker-owned edge; exactly "
+        "one execution can win — across processes sharing the sidecar, not "
+        "just within one (rowcount-checked CAS)",
     ),
     (JobStatus.PENDING, JobStatus.FAILED_RETRYABLE): TransitionRule(
         owner="queue (claim-time structural failure)",
@@ -136,27 +193,23 @@ TRANSITIONS: Final[dict[tuple[JobStatus, JobStatus], TransitionRule]] = {
         "classified TERMINAL (e.g. no handler — a deploy must change); typed "
         "error persisted; no side effect has occurred",
     ),
-    (JobStatus.PROCESSING, JobStatus.PROCESSING): TransitionRule(
-        owner="queue (resume reclaim)",
-        invariant="a previous process died mid-execution; row is re-claimed "
-        "by resume_pending and attempt increments",
-    ),
     (JobStatus.PROCESSING, JobStatus.VERIFYING): TransitionRule(
-        owner="queue",
+        owner="queue (fenced: attempt = claim)",
         invariant="handler returned a dict (execution finished); nothing is "
         "trusted yet — the result only becomes the job result after "
         "verification (and, where a publisher is registered, after atomic "
         "publication + re-probe)",
     ),
     (JobStatus.VERIFYING, JobStatus.COMPLETED): TransitionRule(
-        owner="queue",
+        owner="queue (fenced: attempt = claim)",
         invariant="artifact verification succeeded (and, for published "
         "lanes, the staged artifact was atomically published and re-probed); "
         "the verified facts are persisted inside the result under the "
-        "queue-owned 'artifact_verification' key",
+        "queue-owned 'artifact_verification' key; this CAS is the durable "
+        "commit — a success notification exists only if it returned True",
     ),
     (JobStatus.VERIFYING, JobStatus.FAILED_RETRYABLE): TransitionRule(
-        owner="queue",
+        owner="queue (fenced: attempt = claim)",
         invariant="verification refused or the verifier itself raised "
         "(fail-closed), classified RETRYABLE (artifact damage is what a "
         "clean re-execution is for); typed 'verification_failed:<code>' "
@@ -164,34 +217,40 @@ TRANSITIONS: Final[dict[tuple[JobStatus, JobStatus], TransitionRule]] = {
         "success claim is stored",
     ),
     (JobStatus.VERIFYING, JobStatus.FAILED_TERMINAL): TransitionRule(
-        owner="queue",
+        owner="queue (fenced: attempt = claim)",
         invariant="verification refused with a deterministic handler defect "
         "(no claim / malformed sha / mis-routed publication / typed user "
         "failure reached verification), classified TERMINAL; error "
         "persisted; staged temps retracted",
     ),
     (JobStatus.PROCESSING, JobStatus.FAILED_RETRYABLE): TransitionRule(
-        owner="queue (fail-closed conversion)",
+        owner="queue (fail-closed conversion; fenced: attempt = claim)",
         invariant="typed user failure (success=False dialect) or an "
         "exception escaped the handler and classification returned "
         "RETRYABLE; runtime failure is NEVER converted into success; typed "
         "error persisted (typed_failure:<code> or the exception text)",
     ),
     (JobStatus.PROCESSING, JobStatus.FAILED_TERMINAL): TransitionRule(
-        owner="queue (fail-closed conversion)",
+        owner="queue (fail-closed conversion; fenced: attempt = claim)",
         invariant="typed user failure or handler exception classified "
         "TERMINAL (invalid input / unsupported operation / permission / "
         "render_failed / contract violation); error persisted",
     ),
     (JobStatus.PROCESSING, JobStatus.PENDING): TransitionRule(
-        owner="queue (cancellation / shutdown)",
+        owner="queue (cancellation / shutdown — fenced: attempt = claim; "
+        "or explicit takeover by startup recovery / expiry-gated reclaim)",
         invariant="process-lifecycle event, not a business failure; row "
-        "stays recoverable; started_at cleared",
+        "stays recoverable; started_at cleared; a cancelled execution can "
+        "reset only its own attempt (never a newer owner's row, never a "
+        "terminal row); takeover leaves attempt unchanged so the next "
+        "reservation mints a strictly higher token",
     ),
     (JobStatus.VERIFYING, JobStatus.PENDING): TransitionRule(
-        owner="queue (cancellation / shutdown)",
+        owner="queue (cancellation / shutdown — fenced: attempt = claim; "
+        "or explicit takeover by startup recovery / expiry-gated reclaim)",
         invariant="verification is read-only, so abandoning it is safe; the "
-        "next resume re-runs verification from scratch",
+        "next resume re-runs verification from scratch; same fencing rule "
+        "as processing → pending",
     ),
 }
 
@@ -344,6 +403,8 @@ class JobResult:
 
 __all__ = [
     "FAILURE_STATES",
+    "FENCING_COLUMN",
+    "ExecutionClaim",
     "PREFLIGHT_REQUIREMENTS",
     "RUNNING",
     "SIDE_EFFECT_BOUNDARY",

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Gate 5 mutation probes (task-181) — a small, deterministic mutation harness.
 
-Six adversarial mutations of the invariants this closure exists to protect:
+Seventeen adversarial mutations of the invariants this closure exists to protect
+(six original closure probes + ten execution-ownership / commit-fencing probes
+M1–M10 from the final Gate 5 repair):
 
 ======  ==========================================  ==============================
 probe   mutation                                     killed by
@@ -42,6 +44,9 @@ class Probe:
     mutant: str  # replacement
     tests: tuple[str, ...]  # targeted tests that must flip GREEN → RED
 
+
+F = "tests/integration/test_gate5_execution_fencing.py::"
+QUEUE = REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py"
 
 PROBES: tuple[Probe, ...] = (
     Probe(
@@ -116,6 +121,162 @@ PROBES: tuple[Probe, ...] = (
             "tests/unit/test_failure_semantics.py::test_failure_status_maps_class_to_durable_state",
             "tests/integration/test_gate5_closure.py::test_typed_render_failure_lands_in_a_failure_status_never_completed",
         ),
+    ),
+    # ---- execution-ownership / commit-fencing probes (Gate 5 final repair) ----
+    Probe(
+        name="M1 reservation re-claims a PROCESSING row",
+        target=REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        anchor=(
+            "                WHERE id = ? AND status = ?\n"
+            '                """,\n'
+            "                (JobStatus.PROCESSING.value, _now(), job_id, JobStatus.PENDING.value),"
+        ),
+        mutant=(
+            "                WHERE id = ? AND status IN (?, 'processing')  -- MUTATION\n"
+            '                """,\n'
+            "                (JobStatus.PROCESSING.value, _now(), job_id, JobStatus.PENDING.value),"
+        ),
+        tests=(f"{F}test_t5_two_processes_cannot_both_own_one_execution",),
+    ),
+    Probe(
+        name="M2 _mark_pending forgets the fence",
+        target=REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        anchor=(
+            "                SET status = ?, started_at = NULL\n"
+            "                WHERE id = ? AND status IN (?, ?) AND attempt = ?"
+        ),
+        mutant=(
+            "                SET status = ?, started_at = NULL\n"
+            "                WHERE id = ? AND status IN (?, ?) AND ? >= 0  -- MUTATION: unfenced"
+        ),
+        tests=(
+            f"{F}test_t1_cancelled_old_worker_cannot_reopen_a_newer_execution",
+            f"{F}test_t1b_cancelled_old_worker_cannot_reset_the_new_owners_processing_row",
+        ),
+    ),
+    Probe(
+        name="M3 _mark_completed forgets the fence",
+        target=REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        anchor=(
+            "                SET status = ?, result_json = ?, error = NULL, finished_at = ?\n"
+            "                WHERE id = ? AND status IN (?, ?) AND attempt = ?"
+        ),
+        mutant=(
+            "                SET status = ?, result_json = ?, error = NULL, finished_at = ?\n"
+            "                WHERE id = ? AND status IN (?, ?) AND ? >= 0  -- MUTATION: unfenced"
+        ),
+        tests=(f"{F}test_t2_old_worker_cannot_mark_newer_attempt_completed",),
+    ),
+    Probe(
+        name="M4 _mark_failed forgets the fence",
+        target=REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        anchor=(
+            "                SET status = ?, error = ?, result_json = ?, finished_at = ?\n"
+            "                WHERE id = ? AND status IN (?, ?) AND attempt = ?"
+        ),
+        mutant=(
+            "                SET status = ?, error = ?, result_json = ?, finished_at = ?\n"
+            "                WHERE id = ? AND status IN (?, ?) AND ? >= 0  -- MUTATION: unfenced"
+        ),
+        tests=(f"{F}test_t3_old_worker_cannot_mark_newer_attempt_failed",),
+    ),
+    Probe(
+        name="M5a success notified without a committed COMPLETED (verified lane)",
+        target=QUEUE,
+        anchor=(
+            "                if not await asyncio.to_thread("
+            "self._mark_completed, claim, final_result):\n"
+            "                    # Durable commit refused"
+        ),
+        mutant=(
+            "                if not (\n"
+            "                    await asyncio.to_thread("
+            "self._mark_completed, claim, final_result)\n"
+            "                    or True  # MUTATION: notify regardless of the commit\n"
+            "                ):\n"
+            "                    # Durable commit refused"
+        ),
+        tests=(f"{F}test_t15_no_success_notification_without_durable_completed_state[verified]",),
+    ),
+    Probe(
+        name="M5b success notified without a committed COMPLETED (unverified lane)",
+        target=QUEUE,
+        anchor=(
+            "            if not await asyncio.to_thread("
+            "self._mark_completed, claim, final_result):\n"
+            "                self._log_rejected(job_id, claim, JobStatus.COMPLETED)"
+        ),
+        mutant=(
+            "            if not (\n"
+            "                await asyncio.to_thread(self._mark_completed, claim, final_result)\n"
+            "                or True  # MUTATION: notify regardless of the commit\n"
+            "            ):\n"
+            "                self._log_rejected(job_id, claim, JobStatus.COMPLETED)"
+        ),
+        tests=(f"{F}test_t15_no_success_notification_without_durable_completed_state[unverified]",),
+    ),
+    Probe(
+        name="M6 publication skips the ownership re-check",
+        target=REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        anchor=(
+            "        if not await asyncio.to_thread("
+            "self._owns_execution, claim, JobStatus.VERIFYING):"
+        ),
+        mutant="        if False:  # MUTATION: publish without re-checking ownership",
+        tests=(
+            f"{F}test_t8_stale_worker_publication_cannot_overwrite_current_owners_artifact",
+            f"{F}test_t8b_publication_is_fenced_immediately_before_the_rename",
+        ),
+    ),
+    Probe(
+        name="M7 retract drops the refused bytes instead of restoring the previous artifact",
+        target=REPO / "src/nexus_ai_agent/jobs/feature_verification.py",
+        anchor=(
+            "    if backup.exists():\n"
+            "        os.replace(backup, published)  # atomic restore of the previous bytes\n"
+            "    else:\n"
+            "        published.unlink(missing_ok=True)"
+        ),
+        mutant=(
+            "    backup.unlink(missing_ok=True)  # MUTATION: previous artifact lost\n"
+            "    published.unlink(missing_ok=True)"
+        ),
+        tests=(f"{F}test_t9_reprobe_failure_restores_the_previous_artifact",),
+    ),
+    Probe(
+        name="M8 publish keeps no backup of the previous artifact",
+        target=REPO / "src/nexus_ai_agent/jobs/feature_verification.py",
+        anchor="        _keep_previous(published, backup)\n        os.replace(staged, published)",
+        mutant="        os.replace(staged, published)  # MUTATION: no backup before the rename",
+        tests=(
+            f"{F}test_t9_reprobe_failure_restores_the_previous_artifact",
+            f"{F}test_t10_publish_failure_midway_preserves_previous_artifact",
+        ),
+    ),
+    Probe(
+        name="M9 resume_pending ignores the stale_after window",
+        target=REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        anchor=(
+            "                    if cutoff is not None and started_at is not None "
+            "and started_at >= cutoff:"
+        ),
+        mutant="                    if False:  # MUTATION: every in-flight row is taken over",
+        tests=(f"{F}test_t7_takeover_without_valid_expiry_is_rejected",),
+    ),
+    Probe(
+        name="M10 bare success=False treated as success",
+        target=REPO / "src/nexus_ai_agent/jobs/failure_semantics.py",
+        anchor=(
+            "    if is_typed_user_failure(result):\n"
+            '        return str(result["error_code"])\n'
+            "    return UNSPECIFIED_FAILURE_CODE"
+        ),
+        mutant=(
+            "    if is_typed_user_failure(result):\n"
+            '        return str(result["error_code"])\n'
+            "    return None  # MUTATION: untyped failure completes"
+        ),
+        tests=(f"{F}test_r4_bare_success_false_is_a_failure_not_a_completion",),
     ),
 )
 
