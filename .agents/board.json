@@ -2085,7 +2085,37 @@
       "claimed_at": "2026-09-24T19:21:03Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": ""
+      "note": "",
+      "stacked_on": {
+        "pr": 72,
+        "task": "task-179-gate2-command-reconciliation",
+        "head": "f450df273d944dc88e3a21337b915b40638ee4dd",
+        "consumed_from": {
+          "pr": 67,
+          "head": "9c3a34f107b4b5f3c878a0ec2a7d82e8c24614d3",
+          "file": "src/nexus_ai_agent/creative/studio/lifecycle.py (byte-identical copy)"
+        }
+      },
+      "overlap_ack": {
+        "paths": [
+          "src/nexus_ai_agent/creative/studio/bus.py",
+          "docs/architecture/COMMAND_CAPABILITY_CONTRACT.md",
+          "docs/architecture/CREATIVE_STUDIO.md",
+          "docs/architecture/adr/0005-canonical-command-capability-contract.md"
+        ],
+        "owner": "task-179-gate2-command-reconciliation",
+        "why": "task-183 IS the seam into task-179's contract; its prerequisite is task-179. This branch is STACKED on PR#72 HEAD (no rebase, no overwrite of PR#72) and only appends stage 4b + its docs. If PR#72 changes, this branch is re-based on the new PR#72 HEAD and CI re-run.",
+        "why_fa": "این کار خودِ درزِ اتصال به قرارداد task-179 است؛ شاخه روی HEAD همان PR بنا شده و PR#72 بازنویسی یا rebase نمی‌شود."
+      },
+      "evidence": {
+        "seam": "CommandBus._dispatch_locked stage 4b (after actor grant + capability/permissions, before policy/refs/reservation/handler)",
+        "tests": [
+          "tests/unit/test_gate2_lifecycle_seam.py (A-H + placement)",
+          "tests/unit/test_gate2_lifecycle_mutations.py (M1-M5)",
+          "tests/architecture/test_lifecycle_gate_boundary.py"
+        ],
+        "status": "INTEGRATED (not MERGED: depends on PR#72 landing first)"
+      }
     }
   ],
   "deferred_log": [
