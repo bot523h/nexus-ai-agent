@@ -26,6 +26,7 @@ import sys
 import types
 
 import pytest
+from nagar_helpers import authorized_bus, command_for
 
 from nexus_ai_agent.creative.packs.delivery import signing as sut
 from nexus_ai_agent.creative.packs.delivery.operations import build_delivery_registry
@@ -35,7 +36,6 @@ from nexus_ai_agent.creative.studio.models import (
     CommandValidationError,
     Project,
     Timeline,
-    TypedCommand,
     new_project,
 )
 
@@ -331,12 +331,13 @@ def _delivery_bus() -> CommandBus:
     timeline = Timeline(timeline_id="tl_wave5", duration_us=4_000_000)
     project: Project = new_project("p_wave5_signing_cov", "Coverage Project", timeline)
     project = project.model_copy(update={"assets": [video, audio]})
-    return CommandBus(project, registry=registry)
+    return authorized_bus(project, registry=registry)
 
 
 def test_apply_lut_unknown_asset_rejected() -> None:
     bus = _delivery_bus()
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_cov_lut_unknown",
         operation="color.apply_lut",
         input={"clip_asset_id": "clip_missing", "lut_name": "cinematic", "intensity": 0.5},
@@ -347,7 +348,8 @@ def test_apply_lut_unknown_asset_rejected() -> None:
 
 def test_apply_lut_requires_video_asset() -> None:
     bus = _delivery_bus()
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_cov_lut_audio",
         operation="color.apply_lut",
         input={"clip_asset_id": "audio_a1", "lut_name": "cinematic", "intensity": 0.5},
@@ -358,7 +360,8 @@ def test_apply_lut_requires_video_asset() -> None:
 
 def test_adjust_exposure_unknown_clip_rejected() -> None:
     bus = _delivery_bus()
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_cov_exp_unknown",
         operation="color.adjust_exposure",
         input={"clip_asset_id": "clip_missing", "exposure_ev": 0.5, "temperature_k": 5600},
@@ -369,7 +372,8 @@ def test_adjust_exposure_unknown_clip_rejected() -> None:
 
 def test_auto_balance_execution() -> None:
     bus = _delivery_bus()
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_cov_autobal",
         operation="color.auto_balance",
         input={"clip_asset_id": "clip_v1", "preserve_skin_tones": False},
@@ -388,7 +392,8 @@ def test_auto_balance_execution() -> None:
 
 def test_auto_balance_unknown_clip_rejected() -> None:
     bus = _delivery_bus()
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_cov_autobal_unknown",
         operation="color.auto_balance",
         input={"clip_asset_id": "clip_missing"},
@@ -399,7 +404,8 @@ def test_auto_balance_unknown_clip_rejected() -> None:
 
 def test_match_shot_unknown_source_rejected() -> None:
     bus = _delivery_bus()
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_cov_match_src",
         operation="color.match_shot",
         input={"source_clip_id": "clip_missing", "reference_clip_id": "clip_v1"},
@@ -410,7 +416,8 @@ def test_match_shot_unknown_source_rejected() -> None:
 
 def test_match_shot_unknown_reference_rejected() -> None:
     bus = _delivery_bus()
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_cov_match_ref",
         operation="color.match_shot",
         input={"source_clip_id": "clip_v1", "reference_clip_id": "clip_missing"},
@@ -421,7 +428,8 @@ def test_match_shot_unknown_reference_rejected() -> None:
 
 def test_make_proxy_unknown_video_rejected() -> None:
     bus = _delivery_bus()
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_cov_proxy_unknown",
         operation="delivery.make_proxy_480p",
         input={"video_asset_id": "clip_missing"},
@@ -434,7 +442,8 @@ def test_render_master_4k_handler_requires_confirmation_flag() -> None:
     """Level C envelope passes the bus gate; the handler still fails closed
     when the *input payload* omits the explicit ``confirmed=true`` flag."""
     bus = _delivery_bus()
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_cov_master_unconfirmed",
         operation="delivery.render_master_4k",
         confirmed=True,  # envelope-level confirmation (bus permission gate)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from nagar_helpers import authorized_bus, command_for
 from pydantic import ValidationError
 
 from nexus_ai_agent.creative.packs.edit.models import (
@@ -19,7 +20,6 @@ from nexus_ai_agent.creative.studio.models import (
     PermissionLevel,
     Project,
     Timeline,
-    TypedCommand,
     new_project,
 )
 
@@ -49,7 +49,7 @@ def _setup_edit_bus() -> tuple[Project, CommandBus]:
     timeline = Timeline(timeline_id="tl_edit", duration_us=15_000_000)
     project = new_project("p_edit_01", "Timeline Edit Project", timeline)
     project = project.model_copy(update={"assets": [clip_1, b_roll, audio]})
-    bus = CommandBus(project, registry=registry)
+    bus = authorized_bus(project, registry=registry)
     return project, bus
 
 
@@ -90,7 +90,8 @@ def test_operation_specs_permission_levels() -> None:
 def test_trim_execution() -> None:
     project, bus = _setup_edit_bus()
 
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_trim_01",
         operation="timeline.trim",
         input={
@@ -113,7 +114,8 @@ def test_ripple_delete_execution() -> None:
     project, bus = _setup_edit_bus()
 
     initial_duration = bus.project.timeline.duration_us
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_ripple_01",
         operation="timeline.ripple_delete",
         input={"track_id": "video_main", "start_us": 3_000_000, "duration_us": 2_000_000},
@@ -127,7 +129,8 @@ def test_insert_gap_execution() -> None:
     project, bus = _setup_edit_bus()
 
     initial_duration = bus.project.timeline.duration_us
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_gap_01",
         operation="timeline.insert_gap",
         input={"track_id": "video_main", "at_us": 5_000_000, "duration_us": 3_000_000},
@@ -140,7 +143,8 @@ def test_insert_gap_execution() -> None:
 def test_speed_ramp_execution() -> None:
     project, bus = _setup_edit_bus()
 
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_speed_01",
         operation="timeline.speed_ramp",
         input={"clip_asset_id": "clip_main_01", "speed_factor": 2.0, "maintain_pitch": True},
@@ -157,7 +161,8 @@ def test_speed_ramp_execution() -> None:
 def test_reverse_segment_execution() -> None:
     project, bus = _setup_edit_bus()
 
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_rev_01",
         operation="timeline.reverse_segment",
         input={"clip_asset_id": "clip_main_01"},
@@ -173,7 +178,8 @@ def test_reverse_segment_execution() -> None:
 def test_freeze_frame_execution() -> None:
     project, bus = _setup_edit_bus()
 
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_freeze_01",
         operation="timeline.freeze_frame",
         input={
@@ -194,7 +200,8 @@ def test_freeze_frame_execution() -> None:
 def test_attach_b_roll_execution() -> None:
     project, bus = _setup_edit_bus()
 
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_broll_01",
         operation="timeline.attach_b_roll",
         input={
@@ -216,7 +223,8 @@ def test_attach_b_roll_execution() -> None:
 def test_retime_to_music_execution() -> None:
     project, bus = _setup_edit_bus()
 
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_retime_01",
         operation="timeline.retime_to_music",
         input={
@@ -237,7 +245,8 @@ def test_retime_to_music_execution() -> None:
 def test_reversible_undo() -> None:
     project, bus = _setup_edit_bus()
 
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_trim_undo",
         operation="timeline.trim",
         input={
@@ -251,7 +260,7 @@ def test_reversible_undo() -> None:
     trimmed_id = res.output["asset_id"]
     assert trimmed_id in [a.asset_id for a in bus.project.assets]
 
-    undo_cmd = TypedCommand(command_id="cmd_undo", operation="system.undo", input={})
+    undo_cmd = command_for(bus, command_id="cmd_undo", operation="system.undo", input={})
     undo_res = bus.dispatch(undo_cmd)
     assert undo_res.status == "applied"
     assert trimmed_id not in [a.asset_id for a in bus.project.assets]
