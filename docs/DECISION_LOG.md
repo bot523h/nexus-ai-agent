@@ -1102,3 +1102,44 @@ pipeline now test-covered, the remaining failure would be loud and typed.
 the engine: the repo's own dump primitives and provider already expose download, so new
 dependencies would solve a problem the repo had already solved. (2) Treating a
 successful `upload()` return as proof — that was the reported bug.
+
+## 2026-09-24 — Apply-lane lifecycle closure (D-0013)
+
+### D-0013 — REGISTERED → RUNNABLE gates; executor is the only process site; LUT/font proofs are measured
+
+*Problem.* The apply lane compiled argv and ran FFmpeg, but binary capabilities were
+assumed, `lifecycle.py` did not exist, and a future change could move `subprocess`
+back into the compiler or a new helper. LUT grading was refused at the Telegram
+surface (D-0011) because no `.cube` shipped and the lane had no `lut` op.
+
+*Decision.*
+
+1. `creative/rendering/lifecycle.py` owns states only: UNREGISTERED → REGISTERED
+   (path exists) → RUNNABLE (required filters applied from a probe result) or FAILED.
+   Illegal transitions raise `LaneLifecycleError`. The module never imports
+   `subprocess`.
+2. `creative/rendering/executor.py` is the only process site in the apply lane:
+   filter probe (`ffmpeg -filters`), loudness measure, and encode. `shell=False`,
+   argv list, timeouts, staging + atomic publish, cleanup on failure.
+3. Encode requires RUNNABLE. A REGISTERED-only runtime is a typed refusal.
+4. Filters are probed, never assumed. Required set: drawtext, eq, lut3d, loudnorm,
+   xfade, atempo, format, scale.
+5. Shipped identity LUT (`assets/luts/identity.cube`) and the existing Vazirmatn
+   font power real encode proofs. `LutOp` is duration-neutral; intensity is locked
+   at 1.0 (no unproven blend graph).
+6. Architecture ratchet: AST attribute-load of `subprocess` is allowed only in
+   `executor.py`; a synthetic smuggle into lifecycle is asserted to be detectable.
+7. Telegram `/grade lut` remains `unsupported_operation` until the *surface*
+   mapper is wired (D-0011 reopen clause). The lane instrument exists; the surface
+   still refuses rather than faking.
+
+*Rejected alternatives.* (1) Probe inside `lifecycle.py` — violates the
+gates-only contract. (2) String-search ratchet only — comments/strings can hide
+calls; AST attribute loads are the selected ratchet. (3) Mock FFmpeg for LUT/font
+proofs — rejected; proofs use the resolved binary. (4) Partial LUT intensity via
+`blend` — extra unproven graph. (5) Shipping a cinematic LUT — identity 2³ cube
+is the smallest honest fixture.
+
+*Evidence.* `tests/unit/test_apply_lane_lifecycle.py`,
+`tests/unit/test_apply_lane_lut_and_burnin.py`,
+`tests/architecture/test_rendering_lane_boundary.py`.

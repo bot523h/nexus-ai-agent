@@ -12,7 +12,7 @@ Duration algebra (microseconds, integer math — no float drift):
 * ``reverse`` → unchanged
 * ``freeze``  → ``hold_us`` (the stream becomes the held still)
 * ``xfade``   → ``d_main + d_other - overlap_us``
-* ``title`` / ``loudnorm`` / ``duck`` / ``exposure`` → unchanged
+* ``title`` / ``loudnorm`` / ``duck`` / ``exposure`` / ``lut`` → unchanged
 
 Photometric exposure (the ``exposure`` op) is a pure value mapping and lives
 here next to the IR so the pack twin (``color.adjust_exposure``), the compiler
@@ -262,8 +262,31 @@ class ExposureOp(BaseModel):
         return self.temperature_k != COLOR_TEMPERATURE_NEUTRAL_K or self.tint != 0.0
 
 
+class LutOp(BaseModel):
+    """Apply a 3D LUT via FFmpeg ``lut3d`` (duration-neutral).
+
+    Intensity is locked at 1.0: a blend graph would be a second, unproven
+    filter path. Partial intensity is a typed refusal, not a silent mix.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    op: Literal["lut"] = "lut"
+    cube_path: str = Field(min_length=1)
+    intensity: float = Field(default=1.0, ge=1.0, le=1.0)
+
+
 LaneOp = Annotated[
-    TrimOp | SpeedOp | ReverseOp | FreezeOp | XfadeOp | TitleOp | LoudnormOp | DuckOp | ExposureOp,
+    TrimOp
+    | SpeedOp
+    | ReverseOp
+    | FreezeOp
+    | XfadeOp
+    | TitleOp
+    | LoudnormOp
+    | DuckOp
+    | ExposureOp
+    | LutOp,
     Field(discriminator="op"),
 ]
 
@@ -378,6 +401,7 @@ __all__ = [
     "LaneProfile",
     "LaneSource",
     "LoudnormOp",
+    "LutOp",
     "ReverseOp",
     "SpeedOp",
     "TitleOp",

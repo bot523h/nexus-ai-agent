@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (apply-lane lifecycle closure — session `arena/01a0d365-nexus-ai-agent`)
+
+- **REGISTERED → RUNNABLE gates** on the apply lane (`creative/rendering/lifecycle.py`):
+  path registration is not enough; required FFmpeg filters are probed through
+  `executor.py` before encode. Illegal transitions fail typed.
+- **Single process site** remains `executor.py` (probe + measure + encode);
+  architecture AST ratchet forbids `subprocess` in `lifecycle.py`.
+- **Shipped identity LUT** (`assets/luts/identity.cube`) and **Persian burn-in**
+  proof via Vazirmatn + `TitleOp`. `LutOp` is duration-neutral; intensity locked
+  at 1.0. Telegram `/grade lut` stays refused at the surface (D-0011) until that
+  mapper is wired.
+
 ### Security (P0 hardening day — session `arena/01a0d23e-nexus-ai-agent`, tasks 165–167)
 
 - **`GET /creative/jobs/{job_id}` is now behind the same fail-closed HMAC gate as the

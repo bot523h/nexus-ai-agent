@@ -26,6 +26,13 @@ from nexus_ai_agent.creative.rendering.compiler import (
     compile_measure,
 )
 from nexus_ai_agent.creative.rendering.ir import LaneError, LaneIR
+from nexus_ai_agent.creative.rendering.lifecycle import (
+    LaneRuntime,
+    apply_probe,
+    fail_unregistered,
+    mark_failed,
+    register_binary,
+)
 from nexus_ai_agent.creative.slideshow.ffmpeg import (
     FfmpegUnavailableError,
     RenderError,
@@ -36,6 +43,7 @@ from nexus_ai_agent.creative.slideshow.ffmpeg import (
 
 FFMPEG_TIMEOUT_SECONDS = 900
 MEASURE_TIMEOUT_SECONDS = 600
+PROBE_TIMEOUT_SECONDS = 20
 
 
 class LaneExecutionError(RenderError):
@@ -74,7 +82,73 @@ class LaneArtifact:
 
 
 def _run(args: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
+    return subprocess.run(  # noqa: S603 - argv list, no shell, allow-listed binary
+        args,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+        shell=False,
+    )
+
+
+def probe_filter_names(binary: str, *, timeout: int = PROBE_TIMEOUT_SECONDS) -> frozenset[str]:
+    """Ask the registered binary which filters it actually ships.
+
+    This is the only allowed process for capability discovery. Lifecycle
+    applies the result without executing anything.
+    """
+    try:
+        result = _run([binary, "-hide_banner", "-filters"], timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        raise LaneExecutionError(f"ffmpeg filter probe timed out after {timeout}s") from error
+    if result.returncode != 0:
+        raise LaneExecutionError(
+            f"ffmpeg filter probe exited {result.returncode}: "
+            f"{(result.stderr or result.stdout or '').strip()[-400:]}"
+        )
+    names: set[str] = set()
+    for line in (result.stdout or "").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("Filters") or "=" in stripped[:6]:
+            continue
+        parts = stripped.split()
+        if len(parts) < 2:
+            continue
+        flags, name = parts[0], parts[1]
+        if len(flags) != 3:
+            continue
+        if name.isidentifier():
+            names.add(name)
+    return frozenset(names)
+
+
+def activate_runtime(binary: str | None = None) -> LaneRuntime:
+    """REGISTERED → probed → RUNNABLE (or FAILED). Single process: filter list."""
+    try:
+        resolved = resolve_ffmpeg_bin(binary)
+    except FfmpegUnavailableError as error:
+        return fail_unregistered(str(error))
+    registered = register_binary(resolved)
+    if registered.failure:
+        return registered
+    try:
+        filters = probe_filter_names(resolved)
+    except (LaneExecutionError, OSError) as error:
+        return mark_failed(registered, str(error))
+    return apply_probe(registered, filters)
+
+
+def _ensure_runnable(
+    binary: str | None,
+    runtime: LaneRuntime | None,
+) -> LaneRuntime:
+    if runtime is not None:
+        runtime.require_runnable()
+        return runtime
+    activated = activate_runtime(binary)
+    activated.require_runnable()
+    return activated
 
 
 def measure_loudness(
@@ -85,6 +159,7 @@ def measure_loudness(
     fontfile: str | None = None,
 ) -> MeasuredLoudness:
     """First pass of EBU R128: decode + filter to null, parse the JSON summary."""
+    _ensure_runnable(binary, None)
     resolved = resolve_ffmpeg_bin(binary)
     compiled = compile_measure(ir, fontfile=fontfile)
     try:
@@ -116,6 +191,7 @@ def encode_lane(
     binary: str | None = None,
     timeout: int = FFMPEG_TIMEOUT_SECONDS,
     overwrite: bool = False,
+    runtime: LaneRuntime | None = None,
 ) -> LaneArtifact:
     """Render one compiled lane through exactly one FFmpeg process."""
     destination = Path(output_path)
@@ -124,11 +200,12 @@ def encode_lane(
             f"{destination} already exists; pass overwrite=True (or choose another "
             "path) — a render never silently replaces a file"
         )
+    ready = _ensure_runnable(binary, runtime)
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging = destination.with_name(f".{destination.stem}.part{destination.suffix}")
     staging.unlink(missing_ok=True)
 
-    resolved = resolve_ffmpeg_bin(binary)
+    resolved = ready.binary or resolve_ffmpeg_bin(binary)
     try:
         result = _run(compiled.argv(staging, binary=resolved), timeout=timeout)
     except subprocess.TimeoutExpired as error:
@@ -169,14 +246,21 @@ def render_lane(
     timeout: int = FFMPEG_TIMEOUT_SECONDS,
     overwrite: bool = False,
     fontfile: str | None = None,
+    runtime: LaneRuntime | None = None,
 ) -> LaneArtifact:
     """Convenience: measure (if a loudnorm op exists) then single-process encode."""
+    ready = _ensure_runnable(binary, runtime)
     measured: MeasuredLoudness | None = None
     if any(getattr(op, "op", None) == "loudnorm" for op in ir.ops):
-        measured = measure_loudness(ir, binary=binary, fontfile=fontfile)
+        measured = measure_loudness(ir, binary=ready.binary, fontfile=fontfile)
     compiled = compile_lane(ir, measured=measured, fontfile=fontfile)
     artifact = encode_lane(
-        compiled, output_path, binary=binary, timeout=timeout, overwrite=overwrite
+        compiled,
+        output_path,
+        binary=ready.binary,
+        timeout=timeout,
+        overwrite=overwrite,
+        runtime=ready,
     )
     return LaneArtifact(
         path=artifact.path,
@@ -201,7 +285,10 @@ __all__ = [
     "LaneExecutionError",
     "LaneIR",
     "MEASURE_TIMEOUT_SECONDS",
+    "PROBE_TIMEOUT_SECONDS",
+    "activate_runtime",
     "encode_lane",
     "measure_loudness",
+    "probe_filter_names",
     "render_lane",
 ]

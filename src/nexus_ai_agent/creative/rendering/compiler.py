@@ -30,6 +30,7 @@ from nexus_ai_agent.creative.rendering.ir import (
     LaneOp,
     LaneSource,
     LoudnormOp,
+    LutOp,
     ReverseOp,
     SpeedOp,
     TitleOp,
@@ -165,7 +166,7 @@ def _track_durations(ir: LaneIR) -> list[int]:
                     f"other clip duration ({other.duration_us})"
                 )
             current = current + other.duration_us - op.duration_us
-        # TitleOp / LoudnormOp / DuckOp / ExposureOp deliberately fall through:
+        # TitleOp / LoudnormOp / DuckOp / ExposureOp / LutOp fall through:
         # they touch pixels or samples, never the clock, so `current` carries
         # over unchanged.  test_lane_duration_algebra.py restates this algebra
         # independently over seeded random lanes and pins the agreement.
@@ -314,6 +315,9 @@ def _compile(
                 )
             elif isinstance(op, ExposureOp):
                 lines.append(f"[{video_label}]{_exposure_stage(op)}[{nxt}]")
+            elif isinstance(op, LutOp):
+                cube = _escape_fontfile(op.cube_path)
+                lines.append(f"[{video_label}]lut3d=file='{cube}':interp=tetrahedral[{nxt}]")
             else:
                 continue
             video_label = nxt

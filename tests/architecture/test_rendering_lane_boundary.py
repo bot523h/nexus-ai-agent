@@ -31,6 +31,7 @@ ALLOWED_TOP_LEVEL = {
     "__future__",
     "collections",
     "dataclasses",
+    "enum",
     "hashlib",
     "json",
     "pathlib",
@@ -104,6 +105,20 @@ def test_lane_does_not_cross_into_other_zones() -> None:
             )
 
 
+def _subprocess_attribute_uses(path: Path) -> list[str]:
+    """Structural: any ``subprocess.<attr>`` load, not a comment/string search."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    hits: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            if node.value.id == "subprocess":
+                hits.append(node.attr)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id in {"Popen", "run", "check_output", "call"}:
+                hits.append(node.func.id)
+    return hits
+
+
 def test_exactly_one_subprocess_site_and_no_shell_true() -> None:
     subprocess_users = [
         p for p in _lane_files() if "import subprocess" in p.read_text(encoding="utf-8")
@@ -112,6 +127,44 @@ def test_exactly_one_subprocess_site_and_no_shell_true() -> None:
         f"only executor.py may import subprocess, found: {[p.name for p in subprocess_users]}"
     )
     for file_path in _lane_files():
-        assert "shell=True" not in file_path.read_text(encoding="utf-8"), (
+        source = file_path.read_text(encoding="utf-8")
+        assert "shell=True" not in source, (
             f"{file_path.relative_to(REPO_ROOT)} must never use shell=True"
         )
+        uses = _subprocess_attribute_uses(file_path)
+        if file_path.name == "executor.py":
+            assert "run" in uses
+            continue
+        assert uses == [], (
+            f"{file_path.relative_to(REPO_ROOT)} must not call subprocess "
+            f"(found {uses}) — executor.py is the single execution site"
+        )
+
+
+def test_lifecycle_module_is_gates_only() -> None:
+    path = LANE / "lifecycle.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+            if node.module.startswith("nexus_ai_agent.creative.rendering"):
+                assert node.module.endswith(".ir") or node.module.endswith("rendering.ir"), (
+                    f"lifecycle.py must not import the executor, got {node.module}"
+                )
+    assert "subprocess" not in imported
+    assert "os" not in imported
+    assert "shutil" not in imported
+
+
+def test_ratchet_detects_subprocess_smuggled_into_lifecycle() -> None:
+    """Proof that the AST ratchet fails if execution leaks into lifecycle.py."""
+    smuggled = ast.parse("import subprocess\nsubprocess.run(['ffmpeg'])\n")
+    hits: list[str] = []
+    for node in ast.walk(smuggled):
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            if node.value.id == "subprocess":
+                hits.append(node.attr)
+    assert hits == ["run"], "the ratchet must see a smuggled subprocess.run"

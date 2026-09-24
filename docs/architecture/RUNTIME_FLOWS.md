@@ -97,20 +97,22 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    ops["typed ops<br/>LaneOp (trim, speed, reverse,<br/>freeze, xfade, title, loudnorm, duck)"]
-    ir["LaneIR<br/>asset binding + integer-µs duration algebra"]
-    fg["filtergraph<br/>deterministic string"]
-    argv["argv<br/>no shell, one timeout"]
-    run["one FFmpeg process<br/>staged .part output"]
+    ops["typed ops including lut and title"]
+    ir["LaneIR integer us duration algebra"]
+    life["lifecycle REGISTERED then RUNNABLE"]
+    fg["deterministic filtergraph"]
+    argv["argv no shell one timeout"]
+    run["executor.py probe measure encode"]
     pub["atomic publish"]
-    ev["probe_video + sha256<br/>measured evidence"]
+    ev["probe_video plus sha256"]
 
-    ops --> ir --> fg --> argv --> run --> pub --> ev
+    ops --> ir --> life --> fg --> argv --> run --> pub --> ev
 ```
 
 - Duration algebra is integer microseconds — no float drift ([`../NAGAR_70_OPERATIONS_TDD.md`](../NAGAR_70_OPERATIONS_TDD.md), `creative/rendering/ir.py` docstring).
-- `compile_lane` and `compile_measure` are **pure**; `encode_lane` / `measure_loudness` are the only process sites (`tests/architecture/test_rendering_lane_boundary.py`).
-- Binary resolution order: explicit override → `NEXUS_FFMPEG_BIN` → `PATH` → the `imageio-ffmpeg` wheel; the same binary does encoding *and* probing.
+- `compile_lane` and `compile_measure` are **pure**; `lifecycle.py` is gates only; `executor.py` is the only process site (filter probe, loudness measure, encode) (`tests/architecture/test_rendering_lane_boundary.py`).
+- Binary resolution order: explicit override → `NEXUS_FFMPEG_BIN` → `PATH` → the `imageio-ffmpeg` wheel. Capabilities are probed (`ffmpeg -filters`); encode is forbidden before RUNNABLE.
+- Shipped identity LUT and Vazirmatn font are real fixtures; LUT intensity is 1.0 only. Telegram `/grade lut` remains refused at the surface (D-0011) until that mapper is wired.
 
 **Failure contract** — a lane run that cannot probe its own output raises `LaneExecutionError` and leaves the previous master untouched (no half-written file can be mistaken for a master).
 

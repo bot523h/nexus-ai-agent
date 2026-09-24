@@ -15,8 +15,10 @@ from nexus_ai_agent.creative.rendering.compiler import (
 from nexus_ai_agent.creative.rendering.executor import (
     LaneArtifact,
     LaneExecutionError,
+    activate_runtime,
     encode_lane,
     measure_loudness,
+    probe_filter_names,
     render_lane,
 )
 from nexus_ai_agent.creative.rendering.ir import (
@@ -30,6 +32,7 @@ from nexus_ai_agent.creative.rendering.ir import (
     LaneProfile,
     LaneSource,
     LoudnormOp,
+    LutOp,
     ReverseOp,
     SpeedOp,
     TitleOp,
@@ -38,6 +41,14 @@ from nexus_ai_agent.creative.rendering.ir import (
     ev_to_gamma,
     lane_ir_from_project,
     tint_to_gm,
+)
+from nexus_ai_agent.creative.rendering.lifecycle import (
+    REQUIRED_FILTERS,
+    LaneLifecycleError,
+    LaneLifecycleState,
+    LaneRuntime,
+    apply_probe,
+    register_binary,
 )
 
 __all__ = [
@@ -50,22 +61,31 @@ __all__ = [
     "LaneError",
     "LaneExecutionError",
     "LaneIR",
+    "LaneLifecycleError",
+    "LaneLifecycleState",
     "LaneOp",
     "LaneProfile",
+    "LaneRuntime",
     "LaneSource",
     "LoudnormOp",
+    "LutOp",
     "MeasuredLoudness",
+    "REQUIRED_FILTERS",
     "ReverseOp",
     "SpeedOp",
     "TitleOp",
     "TrimOp",
     "XfadeOp",
+    "activate_runtime",
+    "apply_probe",
     "compile_lane",
     "compile_measure",
     "encode_lane",
     "ev_to_gamma",
     "lane_ir_from_project",
     "measure_loudness",
+    "probe_filter_names",
+    "register_binary",
     "render_lane",
     "tint_to_gm",
 ]

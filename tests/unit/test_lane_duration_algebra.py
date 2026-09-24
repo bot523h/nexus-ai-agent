@@ -37,6 +37,7 @@ from nexus_ai_agent.creative.rendering import (
     LaneOp,
     LaneSource,
     LoudnormOp,
+    LutOp,
     MeasuredLoudness,
     ReverseOp,
     SpeedOp,
@@ -64,7 +65,7 @@ MEASURED = MeasuredLoudness.model_validate(
 )
 
 # Every op kind the restatement below knows how to account for.
-DURATION_NEUTRAL_KINDS = frozenset({"reverse", "title", "loudnorm", "duck", "exposure"})
+DURATION_NEUTRAL_KINDS = frozenset({"reverse", "title", "loudnorm", "duck", "exposure", "lut"})
 DURATION_AFFECTING_KINDS = frozenset({"trim", "speed", "freeze", "xfade"})
 HANDLED_KINDS = DURATION_NEUTRAL_KINDS | DURATION_AFFECTING_KINDS
 
@@ -111,7 +112,7 @@ def _random_op(rng: random.Random, *, loudnorm_used: bool, running_us: int) -> t
     valid by construction — the compiler rejects an overlap past either clip and
     the restatement is only meaningful on lanes the compiler accepts.
     """
-    choices = ["trim", "speed", "reverse", "freeze", "xfade", "title", "duck", "exposure"]
+    choices = ["trim", "speed", "reverse", "freeze", "xfade", "title", "duck", "exposure", "lut"]
     if not loudnorm_used:
         choices.append("loudnorm")
     kind = rng.choice(choices)
@@ -157,6 +158,8 @@ def _random_op(rng: random.Random, *, loudnorm_used: bool, running_us: int) -> t
             ),
             loudnorm_used,
         )
+    if kind == "lut":
+        return LutOp(cube_path="/assets/luts/identity.cube"), loudnorm_used
     return LoudnormOp(), True
 
 
@@ -183,6 +186,8 @@ def _random_lane(seed: int) -> LaneIR:
         # Guarantee the exposure op is exercised on every seed, so the
         # duration-neutrality test below never has to skip.
         ops[rng.randrange(len(ops))] = ExposureOp(exposure_ev=1.0, temperature_k=3200)
+    if not any(isinstance(op, LutOp) for op in ops):
+        ops.append(LutOp(cube_path="/assets/luts/identity.cube"))
     return LaneIR(
         main=MAIN,
         ops=tuple(ops),
