@@ -330,15 +330,59 @@ def test_drawtext_title_burns_glyph_pixels_where_supported(tmp_path: Path) -> No
     assert glyphs > 200, f"no title glyphs at center ({glyphs})"
 
 
-def test_warm_lut_moves_real_pixels_against_a_control(tmp_path: Path) -> None:
-    """The LUT twin is no passthrough: graded gray ≠ ungraded gray.
+def _grab_raw_frame(binary: str, filtergraph: str, src: Path, at_s: float) -> Image.Image:
+    """Run a compiled lane graph to rawvideo: exact pixels, no encoder noise.
 
-    Mid-gray is where a warm lift/gain look bites (the lattice maps 0.5 →
-    ≈0.58/0.55/0.49); saturated primaries shift only a few LSB by design.
+    Measuring through x264+yuv420p attenuates the LUT shift (flat fields
+    quantize) and varies by engine build; rawvideo measures the filtergraph
+    itself — deterministically, on any FFmpeg.
+    """
+    result = subprocess.run(
+        [
+            binary,
+            "-hide_banner",
+            "-nostdin",
+            "-loglevel",
+            "error",
+            "-ss",
+            str(at_s),
+            "-i",
+            str(src),
+            "-filter_complex",
+            filtergraph,
+            "-map",
+            "[vout]",
+            "-frames:v",
+            "1",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-",
+            "-map",
+            "[aout]",
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr[-500:]
+    # Lane profile output is 1280x720 rgb24.
+    return Image.frombytes("RGB", (1280, 720), result.stdout)
+
+
+def test_warm_lut_moves_real_pixels_against_a_control(tmp_path: Path) -> None:
+    """The LUT twin is no passthrough: graded silver ≠ ungraded silver.
+
+    Bright mid-tones are where a warm lift/gain look bites (the lattice
+    maps ≈0.56 → ≈0.60/0.56/0.51 — measured L1 ≈ 25, threshold 15);
+    saturated primaries shift only a few LSB by design.
     """
     binary = _ffmpeg()
     src = tmp_path / "g.mp4"
-    _make_solid(src, "gray", 2.0, binary, 550)
+    _make_solid(src, "silver", 2.0, binary, 550)
 
     from nexus_ai_agent.creative.rendering import LaneIR, LaneSource, compile_lane
     from nexus_ai_agent.creative.rendering.ir import LutOp
@@ -355,8 +399,8 @@ def test_warm_lut_moves_real_pixels_against_a_control(tmp_path: Path) -> None:
     encode_lane(graded, out_graded, binary=binary)
     encode_lane(control, out_control, binary=binary)
 
-    frame_g = _grab_frame(binary, out_graded, 1.0)
-    frame_c = _grab_frame(binary, out_control, 1.0)
+    frame_g = _grab_raw_frame(binary, graded.filtergraph, src, 1.0)
+    frame_c = _grab_raw_frame(binary, control.filtergraph, src, 1.0)
     mean_g, mean_c = _mean_rgb(frame_g), _mean_rgb(frame_c)
     distance = sum(abs(a - b) for a, b in zip(mean_g, mean_c, strict=True))
     assert distance > 15.0, f"warm LUT left pixels untouched: {mean_g} vs {mean_c}"

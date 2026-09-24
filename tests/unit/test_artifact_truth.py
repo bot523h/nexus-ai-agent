@@ -206,3 +206,48 @@ def test_probe_names_its_prover(tmp_path: Path) -> None:
     assert fact.prover in ("ffprobe", "ffmpeg-stderr")
     assert fact.has_video and fact.has_audio
     assert (fact.width, fact.height) == (320, 240)
+
+
+# ---------------------------------------------------------------------------
+# ffprobe prover: pinned against the documented JSON schema via a stub binary
+# ---------------------------------------------------------------------------
+
+_FFPROBE_STUB = """\
+import json, sys
+print(json.dumps({
+    "streams": [
+        {"index": 0, "codec_name": "h264", "codec_type": "video",
+         "width": 320, "height": 240},
+        {"index": 1, "codec_name": "aac", "codec_type": "audio"},
+    ],
+    "format": {"filename": sys.argv[-1],
+               "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+               "duration": "2.000000"},
+}))
+"""
+
+
+def _stub_ffprobe(path: Path, body: str = _FFPROBE_STUB) -> str:
+    script = path / "ffprobe"
+    script.write_text("#!/usr/bin/env python3\n" + body)
+    script.chmod(0o755)
+    return str(script)
+
+
+def test_ffprobe_prover_parses_streams_and_duration(tmp_path: Path) -> None:
+    binary = _stub_ffprobe(tmp_path)
+    fact = probe_media(tmp_path / "clip.mp4", ffprobe_bin=binary)
+    assert fact.prover == "ffprobe"
+    assert fact.duration_us == 2_000_000
+    assert fact.has_video and fact.has_audio
+    assert (fact.width, fact.height) == (320, 240)
+    assert [s.codec_name for s in fact.streams] == ["h264", "aac"]
+    assert fact.container.startswith("mov,mp4")
+
+
+def test_failing_ffprobe_fails_closed_without_fallback(tmp_path: Path) -> None:
+    """A resolving-but-failing ffprobe is evidence of a broken file — the
+    weaker stderr prover must not get a chance to wave it through."""
+    binary = _stub_ffprobe(tmp_path, "import sys; print('boom', file=sys.stderr); sys.exit(1)\n")
+    with pytest.raises(ArtifactVerificationError, match="ffprobe failed"):
+        probe_media(tmp_path / "clip.mp4", ffprobe_bin=binary)

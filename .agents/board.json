@@ -1,6 +1,6 @@
 {
  "schema": 2,
- "updated_at": "2026-09-24T12:30:00Z",
+ "updated_at": "2026-09-24T12:45:00Z",
  "protocol": {
   "protocol_version": 2,
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1963,7 +1963,7 @@
    "title_fa": "نشست ۳: تکمیل ران‌تایم خلاقیت — حقیقت آرتیفکت، چندسگمنتی، تعامل OTIO",
    "zone": "creative-runtime-s3",
    "priority": "P0",
-   "status": "in_review",
+   "status": "active_in_review",
    "scope": "Session 3 creative runtime completion on main-line: port PR#64 value without duplicate architecture (execution semantics, plan bridge, assembly, availability, canonical OTIO, vision packs); artifact truth (logical vs spec vs physical sha + probe); NAG-003 classification; E1 segment isolation; 3-segment RGB proof; integer-µs time algebra; real-parser OTIO interop incl. markers/ExternalReference; 4-state capability lifecycle; required-pack fail-closed enforcement; LUT + burn-in real-or-honest; anti-vacuity mutations. Locked files untouched: delivery/{models,operations}.py (PR#33), api/app.py (PR#58), queue/runtime (PR#60/PR#63).",
    "scope_fa": "تکمیل ران‌تایم خلاقیت روی main-line با شواهد واقعی آرتیفکت و پارسر.",
    "prerequisites": [],
