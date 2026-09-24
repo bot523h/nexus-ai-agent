@@ -1,7 +1,42 @@
 from __future__ import annotations
 
+import logging
+import threading
 import time
 from collections import deque
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+# ── distributed rate-limit backend (task-163) ───────────────────────────
+# The composition root (bot/app.py) installs a RateLimitBackend here when
+# NEXUS_REDIS_URL is set (stateful.build_rate_limit_backend).  Until then —
+# and if the backend is cleared — RateLimiter runs its legacy in-process
+# sliding window, byte-for-byte the old behaviour.
+#
+# Fail-closed at decision time: a backend that raises mid-request counts the
+# request as *not allowed* (a security surface must not open a hole because
+# the counter is unreachable).  The composition-time fallback (no backend
+# installed at all) is the availability path.
+_RATE_LIMIT_BACKEND: Any | None = None
+_BACKEND_LOCK = threading.Lock()
+
+
+def install_rate_limit_backend(backend: Any | None) -> None:
+    """Process-wide backend registration (see module note)."""
+    global _RATE_LIMIT_BACKEND
+    with _BACKEND_LOCK:
+        _RATE_LIMIT_BACKEND = backend
+
+
+def get_rate_limit_backend() -> Any | None:
+    with _BACKEND_LOCK:
+        return _RATE_LIMIT_BACKEND
+
+
+def clear_rate_limit_backend() -> None:
+    """Restore the legacy in-process limiter (tests / shutdown)."""
+    install_rate_limit_backend(None)
 
 
 class RateLimiter:
@@ -11,6 +46,20 @@ class RateLimiter:
         self._events: dict[int, deque[float]] = {}
 
     def is_allowed(self, user_id: int) -> bool:
+        backend = get_rate_limit_backend()
+        if backend is not None:
+            try:
+                return bool(
+                    backend.is_allowed(
+                        user_id=user_id,
+                        limit=self.max_messages,
+                        period_seconds=float(self.window_seconds),
+                    )
+                )
+            except Exception:  # noqa: BLE001 — fail-closed, by design
+                logger.error("rate_limit_backend_failed fail_closed=True", exc_info=True)
+                return False
+        # Legacy in-process sliding window (unchanged behaviour).
         now = time.time()
         q = self._events.setdefault(user_id, deque())
         while q and (now - q[0]) > self.window_seconds:

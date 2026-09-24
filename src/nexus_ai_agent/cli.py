@@ -884,7 +884,9 @@ def jobs_resume(
     """Requeue leftover pending jobs and drain them in this process.
 
     Only ``pending`` rows are claimed; ``processing`` rows belong to the
-    live owner process (usually the bot) and are never duplicated here.
+    live owner process (usually the bot) and are never duplicated here —
+    except rows dead past the processing timeout, which the PostgreSQL
+    tier (task-163) steals first so a killed bot's jobs are not stranded.
     Handlers are the standard application ones, so resumed jobs run exactly
     as they would inside the bot.
     """
@@ -894,9 +896,39 @@ def jobs_resume(
     from nexus_ai_agent.worker import default_job_handlers, job_queue_db_path
 
     async def _run() -> None:
-        queue = InProcessJobQueue(job_queue_db_path(get_settings().db_path))
+        settings = get_settings()
+        # Scale-to-zero tier (task-163): on the PostgreSQL path the drain
+        # claims rows from `nexus_job_queue_pg` (SKIP LOCKED) and runs
+        # them here; otherwise the legacy SQLite sidecar path.
+        queue: Any
+        if settings.database_url:
+            from nexus_ai_agent.stateful import PgJobQueue
+
+            queue = PgJobQueue(settings.database_url)
+        else:
+            queue = InProcessJobQueue(job_queue_db_path(settings.db_path))
         for job_type, handler in default_job_handlers().items():
             queue.register_handler(job_type, handler)
+        if settings.database_url:
+            completed = 0
+            deadline = asyncio.get_running_loop().time() + timeout
+            while True:
+                completion = await queue.process_next()
+                if completion is None:
+                    break
+                marker = "✅" if completion.status is JobStatus.COMPLETED else "❌"
+                detail = completion.result if completion.result is not None else completion.error
+                typer.echo(
+                    f"{marker} {completion.job_id}: {completion.status.value} {detail or ''}"
+                )
+                completed += 1
+                if asyncio.get_running_loop().time() >= deadline:
+                    typer.echo(f"⏳ deadline after {completed} job(s); remaining rows stay queued")
+                    raise typer.Exit(1)
+            typer.echo(
+                "No pending jobs to resume." if completed == 0 else f"Drained {completed} job(s)."
+            )
+            return
         job_ids = await queue.resume_pending_jobs()
         if not job_ids:
             typer.echo("No pending jobs to resume.")

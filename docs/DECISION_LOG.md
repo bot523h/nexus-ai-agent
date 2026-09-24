@@ -991,3 +991,117 @@ the audit and queued as `task-159`, not left implicit.
 read paths should move onto it, and D-0009's surface-owns-authorisation rule should be re-examined
 for whether the check belongs one layer down, in the engine, where a second caller (the delivery
 tick) would otherwise have to duplicate it.
+
+## 2026-09-23 — Board-Git truth gate + scale-to-zero state tiers (D-0010)
+
+**Status:** Accepted and implemented on `arena/01a0cf98-nexus-ai-agent` (task-163).
+**Evidence:** `scripts/board_reconcile.py`, `docs/architecture/adr/0005-board-truth-and-scale-zero-state.md`,
+migration `a41c9e2b7f63`, `src/nexus_ai_agent/stateful/`.
+
+**D-0010 — The board is a cache, not the truth (the truth is `git ls-remote` + the
+GitHub PR matrix, reconciled on every push/PR and every 15 minutes, with drift as a
+*blocking* CI failure); and state is tiered by survivability, with only the
+security-relevant tiers moved out of the scale-to-zero container.**
+
+*Problem.* Two incident classes were visible in the repository's own history.
+(a) **Board-Git truth drift:** PR#34 merged while the board still showed
+`P0-security-batch` as active for days; on 2026-09-23 the same day this entry
+was written, `task-145` sat `active` after its branch had been merged into
+main (PR#52), and five open PRs (PR#33, PR#56–59) had no live claim at all —
+pushes the board could not see. The drift setup for split-brain: two agents
+rewriting the same file while the mirror lies. `praudit` (task-141) was
+diagnostic-only; nothing made drift *red*. (b) **Scale-to-zero amnesia:** a
+Koyeb web service is killed after ~30 s of idleness. The state that kept
+security invariants alive lived inside that container: the access-guard rate
+limiter (process memory), presence (process memory), the job queue (ephemeral
+disk). A spammer who paced one request per scale-to-zero window paid nothing —
+a T4 denial-of-service vector and a T1 bypass by patience.
+
+*Decision.* (1) `scripts/board_reconcile.py` (stdlib + `git`/`gh`, write-free)
+reconciles the board against both halves of the truth and reports
+`MERGED_STILL_OPEN`, `BRANCH_GONE`, `UNCLAIMED_OPEN_PR`, `INVISIBLE_FILE` as
+**blocking** (the `board-reconcile` CI job runs `--check` on every push/PR and
+on a `*/15` schedule sweep; `.agents/board.json` is exempt from the file
+check as the coordination medium), plus `LEASE_EXPIRED`, `SCOPE_TRUNCATED`
+(100-file `PR.files` cap → partial visibility, never a false clean) and
+`OVERLAP` (file fenced by another live claim) as warnings. The reconciler
+never writes the board — the owner or the claiming agent repairs it. The same
+delivery performed the first repair: `task-145` closed (`completed_merged`),
+PR#33 re-leased (`active_in_review`, 168 h, fence = its 52-file set, pending
+the task-123 slim-down — *not* closed, against the board's own governance
+path), and PR#56–59 registered retroactively. (2) State tiers, selected at the
+composition roots only (`bot/app.py`, `cli.py`): `NEXUS_REDIS_URL` set → the
+access-guard denial limiter runs one atomic Lua step (`INCR` + `PEXPIRE` on a
+fixed-window key `nexus:rl:{user}:{floor(now/period)}`), fail-closed at
+decision time (Redis down mid-request ⇒ request not allowed, loud error log),
+fail-soft at composition time (Redis down at boot ⇒ in-process fallback +
+error log); `NEXUS_DATABASE_URL` set → presence in `nexus_presence` (TTLs
+computed and checked against the *server* clock: `now() +
+make_interval(...)` / `online_until > now()`, so two containers never
+disagree) and the job queue in `nexus_job_queue_pg` (claims via
+`SELECT ... FOR UPDATE SKIP LOCKED`, stale-steal after a 900 s processing
+timeout — a killed container's rows return to `pending`, a live owner's row is
+never touched). Unset ⇒ the legacy in-memory/SQLite paths run exactly as
+before; the `redis` driver joins `psycopg`/`asyncpg` as a core dependency on
+purpose (a state tier that only works if the operator remembers an extra is
+the blind-spot-2 trap in uniform).
+
+*Rejected alternatives.* (1) Closing PR#33 to satisfy the new gate — rejected:
+the board's own governance path is task-123 (slim-down) + task-143 (conflict
+map, delivered); re-leasing it records the truth (open, conflicted, pending
+rebase) instead of destroying work. (2) A generic "durable everything" rewrite
+(Redis-backed presence, Redis-backed queue, persisted membership cache) —
+rejected: membership is re-derivable from the Telegram Bot API (one extra
+idempotent call); persisting a boolean the API can always answer is cache, not
+durable state. (3) SQLite sidecar for the rate limiter — rejected: Koyeb's
+disk is ephemeral, which is the whole point; only a separate process (Redis)
+or a managed database (PostgreSQL) survives the kill. (4) Sliding-window
+Redis limiter (sorted sets / `ZRANGEBYSCORE`) — rejected: more expensive per
+request, requires `ZREMRANGEBYSCORE` + `EXPIRE` sequences with their own race
+window; the fixed window is exactly right for a per-user message-rate policy
+and the INCR+PEXPIRE Lua step has no crash window in which a key exists
+without a TTL. (5) Blocking on `LEASE_EXPIRED` in the gate — rejected as
+blocking: the referee (`agent_board.py check`) already releases dead fences, so
+a blocking gate would only punish the owner after the fence was already gone;
+it stays a warning (and `--strict` promotes it).
+
+*Consequences.* A push without a claim turns CI red on the PR that pushed it —
+the board can no longer lag the truth by more than one merge. A >100-file PR
+gets `SCOPE_TRUNCATED` instead of a false clean (split such PRs). The first
+gate run against the pre-repair board reported 6 blocking drifts (including
+`MERGED_STILL_OPEN` for `task-145`); post-repair it is green with 4 `OVERLAP`
+warnings that are true statements about PR#33's 52-file fence. Known
+residuals, documented not hidden: `bot/handlers.py`'s allowed-user flood
+limiter and `ForceJoinManager._membership_cache` stay in-process (the former
+behind the deny-by-default allow-list, so an exhausted window only costs the
+*user* messages, not the *owner* the gate; both are re-derivable or
+owner-scoped). The migration is PostgreSQL-only (SQLite no-op), so the shared
+chain stays ORM-exact on SQLite with `alembic check` at zero drift.
+Its two tables join the Postgres *head-state* set in
+`storage/adopt_pg.py` — the same explicit treatment
+`nexus_checkpoint_lifecycle` (f4a9c2e71b08) already had: a stamped
+database is expected to contain them, a legacy database missing them
+fails adoption rather than being half-adopted, and every chain-head
+pin in the test suite follows the new head `a41c9e2b7f63`
+(task-111 lockstep discipline).
+
+*Reopens when* PR#33's slim-down (task-123) lands — its 52-file fence should
+shrink to the slimmed diff; and when a second consumer of the rate limiter
+appears (the allowed-user flood limiter in `bot/handlers.py` is the natural
+next tenant of the `RateLimitBackend` seam in `bot/middleware.py`).
+
+*Arbitration record (pre-push referee outcome).* The pre-push coordination
+check (`agent_board.py check`) exits 1 for this delivery: 13 content files
+overlap live leases — 9 with the PR#33 re-lease (`.env.example`,
+`.github/workflows/ci.yml`, `CHANGELOG.md`, `docs/DECISION_LOG.md`,
+`pyproject.toml`, `bot/app.py`, `bot/middleware.py`, `cli.py`,
+`config/settings.py`) and `docs/README.md`/`docs/DECISION_LOG.md` with
+pr56/task-160. The fences were verified live-accurate against GitHub
+(52/52 for PR#33, zero stale, zero invisible). Unlike the task-110
+precedent (full duplication → reverted), the overlap is *complementary*:
+task-163 adds its own wiring to files PR#33 also changes, while PR#33 sits
+`CONFLICTING` with main and awaits its task-123 slim-down. The repository
+owner arbitrated on 2026-09-24: **push with the overlap documented**;
+merge order is the slim-down owner's to sequence (task-163 may merge
+first, PR#33 rebases after). The `board-reconcile` gate records the same
+four overlaps as `OVERLAP` warnings (true statements, non-blocking).

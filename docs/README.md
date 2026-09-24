@@ -36,6 +36,7 @@ placeholder text.
 | [architecture/adr/0002-docs-as-code-enforcement.md](architecture/adr/0002-docs-as-code-enforcement.md) | Enforce documentation in Python now; Node toolchain on a recorded trigger. |
 | [architecture/adr/0003-mermaid-flowchart-for-c4-views.md](architecture/adr/0003-mermaid-flowchart-for-c4-views.md) | Express C4 views with Mermaid `flowchart`. |
 | [architecture/adr/0004-board-schema-2.md](architecture/adr/0004-board-schema-2.md) | Coordination board schema 2: prerequisites, acceptance criteria, history split. |
+| [architecture/adr/0005-board-truth-and-scale-zero-state.md](architecture/adr/0005-board-truth-and-scale-zero-state.md) | Board-Git truth gate (blocking, 15-min sweep) + scale-to-zero state tiers. |
 
 ## Authoritative records
 

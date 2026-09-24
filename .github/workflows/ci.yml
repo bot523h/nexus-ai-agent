@@ -1,6 +1,14 @@
 name: CI
 
-on: [push, pull_request]
+# Every push/PR reconciles the coordination board against git + open PRs
+# (blocking `board-reconcile` gate, task-163 / ADR 0005). The schedule sweep
+# is the 15-minute "truth must not drift" check: even with no pushes, the
+# board on main is re-verified against the live PR matrix every 15 minutes.
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "*/15 * * * *"
 
 jobs:
   lint:
@@ -86,10 +94,46 @@ jobs:
       # idempotent re-run must be a no-op (revision already at head).
       - run: nexus migrate
       # Confirm the migration stamp on a real Postgres.
-      # Head is 7c2f9d41e8a3 (ai_memory_consent, P0-7), which revises the
-      # f4a9c2e71b08 lifecycle table revision.
+      # Head is a41c9e2b7f63 (stateful_scale_zero, task-163), which revises
+      # the 7c2f9d41e8a3 ai_memory_consent revision. The revision is
+      # PostgreSQL-only (nexus_presence + nexus_job_queue_pg); the two
+      # integration tests below prove both tables work on real PostgreSQL.
       - run: |
-          PGPASSWORD=nexus psql -h localhost -U nexus -d nexus -tAc "SELECT version_num FROM alembic_version" | grep -q 7c2f9d41e8a3
+          PGPASSWORD=nexus psql -h localhost -U nexus -d nexus -tAc "SELECT version_num FROM alembic_version" | grep -q a41c9e2b7f63
+      # Scale-to-zero state tiers on real PostgreSQL: presence (server-clock
+      # TTLs) and the job queue (SKIP LOCKED claims + stale-steal).
+      - run: pytest -q tests/integration/test_presence_pg.py tests/integration/test_job_queue_pg.py
+
+  # ── Distributed state (task-163) ──────────────────────────────────────────
+  # The real-Redis leg of the scale-to-zero kill proof: two processes, one
+  # SIGKILL between them, the rate-limit count must survive. Zero cloud
+  # credentials — a local Redis service container plays the part of the
+  # production Redis (same convention as the Postgres service above).
+  distributed-state:
+    name: distributed-state (Redis scale-to-zero kill proof)
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        env:
+          REDIS_DISABLE_METRICS: 1
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      NEXUS_REDIS_URL: redis://localhost:6379/0
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: pytest -v -m integration tests/integration/test_rate_limiter_redis.py
 
   # ── Fast rail (task-113) ────────────────────────────────────────────────────
   # Deliberately independent (`needs:` nothing) and dependency-free: it installs no
@@ -117,3 +161,27 @@ jobs:
       - run: python -m pip install "ruff==0.16.8"
       - run: ruff check .
       - run: ruff format --check .
+
+  # ── Board truth (task-163 / ADR 0005) ──────────────────────────────────────
+  # The blocking board↔git reconciliation gate: .agents/board.json is a cache,
+  # git + the open PR matrix is the truth.  Every push/PR re-verifies merged
+  # PRs' leases, branch liveness, PR file-fence coverage, and invisible-file
+  # detection; a blocking mismatch fails the build (rc=1).  The 15-minute
+  # schedule above re-runs this on main even with no pushes, so the board
+  # cannot drift silently between pushes.
+  #
+  # Stdlib-only by design: no `pip install` — just Python, git, and the `gh`
+  # CLI (preinstalled on ubuntu-latest, authenticated with the default
+  # workflow token for read-only PR queries).
+  board-reconcile:
+    name: board-reconcile (board.json ↔ git/PR truth gate)
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python scripts/board_reconcile.py --check

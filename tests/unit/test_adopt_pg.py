@@ -93,6 +93,10 @@ class TestHeadStateIncludesLifecycleTable:
         assert report.alembic_stamped is False
         expected = captured["expected"]
         assert "nexus_checkpoint_lifecycle" in expected
+        # task-163 (a41c9e2b7f63): the scale-to-zero tier tables are part of
+        # the head state, so a stamped database is expected to contain them
+        assert "nexus_presence" in expected
+        assert "nexus_job_queue_pg" in expected
         assert "chat" in expected  # ORM tables still expected
 
 

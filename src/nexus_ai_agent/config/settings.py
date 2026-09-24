@@ -28,6 +28,10 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("NEXUS_DATABASE_URL", "DATABASE_URL"),
     )
+    redis_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("NEXUS_REDIS_URL", "REDIS_URL"),
+    )
     checkpoint_path: str = Field(
         default="data/langgraph.sqlite",
         validation_alias=AliasChoices("NEXUS_CHECKPOINT_PATH", "CHECKPOINT_PATH"),

@@ -362,6 +362,7 @@ def test_migration_chain_includes_consent_revision() -> None:
     config = Config(str(repo_root / "alembic.ini"))
     config.set_main_option("script_location", str(repo_root / "migrations"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["7c2f9d41e8a3"]
+    assert script.get_heads() == ["a41c9e2b7f63"]
     revisions = [r.revision for r in script.walk_revisions()]
     assert "7c2f9d41e8a3" in revisions and "f4a9c2e71b08" in revisions
+    assert "a41c9e2b7f63" in revisions

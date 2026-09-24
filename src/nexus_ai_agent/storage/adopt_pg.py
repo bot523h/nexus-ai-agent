@@ -89,11 +89,22 @@ def _snapshot(sync_conn: Connection, expected: set[str], redacted: str) -> Postg
 async def _inspect(url: str) -> PostgresAdoptionReport:
     """Introspect the database over asyncpg; never mutates it."""
     normalized = normalize_database_url(url)
-    # Head state = ORM tables + the lifecycle table created by revision
-    # f4a9c2e71b08 (PR3 option A).  A database stamped at head must
-    # contain it; a legacy database without it is drift (fail-fast), not
-    # something to paper over (no implicit repair).
-    expected = set(get_target_metadata().tables.keys()) | {LIFECYCLE_TABLE_NAME}
+    # Head state = ORM tables + the PostgreSQL-only adapter tables created by
+    # explicit revisions (never in the ORM, so ``alembic check`` on SQLite
+    # stays at zero drift):
+    #   * f4a9c2e71b08  → nexus_checkpoint_lifecycle (PR3 option A)
+    #   * a41c9e2b7f63  → nexus_presence + nexus_job_queue_pg (task-163,
+    #     scale-to-zero state tiers).  A stamped database must contain them;
+    #     a legacy database without them is drift (fail-fast), not something
+    #     to paper over (no implicit repair).
+    from nexus_ai_agent.stateful.job_queue_pg import JOB_QUEUE_PG_TABLE
+    from nexus_ai_agent.stateful.presence_pg import PRESENCE_TABLE
+
+    expected = set(get_target_metadata().tables.keys()) | {
+        LIFECYCLE_TABLE_NAME,
+        PRESENCE_TABLE,
+        JOB_QUEUE_PG_TABLE,
+    }
     engine = create_async_engine(to_asyncpg_url(normalized), echo=False)
     try:
         async with engine.connect() as conn:

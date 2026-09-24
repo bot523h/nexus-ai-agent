@@ -105,15 +105,26 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
 
     engines: dict[str, Any] = {}
 
-    # Application-owned background jobs. The queue is a SQLite sidecar owned
-    # by this adapter; execution remains on the bot process event loop.
-    # D4: finished jobs notify the origin Telegram chat (fail-safe hook).
+    # Application-owned background jobs. Default tier: a SQLite sidecar
+    # owned by this adapter; execution remains on the bot process event
+    # loop. D4: finished jobs notify the origin Telegram chat (fail-safe
+    # hook).
+    # Scale-to-zero tier (task-163, D-0010): on the PostgreSQL path the
+    # queue rows live in `nexus_job_queue_pg` — a kill leaves them
+    # `pending` (or `processing` past the steal window) and the next
+    # container claims them, so no job is lost or double-executed.
     from nexus_ai_agent.worker import default_job_handlers, job_queue_db_path
 
-    job_queue = InProcessJobQueue(
-        job_queue_db_path(settings.db_path),
-        on_job_finished=_build_job_completion_notifier(_bot_token(settings)),
-    )
+    job_queue: Any
+    if settings.database_url:
+        from nexus_ai_agent.stateful import PgJobQueue
+
+        job_queue = PgJobQueue(settings.database_url)
+    else:
+        job_queue = InProcessJobQueue(
+            job_queue_db_path(settings.db_path),
+            on_job_finished=_build_job_completion_notifier(_bot_token(settings)),
+        )
     for job_type, handler in default_job_handlers().items():
         job_queue.register_handler(job_type, handler)
     engines["job_queue"] = job_queue
@@ -191,8 +202,35 @@ def build_application(
     if not token or token == "CHANGE_ME":
         raise ValueError("TELEGRAM_BOT_TOKEN must be provided via environment/settings")
 
-    presence_store = presence or PresenceStore()
+    # Presence tier (task-163, D-0010): on the PostgreSQL path, presence
+    # lives in `nexus_presence` with server-clock TTLs, so it survives a
+    # scale-to-zero kill; otherwise the legacy in-memory store.
+    presence_store: Any
+    if presence is not None:
+        presence_store = presence
+    else:
+        from nexus_ai_agent.stateful import build_presence_store
+
+        pg_presence = build_presence_store(settings)
+        presence_store = pg_presence if pg_presence is not None else PresenceStore()
     storage_manager = storage or _build_default_storage(settings)
+
+    # Rate-limit tier (task-163, D-0010): install the distributed backend
+    # (when NEXUS_REDIS_URL is set and reachable) BEFORE the access guard
+    # is built, so the guard's RateLimiter delegates to it. Fail-soft at
+    # composition: an unreachable Redis keeps the in-process limiter.
+    from nexus_ai_agent.bot.middleware import install_rate_limit_backend
+    from nexus_ai_agent.stateful import build_rate_limit_backend
+
+    rate_limit_backend = build_rate_limit_backend(settings)
+    install_rate_limit_backend(rate_limit_backend)
+    if rate_limit_backend is not None:
+        # Never log the full URL (credentials); host:port only.
+        logger.info(
+            "rate_limit_backend=redis endpoint=%s", str(settings.redis_url or "").split("@")[-1]
+        )
+    else:
+        logger.info("rate_limit_backend=in_process")
 
     # Initialize all v2.0.0+ engines
     engines = _init_v2_engines(settings)
@@ -210,13 +248,36 @@ def build_application(
             await feature_engines.reminders.restore_pending()
         except Exception:  # noqa: BLE001 — startup wiring must not kill the bot
             logger.exception("feature_engines_startup_failed")
-        await job_queue.resume_pending()
+        # Scale-to-zero resume (task-163): the PostgreSQL tier has no
+        # local tasks to recover — it claims one waiting job (stealing
+        # stale rows first) so a kill right before a wake makes no job
+        # wait a full restart cycle.
+        if hasattr(job_queue, "process_next"):
+            try:
+                await job_queue.process_next()
+            except Exception:  # noqa: BLE001 — startup wiring must not kill the bot
+                logger.exception("pg_job_queue_resume_failed")
+        else:
+            await job_queue.resume_pending()
 
     async def _post_shutdown(application: Any) -> None:
         try:
             feature_engines.reminders.close()
         except Exception:  # noqa: BLE001
             pass
+        # PG-tier handles (task-163): close quietly; a scale-to-zero kill
+        # would drop them anyway, so shutdown must not raise on a dead one.
+        for store in (job_queue, presence_store):
+            if hasattr(store, "close"):
+                try:
+                    store.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        if rate_limit_backend is not None:
+            try:
+                rate_limit_backend.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     application = (
         ApplicationBuilder()

@@ -98,12 +98,48 @@ def _actual(db_file: str) -> tuple[set[str], set[tuple[str, str, bool]]]:
 def test_revision_chain_is_single_line() -> None:
     script = ScriptDirectory.from_config(_make_config())
     heads = script.get_heads()
-    assert heads == ["7c2f9d41e8a3"]
+    assert heads == ["a41c9e2b7f63"]
     assert [r.revision for r in script.walk_revisions()] == [
+        "a41c9e2b7f63",
         "7c2f9d41e8a3",
         "f4a9c2e71b08",
         "47903d282ede",
     ]
+
+
+def test_stateful_migration_is_isolated_and_postgres_only() -> None:
+    """a41c9e2b7f63: exactly two tables + one claim index, PG dialect only."""
+    import re
+
+    migration = (
+        Path(__file__).parents[2]
+        / "migrations"
+        / "versions"
+        / "a41c9e2b7f63_stateful_scale_zero.py"
+    )
+    source = migration.read_text(encoding="utf-8")
+    # exactly two creates / two drops / one index, only the two tier tables
+    assert source.count("op.create_table(") == 2
+    assert source.count("op.drop_table(") == 2
+    assert source.count("op.create_index(") == 1
+    assert source.count("op.drop_index(") == 1
+    assert '"nexus_presence"' in source
+    assert '"nexus_job_queue_pg"' in source
+    assert "ix_nexus_job_queue_pg_claim" in source
+    # no other DDL vocabulary
+    lowered = source.lower()
+    assert "op.execute(" not in lowered
+    assert "create extension" not in lowered
+    assert "pgvector" not in lowered
+    assert "alter table" not in lowered
+    # never touches a LangGraph table
+    assert not re.search(r"\bcheckpoints\b", source)
+    assert "checkpoint_writes" not in source
+    assert "checkpoint_blobs" not in source
+    # dialect guard in both directions
+    assert source.count("if not _is_postgresql():") == 2
+    # chain position: it revises the consent revision, not the base
+    assert 'down_revision: str | Sequence[str] | None = "7c2f9d41e8a3"' in source
 
 
 def test_lifecycle_migration_is_isolated_and_postgres_only() -> None:

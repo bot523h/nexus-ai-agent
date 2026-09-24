@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (board-Git truth gate + scale-to-zero state tiers — task-163, session `arena/01a0cf98-nexus-ai-agent`)
+
+- **`scripts/board_reconcile.py`** — the Board-Git truth reconciler. `.agents/board.json`
+  is a *cache*; the truth is `git ls-remote` + the GitHub PR matrix. Reports
+  `MERGED_STILL_OPEN`, `BRANCH_GONE`, `UNCLAIMED_OPEN_PR`, `INVISIBLE_FILE` as
+  blocking drift (exit 1) and `LEASE_EXPIRED`, `SCOPE_TRUNCATED`, `OVERLAP` as
+  warnings. Pure stdlib + `git`/`gh`, write-free (never mutates the board),
+  so it is safe in CI. The board can no longer lag the truth by more than one
+  merge.
+- **`board-reconcile` CI job** — runs `--check` (blocking) on every push/PR and
+  on a `*/15` schedule sweep, so drift is red even with no pushes.
+- **`src/nexus_ai_agent/stateful/`** — the three scale-to-zero state tiers
+  (D-0010, ADR 0005). Selected at the composition roots only; unset URLs keep
+  the legacy in-memory/SQLite behaviour exactly as before:
+  - `rate_limit.py` — `RedisRateLimiter`: one atomic Lua step (`INCR` + `PEXPIRE`
+    on a fixed-window key) so a scale-to-zero kill cannot reset the counter;
+    fail-closed at decision time, fail-soft at composition time.
+  - `presence_pg.py` — `PgPresenceStore`: presence TTLs computed and checked
+    against the *server* clock, so a container that wakes 40 minutes later
+    reads presence the way the database says.
+  - `job_queue_pg.py` — `PgJobQueue`: the application-owned queue with
+    PostgreSQL as the hand-off point; claims via `SELECT ... FOR UPDATE SKIP
+    LOCKED` (no double-execution across processes) and stale-steal after a
+    900 s timeout (a killed container's jobs return to `pending`).
+- **`migrations/versions/a41c9e2b7f63_stateful_scale_zero.py`** — creates
+  `nexus_presence` + `nexus_job_queue_pg` (PostgreSQL-only; SQLite no-op, so
+  the shared chain stays ORM-exact and `alembic check` is at zero drift on
+  SQLite). Both tables join the Postgres *head-state* set in
+  `storage/adopt_pg.py` (the treatment `nexus_checkpoint_lifecycle` already
+  had): a stamped database must contain them; a legacy database missing them
+  fails adoption explicitly instead of being silently "adopted" half-way.
+  Every chain-head pin in the test suite (`test_core_fingerprint`,
+  `test_ai_memory_consent`, `test_migrate_cli`, `test_migrate_adoption`,
+  `test_migrate_race_condition`) now follows `a41c9e2b7f63` — the
+  task-111 lockstep discipline applied to the new head.
+- **`tests/unit/test_rate_limit_backend_seam.py`** — unit contract for the
+  `bot/middleware.py` backend seam: no-backend legacy path (byte-for-byte
+  sliding window), typed delegation, fail-closed on a raising backend (deny,
+  never crash, never fall back to the permissive in-process window), and
+  `clear_rate_limit_backend()` restore.
+- **`redis>=5.0,<8`** core dependency — the PostgreSQL driver already is a
+  core dep, so the Redis driver joins it: a state tier that only works if the
+  operator remembers an extra is the extras-hermeticity trap.
+- **`NEXUS_REDIS_URL`** setting (`.env.example`) — enables the Redis rate-limit
+  tier; never logged in full (host:port only).
+- **Board repair** (`.agents/board.json`) — closed the stale `task-145`
+  (`completed_merged`, branch already merged via PR#52), re-leased PR#33
+  pending the task-123 slim-down (not closed, against the board's own
+  governance path), and retroactively registered PR#56–59 so every open
+  `arena/*` PR carries a live lease.
+
 ### Added (dead-engine wiring — session `arena/01a0cb38-nexus-ai-agent`)
 
 - **`bot/surface/ads.py`** — `/ad_create` `/ad_list` `/ad_pause` `/ad_resume` `/ad_delete`
