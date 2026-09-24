@@ -2124,7 +2124,7 @@
         "src/nexus_ai_agent/cli.py",
         "docs/audits/VERIFICATION_TRUTH_MATRIX.json"
       ],
-      "note": "AMENDED 2026-09-24: adr/0007 + adr/README.md dropped from exclusive paths (ADR dir is docs-layer-only per adr/README rule 3; failure semantics lives in DECISION_LOG D-0015 — no ADR file created); cli.py added (JobResult/job_id type ripple) and VERIFICATION_TRUTH_MATRIX.json (task-181 revision).",
+      "note": "AMENDED 2026-09-24: adr/0007 + adr/README.md dropped from exclusive paths (ADR dir is docs-layer-only per adr/README rule 3; failure semantics lives in DECISION_LOG D-0015 — no ADR file created); cli.py added (JobResult/job_id type ripple) and VERIFICATION_TRUTH_MATRIX.json (task-181 revision). | DELIVERED via PR#78 (head b030442, CI green on push run 36056456707 + PR run 36057676037; one flaky PR run 36056491410 on the same head — push run green, retriggered PR run green). Gate 5 closure claims audited + reproduced + fixed: typed failure -> COMPLETED (reproduced), one-state failures, pdf staging leak (old artifact destroyed, reproduced), trace job_id absent (reproduced). Mutation harness 6/6 (scripts/gate5_mutation_probes.py). Evidence: docs/audits/GATE5_CLOSURE_2026-09-24.md + GATE5_TRUTH_MATRIX.json. Supersedes PR#71/#74.",
       "acceptance_criteria": [
         "typed render failure (success=False) reaches a failure status, NEVER COMPLETED; notifier must not emit success (regression test)",
         "JobStatus = pending/processing/verifying/completed/failed_retryable/failed_terminal with unit-enforced transition matrix; every illegal transition fails closed",
