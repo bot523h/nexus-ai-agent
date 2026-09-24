@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-24T17:14:12Z",
+  "updated_at": "2026-09-24T17:24:56Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1995,7 +1995,13 @@
       "claimed_at": "2026-09-24T16:32:01Z",
       "ttl_hours": 48,
       "gates_owner": true,
-      "note": "Agent A (Gate 2 reconciliation). Supersedes the contract scope of open PR#68 (same studio files; its queue+slideshow migrations stay valid follow-ups for lifecycle/runtime owners) and rejects the un-PR'd arena/01a0d3a8 v2-protocol proposal (parallel package, no bus integration, gate weakening, hardcoded matrix). Expected textual conflicts with PR#68 (studio/docs) and PR#67 (bus.py lifecycle gate + CREATIVE_STUDIO.md): merge-order issue, recorded in the PR body; integration with PR#67's required_packs gate is NOT VERIFIED until both land."
+      "note": "PR#72 https://github.com/bot523h/nexus-ai-agent/pull/72 (commit 5f955ce) — awaiting merge; merge-order disclosures in PR body (PR#68 supersede, PR#67/PR#70/PR#71 collisions).",
+      "evidence": [
+        "contract 80 + boundary 16 + wave1 22: all pass (local)",
+        "ruff check + format clean; mypy src clean (233 files)",
+        "pytest -m 'not slow': unit+arch 1901 passed/1 skipped, integration 81 passed/19 skipped (local)",
+        "PR#72 CI green: lint pass, test pass, lint-fast pass, migrate-postgres pass (run 36033245557)"
+      ]
     },
     {
       "task": "task-180-adr0006-residual",
