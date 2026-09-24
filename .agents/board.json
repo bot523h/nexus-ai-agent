@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-24T09:41:42Z",
+  "updated_at": "2026-09-24T16:45:20Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -482,6 +482,21 @@
         ".github/workflows/maintenance.yml",
         "CHANGELOG.md",
         "docs/ops/r2-storage.md"
+      ]
+    },
+    {
+      "id": "job-lifecycle",
+      "description": "Canonical Job lifecycle: state machine, artifact verification contract, retry/failure semantics (task-178, Agent C)",
+      "paths": [
+        "src/nexus_ai_agent/jobs/",
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        "src/nexus_ai_agent/application/ports/job_queue.py",
+        "src/nexus_ai_agent/creative/render_jobs.py",
+        "tests/unit/test_job_lifecycle.py",
+        "tests/integration/test_job_lifecycle_queue.py",
+        "docs/architecture/JOB_LIFECYCLE.md",
+        "docs/DECISION_LOG.md",
+        "docs/README.md"
       ]
     }
   ],
@@ -1836,11 +1851,11 @@
     },
     {
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "prerequisites": [],
       "ttl_hours": 48,
       "gates_owner": false,
-      "note": "",
+      "note": "Stewardship-released per orphaned-lease rule (verified with gh 2026-09-24): delivery vehicle PR#65 state=MERGED mergedAt=2026-09-24T09:56:32Z, mergeCommit 035a896 == main HEAD; the lease-holding branch arena/01a0d23e is merged, paths were fenced against every other agent with no live session behind them. cmd_release refuses cross-branch release, so the terminal status is recorded here and in takeover_log. Residual job-layer scope continues as task-178-job-lifecycle.",
       "task": "task-165-legacy-creative-hardening",
       "title": "P0-A: auth for GET /creative/jobs/{id} + upload size cap + legacy deprecation ratchet (ADR)",
       "title_fa": "P0-A: احراز هویت GET /creative/jobs + سقف حجم آپلود + ترکمن‌های رسمی deprecation پایپ‌لاین legacy",
@@ -1869,11 +1884,11 @@
     },
     {
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "prerequisites": [],
       "ttl_hours": 48,
       "gates_owner": false,
-      "note": "",
+      "note": "Stewardship-released per orphaned-lease rule (verified with gh 2026-09-24): delivery vehicle PR#65 state=MERGED mergedAt=2026-09-24T09:56:32Z, mergeCommit 035a896 == main HEAD; the lease-holding branch arena/01a0d23e is merged, paths were fenced against every other agent with no live session behind them. cmd_release refuses cross-branch release, so the terminal status is recorded here and in takeover_log. Residual job-layer scope continues as task-178-job-lifecycle.",
       "task": "task-166-creative-surface-wiring",
       "title": "P0-B: wire creative surface end-to-end — registration, creative_render worker, idempotency, i18n",
       "title_fa": "P0-B: سیم‌کشی انتها به انتهای سطح خلاقیت — رجیستر، worker، idempotency، بومی‌سازی",
@@ -1905,11 +1920,11 @@
     },
     {
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "prerequisites": [],
       "ttl_hours": 48,
       "gates_owner": false,
-      "note": "",
+      "note": "Stewardship-released per orphaned-lease rule (verified with gh 2026-09-24): delivery vehicle PR#65 state=MERGED mergedAt=2026-09-24T09:56:32Z, mergeCommit 035a896 == main HEAD; the lease-holding branch arena/01a0d23e is merged, paths were fenced against every other agent with no live session behind them. cmd_release refuses cross-branch release, so the terminal status is recorded here and in takeover_log. Residual job-layer scope continues as task-178-job-lifecycle.",
       "task": "task-167-backup-verifiability",
       "title": "P0-C: backup success criteria = uploaded + integrity-verified + restore-proven; precise failure diagnosis",
       "title_fa": "P0-C: موفقیت بکاپ = آپلود + راستی‌آزمایی یکپارچگی + اثبات restore؛ تشخیص دقیق خرابی",
@@ -1933,6 +1948,44 @@
       ],
       "agent_branch": "arena/01a0d23e-nexus-ai-agent",
       "claimed_at": "2026-09-24T07:36:43Z"
+    },
+    {
+      "priority": "P0",
+      "status": "active",
+      "prerequisites": [],
+      "ttl_hours": 48,
+      "gates_owner": false,
+      "note": "",
+      "task": "task-178-job-lifecycle",
+      "title": "Canonical job lifecycle: VERIFYING state, independent artifact verification, retry/failure contracts, M1-M10",
+      "title_fa": "چرخهٔ عمر کانونی Job: حالت VERIFYING، راستی‌آزمایی مستقل آرتیفکت، قراردادهای retry و شکست، M1-M10",
+      "zone": "job-lifecycle",
+      "scope": "Execution success != Job success: add VERIFYING to JobStatus, queue-owned independent artifact verification (exists, size>0, sha256 recompute, expected-path containment, ffprobe-equivalent evidence for media, identity binding), guarded transitions with owner+invariant per edge, typed failure semantics, deterministic retry/idempotency matrix, atomic document-artifact writes in render_jobs, M1-M10 negative tests + regression proof that SUCCEEDED implies valid+stable+traceable artifact. Runtime (creative/rendering/*, packs/*, studio/*, slideshow/ffmpeg.py) untouched.",
+      "scope_fa": "موفقیت اجرا != موفقیت Job: افزودن VERIFYING، راستی‌آزمایی مستقل آرتیفکت در صف، ترنزیشن‌های گاردشده با owner و invariant، معناشناسی شکست تایپ‌شده، ماتریس retry/idempotency قطعی، نوشتن اتمیک آرتیفکت‌های document، تست‌های منفی M1-M10 و اثبات رگرسیونی SUCCEEDED ⇒ آرتیفکت معتبر+پایدار+قابل‌ردیابی. Runtime دست‌نخورده.",
+      "acceptance_criteria": [
+        "JobStatus gains VERIFYING; canonical aliases documented (RUNNING≡PROCESSING, SUCCEEDED≡COMPLETED) with no reasonless persisted rename",
+        "creative_render jobs reach COMPLETED only after independent verification (re-hash + probe + containment); verification failure or crash ⇒ FAILED with typed reason, never COMPLETED",
+        "handler success without a valid artifact cannot be COMPLETED (probe test); zero-byte and ffprobe-failed artifacts cannot be COMPLETED",
+        "same idempotency key + different payload ⇒ typed conflict; equal payload ⇒ same job id, no second effect; terminal jobs never re-execute on re-enqueue",
+        "M1-M10 negative tests green; A/B evidence that a lying/stale artifact claim cannot produce SUCCEEDED",
+        "full creative regression + architecture guards green; runtime-owned files untouched (ratchet: creative/rendering/**, creative/packs/**, creative/studio/**, creative/slideshow/ffmpeg.py zero-diff)"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_job_lifecycle.py tests/integration/test_job_lifecycle_queue.py tests/integration/test_creative_chain_e2e.py tests/integration/test_in_process_job_queue.py tests/architecture"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/jobs/",
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        "src/nexus_ai_agent/application/ports/job_queue.py",
+        "src/nexus_ai_agent/creative/render_jobs.py",
+        "tests/unit/test_job_lifecycle.py",
+        "tests/integration/test_job_lifecycle_queue.py",
+        "docs/architecture/JOB_LIFECYCLE.md",
+        "docs/DECISION_LOG.md",
+        "docs/README.md"
+      ],
+      "agent_branch": "arena/01a0d43e-nexus-ai-agent",
+      "claimed_at": "2026-09-24T16:45:20Z"
     }
   ],
   "deferred_log": [
@@ -2478,6 +2531,13 @@
       "task": "pr47-feature-wiring-continuation",
       "reason": "PR#47 reached a terminal state (MERGED 2026-09-22T20:06:40Z, verified with gh). The record was still active_in_review and therefore held bot/handlers.py, bot/surface/*, tests/unit/surface_fakes.py and CHANGELOG.md against every other agent — `agent_board.py check` returned STOP for task-158 on those paths. cmd_release refuses cross-branch release, so the paths are freed here and the reason is recorded, per the orphaned-lease rule documented in AGENTS.md / the PR#33 precedent.",
       "evidence": "gh pr view 47 --json state,mergedAt → {\"state\":\"MERGED\",\"mergedAt\":\"2026-09-22T20:06:40Z\"}"
+    },
+    {
+      "at": "2026-09-24T17:45:00Z",
+      "by_branch": "arena/01a0d43e-nexus-ai-agent",
+      "action": "stewardship-release",
+      "task": "task-165/166/167 (p0-stabilization)",
+      "reason": "PR#65 (the delivery vehicle of all three P0 claims) is MERGED into main (mergeCommit 035a896 = main HEAD, verified with gh pr view 65). The active leases still fenced creative/render_jobs.py, worker.py, bot/creative_surface.py, bot/app.py, api/app.py against every other agent while no live session owns them. Terminal status recorded per the orphaned-lease rule; job-layer continuation is task-178."
     }
   ],
   "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins."
