@@ -1,5 +1,5 @@
 {
-  "$schema_note": "Task-180 verification truth matrix. Chain: OPERATION -> COMMAND -> CAPABILITY -> JOB -> RUNTIME -> ARTIFACT -> VERIFIER -> COMPLETED. Status vocabulary is EXACTLY {PASS, MISSING, BLOCKED, NOT_APPLICABLE}. PASS requires executable evidence (named test) — never the mere existence of a command or capability. Generated 2026-09-24 on branch arena/01a0d475-nexus-ai-agent (base: main 035a896 + PR#71 head 9e9c753).",
+  "$schema_note": "Task-180 verification truth matrix (task-181 revision applied 2026-09-24: failure semantics + publication order — see docs/audits/GATE5_TRUTH_MATRIX.json for the Gate 5 closure claims). Chain: OPERATION -> COMMAND -> CAPABILITY -> JOB -> RUNTIME -> ARTIFACT -> VERIFIER -> COMPLETED. Status vocabulary is EXACTLY {PASS, MISSING, BLOCKED, NOT_APPLICABLE}. PASS requires executable evidence (named test) — never the mere existence of a command or capability. Generated 2026-09-24 on branch arena/01a0d475-nexus-ai-agent (base: main 035a896 + PR#71 head 9e9c753).",
   "generated_at": "2026-09-24T18:30:00Z",
   "status_vocabulary": ["PASS", "MISSING", "BLOCKED", "NOT_APPLICABLE"],
   "operations": [
@@ -24,13 +24,14 @@
         "CAPABILITY": {"status": "PASS", "evidence": "worker.process_pdf_job registered in default_job_handlers"},
         "JOB": {"status": "PASS", "evidence": "durable row + idempotency; tests/integration/test_in_process_job_queue.py"},
         "RUNTIME": {"status": "PASS", "evidence": "real pypdf text-layer extraction (no mock: dev/test dependency comment in pyproject); RAG ingestion is an external side effect, see NOT_APPLICABLE below"},
-        "ARTIFACT": {"status": "PASS", "evidence": "extracted text persisted at <stem>.extracted.txt via atomic temp->replace (task-180 GAP-B); deterministic path derived from the payload alone"},
+        "ARTIFACT": {"status": "PASS", "evidence": "extracted text STAGED at <stem>.extracted.txt.staged, then published at <stem>.extracted.txt via atomic os.replace AFTER verification + re-probe (task-180 GAP-B, publication order task-181 D-0015); deterministic path derived from the payload alone"},
         "VERIFIER": {"status": "PASS", "evidence": "pdf_extract_verifier in default_artifact_verifiers (task-180); exists/size/expected-path/containment/sha256/UTF-8 decode"},
         "COMPLETED": {"status": "PASS", "evidence": "tests/integration/test_verification_gap_closure.py::test_gap_b_pdf_extract_completes_with_verified_text_artifact (real PDF, real extraction, verified block)"}
       },
       "notes": [
         "RAG ingestion (AdvancedRAGEngine.add_document) is an EXTERNAL side effect with no deterministic artifact; it is deliberately NOT claimed as verified (per completion-receipt principle: absent independent evidence => not 'done'). It is doubled in tests; the extraction artifact is measured for real.",
-        "Behavior change (documented): an image-only PDF whose text layer is empty now FAILS (verification_failed:empty_artifact) instead of reporting 'Successfully processed' — false success removed."
+        "Behavior change (documented): an image-only PDF whose text layer is empty now FAILS (verification_failed:empty_artifact) instead of reporting 'Successfully processed' — false success removed.",
+        "Task-181 revision (D-0015): publication order is now stage -> verify -> publish -> re-probe; a refused publication retracts the staged temp and preserves any previous valid <stem>.extracted.txt (pre-task-181 the lane replaced the previous artifact BEFORE verification). The typed user-failure dialect now lands in failed_retryable/failed_terminal (typed_failure:<code>) — never COMPLETED."
       ]
     },
     {

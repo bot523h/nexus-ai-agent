@@ -84,6 +84,8 @@ placeholder text.
 | [audits/VERIFICATION_GAP_REPORT_2026-09-24.md](audits/VERIFICATION_GAP_REPORT_2026-09-24.md) | Task-180 verification closure (Agent D): GAP-A/B/C closed with executable proof (slideshow/story/pdf artifact verifiers), GAP-D recorded as formal gap, attacks A–H + 3 reverted mutations. |
 | [audits/CROSS_PR_TRUTH_2026-09-24.md](audits/CROSS_PR_TRUTH_2026-09-24.md) | Cross-PR truth gate: #67/#68/#70/#71 layer matrix with the branch ≠ PR ≠ merged ≠ CI-on-main distinction, measured with git/gh. |
 | [audits/VERIFICATION_TRUTH_MATRIX.json](audits/VERIFICATION_TRUTH_MATRIX.json) | Machine-readable OPERATION→COMMAND→CAPABILITY→JOB→RUNTIME→ARTIFACT→VERIFIER→COMPLETED matrix (PASS/MISSING/BLOCKED/NOT_APPLICABLE, evidence-named per cell). |
+| [audits/GATE5_CLOSURE_2026-09-24.md](audits/GATE5_CLOSURE_2026-09-24.md) | Task-181 Gate 5 closure/reconciliation (Agent E): claim-audit truth matrix (prior Gate-5-local claims vs GitHub), PR#71/#74 reconciliation, four reproduced defects (typed failure → COMPLETED, one-state failures, publication leak, trace job_id=null), fixes with regression + 6/6 mutation probes. |
+| [audits/GATE5_TRUTH_MATRIX.json](audits/GATE5_TRUTH_MATRIX.json) | Machine-readable Gate 5 claim→evidence matrix + acceptance-gate answers (CLOSED only with Git + CI evidence). |
 | [audits/DEAD_ENGINES_2026-09-22.md](audits/DEAD_ENGINES_2026-09-22.md) | Dead-engine verification (zero importers, measured gates), five-option wiring analysis, negative controls, and the recorded residuals. |
 
 ## History (archived — read-only, never a source of truth)

@@ -1189,3 +1189,65 @@ GAP-B; zero-double Pillow chain for GAP-C; attacks A–H against the DEFAULT reg
 proofs: verifier bypass (11 red), path-validation bypass (3 red), sha bypass (2 red) — all reverted.
 Reports: `docs/audits/VERIFICATION_GAP_REPORT_2026-09-24.md`,
 `docs/audits/CROSS_PR_TRUTH_2026-09-24.md`, `docs/audits/VERIFICATION_TRUTH_MATRIX.json`.
+
+### D-0015 — A typed failure is a FAILURE of the job: 6-state taxonomy, classified retryability, stage→verify→publish, lifecycle-state notifier truth
+
+*Problem.* Gate 5 reconciliation (task-181) reproduced four defects against the task-178/180 tree.
+(1) A typed user failure (`{"success": false, "error_code": …}`) reached **`completed`** — the
+dialect completed "so the notifier can translate the code", which conflated user-facing copy with
+durable truth (`render_failed` + `success=False → completed`). (2) One undifferentiated `failed`
+state erased retryability: `failed` was terminal for a transient ENOSPC exactly as for invalid
+input, and nothing durable could tell the notifier or a future scheduler which failures are worth
+retrying. (3) The `pdf_extract` lane published its sidecar artifact **before** verification: a
+refused extraction (image-only PDF ⇒ `empty_artifact`) replaced and destroyed a previous valid
+`<stem>.extracted.txt` and left the refused bytes at the destination (reproduced: old artifact
+"OLD VALID EXTRACTION" → `''`). (4) Trace events belonging to a job carried **no `job_id`**
+(`creative_render_start` observed with `job_id` absent — the observability pipeline supports
+`structlog.contextvars` binding but nothing bound it).
+
+*Decision.* (1) The typed dialect is a **failure status**, never `completed` (GAP-A). The queue
+short-circuits it before verification (`typed_failure:<code>` persisted, typed result preserved
+for the notifier), and verifiers refuse a typed result fail-closed (`typed_user_failure`) if one
+ever reaches them — two independent layers (D-0013's "job success is a verified state" now also
+means "job failure is a durable state"). (2) `JobStatus` splits `failed` into
+`failed_retryable` / `failed_terminal` (GAP-B): `jobs/failure_semantics` classifies every failure
+family by one principle — RETRYABLE iff the world can change to make the identical request
+succeed — with per-code/per-errno/per-reason rows and tests (temporary IO, dependency unavailable,
+worker crash → RETRYABLE; invalid input, unsupported operation, permission error, deterministic
+handler defects, `render_failed` → TERMINAL; artifact-measurement disagreements → RETRYABLE;
+unknown codes → TERMINAL, fail-closed toward visibility). Pre-task-181 rows spelling `"failed"`
+read back as `failed_terminal` (`parse_job_status`). **No retry scheduler is built** (explicitly
+outside scope): both failure states are terminal as implemented and the reserved
+`failed_retryable → pending` edge stays out of the transition matrix (fail-closed). (3) The one
+lane with a destination outside the job workspace (`pdf_extract`) gets queue-owned publication
+(`ArtifactPublication`): stage at `<stem>.extracted.txt.staged` → verify → atomic `os.replace`
+publish → **re-probe the published bytes** → persist success; any refusal retracts the staged temp
+and preserves the previous published artifact. Workspace lanes map the same order to delivery-time
+publication. (4) The queue binds `job_id` into `structlog.contextvars` for the whole execution and
+emits explicit lifecycle lines (`job_processing`/`verifying`/`completed`/`failed`) — a lifecycle
+event can never record `job_id = null`. (5) Notifier truth source = durable lifecycle state
+(`completed` ⇒ success; `failed_retryable` ⇒ retryable-failure copy; `failed_terminal` ⇒
+terminal-failure copy; non-terminal ⇒ silent), with `result.success` demoted to a second refusal,
+never the truth source.
+
+*Rejected alternatives.* (1) Keeping the complete-on-typed-failure dialect and only translating
+differently — leaves `render_failed → completed` in the durable truth (the reproduced defect).
+(2) A third "unclassified failure" state — the classifier is total; a catch-all state would hide
+unclassified contract drift instead of failing closed. (3) Backup-then-replace publication — worse
+crash semantics (`.prev` orphan states) than stage-then-swap with a re-probe. (4) Building the
+retry scheduler to "use" `failed_retryable` — no repository requirement demands a scheduler, and
+the mission explicitly forbids new retry infrastructure; classification alone is honest and
+complete. (5) Renaming `completed`/`pending` spellings as well — reasonless migration (D-0013's
+rule stands).
+
+*Evidence.* Reproduction of all four defects on the pre-change tree (audit:
+`docs/audits/GATE5_CLOSURE_2026-09-24.md`). `tests/unit/test_failure_semantics.py` (classification
+table, one named test per failure family), `tests/integration/test_gate5_closure.py` (typed-failure
+regression — never `completed`, notifier never succeeds; notification matrix; refused-publication
+preserves the old artifact and cleans staging; happy-path stage→publish→re-probe; publish-failure
+retraction; trace `job_id`; idempotency matrix incl. duplicates during PROCESSING and after
+terminal failure; crash-after-rename recovery), reconciled M-suite assertions (M10b now pins the
+observed RenderError path — repository behavior wins over its old docstring), plus mutation
+harness `scripts/gate5_mutation_probes.py`: 6/6 probes (remove verification / force COMPLETED on
+typed failure / skip atomic publish / drop job_id / notifier trusts result.success / bypass
+failure_status) each GREEN→RED→restore→SHA-restored→GREEN.

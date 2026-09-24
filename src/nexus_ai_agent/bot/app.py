@@ -13,6 +13,7 @@ from typing import Any
 
 from telegram.ext import Application, ApplicationBuilder
 
+from nexus_ai_agent.application.ports.job_queue import JobStatus
 from nexus_ai_agent.config.settings import Settings
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.presence import PresenceStore
@@ -51,6 +52,25 @@ def _bot_token(settings: Settings) -> str:
     return os.environ.get("TELEGRAM_BOT_TOKEN", settings.telegram_bot_token)
 
 
+def _failure_class_line(status: Any, lang: str) -> str:
+    """First line of a failure notification: retryable ≠ terminal (task-181).
+
+    Both are *failure* notifications — never success — and they are visibly
+    distinct so a user can tell "transient, may be retried" from "definitive
+    failure".  Inline copy (this grandfathered file's convention) so the
+    i18n catalog's key parity is untouched.
+    """
+    if status is JobStatus.FAILED_RETRYABLE:
+        head = (
+            "⚠️ شکست موقت (قابل تکرار)"
+            if lang.startswith("fa")
+            else "⚠️ Temporary failure (may be retried)"
+        )
+    else:
+        head = "❌ شکست قطعی" if lang.startswith("fa") else "❌ Terminal failure"
+    return head + "\n"
+
+
 async def _notify_creative_completion(completion: Any, token: str) -> None:
     """task-166 (P0-B): deliver one-shot /edit·/caption·/grade results.
 
@@ -63,6 +83,7 @@ async def _notify_creative_completion(completion: Any, token: str) -> None:
 
     from nexus_ai_agent.creative.render_jobs import ERROR_CODES, cleanup_workspace
     from nexus_ai_agent.i18n import i18n
+    from nexus_ai_agent.jobs.failure_semantics import parse_typed_failure_error
 
     payload = completion.payload or {}
     result = completion.result or {}
@@ -72,13 +93,22 @@ async def _notify_creative_completion(completion: Any, token: str) -> None:
         return
     bot = Bot(token=token)
     try:
-        failed = completion.status.value == "failed" or result.get("success") is False
+        # Source of truth = durable lifecycle state (task-181): success is
+        # announced only for COMPLETED.  ``result.success is False`` stays as
+        # a second, independent refusal — a lying result can never turn a
+        # failure status into a success notification.
+        failed = completion.status is not JobStatus.COMPLETED or result.get("success") is False
         command = str(payload.get("command", "edit"))
         operation = str(payload.get("operation", ""))
         if failed:
-            code = str(result.get("error_code") or "internal")
+            code = str(
+                result.get("error_code")
+                or parse_typed_failure_error(completion.error)
+                or "internal"
+            )
             key = f"creative.failed.{code}" if code in ERROR_CODES else "creative.failed.internal"
-            text = i18n.t(
+            class_line = _failure_class_line(completion.status, lang)
+            text = class_line + i18n.t(
                 key,
                 lang=lang,
                 detail=str(result.get("error_detail") or "—"),
@@ -124,14 +154,32 @@ def _build_job_completion_notifier(token: str) -> Any:
             return
         from telegram import Bot
 
-        if completion.status is JobStatus.FAILED:
+        # Source of truth = durable lifecycle state (task-181, §14): only
+        # COMPLETED may announce success.  FAILED_RETRYABLE and
+        # FAILED_TERMINAL produce visibly distinct *failure* notifications;
+        # any non-terminal state (VERIFYING at delivery time) stays silent —
+        # a success message is impossible outside COMPLETED.
+        if completion.status is JobStatus.FAILED_RETRYABLE:
             text = (
-                f"❌ پردازش «{completion.job_type}» ناموفق بود.\n"
+                f"⚠️ پردازش «{completion.job_type}» ناموفق بود (قابل تکرار).\n"
                 f"شناسه: {completion.job_id}\n"
                 f"خطا: {completion.error or 'نامشخص'}"
             )
-        else:
+        elif completion.status is JobStatus.FAILED_TERMINAL:
+            text = (
+                f"❌ پردازش «{completion.job_type}» با شکست قطعی پایان یافت.\n"
+                f"شناسه: {completion.job_id}\n"
+                f"خطا: {completion.error or 'نامشخص'}"
+            )
+        elif completion.status is JobStatus.COMPLETED:
             text = f"✅ پردازش «{completion.job_type}» کامل شد.\nشناسه: {completion.job_id}"
+        else:
+            logger.info(
+                "job %s notified in non-terminal state %s — staying silent",
+                completion.job_id,
+                completion.status,
+            )
+            return
         if completion.job_type == "slideshow_render":
             # Wave 2.5 (D4 extension, r7 item 4): deliver the rendered master
             # and own its cleanup; failures arrive as short mapped messages.

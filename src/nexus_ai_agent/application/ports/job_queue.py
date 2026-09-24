@@ -16,21 +16,39 @@ class JobStatus(str, Enum):
     ``VERIFYING`` is the explicit phase between execution and success:
     execution success ≠ job success — a job may reach ``COMPLETED`` only
     after its artifact verification succeeded (where a verifier is
-    registered for the job type). Failure paths:
-    ``pending → failed`` (claim-time structural failure),
-    ``processing → failed`` (execution/fail-closed),
-    ``processing → verifying → failed`` (verification failure).
+    registered for the job type) and its artifact was published atomically.
+
+    Failure paths (task-181, GAP-A/GAP-B) always end in one of the two
+    failure states — never in ``COMPLETED``:
+
+    ``pending → failed_*``           claim-time structural failure,
+    ``processing → failed_*``        typed user failure / execution
+                                     (fail-closed conversion),
+    ``processing → verifying →
+    failed_*``                       verification refusal / verifier crash /
+                                     publication failure.
+
+    The split records the classifier's verdict
+    (``jobs/failure_semantics.FailureClass``): ``FAILED_RETRYABLE`` is
+    retry-eligible (the world can change), ``FAILED_TERMINAL`` must not be
+    retried (the identical request must fail again).  There is no retry
+    scheduler in this repository: both failure states are terminal as
+    implemented; the reserved ``failed_retryable → pending`` scheduler edge
+    is deliberately outside the transition matrix (fail-closed).
+
     ``processing/verifying → pending`` is recovery (cancellation/resume),
-    never success. The historical values ``PROCESSING``/``COMPLETED`` keep
-    their persisted spellings; the canonical aliases are ``RUNNING`` and
-    ``SUCCEEDED`` (see ``jobs.lifecycle`` — no reasonless rename).
+    never success.  Persisted spellings of the non-failure states are
+    unchanged; rows written by pre-task-181 code as ``"failed"`` read back
+    as ``FAILED_TERMINAL`` (``jobs.lifecycle.parse_job_status`` — the old
+    contract had one undifferentiated terminal failure).
     """
 
     PENDING = "pending"
     PROCESSING = "processing"
     VERIFYING = "verifying"
     COMPLETED = "completed"
-    FAILED = "failed"
+    FAILED_RETRYABLE = "failed_retryable"
+    FAILED_TERMINAL = "failed_terminal"
 
 
 class JobQueuePort(Protocol):

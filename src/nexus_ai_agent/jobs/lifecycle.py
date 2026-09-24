@@ -1,4 +1,4 @@
-"""The canonical Job lifecycle contract (task-178).
+"""The canonical Job lifecycle contract (task-178, failure taxonomy task-181).
 
 Chain (every step explicit — none implicit):
 
@@ -7,31 +7,52 @@ Chain (every step explicit — none implicit):
       → Runtime Execution          (handler; first side effect only after
                                     the side-effect boundary below)
       → Artifact Verification      (independent, queue-owned re-measurement)
+      → Publication                (atomic rename of the staged artifact, then
+                                    a re-probe of the published bytes — for
+                                    lanes with a destination outside the job
+                                    workspace; workspace-scoped artifacts are
+                                    published at delivery, after verification)
       → Result                     (verified facts or typed failure reason)
 
 States
 ------
 The persisted enum (``application.ports.job_queue.JobStatus``) is
-``pending / processing / verifying / completed / failed``. The canonical
-names of this contract are aliases — the historical persisted spellings are
-kept for compatibility (no reasonless migration):
+``pending / processing / verifying / completed / failed_retryable /
+failed_terminal``. The canonical names of this contract are aliases — the
+historical persisted spellings of the non-failure states are kept for
+compatibility (no reasonless rename):
 
-=================  ==================  ==================================
-Canonical          Persisted enum      Meaning
-=================  ==================  ==================================
-``PENDING``        ``PENDING``         durable, not yet reserved
-``RUNNING``        ``PROCESSING``      reserved by this process; execution
-                                       may touch the world only after the
-                                       side-effect boundary
-``VERIFYING``      ``VERIFYING``       execution returned; artifact is
-                                       being independently re-measured
-``SUCCEEDED``      ``COMPLETED``       execution + verification both ok
-``FAILED``         ``FAILED``          terminal, typed ``error`` persisted
-=================  ==================  ==================================
+=================  ======================  ==================================
+Canonical          Persisted enum          Meaning
+=================  ======================  ==================================
+``PENDING``        ``PENDING``             durable, not yet reserved
+``RUNNING``        ``PROCESSING``          reserved by this process; execution
+                                           may touch the world only after the
+                                           side-effect boundary
+``VERIFYING``      ``VERIFYING``           execution returned; artifact is
+                                           being independently re-measured
+``SUCCEEDED``      ``COMPLETED``           execution + publication +
+                                           verification all ok
+``FAILED_RETRYABLE``  ``FAILED_RETRYABLE`` classified retry-eligible (the
+                                           world can change); terminal as
+                                           implemented — no scheduler
+``FAILED_TERMINAL``   ``FAILED_TERMINAL``  identical request must fail again;
+                                           operator/user action required
+=================  ======================  ==================================
+
+Rows written by pre-task-181 code as ``"failed"`` read back as
+``FAILED_TERMINAL`` via :func:`parse_job_status` (the old contract had one
+undifferentiated terminal failure).
 
 Success rule (Q3): execution success ≠ job success.
 
     execution success + artifact verification success = SUCCESS eligibility
+
+Failure rule (task-181, GAP-A): a typed user failure
+(``{"success": False, "error_code": ...}``) is a FAILURE of the job.  It
+never reaches ``COMPLETED`` — it is classified by
+``jobs.failure_semantics`` and persisted as ``FAILED_RETRYABLE`` or
+``FAILED_TERMINAL`` with the error spelling ``typed_failure:<code>``.
 
 Every transition row in :data:`TRANSITIONS` names its owner and the
 invariant that must hold when the edge is taken; the queue adapter enforces
@@ -51,6 +72,13 @@ from nexus_ai_agent.application.ports.job_queue import JobStatus
 #: not move (compatibility — see module docstring).
 RUNNING: Final[JobStatus] = JobStatus.PROCESSING
 SUCCEEDED: Final[JobStatus] = JobStatus.COMPLETED
+
+#: Legacy persisted spellings (pre-task-181 sidecar rows) → canonical states.
+_LEGACY_STATUS_ALIASES: Final[dict[str, JobStatus]] = {
+    "failed": JobStatus.FAILED_TERMINAL,
+    "running": JobStatus.PROCESSING,
+    "succeeded": JobStatus.COMPLETED,
+}
 
 #: The pre-flight list. NO EXECUTION SIDE-EFFECT is allowed before every one
 #: of these has passed; exactly one boundary exists, and the first lawful
@@ -84,17 +112,29 @@ class TransitionRule:
 
 #: The canonical transition matrix. Anything not listed is illegal and the
 #: adapter's guarded UPDATEs make it impossible to persist.
+#:
+#: RESERVED, NOT IMPLEMENTED (fail-closed): ``(FAILED_RETRYABLE, PENDING)`` —
+#: the retry edge a future scheduler would take.  It is deliberately absent
+#: from this matrix: with no scheduler in the repository, nothing may move a
+#: failure state, and ``assert_transition`` refuses the edge.
 TRANSITIONS: Final[dict[tuple[JobStatus, JobStatus], TransitionRule]] = {
     (JobStatus.PENDING, JobStatus.PROCESSING): TransitionRule(
         owner="queue (reservation CAS)",
         invariant="row exists, not terminal; started_at recorded; at most one "
         "live execution per row per process (task table dedupes)",
     ),
-    (JobStatus.PENDING, JobStatus.FAILED): TransitionRule(
+    (JobStatus.PENDING, JobStatus.FAILED_RETRYABLE): TransitionRule(
         owner="queue (claim-time structural failure)",
         invariant="failure discovered before any reservation is useful "
-        "(e.g. no handler for the job type); typed error persisted; no "
-        "side effect has occurred",
+        "(e.g. no handler for the job type) and classified RETRYABLE (a "
+        "later deploy can make the identical job succeed); typed error "
+        "persisted; no side effect has occurred",
+    ),
+    (JobStatus.PENDING, JobStatus.FAILED_TERMINAL): TransitionRule(
+        owner="queue (claim-time structural failure)",
+        invariant="failure discovered before any reservation is useful and "
+        "classified TERMINAL (e.g. no handler — a deploy must change); typed "
+        "error persisted; no side effect has occurred",
     ),
     (JobStatus.PROCESSING, JobStatus.PROCESSING): TransitionRule(
         owner="queue (resume reclaim)",
@@ -105,24 +145,43 @@ TRANSITIONS: Final[dict[tuple[JobStatus, JobStatus], TransitionRule]] = {
         owner="queue",
         invariant="handler returned a dict (execution finished); nothing is "
         "trusted yet — the result only becomes the job result after "
-        "verification",
+        "verification (and, where a publisher is registered, after atomic "
+        "publication + re-probe)",
     ),
     (JobStatus.VERIFYING, JobStatus.COMPLETED): TransitionRule(
         owner="queue",
-        invariant="artifact verification succeeded; the verified facts are "
-        "persisted inside the result under the queue-owned "
-        "'artifact_verification' key",
+        invariant="artifact verification succeeded (and, for published "
+        "lanes, the staged artifact was atomically published and re-probed); "
+        "the verified facts are persisted inside the result under the "
+        "queue-owned 'artifact_verification' key",
     ),
-    (JobStatus.VERIFYING, JobStatus.FAILED): TransitionRule(
+    (JobStatus.VERIFYING, JobStatus.FAILED_RETRYABLE): TransitionRule(
         owner="queue",
-        invariant="verification failed or the verifier itself raised "
-        "(fail-closed); typed 'verification_failed:<code>' error persisted; "
-        "no result payload is stored",
+        invariant="verification refused or the verifier itself raised "
+        "(fail-closed), classified RETRYABLE (artifact damage is what a "
+        "clean re-execution is for); typed 'verification_failed:<code>' "
+        "error persisted; staged temps retracted; no result payload of a "
+        "success claim is stored",
     ),
-    (JobStatus.PROCESSING, JobStatus.FAILED): TransitionRule(
+    (JobStatus.VERIFYING, JobStatus.FAILED_TERMINAL): TransitionRule(
+        owner="queue",
+        invariant="verification refused with a deterministic handler defect "
+        "(no claim / malformed sha / mis-routed publication / typed user "
+        "failure reached verification), classified TERMINAL; error "
+        "persisted; staged temps retracted",
+    ),
+    (JobStatus.PROCESSING, JobStatus.FAILED_RETRYABLE): TransitionRule(
         owner="queue (fail-closed conversion)",
-        invariant="handler raised or returned a non-dict; runtime failure is "
-        "NEVER converted into success; typed error persisted",
+        invariant="typed user failure (success=False dialect) or an "
+        "exception escaped the handler and classification returned "
+        "RETRYABLE; runtime failure is NEVER converted into success; typed "
+        "error persisted (typed_failure:<code> or the exception text)",
+    ),
+    (JobStatus.PROCESSING, JobStatus.FAILED_TERMINAL): TransitionRule(
+        owner="queue (fail-closed conversion)",
+        invariant="typed user failure or handler exception classified "
+        "TERMINAL (invalid input / unsupported operation / permission / "
+        "render_failed / contract violation); error persisted",
     ),
     (JobStatus.PROCESSING, JobStatus.PENDING): TransitionRule(
         owner="queue (cancellation / shutdown)",
@@ -136,12 +195,46 @@ TRANSITIONS: Final[dict[tuple[JobStatus, JobStatus], TransitionRule]] = {
     ),
 }
 
-_TERMINAL: Final[frozenset[JobStatus]] = frozenset({JobStatus.COMPLETED, JobStatus.FAILED})
+_TERMINAL: Final[frozenset[JobStatus]] = frozenset(
+    {JobStatus.COMPLETED, JobStatus.FAILED_RETRYABLE, JobStatus.FAILED_TERMINAL}
+)
+
+FAILURE_STATES: Final[frozenset[JobStatus]] = frozenset(
+    {JobStatus.FAILED_RETRYABLE, JobStatus.FAILED_TERMINAL}
+)
+
+
+def parse_job_status(raw: str) -> JobStatus:
+    """Parse a persisted status, mapping legacy spellings deterministically.
+
+    Pre-task-181 rows may carry ``"failed"`` (one undifferentiated terminal
+    failure); they read back as ``FAILED_TERMINAL`` — the old contract had no
+    retry classification, so terminal is the conservative, honest mapping.
+    Unknown spellings raise (fail-closed; never silently coerce).
+    """
+    try:
+        return JobStatus(raw)
+    except ValueError:
+        aliased = _LEGACY_STATUS_ALIASES.get(raw)
+        if aliased is not None:
+            return aliased
+        raise
 
 
 def is_terminal(status: JobStatus) -> bool:
-    """Terminal states have no outgoing edges — enforced by guarded UPDATEs."""
+    """Terminal states have no outgoing edges — enforced by guarded UPDATEs.
+
+    Both failure states are terminal *as implemented*: no scheduler exists to
+    take the reserved ``failed_retryable → pending`` edge.  ``FAILED_RETRYABLE``
+    records retry-eligibility for that future edge — it never implies a retry
+    happened.
+    """
     return status in _TERMINAL
+
+
+def is_failure(status: JobStatus) -> bool:
+    """True for the two durable failure states (never ``COMPLETED``)."""
+    return status in FAILURE_STATES
 
 
 def is_legal_transition(source: JobStatus, target: JobStatus) -> bool:
@@ -161,7 +254,10 @@ class JobResult:
 
     Built from the durable row plus the (verified) handler result. Every
     ``SUCCEEDED`` job's result must be traceable back through this object to
-    the command that started it.
+    the command that started it.  Failure jobs carry ``failure_reason``
+    (``typed_failure:<code>`` / ``verification_failed:<code>`` / exception
+    text) and the durable ``execution_status`` is always one of the two
+    failure states — a failure result never reads as success here either.
     """
 
     command_id: str
@@ -247,6 +343,7 @@ class JobResult:
 
 
 __all__ = [
+    "FAILURE_STATES",
     "PREFLIGHT_REQUIREMENTS",
     "RUNNING",
     "SIDE_EFFECT_BOUNDARY",
@@ -255,6 +352,8 @@ __all__ = [
     "TRANSITIONS",
     "TransitionRule",
     "assert_transition",
+    "is_failure",
     "is_legal_transition",
     "is_terminal",
+    "parse_job_status",
 ]

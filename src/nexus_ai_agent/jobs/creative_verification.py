@@ -20,9 +20,12 @@ This is the Job layer's check of the canonical one-shot chain
   ffprobe-equivalent.
 
 A ``{"success": False, "error_code": ...}`` result is the repository's
-typed user-failure dialect: no artifact is claimed, verification is
-``not_applicable``, and the job completes so the notifier can translate the
-code. Any ``success`` result MUST carry a verifiable artifact claim —
+typed user-failure dialect — and, since task-181 (GAP-A), a FAILURE of the
+job: the queue short-circuits it to ``FAILED_RETRYABLE``/``FAILED_TERMINAL``
+(``typed_failure:<code>``) before verification runs.  Verifiers apply the
+same rule fail-closed: a typed failure that reaches a verifier is REFUSED
+(``typed_user_failure``) — no layer may let a non-success claim complete.
+Any ``success`` result MUST carry a verifiable artifact claim —
 there is no "success without artifact" path through this verifier.
 """
 
@@ -32,6 +35,7 @@ from pathlib import Path
 
 from nexus_ai_agent.jobs.verification import (
     REASON_NO_CLAIM,
+    REASON_TYPED_FAILURE,
     ArtifactClaim,
     ArtifactClaimError,
     VerificationOutcome,
@@ -48,13 +52,21 @@ EXPECTED_ARTIFACT_NAMES: dict[str, str] = {
 DEFAULT_ARTIFACT_NAME = "output.mp4"
 
 
-def _not_applicable(result: dict[str, object]) -> VerificationOutcome:
+def _typed_user_failure_refusal(result: dict[str, object]) -> VerificationOutcome:
+    """Fail-closed answer to a typed user failure (task-181, GAP-A).
+
+    A result shaped ``{"success": False, "error_code": ...}`` claims no
+    artifact and is not an execution success — a verifier must never answer
+    ``ok=True`` for it (that would complete the job).  The queue classifies
+    typed failures before verification; this is the second, independent
+    layer of the same rule.
+    """
     return VerificationOutcome(
-        ok=True,
-        reason_code=None,
+        ok=False,
+        reason_code=REASON_TYPED_FAILURE,
         summary={
-            "status": "not_applicable",
-            "reason": "typed_user_failure",
+            "status": "failed",
+            "reason_code": REASON_TYPED_FAILURE,
             "error_code": str(result.get("error_code") or ""),
             "logical_identity": {"project_id": None, "output_asset_id": ""},
             "spec_identity": {"operation": str(result.get("operation") or "")},
@@ -73,7 +85,7 @@ def creative_render_verifier(
     contract — any internal error is the queue's fail-closed path.
     """
     if result.get("success") is False and "error_code" in result:
-        return _not_applicable(result)
+        return _typed_user_failure_refusal(result)
 
     try:
         claim = ArtifactClaim.from_handler_result(dict(result), default_kind="binary")
@@ -156,11 +168,12 @@ def slideshow_render_verifier(
       :func:`verify_artifact` (``kind == "video"`` for the ``.mp4`` master).
 
     A ``{"success": False, "error_code": ...}`` result is the same typed
-    user-failure dialect as ``creative_render``: nothing was claimed, so
-    verification is ``not_applicable`` and the notifier maps the code.
+    user-failure dialect as ``creative_render``: refused fail-closed
+    (``typed_user_failure``) — the queue turns it into a failure status and
+    the notifier maps the code.
     """
     if result.get("success") is False and "error_code" in result:
-        return _not_applicable(result)
+        return _typed_user_failure_refusal(result)
 
     try:
         claim = ArtifactClaim.from_handler_result(dict(result), default_kind="video")

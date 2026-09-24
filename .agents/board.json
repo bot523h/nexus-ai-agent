@@ -549,7 +549,9 @@
         "docs/DECISION_LOG.md",
         "docs/README.md",
         "docs/audits/GATE5_CLOSURE_2026-09-24.md",
-        "docs/audits/GATE5_TRUTH_MATRIX.json"
+        "docs/audits/GATE5_TRUTH_MATRIX.json",
+        "src/nexus_ai_agent/cli.py",
+        "docs/audits/VERIFICATION_TRUTH_MATRIX.json"
       ]
     }
   ],
@@ -2115,14 +2117,14 @@
         "tests/integration/test_in_process_job_queue.py",
         "scripts/gate5_mutation_probes.py",
         "docs/architecture/JOB_LIFECYCLE.md",
-        "docs/architecture/adr/0007-failure-semantics-and-job-outcomes.md",
-        "docs/architecture/adr/README.md",
         "docs/DECISION_LOG.md",
         "docs/README.md",
         "docs/audits/GATE5_CLOSURE_2026-09-24.md",
-        "docs/audits/GATE5_TRUTH_MATRIX.json"
+        "docs/audits/GATE5_TRUTH_MATRIX.json",
+        "src/nexus_ai_agent/cli.py",
+        "docs/audits/VERIFICATION_TRUTH_MATRIX.json"
       ],
-      "note": "",
+      "note": "AMENDED 2026-09-24: adr/0007 + adr/README.md dropped from exclusive paths (ADR dir is docs-layer-only per adr/README rule 3; failure semantics lives in DECISION_LOG D-0015 — no ADR file created); cli.py added (JobResult/job_id type ripple) and VERIFICATION_TRUTH_MATRIX.json (task-181 revision).",
       "acceptance_criteria": [
         "typed render failure (success=False) reaches a failure status, NEVER COMPLETED; notifier must not emit success (regression test)",
         "JobStatus = pending/processing/verifying/completed/failed_retryable/failed_terminal with unit-enforced transition matrix; every illegal transition fails closed",

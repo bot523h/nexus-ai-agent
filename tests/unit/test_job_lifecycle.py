@@ -41,6 +41,7 @@ from nexus_ai_agent.jobs.verification import (
     REASON_SHA_FORMAT,
     REASON_SHA_MISMATCH,
     REASON_SIZE_MISMATCH,
+    REASON_TYPED_FAILURE,
     REASON_UNEXPECTED_PATH,
     ArtifactClaim,
     ArtifactClaimError,
@@ -59,13 +60,19 @@ def test_canonical_aliases_map_to_persisted_values() -> None:
 
 
 def test_every_mission_failure_path_exists() -> None:
-    # PENDING → FAILED / RUNNING → FAILED / RUNNING → VERIFYING → FAILED /
-    # VERIFYING → FAILED, plus recovery and the success eligibility edge.
+    # PENDING → FAILED_* / RUNNING → FAILED_* / RUNNING → VERIFYING → FAILED_* /
+    # VERIFYING → FAILED_*, plus recovery and the success eligibility edge.
+    # task-181: every failure edge exists in BOTH classified shapes
+    # (FAILED_RETRYABLE / FAILED_TERMINAL) — a failure path can never fall
+    # through to COMPLETED.
     required = {
-        (JobStatus.PENDING, JobStatus.FAILED),
-        (JobStatus.PROCESSING, JobStatus.FAILED),
+        (JobStatus.PENDING, JobStatus.FAILED_TERMINAL),
+        (JobStatus.PENDING, JobStatus.FAILED_RETRYABLE),
+        (JobStatus.PROCESSING, JobStatus.FAILED_TERMINAL),
+        (JobStatus.PROCESSING, JobStatus.FAILED_RETRYABLE),
         (JobStatus.PROCESSING, JobStatus.VERIFYING),
-        (JobStatus.VERIFYING, JobStatus.FAILED),
+        (JobStatus.VERIFYING, JobStatus.FAILED_TERMINAL),
+        (JobStatus.VERIFYING, JobStatus.FAILED_RETRYABLE),
         (JobStatus.VERIFYING, JobStatus.COMPLETED),
         (JobStatus.PENDING, JobStatus.PROCESSING),
         (JobStatus.PROCESSING, JobStatus.PENDING),
@@ -82,7 +89,11 @@ def test_every_transition_names_owner_and_invariant() -> None:
 
 def test_terminal_states_have_no_outgoing_edges() -> None:
     assert is_terminal(JobStatus.COMPLETED)
-    assert is_terminal(JobStatus.FAILED)
+    # task-181: both failure states are terminal as implemented — the
+    # reserved failed_retryable → pending scheduler edge is deliberately
+    # outside TRANSITIONS (no scheduler exists; fail-closed).
+    assert is_terminal(JobStatus.FAILED_RETRYABLE)
+    assert is_terminal(JobStatus.FAILED_TERMINAL)
     assert not is_terminal(JobStatus.VERIFYING)
     for source, _ in TRANSITIONS:
         assert not is_terminal(source), f"terminal state {_source_name(source)} has an edge"
@@ -448,12 +459,18 @@ def test_creative_verifier_binds_expected_artifact_names(tmp_path: Path) -> None
     assert not outcome.ok and outcome.reason_code == REASON_UNEXPECTED_PATH
 
 
-def test_creative_verifier_typed_user_failure_is_not_applicable() -> None:
+def test_creative_verifier_typed_user_failure_is_refused_fail_closed() -> None:
+    # task-181 (GAP-A) contract change (strengthening): a typed user failure
+    # is a FAILURE of the job.  The queue short-circuits it before
+    # verification; if one ever reaches a verifier, the verifier must refuse
+    # it fail-closed — no layer may answer ok=True for a non-success claim.
     outcome = creative_render_verifier(
         {"workspace_dir": "/tmp/x"},
         {"success": False, "error_code": "unsupported_operation", "operation": "x"},
     )
-    assert outcome.ok and outcome.summary["status"] == "not_applicable"
+    assert not outcome.ok
+    assert outcome.reason_code == REASON_TYPED_FAILURE
+    assert outcome.summary["reason_code"] == REASON_TYPED_FAILURE
 
 
 def test_creative_verifier_success_without_claim_fails_closed() -> None:

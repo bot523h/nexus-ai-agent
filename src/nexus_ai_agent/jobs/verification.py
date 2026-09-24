@@ -20,9 +20,13 @@ Three identities (found in the tree, not assumed):
 
 Canonical rule: a handler that claims success without a verifiable artifact
 cannot complete a job. A result shaped ``{"success": False, "error_code":
-...}`` is a *typed user failure* — by this repository's durable contract the
-job completes with the typed code (the notifier translates it); no artifact
-is claimed, so there is nothing to verify (status ``not_applicable``).
+...}`` is a *typed user failure* — since task-181 (GAP-A) it is a FAILURE of
+the job: the queue classifies it (``jobs/failure_semantics``) and persists
+``FAILED_RETRYABLE``/``FAILED_TERMINAL`` with ``typed_failure:<code>``; the
+notifier translates the code. Verifiers apply the same rule fail-closed: if
+a typed failure result ever reaches a verifier (it should not — the queue
+short-circuits first), the verifier refuses it (``typed_user_failure``) —
+no layer of the stack may let a non-success claim become ``COMPLETED``.
 """
 
 from __future__ import annotations
@@ -45,6 +49,8 @@ REASON_SHA_MISMATCH = "sha256_mismatch"
 REASON_SIZE_MISMATCH = "size_mismatch"
 REASON_PROBE_FAILED = "probe_failed"
 REASON_DURATION_MISMATCH = "duration_mismatch"
+#: task-181 (GAP-A): a typed user failure reached a verifier — refuse it.
+REASON_TYPED_FAILURE = "typed_user_failure"
 
 _TOLERANCE_US = 1_500_000  # claimed vs probed duration bound (same probe source)
 

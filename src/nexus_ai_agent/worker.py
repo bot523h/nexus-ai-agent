@@ -100,14 +100,18 @@ async def generate_story_task(user_id: int, text: str, output_path: str) -> str:
 async def process_pdf_job(payload: dict[str, object]) -> dict[str, object]:
     """Queue handler for ``pdf_extract`` — with a measurable artifact (task-180).
 
-    The extracted text layer is persisted next to the source PDF at the
-    deterministic path ``<stem>.extracted.txt`` (single source of truth:
-    ``jobs.feature_verification.pdf_text_artifact_path``) via atomic
-    temp→replace publication, and the result carries the artifact claim
-    (path + sha256 + size) that the registered ``pdf_extract`` verifier
-    re-measures independently. Extraction/artifact failures raise, so the
-    queue persists ``failed`` — a job can no longer report success without
-    a verifiable artifact.
+    The extracted text layer is **staged** next to the source PDF at the
+    deterministic name ``<stem>.extracted.txt.staged`` (single source of
+    truth: ``jobs.feature_verification.pdf_text_staged_path``) via atomic
+    temp→replace into the staging name, and the result carries the artifact
+    claim (staged path + sha256 + size) that the registered ``pdf_extract``
+    verifier re-measures independently. The queue publishes the staged
+    artifact (atomic rename to ``<stem>.extracted.txt``) and re-probes it
+    only after verification succeeded (task-181: stage → verify → publish →
+    re-probe) — a refused extraction never touches a previously published
+    artifact. Extraction/artifact failures raise, so the queue persists a
+    failure status — a job can no longer report success without a
+    verifiable artifact.
     """
     user_id = int(str(payload["user_id"]))
     file_path = str(payload["file_path"])
@@ -115,11 +119,11 @@ async def process_pdf_job(payload: dict[str, object]) -> dict[str, object]:
     try:
         text = await extract_pdf_text(file_path)
         from nexus_ai_agent.jobs.feature_verification import (
-            pdf_text_artifact_path,
+            pdf_text_staged_path,
             publish_text_artifact,
         )
 
-        artifact = pdf_text_artifact_path(Path(file_path))
+        artifact = pdf_text_staged_path(Path(file_path))
         publish_text_artifact(artifact, text)
 
         from nexus_ai_agent.features.rag import AdvancedRAGEngine

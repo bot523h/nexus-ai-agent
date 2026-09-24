@@ -8,22 +8,40 @@ process, or ``resume_pending_jobs`` (CLI/operator entry point) to requeue
 only rows still sitting in ``pending``. Terminal states fan out to an
 optional, strictly fail-safe completion hook (job-finished notifications).
 
-Canonical lifecycle (task-178, ``nexus_ai_agent.jobs.lifecycle``):
+Canonical lifecycle (task-178, failure taxonomy task-181):
 
     pending → processing → verifying → completed
                  │             │
-                 └─────────────┴──→ failed          (fail-closed)
-                 └─────────────┴──→ pending         (cancel/recover)
+                 ├─────────────┴──→ failed_retryable   (classified RETRYABLE)
+                 ├─────────────┴──→ failed_terminal    (classified TERMINAL)
+                 └─────────────┴──→ pending            (cancel/recover)
 
 Every edge is a guarded, status-conditioned UPDATE (compare-and-set, never a
 blind write). For job types with a registered artifact verifier, a handler
 result is NEVER trusted on its own: the queue moves the row to ``verifying``
 and re-measures the claimed artifact independently (exists, size > 0,
 sha256 recompute, expected-path containment, probe evidence for media).
-Execution success + verification success = success eligibility; anything
-else is terminal ``failed`` with a typed ``verification_failed:<code>``
-error. Rows without a registered verifier keep the historical two-phase
-semantics unchanged.
+Execution success + verification success = success eligibility.  For lanes
+whose artifact destination lives outside the job workspace (``pdf_extract``)
+the order is stage → verify → **publish atomically** → **re-probe the
+published bytes** → persist success (registered
+:class:`ArtifactPublication`); a refusal retracts the staged temp and leaves
+any previous published artifact untouched.
+
+Failure semantics (task-181, GAP-A): a typed user failure
+(``{"success": False, "error_code": ...}``) is a FAILURE of the job — the
+queue classifies it and persists ``failed_retryable``/``failed_terminal``
+with a ``typed_failure:<code>`` error (result payload preserved for the
+notifier/audit).  Verification refusals persist
+``verification_failed:<code>`` in a failure state the same way.  The two
+failure states record the classifier's verdict
+(``jobs/failure_semantics``); there is no retry scheduler — both are
+terminal as implemented.  Rows without a registered verifier keep the
+historical two-phase semantics otherwise unchanged.
+
+Trace (task-181): every event emitted while a job runs is bound to its
+``job_id`` (structlog contextvars — the worker's events carry it
+automatically) and the queue's own lifecycle lines name it explicitly.
 """
 
 from __future__ import annotations
@@ -40,7 +58,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+import structlog
+
 from nexus_ai_agent.application.ports.job_queue import JobStatus
+from nexus_ai_agent.jobs.failure_semantics import (
+    FailureClass,
+    classify_exception,
+    classify_typed_code,
+    classify_verification_reason,
+    failure_status,
+    is_typed_user_failure,
+    typed_failure_error,
+)
+from nexus_ai_agent.jobs.lifecycle import parse_job_status
 from nexus_ai_agent.jobs.verification import VerificationOutcome
 
 JobHandler = Callable[[dict[str, object]], Awaitable[dict[str, object]]]
@@ -49,6 +79,43 @@ JobCompletionHook = Callable[["JobCompletion"], Awaitable[None]]
 #: A verifier re-measures a handler result against the filesystem. It must
 #: be sync (the queue runs it in a worker thread) and side-effect free.
 ArtifactVerifier = Callable[[dict[str, object], dict[str, object]], VerificationOutcome]
+
+
+@dataclass(frozen=True)
+class ArtifactPublication:
+    """Queue-owned publication step for lanes with an external destination.
+
+    ``publish`` atomically moves the verified staged artifact to its final
+    name and returns the result patch (``artifact_path`` → published).
+    ``retract`` removes this attempt's staged temp after a refusal — and
+    never touches a previously published artifact.  Both run in a worker
+    thread; both must be idempotent (recovery may re-run them).
+    """
+
+    publish: Callable[[dict[str, object], dict[str, object]], dict[str, object]]
+    retract: Callable[[dict[str, object], dict[str, object]], None]
+
+
+def default_artifact_publications() -> dict[str, ArtifactPublication]:
+    """Built-in publications keyed by job type (task-181).
+
+    Only ``pdf_extract`` — the single lane whose artifact destination
+    (``<stem>.extracted.txt`` sidecar) lives *outside* the job workspace.
+    Workspace-scoped lanes (creative_render / slideshow_render / story) are
+    published at delivery, after verification, by the completion notifier.
+    """
+    from nexus_ai_agent.jobs.feature_verification import (
+        publish_pdf_text_artifact,
+        retract_pdf_text_artifact,
+    )
+
+    return {
+        "pdf_extract": ArtifactPublication(
+            publish=publish_pdf_text_artifact,
+            retract=retract_pdf_text_artifact,
+        ),
+    }
+
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +184,7 @@ class InProcessJobQueue:
         *,
         on_job_finished: JobCompletionHook | None = None,
         artifact_verifiers: Mapping[str, ArtifactVerifier] | None = None,
+        artifact_publications: Mapping[str, ArtifactPublication] | None = None,
     ) -> None:
         self.db_path = Path(db_path)
         self._sqlite_path = str(db_path)
@@ -127,6 +195,13 @@ class InProcessJobQueue:
             dict(default_artifact_verifiers())
             if artifact_verifiers is None
             else dict(artifact_verifiers)
+        )
+        # ``artifact_publications=None`` installs the built-in registry
+        # (pdf_extract staged publication); pass ``{}`` to opt out.
+        self._artifact_publications: dict[str, ArtifactPublication] = (
+            dict(default_artifact_publications())
+            if artifact_publications is None
+            else dict(artifact_publications)
         )
         if self._sqlite_path != ":memory:":
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -152,6 +227,15 @@ class InProcessJobQueue:
         if not normalized:
             raise ValueError("job_type must not be empty")
         self._artifact_verifiers[normalized] = verifier
+
+    def register_artifact_publication(
+        self, job_type: str, publication: ArtifactPublication
+    ) -> None:
+        """Register (or replace) the publication step for ``job_type``."""
+        normalized = job_type.strip()
+        if not normalized:
+            raise ValueError("job_type must not be empty")
+        self._artifact_publications[normalized] = publication
 
     async def enqueue(
         self,
@@ -188,7 +272,7 @@ class InProcessJobQueue:
         if row is None:
             raise KeyError(f"unknown job: {job_id}")
         try:
-            return JobStatus(str(row["status"]))
+            return parse_job_status(str(row["status"]))
         except ValueError as exc:
             raise RuntimeError(f"invalid persisted job status for {job_id}") from exc
 
@@ -228,7 +312,7 @@ class InProcessJobQueue:
             payload=payload,
             result=result,
             attempt=int(row["attempt"] or 0),
-            execution_status=str(row["status"]),
+            execution_status=parse_job_status(str(row["status"])).value,
             verification=verification,
             error=str(row["error"]) if row["error"] is not None else None,
         )
@@ -277,20 +361,45 @@ class InProcessJobQueue:
         row = await asyncio.to_thread(self._fetch_row, job_id)
         if row is None:
             return
-        if row["status"] in {JobStatus.COMPLETED.value, JobStatus.FAILED.value}:
-            return
+        try:
+            if parse_job_status(str(row["status"])) in {
+                JobStatus.COMPLETED,
+                JobStatus.FAILED_RETRYABLE,
+                JobStatus.FAILED_TERMINAL,
+            }:
+                return
+        except ValueError:
+            return  # unknown durable spelling: never execute it (fail-closed)
 
-        # Claim-time structural failure: PENDING → FAILED before any
-        # reservation is useful (no side effect has occurred).
-        handler = self._handlers.get(str(row["job_type"]))
+        # Trace (task-181): bind the durable job id for everything that runs
+        # under this job — the handler's structlog events (worker) and the
+        # queue's own lifecycle lines all carry it.  Task-local (each
+        # _process_job runs as its own asyncio task), so concurrent jobs can
+        # never cross-bind.
+        structlog.contextvars.bind_contextvars(job_id=job_id)
+        job_type = str(row["job_type"])
+
+        # Claim-time structural failure: PENDING → FAILED_* before any
+        # reservation is useful (no side effect has occurred).  "No handler"
+        # is a deploy-level defect: the identical job cannot succeed until
+        # the code changes ⇒ TERMINAL.
+        handler = self._handlers.get(job_type)
         if handler is None:
             error = f"no handler registered for job type {row['job_type']}"
-            await asyncio.to_thread(self._mark_failed, job_id, error)
+            status = failure_status(FailureClass.TERMINAL)
+            logger.info(
+                "job_failed job_id=%s type=%s status=%s error=%r",
+                job_id,
+                job_type,
+                status.value,
+                error,
+            )
+            await asyncio.to_thread(self._mark_failed, job_id, error, status)
             await self._notify_completion(
                 JobCompletion(
                     job_id=job_id,
-                    job_type=str(row["job_type"]),
-                    status=JobStatus.FAILED,
+                    job_type=job_type,
+                    status=status,
                     result=None,
                     error=error,
                     payload={},
@@ -302,6 +411,7 @@ class InProcessJobQueue:
         # execution; its own preflight (payload/capability/references)
         # precedes its first side effect by contract (jobs.lifecycle).
         await asyncio.to_thread(self._mark_processing, job_id)
+        logger.info("job_processing job_id=%s type=%s", job_id, job_type)
         payload: dict[str, object] = {}
         try:
             parsed = json.loads(str(row["payload_json"]))
@@ -317,12 +427,21 @@ class InProcessJobQueue:
             await asyncio.to_thread(self._mark_pending, job_id)
             raise
         except Exception as exc:  # noqa: BLE001 - job failure must be persisted
-            await asyncio.to_thread(self._mark_failed, job_id, str(exc))
+            # Fail-closed conversion: classify and persist a failure status.
+            status = failure_status(classify_exception(exc))
+            logger.info(
+                "job_failed job_id=%s type=%s status=%s error=%r",
+                job_id,
+                job_type,
+                status.value,
+                str(exc),
+            )
+            await asyncio.to_thread(self._mark_failed, job_id, str(exc), status)
             await self._notify_completion(
                 JobCompletion(
                     job_id=job_id,
-                    job_type=str(row["job_type"]),
-                    status=JobStatus.FAILED,
+                    job_type=job_type,
+                    status=status,
                     result=None,
                     error=str(exc),
                     payload=payload,
@@ -330,7 +449,36 @@ class InProcessJobQueue:
             )
             return
 
-        verifier = self._artifact_verifiers.get(str(row["job_type"]))
+        # GAP-A (task-181): a typed user failure is a FAILURE of the job —
+        # never COMPLETED, whatever any verifier would answer about it.  The
+        # typed result payload is preserved (error_code/dialect) so the
+        # notifier can translate it and the audit chain can read it.
+        if is_typed_user_failure(result):
+            code = str(result["error_code"])
+            status = failure_status(classify_typed_code(code))
+            error = typed_failure_error(code)
+            logger.info(
+                "job_failed job_id=%s type=%s status=%s error=%s",
+                job_id,
+                job_type,
+                status.value,
+                error,
+            )
+            await asyncio.to_thread(self._mark_failed, job_id, error, status, result)
+            await self._notify_completion(
+                JobCompletion(
+                    job_id=job_id,
+                    job_type=job_type,
+                    status=status,
+                    result=result,
+                    error=error,
+                    payload=payload,
+                )
+            )
+            return
+
+        verifier = self._artifact_verifiers.get(job_type)
+        publication = self._artifact_publications.get(job_type)
         if verifier is None:
             # No verification contract for this job type: historical
             # semantics — the handler result is the completed result.
@@ -341,36 +489,88 @@ class InProcessJobQueue:
             # independently before the row may become terminal-success.
             if not await asyncio.to_thread(self._mark_verifying, job_id):
                 return  # row was reclaimed/reset elsewhere; not ours anymore
+            logger.info("job_verifying job_id=%s type=%s", job_id, job_type)
             outcome = await self._verify_safely(verifier, payload, result)
+            if outcome.ok and publication is not None:
+                # Stage → verify → **publish atomically** → **re-probe** →
+                # persist success (§4 order, task-181).  A publish or
+                # re-probe failure is a verification-class refusal: retract
+                # the staged temp, never a previously published artifact.
+                result, outcome = await self._publish_and_reprobe(
+                    publication, verifier, payload, result
+                )
             if outcome.ok:
                 final_result = {**result, VERIFICATION_RESULT_KEY: outcome.block}
                 await asyncio.to_thread(self._mark_completed, job_id, final_result)
             else:
-                await asyncio.to_thread(
-                    self._mark_failed, job_id, f"verification_failed:{outcome.reason_code}"
+                if publication is not None:
+                    await asyncio.to_thread(publication.retract, payload, result)
+                reason = str(outcome.reason_code)
+                status = failure_status(classify_verification_reason(reason))
+                error = f"verification_failed:{reason}"
+                logger.info(
+                    "job_failed job_id=%s type=%s status=%s error=%s",
+                    job_id,
+                    job_type,
+                    status.value,
+                    error,
                 )
+                await asyncio.to_thread(self._mark_failed, job_id, error, status)
                 await self._notify_completion(
                     JobCompletion(
                         job_id=job_id,
-                        job_type=str(row["job_type"]),
-                        status=JobStatus.FAILED,
+                        job_type=job_type,
+                        status=status,
                         result=None,
-                        error=f"verification_failed:{outcome.reason_code}",
+                        error=error,
                         payload=payload,
                     )
                 )
                 return
 
+        logger.info("job_completed job_id=%s type=%s", job_id, job_type)
         await self._notify_completion(
             JobCompletion(
                 job_id=job_id,
-                job_type=str(row["job_type"]),
+                job_type=job_type,
                 status=JobStatus.COMPLETED,
                 result=final_result,
                 error=None,
                 payload=payload,
             )
         )
+
+    async def _publish_and_reprobe(
+        self,
+        publication: ArtifactPublication,
+        verifier: ArtifactVerifier,
+        payload: dict[str, object],
+        result: dict[str, object],
+    ) -> tuple[dict[str, object], VerificationOutcome]:
+        """Atomic publication + independent re-probe of the published bytes."""
+        try:
+            patch = await asyncio.to_thread(publication.publish, payload, result)
+        except Exception as exc:  # noqa: BLE001 - publication failure is a refusal
+            logger.warning("artifact publish failed; keeping staged temp retracted: %s", exc)
+            return result, VerificationOutcome(
+                ok=False,
+                reason_code="publish_failed",
+                summary={"status": "failed", "reason_code": "publish_failed", "detail": str(exc)},
+            )
+        published = {**result, **patch}
+        reprobed = await self._verify_safely(verifier, payload, published)
+        if not reprobed.ok:
+            reason = reprobed.reason_code or "reprobe_failed"
+            return published, VerificationOutcome(
+                ok=False,
+                reason_code="reprobe_failed",
+                summary={
+                    "status": "failed",
+                    "reason_code": "reprobe_failed",
+                    "detail": f"published artifact failed re-probe ({reason})",
+                },
+            )
+        return published, reprobed
 
     async def _verify_safely(
         self,
@@ -607,17 +807,34 @@ class InProcessJobQueue:
                 ),
             )
 
-    def _mark_failed(self, job_id: str, error: str) -> None:
+    def _mark_failed(
+        self,
+        job_id: str,
+        error: str,
+        status: JobStatus = JobStatus.FAILED_TERMINAL,
+        result: dict[str, object] | None = None,
+    ) -> None:
+        """Persist a classified failure (guarded CAS from any non-terminal).
+
+        ``result`` is stored only for typed user failures (the durable
+        ``{"success": False, "error_code": ...}`` dialect the notifier
+        translates); execution crashes and verification refusals persist no
+        result payload — the ``error`` text is the failure reason.
+        """
+        result_json = (
+            json.dumps(result, ensure_ascii=False, sort_keys=True) if result is not None else None
+        )
         with self._db_lock, self._connection() as connection:
             connection.execute(
                 """
                 UPDATE nexus_job_queue
-                SET status = ?, error = ?, finished_at = ?
+                SET status = ?, error = ?, result_json = ?, finished_at = ?
                 WHERE id = ? AND status IN (?, ?, ?)
                 """,
                 (
-                    JobStatus.FAILED.value,
+                    status.value,
                     error,
+                    result_json,
                     _now(),
                     job_id,
                     JobStatus.PENDING.value,

@@ -37,6 +37,7 @@ from nexus_ai_agent.adapters.in_process_job_queue import (
 )
 from nexus_ai_agent.application.ports.job_queue import JobStatus
 from nexus_ai_agent.creative.slideshow.ffmpeg import sha256_file
+from nexus_ai_agent.jobs.lifecycle import is_failure
 from nexus_ai_agent.worker import default_job_handlers
 
 pytestmark = pytest.mark.integration
@@ -101,7 +102,7 @@ def _queue(db: Path) -> InProcessJobQueue:
 async def _drain(queue: InProcessJobQueue, job_id: str) -> JobStatus:
     for _ in range(400):
         status = await queue.get_status(job_id)
-        if status in {JobStatus.COMPLETED, JobStatus.FAILED}:
+        if status in {JobStatus.COMPLETED, JobStatus.FAILED_RETRYABLE, JobStatus.FAILED_TERMINAL}:
             return status
         await asyncio.sleep(0.05)
     raise AssertionError("job never reached a terminal state")
@@ -211,7 +212,7 @@ async def test_attack_e_slideshow_success_without_artifact_fails(tmp_path: Path)
             "target_duration_us": 30_000_000,
         },
     )
-    assert await _drain(queue, job_id) is JobStatus.FAILED
+    assert is_failure(await _drain(queue, job_id))
     assert _row(db, job_id, "error") == "verification_failed:success_without_artifact_claim"
     assert _row(db, job_id, "result_json") is None
 
@@ -265,7 +266,7 @@ async def test_attack_a_success_without_artifact_fails(tmp_path: Path) -> None:
         idempotency_key="story:attack-a:1",
         payload={"user_id": 1, "text": "x", "output_path": str(ghost)},
     )
-    assert await _drain(queue, job_id) is JobStatus.FAILED
+    assert is_failure(await _drain(queue, job_id))
     assert _row(db, job_id, "error") == "verification_failed:missing_artifact"
 
 
@@ -293,7 +294,7 @@ async def test_attack_b_zero_byte_artifact_fails(tmp_path: Path) -> None:
         idempotency_key="story:attack-b:1",
         payload={"user_id": 2, "text": "x", "output_path": str(zero)},
     )
-    assert await _drain(queue, job_id) is JobStatus.FAILED
+    assert is_failure(await _drain(queue, job_id))
     assert _row(db, job_id, "error") == "verification_failed:empty_artifact"
 
 
@@ -322,7 +323,7 @@ async def test_attack_c_artifact_outside_expected_location_fails(tmp_path: Path)
         idempotency_key="story:attack-c:1",
         payload={"user_id": 3, "text": "x", "output_path": str(dispatched)},
     )
-    assert await _drain(queue, job_id) is JobStatus.FAILED
+    assert is_failure(await _drain(queue, job_id))
     assert _row(db, job_id, "error") == "verification_failed:unexpected_artifact_path"
 
 
@@ -358,7 +359,7 @@ async def test_attack_d_sha_changed_after_write_fails(tmp_path: Path) -> None:
         idempotency_key="story:attack-d:1",
         payload={"user_id": 4, "text": "x", "output_path": str(target)},
     )
-    assert await _drain(queue, job_id) is JobStatus.FAILED
+    assert is_failure(await _drain(queue, job_id))
     # size was claimed honestly-then-staled → the first mismatch that fires
     # may be size or sha; both are fail-closed typed rejections.
     error = str(_row(db, job_id, "error"))
@@ -537,7 +538,7 @@ async def test_pdf_extract_rag_failure_still_fails_job(
         idempotency_key="pdf:rag-fail:1",
         payload={"user_id": 12, "file_path": str(source), "file_id": "FID-2"},
     )
-    assert await _drain(queue, job_id) is JobStatus.FAILED
+    assert is_failure(await _drain(queue, job_id))
     assert "embedding service down" in str(_row(db, job_id, "error"))
 
 
@@ -563,7 +564,7 @@ async def test_pdf_extract_success_claim_without_text_artifact_fails(
         idempotency_key="pdf:attack-a:1",
         payload={"user_id": 13, "file_path": str(source), "file_id": "FID-3"},
     )
-    assert await _drain(queue, job_id) is JobStatus.FAILED
+    assert is_failure(await _drain(queue, job_id))
     assert _row(db, job_id, "error") == "verification_failed:success_without_artifact_claim"
 
 

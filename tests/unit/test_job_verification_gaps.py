@@ -231,13 +231,18 @@ def _slideshow_payload(tmp_path: Path) -> dict[str, object]:
     }
 
 
-def test_slideshow_verifier_typed_user_failure_is_not_applicable(tmp_path: Path) -> None:
+def test_slideshow_verifier_typed_user_failure_is_refused_fail_closed(
+    tmp_path: Path,
+) -> None:
+    # task-181 (GAP-A) contract change (strengthening): a typed user failure
+    # can never verify OK — refusal fail-closed, matching the creative
+    # verifier's answer.
     outcome = slideshow_render_verifier(
         _slideshow_payload(tmp_path), {"success": False, "error_code": "ffmpeg_unavailable"}
     )
-    assert outcome.ok
-    assert outcome.summary["status"] == "not_applicable"
-    assert outcome.summary["reason"] == "typed_user_failure"
+    assert not outcome.ok
+    assert outcome.reason_code == "typed_user_failure"
+    assert outcome.summary["reason_code"] == "typed_user_failure"
 
 
 def test_slideshow_verifier_success_without_claim_fails(tmp_path: Path) -> None:

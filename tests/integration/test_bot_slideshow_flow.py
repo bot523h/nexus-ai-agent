@@ -72,7 +72,11 @@ def _payload(workspace: Path, images: list[Path], **overrides: Any) -> dict[str,
 
 async def _drain(queue: InProcessJobQueue, job_id: str) -> None:
     async def _poll() -> None:
-        while await queue.get_status(job_id) not in (JobStatus.COMPLETED, JobStatus.FAILED):
+        while await queue.get_status(job_id) not in (
+            JobStatus.COMPLETED,
+            JobStatus.FAILED_RETRYABLE,
+            JobStatus.FAILED_TERMINAL,
+        ):
             await asyncio.sleep(0.01)
 
     await asyncio.wait_for(_poll(), timeout=5.0)
@@ -172,7 +176,10 @@ async def test_engine_failure_maps_to_a_code_and_cleans_everything(
     assert "unsupported image type" not in str(result)
     assert not workspace.exists()  # failed runs are fully removed (r7 item 4)
     await asyncio.sleep(0.05)
-    assert completions and completions[0].status is JobStatus.COMPLETED
+    # task-181 (GAP-A): the typed engine failure is a FAILURE status —
+    # never COMPLETED — classified TERMINAL (unusable input media), with the
+    # typed result preserved so the notifier can map the code.
+    assert completions and completions[0].status is JobStatus.FAILED_TERMINAL
 
 
 async def test_payload_envelope_is_a_trust_boundary(

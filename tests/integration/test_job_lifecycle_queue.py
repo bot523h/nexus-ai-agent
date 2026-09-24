@@ -54,6 +54,7 @@ from nexus_ai_agent.creative.slideshow.ffmpeg import (
     resolve_ffmpeg_bin,
     sha256_file,
 )
+from nexus_ai_agent.jobs.lifecycle import is_failure
 from nexus_ai_agent.jobs.verification import VerificationOutcome
 
 
@@ -86,7 +87,11 @@ def _clip(path: Path, seconds: float = 1.0) -> None:
 async def _drain(queue: InProcessJobQueue, job_id: str, timeout: float = 60.0) -> JobStatus:
     deadline = asyncio.get_event_loop().time() + timeout
     while asyncio.get_event_loop().time() < deadline:
-        if await queue.get_status(job_id) in {JobStatus.COMPLETED, JobStatus.FAILED}:
+        if await queue.get_status(job_id) in {
+            JobStatus.COMPLETED,
+            JobStatus.FAILED_RETRYABLE,
+            JobStatus.FAILED_TERMINAL,
+        }:
             return await queue.get_status(job_id)
         await asyncio.sleep(0.02)
     raise TimeoutError(f"job {job_id} never reached a terminal state")
@@ -147,7 +152,9 @@ async def test_m1_execution_failure_is_failed_without_result(tmp_path: Path) -> 
     job_id = await queue.enqueue(
         job_type=CREATIVE_RENDER_JOB_TYPE, idempotency_key="m1", payload={"x": 1}
     )
-    assert await _drain(queue, job_id) is JobStatus.FAILED
+    # an unexpected handler exception is classified RETRYABLE (worker crash
+    # class — conservative bounded retry when a scheduler exists; none today)
+    assert await _drain(queue, job_id) is JobStatus.FAILED_RETRYABLE
     assert await queue.get_result(job_id) is None
     assert "runtime exploded" in (_row_error(tmp_path / "jobs.sqlite3", job_id) or "")
     assert _attempt(tmp_path / "jobs.sqlite3", job_id) == 1
@@ -174,7 +181,7 @@ async def test_m2_probe_failure_cannot_complete(tmp_path: Path) -> None:
         idempotency_key="m2",
         payload={"workspace_dir": str(workspace)},
     )
-    assert await _drain(queue, job_id) is JobStatus.FAILED
+    assert is_failure(await _drain(queue, job_id))
     assert (_row_error(db, job_id) or "") == "verification_failed:probe_failed"
     assert await queue.get_result(job_id) is None
 
@@ -204,7 +211,7 @@ async def test_m3_zero_byte_artifact_cannot_complete(tmp_path: Path) -> None:
         idempotency_key="m3",
         payload={"workspace_dir": str(workspace)},
     )
-    assert await _drain(queue, job_id) is JobStatus.FAILED
+    assert is_failure(await _drain(queue, job_id))
     assert (_row_error(db, job_id) or "") == "verification_failed:empty_artifact"
 
 
@@ -233,7 +240,7 @@ async def test_m4_tampered_artifact_fails_sha_verification(tmp_path: Path) -> No
         idempotency_key="m4",
         payload={"workspace_dir": str(workspace)},
     )
-    assert await _drain(queue, job_id) is JobStatus.FAILED
+    assert is_failure(await _drain(queue, job_id))
     assert (_row_error(db, job_id) or "") == "verification_failed:sha256_mismatch"
 
 
@@ -434,7 +441,7 @@ async def test_m9_execution_success_with_invalid_media_is_failed(tmp_path: Path)
         idempotency_key="m9",
         payload={"workspace_dir": str(workspace)},
     )
-    assert await _drain(queue, job_id) is JobStatus.FAILED
+    assert is_failure(await _drain(queue, job_id))
     assert (_row_error(db, job_id) or "").startswith("verification_failed:")
 
 
@@ -466,7 +473,7 @@ async def test_m10_verifier_crash_fails_closed(tmp_path: Path) -> None:
         idempotency_key="m10",
         payload={"workspace_dir": str(workspace)},
     )
-    assert await _drain(queue, job_id) is JobStatus.FAILED
+    assert is_failure(await _drain(queue, job_id))
     assert (_row_error(db, job_id) or "") == "verification_failed:verifier_crashed"
 
 
@@ -477,10 +484,12 @@ async def test_m10b_runtime_fail_closed_after_publish_is_never_success(
     """A runtime that publishes an unverifiable file cannot produce success.
 
     The worker's own post-encode probe (runtime semantics) fails closed on
-    the garbage bytes and reports the typed ``render_failed`` dialect; the
-    Job ends COMPLETED **as a typed user failure** (``success=False``, the
-    repository's durable dialect) — never as a success, with no artifact
-    verification block, and with no claim anyone could mistake for one.
+    the garbage bytes.  Observed truth (task-181 reconciliation — repository
+    behavior wins over the earlier docstring claim of a typed dialect): the
+    probe raises ``RenderError`` which escapes the handler into the queue's
+    fail-closed conversion — the corrupt-output class, classified RETRYABLE
+    (``FAILED_RETRYABLE``).  Never COMPLETED, no result payload, no artifact
+    verification block, no claim anyone could mistake for one.
     """
     db = creative_env / "jobs.sqlite3"
     queue = InProcessJobQueue(db)
@@ -529,17 +538,17 @@ async def test_m10b_runtime_fail_closed_after_publish_is_never_success(
         },
     )
     status = await _drain(queue, job_id)
-    # fail-closed, whichever terminal shape the dialect takes: never
-    # "success", never a verified-artifact claim.
-    if status is JobStatus.FAILED:
-        assert await queue.get_result(job_id) is None
-    else:
-        result = await queue.get_result(job_id)
-        assert result is not None and result["success"] is False
-        assert VERIFICATION_RESULT_KEY not in result
+    # task-181 (GAP-A): corrupt output discovered at execution time is a
+    # FAILURE status (RETRYABLE class) — never COMPLETED.
+    assert status is JobStatus.FAILED_RETRYABLE, f"corrupt output must be RETRYABLE, got {status}"
+    result = await queue.get_result(job_id)
+    assert result is None
+    assert VERIFICATION_RESULT_KEY not in (result or {})
+    assert _row_error(creative_env / "jobs.sqlite3", job_id)
     chain = await queue.get_result_chain(job_id)
     assert chain["verification_status"] != "verified"
     assert chain["sha256"] is None
+    assert chain["failure_reason"]
 
 
 # ---------------------------------------------------------------------------
@@ -595,7 +604,7 @@ async def test_ab_zero_byte_claim_completes_without_verifier_fails_with_it(
         idempotency_key="ab-b",
         payload={"workspace_dir": str(workspace_b)},
     )
-    assert await _drain(queue_b, job_b) is JobStatus.FAILED, "canonical side must fail the lie"
+    assert is_failure(await _drain(queue_b, job_b)), "canonical side must fail the lie"
     assert (_row_error(tmp_path / "b.sqlite3", job_b) or "") == "verification_failed:empty_artifact"
 
 
@@ -711,7 +720,7 @@ async def test_unknown_job_type_fails_before_reservation(tmp_path: Path) -> None
     db = tmp_path / "jobs.sqlite3"
     queue = InProcessJobQueue(db, artifact_verifiers={})
     job_id = await queue.enqueue(job_type="ghost", idempotency_key="g1", payload={})
-    assert await _drain(queue, job_id) is JobStatus.FAILED
+    assert is_failure(await _drain(queue, job_id))
     assert "no handler registered" in (_row_error(db, job_id) or "")
     with sqlite3.connect(db) as connection:
         started_at, attempt = connection.execute(
