@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-24T17:24:56Z",
+  "updated_at": "2026-09-24T20:37:51Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2068,7 +2068,7 @@
       "title_fa": "",
       "zone": "coordination",
       "priority": "P2",
-      "status": "queued",
+      "status": "active_in_review",
       "scope": "PR#67 adds required_packs + a lifecycle bus gate; Gate 2 could not verify against it. After both land, wire the seam (stage 4, after grant+registry, before reservation) and prove pack-required vs pack-absent dispatch.",
       "scope_fa": "",
       "prerequisites": [
@@ -2080,7 +2080,50 @@
         "contract doc integration section flipped from NOT VERIFIED with evidence"
       ],
       "exclusive_paths": [],
-      "owner_hint": "Gate 2 follow-up; fence set at claim time"
+      "owner_hint": "Gate 2 follow-up; fence set at claim time",
+      "agent_branch": "arena/01a0d50d-nexus-ai-agent",
+      "claimed_at": "2026-09-24T20:37:51Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Continued from arena/01a0d4c8 (PR#75 head e0cba26 is an ancestor of this branch; PR#75 is superseded by PR#77, same stack on PR#72). MERGE ORDER: PR#72 -> PR#77; PR#67 afterwards needs the semantic resolution in COMMAND_CAPABILITY_CONTRACT section 11 (keep 4b, drop 3.5 + payload/surface opt-in, add color.apply_lut to EXPERIMENTAL_OPT_IN_OPERATIONS).",
+      "stacked_on": {
+        "pr": 72,
+        "task": "task-179-gate2-command-reconciliation",
+        "head": "f450df273d944dc88e3a21337b915b40638ee4dd",
+        "consumed_from": {
+          "pr": 67,
+          "head": "9c3a34f107b4b5f3c878a0ec2a7d82e8c24614d3",
+          "file": "src/nexus_ai_agent/creative/studio/lifecycle.py (byte-identical copy)"
+        }
+      },
+      "overlap_ack": {
+        "paths": [
+          "src/nexus_ai_agent/creative/studio/bus.py",
+          "docs/architecture/COMMAND_CAPABILITY_CONTRACT.md",
+          "docs/architecture/CREATIVE_STUDIO.md",
+          "docs/architecture/adr/0005-canonical-command-capability-contract.md",
+          "docs/DECISION_LOG.md"
+        ],
+        "owner": "task-179-gate2-command-reconciliation",
+        "why": "task-183 IS the seam into task-179's contract; its prerequisite is task-179. This branch is STACKED on PR#72 HEAD (no rebase, no overwrite of PR#72) and only appends stage 4b + its docs. If PR#72 changes, this branch is re-based on the new PR#72 HEAD and CI re-run. DECISION_LOG.md: task-183 appends a D-0013 amendment section only (task-179's entry text untouched).",
+        "why_fa": "این کار خودِ درزِ اتصال به قرارداد task-179 است؛ شاخه روی HEAD همان PR بنا شده و PR#72 بازنویسی یا rebase نمی‌شود."
+      },
+      "evidence": {
+        "seam": "CommandBus._dispatch_locked stage 4b (after actor grant + capability/permissions, before policy/refs/reservation/preconditions/handler)",
+        "trust_boundary": "render_jobs.EXPERIMENTAL_OPT_IN_OPERATIONS (server policy keyed on canonical op) is the only source of CommandBus(allow_experimental=...); CreativeRenderPayload has no opt-in field (extra=forbid rejects one)",
+        "tests": [
+          "tests/unit/test_gate2_lifecycle_seam.py (A-H + placement incl. 4b<5, 4b<6)",
+          "tests/unit/test_gate2_lifecycle_mutations.py (M1-M5)",
+          "tests/unit/test_capability_lifecycle.py (PR#67 suite, byte-identical @ 9c3a34f)",
+          "tests/unit/test_creative_render_jobs.py (task-183 trust-boundary block)",
+          "tests/architecture/test_lifecycle_gate_boundary.py",
+          "tests/architecture/test_test_suite_hygiene.py (91fbaff root cause guard)"
+        ],
+        "ci_root_cause_91fbaff": "category B (test defect): cross-test import 'from tests.unit...' -> ModuleNotFoundError under bare pytest (exit 2); masked by python -m pytest; fixed in e0cba26, guarded now",
+        "local": "ruff/format clean; mypy src clean (234 files); pytest -m 'not slow' 2042 passed/20 skipped (py3.11 local; CI py3.12)",
+        "status": "IMPLEMENTED (not MERGED: depends on PR#72 landing first)"
+      },
+      "pr": "https://github.com/bot523h/nexus-ai-agent/pull/77"
     }
   ],
   "deferred_log": [
@@ -2626,6 +2669,14 @@
       "task": "pr47-feature-wiring-continuation",
       "reason": "PR#47 reached a terminal state (MERGED 2026-09-22T20:06:40Z, verified with gh). The record was still active_in_review and therefore held bot/handlers.py, bot/surface/*, tests/unit/surface_fakes.py and CHANGELOG.md against every other agent — `agent_board.py check` returned STOP for task-158 on those paths. cmd_release refuses cross-branch release, so the paths are freed here and the reason is recorded, per the orphaned-lease rule documented in AGENTS.md / the PR#33 precedent.",
       "evidence": "gh pr view 47 --json state,mergedAt → {\"state\":\"MERGED\",\"mergedAt\":\"2026-09-22T20:06:40Z\"}"
+    },
+    {
+      "at": "2026-09-24T20:37:51Z",
+      "by_branch": "arena/01a0d50d-nexus-ai-agent",
+      "action": "continuation",
+      "task": "task-183-pr67-lifecycle-integration",
+      "reason": "Same mission owner, new session branch (a session is bound to exactly one branch and cannot push to arena/01a0d4c8). This branch starts at PR#75 head e0cba26 unchanged and adds the trust-boundary fix, order pins, and doc/board reconciliation; PR#77 supersedes PR#75. No force-push, rebase, or overwrite of PR#67/#72/#75.",
+      "evidence": "git merge-base --is-ancestor e0cba26 arena/01a0d50d-nexus-ai-agent -> true; gh pr view 75 --json headRefOid -> e0cba268897e8d656c69c48104f6519f0dae47e1"
     }
   ],
   "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins."

@@ -176,6 +176,80 @@ def test_grade_proxy_renders_480p(workspace: Path) -> None:
     assert result.get("height") == 480
 
 
+# ── task-183 trust boundary: the EXPERIMENTAL opt-in is server policy ────────
+
+
+@pytest.mark.parametrize("claimed", [True, False])
+def test_a_queue_row_cannot_carry_a_lifecycle_opt_in(workspace: Path, claimed: bool) -> None:
+    """A hand-crafted row asserting ``allow_experimental`` (either value) is
+    rejected at the payload boundary -- it never reaches the bus."""
+    _make_clip(workspace / "input.mp4")
+    for command, operation, args in (("edit", "trim", ["0", "1"]), ("grade", "exposure", ["1.0"])):
+        result = _run(
+            _payload(
+                workspace,
+                command=command,
+                operation=operation,
+                args=args,
+                allow_experimental=claimed,
+            )
+        )
+        assert result["success"] is False, (command, operation, claimed)
+        assert result["error_code"] == "invalid_request"
+        assert "allow_experimental" in result["error_detail"]
+
+
+def test_experimental_opt_in_comes_from_worker_policy_not_the_row(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Withdrawing the *server* opt-in closes the gate for the identical row:
+    the lifecycle gate still reaches the queue, and only policy opens it.
+    (Positive control: ``test_grade_exposure_renders`` -- same row, policy on.)"""
+    from nexus_ai_agent.creative import render_jobs
+
+    monkeypatch.setattr(render_jobs, "EXPERIMENTAL_OPT_IN_OPERATIONS", frozenset())
+    _make_clip(workspace / "input.mp4")
+    result = _run(_payload(workspace, command="grade", operation="exposure", args=["1.0"]))
+    assert result["success"] is False
+    assert result["error_code"] == "invalid_request"
+    assert "experimental" in result["error_detail"]
+
+
+def test_direct_dispatch_offers_no_opt_in_parameter() -> None:
+    """Alternate producers calling the worker's bus seam cannot pass a boolean
+    either: the only input to the opt-in is the canonical operation id."""
+    import inspect
+
+    from nexus_ai_agent.creative.render_jobs import _dispatch
+
+    assert "allow_experimental" not in inspect.signature(_dispatch).parameters
+    assert "allow_experimental" not in CreativeRenderPayload.model_fields
+
+
+def test_opt_in_policy_is_exactly_the_experimental_surface_operations() -> None:
+    """Least privilege, no gap: the server opt-in lists every surface operation
+    that runs on an EXPERIMENTAL pack and nothing else (AVAILABLE operations
+    need no opt-in; a new EXPERIMENTAL operation must be added consciously)."""
+    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+    from nexus_ai_agent.creative.render_jobs import (
+        EXPERIMENTAL_OPT_IN_OPERATIONS,
+        SURFACE_TO_CANONICAL,
+    )
+    from nexus_ai_agent.creative.studio.lifecycle import LifecycleState, pack_lifecycle
+
+    registry = build_runtime_registry()
+    experimental = {
+        op
+        for op in SURFACE_TO_CANONICAL.values()
+        if any(
+            pack_lifecycle(pack).state is LifecycleState.EXPERIMENTAL
+            for pack in registry.get_spec(op).required_packs
+        )
+    }
+    assert experimental, "probe lost its subject: no EXPERIMENTAL surface operation"
+    assert EXPERIMENTAL_OPT_IN_OPERATIONS == experimental
+
+
 def test_trim_rejects_bad_points_as_typed_failure(workspace: Path) -> None:
     _make_clip(workspace / "input.mp4")
     result = _run(_payload(workspace, operation="trim", args=["5", "1"]))

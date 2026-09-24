@@ -56,11 +56,15 @@ def _project_with_media() -> Project:
 
 
 def _audio_bus() -> CommandBus:
-    return CommandBus(_project_with_media(), registry=build_audio_registry())
+    return CommandBus(
+        _project_with_media(), registry=build_audio_registry(), allow_experimental=True
+    )
 
 
 def _motion_bus() -> CommandBus:
-    return CommandBus(_project_with_media(), registry=build_motion_registry())
+    return CommandBus(
+        _project_with_media(), registry=build_motion_registry(), allow_experimental=True
+    )
 
 
 def _derived(bus: CommandBus, asset_id: str) -> AssetRecord:

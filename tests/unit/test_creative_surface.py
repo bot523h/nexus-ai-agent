@@ -93,6 +93,38 @@ def test_mapper_rejects_lut_and_burnin_as_invalid() -> None:
     assert isinstance(m.map(CreativeRequest("caption", "burnin", (), "f", 5.0)), CreativeFailure)
 
 
+@pytest.mark.parametrize(
+    ("command", "operation", "args"),
+    [
+        ("grade", "exposure", ("1.0",)),
+        ("grade", "proxy", ()),
+        ("grade", "otio", ()),
+        ("caption", "transcribe", ()),
+        ("edit", "trim", ("0", "5")),
+    ],
+)
+def test_job_payload_carries_no_lifecycle_opt_in(
+    command: str, operation: str, args: tuple[str, ...]
+) -> None:
+    """task-183: the surface never writes a lifecycle opt-in into the job row
+    (the worker derives it from server policy), and every row it produces is a
+    valid worker payload (positive control for the surface→queue contract)."""
+    from nexus_ai_agent.creative.render_jobs import CreativeRenderPayload
+
+    m = CreativeSurfaceMapper()
+    payload = m.job_payload(
+        CreativeRequest(command, operation, args, "fid", 10.0),
+        user_id=1,
+        chat_id=2,
+        lang="en",
+        idempotency_key="creative:1:2:3",
+        workspace_dir="/tmp/creative_x",
+        input_path="/tmp/creative_x/input.mp4",
+    )
+    assert "allow_experimental" not in payload
+    CreativeRenderPayload.model_validate(payload)
+
+
 def test_job_payload_contains_ids_and_workspace() -> None:
     m = CreativeSurfaceMapper()
     req = CreativeRequest("caption", "transcribe", (), "fid", 10.0)
