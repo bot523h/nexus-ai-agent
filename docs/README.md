@@ -86,6 +86,7 @@ placeholder text.
 | [audits/P0_STABILIZATION_2026-09-24.md](audits/P0_STABILIZATION_2026-09-24.md) | Owner-directed P0 day (task-165/166/167): legacy `/creative/*` lane disposition, studio surface wiring, verifiable backups — repro/evidence-first report. |
 | [audits/DEAD_ENGINES_2026-09-22.md](audits/DEAD_ENGINES_2026-09-22.md) | Dead-engine verification (zero importers, measured gates), five-option wiring analysis, negative controls, and the recorded residuals. |
 | [audits/GATE22_OPERATION_TRUTH_AUDIT_2026-09-24.md](audits/GATE22_OPERATION_TRUTH_AUDIT_2026-09-24.md) | Gate 2.2: Operation Truth as an executable evidence gate — independent recomputation, mutation probes, PR #67/#68/#69/#70 reconciliation, and the corrected L4/READY claims. |
+| [audits/FINAL_CLOSURE_2026-09-24.md](audits/FINAL_CLOSURE_2026-09-24.md) | Final closure pass: repository/CI/Git truth re-read from GitHub, the #74→#71 ancestry, independent re-execution of GAP-A/B/C, a measured RAG-receipt gap, and GAP-D recorded as an accepted open gap. |
 
 ## History (archived — read-only, never a source of truth)
 
