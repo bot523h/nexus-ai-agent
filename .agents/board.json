@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-24T07:27:49Z",
+  "updated_at": "2026-09-24T07:56:53Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1548,7 +1548,7 @@
       "title_fa": "",
       "zone": "nagar-portrait",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "portrait pack: models + pure operations + pack.manifest.json, registered through the wave-5 unified runtime; composition per docs/ops/PACK_RUNTIME.md",
       "scope_fa": "portrait pack: models + pure operations + pack.manifest.json, registered through the wave-5 unified runtime; composition per docs/ops/PACK_RUNTIME.md",
       "prerequisites": [],
@@ -1558,8 +1558,8 @@
         "pack coverage harness >= 95% on the new pack; architecture boundary test added"
       ],
       "note": "",
-      "agent_branch": "arena/01a0d244-nexus-ai-agent",
-      "claimed_at": "2026-09-24T07:27:49Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "exclusive_paths": [
@@ -1578,7 +1578,7 @@
       "title_fa": "",
       "zone": "nagar-scene",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "scene pack: models + pure operations + manifest; shares the op-gap template with task-152; do not blindly copy — compare 5 implementation strategies (duplication vs shared abstraction) first",
       "scope_fa": "scene pack: models + pure operations + manifest; shares the op-gap template with task-152; do not blindly copy — compare 5 implementation strategies (duplication vs shared abstraction) first",
       "prerequisites": [],
@@ -1588,8 +1588,8 @@
         "shared-abstraction decision vs duplication recorded with evidence"
       ],
       "note": "",
-      "agent_branch": "arena/01a0d244-nexus-ai-agent",
-      "claimed_at": "2026-09-24T07:27:49Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "exclusive_paths": [
@@ -1853,7 +1853,7 @@
       "title_fa": "هستهٔ تعامل OTIO نگار (رفت‌وبرگشت Nagar↔OTIO با مارکر/گپ/ترک) + پل کمینهٔ برنامهٔ رندر قطعی + سیم‌کشی ترکیب پک‌های بینایی",
       "zone": "nagar-creative-interop",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "NEW discrete files only (creative/otio/, creative/rendering/plan.py, tests/unit/test_otio_roundtrip.py, tests/unit/test_render_plan.py) plus the documented pack-composition extension points (runtime.py COMPOSITION entry, pack_coverage DEFAULT_TEST_TARGETS, activation-completeness BUILDERS, composition EXPECTED ids) and the creative docs (CREATIVE_STUDIO ledger, PACK_RUNTIME counts). Explicitly NOT task-121 (sequenced post-33) and NOT the delivery pack files held by open PR#33.",
       "scope_fa": "فقط فایل‌های گسستهٔ جدید + نقاط افزودن مستند ترکیب پک + مستندات creative. عمداً نه تسک ۱۲۱ (ترتیب‌بندی‌شده بعد از ۳۳) و نه فایل‌های پک delivery در اختیار PR#33 باز.",
       "prerequisites": [],
@@ -1882,8 +1882,8 @@
         "docs/ops/PACK_RUNTIME.md"
       ],
       "owner_hint": "",
-      "agent_branch": "arena/01a0d244-nexus-ai-agent",
-      "claimed_at": "2026-09-24T07:27:49Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "note": ""
@@ -1919,189 +1919,215 @@
   ],
   "next_work": [
     {
-      "id": "task-164",
-      "priority": "P1",
-      "zone": "ci-quality",
-      "title": "Nightly DB backup has never succeeded (3/3 red) — make the production backup pipeline actually work",
-      "title_fa": "بکاپ شبانهٔ دیتابیس هرگز موفق نشده (۳ از ۳ سرخ) — مسیر بکاپ Production واقعاً کار کند",
-      "why_fa": "تنها مکانیسم DR برای دیتابیس Production (R2 blob tier) سه اجرا پیاپی شکست خورده و هیچ بکاپی تولید نشده؛ ریشهٔ دقیق بدون لوق جاب نامشخص است (R2 secrets؟ پیکربندی Neon؟).",
-      "acceptance_criteria": [
-        "a manual workflow_dispatch run of maintenance/backup-db completes SUCCESS with a visible upload under backups/db/<UTC-stamp>/",
-        "the failing step's error from runs 35580701817 / 35705502209 / 35838057275 is read and its root cause recorded on the board",
-        "if the root cause is missing/misconfigured secrets: the repo secrets per docs/ops/r2-storage.md §4 are set by the owner and the next scheduled run is green"
-      ],
-      "prerequisites": [],
-      "exclusive_paths": [
-        ".github/workflows/maintenance.yml"
-      ],
-      "status_note": "Forensics recorded by arena/01a0cfcd-nexus-ai-agent (task-163 release audit) on 2026-09-23: job/step-level API shows the backup step itself fails 3/3; the 2026-09-21 'success' was housekeeping-only. Rotated out: task-126 (delivered via PR#46 — six packs active, pending=0)."
-    },
-    {
-      "id": "task-124",
+      "id": "task-166",
       "priority": "P0",
-      "zone": "audit-remainder",
-      "title": "P0-8 single wiring + P0-9 graph memory write path",
-      "title_fa": "بستن P0-8 و P0-9",
-      "why_fa": "دو یافتهٔ باز ممیزی امنیتی/کارکردی با معیار پذیرش روشن.",
+      "zone": "nagar-creative-interop",
+      "title": "color.3: white_balance/hdr_tonemap/deband_denoise in delivery pack",
+      "title_fa": "سه عملیات color.* در پک delivery",
+      "why_fa": "تنها شناسه‌های کاتالوگ باقی‌مانده؛ محل فرود packs/delivery/ است که فعلاً قفل PR#33 است.",
       "acceptance_criteria": [
-        "تست ONE-OWNER سبز",
-        "write→read گراف با round-trip",
-        "صفر رگرسیون"
+        "سه عملیات با مدل typed ثبت و پیاده‌سازی شود",
+        "composition_issues()==() و stale_capabilities()=={}",
+        "تست‌های سطح مجوز/قطعیت مثل بقیه delivery ops"
       ],
       "prerequisites": [
-        "task-122",
-        "task-123"
+        "PR#33 merge شود (BLOCKED_SHARED_CONTRACT)"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/memory/",
-        "src/nexus_ai_agent/features/rag.py",
-        "tests/unit/test_audit_remainder.py"
-      ]
+        "src/nexus_ai_agent/creative/packs/delivery/models.py",
+        "src/nexus_ai_agent/creative/packs/delivery/operations.py",
+        "tests/unit/test_delivery_pack.py"
+      ],
+      "status_note": "patch design in arena/01a0d244 mission handoff"
     },
     {
-      "id": "task-122",
+      "id": "task-167",
       "priority": "P0",
-      "zone": "feature-wiring",
-      "title": "PR#32 rebase + dedupe",
-      "title_fa": "ریبیس و رفع دوگانگی PR#32",
-      "why_fa": "بزرگ‌ترین PR باز روی بیس باستانی؛ ریسک دو سیم‌کشی موازی.",
+      "zone": "nagar-render-lane",
+      "title": "render-plan: multi-segment concat assembly (the proven LaneIR gap)",
+      "title_fa": "مونتاژ چندسگمنتی ExecutionPlan در lane رندر",
+      "why_fa": "یک LaneIR فقط یک main source می‌کامپایل می‌کند؛ ترک K-کلیپی امروز concat_required می‌دهد اما رندر یکپارچه نمی‌شود.",
       "acceptance_criteria": [
-        "دیف یکتا",
-        "تست‌های feature_* سبز",
-        "CI سبز روی main تازه"
+        "K سگمنت → یک artifact از مسیر canonical (یا xfade chain یا concat demuxer داخل compiler)",
+        "برنامه/plan_hash قطعی بماند",
+        "تست integration با فیکسچر رسانه‌ی کوچک"
       ],
       "prerequisites": [],
       "exclusive_paths": [
-        "src/nexus_ai_agent/bot/surface/",
-        "src/nexus_ai_agent/features/"
+        "src/nexus_ai_agent/creative/rendering/plan.py",
+        "src/nexus_ai_agent/creative/rendering/ir.py",
+        "src/nexus_ai_agent/creative/rendering/compiler.py",
+        "tests/unit/test_render_plan_assembly.py"
       ],
-      "status_note": "delivered via PR#47 (forensic triage docs/audits/PR32_TRIAGE_2026-09-21.md + port-forward)"
+      "status_note": ""
     },
     {
-      "id": "task-123",
-      "priority": "P0",
-      "zone": "packaging+interop",
-      "title": "PR#33 slim-down",
-      "title_fa": "کوچک‌سازی PR#33",
-      "why_fa": "برای باز شدن مسیر بسته‌بندی/داک و آزادسازی cli.py.",
+      "id": "task-168",
+      "priority": "P1",
+      "zone": "nagar-render-lane",
+      "title": "LaneOp twins for vision effects (unmapped_effects backlog)",
+      "title_fa": "تولید دوقلوهای LaneOp برای افکت‌های vision",
+      "why_fa": "افکت‌های portrait/scene امروز در plan فقط گزارش unmapped می‌شوند؛ رسانه‌ی واقعی نمی‌سازند.",
       "acceptance_criteria": [
-        "دیف فقط یکتاها",
-        "CI سبز"
+        "حداقل smooth_skin و background_blur به فیلتر ffmpeg مپ شوند",
+        "golden filtergraph test",
+        "فهرست EFFECT_TO_LANE_OP بدون پراکندگی بماند"
+      ],
+      "prerequisites": [
+        "task-167 برای مونتاژ"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/rendering/ir.py",
+        "src/nexus_ai_agent/creative/rendering/compiler.py",
+        "tests/unit/test_rendering_lane_effects.py"
+      ],
+      "status_note": ""
+    },
+    {
+      "id": "task-169",
+      "priority": "P1",
+      "zone": "nagar-delivery",
+      "title": "delivery.export_otio delegates to creative/otio (one call site)",
+      "title_fa": "واگذاری export_otio به ماژول OTIO کانونیکال",
+      "why_fa": "دو پیاده‌سازی OTIO ممنوع است؛ فراخوانی فعلی delivery باید به creative/otio.delegate شود.",
+      "acceptance_criteria": [
+        "خروجی delivery.export_otio == مستند creative/otio",
+        "include_markers واقعاً اثر کند",
+        "تست جایگزینی schema-only موجود با round-trip معنایی"
+      ],
+      "prerequisites": [
+        "PR#33 merge شود (BLOCKED_SHARED_CONTRACT)"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/delivery/operations.py",
+        "tests/unit/test_delivery_pack.py"
+      ],
+      "status_note": ""
+    },
+    {
+      "id": "task-170",
+      "priority": "P1",
+      "zone": "nagar-creative-interop",
+      "title": "opentimelineio as a declared optional test extra (ADR)",
+      "title_fa": "افزودن وابستگی اختیاری opentimelineio با ADR",
+      "why_fa": "cross-checkهای OTIO امروز با importorskip می‌روند؛ در CI بدون کتابخانه UNVERIFIED می‌مانند.",
+      "acceptance_criteria": [
+        "ADR در DECISION_LOG (یا گزارش) ثبت شود",
+        "pyproject optional extra + مستندسازی",
+        "CI بدون skip یا دلیل UNVERIFIED صریح"
+      ],
+      "prerequisites": [
+        "gates_owner coordination (pyproject.toml shared)"
+      ],
+      "exclusive_paths": [
+        "pyproject.toml",
+        "tests/unit/test_otio_roundtrip.py"
+      ],
+      "status_note": "dependency add = ADR trigger"
+    },
+    {
+      "id": "task-171",
+      "priority": "P1",
+      "zone": "nagar-scene",
+      "title": "real media artifacts for remove_background/background_blur via the lane",
+      "title_fa": "اثبات رسانه‌ی واقعی برای حذف پس‌زمینه/بلور پس‌زمینه",
+      "why_fa": "طبق قرارداد مأموریت: state updated ≠ عمل خلاقانه تمام‌شده؛ این عملیات باید artifact واقعی ثابت کند.",
+      "acceptance_criteria": [
+        "artifact با LaneArtifact.evidence() (sha256/مدت/ابعاد)",
+        "ONNX/lazy با capability gate صادقانه",
+        "بدون fake-render-success"
+      ],
+      "prerequisites": [
+        "task-168 (twins) یا تعریف mask→filter"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/vision_common.py",
+        "src/nexus_ai_agent/creative/rendering/",
+        "tests/unit/test_vision_artifacts.py"
+      ],
+      "status_note": ""
+    },
+    {
+      "id": "task-172",
+      "priority": "P1",
+      "zone": "nagar-delivery",
+      "title": "capability availability: binary probes → MISSING/FAILED, no silent execution",
+      "title_fa": "کاوش باینری و وضعیت صادقانه capability",
+      "why_fa": "AVAILABLE امروز به باینری وصل نیست؛ نبود FFmpeg/مدل نباید بی‌صدا اجرا شود.",
+      "acceptance_criteria": [
+        "PackRuntime.status() نبود باینری را MISSING/FAILED نشان دهد",
+        "تست قطع/وصل باینری",
+        "رفتار fail-closed مستند شود"
       ],
       "prerequisites": [],
-      "exclusive_paths": []
-    },
-    {
-      "id": "task-121",
-      "priority": "P1",
-      "zone": "delivery-interop-markers",
-      "title": "OTIO marker round-trip",
-      "title_fa": "مارکرهای OTIO",
-      "why_fa": "تنها شکاف باقی‌ماندهٔ تسک ۱۱۰؛ include_markers فعلاً بی‌اثر است.",
-      "acceptance_criteria": [
-        "include_markers مؤثر",
-        "۲ تست round-trip با OTIO واقعی"
-      ],
-      "prerequisites": [
-        "task-123"
-      ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/creative/packs/delivery/",
-        "tests/unit/test_otio_interop.py"
-      ]
+        "src/nexus_ai_agent/creative/packs/verify.py",
+        "src/nexus_ai_agent/creative/packs/runtime.py",
+        "tests/unit/test_pack_status_availability.py"
+      ],
+      "status_note": ""
     },
     {
-      "id": "task-128",
-      "priority": "P1",
-      "zone": "core-database",
-      "title": "Async DB phase 1",
-      "title_fa": "فاز ۱ دیتابیس ناهمگام",
-      "why_fa": "حذف create_engine سینک از features با آزمون نگهبان معماری.",
-      "acceptance_criteria": [
-        "انجین مرکزی + ۲ پایلوت",
-        "گارد معماری سبز"
-      ],
-      "prerequisites": [
-        "task-122"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/core/async_db.py",
-        "src/nexus_ai_agent/features/"
-      ]
-    },
-    {
-      "id": "task-106",
-      "priority": "P1",
-      "zone": "creative-surface",
-      "title": "Telegram studio commands",
-      "title_fa": "فرمان‌های استودیو در تلگرام",
-      "why_fa": "اتصال لاین رندر به کاربر نهایی بدون لمس handlers.py.",
-      "acceptance_criteria": [
-        "/edit /caption /grade با تست",
-        "handlers.py دست‌نخورده"
-      ],
-      "prerequisites": [
-        "task-122"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/bot/creative_surface.py",
-        "tests/unit/test_creative_surface.py"
-      ]
-    },
-    {
-      "id": "task-132",
-      "priority": "P1",
-      "zone": "ci-quality",
-      "title": "Extras smoke matrix",
-      "title_fa": "ماتریس دود اختیاری‌ها",
-      "why_fa": "مسیرهای اختیاری خارج از CI پیش‌فرض می‌توانند بی‌صدا بشکنند (شکاف مستند در TESTING §7).",
-      "acceptance_criteria": [
-        "job ماتریسی per-extra",
-        "شکست نصب = شکست CI"
-      ],
-      "prerequisites": [],
-      "exclusive_paths": [
-        "tests/unit/test_optional_extras.py",
-        ".github/"
-      ]
-    },
-    {
-      "id": "task-134",
+      "id": "task-173",
       "priority": "P2",
-      "zone": "nagar-portrait",
-      "title": "Portrait family slice (5 ops)",
-      "title_fa": "اسلایس خانوادهٔ پرتره",
-      "why_fa": "۲۹ شناسهٔ TDD باقی‌مانده؛ بزرگ‌ترین خانواده پیاده‌نشده.",
+      "zone": "nagar-delivery",
+      "title": "task-121 residue: OtamMarker palette export through delivery.export_otio",
+      "title_fa": "باقی‌مانده task-121: مارکر Otam از مسیر delivery",
+      "why_fa": "پالت/point→1frame در creative/otio انجام شد؛ مسیر delivery (ادعای PR#33) هنوز نه.",
       "acceptance_criteria": [
-        "۵ op رجیستر",
-        "گیت مرزی پک سبز"
+        "Marker.2 روی Stack با include_markers",
+        "پالت رنگ + nagar_color در metadata",
+        "تست task-121 style بدون کتابخانه OTIO"
+      ],
+      "prerequisites": [
+        "PR#33 merge شود (BLOCKED_SHARED_CONTRACT)"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/delivery/operations.py",
+        "tests/unit/test_delivery_pack.py"
+      ],
+      "status_note": ""
+    },
+    {
+      "id": "task-174",
+      "priority": "P2",
+      "zone": "nagar-packs",
+      "title": "real ed25519 manifest signatures (replace placeholders)",
+      "title_fa": "امضای واقعی ed25519 برای manifest پک‌ها",
+      "why_fa": "امضاهای manifest امروز placeholder هستند (encode_manifest_wave5)؛ زنجیره‌ی اعتماد کامل نیست.",
+      "acceptance_criteria": [
+        "verify-manifest امضای واقعی را چک کند",
+        "tamper → fail",
+        "کلید/روت ثبت‌شده در ماژول (نه سرویس جدید)"
       ],
       "prerequisites": [],
       "exclusive_paths": [
-        "src/nexus_ai_agent/creative/packs/portrait/",
-        "tests/unit/test_portrait_pack.py"
+        "src/nexus_ai_agent/creative/packs/manifest.py",
+        "src/nexus_ai_agent/creative/packs/verify.py",
+        "tests/unit/test_pack_manifest_verify.py"
       ],
-      "status_note": "renumbered: portrait work tracked as task-152-portrait-pack (canonical-ID resolution 2026-09-22)"
+      "status_note": ""
     },
     {
-      "id": "task-127",
+      "id": "task-175",
       "priority": "P2",
-      "zone": "features-rag",
-      "title": "Real RAG",
-      "title_fa": "RAG واقعی",
-      "why_fa": "rag.py استاب ۳.۷KB است؛ کیفیت پاسخ به بازیابی وابسته است.",
+      "zone": "nagar-render-lane",
+      "title": "measured performance baseline for the creative lane (before/after only)",
+      "title_fa": "پایه‌ی اندازه‌گیری‌شده کارایی lane خلاقیت",
+      "why_fa": "ادعای بهبود بدون اندازه‌گیری ممنوع؛ هزینه‌های decode/encode تکراری باید اندازه‌گیری شوند.",
       "acceptance_criteria": [
-        "recall@k روی fixture",
-        "بدون وابستگی سنگین جدید"
+        "سنجه‌های قبل/بعد روی فیکسچر کوچک ثبت شود",
+        "حداقل یک هزینه‌ی واقعی (probe/decode تکراری) شناسایی و رفع شود",
+        "گزارش فقط با اعداد اندازه‌گیری‌شده"
       ],
       "prerequisites": [
-        "task-122"
+        "task-167 (assembly) برای baseline کامل‌تر"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/features/rag.py",
-        "tests/unit/test_rag_chunking.py"
+        "src/nexus_ai_agent/creative/rendering/bench.py",
+        "tests/unit/test_rendering_bench.py"
       ],
-      "status_note": "delivered via PR#47 (rag_core stdlib core + lazy engine + eval harness)"
+      "status_note": ""
     }
   ],
   "history": {
