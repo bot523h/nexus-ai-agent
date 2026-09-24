@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-24T11:30:00Z",
+  "updated_at": "2026-09-24T11:35:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1938,7 +1938,7 @@
       "title_fa": "ران‌تایم خلاقیت جلسه ۲: معناشناسی اجرا + مونتاژ چندسگمنتی + دسترس‌پذیری، آماده‌سازی هندآف color/delivery بدون لمس",
       "zone": "nagar-creative-runtime",
       "priority": "P0",
-      "status": "in_review",
+      "status": "active_in_review",
       "scope": "P0: classify all 77 ops (STATE-ONLY/EFFECT-DESCRIPTION/EXECUTABLE/RENDERED-ARTIFACT) in creative/execution.py with tests; prove the execution bridge gap honestly. P1: multi-segment ExecutionPlan->LaneAssembly->compile_assembly (ONE process, existing executor untouched) + A/gap/B acceptance test with real media or UNVERIFIED. P1: color.3 + delivery.export_otio delegation prepared as patch+handoff only (PR#33 holds delivery files — DO NOT TOUCH). P2: PackRuntime availability (REGISTERED/AVAILABLE/MISSING_BINARY/...) via a small probe abstraction + representative CommandBus->plan->executor->artifact e2e. No second renderer/executor/pipeline; no fake execution.",
       "scope_fa": "طبقه‌بندی معناشناسی اجرای هر ۷۷ عملیات؛ مونتاژ چندسگمنتی با همان executor؛ آماده‌سازی هندآف color بدون لمس فایل‌های PR#33؛ دسترس‌پذیری صادقانه پک‌ها؛ اثبات سرتاسری روی مدیای واقعی یا UNVERIFIED.",
       "prerequisites": [],
