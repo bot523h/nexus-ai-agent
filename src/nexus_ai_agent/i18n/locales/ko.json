@@ -61,5 +61,21 @@
   "onboarding.ai_hint": "💡 *팁:* 메시지만 입력하면 AI가 답장합니다!\n\n다음도 사용할 수 있어요:\n• `/ask <질문>` — 빠른 Q&A\n• `/code <코드>` — 코드 리뷰\n• `/translate <텍스트>` — 스마트 번역",
   "onboarding.image_hint": "💡 *팁:* `/image <설명>`으로 이미지를 생성하세요!\n\n시도해 보세요: `/image 우주의 고양이 digital-art`\n\n스타일: realistic, anime, digital-art, oil-painting, pixel-art, watercolor, cyberpunk, fantasy, 3d, sketch",
   "onboarding.go_chat": "💬 메시지를 보내 채팅을 시작하세요!",
-  "onboarding.explore_hint": "🗺️ **전체 명령어:**\n\n🤖 `/ai` — Gemini와 채팅\n🎨 `/image` — 이미지 생성\n🔊 `/tts` — 텍스트 음성 변환\n☁️ `/cloud` — 파일 업로드\n🔗 `/referral` — 친구 초대\n🎮 `/quiz` — 게임하기\n🌐 `/language` — 언어 변경\n❓ `/help` — 전체 명령어 목록"
+  "onboarding.explore_hint": "🗺️ **전체 명령어:**\n\n🤖 `/ai` — Gemini와 채팅\n🎨 `/image` — 이미지 생성\n🔊 `/tts` — 텍스트 음성 변환\n☁️ `/cloud` — 파일 업로드\n🔗 `/referral` — 친구 초대\n🎮 `/quiz` — 게임하기\n🌐 `/language` — 언어 변경\n❓ `/help` — 전체 명령어 목록",
+  "creative.invalid_command": "❌ 알 수 없는 스튜디오 명령입니다. /edit, /caption 또는 /grade를 사용하세요.",
+  "creative.invalid_operation": "❌ /{command}에서 지원하지 않는 작업입니다. 선택지: {operations}",
+  "creative.not_replied": "❌ 이 명령을 동영상(또는 오디오) 메시지에 답장으로 보내 주세요.",
+  "creative.limit_exceeded": "❌ 미디어 길이는 최대 {max_seconds}초여야 합니다.",
+  "creative.media_too_large": "❌ 미디어 크기가 {max_mb}MB를 초과합니다.",
+  "creative.media_download_failed": "❌ Telegram에서 미디어를 다운로드하지 못했습니다. 다시 시도하세요.",
+  "creative.queue_failed": "❌ 렌더 큐를 지금 사용할 수 없습니다. 다시 시도하세요.",
+  "creative.queued": "⏳ /{command} {operation} 대기열 등록 — 작업 {job_id}",
+  "creative.completed": "✅ /{command} {operation} 완료",
+  "creative.failed.invalid_request": "❌ 잘못된 요청입니다({detail}).",
+  "creative.failed.unsupported_operation": "❌ 이 작업은 원샷 렌더에서 지원되지 않습니다.",
+  "creative.failed.media_missing": "❌ 준비된 미디어 파일을 찾을 수 없습니다. 명령을 다시 보내 주세요.",
+  "creative.failed.caption_profile_unavailable": "❌ 이 설치에서는 자막을 사용할 수 없습니다(음성 엔진 없음).",
+  "creative.failed.render_failed": "❌ 렌더링에 실패했습니다. 더 짧은 미디어나 다른 매개변수를 시도하세요.",
+  "creative.failed.ffmpeg_unavailable": "❌ 이 배포에는 렌더 엔진이 설치되어 있지 않습니다.",
+  "creative.failed.internal": "❌ 내부 오류가 발생했습니다. 세부 정보는 팀에서 확인할 수 있습니다."
 }

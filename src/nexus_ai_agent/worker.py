@@ -29,6 +29,7 @@ def default_job_handlers() -> dict[str, JobHandler]:
     Composition roots register the full map so a resumed job always finds
     its handler, regardless of which process drains the queue.
     """
+    from nexus_ai_agent.creative.render_jobs import creative_render_job
     from nexus_ai_agent.creative.slideshow.worker_adapter import slideshow_render_job
 
     return {
@@ -36,6 +37,9 @@ def default_job_handlers() -> dict[str, JobHandler]:
         "story": generate_story_job,
         # Wave 2.5: the Nagar slideshow lane reached through the queue, never inline.
         "slideshow_render": slideshow_render_job,
+        # task-166 (P0-B): one-shot /edit, /caption, /grade through the same
+        # canonical chain (registry → CommandBus → lane → measured artifact).
+        "creative_render": creative_render_job,
     }
 
 

@@ -61,5 +61,21 @@
   "onboarding.ai_hint": "💡 *Совет:* просто напишите сообщение, и я отвечу с помощью ИИ!\n\nТакже можно использовать:\n• `/ask <вопрос>` — быстрые вопросы\n• `/code <код>` — ревью кода\n• `/translate <текст>` — умный перевод",
   "onboarding.image_hint": "💡 *Совет:* используйте `/image <описание>` для генерации изображений!\n\nПопробуйте: `/image кот в космосе digital-art`\n\nСтили: realistic, anime, digital-art, oil-painting, pixel-art, watercolor, cyberpunk, fantasy, 3d, sketch",
   "onboarding.go_chat": "💬 Отправьте сообщение, чтобы начать общение!",
-  "onboarding.explore_hint": "🗺️ **Все команды:**\n\n🤖 `/ai` — чат с Gemini\n🎨 `/image` — генерация изображений\n🔊 `/tts` — текст в речь\n☁️ `/cloud` — загрузка файлов\n🔗 `/referral` — приглашение друзей\n🎮 `/quiz` — играть\n🌐 `/language` — смена языка\n❓ `/help` — полный список команд"
+  "onboarding.explore_hint": "🗺️ **Все команды:**\n\n🤖 `/ai` — чат с Gemini\n🎨 `/image` — генерация изображений\n🔊 `/tts` — текст в речь\n☁️ `/cloud` — загрузка файлов\n🔗 `/referral` — приглашение друзей\n🎮 `/quiz` — играть\n🌐 `/language` — смена языка\n❓ `/help` — полный список команд",
+  "creative.invalid_command": "❌ Неизвестная команда студии. Используйте /edit, /caption или /grade.",
+  "creative.invalid_operation": "❌ Операция не поддерживается для /{command}. Варианты: {operations}",
+  "creative.not_replied": "❌ Отправьте эту команду в ответ на сообщение с видео (или аудио).",
+  "creative.limit_exceeded": "❌ Медиа должно быть не длиннее {max_seconds} секунд.",
+  "creative.media_too_large": "❌ Размер файла превышает {max_mb} МБ.",
+  "creative.media_download_failed": "❌ Не удалось скачать файл из Telegram; попробуйте ещё раз.",
+  "creative.queue_failed": "❌ Очередь рендера сейчас недоступна; попробуйте ещё раз.",
+  "creative.queued": "⏳ /{command} {operation} в очереди — задача {job_id}",
+  "creative.completed": "✅ /{command} {operation} готово",
+  "creative.failed.invalid_request": "❌ Некорректный запрос ({detail}).",
+  "creative.failed.unsupported_operation": "❌ Эта операция не поддерживается для быстрого рендера.",
+  "creative.failed.media_missing": "❌ Подготовленный файл не найден; отправьте команду снова.",
+  "creative.failed.caption_profile_unavailable": "❌ Субтитры недоступны в этой установке (нет речевого движка).",
+  "creative.failed.render_failed": "❌ Рендер не удался; попробуйте более короткое медиа или другие параметры.",
+  "creative.failed.ffmpeg_unavailable": "❌ Движок рендера не установлен в этом развёртывании.",
+  "creative.failed.internal": "❌ Произошла внутренняя ошибка; детали доступны команде."
 }

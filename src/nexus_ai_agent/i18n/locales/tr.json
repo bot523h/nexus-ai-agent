@@ -61,5 +61,21 @@
   "onboarding.ai_hint": "💡 *İpucu:* Bir mesaj yazman yeterli, YZ ile cevaplarım!\n\nŞunları da kullanabilirsin:\n• `/ask <soru>` — Hızlı soru-cevap\n• `/code <kod>` — Kod incelemesi\n• `/translate <metin>` — Akıllı çeviri",
   "onboarding.image_hint": "💡 *İpucu:* Görsel üretmek için `/image <açıklama>` kullan!\n\nDene: `/image uzayda bir kedi digital-art`\n\nStiller: realistic, anime, digital-art, oil-painting, pixel-art, watercolor, cyberpunk, fantasy, 3d, sketch",
   "onboarding.go_chat": "💬 Sohbete başlamak için bir mesaj gönder!",
-  "onboarding.explore_hint": "🗺️ **Tüm Komutlar:**\n\n🤖 `/ai` — Gemini ile sohbet\n🎨 `/image` — Görsel üret\n🔊 `/tts` — Metinden konuşmaya\n☁️ `/cloud` — Dosya yükle\n🔗 `/referral` — Arkadaş davet et\n🎮 `/quiz` — Oyna\n🌐 `/language` — Dil değiştir\n❓ `/help` — Tam komut listesi"
+  "onboarding.explore_hint": "🗺️ **Tüm Komutlar:**\n\n🤖 `/ai` — Gemini ile sohbet\n🎨 `/image` — Görsel üret\n🔊 `/tts` — Metinden konuşmaya\n☁️ `/cloud` — Dosya yükle\n🔗 `/referral` — Arkadaş davet et\n🎮 `/quiz` — Oyna\n🌐 `/language` — Dil değiştir\n❓ `/help` — Tam komut listesi",
+  "creative.invalid_command": "❌ Bilinmeyen stüdyo komutu. /edit, /caption veya /grade kullanın.",
+  "creative.invalid_operation": "❌ /{command} için desteklenmeyen işlem. Seçenekler: {operations}",
+  "creative.not_replied": "❌ Bu komutu bir video (veya ses) mesajına yanıt olarak gönderin.",
+  "creative.limit_exceeded": "❌ Medya en fazla {max_seconds} saniye olmalıdır.",
+  "creative.media_too_large": "❌ Medya {max_mb} MB'den büyük.",
+  "creative.media_download_failed": "❌ Medya Telegram'dan indirilemedi; tekrar deneyin.",
+  "creative.queue_failed": "❌ Render kuyruğu şu anda kullanılamıyor; tekrar deneyin.",
+  "creative.queued": "⏳ /{command} {operation} kuyruğa alındı — iş {job_id}",
+  "creative.completed": "✅ /{command} {operation} tamamlandı",
+  "creative.failed.invalid_request": "❌ İstek geçersiz ({detail}).",
+  "creative.failed.unsupported_operation": "❌ Bu işlem tek adımlı render için desteklenmiyor.",
+  "creative.failed.media_missing": "❌ Hazırlanan medya dosyası bulunamadı; komutu tekrar gönderin.",
+  "creative.failed.caption_profile_unavailable": "❌ Bu kurulumda altyazı kullanılamıyor (konuşma motoru yok).",
+  "creative.failed.render_failed": "❌ Render başarısız oldu; daha kısa medya veya farklı parametreler deneyin.",
+  "creative.failed.ffmpeg_unavailable": "❌ Render motoru bu dağıtımda kurulu değil.",
+  "creative.failed.internal": "❌ Dahili bir hata oluştu; ayrıntılar ekip tarafından görülebilir."
 }

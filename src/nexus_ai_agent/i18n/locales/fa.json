@@ -61,5 +61,21 @@
   "onboarding.ai_hint": "💡 *نکته:* هر پیامی بفرستی، AI جوابت رو میده!\n\nهمچنین:\n• `/ask <سوال>` — سوال سریع\n• `/code <کد>` — بررسی کد\n• `/translate <متن>` — ترجمه هوشمند",
   "onboarding.image_hint": "💡 *نکته:* با `/image <توضیح>` عکس بساز!\n\nمثال: `/image یک گربه در فضا digital-art`\n\nاستایل‌ها: realistic, anime, digital-art, oil-painting, pixel-art, watercolor, cyberpunk, fantasy, 3d, sketch",
   "onboarding.go_chat": "💬 پیامت رو بفرست و چت رو شروع کن!",
-  "onboarding.explore_hint": "🗺️ **همه دستورات:**\n\n🤖 `/ai` — چت با Gemini\n🎨 `/image` — ساخت عکس\n🔊 `/tts` — متن به صدا\n☁️ `/cloud` — آپلود فایل\n🔗 `/referral` — دعوت دوستان\n🎮 `/quiz` — بازی\n🌐 `/language` — تغییر زبان\n❓ `/help` — لیست کامل دستورات"
+  "onboarding.explore_hint": "🗺️ **همه دستورات:**\n\n🤖 `/ai` — چت با Gemini\n🎨 `/image` — ساخت عکس\n🔊 `/tts` — متن به صدا\n☁️ `/cloud` — آپلود فایل\n🔗 `/referral` — دعوت دوستان\n🎮 `/quiz` — بازی\n🌐 `/language` — تغییر زبان\n❓ `/help` — لیست کامل دستورات",
+  "creative.invalid_command": "❌ فرمان استودیو ناشناخته است. /edit، /caption یا /grade را امتحان کن.",
+  "creative.invalid_operation": "❌ این عملیات برای /{command} پشتیبانی نمی‌شود. گزینه‌ها: {operations}",
+  "creative.not_replied": "❌ این فرمان را در پاسخ به یک پیام ویدیو (یا صوت) بفرست.",
+  "creative.limit_exceeded": "❌ رسانه باید حداکثر {max_seconds} ثانیه باشد.",
+  "creative.media_too_large": "❌ حجم رسانه بیش از {max_mb} مگابایت است.",
+  "creative.media_download_failed": "❌ دانلود رسانه از تلگرام ناموفق بود؛ دوباره تلاش کن.",
+  "creative.queue_failed": "❌ صف رندر الان در دسترس نیست؛ دوباره تلاش کن.",
+  "creative.queued": "⏳ /{command} {operation} در صف قرار گرفت — کار {job_id}",
+  "creative.completed": "✅ /{command} {operation} انجام شد",
+  "creative.failed.invalid_request": "❌ درخواست نامعتبر است ({detail}).",
+  "creative.failed.unsupported_operation": "❌ این عملیات برای رندر یک‌مرحله‌ای پشتیبانی نمی‌شود.",
+  "creative.failed.media_missing": "❌ فایل رسانهٔ آماده‌شده پیدا نشد؛ فرمان را دوباره بفرست.",
+  "creative.failed.caption_profile_unavailable": "❌ زیرنویس روی این نصب در دسترس نیست (موتور گفتار نصب نشده).",
+  "creative.failed.render_failed": "❌ رندر ناموفق بود؛ رسانهٔ کوتاه‌تر یا پارامترهای دیگر را امتحان کن.",
+  "creative.failed.ffmpeg_unavailable": "❌ موتور رندر روی این استقرار نصب نیست.",
+  "creative.failed.internal": "❌ خطای داخلی رخ داد؛ جزئیات برای تیم فنی قابل مشاهده است."
 }

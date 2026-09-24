@@ -106,10 +106,9 @@ def test_no_new_importers_of_legacy_support_modules() -> None:
 def test_legacy_routes_call_the_fail_closed_hmac_gate() -> None:
     """Every legacy handler body must call ``require_hmac_signature`` directly."""
     tree = ast.parse(API_APP.read_text(encoding="utf-8"))
+    kinds = (ast.FunctionDef, ast.AsyncFunctionDef)
     for (_, _), func_name in LEGACY_ROUTES.items():
-        func = next(
-            n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == func_name
-        )
+        func = next(n for n in tree.body if isinstance(n, kinds) and n.name == func_name)
         calls = {
             node.func.id
             for node in ast.walk(func)
