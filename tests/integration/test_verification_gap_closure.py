@@ -38,9 +38,44 @@ from nexus_ai_agent.adapters.in_process_job_queue import (
 from nexus_ai_agent.application.ports.job_queue import JobStatus
 from nexus_ai_agent.creative.slideshow.ffmpeg import sha256_file
 from nexus_ai_agent.worker import default_job_handlers
-from tests.unit.test_job_verification_gaps import make_pdf_with_text
 
 pytestmark = pytest.mark.integration
+
+
+def make_pdf_with_text(dest: Path, text: str = "Hello PDF world") -> Path:
+    """A real one-page PDF with extractable text and correct xref offsets.
+
+    Kept local to this file (no cross-directory test imports): CI invokes the
+    bare ``pytest`` console script, where ``tests`` is not an importable
+    package — every test module must be self-contained or use its own
+    directory's helpers (the ``slideshow_media``/``surface_fakes`` pattern).
+    """
+    content = f"BT /F1 24 Tf 72 720 Td ({text}) Tj ET".encode()
+    objects = [
+        b"<</Type/Catalog/Pages 2 0 R>>",
+        b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
+        (
+            b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]"
+            b"/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>"
+        ),
+        b"<</Length " + str(len(content)).encode() + b">>stream\n" + content + b"\nendstream",
+        b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for index, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += f"{index} 0 obj\n".encode() + body + b"\nendobj\n"
+    xref_pos = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n".encode()
+    out += b"0000000000 65535 f \n"
+    for offset in offsets:
+        out += f"{offset:010d} 00000 n \n".encode()
+    out += (
+        f"trailer\n<</Size {len(objects) + 1}/Root 1 0 R>>\nstartxref\n{xref_pos}\n%%EOF\n"
+    ).encode()
+    dest.write_bytes(bytes(out))
+    return dest
 
 
 # ---------------------------------------------------------------------------
