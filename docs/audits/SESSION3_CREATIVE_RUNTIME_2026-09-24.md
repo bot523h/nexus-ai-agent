@@ -102,6 +102,30 @@ render jobs, creative surface, duration algebra, render plan, architecture.
   `pack_coverage.py` + 2 docs came from session-2 residue and are load-bearing
   (clean-worktree proof fails without them).
 
+## Postscript 2: one transient `test` failure, unidentified (same day)
+
+After the docs-index fix (`9320bf3`), the `push` CI run went green while the
+`pull_request` run (same minute) failed `test`. Forensics:
+
+- `main` never moved; `git diff HEAD origin/pr/67/merge` is **empty** — both
+  runs tested the identical tree, 3 seconds apart. Deterministic causes are
+  ruled out: no test reads git state or `GITHUB_*` env (verified by grep; the
+  one `GITHUB_*` fixture is hermetic), durations show no crash truncation.
+- Verdict: a transient single-runner flake (one occurrence in 6+ runs of the
+  same code), test id unknown — CI logs, job logs and the `pytest-log`
+  artifact are all unreachable from the sandbox (EOF on blob storage), and
+  check-run annotations carry only infra notices.
+- Diagnostic scaffold used: a temporary `if: failure()` step mirroring
+  `FAILED|ERROR` lines from `pytest.log` as `::error::` annotations
+  (API-readable). It caught nothing (next run green) and was reverted
+  (`bd74721` + revert) to leave CI untouched.
+- Local robustness signal: render/artifact/jobs suites 3× green; 12
+  timing-sensitive unit/integration files 5× identical (132 passed + 19
+  pre-existing env failures, zero variance).
+
+If `test` flakes again on this PR: re-add the annotation mirror temporarily —
+it is the only failure channel readable from a sandbox.
+
 ## Open follow-ups
 
 - PR#67 awaits review/merge; PR#64/58/33/60/63 still OPEN and conflicting.
