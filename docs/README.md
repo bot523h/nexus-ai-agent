@@ -21,6 +21,7 @@ placeholder text.
 | [architecture/MODULE_MAP.md](architecture/MODULE_MAP.md) | Layer diagram, package inventory, boundary laws → the tests that enforce them, extension recipes. |
 | [architecture/RUNTIME_FLOWS.md](architecture/RUNTIME_FLOWS.md) | Message, slideshow, render-lane, checkpoint, migration, and webhook flows — each with its failure contract. |
 | [architecture/CREATIVE_STUDIO.md](architecture/CREATIVE_STUDIO.md) | Nagar: capability model, permission ladder, packs, activation gap, TDD coverage ledger, render lane. |
+| [architecture/JOB_LIFECYCLE.md](architecture/JOB_LIFECYCLE.md) | Canonical job lifecycle: chain, state machine with owners+invariants, side-effect boundary, artifact verification contract, retry/failure semantics, Result chain. |
 | [architecture/DATA_AND_STORAGE.md](architecture/DATA_AND_STORAGE.md) | Every store, ownership, Alembic chain, retention, portability, and what never enters a store. |
 | [architecture/SECURITY.md](architecture/SECURITY.md) | Trust boundaries, STRIDE threat → control → evidence table, P0 audit follow-through, review checklist. |
 | [architecture/OBSERVABILITY.md](architecture/OBSERVABILITY.md) | Structured events, metric policy, health semantics, inspection commands, the short alert list. |
@@ -80,6 +81,11 @@ placeholder text.
 | [audits/SESSION_PLAN_2026-09-21_01a0c506.md](audits/SESSION_PLAN_2026-09-21_01a0c506.md) | Session plan record (agent 01a0c506): wave-4 hardening batch planning. |
 | [audits/PR32_TRIAGE_2026-09-21.md](audits/PR32_TRIAGE_2026-09-21.md) | Forensic per-file triage of PR#32 vs merged PR#34 (15 SUPERSEDED / 4 DROP / 3 PORT / 4 ADAPT) — basis of the supersession. |
 | [audits/P0_STABILIZATION_2026-09-24.md](audits/P0_STABILIZATION_2026-09-24.md) | Owner-directed P0 day (task-165/166/167): legacy `/creative/*` lane disposition, studio surface wiring, verifiable backups — repro/evidence-first report. |
+| [audits/VERIFICATION_GAP_REPORT_2026-09-24.md](audits/VERIFICATION_GAP_REPORT_2026-09-24.md) | Task-180 verification closure (Agent D): GAP-A/B/C closed with executable proof (slideshow/story/pdf artifact verifiers), GAP-D recorded as formal gap, attacks A–H + 3 reverted mutations. |
+| [audits/CROSS_PR_TRUTH_2026-09-24.md](audits/CROSS_PR_TRUTH_2026-09-24.md) | Cross-PR truth gate: #67/#68/#70/#71 layer matrix with the branch ≠ PR ≠ merged ≠ CI-on-main distinction, measured with git/gh. |
+| [audits/VERIFICATION_TRUTH_MATRIX.json](audits/VERIFICATION_TRUTH_MATRIX.json) | Machine-readable OPERATION→COMMAND→CAPABILITY→JOB→RUNTIME→ARTIFACT→VERIFIER→COMPLETED matrix (PASS/MISSING/BLOCKED/NOT_APPLICABLE, evidence-named per cell). |
+| [audits/GATE5_CLOSURE_2026-09-24.md](audits/GATE5_CLOSURE_2026-09-24.md) | Task-181 Gate 5 closure/reconciliation (Agent E): claim-audit truth matrix (prior Gate-5-local claims vs GitHub), PR#71/#74 reconciliation, four reproduced defects (typed failure → COMPLETED, one-state failures, publication leak, trace job_id=null), fixes with regression + 6/6 mutation probes. |
+| [audits/GATE5_TRUTH_MATRIX.json](audits/GATE5_TRUTH_MATRIX.json) | Machine-readable Gate 5 claim→evidence matrix + acceptance-gate answers (CLOSED only with Git + CI evidence). |
 | [audits/DEAD_ENGINES_2026-09-22.md](audits/DEAD_ENGINES_2026-09-22.md) | Dead-engine verification (zero importers, measured gates), five-option wiring analysis, negative controls, and the recorded residuals. |
 
 ## History (archived — read-only, never a source of truth)

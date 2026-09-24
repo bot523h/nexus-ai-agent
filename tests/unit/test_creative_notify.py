@@ -143,20 +143,36 @@ async def test_typed_failure_is_translated_and_cleans_workspace(
     assert fake.sent_messages, "expected a user-visible failure message"
     text = fake.sent_messages[0][1]
     assert "creative." not in text and "error_code" not in text
-    assert text == i18n.t("creative.failed.caption_profile_unavailable", lang="fa", detail="x")
+    # task-181: failure copy carries the failure-class line (never success)
+    # and then the translated typed message.
+    assert text.endswith(
+        i18n.t("creative.failed.caption_profile_unavailable", lang="fa", detail="x")
+    )
+    assert text.startswith("❌") or text.startswith("⚠️")
     assert not workspace.exists()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "head"),
+    [
+        (JobStatus.FAILED_RETRYABLE, "⚠️"),
+        (JobStatus.FAILED_TERMINAL, "❌"),
+    ],
+)
 async def test_failed_job_status_maps_to_internal_typed_message(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, status: JobStatus, head: str
 ) -> None:
+    # task-181: both failure states map to *failure* copy (visibly distinct
+    # class lines), never success.
     fake = _FakeBot()
     monkeypatch.setattr("telegram.Bot", lambda token: fake)
     await _notify_creative_completion(
-        _completion(status=JobStatus.FAILED, error="boom", result={}),
+        _completion(status=status, error="boom", result={}),
         token="dummy",
     )
     text = fake.sent_messages[0][1]
-    assert text == i18n.t("creative.failed.internal", lang="fa", detail="boom")
+    assert text.startswith(head)
+    assert text.endswith(i18n.t("creative.failed.internal", lang="fa", detail="boom"))
     assert "boom" not in text  # details go to logs, not the user stub
+    assert "✅" not in text

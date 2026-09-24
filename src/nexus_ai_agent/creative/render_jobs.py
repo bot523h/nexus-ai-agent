@@ -13,10 +13,21 @@ Translation and user-facing copy live in the bot completion notifier; this
 module returns typed results instead:
 
 * ``{"success": True, ...}`` — measured artifact facts (sha256-only truth),
+  including the ``spec_ir_hash`` lane identity; since task-178 the queue
+  independently re-verifies every claim before the job may succeed;
 * ``{"success": False, "error_code": <typed>}`` — expected, user-typed
   failure (bad args, unavailable caption engine, ...) — the job COMPLETES,
   the notifier translates the code;
 * **raises** — unexpected environment failure → job FAILED, operator-visible.
+
+Destination safety (task-178): a render never deletes first. The lane
+publishes by staging (``.part``) + atomic rename; ``overwrite=True`` is
+scoped to THIS job's own key-derived workspace path, so a retry can replace
+only its own previous attempt — never an artifact owned by anyone else —
+and a failed re-render leaves the previous bytes in place instead of
+deleting them. Document artifacts (``.srt`` / ``.otio``) are materialised
+with the same atomic temp-then-rename pattern; a half-written destination
+is never visible under the final name.
 
 Nothing here imports Telegram; the worker runs outside the bot process.
 """
@@ -276,6 +287,19 @@ def _sha256_text(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Materialise a document artifact atomically: temp file → rename.
+
+    A crash mid-write can never leave a half-written file under the final
+    name, so the destination path is only ever a whole document (the same
+    guarantee the render lane gives media via its ``.part`` staging).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    staging = path.with_name(f".{path.stem}.part{path.suffix}")
+    staging.write_text(text, encoding="utf-8")
+    staging.replace(path)
+
+
 def _default_caption_engine() -> Any:  # noqa: ANN401 - CaptionEnginePort
     """Optional-extra resolution (SLIDESHOW.md ``[speech]`` row): default
     installs report unavailable and the chain fails *closed*, typed and
@@ -342,8 +366,11 @@ async def _run_render_branch(
         raise CreativeRenderError("invalid_request", f"lane materialisation failed: {exc}") from exc
 
     out_path = workspace / "output.mp4"
-    out_path.unlink(missing_ok=True)
     try:
+        # No unlink: the lane stages to ``.part`` and publishes by atomic
+        # rename. ``overwrite=True`` is scoped to this job's own workspace
+        # path — a retry replaces only its own previous attempt, and a
+        # failed re-render leaves the previous bytes untouched.
         artifact = render_lane(ir, out_path, binary=binary, overwrite=True)
     except Exception as exc:
         raise CreativeRenderError("render_failed", f"{type(exc).__name__}: {exc}") from exc
@@ -354,12 +381,13 @@ async def _run_render_branch(
         "artifact_path": str(out_path),
         "artifact_kind": "video",
         "sha256": sha256_file(out_path),
+        "size_bytes": out_path.stat().st_size,
         "duration_us": measured.duration_us,
         "height": measured.height,
         "operation": canonical_id,
         "output_asset_id": str(output.get("asset_id", "out")),
         "workspace_dir": str(workspace),
-        "_artifact_probe": repr(artifact)[:120],  # debugging only, never user-facing
+        "spec_ir_hash": artifact.lane_ir_hash,
     }
 
 
@@ -383,12 +411,13 @@ async def _run_otio_branch(payload: CreativeRenderPayload, workspace: Path) -> d
     if not isinstance(otio_text, str) or not otio_text.strip():
         raise CreativeRenderError("render_failed", "export produced no OTIO document")
     out_path = workspace / "timeline.otio"
-    out_path.write_text(otio_text, encoding="utf-8")
+    _atomic_write_text(out_path, otio_text)
     return {
         "success": True,
         "artifact_path": str(out_path),
         "artifact_kind": "document",
-        "sha256": _sha256_text(otio_text),
+        "sha256": sha256_file(out_path),
+        "size_bytes": out_path.stat().st_size,
         "duration_us": duration_us,
         "operation": "delivery.export_otio",
         "output_asset_id": str(output.get("asset_id", "timeline")),
@@ -434,7 +463,7 @@ async def _run_caption_branch(
     out_path = workspace / "captions.srt"
     try:
         srt_text = format_srt(transcript)
-        out_path.write_text(srt_text, encoding="utf-8")
+        _atomic_write_text(out_path, srt_text)
     except Exception as exc:
         raise CreativeRenderError("render_failed", f"srt materialisation failed: {exc}") from exc
 
@@ -443,6 +472,7 @@ async def _run_caption_branch(
         "artifact_path": str(out_path),
         "artifact_kind": "document",
         "sha256": sha256_file(out_path),
+        "size_bytes": out_path.stat().st_size,
         "duration_us": duration_us,
         "operation": canonical_id,
         "output_asset_id": "captions",
