@@ -374,3 +374,56 @@ def test_volatile_fields_do_not_produce_false_positives(sandbox, stored):
     tampered["provenance"]["T02"]["links"]["artifact"]["sha256"] = "sha256:" + "ab" * 32
     findings = truth.compare(tampered, truth.build_projection(root=sandbox))
     assert not _kinds(findings) & {"provenance_drift", "reconciliation_drift"}, _kinds(findings)
+
+
+def test_probe_a2_an_unloadable_source_is_named_not_a_traceback():
+    """A2: a tree whose sources cannot load must fail *as a finding*, not a crash.
+
+    Measured against a real mutation: swapping one pack's registrar for another
+    in ``creative/packs/runtime.py`` raises ``ValueError: duplicate operation:
+    'audio.detect_beats'`` while the registry is built.  That is still a red
+    build, but a traceback names a Python frame rather than the rule the tree
+    broke.  The CLI contract is therefore: a source-level load failure exits
+    ``EXIT_SOURCE_UNREADABLE`` (2) — distinct from ``1`` ("loaded, and it
+    disagrees") — and prints the finding.
+
+    The real tree is edited, so the restore is **byte-exact and file-scoped**.
+    An earlier version of this test restored with ``git checkout -- src``; it
+    passed while silently reverting an unrelated uncommitted change, because
+    the constant it asserted on had already been imported.  Never widen this
+    to a directory-level checkout.
+    """
+    import subprocess  # noqa: PLC0415 - one-shot CLI probe, not an import cycle
+    import sys  # noqa: PLC0415
+
+    from nexus_ai_agent.nagar.__main__ import EXIT_SOURCE_UNREADABLE  # noqa: PLC0415
+
+    target = REPO_ROOT / "src/nexus_ai_agent/creative/packs/runtime.py"
+    original = target.read_bytes()
+    mutated = original.replace(
+        b'        "nexus.color.delivery",\n        _register_delivery,',
+        b'        "nexus.color.delivery",\n        _register_audio,',
+        1,
+    )
+    assert mutated != original, "the composition table changed shape - probe A2 is stale"
+
+    try:
+        target.write_bytes(mutated)
+        result = subprocess.run(
+            [sys.executable, "-m", "nexus_ai_agent.nagar", "--check"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        target.write_bytes(original)
+
+    assert target.read_bytes() == original, "probe A2 failed to restore the tree byte-exactly"
+    assert result.returncode == EXIT_SOURCE_UNREADABLE, (
+        f"expected the named-load-failure contract, got exit {result.returncode}\n"
+        f"stdout={result.stdout}\nstderr={result.stderr}"
+    )
+    assert "Traceback" not in result.stderr, (
+        f"the gate crashed instead of reporting:\n{result.stderr}"
+    )
+    assert "duplicate operation" in result.stderr, result.stderr

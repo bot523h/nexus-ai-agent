@@ -17,7 +17,33 @@ from __future__ import annotations
 
 import sys
 
-from nexus_ai_agent.nagar import truth
+from nexus_ai_agent.nagar import sources, truth
+
+#: Exit code for "the sources themselves could not be read" — deliberately
+#: distinct from 1 ("the sources loaded, and they disagree with the
+#: projection").  A CI consumer can then tell a broken tree from a drifted
+#: projection without parsing stderr.
+EXIT_SOURCE_UNREADABLE = 2
+
+
+def _load_error(exc: Exception) -> int:
+    """Render a source-level load failure as a named, actionable finding.
+
+    A traceback here is technically still a red build, but it names a Python
+    frame rather than *the rule the tree broke*: ``duplicate operation: 'x'``
+    is the finding, ``ValueError`` is an implementation detail.  A duplicate
+    pack registration is exactly this case, so it is reported as a measurement
+    outcome instead of crashing the gate.
+    """
+    print(
+        f"Operation Truth could not be measured — a source is not loadable:\n"
+        f"  [{type(exc).__name__}] {exc}\n"
+        f"\nThe three sources must load before any comparison is meaningful. "
+        f"Fix the tree above; do not regenerate {truth.PROJECTION_PATH} to "
+        f"silence this.",
+        file=sys.stderr,
+    )
+    return EXIT_SOURCE_UNREADABLE
 
 
 def _print_summary() -> None:
@@ -50,7 +76,10 @@ def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
 
     if "--write" in args:
-        path = truth.write_projection()
+        try:
+            path = truth.write_projection()
+        except (sources.SourceError, ValueError) as exc:
+            return _load_error(exc)
         print(f"wrote {path.relative_to(truth.sources.REPO_ROOT)}")
         return 0
 
@@ -62,7 +91,11 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 1
-        findings = truth.compare(projection, truth.build_projection())
+        try:
+            fresh = truth.build_projection()
+        except (sources.SourceError, ValueError) as exc:
+            return _load_error(exc)
+        findings = truth.compare(projection, fresh)
         if findings:
             print(
                 f"Operation Truth drifted ({len(findings)} finding(s)) — the sources no "

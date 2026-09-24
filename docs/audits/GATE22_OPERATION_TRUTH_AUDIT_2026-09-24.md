@@ -335,6 +335,26 @@ away*.
 Detected without regenerating: catalogue change, runtime change, surface change,
 contract change, evidence change, owner fabrication, provenance-chain break.
 
+**Exit-code contract.** `--check` distinguishes the two failure classes, so a CI
+consumer can tell a broken tree from a drifted projection without parsing stderr:
+
+| Exit | Meaning |
+|---|---|
+| `0` | the sources load, and they agree with the projection |
+| `1` | the sources load, and they **disagree** (`Operation Truth drifted (N finding(s))`) |
+| `2` | a source is **not loadable** — reported as a named finding, not a traceback |
+
+Exit `2` exists because a real mutation was measured that produces a load
+failure rather than a disagreement: swapping one pack's registrar for another in
+`creative/packs/runtime.py` raises `ValueError: duplicate operation:
+'audio.detect_beats'` while the registry is built. That is still a red build,
+but a traceback names a Python frame rather than the rule the tree broke.
+`test_probe_a2_an_unloadable_source_is_named_not_a_traceback` pins the contract,
+restoring the edited file **byte-exactly and file-scoped** — an earlier draft of
+that test restored with `git checkout -- src`, which passed while silently
+reverting an unrelated uncommitted change, since the constant it asserted on had
+already been imported. Directory-level checkouts are forbidden in these probes.
+
 **False-positive discipline.** `generated.generated_at` and
 `generated.source_revision` change on every run and every commit, and artifact
 digests vary with the local FFmpeg build. All are declared in
@@ -395,9 +415,16 @@ FFmpeg build and teach reviewers to ignore it.
 
 ## 13. Adversarial mutations
 
-Sixteen probes in `tests/unit/test_operation_truth_mutations.py`, all green.
+Seventeen probes in `tests/unit/test_operation_truth_mutations.py`, all green.
 Two mutations of the *same kind* were first run against PR #70's own guard test,
 to establish that the defect was real rather than theoretical:
+
+**Probe hygiene.** A probe must prove it changed the tree. Three of these probes
+were first written against wrong targets — a module **docstring bullet** rather
+than the `COMPOSITION` entry, and two string literals (`| T70 |`, a truncated
+digest) that did not exist in the file — and each reported a spurious **GREEN**
+that would have been read as a gate defect. A mutation that changes no bytes
+tests nothing, so the suite asserts `mutated != original` before measuring.
 
 | Probe | Mutation | PR #70's guard test | Gate 2.2 |
 |---|---|---|---|
@@ -416,6 +443,7 @@ to establish that the defect was real rather than theoretical:
 | I | alter T02's artifact digest | — | RED ✔ |
 | J | rewrite the chain's `command_id` | — | RED ✔ |
 | J2 | delete the chain's `command_id` | — | RED ✔ |
+| A2 | make a source unloadable (duplicate pack registration) | — | RED, **named** (exit 2, no traceback) ✔ |
 | — | volatile fields (timestamp, revision, digest) | — | no false positive ✔ |
 
 Four of the six mutation classes PR #70's suite could express left it **green**.
@@ -428,7 +456,7 @@ rather than described as a principle.
 
 | Suite | Result |
 |---|---|
-| `tests/unit/test_operation_truth_mutations.py` | 16 passed |
+| `tests/unit/test_operation_truth_mutations.py` | 17 passed |
 | `tests/unit/test_operation_truth_sources.py` | 20 passed |
 | `tests/unit/test_operation_truth_runtime_confirmation.py` | 3 passed (the `slow`-marked render probe ≈ 2.5 min) |
 | `tests/architecture/test_operation_truth_gate.py` | 17 passed |
@@ -440,6 +468,30 @@ existing parity rule is preserved):
   a **named** step so drift reports as drift;
 * `Operation Truth runtime confirmation (Gate 2.2)` → the `slow` render probe,
   named rather than hidden in the bulk suite.
+
+**Executed on the runner, not assumed.** CI run
+[`36034831629`](https://github.com/bot523h/nexus-ai-agent/actions/runs/36034831629)
+on this branch (`e8ff2d0`) finished 4/4 green, and the job API confirms both new
+steps ran *in the `test` job* with `conclusion: success`:
+
+```
+lint (ruff + mypy + version lockstep)   success
+migrate-postgres                        success
+lint-fast (pinned ruff, no install)     success
+test (pytest -m "not slow")             success
+  └─ Operation Truth drift (Gate 2.2)                      success
+  └─ Operation Truth runtime confirmation (Gate 2.2)       success
+```
+
+Locally the full non-`slow` suite is **1939 passed, 7 failed**; those same seven
+tests fail identically at the base commit `035a896` in a detached worktree
+(`test_migrate_race_condition.py` ×4, `test_database_url.py`, `test_litellm_provider.py`,
+`test_version_command.py`), i.e. they are pre-existing environment artefacts of a
+partial local venv, not regressions from this change.
+
+**Reproducibility from a clean checkout.** A fresh `git clone` of `e8ff2d0`
+recomputes `70 / 57 / 47 / 23 / 10 / 80 / surface 12` and passes `--check` with
+no local state, which is what makes the `--check` step meaningful in CI.
 
 ---
 
