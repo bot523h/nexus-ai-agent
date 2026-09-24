@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-24T16:45:20Z",
+  "updated_at": "2026-09-24T18:20:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1955,7 +1955,7 @@
       "prerequisites": [],
       "ttl_hours": 48,
       "gates_owner": false,
-      "note": "",
+      "note": "DELIVERED on arena/01a0d43e: JobStatus.VERIFYING + guarded transition matrix (owner+invariant per edge), queue-owned independent artifact verification for creative_render (exists/size>0/expected-path/containment/sha256-recompute/probe; verifier crash fails closed), first-payload-wins idempotency with conflict log, attempt counter, get_result_chain (three identities + probe + failure reason), render_jobs destination-safety (no delete-then-fail; atomic document writes; spec_ir_hash in result). Runtime fence zero-diff (rendering/packs/studio/slideshow-ffmpeg untouched). Evidence: tests/unit/test_job_lifecycle.py (20) + tests/integration/test_job_lifecycle_queue.py (17, M1-M10+A/B+17) green; full pytest 1932 passed/20 skipped; make lint+types green; docs integrity green. Known GAPs recorded in PR body (slideshow verifier wiring, legacy lane).",
       "task": "task-178-job-lifecycle",
       "title": "Canonical job lifecycle: VERIFYING state, independent artifact verification, retry/failure contracts, M1-M10",
       "title_fa": "چرخهٔ عمر کانونی Job: حالت VERIFYING، راستی‌آزمایی مستقل آرتیفکت، قراردادهای retry و شکست، M1-M10",

@@ -1102,3 +1102,43 @@ pipeline now test-covered, the remaining failure would be loud and typed.
 the engine: the repo's own dump primitives and provider already expose download, so new
 dependencies would solve a problem the repo had already solved. (2) Treating a
 successful `upload()` return as proof — that was the reported bug.
+
+### D-0013 — Job success is a verified state, not a handler's word (canonical job lifecycle)
+
+*Problem.* The queue completed a job the moment its handler returned a dict: a handler that claimed
+`{"success": true}` with a zero-byte, truncated, stale or wrong-path artifact ended `COMPLETED`, and
+nothing in the job layer ever re-measured the claim (A-side reproduced: `test_ab_...` completes a
+zero-byte claim when the verifier registry is opted out). The worker adapter also deleted its
+destination before re-rendering (`out_path.unlink()` + `overwrite=True`), so a failed retry destroyed
+the previous bytes, and document artifacts (`.srt`/`.otio`) were written non-atomically — a crash
+mid-write left a half file under the final name. Execution success and job success were conflated.
+
+*Decision.* The canonical chain Command → Job → Runtime Execution → Artifact Verification → Result is
+now explicit and enforced. `JobStatus` gains `VERIFYING` (persisted values otherwise unchanged — no
+reasonless rename; canonical aliases `RUNNING≡PROCESSING`, `SUCCEEDED≡COMPLETED` documented in
+`jobs/lifecycle`). The queue owns an independent verification phase for `creative_render` (default
+registry, injectable): exists → size > 0 → expected path per operation → workspace containment →
+sha256 recompute → probe evidence for media (the runtime's own allow-listed-binary probe) →
+structural checks for documents; success requires execution success AND verification success;
+anything else is terminal `failed` with `verification_failed:<code>` — including a crashing verifier
+(fail-closed). Every transition is a guarded, status-conditioned UPDATE with owner+invariant
+(`jobs/lifecycle.TRANSITIONS`); terminal states have no outgoing edges. Idempotency keeps
+first-payload-wins with a structured conflict log; `attempt` counts executions; `get_result_chain`
+assembles the Result (command/job/project/operation ids, attempt, statuses, three identities, sha,
+size, probe, failure reason). The worker no longer deletes-then-renders (atomic rename replaces only
+its own key-scoped previous attempt) and writes documents atomically. Runtime ownership untouched:
+`creative/rendering/*`, `creative/packs/*`, `creative/studio/*`, `creative/slideshow/ffmpeg.py` are
+zero-diff; the runtime's own probe/sha256 functions are the evidence source.
+
+*Rejected alternatives.* (1) Verifier inside the handler — self-attestation, the exact
+"verification uses the write response" anti-pattern. (2) A separate verification worker/queue —
+over-engineered for an in-process SQLite monolith (no broker by architecture). (3) Renaming
+`PROCESSING/COMPLETED` to `RUNNING/SUCCEEDED` in the persisted enum — a compatibility break with no
+behavioral gain; aliases carry the canonical vocabulary instead. (4) Raising on same-key/different-
+payload enqueue — would break the redelivery-collapse contract the Telegram surface depends on;
+first-payload-wins + conflict log is deterministic and observable.
+
+*Evidence.* `tests/integration/test_job_lifecycle_queue.py` (M1–M10, M10b, A/B, VERIFYING
+observability, recovery, attempt accounting, §17 invariant on the real FFmpeg chain) and
+`tests/unit/test_job_lifecycle.py` (transition matrix, invariants, claim dialects). Contract doc:
+`docs/architecture/JOB_LIFECYCLE.md`.
