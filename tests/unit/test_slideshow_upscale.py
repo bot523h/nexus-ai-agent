@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from nagar_helpers import TEST_ACTOR, TEST_PROVENANCE, authorized_bus
 from PIL import Image
 
 from nexus_ai_agent.creative.packs.slideshow.models import AssetEvidence
@@ -20,14 +21,17 @@ from nexus_ai_agent.creative.slideshow.ffmpeg import (
     resolve_ffmpeg_bin,
 )
 from nexus_ai_agent.creative.slideshow.upscale import upscale_from_file
-from nexus_ai_agent.creative.studio.bus import CommandBus
 from nexus_ai_agent.creative.studio.models import PermissionLevel, Playhead, Timeline, new_project
 
 
 def _command(operation: str, payload: dict[str, object]) -> dict[str, object]:
     return {
         "protocol_version": "nagar.command.v1",
+        "schema_version": 2,
         "command_id": f"cmd_{uuid4().hex}",
+        "actor": TEST_ACTOR.model_dump(mode="json"),
+        "target": {"project_id": "upscale-project"},
+        "provenance": TEST_PROVENANCE.model_dump(mode="json"),
         "session_id": "upscale-test",
         "operation": operation,
         "input": payload,
@@ -103,7 +107,7 @@ def test_catalog_operation_is_level_b_and_undo_restores_state() -> None:
         name="upscale",
         timeline=Timeline(timeline_id="timeline", duration_us=0, playhead=Playhead(timecode_us=0)),
     )
-    bus = CommandBus(project, registry=registry)
+    bus = authorized_bus(project, registry=registry)
     source = AssetEvidence(
         evidence_id="source-image",
         path="/tmp/source.png",

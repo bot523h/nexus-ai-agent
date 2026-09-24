@@ -22,14 +22,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 PROTOCOL_VERSION: Literal["nagar.command.v1"] = "nagar.command.v1"
+COMMAND_SCHEMA_VERSION: Literal[2] = 2
 MICROSECONDS_PER_SECOND = 1_000_000
+_MAX_COMMAND_INPUT_BYTES = 512 * 1024
+_REF_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 
 
 # ---------------------------------------------------------------------------
@@ -50,7 +54,31 @@ class UnknownOperationError(CommandValidationError):
 
 
 class PermissionDeniedError(NagarError):
-    """The registry permission gate (A/B/C/D) rejected the command."""
+    """The actor, operation permissions or A/B/C/D gate rejected the command."""
+
+
+class AuthorizationError(PermissionDeniedError):
+    """The claimed actor does not have trusted access to this project."""
+
+
+class CapabilityError(NagarError):
+    """A capability was not declared, installed or available for this command."""
+
+
+class UnknownCapabilityError(CapabilityError):
+    """The requested capability is not in the authoritative registry."""
+
+
+class CapabilityVersionError(CapabilityError):
+    """The advertised capability or operation schema version is incompatible."""
+
+
+class ExecutionPolicyError(PermissionDeniedError):
+    """The requested execution mode or confirmation is forbidden."""
+
+
+class IdempotencyConflictError(CommandValidationError):
+    """The same scoped key was previously reserved for a different payload."""
 
 
 class PreconditionError(NagarError):
@@ -58,7 +86,11 @@ class PreconditionError(NagarError):
 
 
 class ReferenceResolutionError(NagarError):
-    """A reference expression could not be pinned to a timecode."""
+    """A time or project input reference could not be resolved."""
+
+
+class InputReferenceError(ReferenceResolutionError):
+    """An input reference is not a safe, existing member of this project."""
 
 
 class CommandExecutionError(NagarError):
@@ -309,39 +341,160 @@ def new_project(project_id: str, name: str, timeline: Timeline) -> Project:
 
 
 # ---------------------------------------------------------------------------
-# Typed command envelope (Nagar protocol v1)
+# Typed command envelope (protocol v1, hardened envelope schema 2)
 # ---------------------------------------------------------------------------
 
 
-class TargetRef(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+def _safe_ref_id(value: str) -> str:
+    """Identifiers are not paths, URLs, schemes or percent-encoded paths."""
+    if not _REF_ID.fullmatch(value) or ".." in value:
+        raise ValueError("reference id must be a local identifier, never a path or URL")
+    return value
 
-    project_id: str | None = None
-    track_id: str | None = None
-    clip_id: str | None = None
+
+def _safe_project_id(value: str) -> str:
+    # Queue-generated project identities include ':' in their message key;
+    # exact comparison to the trusted grant is still required by the bus.
+    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.:-]*", value) or ".." in value:
+        raise ValueError("project reference must be an opaque local identifier")
+    return value
+
+
+class ActorIdentity(BaseModel):
+    """A caller's claim; the bus checks it against a trusted, injected grant."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["user", "service", "agent"]
+    actor_id: str = Field(min_length=1, max_length=128)
+
+
+class TargetRef(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # Project identity already lived here in the original v1 envelope. Make it
+    # required instead of introducing a second, diverging top-level project_id.
+    project_id: str = Field(min_length=1, max_length=128)
+    track_id: str | None = Field(default=None, min_length=1, max_length=128)
+    clip_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class Preconditions(BaseModel):
-    """Optional optimistic-concurrency gate evaluated by the command bus."""
+    """Optional optimistic-concurrency gate evaluated only for a new reservation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     state_revision: int | None = Field(default=None, ge=0)
-    state_hash: str | None = None
+    state_hash: str | None = Field(default=None, max_length=128)
+
+
+class ExecutionPolicy(BaseModel):
+    """Requested execution mode; it cannot expand an OperationSpec's modes."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    mode: Literal["local", "preview"] = "local"
+    network_access: Literal[False] = False
+
+
+class InputRefMetadata(BaseModel):
+    """Bounded assertions about an existing asset (never a path or an URL)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    media_kind: Literal["video", "audio", "image", "caption"] | None = None
+    content_sha256: str | None = Field(
+        default=None, pattern=r"^sha256:[a-fA-F0-9]{64}$", max_length=71
+    )
+
+
+class InputRef(BaseModel):
+    """Project-scoped logical id, resolved against Project.assets/timeline."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    ref_type: Literal["asset", "clip", "timeline"]
+    project_id: str = Field(min_length=1, max_length=128)
+    ref_id: str = Field(min_length=1, max_length=128)
+    metadata: InputRefMetadata = Field(default_factory=InputRefMetadata)
+
+    _check_project_id = field_validator("project_id")(_safe_project_id)
+    _check_ref_id = field_validator("ref_id")(_safe_ref_id)
+
+
+class CommandProvenance(BaseModel):
+    """Required origin metadata; neither identity nor authorization evidence."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source: Literal["user", "agent", "service", "local"]
+    source_id: str = Field(min_length=1, max_length=128)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class RequestContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    channel: Literal["api", "local", "telegram", "ai"] = "local"
+    request_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class CapabilitySnapshot(BaseModel):
+    """An advisory compatibility hint, NEVER an authorization or installation claim."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    capability_id: str = Field(min_length=1, max_length=128)
+    operation: str = Field(min_length=1, max_length=128)
+    version: str = Field(pattern=r"^\d+\.\d+\.\d+$", max_length=32)
+    operation_schema_version: int = Field(strict=True, ge=1)
+    pack_provider: str = Field(min_length=1, max_length=128)
 
 
 class TypedCommand(BaseModel):
-    """Canonical typed command: the only input the studio accepts."""
+    """Versioned, JSON-serializable, UI-independent input to CommandBus."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     protocol_version: Literal["nagar.command.v1"] = PROTOCOL_VERSION
-    command_id: str = Field(min_length=1)
-    session_id: str | None = None
-    operation: str = Field(min_length=1)
-    target: TargetRef = Field(default_factory=TargetRef)
+    schema_version: Literal[2] = COMMAND_SCHEMA_VERSION
+    operation_schema_version: int = Field(default=1, strict=True, ge=1)
+    command_id: str = Field(min_length=1, max_length=128)
+    actor: ActorIdentity
+    session_id: str | None = Field(default=None, min_length=1, max_length=128)
+    operation: str = Field(min_length=1, max_length=128)
+    target: TargetRef
     input: dict[str, Any] = Field(default_factory=dict)
+    # A slideshow may contain up to 500 registered images plus its audio bed.
+    input_refs: tuple[InputRef, ...] = Field(default=(), max_length=512)
+    provenance: CommandProvenance
+    request_context: RequestContext = Field(default_factory=RequestContext)
+    capability_snapshot: CapabilitySnapshot | None = None
+    trace_id: str | None = Field(default=None, min_length=1, max_length=128)
+    execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
     preconditions: Preconditions = Field(default_factory=Preconditions)
-    idempotency_key: str | None = None
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
     confirmed: bool = False
+
+    @field_validator("input")
+    @classmethod
+    def _json_input_only(cls, value: dict[str, Any]) -> dict[str, Any]:
+        # The registered operation model performs semantic validation. This
+        # gate ensures even a forged typed command can be serialized as JSON.
+        try:
+            encoded = json.dumps(value, ensure_ascii=False, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("command input must be finite JSON data") from exc
+        if len(encoded.encode("utf-8")) > _MAX_COMMAND_INPUT_BYTES:
+            raise ValueError("command input exceeds 512 KiB")
+        return value
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def _non_blank_key(cls, value: str | None) -> str | None:
+        if value is not None and (value != value.strip() or any(c.isspace() for c in value)):
+            raise ValueError("idempotency_key must not contain whitespace")
+        return value
 
 
 # ---------------------------------------------------------------------------

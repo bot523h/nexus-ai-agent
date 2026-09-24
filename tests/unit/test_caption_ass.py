@@ -14,6 +14,7 @@ Covers:
 from __future__ import annotations
 
 import pytest
+from nagar_helpers import authorized_bus, command_for
 
 from nexus_ai_agent.creative.packs.caption import (
     AssStyleConfig,
@@ -34,7 +35,6 @@ from nexus_ai_agent.creative.studio.models import (
     PermissionLevel,
     Project,
     Timeline,
-    TypedCommand,
     new_project,
 )
 
@@ -162,7 +162,7 @@ def _setup_project() -> tuple[Project, CommandBus]:
         duration_us=15_000_000,
     )
     project = project.model_copy(update={"assets": [audio]})
-    bus = CommandBus(project, registry=build_caption_registry())
+    bus = authorized_bus(project, registry=build_caption_registry())
     return project, bus
 
 
@@ -173,7 +173,8 @@ def test_generate_ass_rtl_command_dispatch_and_undo() -> None:
     assert spec.permission_level == PermissionLevel.REVERSIBLE
 
     tr = _sample_persian_transcript()
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_ass_01",
         operation="caption.generate_ass_rtl",
         input={
@@ -199,7 +200,7 @@ def test_generate_ass_rtl_command_dispatch_and_undo() -> None:
     assert ass_asset.provenance["font"] == "Vazirmatn"
 
     # Test reversible undo
-    undo_cmd = TypedCommand(command_id="cmd_undo_ass", operation="system.undo", input={})
+    undo_cmd = command_for(bus, command_id="cmd_undo_ass", operation="system.undo", input={})
     undo_res = bus.dispatch(undo_cmd)
     assert undo_res.status == "applied"
     assert len(bus.project.assets) == 1
@@ -211,7 +212,8 @@ def test_style_vazirmatn_command_dispatch_and_undo() -> None:
     tr = _sample_persian_transcript()
 
     # First register an ASS caption
-    cmd_ass = TypedCommand(
+    cmd_ass = command_for(
+        bus,
         command_id="cmd_ass_base",
         operation="caption.generate_ass_rtl",
         input={
@@ -222,7 +224,8 @@ def test_style_vazirmatn_command_dispatch_and_undo() -> None:
     bus.dispatch(cmd_ass)
 
     # Now apply style_vazirmatn
-    style_cmd = TypedCommand(
+    style_cmd = command_for(
+        bus,
         command_id="cmd_style_vazir",
         operation="caption.style_vazirmatn",
         input={
@@ -246,7 +249,8 @@ def test_style_vazirmatn_command_dispatch_and_undo() -> None:
 
 def test_style_vazirmatn_rejects_non_existent_asset() -> None:
     project, bus = _setup_project()
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_bad_style",
         operation="caption.style_vazirmatn",
         input={"caption_asset_id": "non_existent"},
@@ -262,7 +266,8 @@ def test_highlight_words_level_a_immediate() -> None:
     assert spec.permission_level == PermissionLevel.IMMEDIATE
 
     tr = _sample_persian_transcript()
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_hl_words",
         operation="caption.highlight_words",
         input={
@@ -339,7 +344,8 @@ def test_search_transcript_matches_keywords_and_words() -> None:
     assert spec.permission_level == PermissionLevel.IMMEDIATE
 
     tr = _sample_persian_transcript()
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_search_01",
         operation="caption.search_transcript",
         input={
@@ -355,7 +361,8 @@ def test_search_transcript_matches_keywords_and_words() -> None:
     assert len(res.output["hits"][0]["matched_words"]) >= 1
 
     # Search non-matching query
-    cmd_empty = TypedCommand(
+    cmd_empty = command_for(
+        bus,
         command_id="cmd_search_none",
         operation="caption.search_transcript",
         input={
@@ -392,7 +399,8 @@ def test_burn_in_level_c_requires_confirmation_and_registers_derived_video() -> 
     )
 
     # Missing confirmation -> fails with PermissionDeniedError at command bus gate
-    cmd_unconfirmed = TypedCommand(
+    cmd_unconfirmed = command_for(
+        bus,
         command_id="cmd_burn_unconf",
         operation="caption.burn_in",
         confirmed=False,
@@ -407,7 +415,8 @@ def test_burn_in_level_c_requires_confirmation_and_registers_derived_video() -> 
         bus.dispatch(cmd_unconfirmed)
 
     # Confirmed -> succeeds
-    cmd_burn = TypedCommand(
+    cmd_burn = command_for(
+        bus,
         command_id="cmd_burn_ok",
         operation="caption.burn_in",
         confirmed=True,
@@ -429,7 +438,7 @@ def test_burn_in_level_c_requires_confirmation_and_registers_derived_video() -> 
     assert burned_rec.provenance["burn_in"] is True
 
     # Test reversible undo
-    undo_cmd = TypedCommand(command_id="cmd_undo_burn", operation="system.undo", input={})
+    undo_cmd = command_for(bus, command_id="cmd_undo_burn", operation="system.undo", input={})
     undo_res = bus.dispatch(undo_cmd)
     assert undo_res.status == "applied"
     assert "burned_master_01" not in [a.asset_id for a in bus.project.assets]
