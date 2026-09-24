@@ -132,8 +132,7 @@ def compile_execution_plan(project: Any, *, track_id: str) -> ExecutionPlan:
         placement = clip.timeline_range
         if placement.start_us < cursor_us:
             raise PlanError(
-                f"track {track_id!r} clips overlap at {placement.start_us}µs "
-                f"(cursor {cursor_us}µs)"
+                f"track {track_id!r} clips overlap at {placement.start_us}µs (cursor {cursor_us}µs)"
             )
         cursor_us = placement.end_us
 
@@ -236,9 +235,7 @@ def assemble_execution_plan(
             if gap_us > 0:
                 pieces.append(AssemblyGap(duration_us=gap_us))
         pieces.append(
-            segment_lane_ir(
-                plan, segment, media_paths, profile=lane_profile, project=project
-            )
+            segment_lane_ir(plan, segment, media_paths, profile=lane_profile, project=project)
         )
         previous_end_us = segment.timeline_end_us
     return LaneAssembly(pieces=tuple(pieces), profile=lane_profile)

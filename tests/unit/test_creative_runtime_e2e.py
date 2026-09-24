@@ -135,7 +135,11 @@ def test_bus_split_then_plan_is_pure_and_deterministic() -> None:
 
     project = bus.project
     plan = compile_execution_plan(project, track_id="video_01")
-    assert [s.clip_id for s in plan.segments] == ["clip_a", result.output["right"]["clip_id"], "clip_b"]
+    assert [s.clip_id for s in plan.segments] == [
+        "clip_a",
+        result.output["right"]["clip_id"],
+        "clip_b",
+    ]
     assert plan.concat_required is True
     again = compile_execution_plan(project, track_id="video_01")
     assert again.plan_hash == plan.plan_hash

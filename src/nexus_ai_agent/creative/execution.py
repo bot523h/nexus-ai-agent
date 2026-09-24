@@ -198,7 +198,7 @@ MISSING_RENDER_PRIMITIVES: dict[str, tuple[str, str]] = {
     ),
     "motion.add_transition": (
         "plan mapping to XfadeOp (lane twin exists)",
-        "XfadeOp exists; the plan needs transition kind/offset/duration derivation from clip adjacency",
+        "XfadeOp exists; the plan needs kind/offset/duration derivation from clip adjacency",
     ),
     "motion.apply_mask": (
         "mask composite LaneOp",
@@ -284,7 +284,7 @@ MISSING_RENDER_PRIMITIVES: dict[str, tuple[str, str]] = {
     # -- slideshow -------------------------------------------------------------
     "slideshow.compose": (
         "slideshow service path (not op-dispatched)",
-        "compose builds timeline + layers; pixels come from creative/slideshow/service.py via bot/CLI, not via this op",
+        "timeline + layers only; pixels come from the slideshow service, not this op",
     ),
 }
 

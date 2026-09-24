@@ -140,9 +140,7 @@ def _smooth_skin(project: Project, context: OperationContext) -> OperationOutcom
         _require_mask(known, payload.mask_asset_id, OPERATION_SMOOTH_SKIN)
 
     output_id = payload.output_asset_id or f"{clip.asset_id}_smoothskin"
-    parents = tuple(
-        [clip.asset_id] + ([payload.mask_asset_id] if payload.mask_asset_id else [])
-    )
+    parents = tuple([clip.asset_id] + ([payload.mask_asset_id] if payload.mask_asset_id else []))
     derived = derive_asset(
         asset_id=output_id,
         media_kind="video",
@@ -315,8 +313,7 @@ def _correct_gaze(project: Project, context: OperationContext) -> OperationOutco
     payload = CorrectGazeInput.model_validate(context.input_data)
     if not payload.confirmed:
         raise CommandValidationError(
-            "portrait.correct_gaze requires explicit user confirmation "
-            "(confirmed=true) in Level C"
+            "portrait.correct_gaze requires explicit user confirmation (confirmed=true) in Level C"
         )
     known = _asset_index(project)
     clip = _require_video(known, payload.clip_asset_id, OPERATION_CORRECT_GAZE)

@@ -449,9 +449,7 @@ def _parse_track(node: dict[str, Any], index: int) -> ParsedTrack:
     )
 
 
-def _parse_clip(
-    node: dict[str, Any], track_id: str, index: int, cursor_us: int
-) -> ParsedClip:
+def _parse_clip(node: dict[str, Any], track_id: str, index: int, cursor_us: int) -> ParsedClip:
     meta = _nagar_meta(node)
     source_start_us, source_duration_us = _read_time_range(node.get("source_range"))
     if meta:

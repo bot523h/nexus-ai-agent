@@ -134,13 +134,9 @@ def probe_binaries(
             )
             continue
         if path:
-            probes.append(
-                BinaryProbe(name=name, found=True, path=path, detail="resolved")
-            )
+            probes.append(BinaryProbe(name=name, found=True, path=path, detail="resolved"))
         else:
-            probes.append(
-                BinaryProbe(name=name, found=False, path=None, detail="unresolvable")
-            )
+            probes.append(BinaryProbe(name=name, found=False, path=None, detail="unresolvable"))
     return tuple(probes)
 
 
@@ -198,14 +194,11 @@ def pack_availability(
             binaries=(),
             dependencies=(),
             detail=(
-                "cannot activate: the runtime does not know "
-                + ", ".join(pending_capabilities)
+                "cannot activate: the runtime does not know " + ", ".join(pending_capabilities)
             ),
         )
     binaries = probe_binaries(tuple(manifest.external_binaries), resolve_binary=resolve_binary)
-    dependencies = probe_dependencies(
-        tuple(python_dependencies), check_dependency=check_dependency
-    )
+    dependencies = probe_dependencies(tuple(python_dependencies), check_dependency=check_dependency)
     if not active:
         return PackAvailability(
             package_id=package_id,

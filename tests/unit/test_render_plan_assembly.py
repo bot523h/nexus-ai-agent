@@ -34,7 +34,6 @@ from nexus_ai_agent.creative.rendering.ir import (
     LoudnormOp,
     SpeedOp,
     TrimOp,
-    lane_ir_from_project,
 )
 from nexus_ai_agent.creative.rendering.plan import (
     PlanError,
@@ -107,13 +106,15 @@ def _gap_scenario() -> tuple[object, dict[str, str]]:
     )
     timeline = Timeline(timeline_id="tl", duration_us=5_000_000, tracks=[track])
     project = new_project("p", "Assembly", timeline)
-    project = project.model_copy(update={"assets": [_asset("hero", 8_000_000), _asset("broll", 8_000_000)]})
+    project = project.model_copy(
+        update={"assets": [_asset("hero", 8_000_000), _asset("broll", 8_000_000)]}
+    )
     return project, {"hero": "/stage/hero.mp4", "broll": "/stage/broll.mp4"}
 
 
 def test_assemble_builds_ordered_pieces_with_an_exact_gap() -> None:
     project, media = _gap_scenario()
-    plan = compile_execution_plan(project, track_id="video_01")  # type: ignore[arg-type]
+    plan = compile_execution_plan(project, track_id="video_01")
     assert plan.concat_required is True
     assembly = assemble_execution_plan(plan, media, project=project)
     assert len(assembly.pieces) == 3
@@ -141,7 +142,7 @@ def test_adjacent_segments_produce_no_gap_piece() -> None:
     timeline = Timeline(timeline_id="tl", duration_us=4_000_000, tracks=[track])
     project = new_project("p", "Adjacent", timeline)
     project = project.model_copy(update={"assets": [_asset("hero", 8_000_000)]})
-    plan = compile_execution_plan(project, track_id="video_01")  # type: ignore[arg-type]
+    plan = compile_execution_plan(project, track_id="video_01")
     assembly = assemble_execution_plan(plan, {"hero": "/stage/hero.mp4"}, project=project)
     assert len(assembly.pieces) == 2
     assert assembly.gaps == ()
@@ -154,7 +155,7 @@ def test_assemble_rejects_empty_and_overlapping_plans() -> None:
         tracks=[Track(track_id="video_01", name="V", kind="video", clips=[])],
     )
     project = new_project("p", "Empty", timeline)
-    plan = compile_execution_plan(project, track_id="video_01")  # type: ignore[arg-type]
+    plan = compile_execution_plan(project, track_id="video_01")
     with pytest.raises(PlanError, match="no segments"):
         assemble_execution_plan(plan, {}, project=project)
 
@@ -171,12 +172,12 @@ def test_assemble_rejects_empty_and_overlapping_plans() -> None:
     timeline2 = Timeline(timeline_id="tl", duration_us=5_000_000, tracks=[overlapping])
     project2 = new_project("p", "Overlap", timeline2)
     with pytest.raises(PlanError, match="overlap"):
-        compile_execution_plan(project2, track_id="video_01")  # type: ignore[arg-type]
+        compile_execution_plan(project2, track_id="video_01")
 
 
 def test_assembly_duration_algebra_is_exact() -> None:
     project, media = _gap_scenario()
-    plan = compile_execution_plan(project, track_id="video_01")  # type: ignore[arg-type]
+    plan = compile_execution_plan(project, track_id="video_01")
     assembly = assemble_execution_plan(plan, media, project=project)
     compiled = compile_assembly(assembly)
     # A trims to 2s, gap is 1s, B trims to 2s → exactly 5s.
@@ -189,7 +190,7 @@ def test_assembly_duration_algebra_is_exact() -> None:
 
 def test_compiled_assembly_is_one_concat_in_timeline_order() -> None:
     project, media = _gap_scenario()
-    plan = compile_execution_plan(project, track_id="video_01")  # type: ignore[arg-type]
+    plan = compile_execution_plan(project, track_id="video_01")
     assembly = assemble_execution_plan(plan, media, project=project)
     compiled = compile_assembly(assembly)
     assert compiled.inputs == ("/stage/hero.mp4", "/stage/broll.mp4")
@@ -223,7 +224,7 @@ def test_per_piece_trim_and_effects_survive_the_assembly() -> None:
     timeline = Timeline(timeline_id="tl", duration_us=4_000_000, tracks=[track])
     project = new_project("p", "Graded", timeline)
     project = project.model_copy(update={"assets": [_asset("hero", 8_000_000)]})
-    plan = compile_execution_plan(project, track_id="video_01")  # type: ignore[arg-type]
+    plan = compile_execution_plan(project, track_id="video_01")
     assembly = assemble_execution_plan(plan, {"hero": "/stage/hero.mp4"}, project=project)
     compiled = compile_assembly(assembly)
     # Both trims travel; the exposure stage lands on the first piece only
@@ -245,15 +246,13 @@ def test_single_segment_assembly_matches_single_lane_duration() -> None:
     timeline = Timeline(timeline_id="tl", duration_us=2_000_000, tracks=[track])
     project = new_project("p", "Single", timeline)
     project = project.model_copy(update={"assets": [_asset("hero", 8_000_000)]})
-    plan = compile_execution_plan(project, track_id="video_01")  # type: ignore[arg-type]
+    plan = compile_execution_plan(project, track_id="video_01")
     assert plan.concat_required is False
     assembly = assemble_execution_plan(plan, {"hero": "/stage/hero.mp4"}, project=project)
     assert len(assembly.pieces) == 1
     from nexus_ai_agent.creative.rendering.plan import segment_lane_ir
 
-    lane = segment_lane_ir(
-        plan, plan.segments[0], {"hero": "/stage/hero.mp4"}, project=project
-    )
+    lane = segment_lane_ir(plan, plan.segments[0], {"hero": "/stage/hero.mp4"}, project=project)
     assert compile_assembly(assembly).duration_us == compile_lane(lane).duration_us == 2_000_000
 
 
@@ -282,17 +281,13 @@ def test_assembly_is_fail_closed() -> None:
     with pytest.raises(LaneError, match="mixes segment media kinds"):
         compile_assembly(LaneAssembly(pieces=(video_ir, audio_ir), profile=profile))
     other_profile = LaneProfile(width=640, height=480)
-    drifted = LaneIR(
-        main=video, ops=(TrimOp(in_us=0, out_us=2_000_000),), profile=other_profile
-    )
+    drifted = LaneIR(main=video, ops=(TrimOp(in_us=0, out_us=2_000_000),), profile=other_profile)
     with pytest.raises(LaneError, match="share the assembly profile"):
         compile_assembly(LaneAssembly(pieces=(video_ir, drifted), profile=profile))
     loud = LaneIR(main=video, ops=(LoudnormOp(),), profile=profile)
     with pytest.raises(LaneError, match="measure pass"):
         compile_assembly(LaneAssembly(pieces=(loud,), profile=profile))
-    graded_audio = LaneIR(
-        main=audio, ops=(ExposureOp(exposure_ev=1.0),), profile=profile
-    )
+    graded_audio = LaneIR(main=audio, ops=(ExposureOp(exposure_ev=1.0),), profile=profile)
     with pytest.raises(LaneError, match="video main asset"):
         compile_assembly(LaneAssembly(pieces=(graded_audio,), profile=profile))
 
@@ -419,7 +414,7 @@ def test_real_media_gap_acceptance_renders_one_artifact(tmp_path: Path) -> None:
             ]
         }
     )
-    plan = compile_execution_plan(project, track_id="video_01")  # type: ignore[arg-type]
+    plan = compile_execution_plan(project, track_id="video_01")
     assembly = assemble_execution_plan(
         plan, {"hero": str(src_a), "broll": str(src_b)}, project=project
     )

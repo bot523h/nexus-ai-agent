@@ -39,6 +39,7 @@ from nexus_ai_agent.creative.rendering.ir import (
     LaneError,
     LaneIR,
     LaneOp,
+    LaneProfile,
     LaneSource,
     LoudnormOp,
     ReverseOp,
@@ -284,7 +285,8 @@ def _video_op_lines(
             f"duration={_seconds(op.duration_us)}:offset={_seconds(op.offset_us)}[{label_out}]",
         ]
     if isinstance(op, TitleOp):
-        if options.fontfile is None:
+        fontfile = options.fontfile
+        if fontfile is None:
             raise LaneError("title op requires an explicit fontfile")
         x, y = _TITLE_POSITIONS[op.position]
         if op.end_us is None:
@@ -292,7 +294,7 @@ def _video_op_lines(
         else:
             enable = f"between(t,{_seconds(op.start_us)},{_seconds(op.end_us)})"
         return [
-            f"[{label_in}]drawtext=fontfile='{options.fontfile and _escape_fontfile(options.fontfile)}':"
+            f"[{label_in}]drawtext=fontfile='{_escape_fontfile(fontfile)}':"
             f"text='{_escape_drawtext(op.text)}':fontsize={op.font_size}:"
             f"fontcolor={op.color}:x={x}:y={y}:enable='{enable}'[{label_out}]"
         ]
@@ -584,16 +586,16 @@ def _assembly_inputs(assembly: LaneAssembly) -> tuple[tuple[LaneSource, ...], li
     return tuple(ordered), per_piece
 
 
-def _assembly_profile_payload(profile: object) -> dict[str, object]:
+def _assembly_profile_payload(profile: LaneProfile) -> dict[str, object]:
     return {
-        "width": profile.width,  # type: ignore[attr-defined]
-        "height": profile.height,  # type: ignore[attr-defined]
-        "fps": profile.fps,  # type: ignore[attr-defined]
-        "crf": profile.crf,  # type: ignore[attr-defined]
-        "preset": profile.preset,  # type: ignore[attr-defined]
-        "video_codec": profile.video_codec,  # type: ignore[attr-defined]
-        "audio_codec": profile.audio_codec,  # type: ignore[attr-defined]
-        "audio_bitrate": profile.audio_bitrate,  # type: ignore[attr-defined]
+        "width": profile.width,
+        "height": profile.height,
+        "fps": profile.fps,
+        "crf": profile.crf,
+        "preset": profile.preset,
+        "video_codec": profile.video_codec,
+        "audio_codec": profile.audio_codec,
+        "audio_bitrate": profile.audio_bitrate,
     }
 
 
@@ -706,9 +708,7 @@ def compile_assembly(assembly: LaneAssembly, *, fontfile: str | None = None) -> 
 
     stage_count = len(assembly.pieces)
     if has_video:
-        lines.append(
-            f"{''.join(concat_inputs)}concat=n={stage_count}:v=1:a=1[vcat][acat]"
-        )
+        lines.append(f"{''.join(concat_inputs)}concat=n={stage_count}:v=1:a=1[vcat][acat]")
         lines.append("[vcat]format=yuv420p[vout]")
         video_out: str | None = "vout"
     else:

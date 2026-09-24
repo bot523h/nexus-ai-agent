@@ -32,13 +32,13 @@ from nexus_ai_agent.creative.rendering.plan import EFFECT_TO_LANE_OP
 from nexus_ai_agent.creative.studio.bus import CommandBus
 from nexus_ai_agent.creative.studio.models import (
     AssetRecord,
+    PermissionLevel,
     Project,
     Timeline,
     TypedCommand,
     UnknownOperationError,
     new_project,
 )
-from nexus_ai_agent.creative.studio.models import PermissionLevel
 
 
 def _project_with_assets() -> Project:
@@ -56,7 +56,8 @@ def _project_with_assets() -> Project:
             duration_us=10_000_000,
         ),
     ]
-    project = new_project("p_exec_01", "Execution semantics", Timeline(timeline_id="tl", duration_us=10_000_000))
+    timeline = Timeline(timeline_id="tl", duration_us=10_000_000)
+    project = new_project("p_exec_01", "Execution semantics", timeline)
     return project.model_copy(update={"assets": assets})
 
 
@@ -85,8 +86,7 @@ def test_summary_counts_are_internally_consistent() -> None:
     class_total = sum(summary[member.value] for member in ExecutionClass)
     assert summary["registered"] == class_total
     assert summary["currently_executable"] == (
-        summary[ExecutionClass.EXECUTABLE.value]
-        + summary[ExecutionClass.RENDERED_ARTIFACT.value]
+        summary[ExecutionClass.EXECUTABLE.value] + summary[ExecutionClass.RENDERED_ARTIFACT.value]
     )
     assert summary["registered"] > 0
 

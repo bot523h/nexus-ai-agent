@@ -156,9 +156,12 @@ def test_input_models_reject_unknown_fields() -> None:
 def test_smooth_skin_requires_a_subject_reference() -> None:
     with pytest.raises(ValidationError):
         SmoothSkinInput.model_validate({"clip_asset_id": "cam_a"})
-    assert SmoothSkinInput.model_validate(
-        {"clip_asset_id": "cam_a", "mask_asset_id": "mask_01"}
-    ).mask_asset_id == "mask_01"
+    assert (
+        SmoothSkinInput.model_validate(
+            {"clip_asset_id": "cam_a", "mask_asset_id": "mask_01"}
+        ).mask_asset_id
+        == "mask_01"
+    )
 
 
 # ---------------------------------------------------------------------------

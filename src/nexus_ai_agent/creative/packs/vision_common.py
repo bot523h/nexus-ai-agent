@@ -287,9 +287,7 @@ def _unit_values(*parts: object, count: int) -> list[float]:
     data = bytearray()
     counter = 0
     while len(data) < needed:
-        data += hashlib.sha512(
-            f"{counter}:".encode() + ":".join(map(str, parts)).encode()
-        ).digest()
+        data += hashlib.sha512(f"{counter}:".encode() + ":".join(map(str, parts)).encode()).digest()
         counter += 1
     return [((data[i] << 8) + data[i + 1]) / 65536.0 for i in range(0, needed, 2)]
 

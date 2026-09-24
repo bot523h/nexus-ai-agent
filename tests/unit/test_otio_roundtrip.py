@@ -270,11 +270,7 @@ def test_stripped_metadata_degrades_to_the_quantized_frame_view() -> None:
 
     def strip(node: object) -> object:
         if isinstance(node, dict):
-            cleaned = {
-                key: strip(value)
-                for key, value in node.items()
-                if key != "metadata"
-            }
+            cleaned = {key: strip(value) for key, value in node.items() if key != "metadata"}
             cleaned["metadata"] = {}
             return cleaned
         if isinstance(node, list):

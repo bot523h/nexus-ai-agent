@@ -137,9 +137,7 @@ def test_default_dependency_probe_never_imports() -> None:
 def test_runtime_availability_covers_every_builtin_pack() -> None:
     runtime = build_pack_runtime(activate=True)
     rows = runtime.availability(resolve_binary=_resolve_present)
-    assert [row.package_id for row in rows] == [
-        entry.package_id for entry in runtime.composition
-    ]
+    assert [row.package_id for row in rows] == [entry.package_id for entry in runtime.composition]
     assert all(row.availability == Availability.AVAILABLE for row in rows)
     missing = runtime.availability(resolve_binary=_resolve_missing)
     by_id = {row.package_id: row for row in missing}

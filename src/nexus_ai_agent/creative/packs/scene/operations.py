@@ -185,7 +185,8 @@ def _remove_object(project: Project, context: OperationContext) -> OperationOutc
     # Deterministic plan confidence: seeded detector agreement, gated by the
     # caller's minimum — below-threshold plans must surface as needs_review.
     agreement = round(
-        0.85 + (int(digest_seed_hash(clip.content_sha256, payload.object_track_id)[7:13], 16) % 150)
+        0.85
+        + (int(digest_seed_hash(clip.content_sha256, payload.object_track_id)[7:13], 16) % 150)
         / 1000.0,
         6,
     )
@@ -399,9 +400,7 @@ def _track_face(project: Project, context: OperationContext) -> OperationOutcome
     )
 
 
-def _detect_shot_boundaries(
-    project: Project, context: OperationContext
-) -> OperationOutcome:
+def _detect_shot_boundaries(project: Project, context: OperationContext) -> OperationOutcome:
     """Level A (READ) handler for scene.detect_shot_boundaries."""
     payload = DetectShotBoundariesInput.model_validate(context.input_data)
     known = _asset_index(project)
