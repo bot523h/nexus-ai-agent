@@ -12,7 +12,7 @@ Duration algebra (microseconds, integer math — no float drift):
 * ``reverse`` → unchanged
 * ``freeze``  → ``hold_us`` (the stream becomes the held still)
 * ``xfade``   → ``d_main + d_other - overlap_us``
-* ``title`` / ``loudnorm`` / ``duck`` / ``exposure`` → unchanged
+* ``title`` / ``loudnorm`` / ``duck`` / ``exposure`` / ``lut`` / ``subtitle`` → unchanged
 
 Photometric exposure (the ``exposure`` op) is a pure value mapping and lives
 here next to the IR so the pack twin (``color.adjust_exposure``), the compiler
@@ -262,8 +262,53 @@ class ExposureOp(BaseModel):
         return self.temperature_k != COLOR_TEMPERATURE_NEUTRAL_K or self.tint != 0.0
 
 
+class LutOp(BaseModel):
+    """3D LUT grade via ``lut3d`` — the executable twin of ``color.apply_lut``.
+
+    ``lut_path`` is a staged ``.cube`` file (resolved by the caller through
+    :mod:`nexus_ai_agent.creative.luts`, which validates strictly); the IR
+    carries it opaquely and FFmpeg fails closed on a missing file.
+    ``intensity`` blends graded over original (``split → lut3d → blend``);
+    at exactly ``1.0`` the blend is elided and the LUT applies directly.
+    Duration is unaffected.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    op: Literal["lut"] = "lut"
+    lut_name: str = Field(min_length=1, max_length=64)
+    lut_path: str = Field(min_length=1)
+    intensity: float = Field(default=1.0, ge=0.0, le=1.0)
+
+
+class SubtitleOp(BaseModel):
+    """Burn staged captions via ``subtitles`` (libass) — the executable twin of
+    ``caption.burn_in``.
+
+    ``subtitle_path`` is a staged ``.srt``/``.ass`` file; the font directory is
+    threaded at compile time (``fontsdir``) so tests point at the shipped
+    Vazirmatn without depending on system fontconfig.  Duration is unaffected.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    op: Literal["subtitle"] = "subtitle"
+    subtitle_path: str = Field(min_length=1)
+    force_style: str | None = Field(default=None, max_length=500)
+
+
 LaneOp = Annotated[
-    TrimOp | SpeedOp | ReverseOp | FreezeOp | XfadeOp | TitleOp | LoudnormOp | DuckOp | ExposureOp,
+    TrimOp
+    | SpeedOp
+    | ReverseOp
+    | FreezeOp
+    | XfadeOp
+    | TitleOp
+    | LoudnormOp
+    | DuckOp
+    | ExposureOp
+    | LutOp
+    | SubtitleOp,
     Field(discriminator="op"),
 ]
 
@@ -286,6 +331,52 @@ class LaneProfile:
     video_codec: str = "libx264"
     audio_codec: str = "aac"
     audio_bitrate: str = "128k"
+
+
+@dataclass(frozen=True)
+class AssemblyGap:
+    """Timeline silence/black between two assembly pieces (integer microseconds).
+
+    A gap is *editorial* time: the compiler renders it as generated black
+    video plus generated silence, so a track with ``Segment A, Gap, Segment B``
+    keeps its timeline positions without inventing media.
+    """
+
+    duration_us: int
+
+
+@dataclass(frozen=True)
+class LaneAssembly:
+    """Ordered pieces (lane segments and gaps) compiled into **one** process.
+
+    One :class:`LaneIR` compiles exactly one main source — the IR has no concat
+    op, so a K-clip track yields K segment IRs.  The assembly is the minimal
+    extension that closes that gap *without* a second pipeline: the pieces are
+    compiled by the same compiler (:func:`compile_assembly`) into one
+    filtergraph with one ``concat`` stage, and executed by the same executor
+    (:func:`encode_lane`) in exactly one FFmpeg process.
+
+    Rules (fail-closed, enforced by the compiler):
+
+    * at least one :class:`LaneIR` piece; pieces are timeline-ordered;
+    * no two adjacent gaps (merge them at plan level);
+    * all segment mains share one media kind (all video or all audio);
+    * every piece profile/container equals the assembly's own.
+    """
+
+    pieces: tuple[LaneIR | AssemblyGap, ...]
+    profile: LaneProfile = LaneProfile()
+    container: str = "mp4"
+
+    @property
+    def segments(self) -> tuple[LaneIR, ...]:
+        """The lane pieces in timeline order (gaps excluded)."""
+        return tuple(p for p in self.pieces if isinstance(p, LaneIR))
+
+    @property
+    def gaps(self) -> tuple[AssemblyGap, ...]:
+        """The gap pieces in timeline order (segments excluded)."""
+        return tuple(p for p in self.pieces if isinstance(p, AssemblyGap))
 
 
 @dataclass(frozen=True)
@@ -369,17 +460,21 @@ __all__ = [
     "LANE_PACKAGE_ID",
     "TINT_FULL_SCALE",
     "XFADE_KINDS",
+    "AssemblyGap",
     "DuckOp",
     "ExposureOp",
     "FreezeOp",
+    "LaneAssembly",
     "LaneError",
     "LaneIR",
     "LaneOp",
     "LaneProfile",
     "LaneSource",
     "LoudnormOp",
+    "LutOp",
     "ReverseOp",
     "SpeedOp",
+    "SubtitleOp",
     "TitleOp",
     "TrimOp",
     "XfadeOp",

@@ -10,6 +10,9 @@ Every dispatch runs the full pipeline inside a re-entrant lock:
    cached result of the first application without re-executing.
 3. **Registry lookup** -- unknown operations raise
    ``UnknownOperationError``; the agent can never reach unregistered code.
+3.5 **Capability lifecycle gate** -- the spec's ``required_packs`` must
+   resolve to ``AVAILABLE`` (or ``EXPERIMENTAL`` with the bus-level opt-in);
+   unknown, ``STUB``, and ``RETIRED`` packs refuse before any work starts.
 4. **Permission gate** -- the ``CapabilityRegistry`` decides per operation
    (A/B proceed, C only with explicit confirmation, D always denied).
 5. **Reference pinning at receipt** -- every ``reference_field`` of the
@@ -46,6 +49,7 @@ from nexus_ai_agent.creative.studio.capabilities import (
     OperationContext,
     build_wave1_registry,
 )
+from nexus_ai_agent.creative.studio.lifecycle import check_required_packs
 from nexus_ai_agent.creative.studio.models import (
     PROTOCOL_VERSION,
     CommandExecutionError,
@@ -71,9 +75,12 @@ class CommandBus:
         state: Project,
         registry: CapabilityRegistry | None = None,
         resolver: ReferenceResolver | None = None,
+        *,
+        allow_experimental: bool = False,
     ) -> None:
         self._registry = registry if registry is not None else build_wave1_registry()
         self._resolver = resolver if resolver is not None else ReferenceResolver()
+        self._allow_experimental = allow_experimental
         self._lock = threading.RLock()
         self._project = state
         self._history: list[EditTransaction] = []
@@ -123,6 +130,14 @@ class CommandBus:
 
         # 3. registry lookup ----------------------------------------------
         spec = self._registry.get_spec(command.operation)
+
+        # 3.5 capability lifecycle gate -------------------------------------
+        # Session 3: the spec's required_packs finally get checked.  Unknown
+        # pack ids, STUB, and RETIRED refuse; EXPERIMENTAL needs the bus-level
+        # opt-in.  Runs before permission/input work so a refused pack does
+        # no work at all (fail-closed).
+        if spec.required_packs:
+            check_required_packs(spec.required_packs, allow_experimental=self._allow_experimental)
 
         # 4. permission gate -----------------------------------------------
         decision = self._registry.check_permission(command.operation, confirmed=command.confirmed)

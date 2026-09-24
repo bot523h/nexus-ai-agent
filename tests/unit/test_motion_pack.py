@@ -44,7 +44,7 @@ def _setup_motion_bus() -> tuple[Project, CommandBus]:
     timeline = Timeline(timeline_id="tl_motion", duration_us=8_000_000)
     project = new_project("p_motion_01", "Motion Graphics Project", timeline)
     project = project.model_copy(update={"assets": [clip_a, clip_b]})
-    bus = CommandBus(project, registry=registry)
+    bus = CommandBus(project, registry=registry, allow_experimental=True)
     return project, bus
 
 
