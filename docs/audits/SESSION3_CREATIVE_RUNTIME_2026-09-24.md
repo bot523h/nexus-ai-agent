@@ -117,14 +117,28 @@ After the docs-index fix (`9320bf3`), the `push` CI run went green while the
   check-run annotations carry only infra notices.
 - Diagnostic scaffold used: a temporary `if: failure()` step mirroring
   `FAILED|ERROR` lines from `pytest.log` as `::error::` annotations
-  (API-readable). It caught nothing (next run green) and was reverted
-  (`bd74721` + revert) to leave CI untouched.
-- Local robustness signal: render/artifact/jobs suites 3× green; 12
-  timing-sensitive unit/integration files 5× identical (132 passed + 19
-  pre-existing env failures, zero variance).
+  (API-readable). It was reverted (`bd74721` + revert) to leave CI untouched.
 
-If `test` flakes again on this PR: re-add the annotation mirror temporarily —
-it is the only failure channel readable from a sandbox.
+## Resolution: the reminder race (same day, after the revert)
+
+The scaffold paid off before the revert landed: the `push` run of `bd74721`
+failed while its `pull_request` twin passed, and its annotations named the
+test: `test_reminder_system.py::test_delivers_to_originating_chat_not_user_id`
+— `assert 'pending' == 'sent'`. Mechanism (pre-existing, not session-3 code):
+`ReminderSystem._deliver` sends in-memory, then marks the row `sent` via an
+`asyncio.to_thread` hop; the test polled for the send but read the DB once,
+immediately — winning the race against the commit on loaded runners. Fix is
+test-only and mirrors the file's own `test_..._failed` pattern: poll for the
+`sent` status with `_sleep_until` (3s). Product ordering (send-then-mark,
+at-least-once) intentionally untouched. `tests/unit/` is inside this claim's
+exclusive paths, so no zone conflict.
+
+Validation in a fresh CI-like venv (`pip install -e ".[dev]"`, sqlmodel
+0.0.42 as CI resolves — vs 0.0.47 in the stale sandbox venv, which explains
+the 82 pre-existing local sqlalchemy failures): reminder file 9/9 green 5×,
+render/artifact/docs/architecture 159 passed + 1 skipped. If `test` flakes
+again on this PR: re-add the annotation mirror temporarily — it is the only
+failure channel readable from a sandbox.
 
 ## Open follow-ups
 
