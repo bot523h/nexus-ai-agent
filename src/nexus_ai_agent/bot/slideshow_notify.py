@@ -23,6 +23,13 @@ from nexus_ai_agent.config.settings import get_settings
 logger = logging.getLogger(__name__)
 
 
+def _typed_code(error: str | None) -> str | None:
+    """Typed code persisted by the queue (``typed_failure:<code>``), if any."""
+    from nexus_ai_agent.jobs.failure_semantics import parse_typed_failure_error
+
+    return parse_typed_failure_error(error)
+
+
 def _contained_workspace(raw: object) -> Path | None:
     """Return the job workspace iff it lives under the configured temp dir.
 
@@ -61,7 +68,11 @@ async def notify_slideshow_completion(completion: Any, token: str) -> None:
         from telegram import Bot
 
         bot = Bot(token=token)
-        failed = completion.status is JobStatus.FAILED or not result.get("success")
+        # Source of truth = durable lifecycle state (task-181, §14): only
+        # COMPLETED may deliver a success document.  ``result.success is
+        # False`` is a second, independent refusal — a lying result can never
+        # turn a failure status into a success notification.
+        failed = completion.status is not JobStatus.COMPLETED or result.get("success") is False
         if not failed:
             from telegram import InputFile
 
@@ -76,9 +87,25 @@ async def notify_slideshow_completion(completion: Any, token: str) -> None:
                 )
                 return
             result = {"error_code": "internal"}
-        await bot.send_message(
-            chat_id=chat_id, text=friendly_render_error(result.get("error_code"))
-        )
+        if completion.status not in (
+            JobStatus.FAILED_RETRYABLE,
+            JobStatus.FAILED_TERMINAL,
+            JobStatus.COMPLETED,  # defense: COMPLETED + success=False contradiction
+        ):
+            # Non-terminal durable state (VERIFYING at delivery time): never a
+            # success delivery, and no premature failure copy either.
+            logger.info(
+                "slideshow job %s in non-terminal state %s — staying silent",
+                completion.job_id,
+                completion.status,
+            )
+            return
+        code = result.get("error_code") or _typed_code(completion.error)
+        if completion.status is JobStatus.FAILED_RETRYABLE:
+            head = "⚠️ موقت (قابل تکرار) — "
+        else:
+            head = "❌ قطعی — "
+        await bot.send_message(chat_id=chat_id, text=head + friendly_render_error(code))
     except Exception:  # noqa: BLE001 - the completion hook never re-raises
         logger.exception("slideshow completion notification failed for job %s", completion.job_id)
     finally:
