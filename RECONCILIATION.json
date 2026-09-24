@@ -1,0 +1,295 @@
+{
+  "schema_version": "nagar.reconciliation.v1",
+  "timestamp": "2026-09-24T16:35:00Z",
+  "reconciliation_rule": "Catalog (70) != Runtime Registry (57) != Executable Surface (9)",
+  "audit_baseline": {
+    "product_catalog_count": 70,
+    "runtime_registry_count": 57,
+    "overlap_count": 47,
+    "missing_gaps_count": 23,
+    "runtime_extras_count": 10,
+    "universe_count": 80
+  },
+  "classification": {
+    "missing_breakdown": {
+      "portrait_pack": 10,
+      "scene_pack": 10,
+      "color_delivery_pack": 3,
+      "total_missing": 23
+    },
+    "runtime_extras_breakdown": {
+      "wave_1_core": 4,
+      "slideshow_pack": 6,
+      "total_extras": 10
+    }
+  },
+  "missing_gaps": {
+    "color.white_balance": {
+      "gap": "Missing white_balance kelvin temperature / tint adjustment",
+      "prerequisite": "Color grading shader / filter IR extension for kelvin scale",
+      "owner": "Agent 1 (Runtime)",
+      "dependencies": [
+        "nexus.color.delivery",
+        "creative/rendering/ir.py"
+      ],
+      "risk": "Low - mathematical color matrix transform BT.709/BT.2020",
+      "acceptance_test": "test_white_balance_kelvin_curves()",
+      "evidence_required": "Deterministic Kelvin to RGB matrix output in test_rendering_lane_exposure.py"
+    },
+    "color.hdr_tonemap": {
+      "gap": "Missing hdr_tonemap Reinhard/ACES/Hable tonemapping curve",
+      "prerequisite": "FFmpeg tonemap / zscale filter IR support or WebGPU tonemap shader",
+      "owner": "Agent 1 (Runtime)",
+      "dependencies": [
+        "nexus.color.delivery",
+        "creative/rendering/ir.py"
+      ],
+      "risk": "Medium - HDR metadata parsing and color space conversion",
+      "acceptance_test": "test_hdr_tonemap_aces_curve()",
+      "evidence_required": "Measured 10-bit to 8-bit clipping prevention proof"
+    },
+    "color.deband_denoise": {
+      "gap": "Missing deband_denoise temporal noise reduction and gradient debanding",
+      "prerequisite": "FFmpeg hqdn3d/gradfun filter IR integration",
+      "owner": "Agent 1 (Runtime)",
+      "dependencies": [
+        "nexus.color.delivery",
+        "creative/rendering/ir.py"
+      ],
+      "risk": "Medium - CPU compute overhead on video streams",
+      "acceptance_test": "test_deband_denoise_profile()",
+      "evidence_required": "FFmpeg filtergraph argument validation and test probe"
+    },
+    "portrait.detect_landmarks": {
+      "gap": "Missing facial landmark detection (68 or 468 points)",
+      "prerequisite": "ONNX Runtime with MediaPipe FaceMesh / UltraFace ONNX model",
+      "owner": "Agent 1 (Runtime)",
+      "dependencies": [
+        "nexus.vision.portrait",
+        "onnxruntime"
+      ],
+      "risk": "Medium - Model download size, inference latency on CPU",
+      "acceptance_test": "test_portrait_landmarks_determinism()",
+      "evidence_required": "Normalized (x,y,z) coordinate bounds verification in unit tests"
+    },
+    "portrait.smooth_skin": {
+      "gap": "Missing bilateral/edge-preserving skin smoothing filter",
+      "prerequisite": "portrait.detect_landmarks + skin tone segmentation mask",
+      "owner": "Agent 1 (Runtime)",
+      "dependencies": [
+        "nexus.vision.portrait",
+        "portrait.detect_landmarks"
+      ],
+      "risk": "Low - Fast guided bilateral filter",
+      "acceptance_test": "test_smooth_skin_texture_retention()",
+      "evidence_required": "High-frequency edge preservation ratio verification"
+    },
+    "portrait.retouch_blemish": {
+      "gap": "Missing facial blemish detection and patch inpainting",
+      "prerequisite": "portrait.detect_landmarks + local Telea/Navier-Stokes inpainting",
+      "owner": "Agent 1 (Runtime)",
+      "dependencies": [
+        "nexus.vision.portrait",
+        "portrait.detect_landmarks"
+      ],
+      "risk": "Medium - Temporal jitter between consecutive video frames",
+      "acceptance_test": "test_retouch_blemish_inpaint()",
+      "evidence_required": "Mask delta check proving adjacent skin area preserved"
+    },
+    "portrait.relight_face": {
+      "gap": "Missing synthetic normal-based facial relighting",
+      "prerequisite": "portrait.detect_landmarks + depth/normal estimation model",
+      "owner": "Agent 1 (Runtime)",
+      "dependencies": [
+        "nexus.vision.portrait",
+        "portrait.detect_landmarks"
+      ],
+      "risk": "High - Heavy neural network requirement (DPR/TotalRelighting)",
+      "acceptance_test": "test_relight_face_shading()",
+      "evidence_required": "Spherical harmonic light coordinate test"
+    },
+    "portrait.whiten_teeth": {
+      "gap": "Missing teeth segmentation and chromatic desaturation",
+      "prerequisite": "portrait.detect_landmarks lip/teeth contour polygon",
+      "owner": "Agent 1 (Runtime)",
+      "dependencies": [
+        "nexus.vision.portrait",
+        "portrait.detect_landmarks"
+      ],
+      "risk": "Low - Geometric mask + HSL yellow desaturation",
+      "acceptance_test": "test_whiten_teeth_saturation_drop()",
+      "evidence_required": "Measured b* channel reduction in Lab color space"
+    },
+    "portrait.correct_gaze": {
+      "gap": "Missing neural gaze redirection and eye contact synthesis",
+      "prerequisite": "portrait.detect_landmarks + gaze warp neural network",
+      "owner": "Agent 1 (Runtime)",
+      "dependencies": [
+        "nexus.vision.portrait",
+        "portrait.detect_landmarks"
+      ],
+      "risk": "High - Ethical / deepfake guard requirement (Level C confirmation)",
+      "acceptance_test": "test_correct_gaze_requires_confirmation()",
+      "evidence_required": "Level C explicit user confirmation check + provenance stamp"
+    },
+    "portrait.enhance_eyes": {
+      "gap": "Missing sclera whitening, iris contrast and red-eye removal",
+      "prerequisite": "portrait.detect_landmarks iris centers",
+      "owner": "Agent 1 (Runtime)",
+      "dependencies": [
+        "nexus.vision.portrait",
+        "portrait.detect_landmarks"
+      ],
+      "risk": "Low - Unsharp masking on iris ROI + red channel desaturation",
+      "acceptance_test": "test_enhance_eyes_contrast()",
+      "evidence_required": "Dynamic range expansion verification on iris crop"
+    },
+    "portrait.mask_hair": {
+      "gap": "Missing hair matte alpha segmentation",
+      "prerequisite": "MODNet / RobustVideoMatting hair segmentation ONNX",
+      "owner": "Agent 1 (Runtime)",
+      "dependencies": [
+        "nexus.vision.portrait"
+      ],
+      "risk": "Medium - Alpha matte edge fringing and memory consumption",
+      "acceptance_test": "test_mask_hair_alpha_channel()",
+      "evidence_required": "8-bit grayscale alpha channel verification"
+    },
+    "portrait.background_blur": {
+      "gap": "Missing portrait depth bokeh background blur",
+      "prerequisite": "Person segmentation mask (RVM/MediaPipe) + box/gaussian blur",
+      "owner": "Agent 1 (Runtime)",
+      "dependencies": [
+        "nexus.vision.portrait"
+      ],
+      "risk": "Low - Standard composition: composite foreground over blurred background",
+      "acceptance_test": "test_portrait_background_blur_composite()",
+      "evidence_required": "Foreground edge preservation test against reference mask"
+    },
+    "portrait.stabilize_face": {
+      "gap": "Missing head motion stabilization and face lock",
+      "prerequisite": "portrait.detect_landmarks + Kalman filter / affine transform",
+      "owner": "Agent 1 (Runtime)",
+      "dependencies": [
+        "nexus.vision.portrait",
+        "portrait.detect_landmarks"
+      ],
+      "risk": "Medium - Border black bars from crop and zoom compensation",
+      "acceptance_test": "test_stabilize_face_trajectory()",
+      "evidence_required": "Variance reduction in facial anchor point over 30 frames"
+    },
+    "scene.segment_subject": {
+      "gap": "Missing semantic subject silhouette segmentation",
+      "prerequisite": "SAM (Segment Anything) lightweight ONNX or YOLOv8-seg",
+      "owner": "Agent 1 (Runtime)",
+      "dependencies": [
+        "nexus.vision.scene"
+      ],
+      "risk": "Medium - Model memory footprint (>100MB RAM)",
+      "acceptance_test": "test_segment_subject_binary_mask()",
+      "evidence_required": "Binary mask IoU evaluation against ground truth"
+    },
+    "scene.remove_object": {
+      "gap": "Missing spatio-temporal video inpainting object removal",
+      "prerequisite": "scene.segment_subject + ProPainter / E2FGVI ONNX or native inpainter",
+      "owner": "Agent 1 (Runtime)",
+      "dependencies": [
+        "nexus.vision.scene",
+        "scene.segment_subject"
+      ],
+      "risk": "High - Extremely compute intensive; requires multi-frame optical flow",
+      "acceptance_test": "test_remove_object_inpainting()",
+      "evidence_required": "Mask delta verification proving target area reconstructed"
+    },
+    "scene.replace_sky": {
+      "gap": "Missing sky segmentation and horizon backdrop replacement",
+      "prerequisite": "Sky detector ONNX + color harmonization blend shader",
+      "owner": "Agent 1 (Runtime)",
+      "dependencies": [
+        "nexus.vision.scene"
+      ],
+      "risk": "Medium - Halo artifacts around complex tree/building horizons",
+      "acceptance_test": "test_replace_sky_horizon_feathering()",
+      "evidence_required": "Edge gradient analysis along detected sky boundary"
+    },
+    "scene.remove_background": {
+      "gap": "Missing green-screen-free subject matting (rotoscoping)",
+      "prerequisite": "RobustVideoMatting (RVM) ONNX model",
+      "owner": "Agent 1 (Runtime)",
+      "dependencies": [
+        "nexus.vision.scene"
+      ],
+      "risk": "Medium - Temporal consistency across fast moving limbs",
+      "acceptance_test": "test_remove_background_alpha_matte()",
+      "evidence_required": "Straight alpha PNG/ProRes 4444 export verification"
+    },
+    "scene.track_object": {
+      "gap": "Missing bounding box optical flow / CSRT object tracker",
+      "prerequisite": "ByteTrack / CSRT / MedianFlow tracker implementation",
+      "owner": "Agent 1 (Runtime)",
+      "dependencies": [
+        "nexus.vision.scene"
+      ],
+      "risk": "Low - Fast 2D bounding box interpolation",
+      "acceptance_test": "test_track_object_trajectory()",
+      "evidence_required": "Bounding box coordinates series per frame"
+    },
+    "scene.track_face": {
+      "gap": "Missing face bounding box identity tracking across scene cuts",
+      "prerequisite": "YOLO-face / SCRFD + CosFace embedding similarity",
+      "owner": "Agent 1 (Runtime)",
+      "dependencies": [
+        "nexus.vision.scene"
+      ],
+      "risk": "Medium - Re-identification failure across occlusions",
+      "acceptance_test": "test_track_face_reid()",
+      "evidence_required": "Consistent track_id assignment across 60 frames"
+    },
+    "scene.detect_shot_boundaries": {
+      "gap": "Missing cut and transition scene change detection",
+      "prerequisite": "PySceneDetect content detector / histogram difference algorithm",
+      "owner": "Agent 1 (Runtime)",
+      "dependencies": [
+        "nexus.vision.scene"
+      ],
+      "risk": "Low - Fast histogram / HSV luminance difference calculation",
+      "acceptance_test": "test_detect_shot_boundaries_cuts()",
+      "evidence_required": "Exact timecode matches for simulated hard cuts"
+    },
+    "scene.find_subject_moment": {
+      "gap": "Missing multimodal subject moment query (speech + visual embedding)",
+      "prerequisite": "scene.track_face + caption.search_transcript + CLIP visual embedding",
+      "owner": "Agent 1 (Runtime)",
+      "dependencies": [
+        "nexus.vision.scene",
+        "nexus.language.caption"
+      ],
+      "risk": "High - Complex cross-modal indexing and query resolution",
+      "acceptance_test": "test_find_subject_moment_query()",
+      "evidence_required": "Candidate time ranges with confidence score >= 0.8"
+    },
+    "scene.remove_logo": {
+      "gap": "Missing stationary watermark and corner logo inpainting",
+      "prerequisite": "Static ROI mask + Navier-Stokes spatial inpainter",
+      "owner": "Agent 1 (Runtime)",
+      "dependencies": [
+        "nexus.vision.scene"
+      ],
+      "risk": "Medium - Legal/copyright provenance policy check (Level C)",
+      "acceptance_test": "test_remove_logo_requires_confirmation()",
+      "evidence_required": "Level C explicit user confirmation check + provenance stamp"
+    },
+    "scene.auto_reframe_subject": {
+      "gap": "Missing intelligent crop and pan/scan (e.g. 16:9 to 9:16)",
+      "prerequisite": "scene.track_object or scene.track_face + trajectory smoothing curve",
+      "owner": "Agent 1 (Runtime)",
+      "dependencies": [
+        "nexus.vision.scene",
+        "nexus.edit.timeline"
+      ],
+      "risk": "Low - Transform curve generation bounded by video frame",
+      "acceptance_test": "test_auto_reframe_aspect_ratio()",
+      "evidence_required": "Generated CropCurve guaranteeing subject in safe-zone"
+    }
+  }
+}

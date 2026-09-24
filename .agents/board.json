@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-24T09:41:42Z",
+  "updated_at": "2026-09-24T16:36:23Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1933,6 +1933,49 @@
       ],
       "agent_branch": "arena/01a0d23e-nexus-ai-agent",
       "claimed_at": "2026-09-24T07:36:43Z"
+    },
+    {
+      "task": "task-agent-b-op-matrix-reconciliation",
+      "title": "Agent B — Operation Matrix + Evidence Gate Reconcile 70/57",
+      "title_fa": "عامل B — ماتریس عملیات و تطبیق حقیقت ۷۰/۵۷",
+      "zone": "nagar-opgap-reconciliation",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Reconcile 70 catalog vs 57 runtime registry, separate catalog/registry/executable surface, preserve 23 gaps explicitly, wave planning, truth matrices, ADR and guard tests.",
+      "scope_fa": "تطبیق کاتالوگ ۷۰ با رجیستری ۵۷، جداسازی سه لایه، ثبت صریح ۲۳ شکاف، برنامه‌ریزی امواج، تست‌های نگهبان و مستندات.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "70 catalog reconciled with 57 runtime",
+        "23 gaps explicitly preserved as MISSING/L0/NOT_IMPLEMENTED",
+        "No fake implementation created",
+        "Three layers explicitly decoupled (Catalog != Registry != Executable Surface)",
+        "Truth table generated in md and json",
+        "Guard tests passing"
+      ],
+      "evidence_required": [
+        "docs/OPERATION_CONTRACT_MATRIX.md",
+        "OPERATION_MATRIX.json",
+        "docs/RECONCILIATION.md",
+        "RECONCILIATION.json",
+        "docs/L0_L4_MATURITY.md",
+        "docs/architecture/adr/0007-three-layer-operation-truth.md",
+        "tests/unit/test_operation_matrix_reconciliation.py"
+      ],
+      "exclusive_paths": [
+        "docs/OPERATION_CONTRACT_MATRIX.md",
+        "OPERATION_MATRIX.json",
+        "docs/RECONCILIATION.md",
+        "RECONCILIATION.json",
+        "docs/L0_L4_MATURITY.md",
+        "docs/architecture/adr/0007-three-layer-operation-truth.md",
+        "tests/unit/test_operation_matrix_reconciliation.py"
+      ],
+      "owner_hint": "Agent B",
+      "agent_branch": "arena/01a0d43d-nexus-ai-agent",
+      "claimed_at": "2026-09-24T16:36:23Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Claimed exclusively for Operation Matrix and Evidence Gate mission by Agent B."
     }
   ],
   "deferred_log": [
