@@ -16,6 +16,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from nagar_helpers import TEST_ACTOR, TEST_PROVENANCE, authorized_bus
 from pydantic import ValidationError
 
 from nexus_ai_agent.creative.studio import (
@@ -92,8 +93,10 @@ def make_command(
 ) -> TypedCommand:
     return TypedCommand(
         command_id=f"cmd_{uuid4().hex[:10]}",
+        actor=TEST_ACTOR,
+        provenance=TEST_PROVENANCE,
         operation=operation,
-        target=TargetRef(track_id=track_id, clip_id=clip_id),
+        target=TargetRef(project_id="project_01", track_id=track_id, clip_id=clip_id),
         input=input_ if input_ is not None else {},
         preconditions=Preconditions(state_revision=state_revision, state_hash=state_hash),
         idempotency_key=idempotency_key,
@@ -108,7 +111,7 @@ def project() -> Project:
 
 @pytest.fixture()
 def bus(project: Project) -> CommandBus:
-    return CommandBus(state=project)
+    return authorized_bus(project)
 
 
 # ---------------------------------------------------------------------------
@@ -380,7 +383,7 @@ class TestCommandBusGuards:
                 handler=never_called,
             ),
         )
-        denied_bus = CommandBus(state=project, registry=registry)
+        denied_bus = authorized_bus(project, registry=registry)
         with pytest.raises(PermissionDeniedError):
             denied_bus.dispatch(make_command("system.shell_exec"))
         assert denied_bus.state_revision == 0
@@ -402,7 +405,7 @@ class TestCommandBusGuards:
                 handler=confirmed_handler,
             ),
         )
-        c_bus = CommandBus(state=project, registry=registry)
+        c_bus = authorized_bus(project, registry=registry)
         with pytest.raises(PermissionDeniedError):
             c_bus.dispatch(make_command("timeline.export_master"))
         result = c_bus.dispatch(make_command("timeline.export_master", confirmed=True))
@@ -475,7 +478,7 @@ class TestCommandBusGuards:
                 reference_fields=original.reference_fields,
             ),
         )
-        broken_bus = CommandBus(state=project, registry=registry)
+        broken_bus = authorized_bus(project, registry=registry)
         with pytest.raises(CommandExecutionError):
             broken_bus.dispatch(make_command("timeline.mark", input_={"at": "اینجا", "label": "x"}))
         assert broken_bus.state_revision == 0

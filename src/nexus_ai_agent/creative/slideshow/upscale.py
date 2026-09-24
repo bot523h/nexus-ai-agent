@@ -13,8 +13,18 @@ from nexus_ai_agent.creative.packs.slideshow.operations import (
 )
 from nexus_ai_agent.creative.slideshow.ffmpeg import UpscaleArtifact, upscale_image
 from nexus_ai_agent.creative.slideshow.probe import probe_image
+from nexus_ai_agent.creative.studio.authorization import ProjectAccess
 from nexus_ai_agent.creative.studio.bus import CommandBus
-from nexus_ai_agent.creative.studio.models import Playhead, Timeline, new_project
+from nexus_ai_agent.creative.studio.models import (
+    ActorIdentity,
+    InputRef,
+    InputRefMetadata,
+    Playhead,
+    Timeline,
+    new_project,
+)
+
+_LOCAL_ACTOR = ActorIdentity(kind="service", actor_id="nagar.slideshow-upscale")
 
 
 @dataclass(frozen=True)
@@ -28,13 +38,24 @@ class UpscaleOutcome:
     state_hash: str
 
 
-def _command(operation: str, payload: dict[str, object]) -> dict[str, object]:
+def _command(
+    bus: CommandBus,
+    operation: str,
+    payload: dict[str, object],
+    *,
+    input_refs: tuple[InputRef, ...] = (),
+) -> dict[str, object]:
     return {
         "protocol_version": "nagar.command.v1",
+        "schema_version": 2,
         "command_id": f"cmd_{uuid4().hex[:16]}",
+        "actor": _LOCAL_ACTOR.model_dump(mode="json"),
+        "target": {"project_id": bus.project.project_id},
+        "provenance": {"source": "service", "source_id": "slideshow-upscale"},
         "session_id": "slideshow-upscale",
         "operation": operation,
         "input": payload,
+        "input_refs": [ref.model_dump(mode="json") for ref in input_refs],
         "idempotency_key": f"{operation}:{uuid4().hex[:16]}",
     }
 
@@ -86,8 +107,16 @@ def upscale_from_file(
             playhead=Playhead(timecode_us=0),
         ),
     )
-    bus = CommandBus(project, registry=build_slideshow_registry())
-    bus.dispatch(_command(OPERATION_SCAN, {"assets": [source.model_dump(mode="json")]}))
+    bus = CommandBus(
+        project,
+        registry=build_slideshow_registry(),
+        authorizer=ProjectAccess(
+            actor=_LOCAL_ACTOR,
+            project_id=project.project_id,
+            permissions=frozenset({"project:read", "project:write"}),
+        ),
+    )
+    bus.dispatch(_command(bus, OPERATION_SCAN, {"assets": [source.model_dump(mode="json")]}))
     artifact = upscale_image(
         input_path,
         output_path,
@@ -101,6 +130,7 @@ def upscale_from_file(
         measured = probe_image(output_path)
         result = bus.dispatch(
             _command(
+                bus,
                 OPERATION_UPSCALE,
                 {
                     "source_asset_id": source.evidence_id,
@@ -115,6 +145,16 @@ def upscale_from_file(
                     "target_resolution": target_resolution,
                     "filter_flags": "lanczos",
                 },
+                input_refs=(
+                    InputRef(
+                        ref_type="asset",
+                        project_id=project.project_id,
+                        ref_id=source.evidence_id,
+                        metadata=InputRefMetadata(
+                            media_kind="image", content_sha256=source.content_sha256
+                        ),
+                    ),
+                ),
             )
         )
     except Exception:

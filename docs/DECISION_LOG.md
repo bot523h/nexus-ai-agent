@@ -1,6 +1,7 @@
 # NEXUS AI — Architecture Decision Log
 
-**Status:** Canonical historical record; revision 8 effective 2026-09-24  
+**Status:** Canonical historical record; revision 9 effective 2026-09-24
+**r9 scope:** Gate 2 versioned command and capability boundary (D-0013); see `architecture/COMMAND_CAPABILITY_CONTRACT.md` for the evidence and limits.
 **r8 scope:** owner-directed P0 stabilization day (session `arena/01a0d23e-nexus-ai-agent`, board claims task-165/166/167): the legacy `/creative/*` HTTP lane disposition (D-0010), wiring the creative studio surface onto the canonical chain (D-0011), and verifiable backup success (D-0012). Evidence root: `docs/audits/P0_STABILIZATION_2026-09-24.md`.
 
 **Scope:** Architectural, operational, and roadmap decisions from Phase 0 through the released v3.13.0 baseline (P0 week-1 security batch + feature-engine wiring), the accepted Phase 6 Nagar design, the implemented Nagar Waves 1–3 (2a substrate, 2b pack, 2c render lane, 3 image generation) and the owner decisions that sequence what comes next.  
@@ -1102,3 +1103,46 @@ pipeline now test-covered, the remaining failure would be loud and typed.
 the engine: the repo's own dump primitives and provider already expose download, so new
 dependencies would solve a problem the repo had already solved. (2) Treating a
 successful `upload()` return as proof — that was the reported bug.
+
+## 2026-09-24 — D-0013: versioned Nagar command gate before pure handler execution
+
+**Status:** Accepted for Gate 2 on branch `arena/01a0d37d-nexus-ai-agent`; tests and
+CI evidence are recorded separately in
+[`architecture/COMMAND_CAPABILITY_CONTRACT.md`](architecture/COMMAND_CAPABILITY_CONTRACT.md).
+
+*Problem.* The existing `CommandBus` could return a cached command result before
+checking actor identity, project, installed capability, input schema or references.
+A colliding key returned old work without comparing payload. The Telegram edge
+had an access guard, but the pure studio bus had no authenticated project grant.
+
+*Decision.* Keep `nagar.command.v1`, the existing `TypedCommand`, registry,
+reference resolver, pack handlers, and pure handler boundary. Require envelope
+schema version 2 with claimed actor, project target and provenance; inject a
+trusted project authorizer at composition; derive schema/version/permissions from
+the installed registry, not client snapshots. Parse → operation schema → grant →
+capability → execution policy → project-scoped references → reservation (and
+preconditions on new work) → pure handler and atomic state commit. Reject
+conflicting payloads at the bus and in the existing SQLite job queue, schedule
+only the queue's newly inserted row, and re-check authorization on Bus replay. Envelope v1-shaped requests without the new
+required fields fail closed; no schema migration or fallback conversion is
+performed. The runtime remains constrained by the existing pack lifecycle
+and adapter staging checks; no UI automation, raw shell, cloud sync or new
+FFmpeg path enters the bus.
+
+*Limits.* The bus reservation lives in one process/instance, not in a cross-
+worker durable journal. SQLite queue admission is durable only for that queue's
+jobs; it cannot make the FFmpeg lane exactly-once. A project asset record is
+logical ownership, not physical file existence. Local CLI and worker grants
+are service identities for ephemeral projects; a future remote API needs its
+own authenticated actor→project authorizer. Rendering may precede the pure
+recording command in existing slideshow adapters; the new contract must not
+be misread as a pre-render FFmpeg authorization guarantee.
+
+*Rejected alternatives.* A second command bus/asset resolver, letting an AI
+claim permissions in a snapshot, a global bypass authorizer, storing new
+idempotency rows in the application DB, and treating queue `INSERT OR IGNORE`
+as evidence that a changed payload is an authorized replay.
+
+*Reopens when* an authenticated multi-user project store or durable, cross-
+process execution adapter lands; publish a versioned migration plan and
+exercise redelivery/crash recovery before claiming exactly-once or L4.

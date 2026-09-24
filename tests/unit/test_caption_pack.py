@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 
 import pytest
+from nagar_helpers import authorized_bus, command_for
 
 from nexus_ai_agent.application.ports.caption_engine import (
     CaptionProfileUnavailableError,
@@ -44,7 +45,6 @@ from nexus_ai_agent.creative.studio.models import (
     PermissionLevel,
     Project,
     Timeline,
-    TypedCommand,
     new_project,
 )
 
@@ -298,7 +298,7 @@ def _setup_project_with_audio() -> tuple[Project, CommandBus]:
     )
     project = project.model_copy(update={"assets": [audio_record]})
     registry = build_caption_registry()
-    bus = CommandBus(project, registry=registry)
+    bus = authorized_bus(project, registry=registry)
     return project, bus
 
 
@@ -309,7 +309,8 @@ def test_caption_transcribe_permission_level_a_and_execution() -> None:
     assert spec.permission_level == PermissionLevel.IMMEDIATE
 
     transcript = _golden_transcript()
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_transcribe_01",
         operation="caption.transcribe",
         input={
@@ -330,7 +331,8 @@ def test_caption_transcribe_rejects_missing_evidence_or_unknown_audio() -> None:
     project, bus = _setup_project_with_audio()
 
     # Missing pinned transcript
-    cmd_no_evidence = TypedCommand(
+    cmd_no_evidence = command_for(
+        bus,
         command_id="cmd_no_ev",
         operation="caption.transcribe",
         input={"audio_asset_id": "asset_audio_01"},
@@ -340,7 +342,8 @@ def test_caption_transcribe_rejects_missing_evidence_or_unknown_audio() -> None:
 
     # Unknown audio asset
     transcript = _golden_transcript()
-    cmd_bad_audio = TypedCommand(
+    cmd_bad_audio = command_for(
+        bus,
         command_id="cmd_bad_audio",
         operation="caption.transcribe",
         input={
@@ -362,7 +365,8 @@ def test_caption_generate_srt_produces_companion_vtt_and_derived_asset() -> None
     # Align source_asset_id with registered audio
     transcript = transcript.model_copy(update={"source_asset_id": "asset_audio_01"})
 
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_gen_srt_01",
         operation="caption.generate_srt",
         input={
@@ -394,7 +398,8 @@ def test_caption_generate_srt_produces_companion_vtt_and_derived_asset() -> None
     assert "vtt" in record.provenance["companion_renditions"]
 
     # Test reversible undo: system.undo must restore original project state
-    undo_cmd = TypedCommand(
+    undo_cmd = command_for(
+        bus,
         command_id="cmd_undo_srt",
         operation="system.undo",
         input={},

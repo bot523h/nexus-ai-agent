@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from nagar_helpers import authorized_bus, command_for
 from pydantic import ValidationError
 
 from nexus_ai_agent.creative.packs.delivery.models import (
@@ -23,7 +24,6 @@ from nexus_ai_agent.creative.studio.models import (
     PermissionLevel,
     Project,
     Timeline,
-    TypedCommand,
     new_project,
 )
 
@@ -53,7 +53,7 @@ def _setup_delivery_bus() -> tuple[Project, CommandBus]:
     timeline = Timeline(timeline_id="tl_delivery", duration_us=10_000_000)
     project = new_project("p_delivery_01", "Cinema Delivery Project", timeline)
     project = project.model_copy(update={"assets": [clip_1, clip_2, audio_1]})
-    bus = CommandBus(project, registry=registry, allow_experimental=True)
+    bus = authorized_bus(project, registry=registry, allow_experimental=True)
     return project, bus
 
 
@@ -104,7 +104,8 @@ def test_operation_specs_permission_levels() -> None:
 def test_apply_lut_execution() -> None:
     project, bus = _setup_delivery_bus()
 
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_lut_01",
         operation="color.apply_lut",
         input={
@@ -128,7 +129,8 @@ def test_apply_lut_execution() -> None:
 def test_adjust_exposure_execution() -> None:
     project, bus = _setup_delivery_bus()
 
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_exp_01",
         operation="color.adjust_exposure",
         input={
@@ -150,7 +152,8 @@ def test_adjust_exposure_execution() -> None:
 def test_make_proxy_execution() -> None:
     project, bus = _setup_delivery_bus()
 
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_proxy_01",
         operation="delivery.make_proxy_480p",
         input={"video_asset_id": "clip_master_01", "resolution": "854x480"},
@@ -167,7 +170,8 @@ def test_make_proxy_execution() -> None:
 def test_match_shot_execution() -> None:
     project, bus = _setup_delivery_bus()
 
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_match_01",
         operation="color.match_shot",
         input={
@@ -189,7 +193,8 @@ def test_match_shot_execution() -> None:
 def test_export_otio_execution() -> None:
     project, bus = _setup_delivery_bus()
 
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_otio_01",
         operation="delivery.export_otio",
         input={"timeline_id": "tl_delivery", "frame_rate": 24.0},
@@ -219,7 +224,8 @@ def test_render_master_4k_requires_confirmation() -> None:
     project, bus = _setup_delivery_bus()
 
     # Missing confirmation -> fails with PermissionDeniedError at Level C gate
-    cmd_unconf = TypedCommand(
+    cmd_unconf = command_for(
+        bus,
         command_id="cmd_master_unconf",
         operation="delivery.render_master_4k",
         confirmed=False,
@@ -229,7 +235,8 @@ def test_render_master_4k_requires_confirmation() -> None:
         bus.dispatch(cmd_unconf)
 
     # Confirmed -> succeeds
-    cmd_conf = TypedCommand(
+    cmd_conf = command_for(
+        bus,
         command_id="cmd_master_ok",
         operation="delivery.render_master_4k",
         confirmed=True,

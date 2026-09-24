@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from nagar_helpers import authorized_bus, command_for
 from pydantic import ValidationError
 
 from nexus_ai_agent.creative.packs.motion.models import (
@@ -20,7 +21,6 @@ from nexus_ai_agent.creative.studio.models import (
     PermissionLevel,
     Project,
     Timeline,
-    TypedCommand,
     new_project,
 )
 
@@ -44,7 +44,7 @@ def _setup_motion_bus() -> tuple[Project, CommandBus]:
     timeline = Timeline(timeline_id="tl_motion", duration_us=8_000_000)
     project = new_project("p_motion_01", "Motion Graphics Project", timeline)
     project = project.model_copy(update={"assets": [clip_a, clip_b]})
-    bus = CommandBus(project, registry=registry, allow_experimental=True)
+    bus = authorized_bus(project, registry=registry, allow_experimental=True)
     return project, bus
 
 
@@ -89,7 +89,8 @@ def test_operation_specs_permission_levels() -> None:
 def test_add_transition_execution() -> None:
     project, bus = _setup_motion_bus()
 
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_trans_01",
         operation="motion.add_transition",
         input={
@@ -117,7 +118,8 @@ def test_keyframe_transform_execution() -> None:
     kf1 = TransformKeyframe(time_offset_us=0, scale=1.0, position_x=0.0).model_dump()
     kf2 = TransformKeyframe(time_offset_us=1_000_000, scale=1.15, position_x=0.2).model_dump()
 
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_kf_01",
         operation="motion.keyframe_transform",
         input={
@@ -138,7 +140,8 @@ def test_keyframe_transform_execution() -> None:
 def test_add_glow_execution() -> None:
     project, bus = _setup_motion_bus()
 
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_glow_01",
         operation="motion.add_glow",
         input={
@@ -160,7 +163,8 @@ def test_add_glow_execution() -> None:
 def test_add_motion_blur_execution() -> None:
     project, bus = _setup_motion_bus()
 
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_blur_01",
         operation="motion.add_motion_blur",
         input={
@@ -181,7 +185,8 @@ def test_add_motion_blur_execution() -> None:
 def test_add_title_execution() -> None:
     project, bus = _setup_motion_bus()
 
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_title_01",
         operation="motion.add_title",
         input={
@@ -207,7 +212,8 @@ def test_add_title_execution() -> None:
 def test_reversible_undo() -> None:
     project, bus = _setup_motion_bus()
 
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_trans_undo",
         operation="motion.add_transition",
         input={
@@ -220,7 +226,7 @@ def test_reversible_undo() -> None:
     trans_id = res.output["asset_id"]
     assert trans_id in [a.asset_id for a in bus.project.assets]
 
-    undo_cmd = TypedCommand(command_id="cmd_undo", operation="system.undo", input={})
+    undo_cmd = command_for(bus, command_id="cmd_undo", operation="system.undo", input={})
     undo_res = bus.dispatch(undo_cmd)
     assert undo_res.status == "applied"
     assert trans_id not in [a.asset_id for a in bus.project.assets]

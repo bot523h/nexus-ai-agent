@@ -222,18 +222,47 @@ def _dispatch(
     """Registry lookup → bus dispatch. Bad args become typed
     ``invalid_request`` (a retry with the same payload fails identically)."""
     from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+    from nexus_ai_agent.creative.studio.authorization import ProjectAccess
     from nexus_ai_agent.creative.studio.bus import CommandBus
-    from nexus_ai_agent.creative.studio.models import TargetRef, TypedCommand
+    from nexus_ai_agent.creative.studio.models import (
+        ActorIdentity,
+        CommandProvenance,
+        InputRef,
+        InputRefMetadata,
+        RequestContext,
+        TargetRef,
+        TypedCommand,
+    )
 
+    # A queued payload's user_id/project_id is *not* authentication. This
+    # worker owns the ephemeral per-job project; only its fixed service actor
+    # receives a grant. The Telegram edge authenticates the human separately.
+    worker = ActorIdentity(kind="service", actor_id="nagar.creative-render-worker")
     bus = CommandBus(
         state=project,
         registry=build_runtime_registry(),
+        authorizer=ProjectAccess(
+            actor=worker,
+            project_id=project.project_id,
+            permissions=frozenset({"project:read", "project:write"}),
+        ),
         allow_experimental=allow_experimental,
     )
     command = TypedCommand(
         command_id=f"cmd-{idempotency_key}-{operation}",
+        actor=worker,
+        provenance=CommandProvenance(source="service", source_id="creative_render"),
+        request_context=RequestContext(channel="telegram", request_id=idempotency_key),
         operation=operation,
         input=input_data,
+        input_refs=(
+            InputRef(
+                ref_type="asset",
+                project_id=project.project_id,
+                ref_id=SOURCE_ASSET_ID,
+                metadata=InputRefMetadata(media_kind="video"),
+            ),
+        ),
         target=TargetRef(project_id=project.project_id, track_id="main"),
         idempotency_key=idempotency_key,
         confirmed=confirmed,

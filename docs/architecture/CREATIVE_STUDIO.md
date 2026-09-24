@@ -13,8 +13,8 @@ Nagar is the studio inside NEXUS: a typed, permissioned, *pure-by-default* media
 ```mermaid
 flowchart TB
     subgraph pure["Pure (stdlib + pydantic + studio) — deterministic, fast tests"]
-        cmd["TypedCommand envelope<br/>protocol v1 + idempotency_key + preconditions"]
-        bus["CommandBus<br/>validate → authorize → apply atomically"]
+        cmd["TypedCommand envelope<br/>protocol v1 + schema 2 + actor/project + idempotency"]
+        bus["CommandBus<br/>schema → auth → capability → policy → refs → reserve → apply"]
         reg["CapabilityRegistry<br/>Domain > Capability > OperationSpec"]
         packs["7 packs: edit · motion · audio · caption · color/delivery · slideshow"]
         proj["Project state<br/>Timeline/Track/Clip/AssetRecord/EffectLayerRef<br/>derived state_hash"]
@@ -27,7 +27,7 @@ flowchart TB
     proj -->|lane_ir_from_project| lane --> probe
 ```
 
-The split is the load-bearing decision: **evidence is gathered above the bus** (probing, analysis, image generation), **handlers inside the bus stay pure**, and **execution happens exactly once, in the lane**. See [`../DECISION_LOG.md`](../DECISION_LOG.md) Wave 2/2c entries.
+The split is the load-bearing decision: **evidence is gathered above the bus** (probing, analysis, image generation), **handlers inside the bus stay pure**, and **rendering happens in the lane**. In-memory bus idempotency applies only to its handler, not to FFmpeg: a rendered artifact can precede the recording command. See [`../DECISION_LOG.md`](../DECISION_LOG.md) Wave 2/2c entries and the [Gate 2 security contract](COMMAND_CAPABILITY_CONTRACT.md).
 
 ## 2. Capability model
 
@@ -36,7 +36,7 @@ The split is the load-bearing decision: **evidence is gathered above the bus** (
 | Domain | `Domain` | first id segment: `media`, `timeline`, `motion`, `audio`, `caption`, `color`, `delivery`, `slideshow`, `system` |
 | Capability | `Capability` | a named grouping inside a domain (for example `timeline.edit`) |
 | Operation | `OperationSpec` | `operation_id`, typed `input_model` (pydantic, `extra="forbid"`), handler, `permission_level`, `undoable` |
-| Envelope | `TypedCommand` | `operation`, `input`, `target`, `preconditions`, `idempotency_key`, `confirmed`, `protocol_version` |
+| Envelope | `TypedCommand` | Protocol `nagar.command.v1`, schema version 2; required `actor`, `target.project_id`, `provenance`; typed `input_refs`, policy, context, optional registry snapshot, idempotency key and preconditions. See [Gate 2](COMMAND_CAPABILITY_CONTRACT.md). |
 
 **Permission ladder** (`PermissionLevel`):
 
@@ -48,7 +48,7 @@ The split is the load-bearing decision: **evidence is gathered above the bus** (
 | D | Denied | refused by policy: shell, raw upload, code execution, anything unregistered | — |
 
 **Dispatch pipeline** (`creative/studio/bus.py::_dispatch_locked`) — strict order, each step failing closed:
-1. envelope validation (protocol v1) → 2. idempotency replay → 3. registry lookup (`UnknownOperationError`) → 4. permission gate (`PermissionDeniedError`) → 5. typed input validation → 6. precondition check (`state_revision` / `state_hash`) → 7. atomic apply + `EditTransaction` push → 8. deep-copied `project` snapshot for safe reads.
+1. parse JSON and versioned envelope → 2. registered operation input schema → 3. independently authorized actor/project grant → 4. authoritative registry capability/version and required permissions → 5. execution mode + A/B/C/D policy → 6. project-scoped input references and pinned time references → 7. in-memory reservation/replay-or-conflict (key scoped by project and operation) → 8. revision/hash preconditions for new work → 9. pure handler + atomic state/result commit. The previous early replay path is retired; see [Gate 2](COMMAND_CAPABILITY_CONTRACT.md) for limits and negative tests.
 
 `Project.state_hash` is **derived** from a canonical JSON serialization on every construction (revision excluded, so revision+hash preconditions survive undo cycles). A stored hash therefore cannot drift from the state it describes.
 

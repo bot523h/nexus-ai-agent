@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
+from nagar_helpers import TEST_ACTOR, TEST_PROVENANCE, authorized_bus
 from pydantic import ValidationError
 
 from nexus_ai_agent.creative.packs.registry import PackRegistry
@@ -115,13 +117,17 @@ def _bus() -> CommandBus:
         "slideshow",
         Timeline(timeline_id="tl", duration_us=0, playhead=Playhead(timecode_us=0)),
     )
-    return CommandBus(project, registry=build_slideshow_registry())
+    return authorized_bus(project, registry=build_slideshow_registry())
 
 
 def _command(operation: str, payload: dict[str, object], *, confirmed: bool = False) -> dict:
     return {
         "protocol_version": "nagar.command.v1",
-        "command_id": f"cmd_{operation}",
+        "schema_version": 2,
+        "command_id": f"cmd_{operation}_{uuid4().hex}",
+        "actor": TEST_ACTOR.model_dump(mode="json"),
+        "target": {"project_id": "proj"},
+        "provenance": TEST_PROVENANCE.model_dump(mode="json"),
         "session_id": "test",
         "operation": operation,
         "input": payload,
