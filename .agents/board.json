@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-24T09:41:42Z",
+  "updated_at": "2026-09-24T10:11:01Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -483,6 +483,20 @@
         "CHANGELOG.md",
         "docs/ops/r2-storage.md"
       ]
+    },
+    {
+      "id": "creative-runtime-s3",
+      "description": "Session 3 creative runtime completion (artifact truth, multi-segment, OTIO interop)",
+      "paths": [
+        "src/nexus_ai_agent/creative/",
+        "src/nexus_ai_agent/continuum/",
+        "tests/unit/",
+        "tests/architecture/",
+        "docs/ops/",
+        "docs/README.md",
+        "docs/architecture/CREATIVE_STUDIO.md",
+        "CHANGELOG.md"
+      ]
     }
   ],
   "claims": [
@@ -615,7 +629,7 @@
       "title_fa": "ریبیس و رفع دوگانگی PR#32",
       "zone": "feature-wiring",
       "priority": "P0",
-      "status": "assigned_to_B",
+      "status": "done",
       "scope": "۸ فایل مشترک با #34 کانفلیکت متنی و معنایی دارند؛ سیم‌کشی موازی باید یکی شود.",
       "scope_fa": "۸ فایل مشترک با #34 کانفلیکت متنی و معنایی دارند؛ سیم‌کشی موازی باید یکی شود.",
       "prerequisites": [
@@ -636,7 +650,7 @@
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "exclusive_paths released with terminal status during schema-2 merge (history in scope)"
+      "note": "PR#32 CLOSED unmerged 2026-09-22T15:36:53Z (mergedAt null) — rebase+dedupe scope is moot, nothing left to rebase. Residual feature wiring delivered via task-158 + PR#47/PR#51. Reconciled by arena/01a0d2e0 (session 3, step 1) with remote evidence: gh pr view 32 -> CLOSED."
     },
     {
       "task": "task-123",
@@ -1836,11 +1850,11 @@
     },
     {
       "priority": "P0",
-      "status": "active",
+      "status": "completed_merged",
       "prerequisites": [],
       "ttl_hours": 48,
       "gates_owner": false,
-      "note": "",
+      "note": "DELIVERED via PR#65 (MERGED 2026-09-24T09:56:32Z, main 035a896dd2ed1293de6accf2ef4309da2fd64c89). Stale active lease reconciled to terminal by arena/01a0d2e0 (session 3, step 1) with remote evidence: gh pr view 65 -> state MERGED.",
       "task": "task-165-legacy-creative-hardening",
       "title": "P0-A: auth for GET /creative/jobs/{id} + upload size cap + legacy deprecation ratchet (ADR)",
       "title_fa": "P0-A: احراز هویت GET /creative/jobs + سقف حجم آپلود + ترکمن‌های رسمی deprecation پایپ‌لاین legacy",
@@ -1865,15 +1879,18 @@
         "docs/architecture/adr/README.md"
       ],
       "agent_branch": "arena/01a0d23e-nexus-ai-agent",
-      "claimed_at": "2026-09-24T07:36:43Z"
+      "claimed_at": "2026-09-24T07:36:43Z",
+      "delivered": [
+        "PR#65"
+      ]
     },
     {
       "priority": "P0",
-      "status": "active",
+      "status": "completed_merged",
       "prerequisites": [],
       "ttl_hours": 48,
       "gates_owner": false,
-      "note": "",
+      "note": "DELIVERED via PR#65 (MERGED 2026-09-24T09:56:32Z, main 035a896dd2ed1293de6accf2ef4309da2fd64c89). Stale active lease reconciled to terminal by arena/01a0d2e0 (session 3, step 1) with remote evidence: gh pr view 65 -> state MERGED.",
       "task": "task-166-creative-surface-wiring",
       "title": "P0-B: wire creative surface end-to-end — registration, creative_render worker, idempotency, i18n",
       "title_fa": "P0-B: سیم‌کشی انتها به انتهای سطح خلاقیت — رجیستر، worker، idempotency، بومی‌سازی",
@@ -1901,15 +1918,18 @@
         "docs/architecture/CREATIVE_STUDIO.md"
       ],
       "agent_branch": "arena/01a0d23e-nexus-ai-agent",
-      "claimed_at": "2026-09-24T07:36:43Z"
+      "claimed_at": "2026-09-24T07:36:43Z",
+      "delivered": [
+        "PR#65"
+      ]
     },
     {
       "priority": "P0",
-      "status": "active",
+      "status": "completed_merged",
       "prerequisites": [],
       "ttl_hours": 48,
       "gates_owner": false,
-      "note": "",
+      "note": "DELIVERED via PR#65 (MERGED 2026-09-24T09:56:32Z, main 035a896dd2ed1293de6accf2ef4309da2fd64c89). Stale active lease reconciled to terminal by arena/01a0d2e0 (session 3, step 1) with remote evidence: gh pr view 65 -> state MERGED.",
       "task": "task-167-backup-verifiability",
       "title": "P0-C: backup success criteria = uploaded + integrity-verified + restore-proven; precise failure diagnosis",
       "title_fa": "P0-C: موفقیت بکاپ = آپلود + راستی‌آزمایی یکپارچگی + اثبات restore؛ تشخیص دقیق خرابی",
@@ -1932,7 +1952,54 @@
         "docs/ops/r2-storage.md"
       ],
       "agent_branch": "arena/01a0d23e-nexus-ai-agent",
-      "claimed_at": "2026-09-24T07:36:43Z"
+      "claimed_at": "2026-09-24T07:36:43Z",
+      "delivered": [
+        "PR#65"
+      ]
+    },
+    {
+      "task": "task-177-creative-runtime-s3",
+      "title": "Session 3: creative runtime completion — artifact truth, multi-segment, OTIO interop",
+      "title_fa": "نشست ۳: تکمیل ران‌تایم خلاقیت — حقیقت آرتیفکت، چندسگمنتی، تعامل OTIO",
+      "zone": "creative-runtime-s3",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Session 3 creative runtime completion on main-line: port PR#64 value without duplicate architecture (execution semantics, plan bridge, assembly, availability, canonical OTIO, vision packs); artifact truth (logical vs spec vs physical sha + probe); NAG-003 classification; E1 segment isolation; 3-segment RGB proof; integer-µs time algebra; real-parser OTIO interop incl. markers/ExternalReference; 4-state capability lifecycle; required-pack fail-closed enforcement; LUT + burn-in real-or-honest; anti-vacuity mutations. Locked files untouched: delivery/{models,operations}.py (PR#33), api/app.py (PR#58), queue/runtime (PR#60/PR#63).",
+      "scope_fa": "تکمیل ران‌تایم خلاقیت روی main-line با شواهد واقعی آرتیفکت و پارسر.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "single canonical renderer: Project -> ExecutionPlan -> LaneIR -> compiler -> executor -> verified artifact (no second renderer; architecture ratchet)",
+        "artifact truth: sha256 from real bytes, ffprobe-or-documented-fallback probe, size>0, failure cannot COMPLETE",
+        "E1: per-segment compilation referentially isolated (title A/B + caption C test, re-compile stable)",
+        "3-segment deterministic RGB render: order preserved, exact duration, single process",
+        "OTIO: real-parser round-trip (Timeline/Stack/Track/Clip/Gap/ExternalReference/source_range/markers/metadata/duration); include_markers honored",
+        "capability lifecycle REGISTERED/INSTALLED/AVAILABLE/RUNNABLE separated; required packs fail closed at dispatch",
+        "LUT + burn-in real-executable with typed unavailable paths (no fake render)",
+        "execution truth table machine-enforced (RENDERED_ARTIFACT contract: bytes+sha+size verified)",
+        "anti-vacuity: 7 mutations each RED then restored GREEN",
+        "deterministic tests; ruff+mypy clean; CI test/lint/lint-fast/migrate-postgres green; docs+board reflect measured state"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_execution_semantics.py tests/unit/test_artifact_truth.py tests/unit/test_segment_isolation_e1.py tests/unit/test_multisegment_rgb.py tests/unit/test_time_algebra.py tests/unit/test_otio_roundtrip.py tests/unit/test_otio_interop_real.py tests/unit/test_capability_lifecycle.py tests/unit/test_required_packs.py tests/unit/test_lut_execution.py tests/unit/test_burnin_execution.py",
+        "ruff check + ruff format --check + mypy on touched modules",
+        "CI run green (test, lint, lint-fast, migrate-postgres) on the session PR"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/",
+        "src/nexus_ai_agent/continuum/",
+        "tests/unit/",
+        "tests/architecture/",
+        "docs/ops/",
+        "docs/README.md",
+        "docs/architecture/CREATIVE_STUDIO.md",
+        "CHANGELOG.md"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0d2e0-nexus-ai-agent",
+      "claimed_at": "2026-09-24T10:11:01Z",
+      "ttl_hours": 48,
+      "gates_owner": true,
+      "note": "Session 3 claim; gates_owner=true (no other active gates owner on the board)."
     }
   ],
   "deferred_log": [
@@ -2302,9 +2369,9 @@
       },
       {
         "pr": 32,
-        "state": "OPEN",
+        "state": "CLOSED",
         "owner": "عامل B",
-        "note": "needs rebase on post-#38 main"
+        "note": "closed unmerged 2026-09-22; residual wiring via task-158 + PR#47/PR#51"
       },
       {
         "pr": 33,
@@ -2398,6 +2465,12 @@
         "state": "MERGED",
         "title": "PR#51 integration — green the test job (3 board clock bombs, env-dependent RAG test, queue hook race)",
         "note": "head arena/01a0ca9c, MERGED → main 315d38a; CI run 35776958516 4/4 SUCCESS."
+      },
+      {
+        "pr": 65,
+        "state": "MERGED",
+        "title": "P0 stabilization: legacy /creative hardening + studio surface wiring E2E + verifiable backups (tasks 165-167)",
+        "note": "head arena/01a0d23e, MERGED -> main 035a896 (2026-09-24)."
       }
     ],
     "incidents": [
