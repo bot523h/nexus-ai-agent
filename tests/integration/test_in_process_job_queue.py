@@ -330,7 +330,18 @@ async def test_pdf_job_extracts_text_with_pypdf(
     )
 
     await _wait_for_status(queue, job_id, JobStatus.COMPLETED)
-    assert (await queue.get_result(job_id)) == {"message": "Successfully processed file-7"}
+    # task-180 (GAP-B): the result dialect grew the artifact claim, and the
+    # job only completes because the queue independently re-measured the
+    # persisted extracted-text artifact (default registry).
+    result = await queue.get_result(job_id)
+    assert result is not None
+    assert result["message"] == "Successfully processed file-7"
+    extracted = tmp_path / "document.extracted.txt"
+    assert result["artifact_path"] == str(extracted)
+    assert extracted.read_text(encoding="utf-8") == "Hello NEXUS job queue"
+    verification = result["artifact_verification"]
+    assert verification["status"] == "verified"
+    assert verification["physical_identity"]["sha256"] == result["content_sha256"]
     assert captured == {
         "user_id": 7,
         "text": "Hello NEXUS job queue",
@@ -400,6 +411,13 @@ async def test_story_job_executes_through_in_process_queue(tmp_path: Path) -> No
     )
 
     await _wait_for_status(queue, job_id, JobStatus.COMPLETED)
-    assert (await queue.get_result(job_id)) == {"output_path": str(output)}
+    # task-180 (GAP-C): completion now requires the queue's independent
+    # re-measurement of the rendered PNG (default registry verifier).
+    result = await queue.get_result(job_id)
+    assert result is not None
+    assert result["output_path"] == str(output)
     assert output.is_file()
     assert output.stat().st_size > 0
+    verification = result["artifact_verification"]
+    assert verification["status"] == "verified"
+    assert verification["probe"]["format"] == "PNG"

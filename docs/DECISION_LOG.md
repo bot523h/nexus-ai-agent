@@ -1142,3 +1142,50 @@ first-payload-wins + conflict log is deterministic and observable.
 observability, recovery, attempt accounting, §17 invariant on the real FFmpeg chain) and
 `tests/unit/test_job_lifecycle.py` (transition matrix, invariants, claim dialects). Contract doc:
 `docs/architecture/JOB_LIFECYCLE.md`.
+
+---
+
+## 2026-09-24 — Verification closure on the task-178 contract: every job type verified, gaps recorded honestly (D-0014)
+
+### D-0014 — Gap closure rides the existing registry; verification dialects are per-artifact, never generalized guesses
+
+*Problem.* PR#71 (task-178) proved the canonical lifecycle but shipped the built-in verifier
+registry with only `creative_render`; its own board note listed the handoff GAPs: `slideshow_render`
+had no verifier (a lying/truncated/zero-byte master completed the job), and the legacy `/creative`
+HTTP lane can persist `done` with no artifact measurement. `pdf_extract` completed on a
+`{"message": …}` result with no measurable artifact at all, and `story` returned a bare
+`output_path` with no digest to cross-check.
+
+*Decision.* Close the gaps **on** the task-178 contract — additive registration through the
+existing `register_artifact_verifier` extension point, no lifecycle redesign (VERIFYING,
+transition naming, `render_jobs.py`, runtime engine all untouched; this branch fast-forwards onto
+PR#71's head so its commits are preserved). Each job type gets a verifier matching its **real**
+artifact, measured from the tree: `slideshow_render` → the workspace-contained master `.mp4` at the
+dispatched path (runtime probe); `story` → the Pillow-rendered PNG (Pillow structural decode);
+`pdf_extract` → the extracted text layer, now persisted atomically at the payload-derived
+`<stem>.extracted.txt` (whole-file UTF-8 decode). The RAG ingestion behind `pdf_extract` is an
+external side effect and is deliberately NOT claimed as verified (absent independent evidence ⇒
+not "done"). Consequence accepted: an empty text layer now FAILS (`empty_artifact`) instead of
+reporting success — a removed false success. The legacy HTTP lane is NOT touched: it stays
+frozen+deprecated (D-0010) and GAP-D is recorded with owner, risk, acceptance test and an
+executable tripwire instead of code. An architecture ratchet
+(`tests/architecture/test_verification_registry_ratchet.py`) now fails if any handler lacks a
+verifier — "execution success = job success" cannot come back silently.
+
+*Rejected alternatives.* (1) Porting PR#67's runtime `creative/artifacts.py` into the job layer —
+unmerged branch, cross-ownership duplication (explicitly forbidden), and the job layer already has
+its own evidence seam. (2) A content-addressed artifact store — a publication redesign against the
+frozen expected-path contract and the bot's file-path notifications. (3) A generalized
+"media verifier" for story/pdf — would have probed a PNG with ffprobe and a text file with nothing;
+dialects follow the real artifacts. (4) Fail-closed-registering a verifier for `pdf_extract`
+without persisting an artifact — would have broken a working capability instead of making it
+honest.
+
+*Evidence.* `tests/unit/test_job_verification_gaps.py` (dialects + verifier units),
+`tests/integration/test_verification_gap_closure.py` (real FFmpeg encode for GAP-A; real pypdf for
+GAP-B; zero-double Pillow chain for GAP-C; attacks A–H against the DEFAULT registry),
+`tests/architecture/test_verification_registry_ratchet.py`,
+`tests/architecture/test_legacy_lane_verification_gap.py` (GAP-D evidence, read-only). Mutation
+proofs: verifier bypass (11 red), path-validation bypass (3 red), sha bypass (2 red) — all reverted.
+Reports: `docs/audits/VERIFICATION_GAP_REPORT_2026-09-24.md`,
+`docs/audits/CROSS_PR_TRUTH_2026-09-24.md`, `docs/audits/VERIFICATION_TRUTH_MATRIX.json`.

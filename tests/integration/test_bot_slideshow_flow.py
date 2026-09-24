@@ -82,7 +82,15 @@ def _queue(tmp_path: Path, completions: list[JobCompletion]) -> InProcessJobQueu
     async def _hook(completion: JobCompletion) -> None:
         completions.append(completion)
 
-    queue = InProcessJobQueue(tmp_path / "jobs.sqlite3", on_job_finished=_hook)
+    # artifact_verifiers={} opts this suite out of the task-180 artifact
+    # verification (this file pins the bot UX contract — notify, cleanup,
+    # payload composition — with a MOCKED encoder whose fake master is not
+    # probeable by design; the suite must never depend on FFmpeg).  The
+    # verification contract itself is proven with a REAL encode and probe in
+    # tests/integration/test_verification_gap_closure.py.
+    queue = InProcessJobQueue(
+        tmp_path / "jobs.sqlite3", on_job_finished=_hook, artifact_verifiers={}
+    )
     queue.register_handler(worker_adapter.SLIDESHOW_JOB_TYPE, worker_adapter.slideshow_render_job)
     return queue
 

@@ -77,15 +77,34 @@ class JobCompletion:
 def default_artifact_verifiers() -> dict[str, ArtifactVerifier]:
     """Built-in verifiers keyed by job type.
 
-    ``creative_render`` — the canonical one-shot chain (/edit /caption
-    /grade) — is verified by default: a lying, stale, truncated or
-    zero-byte artifact can never complete a job. Job types without an
-    entry keep the historical unverified semantics (registered verifiers
-    are additive; nothing existing silently changes meaning).
-    """
-    from nexus_ai_agent.jobs.creative_verification import creative_render_verifier
+    Every job type in ``worker.default_job_handlers`` is verified by
+    default (task-178 established the contract with ``creative_render``;
+    task-180 closed the remaining GAPs):
 
-    return {"creative_render": creative_render_verifier}
+    * ``creative_render`` — the canonical one-shot chain (/edit /caption
+      /grade);
+    * ``slideshow_render`` — the Wave 2.5 render lane (GAP-A);
+    * ``story`` — the locally rendered PNG story image (GAP-C);
+    * ``pdf_extract`` — the persisted extracted-text artifact (GAP-B).
+
+    A lying, stale, truncated or zero-byte artifact can never complete a
+    job. The registry stays additive: ``tests/architecture/
+    test_verification_registry_ratchet.py`` fails if a handler is ever
+    registered without a verifier, so no job type can silently regress to
+    the historical unverified semantics.
+    """
+    from nexus_ai_agent.jobs.creative_verification import (
+        creative_render_verifier,
+        slideshow_render_verifier,
+    )
+    from nexus_ai_agent.jobs.feature_verification import pdf_extract_verifier, story_verifier
+
+    return {
+        "creative_render": creative_render_verifier,
+        "slideshow_render": slideshow_render_verifier,
+        "story": story_verifier,
+        "pdf_extract": pdf_extract_verifier,
+    }
 
 
 class InProcessJobQueue:

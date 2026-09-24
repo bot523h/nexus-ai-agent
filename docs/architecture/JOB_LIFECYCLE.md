@@ -109,11 +109,25 @@ half-written destination is never visible under a final artifact name.
 execution success + artifact verification success = SUCCESS eligibility
 ```
 
-For job types with a registered verifier (default registry:
-`creative_render`), the queue moves the row to `verifying` after the
-handler returns and re-measures the claim **independently** — the
-verifier reads the filesystem; it never trusts the handler's word, and a
-crashing verifier fails the job closed (`verification_failed:verifier_crashed`).
+For job types with a registered verifier, the queue moves the row to
+`verifying` after the handler returns and re-measures the claim
+**independently** — the verifier reads the filesystem; it never trusts
+the handler's word, and a crashing verifier fails the job closed
+(`verification_failed:verifier_crashed`).
+
+Default registry (task-178 established it; task-180 closed the GAPs —
+every job type in `worker.default_job_handlers` is now verified):
+
+| Job type | Verifier | Artifact dialect |
+|---|---|---|
+| `creative_render` | `jobs.creative_verification.creative_render_verifier` | `output.mp4` / `captions.srt` / `timeline.otio` in the job workspace; media probe |
+| `slideshow_render` | `jobs.creative_verification.slideshow_render_verifier` | the rendered master at the dispatched `output_path` inside the job workspace; real media probe |
+| `story` | `jobs.feature_verification.story_verifier` | the Pillow-rendered PNG at the dispatched `output_path`; Pillow structural decode |
+| `pdf_extract` | `jobs.feature_verification.pdf_extract_verifier` | the extracted text layer persisted at `<stem>.extracted.txt` (atomic temp→replace); whole-file UTF-8 decode |
+
+`tests/architecture/test_verification_registry_ratchet.py` fails if a
+handler is ever registered without a verifier — no job type can silently
+regress to unverified "execution success = job success" semantics.
 
 Three identities (found in the tree, not assumed; evidence in
 `creative/render_jobs.py`, `creative/rendering/compiler.py`):

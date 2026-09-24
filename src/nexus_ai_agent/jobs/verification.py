@@ -116,6 +116,12 @@ def _kind_from_suffix(suffix: str, *, default: str) -> str:
         ".srt": "srt",
         ".otio": "otio",
         ".json": "otio",
+        # task-180 dialects (GAP-B/GAP-C): the feature lane's real artifacts.
+        ".png": "image",
+        ".jpg": "image",
+        ".jpeg": "image",
+        ".webp": "image",
+        ".txt": "text",
     }
     return table.get(suffix.lower(), default)
 
@@ -169,6 +175,12 @@ def verify_artifact(
     identity (``sha256:<hex>`` recomputed from bytes equals the claim) →
     probe evidence for media → recorded logical/spec identity. The returned
     summary is what the Job Result carries, so the chain stays traceable.
+
+    Dialects: ``video`` (allow-listed-binary probe), ``srt`` (SubRip timing
+    grammar), ``otio`` (JSON document), and — added by task-180 for the
+    feature lane's real artifacts — ``image`` (Pillow structural decode) and
+    ``text`` (whole-file UTF-8 decode). Every dialect is deterministic and
+    read-only; none trusts a handler-reported property.
     """
     logical = {"project_id": None, "output_asset_id": claim.output_asset_id}
     spec = {"operation": claim.operation}
@@ -247,6 +259,36 @@ def verify_artifact(
             return fail(REASON_PROBE_FAILED)
         if not isinstance(document, dict):
             return fail(REASON_PROBE_FAILED)
+    elif claim.kind == "image":
+        # Structural validity = the bytes decode as a real image (task-180,
+        # GAP-C: the story artifact is a PIL-rendered PNG). Pillow is a core
+        # dependency, so this probe has no external-binary requirement.
+        try:
+            from PIL import Image
+
+            with Image.open(path) as candidate:
+                candidate.verify()  # structural integrity of the full file
+            with Image.open(path) as candidate:
+                # verify() consumes the handle; reopen for the measured facts.
+                evidence = {
+                    "format": candidate.format,
+                    "width": candidate.width,
+                    "height": candidate.height,
+                    "mode": candidate.mode,
+                }
+        except Exception as exc:  # noqa: BLE001 - any decode failure is a verification failure
+            physical["read_error"] = f"{type(exc).__name__}: {exc}"[:400]
+            return fail(REASON_PROBE_FAILED)
+        summary["probe"] = evidence
+    elif claim.kind == "text":
+        # Structural validity = the whole file decodes as UTF-8 (task-180,
+        # GAP-B: the pdf_extract artifact is the extracted text layer).
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            physical["read_error"] = f"{type(exc).__name__}: {exc}"[:400]
+            return fail(REASON_PROBE_FAILED)
+        summary["probe"] = {"encoding": "utf-8", "characters": len(text)}
 
     summary["status"] = "verified"
     summary.pop("reason_code", None)
