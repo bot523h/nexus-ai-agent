@@ -23,9 +23,25 @@ import importlib.util
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
+from pydantic import BaseModel, ConfigDict
 
+from nexus_ai_agent.creative.studio import (
+    ActorIdentity,
+    CapabilityRegistry,
+    CommandProvenance,
+    OperationContext,
+    OperationOutcome,
+    OperationSpec,
+    PermissionLevel,
+    ProjectAccess,
+    Timeline,
+    TypedCommand,
+    new_project,
+)
+from nexus_ai_agent.creative.studio.bus import CommandBus
 from nexus_ai_agent.creative.studio.lifecycle import PackRequirementError
 from nexus_ai_agent.creative.studio.models import (
     AuthorizationError,
@@ -33,15 +49,87 @@ from nexus_ai_agent.creative.studio.models import (
     PreconditionError,
     Preconditions,
     Project,
+    TargetRef,
 )
-from tests.unit.test_gate2_lifecycle_seam import (
-    AVAILABLE_PACK,
-    EXPERIMENTAL_PACK,
-    Calls,
-    build_registry,
-    command,
-    grant,
-)
+
+AVAILABLE_PACK = "nexus.slideshow.compose"
+EXPERIMENTAL_PACK = "nexus.audio.studio"
+
+
+class LabInput(BaseModel):
+    """Self-contained probe input (this module must not import sibling tests)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    note: str = "ok"
+
+
+class Calls:
+    """Runtime-execution witness: only the handler bumps it."""
+
+    def __init__(self) -> None:
+        self.count = 0
+
+
+def build_registry(
+    required_packs: tuple[str, ...], calls: Calls, *, available: bool = True
+) -> CapabilityRegistry:
+    registry = CapabilityRegistry()
+    registry.register_domain("lab", "Mutation probe domain")
+
+    def _handler(project: Project, context: OperationContext) -> OperationOutcome:
+        calls.count += 1
+        return OperationOutcome(project, context.history, {"ran": True})
+
+    registry.register_operation(
+        "lab",
+        "packs",
+        OperationSpec(
+            operation_id="lab.run",
+            description="Probe operation guarded by a pack requirement.",
+            permission_level=PermissionLevel.REVERSIBLE,
+            input_model=LabInput,
+            handler=_handler,
+            required_packs=required_packs,
+        ),
+        available=available,
+    )
+    return registry
+
+
+def actor(actor_id: str = "alice") -> ActorIdentity:
+    return ActorIdentity(kind="user", actor_id=actor_id)
+
+
+def grant(project: Project, actor_id: str = "alice") -> ProjectAccess:
+    return ProjectAccess(
+        actor=actor(actor_id),
+        project_id=project.project_id,
+        permissions=frozenset({"project:read", "project:write"}),
+    )
+
+
+def command(
+    project: Project,
+    *,
+    actor_id: str = "alice",
+    preconditions: Preconditions | None = None,
+) -> TypedCommand:
+    payload: dict[str, Any] = {
+        "command_id": "cmd_01",
+        "schema_version": 2,
+        "operation": "lab.run",
+        "actor": actor(actor_id).model_dump(mode="json"),
+        "target": TargetRef(project_id=project.project_id).model_dump(mode="json"),
+        "provenance": CommandProvenance(source="local", source_id="mutation-test").model_dump(
+            mode="json"
+        ),
+        "input": {"note": "ok"},
+    }
+    if preconditions is not None:
+        payload["preconditions"] = preconditions.model_dump(mode="json")
+    return TypedCommand.model_validate(payload)
+
 
 BUS_SOURCE = (Path(__file__).parents[2] / "src/nexus_ai_agent/creative/studio/bus.py").read_text(
     encoding="utf-8"
@@ -81,8 +169,6 @@ def _replace_once(old: str, new: str) -> str:
 
 @pytest.fixture
 def project() -> Project:
-    from nexus_ai_agent.creative.studio import Timeline, new_project
-
     return new_project(
         "project_01", "Mutation Probe", Timeline(timeline_id="tl_01", duration_us=10_000_000)
     )
@@ -131,8 +217,6 @@ def test_m2_moving_the_gate_after_the_reservation_changes_the_failure(
         bus.dispatch(stale)
     assert calls.count == 0
     # The canonical bus refuses the same command on the *pack*, not the revision.
-    from nexus_ai_agent.creative.studio import CommandBus
-
     canonical = CommandBus(
         project,
         registry=build_registry((EXPERIMENTAL_PACK,), Calls()),
@@ -175,8 +259,6 @@ def test_m4_fabricating_the_actor_grant_lets_an_intruder_through(project: Projec
     bus.dispatch(command(project, actor_id="mallory"))
     assert calls.count == 1, "M4 is vacuous: the authorizer never gated anything"
 
-    from nexus_ai_agent.creative.studio import CommandBus
-
     canonical = CommandBus(
         project,
         registry=build_registry((EXPERIMENTAL_PACK,), Calls()),
@@ -199,8 +281,6 @@ def test_m5_skipping_the_capability_gate_lets_the_handler_run(project: Project) 
     bus = _bus(mutant, project, calls, (AVAILABLE_PACK,), available=False)
     bus.dispatch(command(project))
     assert calls.count == 1, "M5 is vacuous: the capability gate never denied anything"
-
-    from nexus_ai_agent.creative.studio import CommandBus
 
     canonical = CommandBus(
         project,
