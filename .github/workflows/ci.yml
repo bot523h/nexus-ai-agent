@@ -40,6 +40,20 @@ jobs:
       - run: |
           set -o pipefail
           pytest -v -m "not slow" --tb=short 2>&1 | tee pytest.log
+      # TEMPORARY (flake hunt, PR#67): CI logs/artifacts are unreachable from
+      # some sandboxes, so mirror the failing test ids as annotations (which
+      # are API-readable). Remove once the intermittent `test` failure is
+      # identified and fixed.
+      - name: Report failing tests as annotations
+        if: failure()
+        run: |
+          fails=$(grep -E "^(FAILED|ERROR)" pytest.log | head -n 20 || true)
+          if [ -z "$fails" ]; then
+            echo "::error::pytest failed with no FAILED/ERROR lines (collection error or crash?)"
+            tail -n 15 pytest.log | tr '\n' ' ' | sed 's/^/::error::tail: /'
+          else
+            echo "$fails" | sed 's/^/::error::/'
+          fi
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
