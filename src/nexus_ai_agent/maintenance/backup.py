@@ -142,8 +142,7 @@ def _verify_postgres_dump(dump_path: Path) -> dict[str, Any]:
         raise RuntimeError("pg_dump artifact is empty")
     if not data.rstrip().endswith(_PG_DUMP_FOOTER.encode()):
         raise RuntimeError(
-            "pg_dump artifact is truncated or failed mid-run "
-            f"(missing footer {_PG_DUMP_FOOTER!r})"
+            f"pg_dump artifact is truncated or failed mid-run (missing footer {_PG_DUMP_FOOTER!r})"
         )
     return {"engine": "postgres", "footer": "present"}
 
@@ -227,9 +226,7 @@ def create_backup(*, settings: Settings, dry_run: bool = False) -> dict[str, Any
 
         asyncio.run(provider.upload(local_path=dump_path, remote_key=key))
         verification.update(
-            _verify_round_trip(
-                provider, key=key, local_path=dump_path, expected_sha256=sha256
-            )
+            _verify_round_trip(provider, key=key, local_path=dump_path, expected_sha256=sha256)
         )
 
     summary.update(

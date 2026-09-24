@@ -198,9 +198,7 @@ def _dispatch(
     try:
         result = bus.dispatch(command)
     except Exception as exc:
-        raise CreativeRenderError(
-            "invalid_request", f"{type(exc).__name__}: {exc}"
-        ) from exc
+        raise CreativeRenderError("invalid_request", f"{type(exc).__name__}: {exc}") from exc
     return dict(result.output or {})
 
 
@@ -499,9 +497,7 @@ async def creative_render_job(payload: dict[str, Any]) -> dict[str, Any]:
     except CreativeRenderError as exc:
         logger.warning("creative_render_typed_failure", code=exc.code, detail=exc.detail)
         return {"success": False, "error_code": exc.code, "error_detail": exc.detail}
-    logger.info(
-        "creative_render_done", operation=data.operation, sha256=result["sha256"][:26]
-    )
+    logger.info("creative_render_done", operation=data.operation, sha256=result["sha256"][:26])
     result.pop("_artifact_probe", None)
     return result
 

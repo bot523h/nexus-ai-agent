@@ -74,9 +74,7 @@ def _settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, db_rows: int = 3)
 
 
 def _provider(settings: Any, fake: _FakeR2, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "nexus_ai_agent.maintenance.backup._build_provider", lambda settings: fake
-    )
+    monkeypatch.setattr("nexus_ai_agent.maintenance.backup._build_provider", lambda settings: fake)
 
 
 # ── the core contract: success must be verified, not asserted ────────────────
@@ -94,11 +92,14 @@ def test_backup_summary_is_verified_by_round_trip(
     assert summary["uploaded"] is True
     assert summary["verified"] is True, "success without verification is the main bug"
     assert summary["size_bytes"] > 0, "empty artifact must never read as success"
-    assert summary["sha256"] == hashlib.sha256(
-        fake.objects[summary["key"]].read_bytes()
-        if isinstance(fake.objects[summary["key"]], Path)
-        else fake.objects[summary["key"]]
-    ).hexdigest()
+    assert (
+        summary["sha256"]
+        == hashlib.sha256(
+            fake.objects[summary["key"]].read_bytes()
+            if isinstance(fake.objects[summary["key"]], Path)
+            else fake.objects[summary["key"]]
+        ).hexdigest()
+    )
     assert summary.get("timestamp"), "success must be timestamped"
     assert summary["verification"]["integrity"] == "ok"
     assert summary["verification"]["tables"]["jobs"] == 3
@@ -165,8 +166,8 @@ def test_postgres_dump_verifies_via_sha256_round_trip(
 
     def _fake_pg_dump(url: str, dest: Path) -> None:
         dest.write_bytes(
-        b"-- fake pg dump\nCREATE TABLE t(x);\n-- PostgreSQL database dump complete\n"
-    )
+            b"-- fake pg dump\nCREATE TABLE t(x);\n-- PostgreSQL database dump complete\n"
+        )
 
     monkeypatch.setattr("nexus_ai_agent.maintenance.backup._dump_postgres", _fake_pg_dump)
 
@@ -192,8 +193,9 @@ def test_postgres_dump_rejects_truncated_artifact(
 
     monkeypatch.setattr(
         "nexus_ai_agent.maintenance.backup._dump_postgres",
-        lambda url, dest: 
-        dest.write_bytes(b"-- fake pg dump\n-- PostgreSQL database dump complete\n"),
+        lambda url, dest: dest.write_bytes(
+            b"-- fake pg dump\n-- PostgreSQL database dump complete\n"
+        ),
     )
     with pytest.raises(RuntimeError):
         create_backup(settings=settings)

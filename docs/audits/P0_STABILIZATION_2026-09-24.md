@@ -93,3 +93,78 @@ I **do not** keep hardening the legacy pipeline as an equal, and I **do not** de
 ---
 
 *(Implementation evidence, test matrix and the release gate are appended in the delivery section of this document.)*
+
+---
+
+## DELIVERY STATUS (end of stabilization day, 2026-09-24)
+
+Board claims: `task-165` (P0-A), `task-166` (P0-B), `task-167` (P0-C), zone
+`p0-stabilization`, branch `arena/01a0d23e-nexus-ai-agent`. task-106 is marked
+**done — absorbed** into task-166; task-164 is narrowed to **owner-secrets +
+real dispatch proof** (repo-side fix landed in task-167).
+Decision record: `docs/DECISION_LOG.md` r8 (D-0010/0011/0012).
+
+### P0-A — legacy `/creative/*` HTTP lane: harden + deprecate-track (DELIVERED)
+
+- GET is now behind the same fail-closed HMAC gate as POST: **401** unsigned /
+  stale / wrong-key; **503** when `NEXUS_API_HMAC_KEY` is unset. Repro refuted:
+  the original "200 to any unsigned caller" transcript is dead.
+- `_MAX_UPLOAD_BYTES = 500 MiB`; multipart bodies over the cap die **413**
+  aborning the job row, with partial temp files unlinked on any failure.
+- Both routes are `deprecated=True` (OpenAPI); removal is sequenced after
+  PR#58's SSRF scope merges (D-0010).
+- Architecture ratchet added (`tests/architecture/test_legacy_creative_boundary.py`):
+  exact `/creative` route set frozen; importer whitelist for
+  `job_registry / video_director / ffmpeg_executor`; both handlers must call
+  the HMAC gate.
+- **Not re-implemented (by design):** the POST downloader SSRF guard — PR#58
+  delivers it; merge-file proof in this doc shows my edits are conflict-free
+  with theirs (`git merge-file` exit 0, 0 conflict hunks).
+- Tests: `test_security_hardening.py` (+GET auth matrix, +413), plus the two
+  updated suites — **23 passed** (targeted), 5 architecture ratchets passed.
+
+### P0-B — creative studio surface wiring (DELIVERED)
+
+- Chain live end-to-end: mapper → staging → `JobQueuePort.enqueue(creative_render,
+  idempotency=message identity)` → `worker.py` registration →
+  `creative/render_jobs.py` (trust-boundary containment + packs registry +
+  CommandBus + lane + probe/sha256) → completion notify in `bot/app.py`
+  (translated, typed failures, workspace ownership/cleanup).
+- Honest op matrix: `edit trim|speed|reverse`, `grade exposure|proxy|otio`,
+  `caption transcribe`; `lut`/`burnin` refused typed at the surface AND in the
+  worker map — never faked; caption chains fail closed typed without the
+  `[speech]` engine (OTIO + caption→SRT deliver real document artifacts).
+- i18n: 17 `creative.*` keys × 15 locales (parity gate green); a raw key can
+  no longer leak to Telegram.
+- Real-execution tests render 2-second clips through the whole chain via the
+  imageio-ffmpeg static binary (trim ~1 s artifacts measured, speed 2x ≈ 1 s,
+  reverse ≈ 2 s, exposure, 480p proxy height=480, OTIO schema+clips, SRT cues).
+- Tests: `test_creative_surface.py` (14), `test_creative_render_jobs.py` (13),
+  `test_creative_notify.py` (4), `tests/architecture/test_creative_channels.py`
+  (5), `test_i18n_parity.py` — **all green**.
+- UNVERIFIED (external dep): a real PTB application boot against the live
+  Telegram API — out of scope, marked not a PASS.
+
+### P0-C — verifiable backups (DELIVERED, repo-side)
+
+- Success contract enforced in `maintenance/backup.py`: artifact exists AND
+  non-empty AND sha256-measured AND locally verified (SQLite: restore into
+  isolated temp DB → `PRAGMA integrity_check` + user-table inventory — the
+  silent-empty-dump masquerade is rejected; PostgreSQL: pg_dump completion
+  footer + non-empty) AND post-upload round-trip byte-identity; any mismatch
+  hard-fails the run. Failure ⇒ non-zero; success ⇒ summary + structured log
+  carry sha256/size/verified/timestamp. No new tooling; no `storage/` change
+  (`R2Provider.download` already existed).
+- Tests: `tests/unit/test_maintenance_backup.py` — **6 passed** (in-memory R2
+  fake + real SQLite).
+- **Residual (owner-side, task-164 kept open):** R2 repository secrets must be
+  configured in GitHub Actions; then one `workflow_dispatch` proves the real
+  end-to-end run. Until that runs green, "nightly backups exist" remains
+  UNKNOWN (not asserted).
+
+### Residual / follow-up queue (honest)
+
+1. PR#58 merge + legacy-lane removal PR (D-0010 reopen clause).
+2. Real dispatch proof of the backup job once secrets exist (task-164).
+3. Lane LUT + subtitles instruments (would un-refuse `lut`/`burnin`).
+4. PTB-runtime smoke of the three commands on staging (external).

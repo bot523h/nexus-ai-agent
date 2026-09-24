@@ -123,10 +123,7 @@ class CreativeSurfaceMapper:
                 CreativeErrorCode.NOT_REPLIED,
                 message_key="creative.not_replied",
             )
-        if (
-            req.media_duration_s is not None
-            and req.media_duration_s * 1_000_000 > MAX_DURATION_US
-        ):
+        if req.media_duration_s is not None and req.media_duration_s * 1_000_000 > MAX_DURATION_US:
             return CreativeFailure(
                 CreativeErrorCode.LIMIT_EXCEEDED,
                 message_key="creative.limit_exceeded",
@@ -277,9 +274,7 @@ def build_creative_handlers(
         )
         mapped = _mapper.map(req)
         if isinstance(mapped, CreativeFailure):
-            logger.info(
-                "creative_request_rejected", command=command, code=mapped.code.value
-            )
+            logger.info("creative_request_rejected", command=command, code=mapped.code.value)
             await _reply(update, _failure_text(mapped, lang, command))
             return
 

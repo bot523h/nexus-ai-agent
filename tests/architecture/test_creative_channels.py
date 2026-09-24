@@ -72,9 +72,7 @@ def test_worker_routes_creative_render() -> None:
     assert '"creative_render"' in {repr(s) for s in _strings(tree)} or (
         "creative_render" in _strings(tree)
     )
-    assert "creative_render_job" in {
-        n.id for n in ast.walk(tree) if isinstance(n, ast.Name)
-    }
+    assert "creative_render_job" in {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
 
 
 def test_composition_root_registers_the_queue_handler() -> None:
