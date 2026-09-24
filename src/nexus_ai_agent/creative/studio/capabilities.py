@@ -22,15 +22,19 @@ guarantee atomicity (a failing handler leaves the central state untouched).
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field as dc_field
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from nexus_ai_agent.creative.studio.models import (
+    CapabilityError,
+    CapabilitySnapshot,
+    CapabilityVersionError,
     Clip,
     CommandValidationError,
     EditTransaction,
@@ -41,6 +45,7 @@ from nexus_ai_agent.creative.studio.models import (
     TimeRangeUS,
     TypedCommand,
     UndoStackEmptyError,
+    UnknownCapabilityError,
     UnknownOperationError,
     frame_number_for,
 )
@@ -64,6 +69,15 @@ class OperationContext:
 
 
 OperationHandler = Callable[[Project, OperationContext], OperationOutcome]
+ExecutionMode = Literal["local", "preview"]
+_VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+
+
+def _semver(version: str) -> tuple[int, int, int]:
+    match = _VERSION.fullmatch(version)
+    if match is None:
+        raise ValueError(f"invalid capability version: {version!r} (expected MAJOR.MINOR.PATCH)")
+    return int(match[1]), int(match[2]), int(match[3])
 
 
 @dataclass(frozen=True)
@@ -76,11 +90,26 @@ class OperationSpec:
     reference_fields: tuple[str, ...] = ()
     required_packs: tuple[str, ...] = ()
     deterministic: bool = True
+    schema_version: int = 1
+    execution_modes: tuple[ExecutionMode, ...] = ("local",)
+    required_permissions: tuple[str, ...] = ()
+
+    @property
+    def effective_permissions(self) -> tuple[str, ...]:
+        baseline = (
+            "project:read"
+            if self.permission_level is PermissionLevel.IMMEDIATE
+            else "project:write"
+        )
+        return tuple(sorted({baseline, *self.required_permissions}))
 
 
 @dataclass
 class Capability:
     name: str
+    capability_id: str
+    version: str = "1.0.0"
+    available: bool = True
     description: str = ""
     operations: dict[str, OperationSpec] = dc_field(default_factory=dict)
 
@@ -92,6 +121,33 @@ class Domain:
     capabilities: dict[str, Capability] = dc_field(default_factory=dict)
 
 
+class CapabilityDescription(BaseModel):
+    """Authoritative, JSON-serializable registry view for API/local clients."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    capability_id: str
+    version: str
+    operations: tuple[str, ...]
+    operation: str
+    operation_schema_version: int
+    operation_schema: dict[str, Any]
+    available: bool
+    execution_modes: tuple[ExecutionMode, ...]
+    required_permissions: tuple[str, ...]
+    required_packs: tuple[str, ...]
+    pack_provider: str
+
+    def snapshot(self) -> CapabilitySnapshot:
+        return CapabilitySnapshot(
+            capability_id=self.capability_id,
+            operation=self.operation,
+            version=self.version,
+            operation_schema_version=self.operation_schema_version,
+            pack_provider=self.pack_provider,
+        )
+
+
 @dataclass(frozen=True)
 class PermissionDecision:
     operation_id: str
@@ -101,34 +157,114 @@ class PermissionDecision:
 
 
 class CapabilityRegistry:
-    """Domain > Capability > Operation allow-list for the command bus."""
+    """Domain > Capability > Operation; the *only* operation allow-list."""
 
     def __init__(self) -> None:
         self._domains: dict[str, Domain] = {}
         self._index: dict[str, OperationSpec] = {}
         self._domain_of: dict[str, str] = {}
+        self._capability_of: dict[str, Capability] = {}
+        self._capabilities: dict[str, Capability] = {}
 
     def register_domain(self, name: str, description: str = "") -> None:
         self._domains.setdefault(name, Domain(name=name, description=description))
 
-    def register_operation(self, domain: str, capability: str, spec: OperationSpec) -> None:
+    def register_operation(
+        self,
+        domain: str,
+        capability: str,
+        spec: OperationSpec,
+        *,
+        capability_version: str = "1.0.0",
+        available: bool = True,
+    ) -> None:
         if not spec.operation_id.startswith(f"{domain}."):
             raise ValueError(
                 f"operation_id {spec.operation_id!r} does not belong to domain {domain!r}"
             )
         if spec.operation_id in self._index:
             raise ValueError(f"duplicate operation: {spec.operation_id!r}")
+        if spec.input_model.model_config.get("extra") != "forbid":
+            raise ValueError(f"{spec.operation_id}: operation schema must forbid extra fields")
+        if spec.schema_version < 1 or not spec.execution_modes:
+            raise ValueError(f"{spec.operation_id}: invalid schema version or execution modes")
+        if any(mode not in ("local", "preview") for mode in spec.execution_modes):
+            raise ValueError(f"{spec.operation_id}: unknown execution mode")
+        _semver(capability_version)
+        capability_id = f"{domain}.{capability}"
         dom = self._domains.setdefault(domain, Domain(name=domain))
-        cap = dom.capabilities.setdefault(capability, Capability(name=capability))
+        cap = dom.capabilities.get(capability)
+        if cap is None:
+            cap = Capability(
+                name=capability,
+                capability_id=capability_id,
+                version=capability_version,
+                available=available,
+            )
+            dom.capabilities[capability] = cap
+            self._capabilities[capability_id] = cap
+        elif cap.version != capability_version or cap.available != available:
+            raise ValueError(f"{capability_id}: conflicting capability version/availability")
         cap.operations[spec.operation_id] = spec
         self._index[spec.operation_id] = spec
         self._domain_of[spec.operation_id] = domain
+        self._capability_of[spec.operation_id] = cap
 
     def get_spec(self, operation_id: str) -> OperationSpec:
         try:
             return self._index[operation_id]
         except KeyError:
             raise UnknownOperationError(f"unknown operation: {operation_id!r}") from None
+
+    def get_capability(self, capability_id: str) -> Capability:
+        try:
+            return self._capabilities[capability_id]
+        except KeyError:
+            raise UnknownCapabilityError(f"unknown capability: {capability_id!r}") from None
+
+    def describe(self, operation_id: str) -> CapabilityDescription:
+        spec = self.get_spec(operation_id)
+        cap = self._capability_of[operation_id]
+        return CapabilityDescription(
+            capability_id=cap.capability_id,
+            version=cap.version,
+            operations=tuple(sorted(cap.operations)),
+            operation=operation_id,
+            operation_schema_version=spec.schema_version,
+            operation_schema=spec.input_model.model_json_schema(),
+            available=cap.available,
+            execution_modes=spec.execution_modes,
+            required_permissions=spec.effective_permissions,
+            required_packs=spec.required_packs,
+            pack_provider=spec.required_packs[0] if spec.required_packs else "nagar.core",
+        )
+
+    def check_capability(self, command: TypedCommand) -> CapabilityDescription:
+        """Treat the client's snapshot as a hint, never as a declaration."""
+        descriptor = self.describe(command.operation)
+        snapshot = command.capability_snapshot
+        if snapshot is not None:
+            self.get_capability(snapshot.capability_id)  # unknown id fails separately
+            if (
+                snapshot.capability_id != descriptor.capability_id
+                or snapshot.operation != command.operation
+            ):
+                raise CapabilityError("capability snapshot does not match the requested operation")
+            if snapshot.pack_provider != descriptor.pack_provider:
+                raise CapabilityError("capability snapshot has a forged provider")
+            required = _semver(snapshot.version)
+            installed = _semver(descriptor.version)
+            if required[0] != installed[0] or required > installed:
+                raise CapabilityVersionError(
+                    "capability version is not compatible with this runtime"
+                )
+            if snapshot.operation_schema_version != descriptor.operation_schema_version:
+                raise CapabilityVersionError(
+                    "capability snapshot has an incompatible operation schema"
+                )
+        if not descriptor.available:
+            raise CapabilityError(f"capability is unavailable: {descriptor.capability_id}")
+        return descriptor
 
     def check_permission(self, operation_id: str, *, confirmed: bool = False) -> PermissionDecision:
         spec = self.get_spec(operation_id)
@@ -431,6 +567,7 @@ def build_wave1_registry() -> CapabilityRegistry:
             permission_level=PermissionLevel.IMMEDIATE,
             input_model=UndoCommandInput,
             handler=_system_undo,
+            required_permissions=("project:write",),
             deterministic=True,
         ),
     )

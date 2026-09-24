@@ -331,7 +331,7 @@ def _delivery_bus() -> CommandBus:
     timeline = Timeline(timeline_id="tl_wave5", duration_us=4_000_000)
     project: Project = new_project("p_wave5_signing_cov", "Coverage Project", timeline)
     project = project.model_copy(update={"assets": [video, audio]})
-    return CommandBus(project, registry=registry)
+    return CommandBus(project, registry=registry, allow_experimental=True)
 
 
 def test_apply_lut_unknown_asset_rejected() -> None:

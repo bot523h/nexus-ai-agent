@@ -1,6 +1,7 @@
 # NEXUS AI — Architecture Decision Log
 
-**Status:** Canonical historical record; revision 8 effective 2026-09-24  
+**Status:** Canonical historical record; revision 9 effective 2026-09-24  
+**r9 scope:** Gate 2 canonical command + capability reconciliation, board task-179 (session `arena/01a0d43c-nexus-ai-agent`): the v1/v2 contract conflict resolved to one canonical contract (D-0013); see `architecture/COMMAND_CAPABILITY_CONTRACT.md` and `architecture/adr/0005-canonical-command-capability-contract.md` for evidence, scoring, and limits.  
 **r8 scope:** owner-directed P0 stabilization day (session `arena/01a0d23e-nexus-ai-agent`, board claims task-165/166/167): the legacy `/creative/*` HTTP lane disposition (D-0010), wiring the creative studio surface onto the canonical chain (D-0011), and verifiable backup success (D-0012). Evidence root: `docs/audits/P0_STABILIZATION_2026-09-24.md`.
 
 **Scope:** Architectural, operational, and roadmap decisions from Phase 0 through the released v3.13.0 baseline (P0 week-1 security batch + feature-engine wiring), the accepted Phase 6 Nagar design, the implemented Nagar Waves 1–3 (2a substrate, 2b pack, 2c render lane, 3 image generation) and the owner decisions that sequence what comes next.  
@@ -1251,3 +1252,95 @@ observed RenderError path — repository behavior wins over its old docstring), 
 harness `scripts/gate5_mutation_probes.py`: 6/6 probes (remove verification / force COMPLETED on
 typed failure / skip atomic publish / drop job_id / notifier trusts result.success / bypass
 failure_status) each GREEN→RED→restore→SHA-restored→GREEN.
+
+---
+
+## 2026-09-24 — D-0013: one canonical Nagar command + capability contract (Gate 2 reconciliation)
+
+**Status:** Accepted on branch `arena/01a0d43c-nexus-ai-agent` (board task-179);
+contract page
+[`architecture/COMMAND_CAPABILITY_CONTRACT.md`](architecture/COMMAND_CAPABILITY_CONTRACT.md),
+governance record
+[`architecture/adr/0005-canonical-command-capability-contract.md`](architecture/adr/0005-canonical-command-capability-contract.md);
+tests and CI evidence are recorded separately on the contract page.
+
+*Problem.* Two Gate 2 reports claimed incompatible canonical contracts
+(`schema_version = 2` with external id `nagar.command.v1` and a wired bus vs a
+parallel `Command Envelope v2` with canonical `nagar.command.v2`, a new
+package, and ADR 0005–0008), and the existing `CommandBus` returned cached
+results before checking actor, project, capability, schema, references, or
+payload. Neither report could be accepted without reconciliation against the
+live repository.
+
+*Decision.* Keep `nagar.command.v1` as the external protocol identifier, the
+existing `TypedCommand`, registry, reference resolver, pack handlers, and pure
+handler boundary. Evolve the envelope with schema `1|2` (legacy shape vs
+explicit actor/project/provenance claims), inject a trusted project authorizer
+at composition, and derive schema/version/permissions from the installed
+registry, never from client snapshots. Canonical order: parse → envelope +
+operation schema → actor/project grant → capability/version/permissions →
+execution policy (mode + A/B/C/D) → project-scoped references → idempotency
+reservation (project, operation, key) with fingerprint conflict → revision
+preconditions on new work → pure handler and atomic commit. Same key +
+different payload is a deterministic `IdempotencyConflictError`; claim-less
+schema-1 commands without an authorizer keep dispatching under deprecated
+implicit local trust so the runtime-owned call sites work unchanged. No
+second bus, no second resolver, no parallel envelope package, no protocol
+rename, no database migration. The `v2` protocol id is refused at parse and
+banned from `src/` by guard.
+
+*Limits.* The bus reservation is per-bus in-memory: no cross-process,
+cross-instance, or post-restart claim. The durable SQLite queue still returns
+the original job id for a reused key without comparing payloads (lifecycle
+follow-up, board task-182). A project asset record is logical membership, not
+physical file existence. Explicit service grants at the three runtime call
+sites are the runtime owner's follow-up (board task-181); until then the
+implicit local path cannot be retired. Integration with PR#67's
+`required_packs`/lifecycle bus gate is NOT VERIFIED (board task-183; seam at
+stage 4). The `preview` execution mode is reserved surface without an
+implementation.
+
+*Rejected alternatives.* (B) Agent 2's parallel v2 envelope (no bus
+integration, duplicated models, hardcoded operation snapshot, gate
+weakening, no PR); (C) a minimal additive change with unenforced
+authorization; (D) a full `v2` protocol cutover across manifests and logs;
+(A′) PR#68 verbatim (required claims breaking runtime-owned call sites).
+Scored in ADR 0005; salvageable Agent-2 ideas (advisory snapshots,
+fail-closed locality, preview surface, the matrix question) folded into this
+contract, and PR#68's queue hardening plus runtime call-site migrations stay
+valid follow-ups for their lanes.
+
+*Reopens when* an authenticated multi-user project store, a durable
+cross-process reservation adapter, or the PR#67 lifecycle integration lands;
+publish a versioned migration plan and exercise redelivery/crash recovery
+before claiming exactly-once or production-grade durability.
+
+### D-0013 amendment (task-183): lifecycle seam integrated at stage 4b
+
+The *Limits* line above ("Integration with PR#67's `required_packs`/lifecycle
+bus gate is NOT VERIFIED … seam at stage 4") is superseded. PR#67's
+`creative/studio/lifecycle.py` is consumed byte-identical (`9c3a34f`) and
+called exactly once, at sub-stage **4b**: after the actor/project grant and
+capability permissions, before execution policy, reference validation, the
+idempotency reservation, preconditions and the handler. Refusals: unknown,
+`STUB`, `RETIRED`, and `EXPERIMENTAL` without the opt-in.
+
+*Trust boundary.* The opt-in is composition-root state
+(`CommandBus(..., allow_experimental=...)`), never an envelope field and
+never a queue-row field. The render worker, the only production site that
+sets it, derives it from the canonical operation via
+`render_jobs.EXPERIMENTAL_OPT_IN_OPERATIONS`, which is pinned to exactly the
+surface operations on an `EXPERIMENTAL` pack. An earlier revision carried it
+as `CreativeRenderPayload.allow_experimental`. That let whoever wrote the queue
+row choose lifecycle policy, so it was replaced before merge.
+
+*Merge with PR#67.* The merge is semantic, not just textual. Keep stage 4b,
+drop PR#67's stage-3.5 call and its payload/surface flag, and add
+`color.apply_lut` to the opt-in set. The architecture guards and the
+opt-in-completeness test go red on any other resolution.
+
+*Evidence.* `tests/unit/test_gate2_lifecycle_seam.py`,
+`tests/unit/test_gate2_lifecycle_mutations.py`,
+`tests/unit/test_capability_lifecycle.py`,
+`tests/architecture/test_lifecycle_gate_boundary.py`, and the task-183
+trust-boundary tests in `tests/unit/test_creative_render_jobs.py`.
