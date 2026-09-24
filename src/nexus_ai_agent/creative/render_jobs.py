@@ -24,6 +24,7 @@ Nothing here imports Telegram; the worker runs outside the bot process.
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 from pathlib import Path
 from typing import Any, Literal
@@ -40,19 +41,28 @@ WORKSPACE_PREFIX = "creative_"
 SOURCE_ASSET_ID = "src"
 
 #: Surface (command, operation) → canonical packs operation id (closed set —
-#: this map *is* the surface's promise). ``lut``/``burnin`` are deliberately
-#: absent: neither has an honest execution path today (CREATIVE_STUDIO §7 —
-#: no shipped .cube assets / no lane instrument) and both are refused at the
-#: mapper; anything hand-queued dies here as ``unsupported_operation``.
+#: this map *is* the surface's promise).  Session 3 adds ``lut``/``burnin``:
+#: shipped ``.cube`` assets (``creative.luts``) and the ``lut``/``subtitle``
+#: lane instruments now give both an honest execution path (CREATIVE_STUDIO
+#: §7).  Anything hand-queued outside this map dies as ``unsupported_operation``.
 SURFACE_TO_CANONICAL: dict[tuple[str, str], str] = {
     ("edit", "trim"): "timeline.trim",
     ("edit", "speed"): "timeline.speed_ramp",
     ("edit", "reverse"): "timeline.reverse_segment",
     ("caption", "transcribe"): "caption.transcribe",
+    ("caption", "burnin"): "caption.burn_in",
     ("grade", "exposure"): "color.adjust_exposure",
+    ("grade", "lut"): "color.apply_lut",
     ("grade", "proxy"): "delivery.make_proxy_480p",
     ("grade", "otio"): "delivery.export_otio",
 }
+
+#: Asset id of the worker-staged caption file inside a burnin job project.
+JOB_CAPTION_ASSET_ID = "job-caption"
+
+#: Max caption text a burnin job stages (single SRT line; longer text is a
+#: different job shape, not a silent truncation).
+BURNIN_MAX_TEXT_CHARS = 500
 
 #: Typed failure codes surfaced to users via ``creative.failed.<code>``.
 ERROR_CODES: frozenset[str] = frozenset(
@@ -94,6 +104,11 @@ class CreativeRenderPayload(BaseModel):
     chat_id: int
     lang: str = "en"
     idempotency_key: str = Field(min_length=1)
+    allow_experimental: bool = False
+    """Per-job opt-in for EXPERIMENTAL packs (delivery/audio/motion/vision).
+
+    The bus lifecycle gate (step 3.5) refuses experimental packs without it;
+    queueing a job with this flag is the explicit operator act."""
 
 
 # ---------------------------------------------------------------------------
@@ -137,9 +152,16 @@ def _guarded_input(payload: CreativeRenderPayload, workspace: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def _build_project(*, payload: CreativeRenderPayload, duration_us: int, sha256: str) -> Any:  # noqa: ANN401
+def _build_project(  # noqa: ANN401
+    *,
+    payload: CreativeRenderPayload,
+    duration_us: int,
+    sha256: str,
+    caption_sha256: str | None = None,
+) -> Any:
     """One asset ("src") + an empty main timeline — the minimal central state
-    a pack operation can lawfully mutate."""
+    a pack operation can lawfully mutate.  Burnin jobs additionally register
+    the staged SRT (its real file hash) as the caption asset."""
     from nexus_ai_agent.creative.studio.models import (
         AssetRecord,
         Playhead,
@@ -171,7 +193,21 @@ def _build_project(*, payload: CreativeRenderPayload, duration_us: int, sha256: 
             "operation": payload.operation,
         },
     )
-    return project.model_copy(update={"assets": [src]})
+    assets = [src]
+    if caption_sha256 is not None:
+        caption = AssetRecord(
+            asset_id=JOB_CAPTION_ASSET_ID,
+            media_kind="caption",
+            content_sha256=caption_sha256,
+            duration_us=duration_us,
+            parent_asset_ids=(),
+            provenance={
+                "origin": "worker.staged_srt",
+                "idempotency_key": payload.idempotency_key,
+            },
+        )
+        assets.append(caption)
+    return project.model_copy(update={"assets": assets})
 
 
 def _dispatch(
@@ -180,20 +216,56 @@ def _dispatch(
     operation: str,
     input_data: dict[str, Any],
     idempotency_key: str,
+    allow_experimental: bool = False,
+    confirmed: bool = False,
 ) -> dict[str, Any]:
     """Registry lookup → bus dispatch. Bad args become typed
     ``invalid_request`` (a retry with the same payload fails identically)."""
     from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+    from nexus_ai_agent.creative.studio.authorization import ProjectAccess
     from nexus_ai_agent.creative.studio.bus import CommandBus
-    from nexus_ai_agent.creative.studio.models import TargetRef, TypedCommand
+    from nexus_ai_agent.creative.studio.models import (
+        ActorIdentity,
+        CommandProvenance,
+        InputRef,
+        InputRefMetadata,
+        RequestContext,
+        TargetRef,
+        TypedCommand,
+    )
 
-    bus = CommandBus(state=project, registry=build_runtime_registry())
+    # A queued payload's user_id/project_id is *not* authentication. This
+    # worker owns the ephemeral per-job project; only its fixed service actor
+    # receives a grant. The Telegram edge authenticates the human separately.
+    worker = ActorIdentity(kind="service", actor_id="nagar.creative-render-worker")
+    bus = CommandBus(
+        state=project,
+        registry=build_runtime_registry(),
+        authorizer=ProjectAccess(
+            actor=worker,
+            project_id=project.project_id,
+            permissions=frozenset({"project:read", "project:write"}),
+        ),
+        allow_experimental=allow_experimental,
+    )
     command = TypedCommand(
         command_id=f"cmd-{idempotency_key}-{operation}",
+        actor=worker,
+        provenance=CommandProvenance(source="service", source_id="creative_render"),
+        request_context=RequestContext(channel="telegram", request_id=idempotency_key),
         operation=operation,
         input=input_data,
+        input_refs=(
+            InputRef(
+                ref_type="asset",
+                project_id=project.project_id,
+                ref_id=SOURCE_ASSET_ID,
+                metadata=InputRefMetadata(media_kind="video"),
+            ),
+        ),
         target=TargetRef(project_id=project.project_id, track_id="main"),
         idempotency_key=idempotency_key,
+        confirmed=confirmed,
     )
     try:
         result = bus.dispatch(command)
@@ -230,6 +302,21 @@ def _operation_inputs(payload: CreativeRenderPayload, duration_us: int) -> dict[
         return {"clip_asset_id": SOURCE_ASSET_ID}
     if payload.operation == "exposure":
         return {"clip_asset_id": SOURCE_ASSET_ID, "exposure_ev": _seconds_args(payload, 0, 0.0)}
+    if payload.operation == "lut":
+        lut_name = payload.args[0] if payload.args else "warm"
+        intensity = _seconds_args(payload, 1, 1.0)
+        return {
+            "clip_asset_id": SOURCE_ASSET_ID,
+            "lut_name": lut_name,
+            "intensity": intensity,
+        }
+    if payload.operation == "burnin":
+        _burnin_text(payload)  # validates now; the branch stages the SRT
+        return {
+            "video_asset_id": SOURCE_ASSET_ID,
+            "caption_asset_id": JOB_CAPTION_ASSET_ID,
+            "confirmed": True,
+        }
     if payload.operation == "proxy":
         return {"video_asset_id": SOURCE_ASSET_ID, "output_asset_id": "proxy-480p"}
     if payload.operation == "otio":
@@ -237,16 +324,58 @@ def _operation_inputs(payload: CreativeRenderPayload, duration_us: int) -> dict[
     raise CreativeRenderError("unsupported_operation", payload.operation)
 
 
+def _burnin_text(payload: CreativeRenderPayload) -> str:
+    """The single caption line a burnin job burns (validated, never truncated)."""
+    raw = payload.args[0] if payload.args else ""
+    text = raw.strip()
+    if not text:
+        raise CreativeRenderError("invalid_request", "burnin needs caption text in args[0]")
+    if len(text) > BURNIN_MAX_TEXT_CHARS:
+        raise CreativeRenderError(
+            "invalid_request",
+            f"burnin text is {len(text)} chars (max {BURNIN_MAX_TEXT_CHARS})",
+        )
+    if "\n" in text:
+        raise CreativeRenderError("invalid_request", "burnin stages one line (no newlines)")
+    return text
+
+
+def _srt_timestamp(micros: int) -> str:
+    total_ms = max(micros, 0) // 1000
+    hours, rem = divmod(total_ms, 3_600_000)
+    minutes, rem = divmod(rem, 60_000)
+    seconds, millis = divmod(rem, 1000)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
+
+
+def _stage_burnin_srt(*, text: str, duration_us: int, workspace: Path) -> Path:
+    """Stage the burnin caption as a real SRT file covering the full media."""
+    if duration_us <= 0:
+        raise CreativeRenderError("invalid_request", "burnin needs positive media duration")
+    staged = workspace / "caption.srt"
+    staged.write_text(
+        f"1\n{_srt_timestamp(0)} --> {_srt_timestamp(duration_us)}\n{text}\n",
+        encoding="utf-8",
+    )
+    return staged
+
+
 def _lane_ops(
-    payload: CreativeRenderPayload, canonical_id: str, duration_us: int
+    payload: CreativeRenderPayload,
+    canonical_id: str,
+    duration_us: int,
+    *,
+    staged_subtitle: Path | None = None,
 ) -> tuple[list[Any], Any | None]:  # noqa: ANN401
     """Lane-IR instrumentation matching the canonical operation one-to-one.
     Trim is clamped to the measured duration — the media is the truth."""
     from nexus_ai_agent.creative.rendering.ir import (
         ExposureOp,
         LaneProfile,
+        LutOp,
         ReverseOp,
         SpeedOp,
+        SubtitleOp,
         TrimOp,
     )
 
@@ -267,6 +396,24 @@ def _lane_ops(
         return [ReverseOp()], None
     if canonical_id == "color.adjust_exposure":
         return [ExposureOp(exposure_ev=_seconds_args(payload, 0, 0.0))], None
+    if canonical_id == "color.apply_lut":
+        from nexus_ai_agent.creative.luts import LutError, resolve_lut
+
+        lut_name = payload.args[0] if payload.args else "warm"
+        intensity = _seconds_args(payload, 1, 1.0)
+        try:
+            lut_path = resolve_lut(lut_name)
+        except LutError as exc:
+            raise CreativeRenderError("invalid_request", f"unknown LUT: {exc}") from exc
+        try:
+            op = LutOp(lut_name=lut_name, lut_path=str(lut_path), intensity=intensity)
+        except Exception as exc:
+            raise CreativeRenderError("invalid_request", f"bad LUT intensity: {exc}") from exc
+        return [op], None
+    if canonical_id == "caption.burn_in":
+        if staged_subtitle is None or not staged_subtitle.is_file():
+            raise CreativeRenderError("invalid_request", "burnin has no staged subtitle file")
+        return [SubtitleOp(subtitle_path=str(staged_subtitle))], None
     if canonical_id == "delivery.make_proxy_480p":
         return [], LaneProfile(width=854, height=480)
     raise CreativeRenderError("unsupported_operation", canonical_id)
@@ -319,20 +466,41 @@ async def _run_render_branch(
         raise CreativeRenderError("invalid_request", f"unreadable media: {exc}") from exc
     duration_us = payload.media_duration_us or probed.duration_us
 
+    # 0) burnin stages its caption file first: the project registers the SRT's
+    # real hash and the lane burns the same file — one staged artifact, no drift.
+    staged_subtitle: Path | None = None
+    caption_sha256: str | None = None
+    if canonical_id == "caption.burn_in":
+        staged_subtitle = _stage_burnin_srt(
+            text=_burnin_text(payload), duration_us=duration_us, workspace=workspace
+        )
+        caption_sha256 = sha256_file(staged_subtitle)
+
     sha256 = sha256_file(input_path)
-    project = _build_project(payload=payload, duration_us=duration_us, sha256=sha256)
+    project = _build_project(
+        payload=payload,
+        duration_us=duration_us,
+        sha256=sha256,
+        caption_sha256=caption_sha256,
+    )
 
     # 1) canonical operation (state mutation + history + measured record)
+    # Queueing a Level-C job IS the explicit user confirmation, so burnin
+    # dispatches confirmed; anything else keeps the default (unconfirmed).
     output = _dispatch(
         project,
         operation=canonical_id,
         input_data=_operation_inputs(payload, duration_us),
         idempotency_key=payload.idempotency_key,
+        allow_experimental=payload.allow_experimental,
+        confirmed=canonical_id == "caption.burn_in",
     )
     render_project = project  # lane instrumentation below mirrors the SAME op
 
     # 2) render lane (measured artifact, allow-listed binary)
-    lane_ops_raw, profile = _lane_ops(payload, canonical_id, duration_us)
+    lane_ops_raw, profile = _lane_ops(
+        payload, canonical_id, duration_us, staged_subtitle=staged_subtitle
+    )
     media_paths = {SOURCE_ASSET_ID: str(input_path)}
     try:
         ir = lane_ir_from_project(
@@ -343,8 +511,11 @@ async def _run_render_branch(
 
     out_path = workspace / "output.mp4"
     out_path.unlink(missing_ok=True)
+    # Subtitle fonts resolve like the ffprobe binary: explicit env override,
+    # else libass system fonts (documented in CREATIVE_RUNTIME §fonts).
+    fontsdir = os.environ.get("NEXUS_FONTS_DIR") or None
     try:
-        artifact = render_lane(ir, out_path, binary=binary, overwrite=True)
+        artifact = render_lane(ir, out_path, binary=binary, overwrite=True, fontsdir=fontsdir)
     except Exception as exc:
         raise CreativeRenderError("render_failed", f"{type(exc).__name__}: {exc}") from exc
 
@@ -378,6 +549,7 @@ async def _run_otio_branch(payload: CreativeRenderPayload, workspace: Path) -> d
         operation="delivery.export_otio",
         input_data=_operation_inputs(payload, duration_us),
         idempotency_key=payload.idempotency_key,
+        allow_experimental=payload.allow_experimental,
     )
     otio_text = output.get("otio_json")
     if not isinstance(otio_text, str) or not otio_text.strip():

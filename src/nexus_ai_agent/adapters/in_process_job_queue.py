@@ -87,8 +87,9 @@ class InProcessJobQueue:
     ) -> str:
         """Persist a job and schedule it exactly once for this process.
 
-        Reusing an idempotency key returns the original job id and does not
-        create a second effect.
+        Reusing a key with the *same* job type and payload returns the original
+        job id; reusing it with different work is a conflict, never a silent
+        overwrite. The existing SQLite unique key is the durable reservation.
         """
         normalized = job_type.strip()
         if not normalized:
@@ -96,13 +97,17 @@ class InProcessJobQueue:
         if not idempotency_key.strip():
             raise ValueError("idempotency_key must not be empty")
 
-        job_id = await asyncio.to_thread(
+        job_id, created = await asyncio.to_thread(
             self._insert_or_get,
             normalized,
             idempotency_key,
             payload,
         )
-        self._schedule(job_id)
+        # A retry in another adapter instance must not schedule the same row
+        # while its original owner is processing it. Crash recovery uses the
+        # explicit resume entry point, not re-enqueue's replay path.
+        if created:
+            self._schedule(job_id)
         return job_id
 
     async def get_status(self, job_id: str) -> JobStatus:
@@ -257,21 +262,19 @@ class InProcessJobQueue:
         job_type: str,
         idempotency_key: str,
         payload: dict[str, object],
-    ) -> str:
-        payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    ) -> tuple[str, bool]:
+        payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True, allow_nan=False)
         job_id = uuid4().hex
         with self._db_lock, self._connection() as connection:
-            existing = connection.execute(
-                "SELECT id FROM nexus_job_queue WHERE idempotency_key = ?",
-                (idempotency_key,),
-            ).fetchone()
-            if existing is not None:
-                return str(existing[0])
-            connection.execute(
+            # SQLite's existing UNIQUE(idempotency_key) arbitrates concurrent
+            # adapter instances. A read-then-insert here would race between
+            # processes and could not compare the winning payload reliably.
+            cursor = connection.execute(
                 """
                 INSERT INTO nexus_job_queue
                     (id, job_type, idempotency_key, payload_json, status, created_at)
                 VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(idempotency_key) DO NOTHING
                 """,
                 (
                     job_id,
@@ -282,7 +285,18 @@ class InProcessJobQueue:
                     _now(),
                 ),
             )
-        return job_id
+            inserted = cursor.rowcount == 1
+            existing = connection.execute(
+                "SELECT id, job_type, payload_json FROM nexus_job_queue WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+            if existing is None:  # pragma: no cover - SQLite INSERT/SELECT invariant
+                raise RuntimeError("job reservation disappeared")
+            # Compare canonical JSON text, not Python-decoded values: True == 1
+            # and 1 == 1.0 in Python, but those are different request payloads.
+            if existing["job_type"] != job_type or existing["payload_json"] != payload_json:
+                raise ValueError("idempotency key reused with different job type or payload")
+            return str(existing["id"]), inserted
 
     def _fetch_row(self, job_id: str) -> sqlite3.Row | None:
         with self._db_lock, self._connection() as connection:

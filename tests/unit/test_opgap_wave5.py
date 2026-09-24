@@ -29,6 +29,7 @@ import json
 from pathlib import Path
 
 import pytest
+from nagar_helpers import authorized_bus, command_for
 from pydantic import ValidationError
 
 from nexus_ai_agent.creative.packs.audio.models import (
@@ -58,7 +59,6 @@ from nexus_ai_agent.creative.studio.models import (
     PermissionLevel,
     Project,
     Timeline,
-    TypedCommand,
     new_project,
 )
 
@@ -113,12 +113,12 @@ def _project() -> Project:
 
 
 def _bus(registry) -> CommandBus:  # noqa: ANN001 - test helper
-    return CommandBus(_project(), registry=registry)
+    return authorized_bus(_project(), registry=registry, allow_experimental=True)
 
 
 def _dispatch(bus: CommandBus, operation: str, payload: dict[str, object]) -> object:
     return bus.dispatch(
-        TypedCommand(command_id=f"cmd_{operation}", operation=operation, input=payload)
+        command_for("proj_wave5", command_id=f"cmd_{operation}", operation=operation, input=payload)
     )
 
 
@@ -799,7 +799,9 @@ def test_handlers_never_mutate_the_state_they_receive() -> None:
         spec = registry.get_spec(operation)
         validated = spec.input_model(**payload)
         context = OperationContext(
-            command=TypedCommand(command_id=f"cmd_{operation}", operation=operation, input=payload),
+            command=command_for(
+                "proj_wave5", command_id=f"cmd_{operation}", operation=operation, input=payload
+            ),
             input_data=validated.model_dump(),
             history=(),
         )

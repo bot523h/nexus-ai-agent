@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (session 3 — artifact-producing Creative Runtime, task-177)
+
+- **LUT + subtitle lane twins are real** — shipped `identity`/`warm` 16³ `.cube`
+  looks (`creative/luts/`, strict validation) render through `lut3d` (direct at
+  full intensity, split+blend below), and `caption.burn_in` renders through the
+  `subtitles` instrument with `fontsdir` threading; the plan maps
+  `motion.add_title`/`color.apply_lut`/`caption.burn_in` with typed `PlanError`
+  refusals for unstaged assets (7 currently-executable ops, derived — never
+  hand-claimed).
+- **`grade lut` and `caption burnin` join the honest surface** — the task-166
+  refusal is reversed now that execution paths exist; burnin jobs stage a real
+  SRT (fonts via `NEXUS_FONTS_DIR`) and confirm Level C at queue time.
+- **Fail-closed pack lifecycle gate** — the bus checks `required_packs` at step
+  3.5 against the 4-state machine (`studio/lifecycle.py`): 3 packs `AVAILABLE`,
+  5 `EXPERIMENTAL` (bus- and job-level opt-in), unknown/`STUB`/`RETIRED` refuse.
+- **Artifact truth** (`creative/artifacts.py`) — spec hash, file hash, and
+  content identity are separate digests; `ffprobe`-first probing with a named
+  fallback; verification failures raise and can never report success (NAG-003).
+- **Real OTIO interop** (`creative/interop/otio.py`, extra `[otio]`) — parse and
+  emit with the OpenTimelineIO library; exact round-trip at integer rates.
+- **A→B→C render proof + anti-vacuity battery** — one assembly encode proves
+  segment order, LUT grading, and Persian glyph pixels from sampled frames;
+  mutations M1–M7 and the integer-µs time algebra are pinned by tests.
+
 ### Security (P0 hardening day — session `arena/01a0d23e-nexus-ai-agent`, tasks 165–167)
 
 - **`GET /creative/jobs/{job_id}` is now behind the same fail-closed HMAC gate as the

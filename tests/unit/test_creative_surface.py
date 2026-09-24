@@ -11,7 +11,7 @@ Covers the task-166 (P0-B) regression battery:
 * every user-visible reply is resolved through the i18n catalog — no raw
   ``creative.*`` key may ever leak;
 * replied media is staged into a job workspace and the payload carries it;
-* dropped ops (lut/burnin) fail at the mapper as unsupported.
+* session 3 opens lut/burnin (honest paths now exist); unknown ops still fail.
 """
 
 from __future__ import annotations
@@ -86,11 +86,40 @@ def test_mapper_enforces_size_limit_when_telegram_reports_it() -> None:
     assert mapped.code == CreativeErrorCode.MEDIA_TOO_LARGE
 
 
-def test_mapper_rejects_lut_and_burnin_as_invalid() -> None:
-    """Dropped ops (lut, burnin) must never reach the queue (task-166)."""
+def test_mapper_accepts_lut_and_burnin_with_honest_paths() -> None:
+    """Session 3 reverses the task-166 refusal: shipped cubes + the lut3d /
+    subtitles lane instruments give both ops honest execution paths."""
     m = CreativeSurfaceMapper()
-    assert isinstance(m.map(CreativeRequest("grade", "lut", (), "f", 5.0)), CreativeFailure)
-    assert isinstance(m.map(CreativeRequest("caption", "burnin", (), "f", 5.0)), CreativeFailure)
+    assert m.map(CreativeRequest("grade", "lut", (), "f", 5.0)) == CreativeRequest(
+        "grade", "lut", (), "f", 5.0
+    )
+    assert m.map(CreativeRequest("caption", "burnin", (), "f", 5.0)) == CreativeRequest(
+        "caption", "burnin", (), "f", 5.0
+    )
+    # Unknown ops are still refused at the surface, never queued.
+    assert isinstance(m.map(CreativeRequest("grade", "noir", (), "f", 5.0)), CreativeFailure)
+
+
+def test_job_payload_opts_grade_jobs_into_experimental() -> None:
+    """Session 3: grade/* runs on the EXPERIMENTAL delivery pack — the
+    surface opts those jobs in; caption/edit packs need no opt-in."""
+    m = CreativeSurfaceMapper()
+    for command, operation, expected in (
+        ("grade", "lut", True),
+        ("grade", "exposure", True),
+        ("caption", "burnin", False),
+        ("edit", "trim", False),
+    ):
+        payload = m.job_payload(
+            CreativeRequest(command, operation, (), "fid", 10.0),
+            user_id=1,
+            chat_id=2,
+            lang="en",
+            idempotency_key="k",
+            workspace_dir="/tmp/w",
+            input_path="/tmp/w/in.mp4",
+        )
+        assert payload["allow_experimental"] is expected, (command, operation)
 
 
 def test_job_payload_contains_ids_and_workspace() -> None:

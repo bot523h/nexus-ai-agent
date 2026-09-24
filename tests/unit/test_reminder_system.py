@@ -90,6 +90,15 @@ async def test_delivers_to_originating_chat_not_user_id(reminder_sys: ReminderSy
     chat_id, text = bot.sent[0]
     assert chat_id == -1001234567  # the originating chat, NOT user 111
     assert "آب بنوش" in text
+
+    # Delivery (in-memory send) precedes the threaded DB write by design
+    # (send-then-mark), so poll for the status like the "failed" test does —
+    # a single immediate read races the commit on loaded runners (PR#67 CI).
+    def _marked_sent() -> bool:
+        saved = rows(reminder_sys._db_path)  # type: ignore[arg-type]
+        return bool(saved) and saved[0].status == "sent"
+
+    await _sleep_until(_marked_sent, seconds=3.0)
     saved = rows(reminder_sys._db_path)  # type: ignore[arg-type]
     assert saved[0].status == "sent"
 

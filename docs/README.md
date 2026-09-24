@@ -21,6 +21,7 @@ placeholder text.
 | [architecture/MODULE_MAP.md](architecture/MODULE_MAP.md) | Layer diagram, package inventory, boundary laws → the tests that enforce them, extension recipes. |
 | [architecture/RUNTIME_FLOWS.md](architecture/RUNTIME_FLOWS.md) | Message, slideshow, render-lane, checkpoint, migration, and webhook flows — each with its failure contract. |
 | [architecture/CREATIVE_STUDIO.md](architecture/CREATIVE_STUDIO.md) | Nagar: capability model, permission ladder, packs, activation gap, TDD coverage ledger, render lane. |
+| [architecture/COMMAND_CAPABILITY_CONTRACT.md](architecture/COMMAND_CAPABILITY_CONTRACT.md) | Nagar Gate 2: command envelope, authorization/capability/policy/reference pipeline, idempotency and evidence limits. |
 | [architecture/DATA_AND_STORAGE.md](architecture/DATA_AND_STORAGE.md) | Every store, ownership, Alembic chain, retention, portability, and what never enters a store. |
 | [architecture/SECURITY.md](architecture/SECURITY.md) | Trust boundaries, STRIDE threat → control → evidence table, P0 audit follow-through, review checklist. |
 | [architecture/OBSERVABILITY.md](architecture/OBSERVABILITY.md) | Structured events, metric policy, health semantics, inspection commands, the short alert list. |
@@ -81,6 +82,8 @@ placeholder text.
 | [audits/PR32_TRIAGE_2026-09-21.md](audits/PR32_TRIAGE_2026-09-21.md) | Forensic per-file triage of PR#32 vs merged PR#34 (15 SUPERSEDED / 4 DROP / 3 PORT / 4 ADAPT) — basis of the supersession. |
 | [audits/P0_STABILIZATION_2026-09-24.md](audits/P0_STABILIZATION_2026-09-24.md) | Owner-directed P0 day (task-165/166/167): legacy `/creative/*` lane disposition, studio surface wiring, verifiable backups — repro/evidence-first report. |
 | [audits/DEAD_ENGINES_2026-09-22.md](audits/DEAD_ENGINES_2026-09-22.md) | Dead-engine verification (zero importers, measured gates), five-option wiring analysis, negative controls, and the recorded residuals. |
+| [audits/SESSION3_CREATIVE_RUNTIME_2026-09-24.md](audits/SESSION3_CREATIVE_RUNTIME_2026-09-24.md) | Session 3 record (task-177): artifact-producing Creative Runtime, CI triage, evidence, follow-ups. |
+| [audits/GATE4_CROSS_LAYER_SLICE_2026-09-24.md](audits/GATE4_CROSS_LAYER_SLICE_2026-09-24.md) | Gate 4 cross-layer verification (task-178): T01–T64 vertical slice, Truth Matrix, failure matrix, reopen proof — harness-generated evidence. |
 
 ## History (archived — read-only, never a source of truth)
 

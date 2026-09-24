@@ -15,6 +15,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from nagar_helpers import command_for
 
 from nexus_ai_agent.adapters.whisper_local import (
     ArgosLocalTranslator,
@@ -35,7 +36,7 @@ from nexus_ai_agent.creative.packs.caption.models import (
 from nexus_ai_agent.creative.packs.caption.operations import build_caption_registry
 from nexus_ai_agent.creative.packs.registry import PackRegistry
 from nexus_ai_agent.creative.studio.capabilities import OperationContext
-from nexus_ai_agent.creative.studio.models import Project, Timeline, TypedCommand
+from nexus_ai_agent.creative.studio.models import Project, Timeline
 
 # ---------------------------------------------------------------------------
 # stubs
@@ -129,7 +130,7 @@ def _project() -> Project:
 
 def _ctx(operation: str, payload: dict[str, Any]) -> OperationContext:
     return OperationContext(
-        command=TypedCommand(command_id="c1", operation=operation),
+        command=command_for("p1", command_id="c1", operation=operation),
         input_data=payload,
         history=(),
     )

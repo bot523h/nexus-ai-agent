@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+from nagar_helpers import authorized_bus, command_for
 from pydantic import ValidationError
 
 from nexus_ai_agent.creative.packs.audio.models import (
@@ -30,7 +31,6 @@ from nexus_ai_agent.creative.studio.models import (
     PermissionLevel,
     Project,
     Timeline,
-    TypedCommand,
     new_project,
 )
 
@@ -56,11 +56,15 @@ def _project_with_media() -> Project:
 
 
 def _audio_bus() -> CommandBus:
-    return CommandBus(_project_with_media(), registry=build_audio_registry())
+    return authorized_bus(
+        _project_with_media(), registry=build_audio_registry(), allow_experimental=True
+    )
 
 
 def _motion_bus() -> CommandBus:
-    return CommandBus(_project_with_media(), registry=build_motion_registry())
+    return authorized_bus(
+        _project_with_media(), registry=build_motion_registry(), allow_experimental=True
+    )
 
 
 def _derived(bus: CommandBus, asset_id: str) -> AssetRecord:
@@ -112,7 +116,8 @@ def test_manifests_advertise_new_capabilities() -> None:
 def test_remove_noise_execution() -> None:
     bus = _audio_bus()
     result = bus.dispatch(
-        TypedCommand(
+        command_for(
+            "test_opgap",
             command_id="cmd_denoise_01",
             operation="audio.remove_noise",
             input={
@@ -141,10 +146,10 @@ def test_remove_noise_is_deterministic() -> None:
         "output_asset_id": "voice_01_clean",
     }
     first = _audio_bus().dispatch(
-        TypedCommand(command_id="cmd_a", operation="audio.remove_noise", input=payload)
+        command_for("test_opgap", command_id="cmd_a", operation="audio.remove_noise", input=payload)
     )
     second = _audio_bus().dispatch(
-        TypedCommand(command_id="cmd_b", operation="audio.remove_noise", input=payload)
+        command_for("test_opgap", command_id="cmd_b", operation="audio.remove_noise", input=payload)
     )
     assert first.output["content_sha256"] == second.output["content_sha256"]
 
@@ -152,7 +157,8 @@ def test_remove_noise_is_deterministic() -> None:
 def test_deess_execution() -> None:
     bus = _audio_bus()
     result = bus.dispatch(
-        TypedCommand(
+        command_for(
+            "test_opgap",
             command_id="cmd_deess_01",
             operation="audio.deess",
             input={
@@ -174,7 +180,8 @@ def test_deess_execution() -> None:
 def test_eq_voice_applies_preset_plus_master_gain() -> None:
     bus = _audio_bus()
     result = bus.dispatch(
-        TypedCommand(
+        command_for(
+            "test_opgap",
             command_id="cmd_eq_01",
             operation="audio.eq_voice",
             input={
@@ -202,7 +209,8 @@ def test_eq_voice_rejects_unknown_preset() -> None:
 def test_time_stretch_scales_duration() -> None:
     bus = _audio_bus()
     result = bus.dispatch(
-        TypedCommand(
+        command_for(
+            "test_opgap",
             command_id="cmd_stretch_01",
             operation="audio.time_stretch",
             input={
@@ -229,7 +237,8 @@ def test_audio_gap_ops_reject_unknown_and_wrong_kind_assets() -> None:
     ):
         with pytest.raises(CommandValidationError, match="unknown audio asset"):
             _audio_bus().dispatch(
-                TypedCommand(
+                command_for(
+                    "test_opgap",
                     command_id=f"cmd_{operation}_missing",
                     operation=operation,
                     input={"audio_asset_id": "ghost_track"},
@@ -237,7 +246,8 @@ def test_audio_gap_ops_reject_unknown_and_wrong_kind_assets() -> None:
             )
         with pytest.raises(CommandValidationError, match="requires an audio asset"):
             _audio_bus().dispatch(
-                TypedCommand(
+                command_for(
+                    "test_opgap",
                     command_id=f"cmd_{operation}_kind",
                     operation=operation,
                     input={"audio_asset_id": "clip_01"},
@@ -248,7 +258,8 @@ def test_audio_gap_ops_reject_unknown_and_wrong_kind_assets() -> None:
 def test_stabilize_execution() -> None:
     bus = _motion_bus()
     result = bus.dispatch(
-        TypedCommand(
+        command_for(
+            "test_opgap",
             command_id="cmd_stab_01",
             operation="motion.stabilize",
             input={
@@ -270,7 +281,8 @@ def test_stabilize_execution() -> None:
 def test_add_parallax_layer_plan() -> None:
     bus = _motion_bus()
     result = bus.dispatch(
-        TypedCommand(
+        command_for(
+            "test_opgap",
             command_id="cmd_par_01",
             operation="motion.add_parallax",
             input={
@@ -298,7 +310,8 @@ def test_motion_gap_ops_reject_unknown_and_wrong_kind_assets() -> None:
         key = "clip_asset_id"
         with pytest.raises(CommandValidationError, match="unknown video asset"):
             _motion_bus().dispatch(
-                TypedCommand(
+                command_for(
+                    "test_opgap",
                     command_id=f"cmd_{operation}_missing",
                     operation=operation,
                     input={key: "ghost_clip"},
@@ -306,7 +319,8 @@ def test_motion_gap_ops_reject_unknown_and_wrong_kind_assets() -> None:
             )
         with pytest.raises(CommandValidationError, match="requires a video asset"):
             _motion_bus().dispatch(
-                TypedCommand(
+                command_for(
+                    "test_opgap",
                     command_id=f"cmd_{operation}_kind",
                     operation=operation,
                     input={key: "voice_01"},

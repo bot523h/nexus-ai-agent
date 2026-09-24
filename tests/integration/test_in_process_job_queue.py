@@ -261,13 +261,117 @@ async def test_job_queue_idempotency_returns_original_job(tmp_path: Path) -> Non
     second = await queue.enqueue(
         job_type="idempotent",
         idempotency_key="same-key",
-        payload={"value": 2},
+        payload={"value": 1},
     )
 
     assert second == first
     await _wait_for_status(queue, first, JobStatus.COMPLETED)
     assert calls == 1
     assert await queue.get_result(first) == {"value": 1}
+
+
+@pytest.mark.asyncio
+async def test_queue_conflicting_retry_rejected_after_adapter_restart(tmp_path: Path) -> None:
+    path = tmp_path / "jobs.sqlite3"
+    first_queue = InProcessJobQueue(path)
+    calls = 0
+
+    async def handler(payload: dict[str, object]) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return payload
+
+    first_queue.register_handler("creative_render", handler)
+    job_id = await first_queue.enqueue(
+        job_type="creative_render", idempotency_key="project:op:key", payload={"value": 1}
+    )
+    await _wait_for_status(first_queue, job_id, JobStatus.COMPLETED)
+
+    second_queue = InProcessJobQueue(path)
+    with pytest.raises(ValueError, match="idempotency key reused"):
+        await second_queue.enqueue(
+            job_type="creative_render", idempotency_key="project:op:key", payload={"value": 2}
+        )
+    with pytest.raises(ValueError, match="idempotency key reused"):
+        await second_queue.enqueue(
+            job_type="different", idempotency_key="project:op:key", payload={"value": 1}
+        )
+    # Python compares True == 1 and 1.0 == 1, but the JSON request types
+    # differ and must never reuse the first job's effect or output.
+    for changed in (True, 1.0):
+        with pytest.raises(ValueError, match="idempotency key reused"):
+            await second_queue.enqueue(
+                job_type="creative_render",
+                idempotency_key="project:op:key",
+                payload={"value": changed},
+            )
+    assert await second_queue.get_result(job_id) == {"value": 1}
+    assert calls == 1
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT count(*) FROM nexus_job_queue").fetchone() == (1,)
+
+
+@pytest.mark.asyncio
+async def test_replayed_queue_key_does_not_schedule_a_second_live_owner(tmp_path: Path) -> None:
+    path = tmp_path / "jobs.sqlite3"
+    first = InProcessJobQueue(path)
+    second = InProcessJobQueue(path)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def handler(payload: dict[str, object]) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        entered.set()
+        await release.wait()
+        return payload
+
+    first.register_handler("render", handler)
+    second.register_handler("render", handler)
+    job_id = await first.enqueue(
+        job_type="render", idempotency_key="same-live-key", payload={"asset": "a"}
+    )
+    await asyncio.wait_for(entered.wait(), timeout=2.0)
+    try:
+        replay = await second.enqueue(
+            job_type="render", idempotency_key="same-live-key", payload={"asset": "a"}
+        )
+        assert replay == job_id
+        assert second._tasks == {}  # deterministic: no second schedule in another adapter
+    finally:
+        release.set()
+    await _wait_for_status(first, job_id, JobStatus.COMPLETED)
+    assert calls == 1
+    assert await second.get_result(job_id) == {"asset": "a"}
+
+
+@pytest.mark.asyncio
+async def test_concurrent_queue_adapters_cannot_admit_two_different_jobs_for_one_key(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "jobs.sqlite3"
+    left = InProcessJobQueue(path)
+    right = InProcessJobQueue(path)
+
+    async def handler(payload: dict[str, object]) -> dict[str, object]:
+        return payload
+
+    for queue in (left, right):
+        queue.register_handler("render", handler)
+    results = await asyncio.gather(
+        left.enqueue(job_type="render", idempotency_key="collision", payload={"asset": "a"}),
+        right.enqueue(job_type="render", idempotency_key="collision", payload={"asset": "b"}),
+        return_exceptions=True,
+    )
+    accepted = [value for value in results if isinstance(value, str)]
+    rejected = [value for value in results if isinstance(value, ValueError)]
+    assert len(accepted) == len(rejected) == 1
+    assert "different job type or payload" in str(rejected[0])
+    await _wait_for_status(left, accepted[0], JobStatus.COMPLETED)
+    assert (await left.get_result(accepted[0])) in ({"asset": "a"}, {"asset": "b"})
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT count(*) FROM nexus_job_queue").fetchone() == (1,)
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from nagar_helpers import authorized_bus, command_for
 from pydantic import ValidationError
 
 from nexus_ai_agent.creative.packs.audio.models import (
@@ -22,7 +23,6 @@ from nexus_ai_agent.creative.studio.models import (
     PermissionLevel,
     Project,
     Timeline,
-    TypedCommand,
     new_project,
 )
 
@@ -58,7 +58,7 @@ def _setup_audio_bus() -> tuple[Project, CommandBus]:
     timeline = Timeline(timeline_id="tl_audio", duration_us=10_000_000)
     project = new_project("test_audio_proj", "Audio Studio Test", timeline)
     project = project.model_copy(update={"assets": [audio_rec, voice_rec, clip_1, clip_2]})
-    bus = CommandBus(project, registry=registry)
+    bus = authorized_bus(project, registry=registry, allow_experimental=True)
     return project, bus
 
 
@@ -110,7 +110,8 @@ def test_operation_specs_permission_levels() -> None:
 def test_detect_beats_execution() -> None:
     project, bus = _setup_audio_bus()
 
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_detect_01",
         operation="audio.detect_beats",
         input={"audio_asset_id": "music_track_01", "sensitivity": 0.8},
@@ -129,7 +130,8 @@ def test_detect_beats_execution() -> None:
 def test_detect_beats_rejects_missing_asset() -> None:
     project, bus = _setup_audio_bus()
 
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_detect_fail",
         operation="audio.detect_beats",
         input={"audio_asset_id": "non_existent_audio"},
@@ -142,7 +144,8 @@ def test_normalize_loudness_requires_level_c_confirmation() -> None:
     project, bus = _setup_audio_bus()
 
     # Unconfirmed command -> PermissionDeniedError at gate
-    cmd_unconf = TypedCommand(
+    cmd_unconf = command_for(
+        bus,
         command_id="cmd_norm_unconf",
         operation="audio.normalize_loudness",
         confirmed=False,
@@ -152,7 +155,8 @@ def test_normalize_loudness_requires_level_c_confirmation() -> None:
         bus.dispatch(cmd_unconf)
 
     # Confirmed command -> succeeds and creates derived AssetRecord
-    cmd_conf = TypedCommand(
+    cmd_conf = command_for(
+        bus,
         command_id="cmd_norm_ok",
         operation="audio.normalize_loudness",
         confirmed=True,
@@ -178,7 +182,8 @@ def test_normalize_loudness_requires_level_c_confirmation() -> None:
 def test_duck_music_execution() -> None:
     project, bus = _setup_audio_bus()
 
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_duck_01",
         operation="audio.duck_music",
         input={
@@ -199,7 +204,8 @@ def test_duck_music_execution() -> None:
 def test_beat_sync_cut_execution() -> None:
     project, bus = _setup_audio_bus()
 
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_cut_01",
         operation="audio.beat_sync_cut",
         input={
@@ -223,7 +229,8 @@ def test_beat_sync_cut_execution() -> None:
 def test_command_bus_idempotency() -> None:
     project, bus = _setup_audio_bus()
 
-    cmd = TypedCommand(
+    cmd = command_for(
+        bus,
         command_id="cmd_idem_01",
         idempotency_key="key-audio-12345",
         operation="audio.detect_beats",
