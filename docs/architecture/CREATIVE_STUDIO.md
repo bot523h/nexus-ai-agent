@@ -90,7 +90,7 @@ $ nexus packs activate nexus.audio.studio
   audio.deess, audio.eq_voice, audio.time_stretch
 ```
 
-**Why:** the CLI composition root (`cli.py::_packs_registry`) composes only the slideshow and caption registries, so the runtime sees **21** of the **51** implemented operation ids. The handlers for edit/motion/audio/delivery exist and pass their own tests; they are not yet *reachable* through the CLI registry. This is board task **task-126**, sequenced after PR#33 because that PR rewrites `cli.py`. Until it lands, treat the four pending packs as **implemented but not activatable** — the honest status.
+**Resolved (2026-09-23):** the Wave-5 composition root (`packs/runtime.py::COMPOSITION`, one call per pack) replaced the per-call-site registries — `cli.py::_packs_registry` now composes the full runtime (**77 operations across 8 packs**, measured). The historical "21 of 51 reachable" status above is obsolete; `nexus packs activate` succeeds for every complete pack.
 
 ## 5. Coverage ledger vs. the TDD catalogue
 
@@ -98,23 +98,18 @@ Measured by diffing the operation ids in [`../NAGAR_70_OPERATIONS_TDD.md`](../NA
 
 | Metric | Value |
 |---|---:|
-| Operation ids catalogued by the TDD | 71 |
-| Implemented and registered by a builder | 51 unique (77 registrations across 7 registries, with inherited Wave-1 ops shared) |
-| TDD ids implemented | 42 |
-| TDD ids remaining | **29** |
+| Operation ids catalogued by the TDD | 70 |
+| Implemented and registered | **67** (registry union of all builders; CLI registry = 77 rows incl. `system.undo` and pack-shared names) |
+| Packs in the composition | 8 (slideshow, caption, edit, motion, audio, delivery, portrait, scene) |
+| TDD ids remaining | **3** |
 
-Remaining, by family:
+Remaining, by family (measured 2026-09-23 against the registry union):
 
 | Family | Remaining ids |
 |---|---|
-| `portrait.*` (9) | `detect_landmarks`, `smooth_skin`, `whiten_teeth`, `retouch_blemish`, `enhance_eyes`, `relight_face`, `background_blur`, `mask_hair`, `correct_gaze`, `stabilize_face` |
-| `scene.*` (9) | `detect_shot_boundaries`, `auto_reframe_subject`, `remove_object`, `remove_background`, `replace_sky`, `segment_subject`, `track_object`, `track_face`, `find_subject_moment`, `remove_logo` |
-| `motion.*` (3) | `add_particles`, `apply_mask`, `warp` |
-| `color.*` (3) | `white_balance`, `deband_denoise`, `hdr_tonemap` |
-| `audio.*` (2) | `align_music`, `remove_vocal` |
-| `timeline.*` (1) | `sync_multicam` |
+| `color.*` (3) | `white_balance`, `deband_denoise`, `hdr_tonemap` — home is the PR#33-frozen `packs/delivery/` (BLOCKED_SHARED_CONTRACT) |
 
-(Counts in the "Remaining" table are per-id; the TDD list also contains the six `nexus.*` pack ids and non-operation tokens, which are excluded here.)
+`motion.*`, `audio.*`, `timeline.*` and the `portrait.*`/`scene.*` families are **implemented and registered** (the Wave-5 gap ops and the Wave-1 vision packs); the earlier ledger that listed them here predates those landings. (Counts exclude the `nexus.*` pack ids and non-operation tokens.)
 
 ## 6. The render lane
 
@@ -123,6 +118,8 @@ Remaining, by family:
 | Typed ops | 8 (`TrimOp`, `SpeedOp`, `ReverseOp`, `FreezeOp`, `XfadeOp`, `TitleOp`, `LoudnormOp`, `DuckOp`) in `creative/rendering/ir.py` |
 | Duration algebra | integer microseconds — trim/speed/reverse/freeze/xfade have explicit formulas; no float drift |
 | Purity | `compile_lane`, `compile_measure` are pure and golden-tested; `lane_ir_from_project` bridges packs' `Project` IR to lane IR |
+| Plan bridge | `creative/rendering/plan.py` — deterministic `compile_execution_plan` (Project timeline → segment plans; trim + `color.adjust_exposure` → lane ops; multi-clip tracks report `concat_required`) |
+| OTIO interchange | `creative/otio/` — `project_to_otio_document` / `parse_otio_document` / `LOSS_CONTRACT`; semantic round-trip verified against the real `opentimelineio` library (`tests/unit/test_otio_roundtrip.py`) |
 | Process policy | one process per call, no shell, one timeout, binary allow-list (`override → NEXUS_FFMPEG_BIN → PATH → imageio-ffmpeg`) |
 | Publication | `.<name>.part.<ext>` → atomic rename; `overwrite=False` by default |
 | Evidence | `probe_video` + `sha256_file` on the published artifact; a run that cannot probe fails with `LaneExecutionError` |
@@ -139,7 +136,7 @@ The lane is deliberately the *only* place in the creative tree that spawns a pro
 ## 8. How to verify this document
 
 ```bash
-# inventory (expect: 6 packs, 51 unique ops across builders, 21 in the CLI registry)
+# inventory (expect: 8 packs, 77 ops in the CLI registry)
 python - <<'PY'
 from nexus_ai_agent.cli import _packs_registry
 print(len(_packs_registry().runtime_registry.list_operations()))

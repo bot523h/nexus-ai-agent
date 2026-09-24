@@ -65,6 +65,8 @@ placeholder text.
 | [ops/r2-storage.md](ops/r2-storage.md) | Cloudflare R2 blob tier: setup + maintenance secrets. |
 | [ops/COLOR_LANE.md](ops/COLOR_LANE.md) | Color/exposure lane runbook: EV→filter mapping, hard contracts, FFmpeg-free validation, troubleshooting. |
 | [ops/PACK_RUNTIME.md](ops/PACK_RUNTIME.md) | Unified pack runtime (wave 5): composition, activation gate, op-gap ledger, composition checklist for new packs. |
+| [ops/CREATIVE_RUNTIME.md](ops/CREATIVE_RUNTIME.md) | Creative runtime truth (session 2): execution semantics, multi-segment assembly, availability, OTIO status, perf baseline. |
+| [ops/COLOR_DELIVERY_HANDOFF_2026-09-24.md](ops/COLOR_DELIVERY_HANDOFF_2026-09-24.md) | Handoff: color.3 + export_otio delegation patches, blocked on PR#33 (prepare-only). |
 | [ops/RUNBOOK_HARDENING.md](ops/RUNBOOK_HARDENING.md) | Runbook hardening pass (wave-4 step 8): boundary conditions, failure modes, operator knobs. |
 
 ## Audits (dated, immutable records)
