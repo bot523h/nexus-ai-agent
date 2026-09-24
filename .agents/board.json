@@ -1,6 +1,6 @@
 {
  "schema": 2,
- "updated_at": "2026-09-24T13:30:00Z",
+ "updated_at": "2026-09-24T14:00:00Z",
  "protocol": {
   "protocol_version": 2,
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1999,7 +1999,7 @@
    "claimed_at": "2026-09-24T10:11:01Z",
    "ttl_hours": 48,
    "gates_owner": true,
-   "note": "Session 3 claim; gates_owner=true (no other active gates owner on the board). Evidence paths updated to the built test files (E1 lives in test_plan_effect_twins.py; RGB proof in test_assembly_render_proof.py; OTIO in test_otio_interop.py; required-packs gate in test_capability_lifecycle.py; LUT/burn-in execution in test_assembly_render_proof.py + test_creative_render_jobs.py). Non-exclusive touches outside the zone (no active contender, verified): src/nexus_ai_agent/bot/creative_surface.py (honest surface matrix), pyproject.toml (otio extra). Locked files verified untouched. PR#67 opened 2026-09-24 (base main 035a896). CI green on PR#67 (run 35993537741: lint, lint-fast, migrate-postgres, test all pass; title/drawtext proof runs on CI's full FFmpeg). Also deflaked pre-existing reminder race (test-only, tests/unit/ in-zone; product untouched)."
+   "note": "Session 3 claim; gates_owner=true (no other active gates owner on the board). Evidence paths updated to the built test files (E1 lives in test_plan_effect_twins.py; RGB proof in test_assembly_render_proof.py; OTIO in test_otio_interop.py; required-packs gate in test_capability_lifecycle.py; LUT/burn-in execution in test_assembly_render_proof.py + test_creative_render_jobs.py). Non-exclusive touches outside the zone (no active contender, verified): src/nexus_ai_agent/bot/creative_surface.py (honest surface matrix), pyproject.toml (otio extra). Locked files verified untouched. PR#67 opened 2026-09-24 (base main 035a896). CI green on PR#67 (run 35993537741: lint, lint-fast, migrate-postgres, test all pass; title/drawtext proof runs on CI's full FFmpeg). Also deflaked pre-existing reminder race (test-only, tests/unit/ in-zone; product untouched). Final head f292f11 CI green both events (pr 36000760452, push 36000754891). PR#66 triaged: 26 pre-existing conflicts vs main, +1 from #67 (docs row); semantic reconciliation table in the session record; merge order #67 first."
   }
  ],
  "deferred_log": [

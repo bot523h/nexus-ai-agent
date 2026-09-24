@@ -24,7 +24,12 @@ time algebra, real OpenTimelineIO interop, honest LUT/caption availability
 | `eb408ca` | Board claim → review status (see §3: corrected to `active_in_review`) |
 | `a28fa52` | Follow-up: legal board status, stub-ffprobe parser pins, robust LUT margin |
 | `72d13ed` | Board note: CI evidence |
-| this file | Session record (persistence; no code impact) |
+| `7749f85` | Session record (this file, v1 — unindexed, see postscript 1) |
+| `9320bf3` | Docs-map index row for the record |
+| `bd74721` | Temporary CI annotation mirror (flake hunt scaffold) |
+| `e148a86` | Revert of the scaffold + hunt outcome in the record |
+| `f292f11` | Test-only deflake of the reminder sent-status race |
+| this file | v2: final CI evidence + PR#66 collision triage |
 
 ## CI failure triage (the one regression)
 
@@ -140,9 +145,43 @@ render/artifact/docs/architecture 159 passed + 1 skipped. If `test` flakes
 again on this PR: re-add the annotation mirror temporarily — it is the only
 failure channel readable from a sandbox.
 
+## PR#66 collision triage (parallel P0 creative pass — integrator input)
+
+PR#66 (`arena/01a0d2d6`, "P0 creative integration", base `2cf2213`, 9 commits
+behind `main`) reworks the same creative surface in parallel. Measured with
+`git merge-tree` (base `2cf2213`):
+
+- #66 vs current `main` (`035a896`): **26 conflicts** (pre-existing staleness).
+- #66 vs `main`+#67: **27 conflicts** — the only one attributable to #67 is
+  `docs/README.md` (adjacent audit-table rows, trivial). The
+  `tests/integration/test_creative_chain_e2e.py` **add/add** (main added the
+  file in its 9 commits; #66 added its own 383-line version) predates #67.
+- #66 state: `CONFLICTING`/`DIRTY`, CI green on its own head. Forced merge
+  order: **#67 first** (mergeable, clean, on current main, green), #66 rebases.
+
+Textual cost is negligible; the **semantic** collisions must be reconciled by
+#66's rebase (its own tests will red-flag them — resolve in this direction):
+
+| Operation | #67 (this PR) | #66 | Correct resolution |
+|---|---|---|---|
+| `grade/lut` | EXECUTABLE (shipped `.cube` + `lut3d` lane + render-job proof) | refused (`NOT_AVAILABLE`, pinned) | #67 wins → flip #66's pin to executable |
+| `caption/burnin` | EXECUTABLE (staged SRT + `subtitles` lane, RTL proven) | refused, pinned | #67 wins → flip the pin |
+| `caption/transcribe`, `grade/proxy` | accepted at surface (inherited from main; no new lane primitive) | refused, pinned | #66 wins → keep refused (more honest) |
+| `grade/otio` | accepted (medialess surface op; interop adapter in `creative/interop/`) | stance unclear from sampled hunks | verify during rebase, do not guess |
+| `verify_lane_artifact` | canonical in `creative/artifacts.py` | second local copy in `adapters/creative_render_job.py` | delete #66's copy, import #67's (one artifact truth) |
+| `build_lane_ir` body | plan compiler in `rendering/plan.py` | hand-built `LaneIR(main=LaneSource(...))`, docstring anticipates swapping to `compile_execution_plan` | delegate as its docstring says |
+| e2e chain proof | main's chain tests + session-3 `noir` edit | 383-line worker-chain proof (5 tests) | fuse: keep BOTH assertion sets, no silent drops |
+
+Also note: #66 touches `api/app.py`, `worker.py`, `bot/app.py` and 15 i18n
+locales — broad blast radius, needs a full-suite re-verification after rebase.
+#67's locked paths (`delivery/models|operations`, `api/app`, queue infra)
+remain untouched by #67 itself.
+
 ## Open follow-ups
 
-- PR#67 awaits review/merge; PR#64/58/33/60/63 still OPEN and conflicting.
+- PR#67 awaits review/merge (OPEN, MERGEABLE, CLEAN, no reviews yet).
+- PR#64/58/33/60/63 still OPEN; PR#66 is CONFLICTING and must rebase after
+  #67 (see triage above).
 - Stale board claims 165–167 + task-122 cleared during this session.
 - `pyproject.toml` version field: this session did not bump; confirm release
   process expectations before merge if needed.
