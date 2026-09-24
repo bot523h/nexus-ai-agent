@@ -52,6 +52,7 @@ builtin packs exist in the runtime:
 | `build_pack_registry()` | the same registry wrapped in a `PackRegistry` (what the CLI consumes) |
 | `build_pack_runtime()` | `PackRuntime`: composition + builtin registration + optional activation |
 | `PackRuntime.status()` | one `PackStatus` row per pack: capabilities, pending, active, signature, binaries |
+| `PackRuntime.availability()` | one `PackAvailability` row per pack: `REGISTERED / AVAILABLE / MISSING_DEPENDENCY / MISSING_BINARY / DISABLED / FAILED` (session 2 — registered ≠ runnable; see `CREATIVE_RUNTIME.md` §6) |
 | `PackRuntime.activate_all()` | activates every *complete* pack (incomplete packs are skipped, never forced) |
 | `composition_issues()` | the verifier: a manifest without a builder, a builder without a manifest, or a mismatched `package_id` is a finding |
 | `stale_capabilities()` | `package_id → capabilities the runtime cannot execute`; must be `{}` |

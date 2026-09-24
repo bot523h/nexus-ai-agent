@@ -72,6 +72,11 @@ DEFAULT_TEST_TARGETS: tuple[str, ...] = (
     # task-165 creative interop + render-plan bridge
     "tests/unit/test_otio_roundtrip.py",
     "tests/unit/test_render_plan.py",
+    # task-176 creative runtime (semantics + availability + assembly + e2e)
+    "tests/unit/test_execution_semantics.py",
+    "tests/unit/test_pack_status_availability.py",
+    "tests/unit/test_render_plan_assembly.py",
+    "tests/unit/test_creative_runtime_e2e.py",
     # the substrate that composes and verifies them
     "tests/unit/test_pack_manifest_verify.py",
     "tests/unit/test_pack_runtime_composition.py",
