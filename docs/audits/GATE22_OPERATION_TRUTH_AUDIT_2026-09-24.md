@@ -480,6 +480,7 @@ them would forbid the data from improving. Independence is a property of the
 | `tests/unit/test_operation_truth_sources.py` | 20 passed |
 | `tests/unit/test_operation_truth_runtime_confirmation.py` | 3 passed (the `slow`-marked render probe ≈ 2.5 min) |
 | `tests/architecture/test_operation_truth_gate.py` | 19 passed |
+| `tests/architecture/` (whole suite) | 110 passed |
 
 CI additions (`.github/workflows/ci.yml`, `test` job, no `needs: lint` — the
 existing parity rule is preserved):
@@ -503,7 +504,7 @@ test (pytest -m "not slow")             success
   └─ Operation Truth runtime confirmation (Gate 2.2)       success
 ```
 
-Locally the full non-`slow` suite is **1939 passed, 7 failed**; those same seven
+Locally the full non-`slow` suite is **1941 passed, 7 failed**; those same seven
 tests fail identically at the base commit `035a896` in a detached worktree
 (`test_migrate_race_condition.py` ×4, `test_database_url.py`, `test_litellm_provider.py`,
 `test_version_command.py`), i.e. they are pre-existing environment artefacts of a
