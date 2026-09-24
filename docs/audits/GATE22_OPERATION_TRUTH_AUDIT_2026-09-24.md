@@ -450,6 +450,26 @@ Four of the six mutation classes PR #70's suite could express left it **green**.
 That is the measurement that justifies Gate 2.2's existence; it is recorded here
 rather than described as a principle.
 
+### A defect the gate caught in its own deliverable
+
+`executor_ready` was built as `operation_id in lane_ops or operation_id in
+surface_ops`, which made it a **synonym of** `surface_reachable` — both 12 —
+while this package's own docstring documented it as "the render lane has a
+`canonical_id ==` branch" and `docs/L0_L4_MATURITY.md` published it as **7**. The
+projection therefore disagreed with the documentation that described it.
+
+Nothing caught this until the two assertions added for it: a layer-set
+comparison, and `test_executor_ready_is_derived_from_the_render_lane_alone`,
+which pins the derivation to the render-lane probe. `executor_ready` is now 7.
+
+The naive form of the first assertion was itself wrong and is recorded as such:
+it required all eight layer sets to be pairwise **unequal**, which fails on
+`registered == domain_ready` (every registered operation happens to have a
+well-formed spec) and `runtime_proven == artifact_proven` (Gate 4's single
+end-to-end slice proves both tiers). Those are benign coincidences — forbidding
+them would forbid the data from improving. Independence is a property of the
+*derivation*, so the test now pins each layer to its own source instead.
+
 ---
 
 ## 14. Tests and CI
@@ -459,7 +479,7 @@ rather than described as a principle.
 | `tests/unit/test_operation_truth_mutations.py` | 17 passed |
 | `tests/unit/test_operation_truth_sources.py` | 20 passed |
 | `tests/unit/test_operation_truth_runtime_confirmation.py` | 3 passed (the `slow`-marked render probe ≈ 2.5 min) |
-| `tests/architecture/test_operation_truth_gate.py` | 17 passed |
+| `tests/architecture/test_operation_truth_gate.py` | 19 passed |
 
 CI additions (`.github/workflows/ci.yml`, `test` job, no `needs: lint` — the
 existing parity rule is preserved):

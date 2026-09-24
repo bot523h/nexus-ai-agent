@@ -147,6 +147,46 @@ def test_executor_readiness_does_not_imply_artifact_proof(projection: dict) -> N
     )
 
 
+def test_every_layer_is_pinned_to_its_own_source(fresh: dict) -> None:
+    """Each layer must equal what *its own* documented source says.
+
+    Measured defect this pins: ``executor_ready`` used to be built as
+    ``operation_id in lane_ops or operation_id in surface_ops``, which made it a
+    **synonym of** ``surface_reachable`` (both 12) while the module's own
+    docstring documented it as "the render lane has a ``canonical_id ==``
+    branch". Two layers that always agree are one layer, and a collapsed layer
+    is not evidence. The predicate now reads the render lane alone; the
+    assertion for that specific derivation is
+    :func:`test_executor_ready_is_derived_from_the_render_lane_alone`.
+
+    Note what is deliberately **not** asserted: that the layer sets are pairwise
+    unequal. They may coincide whenever their predicates happen to agree on the
+    data — on this baseline ``registered == domain_ready`` (every registered
+    operation has a well-formed spec) and ``runtime_proven == artifact_proven``
+    (Gate 4's one end-to-end slice proves both tiers). Forbidding that would
+    forbid the data from improving. Independence is a property of the
+    *derivation*, so that is what is pinned here.
+    """
+    assert _by_token(fresh, "defined") == set(sources.read_product_catalog().operation_ids)
+    assert _by_token(fresh, "registered") == set(sources.read_runtime_registry().operation_ids)
+    assert _by_token(fresh, "surface_reachable") == set(
+        sources.read_executable_surface().operation_ids
+    )
+
+
+def test_executor_ready_is_derived_from_the_render_lane_alone(fresh: dict) -> None:
+    """Pin the *derivation*: ``executor_ready`` == the render lane's branches."""
+    from nexus_ai_agent.nagar import sources
+
+    lane = set(sources.read_render_lane().operations)
+    executor = _by_token(fresh, "executor_ready")
+    assert executor == lane, (
+        "executor_ready must be exactly the render lane's dispatchable set — "
+        f"lane={len(lane)} executor_ready={len(executor)} "
+        f"diff={sorted(executor ^ lane)}"
+    )
+
+
 def test_production_like_is_never_claimed(projection: dict) -> None:
     """No source defines or measures ``production_like``, so the gate cannot claim it."""
     values = {node["status"]["production_like"] for node in projection["operations"]}

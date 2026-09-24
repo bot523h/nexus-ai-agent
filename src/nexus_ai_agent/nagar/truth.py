@@ -289,7 +289,12 @@ def build_nodes(
             defined=row is not None,
             registered=registered is not None,
             domain_ready=registered is not None and registered.domain_ready,
-            executor_ready=operation_id in lane_ops or operation_id in surface_ops,
+            # The render lane's dispatch branches, and *only* those.  An earlier
+            # revision read `lane_ops or surface_ops`, which made this layer a
+            # synonym of `surface_reachable` (both 12) and contradicted the
+            # predicate documented above.  Two layers that always agree are one
+            # layer; a collapsed layer is not evidence.
+            executor_ready=operation_id in lane_ops,
             surface_reachable=operation_id in surface_ops,
             runtime_proven=operation_id in runtime_proven,
             artifact_proven=operation_id in artifact_proven,
