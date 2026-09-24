@@ -1163,3 +1163,33 @@ valid follow-ups for their lanes.
 cross-process reservation adapter, or the PR#67 lifecycle integration lands;
 publish a versioned migration plan and exercise redelivery/crash recovery
 before claiming exactly-once or production-grade durability.
+
+### D-0013 amendment (task-183): lifecycle seam integrated at stage 4b
+
+The *Limits* line above ("Integration with PR#67's `required_packs`/lifecycle
+bus gate is NOT VERIFIED … seam at stage 4") is superseded. PR#67's
+`creative/studio/lifecycle.py` is consumed byte-identical (`9c3a34f`) and
+called exactly once, at sub-stage **4b**: after the actor/project grant and
+capability permissions, before execution policy, reference validation, the
+idempotency reservation, preconditions and the handler. Refusals: unknown,
+`STUB`, `RETIRED`, and `EXPERIMENTAL` without the opt-in.
+
+*Trust boundary.* The opt-in is composition-root state
+(`CommandBus(..., allow_experimental=...)`), never an envelope field and
+never a queue-row field. The render worker, the only production site that
+sets it, derives it from the canonical operation via
+`render_jobs.EXPERIMENTAL_OPT_IN_OPERATIONS`, which is pinned to exactly the
+surface operations on an `EXPERIMENTAL` pack. An earlier revision carried it
+as `CreativeRenderPayload.allow_experimental`. That let whoever wrote the queue
+row choose lifecycle policy, so it was replaced before merge.
+
+*Merge with PR#67.* The merge is semantic, not just textual. Keep stage 4b,
+drop PR#67's stage-3.5 call and its payload/surface flag, and add
+`color.apply_lut` to the opt-in set. The architecture guards and the
+opt-in-completeness test go red on any other resolution.
+
+*Evidence.* `tests/unit/test_gate2_lifecycle_seam.py`,
+`tests/unit/test_gate2_lifecycle_mutations.py`,
+`tests/unit/test_capability_lifecycle.py`,
+`tests/architecture/test_lifecycle_gate_boundary.py`, and the task-183
+trust-boundary tests in `tests/unit/test_creative_render_jobs.py`.

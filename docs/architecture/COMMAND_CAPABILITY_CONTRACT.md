@@ -85,7 +85,12 @@ flowchart LR
    reference pinning, the idempotency reservation and the handler (a refused
    pack does zero work, consumes no key, and leaves state and history
    untouched). `allow_experimental` is composition-root state, never an
-   envelope field: a command cannot widen its own lifecycle. Lifecycle
+   envelope field: a command cannot widen its own lifecycle. The one
+   production call site that sets it (the render worker) derives it from the
+   canonical operation via `render_jobs.EXPERIMENTAL_OPT_IN_OPERATIONS`; the
+   queue row (`CreativeRenderPayload`, `extra="forbid"`) cannot carry it, so
+   the chain is *external request → surface mapping → server job policy →
+   bus composition → lifecycle gate*, never *request → boolean*. Lifecycle
    (maturity) stays distinct from `packs/availability.py` (runnability at
    render/preflight time); the bus owns only the former.
 5. **Policy.** Requested execution mode must be advertised (`local` only
@@ -252,7 +257,7 @@ valid follow-ups for their lanes.
 | Bus reservation across instances / processes / restart | NOT VERIFIED by design (in-memory); no claim |
 | Durable queue payload-conflict | GAP, lifecycle lane (task-182) |
 | Explicit service grants at the three runtime call sites | RUNTIME GAP, owner Agent 1 (task-181) |
-| Integration with PR#67's `required_packs`/lifecycle bus gate | INTEGRATED at stage 4b (task-183, PR#75 stacked on PR#72); `MERGED` only after PR#72 lands and CI re-runs |
+| Integration with PR#67's `required_packs`/lifecycle bus gate | INTEGRATED at stage 4b (task-183, stacked on PR#72; PR#67's lifecycle suite runs unchanged on this tree); `MERGED` only after PR#72 lands and CI re-runs. Merging PR#67 afterwards is a *semantic* resolution: keep stage 4b and drop PR#67's stage-3.5 call and its `CreativeRenderPayload.allow_experimental` / surface flag (the architecture guards fail otherwise), and add `color.apply_lut` to `EXPERIMENTAL_OPT_IN_OPERATIONS` |
 | Runtime opt-in propagation beyond the render-job queue (studio/slideshow service call sites) | runtime-owner follow-up; slideshow/caption/edit packs are `AVAILABLE`, so no opt-in is needed today |
 | `preview` execution mode semantics | reserved surface, no implementation |
 | Authenticated multi-user project store / network API authorizer | not in this gate |
@@ -264,7 +269,9 @@ contract incl. order probes), `tests/unit/test_gate2_lifecycle_seam.py`
 (stage-4b order proofs A–H), `tests/unit/test_gate2_lifecycle_mutations.py`
 (mutations M1–M5 against the seam),
 `tests/architecture/test_lifecycle_gate_boundary.py` (one gate call site, one
-bus construction set), `tests/architecture/test_command_capability_boundary.py`
+bus construction set, opt-in derived only from server policy),
+`tests/unit/test_capability_lifecycle.py` (PR#67's lifecycle suite, unchanged),
+`tests/architecture/test_test_suite_hygiene.py` (no cross-test package imports), `tests/architecture/test_command_capability_boundary.py`
 (R13 in [MODULE_MAP.md](MODULE_MAP.md) §3), `tests/architecture/test_nagar_studio_isolation.py`
 (R6), `tests/unit/test_nagar_wave1_green_cockpit.py`,
 `tests/unit/test_docs_integrity.py`.
