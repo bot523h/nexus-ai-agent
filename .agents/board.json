@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-25T17:46:27Z",
+  "updated_at": "2026-09-25T19:09:36Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -997,11 +997,11 @@
       ],
       "exclusive_paths": [],
       "owner_hint": "",
-      "agent_branch": "arena/01a0d709-nexus-ai-agent",
-      "claimed_at": "2026-09-25T05:50:21Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "DELIVERED 2026-09-25 on arena/01a0d709-nexus-ai-agent (PR82): extras-matrix legs core/pdf/speech/translate + python-parity 3.10/3.11/3.12 (all blocking, 3.10 exception removed after the runtime was made truly 3.10-compatible) + release-lineage. Final head 0f2f8f8: CI 12/12 SUCCESS on both runs 36168073743 (pull_request) and 36168067276 (push). Skip-audit mutant-proofed (M1 pinned+killed, M2 killed, intentional skips allowed). Old 3.11-only failure (run 36101703012) proven non-reproducible (flake-or-fixed, no product bug); line-0 test synced. Gates released."
+      "note": "MERGED 2026-09-25 → main @2351f099e2f789b80de05c6b382554b5cdcec0f3 via PR#82 (https://github.com/bot523h/nexus-ai-agent/pull/82). PR HEAD 6d9300dd2a499ea5252e44609dd2c59ac92a52c0: pre-merge CI 12/12 SUCCESS on runs 36169237358 (pull_request) and 36169232780 (push). Post-merge main CI run 36176954176 12/12 SUCCESS on 2351f099e2f789b80de05c6b382554b5cdcec0f3: extras-matrix core/pdf/speech/translate + python-parity 3.10/3.11/3.12 + lint + lint-fast + test + migrate-postgres + release-lineage all green. Scope task-132 only (no backup/R2/Operation-Truth/Node24/release-tag). Gates released; exclusive_paths empty."
     },
     {
       "task": "pr33-in-review",
@@ -2864,6 +2864,12 @@
         "state": "MERGED",
         "title": "PR#51 integration — green the test job (3 board clock bombs, env-dependent RAG test, queue hook race)",
         "note": "head arena/01a0ca9c, MERGED → main 315d38a; CI run 35776958516 4/4 SUCCESS."
+      },
+      {
+        "pr": 82,
+        "state": "MERGED",
+        "title": "ci(task-132): blocking extras-matrix + python parity + release lineage",
+        "note": "head arena/01a0d709 @6d9300dd; MERGED → main @2351f099e2f789b80de05c6b382554b5cdcec0f3; pre-merge CI 36169237358+36169232780 12/12 SUCCESS; post-merge CI 36176954176 12/12 SUCCESS on main."
       }
     ],
     "incidents": [
