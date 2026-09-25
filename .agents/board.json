@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-25T05:32:16Z",
+  "updated_at": "2026-09-25T06:39:14Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -600,6 +600,23 @@
         "docs/audits/GATE5_TRUTH_MATRIX.json",
         "src/nexus_ai_agent/cli.py",
         "docs/audits/VERIFICATION_TRUTH_MATRIX.json"
+      ]
+    },
+    {
+      "id": "operation-truth",
+      "paths": [
+        "src/nexus_ai_agent/nagar/",
+        "OPERATION_TRUTH.json",
+        "OPERATION_CONTRACT_MATRIX.md",
+        "L0_L4_MATURITY.md",
+        "RECONCILIATION.md",
+        "OPERATION_WAVE_PLAN.md",
+        "OPERATION_TRUTH_AUDIT_2026-09-25.md",
+        "OPERATION_TRUTH_MUTATIONS_2026-09-25.md",
+        "docs/audits/OPERATION_PROOF_REGISTRY.json",
+        "tests/architecture/test_operation_truth_gate.py",
+        "tests/unit/test_operation_truth_mutations.py",
+        "tests/unit/test_operation_truth_sources.py"
       ]
     }
   ],
@@ -2391,6 +2408,51 @@
       "claimed_at": "2026-09-24T23:06:38Z",
       "ttl_hours": 48,
       "prev_agent_branch": "arena/01a0d4b6-nexus-ai-agent"
+    },
+    {
+      "task": "task-190-operation-truth",
+      "title": "Operation Truth engine: live recompute + machine-verifiable evidence chain",
+      "title_fa": "موتور حقیقت عملیات: بازمحاسبه زنده + زنجیرهٔ evidence ماشین‌سنج",
+      "zone": "operation-truth",
+      "priority": "P0",
+      "status": "active_in_review",
+      "scope": "استخراج حقیقت اجرایی Nagar از منابع زنده (TDD catalog / runtime registry / executable surface / proof)، تولید OPERATION_TRUTH.json به‌صورت deterministic، projection مستنداتی صرفاً خروجی، گاردهای drift/anti-drift با mutation probe، ماتریس L0-L4 و wave planning گمشده‌ها.",
+      "scope_fa": "استخراج حقیقت اجرایی Nagar از منابع زنده، تولید deterministic OPERATION_TRUTH.json، projection مستنداتی فقط-خروجی، گاردهای drift با mutation probe، ماتریس L0-L4 و wave planning.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "python -m nexus_ai_agent.nagar regenerates OPERATION_TRUTH.json and the architecture gate proves stored == recomputed",
+        "no operation is L3/L4 without recorded executable evidence; runtime-only and missing sets are computed, never hard-coded",
+        "mutation probes: every anti-drift guard turns RED under a synthetic fault and GREEN after restore",
+        "docs projections (matrix/maturity/reconciliation) are marked generated and verified against the recomputation"
+      ],
+      "evidence_required": [
+        "pytest tests/architecture/test_operation_truth_gate.py tests/unit/test_operation_truth_mutations.py tests/unit/test_operation_truth_sources.py",
+        "mutation evidence log GREEN->MUTANT->RED->RESTORE->GREEN",
+        "CI green on the PR"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/nagar/",
+        "OPERATION_TRUTH.json",
+        "OPERATION_CONTRACT_MATRIX.md",
+        "L0_L4_MATURITY.md",
+        "RECONCILIATION.md",
+        "OPERATION_WAVE_PLAN.md",
+        "OPERATION_TRUTH_AUDIT_2026-09-25.md",
+        "OPERATION_TRUTH_MUTATIONS_2026-09-25.md",
+        "docs/audits/OPERATION_PROOF_REGISTRY.json",
+        "tests/architecture/test_operation_truth_gate.py",
+        "tests/unit/test_operation_truth_mutations.py",
+        "tests/unit/test_operation_truth_sources.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0d708-nexus-ai-agent",
+      "claimed_at": "2026-09-25T06:39:14Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "generated pages live at the repo root because docs/README.md is leased by task-179-gate2-command-reconciliation (referee check exit 1); index rows deferred",
+      "pr": 83,
+      "pr_url": "https://github.com/bot523h/nexus-ai-agent/pull/83",
+      "heartbeat": "2026-09-25T17:45:51Z"
     }
   ],
   "deferred_log": [
