@@ -665,7 +665,7 @@
       "claimed_at": "2026-09-25T19:55:00Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Owner instruction (Persian): register the Engineering Constitution somewhere every agent reviews before working or coding, and keep it permanently saved. Placement at the repo root next to AGENTS.md (the agent front door) was chosen over docs/ so the law is read before work; docs/README.md is exclusively leased by task-181 until 2026-09-26T23:06:38Z, so no docs/ file was touched (Article 8 scope firewall; referee: agent_board.py check). gates_owner is false on purpose: no active claim on the live board holds gates_owner: true (seat vacant), and this session cannot run the full gates in its sandbox (dependencies not installed), so the gates are deferred to the gates owner / to CI on the PR rather than claimed without evidence. Pre-existing finding, state DEFERRED_WITH_REASON: `mypy --ignore-missing-imports scripts/agent_board.py` reports 4 errors in fetch_open_prs (object not iterable / unused type: ignore) — verified identical on HEAD~ of this branch (pre-existing, not introduced here) and outside CI's `mypy src` scope; fixing it needs its own claim plus a typing test, so it is recorded rather than silently mixed into this governance change."
+      "note": "Owner instruction (Persian): register the Engineering Constitution somewhere every agent reviews before working or coding, and keep it permanently saved. Placement at the repo root next to AGENTS.md (the agent front door) was chosen over docs/ so the law is read before work; docs/README.md is exclusively leased by task-181 until 2026-09-26T23:06:38Z, so no docs/ file was touched (Article 8 scope firewall; referee: agent_board.py check). gates_owner is false on purpose: no active claim on the live board holds gates_owner: true (seat vacant), and this session cannot run the full gates in its sandbox (dependencies not installed), so the gates are deferred to the gates owner / to CI on the PR rather than claimed without evidence. Pre-existing finding, state DEFERRED_WITH_REASON: `mypy --ignore-missing-imports scripts/agent_board.py` reports 4 errors in fetch_open_prs (object not iterable / unused type: ignore) — verified identical on HEAD~ of this branch (pre-existing, not introduced here) and outside CI's `mypy src` scope; fixing it needs its own claim plus a typing test, so it is recorded rather than silently mixed into this governance change. Delivered via PR#84 (https://github.com/bot523h/nexus-ai-agent/pull/84), head 09f3bae."
     },
     {
       "task": "task-131",
@@ -2768,6 +2768,12 @@
       }
     ],
     "pull_requests": [
+      {
+        "pr": 84,
+        "state": "OPEN",
+        "title": "Register the NEXUS Engineering Constitution as an enforced contract (task-184)",
+        "note": "head arena/01a0da15-nexus-ai-agent @ 09f3bae; owner-directed governance change, no src/ file touched."
+      },
       {
         "pr": 19,
         "state": "MERGED",
