@@ -625,7 +625,7 @@
       "title_fa": "ثبت قانون اساسی مهندسی نکسوس به‌عنوان قرارداد اجراشدنی مخزن",
       "zone": "governance-constitution",
       "priority": "P0",
-      "status": "active",
+      "status": "active_in_review",
       "scope": "Owner-directed: register the 14-article Engineering Constitution so every agent reads and follows it before working. Deliverables: ENGINEERING_CONSTITUTION.md (Persian original normative + English rendering + enforcement map + Final Gate checklist), AGENTS.md §0 entry gate and Article-5 wording in §2, CONTRIBUTING.md + README.md pointers, .agents/board.json protocol.constitution, agent_board.py show/next/claim reminder, .github/PULL_REQUEST_TEMPLATE.md Final Gate checklist, and tests/unit/test_engineering_constitution.py. No file under src/ is touched.",
       "scope_fa": "دستور مالک: ثبت قانون اساسی مهندسی (۱۴ ماده) تا هر عامل پیش از کار آن را بخواند و رعایت کند. خروجی‌ها: ENGINEERING_CONSTITUTION.md (متن فارسی معتبر + ترجمهٔ انگلیسی + نقشهٔ اجرا + چک‌لیست Final Gate)، بخش ۰ در AGENTS.md، اشاره در CONTRIBUTING.md و README.md، protocol.constitution در تخته، یادآوری در خروجی show/next/claim ابزار تخته، قالب PR با چک‌لیست Final Gate، و تست اجرا. هیچ فایلی در src/ تغییر نمی‌کند.",
       "prerequisites": [],
@@ -651,21 +651,13 @@
         "python scripts/agent_board.py show | grep -i constitution",
         "python scripts/agent_board.py check --files <changed files> --branch arena/01a0da15-nexus-ai-agent (exit 0)"
       ],
-      "exclusive_paths": [
-        "ENGINEERING_CONSTITUTION.md",
-        "AGENTS.md",
-        "CONTRIBUTING.md",
-        "README.md",
-        ".github/PULL_REQUEST_TEMPLATE.md",
-        "scripts/agent_board.py",
-        "tests/unit/test_engineering_constitution.py"
-      ],
+      "exclusive_paths": [],
       "owner_hint": "",
       "agent_branch": "arena/01a0da15-nexus-ai-agent",
       "claimed_at": "2026-09-25T19:55:00Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Owner instruction (Persian): register the Engineering Constitution somewhere every agent reviews before working or coding, and keep it permanently saved. Placement at the repo root next to AGENTS.md (the agent front door) was chosen over docs/ so the law is read before work; docs/README.md is exclusively leased by task-181 until 2026-09-26T23:06:38Z, so no docs/ file was touched (Article 8 scope firewall; referee: agent_board.py check). gates_owner is false on purpose: no active claim on the live board holds gates_owner: true (seat vacant), and this session cannot run the full gates in its sandbox (dependencies not installed), so the gates are deferred to the gates owner / to CI on the PR rather than claimed without evidence. Pre-existing finding, state DEFERRED_WITH_REASON: `mypy --ignore-missing-imports scripts/agent_board.py` reports 4 errors in fetch_open_prs (object not iterable / unused type: ignore) — verified identical on HEAD~ of this branch (pre-existing, not introduced here) and outside CI's `mypy src` scope; fixing it needs its own claim plus a typing test, so it is recorded rather than silently mixed into this governance change. Delivered via PR#84 (https://github.com/bot523h/nexus-ai-agent/pull/84), head 09f3bae."
+      "note": "Owner instruction (Persian): register the Engineering Constitution somewhere every agent reviews before working or coding, and keep it permanently saved. Placement at the repo root next to AGENTS.md (the agent front door) was chosen over docs/ so the law is read before work; docs/README.md is exclusively leased by task-181 until 2026-09-26T23:06:38Z, so no docs/ file was touched (Article 8 scope firewall; referee: agent_board.py check). gates_owner is false on purpose: no active claim on the live board holds gates_owner: true (seat vacant), and this session cannot run the full gates in its sandbox (dependencies not installed), so the gates are deferred to the gates owner / to CI on the PR rather than claimed without evidence. Pre-existing finding, state DEFERRED_WITH_REASON: `mypy --ignore-missing-imports scripts/agent_board.py` reports 4 errors in fetch_open_prs (object not iterable / unused type: ignore) — verified identical on HEAD~ of this branch (pre-existing, not introduced here) and outside CI's `mypy src` scope; fixing it needs its own claim plus a typing test, so it is recorded rather than silently mixed into this governance change. Delivered via PR#84 (https://github.com/bot523h/nexus-ai-agent/pull/84), head 09f3bae. Delivered in PR#84 and CI-verified on head 0152cdb: lint (ruff+mypy+lockstep) pass 7m24s, lint-fast pass 12s, test (pytest -m 'not slow') pass 8m33s, migrate-postgres pass 6m13s, release-lineage pass 7s, extras-matrix core/pdf/speech/translate pass, python-parity 3.10/3.11/3.12 pass. Claim moved to active_in_review with no exclusive paths, so the governance-constitution zone is free while the PR is under review."
     },
     {
       "task": "task-131",
