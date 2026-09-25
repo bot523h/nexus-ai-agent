@@ -1,6 +1,17 @@
 # Phase 5 — periodic maintenance only. Deliberately NOT on push/pull_request;
 # those gates live in ci.yml. Scheduled workflows only run on the default
 # branch and require the repo secrets to be set (docs/ops/r2-storage.md).
+#
+# task-164 (production backup durability). The chain this workflow proves:
+#   produce → persist → verify → restore → report → alert
+#   * backup-db      : the real thing (Neon → pg_dump → R2 → round-trip →
+#                      restore into a scratch PostgreSQL → evidence JSON).
+#   * restore-drill  : the same dump/restore mechanics on a seeded local
+#                      PostgreSQL — needs NO secrets, so recoverability of the
+#                      mechanism is proven every night even while the owner
+#                      has not configured R2/Neon yet.
+#   * a failing job opens (or comments on) one GitHub issue — a red run must
+#     never be silent again (five consecutive red nights were, 09-21 → 09-25).
 name: maintenance
 
 on:
@@ -16,34 +27,70 @@ on:
   push:
     branches: ["arena/01a0d9f4-nexus-ai-agent"]
 
+permissions:
+  contents: read
+  issues: write # alert step: open/comment the "backup failing" issue
+
 # One shared group: a scheduled backup never overlaps a running one, and a
 # manual run queues behind an in-progress schedule instead of cancelling it.
 concurrency:
   group: nexus-maintenance
   cancel-in-progress: false
 
+env:
+  # pg_dump/psql must be >= the server major (pg_dump refuses newer servers:
+  # "aborting because of server version mismatch"). ubuntu-latest ships 16;
+  # Neon projects default to 17 — install the PGDG 17 client explicitly and
+  # restore into a 17 scratch server (a 17 client dumps 16 or 17 sources; a
+  # 17 target loads either dump).
+  PG_CLIENT_MAJOR: "17"
+
 jobs:
   backup-db:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.schedule == '17 3 * * *'
     runs-on: ubuntu-latest
+    services:
+      # Scratch restore target — the uploaded artifact is loaded here into a
+      # fresh database (TEMPLATE template0) and inventoried against the source.
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: nexus
+          POSTGRES_PASSWORD: nexus
+          POSTGRES_DB: nexus
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nexus -d nexus"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
-      # pg_dump target. When unset, the command backs up the local SQLite
-      # file instead (which is empty in CI) — set the secret for real use.
+      # pg_dump source. The job REFUSES the SQLite fallback (--require-postgres):
+      # the runner's local SQLite file is never the production database, so
+      # "backing it up" would be a fake success.
       NEXUS_DATABASE_URL: ${{ secrets.NEXUS_DATABASE_URL }}
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      NEXUS_BACKUP_RESTORE_TARGET_URL: postgresql://nexus:nexus@localhost:5432/nexus
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install PostgreSQL ${{ env.PG_CLIENT_MAJOR }} client (PGDG)
+        run: |
+          set -eux
+          sudo apt-get install -y -qq postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y -qq "postgresql-client-${PG_CLIENT_MAJOR}"
+          echo "/usr/lib/postgresql/${PG_CLIENT_MAJOR}/bin" >> "$GITHUB_PATH"
       - run: pip install -e .
-      # task-164 forensics: presence booleans only — secret VALUES are never
-      # printed. Each finding is mirrored as its own step below so the
-      # configuration state is readable from the jobs API even when the log
-      # archive is unreachable.
+      # Presence booleans only — secret VALUES are never printed. Each finding
+      # is mirrored as its own step so the configuration state is readable
+      # from the jobs API even when the log archive is unreachable.
       - name: Preflight (presence booleans only)
         id: preflight
         run: |
@@ -79,9 +126,123 @@ jobs:
       - name: "Config: pg_dump on PATH"
         if: steps.preflight.outputs.pg_dump == 'true'
         run: "true"
-      # Stateless + idempotent: safe to re-run. Exits non-zero when R2 is
-      # not configured so a silently-skipped backup is visible, not hidden.
-      - run: nexus maintenance backup
+      # Names exactly which piece is missing; exit 2 = owner action, nothing attempted.
+      - name: Preflight (named, typed)
+        run: |
+          mkdir -p ci-artifacts
+          nexus maintenance backup --preflight --require-postgres --evidence-json ci-artifacts/preflight.json
+      # produce → persist → verify (sha256 + round-trip) → restore (scratch PG,
+      # inventory == source) → report (evidence JSON). Exit 1 = real failure.
+      - name: Backup → verify → upload → round-trip → restore proof
+        run: |
+          nexus maintenance backup --require-postgres --evidence-json ci-artifacts/backup-evidence.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backup-evidence-${{ github.run_id }}
+          path: ci-artifacts/
+          retention-days: 30
+          if-no-files-found: ignore
+      - name: Alert — open or update the "backup failing" issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          title="[backup] nightly database backup is failing"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          classification="unknown"
+          problems=""
+          for f in ci-artifacts/backup-evidence.json ci-artifacts/preflight.json; do
+            if [ -f "$f" ]; then
+              classification=$(python3 -c "import json,sys;d=json.load(open('$f'));print(d.get('classification') or ('not_configured' if not d.get('preflight',{}).get('ok',True) else 'unknown'))")
+              problems=$(python3 -c "import json;d=json.load(open('$f'));p=(d.get('preflight') or {}).get('problems') or [];print('\n'.join('- '+x for x in p))")
+              break
+            fi
+          done
+          body="Run: ${run_url}
+          Event: ${GITHUB_EVENT_NAME} · commit: ${GITHUB_SHA}
+          Classification: \`${classification}\`
+          ${problems}
+
+          Owner runbook: docs/ops/r2-storage.md §4 (secrets) · evidence artifact: backup-evidence-${GITHUB_RUN_ID}"
+          existing=$(gh issue list --state open --search "in:title \"${title}\"" --json number,title --jq ".[] | select(.title==\"${title}\") | .number" | head -n1)
+          if [ -n "${existing}" ]; then
+            gh issue comment "${existing}" --body "${body}"
+          else
+            gh issue create --title "${title}" --body "${body}"
+          fi
+
+  # Recoverability of the MECHANISM, proven nightly without any secret:
+  # migrate a fresh PostgreSQL to head (real schema), dump it exactly like the
+  # nightly backup does, restore into a scratch database, require an identical
+  # table inventory with identical row counts, then run the integration test.
+  restore-drill:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.schedule == '17 3 * * *'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: nexus
+          POSTGRES_PASSWORD: nexus
+          POSTGRES_DB: nexus
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nexus -d nexus"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      NEXUS_DATABASE_URL: postgresql://nexus:nexus@localhost:5432/nexus
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PostgreSQL ${{ env.PG_CLIENT_MAJOR }} client (PGDG)
+        run: |
+          set -eux
+          sudo apt-get install -y -qq postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y -qq "postgresql-client-${PG_CLIENT_MAJOR}"
+          echo "/usr/lib/postgresql/${PG_CLIENT_MAJOR}/bin" >> "$GITHUB_PATH"
+      - run: pip install -e . pytest pytest-asyncio
+      - run: nexus migrate
+      - name: Drill — dump → restore → identical inventory
+        run: |
+          mkdir -p ci-artifacts
+          nexus maintenance restore-drill \
+            --source-url "$NEXUS_DATABASE_URL" \
+            --target-url "$NEXUS_DATABASE_URL" \
+            --evidence-json ci-artifacts/restore-drill.json
+      - name: Integration test on real PostgreSQL
+        run: pytest -q -rs tests/integration/test_backup_restore_postgres.py --tb=short
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: restore-drill-evidence-${{ github.run_id }}
+          path: ci-artifacts/
+          retention-days: 30
+          if-no-files-found: ignore
+      - name: Alert — open or update the "restore drill failing" issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          title="[backup] restore drill is failing (dump/restore mechanism broken)"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          body="Run: ${run_url}
+          Event: ${GITHUB_EVENT_NAME} · commit: ${GITHUB_SHA}
+          The secret-free drill (migrate → pg_dump → psql restore → inventory) failed: the backup mechanism itself is broken, independent of R2/Neon configuration."
+          existing=$(gh issue list --state open --search "in:title \"${title}\"" --json number,title --jq ".[] | select(.title==\"${title}\") | .number" | head -n1)
+          if [ -n "${existing}" ]; then
+            gh issue comment "${existing}" --body "${body}"
+          else
+            gh issue create --title "${title}" --body "${body}"
+          fi
 
   housekeeping:
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '23 4 * * 1'

@@ -941,25 +941,126 @@ def backup(
         "--dry-run",
         help="Show what would be dumped and uploaded without doing it.",
     ),
+    preflight_only: bool = typer.Option(
+        False,
+        "--preflight",
+        help="Only report what is (not) configured — booleans, never values — and exit "
+        "(0 = a backup could run, 2 = configuration missing).",
+    ),
+    require_postgres: bool = typer.Option(
+        False,
+        "--require-postgres",
+        help="Refuse the SQLite fallback (use on ephemeral hosts such as CI runners, "
+        "where the local SQLite file is never the production database).",
+    ),
+    restore_target_url: str | None = typer.Option(
+        None,
+        "--restore-target-url",
+        envvar="NEXUS_BACKUP_RESTORE_TARGET_URL",
+        help="Scratch PostgreSQL URL: the uploaded artifact is restored into a fresh "
+        "database there and the table inventory compared with the source.",
+        show_default=False,
+    ),
+    evidence_json: Annotated[
+        Path | None,
+        typer.Option(
+            "--evidence-json",
+            help="Write the run summary (success or failure, with classification) here.",
+        ),
+    ] = None,
 ) -> None:
-    """Dump the database and upload it to the R2 blob tier (stateless)."""
+    """Dump the database, verify, upload to R2, re-verify, prove restore (stateless).
+
+    Exit codes: 0 success · 1 backup failure (typed classification printed) ·
+    2 not configured (owner action; nothing was attempted).
+    """
     from nexus_ai_agent.config.settings import get_settings
-    from nexus_ai_agent.maintenance.backup import create_backup
-    from nexus_ai_agent.storage.providers.base import ProviderUnavailable
+    from nexus_ai_agent.maintenance.backup import (
+        BackupError,
+        BackupNotConfigured,
+        create_backup,
+        preflight,
+        write_evidence,
+    )
 
     settings = get_settings()
+
+    if preflight_only:
+        report = preflight(settings, require_postgres=require_postgres)
+        for env, present in report["r2"].items():
+            typer.echo(f"{env}: {'present' if present else 'MISSING'}")
+        typer.echo(f"database: {report['database']}")
+        typer.echo(f"pg_dump:  {report['pg_dump_version'] or 'MISSING'}")
+        for problem in report["problems"]:
+            typer.echo(f"✗ {problem}", err=True)
+        if evidence_json is not None:
+            write_evidence(evidence_json, {"preflight": report})
+        typer.echo("✅ preflight ok" if report["ok"] else "❌ preflight: configuration incomplete")
+        raise typer.Exit(code=0 if report["ok"] else 2)
+
     try:
-        result = create_backup(settings=settings, dry_run=dry_run)
-    except (ProviderUnavailable, RuntimeError) as e:
-        typer.echo(f"❌ backup failed: {e}", err=True)
-        raise typer.Exit(code=1) from e
+        result = create_backup(
+            settings=settings,
+            dry_run=dry_run,
+            require_postgres=require_postgres,
+            restore_target_url=restore_target_url,
+        )
+    except BackupError as e:
+        summary = getattr(e, "summary", {"status": "failed", "classification": e.classification})
+        if evidence_json is not None:
+            write_evidence(evidence_json, summary)
+        typer.echo(f"❌ backup failed [{e.classification}]: {e}", err=True)
+        raise typer.Exit(code=2 if isinstance(e, BackupNotConfigured) else 1) from e
+    if evidence_json is not None:
+        write_evidence(evidence_json, result)
     typer.echo(f"source: {result['source']}")
     typer.echo(f"key:    {result['key']}")
     if result["dry_run"]:
         typer.echo("dry-run: nothing dumped or uploaded")
     else:
         typer.echo(f"size:   {result['size_bytes']} bytes")
-        typer.echo("✅ uploaded to R2")
+        typer.echo(f"sha256: {result['sha256']}")
+        typer.echo("✅ uploaded to R2 and verified (byte-identical round-trip)")
+        if result["restore_proven"]:
+            restored = result["verification"].get("restored_tables", {})
+            typer.echo(
+                f"✅ restore proven: {len(restored)} table(s) restored into scratch database"
+            )
+
+
+@maintenance_app.command("restore-drill")
+def restore_drill_cmd(
+    source_url: str = typer.Option(
+        ...,
+        "--source-url",
+        envvar="NEXUS_BACKUP_DRILL_SOURCE_URL",
+        help="PostgreSQL URL to dump (a seeded scratch database).",
+        show_default=False,
+    ),
+    target_url: str = typer.Option(
+        ...,
+        "--target-url",
+        envvar="NEXUS_BACKUP_RESTORE_TARGET_URL",
+        help="PostgreSQL URL on which a fresh scratch database is created and restored.",
+        show_default=False,
+    ),
+    evidence_json: Annotated[Path | None, typer.Option("--evidence-json")] = None,
+) -> None:
+    """Prove dump → restore → identical inventory without R2 or secrets."""
+    from nexus_ai_agent.maintenance.backup import BackupError, restore_drill, write_evidence
+
+    try:
+        result = restore_drill(source_url=source_url, target_url=target_url)
+    except BackupError as e:
+        summary = getattr(e, "summary", {"status": "failed", "classification": e.classification})
+        if evidence_json is not None:
+            write_evidence(evidence_json, summary)
+        typer.echo(f"❌ restore drill failed [{e.classification}]: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    if evidence_json is not None:
+        write_evidence(evidence_json, result)
+    tables = result["verification"]["restored_tables"]
+    typer.echo(f"✅ restore drill ok: {len(tables)} table(s), row counts identical")
 
 
 @maintenance_app.command()
