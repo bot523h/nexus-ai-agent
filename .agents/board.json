@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-24T20:37:51Z",
+  "updated_at": "2026-09-25T05:47:42Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -508,6 +508,15 @@
         "src/nexus_ai_agent/creative/slideshow/service.py",
         "src/nexus_ai_agent/creative/slideshow/upscale.py",
         "src/nexus_ai_agent/creative/render_jobs.py"
+      ]
+    },
+    {
+      "id": "creative-gate",
+      "description": "Permanent Creative Gate: operation truth matrix, adversarial media/RTL batteries, FFmpeg compatibility, preview/master honesty, mutation-informed regression pins, audit evidence.",
+      "paths": [
+        "scripts/creative_gate/",
+        "tests/unit/test_creative_gate_",
+        "docs/audits/CREATIVE_GATE_2026-09-25.md"
       ]
     }
   ],
@@ -2124,6 +2133,40 @@
         "status": "IMPLEMENTED (not MERGED: depends on PR#72 landing first)"
       },
       "pr": "https://github.com/bot523h/nexus-ai-agent/pull/77"
+    },
+    {
+      "task": "task-201-creative-gate-verification",
+      "title": "Creative Gate: evidence-locked verification of the creative layer + durable adversarial batteries",
+      "title_fa": "گیت دائمی خلاقیت: ماتریس حقیقت عملیات، باتری‌های رسانه/RTL adversarial، سازگاری FFmpeg، صداقت preview/master",
+      "zone": "creative-gate",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Verify the creative layer at the live HEAD with executed evidence only: 70-op truth matrix (TDD vs registry vs tests), creative keep-green chain baseline, FFmpeg/media inventory + adversarial media battery, Persian/RTL gate, command-bus refusal vocabulary, pack lifecycle/missing-capability behavior, preview/master honesty, mutation-informed coverage pins, CI parity. Add durable gate tests under tests/unit/test_creative_gate_* and the dated audit doc. No changes to Gate-2 contract files (leased by task-179) or other zones.",
+      "scope_fa": "راستی‌آزمایی لایه خلاقانه با شواهد اجراشده + افزودن تست‌های دائمی گیت، بدون لمس فایل‌های لیز‌شده.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "operation matrix recomputed from build_runtime_registry() at HEAD (counts pinned)",
+        "creative keep-green chain executed and frozen (pass counts recorded)",
+        "adversarial media battery executes: corrupt/empty/zero-duration/no-audio/no-video/VFR/odd-res/unicode/Persian-name, each failure typed",
+        "RTL/Persian battery executes: mixed text, digits, URL, brackets, emoji, ZWNJ, multiline, karaoke; byte-deterministic output",
+        "mutation spot-checks: at least 3 mutants against the creative chain are caught by the suite or the new gates",
+        "every new/changed file passes the board check against live exclusive_paths",
+        "audit doc records evidence levels honestly (LOCAL/CI/E2E/ENVIRONMENTAL/PRE-EXISTING)"
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_creative_gate_media_adversarial.py tests/unit/test_creative_gate_rtl.py",
+        "pytest -q -m 'not slow' (full suite green, zero regression vs 2042-pass baseline)",
+        "python scripts/agent_board.py check --files <changed> --branch arena/01a0d703-nexus-ai-agent",
+        "docs/audits/CREATIVE_GATE_2026-09-25.md"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "arena/01a0d703-nexus-ai-agent",
+      "agent_branch": "arena/01a0d703-nexus-ai-agent",
+      "claimed_at": "2026-09-25T05:47:42Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": false,
+      "note": ""
     }
   ],
   "deferred_log": [
