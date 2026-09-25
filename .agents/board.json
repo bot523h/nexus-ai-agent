@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-25T19:39:54Z",
+  "updated_at": "2026-09-25T19:43:27Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2407,7 +2407,7 @@
       "task": "release-truth-c-20260925",
       "title": "Release lineage, dependency and container audit",
       "zone": "release-truth-c",
-      "status": "active",
+      "status": "done",
       "exclusive_paths": [
         "README.md",
         "tests/unit/test_version_lockstep.py",
@@ -2423,11 +2423,11 @@
         "README_RELEASE_TRUTH.md",
         "Targeted pytest and ruff results, commit SHA"
       ],
-      "agent_branch": "arena/01a0da13-nexus-ai-agent",
-      "claimed_at": "2026-09-25T19:39:54Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "docs/README.md overlaps task-181: immediately relinquished, no edits; audit is a root README instead. Initial claim push mistakenly included the index; corrected before implementation."
+      "note": "Audit and narrow fixes delivered at 7809b9e4e98ee99c9ee5ec6d1d24afb65fb1d54f; evidence README_RELEASE_TRUTH.md. 83 pure targeted tests passed (--noconftest, editable --no-deps); full-tree ruff check/format green (496 files); lockstep/extras matrix green. Clean-tree live release_lineage exits 0 OPEN: no v3.13.0 tag; latest release v3.3.0. No PR closed: all 15 audited old heads retain non-equivalent patches. No tag/release mutation. Packaging/core-minimal and Docker non-root/multi-stage deferred with migration/runtime acceptance criteria; Docker unavailable. Full gates deferred to gates owner; final CI not yet verified. Audit task done, user full DoD remains partial. Overlapping docs index relinquished in f5453da, no index edits."
     }
   ],
   "deferred_log": [
