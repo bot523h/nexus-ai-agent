@@ -1,9 +1,11 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-25T17:46:27Z",
+  "updated_at": "2026-09-25T19:47:48Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
+    "constitution": "قانون اساسی مهندسی نکسوس (ENGINEERING_CONSTITUTION.md) پیش از هر claim، کدنویسی، بازبینی یا اعلام «تمام» خوانده و رعایت می‌شود؛ طبق مادهٔ ۱۴ خودش بر قوانین محلی این مخزن مقدم است. ابزار تخته (show/next/claim) هم این یادآوری را چاپ می‌کند.",
+    "constitution_en": "The NEXUS Engineering Constitution (ENGINEERING_CONSTITUTION.md) is mandatory reading before any claim, code, review, or 'done' claim; by its own Article 14 it prevails over the local rules of this repository.",
     "identity_rule": "شاخه، هویت متعارف است (branch name is the canonical identity)؛ حروف (A/B/C…) فقط برچسب‌اند. هر سشن جدید باید ابتدا `git ls-remote origin \"arena/*\"`، PRهای باز و این تخته را بخواند.",
     "lease_ttl_hours": 24,
     "gates_rule": "دقیقاً یک عامل (دارندهٔ gates_owner) گیت‌های کامل را روی کارِ main-bound اجرا می‌کند؛ بقیه «deferred to gates owner» را در PR قید می‌کنند. بررسی‌های تشخیصی محلی (ruff check، pytest هدفمند) برای همه آزاد است.",
@@ -601,9 +603,70 @@
         "src/nexus_ai_agent/cli.py",
         "docs/audits/VERIFICATION_TRUTH_MATRIX.json"
       ]
+    },
+    {
+      "id": "governance-constitution",
+      "description": "Engineering Constitution registration: root contract, agent-facing pointers, board protocol entry, CLI reminder, PR gate, enforcement test",
+      "paths": [
+        "ENGINEERING_CONSTITUTION.md",
+        "AGENTS.md",
+        "CONTRIBUTING.md",
+        "README.md",
+        ".github/PULL_REQUEST_TEMPLATE.md",
+        "scripts/agent_board.py",
+        "tests/unit/test_engineering_constitution.py"
+      ]
     }
   ],
   "claims": [
+    {
+      "task": "task-184-engineering-constitution",
+      "title": "Register the NEXUS Engineering Constitution as an enforced repository contract",
+      "title_fa": "ثبت قانون اساسی مهندسی نکسوس به‌عنوان قرارداد اجراشدنی مخزن",
+      "zone": "governance-constitution",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Owner-directed: register the 14-article Engineering Constitution so every agent reads and follows it before working. Deliverables: ENGINEERING_CONSTITUTION.md (Persian original normative + English rendering + enforcement map + Final Gate checklist), AGENTS.md §0 entry gate and Article-5 wording in §2, CONTRIBUTING.md + README.md pointers, .agents/board.json protocol.constitution, agent_board.py show/next/claim reminder, .github/PULL_REQUEST_TEMPLATE.md Final Gate checklist, and tests/unit/test_engineering_constitution.py. No file under src/ is touched.",
+      "scope_fa": "دستور مالک: ثبت قانون اساسی مهندسی (۱۴ ماده) تا هر عامل پیش از کار آن را بخواند و رعایت کند. خروجی‌ها: ENGINEERING_CONSTITUTION.md (متن فارسی معتبر + ترجمهٔ انگلیسی + نقشهٔ اجرا + چک‌لیست Final Gate)، بخش ۰ در AGENTS.md، اشاره در CONTRIBUTING.md و README.md، protocol.constitution در تخته، یادآوری در خروجی show/next/claim ابزار تخته، قالب PR با چک‌لیست Final Gate، و تست اجرا. هیچ فایلی در src/ تغییر نمی‌کند.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "متن اصلی ۱۴ ماده بدون تغییر ثبت شده باشد (Persian original verbatim) و ترجمهٔ انگلیسی همراه آن باشد",
+        "AGENTS.md §0 و CONTRIBUTING.md و README.md و protocol.constitution تخته همه به سند لینک کنند",
+        "خروجی scripts/agent_board.py show/next/claim یادآوری قانون را چاپ کند",
+        "tests/unit/test_engineering_constitution.py هر یک از این سنجه‌ها را تضمین کند و با pytest سبز باشد",
+        "docs gates (tests/unit/test_docs_integrity.py) و board schema tests سبز بمانند",
+        "هیچ فایلی در src/ لمس نشود"
+      ],
+      "acceptance_criteria_en": [
+        "the 14 articles are registered verbatim (Persian original) with an English rendering",
+        "AGENTS.md §0, CONTRIBUTING.md, README.md and the board's protocol.constitution all link the document",
+        "scripts/agent_board.py show/next/claim print the constitution reminder",
+        "tests/unit/test_engineering_constitution.py enforces every pin above and is green",
+        "the docs gates (tests/unit/test_docs_integrity.py) and the board schema tests stay green",
+        "no file under src/ is touched"
+      ],
+      "evidence_required": [
+        "pytest -q --noconftest tests/unit/test_engineering_constitution.py tests/unit/test_docs_integrity.py tests/unit/test_agent_board.py tests/unit/test_agent_board_active_in_review.py tests/unit/test_agent_board_pr_visibility.py",
+        "ruff check tests/unit/test_engineering_constitution.py scripts/agent_board.py && ruff format --check tests/unit/test_engineering_constitution.py scripts/agent_board.py",
+        "python scripts/agent_board.py show | grep -i constitution",
+        "python scripts/agent_board.py check --files <changed files> --branch arena/01a0da15-nexus-ai-agent (exit 0)"
+      ],
+      "exclusive_paths": [
+        "ENGINEERING_CONSTITUTION.md",
+        "AGENTS.md",
+        "CONTRIBUTING.md",
+        "README.md",
+        ".github/PULL_REQUEST_TEMPLATE.md",
+        "scripts/agent_board.py",
+        "tests/unit/test_engineering_constitution.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0da15-nexus-ai-agent",
+      "claimed_at": "2026-09-25T19:55:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Owner instruction (Persian): register the Engineering Constitution somewhere every agent reviews before working or coding, and keep it permanently saved. Placement at the repo root next to AGENTS.md (the agent front door) was chosen over docs/ so the law is read before work; docs/README.md is exclusively leased by task-181 until 2026-09-26T23:06:38Z, so no docs/ file was touched (Article 8 scope firewall; referee: agent_board.py check). gates_owner is false on purpose: no active claim on the live board holds gates_owner: true (seat vacant), and this session cannot run the full gates in its sandbox (dependencies not installed), so the gates are deferred to the gates owner / to CI on the PR rather than claimed without evidence. Pre-existing finding, state DEFERRED_WITH_REASON: `mypy --ignore-missing-imports scripts/agent_board.py` reports 4 errors in fetch_open_prs (object not iterable / unused type: ignore) — verified identical on HEAD~ of this branch (pre-existing, not introduced here) and outside CI's `mypy src` scope; fixing it needs its own claim plus a typing test, so it is recorded rather than silently mixed into this governance change."
+    },
     {
       "task": "task-131",
       "title": "Architecture & documentation suite + board rewrite",
@@ -2203,11 +2266,11 @@
     },
     {
       "priority": "P0",
-      "status": "active_in_review",
+      "status": "expired",
       "prerequisites": [],
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Continuation of sec-boundary-salvage-01a0d4c7 (PR#76 head 5b17a709, CI green): owner-directed adversarial verification proved 5 S3/S5 defects its tests missed (stdlib traceback redaction bypass, mapping/non-string arg corruption, Basic-scheme credentials, CGNAT 100.64.0.0/10 allowed, https->http redirect downgrade followed). Closed on this branch (ff from 5b17a709 + closure commits), 12/12 mutation-killed, full non-slow suite 1989 passed / ruff / format / mypy clean. Takeover recorded in takeover_log; same zone, one owner.",
+      "note": "auto-released by gc at 2026-09-25T19:42:45Z (stale active_in_review lease) — prior note preserved: Continuation of sec-boundary-salvage-01a0d4c7 (PR#76 head 5b17a709, CI green): owner-directed adversarial verification proved 5 S3/S5 defects its tests missed (stdlib traceback redaction bypass, mapping/non-string arg corruption, Basic-scheme credentials, CGNAT 100.64.0.0/10 allowed, https->http redirect downgrade followed). Closed on this branch (ff from 5b17a709 + closure commits), 12/12 mutation-killed, full non-slow suite 1989 passed / ruff / format / mypy clean. Takeover recorded in takeover_log; same zone, one owner.",
       "task": "sec-boundary-salvage-01a0d563",
       "title": "Security truth salvage: verify S1-S5 on main 035a896, fix only the real delta",
       "title_fa": "استخراج حقیقت امنیتی: بازبینی S1-S5 روی main 035a896 و اعمال فقط دلتای واقعی",

@@ -17,6 +17,22 @@ committed and pushed through git, backed by a zero-dependency CLI
 The board is `.agents/board.json` (**schema 2**: `protocol`, `zones`, `claims`, `deferred_log`,
 `takeover_log`, `next_work`, `history`). Structure is enforced, not requested.
 
+## 0. Rule zero — read the Engineering Constitution first
+
+**Before you claim, code, review, or sign anything off, read
+[`ENGINEERING_CONSTITUTION.md`](ENGINEERING_CONSTITUTION.md) — the NEXUS Engineering Constitution
+(14 articles, Persian original + English rendering).** It is binding on every agent in this
+repository — model or human — and by its own Article 14 it **prevails over the local rules in this
+file** wherever the two disagree.
+
+`python scripts/agent_board.py show` (and `next`, and `claim`) prints the pointer back to it, so the
+constitution cannot be skipped by accident, and
+`pytest -q tests/unit/test_engineering_constitution.py` fails if this link, the board's
+`protocol.constitution` entry, the `README.md` / `CONTRIBUTING.md` pointers, or the CLI reminder ever
+disappear. Article 14's Final Gate — `CODE` + `TEST` + `SECURITY` + `CI` + `OBSERVABILITY` +
+`DOCUMENTATION` + `BOARD EVIDENCE` — is what a PR body must be able to prove, and
+`.github/PULL_REQUEST_TEMPLATE.md` is its per-PR checklist.
+
 ## 1. The five rules
 
 1. **CLAIM BEFORE YOU CODE.** `python scripts/agent_board.py show` → `... next --branch <your-branch>`
@@ -40,7 +56,10 @@ The board is `.agents/board.json` (**schema 2**: `protocol`, `zones`, `claims`, 
 - Every claimable task carries **`acceptance_criteria`** and **`evidence_required`** — a task without
   them cannot be claimed, and `tests/unit/test_agent_board.py` fails the board if one appears.
 - A PR body states: task id, zone, the acceptance criteria met, the exact commands run, and their
-  observed result. "Tests pass" without a command is not evidence.
+  observed result. "Tests pass" without a command is not evidence — Article 5 of the
+  [`ENGINEERING_CONSTITUTION.md`](ENGINEERING_CONSTITUTION.md) (evidence first) is the law behind this
+  rule, and its list of acceptable evidence is test / benchmark / CI run / static analysis / runtime
+  probe / reproducible command / artifact / hash / migration proof.
 - Honest status beats optimistic status: if a capability is implemented but not reachable, say so and
   record the reproduction (see `task-126` in the board as the worked example).
 - Numbers in documentation must be reproducible from the tree

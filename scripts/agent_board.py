@@ -28,6 +28,7 @@ Commands
 All state lives in .agents/board.json (schema 1). Pure stdlib.
 
 Typical loop for an arriving agent:
+    cat ENGINEERING_CONSTITUTION.md      # mandatory first read (AGENTS.md §0)
     python scripts/agent_board.py show
     python scripts/agent_board.py next --branch $MY_BRANCH
     python scripts/agent_board.py claim feature-wiring-batch --branch $MY_BRANCH
@@ -47,6 +48,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BOARD = ROOT / ".agents" / "board.json"
+
+#: The Engineering Constitution (AGENTS.md §0, Article 14 of the constitution itself): every agent
+#: reads it before it claims, codes, reviews, or declares anything done.  The board's
+#: ``protocol.constitution`` text overrides the default wording, and the pointer is printed by
+#: ``show`` / ``next`` / ``claim`` so an arriving agent cannot miss it by accident.
+#: ``tests/unit/test_engineering_constitution.py`` fails if this reminder disappears.
+CONSTITUTION_DOC = "ENGINEERING_CONSTITUTION.md"
+CONSTITUTION_DEFAULT = (
+    f"read {CONSTITUTION_DOC} (the NEXUS Engineering Constitution) before any work — "
+    "by its Article 14 it prevails over the local rules of this repository."
+)
 
 # Files every PR is expected to touch (coordination medium) — never counted as
 # "uncovered scope" by praudit, because no claim exclusively owns them.
@@ -110,6 +122,13 @@ def load_board() -> dict:
 def save_board(board: dict) -> None:
     board["updated_at"] = _iso(_now())
     BOARD.write_text(json.dumps(board, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def _constitution_line(board: dict) -> str:
+    """The mandatory-first-read reminder, worded by the board when it declares one."""
+    protocol = board.get("protocol") or {}
+    text = str(protocol.get("constitution") or CONSTITUTION_DEFAULT)
+    return f"constitution: {text}"
 
 
 def gc_expired(board: dict) -> list[str]:
@@ -184,6 +203,7 @@ def cmd_show(_args: argparse.Namespace) -> int:
         save_board(board)
         print(f"[gc] auto-released expired leases: {', '.join(freed)}")
     print(f"board updated_at: {board['updated_at']}")
+    print(_constitution_line(board))
     for claim in board.get("claims", []):
         claimed = _parse(claim.get("claimed_at"))
         expires = (
@@ -242,6 +262,7 @@ def cmd_claim(args: argparse.Namespace) -> int:
                 other["gates_owner"] = False
     save_board(board)
     print(f"CLAIMED {args.task} for {args.branch} (ttl {args.ttl}h, gates_owner={args.gates})")
+    print(_constitution_line(board))
     print("NOW: git add .agents/board.json && git commit && git push IMMEDIATELY —")
     print("an unpushed claim does not exist for the other sandbox.")
     return 0
@@ -287,6 +308,7 @@ def cmd_next(args: argparse.Namespace) -> int:
     board = load_board()
     gc_expired(board)
     save_board(board)
+    print(_constitution_line(board))
     for claim in board.get("claims", []):
         if claim["status"] in ("queued", "expired", "deferred"):
             blockers = []
