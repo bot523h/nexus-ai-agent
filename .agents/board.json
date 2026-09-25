@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-24T20:37:51Z",
+  "updated_at": "2026-09-25T05:10:59Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1837,7 +1837,7 @@
       "title_fa": "بکاپ شبانهٔ دیتابیس هرگز موفق نشده (۳ از ۳ سرخ) — مسیر بکاپ Production واقعاً کار کند",
       "zone": "ci-quality",
       "priority": "P1",
-      "status": "queued",
+      "status": "active",
       "scope": "maintenance.yml backup-db fails 3/3 scheduled runs (35580701817, 35705502209, 35838057275 — the 'Run nexus maintenance backup' step exits 1; the 2026-09-21 'success' 35586584833 was housekeeping-only with backup-db skipped, verified via the job API). backup.py/r2.py unchanged across those runs, so the failure is environmental (R2 secrets missing => by-design red, or R2+Neon misconfiguration). Read the job log, record the exact root cause, fix configuration (owner secrets per docs/ops/r2-storage.md §4) and/or the workflow preflight, then prove a real upload under backups/db/<stamp>/ via workflow_dispatch.",
       "scope_fa": "backup-db در سه اجرا پیاپی سرخ است؛ کد backup.py/r2.py در بازهٔ آن اجراها دست‌نخورده مانده، پس شکست محیطی است (R2 secrets / پیکربندی Neon). لوق جاب باید خوانده، ریشه ثبت و با یک اجرای دستی موفق (آپلود واقع‌زیر backups/db/<stamp>/) اثبات شود.",
       "prerequisites": [],
@@ -1854,11 +1854,11 @@
         ".github/workflows/maintenance.yml"
       ],
       "owner_hint": "owner action for the secrets; any free agent for the forensics/preflight",
-      "agent_branch": "",
-      "claimed_at": null,
-      "ttl_hours": 24,
+      "agent_branch": "arena/01a0d6d7-nexus-ai-agent",
+      "claimed_at": "2026-09-25T05:10:59Z",
+      "ttl_hours": 48,
       "gates_owner": false,
-      "note": "Forensics recorded 2026-09-23. Repo-side verifiability absorbed by task-167-backup-verifiability (P0-C, 2026-09-24). This task keeps ONLY the owner-action part: set R2/Neon secrets (docs/ops/r2-storage.md §4) and prove one green workflow_dispatch run with upload under backups/db/<stamp>/."
+      "note": ""
     },
     {
       "priority": "P0",
