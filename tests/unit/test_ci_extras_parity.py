@@ -272,3 +272,74 @@ def test_the_release_lineage_job_exists_and_fetches_tags() -> None:
     assert "scripts/release_lineage.py" in block
     assert "fetch-depth: 0" in block
     assert "fetch-tags: true" in block
+
+
+# --------------------------------------------------------------------------- #
+# 7. the 3.10 bootstrap exception is scoped, documented and self-unarming
+# --------------------------------------------------------------------------- #
+#: Runtime constructs that require Python > 3.10.  While any of them exists in
+#: ``src/``, the 3.10 parity leg is *allowed* to be non-blocking (the runtime
+#: is not 3.10-capable and CI must not pretend otherwise); the moment the last
+#: one is gone, the leg MUST become blocking again — this test enforces the
+#: transition machine, so the exception cannot silently outlive its cause.
+_PY310_RUNTIME_BLOCKERS = ("StrEnum",)
+
+_SRC = REPO_ROOT / "src"
+
+
+def _py310_runtime_blockers() -> list[str]:
+    blockers: list[str] = []
+    for path in sorted(_SRC.rglob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        for marker in _PY310_RUNTIME_BLOCKERS:
+            if marker in text:
+                blockers.append(f"{path.relative_to(REPO_ROOT)} uses {marker}")
+    return blockers
+
+
+def test_the_310_parity_leg_is_blocking_iff_the_runtime_supports_it() -> None:
+    block = extras_matrix.job_block(WORKFLOW_TEXT, extras_matrix.PARITY_JOB)
+    has_blockers = bool(_py310_runtime_blockers())
+    has_exception = "continue-on-error: ${{ matrix.python-version == '3.10' }}" in block
+    if has_blockers:
+        assert has_exception, (
+            "the runtime still contains Python>3.10 constructs "
+            f"({_py310_runtime_blockers()}) so the 3.10 parity leg must stay "
+            "explicitly non-blocking — or the constructs must be fixed first"
+        )
+    else:
+        assert not has_exception, (
+            "src/ no longer uses any known Python>3.10 construct: the 3.10 parity "
+            "leg MUST drop its continue-on-error and become blocking again "
+            "(remove the line and this guard turns green)"
+        )
+
+
+def test_red_proof_the_transition_guard_detects_a_healed_runtime() -> None:
+    """No blockers + still non-blocking → the guard must be able to fail."""
+    healed_block = extras_matrix.job_block(WORKFLOW_TEXT, extras_matrix.PARITY_JOB)
+    assert "continue-on-error: ${{ matrix.python-version == '3.10' }}" in healed_block
+    # simulate the healed state: the guard logic must demand the leg be blocking
+    assert _py310_runtime_blockers(), (
+        "if this fails, src/ has been healed: go drop the 3.10 continue-on-error "
+        "in ci.yml (the transition this guard enforces)"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 8. core-leg skip inflation (stricter: zero dependency-missing skips)
+# --------------------------------------------------------------------------- #
+def test_red_proof_a_dependency_skip_on_the_core_leg_is_detected() -> None:
+    log = "SKIPPED [1] tests/unit/test_litellm_provider.py:170: could not import 'litellm'\n"
+    problems = extras_matrix.skip_inflation_problems(log, "core")
+    assert problems and "core" in problems[0], problems
+
+
+def test_core_leg_allows_explicitly_reasoned_optional_skips() -> None:
+    """The intentional, visible leg skips must NOT trip the core-leg guard."""
+    log = (
+        "SKIPPED [1] tests/unit/test_optional_extras.py:88: [speech] smoke is "
+        "proven by the `extras-matrix` CI leg (NEXUS_EXTRA_LEG=speech); not "
+        "installed in this environment\n"
+    )
+    assert extras_matrix.skip_inflation_problems(log, "core") == []

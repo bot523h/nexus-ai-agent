@@ -28,7 +28,20 @@ from importlib.metadata import version as distribution_version
 from pathlib import Path
 
 import pytest
-import tomllib
+
+try:  # Python 3.11+
+    import tomllib
+except ImportError:  # Python 3.10 — tomli ships transitively via pyproject_hooks
+    try:
+        import tomli as tomllib  # type: ignore[no-redef]
+    except ImportError:  # pragma: no cover — neither parser available
+        tomllib = None  # type: ignore[assignment]
+
+if tomllib is None:  # pragma: no cover
+    pytest.skip(
+        "no TOML parser on this interpreter (tomllib/tomli) — lockstep test inert",
+        allow_module_level=True,
+    )
 
 REPO_ROOT = Path(__file__).parents[2]
 VERSION_FILE = REPO_ROOT / "VERSION"

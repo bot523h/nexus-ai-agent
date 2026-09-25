@@ -74,8 +74,11 @@ PARITY_JOB = "python-parity"
 PRIMARY_PYTHON = "3.12"
 
 #: Skip reasons that mean "a real test declined to run because of a missing
-#: optional dependency".  ``pytest.importorskip`` reports "could not import".
-_MISSING_DEP_SKIP = re.compile(r"could not import|requires the optional|not installed")
+#: dependency".  ``pytest.importorskip`` reports "could not import"; the
+#: intentionally-reasoned leg skips ("smoke is proven by the extras-matrix CI
+#: leg … not installed in this environment") are deliberately self-describing
+#: and must NOT match — they are the visible, honest kind of skip.
+_MISSING_DEP_SKIP = re.compile(r"could not import|requires the optional")
 
 _JOB_HEADER = re.compile(r"^  (?P<job>[A-Za-z0-9_-]+):[ \t]*$", re.MULTILINE)
 _LEG_ENTRY = re.compile(r"^\s*-\s*leg:\s*([A-Za-z0-9_.-]+)\s*$", re.MULTILINE)
@@ -476,17 +479,35 @@ def skip_inflation_problems(log_text: str, leg: str) -> list[str]:
     ``pdf``, a reason mentioning ``pypdf`` (e.g. ``could not import 'pypdf'``)
     means a test that CI promised to run for real silently did not — that is
     the "skipped test inflation" failure mode this guard kills.
+
+    The ``core`` leg provides no optional module, so its rule is stricter and
+    simpler: **no** dependency-missing skip at all.  Optional-extras tests on
+    that leg skip with an explicit, self-describing reason ("smoke is proven by
+    the extras-matrix CI leg"), which does not match the missing-dependency
+    pattern — anything that does is a core dependency that failed to provide.
     """
-    if leg not in LEG_DEFINITIONS:
+    if leg == CORE_LEG:
+        modules: tuple[str, ...] = ()
+    elif leg in LEG_DEFINITIONS:
+        modules = LEG_DEFINITIONS[leg].import_modules
+    else:
         return [f"unknown leg {leg!r}: known legs are core + {sorted(LEG_DEFINITIONS)}"]
-    modules = LEG_DEFINITIONS[leg].import_modules
     problems: list[str] = []
     for line in log_text.splitlines():
         stripped = line.strip()
         if not stripped.startswith("SKIPPED"):
             continue
+        if not _MISSING_DEP_SKIP.search(stripped):
+            continue
+        if leg == CORE_LEG:
+            problems.append(
+                f"skip inflation on leg 'core': {stripped} — the core install must "
+                "provide everything a core test needs; optional-extras skips are "
+                "explicitly reasoned and never match this pattern"
+            )
+            continue
         for module in modules:
-            if module in stripped and _MISSING_DEP_SKIP.search(stripped):
+            if module in stripped:
                 problems.append(
                     f"skip inflation on leg {leg!r}: {stripped} — module {module!r} is "
                     "installed on this leg, the test must run, not skip"

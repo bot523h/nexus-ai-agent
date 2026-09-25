@@ -56,21 +56,22 @@ FIXTURES = REPO_ROOT / "tests" / "fixtures"
 LEG = os.environ.get("NEXUS_EXTRA_LEG") or None
 
 
-def _load_leg_definitions() -> dict[str, tuple[str, ...]]:
-    """Import the leg registry from the script by path (scripts/ is unpackaged)."""
+def _load_leg_module() -> object:
+    """Import the leg registry script by path (scripts/ is unpackaged)."""
     spec = importlib.util.spec_from_file_location("extras_matrix_legs", LEG_SCRIPT)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     # register before exec: @dataclass resolves annotations via sys.modules
     sys.modules["extras_matrix_legs"] = module
     spec.loader.exec_module(module)
-    return {
-        name: tuple(definition.import_modules)
-        for name, definition in module.LEG_DEFINITIONS.items()
-    }
+    return module
 
 
-LEG_MODULES = _load_leg_definitions()
+_EXTRAS_MATRIX = _load_leg_module()
+LEG_MODULES = {
+    name: tuple(definition.import_modules)
+    for name, definition in _EXTRAS_MATRIX.LEG_DEFINITIONS.items()  # type: ignore[attr-defined]
+}
 PDF_HINT = "nexus-ai-agent[pdf]"
 SPEECH_HINT = "nexus-ai-agent[speech]"
 TRANSLATE_HINT = "nexus-ai-agent[translate]"
@@ -306,10 +307,11 @@ def test_active_leg_is_a_known_leg() -> None:
 
 def test_leg_environment_matches_declared_extras() -> None:
     """The leg registry in the script must mirror pyproject (double-entry bookkeeping)."""
-    import tomllib
-
-    data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    shipping = {name for name in data["project"]["optional-dependencies"] if name != "dev"}
+    # The script's parser is stdlib-only and Python-3.10-safe (no tomllib),
+    # so the same declaration is read live from pyproject on every interpreter.
+    pyproject_text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    extras = _EXTRAS_MATRIX._optional_dependencies(pyproject_text)  # noqa: SLF001
+    shipping = {name for name in extras if name != "dev"}
     assert set(LEG_MODULES) == shipping, (
         "scripts/extras_matrix.py LEG_DEFINITIONS drifted from pyproject "
         f"optional-dependencies: script={sorted(LEG_MODULES)} pyproject={sorted(shipping)}"

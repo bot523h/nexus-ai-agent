@@ -29,7 +29,10 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-import tomllib
+try:  # Python 3.11+
+    import tomllib
+except ImportError:  # Python 3.10 — tomli ships transitively via pyproject_hooks
+    import tomli as tomllib  # type: ignore[no-redef]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
