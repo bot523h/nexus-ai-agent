@@ -234,3 +234,28 @@ def test_architecture_pages_start_with_a_single_h1(path: Path) -> None:
     assert lines and lines[0].startswith("# "), f"{path.name} does not start with an H1"
     h1_count = sum(1 for line in lines if line.startswith("# "))
     assert h1_count == 1, f"{path.name} has {h1_count} H1 headings (expected exactly 1)"
+
+
+# --------------------------------------------------------------------------- #
+# 7. the Engineering Constitution enforcement is not self-hosted (task-185)
+# --------------------------------------------------------------------------- #
+def test_constitution_enforcement_survives_the_deletion_of_one_file() -> None:
+    """Deleting one file must not delete the enforcement of the constitution.
+
+    Audit mutation M10 proved the gap: removing ``tests/unit/test_engineering_constitution.py``
+    left 97 other governance tests green, because the enforcement lived only inside the file it
+    protects.  ``scripts/constitution_gate.py`` is the independent half — a separate file, run by
+    the ``lint-fast`` CI job, which installs nothing.  This cross-guard lives in a *different*
+    module on purpose, so the enforcement now has two homes and deleting either one is red.
+    """
+    gate = REPO_ROOT / "scripts" / "constitution_gate.py"
+    enforcement = REPO_ROOT / "tests" / "unit" / "test_engineering_constitution.py"
+    workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    agents_md = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert gate.is_file(), "scripts/constitution_gate.py is missing — the independent gate is gone"
+    assert enforcement.is_file(), "tests/unit/test_engineering_constitution.py is missing"
+    assert "python scripts/constitution_gate.py" in workflow, (
+        "the constitution gate is not wired into .github/workflows/ci.yml"
+    )
+    assert "](ENGINEERING_CONSTITUTION.md)" in agents_md, "AGENTS.md lost the constitution link"

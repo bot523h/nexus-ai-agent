@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -436,3 +437,35 @@ def test_show_garbage_collects_an_expired_lease(board_module: ModuleType) -> Non
     reloaded = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
     freed = next(c for c in reloaded["claims"] if c["task"] == stale["task"])
     assert freed["status"] == "expired"
+
+
+# --------------------------------------------------------------------------- #
+# the constitution's board entry + evidence-SHA binding (task-185 cross-guard)
+# --------------------------------------------------------------------------- #
+def test_board_constitution_entry_and_evidence_shas_stay_declared(board: dict) -> None:
+    """The board is the only medium shared by parallel sandboxes, so the law lives in it too.
+
+    This guard lives beside the board schema tests on purpose: the audit showed that stripping
+    ``protocol.constitution`` (mutation M08/B21) or citing a fabricated ``evidence_sha`` (M19) was
+    invisible to every suite except the constitution's own — and that suite is deletable.  Here the
+    same facts are asserted from the board side, by a module no agent can remove without breaking
+    the schema tests everyone relies on.
+    """
+    gate = REPO_ROOT / "scripts" / "constitution_gate.py"
+    assert gate.is_file(), "scripts/constitution_gate.py is missing (task-185 cross-guard)"
+
+    protocol = board["protocol"]
+    assert "constitution" in protocol, "the board protocol lost its constitution entry"
+    assert "ENGINEERING_CONSTITUTION.md" in protocol["constitution"], (
+        "the board's constitution entry does not name the document"
+    )
+    assert "constitution_en" in protocol, "the board protocol lost its English constitution entry"
+
+    for claim in board["claims"]:
+        sha = claim.get("evidence_sha")
+        if not sha:
+            continue
+        assert re.fullmatch(r"[0-9a-f]{40}", str(sha)), (
+            f"{claim['task']}: evidence_sha {sha!r} is not a 40-hex commit id — "
+            "evidence must be attributable to a real commit (Article 10)"
+        )

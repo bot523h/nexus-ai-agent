@@ -530,8 +530,12 @@ src/nexus_ai_agent/
 
 ## Documentation Map
 
-Everything lives under `docs/` (index: [`docs/README.md`](docs/README.md)):
+Everything lives under `docs/` (index: [`docs/README.md`](docs/README.md)); the agent-facing
+contract deliberately sits at the repository root, next to the code:
 
+- [`ENGINEERING_CONSTITUTION.md`](ENGINEERING_CONSTITUTION.md) — the NEXUS Engineering Constitution:
+  mandatory reading for every agent before any work; prevails over local rules
+- [`AGENTS.md`](AGENTS.md) — the multi-agent coordination contract (claim board, leases, gates owner)
 - `docs/DECISION_LOG.md` — the authoritative architecture decision log
 - `docs/architecture.md` + `docs/architecture/` — current architecture & data lifecycle
 - `docs/audits/` — dated audits and handoff analyses
