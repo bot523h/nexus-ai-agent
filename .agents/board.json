@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-25T05:52:35Z",
+  "updated_at": "2026-09-25T06:39:14Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -537,12 +537,13 @@
       "paths": [
         "src/nexus_ai_agent/nagar/",
         "OPERATION_TRUTH.json",
-        "docs/OPERATION_CONTRACT_MATRIX.md",
-        "docs/L0_L4_MATURITY.md",
-        "docs/RECONCILIATION.md",
-        "docs/OPERATION_WAVE_PLAN.md",
-        "docs/audits/OPERATION_TRUTH_2026-09-25.md",
-        "docs/audits/OPERATION_TRUTH_MUTATIONS_2026-09-25.md",
+        "OPERATION_CONTRACT_MATRIX.md",
+        "L0_L4_MATURITY.md",
+        "RECONCILIATION.md",
+        "OPERATION_WAVE_PLAN.md",
+        "OPERATION_TRUTH_AUDIT_2026-09-25.md",
+        "OPERATION_TRUTH_MUTATIONS_2026-09-25.md",
+        "docs/audits/OPERATION_PROOF_REGISTRY.json",
         "tests/architecture/test_operation_truth_gate.py",
         "tests/unit/test_operation_truth_mutations.py",
         "tests/unit/test_operation_truth_sources.py"
@@ -2235,22 +2236,23 @@
       "exclusive_paths": [
         "src/nexus_ai_agent/nagar/",
         "OPERATION_TRUTH.json",
-        "docs/OPERATION_CONTRACT_MATRIX.md",
-        "docs/L0_L4_MATURITY.md",
-        "docs/RECONCILIATION.md",
-        "docs/OPERATION_WAVE_PLAN.md",
-        "docs/audits/OPERATION_TRUTH_2026-09-25.md",
-        "docs/audits/OPERATION_TRUTH_MUTATIONS_2026-09-25.md",
+        "OPERATION_CONTRACT_MATRIX.md",
+        "L0_L4_MATURITY.md",
+        "RECONCILIATION.md",
+        "OPERATION_WAVE_PLAN.md",
+        "OPERATION_TRUTH_AUDIT_2026-09-25.md",
+        "OPERATION_TRUTH_MUTATIONS_2026-09-25.md",
+        "docs/audits/OPERATION_PROOF_REGISTRY.json",
         "tests/architecture/test_operation_truth_gate.py",
         "tests/unit/test_operation_truth_mutations.py",
         "tests/unit/test_operation_truth_sources.py"
       ],
       "owner_hint": "",
       "agent_branch": "arena/01a0d708-nexus-ai-agent",
-      "claimed_at": "2026-09-25T05:52:35Z",
+      "claimed_at": "2026-09-25T06:39:14Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": ""
+      "note": "generated pages live at the repo root because docs/README.md is leased by task-179-gate2-command-reconciliation (referee check exit 1); index rows deferred"
     }
   ],
   "deferred_log": [
