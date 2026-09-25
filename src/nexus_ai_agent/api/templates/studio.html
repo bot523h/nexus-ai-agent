@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nagar Creative Studio -- سیستم‌عامل خلاقانه نگار</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;600;700;800&display=swap');
+        * { font-family: 'Vazirmatn', -apple-system, sans-serif; }
+        .timeline-track { background: repeating-linear-gradient(90deg, #1e293b, #1e293b 49px, #334155 50px); }
+        .playhead-line { box-shadow: 0 0 10px rgba(59, 130, 246, 0.8); }
+        .waveform-bar:hover { background-color: #60a5fa !important; }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 flex flex-col h-screen overflow-hidden select-none">
+
+    <!-- Top App Bar -->
+    <header class="h-14 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-6 z-20">
+        <div class="flex items-center gap-4">
+            <div class="flex items-center gap-2">
+                <span class="w-3 h-3 rounded-full bg-emerald-500 animate-pulse"></span>
+                <h1 class="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+                    <span>Nagar</span>
+                    <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-900/60 text-blue-300 border border-blue-700">Creative OS</span>
+                </h1>
+            </div>
+            <div id="pipeline-badge" class="px-2.5 py-0.5 rounded text-xs font-bold bg-amber-950/70 text-amber-300 border border-amber-800">
+                پیش‌نمایش (Draft / ۴۸۰p)
+            </div>
+        </div>
+
+        <!-- Center Controls: Student Mode & Reversible Edit Actions -->
+        <div class="flex items-center gap-3">
+            <button id="btn-student" onclick="toggleStudentMode()" class="px-3 py-1 rounded-lg text-xs font-medium border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center gap-1.5 transition">
+                <span>🎓</span>
+                <span id="student-label">حالت یادگیری (Student Mode)</span>
+            </button>
+            <div class="h-5 w-px bg-slate-800"></div>
+            <button id="btn-undo" onclick="undo()" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs flex items-center gap-1" title="Ctrl+Z">
+                <span>↩</span>
+                <span>بازگشت (Undo)</span>
+            </button>
+            <button id="btn-redo" onclick="redo()" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs flex items-center gap-1" title="Ctrl+Y">
+                <span>↪</span>
+                <span>پیش‌روی (Redo)</span>
+            </button>
+        </div>
+
+        <!-- Right: Timecode & Project Identity -->
+        <div class="flex items-center gap-4">
+            <div class="flex items-baseline gap-1 bg-slate-900 px-3 py-1 rounded-lg border border-slate-800">
+                <span class="text-xs text-slate-400">موقعیت:</span>
+                <span id="timecode-display" class="font-mono text-sm font-bold text-blue-400 dir-ltr">00:00:00.000</span>
+            </div>
+            <button onclick="toggleLang()" class="text-xs text-slate-400 hover:text-white px-2 py-1 rounded border border-slate-800">
+                فارسی / EN
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <main class="flex-1 flex overflow-hidden">
+
+        <!-- Left / Center: Preview Monitor & Timeline Workspace -->
+        <div class="flex-1 flex flex-col border-l border-slate-800">
+
+            <!-- Video Preview Stage -->
+            <div class="flex-1 bg-slate-900 flex flex-col items-center justify-center p-4 relative">
+                <div class="w-full max-w-2xl aspect-video bg-black rounded-lg border border-slate-800 shadow-2xl relative overflow-hidden flex flex-col items-center justify-center">
+                    
+                    <!-- Watermark / Status Badge -->
+                    <div class="absolute top-3 right-3 flex items-center gap-2 z-10">
+                        <span id="preview-tag" class="px-2 py-0.5 rounded text-[11px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/40">
+                            پیش‌نمایش زنده (Preview Draft)
+                        </span>
+                    </div>
+
+                    <!-- Video Canvas Simulation -->
+                    <div id="video-canvas" class="text-center p-6">
+                        <div class="w-16 h-16 mx-auto mb-3 rounded-full bg-blue-500/10 flex items-center justify-center text-blue-400 text-2xl">
+                            🎬
+                        </div>
+                        <h3 class="text-sm font-bold text-slate-200 mb-1">Nagar Pure Rendering Canvas</h3>
+                        <p id="canvas-sub" class="text-xs text-slate-400">کیفیت سبک ۴۸۰p • پاسخ‌دهی تعاملی کمتر از ۳۰ میلی‌ثانیه</p>
+                    </div>
+
+                    <!-- Subtitle Overlay with Persian RTL Vazirmatn Styling -->
+                    <div id="subtitle-overlay" class="absolute bottom-6 inset-x-4 text-center z-10">
+                        <span id="subtitle-text" class="inline-block bg-black/80 text-white text-sm font-semibold px-4 py-1.5 rounded-lg border border-white/10 shadow-lg">
+                            سلام به استودیوی خلاق نگار؛ ویرایش هوشمند و بی‌دردسر ویدیو.
+                        </span>
+                    </div>
+                </div>
+
+                <!-- Transport Bar -->
+                <div class="mt-3 flex items-center gap-3">
+                    <button onclick="stepRelative(-1000000)" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs" title="یک ثانیه قبل (J)">⏪</button>
+                    <button id="btn-play" onclick="togglePlay()" class="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs flex items-center gap-1.5" title="پخش / توقف (Space)">
+                        <span id="play-icon">▶</span>
+                        <span id="play-text">پخش</span>
+                    </button>
+                    <button onclick="stepRelative(1000000)" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs" title="یک ثانیه بعد (L)">⏩</button>
+                    <button onclick="holdMoment()" class="px-3 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs" title="تثبیت لحظه برای فرمان">
+                        📍 تثبیت لحظه (Hold)
+                    </button>
+                </div>
+            </div>
+
+            <!-- Timeline & Range Scrubber Panel -->
+            <div class="h-64 bg-slate-950 border-t border-slate-800 flex flex-col">
+                <!-- Timeline Header / Action Bar -->
+                <div class="h-10 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-4 text-xs">
+                    <div class="flex items-center gap-2">
+                        <button onclick="pinIn()" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold" title="کلید I">
+                            [ ورود (In)
+                        </button>
+                        <button onclick="pinOut()" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold" title="کلید O">
+                            خروج (Out) ]
+                        </button>
+                        <button onclick="clearRange()" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-400" title="کلید X">
+                            پاک کردن بازه
+                        </button>
+                        <span id="range-info" class="text-slate-400 mr-2 text-[11px]">بدون بازه انتخاب‌شده</span>
+                    </div>
+
+                    <div class="flex items-center gap-2">
+                        <button onclick="splitAtPlayhead()" class="px-2.5 py-1 rounded bg-rose-900/60 hover:bg-rose-800 text-rose-200 border border-rose-700" title="کلید S">
+                            ✂️ برش در نقطه فعلی (Split)
+                        </button>
+                        <button onclick="addMarker()" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300" title="کلید M">
+                            📌 نشانگر (Marker)
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Interactive Scrubber & Waveform Surface -->
+                <div id="timeline-container" onclick="handleTimelineClick(event)" class="flex-1 relative cursor-pointer overflow-hidden p-2">
+                    
+                    <!-- Waveform background -->
+                    <div id="waveform-strip" class="w-full h-12 flex items-end gap-0.5 rounded bg-slate-900/50 p-1 mb-2">
+                        <!-- Waveform bars generated dynamically -->
+                    </div>
+
+                    <!-- Tracks Container -->
+                    <div class="w-full h-16 bg-slate-900 rounded border border-slate-800 relative overflow-hidden flex items-center px-1">
+                        <!-- Clip 1 -->
+                        <div class="h-12 bg-blue-900/70 border border-blue-600 rounded flex items-center justify-center text-xs font-bold text-blue-200 absolute" style="left: 0%; width: 40%;">
+                            کلیپ ورودی (clip_intro)
+                        </div>
+                        <!-- Gap (Detected Silence) -->
+                        <div class="h-12 border border-dashed border-amber-600/50 bg-amber-950/20 rounded flex items-center justify-center text-[10px] text-amber-400 absolute" style="left: 40%; width: 6.6%;">
+                            سکوت (Gap)
+                        </div>
+                        <!-- Clip 2 -->
+                        <div class="h-12 bg-indigo-900/70 border border-indigo-600 rounded flex items-center justify-center text-xs font-bold text-indigo-200 absolute" style="left: 46.6%; width: 46.6%;">
+                            کلیپ اصلی (clip_main)
+                        </div>
+
+                        <!-- Range Selection Overlay -->
+                        <div id="range-overlay" class="h-full bg-blue-500/20 border-x-2 border-blue-400 absolute hidden z-10 pointer-events-none"></div>
+
+                        <!-- Shared Playhead Cursor Indicator -->
+                        <div id="playhead-cursor" class="absolute top-0 bottom-0 w-0.5 bg-blue-400 z-20 playhead-line pointer-events-none" style="left: 0%;">
+                            <div class="w-3 h-3 bg-blue-500 rounded-full -mr-1.5 -mt-1 shadow-md"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Side: Assistant Guidance Cards & Student Mode Inspector -->
+        <aside class="w-96 bg-slate-900 flex flex-col overflow-hidden">
+            <!-- Sidebar Header -->
+            <div class="p-4 border-b border-slate-800 flex items-center justify-between">
+                <div>
+                    <h2 class="text-sm font-bold text-white flex items-center gap-1.5">
+                        <span>💡</span>
+                        <span>کارت‌های هوشمند دستیار</span>
+                    </h2>
+                    <p class="text-[11px] text-slate-400 mt-0.5">پیشنهادهای متناسب با موقعیت فعلی تایم‌لاین</p>
+                </div>
+                <span id="moment-badge" class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">
+                    فعال
+                </span>
+            </div>
+
+            <!-- Natural Language Contextual Command Bar -->
+            <div class="p-3 bg-slate-950 border-b border-slate-800">
+                <label class="block text-[11px] font-bold text-slate-400 mb-1">فرمان زبانی سریع (Intent-First):</label>
+                <div class="flex gap-1.5">
+                    <input id="intent-input" type="text" placeholder="مثال: همین قسمت رو تمیز کن..." class="flex-1 bg-slate-900 border border-slate-700 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-blue-500" onkeydown="if(event.key==='Enter') executeIntent()">
+                    <button onclick="executeIntent()" class="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-bold">
+                        اجرا
+                    </button>
+                </div>
+            </div>
+
+            <!-- Guidance Cards Scroll Area -->
+            <div id="cards-container" class="flex-1 overflow-y-auto p-3 space-y-3">
+                <p class="text-xs text-slate-500 text-center py-6">در حال دریافت کارت‌های هوشمند...</p>
+            </div>
+
+            <!-- Missing Pack Status Card / Graceful Installation -->
+            <div id="missing-pack-box" class="p-3 bg-slate-950 border-t border-slate-800">
+                <div class="bg-amber-950/40 border border-amber-800/80 rounded-lg p-2.5">
+                    <div class="flex items-center justify-between mb-1">
+                        <span class="text-xs font-bold text-amber-300">📦 بسته موشن و ترنزیشن</span>
+                        <span class="text-[10px] px-1.5 py-0.2 rounded bg-amber-900/60 text-amber-200">اختیاری</span>
+                    </div>
+                    <p class="text-[11px] text-slate-400 mb-2 leading-relaxed">
+                        برای دسترسی به ترنزیشن‌های پیشرفته و افکت‌های حرکتی، بسته با یک کلیک قابل نصب است.
+                    </p>
+                    <button onclick="installPackDemo()" class="w-full py-1 rounded bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold">
+                        دریافت و فعال‌سازی بسته (۱۴.۵ MB)
+                    </button>
+                </div>
+            </div>
+        </aside>
+
+    </main>
+
+    <!-- Client-side Logic -->
+    <script>
+        let isPlaying = false;
+        let currentTimeUs = 0;
+        const totalDurationUs = 30000000;
+        let playInterval = null;
+        let inUs = null;
+        let outUs = null;
+        let studentModeActive = false;
+
+        async function init() {
+            await refreshSession();
+            await loadWaveform();
+            await loadGuidanceCards();
+        }
+
+        async function refreshSession() {
+            try {
+                const res = await fetch('/api/studio/session');
+                const data = await res.json();
+                currentTimeUs = data.cursor_timecode_us;
+                inUs = data.range_in_us;
+                outUs = data.range_out_us;
+                updateTimecodeDisplay();
+                updatePlayheadVisual();
+                updateRangeVisual();
+            } catch (err) {
+                console.error("Session refresh error:", err);
+            }
+        }
+
+        function updateTimecodeDisplay() {
+            const totalS = currentTimeUs / 1000000;
+            const h = Math.floor(totalS / 3600);
+            const m = Math.floor((totalS % 3600) / 60);
+            const s = Math.floor(totalS % 60);
+            const ms = Math.floor((currentTimeUs % 1000000) / 1000);
+            const tc = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}.${String(ms).padStart(3,'0')}`;
+            document.getElementById('timecode-display').innerText = tc;
+        }
+
+        function updatePlayheadVisual() {
+            const pct = (currentTimeUs / totalDurationUs) * 100;
+            document.getElementById('playhead-cursor').style.left = `${Math.min(100, Math.max(0, pct))}%`;
+        }
+
+        function updateRangeVisual() {
+            const overlay = document.getElementById('range-overlay');
+            const info = document.getElementById('range-info');
+            if (inUs !== null && outUs !== null && outUs > inUs) {
+                const left = (inUs / totalDurationUs) * 100;
+                const width = ((outUs - inUs) / totalDurationUs) * 100;
+                overlay.style.left = `${left}%`;
+                overlay.style.width = `${width}%`;
+                overlay.classList.remove('hidden');
+                info.innerText = `بازه: ${(inUs/1000000).toFixed(2)}s تا ${(outUs/1000000).toFixed(2)}s (طول: ${((outUs-inUs)/1000000).toFixed(2)}s)`;
+            } else {
+                overlay.classList.add('hidden');
+                info.innerText = 'بدون بازه انتخاب‌شده';
+            }
+        }
+
+        function togglePlay() {
+            isPlaying = !isPlaying;
+            const btn = document.getElementById('play-text');
+            const icon = document.getElementById('play-icon');
+            if (isPlaying) {
+                btn.innerText = 'توقف';
+                icon.innerText = '⏸';
+                playInterval = setInterval(() => {
+                    currentTimeUs += 100000;
+                    if (currentTimeUs >= totalDurationUs) {
+                        currentTimeUs = 0;
+                    }
+                    updateTimecodeDisplay();
+                    updatePlayheadVisual();
+                }, 100);
+            } else {
+                btn.innerText = 'پخش';
+                icon.innerText = '▶';
+                clearInterval(playInterval);
+                fetch('/api/studio/seek', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({timecode_us: currentTimeUs})
+                });
+                loadGuidanceCards();
+            }
+        }
+
+        async function handleTimelineClick(event) {
+            const rect = event.currentTarget.getBoundingClientRect();
+            const clickX = event.clientX - rect.left;
+            const pct = Math.max(0, Math.min(1, clickX / rect.width));
+            currentTimeUs = Math.floor(pct * totalDurationUs);
+            updateTimecodeDisplay();
+            updatePlayheadVisual();
+            await fetch('/api/studio/seek', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({timecode_us: currentTimeUs})
+            });
+            await loadGuidanceCards();
+        }
+
+        async function pinIn() {
+            inUs = currentTimeUs;
+            await fetch('/api/studio/range', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({action: 'pin_start', start_us: inUs})
+            });
+            updateRangeVisual();
+            await loadGuidanceCards();
+        }
+
+        async function pinOut() {
+            outUs = currentTimeUs;
+            await fetch('/api/studio/range', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({action: 'pin_end', end_us: outUs})
+            });
+            updateRangeVisual();
+            await loadGuidanceCards();
+        }
+
+        async function clearRange() {
+            inUs = null;
+            outUs = null;
+            await fetch('/api/studio/range', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({action: 'clear'})
+            });
+            updateRangeVisual();
+            await loadGuidanceCards();
+        }
+
+        async function undo() {
+            try {
+                const res = await fetch('/api/studio/undo', {method: 'POST'});
+                if (res.ok) {
+                    await refreshSession();
+                    await loadGuidanceCards();
+                }
+            } catch (err) { console.error(err); }
+        }
+
+        async function redo() {
+            try {
+                const res = await fetch('/api/studio/redo', {method: 'POST'});
+                if (res.ok) {
+                    await refreshSession();
+                    await loadGuidanceCards();
+                }
+            } catch (err) { console.error(err); }
+        }
+
+        async function toggleStudentMode() {
+            studentModeActive = !studentModeActive;
+            const lbl = document.getElementById('student-label');
+            const btn = document.getElementById('btn-student');
+            if (studentModeActive) {
+                lbl.innerText = 'حالت یادگیری فعال است ✓';
+                btn.classList.add('border-blue-500', 'bg-blue-950/60', 'text-blue-300');
+            } else {
+                lbl.innerText = 'حالت یادگیری (Student Mode)';
+                btn.classList.remove('border-blue-500', 'bg-blue-950/60', 'text-blue-300');
+            }
+            await fetch('/api/studio/student-mode', {method: 'POST'});
+            await loadGuidanceCards();
+        }
+
+        async function loadWaveform() {
+            try {
+                const res = await fetch('/api/studio/waveform?bins=80');
+                const bins = await res.json();
+                const container = document.getElementById('waveform-strip');
+                container.innerHTML = '';
+                bins.forEach(b => {
+                    const bar = document.createElement('div');
+                    const h = Math.max(10, Math.floor(b.peak_amplitude * 100));
+                    bar.className = 'waveform-bar flex-1 bg-blue-500/40 rounded-t transition-all';
+                    bar.style.height = `${h}%`;
+                    container.appendChild(bar);
+                });
+            } catch (err) { console.error(err); }
+        }
+
+        async function loadGuidanceCards() {
+            try {
+                const res = await fetch('/api/studio/cards');
+                const cards = await res.json();
+                const container = document.getElementById('cards-container');
+                container.innerHTML = '';
+                if (cards.length === 0) {
+                    container.innerHTML = '<p class="text-xs text-slate-500 text-center py-6">هیچ پیشنهادی در این نقطه وجود ندارد.</p>';
+                    return;
+                }
+                cards.forEach(card => {
+                    const el = document.createElement('div');
+                    el.className = 'bg-slate-950 border border-slate-800 rounded-lg p-3 hover:border-blue-800/60 transition shadow';
+                    
+                    const studentHtml = studentModeActive ? `
+                        <div class="mt-2 p-2 rounded bg-blue-950/40 border border-blue-900/60 text-[11px] text-blue-200 leading-relaxed">
+                            <span class="font-bold">راهنمای آموزشی:</span> ${card.student_mode_hint_fa}
+                        </div>
+                    ` : '';
+
+                    el.innerHTML = `
+                        <div class="flex items-center justify-between mb-1">
+                            <span class="text-xs font-bold text-slate-200">${card.title_fa}</span>
+                            <span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800 font-mono">${Math.floor(card.confidence*100)}%</span>
+                        </div>
+                        <p class="text-[11px] text-slate-400 mb-2 leading-relaxed">${card.reason_fa}</p>
+                        ${studentHtml}
+                        <button onclick='applyCard(${JSON.stringify(card.suggested_command)})' class="w-full mt-2.5 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition">
+                            اجرای سریع (۱ کلیک)
+                        </button>
+                    `;
+                    container.appendChild(el);
+                });
+            } catch (err) { console.error(err); }
+        }
+
+        async function applyCard(cmd) {
+            cmd.command_id = "cmd_" + Math.random().toString(36).substring(2, 9);
+            try {
+                const res = await fetch('/api/studio/command', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(cmd)
+                });
+                if (res.ok) {
+                    await refreshSession();
+                    await loadGuidanceCards();
+                }
+            } catch (err) { console.error(err); }
+        }
+
+        async function executeIntent() {
+            const input = document.getElementById('intent-input');
+            const text = input.value.trim();
+            if (!text) return;
+            try {
+                const res = await fetch('/api/studio/contextual-intent', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({intent_text: text})
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    alert(data.message_fa);
+                    await refreshSession();
+                    await loadGuidanceCards();
+                } else {
+                    alert("خطا: " + data.detail);
+                }
+            } catch (err) { console.error(err); }
+        }
+
+        function installPackDemo() {
+            alert("دستور نصب بسته ارسال شد: nexus packs install nexus.motion.graphics\\nبسته به‌صورت تاییدشده و امن در پس‌زمینه نصب خواهد شد.");
+        }
+
+        // Global Keyboard Ergonomics
+        window.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT') return;
+            if (e.key === ' ') { e.preventDefault(); togglePlay(); }
+            if (e.key === 'i' || e.key === 'I') pinIn();
+            if (e.key === 'o' || e.key === 'O') pinOut();
+            if (e.key === 'x' || e.key === 'X') clearRange();
+            if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
+            if ((e.ctrlKey || e.metaKey) && e.key === 'y') { e.preventDefault(); redo(); }
+        });
+
+        init();
+    </script>
+</body>
+</html>

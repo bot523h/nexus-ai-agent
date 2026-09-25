@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-25T20:14:15Z",
+  "updated_at": "2026-09-25T20:30:05Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -619,7 +619,7 @@
       "title_fa": "تبدیل استودیو نگار به Creative Operating System: تعامل تایم‌لاین، مکان‌نمای مشترک پلی‌هد، راهنمایی لحظه، انتخاب بازه، کارت‌های هوشمند، حالت دانش‌آموز، تجربه عدم نصب پک، زیرنویس فارسی RTL و تفکیک پیش‌نمایش از مستر",
       "zone": "nagar-creative-studio",
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "scope": "Turn Studio from a tool collection into a real Creative Operating System: (1) Timeline interaction & shared playhead cursor bridging user/assistant/timeline/preview; (2) Moment guidance (play->hold->identify t->command) + range selection (pin start->pin end->range command) + contextual resolution (همین قسمت); (3) First-class Persian RTL subtitles, bidi isolates, timecodes, punctuation, Vazirmatn layout; (4) Smart guidance cards + student mode + tool discovery UX; (5) Graceful missing-pack handling (feature unavailable -> why -> provides -> size -> install action); (6) Preview vs Master explicit two-tier pipeline; (7) Reversible redo stack; (8) User-facing error recovery & accessibility.",
       "scope_fa": "تبدیل استودیو نگار به یک سیستم‌عامل خلاقانه با کاهش اصطکاک تعاملی از طریق پلی‌هد مشترک، انتخاب بازه، راهنمایی لحظه، کارت‌های هوشمند، حالت دانش‌آموز، تجربه زیبای فقدان پک، زیرنویس فارسی راست‌به‌چپ درجه‌یک و تفکیک شفاف پیش‌نمایش از مستر.",
       "prerequisites": [],
@@ -650,8 +650,8 @@
         "src/nexus_ai_agent/api/studio_router.py",
         "tests/unit/test_creative_studio_agent2.py"
       ],
-      "agent_branch": "arena/01a0da2c-nexus-ai-agent",
-      "claimed_at": "2026-09-25T20:14:15Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "Agent 2 Principal Creative Systems Engineer lease. Search-10 completed on board."

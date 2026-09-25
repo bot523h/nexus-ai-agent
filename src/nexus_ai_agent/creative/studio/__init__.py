@@ -1,15 +1,12 @@
-"""Nagar creative studio -- Wave 1: Green Cockpit core.
+"""Nagar creative studio -- Creative Operating System core.
 
-A typed, UI-free command surface for the studio: state models, the
-hierarchical capability registry, the semantic reference resolver and the
-atomic command bus.
+Owned by Agent 2 (Principal Creative Systems Engineer + Product UX Architect +
+Media Pipeline Engineer + Interaction Designer).
 
-Wave 1 guarantees:
-
-* no React/DOM/Canvas -- input is a typed JSON command, output is an
-  in-memory state update;
-* no heavy dependencies (no torch/transformers/CV);
-* no ``storage/`` or ``llm/`` imports from this package.
+A typed, UI-free command and interaction surface for the studio: state models,
+hierarchical capability registry, semantic reference resolver, atomic command bus,
+shared playhead cursor, moment guidance, range selection, Persian RTL subtitles,
+and two-tier preview/master pipeline.
 """
 
 from __future__ import annotations
@@ -26,6 +23,29 @@ from nexus_ai_agent.creative.studio.capabilities import (
     OperationSpec,
     PermissionDecision,
     build_wave1_registry,
+)
+from nexus_ai_agent.creative.studio.engine import (
+    RedoStackEmptyError,
+    SessionSnapshot,
+    StudioSession,
+    create_studio_session,
+)
+from nexus_ai_agent.creative.studio.interaction import (
+    CandidateMoment,
+    CandidateMomentKind,
+    ContextualResolver,
+    GuidanceCard,
+    GuidanceCardAvailability,
+    GuidanceCardManager,
+    MissingPackExperience,
+    MissingPackReport,
+    MomentGuidanceEngine,
+    PlayheadCursorSource,
+    RangeSelection,
+    SharedPlayheadCursor,
+    StudioAccessibility,
+    StudioAction,
+    StudioErgonomics,
 )
 from nexus_ai_agent.creative.studio.models import (
     COMMAND_SCHEMA_VERSION,
@@ -72,10 +92,24 @@ from nexus_ai_agent.creative.studio.models import (
     frame_number_for,
     new_project,
 )
+from nexus_ai_agent.creative.studio.preview import (
+    AudioWaveformSample,
+    FidelityDiff,
+    MasterProfile,
+    PipelineMode,
+    PreviewFrameData,
+    PreviewPipelineEngine,
+    PreviewProfile,
+)
 from nexus_ai_agent.creative.studio.references import (
     ReferenceExpr,
     ReferenceInput,
     ReferenceResolver,
+)
+from nexus_ai_agent.creative.studio.subtitles import (
+    PersianRTLStyler,
+    SubtitleCue,
+    SubtitleTrack,
 )
 
 __all__ = [
@@ -83,30 +117,42 @@ __all__ = [
     "LEGACY_SCHEMA_VERSION",
     "PROTOCOL_VERSION",
     "ActorIdentity",
+    "AssetRecord",
+    "AudioWaveformSample",
     "AuthorizationError",
+    "CandidateMoment",
+    "CandidateMomentKind",
     "Capability",
     "CapabilityDescription",
     "CapabilityError",
     "CapabilityRegistry",
     "CapabilitySnapshot",
     "CapabilityVersionError",
+    "Clip",
     "CommandBus",
     "CommandExecutionError",
     "CommandProvenance",
     "CommandResult",
     "CommandValidationError",
-    "AssetRecord",
-    "Clip",
-    "EffectLayerRef",
+    "ContextualResolver",
     "Domain",
     "EditTransaction",
+    "EffectLayerRef",
     "ExecutionPolicy",
     "ExecutionPolicyError",
+    "FidelityDiff",
+    "GuidanceCard",
+    "GuidanceCardAvailability",
+    "GuidanceCardManager",
     "IdempotencyConflictError",
     "InputRef",
     "InputReferenceError",
     "Marker",
+    "MasterProfile",
     "MediaRef",
+    "MissingPackExperience",
+    "MissingPackReport",
+    "MomentGuidanceEngine",
     "NagarError",
     "OperationContext",
     "OperationOutcome",
@@ -114,19 +160,35 @@ __all__ = [
     "PermissionDecision",
     "PermissionDeniedError",
     "PermissionLevel",
+    "PersianRTLStyler",
+    "PipelineMode",
     "Playhead",
+    "PlayheadCursorSource",
     "PreconditionError",
+    "PreviewFrameData",
+    "PreviewPipelineEngine",
+    "PreviewProfile",
     "Project",
     "ProjectAccess",
     "ProjectAuthorizer",
+    "RangeSelection",
+    "RedoStackEmptyError",
     "ReferenceExpr",
     "ReferenceInput",
     "ReferenceResolutionError",
     "ReferenceResolver",
     "RequestContext",
-    "Timeline",
+    "SessionSnapshot",
+    "SharedPlayheadCursor",
+    "StudioAccessibility",
+    "StudioAction",
+    "StudioErgonomics",
+    "StudioSession",
+    "SubtitleCue",
+    "SubtitleTrack",
     "TimeBase",
     "TimeRangeUS",
+    "Timeline",
     "Track",
     "TypedCommand",
     "UndoStackEmptyError",
@@ -135,6 +197,7 @@ __all__ = [
     "build_wave1_registry",
     "compute_parameters_hash",
     "compute_state_hash",
+    "create_studio_session",
     "frame_number_for",
     "new_project",
 ]
