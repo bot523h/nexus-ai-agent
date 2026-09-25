@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-25T16:55:22Z",
+  "updated_at": "2026-09-25T17:46:27Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -983,7 +983,7 @@
       "title_fa": "ماتریس دود اختیاری‌ها در CI",
       "zone": "ci-quality",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "مسیرهای اختیاری ([speech]/[translate]/[pdf]/[local-llm]) در CI پیش‌فرض اجرا نمی‌شوند؛ یک job ماتریسی باید نصب هر extra و اجرای تست مربوطه را ثابت کند.",
       "scope_fa": "مسیرهای اختیاری ([speech]/[translate]/[pdf]/[local-llm]) در CI پیش‌فرض اجرا نمی‌شوند؛ یک job ماتریسی باید نصب هر extra و اجرای تست مربوطه را ثابت کند.",
       "prerequisites": [],
@@ -1000,8 +1000,8 @@
       "agent_branch": "arena/01a0d709-nexus-ai-agent",
       "claimed_at": "2026-09-25T05:50:21Z",
       "ttl_hours": 24,
-      "gates_owner": true,
-      "note": ""
+      "gates_owner": false,
+      "note": "DELIVERED 2026-09-25 on arena/01a0d709-nexus-ai-agent (PR82): extras-matrix legs core/pdf/speech/translate + python-parity 3.10/3.11/3.12 (all blocking, 3.10 exception removed after the runtime was made truly 3.10-compatible) + release-lineage. Final head 0f2f8f8: CI 12/12 SUCCESS on both runs 36168073743 (pull_request) and 36168067276 (push). Skip-audit mutant-proofed (M1 pinned+killed, M2 killed, intentional skips allowed). Old 3.11-only failure (run 36101703012) proven non-reproducible (flake-or-fixed, no product bug); line-0 test synced. Gates released."
     },
     {
       "task": "pr33-in-review",
