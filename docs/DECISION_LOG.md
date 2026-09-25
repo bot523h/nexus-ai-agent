@@ -1351,3 +1351,242 @@ output" now additionally covers mapping/non-string args, tracebacks and the
 covers scheme (https-only) and CGNAT. PR#76's claim
 `sec-boundary-salvage-01a0d4c7` is continued by the closure session branch
 (recorded on the board) — same zone, one owner.
+
+### D-0017 — Job success is a verified state, not a handler's word (canonical job lifecycle)
+
+> **ID note (release integration 2026-09-25).** This chain was drafted as
+> `D-0017`/`D-0018`/`D-0019`/`D-0020` on the PR#78→PR#81 line, but `D-0017`, `D-0019`
+> and `D-0020` were already owned on main when this branch merged (`D-0017` = Gate 2
+> command contract, PR#72; `D-0019` = security-boundary salvage, `D-0020` = S3/S5
+> closure, PR#79). To keep every citation unambiguous the whole chain moved to
+> `D-0017`/`D-0018`/`D-0019`/`D-0020` at integration — job-lifecycle `D-0013`→`D-0017`,
+> verification closure `D-0014`→`D-0018`, typed-failure `D-0015`→`D-0019`,
+> execution-fencing `D-0016`→`D-0020`. `JOB_LIFECYCLE.md`, the Gate 5 audits and the
+> board cite the new identifiers. The pre-merge `D-0017`/`D-0019`/`D-0020` readings of
+> these sections are RETRACTED as identifiers (section content unchanged).
+
+*Problem.* The queue completed a job the moment its handler returned a dict: a handler that claimed
+`{"success": true}` with a zero-byte, truncated, stale or wrong-path artifact ended `COMPLETED`, and
+nothing in the job layer ever re-measured the claim (A-side reproduced: `test_ab_...` completes a
+zero-byte claim when the verifier registry is opted out). The worker adapter also deleted its
+destination before re-rendering (`out_path.unlink()` + `overwrite=True`), so a failed retry destroyed
+the previous bytes, and document artifacts (`.srt`/`.otio`) were written non-atomically — a crash
+mid-write left a half file under the final name. Execution success and job success were conflated.
+
+*Decision.* The canonical chain Command → Job → Runtime Execution → Artifact Verification → Result is
+now explicit and enforced. `JobStatus` gains `VERIFYING` (persisted values otherwise unchanged — no
+reasonless rename; canonical aliases `RUNNING≡PROCESSING`, `SUCCEEDED≡COMPLETED` documented in
+`jobs/lifecycle`). The queue owns an independent verification phase for `creative_render` (default
+registry, injectable): exists → size > 0 → expected path per operation → workspace containment →
+sha256 recompute → probe evidence for media (the runtime's own allow-listed-binary probe) →
+structural checks for documents; success requires execution success AND verification success;
+anything else is terminal `failed` with `verification_failed:<code>` — including a crashing verifier
+(fail-closed). Every transition is a guarded, status-conditioned UPDATE with owner+invariant
+(`jobs/lifecycle.TRANSITIONS`); terminal states have no outgoing edges. Idempotency keeps
+first-payload-wins with a structured conflict log; `attempt` counts executions; `get_result_chain`
+assembles the Result (command/job/project/operation ids, attempt, statuses, three identities, sha,
+size, probe, failure reason). The worker no longer deletes-then-renders (atomic rename replaces only
+its own key-scoped previous attempt) and writes documents atomically. Runtime ownership untouched:
+`creative/rendering/*`, `creative/packs/*`, `creative/studio/*`, `creative/slideshow/ffmpeg.py` are
+zero-diff; the runtime's own probe/sha256 functions are the evidence source.
+
+*Rejected alternatives.* (1) Verifier inside the handler — self-attestation, the exact
+"verification uses the write response" anti-pattern. (2) A separate verification worker/queue —
+over-engineered for an in-process SQLite monolith (no broker by architecture). (3) Renaming
+`PROCESSING/COMPLETED` to `RUNNING/SUCCEEDED` in the persisted enum — a compatibility break with no
+behavioral gain; aliases carry the canonical vocabulary instead. (4) Raising on same-key/different-
+payload enqueue — would break the redelivery-collapse contract the Telegram surface depends on;
+first-payload-wins + conflict log is deterministic and observable.
+
+*Evidence.* `tests/integration/test_job_lifecycle_queue.py` (M1–M10, M10b, A/B, VERIFYING
+observability, recovery, attempt accounting, §17 invariant on the real FFmpeg chain) and
+`tests/unit/test_job_lifecycle.py` (transition matrix, invariants, claim dialects). Contract doc:
+`docs/architecture/JOB_LIFECYCLE.md`.
+
+---
+
+## 2026-09-24 — Verification closure on the task-178 contract: every job type verified, gaps recorded honestly (D-0018)
+
+### D-0018 — Gap closure rides the existing registry; verification dialects are per-artifact, never generalized guesses
+
+*Problem.* PR#71 (task-178) proved the canonical lifecycle but shipped the built-in verifier
+registry with only `creative_render`; its own board note listed the handoff GAPs: `slideshow_render`
+had no verifier (a lying/truncated/zero-byte master completed the job), and the legacy `/creative`
+HTTP lane can persist `done` with no artifact measurement. `pdf_extract` completed on a
+`{"message": …}` result with no measurable artifact at all, and `story` returned a bare
+`output_path` with no digest to cross-check.
+
+*Decision.* Close the gaps **on** the task-178 contract — additive registration through the
+existing `register_artifact_verifier` extension point, no lifecycle redesign (VERIFYING,
+transition naming, `render_jobs.py`, runtime engine all untouched; this branch fast-forwards onto
+PR#71's head so its commits are preserved). Each job type gets a verifier matching its **real**
+artifact, measured from the tree: `slideshow_render` → the workspace-contained master `.mp4` at the
+dispatched path (runtime probe); `story` → the Pillow-rendered PNG (Pillow structural decode);
+`pdf_extract` → the extracted text layer, now persisted atomically at the payload-derived
+`<stem>.extracted.txt` (whole-file UTF-8 decode). The RAG ingestion behind `pdf_extract` is an
+external side effect and is deliberately NOT claimed as verified (absent independent evidence ⇒
+not "done"). Consequence accepted: an empty text layer now FAILS (`empty_artifact`) instead of
+reporting success — a removed false success. The legacy HTTP lane is NOT touched: it stays
+frozen+deprecated (D-0010) and GAP-D is recorded with owner, risk, acceptance test and an
+executable tripwire instead of code. An architecture ratchet
+(`tests/architecture/test_verification_registry_ratchet.py`) now fails if any handler lacks a
+verifier — "execution success = job success" cannot come back silently.
+
+*Rejected alternatives.* (1) Porting PR#67's runtime `creative/artifacts.py` into the job layer —
+unmerged branch, cross-ownership duplication (explicitly forbidden), and the job layer already has
+its own evidence seam. (2) A content-addressed artifact store — a publication redesign against the
+frozen expected-path contract and the bot's file-path notifications. (3) A generalized
+"media verifier" for story/pdf — would have probed a PNG with ffprobe and a text file with nothing;
+dialects follow the real artifacts. (4) Fail-closed-registering a verifier for `pdf_extract`
+without persisting an artifact — would have broken a working capability instead of making it
+honest.
+
+*Evidence.* `tests/unit/test_job_verification_gaps.py` (dialects + verifier units),
+`tests/integration/test_verification_gap_closure.py` (real FFmpeg encode for GAP-A; real pypdf for
+GAP-B; zero-double Pillow chain for GAP-C; attacks A–H against the DEFAULT registry),
+`tests/architecture/test_verification_registry_ratchet.py`,
+`tests/architecture/test_legacy_lane_verification_gap.py` (GAP-D evidence, read-only). Mutation
+proofs: verifier bypass (11 red), path-validation bypass (3 red), sha bypass (2 red) — all reverted.
+Reports: `docs/audits/VERIFICATION_GAP_REPORT_2026-09-24.md`,
+`docs/audits/CROSS_PR_TRUTH_2026-09-24.md`, `docs/audits/VERIFICATION_TRUTH_MATRIX.json`.
+
+### D-0019 — A typed failure is a FAILURE of the job: 6-state taxonomy, classified retryability, stage→verify→publish, lifecycle-state notifier truth
+
+*Problem.* Gate 5 reconciliation (task-181) reproduced four defects against the task-178/180 tree.
+(1) A typed user failure (`{"success": false, "error_code": …}`) reached **`completed`** — the
+dialect completed "so the notifier can translate the code", which conflated user-facing copy with
+durable truth (`render_failed` + `success=False → completed`). (2) One undifferentiated `failed`
+state erased retryability: `failed` was terminal for a transient ENOSPC exactly as for invalid
+input, and nothing durable could tell the notifier or a future scheduler which failures are worth
+retrying. (3) The `pdf_extract` lane published its sidecar artifact **before** verification: a
+refused extraction (image-only PDF ⇒ `empty_artifact`) replaced and destroyed a previous valid
+`<stem>.extracted.txt` and left the refused bytes at the destination (reproduced: old artifact
+"OLD VALID EXTRACTION" → `''`). (4) Trace events belonging to a job carried **no `job_id`**
+(`creative_render_start` observed with `job_id` absent — the observability pipeline supports
+`structlog.contextvars` binding but nothing bound it).
+
+*Decision.* (1) The typed dialect is a **failure status**, never `completed` (GAP-A). The queue
+short-circuits it before verification (`typed_failure:<code>` persisted, typed result preserved
+for the notifier), and verifiers refuse a typed result fail-closed (`typed_user_failure`) if one
+ever reaches them — two independent layers (D-0017's "job success is a verified state" now also
+means "job failure is a durable state"). (2) `JobStatus` splits `failed` into
+`failed_retryable` / `failed_terminal` (GAP-B): `jobs/failure_semantics` classifies every failure
+family by one principle — RETRYABLE iff the world can change to make the identical request
+succeed — with per-code/per-errno/per-reason rows and tests (temporary IO, dependency unavailable,
+worker crash → RETRYABLE; invalid input, unsupported operation, permission error, deterministic
+handler defects, `render_failed` → TERMINAL; artifact-measurement disagreements → RETRYABLE;
+unknown codes → TERMINAL, fail-closed toward visibility). Pre-task-181 rows spelling `"failed"`
+read back as `failed_terminal` (`parse_job_status`). **No retry scheduler is built** (explicitly
+outside scope): both failure states are terminal as implemented and the reserved
+`failed_retryable → pending` edge stays out of the transition matrix (fail-closed). (3) The one
+lane with a destination outside the job workspace (`pdf_extract`) gets queue-owned publication
+(`ArtifactPublication`): stage at `<stem>.extracted.txt.staged` → verify → atomic `os.replace`
+publish → **re-probe the published bytes** → persist success; any refusal retracts the staged temp
+and preserves the previous published artifact. Workspace lanes map the same order to delivery-time
+publication. (4) The queue binds `job_id` into `structlog.contextvars` for the whole execution and
+emits explicit lifecycle lines (`job_processing`/`verifying`/`completed`/`failed`) — a lifecycle
+event can never record `job_id = null`. (5) Notifier truth source = durable lifecycle state
+(`completed` ⇒ success; `failed_retryable` ⇒ retryable-failure copy; `failed_terminal` ⇒
+terminal-failure copy; non-terminal ⇒ silent), with `result.success` demoted to a second refusal,
+never the truth source.
+
+*Rejected alternatives.* (1) Keeping the complete-on-typed-failure dialect and only translating
+differently — leaves `render_failed → completed` in the durable truth (the reproduced defect).
+(2) A third "unclassified failure" state — the classifier is total; a catch-all state would hide
+unclassified contract drift instead of failing closed. (3) Backup-then-replace publication — worse
+crash semantics (`.prev` orphan states) than stage-then-swap with a re-probe. (4) Building the
+retry scheduler to "use" `failed_retryable` — no repository requirement demands a scheduler, and
+the mission explicitly forbids new retry infrastructure; classification alone is honest and
+complete. (5) Renaming `completed`/`pending` spellings as well — reasonless migration (D-0017's
+rule stands).
+
+*Evidence.* Reproduction of all four defects on the pre-change tree (audit:
+`docs/audits/GATE5_CLOSURE_2026-09-24.md`). `tests/unit/test_failure_semantics.py` (classification
+table, one named test per failure family), `tests/integration/test_gate5_closure.py` (typed-failure
+regression — never `completed`, notifier never succeeds; notification matrix; refused-publication
+preserves the old artifact and cleans staging; happy-path stage→publish→re-probe; publish-failure
+retraction; trace `job_id`; idempotency matrix incl. duplicates during PROCESSING and after
+terminal failure; crash-after-rename recovery), reconciled M-suite assertions (M10b now pins the
+observed RenderError path — repository behavior wins over its old docstring), plus mutation
+harness `scripts/gate5_mutation_probes.py`: 6/6 probes (remove verification / force COMPLETED on
+typed failure / skip atomic publish / drop job_id / notifier trusts result.success / bypass
+failure_status) each GREEN→RED→restore→SHA-restored→GREEN.
+
+### D-0020 — Execution ownership is a fencing token (`attempt`); worker transitions are fenced CAS; publication keeps the previous artifact recoverable until the durable commit
+
+*Problem.* The final Gate 5 repair (task-181, branch `arena/01a0d5a1-nexus-ai-agent`, base
+`947173c` = main + PR#78) reproduced five defects that the previous closure had either declared
+fixed or filed as "documented limitations": (R1) a refused **re-probe** destroyed the previous
+`<stem>.extracted.txt` (`publish` had already renamed over it; `retract` only knew the staged
+name); (R2) a cancelled worker's `_mark_pending` (`WHERE id = ?`) reopened a job that a newer
+execution had meanwhile **completed**; (R3) `_mark_completed` returned nothing and the ✅ hook
+fired even when the row was no longer ours; (R4) a bare `{"success": false}` (no `error_code`)
+completed; (R5) `_mark_processing` claimed `status IN ('pending','processing')` without checking
+`rowcount`, so two processes on one database both ran the handler for one job. R2/R3/R5 share
+one root cause: **no execution owned a row** — every worker-side UPDATE was conditioned on status
+at best, never on *which execution* was writing. This is the pattern pg-boss fixed in issue #925
+(stale `complete()` settling the newer attempt) and the textbook fencing-token failure (Kleppmann,
+"How to do distributed locking").
+
+*Decision.*
+1. **Who owns a job:** the execution whose `pending → processing` CAS committed. The reservation
+   is `UPDATE … SET status='processing', attempt = attempt + 1 WHERE id = ? AND status = 'pending'`
+   with `rowcount == 1`; the `attempt` it minted is the execution's **fencing token**
+   (`jobs.lifecycle.ExecutionClaim`, `FENCING_COLUMN = "attempt"`). A `processing` row is never
+   re-claimable by a reservation (the `(PROCESSING, PROCESSING)` edge is removed from `TRANSITIONS`).
+2. **Every worker transition is a fenced CAS:** `_mark_verifying/_pending/_completed/_failed` add
+   `AND attempt = ?` to their status-conditioned `UPDATE` and return `rowcount == 1`. A `False`
+   means "not ours any more": the worker logs `job_transition_rejected` and performs **no** state
+   change, notification, publication or retraction. Claim-time structural failures (no handler)
+   use an unfenced PENDING-only CAS (`_fail_unclaimed`) because no execution exists yet.
+3. **Takeover is explicit:** only `resume_pending` moves live `processing/verifying` rows back to
+   `pending` — at startup (rows this process is not itself executing) or expiry-gated
+   (`stale_after=Δ`: rows whose `started_at` is younger than Δ are left to their owner). `attempt`
+   is left untouched; the next reservation mints a new token and fences the previous owner out.
+4. **Notification contract = "never lie":** hooks fire only after the fenced UPDATE committed. A
+   crash between commit and hook loses that notification; durable state remains the truth.
+5. **Publication (F1, option A — backup/restore):** `publish` keeps the previous artifact as
+   `<stem>.extracted.txt.prev` (same-directory `os.link`, `copy2` fallback) before `os.replace`;
+   ownership is re-read immediately before publication (`_owns_execution(claim, VERIFYING)` —
+   the side-effect fencing point); a refused re-probe restores `.prev` by one atomic rename (or
+   removes the refused bytes when no previous artifact existed); `finalize` removes `.prev` only
+   after the fenced `completed` commit. The re-probe is kept — it measures the bytes under the
+   final name (what readers see) and is not a duplicate of the staged-bytes verification.
+6. **Bare `success: false`** is a failure with code `unspecified` (TERMINAL — a retry repeats the
+   same unspecified refusal); `failure_code_of()` is the queue's single "handler said it failed"
+   check.
+
+*Options compared for the fence.* A `attempt` (chosen): minted atomically with the claim, strictly
+monotonic per row, zero schema change, trivially testable, backward compatible (existing rows
+already carry it). B execution UUID: same guarantees but a new column + no ordering (cannot
+tell "older" from "different"). C lease + owner + expiry as the fence: wall-clock dependent, clock
+skew across processes, and still needs a token for the write-side check — kept only as the
+*takeover policy* (`stale_after`). D single-process invariant + fail-closed: no executable
+invariant exists (bot, webhook and CLI each open a queue on the same db path). E hybrid A+C:
+this is what was built (A fences, C-style expiry governs takeover).
+
+*Options compared for publication.* A backup/restore (chosen); B versioned files + pointer
+(new naming contract for every consumer); C stage + verify + atomic replace, drop the re-probe
+(re-probe proven not redundant — it is the only check after the rename); D two-phase journal and
+E "publish transaction" (both more machinery than the guarantee needs). **This supersedes the
+D-0019 rejection of backup-then-replace**: D-0019 feared `.prev` orphans; the lane now removes a
+stray `.prev` before publishing, `finalize` removes it after commit, and the crash between publish
+and commit is covered by `test_t11_crash_between_publish_and_reprobe_recovers`. Stage-then-swap
+alone was proven to destroy the previous artifact on a refused re-probe (R1).
+
+*Rejected.* Transactional outbox for notifications — it solves dual-write *delivery* (DB + broker,
+at-least-once + consumer idempotency); Gate 5 requires only that a success is never announced
+without a committed `completed`, which the fenced CAS result already gives. Token-aware storage to
+close the residual window between the ownership re-read and `os.replace` — out of scope; the
+window is documented in JOB_LIFECYCLE.md §2a and can only be entered by a takeover during that
+interval, never by a concurrent reservation.
+
+*Evidence.* OLD RED on `947173c`: `tests/integration/test_gate5_execution_fencing.py` 19 failed /
+1 passed (R1 `'fresh extraction' == 'OLD VALID EXTRACTION'`, R2 `PENDING is COMPLETED`, R3
+`['me'] == []`, R5 `2 == 1`). NEW GREEN: 21 passed; full `pytest -m "not slow"` green; mutation
+harness `scripts/gate5_mutation_probes.py` 17/17 (M1–M10 + the six D-0019 probes) with
+BASELINE GREEN → MUTANT RED → SHA-restored → GREEN. Sources: pg-boss issue #925; M. Kleppmann,
+"How to do distributed locking" (fencing tokens); Python `sqlite3.Cursor.rowcount`; SQLite
+atomic commit; Python `os.replace` (atomic same-filesystem replace, previous inode not
+preserved); Oban's `fetch_jobs` (available-only claim minting `attempt`) and `Lifeline` rescue
+(expiry-gated takeover) as the mature-implementation reference for options A/E.
