@@ -13,3 +13,6 @@ dist/
 # Disposable local gate output; never treat old reports as current evidence.
 /*_report.txt
 /test_story.png
+
+# CI audit artifacts (per-run evidence lives in GitHub Actions artifacts, not the tree)
+ci-artifacts/

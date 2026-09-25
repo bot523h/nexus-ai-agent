@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### CI (task-132 — extras smoke matrix, session `arena/01a0d709-nexus-ai-agent`)
+
+- **Every optional extra is now a blocking CI leg.** The new `extras-matrix` job
+  installs `pip install -e '.[pdf]'` / `.[speech]` / `.[translate]` for real (plus a
+  **core-only** leg with no extras at all) and smoke-tests the installed modules —
+  previously `[speech]` and `[translate]` were never installed anywhere, so a broken
+  extra would only surface for a user. A failed install is a failed CI run: no
+  `continue-on-error`.
+- **Core-only contract, proven in CI**: on a bare `pip install -e .` the CLI import
+  tree runs, the whole package imports with zero `ImportError`, every optional module
+  is genuinely absent, and each optional path fails closed with its typed error
+  (`caption_profile_unavailable` / `translate_profile_unavailable` / the `pypdf`
+  install hint).
+- **Python parity matrix (3.10 / 3.11 / 3.12)**: `requires-python` claims `>=3.10`
+  but every job ran 3.12 only — a local green on 3.11 proved nothing about the
+  declared floor. The new `python-parity` job runs the full non-slow suite on each
+  supported minor.
+- **`scripts/extras_matrix.py`** (stdlib-only) is the single source of truth:
+  `check` fails when pyproject extras, the CI matrix, the leg smoke tests
+  (`tests/unit/test_optional_extras.py`) or the committed
+  `.github/DEPENDENCY_MATRIX.md` drift apart — a new extra without a CI leg is a red
+  build, not a silent gap. `audit-skips` fails on skip inflation (a test that skips
+  for a module its own leg just installed); `report` writes a SHA-bound provenance
+  artifact per leg.
+- **`scripts/release_lineage.py` + `release-lineage` CI job**: the chain
+  VERSION → commit → tag → GitHub Release → CHANGELOG is machine-checked every push.
+  Live findings at `fe95cf0`: no tag for 3.13.0 (releases stopped at v3.5.0 — versions
+  3.6.0…3.13.0 were shipped without tags/releases), the v3.5.0 tag points at a commit
+  **outside main's history**, and the newest GitHub Release (v3.3.0) carries **no
+  artifacts**. Gaps are reported as OPEN; contradictions (a current-version tag that
+  is off-history or release-less) are red.
+- **Actions pinned to commit SHAs** (`checkout@11bd7190` v4.2.2,
+  `setup-python@a26af69` v5.6.0, `upload-artifact@ea165f8d` v4.6.2), a
+  cancel-superseded `concurrency` group, and `-rs` on the main test job so every
+  optional-dependency skip is intentional and **visible**.
+- Guards are mutation-proven in `tests/unit/test_ci_extras_parity.py` (removing a
+  leg, an unknown leg, `continue-on-error`, a missing Python floor, an uncovered job
+  Python, a stale committed matrix, skip inflation — each has a red-proof fixture).
+
 ### Security (P0 hardening day — session `arena/01a0d23e-nexus-ai-agent`, tasks 165–167)
 
 - **`GET /creative/jobs/{job_id}` is now behind the same fail-closed HMAC gate as the

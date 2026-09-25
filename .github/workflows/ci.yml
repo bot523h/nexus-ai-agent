@@ -2,6 +2,13 @@ name: CI
 
 on: [push, pull_request]
 
+# A superseded push's matrix run is wasted minutes: cancel it so the queue
+# always reflects the newest SHA (the maintenance workflow deliberately does
+# NOT do this — scheduled backup runs must never be cancelled).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     name: lint (ruff + mypy + version lockstep)
@@ -9,8 +16,8 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
@@ -32,20 +39,130 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
       - run: |
           set -o pipefail
-          pytest -v -m "not slow" --tb=short 2>&1 | tee pytest.log
-      - uses: actions/upload-artifact@v4
+          # -rs: skip REASONS are part of the contract — an optional-dependency
+          # skip must be intentional and visible, never silent (task-132).
+          pytest -v -rs -m "not slow" --tb=short 2>&1 | tee pytest.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
           name: pytest-log
           path: pytest.log
           retention-days: 2
+
+  # ── task-132: optional-extras install matrix ────────────────────────────────
+  # Every shipping extra of pyproject.toml gets one blocking leg that proves the
+  # REAL install path (`pip install -e '.[extra]'`) resolves and its modules
+  # import, plus the focused behavioural contract.  The `core` leg proves the
+  # core-only contract: no extras, CLI + full import tree, fail-closed guards.
+  # scripts/extras_matrix.py check (below) fails when a leg and pyproject drift
+  # apart, so a new extra without a leg is a red build, not a silent gap.
+  # NO continue-on-error: a failed install is a failed CI run.
+  extras-matrix:
+    name: extras-matrix (${{ matrix.leg }})
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      NEXUS_EXTRA_LEG: ${{ matrix.leg }}
+    strategy:
+      # one red leg must not cancel the others before their evidence exists
+      fail-fast: false
+      matrix:
+        include:
+          - leg: core
+          - leg: pdf
+          - leg: speech
+          - leg: translate
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Install the leg environment
+        run: |
+          set -eux
+          if [ "${{ matrix.leg }}" = "core" ]; then
+            # NOT the dev extra: it ships pypdf + imageio-ffmpeg, which would
+            # contaminate the core-only absence proof.  Test tooling only.
+            pip install -e . pytest pytest-asyncio
+          else
+            pip install -e ".[${{ matrix.leg }}]" pytest pytest-asyncio
+          fi
+      - name: Extras-matrix declarations agree (pyproject ↔ CI ↔ tests ↔ committed doc)
+        run: python scripts/extras_matrix.py check
+      - name: Leg smoke + contract tests
+        run: |
+          set -o pipefail
+          pytest -v -rs tests/unit/test_optional_extras.py --tb=short 2>&1 | tee leg.log
+      - name: Focused tests for this leg
+        run: |
+          set -o pipefail
+          case "${{ matrix.leg }}" in
+            pdf)
+              pytest -q -rs tests/unit/test_jobs_cli.py -k pdf --tb=short 2>&1 | tee -a leg.log
+              pytest -q -rs tests/integration/test_in_process_job_queue.py -k pdf --tb=short 2>&1 | tee -a leg.log
+              ;;
+            speech|translate)
+              pytest -q -rs tests/unit/test_caption_engine_adapters.py --tb=short 2>&1 | tee -a leg.log
+              ;;
+            core)
+              # startup contract on the bare install: the CLI composition root
+              # must build without any optional package present.
+              python -m nexus_ai_agent.cli --help >/dev/null
+              ;;
+          esac
+      - name: Skip-inflation guard (a skippable test on this leg is a defect)
+        run: python scripts/extras_matrix.py audit-skips --leg "${{ matrix.leg }}" --log leg.log
+      - name: Provenance report (SHA-bound, never "latest")
+        run: |
+          mkdir -p ci-artifacts
+          pip freeze > ci-artifacts/freeze-${{ matrix.leg }}.txt
+          python scripts/extras_matrix.py report \
+            --out "ci-artifacts/dependency-matrix-${{ matrix.leg }}.json" \
+            --sha "$GITHUB_SHA" \
+            --timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --installed-from "ci-artifacts/freeze-${{ matrix.leg }}.txt"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dependency-matrix-${{ matrix.leg }}
+          path: ci-artifacts/
+          retention-days: 14
+
+  # ── Python parity (task-132 / CI parity audit) ──────────────────────────────
+  # requires-python claims >= 3.10 but every job ran 3.12 only: a local green on
+  # 3.11 proved nothing about the declared floor.  This matrix runs the exact
+  # test-job selection on every supported minor.  scripts/extras_matrix.py check
+  # fails when a job pins a python-version this matrix does not cover.
+  python-parity:
+    name: python-parity (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e ".[dev]"
+      - run: |
+          set -o pipefail
+          pytest -q -rs -m "not slow" --tb=short 2>&1 | tee parity.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure()
+        with:
+          name: parity-log-${{ matrix.python-version }}
+          path: parity.log
+          retention-days: 7
 
   # Prove the initial Alembic chain on real PostgreSQL.
   # real PostgreSQL before any Neon URL is provided.  Zero cloud credentials:
@@ -71,8 +188,8 @@ jobs:
       NEXUS_DATABASE_URL: postgresql://nexus:nexus@localhost:5432/nexus
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
@@ -90,6 +207,38 @@ jobs:
       # f4a9c2e71b08 lifecycle table revision.
       - run: |
           PGPASSWORD=nexus psql -h localhost -U nexus -d nexus -tAc "SELECT version_num FROM alembic_version" | grep -q 7c2f9d41e8a3
+
+  # ── Release lineage (machine-checked, reported — never assumed) ─────────────
+  # VERSION → commit → CI → tag → GitHub Release → CHANGELOG.  Gaps are OPEN
+  # (printed, summarized, artifacted); contradictions are RED: once the current
+  # version's tag exists, the whole chain behind it must hold.
+  release-lineage:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # full history + tags: lineage is checked against real refs
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Version lockstep + tag/release lineage
+        run: |
+          set -o pipefail
+          mkdir -p ci-artifacts
+          python scripts/release_lineage.py \
+            --github-summary "$GITHUB_STEP_SUMMARY" \
+            --out ci-artifacts/release-lineage.json \
+            --sha "$GITHUB_SHA"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-lineage
+          path: ci-artifacts/
+          retention-days: 30
 
   # ── Fast rail (task-113) ────────────────────────────────────────────────────
   # Deliberately independent (`needs:` nothing) and dependency-free: it installs no
@@ -109,11 +258,14 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - run: python scripts/check_version_lockstep.py
+      # task-132: the extras matrix must also be verified before any install —
+      # a pyproject extra without a CI leg fails here in seconds.
+      - run: python scripts/extras_matrix.py check
       - run: python -m pip install "ruff==0.16.8"
       - run: ruff check .
       - run: ruff format --check .
