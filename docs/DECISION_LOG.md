@@ -1,6 +1,9 @@
 # NEXUS AI — Architecture Decision Log
 
-**Status:** Canonical historical record; revision 8 effective 2026-09-24  
+**Status:** Canonical historical record; revision 11 effective 2026-09-25  
+**r11 scope:** S3/S5 adversarial closure of the security-boundary salvage (D-0016; session `arena/01a0d563-nexus-ai-agent`, PR#79): 5 proven defects closed, 12/12 mutation-killed.  
+**r10 scope:** security-boundary truth salvage (D-0015; PR#76 head `5b17a70` carried into PR#79): S1–S5 real deltas fixed, 9/9 mutation-killed.  
+**r9 scope:** Gate 2 canonical command + capability reconciliation, board task-179 (session `arena/01a0d43c-nexus-ai-agent`): the v1/v2 contract conflict resolved to one canonical contract (D-0013); see `architecture/COMMAND_CAPABILITY_CONTRACT.md` and `architecture/adr/0005-canonical-command-capability-contract.md` for evidence, scoring, and limits.  
 **r8 scope:** owner-directed P0 stabilization day (session `arena/01a0d23e-nexus-ai-agent`, board claims task-165/166/167): the legacy `/creative/*` HTTP lane disposition (D-0010), wiring the creative studio surface onto the canonical chain (D-0011), and verifiable backup success (D-0012). Evidence root: `docs/audits/P0_STABILIZATION_2026-09-24.md`.
 
 **Scope:** Architectural, operational, and roadmap decisions from Phase 0 through the released v3.13.0 baseline (P0 week-1 security batch + feature-engine wiring), the accepted Phase 6 Nagar design, the implemented Nagar Waves 1–3 (2a substrate, 2b pack, 2c render lane, 3 image generation) and the owner decisions that sequence what comes next.  
@@ -16,8 +19,8 @@
 - **r5 (2026-09-20, PR#23):** recorded Nagar Wave 2c — the render lane (pure `RenderIR` → filtergraph → argv, one FFmpeg process, staging publish, measured evidence) — as an accepted and implemented decision with its rejected alternatives (agent-authored filtergraphs, `-y` against the destination, trusting the plan's duration, a second `ffprobe` binary, encoding inside a handler, a Python video library).
 - **r7 (2026-09-21, repo-hygiene pass — owner-directed, session `arena/01a0c484`):** release baseline moved to `v3.13.0` (the merged P0 week-1 security batch — README already described its behavior as v3.13.0 while VERSION/pyproject still said 3.12.0); docs reorganized without content loss (`docs/audits/`, `docs/history/`, `docs/ops/`, `docs/README.md` index); the broken root `termux_install.sh` removed and `scripts/termux_install.sh` repaired (canonical `nexus run-bot` entrypoint); PR #33 closed as superseded (security scope already delivered by merged PR #34; feature-wiring scope double-claims agent B's active lease — evidence: `mergeable=CONFLICTING`, head checks green but base-diverged), then **reopened the same day** when the `ci-gates-steward` board (15:21Z) re-designated it as the task-110 vehicle; 28 merged/closed remote branches deleted with per-branch dispositions below.
 - **r6 (2026-09-20, v3.11.0 housekeeping PR):** moved the release baseline to `v3.11.0`; recorded two owner decisions — *image generation behind an adapter (Pollinations by default, Gemini opt-in)*, which resolves the open question left by Wave 2 item 7, and *Wave 2.5 (Telegram surface for the slideshow pack) precedes Wave 3*; corrected the Phase 6 status text to Waves 1–2c merged; updated the PR snapshot (PR#23 merged as `ebe995a`, PR#1/PR#2 closed); noted that the lifecycle PR1/PR2/PR3 line has been on `main` since PR#7 (`acdbcb7`, v3.6.0) — the roadmap file had still called it unmerged.
-- **r10 (2026-09-24, S3/S5 adversarial closure):** PR#76's own S3/S5 surfaces independently re-verified and 5 proven defects closed (stdlib traceback redaction, mapping/non-string arg redaction, Basic-scheme credentials, CGNAT 100.64.0.0/10, https-only scheme gate on redirect hops) — 12/12 mutation-killed; D-0016.
-- **r9 (2026-09-24, security-boundary truth salvage):** PR#58's S1–S5 claims re-verified against main `035a896` — real deltas fixed on a fresh branch (dispatcher-true access guard incl. sync `check_update` + `ApplicationHandlerStop`, force-join SQL predicate + fail-closed-unbound, boundary redaction in both pipelines, Gemini `x-goog-api-key` everywhere, SSRF-safe legacy `video_url` download + `SafeAsyncTransport` stream fix), 9/9 mutation-killed; PR#58 stays unmerged evidence (D-0015).
+- **r10 (2026-09-24, security-boundary truth salvage):** PR#58's S1–S5 claims re-verified against main `035a896` — real deltas fixed on a fresh branch (dispatcher-true access guard incl. sync `check_update` + `ApplicationHandlerStop`, force-join SQL predicate + fail-closed-unbound, boundary redaction in both pipelines, Gemini `x-goog-api-key` everywhere, SSRF-safe legacy `video_url` download + `SafeAsyncTransport` stream fix), 9/9 mutation-killed; PR#58 stays unmerged evidence (D-0015).
+- **r11 (2026-09-24, S3/S5 adversarial closure):** PR#76's own S3/S5 surfaces independently re-verified and 5 proven defects closed (stdlib traceback redaction, mapping/non-string arg redaction, Basic-scheme credentials, CGNAT 100.64.0.0/10, https-only scheme gate on redirect hops) — 12/12 mutation-killed; D-0016.
 - **r8 (2026-09-24, P0 stabilization day):** D-0010 legacy `/creative/*` HTTP lane = keep+harden (strictly harden-edged) on a deprecation track gated on open PR#58's SSRF scope, never a competitor pipeline; D-0011 `/edit` `/caption` `/grade` wired through the canonical chain with message-anchored idempotency, the bogus `mapper` handler key removed, honest op matrix (`lut`/`burnin` refused, not faked), all replies through the i18n catalog; D-0012 backup success must be measured and round-trip-verified, never asserted — plus the r8 coordination facts (task-106 superseded into task-166, task-164 narrowed to owner-secrets, docs number-resync against measured values: 57 registered ops).
 
 This document is the single reference point for architectural decisions in this repository. A new decision must be appended here with its date, status, rationale, rejected alternatives, and repository evidence. Existing historical documents remain useful as detailed records, but this log is authoritative when summaries differ.
@@ -1105,6 +1108,95 @@ the engine: the repo's own dump primitives and provider already expose download,
 dependencies would solve a problem the repo had already solved. (2) Treating a
 successful `upload()` return as proof — that was the reported bug.
 
+## 2026-09-24 — D-0013: one canonical Nagar command + capability contract (Gate 2 reconciliation)
+
+**Status:** Accepted on branch `arena/01a0d43c-nexus-ai-agent` (board task-179);
+contract page
+[`architecture/COMMAND_CAPABILITY_CONTRACT.md`](architecture/COMMAND_CAPABILITY_CONTRACT.md),
+governance record
+[`architecture/adr/0005-canonical-command-capability-contract.md`](architecture/adr/0005-canonical-command-capability-contract.md);
+tests and CI evidence are recorded separately on the contract page.
+
+*Problem.* Two Gate 2 reports claimed incompatible canonical contracts
+(`schema_version = 2` with external id `nagar.command.v1` and a wired bus vs a
+parallel `Command Envelope v2` with canonical `nagar.command.v2`, a new
+package, and ADR 0005–0008), and the existing `CommandBus` returned cached
+results before checking actor, project, capability, schema, references, or
+payload. Neither report could be accepted without reconciliation against the
+live repository.
+
+*Decision.* Keep `nagar.command.v1` as the external protocol identifier, the
+existing `TypedCommand`, registry, reference resolver, pack handlers, and pure
+handler boundary. Evolve the envelope with schema `1|2` (legacy shape vs
+explicit actor/project/provenance claims), inject a trusted project authorizer
+at composition, and derive schema/version/permissions from the installed
+registry, never from client snapshots. Canonical order: parse → envelope +
+operation schema → actor/project grant → capability/version/permissions →
+execution policy (mode + A/B/C/D) → project-scoped references → idempotency
+reservation (project, operation, key) with fingerprint conflict → revision
+preconditions on new work → pure handler and atomic commit. Same key +
+different payload is a deterministic `IdempotencyConflictError`; claim-less
+schema-1 commands without an authorizer keep dispatching under deprecated
+implicit local trust so the runtime-owned call sites work unchanged. No
+second bus, no second resolver, no parallel envelope package, no protocol
+rename, no database migration. The `v2` protocol id is refused at parse and
+banned from `src/` by guard.
+
+*Limits.* The bus reservation is per-bus in-memory: no cross-process,
+cross-instance, or post-restart claim. The durable SQLite queue still returns
+the original job id for a reused key without comparing payloads (lifecycle
+follow-up, board task-182). A project asset record is logical membership, not
+physical file existence. Explicit service grants at the three runtime call
+sites are the runtime owner's follow-up (board task-181); until then the
+implicit local path cannot be retired. Integration with PR#67's
+`required_packs`/lifecycle bus gate is NOT VERIFIED (board task-183; seam at
+stage 4). The `preview` execution mode is reserved surface without an
+implementation.
+
+*Rejected alternatives.* (B) Agent 2's parallel v2 envelope (no bus
+integration, duplicated models, hardcoded operation snapshot, gate
+weakening, no PR); (C) a minimal additive change with unenforced
+authorization; (D) a full `v2` protocol cutover across manifests and logs;
+(A′) PR#68 verbatim (required claims breaking runtime-owned call sites).
+Scored in ADR 0005; salvageable Agent-2 ideas (advisory snapshots,
+fail-closed locality, preview surface, the matrix question) folded into this
+contract, and PR#68's queue hardening plus runtime call-site migrations stay
+valid follow-ups for their lanes.
+
+*Reopens when* an authenticated multi-user project store, a durable
+cross-process reservation adapter, or the PR#67 lifecycle integration lands;
+publish a versioned migration plan and exercise redelivery/crash recovery
+before claiming exactly-once or production-grade durability.
+
+### D-0013 amendment (task-183): lifecycle seam integrated at stage 4b
+
+The *Limits* line above ("Integration with PR#67's `required_packs`/lifecycle
+bus gate is NOT VERIFIED … seam at stage 4") is superseded. PR#67's
+`creative/studio/lifecycle.py` is consumed byte-identical (`9c3a34f`) and
+called exactly once, at sub-stage **4b**: after the actor/project grant and
+capability permissions, before execution policy, reference validation, the
+idempotency reservation, preconditions and the handler. Refusals: unknown,
+`STUB`, `RETIRED`, and `EXPERIMENTAL` without the opt-in.
+
+*Trust boundary.* The opt-in is composition-root state
+(`CommandBus(..., allow_experimental=...)`), never an envelope field and
+never a queue-row field. The render worker, the only production site that
+sets it, derives it from the canonical operation via
+`render_jobs.EXPERIMENTAL_OPT_IN_OPERATIONS`, which is pinned to exactly the
+surface operations on an `EXPERIMENTAL` pack. An earlier revision carried it
+as `CreativeRenderPayload.allow_experimental`. That let whoever wrote the queue
+row choose lifecycle policy, so it was replaced before merge.
+
+*Merge with PR#67.* The merge is semantic, not just textual. Keep stage 4b,
+drop PR#67's stage-3.5 call and its payload/surface flag, and add
+`color.apply_lut` to the opt-in set. The architecture guards and the
+opt-in-completeness test go red on any other resolution.
+
+*Evidence.* `tests/unit/test_gate2_lifecycle_seam.py`,
+`tests/unit/test_gate2_lifecycle_mutations.py`,
+`tests/unit/test_capability_lifecycle.py`,
+`tests/architecture/test_lifecycle_gate_boundary.py`, and the task-183
+trust-boundary tests in `tests/unit/test_creative_render_jobs.py`.
 ## 2026-09-24 — Security-boundary truth salvage: PR#58 evidence reconciled onto current main (D-0015)
 
 *Problem.* PR#58 ("Security Boundary hardening — S1–S5") was drafted against base

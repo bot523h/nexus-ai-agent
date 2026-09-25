@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-24T22:30:00Z",
+  "updated_at": "2026-09-25T05:08:57Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -482,6 +482,32 @@
         ".github/workflows/maintenance.yml",
         "CHANGELOG.md",
         "docs/ops/r2-storage.md"
+      ]
+    },
+    {
+      "id": "nagar-contract-gate",
+      "description": "Gate 2 canonical command + capability reconciliation (contract boundary only): studio envelope/registry/bus, contract tests + guards, contract doc + ADR 0005 + D-0013. Locked out: creative/rendering/*, creative/packs/*, creative/slideshow/* (runtime-owned), adapters/* (lifecycle-owned).",
+      "paths": [
+        "src/nexus_ai_agent/creative/studio/",
+        "tests/unit/test_command_capability_contract.py",
+        "tests/unit/test_pack_manifest_verify.py",
+        "tests/architecture/test_command_capability_boundary.py",
+        "docs/architecture/COMMAND_CAPABILITY_CONTRACT.md",
+        "docs/architecture/adr/",
+        "docs/architecture/CREATIVE_STUDIO.md",
+        "docs/architecture/MODULE_MAP.md",
+        "docs/architecture/TESTING.md",
+        "docs/README.md",
+        "docs/DECISION_LOG.md"
+      ]
+    },
+    {
+      "id": "nagar-runtime-call-sites",
+      "description": "Runtime-owned in-process bus call sites (slideshow service/upscale, render_jobs): explicit service grants + source refs. Owner: runtime lane (Agent 1).",
+      "paths": [
+        "src/nexus_ai_agent/creative/slideshow/service.py",
+        "src/nexus_ai_agent/creative/slideshow/upscale.py",
+        "src/nexus_ai_agent/creative/render_jobs.py"
       ]
     },
     {
@@ -1858,11 +1884,11 @@
     },
     {
       "priority": "P0",
-      "status": "completed_released",
+      "status": "done",
       "prerequisites": [],
       "ttl_hours": 48,
       "gates_owner": false,
-      "note": "Delivered via PR#65 (merged 2026-09-24T09:44:16Z). Stewardship-release: lease held api/app.py against the security-boundary lane although the work landed on main.",
+      "note": "RECONCILED 2026-09-24: delivered by merged PR#65; terminal status recorded during Gate 2 contract reconciliation zero-state. exclusive_paths released. RESIDUAL (honest gap, not mine): the acceptance criterion 'ADR 0006 records KEEP+HARDEN' is UNMET on main -- docs/architecture/adr/0006-legacy-creative-pipeline.md does not exist (verified with git ls-tree on 035a896) and CREATIVE_STUDIO.md section 9 references a dangling 'ADR 0006'. Tracked as next_work task-180.",
       "task": "task-165-legacy-creative-hardening",
       "title": "P0-A: auth for GET /creative/jobs/{id} + upload size cap + legacy deprecation ratchet (ADR)",
       "title_fa": "P0-A: احراز هویت GET /creative/jobs + سقف حجم آپلود + ترکمن‌های رسمی deprecation پایپ‌لاین legacy",
@@ -1878,24 +1904,19 @@
       "evidence_required": [
         "pytest tests/unit/test_security_hardening.py tests/architecture/test_legacy_creative_boundary.py"
       ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/api/app.py",
-        "src/nexus_ai_agent/creative/legacy_boundary.py",
-        "tests/unit/test_security_hardening.py",
-        "tests/architecture/test_legacy_creative_boundary.py",
-        "docs/architecture/adr/0006-legacy-creative-pipeline.md",
-        "docs/architecture/adr/README.md"
-      ],
+      "exclusive_paths": [],
       "agent_branch": "arena/01a0d23e-nexus-ai-agent",
-      "claimed_at": "2026-09-24T07:36:43Z"
+      "claimed_at": "2026-09-24T07:36:43Z",
+      "released_at": "2026-09-24T16:32:01Z",
+      "evidence": "PR#65 MERGED -> main 035a896 (035a896dd2ed1293de6accf2ef4309da2fd64c89) at 2026-09-24T09:44:16Z (verified with gh pr view 65 --json state,mergedAt). Reconciled by arena/01a0d43c-nexus-ai-agent: a merged PR must not keep a live lease (PR#51 integration + PR#47 stewardship precedent)."
     },
     {
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "prerequisites": [],
       "ttl_hours": 48,
       "gates_owner": false,
-      "note": "",
+      "note": "RECONCILED 2026-09-24: delivered by merged PR#65; terminal status recorded during Gate 2 contract reconciliation zero-state. exclusive_paths released.",
       "task": "task-166-creative-surface-wiring",
       "title": "P0-B: wire creative surface end-to-end — registration, creative_render worker, idempotency, i18n",
       "title_fa": "P0-B: سیم‌کشی انتها به انتهای سطح خلاقیت — رجیستر، worker، idempotency، بومی‌سازی",
@@ -1912,26 +1933,19 @@
       "evidence_required": [
         "pytest tests/unit/test_creative_surface.py tests/unit/test_creative_render_jobs.py tests/unit/test_i18n_parity.py"
       ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/bot/creative_surface.py",
-        "src/nexus_ai_agent/creative/render_jobs.py",
-        "src/nexus_ai_agent/worker.py",
-        "src/nexus_ai_agent/bot/app.py",
-        "src/nexus_ai_agent/i18n/locales/",
-        "tests/unit/test_creative_surface.py",
-        "tests/unit/test_creative_render_jobs.py",
-        "docs/architecture/CREATIVE_STUDIO.md"
-      ],
+      "exclusive_paths": [],
       "agent_branch": "arena/01a0d23e-nexus-ai-agent",
-      "claimed_at": "2026-09-24T07:36:43Z"
+      "claimed_at": "2026-09-24T07:36:43Z",
+      "released_at": "2026-09-24T16:32:01Z",
+      "evidence": "PR#65 MERGED -> main 035a896 (035a896dd2ed1293de6accf2ef4309da2fd64c89) at 2026-09-24T09:44:16Z (verified with gh pr view 65 --json state,mergedAt). Reconciled by arena/01a0d43c-nexus-ai-agent: a merged PR must not keep a live lease (PR#51 integration + PR#47 stewardship precedent)."
     },
     {
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "prerequisites": [],
       "ttl_hours": 48,
       "gates_owner": false,
-      "note": "",
+      "note": "RECONCILED 2026-09-24: delivered by merged PR#65; terminal status recorded during Gate 2 contract reconciliation zero-state. exclusive_paths released.",
       "task": "task-167-backup-verifiability",
       "title": "P0-C: backup success criteria = uploaded + integrity-verified + restore-proven; precise failure diagnosis",
       "title_fa": "P0-C: موفقیت بکاپ = آپلود + راستی‌آزمایی یکپارچگی + اثبات restore؛ تشخیص دقیق خرابی",
@@ -1947,14 +1961,191 @@
       "evidence_required": [
         "pytest tests/unit/test_maintenance_backup.py"
       ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/maintenance/backup.py",
-        "tests/unit/test_maintenance_backup.py",
-        ".github/workflows/maintenance.yml",
-        "docs/ops/r2-storage.md"
-      ],
+      "exclusive_paths": [],
       "agent_branch": "arena/01a0d23e-nexus-ai-agent",
-      "claimed_at": "2026-09-24T07:36:43Z"
+      "claimed_at": "2026-09-24T07:36:43Z",
+      "released_at": "2026-09-24T16:32:01Z",
+      "evidence": "PR#65 MERGED -> main 035a896 (035a896dd2ed1293de6accf2ef4309da2fd64c89) at 2026-09-24T09:44:16Z (verified with gh pr view 65 --json state,mergedAt). Reconciled by arena/01a0d43c-nexus-ai-agent: a merged PR must not keep a live lease (PR#51 integration + PR#47 stewardship precedent)."
+    },
+    {
+      "task": "task-179-gate2-command-reconciliation",
+      "title": "Gate 2: canonical command + capability reconciliation (v1/v2 conflict -> one contract)",
+      "title_fa": "Gate 2: یکسان‌سازی قرارداد فرمان و قابلیت (حل اختلاف v1/v2)",
+      "zone": "nagar-contract-gate",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Reconcile the Agent 1 (schema_version=2, protocol nagar.command.v1, wired bus) vs Agent 2 (nagar.command.v2 parallel envelope, ADR 0005-0008, docs/contracts) conflict into ONE canonical contract on the contract boundary only: versioned TypedCommand (protocol v1 + schema 1|2), trusted actor/project authorization seam, capability authorization, execution policy, project-scoped reference validation, scoped payload-bound idempotency, revision preconditions, canonical dispatch order. No runtime/pack/rendering/slideshow/job-lifecycle changes; runtime needs recorded as RUNTIME GAP for Agent 1.",
+      "scope_fa": "حل اختلاف قرارداد فرمان/قابلیت فقط در مرز قرارداد، بدون دست‌زدن به runtime.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "v1/v2 conflict resolved with remote-verifiable evidence; one canonical contract",
+        "unknown protocol/schema/operation-schema versions rejected by negative tests",
+        "unauthorized actor/project denied by negative tests (fail-closed seam)",
+        "unavailable/unknown/mismatched capability denied by negative tests",
+        "same key + different payload -> deterministic IdempotencyConflictError (tested)",
+        "stale revision/hash rejected; old commands cannot apply silently (tested)",
+        "docs match code (contract doc + ADR 0005 + D-0013 + pipeline section)",
+        "architecture guard green; ruff + mypy + targeted pytest + full relevant pytest green",
+        "zero changes under creative/rendering, creative/packs, creative/slideshow, adapters"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_command_capability_contract.py tests/architecture/test_command_capability_boundary.py tests/unit/test_nagar_wave1_green_cockpit.py",
+        "ruff check . && ruff format --check . && mypy src",
+        "pytest -q -m 'not slow' (full suite, zero regression vs base)",
+        "CI green on the PR"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/studio/models.py",
+        "src/nexus_ai_agent/creative/studio/authorization.py",
+        "src/nexus_ai_agent/creative/studio/bus.py",
+        "src/nexus_ai_agent/creative/studio/capabilities.py",
+        "src/nexus_ai_agent/creative/studio/references.py",
+        "src/nexus_ai_agent/creative/studio/__init__.py",
+        "tests/unit/test_command_capability_contract.py",
+        "tests/architecture/test_command_capability_boundary.py",
+        "tests/unit/test_pack_manifest_verify.py",
+        "docs/architecture/COMMAND_CAPABILITY_CONTRACT.md",
+        "docs/architecture/adr/0005-canonical-command-capability-contract.md",
+        "docs/architecture/adr/README.md",
+        "docs/architecture/CREATIVE_STUDIO.md",
+        "docs/architecture/MODULE_MAP.md",
+        "docs/architecture/TESTING.md",
+        "docs/README.md",
+        "docs/DECISION_LOG.md"
+      ],
+      "agent_branch": "arena/01a0d43c-nexus-ai-agent",
+      "claimed_at": "2026-09-24T16:32:01Z",
+      "ttl_hours": 48,
+      "gates_owner": true,
+      "note": "PR#72 https://github.com/bot523h/nexus-ai-agent/pull/72 (commit 5f955ce) — awaiting merge; merge-order disclosures in PR body (PR#68 supersede, PR#67/PR#70/PR#71 collisions).",
+      "evidence": [
+        "contract 80 + boundary 16 + wave1 22: all pass (local)",
+        "ruff check + format clean; mypy src clean (233 files)",
+        "pytest -m 'not slow': unit+arch 1901 passed/1 skipped, integration 81 passed/19 skipped (local)",
+        "PR#72 CI green: lint pass, test pass, lint-fast pass, migrate-postgres pass (run 36033245557)"
+      ]
+    },
+    {
+      "task": "task-180-adr0006-residual",
+      "title": "Residual: deliver or retract the dangling ADR 0006 (legacy /creative pipeline KEEP+HARDEN)",
+      "title_fa": "",
+      "zone": "docs-architecture",
+      "priority": "P2",
+      "status": "queued",
+      "scope": "task-165 acceptance criterion unmet on main: the ADR file does not exist while CREATIVE_STUDIO.md §9 references it.",
+      "scope_fa": "",
+      "prerequisites": [
+        "task-179-gate2-command-reconciliation"
+      ],
+      "acceptance_criteria": [
+        "either adr/0006-legacy-creative-pipeline.md exists, indexed and linked, or the CREATIVE_STUDIO.md reference is removed with a DECISION_LOG note",
+        "tests/unit/test_docs_integrity.py green"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "Gate 2 follow-up; fence set at claim time"
+    },
+    {
+      "task": "task-181-runtime-service-grants",
+      "title": "RUNTIME GAP (owner Agent 1): bind explicit service grants + source input_refs at the three local bus call sites",
+      "title_fa": "",
+      "zone": "nagar-runtime-call-sites",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "After Gate 2, claim-less schema-1 dispatches run under deprecated implicit local trust; the runtime owner must inject authorizer= with service grants at the three in-process call sites, then the implicit path can be retired.",
+      "scope_fa": "",
+      "prerequisites": [
+        "task-179-gate2-command-reconciliation"
+      ],
+      "acceptance_criteria": [
+        "creative/slideshow/service.py, creative/slideshow/upscale.py, creative/render_jobs.py pass authorizer= with a service grant and declare owned source refs",
+        "an architecture guard requires authorizer= at those call sites (Gate 2 guard deliberately does not, to avoid owning runtime files)",
+        "full suite green; no contract-layer change needed"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "Gate 2 follow-up; fence set at claim time"
+    },
+    {
+      "task": "task-182-durable-idempotency-conflict",
+      "title": "LIFECYCLE GAP: durable idempotency conflict (same key + different payload) in the SQLite job queue",
+      "title_fa": "",
+      "zone": "storage-resilience",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "Gate 2 proves conflicts at the bus; the durable queue above it (src/nexus_ai_agent/adapters/in_process_job_queue.py) still returns the original job id for a reused key without comparing payloads. Open PR#68 already implements exactly this fix; salvage or close as duplicate.",
+      "scope_fa": "",
+      "prerequisites": [
+        "task-179-gate2-command-reconciliation"
+      ],
+      "acceptance_criteria": [
+        "enqueue with a reused key + different job type/payload raises a typed conflict",
+        "same key + same payload across adapter instances/processes returns the original job",
+        "tests/integration/test_in_process_job_queue.py covers both incl. concurrency"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "Gate 2 follow-up; fence set at claim time"
+    },
+    {
+      "task": "task-183-pr67-lifecycle-integration",
+      "title": "Post-merge integration check: Gate 2 bus vs PR#67 pack-lifecycle/required_packs gate",
+      "title_fa": "",
+      "zone": "coordination",
+      "priority": "P2",
+      "status": "active_in_review",
+      "scope": "PR#67 adds required_packs + a lifecycle bus gate; Gate 2 could not verify against it. After both land, wire the seam (stage 4, after grant+registry, before reservation) and prove pack-required vs pack-absent dispatch.",
+      "scope_fa": "",
+      "prerequisites": [
+        "task-179-gate2-command-reconciliation"
+      ],
+      "acceptance_criteria": [
+        "PR#67 lifecycle check sits in stage 4 (after trusted grant + registry, before reservation)",
+        "Gate 2 negative suite + PR#67 lifecycle tests green on the merged tree",
+        "contract doc integration section flipped from NOT VERIFIED with evidence"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "Gate 2 follow-up; fence set at claim time",
+      "agent_branch": "arena/01a0d50d-nexus-ai-agent",
+      "claimed_at": "2026-09-24T20:37:51Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Continued from arena/01a0d4c8 (PR#75 head e0cba26 is an ancestor of this branch; PR#75 is superseded by PR#77, same stack on PR#72). MERGE ORDER: PR#72 -> PR#77; PR#67 afterwards needs the semantic resolution in COMMAND_CAPABILITY_CONTRACT section 11 (keep 4b, drop 3.5 + payload/surface opt-in, add color.apply_lut to EXPERIMENTAL_OPT_IN_OPERATIONS).",
+      "stacked_on": {
+        "pr": 72,
+        "task": "task-179-gate2-command-reconciliation",
+        "head": "f450df273d944dc88e3a21337b915b40638ee4dd",
+        "consumed_from": {
+          "pr": 67,
+          "head": "9c3a34f107b4b5f3c878a0ec2a7d82e8c24614d3",
+          "file": "src/nexus_ai_agent/creative/studio/lifecycle.py (byte-identical copy)"
+        }
+      },
+      "overlap_ack": {
+        "paths": [
+          "src/nexus_ai_agent/creative/studio/bus.py",
+          "docs/architecture/COMMAND_CAPABILITY_CONTRACT.md",
+          "docs/architecture/CREATIVE_STUDIO.md",
+          "docs/architecture/adr/0005-canonical-command-capability-contract.md",
+          "docs/DECISION_LOG.md"
+        ],
+        "owner": "task-179-gate2-command-reconciliation",
+        "why": "task-183 IS the seam into task-179's contract; its prerequisite is task-179. This branch is STACKED on PR#72 HEAD (no rebase, no overwrite of PR#72) and only appends stage 4b + its docs. If PR#72 changes, this branch is re-based on the new PR#72 HEAD and CI re-run. DECISION_LOG.md: task-183 appends a D-0013 amendment section only (task-179's entry text untouched).",
+        "why_fa": "این کار خودِ درزِ اتصال به قرارداد task-179 است؛ شاخه روی HEAD همان PR بنا شده و PR#72 بازنویسی یا rebase نمی‌شود."
+      },
+      "evidence": {
+        "seam": "CommandBus._dispatch_locked stage 4b (after actor grant + capability/permissions, before policy/refs/reservation/preconditions/handler)",
+        "trust_boundary": "render_jobs.EXPERIMENTAL_OPT_IN_OPERATIONS (server policy keyed on canonical op) is the only source of CommandBus(allow_experimental=...); CreativeRenderPayload has no opt-in field (extra=forbid rejects one)",
+        "tests": [
+          "tests/unit/test_gate2_lifecycle_seam.py (A-H + placement incl. 4b<5, 4b<6)",
+          "tests/unit/test_gate2_lifecycle_mutations.py (M1-M5)",
+          "tests/unit/test_capability_lifecycle.py (PR#67 suite, byte-identical @ 9c3a34f)",
+          "tests/unit/test_creative_render_jobs.py (task-183 trust-boundary block)",
+          "tests/architecture/test_lifecycle_gate_boundary.py",
+          "tests/architecture/test_test_suite_hygiene.py (91fbaff root cause guard)"
+        ],
+        "ci_root_cause_91fbaff": "category B (test defect): cross-test import 'from tests.unit...' -> ModuleNotFoundError under bare pytest (exit 2); masked by python -m pytest; fixed in e0cba26, guarded now",
+        "local": "ruff/format clean; mypy src clean (234 files); pytest -m 'not slow' 2042 passed/20 skipped (py3.11 local; CI py3.12)",
+        "status": "IMPLEMENTED (not MERGED: depends on PR#72 landing first)"
+      },
+      "pr": "https://github.com/bot523h/nexus-ai-agent/pull/77"
     },
     {
       "priority": "P0",
@@ -2556,6 +2747,14 @@
       "task": "task-165-legacy-creative-hardening",
       "reason": "PR#65 reached terminal state (MERGED 2026-09-24T09:44:16Z, verified with gh) but the lease still held src/nexus_ai_agent/api/app.py against every other agent — agent_board.py check returned STOP for the security-boundary salvage task. cmd_release refuses cross-branch release, so the paths are freed here per the orphaned-lease rule and the PR#47 precedent in this log. task-165's own scope note deferred the POST video_url SSRF fix to the PR#58 lane, which is exactly the work now claimed.",
       "evidence": "gh pr view 65 --json state,mergedAt -> MERGED 2026-09-24T09:44:16Z (main 035a896)"
+    },
+    {
+      "at": "2026-09-24T20:37:51Z",
+      "by_branch": "arena/01a0d50d-nexus-ai-agent",
+      "action": "continuation",
+      "task": "task-183-pr67-lifecycle-integration",
+      "reason": "Same mission owner, new session branch (a session is bound to exactly one branch and cannot push to arena/01a0d4c8). This branch starts at PR#75 head e0cba26 unchanged and adds the trust-boundary fix, order pins, and doc/board reconciliation; PR#77 supersedes PR#75. No force-push, rebase, or overwrite of PR#67/#72/#75.",
+      "evidence": "git merge-base --is-ancestor e0cba26 arena/01a0d50d-nexus-ai-agent -> true; gh pr view 75 --json headRefOid -> e0cba268897e8d656c69c48104f6519f0dae47e1"
     },
     {
       "at": "2026-09-24T22:30:00Z",

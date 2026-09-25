@@ -158,11 +158,25 @@ def test_slideshow_analysis_sends_key_in_header(
     assert "gemini-secret-key" not in str(sent.url)
 
 
-def test_video_director_sends_key_in_header(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_video_director_sends_key_in_header() -> None:
     """Covered end-to-end in test_creative_studio.py; asserted here as
-    part of the complete inventory with the same guard shape."""
-    from tests.unit.test_creative_studio import (  # noqa: F401  (re-export guard)
-        test_video_director_calls_gemini as _e2e_guard,
-    )
+    part of the complete inventory with the same guard shape.
 
-    assert callable(_e2e_guard)
+    Integration note (release 2026-09-25): this was a cross-module
+    ``from tests.unit.test_creative_studio import ...`` re-export guard.
+    That shape breaks under CI's bare-``pytest`` entry point (no ``tests``
+    package on ``sys.path``) and is banned by the task-183 suite-hygiene
+    guard, so the guard now pins the sibling test's *existence* with a
+    self-contained AST scan instead of importing it. Same intent: this
+    test fails if the end-to-end coverage is renamed or removed.
+    """
+    import ast
+
+    sibling = Path(__file__).with_name("test_creative_studio.py")
+    tree = ast.parse(sibling.read_text(encoding="utf-8"), filename=str(sibling))
+    names = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert "test_video_director_calls_gemini" in names
