@@ -101,9 +101,9 @@ Unverified external pack installation remains unavailable by design. Preview and
 
 ## COMMIT / BOARD / LEASE / DEATH
 
-`COMMIT: PENDING` — this audit must not claim final release readiness before verification and commit.
+`COMMIT: c6ad481` — pushed to `arena/01a0da2d-nexus-ai-agent`; PR #86 opened. GitHub checks are currently QUEUED, therefore CI is not green evidence.
 
-`BOARD: NOT UPDATED` — no board mutation was made because the coordination board has active ownership fences; this is explicitly recorded rather than hidden.
+`BOARD: NOT UPDATED` — no board mutation was made because `docs/README.md` is fenced by task-181; the overlap check passed for the actual changed files. This is explicitly recorded rather than hidden.
 
 `LEASE: NOT ACQUIRED / NOTHING TO RELEASE`.
 
