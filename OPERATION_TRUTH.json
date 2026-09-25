@@ -25,8 +25,8 @@
       }
     ],
     "generation_command": "python -m nexus_ai_agent.nagar",
-    "source_revision": "c758a3d268c014efcb841472f559ec5168a3f80c",
-    "generated_at": "2026-09-25T06:45:06Z",
+    "source_revision": "0c133d3643444d47cbe9723718629f9fac163b9c",
+    "generated_at": "2026-09-25T18:07:24Z",
     "deterministic_fields": [
       "reconciliation",
       "operations[*].pipeline",
@@ -386,7 +386,8 @@
           "dispatch"
         ],
         "files": [
-          "tests/unit/test_caption_pack.py"
+          "tests/unit/test_caption_pack.py",
+          "tests/unit/test_job_lifecycle.py"
         ]
       },
       "caption.translate_local": {
@@ -438,7 +439,8 @@
           "dispatch"
         ],
         "files": [
-          "tests/unit/test_delivery_pack.py"
+          "tests/unit/test_delivery_pack.py",
+          "tests/unit/test_job_lifecycle.py"
         ]
       },
       "delivery.make_proxy_480p": {
@@ -783,8 +785,11 @@
         ],
         "files": [
           "tests/integration/test_creative_chain_e2e.py",
+          "tests/integration/test_gate5_closure.py",
+          "tests/integration/test_job_lifecycle_queue.py",
           "tests/unit/test_creative_render_jobs.py",
           "tests/unit/test_edit_pack.py",
+          "tests/unit/test_job_lifecycle.py",
           "tests/unit/test_opgap_wave5.py"
         ]
       }
@@ -2586,7 +2591,8 @@
           "dispatch"
         ],
         "suite_reference_files": [
-          "tests/unit/test_caption_pack.py"
+          "tests/unit/test_caption_pack.py",
+          "tests/unit/test_job_lifecycle.py"
         ],
         "recorded_execution_proof": false,
         "recorded_artifact_proof": false,
@@ -3055,7 +3061,8 @@
           "dispatch"
         ],
         "suite_reference_files": [
-          "tests/unit/test_delivery_pack.py"
+          "tests/unit/test_delivery_pack.py",
+          "tests/unit/test_job_lifecycle.py"
         ],
         "recorded_execution_proof": false,
         "recorded_artifact_proof": false,
@@ -5812,8 +5819,11 @@
         ],
         "suite_reference_files": [
           "tests/integration/test_creative_chain_e2e.py",
+          "tests/integration/test_gate5_closure.py",
+          "tests/integration/test_job_lifecycle_queue.py",
           "tests/unit/test_creative_render_jobs.py",
           "tests/unit/test_edit_pack.py",
+          "tests/unit/test_job_lifecycle.py",
           "tests/unit/test_opgap_wave5.py"
         ],
         "recorded_execution_proof": false,
