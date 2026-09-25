@@ -69,11 +69,13 @@ def test_executable_lines_counts_statements_not_comments_or_docstrings(tmp_path:
         encoding="utf-8",
     )
     lines = executable_lines(source)
-    # CPython's line table for a module is 1-based for statements, but a module
-    # prologue (RESUME) reports line 0 and a *module* docstring really does
-    # compile to a store of ``__doc__`` — both are what a coverage tool counts,
-    # and the harness must agree with the compiler rather than with intuition.
-    assert lines == frozenset({0, 1, 4, 5, 6, 8, 10}), sorted(lines)
+    # CPython's line table for a module is 1-based for statements, but on 3.11+
+    # a module prologue (RESUME) reports line 0 and a *module* docstring really
+    # does compile to a store of ``__doc__`` — both are what a coverage tool
+    # counts, and the harness must agree with the compiler rather than with
+    # intuition.  On 3.10 there is no RESUME prologue, so line 0 never appears.
+    expected = {0, 1, 4, 5, 6, 8, 10} if sys.version_info >= (3, 11) else {1, 4, 5, 6, 8, 10}
+    assert lines == frozenset(expected), sorted(lines)
     assert 3 not in lines  # a comment never executes
     assert 7 not in lines  # a blank line never executes
     assert 9 not in lines  # a *function* docstring is constant-folded away
