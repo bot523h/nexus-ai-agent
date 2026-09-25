@@ -36,6 +36,45 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e .
+      # task-164 forensics: presence booleans only — secret VALUES are never
+      # printed. Each finding is mirrored as its own step below so the
+      # configuration state is readable from the jobs API even when the log
+      # archive is unreachable.
+      - name: Preflight (presence booleans only)
+        id: preflight
+        run: |
+          have() { if [ -n "${!1:-}" ]; then echo true; else echo false; fi; }
+          {
+            echo "r2_account_id=$(have R2_ACCOUNT_ID)"
+            echo "r2_access_key_id=$(have R2_ACCESS_KEY_ID)"
+            echo "r2_secret_access_key=$(have R2_SECRET_ACCESS_KEY)"
+            echo "r2_bucket=$(have R2_BUCKET)"
+            echo "database_url=$(have NEXUS_DATABASE_URL)"
+            if command -v pg_dump >/dev/null; then echo "pg_dump=true"; else echo "pg_dump=false"; fi
+          } | tee -a "$GITHUB_OUTPUT"
+          pg_dump --version || true
+          if [ -n "${NEXUS_DATABASE_URL:-}" ] && command -v psql >/dev/null; then
+            # server major only (not a secret); 20 s cap so a hung TCP connect cannot stall the job
+            timeout 20 psql "$NEXUS_DATABASE_URL" -Atc "show server_version" 2>&1 | sed 's/^/server_version: /' || true
+          fi
+      - name: "Config: R2_ACCOUNT_ID present"
+        if: steps.preflight.outputs.r2_account_id == 'true'
+        run: "true"
+      - name: "Config: R2_ACCESS_KEY_ID present"
+        if: steps.preflight.outputs.r2_access_key_id == 'true'
+        run: "true"
+      - name: "Config: R2_SECRET_ACCESS_KEY present"
+        if: steps.preflight.outputs.r2_secret_access_key == 'true'
+        run: "true"
+      - name: "Config: R2_BUCKET present"
+        if: steps.preflight.outputs.r2_bucket == 'true'
+        run: "true"
+      - name: "Config: NEXUS_DATABASE_URL present"
+        if: steps.preflight.outputs.database_url == 'true'
+        run: "true"
+      - name: "Config: pg_dump on PATH"
+        if: steps.preflight.outputs.pg_dump == 'true'
+        run: "true"
       # Stateless + idempotent: safe to re-run. Exits non-zero when R2 is
       # not configured so a silently-skipped backup is visible, not hidden.
       - run: nexus maintenance backup
