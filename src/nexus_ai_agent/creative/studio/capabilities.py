@@ -70,6 +70,13 @@ class OperationContext:
 
 OperationHandler = Callable[[Project, OperationContext], OperationOutcome]
 ExecutionMode = Literal["local", "preview"]
+#: What an advertised ``preview`` execution *means* for this operation — the
+#: registration-time declaration of the preview/master boundary (contract doc
+#: §13). ``state_equivalent``: the preview execution is the same pure state
+#: edit, equally authoritative as state truth. ``non_authoritative_realization``:
+#: the preview execution is a realization whose artifacts are NOT master
+#: evidence and can never be promoted or referenced as such.
+PreviewSemantics = Literal["state_equivalent", "non_authoritative_realization"]
 _VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 
 
@@ -93,6 +100,11 @@ class OperationSpec:
     schema_version: int = 1
     execution_modes: tuple[ExecutionMode, ...] = ("local",)
     required_permissions: tuple[str, ...] = ()
+    #: The declared meaning of an advertised ``preview`` execution (the
+    #: preview/master boundary, contract doc §13). ``None`` is legal only for
+    #: operations that do not advertise ``preview``; registration refuses both
+    #: an undeclared preview advertisement and an orphaned declaration.
+    preview_semantics: PreviewSemantics | None = None
 
     @property
     def effective_permissions(self) -> tuple[str, ...]:
@@ -102,6 +114,21 @@ class OperationSpec:
             else "project:write"
         )
         return tuple(sorted({baseline, *self.required_permissions}))
+
+    def authoritative_for(self, mode: ExecutionMode) -> bool:
+        """Is an execution in ``mode`` master-authoritative for this operation?
+
+        ``local`` always is. A ``preview`` execution is authoritative only
+        when the operation declared ``state_equivalent`` semantics (the
+        preview execution *is* the same pure state edit); a
+        ``non_authoritative_realization`` preview is never master evidence.
+        Unadvertised modes fail closed (the bus refuses them at stage 5).
+        """
+        if mode == "local":
+            return True
+        if mode == "preview" and "preview" in self.execution_modes:
+            return self.preview_semantics == "state_equivalent"
+        return False
 
 
 @dataclass
@@ -190,6 +217,19 @@ class CapabilityRegistry:
             raise ValueError(f"{spec.operation_id}: invalid schema version or execution modes")
         if any(mode not in ("local", "preview") for mode in spec.execution_modes):
             raise ValueError(f"{spec.operation_id}: unknown execution mode")
+        # Preview/master boundary (contract doc §13): advertising preview is a
+        # semantic claim that must be declared, and a declaration without an
+        # advertisement is dead contract data. Both fail closed at registration.
+        if "preview" in spec.execution_modes and spec.preview_semantics is None:
+            raise ValueError(
+                f"{spec.operation_id}: advertising preview mode requires explicit "
+                "preview_semantics (state_equivalent | non_authoritative_realization)"
+            )
+        if spec.preview_semantics is not None and "preview" not in spec.execution_modes:
+            raise ValueError(
+                f"{spec.operation_id}: preview_semantics declared but preview mode "
+                "is not advertised"
+            )
         _semver(capability_version)
         capability_id = f"{domain}.{capability}"
         dom = self._domains.setdefault(domain, Domain(name=domain))

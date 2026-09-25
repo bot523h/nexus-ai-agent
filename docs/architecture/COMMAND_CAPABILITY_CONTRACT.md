@@ -93,9 +93,11 @@ flowchart LR
    bus composition → lifecycle gate*, never *request → boolean*. Lifecycle
    (maturity) stays distinct from `packs/availability.py` (runnability at
    render/preflight time); the bus owns only the former.
-5. **Policy.** Requested execution mode must be advertised (`local` only
-   today); the A/B/C/D ladder still gates (C needs `confirmed`, D always
-   denied). The envelope cannot request network access or a shell.
+5. **Policy.** Requested execution mode must be advertised by the spec;
+   advertising `preview` is only legal with an explicit registration-time
+   `preview_semantics` declaration (§13). The A/B/C/D ladder still gates
+   (C needs `confirmed`, D always denied). The envelope cannot request
+   network access or a shell.
 6. **References.** Every declared `input_refs` entry is validated against the
    authorized project (asset/clip/timeline membership, project scope,
    optional kind/digest assertions); semantic time expressions pin to an exact
@@ -111,7 +113,10 @@ flowchart LR
 9. **Apply.** The registered pure handler runs against an isolated copy; the
    new project, bumped revision, recomputed hash, `EditTransaction`, and the
    reservation result commit together. A handler that mutates-then-fails or
-   renames the project cannot corrupt central state.
+   renames the project cannot corrupt central state. The committed
+   `CommandResult` is stamped with `diagnostics.execution_mode` and
+   `diagnostics.authoritative` (§13): every consumer can tell which mode
+   produced the result and whether it is master evidence.
 
 ## 3. Capability contract
 
@@ -244,11 +249,12 @@ additive change with unenforced authorization; (D) a full `v2` protocol
 cutover across manifests and logs. Full scoring is in [ADR 0005](adr/0005-canonical-command-capability-contract.md#decision-outcome).
 Salvaged from Agent 2 into this contract: the operation-matrix *question*
 (answered executably from live builders), advisory capability snapshots,
-fail-closed locality (`network_access = False`), and dry-run surface
-(`preview` mode reserved, not yet executable). This gate supersedes PR#68's
-contract scope (same studio files; expected textual conflict resolved by
-merge order); PR#68's queue hardening and runtime call-site migrations stay
-valid follow-ups for their lanes.
+fail-closed locality (`network_access = False`), and the dry-run surface
+question — since task-186 the `preview` execution mode has defined,
+fail-closed semantics (§13). This gate supersedes PR#68's contract scope
+(same studio files; expected textual conflict resolved by merge order);
+PR#68's queue hardening and runtime call-site migrations stay valid
+follow-ups for their lanes.
 
 ## 11. Open gaps
 
@@ -259,7 +265,10 @@ valid follow-ups for their lanes.
 | Explicit service grants at the three runtime call sites | RUNTIME GAP, owner Agent 1 (task-181) |
 | Integration with PR#67's `required_packs`/lifecycle bus gate | INTEGRATED at stage 4b (task-183, stacked on PR#72; PR#67's lifecycle suite runs unchanged on this tree); `MERGED` only after PR#72 lands and CI re-runs. Merging PR#67 afterwards is a *semantic* resolution: keep stage 4b and drop PR#67's stage-3.5 call and its `CreativeRenderPayload.allow_experimental` / surface flag (the architecture guards fail otherwise), and add `color.apply_lut` to `EXPERIMENTAL_OPT_IN_OPERATIONS` |
 | Runtime opt-in propagation beyond the render-job queue (studio/slideshow service call sites) | runtime-owner follow-up; slideshow/caption/edit packs are `AVAILABLE`, so no opt-in is needed today |
-| `preview` execution mode semantics | reserved surface, no implementation |
+| `preview` execution mode semantics | IMPLEMENTED at the contract level (task-186, §13): registration-time declaration, fail-closed refusal, dispatch stamping, master-evidence gate. Media realization preview twins (per-operation renderers) remain the render lane's job |
+| Capability discovery surface for the Assistant | IMPLEMENTED (task-186, §14): `build_capability_surface`, protocol `nagar.discovery.v1`, Law-4 projection, typed error contract |
+| Core API HTTP adapter (`/studio/v1/*`) | SPECIFIED (§15.4); adapter implementation deferred to the composition root — it must inject a `ProjectAuthorizer` and carry its own authentication design |
+| `DECISION_LOG` D-0021/D-0022 entries for task-186 | DEFERRED behind the task-181 lease on `docs/DECISION_LOG.md`; the decisions are published here (§13/§14) and queued for transcription (board task-187) |
 | Authenticated multi-user project store / network API authorizer | not in this gate |
 
 ## 12. Enforcers and verification
@@ -274,7 +283,12 @@ bus construction set, opt-in derived only from server policy),
 `tests/architecture/test_test_suite_hygiene.py` (no cross-test package imports), `tests/architecture/test_command_capability_boundary.py`
 (R13 in [MODULE_MAP.md](MODULE_MAP.md) §3), `tests/architecture/test_nagar_studio_isolation.py`
 (R6), `tests/unit/test_nagar_wave1_green_cockpit.py`,
-`tests/unit/test_docs_integrity.py`.
+`tests/unit/test_docs_integrity.py`. Task-186 enforcers:
+`tests/unit/test_studio_discovery.py` (Law-4 projection, determinism, error
+contract, R14), `tests/unit/test_studio_preview_master_boundary.py`
+(preview/master registration + stamps, R15),
+`tests/unit/test_studio_integration_contracts.py` (the executable Agent 2 /
+Agent 3 integration contract, nine-category matrix).
 
 ```bash
 ruff check . && ruff format --check .
@@ -284,3 +298,196 @@ pytest -q tests/unit/test_command_capability_contract.py \
   tests/unit/test_nagar_wave1_green_cockpit.py
 pytest -q -m "not slow"
 ```
+
+## 13. Preview/master execution boundary (task-186)
+
+The TDD splits realization into two engines: a **preview** path (fast,
+possibly lower-fidelity) and a **master** path (the authoritative export).
+The risk it names: an agent cannot be allowed to assume that what it
+previewed is what will be exported. The boundary is therefore a *contract
+property of every execution*, not a renderer feature:
+
+### 13.1 Semantics
+
+| Concept | Rule |
+|---|---|
+| execution mode | the envelope `execution_policy.mode` — `local` (master-authoritative) or `preview`; any unadvertised mode is refused at dispatch stage 5 |
+| `preview_semantics` | a registration-time declaration on the `OperationSpec`, required the moment an operation advertises `preview`: `state_equivalent` or `non_authoritative_realization` |
+| `state_equivalent` | the preview execution **is** the same pure state edit; its result is authoritative as *state truth* (identical reducer, identical state hash) |
+| `non_authoritative_realization` | the preview execution is a realization whose outputs are **not** master evidence; a master requires its own `local` execution |
+| result stamp | every `CommandResult` carries `diagnostics.execution_mode` and `diagnostics.authoritative`; consumers must not infer authority from anything else |
+| master evidence | `is_master_evidence(result)` — true only when the stamp is `authoritative is True`; an unstamped result is never evidence (fail-closed). Stamps are minted only by the bus at commit; a hand-built result claiming authority is an in-process forgery under the §9 trust model, and artifact lanes must re-measure independently (task-178 chain), never trust a presented result |
+| promotion | none exists. A preview result can never be upgraded, renamed or re-labelled into master evidence; the master must be re-executed under `local` |
+
+### 13.2 Fail-closed registration
+
+`CapabilityRegistry.register_operation` refuses both directions of an
+ambiguous contract:
+
+* advertising `preview` in `execution_modes` without `preview_semantics`
+  raises `ValueError` — a preview advertisement is a semantic claim and must
+  be declared;
+* declaring `preview_semantics` without advertising `preview` raises
+  `ValueError` — dead contract data is a lie by omission.
+
+The shipped Wave-1 catalog and the six pack registrars register unchanged:
+they advertise `local` only, so preview requests against them are still
+denied at stage 5 (the pinned Gate-2 behaviour). When a pack later ships a
+real preview twin, it advertises `preview` with explicit semantics — the
+registry refuses anything less.
+
+### 13.3 Enforcement
+
+* `OperationSpec.authoritative_for(mode)` is the single authority consulted
+  by the bus when stamping a result; unadvertised modes fail closed.
+* `discovery.is_master_evidence(result)` is the single authority consumers
+  use before treating a result as master evidence.
+* Enforcement suite: `tests/unit/test_studio_preview_master_boundary.py`
+  (registration refusal both directions, stamp matrix, no forged stamp on
+  failed execution, pinned baseline regression) and the Agent 3 stamp flow
+  in `tests/unit/test_studio_integration_contracts.py`.
+
+## 14. Capability discovery contract — `nagar.discovery.v1` (task-186)
+
+The bus is the *write* authority; discovery is the *read* authority.
+`build_capability_surface(registry, *, include_experimental=False)` projects
+any `CapabilityRegistry` into a typed `CapabilitySurface` — the only
+capability view an Assistant is allowed to plan against.
+
+### 14.1 Law-4 projection (runtime truth only)
+
+An Assistant must never see a capability the runtime cannot guarantee:
+
+* operations whose capability is marked unavailable are hidden;
+* operations whose required packs include an unknown id, a `STUB`, or a
+  `RETIRED` pack are hidden (lifecycle maturity axis, fail-closed);
+* operations on `EXPERIMENTAL` packs are hidden unless
+  `include_experimental=True` — the same composition-root flag the bus uses
+  (`CommandBus(allow_experimental=...)`). The flag is server state; a client
+  cannot opt itself in through the envelope;
+* every hidden operation is recorded in `excluded` with a typed reason code
+  (`capability_unavailable`, `pack_unknown`, `pack_stub`, `pack_retired`,
+  `pack_experimental_not_opted_in`) and **no permission data**.
+
+Advertised operations carry everything needed to plan a command: operation
+id, capability id + semver, description, permission level and effective
+permissions, advertised execution modes + preview semantics, operation
+schema version + the operation input JSON schema, required packs with their
+resolved lifecycle states, pack provider, and the determinism flag.
+
+### 14.2 Determinism and versioning
+
+The surface is a pure function of (registry, flag): sorted iteration, no
+clock, no randomness. `surface_canonical_json` / `surface_identity` give a
+byte-stable serialization and content hash — identical registries produce
+identical identities. The protocol literal is `nagar.discovery.v1`;
+evolution is additive only (new optional fields; existing keys never
+renamed). Discovery output can never authorize anything — dispatch re-runs
+every gate against the live registry on every attempt.
+
+### 14.3 Typed error contract
+
+`ERROR_CONTRACT` / `error_code_of` map every `NagarError` of the dispatch
+pipeline to a stable string code, most-derived class first:
+`unknown_operation`, `idempotency_conflict`, `command_validation`,
+`authorization`, `execution_policy`, `permission_denied`,
+`unknown_capability`, `capability_version`, `capability_unavailable`,
+`input_reference`, `reference_resolution`, `precondition`, `undo_stack_empty`,
+`execution_failed`, `pack_requirement`, `nagar_error`. Published codes are
+never renamed; new codes are additive.
+
+## 15. Integration contracts — Agent 2 and Agent 3 (task-186)
+
+The executable form of these contracts is
+`tests/unit/test_studio_integration_contracts.py`; it runs through the
+public studio API only and is the reference both agents code against.
+Envelope identity, versioning and dispatch semantics stay governed by §1–§10
+(ADR 0005); this section adds nothing parallel — it pins how downstream
+agents consume the canonical core.
+
+### 15.1 Agent 2 — Assistant / driver consumer
+
+Intent chain: **discovery → plan → dispatch → result → undo**.
+
+1. **Discover** — call `build_capability_surface` on the runtime registry;
+   plan strictly from the advertised rows (§14). Hidden operations do not
+   exist for planning; attempting them dispatches into
+   `unknown_operation` / `pack_requirement` anyway.
+2. **Plan** — build a schema-2 `TypedCommand` (`actor`, `target.project_id`,
+   `provenance` claims required); the advisory `capability_snapshot` must be
+   copied from the surface row (capability id, version, operation schema
+   version, provider) — forged snapshots are refused at stage 4.
+3. **Dispatch** — through `CommandBus.dispatch` only (no handler bypass,
+   R13); branch on `error_code_of` for recoverable failures.
+4. **Consume** — read `CommandResult` stamps (§13): use
+   `is_master_evidence` before treating any result as master evidence.
+5. **Undo** — `system.undo` through the same path; the restored
+   `state_hash` equals the pre-transaction hash exactly.
+
+Agent 2 must never: construct grants from its own claims, widen lifecycle
+flags, treat `excluded` rows as retry targets, or cache a surface across a
+registry change without re-fetching (surface identity makes staleness
+detectable).
+
+### 15.2 Agent 3 — runtime / execution consumer
+
+1. **Register** — operations enter only through
+   `CapabilityRegistry.register_operation`: `extra="forbid"` input model,
+   valid semver capability version, advertised modes with declared preview
+   semantics (§13.2), required packs named explicitly.
+2. **Compose** — pack composition is explicit data
+   (`creative/packs/runtime.COMPOSITION`); lifecycle states live in
+   `creative/studio/lifecycle.PACK_LIFECYCLE` and change only with the
+   tests that prove the new behaviour.
+3. **Execute** — handlers stay pure `(Project, OperationContext) ->
+   OperationOutcome`; the bus owns atomicity, stamps and history.
+4. **Publish** — artifact-producing lanes keep the task-178/180 chain:
+   staging → verification → atomic publication, with the result stamp
+   carried into the job result so `non_authoritative_realization` outputs
+   can never be published as masters.
+
+### 15.3 Tool invocation rule
+
+The studio accepts exactly one invocation shape: a typed command against a
+registered operation (R13). Any *new* tool surface must be expressed as a
+capability operation with a schema — `tools/`-style dict-in/dict-out
+invocation is a frozen legacy surface for the pre-Nagar agent graph and
+must not grow: new entries there are an architecture violation.
+
+### 15.4 Core API endpoint contract (adapter deferred)
+
+The core is consumable in-process today; the HTTP adapter is a
+composition-root deliverable with its own authentication design. Its
+contract is fixed here so the adapter cannot invent a surface:
+
+| Endpoint | Method | Purpose | Contract |
+|---|---|---|---|
+| `/studio/v1/capabilities` | GET | discovery surface | `?include_experimental` only via server policy; response = `CapabilitySurface` JSON (§14) |
+| `/studio/v1/commands` | POST | dispatch one typed command | request body = `TypedCommand` JSON (schema 2, claims required); response = `CommandResult` JSON or a typed error `{code, message}` from §14.3 |
+| `/studio/v1/commands/{idempotency_key}` | POST | keyed redelivery | replay/conflict semantics of §6, unchanged |
+| `/studio/v1/jobs/{job_id}` | GET | durable job state | `JobResult` JSON from `jobs.lifecycle` (task-178 chain) |
+
+Adapter obligations (fail-closed): an authenticated `ProjectAuthorizer`
+injected at construction (no grant may be derived from request JSON); the
+implicit local-trust path is never exposed on a network surface; the A/B/C/D
+ladder, pack gate and mode policy are inherited from the bus, not
+re-implemented. Until the adapter lands, in-process composition (as in the
+integration tests) is the only supported path.
+
+### 15.5 Governance and location decision (docs layer)
+
+This section is the canonical location for the Agent 2 / Agent 3
+integration contracts. Decision (task-186, docs layer): the contracts live
+as **living sections of this document** plus the executable suite
+`tests/unit/test_studio_integration_contracts.py` — not in a parallel
+`docs/contracts/` directory and not in a parallel envelope package (ADR 0005
+rejected both shapes; this decision adds nothing parallel either). A
+docs-layer ADR for the location was prepared but is **not** filed while
+`docs/README.md` is under the task-181 exclusive lease (a new ADR file
+requires a docs index line, which that lease blocks) — the same precedent
+task-181 applied when it declined to create an ADR file. If a future session
+proposes a `docs/contracts/` directory again, it must land the index line in
+the same PR and stay additive to §13–§15. The behavioural decisions of
+task-186 (D-0021 preview/master boundary, D-0022 discovery surface) are
+published in §13/§14 and queued for `DECISION_LOG.md` transcription as board
+`task-187-decision-log-transcription`, claimable once that lease frees.
