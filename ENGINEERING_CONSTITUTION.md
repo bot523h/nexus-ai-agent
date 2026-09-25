@@ -3,12 +3,16 @@
 | | |
 |---|---|
 | **Status** | accepted — binding on every agent (model or human) working in this repository |
-| **Version** | 1.0 |
+| **Version** | 1.1.0 |
 | **Date** | 2026-09-25 |
 | **Owner** | repository owner (`bot523h`) |
 | **Applies to** | every session that creates, deletes, reviews, or signs off a change in this repository |
 | **Precedence** | this constitution prevails over every local rule, summary, and habit in this repository (its own Article 14) |
 | **Language** | the Persian text is the owner's original and is **normative**; the English rendering is a translation so that non-Persian-reading agents and CI reviewers read the same law. On any divergence the Persian text wins. |
+| **Hash algorithm** | sha256 over the whitespace-normalised text of each part below |
+| **Content identity — Persian original** | `ede16663bc141a7950a06d85fe86851a51ad6765023186f4d1b22b51a5257ee3` |
+| **Content identity — English rendering** | `b29490554650ecded4b813660adc2c7b21657e1162eb88817a143cf087f13cfb` |
+| **Enforcement** | `python scripts/constitution_gate.py` (stdlib gate, wired into the `lint-fast` CI job) + `tests/unit/test_engineering_constitution.py` + the cross-guards in `tests/unit/test_docs_integrity.py` and `tests/unit/test_agent_board.py`. Editing the law is allowed — but only as a deliberate act: re-stamp the content identity (`--print-hashes`) and bump the Version row in the same commit, so a silent edit is a red gate (Articles 5, 6, 9). |
 
 > **قانون قطعی:** هیچ عاملی — انسان یا مدل — حق ندارد در این مخزن کاری کند، فایلی بسازد، تغییر دهد یا
 > حذف کند، یا کاری را «تمام» اعلام کند، بدون اینکه این ۱۴ ماده را خوانده و رعایت کرده باشد.
@@ -525,6 +529,9 @@ For any non-trivial decision, the PR body (or the ADR) carries:
 
 ## More information
 
+- [`CONSTITUTION_ENFORCEMENT_AUDIT_2026-09-25.md`](CONSTITUTION_ENFORCEMENT_AUDIT_2026-09-25.md) —
+  the adversarial audit that proved which of these articles were actually enforced, the bypass and
+  mutation results, and the hardening that closed the proven gaps (task-185)
 - [`AGENTS.md`](AGENTS.md) — the multi-agent coordination contract (protocol v2); §0 is the entry gate
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — local quality rails and the multi-agent rules
 - [`docs/MULTI_AGENT_PROTOCOL.md`](docs/MULTI_AGENT_PROTOCOL.md) /

@@ -271,6 +271,11 @@ jobs:
         with:
           python-version: "3.12"
       - run: python scripts/check_version_lockstep.py
+      # task-185: the Engineering Constitution gate.  Deliberately independent of the pytest
+      # suite (stdlib script, no install, seconds) so that deleting or stubbing
+      # tests/unit/test_engineering_constitution.py cannot take the enforcement down with it —
+      # audit mutation M10 left 97 other governance tests green.
+      - run: python scripts/constitution_gate.py
       # task-132: the extras matrix must also be verified before any install —
       # a pyproject extra without a CI leg fails here in seconds.
       - run: python scripts/extras_matrix.py check

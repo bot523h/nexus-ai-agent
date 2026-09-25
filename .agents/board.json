@@ -616,9 +616,84 @@
         "scripts/agent_board.py",
         "tests/unit/test_engineering_constitution.py"
       ]
+    },
+    {
+      "id": "governance-constitution-audit",
+      "description": "Adversarial audit + minimal hardening of the Engineering Constitution enforcement: gate script, hardened tests, CI wiring, board evidence-SHA binding, audit record",
+      "paths": [
+        "ENGINEERING_CONSTITUTION.md",
+        "CONSTITUTION_ENFORCEMENT_AUDIT_2026-09-25.md",
+        "scripts/constitution_gate.py",
+        "scripts/agent_board.py",
+        "tests/unit/test_engineering_constitution.py",
+        "tests/unit/test_docs_integrity.py",
+        "tests/unit/test_agent_board.py",
+        ".github/workflows/ci.yml",
+        ".agents/board.json",
+        "Makefile"
+      ]
     }
   ],
   "claims": [
+    {
+      "task": "task-185-constitution-enforcement-audit",
+      "title": "Forensic audit + hardening of the Engineering Constitution enforcement (task-185)",
+      "title_fa": "ممیزی forensic و سخت‌سازی اجرای قانون اساسی مهندسی",
+      "zone": "governance-constitution-audit",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Owner-directed adversarial audit: prove with live evidence whether a real agent can claim, code, open a PR, merge, or declare done while bypassing the Engineering Constitution, and harden only the proven gaps. Deliverables: CONSTITUTION_ENFORCEMENT_AUDIT_2026-09-25.md (bypass matrix, 20-class mutation results, test-the-tester analysis, stale-evidence proof, final gate table), scripts/constitution_gate.py (stdlib gate wired into the fast CI rail), hardened tests/unit/test_engineering_constitution.py, cross-guards in test_docs_integrity.py and test_agent_board.py, ci.yml wiring, board evidence-SHA binding, constitution version bump. Plus a `make constitution-check` target that runs the same gate locally.",
+      "scope_fa": "ممیزی تهاجمی به دستور مالک: اثبات با شواهد زندهٔ این‌نکه که آیا یک عامل واقعی می‌تواند قانون اساسی را دور بزند (claim/کد/PR/merge/done)، و سخت‌سازی فقط gapهای اثبات‌شده. خروجی‌ها: سند ممیزی، اسکریپت گیت در ریل سریع CI، تست‌های سخت‌شده، گاردهای متقابل، سیم‌کشی ci.yml، و evidence_sha در تخته.",
+      "prerequisites": [
+        "task-184-engineering-constitution"
+      ],
+      "acceptance_criteria": [
+        "LIVE_TRUTH_SNAPSHOT با SHA/PR/CI/board/lease واقعی استخراج و ثبت شود",
+        "هر ۱۴ ماده با enforcement point / test / CI gate / bypass path / status ثبت شود",
+        "ماتریس bypass با نتیجهٔ BLOCKED/ALLOWED/PARTIALLY BLOCKED و شواهد تکمیل شود",
+        "حداقل ۲۰ کلاس mutation با expected vs actual اجرا و ثبت شود",
+        "test-the-tester برای هر تست constitution انجام شود",
+        "فقط gapهای اثبات‌شده harden شوند (before/after evidence)",
+        "گزارش نهایی با بخش‌های A..J و یک FINAL DECISION از چهار حالت",
+        "هیچ فایلی زیر src/ و هیچ فایل lease‌شدهٔ task-181 (docs/README.md) لمس نشود"
+      ],
+      "acceptance_criteria_en": [
+        "LIVE_TRUTH_SNAPSHOT captured from live GitHub (SHA, PRs, CI, board, leases)",
+        "all 14 articles audited with enforcement point / test / CI gate / bypass path / status",
+        "bypass matrix completed with BLOCKED/ALLOWED/PARTIALLY BLOCKED plus evidence",
+        "at least 20 mutation classes executed with expected vs actual recorded",
+        "test-the-tester analysis for every constitution test",
+        "only evidence-proven gaps hardened, each with before/after proof",
+        "final report with sections A..J and one FINAL DECISION of the four allowed values",
+        "no file under src/ and no file leased by task-181 (docs/README.md) touched"
+      ],
+      "evidence_required": [
+        "pytest -q --noconftest tests/unit/test_engineering_constitution.py tests/unit/test_docs_integrity.py tests/unit/test_agent_board.py tests/unit/test_agent_board_active_in_review.py tests/unit/test_agent_board_pr_visibility.py tests/unit/test_ci_lint_parity.py",
+        "python scripts/constitution_gate.py (exit 0)",
+        "ruff check . && ruff format --check .",
+        "mutation transcripts (GREEN->RED->restore) recorded in the audit document",
+        "gh api check-runs on the final head SHA (12/12 success)"
+      ],
+      "exclusive_paths": [
+        "ENGINEERING_CONSTITUTION.md",
+        "CONSTITUTION_ENFORCEMENT_AUDIT_2026-09-25.md",
+        "scripts/constitution_gate.py",
+        "scripts/agent_board.py",
+        "tests/unit/test_engineering_constitution.py",
+        "tests/unit/test_docs_integrity.py",
+        "tests/unit/test_agent_board.py",
+        ".github/workflows/ci.yml",
+        ".agents/board.json",
+        "Makefile"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0da15-nexus-ai-agent",
+      "claimed_at": "2026-09-25T20:40:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "LAW 3 (board before code) satisfied before the first edit. Ownership check: `agent_board.py check --files <owned files> --branch arena/01a0da15-nexus-ai-agent` must exit 0; docs/README.md and docs/audits/ are fenced by the live task-181-gate5-closure lease, so the audit record is written at the repository root (next to the constitution) instead of docs/audits/ — no leased file is modified (LAW 5). gates_owner stays false: the seat is vacant on the live board and this sandbox cannot run the full dependency gates; CI runs them on the PR head. evidence_sha 67e8ff3 = the last head of this branch with a completed, all-green CI run (run 36183886954/36183882546, 2026-09-25T20:07Z, 12/12 checks success) — the SHA this audit started from. It is refreshed in the commit that follows the CI verification of the hardening.",
+      "evidence_sha": "67e8ff3ff18f41ea97a0c6139a8165adf399f122"
+    },
     {
       "task": "task-184-engineering-constitution",
       "title": "Register the NEXUS Engineering Constitution as an enforced repository contract",
@@ -657,7 +732,7 @@
       "claimed_at": "2026-09-25T19:55:00Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Owner instruction (Persian): register the Engineering Constitution somewhere every agent reviews before working or coding, and keep it permanently saved. Placement at the repo root next to AGENTS.md (the agent front door) was chosen over docs/ so the law is read before work; docs/README.md is exclusively leased by task-181 until 2026-09-26T23:06:38Z, so no docs/ file was touched (Article 8 scope firewall; referee: agent_board.py check). gates_owner is false on purpose: no active claim on the live board holds gates_owner: true (seat vacant), and this session cannot run the full gates in its sandbox (dependencies not installed), so the gates are deferred to the gates owner / to CI on the PR rather than claimed without evidence. Pre-existing finding, state DEFERRED_WITH_REASON: `mypy --ignore-missing-imports scripts/agent_board.py` reports 4 errors in fetch_open_prs (object not iterable / unused type: ignore) — verified identical on HEAD~ of this branch (pre-existing, not introduced here) and outside CI's `mypy src` scope; fixing it needs its own claim plus a typing test, so it is recorded rather than silently mixed into this governance change. Delivered via PR#84 (https://github.com/bot523h/nexus-ai-agent/pull/84), head 09f3bae. Delivered in PR#84 and CI-verified on head 0152cdb: lint (ruff+mypy+lockstep) pass 7m24s, lint-fast pass 12s, test (pytest -m 'not slow') pass 8m33s, migrate-postgres pass 6m13s, release-lineage pass 7s, extras-matrix core/pdf/speech/translate pass, python-parity 3.10/3.11/3.12 pass. Claim moved to active_in_review with no exclusive paths, so the governance-constitution zone is free while the PR is under review."
+      "note": "Owner instruction (Persian): register the Engineering Constitution somewhere every agent reviews before working or coding, and keep it permanently saved. Placement at the repo root next to AGENTS.md (the agent front door) was chosen over docs/ so the law is read before work; docs/README.md is exclusively leased by task-181 until 2026-09-26T23:06:38Z, so no docs/ file was touched (Article 8 scope firewall; referee: agent_board.py check). gates_owner is false on purpose: no active claim on the live board holds gates_owner: true (seat vacant), and this session cannot run the full gates in its sandbox (dependencies not installed), so the gates are deferred to the gates owner / to CI on the PR rather than claimed without evidence. Pre-existing finding, state DEFERRED_WITH_REASON: `mypy --ignore-missing-imports scripts/agent_board.py` reports 4 errors in fetch_open_prs (object not iterable / unused type: ignore) — verified identical on HEAD~ of this branch (pre-existing, not introduced here) and outside CI's `mypy src` scope; fixing it needs its own claim plus a typing test, so it is recorded rather than silently mixed into this governance change. Delivered via PR#84 (https://github.com/bot523h/nexus-ai-agent/pull/84), head 09f3bae. Delivered in PR#84 and CI-verified on head 0152cdb: lint (ruff+mypy+lockstep) pass 7m24s, lint-fast pass 12s, test (pytest -m 'not slow') pass 8m33s, migrate-postgres pass 6m13s, release-lineage pass 7s, extras-matrix core/pdf/speech/translate pass, python-parity 3.10/3.11/3.12 pass. Claim moved to active_in_review with no exclusive paths, so the governance-constitution zone is free while the PR is under review. STALE-EVIDENCE correction (found by task-185): this note cited CI evidence at 0152cdb while PR#84's head had already moved to 67e8ff3; the green run for 67e8ff3 is 36183886954/36183882546 (2026-09-25T20:07Z, conclusion success, 12/12 checks). Nothing in the repository detected the drift — that is the gap task-185 hardens."
     },
     {
       "task": "task-131",
