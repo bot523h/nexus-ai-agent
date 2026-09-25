@@ -306,3 +306,28 @@ closed is repository-level (required checks, CODEOWNERS) and needs the repositor
 permissions — recorded as R-1/R-2 `BLOCKED`, not as a pass.
 
 No overall score, no rating: only the gates above and the evidence behind them.
+
+---
+
+## K. REPRODUCTION (what a reviewer runs, in order)
+
+```bash
+# 1. the independent gate — stdlib only, no install, ~0.2s
+python scripts/constitution_gate.py                 # PASS 14/14, exit 0
+python scripts/constitution_gate.py --json          # machine-readable report
+python scripts/constitution_gate.py --print-hashes  # the two content-identity digests
+
+# 2. the enforcement suite and its cross-guards
+python -m pytest -q --noconftest tests/unit/test_engineering_constitution.py \
+    tests/unit/test_docs_integrity.py tests/unit/test_agent_board.py
+
+# 3. ownership (LAW 5) before touching any file
+python scripts/agent_board.py check --files "<the files you touched>" --branch "$(git branch --show-current)"
+
+# 4. the same gate through make
+make constitution-check
+```
+
+Mutation reproduction: the harnesses used for §D are the scripts under `/tmp/audit/`
+(`mutations_after.py`, 35 classes). Each mutation is applied to the real tree, the governance
+selection **and** the gate are executed, and the tree is restored from `/tmp/audit/backup_after/`.
