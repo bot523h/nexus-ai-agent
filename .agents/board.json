@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-25T17:46:27Z",
+  "updated_at": "2026-09-25T20:14:15Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -601,9 +601,61 @@
         "src/nexus_ai_agent/cli.py",
         "docs/audits/VERIFICATION_TRUTH_MATRIX.json"
       ]
+    },
+    {
+      "id": "nagar-creative-studio",
+      "paths": [
+        "src/nexus_ai_agent/creative/studio/",
+        "src/nexus_ai_agent/api/studio_router.py",
+        "tests/unit/test_creative_studio_agent2.py",
+        "docs/architecture/CREATIVE_STUDIO.md"
+      ]
     }
   ],
   "claims": [
+    {
+      "task": "task-192-creative-studio-agent2",
+      "title": "Agent 2 Creative Studio OS: timeline interaction, shared playhead, moment guidance, range selection, smart tool cards, student mode, graceful missing-pack, Persian RTL subtitles, preview vs master",
+      "title_fa": "تبدیل استودیو نگار به Creative Operating System: تعامل تایم‌لاین، مکان‌نمای مشترک پلی‌هد، راهنمایی لحظه، انتخاب بازه، کارت‌های هوشمند، حالت دانش‌آموز، تجربه عدم نصب پک، زیرنویس فارسی RTL و تفکیک پیش‌نمایش از مستر",
+      "zone": "nagar-creative-studio",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Turn Studio from a tool collection into a real Creative Operating System: (1) Timeline interaction & shared playhead cursor bridging user/assistant/timeline/preview; (2) Moment guidance (play->hold->identify t->command) + range selection (pin start->pin end->range command) + contextual resolution (همین قسمت); (3) First-class Persian RTL subtitles, bidi isolates, timecodes, punctuation, Vazirmatn layout; (4) Smart guidance cards + student mode + tool discovery UX; (5) Graceful missing-pack handling (feature unavailable -> why -> provides -> size -> install action); (6) Preview vs Master explicit two-tier pipeline; (7) Reversible redo stack; (8) User-facing error recovery & accessibility.",
+      "scope_fa": "تبدیل استودیو نگار به یک سیستم‌عامل خلاقانه با کاهش اصطکاک تعاملی از طریق پلی‌هد مشترک، انتخاب بازه، راهنمایی لحظه، کارت‌های هوشمند، حالت دانش‌آموز، تجربه زیبای فقدان پک، زیرنویس فارسی راست‌به‌چپ درجه‌یک و تفکیک شفاف پیش‌نمایش از مستر.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Search-10 completed across all 10 problem dimensions with zero coding prior to search",
+        "User pains clearly defined with measured interaction reduction (7-9 clicks -> 1-2 clicks)",
+        "Moment-first interaction (play -> hold -> identify t -> command) and range selection (pin start -> pin end -> range command) fully implemented",
+        "Shared playhead cursor connects user, assistant, timeline, preview and resolves contextual requests (همین قسمت)",
+        "First-class Persian RTL engine: bidi isolates, numerals, timecodes, punctuation anchor, Vazirmatn font styling, bidi transcript search",
+        "Smart tool guidance cards with operation, reason, target, current range, availability, pack requirement, and student mode progressive disclosure",
+        "Graceful missing pack experience: no crash/error wall, clear why/provides/size/status and explicit install action",
+        "Preview vs Master two-tier pipeline: low-latency interactive preview vs deterministic final master",
+        "Reversible history: bidirectional undo and redo with verified state hashes",
+        "Mandatory 10 experience scenarios pass: first-time, expert, Persian/RTL, no pack, invalid input, interrupted, undo, redo, slow machine, missing dependency",
+        "All studio isolation boundaries and architecture tests green; ruff check and mypy clean"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_creative_studio_agent2.py tests/unit/test_creative_studio.py tests/architecture/test_nagar_studio_isolation.py tests/architecture/test_command_capability_boundary.py",
+        "ruff check . && ruff format --check .",
+        "agent_board.py check --files ... --branch arena/01a0da2c-nexus-ai-agent",
+        "pytest -q tests/unit/test_agent_board.py"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/studio/interaction.py",
+        "src/nexus_ai_agent/creative/studio/subtitles.py",
+        "src/nexus_ai_agent/creative/studio/preview.py",
+        "src/nexus_ai_agent/creative/studio/engine.py",
+        "src/nexus_ai_agent/api/studio_router.py",
+        "tests/unit/test_creative_studio_agent2.py"
+      ],
+      "agent_branch": "arena/01a0da2c-nexus-ai-agent",
+      "claimed_at": "2026-09-25T20:14:15Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Agent 2 Principal Creative Systems Engineer lease. Search-10 completed on board."
+    },
     {
       "task": "task-131",
       "title": "Architecture & documentation suite + board rewrite",
@@ -2203,11 +2255,11 @@
     },
     {
       "priority": "P0",
-      "status": "active_in_review",
+      "status": "expired",
       "prerequisites": [],
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Continuation of sec-boundary-salvage-01a0d4c7 (PR#76 head 5b17a709, CI green): owner-directed adversarial verification proved 5 S3/S5 defects its tests missed (stdlib traceback redaction bypass, mapping/non-string arg corruption, Basic-scheme credentials, CGNAT 100.64.0.0/10 allowed, https->http redirect downgrade followed). Closed on this branch (ff from 5b17a709 + closure commits), 12/12 mutation-killed, full non-slow suite 1989 passed / ruff / format / mypy clean. Takeover recorded in takeover_log; same zone, one owner.",
+      "note": "auto-released by gc at 2026-09-25T20:05:57Z (stale active_in_review lease)",
       "task": "sec-boundary-salvage-01a0d563",
       "title": "Security truth salvage: verify S1-S5 on main 035a896, fix only the real delta",
       "title_fa": "استخراج حقیقت امنیتی: بازبینی S1-S5 روی main 035a896 و اعمال فقط دلتای واقعی",
