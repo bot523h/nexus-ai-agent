@@ -648,6 +648,25 @@
         "docs/audits/PR86_SUPERSEDED",
         "docs/audits/PR80_SUPERSEDED"
       ]
+    },
+    {
+      "id": "nagar-studio-core-contracts",
+      "description": "Studio core contracts: capability discovery surface, preview/master execution boundary, Agent 2/3 integration contracts (task-186)",
+      "paths": [
+        "src/nexus_ai_agent/creative/studio/discovery.py",
+        "tests/unit/test_studio_discovery.py",
+        "tests/unit/test_studio_preview_master_boundary.py",
+        "tests/unit/test_studio_integration_contracts.py",
+        "docs/architecture/COMMAND_CAPABILITY_CONTRACT.md",
+        "docs/architecture/MODULE_MAP.md",
+        "docs/architecture/adr/README.md",
+        "docs/architecture/adr/0008-studio-integration-contract-location.md",
+        "src/nexus_ai_agent/creative/studio/__init__.py",
+        "src/nexus_ai_agent/creative/studio/capabilities.py",
+        "src/nexus_ai_agent/creative/studio/bus.py",
+        "docs/architecture/CREATIVE_STUDIO.md",
+        "docs/DECISION_LOG.md"
+      ]
     }
   ],
   "claims": [
@@ -2562,6 +2581,81 @@
       "gates_owner": false,
       "delivered": [],
       "note": ""
+    },
+    {
+      "task": "task-186-studio-core-contracts",
+      "title": "Studio Core contracts: capability discovery surface + preview/master execution boundary + Agent 2/3 integration contracts",
+      "title_fa": "قراردادهای هستهٔ استودیو: سطح کشف قابلیت‌ها + مرز اجرای پیش‌نمایش/مستر + قراردادهای یکپارچگی عامل ۲ و ۳",
+      "zone": "nagar-studio-core-contracts",
+      "priority": "P0",
+      "status": "done",
+      "scope": "Close the three Studio-core gaps recorded in COMMAND_CAPABILITY_CONTRACT.md §11 and required by the Nagar mission: (1) a typed capability DISCOVERY surface built from runtime truth (lifecycle/availability filtered, fail-closed) so the Assistant never sees uninstalled/unauthorized/unsupported capabilities (Law 4); (2) the PREVIEW/MASTER execution boundary semantics: registration-time preview declaration (state_equivalent | non_authoritative_realization), fail-closed refusal of undeclared preview advertisement, dispatch stamps execution_mode + authoritative into CommandResult.diagnostics; (3) canonical Agent 2 / Agent 3 INTEGRATION CONTRACTS (§13 of the command/capability contract doc + executable contract tests + ADR 0008 for the docs-layer location decision). DECISION_LOG.md and docs/README.md are EXCLUDED (active lease task-181): D-0021 text ships inside the contract doc + ADR link and a queued transcription task follows the lease release.",
+      "scope_fa": "بستن سه شکاف هستهٔ استودیو ثبت‌شده در §11 سند قرارداد فرمان/قابلیت: (۱) سطح کشف تایپ‌شدهٔ قابلیت‌ها بر اساس حقیقت ران‌تایم؛ (۲) معناشناسی مرز پیش‌نمایش/مستر؛ (۳) قراردادهای یکپارچگی عامل ۲ و ۳.",
+      "prerequisites": [
+        "task-179-gate2-command-reconciliation"
+      ],
+      "acceptance_criteria": [
+        "studio/discovery.py exposes a typed CapabilitySurface (protocol nagar.discovery.v1) built from any CapabilityRegistry: deterministic ordering, JSON-serializable, excludes operations whose capability is unavailable or whose required packs are unknown/STUB/RETIRED, excludes EXPERIMENTAL packs unless include_experimental=True, and records exclusion reason codes without permission data",
+        "OperationSpec gains a fail-closed preview declaration: advertising execution mode 'preview' without preview_semantics (state_equivalent | non_authoritative_realization) is refused at registration; orphan semantics without preview advertisement are refused; Wave-1 catalog and all six shipped packs register unchanged",
+        "CommandBus.dispatch stamps diagnostics.execution_mode and diagnostics.authoritative on every CommandResult; authoritative is False only for preview execution of non_authoritative_realization operations; every existing pinned contract test stays green unmodified",
+        "integration contracts for Agent 2 (Assistant/driver) and Agent 3 (runtime/execution) are published: COMMAND_CAPABILITY_CONTRACT.md §13 with discovery contract, submission contract, result/undo contract, error-code contract, preview/master rules, and the core API endpoint contract (adapter deferred, seam rules stated); ADR 0008 decides the docs-layer location",
+        "executable contract tests cover the 9-category matrix (happy path, invalid input, missing capability, unavailable pack, permission failure, malformed command, execution failure, retry/cancel semantics via idempotent replay, compatibility regression) for the discovery + preview surfaces",
+        "full diagnostic gates green: ruff check, ruff format --check, mypy src, targeted suites + full non-slow suite; board check --files exits 0 for every changed file"
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_studio_discovery.py tests/unit/test_studio_preview_master_boundary.py tests/unit/test_studio_integration_contracts.py",
+        "pytest -q tests/unit/test_command_capability_contract.py tests/unit/test_gate2_lifecycle_seam.py tests/unit/test_gate2_lifecycle_mutations.py tests/unit/test_nagar_wave1_green_cockpit.py tests/architecture/test_nagar_studio_isolation.py tests/architecture/test_command_capability_boundary.py tests/unit/test_docs_integrity.py",
+        "pytest -q -m 'not slow' (full suite)",
+        "ruff check . && ruff format --check . && mypy src",
+        "python scripts/agent_board.py check --files <changed files> --branch arena/01a0da2a-nexus-ai-agent"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/studio/discovery.py",
+        "tests/unit/test_studio_discovery.py",
+        "tests/unit/test_studio_preview_master_boundary.py",
+        "tests/unit/test_studio_integration_contracts.py",
+        "docs/architecture/COMMAND_CAPABILITY_CONTRACT.md",
+        "docs/architecture/MODULE_MAP.md",
+        "docs/architecture/adr/README.md",
+        "docs/architecture/adr/0008-studio-integration-contract-location.md"
+      ],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "DELIVERED on arena/01a0da2a: studio/discovery.py (nagar.discovery.v1 surface, Law-4 fail-closed projection, typed error contract, surface_identity) + preview/master boundary (OperationSpec.preview_semantics registration gate, authoritative_for, bus diagnostics stamps, is_master_evidence) + integration contracts published in COMMAND_CAPABILITY_CONTRACT.md §13-§15 (Agent 2/Agent 3, tool-invocation rule, core API endpoint contract) + MODULE_MAP R14/R15 + CHANGELOG [Unreleased]. Evidence: 48 new tests green; 205 pinned Gate-2/studio tests green unmodified; full non-slow suite 2362 passed / 30 skipped / 0 failed; ruff check + ruff format --check + mypy src clean; agent_board check --files exit 0. DECISION_LOG transcription deferred as task-187 (lease task-181)."
+    },
+    {
+      "task": "task-187-decision-log-transcription",
+      "title": "Transcribe task-186 decisions D-0021/D-0022 into DECISION_LOG.md once the task-181 lease frees",
+      "title_fa": "ثبت تصمیم‌های D-0021/D-0022 تسک ۱۸۶ در DECISION_LOG پس از آزاد شدن قفل تسک ۱۸۱",
+      "zone": "nagar-studio-core-contracts",
+      "priority": "P1",
+      "status": "deferred",
+      "scope": "task-186 published its behavioural decisions in COMMAND_CAPABILITY_CONTRACT.md §13 (preview/master execution boundary) and §14 (capability discovery contract, nagar.discovery.v1) because docs/DECISION_LOG.md is under the active exclusive lease of task-181-gate5-closure. Once that lease is released: transcribe both decisions into docs/DECISION_LOG.md as D-0021 (preview/master boundary: registration-time declaration, dispatch stamps, master-evidence gate) and D-0022 (capability discovery surface + typed error contract), citing §13/§14 as the authoritative text and linking ADR 0008 for the location decision. No docs/README.md change is needed (the contract doc is already indexed).",
+      "scope_fa": "انتقال متن تصمیم‌های رفتاری تسک ۱۸۶ از §§13/14 سند قرارداد به DECISION_LOG پس از آزاد شدن قفل.",
+      "prerequisites": [
+        "task-186-studio-core-contracts"
+      ],
+      "acceptance_criteria": [
+        "D-0021 and D-0022 entries exist in docs/DECISION_LOG.md with dated headings, rejected alternatives, and links to COMMAND_CAPABILITY_CONTRACT.md §13/§14 + ADR 0008",
+        "docs/DECISION_LOG.md lease was free at edit time (agent_board.py check --files exits 0)",
+        "pytest -q tests/unit/test_docs_integrity.py stays green"
+      ],
+      "evidence_required": [
+        "python scripts/agent_board.py check --files docs/DECISION_LOG.md --branch <claiming-branch> exit 0",
+        "pytest -q tests/unit/test_docs_integrity.py"
+      ],
+      "exclusive_paths": [
+        "docs/DECISION_LOG.md"
+      ],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Deferred by task-186: docs/DECISION_LOG.md is under the active exclusive lease of task-181-gate5-closure (arena/01a0d5a1). The decisions are published in COMMAND_CAPABILITY_CONTRACT.md §13/§14 until transcription."
     }
   ],
   "deferred_log": [
@@ -2598,6 +2692,14 @@
       "reason_fa": "چون عامل task-179 مالک TESTING.md و docs/README.md است، به‌روزرسانی جدول گیت‌ها و ایندکس را defer کردم؛ مستندات CI موقتاً در .github/DEPENDENCY_MATRIX.md و CHANGELOG ثبت می‌شود.",
       "reason_en": "task-132 (CI extras matrix) must update TESTING.md gate table and docs/README.md index, but those files are exclusively claimed by task-179. Documentation update deferred; CI docs live in .github/DEPENDENCY_MATRIX.md + CHANGELOG entry meanwhile.",
       "resume_when": "task-179 lands (TESTING.md/docs/README.md free) — then port the gate-table rows + docs index line"
+    },
+    {
+      "task": "task-187-decision-log-transcription",
+      "deferred_by_branch": "arena/01a0da2a-nexus-ai-agent",
+      "at": "2026-09-25T20:45:00Z",
+      "reason_fa": "چون docs/DECISION_LOG.md در اجارهٔ فعال تسک ۱۸۱ است، ثبت D-0021/D-0022 به پس از آزاد شدن اجاره منتقل شد؛ متن مرجب در §§13/14 سند قرارداد فرمان/قابلیت منتشر شده است.",
+      "reason_en": "docs/DECISION_LOG.md is exclusively leased by task-181-gate5-closure; the task-186 decisions are published in COMMAND_CAPABILITY_CONTRACT.md §13/§14 until the lease frees.",
+      "resume_when": "task-181-gate5-closure lease released (docs/DECISION_LOG.md free)"
     }
   ],
   "next_work": [
@@ -2792,6 +2894,36 @@
       "title": "Staging smoke of /edit /caption /grade against the live bot (PTB runtime)",
       "title_fa": "اسموک استیجینگ سه فرمان creative روی ربات زنده",
       "why_fa": "زنجیره در سطح unit/integration با artifact واقعی اثبات شده؛ اثبات نهایی کاربر-واقعی به کانتکست PTB زنده و توکن استیجینگ نیاز دارد (external dependency)."
+    },
+    {
+      "id": "task-186-studio-core-contracts",
+      "priority": "P0",
+      "zone": "nagar-studio-core-contracts",
+      "title": "Studio Core contracts: capability discovery surface + preview/master execution boundary + Agent 2/3 integration contracts",
+      "title_fa": "قراردادهای هستهٔ استودیو: سطح کشف قابلیت‌ها + مرز اجرای پیش‌نمایش/مستر + قراردادهای یکپارچگی عامل ۲ و ۳",
+      "why_fa": "مأموریت نگار: دستیار باید سطح قابلیت‌ها را از حقیقت ران‌تایم بگیرد (قانون ۴)، مرز پیش‌نمایش/مستر در §11 سند قرارداد «ذخیره‌شده بدون پیاده‌سازی» ثبت شده، و قرارداد یکپارچگی برای عامل‌های ۲ و ۳ وجود ندارد.",
+      "acceptance_criteria": [
+        "studio/discovery.py exposes a typed CapabilitySurface (protocol nagar.discovery.v1) built from any CapabilityRegistry: deterministic ordering, JSON-serializable, excludes operations whose capability is unavailable or whose required packs are unknown/STUB/RETIRED, excludes EXPERIMENTAL packs unless include_experimental=True, and records exclusion reason codes without permission data",
+        "OperationSpec gains a fail-closed preview declaration: advertising execution mode 'preview' without preview_semantics (state_equivalent | non_authoritative_realization) is refused at registration; orphan semantics without preview advertisement are refused; Wave-1 catalog and all six shipped packs register unchanged",
+        "CommandBus.dispatch stamps diagnostics.execution_mode and diagnostics.authoritative on every CommandResult; authoritative is False only for preview execution of non_authoritative_realization operations; every existing pinned contract test stays green unmodified",
+        "integration contracts for Agent 2 (Assistant/driver) and Agent 3 (runtime/execution) are published: COMMAND_CAPABILITY_CONTRACT.md §13 with discovery contract, submission contract, result/undo contract, error-code contract, preview/master rules, and the core API endpoint contract (adapter deferred, seam rules stated); ADR 0008 decides the docs-layer location",
+        "executable contract tests cover the 9-category matrix (happy path, invalid input, missing capability, unavailable pack, permission failure, malformed command, execution failure, retry/cancel semantics via idempotent replay, compatibility regression) for the discovery + preview surfaces",
+        "full diagnostic gates green: ruff check, ruff format --check, mypy src, targeted suites + full non-slow suite; board check --files exits 0 for every changed file"
+      ],
+      "prerequisites": [
+        "task-179-gate2-command-reconciliation"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/studio/discovery.py",
+        "tests/unit/test_studio_discovery.py",
+        "tests/unit/test_studio_preview_master_boundary.py",
+        "tests/unit/test_studio_integration_contracts.py",
+        "docs/architecture/COMMAND_CAPABILITY_CONTRACT.md",
+        "docs/architecture/MODULE_MAP.md",
+        "docs/architecture/adr/README.md",
+        "docs/architecture/adr/0008-studio-integration-contract-location.md"
+      ],
+      "status_note": "claimed by arena/01a0da2a-nexus-ai-agent (Agent 01, Studio Core)"
     }
   ],
   "history": {

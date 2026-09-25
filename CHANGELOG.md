@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Studio Core (task-186 — discovery surface, preview/master boundary, Agent 2/3 integration contracts, session `arena/01a0da2a-nexus-ai-agent`)
+
+- **Capability discovery contract (`nagar.discovery.v1`)**:
+  `studio.build_capability_surface(registry, include_experimental=...)`
+  projects any capability registry into the Assistant-facing surface — a
+  fail-closed Law-4 projection that never advertises unavailable
+  capabilities or operations on unknown/STUB/RETIRED/EXPERIMENTAL packs
+  (typed exclusion reason codes, no permission data), deterministic
+  byte-stable JSON (`surface_identity`), plus the typed error contract
+  (`error_code_of`) mapping every dispatch failure to a stable code.
+- **Preview/master execution boundary**: advertising `preview` now requires
+  an explicit registration-time `preview_semantics` declaration
+  (`state_equivalent` | `non_authoritative_realization`) — both undeclared
+  advertisements and orphaned declarations are refused. Every
+  `CommandResult` is stamped with `execution_mode` + `authoritative`;
+  `is_master_evidence` is the single fail-closed gate consumers use before
+  treating a result as master evidence. No promotion path exists.
+- **Integration contracts for Agent 2 (Assistant/driver) and Agent 3
+  (runtime/execution)** published in
+  `docs/architecture/COMMAND_CAPABILITY_CONTRACT.md` §13–§15 (discovery
+  contract, submission/result/undo chain, tool-invocation rule, core API
+  endpoint contract) and pinned executably by
+  `tests/unit/test_studio_integration_contracts.py` (nine-category
+  verification matrix through the public API). Governance: the location
+  decision is published in §15.5 of that document (a docs-layer ADR is
+  deferred while the docs index is leased — task-181 precedent); the
+  matching DECISION_LOG entries are queued as board task-187 behind the
+  task-181 lease.
+
 ### CI (task-132 — extras smoke matrix, session `arena/01a0d709-nexus-ai-agent`)
 
 - **Every optional extra is now a blocking CI leg.** The new `extras-matrix` job
