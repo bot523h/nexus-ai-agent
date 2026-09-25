@@ -10,11 +10,14 @@
 
 | Gate | Command | Runs in CI | Blocks merge |
 |---|---|---|---|
-| Lint | `ruff check .` | `test` job | yes |
-| Format | `ruff format --check .` | `test` job | yes |
-| Types | `mypy src` | `test` job | yes |
+| Lint | `ruff check .` | `lint` job | yes |
+| Format | `ruff format --check .` | `lint` job | yes |
+| Types | `mypy src` | `lint` job | yes |
 | Tests | `pytest -q -m "not slow"` | `test` job | yes |
 | Migrations on real PostgreSQL | `nexus migrate` ×2 + 3 contract suites + head assertion | `migrate-postgres` job (`pgvector/pgvector:pg16`) | yes |
+| Optional-extras install matrix | one leg per shipping extra + `core` (`test_optional_extras.py`, focused behaviour, skip-inflation audit) | `extras-matrix` job (task-132) | yes |
+| Python parity | the `test`-job selection on 3.10 / 3.11 / 3.12 | `python-parity` job (task-132) | yes |
+| Release lineage | tags + `VERSION` + lockstep on full history | `release-lineage` job (task-132) | yes |
 
 `make lint && make types && make test` is the local equivalent. **One agent owns the gates at a time** (`.agents/board.json` → `gates_owner`); everyone else may run read-only diagnostics but must not race the same CI job deliberately.
 
@@ -104,7 +107,7 @@ pytest -q tests/unit/test_docs_integrity.py
 | Gap | Impact | Where it is tracked |
 |---|---|---|
 | No full Mermaid syntax validation (structural checks only) | a syntactically invalid diagram could pass the gate | [`adr/0002`](adr/0002-docs-as-code-enforcement.md) — adopt `mermaid-lint` if `docs/` grows past ~30 files |
-| Optional heavy extras (`[speech]`, `[translate]`, `[local-llm]`, Chroma/sentence-transformers) are not exercised in the default CI job | a broken optional path may survive until a user opts in | `tests/unit/test_caption_engine_adapters.py` covers the fail-closed path; enabling an extras CI matrix is board work |
+| Optional heavy extras are not exercised in the default CI job | a broken optional path may survive until a user opts in | CLOSED for the shipping extras by the `extras-matrix` CI job (task-132, legs `core`/`pdf`/`speech`/`translate` + skip-inflation audit); heavy *core* deps (Chroma/sentence-transformers) stay covered by unit/fail-closed tests only, and `[local-llm]` never existed as an extra |
 | PostgreSQL suites skip locally without `NEXUS_DATABASE_URL` | local confidence is lower than CI confidence | CI `migrate-postgres` job |
 | No browser/E2E UI test | the dashboard is HTML-by-render, not a UI framework | deliberate: see [`OVERVIEW.md`](OVERVIEW.md) §7 (dashboard is read-only by design) |
 | P0-8/P0-9 have no guard test yet | engine double-wiring and empty graph memory can return unnoticed | board **task-124** [`SECURITY.md`](SECURITY.md) §3 |

@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-25T05:32:16Z",
+  "updated_at": "2026-09-25T17:46:27Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -697,7 +697,7 @@
       "agent_branch": "arena/01a0c460-nexus-ai-agent",
       "claimed_at": "2026-09-21T15:21:39Z",
       "ttl_hours": 24,
-      "gates_owner": true,
+      "gates_owner": false,
       "note": "lease expired 2026-09-22T15:21:39Z without renewal; stewardship transferred via task-145 claim (arena/01a0c992) with full handoff note"
     },
     {
@@ -983,7 +983,7 @@
       "title_fa": "ماتریس دود اختیاری‌ها در CI",
       "zone": "ci-quality",
       "priority": "P1",
-      "status": "queued",
+      "status": "done",
       "scope": "مسیرهای اختیاری ([speech]/[translate]/[pdf]/[local-llm]) در CI پیش‌فرض اجرا نمی‌شوند؛ یک job ماتریسی باید نصب هر extra و اجرای تست مربوطه را ثابت کند.",
       "scope_fa": "مسیرهای اختیاری ([speech]/[translate]/[pdf]/[local-llm]) در CI پیش‌فرض اجرا نمی‌شوند؛ یک job ماتریسی باید نصب هر extra و اجرای تست مربوطه را ثابت کند.",
       "prerequisites": [],
@@ -997,11 +997,11 @@
       ],
       "exclusive_paths": [],
       "owner_hint": "",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0d709-nexus-ai-agent",
+      "claimed_at": "2026-09-25T05:50:21Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "exclusive_paths released with terminal status during schema-2 merge (history in scope)"
+      "note": "DELIVERED 2026-09-25 on arena/01a0d709-nexus-ai-agent (PR82): extras-matrix legs core/pdf/speech/translate + python-parity 3.10/3.11/3.12 (all blocking, 3.10 exception removed after the runtime was made truly 3.10-compatible) + release-lineage. Final head 0f2f8f8: CI 12/12 SUCCESS on both runs 36168073743 (pull_request) and 36168067276 (push). Skip-audit mutant-proofed (M1 pinned+killed, M2 killed, intentional skips allowed). Old 3.11-only failure (run 36101703012) proven non-reproducible (flake-or-fixed, no product bug); line-0 test synced. Gates released."
     },
     {
       "task": "pr33-in-review",
@@ -2419,6 +2419,14 @@
       "reason_fa": "چون عامل امنیتی روی فایل مشترک bot/handlers.py کار می‌کرد، این وظیفه متوقف شد و به زمان دیگری موکول گردید تا فراموش نشود.",
       "reason_en": "Deferred because another agent holds the active lease on the shared file bot/handlers.py (P0-security-batch). Resolved: PR#32 delivered via new surface files; handlers.py lock stands until the security batch merges.",
       "resume_when": "PR#32 rebase on green main (after task-101) and coordinate handlers.py with agent A"
+    },
+    {
+      "task": "task-179-gate2-command-reconciliation",
+      "deferred_by_branch": "arena/01a0d709-nexus-ai-agent",
+      "at": "2026-09-25T05:51:06Z",
+      "reason_fa": "چون عامل task-179 مالک TESTING.md و docs/README.md است، به‌روزرسانی جدول گیت‌ها و ایندکس را defer کردم؛ مستندات CI موقتاً در .github/DEPENDENCY_MATRIX.md و CHANGELOG ثبت می‌شود.",
+      "reason_en": "task-132 (CI extras matrix) must update TESTING.md gate table and docs/README.md index, but those files are exclusively claimed by task-179. Documentation update deferred; CI docs live in .github/DEPENDENCY_MATRIX.md + CHANGELOG entry meanwhile.",
+      "resume_when": "task-179 lands (TESTING.md/docs/README.md free) — then port the gate-table rows + docs index line"
     }
   ],
   "next_work": [

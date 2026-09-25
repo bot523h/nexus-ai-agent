@@ -139,7 +139,9 @@ def test_the_script_imports_standard_library_only() -> None:
             imported.add(node.module.split(".")[0])
     # tomllib is standard from 3.11 and the parser degrades gracefully on 3.10 (see
     # toml_cross_check): allow it explicitly so the test is version-independent.
-    allowed = set(sys.stdlib_module_names) | {"tomllib", "tomli"}
+    # tomli is deliberately NOT allowed: it is not a dependency (not even
+    # transitively), so any import of it would crash the rail at runtime.
+    allowed = set(sys.stdlib_module_names) | {"tomllib"}
     third_party = sorted(name for name in imported if name not in allowed)
     assert not third_party, (
         f"{SCRIPT.name} must stay standard-library only — lint-fast installs nothing, "

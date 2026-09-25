@@ -7,17 +7,31 @@ checkpoint is explicitly deferred because LangGraph stores delta lineage.
 
 from __future__ import annotations
 
-from enum import StrEnum
+from enum import Enum
 from typing import Final, TypeAlias
 
 
-class EntityType(StrEnum):
+class EntityType(str, Enum):
+    """String-valued vocabulary enum, spelled without 3.11+ syntax.
+
+    The ``(str, Enum)`` mixin plus ``__str__``/``__format__`` is exactly the
+    pre-3.11 recipe for a value-printing string enum: ``str()``/``format()``
+    yield the value on every supported interpreter (3.10–3.12+), identical
+    to the 3.11 spelling this replaces.
+    """
+
     CONVERSATION = "conversation"
     THREAD = "thread"
     MESSAGE = "message"
     CHECKPOINT = "checkpoint"
     TOOL_STATE = "tool_state"
     ATTACHMENT = "attachment"
+
+    def __str__(self) -> str:
+        return str(self.value)
+
+    def __format__(self, spec: str) -> str:
+        return format(str(self.value), spec)
 
 
 SourceOfTruth: TypeAlias = str
