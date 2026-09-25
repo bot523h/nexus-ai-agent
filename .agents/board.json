@@ -754,7 +754,7 @@
       "claimed_at": "2026-09-25T20:03:09Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": ""
+      "note": "Settled 12 fake/placeholder commands (/leaderboard, /newchat, /viral_stats, /viral_preview, /viral_post, /mod_config, /warn, /mute, /unmute, /reputation, /storage, /model) with real engines and typed refusals; wired ModerationEngine.check_message into bot ingress with boundary/normalization fixes and per-chat flood tracking."
     },
     {
       "task": "task-123",

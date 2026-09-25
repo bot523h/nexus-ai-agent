@@ -209,7 +209,7 @@ def build_handlers(
     from nexus_ai_agent.bot.rate_limiter import InMemoryRateLimiter
 
     rate_limiter = InMemoryRateLimiter()
-    _ = storage
+    storage_manager = storage
 
     # ── Feature Engines ───────────────────────────────────────────
     # These are mostly accessed via bot_data, but local aliases help
@@ -295,6 +295,77 @@ def build_handlers(
             presence_store.mark_offline(user_id)
             await _reply(update, "📴 You are now marked as offline.")
 
+    async def storage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Inspect storage manager status and stored files."""
+        storage_mgr = storage_manager
+        if storage_mgr is None and hasattr(context, "application") and context.application:
+            storage_mgr = context.application.bot_data.get("storage")
+        if storage_mgr is None:
+            await _reply(update, "❌ [ERR_STORAGE_UNAVAILABLE] Storage manager is not configured.")
+            return
+
+        cache_dir = getattr(storage_mgr, "cache_dir", "Unknown")
+        lines = [
+            "💾 **Storage Manager Status**",
+            "━━━━━━━━━━━━━━━━━━━",
+            f"📁 Cache Directory: `{cache_dir}`",
+        ]
+        if hasattr(storage_mgr, "list_files"):
+            try:
+                files = await storage_mgr.list_files()
+                lines.append(f"📦 Stored Files: {len(files)}")
+                if files:
+                    sample = files[:5]
+                    lines.append("📋 Recent Files:\n" + "\n".join(f"  • {f}" for f in sample))
+            except Exception as exc:  # noqa: BLE001
+                lines.append(f"⚠️ [ERR_STORAGE_LIST] Failed to list files: {exc}")
+        else:
+            lines.append("ℹ️ Storage engine online.")
+        await _reply(update, "\n".join(lines))
+
+    async def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Inspect local and remote AI model status."""
+        model_path = Path(settings.model_path) if getattr(settings, "model_path", None) else None
+        local_exists = model_path.exists() if model_path else False
+        local_size_mb = (model_path.stat().st_size / (1024**2)) if local_exists else 0.0
+        model_name = getattr(settings, "model_name", None) or (
+            model_path.name if model_path else "None"
+        )
+        avail_str = f"Available: {local_size_mb:.1f} MB" if local_exists else "Not Downloaded"
+
+        lines = [
+            "🤖 **AI Model Configuration & Status**",
+            "━━━━━━━━━━━━━━━━━━━",
+            f"🧠 Local Model Name: `{model_name}`",
+            f"📍 Local Path: `{getattr(settings, 'model_path', 'None')}` ({avail_str})",
+        ]
+        has_remote = False
+        if getattr(settings, "gemini_api_key", None):
+            gemini_m = getattr(settings, "gemini_model", "default")
+            lines.append(f"✨ Gemini Provider: `{gemini_m}` (Configured)")
+            has_remote = True
+        if getattr(settings, "ollama_model", None):
+            lines.append(f"🦙 Ollama Provider: `{settings.ollama_model}`")
+            has_remote = True
+        if getattr(settings, "groq_api_key", None):
+            groq_m = getattr(settings, "groq_model", "default")
+            lines.append(f"⚡ Groq Provider: `{groq_m}`")
+            has_remote = True
+        if getattr(settings, "openrouter_api_key", None):
+            openrouter_m = getattr(settings, "openrouter_model", "default")
+            lines.append(f"🌐 OpenRouter Provider: `{openrouter_m}`")
+            has_remote = True
+
+        if not local_exists and not has_remote:
+            await _reply(
+                update,
+                "❌ [ERR_MODEL_NOT_FOUND] No local model file found and "
+                "no remote LLM providers are configured.",
+            )
+            return
+
+        await _reply(update, "\n".join(lines))
+
     # ── Phase 1: Group/Channel Management ─────────────────────────
     # /post /schedule /pin /ban /unban /stats /welcome are imported from
     # bot/surface/channel_management.py: the real ChannelManager, memoised in
@@ -323,7 +394,25 @@ def build_handlers(
     quiz_callback = feature_cmds["quiz_callback"]
 
     async def leaderboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await _reply(update, "🏆 **Leaderboard**\n\n1. UserA: 1500 XP\n2. UserB: 1200 XP")
+        """Show top quiz scores for this chat."""
+        chat_id = _chat_id(update)
+        quiz_engine = getattr(engines, "quiz", None)
+        if quiz_engine is None:
+            await _reply(update, "❌ [ERR_ENGINE_UNAVAILABLE] Quiz engine is not available.")
+            return
+        scores = await asyncio.to_thread(quiz_engine.get_leaderboard, chat_id, 10)
+        if not scores:
+            await _reply(
+                update,
+                "🏆 **Quiz Leaderboard**\n\nNo scores recorded yet. Play a game with /quiz!",
+            )
+            return
+        lines = ["🏆 **Quiz Leaderboard**\n"]
+        for i, item in enumerate(scores, 1):
+            lines.append(
+                f"{i}. User {item['user_id']}: {item['score']} pts ({item['answered']} answered)"
+            )
+        await _reply(update, "\n".join(lines))
 
     guess_start_cmd = feature_cmds["guess_start"]
     guess_stop_cmd = feature_cmds["guess_stop"]
@@ -829,9 +918,19 @@ def build_handlers(
     async def newchat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Reset conversation history."""
         user_id = _user_id(update)
-        if user_id:
-            # In real app, this would clear ConversationStore
-            await _reply(update, "🔄 Conversation history cleared.")
+        if not user_id:
+            await _reply(update, "❌ [ERR_USER_REQUIRED] Could not identify user.")
+            return
+        chat_id = _chat_id(update)
+        conv_id = f"tg:{chat_id}"
+        if gemini_engine is not None:
+            gemini_engine.clear_history(conv_id)
+        bot_data = getattr(getattr(context, "application", None), "bot_data", {})
+        conv_store = bot_data.get("conversation_store")
+        if conv_store is not None and hasattr(conv_store, "clear"):
+            await asyncio.to_thread(conv_store.clear, conv_id)
+        logger.info("conversation_cleared", user_id=user_id, chat_id=chat_id, conv_id=conv_id)
+        await _reply(update, "🔄 Conversation history cleared.")
 
     # ── v3.2.0: Core Message Handler ──────────────────────────────
     async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -847,6 +946,30 @@ def build_handlers(
 
         if not rate_limiter.is_allowed(user_id):
             await _reply(update, "⚠️ شما بیش از حد مجاز پیام ارسال کرده‌اید. لطفاً یک دقیقه صبر کنید.")
+            return
+
+        # Smart Moderation ingress check (anti-spam, anti-flood, link & profanity filter)
+        chat_id = _chat_id(update)
+        mod_result = await asyncio.to_thread(
+            ModerationEngine.check_message, user_id, chat_id, update.message.text
+        )
+        if not mod_result.get("allowed", True):
+            action = mod_result.get("action")
+            reasons = mod_result.get("reasons", [])
+            reasons_str = ", ".join(reasons)
+            if action == "block":
+                await _reply(update, "🚫 شما در این گروه مسدود هستید و امکان ارسال پیام ندارید.")
+            elif action == "mute":
+                await _reply(
+                    update,
+                    f"🔇 پیام شما حذف شد و به دلیل نقض قوانین ({reasons_str}) مسدود شدید.",
+                )
+            else:
+                await _reply(update, f"⚠️ اخطار: پیام شما ناقض قوانین گروه است ({reasons_str}).")
+            try:
+                await update.message.delete()
+            except Exception:
+                pass
             return
 
         # Force-join gate (P0-3): when the owner has enabled force-join,
@@ -865,7 +988,6 @@ def build_handlers(
 
         correlation_id = str(uuid4())
         structlog.contextvars.bind_contextvars(correlation_id=correlation_id)
-        chat_id = _chat_id(update)
         thread_id = f"tg:{chat_id}"
 
         await _upsert_user(db_session_factory, update.effective_user)
@@ -1133,26 +1255,92 @@ def build_handlers(
     # ── Phase 11: Viral Content Engine ─────────────────────────────
     async def viral_now_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Trigger viral post generation (owner only)."""
-        if not is_owner(update.effective_user.id if update.effective_user else 0):
-            await _reply(update, "⛔ Access denied")
+        user_id = _user_id(update) or 0
+        if not is_owner(user_id):
+            await _reply(update, "⛔ [ERR_ACCESS_DENIED] Access denied: owner privileges required.")
             return
         chat_id = _chat_id(update)
-        text = ViralEngine.generate_post()
+        text = await asyncio.to_thread(ViralEngine.generate_post)
         score = ViralEngine.calculate_viral_score(text)
-        post_id = ViralEngine.save_post(chat_id, text, score)
+        post_id = await asyncio.to_thread(ViralEngine.save_post, chat_id, text, score)
         await _reply(update, f"🔥 Viral post saved (id={post_id}, score={score:.1f}):\n\n{text}")
 
     async def viral_preview_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Preview next viral post."""
-        await _reply(update, "🔥 Preview: Top AI trends of the week...")
+        """Preview next viral post (owner only)."""
+        user_id = _user_id(update) or 0
+        if not is_owner(user_id):
+            await _reply(update, "⛔ [ERR_ACCESS_DENIED] Access denied: owner privileges required.")
+            return
+        chat_id = _chat_id(update)
+        pending = await asyncio.to_thread(ViralEngine.get_pending_posts, chat_id, 1)
+        if pending:
+            post = pending[0]
+            await _reply(
+                update,
+                f"🔥 **Pending Viral Post Preview** "
+                f"(ID: {post['id']}, Score: {post['viral_score']:.1f}):\n\n{post['text']}",
+            )
+            return
+        preview_text = await asyncio.to_thread(ViralEngine.generate_post)
+        score = ViralEngine.calculate_viral_score(preview_text)
+        await _reply(
+            update,
+            f"🔥 **Generated Viral Post Preview** (Score: {score:.1f}):\n\n{preview_text}\n\n"
+            f"_(Use /viral_now to generate and save a post)_",
+            parse_mode="Markdown",
+        )
 
     async def viral_stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Show viral engine stats."""
-        await _reply(update, "🔥 Viral Engine: 12 posts sent, 450 likes total.")
+        """Show viral engine stats (owner only)."""
+        user_id = _user_id(update) or 0
+        if not is_owner(user_id):
+            await _reply(update, "⛔ [ERR_ACCESS_DENIED] Access denied: owner privileges required.")
+            return
+        chat_id = _chat_id(update)
+        stats = await asyncio.to_thread(ViralEngine.get_stats, chat_id)
+        await _reply(
+            update,
+            f"📊 **Viral Engine Stats**\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"📝 Total Posts: {stats['total']}\n"
+            f"⏳ Pending: {stats['pending']}\n"
+            f"✅ Posted: {stats['posted']}\n"
+            f"❌ Failed: {stats['failed']}",
+        )
 
     async def viral_post_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Manage pending viral posts."""
-        await _reply(update, "📋 Pending viral posts: 3 in queue.")
+        """Manage pending viral posts (owner only)."""
+        user_id = _user_id(update) or 0
+        if not is_owner(user_id):
+            await _reply(update, "⛔ [ERR_ACCESS_DENIED] Access denied: owner privileges required.")
+            return
+        chat_id = _chat_id(update)
+        args = context.args or []
+        if args and args[0] == "mark" and len(args) >= 2:
+            try:
+                post_id = int(args[1])
+                await asyncio.to_thread(ViralEngine.mark_posted, post_id)
+                await _reply(update, f"✅ Viral post {post_id} marked as posted.")
+                return
+            except ValueError:
+                await _reply(
+                    update,
+                    "❌ [ERR_INVALID_ARGUMENT] Post ID must be an integer: /viral_post mark <id>",
+                )
+                return
+
+        pending = await asyncio.to_thread(ViralEngine.get_pending_posts, chat_id, 10)
+        if not pending:
+            await _reply(
+                update,
+                "📋 **Pending Viral Posts**\n\nNo pending posts in queue for this chat.",
+            )
+            return
+        lines = [f"📋 **Pending Viral Posts ({len(pending)} in queue)**\n"]
+        for p in pending:
+            lines.append(f"• ID {p['id']} [Score: {p['viral_score']:.1f}]: {p['text']}")
+        lines.append("\n_Use `/viral_post mark <id>` to mark a post as posted._")
+        await _reply(update, "\n".join(lines), parse_mode="Markdown")
 
     # ── Phase 12: Advertisement System ────────────────────────────
     # /ad_create /ad_list /ad_pause /ad_resume /ad_delete /ad_stats are
@@ -1164,45 +1352,321 @@ def build_handlers(
     # ── Phase 13: Smart Moderation ─────────────────────────────────
     async def mod_on_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Enable moderation (owner only)."""
-        if not is_owner(update.effective_user.id if update.effective_user else 0):
-            await _reply(update, "⛔ Access denied")
+        user_id = _user_id(update) or 0
+        if not is_owner(user_id):
+            await _reply(update, "⛔ [ERR_ACCESS_DENIED] Access denied: owner privileges required.")
             return
         chat_id = _chat_id(update)
-        ModerationEngine.set_config(
-            chat_id, anti_spam=True, anti_flood=True, link_filter=True, profanity_filter=True
+        await asyncio.to_thread(
+            ModerationEngine.set_config,
+            chat_id,
+            anti_spam=True,
+            anti_flood=True,
+            link_filter=True,
+            profanity_filter=True,
         )
         await _reply(update, "🛡️ Smart Moderation enabled.")
 
     async def mod_off_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Disable moderation (owner only)."""
-        if not is_owner(update.effective_user.id if update.effective_user else 0):
-            await _reply(update, "⛔ Access denied")
+        user_id = _user_id(update) or 0
+        if not is_owner(user_id):
+            await _reply(update, "⛔ [ERR_ACCESS_DENIED] Access denied: owner privileges required.")
             return
         chat_id = _chat_id(update)
-        ModerationEngine.set_config(
-            chat_id, anti_spam=False, anti_flood=False, link_filter=False, profanity_filter=False
+        await asyncio.to_thread(
+            ModerationEngine.set_config,
+            chat_id,
+            anti_spam=False,
+            anti_flood=False,
+            link_filter=False,
+            profanity_filter=False,
         )
         await _reply(update, "🛡️ Smart Moderation disabled.")
 
     async def mod_config_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Configure moderation rules."""
-        await _reply(update, "🛡️ Moderation rules updated.")
+        """Configure moderation rules (owner only)."""
+        user_id = _user_id(update) or 0
+        if not is_owner(user_id):
+            await _reply(update, "⛔ [ERR_ACCESS_DENIED] Access denied: owner privileges required.")
+            return
+        chat_id = _chat_id(update)
+        args = context.args or []
+        if not args:
+            cfg = await asyncio.to_thread(ModerationEngine.get_config, chat_id)
+            if cfg is None:
+                await _reply(
+                    update,
+                    "🛡️ **Smart Moderation Config**\n\n"
+                    "Moderation is currently not configured for this chat.\n"
+                    "Use /mod_on to enable default rules.",
+                )
+                return
+            await _reply(
+                update,
+                f"🛡️ **Smart Moderation Config**\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"🚫 Anti-Spam: {'Enabled' if cfg.anti_spam else 'Disabled'}\n"
+                f"🌊 Anti-Flood: {'Enabled' if cfg.anti_flood else 'Disabled'}\n"
+                f"🔗 Link Filter: {'Enabled' if cfg.link_filter else 'Disabled'}\n"
+                f"🤬 Profanity Filter: {'Enabled' if cfg.profanity_filter else 'Disabled'}\n"
+                f"⚠️ Max Warnings: {cfg.max_warnings}\n"
+                f"🔇 Mute Duration: {cfg.mute_duration_minutes} min\n\n"
+                f"_Update options with: "
+                f"/mod_config anti_spam=on|off max_warnings=N mute_duration=N_",
+                parse_mode="Markdown",
+            )
+            return
+
+        kwargs: dict[str, Any] = {}
+        for arg in args:
+            if "=" not in arg:
+                await _reply(
+                    update,
+                    "❌ [ERR_INVALID_ARGUMENT] Invalid option format. "
+                    "Expected key=value (e.g. anti_spam=on max_warnings=3).",
+                )
+                return
+            key, val = arg.split("=", 1)
+            key = key.lower().strip()
+            val = val.lower().strip()
+            if key in {"anti_spam", "anti_flood", "link_filter", "profanity_filter"}:
+                if val in {"on", "true", "1", "yes"}:
+                    kwargs[key] = True
+                elif val in {"off", "false", "0", "no"}:
+                    kwargs[key] = False
+                else:
+                    await _reply(
+                        update,
+                        f"❌ [ERR_INVALID_ARGUMENT] Invalid boolean value for {key}: {val}",
+                    )
+                    return
+            elif key == "max_warnings":
+                try:
+                    kwargs["max_warnings"] = int(val)
+                except ValueError:
+                    await _reply(
+                        update,
+                        f"❌ [ERR_INVALID_ARGUMENT] max_warnings must be an integer: {val}",
+                    )
+                    return
+            elif key in {"mute_duration", "mute_duration_minutes"}:
+                try:
+                    kwargs["mute_duration_minutes"] = int(val)
+                except ValueError:
+                    await _reply(
+                        update,
+                        f"❌ [ERR_INVALID_ARGUMENT] mute_duration must be an integer: {val}",
+                    )
+                    return
+            else:
+                await _reply(update, f"❌ [ERR_INVALID_ARGUMENT] Unknown config key: {key}")
+                return
+
+        new_cfg = await asyncio.to_thread(ModerationEngine.set_config, chat_id, **kwargs)
+        await _reply(
+            update,
+            f"🛡️ **Moderation Rules Updated**\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"🚫 Anti-Spam: {'Enabled' if new_cfg.anti_spam else 'Disabled'}\n"
+            f"🌊 Anti-Flood: {'Enabled' if new_cfg.anti_flood else 'Disabled'}\n"
+            f"🔗 Link Filter: {'Enabled' if new_cfg.link_filter else 'Disabled'}\n"
+            f"🤬 Profanity Filter: {'Enabled' if new_cfg.profanity_filter else 'Disabled'}\n"
+            f"⚠️ Max Warnings: {new_cfg.max_warnings}\n"
+            f"🔇 Mute Duration: {new_cfg.mute_duration_minutes} min",
+        )
 
     async def mod_warn_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Warn a user."""
-        await _reply(update, "⚠️ User warned (1/3).")
+        """Warn a user (owner only)."""
+        user_id = _user_id(update) or 0
+        if not is_owner(user_id):
+            await _reply(update, "⛔ [ERR_ACCESS_DENIED] Access denied: owner privileges required.")
+            return
+        chat_id = _chat_id(update)
+        msg = update.message
+        target_user_id: int | None = None
+        reason: str = ""
+
+        if msg and msg.reply_to_message and msg.reply_to_message.from_user:
+            target_user_id = int(msg.reply_to_message.from_user.id)
+            if context.args:
+                reason = " ".join(context.args)
+        elif context.args:
+            try:
+                target_user_id = int(context.args[0])
+                if len(context.args) > 1:
+                    reason = " ".join(context.args[1:])
+            except ValueError:
+                await _reply(
+                    update,
+                    "❌ [ERR_INVALID_ARGUMENT] Target user ID must be an integer: "
+                    "/warn <user_id> [reason]",
+                )
+                return
+
+        if target_user_id is None:
+            await _reply(
+                update,
+                "❌ [ERR_TARGET_REQUIRED] Reply to a message or provide a user ID: "
+                "/warn <user_id> [reason]",
+            )
+            return
+
+        warnings = await asyncio.to_thread(
+            ModerationEngine.add_warning, target_user_id, chat_id, reason
+        )
+        cfg = await asyncio.to_thread(ModerationEngine.get_config, chat_id)
+        max_warnings = cfg.max_warnings if cfg else 3
+        mute_dur = cfg.mute_duration_minutes if cfg else 30
+
+        if warnings >= max_warnings:
+            await asyncio.to_thread(ModerationEngine.mute_user, target_user_id, chat_id, mute_dur)
+            await _reply(
+                update,
+                f"⚠️ User {target_user_id} warned ({warnings}/{max_warnings}) "
+                f"and muted for {mute_dur} minutes. Reason: {reason or 'Manual warning'}",
+            )
+        else:
+            await _reply(
+                update,
+                f"⚠️ User {target_user_id} warned ({warnings}/{max_warnings}). "
+                f"Reason: {reason or 'Manual warning'}",
+            )
 
     async def mod_mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Mute a user."""
-        await _reply(update, "🔇 User muted for 10 minutes.")
+        """Mute a user (owner only)."""
+        user_id = _user_id(update) or 0
+        if not is_owner(user_id):
+            await _reply(update, "⛔ [ERR_ACCESS_DENIED] Access denied: owner privileges required.")
+            return
+        chat_id = _chat_id(update)
+        msg = update.message
+        target_user_id: int | None = None
+        duration_minutes: int | None = None
+
+        if msg and msg.reply_to_message and msg.reply_to_message.from_user:
+            target_user_id = int(msg.reply_to_message.from_user.id)
+            if context.args:
+                try:
+                    duration_minutes = int(context.args[0])
+                except ValueError:
+                    await _reply(
+                        update,
+                        "❌ [ERR_INVALID_ARGUMENT] Mute duration must be an integer: "
+                        "/mute [minutes]",
+                    )
+                    return
+        elif context.args:
+            try:
+                target_user_id = int(context.args[0])
+                if len(context.args) > 1:
+                    duration_minutes = int(context.args[1])
+            except ValueError:
+                await _reply(
+                    update,
+                    "❌ [ERR_INVALID_ARGUMENT] Target user ID and duration must be integers: "
+                    "/mute <user_id> [minutes]",
+                )
+                return
+
+        if target_user_id is None:
+            await _reply(
+                update,
+                "❌ [ERR_TARGET_REQUIRED] Reply to a message or provide a user ID: "
+                "/mute <user_id> [minutes]",
+            )
+            return
+
+        cfg = await asyncio.to_thread(ModerationEngine.get_config, chat_id)
+        if duration_minutes is None:
+            duration_minutes = cfg.mute_duration_minutes if cfg else 30
+        if duration_minutes <= 0:
+            await _reply(
+                update,
+                "❌ [ERR_INVALID_ARGUMENT] Mute duration must be greater than 0 minutes.",
+            )
+            return
+
+        await asyncio.to_thread(
+            ModerationEngine.mute_user, target_user_id, chat_id, duration_minutes
+        )
+        await _reply(update, f"🔇 User {target_user_id} muted for {duration_minutes} minutes.")
 
     async def mod_unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Unmute a user."""
-        await _reply(update, "🔊 User unmuted.")
+        """Unmute a user (owner only)."""
+        user_id = _user_id(update) or 0
+        if not is_owner(user_id):
+            await _reply(update, "⛔ [ERR_ACCESS_DENIED] Access denied: owner privileges required.")
+            return
+        chat_id = _chat_id(update)
+        msg = update.message
+        target_user_id: int | None = None
+
+        if msg and msg.reply_to_message and msg.reply_to_message.from_user:
+            target_user_id = int(msg.reply_to_message.from_user.id)
+        elif context.args:
+            try:
+                target_user_id = int(context.args[0])
+            except ValueError:
+                await _reply(
+                    update,
+                    "❌ [ERR_INVALID_ARGUMENT] Target user ID must be an integer: "
+                    "/unmute <user_id>",
+                )
+                return
+
+        if target_user_id is None:
+            await _reply(
+                update,
+                "❌ [ERR_TARGET_REQUIRED] Reply to a message or provide a user ID: "
+                "/unmute <user_id>",
+            )
+            return
+
+        await asyncio.to_thread(ModerationEngine.unmute_user, target_user_id, chat_id)
+        await _reply(update, f"🔊 User {target_user_id} unmuted.")
 
     async def mod_reputation_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show user reputation."""
-        await _reply(update, "👤 User Reputation: 85/100 (Good).")
+        chat_id = _chat_id(update)
+        msg = update.message
+        target_user_id = _user_id(update) or 0
+
+        if msg and msg.reply_to_message and msg.reply_to_message.from_user:
+            target_user_id = int(msg.reply_to_message.from_user.id)
+        elif context.args:
+            try:
+                target_user_id = int(context.args[0])
+            except ValueError:
+                await _reply(
+                    update,
+                    "❌ [ERR_INVALID_ARGUMENT] Target user ID must be an integer: "
+                    "/reputation [user_id]",
+                )
+                return
+
+        rep = await asyncio.to_thread(ModerationEngine.get_reputation, target_user_id, chat_id)
+        if rep is None:
+            await _reply(
+                update,
+                f"👤 **User Reputation** (ID: {target_user_id})\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"⭐ Reputation Score: 100/100 (Default)\n"
+                f"⚠️ Active Warnings: 0\n"
+                f"🔇 Muted: No",
+            )
+            return
+
+        lines = [
+            f"👤 **User Reputation** (ID: {target_user_id})",
+            "━━━━━━━━━━━━━━━━━━━",
+            f"⭐ Reputation Score: {rep.reputation}",
+            f"⚠️ Active Warnings: {rep.warnings}",
+            f"🔇 Muted: {'Yes' if rep.is_muted else 'No'}",
+        ]
+        if rep.is_muted and rep.mute_until:
+            lines.append(f"⏳ Muted Until: {rep.mute_until.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+        await _reply(update, "\n".join(lines))
 
     # ── Phase 14: Gamification ─────────────────────────────────────
     # /profile /daily /xp_leaderboard /achievements are imported from
@@ -1567,14 +2031,6 @@ async def story_cmd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 async def story_style_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _reply(update, "🎨 استایل فعلی: Motivational\nگزینه‌ها: Motivational | Romantic | Success")
-
-
-async def storage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    pass
-
-
-async def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    pass
 
 
 async def install_presence_heartbeat(application: Any) -> None:

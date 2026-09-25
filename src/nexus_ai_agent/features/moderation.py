@@ -37,7 +37,6 @@ _PROFANITY_PATTERNS: list[str] = [
     r"خرف",
     r"احمق",
     r"دیوانه",
-    r"مغز",
     r"کثیف",
     r"حقیر",
     r"نادان",
@@ -46,12 +45,33 @@ _PROFANITY_PATTERNS: list[str] = [
     r"خر",
     r"گوساله",
     r"سگ",
+    r"کصکش",
+    r"دیوث",
+    r"حرومزاده",
+    r"کونی",
+    r"جنده",
+    r"لاشی",
 ]
 
-_PROFANITY_RE = re.compile("|".join(_PROFANITY_PATTERNS), re.IGNORECASE)
+# Unicode word-boundary matching to avoid false positives on words like
+# "خرید" (bought) matching "خر" or "رید", while properly flagging words
+# with boundaries, whitespace, or ZWNJ. "مغز" (brain) is removed as it
+# is an anatomical / common Persian noun, not profanity.
+_PROFANITY_RE = re.compile(
+    r"(?:\b|_)(?:" + "|".join(re.escape(p) for p in _PROFANITY_PATTERNS) + r")(?:\b|_)",
+    re.IGNORECASE,
+)
 
-# Link detection regex
-_LINK_RE = re.compile(r"https?://[^\s<>\"]+|t\.me/[^\s<>\"]+|www\.[^\s<>\"]+", re.IGNORECASE)
+# Link detection regex (supports http, https, t.me, telegram.me, telegram.dog, tg://, www)
+_LINK_RE = re.compile(
+    r"https?://[^\s<>\"]+|t\.me/[^\s<>\"]+|telegram\.me/[^\s<>\"]+|telegram\.dog/[^\s<>\"]+|tg://[^\s<>\"]+|www\.[^\s<>\"]+",
+    re.IGNORECASE,
+)
+
+
+def _normalize_persian(text: str) -> str:
+    """Normalize Arabic variants to Persian characters and strip tatweel."""
+    return text.replace("ي", "ی").replace("ك", "ک").replace("\u0640", "")
 
 
 class ModerationEngine:
@@ -131,11 +151,16 @@ class ModerationEngine:
     @staticmethod
     def has_profanity(text: str) -> bool:
         """Check if text contains profanity."""
-        return bool(_PROFANITY_RE.search(text))
+        if not text:
+            return False
+        normalized = _normalize_persian(text)
+        return bool(_PROFANITY_RE.search(normalized))
 
     @staticmethod
     def has_links(text: str) -> bool:
         """Check if text contains links."""
+        if not text:
+            return False
         return bool(_LINK_RE.search(text))
 
     @staticmethod
@@ -144,8 +169,11 @@ class ModerationEngine:
 
         Heuristics: repeated characters, excessive caps, very short + emoji.
         """
-        # Excessive repeated characters (e.g., "aaaaaaa")
-        if re.search(r"(.)\1{6,}", text):
+        if not text:
+            return False
+        # Excessive repeated word characters (e.g., "aaaaaaa", "سسسسسسس")
+        # Uses \w to avoid false positives on punctuation/dividers ("-------", ".......")
+        if re.search(r"(\w)\1{6,}", text):
             return True
         # Excessive ALL CAPS (>70% uppercase)
         alpha_chars = [c for c in text if c.isalpha()]
@@ -159,21 +187,31 @@ class ModerationEngine:
             return True
         return False
 
-    @staticmethod
-    def is_flooding(user_id: int) -> bool:
+    @classmethod
+    def is_flooding(cls, user_id: int, chat_id: int = 0) -> bool:
         """Check if user is flooding (too many messages in short time)."""
         now = time.time()
-        if user_id not in ModerationEngine._flood_tracker:
-            ModerationEngine._flood_tracker[user_id] = [now]
+        key = (chat_id, user_id) if chat_id else user_id
+        if key not in cls._flood_tracker:
+            cls._flood_tracker[key] = [now]
             return False
 
-        timestamps = ModerationEngine._flood_tracker[user_id]
+        timestamps = cls._flood_tracker[key]
         # Remove old timestamps outside the window
-        timestamps = [t for t in timestamps if now - t < ModerationEngine.FLOOD_WINDOW_SECONDS]
+        timestamps = [t for t in timestamps if now - t < cls.FLOOD_WINDOW_SECONDS]
         timestamps.append(now)
-        ModerationEngine._flood_tracker[user_id] = timestamps
+        cls._flood_tracker[key] = timestamps
 
-        return len(timestamps) > ModerationEngine.FLOOD_MAX_MESSAGES
+        # Periodic bounded purge to avoid memory leaks
+        if len(cls._flood_tracker) > 10000:
+            stale_cutoff = now - cls.FLOOD_WINDOW_SECONDS
+            stale_keys = [
+                k for k, ts in cls._flood_tracker.items() if not ts or ts[-1] < stale_cutoff
+            ]
+            for k in stale_keys:
+                cls._flood_tracker.pop(k, None)
+
+        return len(timestamps) > cls.FLOOD_MAX_MESSAGES
 
     # ------------------------------------------------------------------
     # Reputation & warnings
@@ -309,12 +347,16 @@ class ModerationEngine:
             if rep is None or not rep.is_muted:
                 return False
             # Check if mute has expired
-            if rep.mute_until is not None and rep.mute_until <= datetime.now(timezone.utc):
-                rep.is_muted = False
-                rep.mute_until = None
-                session.add(rep)
-                session.commit()
-                return False
+            if rep.mute_until is not None:
+                mute_until = rep.mute_until
+                if mute_until.tzinfo is None:
+                    mute_until = mute_until.replace(tzinfo=timezone.utc)
+                if mute_until <= datetime.now(timezone.utc):
+                    rep.is_muted = False
+                    rep.mute_until = None
+                    session.add(rep)
+                    session.commit()
+                    return False
             return True
 
     @staticmethod
@@ -357,12 +399,20 @@ class ModerationEngine:
         Returns dict with:
             allowed: bool - whether the message should be allowed
             reasons: list[str] - list of violation reasons
-            action: str - "allow", "warn", "mute"
+            action: str - "allow", "warn", "mute", "block"
         """
         cfg = ModerationEngine.get_config(chat_id)
         if cfg is None:
             # No config = moderation not enabled
             return {"allowed": True, "reasons": [], "action": "allow"}
+
+        # Fast path: check if user is already muted
+        if ModerationEngine.is_muted(user_id, chat_id):
+            logger.warning(
+                "moderation_blocked_muted_user",
+                extra={"user_id": user_id, "chat_id": chat_id, "action": "block"},
+            )
+            return {"allowed": False, "reasons": ["muted"], "action": "block"}
 
         reasons: list[str] = []
 
@@ -371,7 +421,7 @@ class ModerationEngine:
             reasons.append("spam")
 
         # Anti-flood check
-        if cfg.anti_flood and ModerationEngine.is_flooding(user_id):
+        if cfg.anti_flood and ModerationEngine.is_flooding(user_id, chat_id):
             reasons.append("flood")
 
         # Link filter
@@ -382,10 +432,6 @@ class ModerationEngine:
         if cfg.profanity_filter and ModerationEngine.has_profanity(text):
             reasons.append("profanity")
 
-        # Check if muted
-        if ModerationEngine.is_muted(user_id, chat_id):
-            return {"allowed": False, "reasons": ["muted"], "action": "block"}
-
         if not reasons:
             return {"allowed": True, "reasons": [], "action": "allow"}
 
@@ -393,6 +439,18 @@ class ModerationEngine:
         warnings = ModerationEngine.add_warning(user_id, chat_id, reason=", ".join(reasons))
         if warnings >= cfg.max_warnings:
             ModerationEngine.mute_user(user_id, chat_id, cfg.mute_duration_minutes)
-            return {"allowed": False, "reasons": reasons, "action": "mute"}
+            action = "mute"
+        else:
+            action = "warn"
 
-        return {"allowed": False, "reasons": reasons, "action": "warn"}
+        logger.warning(
+            "moderation_violation_detected",
+            extra={
+                "user_id": user_id,
+                "chat_id": chat_id,
+                "reasons": reasons,
+                "warnings": warnings,
+                "action": action,
+            },
+        )
+        return {"allowed": False, "reasons": reasons, "action": action}
