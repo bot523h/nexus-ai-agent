@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-24T20:37:51Z",
+  "updated_at": "2026-09-25T05:08:57Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -508,6 +508,28 @@
         "src/nexus_ai_agent/creative/slideshow/service.py",
         "src/nexus_ai_agent/creative/slideshow/upscale.py",
         "src/nexus_ai_agent/creative/render_jobs.py"
+      ]
+    },
+    {
+      "id": "security-boundary",
+      "description": "P0 security boundary: telegram access guard dispatcher semantics, force-join gate, log redaction, Gemini key transport, SSRF-safe outbound fetch",
+      "paths": [
+        "src/nexus_ai_agent/bot/access_guard.py",
+        "src/nexus_ai_agent/features/force_join.py",
+        "src/nexus_ai_agent/observability/logging.py",
+        "src/nexus_ai_agent/infrastructure/observability/",
+        "src/nexus_ai_agent/core/ssrf_guard.py",
+        "src/nexus_ai_agent/api/app.py",
+        "src/nexus_ai_agent/features/ai_chat.py",
+        "src/nexus_ai_agent/features/summarizer.py",
+        "src/nexus_ai_agent/creative/video_director.py",
+        "src/nexus_ai_agent/creative/slideshow/analysis.py",
+        "tests/unit/test_access_guard.py",
+        "tests/unit/test_observability.py",
+        "tests/unit/test_force_join_gate.py",
+        "tests/unit/test_api_ssrf_download.py",
+        "tests/unit/test_creative_studio.py",
+        "tests/unit/test_gemini_key_transport.py"
       ]
     }
   ],
@@ -2124,6 +2146,54 @@
         "status": "IMPLEMENTED (not MERGED: depends on PR#72 landing first)"
       },
       "pr": "https://github.com/bot523h/nexus-ai-agent/pull/77"
+    },
+    {
+      "priority": "P0",
+      "status": "active_in_review",
+      "prerequisites": [],
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Continuation of sec-boundary-salvage-01a0d4c7 (PR#76 head 5b17a709, CI green): owner-directed adversarial verification proved 5 S3/S5 defects its tests missed (stdlib traceback redaction bypass, mapping/non-string arg corruption, Basic-scheme credentials, CGNAT 100.64.0.0/10 allowed, https->http redirect downgrade followed). Closed on this branch (ff from 5b17a709 + closure commits), 12/12 mutation-killed, full non-slow suite 1989 passed / ruff / format / mypy clean. Takeover recorded in takeover_log; same zone, one owner.",
+      "task": "sec-boundary-salvage-01a0d563",
+      "title": "Security truth salvage: verify S1-S5 on main 035a896, fix only the real delta",
+      "title_fa": "استخراج حقیقت امنیتی: بازبینی S1-S5 روی main 035a896 و اعمال فقط دلتای واقعی",
+      "zone": "security-boundary",
+      "scope": "Forensic re-verification of PR#58 claims against current main: S1 access guard dispatcher semantics (real Application.process_update), S2 force-join SQL predicate + unbound fail-closed, S3 log redaction at both pipelines, S4 Gemini x-goog-api-key header on all call sites, S5 SSRF transport on the legacy video_url download. PR#58 is evidence only; nothing is blind-merged.",
+      "scope_fa": "بازبینی حقوقی PR#58 روی main فعلی: S1 نیم‌فروش عمومی گارد دسترسی، S2 پیشیکیت SQL فورس‌جوین و fail-closed، S3 رداکشن لاگ در هر دو پایپ‌لاین، S4 هدر Gemini در همه call-siteها، S5 ترنسپورت SSRF دانلود ویدیو.",
+      "acceptance_criteria": [
+        "unauthorized update -> denial -> ApplicationHandlerStop -> no later handler, proven via real Application.process_update (not a replica loop), concurrent_updates False/True",
+        "authorized user reaches group 0 without denial UX (check_update is sync per PTB 21/22 BaseHandler contract)",
+        "force-join: no Python identity comparison on SQLAlchemy columns; WHERE compiled predicate returns enabled rows on SQLite; bot is None is fail-closed",
+        "redaction: bot-token URL, ?key=, ?token=, x-goog-api-key, bearer, userinfo never appear raw in captured-log tests of both pipelines",
+        "all Gemini call sites send x-goog-api-key header; grep proves no ?key= remains",
+        "video_url download: validate_url fail-fast at job creation + SafeAsyncTransport at fetch; localhost/loopback/RFC1918/metadata/IPv6/mapped/userinfo/redirect refused; temp file cleaned",
+        "mutation runs: each fix reverted one at a time turns the new tests RED; restored -> GREEN"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_access_guard.py tests/unit/test_observability.py tests/unit/test_force_join_gate.py tests/unit/test_summarizer_ssrf.py tests/unit/test_http_client_ssrf.py tests/unit/test_api_ssrf_download.py -v",
+        "ruff check . && ruff format --check . && mypy src",
+        "mutation transcripts (mutant -> RED -> restore -> GREEN) in the PR body"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/access_guard.py",
+        "src/nexus_ai_agent/features/force_join.py",
+        "src/nexus_ai_agent/observability/logging.py",
+        "src/nexus_ai_agent/infrastructure/observability/redaction.py",
+        "src/nexus_ai_agent/api/app.py",
+        "src/nexus_ai_agent/core/ssrf_guard.py",
+        "src/nexus_ai_agent/features/ai_chat.py",
+        "src/nexus_ai_agent/features/summarizer.py",
+        "src/nexus_ai_agent/creative/video_director.py",
+        "src/nexus_ai_agent/creative/slideshow/analysis.py",
+        "tests/unit/test_access_guard.py",
+        "tests/unit/test_observability.py",
+        "tests/unit/test_force_join_gate.py",
+        "tests/unit/test_api_ssrf_download.py",
+        "tests/unit/test_creative_studio.py",
+        "tests/unit/test_gemini_key_transport.py"
+      ],
+      "agent_branch": "arena/01a0d563-nexus-ai-agent",
+      "claimed_at": "2026-09-24T19:15:00Z"
     }
   ],
   "deferred_log": [
@@ -2671,12 +2741,28 @@
       "evidence": "gh pr view 47 --json state,mergedAt → {\"state\":\"MERGED\",\"mergedAt\":\"2026-09-22T20:06:40Z\"}"
     },
     {
+      "at": "2026-09-24T19:15:00Z",
+      "by_branch": "arena/01a0d4c7-nexus-ai-agent",
+      "action": "stewardship-release",
+      "task": "task-165-legacy-creative-hardening",
+      "reason": "PR#65 reached terminal state (MERGED 2026-09-24T09:44:16Z, verified with gh) but the lease still held src/nexus_ai_agent/api/app.py against every other agent — agent_board.py check returned STOP for the security-boundary salvage task. cmd_release refuses cross-branch release, so the paths are freed here per the orphaned-lease rule and the PR#47 precedent in this log. task-165's own scope note deferred the POST video_url SSRF fix to the PR#58 lane, which is exactly the work now claimed.",
+      "evidence": "gh pr view 65 --json state,mergedAt -> MERGED 2026-09-24T09:44:16Z (main 035a896)"
+    },
+    {
       "at": "2026-09-24T20:37:51Z",
       "by_branch": "arena/01a0d50d-nexus-ai-agent",
       "action": "continuation",
       "task": "task-183-pr67-lifecycle-integration",
       "reason": "Same mission owner, new session branch (a session is bound to exactly one branch and cannot push to arena/01a0d4c8). This branch starts at PR#75 head e0cba26 unchanged and adds the trust-boundary fix, order pins, and doc/board reconciliation; PR#77 supersedes PR#75. No force-push, rebase, or overwrite of PR#67/#72/#75.",
       "evidence": "git merge-base --is-ancestor e0cba26 arena/01a0d50d-nexus-ai-agent -> true; gh pr view 75 --json headRefOid -> e0cba268897e8d656c69c48104f6519f0dae47e1"
+    },
+    {
+      "at": "2026-09-24T22:30:00Z",
+      "by_branch": "arena/01a0d563-nexus-ai-agent",
+      "action": "claim-continuation",
+      "task": "sec-boundary-salvage-01a0d563 (was sec-boundary-salvage-01a0d4c7)",
+      "reason": "PR#76 (head 5b17a709, open, CI green) delivered the salvage but left S3/S5 defects proven by independent adversarial verification (leaking stdlib tracebacks, corrupted mapping args, uncovered Basic credentials, CGNAT allowed, https->http redirect followed). The owner-directed mission requires repair before merge; this session cannot push to another branch, so the vehicle continues here as a fast-forward of 5b17a709 plus closure commits. Referee: agent_board.py check --files <S3/S5 paths> --branch arena/01a0d563 exited 0 against the live board (no active claim covered these paths before the fast-forward imported this claim). Live evidence: gh pr view 76 -> state OPEN, headRefOid 5b17a709; statusCheckRollup 4/4 SUCCESS. Original session's vehicle remains PR#76; if it resumes it should rebase onto this continuation.",
+      "evidence": "defect reproducers + mutation transcripts in PR body; D-0016 in docs/DECISION_LOG.md"
     }
   ],
   "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins."

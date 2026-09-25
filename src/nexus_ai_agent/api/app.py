@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hmac as hmac_mod
 import os
 import secrets
@@ -16,6 +17,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from nexus_ai_agent.api.dashboard import router as dashboard_router
 from nexus_ai_agent.config.settings import get_settings
+from nexus_ai_agent.core.ssrf_guard import SafeAsyncTransport, SSRFBlockError, validate_url
 from nexus_ai_agent.creative import image_post
 from nexus_ai_agent.creative.ffmpeg_executor import execute_ffmpeg_commands
 from nexus_ai_agent.creative.job_registry import JobRegistry
@@ -253,6 +255,24 @@ async def _save_upload_to_temp(upload: StarletteUploadFile) -> str:
 
 
 async def _download_video_to_temp(video_url: str) -> str:
+    """Download a user-supplied video URL to a temp file (SSRF-hardened).
+
+    Defence in depth (the URL is attacker-controlled input on a
+    deprecated-but-live route):
+
+    1. ``validate_url`` fail-fast *before* any temp file is created —
+       https-only and every resolved address must be public (blocks
+       loopback, RFC1918, cloud metadata, IPv6 loopback, IPv4-mapped
+       forms and ``user@host`` tricks).
+    2. The fetch itself runs through :class:`SafeAsyncTransport`, whose
+       httpcore backend re-resolves and re-checks the address at every
+       TCP connection — including every redirect hop — and pins the
+       connection to the validated IP (closes the DNS-rebinding TOCTOU
+       that a preflight-only check would leave open).
+    """
+    # Sync DNS resolution: keep it off the event loop.
+    await asyncio.to_thread(validate_url, video_url)
+
     settings = get_settings()
     temp_dir = Path(settings.creative_temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
@@ -260,13 +280,16 @@ async def _download_video_to_temp(video_url: str) -> str:
     fd, temp_path = tempfile.mkstemp(prefix="creative-url-", suffix=suffix, dir=temp_dir)
     os.close(fd)
     try:
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=60.0, transport=SafeAsyncTransport(), follow_redirects=True
+        ) as client:
             async with client.stream("GET", video_url) as response:
                 response.raise_for_status()
                 with Path(temp_path).open("wb") as handle:
                     async for chunk in response.aiter_bytes():
                         handle.write(chunk)
     except Exception:
+        # A refused/blocked/failed download never leaves a partial file.
         Path(temp_path).unlink(missing_ok=True)
         raise
     return temp_path
@@ -351,6 +374,13 @@ async def create_video_edit_job(
         normalized_url = (video_url or "").strip()
         if not normalized_url:
             raise HTTPException(status_code=400, detail="video_url must not be empty")
+        # SSRF fail-fast at request time: reject unsafe targets with a 400
+        # *before* a job row is created. The background download re-validates
+        # at connect time via SafeAsyncTransport (defence in depth).
+        try:
+            await asyncio.to_thread(validate_url, normalized_url)
+        except SSRFBlockError as exc:
+            raise HTTPException(status_code=400, detail=f"video_url rejected: {exc}") from exc
         source = normalized_url
         input_data = {
             "source_type": "url",

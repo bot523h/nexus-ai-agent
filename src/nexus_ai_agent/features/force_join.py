@@ -15,7 +15,7 @@ import time
 from functools import lru_cache
 from typing import Any
 
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.observability.logging import get_logger
@@ -62,7 +62,10 @@ class ForceJoinManager:
         """Attach (or replace) the Telegram bot (called at startup).
 
         Without a bot, :meth:`check_membership` cannot verify membership
-        and fails open; binding at application startup closes that gap.
+        and fails **closed** (treats the user as not-a-member): the
+        startup wiring binds inside a broad ``try/except`` that may
+        swallow a bind failure, so an unbound gate must never widen the
+        boundary to "everyone is a member".
         """
         self.bot = bot
 
@@ -137,9 +140,12 @@ class ForceJoinManager:
             if now - ts < _CACHE_TTL:
                 return is_member
 
-        # Ask Telegram API
+        # Ask Telegram API — an unbound manager cannot verify anyone, so
+        # it fails closed (not a member). The unbound state is *not*
+        # cached: once the bot binds, the next check must hit the API.
         if self.bot is None:
-            return True  # can't verify without bot
+            logger.warning("forcejoin_unverified_bot_unbound", user_id=user_id, channel=ch)
+            return False
         try:
             member = await self.bot.get_chat_member(chat_id=ch, user_id=user_id)
             is_member = member.status in ("member", "administrator", "creator")
@@ -182,9 +188,15 @@ class ForceJoinManager:
         """Synchronous DB core for :meth:`should_block` (worker thread)."""
         engine = _sync_engine(get_settings().db_path)
         with Session(engine) as session:
+            # ColumnElement.is_() builds a SQL ``enabled IS true`` (SQLite:
+            # ``enabled IS 1``) predicate. A Python ``is`` comparison here
+            # would evaluate to ``False`` at expression-build time and
+            # compile to ``WHERE 0 = 1`` — the gate would never block
+            # anyone (fail-open). ``col()`` tells both SQLModel and the
+            # type-checker that ``enabled`` is a column expression.
             return (
                 session.exec(
-                    select(ForceJoinConfig).where(ForceJoinConfig.enabled is True)  # noqa: E712
+                    select(ForceJoinConfig).where(col(ForceJoinConfig.enabled).is_(True))
                 ).first()
                 is not None
             )

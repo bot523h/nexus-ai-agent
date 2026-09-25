@@ -1,6 +1,8 @@
 # NEXUS AI — Architecture Decision Log
 
-**Status:** Canonical historical record; revision 9 effective 2026-09-24  
+**Status:** Canonical historical record; revision 11 effective 2026-09-25  
+**r11 scope:** S3/S5 adversarial closure of the security-boundary salvage (D-0016; session `arena/01a0d563-nexus-ai-agent`, PR#79): 5 proven defects closed, 12/12 mutation-killed.  
+**r10 scope:** security-boundary truth salvage (D-0015; PR#76 head `5b17a70` carried into PR#79): S1–S5 real deltas fixed, 9/9 mutation-killed.  
 **r9 scope:** Gate 2 canonical command + capability reconciliation, board task-179 (session `arena/01a0d43c-nexus-ai-agent`): the v1/v2 contract conflict resolved to one canonical contract (D-0013); see `architecture/COMMAND_CAPABILITY_CONTRACT.md` and `architecture/adr/0005-canonical-command-capability-contract.md` for evidence, scoring, and limits.  
 **r8 scope:** owner-directed P0 stabilization day (session `arena/01a0d23e-nexus-ai-agent`, board claims task-165/166/167): the legacy `/creative/*` HTTP lane disposition (D-0010), wiring the creative studio surface onto the canonical chain (D-0011), and verifiable backup success (D-0012). Evidence root: `docs/audits/P0_STABILIZATION_2026-09-24.md`.
 
@@ -17,6 +19,8 @@
 - **r5 (2026-09-20, PR#23):** recorded Nagar Wave 2c — the render lane (pure `RenderIR` → filtergraph → argv, one FFmpeg process, staging publish, measured evidence) — as an accepted and implemented decision with its rejected alternatives (agent-authored filtergraphs, `-y` against the destination, trusting the plan's duration, a second `ffprobe` binary, encoding inside a handler, a Python video library).
 - **r7 (2026-09-21, repo-hygiene pass — owner-directed, session `arena/01a0c484`):** release baseline moved to `v3.13.0` (the merged P0 week-1 security batch — README already described its behavior as v3.13.0 while VERSION/pyproject still said 3.12.0); docs reorganized without content loss (`docs/audits/`, `docs/history/`, `docs/ops/`, `docs/README.md` index); the broken root `termux_install.sh` removed and `scripts/termux_install.sh` repaired (canonical `nexus run-bot` entrypoint); PR #33 closed as superseded (security scope already delivered by merged PR #34; feature-wiring scope double-claims agent B's active lease — evidence: `mergeable=CONFLICTING`, head checks green but base-diverged), then **reopened the same day** when the `ci-gates-steward` board (15:21Z) re-designated it as the task-110 vehicle; 28 merged/closed remote branches deleted with per-branch dispositions below.
 - **r6 (2026-09-20, v3.11.0 housekeeping PR):** moved the release baseline to `v3.11.0`; recorded two owner decisions — *image generation behind an adapter (Pollinations by default, Gemini opt-in)*, which resolves the open question left by Wave 2 item 7, and *Wave 2.5 (Telegram surface for the slideshow pack) precedes Wave 3*; corrected the Phase 6 status text to Waves 1–2c merged; updated the PR snapshot (PR#23 merged as `ebe995a`, PR#1/PR#2 closed); noted that the lifecycle PR1/PR2/PR3 line has been on `main` since PR#7 (`acdbcb7`, v3.6.0) — the roadmap file had still called it unmerged.
+- **r10 (2026-09-24, security-boundary truth salvage):** PR#58's S1–S5 claims re-verified against main `035a896` — real deltas fixed on a fresh branch (dispatcher-true access guard incl. sync `check_update` + `ApplicationHandlerStop`, force-join SQL predicate + fail-closed-unbound, boundary redaction in both pipelines, Gemini `x-goog-api-key` everywhere, SSRF-safe legacy `video_url` download + `SafeAsyncTransport` stream fix), 9/9 mutation-killed; PR#58 stays unmerged evidence (D-0015).
+- **r11 (2026-09-24, S3/S5 adversarial closure):** PR#76's own S3/S5 surfaces independently re-verified and 5 proven defects closed (stdlib traceback redaction, mapping/non-string arg redaction, Basic-scheme credentials, CGNAT 100.64.0.0/10, https-only scheme gate on redirect hops) — 12/12 mutation-killed; D-0016.
 - **r8 (2026-09-24, P0 stabilization day):** D-0010 legacy `/creative/*` HTTP lane = keep+harden (strictly harden-edged) on a deprecation track gated on open PR#58's SSRF scope, never a competitor pipeline; D-0011 `/edit` `/caption` `/grade` wired through the canonical chain with message-anchored idempotency, the bogus `mapper` handler key removed, honest op matrix (`lut`/`burnin` refused, not faked), all replies through the i18n catalog; D-0012 backup success must be measured and round-trip-verified, never asserted — plus the r8 coordination facts (task-106 superseded into task-166, task-164 narrowed to owner-secrets, docs number-resync against measured values: 57 registered ops).
 
 This document is the single reference point for architectural decisions in this repository. A new decision must be appended here with its date, status, rationale, rejected alternatives, and repository evidence. Existing historical documents remain useful as detailed records, but this log is authoritative when summaries differ.
@@ -1193,3 +1197,157 @@ opt-in-completeness test go red on any other resolution.
 `tests/unit/test_capability_lifecycle.py`,
 `tests/architecture/test_lifecycle_gate_boundary.py`, and the task-183
 trust-boundary tests in `tests/unit/test_creative_render_jobs.py`.
+## 2026-09-24 — Security-boundary truth salvage: PR#58 evidence reconciled onto current main (D-0015)
+
+*Problem.* PR#58 ("Security Boundary hardening — S1–S5") was drafted against base
+`a997aab` and left in DRAFT/CONFLICTING state while main advanced to `035a896`.
+Its claims were never re-verified: on current main, (S1) the access guard raised
+no `ApplicationHandlerStop` — and worse, its `check_update` was `async def` while
+PTB v21/v22 call `check_update` synchronously, so the dispatcher saw a truthy
+coroutine for **every** update: the allow-list was never consulted, authorized
+users received denial UX, and denied users' commands still executed in group 0;
+(S2) `_is_enabled_anywhere_sync` used the Python identity comparison
+`ForceJoinConfig.enabled is True`, which compiles to `WHERE 0 = 1` — the
+force-join gate could never block anyone — and `check_membership` failed **open**
+when the bot was unbound, while the startup `post_init` binds inside a broad
+`try/except` that can swallow a bind failure (no machine guarantee bind precedes
+traffic); (S3) both redaction pipelines missed the `api.telegram.org/bot<token>`
+URL form, bare `?key=`/`&key=` query secrets, and (stdlib/structlog pipeline)
+URL userinfo, and `redact_fields` never considered the *key* a value sat under;
+(S4) four Gemini call sites still sent the API key as `?key=` in the URL; (S5)
+`_download_video_to_temp` fetched the attacker-controlled `video_url` with a raw
+`httpx.AsyncClient(follow_redirects=True)` and no validation or safe transport —
+and `SafeAsyncTransport` itself passed the raw httpcore response stream into
+`httpx.Response`, so any *successful* fetch would have crashed on httpx 0.28's
+`isinstance(response.stream, AsyncByteStream)` assert (unseen because every
+existing test blocked before a response existed).
+
+*Decision.* Recover only the real delta, on a fresh branch from current main,
+with every fix proven at the level where it fails: S1 — sync `check_update` per
+the `BaseHandler` contract **and** `ApplicationHandlerStop` on every denial path
+(silent-drop, callback, message), all proven through the real
+`Application.process_update` group loop (a fake network boundary only — a
+replica loop like PR#58's would have masked the async-`check_update` defect,
+and PR#58's STOP-only fix would have bricked the bot for every user including
+the owner); S2 — `col(ForceJoinConfig.enabled).is_(True)` (SQL `IS true` /
+`IS 1`), and the unbound gate fails **closed** (non-member, uncached) because
+no machine guarantee of bind-before-traffic exists; S3 — redaction widened at
+the *logging boundary* in both pipelines (bot-URL tokens, `?key=`/`?token=`,
+`x-goog-api-key` incl. quoted dict-reprs, userinfo stripping, secret-ish keys
+replaced wholesale in `redact_fields`, nested-structure recursion in the
+structlog processor), asserted against captured rendered log output;
+S4 — all four call sites moved to the `x-goog-api-key` header (matching the
+image-gen adapter, the existing in-repo reference implementation), locked by a
+source-scan inventory test; S5 — fail-fast `validate_url` at job creation (400
+before a job row) plus `SafeAsyncTransport` for the fetch (every connection
+incl. redirect hops re-resolved, re-checked, IP-pinned), temp-file cleanup
+asserted on refusal, and the transport stream wrapped exactly like httpx's own
+default transport. PR#58 remains unmerged as evidence; nothing was blind-merged.
+
+*Rejected alternatives.* (1) *Merge/update PR#58* — its base is 34 commits
+behind, it conflicts, and its S1 test harness reimplements the dispatcher loop
+(`await handler.check_update(...)`) in a way that would stay green while the
+real dispatcher fails; updating it would inherit that proof debt. (2) *STOP-only
+fix as in PR#58* — with the async `check_update` still present it turns the
+fail-open bug into a full self-DoS (every user, including the owner, denied
+and stopped). (3) *Port PR#58's `is_public_ip` IPv4-mapped recursion* — both
+supported Pythons (3.11 sandbox / 3.12 CI) already block every mapped-private
+form (over-blocking `::ffff:8.8.8.8` on 3.11 is fail-closed, not a hole);
+not rebuilt. (4) *Fail-open-unbound + documented bind order* — documentation is
+not a machine guarantee; the broad startup `try/except` stands.
+
+*Evidence.* 9/9 mutation matrix (mutant → RED → restore → GREEN) recorded in
+the PR; full gates `pytest -q` (1973 passed, 20 skipped — all
+requires-PostgreSQL, pre-existing), `pytest -q -m "not slow"`, `ruff check .`,
+`ruff format --check .`, `mypy src` clean; board claim
+`sec-boundary-salvage-01a0d4c7` (zone `security-boundary`) with no overlap
+against PR#67/#70/#71/#72/#73/#74; task-165's delivered-but-unreleased lease
+stewardship-released per the PR#47 precedent with `gh` merge evidence.
+
+*Supersedes the PR#58 gating in* D-0010: the SSRF hardening that decision
+sequenced "after PR#58" is delivered by this decision's branch; the legacy-lane
+removal ratchet ("reopens when PR#58 merges") now reopens on the merge of the
+salvage PR instead.
+
+
+## 2026-09-24 — S3/S5 adversarial closure of the security-boundary salvage (D-0016)
+
+*Problem.* An independent adversarial pass over PR#76's S3/S5 surfaces (rule:
+no evidence is accepted from the previous agent's report alone; every defect
+needs source trace + minimal reproducer + observable bad behavior) proved five
+real defects in the salvage's boundary code that its tests did not reach:
+
+(S3-1) stdlib `exc_info` tracebacks are rendered by `Formatter.format` *after*
+handler filters run, so an exception message carrying a secret reached the
+final log raw — contradicting the module docstring's "exception tracebacks
+… masked" claim (reproduced: `logger.exception` with a bot-token URL leaked
+the raw token into the captured root-handler output);
+(S3-2) `SecretRedactionFilter` assumed `record.args` is a tuple of strings,
+but stdlib also documents a single *mapping* (`logger.warning("%(password)s",
+{...})`): the filter iterated the dict's keys, destroying the record with
+`TypeError: format requires a mapping` (rendered as logging-error spam, record
+lost) or silently corrupting `%s`-dict args into their first key; non-string
+args (`dict`/`list`/object `repr()`) rendered their secrets after the filter
+entirely;
+(S3-3) no rule covered `Basic <base64-credentials>` (RFC 7617) unless an
+`authorization:`-style key prefix happened to be present — reproduced leaking
+through logger args, exception messages, and the `handleError` replay on
+stderr;
+(S5-1) CGNAT `100.64.0.0/10` was absent from the guard's explicit blocked
+list and `ipaddress`' `is_private` does not cover it on all supported runtimes
+— `validate_url("https://100.64.0.1/")` and the Alibaba metadata address
+`100.100.100.100` passed preflight;
+(S5-2) the https-only rule lived only in the preflight `validate_url`: with
+`follow_redirects=True`, a 302 `https→http` was followed and a *second,
+plaintext* connection established and its body consumed (reproduced against
+the scripted transport: `connects == [public:443, public:80]`, downgrade body
+returned).
+
+*Decision.* Close all five at the same boundary the salvage chose, without
+weakening any existing assertion: S3 — the stdlib filter now normalises every
+lazy-rendering surface (mapping args keep their mapping type with key-aware
+wholesale redaction, other args are walked through the recursive redactor,
+`exc_info` is pre-rendered through stdlib's own formatter and stored redacted
+as `exc_text`, `stack_info` likewise), and `RedactingFormatter` wraps each
+handler's formatter as a final rendered-line boundary (format/datefmt/style
+preserved) — with the key/value rule extended to single-quoted dict-repr keys
+(`'password': 'x'`) so object-repr leaks of fresh credentials are masked;
+`Basic <token>` is redacted only when credential-shaped (≥14 chars of the
+base64 alphabet, mixed case, digit or `=` padding) so prose like "basic
+settings here" is untouched. S5 — `100.64.0.0/10` joins the explicit blocked
+networks, and the https-only scheme is enforced inside
+`SafeAsyncTransport.handle_async_request` on *every* request including every
+redirect hop; malformed hosts httpx refuses to parse (octal IPv4) now surface
+as `SSRFBlockError` so the route's 400 contract holds fail-closed.
+
+*Rejected alternatives.* (1) *Redact only at the final formatter* — cannot
+repair a record the mapping corruption has already destroyed; the filter layer
+is required. (2) *Redact only at the filter* — cannot rewrite opaque object
+reprs rendered lazily; the formatter layer is required. The layers are
+complementary by construction (mutation S3-M12: removing both turns the
+traceback tests red; removing either alone is caught by the other). (3)
+*Blanket `str()` of unknown args* — would break `%d`/`%r` positional
+semantics; rejected as non-backward-compatible. (4) *Broaden `Basic` to any
+token after the word* — over-redacts prose ("Basic Authentication flow");
+the credential-shape heuristic is the minimal fail-closed form. (5) *Block
+the http redirect hop inside httpx's redirect machinery* — that would patch
+httpx behavior instead of the transport boundary every request already
+passes through.
+
+*Evidence.* Independent reproducers (real root-handler capture, real loopback
+TCP server, scripted-transport multi-hop) — all red at PR#76 head
+`5b17a709`, all green after the fix; 12/12 mutation matrix (mutant → RED →
+restore → GREEN) incl. per-layer and combined mutants; full gates at the
+closure head: `pytest -q -m "not slow"` 1989 passed / 20 skipped (all
+requires-PostgreSQL, pre-existing), `ruff check .`, `ruff format --check .`,
+`mypy src` clean; real-runtime proofs: loopback refused with 0 server hits,
+same-host DNS rebinding (preflight public → connect-time private) refused at
+connect with 0 connects, real public fetch through `SafeAsyncTransport`
+succeeds (backward compatibility).
+
+*Amends* D-0015's evidence claim: T8's "asserted on captured rendered log
+output" now additionally covers mapping/non-string args, tracebacks and the
+`Basic` scheme; T9's "every connection incl. redirect hops" now additionally
+covers scheme (https-only) and CGNAT. PR#76's claim
+`sec-boundary-salvage-01a0d4c7` is continued by the closure session branch
+(recorded on the board) — same zone, one owner.
