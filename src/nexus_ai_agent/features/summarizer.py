@@ -97,9 +97,12 @@ class SummarizerEngine:
         }
 
         try:
+            # API key in the x-goog-api-key header, never in the URL
+            # (query params leak to httpx INFO lines / proxy logs).
             resp = await self._http.post(
-                f"{self._base_url}/models/{self._model}:generateContent?key={self._api_key}",
+                f"{self._base_url}/models/{self._model}:generateContent",
                 json=payload,
+                headers={"x-goog-api-key": self._api_key},
             )
             resp.raise_for_status()
             data = resp.json()

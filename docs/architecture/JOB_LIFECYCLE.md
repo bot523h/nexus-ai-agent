@@ -6,8 +6,8 @@
 > `src/nexus_ai_agent/adapters/in_process_job_queue.py`. Delivered by task-178
 > (Agent C, 2026-09-24), closed by task-180 (verification GAPs, 2026-09-24)
 > and task-181 (failure semantics + 6-state taxonomy + publication order,
-> 2026-09-24). Decision records: `docs/DECISION_LOG.md` D-0013, D-0014,
-> D-0015.
+> 2026-09-24). Decision records: `docs/DECISION_LOG.md` D-0017, D-0018,
+> D-0019.
 
 ## 1. The canonical chain
 
@@ -42,7 +42,7 @@ binary probe `probe_video` — the architecture's ffprobe-equivalent).
 ## 2. State machine
 
 Persisted values (enum `JobStatus`, task-181 failure taxonomy — see
-D-0015 for the compatibility mapping): `pending`, `processing`,
+D-0019 for the compatibility mapping): `pending`, `processing`,
 `verifying`, `completed`, `failed_retryable`, `failed_terminal`.
 Canonical aliases: `RUNNING ≡ PROCESSING`, `SUCCEEDED ≡ COMPLETED`
 (`jobs/lifecycle.py`). Rows written by pre-task-181 code as `"failed"` read
@@ -130,7 +130,7 @@ destination. This is Kleppmann's fencing-token rule applied to the row
 itself (the storage compares the token, not the client), the same repair
 pg-boss adopted for its stale-`complete()` bug (pg-boss #925).
 
-Why `attempt` and not a UUID / lease column (D-0016): the token must be
+Why `attempt` and not a UUID / lease column (D-0020): the token must be
 minted atomically with the claim, be strictly monotonic per row, and cost
 no schema change — `attempt` already is all three. Wall-clock leases were
 rejected as the *fence* (clock skew, no ordering) and kept only as the
@@ -153,7 +153,7 @@ no token the filesystem could check; the window is bounded to microseconds
 of a single worker and can only be entered if a takeover happened *in that
 interval*, which requires `resume_pending` (startup or expiry) — never a
 concurrent reservation. Closing it fully would require token-aware storage
-(D-0016 records this as out of scope).
+(D-0020 records this as out of scope).
 
 **Q1 — when does a Job become RUNNING?** At the reservation compare-and-set
 (`_mark_processing`), *before* the handler is invoked. It is not "after
@@ -229,7 +229,7 @@ carry valid probe evidence (a probe failure is exactly "ffprobe failed" by
 runtime semantics). Document artifacts are verified structurally (SubRip
 timing-block syntax; OTIO must parse as a JSON object).
 
-**Publication order (task-181, D-0015).** For lanes whose artifact
+**Publication order (task-181, D-0019).** For lanes whose artifact
 destination lives *outside* the job workspace — today exactly
 `pdf_extract`, its `<stem>.extracted.txt` sidecar — the order is:
 
@@ -244,7 +244,7 @@ re-runs the same verifier against the published claim, persists `completed`
 (fenced CAS), and only then finalizes (`ArtifactPublication.finalize`).
 
 **Recoverability of the previous artifact (F1, option A — backup/restore,
-D-0016).** `publish` first makes the currently published bytes reachable
+D-0020).** `publish` first makes the currently published bytes reachable
 under `<stem>.extracted.txt.prev` (same-directory hard link; copy fallback),
 then renames the staged file onto the final name. The three refusal points
 behave as follows:
@@ -274,7 +274,7 @@ overwrite its own key's staging files).
 
 Typed user failures (`{"success": false, "error_code": …}`, the durable
 dialect of this repository) claim **no artifact** and — since task-181
-(D-0015, GAP-A) — are **failures of the job**: the queue classifies them
+(D-0019, GAP-A) — are **failures of the job**: the queue classifies them
 (`jobs/failure_semantics`) and persists `failed_retryable` / `failed_terminal`
 with `typed_failure:<code>`; the typed result payload is preserved so the
 notifier can translate the code. A typed failure never reaches `completed`,
@@ -381,7 +381,7 @@ attempt accounting · PENDING→FAILED claim-time edge.
 real chain): `COMPLETED` ⇒ artifact exists on disk, `size > 0`,
 `sha256(result) == sha256(bytes on disk)`, probe evidence present, logical
 + spec + physical identities persisted, `attempt` recorded. That test *is*
-the durable answer to the mandatory question — see D-0013 for the A/B
+the durable answer to the mandatory question — see D-0017 for the A/B
 evidence that the pre-contract queue could complete a lying claim and the
 canonical queue cannot.
 
@@ -412,7 +412,7 @@ logged (`job_transition_rejected`) and announces nothing. The contract is
 "never lie", not "eventual delivery": a crash between the commit and the
 notification loses that notification (the durable state remains true and
 `get_status` reflects it); a transactional outbox was evaluated and rejected
-for this scope (D-0016). Evidence: `tests/integration/test_gate5_closure.py`
+for this scope (D-0020). Evidence: `tests/integration/test_gate5_closure.py`
 (notification matrix + lying-result regression), `tests/unit/test_creative_notify.py`,
 `tests/unit/test_bot_slideshow_notify.py`.
 

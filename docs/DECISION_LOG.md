@@ -1,6 +1,8 @@
 # NEXUS AI — Architecture Decision Log
 
-**Status:** Canonical historical record; revision 9 effective 2026-09-24  
+**Status:** Canonical historical record; revision 11 effective 2026-09-25  
+**r11 scope:** S3/S5 adversarial closure of the security-boundary salvage (D-0016; session `arena/01a0d563-nexus-ai-agent`, PR#79): 5 proven defects closed, 12/12 mutation-killed.  
+**r10 scope:** security-boundary truth salvage (D-0015; PR#76 head `5b17a70` carried into PR#79): S1–S5 real deltas fixed, 9/9 mutation-killed.  
 **r9 scope:** Gate 2 canonical command + capability reconciliation, board task-179 (session `arena/01a0d43c-nexus-ai-agent`): the v1/v2 contract conflict resolved to one canonical contract (D-0013); see `architecture/COMMAND_CAPABILITY_CONTRACT.md` and `architecture/adr/0005-canonical-command-capability-contract.md` for evidence, scoring, and limits.  
 **r8 scope:** owner-directed P0 stabilization day (session `arena/01a0d23e-nexus-ai-agent`, board claims task-165/166/167): the legacy `/creative/*` HTTP lane disposition (D-0010), wiring the creative studio surface onto the canonical chain (D-0011), and verifiable backup success (D-0012). Evidence root: `docs/audits/P0_STABILIZATION_2026-09-24.md`.
 
@@ -17,6 +19,8 @@
 - **r5 (2026-09-20, PR#23):** recorded Nagar Wave 2c — the render lane (pure `RenderIR` → filtergraph → argv, one FFmpeg process, staging publish, measured evidence) — as an accepted and implemented decision with its rejected alternatives (agent-authored filtergraphs, `-y` against the destination, trusting the plan's duration, a second `ffprobe` binary, encoding inside a handler, a Python video library).
 - **r7 (2026-09-21, repo-hygiene pass — owner-directed, session `arena/01a0c484`):** release baseline moved to `v3.13.0` (the merged P0 week-1 security batch — README already described its behavior as v3.13.0 while VERSION/pyproject still said 3.12.0); docs reorganized without content loss (`docs/audits/`, `docs/history/`, `docs/ops/`, `docs/README.md` index); the broken root `termux_install.sh` removed and `scripts/termux_install.sh` repaired (canonical `nexus run-bot` entrypoint); PR #33 closed as superseded (security scope already delivered by merged PR #34; feature-wiring scope double-claims agent B's active lease — evidence: `mergeable=CONFLICTING`, head checks green but base-diverged), then **reopened the same day** when the `ci-gates-steward` board (15:21Z) re-designated it as the task-110 vehicle; 28 merged/closed remote branches deleted with per-branch dispositions below.
 - **r6 (2026-09-20, v3.11.0 housekeeping PR):** moved the release baseline to `v3.11.0`; recorded two owner decisions — *image generation behind an adapter (Pollinations by default, Gemini opt-in)*, which resolves the open question left by Wave 2 item 7, and *Wave 2.5 (Telegram surface for the slideshow pack) precedes Wave 3*; corrected the Phase 6 status text to Waves 1–2c merged; updated the PR snapshot (PR#23 merged as `ebe995a`, PR#1/PR#2 closed); noted that the lifecycle PR1/PR2/PR3 line has been on `main` since PR#7 (`acdbcb7`, v3.6.0) — the roadmap file had still called it unmerged.
+- **r10 (2026-09-24, security-boundary truth salvage):** PR#58's S1–S5 claims re-verified against main `035a896` — real deltas fixed on a fresh branch (dispatcher-true access guard incl. sync `check_update` + `ApplicationHandlerStop`, force-join SQL predicate + fail-closed-unbound, boundary redaction in both pipelines, Gemini `x-goog-api-key` everywhere, SSRF-safe legacy `video_url` download + `SafeAsyncTransport` stream fix), 9/9 mutation-killed; PR#58 stays unmerged evidence (D-0015).
+- **r11 (2026-09-24, S3/S5 adversarial closure):** PR#76's own S3/S5 surfaces independently re-verified and 5 proven defects closed (stdlib traceback redaction, mapping/non-string arg redaction, Basic-scheme credentials, CGNAT 100.64.0.0/10, https-only scheme gate on redirect hops) — 12/12 mutation-killed; D-0016.
 - **r8 (2026-09-24, P0 stabilization day):** D-0010 legacy `/creative/*` HTTP lane = keep+harden (strictly harden-edged) on a deprecation track gated on open PR#58's SSRF scope, never a competitor pipeline; D-0011 `/edit` `/caption` `/grade` wired through the canonical chain with message-anchored idempotency, the bogus `mapper` handler key removed, honest op matrix (`lut`/`burnin` refused, not faked), all replies through the i18n catalog; D-0012 backup success must be measured and round-trip-verified, never asserted — plus the r8 coordination facts (task-106 superseded into task-166, task-164 narrowed to owner-secrets, docs number-resync against measured values: 57 registered ops).
 
 This document is the single reference point for architectural decisions in this repository. A new decision must be appended here with its date, status, rationale, rejected alternatives, and repository evidence. Existing historical documents remain useful as detailed records, but this log is authoritative when summaries differ.
@@ -1193,14 +1197,173 @@ opt-in-completeness test go red on any other resolution.
 `tests/unit/test_capability_lifecycle.py`,
 `tests/architecture/test_lifecycle_gate_boundary.py`, and the task-183
 trust-boundary tests in `tests/unit/test_creative_render_jobs.py`.
+## 2026-09-24 — Security-boundary truth salvage: PR#58 evidence reconciled onto current main (D-0015)
 
-### D-0013 — Job success is a verified state, not a handler's word (canonical job lifecycle)
+*Problem.* PR#58 ("Security Boundary hardening — S1–S5") was drafted against base
+`a997aab` and left in DRAFT/CONFLICTING state while main advanced to `035a896`.
+Its claims were never re-verified: on current main, (S1) the access guard raised
+no `ApplicationHandlerStop` — and worse, its `check_update` was `async def` while
+PTB v21/v22 call `check_update` synchronously, so the dispatcher saw a truthy
+coroutine for **every** update: the allow-list was never consulted, authorized
+users received denial UX, and denied users' commands still executed in group 0;
+(S2) `_is_enabled_anywhere_sync` used the Python identity comparison
+`ForceJoinConfig.enabled is True`, which compiles to `WHERE 0 = 1` — the
+force-join gate could never block anyone — and `check_membership` failed **open**
+when the bot was unbound, while the startup `post_init` binds inside a broad
+`try/except` that can swallow a bind failure (no machine guarantee bind precedes
+traffic); (S3) both redaction pipelines missed the `api.telegram.org/bot<token>`
+URL form, bare `?key=`/`&key=` query secrets, and (stdlib/structlog pipeline)
+URL userinfo, and `redact_fields` never considered the *key* a value sat under;
+(S4) four Gemini call sites still sent the API key as `?key=` in the URL; (S5)
+`_download_video_to_temp` fetched the attacker-controlled `video_url` with a raw
+`httpx.AsyncClient(follow_redirects=True)` and no validation or safe transport —
+and `SafeAsyncTransport` itself passed the raw httpcore response stream into
+`httpx.Response`, so any *successful* fetch would have crashed on httpx 0.28's
+`isinstance(response.stream, AsyncByteStream)` assert (unseen because every
+existing test blocked before a response existed).
 
-> **ID note (integration 2026-09-24).** The identifier `D-0013` was assigned independently on two
-> branches: the Gate 2 command contract above (task-179, merged via PR#72) and this job-lifecycle
-> decision (task-178, PR#71 → PR#78). Both records are retained verbatim; JOB_LIFECYCLE.md and the
-> Gate 5 audits mean *this* entry when they cite D-0013. D-0014 / D-0015 below belong to the
-> lifecycle series.
+*Decision.* Recover only the real delta, on a fresh branch from current main,
+with every fix proven at the level where it fails: S1 — sync `check_update` per
+the `BaseHandler` contract **and** `ApplicationHandlerStop` on every denial path
+(silent-drop, callback, message), all proven through the real
+`Application.process_update` group loop (a fake network boundary only — a
+replica loop like PR#58's would have masked the async-`check_update` defect,
+and PR#58's STOP-only fix would have bricked the bot for every user including
+the owner); S2 — `col(ForceJoinConfig.enabled).is_(True)` (SQL `IS true` /
+`IS 1`), and the unbound gate fails **closed** (non-member, uncached) because
+no machine guarantee of bind-before-traffic exists; S3 — redaction widened at
+the *logging boundary* in both pipelines (bot-URL tokens, `?key=`/`?token=`,
+`x-goog-api-key` incl. quoted dict-reprs, userinfo stripping, secret-ish keys
+replaced wholesale in `redact_fields`, nested-structure recursion in the
+structlog processor), asserted against captured rendered log output;
+S4 — all four call sites moved to the `x-goog-api-key` header (matching the
+image-gen adapter, the existing in-repo reference implementation), locked by a
+source-scan inventory test; S5 — fail-fast `validate_url` at job creation (400
+before a job row) plus `SafeAsyncTransport` for the fetch (every connection
+incl. redirect hops re-resolved, re-checked, IP-pinned), temp-file cleanup
+asserted on refusal, and the transport stream wrapped exactly like httpx's own
+default transport. PR#58 remains unmerged as evidence; nothing was blind-merged.
+
+*Rejected alternatives.* (1) *Merge/update PR#58* — its base is 34 commits
+behind, it conflicts, and its S1 test harness reimplements the dispatcher loop
+(`await handler.check_update(...)`) in a way that would stay green while the
+real dispatcher fails; updating it would inherit that proof debt. (2) *STOP-only
+fix as in PR#58* — with the async `check_update` still present it turns the
+fail-open bug into a full self-DoS (every user, including the owner, denied
+and stopped). (3) *Port PR#58's `is_public_ip` IPv4-mapped recursion* — both
+supported Pythons (3.11 sandbox / 3.12 CI) already block every mapped-private
+form (over-blocking `::ffff:8.8.8.8` on 3.11 is fail-closed, not a hole);
+not rebuilt. (4) *Fail-open-unbound + documented bind order* — documentation is
+not a machine guarantee; the broad startup `try/except` stands.
+
+*Evidence.* 9/9 mutation matrix (mutant → RED → restore → GREEN) recorded in
+the PR; full gates `pytest -q` (1973 passed, 20 skipped — all
+requires-PostgreSQL, pre-existing), `pytest -q -m "not slow"`, `ruff check .`,
+`ruff format --check .`, `mypy src` clean; board claim
+`sec-boundary-salvage-01a0d4c7` (zone `security-boundary`) with no overlap
+against PR#67/#70/#71/#72/#73/#74; task-165's delivered-but-unreleased lease
+stewardship-released per the PR#47 precedent with `gh` merge evidence.
+
+*Supersedes the PR#58 gating in* D-0010: the SSRF hardening that decision
+sequenced "after PR#58" is delivered by this decision's branch; the legacy-lane
+removal ratchet ("reopens when PR#58 merges") now reopens on the merge of the
+salvage PR instead.
+
+
+## 2026-09-24 — S3/S5 adversarial closure of the security-boundary salvage (D-0016)
+
+*Problem.* An independent adversarial pass over PR#76's S3/S5 surfaces (rule:
+no evidence is accepted from the previous agent's report alone; every defect
+needs source trace + minimal reproducer + observable bad behavior) proved five
+real defects in the salvage's boundary code that its tests did not reach:
+
+(S3-1) stdlib `exc_info` tracebacks are rendered by `Formatter.format` *after*
+handler filters run, so an exception message carrying a secret reached the
+final log raw — contradicting the module docstring's "exception tracebacks
+… masked" claim (reproduced: `logger.exception` with a bot-token URL leaked
+the raw token into the captured root-handler output);
+(S3-2) `SecretRedactionFilter` assumed `record.args` is a tuple of strings,
+but stdlib also documents a single *mapping* (`logger.warning("%(password)s",
+{...})`): the filter iterated the dict's keys, destroying the record with
+`TypeError: format requires a mapping` (rendered as logging-error spam, record
+lost) or silently corrupting `%s`-dict args into their first key; non-string
+args (`dict`/`list`/object `repr()`) rendered their secrets after the filter
+entirely;
+(S3-3) no rule covered `Basic <base64-credentials>` (RFC 7617) unless an
+`authorization:`-style key prefix happened to be present — reproduced leaking
+through logger args, exception messages, and the `handleError` replay on
+stderr;
+(S5-1) CGNAT `100.64.0.0/10` was absent from the guard's explicit blocked
+list and `ipaddress`' `is_private` does not cover it on all supported runtimes
+— `validate_url("https://100.64.0.1/")` and the Alibaba metadata address
+`100.100.100.100` passed preflight;
+(S5-2) the https-only rule lived only in the preflight `validate_url`: with
+`follow_redirects=True`, a 302 `https→http` was followed and a *second,
+plaintext* connection established and its body consumed (reproduced against
+the scripted transport: `connects == [public:443, public:80]`, downgrade body
+returned).
+
+*Decision.* Close all five at the same boundary the salvage chose, without
+weakening any existing assertion: S3 — the stdlib filter now normalises every
+lazy-rendering surface (mapping args keep their mapping type with key-aware
+wholesale redaction, other args are walked through the recursive redactor,
+`exc_info` is pre-rendered through stdlib's own formatter and stored redacted
+as `exc_text`, `stack_info` likewise), and `RedactingFormatter` wraps each
+handler's formatter as a final rendered-line boundary (format/datefmt/style
+preserved) — with the key/value rule extended to single-quoted dict-repr keys
+(`'password': 'x'`) so object-repr leaks of fresh credentials are masked;
+`Basic <token>` is redacted only when credential-shaped (≥14 chars of the
+base64 alphabet, mixed case, digit or `=` padding) so prose like "basic
+settings here" is untouched. S5 — `100.64.0.0/10` joins the explicit blocked
+networks, and the https-only scheme is enforced inside
+`SafeAsyncTransport.handle_async_request` on *every* request including every
+redirect hop; malformed hosts httpx refuses to parse (octal IPv4) now surface
+as `SSRFBlockError` so the route's 400 contract holds fail-closed.
+
+*Rejected alternatives.* (1) *Redact only at the final formatter* — cannot
+repair a record the mapping corruption has already destroyed; the filter layer
+is required. (2) *Redact only at the filter* — cannot rewrite opaque object
+reprs rendered lazily; the formatter layer is required. The layers are
+complementary by construction (mutation S3-M12: removing both turns the
+traceback tests red; removing either alone is caught by the other). (3)
+*Blanket `str()` of unknown args* — would break `%d`/`%r` positional
+semantics; rejected as non-backward-compatible. (4) *Broaden `Basic` to any
+token after the word* — over-redacts prose ("Basic Authentication flow");
+the credential-shape heuristic is the minimal fail-closed form. (5) *Block
+the http redirect hop inside httpx's redirect machinery* — that would patch
+httpx behavior instead of the transport boundary every request already
+passes through.
+
+*Evidence.* Independent reproducers (real root-handler capture, real loopback
+TCP server, scripted-transport multi-hop) — all red at PR#76 head
+`5b17a709`, all green after the fix; 12/12 mutation matrix (mutant → RED →
+restore → GREEN) incl. per-layer and combined mutants; full gates at the
+closure head: `pytest -q -m "not slow"` 1989 passed / 20 skipped (all
+requires-PostgreSQL, pre-existing), `ruff check .`, `ruff format --check .`,
+`mypy src` clean; real-runtime proofs: loopback refused with 0 server hits,
+same-host DNS rebinding (preflight public → connect-time private) refused at
+connect with 0 connects, real public fetch through `SafeAsyncTransport`
+succeeds (backward compatibility).
+
+*Amends* D-0015's evidence claim: T8's "asserted on captured rendered log
+output" now additionally covers mapping/non-string args, tracebacks and the
+`Basic` scheme; T9's "every connection incl. redirect hops" now additionally
+covers scheme (https-only) and CGNAT. PR#76's claim
+`sec-boundary-salvage-01a0d4c7` is continued by the closure session branch
+(recorded on the board) — same zone, one owner.
+
+### D-0017 — Job success is a verified state, not a handler's word (canonical job lifecycle)
+
+> **ID note (release integration 2026-09-25).** This chain was drafted as
+> `D-0017`/`D-0018`/`D-0019`/`D-0020` on the PR#78→PR#81 line, but `D-0017`, `D-0019`
+> and `D-0020` were already owned on main when this branch merged (`D-0017` = Gate 2
+> command contract, PR#72; `D-0019` = security-boundary salvage, `D-0020` = S3/S5
+> closure, PR#79). To keep every citation unambiguous the whole chain moved to
+> `D-0017`/`D-0018`/`D-0019`/`D-0020` at integration — job-lifecycle `D-0013`→`D-0017`,
+> verification closure `D-0014`→`D-0018`, typed-failure `D-0015`→`D-0019`,
+> execution-fencing `D-0016`→`D-0020`. `JOB_LIFECYCLE.md`, the Gate 5 audits and the
+> board cite the new identifiers. The pre-merge `D-0017`/`D-0019`/`D-0020` readings of
+> these sections are RETRACTED as identifiers (section content unchanged).
 
 *Problem.* The queue completed a job the moment its handler returned a dict: a handler that claimed
 `{"success": true}` with a zero-byte, truncated, stale or wrong-path artifact ended `COMPLETED`, and
@@ -1242,9 +1405,9 @@ observability, recovery, attempt accounting, §17 invariant on the real FFmpeg c
 
 ---
 
-## 2026-09-24 — Verification closure on the task-178 contract: every job type verified, gaps recorded honestly (D-0014)
+## 2026-09-24 — Verification closure on the task-178 contract: every job type verified, gaps recorded honestly (D-0018)
 
-### D-0014 — Gap closure rides the existing registry; verification dialects are per-artifact, never generalized guesses
+### D-0018 — Gap closure rides the existing registry; verification dialects are per-artifact, never generalized guesses
 
 *Problem.* PR#71 (task-178) proved the canonical lifecycle but shipped the built-in verifier
 registry with only `creative_render`; its own board note listed the handoff GAPs: `slideshow_render`
@@ -1287,7 +1450,7 @@ proofs: verifier bypass (11 red), path-validation bypass (3 red), sha bypass (2 
 Reports: `docs/audits/VERIFICATION_GAP_REPORT_2026-09-24.md`,
 `docs/audits/CROSS_PR_TRUTH_2026-09-24.md`, `docs/audits/VERIFICATION_TRUTH_MATRIX.json`.
 
-### D-0015 — A typed failure is a FAILURE of the job: 6-state taxonomy, classified retryability, stage→verify→publish, lifecycle-state notifier truth
+### D-0019 — A typed failure is a FAILURE of the job: 6-state taxonomy, classified retryability, stage→verify→publish, lifecycle-state notifier truth
 
 *Problem.* Gate 5 reconciliation (task-181) reproduced four defects against the task-178/180 tree.
 (1) A typed user failure (`{"success": false, "error_code": …}`) reached **`completed`** — the
@@ -1305,7 +1468,7 @@ refused extraction (image-only PDF ⇒ `empty_artifact`) replaced and destroyed 
 *Decision.* (1) The typed dialect is a **failure status**, never `completed` (GAP-A). The queue
 short-circuits it before verification (`typed_failure:<code>` persisted, typed result preserved
 for the notifier), and verifiers refuse a typed result fail-closed (`typed_user_failure`) if one
-ever reaches them — two independent layers (D-0013's "job success is a verified state" now also
+ever reaches them — two independent layers (D-0017's "job success is a verified state" now also
 means "job failure is a durable state"). (2) `JobStatus` splits `failed` into
 `failed_retryable` / `failed_terminal` (GAP-B): `jobs/failure_semantics` classifies every failure
 family by one principle — RETRYABLE iff the world can change to make the identical request
@@ -1334,7 +1497,7 @@ unclassified contract drift instead of failing closed. (3) Backup-then-replace p
 crash semantics (`.prev` orphan states) than stage-then-swap with a re-probe. (4) Building the
 retry scheduler to "use" `failed_retryable` — no repository requirement demands a scheduler, and
 the mission explicitly forbids new retry infrastructure; classification alone is honest and
-complete. (5) Renaming `completed`/`pending` spellings as well — reasonless migration (D-0013's
+complete. (5) Renaming `completed`/`pending` spellings as well — reasonless migration (D-0017's
 rule stands).
 
 *Evidence.* Reproduction of all four defects on the pre-change tree (audit:
@@ -1349,7 +1512,7 @@ harness `scripts/gate5_mutation_probes.py`: 6/6 probes (remove verification / fo
 typed failure / skip atomic publish / drop job_id / notifier trusts result.success / bypass
 failure_status) each GREEN→RED→restore→SHA-restored→GREEN.
 
-### D-0016 — Execution ownership is a fencing token (`attempt`); worker transitions are fenced CAS; publication keeps the previous artifact recoverable until the durable commit
+### D-0020 — Execution ownership is a fencing token (`attempt`); worker transitions are fenced CAS; publication keeps the previous artifact recoverable until the durable commit
 
 *Problem.* The final Gate 5 repair (task-181, branch `arena/01a0d5a1-nexus-ai-agent`, base
 `947173c` = main + PR#78) reproduced five defects that the previous closure had either declared
@@ -1406,7 +1569,7 @@ this is what was built (A fences, C-style expiry governs takeover).
 (new naming contract for every consumer); C stage + verify + atomic replace, drop the re-probe
 (re-probe proven not redundant — it is the only check after the rename); D two-phase journal and
 E "publish transaction" (both more machinery than the guarantee needs). **This supersedes the
-D-0015 rejection of backup-then-replace**: D-0015 feared `.prev` orphans; the lane now removes a
+D-0019 rejection of backup-then-replace**: D-0019 feared `.prev` orphans; the lane now removes a
 stray `.prev` before publishing, `finalize` removes it after commit, and the crash between publish
 and commit is covered by `test_t11_crash_between_publish_and_reprobe_recovers`. Stage-then-swap
 alone was proven to destroy the previous artifact on a refused re-probe (R1).
@@ -1421,7 +1584,7 @@ interval, never by a concurrent reservation.
 *Evidence.* OLD RED on `947173c`: `tests/integration/test_gate5_execution_fencing.py` 19 failed /
 1 passed (R1 `'fresh extraction' == 'OLD VALID EXTRACTION'`, R2 `PENDING is COMPLETED`, R3
 `['me'] == []`, R5 `2 == 1`). NEW GREEN: 21 passed; full `pytest -m "not slow"` green; mutation
-harness `scripts/gate5_mutation_probes.py` 17/17 (M1–M10 + the six D-0015 probes) with
+harness `scripts/gate5_mutation_probes.py` 17/17 (M1–M10 + the six D-0019 probes) with
 BASELINE GREEN → MUTANT RED → SHA-restored → GREEN. Sources: pg-boss issue #925; M. Kleppmann,
 "How to do distributed locking" (fencing tokens); Python `sqlite3.Cursor.rowcount`; SQLite
 atomic commit; Python `os.replace` (atomic same-filesystem replace, previous inode not

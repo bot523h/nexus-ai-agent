@@ -158,7 +158,7 @@ F2 (cancel/reclaim race), F3 (durable completion vs notification) and R5 (two wo
 defect: no worker-side write was conditioned on *which execution* wrote it. The repair is a single
 fencing token — `jobs.lifecycle.ExecutionClaim(job_id, attempt)` minted by a PENDING-only
 reservation CAS — and the rule that every worker transition is `UPDATE … WHERE id=? AND status IN
-(expected) AND attempt=?` with `rowcount == 1` as the verdict (D-0016; JOB_LIFECYCLE.md §2a).
+(expected) AND attempt=?` with `rowcount == 1` as the verdict (D-0020; JOB_LIFECYCLE.md §2a).
 F1 is the same rule applied to the filesystem step (ownership re-read immediately before the
 rename) plus a recoverable previous artifact (`.prev` backup → restore on refused re-probe →
 removed only after the committed `completed`).
