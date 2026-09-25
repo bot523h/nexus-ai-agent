@@ -29,19 +29,14 @@ from pathlib import Path
 
 import pytest
 
-try:  # Python 3.11+
+try:  # Python 3.11+: the real TOML parser, stdlib, no new dependency.
     import tomllib
-except ImportError:  # Python 3.10 — tomli ships transitively via pyproject_hooks
-    try:
-        import tomli as tomllib  # type: ignore[no-redef]
-    except ImportError:  # pragma: no cover — neither parser available
-        tomllib = None  # type: ignore[assignment]
-
-if tomllib is None:  # pragma: no cover
-    pytest.skip(
-        "no TOML parser on this interpreter (tomllib/tomli) — lockstep test inert",
-        allow_module_level=True,
-    )
+except ImportError:  # Python 3.10: tomllib does not exist there.
+    # NOTE: no ``tomli`` fallback — tomli is not a dependency (not even
+    # transitively: pip vendors it privately), so importing it crashes a bare
+    # 3.10 interpreter at collection.  The 3.10 path is a stdlib-only text
+    # scan, so the parser is always available and this module never skips.
+    tomllib = None  # type: ignore[assignment]
 
 REPO_ROOT = Path(__file__).parents[2]
 VERSION_FILE = REPO_ROOT / "VERSION"
@@ -58,8 +53,29 @@ def read_repository_version() -> str:
 
 
 def read_pyproject_version() -> str:
-    data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
-    return str(data["project"]["version"])
+    text = PYPROJECT.read_text(encoding="utf-8")
+    if tomllib is not None:
+        return str(tomllib.loads(text)["project"]["version"])
+    return _project_version_text_scan(text)
+
+
+def _project_version_text_scan(pyproject_text: str) -> str:
+    """The 3.10 fallback: ``version`` from the ``[project]`` table body.
+
+    Scoped to the table (the match must sit between ``[project]`` and the
+    next table header) so similarly-named keys in other tables can never
+    leak in.  Raises instead of guessing when the table or key is absent.
+    """
+    start = re.search(r"^\[project\][ \t]*$", pyproject_text, re.MULTILINE)
+    if start is None:
+        raise ValueError("pyproject.toml has no [project] table")
+    rest = pyproject_text[start.end() :]
+    next_table = re.search(r"^\[[^\[\]]+\][ \t]*$", rest, re.MULTILINE)
+    body = rest if next_table is None else rest[: next_table.start()]
+    match = re.search(r'^version\s*=\s*"([^"]+)"', body, re.MULTILINE)
+    if match is None:
+        raise ValueError("pyproject.toml [project] has no version key")
+    return match.group(1)
 
 
 def read_changelog_version(text: str | None = None) -> str:

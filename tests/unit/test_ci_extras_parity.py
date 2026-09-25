@@ -287,13 +287,17 @@ _PY310_RUNTIME_BLOCKERS = ("StrEnum",)
 _SRC = REPO_ROOT / "src"
 
 
-def _py310_runtime_blockers() -> list[str]:
+def _py310_runtime_blockers(root: Path = _SRC) -> list[str]:
     blockers: list[str] = []
-    for path in sorted(_SRC.rglob("*.py")):
+    for path in sorted(root.rglob("*.py")):
         text = path.read_text(encoding="utf-8")
         for marker in _PY310_RUNTIME_BLOCKERS:
             if marker in text:
-                blockers.append(f"{path.relative_to(REPO_ROOT)} uses {marker}")
+                try:
+                    shown = path.relative_to(REPO_ROOT)
+                except ValueError:  # a fixture tree outside the repo (red-proof)
+                    shown = path.name
+                blockers.append(f"{shown} uses {marker}")
     return blockers
 
 
@@ -315,15 +319,25 @@ def test_the_310_parity_leg_is_blocking_iff_the_runtime_supports_it() -> None:
         )
 
 
-def test_red_proof_the_transition_guard_detects_a_healed_runtime() -> None:
-    """No blockers + still non-blocking → the guard must be able to fail."""
-    healed_block = extras_matrix.job_block(WORKFLOW_TEXT, extras_matrix.PARITY_JOB)
-    assert "continue-on-error: ${{ matrix.python-version == '3.10' }}" in healed_block
-    # simulate the healed state: the guard logic must demand the leg be blocking
-    assert _py310_runtime_blockers(), (
-        "if this fails, src/ has been healed: go drop the 3.10 continue-on-error "
-        "in ci.yml (the transition this guard enforces)"
+def test_healed_state_the_310_leg_is_blocking_and_the_runtime_is_clean() -> None:
+    """The transition this guard enforced has landed: pin the healed state."""
+    block = extras_matrix.job_block(WORKFLOW_TEXT, extras_matrix.PARITY_JOB)
+    assert "continue-on-error" not in block, (
+        "the 3.10 parity leg is blocking again — no exception of any form "
+        "may come back while the runtime is clean"
     )
+    assert _py310_runtime_blockers() == [], (
+        "a Python>3.10 construct reappeared in src/ — fix the construct, do not re-add an exception"
+    )
+
+
+def test_red_proof_the_blocker_detector_fires_on_a_fixture(tmp_path: Path) -> None:
+    """The guard must be able to fail: the detector fires on a dirty tree."""
+    dirty = tmp_path / "dirty_mod.py"
+    dirty.write_text("from enum import StrEnum\n", encoding="utf-8")
+    assert _py310_runtime_blockers(tmp_path) != []
+    dirty.write_text("from enum import Enum\n", encoding="utf-8")
+    assert _py310_runtime_blockers(tmp_path) == []
 
 
 # --------------------------------------------------------------------------- #
@@ -343,3 +357,18 @@ def test_core_leg_allows_explicitly_reasoned_optional_skips() -> None:
         "installed in this environment\n"
     )
     assert extras_matrix.skip_inflation_problems(log, "core") == []
+
+
+def test_red_proof_the_requires_arm_of_the_skip_pattern_is_pinned() -> None:
+    """The ``requires the optional`` pattern arm must stay armed.
+
+    Mutation proof (task-132 review): dropping that arm from
+    ``_MISSING_DEP_SKIP`` kept the whole suite green — no test pinned it.
+    This test kills that mutant on both the owning leg and the core leg.
+    """
+    log = (
+        "SKIPPED [1] tests/unit/test_pdf_smoke.py:1: PDF extraction requires "
+        "the optional 'pypdf' package\n"
+    )
+    assert extras_matrix.skip_inflation_problems(log, "pdf"), log
+    assert extras_matrix.skip_inflation_problems(log, "core"), log

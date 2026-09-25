@@ -4,11 +4,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from enum import StrEnum
+from enum import Enum
 from typing import Final
 
 
-class JournalStatus(StrEnum):
+class JournalStatus(str, Enum):
+    """String-valued journal status, spelled without 3.11+ syntax.
+
+    Same recipe as ``EntityType`` in ``domain/glossary.py``: the
+    ``(str, Enum)`` mixin plus ``__str__``/``__format__`` prints the value
+    on every supported interpreter (3.10–3.12+).
+    """
+
     PENDING = "pending"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
@@ -16,6 +23,12 @@ class JournalStatus(StrEnum):
     RETRYING = "retrying"
     BLOCKED = "blocked"
     CANCELLED = "cancelled"
+
+    def __str__(self) -> str:
+        return str(self.value)
+
+    def __format__(self, spec: str) -> str:
+        return format(str(self.value), spec)
 
 
 ALLOWED_TRANSITIONS: Final[dict[JournalStatus, frozenset[JournalStatus]]] = {

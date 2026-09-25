@@ -24,15 +24,19 @@ from __future__ import annotations
 
 import importlib.metadata
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-try:  # Python 3.11+
+try:  # Python 3.11+: the real TOML parser, stdlib, no new dependency.
     import tomllib
-except ImportError:  # Python 3.10 — tomli ships transitively via pyproject_hooks
-    import tomli as tomllib  # type: ignore[no-redef]
+except ImportError:  # Python 3.10: tomllib does not exist there.
+    # NOTE: no ``tomli`` fallback — tomli is not a dependency (not even
+    # transitively: pip vendors it privately), so importing it crashes a bare
+    # 3.10 interpreter.  The 3.10 path below is a stdlib-only text scan.
+    tomllib = None  # type: ignore[assignment]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -58,15 +62,48 @@ class Pin:
         return None
 
 
+def _dependencies_text_scan(pyproject_text: str) -> list[str]:
+    """The 3.10 fallback: quoted strings of the ``[project].dependencies`` array.
+
+    The array ends at the first line whose first non-space character is
+    ``]`` — dependency strings never span lines, and quoted ``[...]``
+    markers such as ``psycopg[binary,pool]`` never start a line, so the
+    terminator cannot be confused with array content.  Every pattern that
+    fails to match raises: a silent empty pin list would skip the ABI
+    verification this module exists for.
+    """
+    start = re.search(r"^\[project\][ \t]*$", pyproject_text, re.MULTILINE)
+    if start is None:
+        raise ValueError("pyproject.toml has no [project] table")
+    rest = pyproject_text[start.end() :]
+    next_table = re.search(r"^\[[^\[\]]+\][ \t]*$", rest, re.MULTILINE)
+    body = rest if next_table is None else rest[: next_table.start()]
+    opening = re.search(r"^dependencies\s*=\s*\[", body, re.MULTILINE)
+    if opening is None:
+        raise ValueError("pyproject.toml [project] has no dependencies array")
+    tail = body[opening.end() :]
+    terminator = re.search(r"^\s*\]", tail, re.MULTILINE)
+    if terminator is None:
+        raise ValueError("pyproject.toml dependencies array never closes")
+    return re.findall(r'"([^"]+)"', tail[: terminator.start()])
+
+
+def read_dependency_strings() -> list[str]:
+    """Every ``[project].dependencies`` entry, on any supported interpreter."""
+    text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    if tomllib is not None:
+        return [str(dep) for dep in tomllib.loads(text)["project"]["dependencies"]]
+    return _dependencies_text_scan(text)
+
+
 def read_pins() -> list[Pin]:
     """Parse exact ``==`` pins out of ``[project].dependencies``.
 
     Extras markers (``psycopg[binary,pool]==3.3.5``) are stripped so the
     distribution name matches what ``importlib.metadata`` reports.
     """
-    data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     pins: list[Pin] = []
-    for dep in data["project"]["dependencies"]:
+    for dep in read_dependency_strings():
         if "==" not in dep:
             continue
         raw_name, _, version = dep.partition("==")
