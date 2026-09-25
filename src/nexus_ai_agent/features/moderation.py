@@ -77,8 +77,8 @@ def _normalize_persian(text: str) -> str:
 class ModerationEngine:
     """Smart moderation: anti-spam, flood, link filter, profanity, warnings."""
 
-    # In-memory flood tracking: user_id -> list of timestamps
-    _flood_tracker: dict[int, list[float]] = {}
+    # In-memory flood tracking: (chat_id, user_id) or bare user_id -> timestamps
+    _flood_tracker: dict[int | tuple[int, int], list[float]] = {}
 
     # Rate limits
     FLOOD_WINDOW_SECONDS = 5

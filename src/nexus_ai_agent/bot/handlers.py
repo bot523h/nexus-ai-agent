@@ -327,7 +327,9 @@ def build_handlers(
         """Inspect local and remote AI model status."""
         model_path = Path(settings.model_path) if getattr(settings, "model_path", None) else None
         local_exists = model_path.exists() if model_path else False
-        local_size_mb = (model_path.stat().st_size / (1024**2)) if local_exists else 0.0
+        local_size_mb = (
+            (model_path.stat().st_size / (1024**2)) if model_path and local_exists else 0.0
+        )
         model_name = getattr(settings, "model_name", None) or (
             model_path.name if model_path else "None"
         )

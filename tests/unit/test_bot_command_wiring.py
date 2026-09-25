@@ -66,11 +66,7 @@ def db(settings_override: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
 
 def _extract_commands(handlers: list[Any]) -> dict[str, Any]:
     """Map command name to handler callback."""
-    return {
-        next(iter(h.commands)): h.callback
-        for h in handlers
-        if hasattr(h, "commands")
-    }
+    return {next(iter(h.commands)): h.callback for h in handlers if hasattr(h, "commands")}
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -242,6 +238,19 @@ async def test_mod_config_command(db: Any) -> None:
     await cmd_map["mod_config"](update_bad, make_context(args=["max_warnings=xyz"]))
     assert "[ERR_INVALID_ARGUMENT]" in update_bad.last_reply
 
+    # Owner passes an unknown key → typed refusal, no DB mutation (mutation F probe)
+    update_unknown = make_update(user_id=OWNER_ID, chat_id=CHAT_ID)
+    await cmd_map["mod_config"](update_unknown, make_context(args=["unknown_key=1"]))
+    assert "[ERR_INVALID_ARGUMENT]" in update_unknown.last_reply
+    cfg_after_refusal = ModerationEngine.get_config(CHAT_ID)
+    assert cfg_after_refusal is not None
+    assert cfg_after_refusal.max_warnings == 5  # refusal must not have written anything
+
+    # Owner passes an invalid boolean → typed refusal
+    update_badbool = make_update(user_id=OWNER_ID, chat_id=CHAT_ID)
+    await cmd_map["mod_config"](update_badbool, make_context(args=["anti_spam=maybe"]))
+    assert "[ERR_INVALID_ARGUMENT]" in update_badbool.last_reply
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # 5. Smart Moderation Actions (/warn, /mute, /unmute, /reputation)
@@ -307,6 +316,12 @@ async def test_warn_mute_unmute_lifecycle(db: Any) -> None:
     await cmd_map["mute"](update_mute, make_context(args=[str(USER_ID), "15"]))
     assert f"User {USER_ID} muted for 15 minutes" in update_mute.last_reply
     assert ModerationEngine.is_muted(USER_ID, CHAT_ID) is True
+
+    # /mute duration must be a positive integer → typed refusal, no state change
+    update_mute_zero = make_update(user_id=OWNER_ID, chat_id=CHAT_ID)
+    await cmd_map["mute"](update_mute_zero, make_context(args=[str(USER_ID), "0"]))
+    assert "[ERR_INVALID_ARGUMENT]" in update_mute_zero.last_reply
+    assert ModerationEngine.is_muted(USER_ID, CHAT_ID) is True  # prior mute untouched
 
     # Reply-to target support for /unmute
     replied_msg = FakeMessage("spam", author_id=USER_ID)
@@ -442,6 +457,7 @@ async def test_moderation_ingress_on_message(db: Any) -> None:
     handlers = build_handlers(mock_graph, lambda: Session(db), settings, PresenceStore(), None)
     # on_message is the MessageHandler without commands
     from telegram.ext import MessageHandler
+
     on_message_handler = next(
         h.callback
         for h in handlers
