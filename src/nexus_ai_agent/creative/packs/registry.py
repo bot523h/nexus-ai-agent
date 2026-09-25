@@ -27,7 +27,11 @@ from nexus_ai_agent.creative.packs.manifest import (
     PackManifestError,
     load_manifest,
 )
-from nexus_ai_agent.creative.packs.verify import VerificationReport, verify_manifest
+from nexus_ai_agent.creative.packs.verify import (
+    TRUSTED_SIGNATURE_STATES,
+    VerificationReport,
+    verify_manifest,
+)
 from nexus_ai_agent.creative.studio.capabilities import CapabilityRegistry
 
 Anchor = Literal["builtin", "external"]
@@ -148,6 +152,21 @@ class PackRegistry:
         learns them (Wave 2b), with no re-registration.
         """
         pack = self.get(package_id)
+        # PACK-SEC-001: external manifests are an untrusted supply-chain
+        # boundary.  The verifier can only emit ``placeholder`` or
+        # ``format_only_unverified`` (Ed25519 verification is not wired in), and
+        # ``TRUSTED_SIGNATURE_STATES`` is empty by construction, so activating an
+        # external pack would turn a warning into executable trust — refused.
+        # Builtins are repository-controlled and keep the existing activation
+        # path until a real signature provider is introduced.
+        if (
+            pack.anchor == "external"
+            and pack.report.signature_state not in TRUSTED_SIGNATURE_STATES
+        ):
+            raise PackRegistryError(
+                f"{package_id}: cannot activate — external pack signature is not verified "
+                f"(state {pack.report.signature_state!r}; no cryptographic verifier is wired in)"
+            )
         unknown = tuple(
             capability
             for capability in pack.manifest.capabilities

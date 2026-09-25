@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-25T17:46:27Z",
+  "updated_at": "2026-09-25T21:25:44Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -600,6 +600,21 @@
         "docs/audits/GATE5_TRUTH_MATRIX.json",
         "src/nexus_ai_agent/cli.py",
         "docs/audits/VERIFICATION_TRUTH_MATRIX.json"
+      ]
+    },
+    {
+      "id": "nagar-redclose-l4-proof",
+      "description": "task-191: PACK-SEC-001 (#86) root-cause fix + L4 artifact-proof harness + session evidence",
+      "paths": [
+        "src/nexus_ai_agent/creative/packs/registry.py",
+        "src/nexus_ai_agent/creative/packs/verify.py",
+        "tests/unit/test_pack_manifest_verify.py",
+        "docs/architecture/SECURITY.md",
+        "NAGAR_AGENT_03_FINAL_2026-09-25.md",
+        "NAGAR_MASTER_SESSION_2026-09-25.md",
+        "tests/integration/test_l4_artifact_proof.py",
+        "scripts/l4_artifact_proof.py",
+        "scripts/pr87_contract_probe.py"
       ]
     }
   ],
@@ -2144,7 +2159,7 @@
       "title_fa": "",
       "zone": "coordination",
       "priority": "P2",
-      "status": "active_in_review",
+      "status": "expired",
       "scope": "PR#67 adds required_packs + a lifecycle bus gate; Gate 2 could not verify against it. After both land, wire the seam (stage 4, after grant+registry, before reservation) and prove pack-required vs pack-absent dispatch.",
       "scope_fa": "",
       "prerequisites": [
@@ -2161,7 +2176,7 @@
       "claimed_at": "2026-09-24T20:37:51Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Continued from arena/01a0d4c8 (PR#75 head e0cba26 is an ancestor of this branch; PR#75 is superseded by PR#77, same stack on PR#72). MERGE ORDER: PR#72 -> PR#77; PR#67 afterwards needs the semantic resolution in COMMAND_CAPABILITY_CONTRACT section 11 (keep 4b, drop 3.5 + payload/surface opt-in, add color.apply_lut to EXPERIMENTAL_OPT_IN_OPERATIONS).",
+      "note": "auto-released by gc at 2026-09-25T21:09:07Z (stale active_in_review lease)",
       "stacked_on": {
         "pr": 72,
         "task": "task-179-gate2-command-reconciliation",
@@ -2203,11 +2218,11 @@
     },
     {
       "priority": "P0",
-      "status": "active_in_review",
+      "status": "expired",
       "prerequisites": [],
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Continuation of sec-boundary-salvage-01a0d4c7 (PR#76 head 5b17a709, CI green): owner-directed adversarial verification proved 5 S3/S5 defects its tests missed (stdlib traceback redaction bypass, mapping/non-string arg corruption, Basic-scheme credentials, CGNAT 100.64.0.0/10 allowed, https->http redirect downgrade followed). Closed on this branch (ff from 5b17a709 + closure commits), 12/12 mutation-killed, full non-slow suite 1989 passed / ruff / format / mypy clean. Takeover recorded in takeover_log; same zone, one owner.",
+      "note": "auto-released by gc at 2026-09-25T21:09:07Z (stale active_in_review lease)",
       "task": "sec-boundary-salvage-01a0d563",
       "title": "Security truth salvage: verify S1-S5 on main 035a896, fix only the real delta",
       "title_fa": "استخراج حقیقت امنیتی: بازبینی S1-S5 روی main 035a896 و اعمال فقط دلتای واقعی",
@@ -2391,6 +2406,45 @@
       "claimed_at": "2026-09-24T23:06:38Z",
       "ttl_hours": 48,
       "prev_agent_branch": "arena/01a0d4b6-nexus-ai-agent"
+    },
+    {
+      "task": "task-191-nagar-redclose-l4-proof",
+      "title": "Master session: close #86 CI RED at root cause, forensics #80/#83/#84/#87, adversarial #87 contract probe, first real artifact-proof vertical slice",
+      "title_fa": "بستن RED واقعی #86، تثبیت حقیقت main، اثبات مصنوع واقعی (L4 artifact leg) و اولین برش عمودی",
+      "zone": "nagar-redclose-l4-proof",
+      "priority": "P0",
+      "status": "done",
+      "gates_owner": false,
+      "prerequisites": [],
+      "scope": "(1) PR#86 PACK-SEC-001: reproduce exact-SHA 2683d6d failures, fix only the root cause (mypy comparison-overlap on a signature state no verifier can produce; malformed regression fixture), mutation-prove the external-signature guard. #86 commits are cherry-picked with provenance; this branch supersedes #86 because the session is fixed to its own branch. (2) Forensics: #80 superseded by #81 (main); #83 conflicts only in board.json; #84 read-only (actively moving); #87 contract probed adversarially from a detached worktree, no code changes to #87 zone. (3) L4 artifact leg: a real deterministic ffmpeg fixture through the shipped creative_render_job -> CommandBus -> render_lane chain, independently verified (queue verifier + full decode + pure-Python MP4 box parse), hashed, reopened, provenance recorded. Operation Truth ladder is NOT edited: L4 stays 0 (production-like leg unsourced).",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/registry.py",
+        "src/nexus_ai_agent/creative/packs/verify.py",
+        "tests/unit/test_pack_manifest_verify.py",
+        "docs/architecture/SECURITY.md",
+        "NAGAR_AGENT_03_FINAL_2026-09-25.md",
+        "NAGAR_MASTER_SESSION_2026-09-25.md",
+        "tests/integration/test_l4_artifact_proof.py",
+        "scripts/l4_artifact_proof.py",
+        "scripts/pr87_contract_probe.py"
+      ],
+      "acceptance_criteria": [
+        "ruff check/format + mypy src clean at the branch head",
+        "tests/unit/test_pack_manifest_verify.py green incl. the external-signature regression test; the test goes RED when the guard is removed (mutation) and GREEN on restore",
+        "full pytest -m 'not slow' green locally and exact-SHA CI green on this branch (all legs incl. python-parity 3.10/3.11/3.12)",
+        "a real artifact is produced by the shipped chain and independently verified (exists, non-zero, MP4 container, full decode, duration, streams, sha256 recompute, reopen) with provenance",
+        "no claim of cryptographic signature verification; no L4 emission; no 'Master Ready' wording"
+      ],
+      "evidence_required": [
+        "commands + observed results in NAGAR_MASTER_SESSION_2026-09-25.md",
+        "mutation transcript (guard removed -> RED -> restore -> GREEN)",
+        "exact-SHA CI run URL for the branch head",
+        "artifact provenance JSON (sha256, duration, streams, command id, state revision, lane ir hash)"
+      ],
+      "note": "RELEASED 2026-09-25 by arena/01a0da5a-nexus-ai-agent. PR #88 open (supersedes #86). Verdicts: #86 root cause fixed + mutation-proved (SECURITY_VERIFIED only if #88 exact-SHA CI all green — see PR #88 'EXACT-SHA CI' comment); #87 NEEDS_FIX (probe 7 pass / 4 violated: D2,P2,P4,P5); artifact chain L4_PROOF_PARTIAL (timeline.trim artifact + 480p proxy verified/reopened/hashed; master 4K SIMULATED); Operation Truth unchanged, L4=0. #80 closed as superseded by #81. Evidence: NAGAR_MASTER_SESSION_2026-09-25.md.",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24
     }
   ],
   "deferred_log": [

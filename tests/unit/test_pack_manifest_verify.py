@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 from pydantic import ValidationError
@@ -32,7 +32,12 @@ from nexus_ai_agent.creative.packs.manifest import (
     load_manifest,
 )
 from nexus_ai_agent.creative.packs.registry import PackRegistry, PackRegistryError
-from nexus_ai_agent.creative.packs.verify import verify_manifest, verify_manifest_file
+from nexus_ai_agent.creative.packs.verify import (
+    TRUSTED_SIGNATURE_STATES,
+    SignatureState,
+    verify_manifest,
+    verify_manifest_file,
+)
 from nexus_ai_agent.creative.studio.capabilities import CapabilityRegistry, build_wave1_registry
 
 PACKS_DIR = Path(__file__).parents[2] / "src" / "nexus_ai_agent" / "creative" / "packs"
@@ -287,6 +292,65 @@ def test_builtin_pack_registers_with_pending_capabilities_but_cannot_activate() 
 
     with pytest.raises(PackRegistryError, match="cannot activate"):
         registry.activate("nexus.slideshow.compose")
+
+
+def _activatable_media_manifest() -> CapabilityPackManifest:
+    """A manifest whose every capability the wave-1 runtime already knows.
+
+    ``media.play`` is registered by :func:`build_wave1_registry`, and the
+    ``nexus.media.*`` package id satisfies the capability-namespace rule, so the
+    ONLY thing that can stop this pack from activating is the PACK-SEC-001
+    signature guard.  (The first version of this fixture used
+    ``nexus.external.test`` and failed ``model_validate`` on the namespace rule
+    before ever reaching ``activate()`` — the regression test proved nothing;
+    that was the exact-SHA CI failure on PR#86 ``2683d6d``.)
+    """
+    payload = _manifest_dict()
+    payload["package_id"] = "nexus.media.external_probe"
+    payload["capabilities"] = ["media.play"]
+    return CapabilityPackManifest.model_validate(payload)
+
+
+def test_external_pack_with_unverified_signature_cannot_activate() -> None:
+    runtime = build_wave1_registry()
+    manifest = _activatable_media_manifest()
+    registry = PackRegistry(runtime, current_version="3.10.0")
+    pack = registry.register(manifest, anchor="external")
+    assert pack.pending_capabilities == ()  # nothing else can block activation
+    assert pack.report.signature_state not in TRUSTED_SIGNATURE_STATES
+
+    with pytest.raises(PackRegistryError, match="signature is not verified"):
+        registry.activate(manifest.package_id)
+    assert registry.active_packs() == []
+    assert registry.get(manifest.package_id).active is False
+
+
+def test_external_pack_cannot_self_activate_at_registration() -> None:
+    registry = PackRegistry(build_wave1_registry(), current_version="3.10.0")
+    with pytest.raises(PackRegistryError, match="signature is not verified"):
+        registry.register(_activatable_media_manifest(), anchor="external", activate=True)
+    assert registry.active_packs() == []
+
+
+def test_same_manifest_as_builtin_activates_so_the_guard_is_the_only_refusal() -> None:
+    """Control arm: the refusal above is caused by the signature guard alone."""
+    registry = PackRegistry(build_wave1_registry(), current_version="3.10.0")
+    manifest = _activatable_media_manifest()
+    registry.register(manifest, anchor="builtin")
+    assert registry.activate(manifest.package_id).active is True
+
+
+def test_no_state_the_current_verifier_can_emit_is_trusted() -> None:
+    """No Ed25519 verifier exists, so no emittable state may grant trust.
+
+    A real verifier must add its state to ``SignatureState`` and
+    ``TRUSTED_SIGNATURE_STATES`` in the same reviewed change — never by
+    widening the trusted set to ``placeholder``/``format_only_unverified``.
+    """
+    emittable = set(get_args(SignatureState))
+    assert emittable == {"placeholder", "format_only_unverified"}
+    assert TRUSTED_SIGNATURE_STATES.isdisjoint(emittable)
+    assert TRUSTED_SIGNATURE_STATES == frozenset()
 
 
 def test_activation_succeeds_once_the_runtime_knows_the_operations() -> None:
