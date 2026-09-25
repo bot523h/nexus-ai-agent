@@ -2218,7 +2218,7 @@
       "title_fa": "موتور حقیقت عملیات: بازمحاسبه زنده + زنجیرهٔ evidence ماشین‌سنج",
       "zone": "operation-truth",
       "priority": "P0",
-      "status": "active",
+      "status": "active_in_review",
       "scope": "استخراج حقیقت اجرایی Nagar از منابع زنده (TDD catalog / runtime registry / executable surface / proof)، تولید OPERATION_TRUTH.json به‌صورت deterministic، projection مستنداتی صرفاً خروجی، گاردهای drift/anti-drift با mutation probe، ماتریس L0-L4 و wave planning گمشده‌ها.",
       "scope_fa": "استخراج حقیقت اجرایی Nagar از منابع زنده، تولید deterministic OPERATION_TRUTH.json، projection مستنداتی فقط-خروجی، گاردهای drift با mutation probe، ماتریس L0-L4 و wave planning.",
       "prerequisites": [],
@@ -2252,7 +2252,10 @@
       "claimed_at": "2026-09-25T06:39:14Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "generated pages live at the repo root because docs/README.md is leased by task-179-gate2-command-reconciliation (referee check exit 1); index rows deferred"
+      "note": "generated pages live at the repo root because docs/README.md is leased by task-179-gate2-command-reconciliation (referee check exit 1); index rows deferred",
+      "pr": 83,
+      "pr_url": "https://github.com/bot523h/nexus-ai-agent/pull/83",
+      "heartbeat": "2026-09-25T17:45:51Z"
     }
   ],
   "deferred_log": [
