@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-25T17:46:27Z",
+  "updated_at": "2026-09-25T20:11:04Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -600,6 +600,24 @@
         "docs/audits/GATE5_TRUTH_MATRIX.json",
         "src/nexus_ai_agent/cli.py",
         "docs/audits/VERIFICATION_TRUTH_MATRIX.json"
+      ]
+    },
+    {
+      "id": "nagar-studio-core-contracts",
+      "description": "Studio core contracts: capability discovery surface, preview/master execution boundary, Agent 2/3 integration contracts (task-186)",
+      "paths": [
+        "src/nexus_ai_agent/creative/studio/discovery.py",
+        "tests/unit/test_studio_discovery.py",
+        "tests/unit/test_studio_preview_master_boundary.py",
+        "tests/unit/test_studio_integration_contracts.py",
+        "docs/architecture/COMMAND_CAPABILITY_CONTRACT.md",
+        "docs/architecture/MODULE_MAP.md",
+        "docs/architecture/adr/README.md",
+        "docs/architecture/adr/0008-studio-integration-contract-location.md",
+        "src/nexus_ai_agent/creative/studio/__init__.py",
+        "src/nexus_ai_agent/creative/studio/capabilities.py",
+        "src/nexus_ai_agent/creative/studio/bus.py",
+        "docs/architecture/CREATIVE_STUDIO.md"
       ]
     }
   ],
@@ -2203,11 +2221,11 @@
     },
     {
       "priority": "P0",
-      "status": "active_in_review",
+      "status": "expired",
       "prerequisites": [],
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Continuation of sec-boundary-salvage-01a0d4c7 (PR#76 head 5b17a709, CI green): owner-directed adversarial verification proved 5 S3/S5 defects its tests missed (stdlib traceback redaction bypass, mapping/non-string arg corruption, Basic-scheme credentials, CGNAT 100.64.0.0/10 allowed, https->http redirect downgrade followed). Closed on this branch (ff from 5b17a709 + closure commits), 12/12 mutation-killed, full non-slow suite 1989 passed / ruff / format / mypy clean. Takeover recorded in takeover_log; same zone, one owner.",
+      "note": "auto-released by gc at 2026-09-25T20:03:55Z (stale active_in_review lease)",
       "task": "sec-boundary-salvage-01a0d563",
       "title": "Security truth salvage: verify S1-S5 on main 035a896, fix only the real delta",
       "title_fa": "استخراج حقیقت امنیتی: بازبینی S1-S5 روی main 035a896 و اعمال فقط دلتای واقعی",
@@ -2391,6 +2409,50 @@
       "claimed_at": "2026-09-24T23:06:38Z",
       "ttl_hours": 48,
       "prev_agent_branch": "arena/01a0d4b6-nexus-ai-agent"
+    },
+    {
+      "task": "task-186-studio-core-contracts",
+      "title": "Studio Core contracts: capability discovery surface + preview/master execution boundary + Agent 2/3 integration contracts",
+      "title_fa": "قراردادهای هستهٔ استودیو: سطح کشف قابلیت‌ها + مرز اجرای پیش‌نمایش/مستر + قراردادهای یکپارچگی عامل ۲ و ۳",
+      "zone": "nagar-studio-core-contracts",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Close the three Studio-core gaps recorded in COMMAND_CAPABILITY_CONTRACT.md §11 and required by the Nagar mission: (1) a typed capability DISCOVERY surface built from runtime truth (lifecycle/availability filtered, fail-closed) so the Assistant never sees uninstalled/unauthorized/unsupported capabilities (Law 4); (2) the PREVIEW/MASTER execution boundary semantics: registration-time preview declaration (state_equivalent | non_authoritative_realization), fail-closed refusal of undeclared preview advertisement, dispatch stamps execution_mode + authoritative into CommandResult.diagnostics; (3) canonical Agent 2 / Agent 3 INTEGRATION CONTRACTS (§13 of the command/capability contract doc + executable contract tests + ADR 0008 for the docs-layer location decision). DECISION_LOG.md and docs/README.md are EXCLUDED (active lease task-181): D-0021 text ships inside the contract doc + ADR link and a queued transcription task follows the lease release.",
+      "scope_fa": "بستن سه شکاف هستهٔ استودیو ثبت‌شده در §11 سند قرارداد فرمان/قابلیت: (۱) سطح کشف تایپ‌شدهٔ قابلیت‌ها بر اساس حقیقت ران‌تایم؛ (۲) معناشناسی مرز پیش‌نمایش/مستر؛ (۳) قراردادهای یکپارچگی عامل ۲ و ۳.",
+      "prerequisites": [
+        "task-179-gate2-command-reconciliation"
+      ],
+      "acceptance_criteria": [
+        "studio/discovery.py exposes a typed CapabilitySurface (protocol nagar.discovery.v1) built from any CapabilityRegistry: deterministic ordering, JSON-serializable, excludes operations whose capability is unavailable or whose required packs are unknown/STUB/RETIRED, excludes EXPERIMENTAL packs unless include_experimental=True, and records exclusion reason codes without permission data",
+        "OperationSpec gains a fail-closed preview declaration: advertising execution mode 'preview' without preview_semantics (state_equivalent | non_authoritative_realization) is refused at registration; orphan semantics without preview advertisement are refused; Wave-1 catalog and all six shipped packs register unchanged",
+        "CommandBus.dispatch stamps diagnostics.execution_mode and diagnostics.authoritative on every CommandResult; authoritative is False only for preview execution of non_authoritative_realization operations; every existing pinned contract test stays green unmodified",
+        "integration contracts for Agent 2 (Assistant/driver) and Agent 3 (runtime/execution) are published: COMMAND_CAPABILITY_CONTRACT.md §13 with discovery contract, submission contract, result/undo contract, error-code contract, preview/master rules, and the core API endpoint contract (adapter deferred, seam rules stated); ADR 0008 decides the docs-layer location",
+        "executable contract tests cover the 9-category matrix (happy path, invalid input, missing capability, unavailable pack, permission failure, malformed command, execution failure, retry/cancel semantics via idempotent replay, compatibility regression) for the discovery + preview surfaces",
+        "full diagnostic gates green: ruff check, ruff format --check, mypy src, targeted suites + full non-slow suite; board check --files exits 0 for every changed file"
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_studio_discovery.py tests/unit/test_studio_preview_master_boundary.py tests/unit/test_studio_integration_contracts.py",
+        "pytest -q tests/unit/test_command_capability_contract.py tests/unit/test_gate2_lifecycle_seam.py tests/unit/test_gate2_lifecycle_mutations.py tests/unit/test_nagar_wave1_green_cockpit.py tests/architecture/test_nagar_studio_isolation.py tests/architecture/test_command_capability_boundary.py tests/unit/test_docs_integrity.py",
+        "pytest -q -m 'not slow' (full suite)",
+        "ruff check . && ruff format --check . && mypy src",
+        "python scripts/agent_board.py check --files <changed files> --branch arena/01a0da2a-nexus-ai-agent"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/studio/discovery.py",
+        "tests/unit/test_studio_discovery.py",
+        "tests/unit/test_studio_preview_master_boundary.py",
+        "tests/unit/test_studio_integration_contracts.py",
+        "docs/architecture/COMMAND_CAPABILITY_CONTRACT.md",
+        "docs/architecture/MODULE_MAP.md",
+        "docs/architecture/adr/README.md",
+        "docs/architecture/adr/0008-studio-integration-contract-location.md"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0da2a-nexus-ai-agent",
+      "claimed_at": "2026-09-25T20:11:04Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": ""
     }
   ],
   "deferred_log": [
@@ -2621,6 +2683,36 @@
       "title": "Staging smoke of /edit /caption /grade against the live bot (PTB runtime)",
       "title_fa": "اسموک استیجینگ سه فرمان creative روی ربات زنده",
       "why_fa": "زنجیره در سطح unit/integration با artifact واقعی اثبات شده؛ اثبات نهایی کاربر-واقعی به کانتکست PTB زنده و توکن استیجینگ نیاز دارد (external dependency)."
+    },
+    {
+      "id": "task-186-studio-core-contracts",
+      "priority": "P0",
+      "zone": "nagar-studio-core-contracts",
+      "title": "Studio Core contracts: capability discovery surface + preview/master execution boundary + Agent 2/3 integration contracts",
+      "title_fa": "قراردادهای هستهٔ استودیو: سطح کشف قابلیت‌ها + مرز اجرای پیش‌نمایش/مستر + قراردادهای یکپارچگی عامل ۲ و ۳",
+      "why_fa": "مأموریت نگار: دستیار باید سطح قابلیت‌ها را از حقیقت ران‌تایم بگیرد (قانون ۴)، مرز پیش‌نمایش/مستر در §11 سند قرارداد «ذخیره‌شده بدون پیاده‌سازی» ثبت شده، و قرارداد یکپارچگی برای عامل‌های ۲ و ۳ وجود ندارد.",
+      "acceptance_criteria": [
+        "studio/discovery.py exposes a typed CapabilitySurface (protocol nagar.discovery.v1) built from any CapabilityRegistry: deterministic ordering, JSON-serializable, excludes operations whose capability is unavailable or whose required packs are unknown/STUB/RETIRED, excludes EXPERIMENTAL packs unless include_experimental=True, and records exclusion reason codes without permission data",
+        "OperationSpec gains a fail-closed preview declaration: advertising execution mode 'preview' without preview_semantics (state_equivalent | non_authoritative_realization) is refused at registration; orphan semantics without preview advertisement are refused; Wave-1 catalog and all six shipped packs register unchanged",
+        "CommandBus.dispatch stamps diagnostics.execution_mode and diagnostics.authoritative on every CommandResult; authoritative is False only for preview execution of non_authoritative_realization operations; every existing pinned contract test stays green unmodified",
+        "integration contracts for Agent 2 (Assistant/driver) and Agent 3 (runtime/execution) are published: COMMAND_CAPABILITY_CONTRACT.md §13 with discovery contract, submission contract, result/undo contract, error-code contract, preview/master rules, and the core API endpoint contract (adapter deferred, seam rules stated); ADR 0008 decides the docs-layer location",
+        "executable contract tests cover the 9-category matrix (happy path, invalid input, missing capability, unavailable pack, permission failure, malformed command, execution failure, retry/cancel semantics via idempotent replay, compatibility regression) for the discovery + preview surfaces",
+        "full diagnostic gates green: ruff check, ruff format --check, mypy src, targeted suites + full non-slow suite; board check --files exits 0 for every changed file"
+      ],
+      "prerequisites": [
+        "task-179-gate2-command-reconciliation"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/studio/discovery.py",
+        "tests/unit/test_studio_discovery.py",
+        "tests/unit/test_studio_preview_master_boundary.py",
+        "tests/unit/test_studio_integration_contracts.py",
+        "docs/architecture/COMMAND_CAPABILITY_CONTRACT.md",
+        "docs/architecture/MODULE_MAP.md",
+        "docs/architecture/adr/README.md",
+        "docs/architecture/adr/0008-studio-integration-contract-location.md"
+      ],
+      "status_note": "claimed by arena/01a0da2a-nexus-ai-agent (Agent 01, Studio Core)"
     }
   ],
   "history": {
