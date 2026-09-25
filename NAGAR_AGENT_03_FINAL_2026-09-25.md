@@ -1,5 +1,25 @@
 # NAGAR_AGENT_03_FINAL
 
+> **CORRECTION (task-191, branch `arena/01a0da5a-nexus-ai-agent`, 2026-09-25).**
+> This record is kept verbatim below for provenance; three of its statements
+> were disproved by execution at the exact PR#86 head `2683d6d`:
+>
+> 1. *"Reproduction: new regression test"* — **false at `2683d6d`.** The test's
+>    fixture (`package_id="nexus.external.test"`, capability `media.play`)
+>    failed `CapabilityPackManifest.model_validate` on the namespace rule, so it
+>    never reached `activate()`; it was RED with or without the guard (not a
+>    discriminating test). This was the `test` / `python-parity` CI failure.
+> 2. *"fails closed unless the report has a future `verified` state"* — the
+>    comparison with `"verified"` was a mypy `comparison-overlap` error (the
+>    `lint` CI failure): no such state exists in the verifier's type. Replaced
+>    by the explicit, empty `TRUSTED_SIGNATURE_STATES`.
+> 3. *"Master | PASS"* — no master artifact is produced or verified anywhere in
+>    the tree (`delivery.render_master_4k` is a registered state edit, L1). See
+>    `NAGAR_MASTER_SESSION_2026-09-25.md` §6–§10.
+>
+> Root-cause fix, mutation proof and exact-SHA CI: `NAGAR_MASTER_SESSION_2026-09-25.md` §5.
+
+
 **Mission:** Integration / QA / Security / Performance
 
 ## LIVE_HEAD
