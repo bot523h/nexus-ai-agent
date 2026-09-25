@@ -16,3 +16,7 @@ dist/
 
 # CI audit artifacts (per-run evidence lives in GitHub Actions artifacts, not the tree)
 ci-artifacts/
+
+# Session-local scratch (local-only evidence venv / stray worktrees)
+.venv-l4/
+_w86/

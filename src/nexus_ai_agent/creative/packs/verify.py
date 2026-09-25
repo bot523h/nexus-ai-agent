@@ -34,6 +34,18 @@ from nexus_ai_agent.creative.packs.manifest import (
 Anchor = Literal["builtin", "external"]
 Severity = Literal["error", "warning"]
 
+#: The full signature-state space of the verification protocol.
+#:
+#: Today's verifier emits only ``placeholder`` and ``format_only_unverified``:
+#: Ed25519 verification is not wired into the registry path (the typed seam
+#: in ``packs/delivery/signing.py`` exists for it).  ``verified`` is part of
+#: the *protocol* — the state a real signature provider would set — and it
+#: must be representable here so a consumer can fail closed on
+#: ``state != "verified"`` without a non-overlapping-type false promise.
+#: Widening the type does not widen trust: no runtime code path below
+#: produces ``verified``, so an external pack can never activate by accident.
+SignatureState = Literal["placeholder", "format_only_unverified", "verified"]
+
 ANCHORS: tuple[Anchor, ...] = ("builtin", "external")
 
 #: Permission token that must accompany ``network_policy.upload_media: true``.
@@ -55,7 +67,7 @@ class VerificationReport:
     package_version: str
     capabilities: tuple[str, ...]
     pending_capabilities: tuple[str, ...]
-    signature_state: Literal["placeholder", "format_only_unverified"]
+    signature_state: SignatureState
     external_binaries: tuple[str, ...]
     issues: tuple[VerificationIssue, ...]
 
@@ -190,7 +202,7 @@ def verify_manifest(
 
     # --- signature ---------------------------------------------------------
     if manifest.signature_is_placeholder:
-        signature_state: Literal["placeholder", "format_only_unverified"] = "placeholder"
+        signature_state: SignatureState = "placeholder"
         issues.append(
             VerificationIssue(
                 "unsigned_manifest",

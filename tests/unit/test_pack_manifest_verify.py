@@ -292,11 +292,34 @@ def test_builtin_pack_registers_with_pending_capabilities_but_cannot_activate() 
 def test_external_pack_with_unverified_signature_cannot_activate() -> None:
     runtime = build_wave1_registry()
     payload = _manifest_dict()
-    payload["package_id"] = "nexus.external.test"
+    # The manifest namespace rule (manifest.py::_capability_domains_belong_to_the_package)
+    # accepts only package tokens as capability domains, so an external pack
+    # claiming ``media.play`` must live in a ``media`` namespace.
+    payload["package_id"] = "nexus.external.media"
     payload["capabilities"] = ["media.play"]
     manifest = CapabilityPackManifest.model_validate(payload)
     registry = PackRegistry(runtime, current_version="3.10.0")
     registry.register(manifest, anchor="external")
+
+    with pytest.raises(PackRegistryError, match="signature is not verified"):
+        registry.activate(manifest.package_id)
+    assert registry.active_packs() == []
+
+
+def test_external_pack_with_a_signed_looking_but_unverified_signature_cannot_activate() -> None:
+    # Mutation guard for the fail-closed rule: a signature that merely *looks
+    # real* (non-placeholder base64, state ``format_only_unverified``) must buy
+    # exactly zero trust — "signed" is not "verified" until the registry path
+    # actually verifies Ed25519 against a provider key.
+    runtime = build_wave1_registry()
+    payload = _manifest_dict()
+    payload["package_id"] = "nexus.external.media"
+    payload["capabilities"] = ["media.play"]
+    payload["security"]["signature"] = "base64:" + "AA" * 32  # 64 bytes, not the placeholder
+    manifest = CapabilityPackManifest.model_validate(payload)
+    registry = PackRegistry(runtime, current_version="3.10.0")
+    registered = registry.register(manifest, anchor="external")
+    assert registered.report.signature_state == "format_only_unverified"
 
     with pytest.raises(PackRegistryError, match="signature is not verified"):
         registry.activate(manifest.package_id)

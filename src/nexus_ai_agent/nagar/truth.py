@@ -49,7 +49,7 @@ import json
 import re
 import subprocess
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -808,7 +808,8 @@ def build_projection(
             ],
             "generation_command": GENERATION_COMMAND,
             "source_revision": source_revision(base),
-            "generated_at": generated_at or datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "generated_at": generated_at
+            or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "deterministic_fields": [
                 "reconciliation",
                 "operations[*].pipeline",
