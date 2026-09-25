@@ -36,6 +36,19 @@ Severity = Literal["error", "warning"]
 
 ANCHORS: tuple[Anchor, ...] = ("builtin", "external")
 
+#: Every signature state :func:`verify_manifest` can emit today.
+SignatureState = Literal["placeholder", "format_only_unverified"]
+
+#: Signature states that grant an **external** pack activation trust
+#: (PACK-SEC-001).  EMPTY by construction: this wave ships no Ed25519
+#: verifier (no cryptography dependency, no trusted publisher key chain), so
+#: no state the verifier can produce is a verified state and every external
+#: pack is refused at activation.  A future real verifier must add its new
+#: state to BOTH :data:`SignatureState` and this set in the same change;
+#: ``tests/unit/test_pack_manifest_verify.py`` pins that the set stays
+#: disjoint from every state the current verifier can emit.
+TRUSTED_SIGNATURE_STATES: frozenset[str] = frozenset()
+
 #: Permission token that must accompany ``network_policy.upload_media: true``.
 MEDIA_EGRESS_PERMISSION = "egress_media_optin"
 
@@ -55,7 +68,7 @@ class VerificationReport:
     package_version: str
     capabilities: tuple[str, ...]
     pending_capabilities: tuple[str, ...]
-    signature_state: Literal["placeholder", "format_only_unverified"]
+    signature_state: SignatureState
     external_binaries: tuple[str, ...]
     issues: tuple[VerificationIssue, ...]
 
@@ -190,7 +203,7 @@ def verify_manifest(
 
     # --- signature ---------------------------------------------------------
     if manifest.signature_is_placeholder:
-        signature_state: Literal["placeholder", "format_only_unverified"] = "placeholder"
+        signature_state: SignatureState = "placeholder"
         issues.append(
             VerificationIssue(
                 "unsigned_manifest",
