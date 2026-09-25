@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-25T20:03:09Z",
+  "updated_at": "2026-09-25T22:20:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -733,7 +733,7 @@
       "title_fa": "ریبیس و رفع دوگانگی PR#32",
       "zone": "feature-wiring",
       "priority": "P0",
-      "status": "active",
+      "status": "active_in_review",
       "scope": "۸ فایل مشترک با #34 کانفلیکت متنی و معنایی دارند؛ سیم‌کشی موازی باید یکی شود.",
       "scope_fa": "۸ فایل مشترک با #34 کانفلیکت متنی و معنایی دارند؛ سیم‌کشی موازی باید یکی شود.",
       "prerequisites": [
@@ -750,11 +750,13 @@
       ],
       "exclusive_paths": [],
       "owner_hint": "عامل B",
-      "agent_branch": "arena/01a0da12-nexus-ai-agent",
+      "agent_branch": "arena/01a0da85-nexus-ai-agent",
       "claimed_at": "2026-09-25T20:03:09Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Settled 12 fake/placeholder commands (/leaderboard, /newchat, /viral_stats, /viral_preview, /viral_post, /mod_config, /warn, /mute, /unmute, /reputation, /storage, /model) with real engines and typed refusals; wired ModerationEngine.check_message into bot ingress with boundary/normalization fixes and per-chat flood tracking."
+      "note": "Forensic closure of 0199e58 (baseline e405e07 NEEDS_FIX): ruff format fixed; 2 latent mypy errors fixed; mutation C killed by cross-chat/cross-user flood tests; mutation G killed by AST architecture gate (tests/architecture/test_async_db_offload_guard.py); typed-failure gaps (mod_config unknown-key/bad-bool, mute duration<=0) tested; full suite 2332 passed on CPython 3.11.2. Remaining: anon peer-moderation scope = NEEDS_PRODUCT_DECISION (engineering gates green).",
+      "prev_agent_branch": "arena/01a0da12-nexus-ai-agent",
+      "ci_evidence": "CI 36194369744 green 12/12 on closure commit 60188f2 (lint, lint-fast, test, extras×4, parity 3.10/3.11/3.12, migrate-postgres, release-lineage); forensic v2: FORENSIC_REPORT_task122.md"
     },
     {
       "task": "task-123",
