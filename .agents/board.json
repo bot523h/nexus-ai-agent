@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-25T17:46:27Z",
+  "updated_at": "2026-09-25T19:39:54Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -600,6 +600,18 @@
         "docs/audits/GATE5_TRUTH_MATRIX.json",
         "src/nexus_ai_agent/cli.py",
         "docs/audits/VERIFICATION_TRUTH_MATRIX.json"
+      ]
+    },
+    {
+      "id": "release-truth-c",
+      "description": "Release truth audit and narrow regression guards",
+      "paths": [
+        "README.md",
+        "tests/unit/test_version_lockstep.py",
+        ".dockerignore",
+        "tests/unit/test_container_context.py",
+        "docs/audits/RELEASE_TRUTH_2026-09-25.md",
+        "docs/README.md"
       ]
     }
   ],
@@ -2203,11 +2215,11 @@
     },
     {
       "priority": "P0",
-      "status": "active_in_review",
+      "status": "expired",
       "prerequisites": [],
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Continuation of sec-boundary-salvage-01a0d4c7 (PR#76 head 5b17a709, CI green): owner-directed adversarial verification proved 5 S3/S5 defects its tests missed (stdlib traceback redaction bypass, mapping/non-string arg corruption, Basic-scheme credentials, CGNAT 100.64.0.0/10 allowed, https->http redirect downgrade followed). Closed on this branch (ff from 5b17a709 + closure commits), 12/12 mutation-killed, full non-slow suite 1989 passed / ruff / format / mypy clean. Takeover recorded in takeover_log; same zone, one owner.",
+      "note": "auto-released by gc at 2026-09-25T19:39:24Z (stale active_in_review lease)",
       "task": "sec-boundary-salvage-01a0d563",
       "title": "Security truth salvage: verify S1-S5 on main 035a896, fix only the real delta",
       "title_fa": "استخراج حقیقت امنیتی: بازبینی S1-S5 روی main 035a896 و اعمال فقط دلتای واقعی",
@@ -2391,6 +2403,33 @@
       "claimed_at": "2026-09-24T23:06:38Z",
       "ttl_hours": 48,
       "prev_agent_branch": "arena/01a0d4b6-nexus-ai-agent"
+    },
+    {
+      "task": "release-truth-c-20260925",
+      "title": "Release lineage, dependency and container audit",
+      "zone": "release-truth-c",
+      "status": "active",
+      "exclusive_paths": [
+        "README.md",
+        "tests/unit/test_version_lockstep.py",
+        ".dockerignore",
+        "tests/unit/test_container_context.py",
+        "docs/audits/RELEASE_TRUTH_2026-09-25.md",
+        "docs/README.md"
+      ],
+      "acceptance_criteria": [
+        "Record live release and PR truth; fix proven README drift; preserve packaging compatibility",
+        "Document dependency/container deferrals and targeted checks"
+      ],
+      "evidence_required": [
+        "docs/audits/RELEASE_TRUTH_2026-09-25.md",
+        "Targeted pytest and ruff results, commit SHA"
+      ],
+      "agent_branch": "arena/01a0da13-nexus-ai-agent",
+      "claimed_at": "2026-09-25T19:39:54Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": ""
     }
   ],
   "deferred_log": [
