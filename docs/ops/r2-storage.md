@@ -57,15 +57,67 @@ Test manually via the **Run workflow** button (`workflow_dispatch`).
 ## CLI
 
 ```bash
+nexus maintenance backup --preflight    # names what is (not) configured; exit 0 ok / 2 missing
 nexus maintenance backup --dry-run      # show what would be dumped/uploaded
-nexus maintenance backup                # dump + upload (fails loudly without R2)
+nexus maintenance backup                # dump + verify + upload + round-trip (fails loudly without R2)
+nexus maintenance backup --require-postgres --restore-target-url postgresql://… \
+                         --evidence-json out.json   # + restore proof into a scratch PostgreSQL
+nexus maintenance restore-drill --source-url … --target-url …   # dump→restore proof, no R2 needed
 nexus maintenance housekeeping --dry-run
 nexus maintenance housekeeping          # stale temp files + R2 retention prune
 ```
 
-Both commands are stateless and idempotent. `backup` **fails** when R2 is not
+All commands are stateless and idempotent. `backup` **fails** when R2 is not
 configured (a silently-skipped backup is worse than a red job); `housekeeping`
 stays green and only does the local temp cleanup.
+
+### Backup success contract and failure classification (task-164)
+
+A run prints `✅` only after **all** of: artifact exists and is non-empty →
+sha256 measured → local integrity (SQLite: `PRAGMA integrity_check` + table
+inventory in a temp DB; PostgreSQL: pg_dump completion footer) → uploaded →
+**re-downloaded byte-identical** → (when `--restore-target-url` is given) the
+artifact is restored into a fresh scratch database (`CREATE DATABASE …
+TEMPLATE template0`, `psql -X -v ON_ERROR_STOP=1 --single-transaction`) and the
+restored table inventory equals the source inventory (row-count drift is
+recorded per table, never hidden). The scratch database is always dropped.
+
+| Exit | `classification` | Meaning | Who acts |
+|---|---|---|---|
+| 2 | `not_configured` | Nothing attempted; each missing variable is named individually | owner (secrets) |
+| 1 | `dump_failed` | DB missing / `pg_dump` failed (e.g. *server version mismatch*) | operator |
+| 1 | `verification_failed` | empty/corrupt artifact, footer missing, or round-trip bytes differ | operator |
+| 1 | `upload_failed` | provider refused the upload | operator |
+| 1 | `restore_failed` | scratch restore errored, table set differs, or no tables came back | operator |
+
+`--evidence-json` writes the full summary for success **and** failure
+(status, classification, key, sha256, size, verification, preflight
+booleans). It never contains secret values; URL credentials in error text are
+redacted (`://***@`).
+
+### The scheduled workflow, end to end
+
+`backup-db` (nightly 03:17 UTC): PGDG PostgreSQL **17** client (Neon projects
+default to 17; a 16 `pg_dump` aborts on a 17 server) → presence preflight
+(booleans, mirrored as steps) → `backup --preflight --require-postgres` →
+`backup --require-postgres --evidence-json` with a `pgvector/pgvector:pg17`
+service container as the restore target → evidence uploaded as the
+`backup-evidence-<run id>` artifact (30 days) → on failure, one GitHub issue
+titled **"[backup] nightly database backup is failing"** is opened or
+commented with the classification and the named missing pieces.
+
+`restore-drill` (same schedule, **no secrets**): `nexus migrate` on a fresh
+PostgreSQL 17 → `nexus maintenance restore-drill` (dump → restore → identical
+inventory, row counts equal) → `tests/integration/test_backup_restore_postgres.py`
+→ `restore-drill-evidence-<run id>` artifact. A red drill means the mechanism
+is broken regardless of configuration and opens its own issue.
+
+`--require-postgres` is deliberate: the runner's local SQLite file is never the
+production database, so backing it up would be a fake success.
+
+Neon notes: use the **unpooled** connection string for `NEXUS_DATABASE_URL`
+(Neon documents that `pg_dump` must not go through the pooler), and keep the
+project's Postgres major ≤ 17 or bump `PG_CLIENT_MAJOR` in the workflow.
 
 ## Notes
 

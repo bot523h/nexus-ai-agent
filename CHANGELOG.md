@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (task-164 — production backup durability, session `arena/01a0d9f4-nexus-ai-agent`)
+
+- **Root cause of five red nightly backups (09-21→09-25) established with evidence, not
+  inference:** none of `R2_ACCOUNT_ID` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` /
+  `R2_BUCKET` / `NEXUS_DATABASE_URL` is set in the repository (forensic run 36181105635).
+- **Latent defect fixed:** the pg_dump footer check rejected every *real* dump (real trailer
+  is `--\n-- PostgreSQL database dump complete\n--`), so Postgres backups would have failed
+  even after the secrets are set. Found by the new real-PostgreSQL drill.
+- **Typed failure classification** (`not_configured` exit 2 · `dump_failed` /
+  `verification_failed` / `upload_failed` / `restore_failed` exit 1), per-variable preflight
+  (`backup --preflight`), `--require-postgres` (no fake SQLite backup on CI runners),
+  `--evidence-json` (written on success and failure, secrets redacted).
+- **Restore proof:** `--restore-target-url` loads the uploaded artifact into a fresh scratch
+  database (`TEMPLATE template0`, `psql -X -v ON_ERROR_STOP=1 --single-transaction`) and
+  requires the restored table inventory to equal the source; new `nexus maintenance
+  restore-drill` proves the mechanism without R2.
+- **Workflow:** PostgreSQL 17 client (Neon default), pg17 scratch service, evidence
+  artifacts, secret-free nightly `restore-drill` job, and failure → one GitHub issue
+  (`[backup] nightly database backup is failing`, first raised as #85).
+- Docs: `docs/ops/r2-storage.md` contract/exit-code table; evidence report
+  `docs/audits/BACKUP_DURABILITY_2026-09-25.md`.
+
 ### CI (task-132 — extras smoke matrix, session `arena/01a0d709-nexus-ai-agent`)
 
 - **Every optional extra is now a blocking CI leg.** The new `extras-matrix` job

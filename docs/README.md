@@ -79,6 +79,7 @@ placeholder text.
 | [audits/REPO_HYGIENE_REPORT_2026-09-21.md](audits/REPO_HYGIENE_REPORT_2026-09-21.md) | Repository hygiene pass: docs reorganisation, release alignment, branch janitorial work. |
 | [audits/ARCHITECTURE_DOCS_2026-09-21.md](audits/ARCHITECTURE_DOCS_2026-09-21.md) | Architecture-documentation pass (task-131): what was written, verified, and enforced. |
 | [audits/WAVE5_ACTIVATION_2026-09-21.md](audits/WAVE5_ACTIVATION_2026-09-21.md) | Wave-5 activation audit: unified runtime, six packs active, coverage harness, honest 10-task forward network. |
+| [audits/BACKUP_DURABILITY_2026-09-25.md](audits/BACKUP_DURABILITY_2026-09-25.md) | task-164: production backup forensics (all five secrets absent), latent real-pg_dump footer defect, restore-proof chain and CI evidence. |
 | [audits/FORENSIC_PR40_CI_2026-09-21.md](audits/FORENSIC_PR40_CI_2026-09-21.md) | Forensic CI analysis of the red PR#40 wave-4 batch (root cause + A/B proof). |
 | [audits/SESSION_PLAN_2026-09-21_01a0c506.md](audits/SESSION_PLAN_2026-09-21_01a0c506.md) | Session plan record (agent 01a0c506): wave-4 hardening batch planning. |
 | [audits/PR32_TRIAGE_2026-09-21.md](audits/PR32_TRIAGE_2026-09-21.md) | Forensic per-file triage of PR#32 vs merged PR#34 (15 SUPERSEDED / 4 DROP / 3 PORT / 4 ADAPT) — basis of the supersession. |

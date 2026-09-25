@@ -22,10 +22,6 @@ on:
     - cron: "23 4 * * 1"
   # Allow manual runs from the Actions tab (e.g. right after setting secrets).
   workflow_dispatch: {}
-  # TEMPORARY (task-164 forensics only — removed before merge): the sandbox
-  # token cannot dispatch workflows, so the diagnostic runs on push of this branch.
-  push:
-    branches: ["arena/01a0d9f4-nexus-ai-agent"]
 
 permissions:
   contents: read
@@ -47,7 +43,7 @@ env:
 
 jobs:
   backup-db:
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.schedule == '17 3 * * *'
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 3 * * *'
     runs-on: ubuntu-latest
     services:
       # Scratch restore target — the uploaded artifact is loaded here into a
@@ -178,7 +174,7 @@ jobs:
   # nightly backup does, restore into a scratch database, require an identical
   # table inventory with identical row counts, then run the integration test.
   restore-drill:
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.schedule == '17 3 * * *'
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 3 * * *'
     runs-on: ubuntu-latest
     services:
       postgres:
