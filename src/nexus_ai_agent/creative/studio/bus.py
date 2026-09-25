@@ -379,6 +379,12 @@ class CommandBus:
                 "permission_level": spec.permission_level.value,
                 "protocol_version": PROTOCOL_VERSION,
                 "trace_id": command.trace_id,
+                # Preview/master boundary stamp (contract doc §13): every result
+                # carries the mode it was executed under and whether that
+                # execution is master-authoritative for this operation. A
+                # non-authoritative result can never be master evidence.
+                "execution_mode": command.execution_policy.mode,
+                "authoritative": spec.authoritative_for(command.execution_policy.mode),
             },
             undo_available=True,
         )
