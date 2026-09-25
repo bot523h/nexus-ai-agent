@@ -148,6 +148,16 @@ class PackRegistry:
         learns them (Wave 2b), with no re-registration.
         """
         pack = self.get(package_id)
+        # External manifests are an untrusted supply-chain boundary.  The
+        # current verifier deliberately reports signatures as placeholder or
+        # format-only-unverified because Ed25519 verification is not wired in;
+        # allowing activation here would turn a warning into executable trust.
+        # Builtins are repository-controlled and retain the existing activation
+        # path until a real signature provider is introduced.
+        if pack.anchor == "external" and pack.report.signature_state != "verified":
+            raise PackRegistryError(
+                f"{package_id}: cannot activate — external pack signature is not verified"
+            )
         unknown = tuple(
             capability
             for capability in pack.manifest.capabilities

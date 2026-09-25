@@ -289,6 +289,20 @@ def test_builtin_pack_registers_with_pending_capabilities_but_cannot_activate() 
         registry.activate("nexus.slideshow.compose")
 
 
+def test_external_pack_with_unverified_signature_cannot_activate() -> None:
+    runtime = build_wave1_registry()
+    payload = _manifest_dict()
+    payload["package_id"] = "nexus.external.test"
+    payload["capabilities"] = ["media.play"]
+    manifest = CapabilityPackManifest.model_validate(payload)
+    registry = PackRegistry(runtime, current_version="3.10.0")
+    registry.register(manifest, anchor="external")
+
+    with pytest.raises(PackRegistryError, match="signature is not verified"):
+        registry.activate(manifest.package_id)
+    assert registry.active_packs() == []
+
+
 def test_activation_succeeds_once_the_runtime_knows_the_operations() -> None:
     runtime = build_wave1_registry()
     registry = PackRegistry(runtime, current_version="3.10.0")
