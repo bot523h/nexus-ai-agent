@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-25T21:10:03Z",
+  "updated_at": "2026-09-25T21:25:44Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2413,7 +2413,7 @@
       "title_fa": "بستن RED واقعی #86، تثبیت حقیقت main، اثبات مصنوع واقعی (L4 artifact leg) و اولین برش عمودی",
       "zone": "nagar-redclose-l4-proof",
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "gates_owner": false,
       "prerequisites": [],
       "scope": "(1) PR#86 PACK-SEC-001: reproduce exact-SHA 2683d6d failures, fix only the root cause (mypy comparison-overlap on a signature state no verifier can produce; malformed regression fixture), mutation-prove the external-signature guard. #86 commits are cherry-picked with provenance; this branch supersedes #86 because the session is fixed to its own branch. (2) Forensics: #80 superseded by #81 (main); #83 conflicts only in board.json; #84 read-only (actively moving); #87 contract probed adversarially from a detached worktree, no code changes to #87 zone. (3) L4 artifact leg: a real deterministic ffmpeg fixture through the shipped creative_render_job -> CommandBus -> render_lane chain, independently verified (queue verifier + full decode + pure-Python MP4 box parse), hashed, reopened, provenance recorded. Operation Truth ladder is NOT edited: L4 stays 0 (production-like leg unsourced).",
@@ -2441,9 +2441,9 @@
         "exact-SHA CI run URL for the branch head",
         "artifact provenance JSON (sha256, duration, streams, command id, state revision, lane ir hash)"
       ],
-      "note": "",
-      "agent_branch": "arena/01a0da5a-nexus-ai-agent",
-      "claimed_at": "2026-09-25T21:10:03Z",
+      "note": "RELEASED 2026-09-25 by arena/01a0da5a-nexus-ai-agent. PR #88 open (supersedes #86). Verdicts: #86 root cause fixed + mutation-proved (SECURITY_VERIFIED only if #88 exact-SHA CI all green — see PR #88 'EXACT-SHA CI' comment); #87 NEEDS_FIX (probe 7 pass / 4 violated: D2,P2,P4,P5); artifact chain L4_PROOF_PARTIAL (timeline.trim artifact + 480p proxy verified/reopened/hashed; master 4K SIMULATED); Operation Truth unchanged, L4=0. #80 closed as superseded by #81. Evidence: NAGAR_MASTER_SESSION_2026-09-25.md.",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24
     }
   ],
