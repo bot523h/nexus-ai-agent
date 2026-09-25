@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-25T05:08:57Z",
+  "updated_at": "2026-09-25T05:52:35Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -530,6 +530,22 @@
         "tests/unit/test_api_ssrf_download.py",
         "tests/unit/test_creative_studio.py",
         "tests/unit/test_gemini_key_transport.py"
+      ]
+    },
+    {
+      "id": "operation-truth",
+      "paths": [
+        "src/nexus_ai_agent/nagar/",
+        "OPERATION_TRUTH.json",
+        "docs/OPERATION_CONTRACT_MATRIX.md",
+        "docs/L0_L4_MATURITY.md",
+        "docs/RECONCILIATION.md",
+        "docs/OPERATION_WAVE_PLAN.md",
+        "docs/audits/OPERATION_TRUTH_2026-09-25.md",
+        "docs/audits/OPERATION_TRUTH_MUTATIONS_2026-09-25.md",
+        "tests/architecture/test_operation_truth_gate.py",
+        "tests/unit/test_operation_truth_mutations.py",
+        "tests/unit/test_operation_truth_sources.py"
       ]
     }
   ],
@@ -2194,6 +2210,47 @@
       ],
       "agent_branch": "arena/01a0d563-nexus-ai-agent",
       "claimed_at": "2026-09-24T19:15:00Z"
+    },
+    {
+      "task": "task-190-operation-truth",
+      "title": "Operation Truth engine: live recompute + machine-verifiable evidence chain",
+      "title_fa": "موتور حقیقت عملیات: بازمحاسبه زنده + زنجیرهٔ evidence ماشین‌سنج",
+      "zone": "operation-truth",
+      "priority": "P0",
+      "status": "active",
+      "scope": "استخراج حقیقت اجرایی Nagar از منابع زنده (TDD catalog / runtime registry / executable surface / proof)، تولید OPERATION_TRUTH.json به‌صورت deterministic، projection مستنداتی صرفاً خروجی، گاردهای drift/anti-drift با mutation probe، ماتریس L0-L4 و wave planning گمشده‌ها.",
+      "scope_fa": "استخراج حقیقت اجرایی Nagar از منابع زنده، تولید deterministic OPERATION_TRUTH.json، projection مستنداتی فقط-خروجی، گاردهای drift با mutation probe، ماتریس L0-L4 و wave planning.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "python -m nexus_ai_agent.nagar regenerates OPERATION_TRUTH.json and the architecture gate proves stored == recomputed",
+        "no operation is L3/L4 without recorded executable evidence; runtime-only and missing sets are computed, never hard-coded",
+        "mutation probes: every anti-drift guard turns RED under a synthetic fault and GREEN after restore",
+        "docs projections (matrix/maturity/reconciliation) are marked generated and verified against the recomputation"
+      ],
+      "evidence_required": [
+        "pytest tests/architecture/test_operation_truth_gate.py tests/unit/test_operation_truth_mutations.py tests/unit/test_operation_truth_sources.py",
+        "mutation evidence log GREEN->MUTANT->RED->RESTORE->GREEN",
+        "CI green on the PR"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/nagar/",
+        "OPERATION_TRUTH.json",
+        "docs/OPERATION_CONTRACT_MATRIX.md",
+        "docs/L0_L4_MATURITY.md",
+        "docs/RECONCILIATION.md",
+        "docs/OPERATION_WAVE_PLAN.md",
+        "docs/audits/OPERATION_TRUTH_2026-09-25.md",
+        "docs/audits/OPERATION_TRUTH_MUTATIONS_2026-09-25.md",
+        "tests/architecture/test_operation_truth_gate.py",
+        "tests/unit/test_operation_truth_mutations.py",
+        "tests/unit/test_operation_truth_sources.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0d708-nexus-ai-agent",
+      "claimed_at": "2026-09-25T05:52:35Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": ""
     }
   ],
   "deferred_log": [
