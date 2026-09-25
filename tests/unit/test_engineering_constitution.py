@@ -205,6 +205,40 @@ def _part(text: str, start_marker: str, end_marker: str | None) -> str:
     return text[start:end]
 
 
+def _full_history() -> bool:
+    """True when this clone can see the whole commit graph.
+
+    ``actions/checkout`` fetches one commit by default, so the head has no parents here and
+    ancestry questions are unanswerable.  The gate and this test therefore verify what the
+    checkout can actually show and report the rest as unverifiable instead of guessing.
+    """
+    return _git("rev-parse", "--is-shallow-repository") == "false"
+
+
+def _sha_present(sha: str) -> bool | None:
+    """``True``/``False`` when the object's existence is observable, ``None`` when it is not.
+
+    A missing object is fetched from the remote first: the server refuses an object it does
+    not have ("unadvertised object" on GitHub, "not our ref" on a file:// transport), which
+    is proof that the citation is fabricated rather than merely unfetched.
+    """
+    if _git_ok("cat-file", "-e", f"{sha}^{{commit}}"):
+        return True
+    if _full_history():
+        return False
+    proc = subprocess.run(  # noqa: S603 (fixed argv, repository root only)
+        ["git", "fetch", "--quiet", "--depth=1", "origin", sha],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if proc.returncode == 0 and _git_ok("cat-file", "-e", f"{sha}^{{commit}}"):
+        return True
+    if "unadvertised" in proc.stderr or "not our ref" in proc.stderr:
+        return False
+    return None
+
+
 def _article_body(text: str, heading: str) -> str:
     marker = f"## {heading}"
     start = text.index(marker) + len(marker)
@@ -508,9 +542,11 @@ def test_board_evidence_shas_are_well_formed() -> None:
         assert SHA40.match(str(sha)), (
             f"{claim['task']}: evidence_sha {sha!r} is not a 40-hex commit id"
         )
-        assert _git_ok("cat-file", "-e", f"{sha}^{{commit}}"), (
-            f"{claim['task']}: evidence_sha {sha[:12]} does not exist in this repository"
-        )
+        present = _sha_present(str(sha))
+        if present is not None:
+            assert present, (
+                f"{claim['task']}: evidence_sha {sha[:12]} does not exist in this repository"
+            )
 
 
 def test_governance_claim_evidence_still_covers_the_submitted_head() -> None:
@@ -526,6 +562,13 @@ def test_governance_claim_evidence_still_covers_the_submitted_head() -> None:
       branch is not evidence);
     * once the work is **under review** (``active_in_review``), the citation must still cover the
       head: no non-board commit may have landed since it was verified.
+
+    Existence is checked everywhere — a citation the remote refuses is fabricated, in any
+    checkout.  Reachability and freshness need the commit graph, which a shallow CI checkout
+    does not contain; ``scripts/constitution_gate.py`` enforces those in the ``lint-fast`` job
+    (``fetch-depth: 0``), and this test enforces them in every full clone.  Nothing here skips:
+    the unanswerable checks are simply not asserted where they cannot be observed (Article 6,
+    no fake green in either direction).
     """
     board = json.loads(BOARD_PATH.read_text(encoding="utf-8"))
     # ``rev-list --parents -n 1`` prints "<sha> <parent…>": a merge commit carries two parents
@@ -544,6 +587,8 @@ def test_governance_claim_evidence_still_covers_the_submitted_head() -> None:
         assert _git_ok("cat-file", "-e", f"{sha}^{{commit}}"), (
             f"{label}: evidence_sha {sha[:12]} does not exist in this repository"
         )
+        if not _full_history():
+            continue  # ancestry is not observable in a shallow checkout — the gate enforces it
         assert _git_ok("merge-base", "--is-ancestor", str(sha), evidence_ref), (
             f"{label}: evidence_sha {sha[:12]} is not reachable from {evidence_ref[:12]}"
         )

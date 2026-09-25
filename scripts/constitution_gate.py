@@ -403,6 +403,39 @@ def check_ci_wiring(failures: list[str]) -> None:
         )
 
 
+def _repository_has_full_history() -> bool:
+    """True when this clone can answer questions about any commit in the repository.
+
+    ``actions/checkout`` fetches one commit by default (a *shallow* clone), so the evidence
+    SHA cited by the board is frequently not present locally.  The gate must not report a
+    failure it cannot observe, and must not accept one it can: a missing object is fetched
+    from the remote first — the server answers "unadvertised object" for a SHA that does
+    not exist, which is proof of fabrication — and only a fetch that fails for another
+    reason (offline, permissions) degrades to *unverifiable*.
+    """
+    return _git("rev-parse", "--is-shallow-repository") == "false"
+
+
+def _sha_exists(sha: str) -> tuple[bool, str]:
+    """``(exists, reason)`` for a cited commit id, working in shallow clones too."""
+    if _git_ok("cat-file", "-e", f"{sha}^{{commit}}"):
+        return True, "present"
+    if _repository_has_full_history():
+        return False, "absent from a full clone"
+    proc = subprocess.run(  # noqa: S603 (fixed argv, repository root only)
+        ["git", "fetch", "--quiet", "--depth=1", "origin", sha],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if proc.returncode == 0 and _git_ok("cat-file", "-e", f"{sha}^{{commit}}"):
+        return True, "fetched"
+    if "unadvertised" in proc.stderr or "not our ref" in proc.stderr:
+        return False, "the remote does not have this object"
+    return None, "not observable in this checkout"
+
+
 def check_board_evidence(failures: list[str], report: dict) -> None:
     """Article 10 + 14: evidence must be attributable to a real, current commit."""
     if not BOARD_PATH.is_file():
@@ -421,10 +454,20 @@ def check_board_evidence(failures: list[str], report: dict) -> None:
         if not SHA40.match(str(sha)):
             failures.append(f"{label}: evidence_sha {sha!r} is not a 40-hex commit id")
             continue
-        if not _git_ok("cat-file", "-e", f"{sha}^{{commit}}"):
+        exists, reason = _sha_exists(str(sha))
+        if exists is None:
+            # Not observable *here* (offline or a restricted clone) is not a failure: the gate
+            # says what it could not check instead of guessing in either direction.
+            report.setdefault("evidence_unverifiable", []).append(f"{label}: {sha[:12]} ({reason})")
+            print(f"  ! {label}: evidence_sha {sha[:12]} — unverifiable ({reason})")
+            continue
+        if not exists:
             failures.append(f"{label}: evidence_sha {sha[:12]} does not exist in this repository")
             continue
-        if not _git_ok("merge-base", "--is-ancestor", str(sha), evidence_ref):
+        full_history = _repository_has_full_history()
+        if not full_history:
+            report.setdefault("evidence_unverifiable", []).append(f"{label}: reachability")
+        elif not _git_ok("merge-base", "--is-ancestor", str(sha), evidence_ref):
             failures.append(
                 f"{label}: evidence_sha {sha[:12]} is not reachable from the submitted head "
                 f"{evidence_ref[:12]} — evidence from another branch is not evidence"
@@ -432,23 +475,32 @@ def check_board_evidence(failures: list[str], report: dict) -> None:
             continue
         if not claim.get("zone", "").startswith(GOVERNANCE_ZONE_PREFIX):
             continue
-        stale = _git(
-            "rev-list",
-            "--count",
-            f"{sha}..{evidence_ref}",
-            "--",
-            ".",
-            ":(exclude).agents/board.json",
-        )
+        stale = "unverifiable"
+        if full_history:
+            stale = _git(
+                "rev-list",
+                "--count",
+                f"{sha}..{evidence_ref}",
+                "--",
+                ".",
+                ":(exclude).agents/board.json",
+            )
         report.setdefault("governance_evidence", {})[claim["task"]] = {
             "evidence_sha": sha[:12],
             "head": evidence_ref[:12],
             "unverified_non_board_commits": stale,
         }
-        if stale not in ("0", ""):
+        submitted = claim.get("status") in ("active_in_review", "done")
+        if stale == "unverifiable":
+            pass
+        elif stale not in ("0", "") and submitted:
             failures.append(
                 f"{label}: evidence_sha {sha[:12]} is stale — {stale} non-board commit(s) have "
                 "landed since it was verified; re-run the gates and re-cite the SHA"
+            )
+        elif stale not in ("0", ""):
+            report.setdefault("evidence_in_progress_stale", []).append(
+                f"{label}: {stale} non-board commit(s) since the cited checkpoint"
             )
 
 

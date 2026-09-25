@@ -167,8 +167,9 @@ pytest selection **and** the independent gate were executed, and the tree was re
 | M17 remove a ZWNJ from a Persian word | 17 | red | **GAP** (word not sampled) | **BLOCKED** (content identity) |
 | M18 version `1.1.0` → `9.9` | 18 | red | **GAP** | **BLOCKED** (semver + identity + version row) |
 | M18b version → non-semver value | 18 | red | **GAP** (found in run 2) | **BLOCKED** |
-| M19 fabricated `evidence_sha` (`deadbeef`×5) | 19 | red | **GAP** (field unknown) | **BLOCKED** (40-hex + `cat-file` + reachability) |
-| M26 `evidence_sha` from a foreign branch (`main`) | 19 | red | **GAP** (found in run 2) | **BLOCKED** (reachability from the head) |
+| M19 fabricated `evidence_sha` (`deadbeef`×5) | 19 | red | **GAP** (field unknown) | **BLOCKED** (40-hex + object existence) |
+| M26 `evidence_sha` from a foreign branch (another agent's tip) | 19 | red | **GAP** (found in run 2) | **BLOCKED** (reachability from the head) |
+| M26b `evidence_sha` from `main`, which **is** an ancestor here | 19 | *must stay green* | — | **correctly green** (negative control: an ancestor is legitimate evidence) |
 | M27 `evidence_sha` emptied on a governance claim | 19 | red | **GAP** (found in run 2) | **BLOCKED** (governance claims must be evidenced) |
 | M20 remove the gate from `ci.yml` | 20 | red | n/a (gate did not exist) | **BLOCKED** (the gate asserts its own CI line) |
 | M21 delete `scripts/constitution_gate.py` | 20 | red | n/a | **BLOCKED** |
@@ -179,11 +180,17 @@ pytest selection **and** the independent gate were executed, and the tree was re
 | M29 weaken the test **and** gut Article 10 English | 11+5 | red | **GAP** | **BLOCKED by the gate** |
 | M30 weaken the test **and** alter the Persian Final Gate | 11+4 | red | **GAP** | **BLOCKED by the gate** |
 
-**Run 1 (before hardening): 11 of 21 classes survived. Run 2 (after hardening): 0 of 34 lost
-enforcement.** The two that survive *in isolation* — M11 and M28, weakening one assertion inside the
-enforcement test — do not lose the law: the same facts are enforced a second time by the independent
-gate, and the compound mutations M29/M30 (weaken **and** corrupt in the same commit) are blocked by
-the gate alone. That residual risk is recorded as R-9 rather than claimed away.
+**Run 1 (before hardening): 11 of 21 classes survived. Run 2 (after hardening): 35 classes, 0 lost
+enforcement.** Two survive *in isolation* — M11 and M28, weakening one assertion inside the
+enforcement test — and do not lose the law: the same facts are enforced a second time by the
+independent gate, and the compound mutations M29/M30 (weaken **and** corrupt in the same commit)
+are blocked by the gate alone. That residual risk is recorded as R-9 rather than claimed away.
+M26b is a negative control that must stay green and does.
+
+**The post-hardening run was executed against a full-history clone.** The first attempt ran in the
+audit sandbox, which is itself a shallow clone (`.git/shallow` present, 5 commits visible): the
+evidence-SHA reachability and freshness checks were unanswerable there and reported as
+unverifiable, so the local "PASS" was weaker than it looked — see G-11.
 
 ---
 
@@ -201,6 +208,7 @@ the gate alone. That residual risk is recorded as R-9 rather than claimed away.
 | **G-8** | Board state can be rewritten by direct JSON edit (fake completion, stripped protocol) with no test noticing | B19/B21 | **medium** |
 | **G-9** | The rule-zero *heading* was truncatable: shortening `## 0. Rule zero — read the Engineering Constitution first` to `## 0. Rule zero` kept the section locator satisfied | found in run 2 (M06b/M06c) | **medium (fixed in F-9)** |
 | **G-10** | The enforcement test itself was stubbable: a module containing only `assert True` satisfied every existence check | found in run 2 (M11b) | **high (fixed in F-8)** |
+| **G-11** | The new gate failed in its own CI environment on its first run: `actions/checkout` fetches one commit, so the evidence SHA cited by the board was not present locally and the gate reported a gap. The audit sandbox is a shallow clone too, so the local "PASS" had silently degraded to *unverifiable* for reachability and freshness — a green that could not see the thing it was certifying | run `36187431966`/`36187435425`, `lint-fast` = failure at head `a9dd5ed`; `git rev-parse --is-shallow-repository` → `true`, 5 commits visible | **high (fixed in F-10)** |
 
 ---
 
@@ -217,6 +225,7 @@ the gate alone. That residual risk is recorded as R-9 rather than claimed away.
 | F-7 | operability | no local command | `make constitution-check` (same gate, ~0.2 s, no install) | `Makefile` |
 | F-8 | G-10 (found in run 2) | existence ≠ enforcement | the gate requires the enforcement test to keep ≥ 20 assertions and to still name the facts it owns (both heading tables, the Final Gate table, body length, the exact rule-zero heading, `evidence_sha`) | gate |
 | F-9 | G-9 (found in run 2) | locator matched a prefix | the rule-zero section is located by its **exact** heading string, so truncating it is red | gate, test |
+| F-10 | G-11 (found by CI) | the evidence binding assumed a full-history checkout | depth-aware verification: a missing object is fetched from the remote first — the server refuses an object it does not have ("unadvertised object" / "not our ref"), which proves fabrication in *any* checkout; reachability and freshness need the commit graph, so they are enforced wherever the history is complete and reported as `unverifiable` (never a pass, never a false red) where it is not. `lint-fast` now checks out with `fetch-depth: 0`, so one CI job always enforces them for real | `scripts/constitution_gate.py`, `tests/unit/test_engineering_constitution.py`, `.github/workflows/ci.yml` |
 
 **Before/after proof:** the mutation table in §D is the before/after evidence for every fix
 (11 surviving classes → 0). Contract stability (LAW 8): `evidence_sha` is additive and optional; the
@@ -238,6 +247,7 @@ board CLI, the schema, and every existing test keep working unchanged (`19 passe
 | R-7 | Other agents' claims are validated only when they carry `evidence_sha`; retroactive enforcement would red their PRs. Governance-zone claims (this audit's own) are required to carry it. | **DEFERRED_WITH_REASON** |
 | R-8 | `mypy src` / full `make test` could not run in the audit sandbox (project dependencies absent). No `src/` file was changed, so the `mypy src` outcome is unchanged; CI ran both on the PR head. | **KNOWN_ENVIRONMENTAL** |
 | R-9 | One weakened assertion inside the enforcement test is not detectable in isolation (M11/M28 survive). The fact it covers is still enforced by the independent gate — proven by the compound mutations M29/M30 — but a change that weakens a *single* assertion and nothing else is visible only in review. | **DEFERRED_WITH_REASON** (re-implementing the whole suite inside the gate would duplicate it and violate LAW 9; redundancy plus review is the proportionate control) |
+| R-10 | In a shallow checkout the evidence binding degrades to *unverifiable* for reachability and freshness (fabrication is still caught everywhere, because the remote refuses an unknown object). A clone without history cannot certify freshness — the `lint-fast` job is the enforcement point for it. | **KNOWN_ENVIRONMENTAL** (mitigated by `fetch-depth: 0` in `lint-fast`; the gate prints what it could not check) |
 
 ---
 
