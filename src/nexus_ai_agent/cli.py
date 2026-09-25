@@ -908,8 +908,17 @@ def jobs_resume(
         while remaining:
             for job_id in sorted(remaining):
                 status = await queue.get_status(job_id)
-                if status in {JobStatus.COMPLETED, JobStatus.FAILED}:
-                    marker = "✅" if status is JobStatus.COMPLETED else "❌"
+                if status in {
+                    JobStatus.COMPLETED,
+                    JobStatus.FAILED_RETRYABLE,
+                    JobStatus.FAILED_TERMINAL,
+                }:
+                    if status is JobStatus.COMPLETED:
+                        marker = "✅"
+                    elif status is JobStatus.FAILED_RETRYABLE:
+                        marker = "⚠️"
+                    else:
+                        marker = "❌"
                     typer.echo(f"{marker} {job_id}: {status.value}")
                     remaining.discard(job_id)
             if remaining and loop.time() >= deadline:
