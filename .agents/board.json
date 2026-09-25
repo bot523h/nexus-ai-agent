@@ -610,8 +610,7 @@
         "tests/unit/test_version_lockstep.py",
         ".dockerignore",
         "tests/unit/test_container_context.py",
-        "docs/audits/RELEASE_TRUTH_2026-09-25.md",
-        "docs/README.md"
+        "README_RELEASE_TRUTH.md"
       ]
     }
   ],
@@ -2414,22 +2413,21 @@
         "tests/unit/test_version_lockstep.py",
         ".dockerignore",
         "tests/unit/test_container_context.py",
-        "docs/audits/RELEASE_TRUTH_2026-09-25.md",
-        "docs/README.md"
+        "README_RELEASE_TRUTH.md"
       ],
       "acceptance_criteria": [
         "Record live release and PR truth; fix proven README drift; preserve packaging compatibility",
         "Document dependency/container deferrals and targeted checks"
       ],
       "evidence_required": [
-        "docs/audits/RELEASE_TRUTH_2026-09-25.md",
+        "README_RELEASE_TRUTH.md",
         "Targeted pytest and ruff results, commit SHA"
       ],
       "agent_branch": "arena/01a0da13-nexus-ai-agent",
       "claimed_at": "2026-09-25T19:39:54Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": ""
+      "note": "docs/README.md overlaps task-181: immediately relinquished, no edits; audit is a root README instead. Initial claim push mistakenly included the index; corrected before implementation."
     }
   ],
   "deferred_log": [
