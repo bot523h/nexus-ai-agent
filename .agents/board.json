@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-25T17:46:27Z",
+  "updated_at": "2026-09-25T21:16:42Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -600,6 +600,53 @@
         "docs/audits/GATE5_TRUTH_MATRIX.json",
         "src/nexus_ai_agent/cli.py",
         "docs/audits/VERIFICATION_TRUTH_MATRIX.json"
+      ]
+    },
+    {
+      "id": "nagar-truth-mainline",
+      "description": "PR#83 Operation Truth → canonical main integration (provenance kept, parity fix), projection regeneration",
+      "paths": [
+        "src/nexus_ai_agent/nagar/",
+        "OPERATION_TRUTH.json",
+        "L0_L4_MATURITY.md",
+        "OPERATION_CONTRACT_MATRIX.md",
+        "OPERATION_TRUTH_AUDIT_2026-09-25.md",
+        "OPERATION_TRUTH_MUTATIONS_2026-09-25.md",
+        "OPERATION_WAVE_PLAN.md",
+        "RECONCILIATION.md",
+        "docs/audits/OPERATION_PROOF_REGISTRY.json",
+        "docs/audits/L4_ARTIFACT_PROOF",
+        "tests/architecture/test_operation_truth_gate.py",
+        "tests/unit/test_operation_truth_mutations.py",
+        "tests/unit/test_operation_truth_sources.py"
+      ]
+    },
+    {
+      "id": "studio-l4-vertical",
+      "description": "PR#87 Studio Core consumption + L4 artifact-proof vertical slice through Discovery→TypedCommand→CommandBus",
+      "paths": [
+        "src/nexus_ai_agent/creative/studio/",
+        "tests/unit/test_studio_discovery.py",
+        "tests/unit/test_studio_integration_contracts.py",
+        "tests/unit/test_studio_preview_master_boundary.py",
+        "tests/unit/test_l4_artifact_proof.py",
+        "tests/architecture/test_l4_vertical_slice.py",
+        "docs/architecture/COMMAND_CAPABILITY_CONTRACT.md",
+        "docs/architecture/MODULE_MAP.md",
+        "CHANGELOG.md"
+      ]
+    },
+    {
+      "id": "pack-security-fail-closed",
+      "description": "Supersede PR#86: external-pack activation fail-closed, parity-correct signature state space",
+      "paths": [
+        "src/nexus_ai_agent/creative/packs/registry.py",
+        "src/nexus_ai_agent/creative/packs/verify.py",
+        "tests/unit/test_pack_manifest_verify.py",
+        "docs/architecture/SECURITY.md",
+        "NAGAR_AGENT_03_FINAL_2026-09-25.md",
+        "docs/audits/PR86_SUPERSEDED",
+        "docs/audits/PR80_SUPERSEDED"
       ]
     }
   ],
@@ -2068,7 +2115,7 @@
       "agent_branch": "arena/01a0d43c-nexus-ai-agent",
       "claimed_at": "2026-09-24T16:32:01Z",
       "ttl_hours": 48,
-      "gates_owner": true,
+      "gates_owner": false,
       "note": "PR#72 https://github.com/bot523h/nexus-ai-agent/pull/72 (commit 5f955ce) — awaiting merge; merge-order disclosures in PR body (PR#68 supersede, PR#67/PR#70/PR#71 collisions). | STEWARDSHIP-RELEASED 2026-09-24T23:06:38Z by arena/01a0d5a1-nexus-ai-agent: delivery vehicle PR#72 is MERGED; a merged PR must not keep a live lease (PR#51/#47/#65 precedent). exclusive_paths released.",
       "evidence": [
         "contract 80 + boundary 16 + wave1 22: all pass (local)",
@@ -2144,7 +2191,7 @@
       "title_fa": "",
       "zone": "coordination",
       "priority": "P2",
-      "status": "active_in_review",
+      "status": "expired",
       "scope": "PR#67 adds required_packs + a lifecycle bus gate; Gate 2 could not verify against it. After both land, wire the seam (stage 4, after grant+registry, before reservation) and prove pack-required vs pack-absent dispatch.",
       "scope_fa": "",
       "prerequisites": [
@@ -2161,7 +2208,7 @@
       "claimed_at": "2026-09-24T20:37:51Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Continued from arena/01a0d4c8 (PR#75 head e0cba26 is an ancestor of this branch; PR#75 is superseded by PR#77, same stack on PR#72). MERGE ORDER: PR#72 -> PR#77; PR#67 afterwards needs the semantic resolution in COMMAND_CAPABILITY_CONTRACT section 11 (keep 4b, drop 3.5 + payload/surface opt-in, add color.apply_lut to EXPERIMENTAL_OPT_IN_OPERATIONS).",
+      "note": "auto-released by gc at 2026-09-25T21:16:42Z (stale active_in_review lease)",
       "stacked_on": {
         "pr": 72,
         "task": "task-179-gate2-command-reconciliation",
@@ -2203,11 +2250,11 @@
     },
     {
       "priority": "P0",
-      "status": "active_in_review",
+      "status": "expired",
       "prerequisites": [],
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Continuation of sec-boundary-salvage-01a0d4c7 (PR#76 head 5b17a709, CI green): owner-directed adversarial verification proved 5 S3/S5 defects its tests missed (stdlib traceback redaction bypass, mapping/non-string arg corruption, Basic-scheme credentials, CGNAT 100.64.0.0/10 allowed, https->http redirect downgrade followed). Closed on this branch (ff from 5b17a709 + closure commits), 12/12 mutation-killed, full non-slow suite 1989 passed / ruff / format / mypy clean. Takeover recorded in takeover_log; same zone, one owner.",
+      "note": "auto-released by gc at 2026-09-25T21:16:42Z (stale active_in_review lease)",
       "task": "sec-boundary-salvage-01a0d563",
       "title": "Security truth salvage: verify S1-S5 on main 035a896, fix only the real delta",
       "title_fa": "استخراج حقیقت امنیتی: بازبینی S1-S5 روی main 035a896 و اعمال فقط دلتای واقعی",
@@ -2391,6 +2438,130 @@
       "claimed_at": "2026-09-24T23:06:38Z",
       "ttl_hours": 48,
       "prev_agent_branch": "arena/01a0d4b6-nexus-ai-agent"
+    },
+    {
+      "task": "task-195",
+      "title": "Operation Truth (PR#83) → canonical main, provenance kept + py3.10 parity fix",
+      "title_fa": "اورژانس ادغام Operation Truth روی main canonical با حفظ provenance و اصلاح parity پایتون ۳.۱۰",
+      "zone": "nagar-truth-mainline",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Problem: Operation Truth (PR#83 head 372643af) is CONFLICTING with main 2351f099 only on .agents/board.json (forensic merge-base 52ab7e8f); everything else is additive. Evidence: git merge-tree conflict set = {.agents/board.json}; PR#83 branch CI was green pre-#82 legs. Root cause of stale CI signal: PR#82 added python-parity legs after #83's last CI run; PR#83's truth.py:52 uses `from datetime import UTC` (3.11+) which would red the 3.10 leg. Scope: merge PR#83 head into arena/01a0da56 with board.json union, fix datetime.UTC parity, regenerate OPERATION_TRUTH.json + L0_L4_MATURITY.md from the recomputation, keep all provenance docs (audit/mutations/wave plan/reconciliation).",
+      "scope_fa": "Problem: Operation Truth (PR#83) فقط روی board.json با main تعارض دارد؛ بقیه additive است. Evidence: merge-base 52ab7e8f، conflict set فقط board.json. Root cause سیگنال قدیمی CI: گیت parity پس از CI شاخهٔ ۸۳ اضافه شده و truth.py از datetime.UTC (۳.۱۱+) استفاده می‌کند. Scope: merge با union روی board.json، اصلاح parity، بازتولید projection، حفظ provenance.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "PR#83 head present in tree with zero content drift except (a) board.json union, (b) datetime.UTC→timezone.utc parity fix",
+        "python -m nexus_ai_agent.nagar --check recomputes projections; OPERATION_TRUTH.json and L0_L4_MATURITY.md regenerate byte-identical to committed files",
+        "pytest of nagar truth tests green on py3.11; no 3.11-only constructs remain in nagar modules (static scan + CI parity legs)",
+        "L4 remains 0 and missing=23 until an artifact-proof source exists (no hand-edited maturity)"
+      ],
+      "evidence_required": [
+        "git diff of PR#83-head vs integrated tree limited to the two named deltas",
+        "python -m nexus_ai_agent.nagar --check output + regenerated projection sha256",
+        "exact-SHA CI legs (lint/test/parity/extras/release-lineage) green"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/nagar/",
+        "OPERATION_TRUTH.json",
+        "L0_L4_MATURITY.md",
+        "OPERATION_CONTRACT_MATRIX.md",
+        "OPERATION_TRUTH_AUDIT_2026-09-25.md",
+        "OPERATION_TRUTH_MUTATIONS_2026-09-25.md",
+        "OPERATION_WAVE_PLAN.md",
+        "RECONCILIATION.md",
+        "docs/audits/OPERATION_PROOF_REGISTRY.json",
+        "docs/audits/L4_ARTIFACT_PROOF",
+        "tests/architecture/test_operation_truth_gate.py",
+        "tests/unit/test_operation_truth_mutations.py",
+        "tests/unit/test_operation_truth_sources.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0da56-nexus-ai-agent",
+      "claimed_at": "2026-09-25T21:16:42Z",
+      "ttl_hours": 30,
+      "gates_owner": true,
+      "delivered": [],
+      "note": ""
+    },
+    {
+      "task": "task-196",
+      "title": "Consume PR#87 Studio Core contracts + L4 artifact-proof vertical slice",
+      "title_fa": "مصرف قراردادهای Studio Core (PR#87) و برش عمودی اثبات artifact برای L4",
+      "zone": "studio-l4-vertical",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Problem: no studio-dispatchable operation on main produces a real artifact (edit/slideshow pack handlers are pure state transforms — edit/operations.py::_trim computes a derived sha from a seed string, no file I/O); L4 requires input→discover→intent→TypedCommand→CommandBus→real operation→preview/local paths→verifier→hash→reopen→undo/replay→Operation Truth. Evidence: edit/operations.py handler source; jobs/verification.py verify_artifact exists; creative/render_jobs.py::creative_render_job is the real binary-backed lane (allow-listed ffmpeg via NEXUS_FFMPEG_BIN→PATH→imageio-ffmpeg). Root cause: command surface and the artifact lane were never joined under proof discipline. Scope: integrate PR#87 head (discovery surface + preview/master stamps) unchanged unless a defect reproduces; implement the harness OUTSIDE the baseline contracts; adversarial tests for the three families (stale surface_identity, forged authoritative, preview→master escalation).",
+      "scope_fa": "Problem: هیچ عملیات studio روی main artifact واقعی نمی‌سازد (handlerهای edit/slideshow تبدیل وضعیت خالص‌اند). Evidence: سورس handlerها + وجود verify_artifact و مسیر واقعی render_jobs. Root cause: سطح فرمان و لاین artifact بدون انضباط اثبات به هم وصل نشده‌اند. Scope: ادغام دست‌نخوردهٔ PR#87 مگر با defect بازتولیدشده؛ harness بیرون از قراردادهای Baseline؛ تست‌های adversarial هر سه خانواده.",
+      "prerequisites": [
+        "task-195"
+      ],
+      "acceptance_criteria": [
+        "PR#87 contracts integrated verbatim; any deviation has a reproduction + failing test + minimal fix + mutation note",
+        "vertical slice: deterministic fixture → discovery advertisement → TypedCommand → CommandBus dispatch → REAL ffmpeg-backed execution → artifact on disk → independent verify_artifact (exists/non-empty/type/probe/duration) → canonical payload hash → reopen+reprobe → replay determinism → recorded provenance (operation id, command revision, execution mode, artifact hash, verifier result)",
+        "six Preview/Master invariants machine-tested (no unauthoritative preview as master; stamp-forgery rejected; no verifier evidence ⇒ no L4; preview artifact never promoted; master proof bound to real artifact+verification)",
+        "Operation Truth integration: artifact_evidence + production_like proofs recorded only via the harness gate; gate test re-verifies recorded proofs independently (recipe re-execution), fake/corrupt/stale entries fail the gate red"
+      ],
+      "evidence_required": [
+        "pytest of slice + adversarial + preview/master tests green; mutation: corrupt artifact / forged stamp / missing verifier each make the gate red",
+        "python -m nexus_ai_agent.nagar --check shows the sliced op at L4 with recorded proofs; removing the proof entries drops it back to L4=0",
+        "surface_identity stability: same registry+flag ⇒ byte-identical canonical JSON"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/studio/",
+        "tests/unit/test_studio_discovery.py",
+        "tests/unit/test_studio_integration_contracts.py",
+        "tests/unit/test_studio_preview_master_boundary.py",
+        "tests/unit/test_l4_artifact_proof.py",
+        "tests/architecture/test_l4_vertical_slice.py",
+        "docs/architecture/COMMAND_CAPABILITY_CONTRACT.md",
+        "docs/architecture/MODULE_MAP.md",
+        "CHANGELOG.md"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0da56-nexus-ai-agent",
+      "claimed_at": "2026-09-25T21:16:42Z",
+      "ttl_hours": 30,
+      "gates_owner": false,
+      "delivered": [],
+      "note": ""
+    },
+    {
+      "task": "task-197",
+      "title": "Supersede PR#86: fail-closed external activation with parity-correct types (CI red root-caused)",
+      "title_fa": "ابرسده PR#86: فیل-کلوز فعال‌سازی بستهٔ خارجی با نوع‌های سازگار با parity (ریشهٔ CI سرخ روشن)",
+      "zone": "pack-security-fail-closed",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Problem: PR#86 (head 2683d6d8) is red on lint + test + all parity legs. Evidence (local reproduction on the exact head): (1) mypy src → registry.py:157 comparison-overlap: Literal['placeholder','format_only_unverified'] != Literal['verified'] is non-overlapping; (2) its new test fails ValidationError — capability 'media.play' is outside package 'nexus.external.test' namespace before activate() is ever reached. Root cause: the guard's right-hand value is absent from the protocol Literal (type-level), and the test's fixture package id violates the manifest namespace rule (data-level). Scope: superseding change carrying #86's intent verbatim — fail-closed external activation — with two scoped fixes: widen the signature-state protocol Literal to include 'verified' (documented as never emitted by today's verifier) and fix the test fixture package id to a namespace-valid one. Also document-close PR#80 as superseded-by-main (forensic matrix in note).",
+      "scope_fa": "Problem: PR#86 روی lint+test+parity سرخ است. Evidence بازتولید محلی روی همان head: (۱) mypy comparison-overlap در registry.py:157؛ (۲) تست جدید با ValidationError namespace شکست می‌خورد پیش از رسیدن به activate. Root cause: مقدار 'verified' در Literal پروتکل نیست و fixture تست از قاعدهٔ namespace خارج است. Scope: حمل همان intent با دو اصلاح محدود + بستن مستند PR#80 به‌عنوان superseded.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "mypy src clean; ruff clean; full pytest files for packs green",
+        "external pack with unverified signature cannot activate (regression test green); builtin activation path unchanged (existing tests green)",
+        "PR#86 diff carried with provenance (its commit content + NAGAR_AGENT_03 report verbatim) plus the two named fixes only",
+        "PR#80 supersession documented with the forensic file/test matrix (posted to the PR + audit note)"
+      ],
+      "evidence_required": [
+        "exact reproduction strings (mypy error + ValidationError) captured in the audit note",
+        "targeted pytest: tests/unit/test_pack_manifest_verify.py, tests/architecture/test_pack_manifest_is_data_only.py",
+        "exact-SHA CI green on the integrating PR"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/registry.py",
+        "src/nexus_ai_agent/creative/packs/verify.py",
+        "tests/unit/test_pack_manifest_verify.py",
+        "docs/architecture/SECURITY.md",
+        "NAGAR_AGENT_03_FINAL_2026-09-25.md",
+        "docs/audits/PR86_SUPERSEDED",
+        "docs/audits/PR80_SUPERSEDED"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0da56-nexus-ai-agent",
+      "claimed_at": "2026-09-25T21:16:42Z",
+      "ttl_hours": 30,
+      "gates_owner": false,
+      "delivered": [],
+      "note": ""
     }
   ],
   "deferred_log": [
