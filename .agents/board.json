@@ -641,7 +641,7 @@
       "title_fa": "ممیزی forensic و سخت‌سازی اجرای قانون اساسی مهندسی",
       "zone": "governance-constitution-audit",
       "priority": "P0",
-      "status": "active",
+      "status": "active_in_review",
       "scope": "Owner-directed adversarial audit of ENGINEERING_CONSTITUTION.md: prove with live evidence whether a real agent can claim, code, open a PR, merge, or declare done while bypassing the constitution, and harden only the proven gaps. Deliverables: CONSTITUTION_ENFORCEMENT_AUDIT_2026-09-25.md (sections A-K), scripts/constitution_gate.py (stdlib gate wired into the fast CI rail with full history), a hardened tests/unit/test_engineering_constitution.py, cross-guards in test_docs_integrity.py and test_agent_board.py, ci.yml wiring, the board evidence_sha binding, constitution version 1.1.0 with content identity, and a `make constitution-check` target.",
       "scope_fa": "ممیزی تهاجمی به دستور مالک: اثبات با شواهد زندهٔ این‌نکه که آیا یک عامل واقعی می‌تواند قانون اساسی را دور بزند (claim/کد/PR/merge/done)، و سخت‌سازی فقط gapهای اثبات‌شده. خروجی‌ها: سند ممیزی، اسکریپت گیت در ریل سریع CI، تست‌های سخت‌شده، گاردهای متقابل، سیم‌کشی ci.yml، و evidence_sha در تخته.",
       "prerequisites": [
@@ -678,25 +678,14 @@
         "mutation transcripts (GREEN->RED->restore) recorded in the audit document",
         "gh api check-runs on the final head SHA (12/12 success)"
       ],
-      "exclusive_paths": [
-        "ENGINEERING_CONSTITUTION.md",
-        "CONSTITUTION_ENFORCEMENT_AUDIT_2026-09-25.md",
-        "scripts/constitution_gate.py",
-        "scripts/agent_board.py",
-        "tests/unit/test_engineering_constitution.py",
-        "tests/unit/test_docs_integrity.py",
-        "tests/unit/test_agent_board.py",
-        ".github/workflows/ci.yml",
-        ".agents/board.json",
-        "Makefile"
-      ],
+      "exclusive_paths": [],
       "owner_hint": "",
       "agent_branch": "arena/01a0da15-nexus-ai-agent",
       "claimed_at": "2026-09-25T20:40:00Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "LAW 3 satisfied before the first edit; ownership re-verified with `agent_board.py check --files <all changed files> --branch arena/01a0da15-nexus-ai-agent` (exit 0). docs/README.md and docs/audits/ stay fenced by the live task-181-gate5-closure lease, so the audit record lives at the repository root (LAW 5). gates_owner stays false: the seat is vacant on the live board. DELIVERED: CONSTITUTION_ENFORCEMENT_AUDIT_2026-09-25.md (sections A-K); scripts/constitution_gate.py (stdlib, 14/14 checks, PASS); tests/unit/test_engineering_constitution.py hardened to 33 tests; cross-guards in test_docs_integrity.py and test_agent_board.py; ci.yml wiring in lint-fast (fetch-depth: 0); board evidence_sha binding; constitution v1.0 -> v1.1.0 with content identity; `make constitution-check`. VERIFIED LOCALLY: gate PASS 14/14 (full-history clone); `pytest -q -m 'not slow'` -> 2343 passed, 30 skipped; governance selection 159 passed / 1 skipped (pre-existing environmental skip in test_version_lockstep.py); ruff check + format --check clean; mutation harness 35 classes -> 0 lost enforcement (M11/M28 redundancy-only, recorded as R-9; M26b is a negative control that must stay green). CI STATE (exact): head 0671cc9 -> run 36188951892 (push) `test` FAILED exit 1, run 36188954963 (pull_request) SUCCESS, python-parity 3.10/3.11/3.12 SUCCESS, lint-fast/lint/extras-matrix/migrate-postgres/release-lineage SUCCESS (11 of 12 check types green). The same suite passes locally in a full clone AND in a shallow clone (2343 passed), so the single push-event failure is not reproduced by the code; the pytest.log artifact could not be downloaded (the sandbox egress blocks the Actions blob host) and the re-run pushed as 493f405 could not be read because the GitHub API token expired mid-session (`gh`: Bad credentials, HTTP 401; `git ls-remote` no longer authenticates). THEREFORE evidence_sha stays 67e8ff3 — the last head of this branch with a complete, all-green CI run (run 36183886954/36183882546, 2026-09-25T20:07Z, 12/12 checks success). The claim stays `active`: LAW 10 forbids submitting work as reviewed before its CI evidence exists. When GitHub is reconnected: read the check runs on 493f405 (and 0671cc9), and if green set evidence_sha to that head, set status active_in_review and release the lease in one board-only commit.",
-      "evidence_sha": "67e8ff3ff18f41ea97a0c6139a8165adf399f122"
+      "note": "SUBMITTED FOR REVIEW. evidence_sha 483174d = the head this branch was verified on: CI runs 36264305131 (push) and 36264319228 (pull_request) both completed with 12/12 checks SUCCESS — lint, lint-fast (which runs scripts/constitution_gate.py: PASS 14/14), test, python-parity 3.10/3.11/3.12, extras-matrix (core/pdf/speech/translate), migrate-postgres, release-lineage. LOCAL: gate PASS 14/14 on a full-history clone; `pytest -q -m 'not slow'` -> 2343 passed, 30 skipped; the 8 governance suites -> 159 passed, 1 skipped (pre-existing environmental skip in test_version_lockstep.py); ruff check + format --check clean; mutation harness 35 classes -> 0 lost enforcement (M11/M28 redundancy-only = R-9, M26b negative control stays green). OWNERSHIP: `agent_board.py check --files <all changed files> --branch arena/01a0da15-nexus-ai-agent` -> exit 0; nothing under src/, nothing under task-181's live docs/ lease; the audit record therefore lives at the repository root. DELIVERED: CONSTITUTION_ENFORCEMENT_AUDIT_2026-09-25.md (sections A-K), scripts/constitution_gate.py, hardened tests/unit/test_engineering_constitution.py (33 tests), cross-guards in test_docs_integrity.py + test_agent_board.py, ci.yml wiring in lint-fast (fetch-depth: 0), board evidence_sha binding, constitution v1.1.0 with content identity, `make constitution-check`. UNRESOLVED ITEM, EXPLICITLY BLOCKED (owner action required, not a pass): two earlier heads showed one red CI leg each — 0671cc9 push run 36188951892 `test` exit 1, and ae0ee02 pull_request run 36261476215 `python-parity (3.10)` exit 1. In both cases the same leg was green in the sibling event on the same head and green on the neighbouring heads, and the code under test is byte-identical apart from documentation, which is the signature of a flaky leg rather than a defect — but no root cause is asserted, because the pytest.log / parity-log artifacts sit behind the Actions blob host the authoring sandbox cannot reach and `gh run rerun` answers `cannot be rerun`. ACTION FOR THE OWNER: read the log of run 36188951892 (or rerun that leg) to name the flaky test; nothing in this change depends on it. R-1 and R-2 remain BLOCKED for the same owner: required checks and a CODEOWNERS file need repository permissions this token does not have (branch protection API returns 403). LEASE RELEASED with this commit: exclusive_paths emptied, status active_in_review.",
+      "evidence_sha": "483174d86dcadd2abbdad52bf66ac2bc4c3670cc"
     },
     {
       "task": "task-184-engineering-constitution",
