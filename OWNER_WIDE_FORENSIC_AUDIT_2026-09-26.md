@@ -81,7 +81,7 @@ Local commands on the changed tree:
 
 ```text
 ruff check .                         -> All checks passed!
-ruff format --check .                -> 499 files already formatted
+ruff format --check .                -> 501 files already formatted
 mypy src                             -> Success: no issues found in 241 source files
 pytest targeted security/execution   -> 26 passed
 pytest graph regression selection    -> 8 passed
@@ -94,24 +94,26 @@ The virtual environment used for these commands was `.venv/`, ignored by the
 repository and not part of the patch. It was installed from `pyproject.toml`
 with the `[dev]` extra.
 
-Full suite, architecture suite, and exact new-commit CI are release-gate work;
-they are not inferred from this targeted evidence.
+The exact new-commit CI is now verified by run `36219926677` on head
+`a255516dab33a6ce652819360d75732cb1288426`: all 12 blocking jobs passed.
+The remaining unverified items below are live-provider, restore, distributed
+capacity, and open-PR lineage items—not this PR's CI.
 
 ## 6. Domain evidence table
 
 | Domain | Invariant | Implementation | Test | CI | Exact SHA | Status |
 |---|---|---|---|---|---|---|
-| Security | Workspace operations remain physically contained | `tools/filesystem_policy.py` | 4 new adversarial tests + existing shell sandbox | pending for this PR | `8e7e5e5` | VERIFIED locally / CI pending |
-| Filesystem | Symlink and alternate path escapes are rejected | `WorkspaceFilesystem` | `test_filesystem_boundary.py` | pending | `8e7e5e5` | VERIFIED locally / CI pending |
+| Security | Workspace operations remain physically contained | `tools/filesystem_policy.py` | 4 new adversarial tests + existing shell sandbox | run `36219926677` | `8e7e5e5` implementation / `a255516` CI head | VERIFIED |
+| Filesystem | Symlink and alternate path escapes are rejected | `WorkspaceFilesystem` | `test_filesystem_boundary.py` | run `36219926677` | `8e7e5e5` implementation / `a255516` CI head | VERIFIED |
 | Database | Backup path is measured and round-trip verified | existing `maintenance/backup.py` | existing backup suite | main CI 36176954176 | `2351f09` baseline | VERIFIED baseline |
 | Queue | Fenced lifecycle and artifact verification remain intact | existing `InProcessJobQueue` | existing queue/integration suites | main CI 36176954176 | `2351f09` baseline | VERIFIED baseline; capacity remains bounded only in-process |
-| Executor | Unsupported work is a failure, never fake success | graph + `ExecutorAgent` | `test_execution_truth.py` | pending | `8e7e5e5` | VERIFIED locally / CI pending |
+| Executor | Unsupported work is a failure, never fake success | graph + `ExecutorAgent` | `test_execution_truth.py` | run `36219926677` | `8e7e5e5` implementation / `a255516` CI head | VERIFIED |
 | LLM | Provider/runtime success requires provider evidence | existing provider contracts | existing provider tests | main CI 36176954176 | `2351f09` baseline | PARTIAL; live providers unverified |
-| Registry | Workspace config is instance-owned | `ToolRegistry` + tool constructors | isolation test | pending | `8e7e5e5` | VERIFIED locally / CI pending |
+| Registry | Workspace config is instance-owned | `ToolRegistry` + tool constructors | isolation test | run `36219926677` | `8e7e5e5` implementation / `a255516` CI head | VERIFIED |
 | Packs | External/unverified pack behavior is fail-closed | not changed here; open PR work remains separate | existing registry tests | main CI 36176954176 | `2351f09` baseline | PARTIAL until open PRs land and are rechecked |
 | CommandBus | Nagar typed path retains its existing gate | not changed here | existing studio suite | main CI 36176954176 | `2351f09` baseline | VERIFIED baseline |
 | Nagar | Operation Truth PR #83 is not on this SHA | open PR only | no baseline claim | no baseline claim | `2351f09` | UNVERIFIED on this branch |
-| Storage | Maintenance dry-run is non-mutating | `housekeeping.py` | housekeeping contract tests | pending | `8e7e5e5` | VERIFIED locally / CI pending |
+| Storage | Maintenance dry-run is non-mutating | `housekeeping.py` | housekeeping contract tests | run `36219926677` | `8e7e5e5` implementation / `a255516` CI head | VERIFIED |
 | Backup | Restore is not claimed without a live restore drill | existing backup verifier | backup suite | main CI 36176954176 | `2351f09` | PARTIAL |
 | CI/CD | Baseline gates are exact-SHA and blocking | `.github/workflows/ci.yml` | existing CI parity tests | run 36176954176 | `2351f09` | VERIFIED baseline |
 
