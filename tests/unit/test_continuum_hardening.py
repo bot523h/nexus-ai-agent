@@ -244,6 +244,24 @@ def test_verify_snapshot_distinguishes_non_ancestor_git_failure_count_and_enviro
     assert any(problem.startswith("environment fingerprint mismatch") for problem in problems)
 
 
+def test_verify_snapshot_rejects_a_valid_snapshot_when_the_checkout_is_dirty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A prior committed snapshot cannot vouch for modified source files."""
+
+    value = _snapshot(test_count=3)
+    monkeypatch.setattr(snapshot, "read_snapshot", lambda: value)
+    monkeypatch.setattr(snapshot, "current_commit", lambda: "current-head")
+    monkeypatch.setattr(snapshot, "_is_ancestor", lambda _old, _head: True)
+    monkeypatch.setattr(snapshot, "_working_tree_clean", lambda: False)
+    monkeypatch.setattr(snapshot, "_test_case_count", lambda: 3)
+    monkeypatch.setattr(snapshot, "_environment", lambda: value.env_fingerprint)
+
+    assert snapshot.verify_snapshot() == [
+        "working tree drift detected: snapshot verification requires a clean checkout"
+    ]
+
+
 def test_verify_snapshot_reports_unavailable_git_and_test_discovery_without_false_state_loss(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

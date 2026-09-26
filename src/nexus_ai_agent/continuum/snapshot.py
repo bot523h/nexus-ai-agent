@@ -276,6 +276,22 @@ def _is_ancestor(ancestor: str, descendant: str) -> bool:
     )
 
 
+def _working_tree_clean() -> bool:
+    """Return whether the checkout still matches the committed snapshot state.
+
+    A committed snapshot is part of a Git tree.  Verifying only ``HEAD`` lets
+    uncommitted source changes borrow a previous commit's green result, so
+    every tracked *and* untracked change is evidence drift.  The porcelain
+    format is stable, machine-readable, and deliberately includes untracked
+    files rather than silently accepting generated or newly added source.
+    """
+
+    return not _git_output(
+        ["status", "--porcelain=v1", "--untracked-files=all"],
+        "cannot inspect working tree",
+    )
+
+
 def _environment() -> EnvFingerprint:
     return EnvFingerprint(
         python=f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
@@ -370,6 +386,15 @@ def verify_snapshot() -> list[str]:
                         "state loss detected: recorded good commit "
                         f"{snapshot.step} is not reachable from HEAD {head}"
                     )
+        try:
+            clean = _working_tree_clean()
+        except RuntimeError as exc:
+            problems.append(_problem("git verification unavailable", exc))
+        else:
+            if not clean:
+                problems.append(
+                    "working tree drift detected: snapshot verification requires a clean checkout"
+                )
 
     try:
         actual_tests = _test_case_count()
