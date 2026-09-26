@@ -95,3 +95,68 @@ def test_token_required_when_configured(client_and_db: TestClient, monkeypatch) 
     finally:
         monkeypatch.delenv("NEXUS_DASHBOARD_TOKEN", raising=False)
         settings_module.get_settings.cache_clear()
+
+
+# ── query-parameter bounds ──────────────────────────────────────────────────
+
+
+def test_recent_users_limit_is_bounded(client_and_db: TestClient) -> None:
+    """`limit` was an unvalidated int straight off the query string.
+
+    A single authenticated `?limit=100000000` materialised the whole user
+    table into memory and serialised it — a denial of service behind an
+    endpoint whose only other protection is a shared bearer token.
+    """
+    from nexus_ai_agent.api.dashboard import MAX_RECENT_USERS
+
+    assert client_and_db.get("/api/dashboard/recent_users?limit=100000000").status_code == 422
+    assert (
+        client_and_db.get(f"/api/dashboard/recent_users?limit={MAX_RECENT_USERS}").status_code
+        == 200
+    )
+
+
+def test_recent_users_rejects_a_negative_limit(client_and_db: TestClient) -> None:
+    """SQLite reads `LIMIT -1` as "no limit" — the opposite of the intent."""
+    assert client_and_db.get("/api/dashboard/recent_users?limit=-1").status_code == 422
+    assert client_and_db.get("/api/dashboard/recent_users?limit=0").status_code == 422
+
+
+def test_recent_users_honours_a_valid_limit(client_and_db: TestClient) -> None:
+    resp = client_and_db.get("/api/dashboard/recent_users?limit=1")
+    assert resp.status_code == 200
+    assert len(resp.json()) == 1
+
+
+# ── CORS policy ─────────────────────────────────────────────────────────────
+
+
+def test_a_wildcard_origin_never_carries_credentials() -> None:
+    """`allow_origins=["*"]` + `allow_credentials=True` is the CORS anti-pattern.
+
+    Starlette responds to that combination by reflecting the caller's Origin
+    and setting `Access-Control-Allow-Credentials: true`, which hands every
+    site on the internet an authenticated channel to this API. The empty
+    default avoided it; an operator typing `NEXUS_API_CORS_ORIGINS=*` while
+    debugging reintroduced it, because `bool(["*"])` is `True`.
+    """
+    from nexus_ai_agent.api.app import cors_policy
+
+    assert cors_policy(["*"]) == (["*"], False)
+    assert cors_policy(["https://a.example", "*"]) == (["*"], False)
+
+
+def test_an_explicit_allowlist_keeps_credentials() -> None:
+    from nexus_ai_agent.api.app import cors_policy
+
+    assert cors_policy(["https://a.example"]) == (["https://a.example"], True)
+    assert cors_policy(["https://a.example", "https://b.example"]) == (
+        ["https://a.example", "https://b.example"],
+        True,
+    )
+
+
+def test_no_allowlist_means_no_cross_origin_access() -> None:
+    from nexus_ai_agent.api.app import cors_policy
+
+    assert cors_policy([]) == ([], False)

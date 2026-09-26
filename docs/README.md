@@ -111,6 +111,7 @@ placeholder text.
 | [audits/MASTER_ARCHITECTURAL_ASSESSMENT_2026-09-27.md](audits/MASTER_ARCHITECTURAL_ASSESSMENT_2026-09-27.md) | Exact-SHA Phase Zero assessment: actual runtime, trust boundaries, Continuum/GitHub truth, five-angle research decisions, gaps, and risk register. |
 | [audits/EXECUTION_PLAN_2026-09-27.md](audits/EXECUTION_PLAN_2026-09-27.md) | Phased implementation plan with dependencies, verification/CI strategy, operational gates, and Definition of Done. |
 | [audits/FORENSIC_MAINLINE_RECOVERY_2026-10-06.md](audits/FORENSIC_MAINLINE_RECOVERY_2026-10-06.md) | Exact-SHA mainline truth audit: release-metadata defects (README version, lockstep guard, Continuum snapshot) with the delivered fixes and honest production limitations. |
+| [audits/OWNER_AUDIT_COMMAND_TRUTH_2026-09-26.md](audits/OWNER_AUDIT_COMMAND_TRUTH_2026-09-26.md) | Owner audit (task-193): eleven fake/silent commands wired to the engines that already existed, ModerationEngine correctness (10/11 innocent Persian words were flagged; naive/aware mute crash; unbounded flood tracker), self-update event-loop freeze, and the CORS/limit/signing-key/root-container/settings-alias hardening set. |
 
 ## History (archived — read-only, never a source of truth)
 

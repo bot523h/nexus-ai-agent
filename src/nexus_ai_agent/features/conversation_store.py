@@ -7,12 +7,12 @@ survive process restarts and can be queried/audited.
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import create_engine, text
 
+from nexus_ai_agent.core.timeutil import utcnow
 from nexus_ai_agent.observability.logging import get_logger
 
 log = get_logger(__name__)
@@ -101,7 +101,7 @@ class ConversationStore:
                     "cid": conv_id,
                     "role": role,
                     "parts": parts_json,
-                    "ts": datetime.utcnow().isoformat(),
+                    "ts": utcnow().isoformat(),
                 },
             )
 
@@ -121,7 +121,7 @@ class ConversationStore:
                         "cid": conv_id,
                         "role": role,
                         "parts": parts_json,
-                        "ts": datetime.utcnow().isoformat(),
+                        "ts": utcnow().isoformat(),
                     },
                 )
 

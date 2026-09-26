@@ -140,8 +140,14 @@ def test_non_ascii_manifest_is_stable(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_base64_key_fallback_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A non-hex ``NEXUS_SIGNING_KEY`` falls back to base64 decoding."""
-    raw_key = b"nexus-wave5-task142-key-bytes!"  # 30 raw bytes, arbitrary
+    """A non-hex ``NEXUS_SIGNING_KEY`` falls back to base64 decoding.
+
+    The key is 32 bytes because that is now the enforced floor — see
+    ``test_short_key_is_rejected`` for why. This test previously used a
+    30-byte key, i.e. it asserted that an under-length key was acceptable.
+    """
+    raw_key = b"nexus-wave5-task142-key-bytes-32"  # exactly 32 raw bytes
+    assert len(raw_key) == sut.MIN_KEY_BYTES
     key_b64 = base64.b64encode(raw_key).decode("ascii")
     assert not all(c in "0123456789abcdefABCDEF" for c in key_b64) or len(key_b64) != 64
     monkeypatch.setenv("NEXUS_SIGNING_KEY", key_b64)
@@ -149,6 +155,27 @@ def test_base64_key_fallback_round_trip(monkeypatch: pytest.MonkeyPatch) -> None
     # same canonicalisation, so sign/verify round-trips through the fallback
     manifest = {"fallback": "base64", "n": 42}
     sut.verify_manifest(manifest, sut.sign_manifest(manifest))
+
+
+@pytest.mark.parametrize("raw_key", [b"", b"a", b"abcd", b"31-bytes-is-still-too-short-xx"])
+def test_short_key_is_rejected(monkeypatch: pytest.MonkeyPatch, raw_key: bytes) -> None:
+    """The base64 branch used to accept *any* decodable string.
+
+    ``NEXUS_SIGNING_KEY="abcd"`` decoded to 3 bytes and was signed with — a
+    2^24 keyspace on the component whose only job is proving a delivery pack
+    was not tampered with. A truncated key must fail closed, and with the
+    typed error, not a raw ValueError out of nacl.
+    """
+    monkeypatch.setenv("NEXUS_SIGNING_KEY", base64.b64encode(raw_key).decode("ascii") or "x")
+    with pytest.raises(sut.SigningError):
+        sut.get_signing_key_bytes()
+    with pytest.raises(sut.SigningError):
+        sut.sign_manifest({"x": 1})
+
+
+def test_minimum_key_length_is_256_bits() -> None:
+    """32 bytes = the Ed25519 seed size and the natural HMAC-SHA256 key size."""
+    assert sut.MIN_KEY_BYTES == 32
 
 
 def test_malformed_key_raises_signing_error(monkeypatch: pytest.MonkeyPatch) -> None:

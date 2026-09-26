@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import random
 import re
+import threading
 from datetime import datetime, timezone
 from typing import Any
 
@@ -25,12 +26,24 @@ from nexus_ai_agent.storage.models import ViralPost
 logger = get_logger(__name__)
 
 
+# One engine per database path (see ``features/moderation.py`` for the same
+# repair): the previous helper built a fresh SQLAlchemy engine — and with it a
+# fresh connection pool — on every single CRUD call.
+_ENGINES: dict[str, Any] = {}
+_ENGINE_LOCK = threading.Lock()
+
+
 def _sync_engine() -> Any:
-    """Return a synchronous SQLAlchemy engine for feature CRUD."""
+    """Return the process-wide synchronous engine for the configured database."""
     from sqlalchemy import create_engine as _ce
 
-    settings = get_settings()
-    return _ce(f"sqlite:///{settings.db_path}", echo=False)
+    db_path = str(get_settings().db_path)
+    with _ENGINE_LOCK:
+        engine = _ENGINES.get(db_path)
+        if engine is None:
+            engine = _ce(f"sqlite:///{db_path}", echo=False)
+            _ENGINES[db_path] = engine
+        return engine
 
 
 # ---------------------------------------------------------------------------
@@ -57,7 +70,7 @@ _VIRAL_TEMPLATES: list[dict[str, Any]] = [
     {
         "category": "fun",
         "templates": [
-            "😂 سؤال: چرا برنامه‌نویس‌ها混淆 میشن؟ چون زبونشونو گم می‌کنن!\n\n#طنز #برنامه‌نویسی",
+            "😂 سؤال: چرا برنامه‌نویس‌ها گیج میشن؟ چون زبونشونو گم می‌کنن!\n\n#طنز #برنامه‌نویسی",
             "🎮 اگه زندگیت یه بازی بود، چیستری می‌زدی؟ 😄\n\n#طنز #سرگرمی",
             "🍕 پیتزا با آناناس: نابودی یا شاهکار؟ 🍍\n\nنظر بدید! 👇\n\n#طنز #غذا",
         ],
@@ -190,7 +203,7 @@ class ViralEngine:
     @staticmethod
     def is_duplicate(text: str, chat_id: int = 0) -> bool:
         """Check if *text* has been posted before (by content hash)."""
-        content_hash = hashlib.md5(text.encode()).hexdigest()[:12]
+        content_hash = hashlib.md5(text.encode(), usedforsecurity=False).hexdigest()[:12]
         engine = _sync_engine()
         with Session(engine) as session:
             existing = session.exec(

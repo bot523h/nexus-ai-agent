@@ -47,6 +47,11 @@ from nexus_ai_agent.i18n import DEFAULT_LANG, i18n
 
 from ._ptb import callback_data, user_language_code
 
+#: The single sentence the old catch-all answered every ``^onboarding_``
+#: button with. Held here so ``tests/unit/test_surface_registration.py`` can
+#: assert it is never replied to a user again.
+STUB_STRINGS = ("✅ Onboarding step completed!",)
+
 __all__ = [
     "DEFAULT_FALLBACK_LANG",
     "KNOWN_CALLBACKS",
