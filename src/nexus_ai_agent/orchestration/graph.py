@@ -98,6 +98,18 @@ async def _executor_agent(
         tool_inputs = first_pending.get("inputs", {})
         try:
             res = await tool_registry.run(tool_name, tool_inputs)
+            if res.get("needs_confirmation"):
+                # A guarded tool without confirmation policy is a PAUSE, not
+                # an execution: the step stays pending, nothing ran, and the
+                # user-visible message must say so. Reporting success — or a
+                # bare "Tool X executed." — here used to convert a refusal
+                # into fake execution truth.
+                state["response"] = (
+                    f"Confirmation required to run tool '{tool_name}'. "
+                    "The tool has NOT been executed yet.\n"
+                    f"Inputs: {tool_inputs}"
+                )
+                return state
             is_success = res.get("success", False)
             first_pending["status"] = "done" if is_success else "failed"
             output_text = res.get("output", "") or res.get("error", "")
@@ -109,7 +121,12 @@ async def _executor_agent(
                     "output": output_text,
                 }
             ]
-            state["response"] = output_text or f"Tool {tool_name} executed."
+            # The response must describe the OBSERVED outcome, never the
+            # request: only a real success may claim completion.
+            if is_success:
+                state["response"] = output_text or f"Tool {tool_name} completed."
+            else:
+                state["response"] = output_text or f"Tool {tool_name} failed."
         except Exception as e:
             first_pending["status"] = "failed"
             state["tool_results"] = state.get("tool_results", []) + [

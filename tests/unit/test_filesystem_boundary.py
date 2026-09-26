@@ -72,6 +72,18 @@ def test_policy_rejects_absolute_windows_and_traversal_spellings(tmp_path: Path)
             policy.resolve(raw)
 
 
+def test_policy_rejects_workspace_root_as_file_operand(tmp_path: Path) -> None:
+    """'.' must be a typed boundary error, never an AssertionError crash."""
+    policy = WorkspaceFilesystem(tmp_path)
+    for operation in (
+        lambda: policy.read_text("."),
+        lambda: policy.write_text(".", "x"),
+        lambda: policy.unlink("."),
+    ):
+        with pytest.raises(FilesystemBoundaryError, match="file path is required"):
+            operation()
+
+
 def test_policy_does_not_follow_leaf_symlink_on_unlink(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     outside = tmp_path / "outside.txt"
