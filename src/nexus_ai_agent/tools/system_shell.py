@@ -25,6 +25,7 @@ from typing import ClassVar
 
 from nexus_ai_agent.tools.base import BaseTool, RiskLevel
 from nexus_ai_agent.tools.files import _workspace_root
+from nexus_ai_agent.tools.filesystem_policy import WorkspaceFilesystem
 
 
 class ShellTool(BaseTool):
@@ -50,25 +51,24 @@ class ShellTool(BaseTool):
     # grep: flags whose next argument is a file path (containment-checked).
     _GREP_PATH_FLAGS: ClassVar[frozenset[str]] = frozenset({"-f"})
 
-    def __init__(self, enable_shell: bool):
+    def __init__(self, enable_shell: bool, workspace_root: str | Path | None = None):
+        self._workspace = WorkspaceFilesystem(workspace_root or _workspace_root())
         if not enable_shell:
             self.risk_level = RiskLevel.BLOCKED
 
+    def bind_workspace(self, workspace_root: str | Path) -> None:
+        self._workspace = WorkspaceFilesystem(workspace_root)
+
     # ── validation ──────────────────────────────────────────────────
 
-    @staticmethod
-    def _validate_path(root: Path, arg: str) -> None:
-        """Reject absolute paths, ``..`` segments, and escapes outside *root*."""
-        if arg.startswith("/"):
-            raise ValueError(f"Absolute paths are not allowed: {arg}")
-        if ".." in Path(arg).parts:
-            raise ValueError(f"Path traversal is not allowed: {arg}")
-        resolved = (root / arg).resolve()
-        if not resolved.is_relative_to(root):
-            raise ValueError(f"Path escapes the workspace: {arg}")
+    def _validate_path(self, arg: str) -> None:
+        """Reject traversal and symlink escapes before subprocess execution."""
+        try:
+            self._workspace.resolve(arg, allow_root=arg in ("", "."))
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"Path is outside the workspace: {arg}") from exc
 
     def _validate_args(self, command: str, args: list[str]) -> None:
-        root = _workspace_root()
 
         if command == "find":
             for arg in args:
@@ -83,21 +83,21 @@ class ShellTool(BaseTool):
                 if command == "find" and arg in self._FIND_PATH_FLAGS:
                     if i + 1 >= len(args):
                         raise ValueError(f"Flag {arg} requires a path argument")
-                    self._validate_path(root, args[i + 1])
+                    self._validate_path(args[i + 1])
                     i += 2
                 elif command == "grep" and arg in self._GREP_PATH_FLAGS:
                     if i + 1 >= len(args):
                         raise ValueError(f"Flag {arg} requires a path argument")
-                    self._validate_path(root, args[i + 1])
+                    self._validate_path(args[i + 1])
                     i += 2
                 else:
                     i += 1
                 continue
 
             if command in self._PATH_COMMANDS:
-                self._validate_path(root, arg)
+                self._validate_path(arg)
             elif command == "grep" and nonflag_index >= 1:
-                self._validate_path(root, arg)
+                self._validate_path(arg)
             nonflag_index += 1
             i += 1
 
@@ -127,7 +127,7 @@ class ShellTool(BaseTool):
         except ValueError as exc:
             return {"success": False, "output": "", "error": str(exc)}
 
-        root = _workspace_root()
+        root = self._workspace.root
 
         def _run() -> subprocess.CompletedProcess[str]:
             return subprocess.run(
