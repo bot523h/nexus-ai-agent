@@ -616,6 +616,85 @@
   ],
   "claims": [
     {
+      "task": "night-shift-owner-db",
+      "zone": "storage-observability",
+      "status": "active",
+      "priority": "P0",
+      "agent_branch": "arena/01a0da13-nexus-ai-agent",
+      "claimed_at": "2026-09-26T05:09:11Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/db.py"
+      ],
+      "prerequisites": [],
+      "scope": "Night-shift owner hardening: configured SQLite default path only; no foreign ownership takeover. This is a file-scoped subclaim of the same mission using existing zones.",
+      "acceptance_criteria": [
+        "Default runtime session and schema creation honor Settings.db_path, retaining explicit override and PostgreSQL precedence",
+        "New isolated regression fails on exact main and passes after minimal fix",
+        "Document remaining DB consumers and ownership blockers; no global closure claim"
+      ],
+      "evidence_required": [
+        "Exact-main failing regression and targeted after-fix tests",
+        "Exact final SHA CI separately from local diagnostics",
+        "Read-only original checkout byte hashes unchanged"
+      ],
+      "note": "Owner authorized additive mission claims only. Existing claims/zones are unchanged; full local engineering gates deferred to gates owner."
+    },
+    {
+      "task": "night-shift-owner-regression",
+      "zone": "storage-r2-smoke",
+      "status": "active",
+      "priority": "P0",
+      "agent_branch": "arena/01a0da13-nexus-ai-agent",
+      "claimed_at": "2026-09-26T05:09:11Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "tests/integration/test_owner_db_path_contract.py"
+      ],
+      "prerequisites": [],
+      "scope": "Night-shift owner hardening: configured SQLite default path only; no foreign ownership takeover. This is a file-scoped subclaim of the same mission using existing zones.",
+      "acceptance_criteria": [
+        "Default runtime session and schema creation honor Settings.db_path, retaining explicit override and PostgreSQL precedence",
+        "New isolated regression fails on exact main and passes after minimal fix",
+        "Document remaining DB consumers and ownership blockers; no global closure claim"
+      ],
+      "evidence_required": [
+        "Exact-main failing regression and targeted after-fix tests",
+        "Exact final SHA CI separately from local diagnostics",
+        "Read-only original checkout byte hashes unchanged"
+      ],
+      "note": "Owner authorized additive mission claims only. Existing claims/zones are unchanged; full local engineering gates deferred to gates owner."
+    },
+    {
+      "task": "night-shift-owner-evidence",
+      "zone": "docs-architecture",
+      "status": "active",
+      "priority": "P0",
+      "agent_branch": "arena/01a0da13-nexus-ai-agent",
+      "claimed_at": "2026-09-26T05:09:11Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "docs/audits/OWNER_HARDENING_CLOSURE.md",
+        "docs/audits/OWNER_HARDENING_EVIDENCE/"
+      ],
+      "prerequisites": [],
+      "scope": "Night-shift owner hardening: configured SQLite default path only; no foreign ownership takeover. This is a file-scoped subclaim of the same mission using existing zones.",
+      "acceptance_criteria": [
+        "Default runtime session and schema creation honor Settings.db_path, retaining explicit override and PostgreSQL precedence",
+        "New isolated regression fails on exact main and passes after minimal fix",
+        "Document remaining DB consumers and ownership blockers; no global closure claim"
+      ],
+      "evidence_required": [
+        "Exact-main failing regression and targeted after-fix tests",
+        "Exact final SHA CI separately from local diagnostics",
+        "Read-only original checkout byte hashes unchanged"
+      ],
+      "note": "Owner authorized additive mission claims only. Existing claims/zones are unchanged; full local engineering gates deferred to gates owner."
+    },
+    {
       "task": "task-131",
       "title": "Architecture & documentation suite + board rewrite",
       "title_fa": "سوئیت معماری و مستندسازی + بازنویسی تخته",

@@ -1,0 +1,11 @@
+{
+  "status": " M .agents/board.json\n M .dockerignore\n M README.md\n M tests/unit/test_version_lockstep.py\n?? README_RELEASE_TRUTH.md\n?? tests/unit/test_container_context.py\n",
+  "files": {
+    ".agents/board.json": "3c20f3f2538f054da5440cc7ba9737adc4e69702bd9fa60088b5eb07667ca18f",
+    ".dockerignore": "8c09f70c4dc9b2fbd2c2586481ecf896c9c169cbb59259e31d9d0738c4b38ae6",
+    "README.md": "38e2c1af58923228ddfdf86d586eac82f8ed48ef8dfeb09711e16eb23bb3b893",
+    "tests/unit/test_version_lockstep.py": "192d624b5cd232312e77b1a00df5750f06825eeebfba584d4a18fe2b2482d06f",
+    "README_RELEASE_TRUTH.md": "2d5c927039d26ddb72a6e75123b9e144f27ab987bb8c25a12021b7f28981b59c",
+    "tests/unit/test_container_context.py": "2d564ad78e9ceca3944f0b16d6e86f8d23f8f255d933573a319bfdc2771a31fb"
+  }
+}

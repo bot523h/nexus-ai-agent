@@ -1,0 +1,9 @@
+{
+  "timestamp": "2026-09-26T05:09:11Z",
+  "existing_claims_unchanged": true,
+  "other_board_fields_unchanged": true,
+  "live_foreign_overlap": [],
+  "board_exception": "Owner authorized additive mission claim; split across existing zones without adding/changing zones",
+  "main_sha": "2351f099e2f789b80de05c6b382554b5cdcec0f3",
+  "inherited_head": "690483c2e1fdd46b67b785cc30689ccb7515b2d0"
+}
