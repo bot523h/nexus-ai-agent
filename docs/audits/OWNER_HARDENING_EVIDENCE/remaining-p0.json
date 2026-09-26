@@ -1,0 +1,37 @@
+{
+  "sha": "2351f099e2f789b80de05c6b382554b5cdcec0f3",
+  "timestamp": "2026-09-26T05:10:59.665297+00:00",
+  "python": "3.11.2",
+  "environment": "PYTHONPATH exact-main archive; temporary cwd/HOME; no production data",
+  "results": {
+    "cli_dry_run": {
+      "before": [],
+      "after": [
+        "data",
+        "data/cache",
+        "models"
+      ],
+      "changed": true
+    },
+    "local_dry_run": {
+      "summary": {
+        "dry_run": true,
+        "temp_files_removed": [
+          "/tmp/tmph27mz__5/creative/creative_jobs.sqlite3",
+          "/tmp/tmph27mz__5/creative/creative_jobs.sqlite3-journal",
+          "/tmp/tmph27mz__5/creative/creative_jobs.sqlite3-shm",
+          "/tmp/tmph27mz__5/creative/creative_jobs.sqlite3-wal",
+          "/tmp/tmph27mz__5/creative/old.mp4"
+        ],
+        "backups_deleted": [],
+        "r2_skipped_reason": "R2 not configured \u2014 local cleanup only"
+      },
+      "remaining": []
+    },
+    "tilde_path": {
+      "configured": "~/custom.sqlite",
+      "runtime_explicit_path": "/tmp/tmph27mz__5/custom.sqlite",
+      "backup_error": "SQLite database not found at ~/custom.sqlite"
+    }
+  }
+}

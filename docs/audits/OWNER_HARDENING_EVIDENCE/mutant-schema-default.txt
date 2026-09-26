@@ -1,0 +1,11 @@
+.....F..                                                                 [100%]
+=================================== FAILURES ===================================
+____________ test_no_argument_schema_creation_uses_configured_path _____________
+/home/user/night-shift/mutation/tests/integration/test_owner_db_path_contract.py:76: in test_no_argument_schema_creation_uses_configured_path
+    assert expected.is_file()
+E   AssertionError: assert False
+E    +  where False = is_file()
+E    +    where is_file = PosixPath('/tmp/pytest-of-user/pytest-6/test_no_argument_schema_creati0/configured/schema.sqlite').is_file
+=========================== short test summary info ============================
+FAILED tests/integration/test_owner_db_path_contract.py::test_no_argument_schema_creation_uses_configured_path
+1 failed, 7 passed in 1.27s
