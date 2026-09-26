@@ -138,6 +138,8 @@ class WorkspaceFilesystem:
 
     def read_text(self, raw: str, *, encoding: str = "utf-8") -> str:
         parts = _validate_relative(raw)
+        if not parts:
+            raise FilesystemBoundaryError("a file path is required, got the workspace root")
         self.resolve(raw)
         with self._parent_fd(parts) as (parent_fd, name):
             assert name is not None
@@ -154,6 +156,8 @@ class WorkspaceFilesystem:
 
     def write_text(self, raw: str, content: str, *, encoding: str = "utf-8") -> Path:
         parts = _validate_relative(raw)
+        if not parts:
+            raise FilesystemBoundaryError("a file path is required, got the workspace root")
         resolved = self.resolve(raw)
         with self._parent_fd(parts, create=True) as (parent_fd, name):
             assert name is not None
@@ -220,6 +224,8 @@ class WorkspaceFilesystem:
     def unlink(self, raw: str) -> None:
         """Unlink one contained file without following a swapped parent/leaf."""
         parts = _validate_relative(raw)
+        if not parts:
+            raise FilesystemBoundaryError("a file path is required, got the workspace root")
         self.resolve(raw)
         with self._parent_fd(parts) as (parent_fd, name):
             assert name is not None

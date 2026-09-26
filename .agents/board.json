@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-25T17:46:27Z",
+  "updated_at": "2026-09-26T19:45:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -600,6 +600,22 @@
         "docs/audits/GATE5_TRUTH_MATRIX.json",
         "src/nexus_ai_agent/cli.py",
         "docs/audits/VERIFICATION_TRUTH_MATRIX.json"
+      ]
+    },
+    {
+      "id": "production-dr-deploy",
+      "description": "Production/DR/deploy truth (mission-2): maintenance DR lane (backup/restore/failure taxonomy), readiness+identity API surface, maintenance workflow hardening, deploy smoke/version-identity gate, DR runbooks and DR tests",
+      "paths": [
+        "src/nexus_ai_agent/maintenance/",
+        "src/nexus_ai_agent/api/app.py",
+        "scripts/deploy_smoke.py",
+        "Dockerfile",
+        ".github/workflows/maintenance.yml",
+        "docs/ops/",
+        "tests/unit/test_restore_drill.py",
+        "tests/unit/test_backup_dr_truth.py",
+        "tests/unit/test_readyz_identity.py",
+        "tests/unit/test_deploy_smoke_readyz.py"
       ]
     }
   ],
@@ -1929,7 +1945,7 @@
       "title_fa": "بکاپ شبانهٔ دیتابیس هرگز موفق نشده (۳ از ۳ سرخ) — مسیر بکاپ Production واقعاً کار کند",
       "zone": "ci-quality",
       "priority": "P1",
-      "status": "queued",
+      "status": "active",
       "scope": "maintenance.yml backup-db fails 3/3 scheduled runs (35580701817, 35705502209, 35838057275 — the 'Run nexus maintenance backup' step exits 1; the 2026-09-21 'success' 35586584833 was housekeeping-only with backup-db skipped, verified via the job API). backup.py/r2.py unchanged across those runs, so the failure is environmental (R2 secrets missing => by-design red, or R2+Neon misconfiguration). Read the job log, record the exact root cause, fix configuration (owner secrets per docs/ops/r2-storage.md §4) and/or the workflow preflight, then prove a real upload under backups/db/<stamp>/ via workflow_dispatch.",
       "scope_fa": "backup-db در سه اجرا پیاپی سرخ است؛ کد backup.py/r2.py در بازهٔ آن اجراها دست‌نخورده مانده، پس شکست محیطی است (R2 secrets / پیکربندی Neon). لوق جاب باید خوانده، ریشه ثبت و با یک اجرای دستی موفق (آپلود واقع‌زیر backups/db/<stamp>/) اثبات شود.",
       "prerequisites": [],
@@ -1942,15 +1958,14 @@
         "job log excerpt of one failed run naming the exact error",
         "green workflow_dispatch run id + the uploaded R2 key"
       ],
-      "exclusive_paths": [
-        ".github/workflows/maintenance.yml"
-      ],
+      "exclusive_paths": [],
       "owner_hint": "owner action for the secrets; any free agent for the forensics/preflight",
-      "agent_branch": "",
-      "claimed_at": null,
-      "ttl_hours": 24,
+      "agent_branch": "arena/01a0dee1-nexus-ai-agent",
+      "claimed_at": "2026-09-26T19:15:19Z",
+      "ttl_hours": 48,
       "gates_owner": false,
-      "note": "Forensics recorded 2026-09-23. Repo-side verifiability absorbed by task-167-backup-verifiability (P0-C, 2026-09-24). This task keeps ONLY the owner-action part: set R2/Neon secrets (docs/ops/r2-storage.md §4) and prove one green workflow_dispatch run with upload under backups/db/<stamp>/."
+      "note": "",
+      "handoff_note": "File lease for .github/workflows/maintenance.yml released to task-192-production-dr-truth (superset scope: workflow hardening incl. restore-drill job + evidence steps). task-164 remaining scope is OWNER-SIDE: R2 secrets + a real green dispatch of backup-db; it holds no file lease."
     },
     {
       "priority": "P0",
@@ -2144,7 +2159,7 @@
       "title_fa": "",
       "zone": "coordination",
       "priority": "P2",
-      "status": "active_in_review",
+      "status": "expired",
       "scope": "PR#67 adds required_packs + a lifecycle bus gate; Gate 2 could not verify against it. After both land, wire the seam (stage 4, after grant+registry, before reservation) and prove pack-required vs pack-absent dispatch.",
       "scope_fa": "",
       "prerequisites": [
@@ -2161,7 +2176,7 @@
       "claimed_at": "2026-09-24T20:37:51Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Continued from arena/01a0d4c8 (PR#75 head e0cba26 is an ancestor of this branch; PR#75 is superseded by PR#77, same stack on PR#72). MERGE ORDER: PR#72 -> PR#77; PR#67 afterwards needs the semantic resolution in COMMAND_CAPABILITY_CONTRACT section 11 (keep 4b, drop 3.5 + payload/surface opt-in, add color.apply_lut to EXPERIMENTAL_OPT_IN_OPERATIONS).",
+      "note": "auto-released by gc at 2026-09-26T19:10:58Z (stale active_in_review lease)",
       "stacked_on": {
         "pr": 72,
         "task": "task-179-gate2-command-reconciliation",
@@ -2203,11 +2218,11 @@
     },
     {
       "priority": "P0",
-      "status": "active_in_review",
+      "status": "expired",
       "prerequisites": [],
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Continuation of sec-boundary-salvage-01a0d4c7 (PR#76 head 5b17a709, CI green): owner-directed adversarial verification proved 5 S3/S5 defects its tests missed (stdlib traceback redaction bypass, mapping/non-string arg corruption, Basic-scheme credentials, CGNAT 100.64.0.0/10 allowed, https->http redirect downgrade followed). Closed on this branch (ff from 5b17a709 + closure commits), 12/12 mutation-killed, full non-slow suite 1989 passed / ruff / format / mypy clean. Takeover recorded in takeover_log; same zone, one owner.",
+      "note": "auto-released by gc at 2026-09-26T19:10:58Z (stale active_in_review lease)",
       "task": "sec-boundary-salvage-01a0d563",
       "title": "Security truth salvage: verify S1-S5 on main 035a896, fix only the real delta",
       "title_fa": "استخراج حقیقت امنیتی: بازبینی S1-S5 روی main 035a896 و اعمال فقط دلتای واقعی",
@@ -2391,6 +2406,45 @@
       "claimed_at": "2026-09-24T23:06:38Z",
       "ttl_hours": 48,
       "prev_agent_branch": "arena/01a0d4b6-nexus-ai-agent"
+    },
+    {
+      "task": "task-192-production-dr-truth",
+      "priority": "P1",
+      "zone": "production-dr-deploy",
+      "title": "Production readiness + DR + deployment truth: executable local restore drill, typed R2/backup failure taxonomy, deployment identity+smoke validation, rollback semantics documentation",
+      "acceptance_criteria": [
+        "local restore drill is executable: backup -> isolated target -> restore -> integrity -> schema/table validation -> app-readable state, with regression tests (sqlite leg real, postgres leg structural without live credentials)",
+        "backup failure taxonomy is operator-actionable: every failure names what/where/why/retryable/operator-action for missing config, wrong creds/bucket/endpoint, upload/readback/checksum errors, corrupt/empty/truncated artifact, timeout",
+        "deployment identity chain verifiable: git SHA/app version surface at runtime and are pinned by tests; deploy_smoke validated",
+        "Dockerfile production gap from board: ffmpeg presence decision ratcheted by contract test",
+        "rollback semantics documented + whatever is executable is tested; no fake provider/success"
+      ],
+      "evidence_required": [
+        "pytest targeted ops suites green + full non-slow suite green",
+        "kill-mutations: remove checksum validation / skip readback / accept empty artifact / mark failed restore healthy -> tests go RED and are restored",
+        "no change to storage/providers/r2.py core (task-137/138/139 zone) except operator-facing taxonomy if board-clean at edit time"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/maintenance/restore.py",
+        "src/nexus_ai_agent/maintenance/failures.py",
+        "src/nexus_ai_agent/maintenance/backup.py",
+        "src/nexus_ai_agent/api/app.py",
+        "scripts/deploy_smoke.py",
+        ".github/workflows/maintenance.yml",
+        "Dockerfile",
+        "tests/unit/test_restore_drill.py",
+        "tests/unit/test_backup_dr_truth.py",
+        "tests/unit/test_readyz_identity.py",
+        "tests/unit/test_deploy_smoke_readyz.py",
+        "docs/ops/DISASTER_RECOVERY_RUNBOOK.md",
+        "docs/ops/DEPLOY_RUNBOOK.md"
+      ],
+      "status": "active",
+      "owner": "arena/01a0dee1-nexus-ai-agent",
+      "claimed_at": "2026-09-26T19:30:00Z",
+      "ttl_hours": 48,
+      "status_note": "cli.py deferred: active lease held by task-181-gate5-closure (ZERO COLLISION). Restore drill exposed via python -m nexus_ai_agent.maintenance.restore instead.",
+      "agent_branch": "arena/01a0dee1-nexus-ai-agent"
     }
   ],
   "deferred_log": [

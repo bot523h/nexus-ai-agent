@@ -35,7 +35,7 @@ from typing import Any, Literal
 try:
     import yaml  # type: ignore[import-untyped]
 except ImportError:  # pragma: no cover - runner without PyYAML
-    yaml = None  # type: ignore[assignment]
+    yaml = None
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -43,6 +43,7 @@ SERVICE_NAME = "bot"
 EXPECTED_SERVICE_TYPE = "web"
 EXPECTED_HEALTH_PATH = "/healthz"
 EXPECTED_WEBHOOK_PATH = "/webhook/telegram"
+EXPECTED_READINESS_PATH = "/readyz"
 
 REQUIRED_ENV_VARS = (
     "TELEGRAM_BOT_TOKEN",
@@ -169,7 +170,7 @@ def check_contract(repo_root: Path) -> list[CheckResult]:
         results.append(CheckResult("contract", "FAIL", "web app module (api/app.py) missing"))
     else:
         source = app_py.read_text(encoding="utf-8")
-        for route in (EXPECTED_HEALTH_PATH, EXPECTED_WEBHOOK_PATH):
+        for route in (EXPECTED_HEALTH_PATH, EXPECTED_WEBHOOK_PATH, EXPECTED_READINESS_PATH):
             if route in source:
                 results.append(CheckResult("contract", "PASS", f"route {route} present"))
             else:
@@ -215,7 +216,13 @@ def _read_json_response(url: str, timeout: float) -> tuple[int, Any]:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, None
+        # Error responses may still carry a JSON body — readiness(503) is the
+        # main case: the operator NEEDS the `db.detail` reason for triage.
+        try:
+            body = exc.read().decode("utf-8")
+            return exc.code, json.loads(body)
+        except Exception:  # noqa: BLE001 - non-JSON error body is fine metadata
+            return exc.code, None
 
 
 def check_healthz(base_url: str, timeout: float) -> CheckResult:
@@ -228,6 +235,50 @@ def check_healthz(base_url: str, timeout: float) -> CheckResult:
     if status != 200 or payload != {"status": "ok"}:
         return CheckResult("healthz", "FAIL", f"{url} answered {status} {payload!r}")
     return CheckResult("healthz", "PASS", f"{url} -> 200 {payload!r}")
+
+
+def check_readyz(
+    base_url: str,
+    timeout: float,
+    expect_version: str | None = None,
+) -> CheckResult:
+    """Probe readiness + deploy identity of a deployed instance.
+
+    ``503 not_ready`` means: do not promote traffic, investigate logs, and
+    when this follows a deploy, roll back. A version mismatch against
+    ``expect_version`` is the stale-deployment detector: the deploy did not
+    land what the operator thinks it did, and the check names the rollback
+    action.
+    """
+    url = base_url.rstrip("/") + EXPECTED_READINESS_PATH
+    try:
+        status, payload = _read_json_response(url, timeout)
+    except Exception as exc:  # noqa: BLE001 - network failures fail the check
+        return CheckResult("readyz", "FAIL", f"{url} unreachable: {exc}")
+    if status == 503:
+        detail = (payload or {}).get("db", {}).get("detail") if isinstance(payload, dict) else None
+        return CheckResult(
+            "readyz",
+            "FAIL",
+            f"{url} reports NOT READY (db: {detail or 'unavailable'}) — "
+            "do not promote traffic; if this follows a deploy, roll back and inspect logs",
+        )
+    if status != 200 or not isinstance(payload, dict):
+        return CheckResult("readyz", "FAIL", f"{url} answered {status} {payload!r}")
+    version = payload.get("version")
+    if payload.get("status") != "ready" or not version:
+        return CheckResult(
+            "readyz", "FAIL", f"{url} answered 200 but payload is incomplete: {payload!r}"
+        )
+    if expect_version is not None and version != expect_version:
+        return CheckResult(
+            "readyz",
+            "FAIL",
+            f"deployed version mismatch: expected {expect_version}, running {version} — "
+            "likely a stale deployment or wrong build; roll back or redeploy before promoting",
+        )
+    sha = payload.get("deploy_git_sha") or "unknown-sha"
+    return CheckResult("readyz", "PASS", f"{url} ready (version={version}, sha={sha})")
 
 
 def check_webhook_gate(base_url: str, timeout: float) -> CheckResult:
@@ -264,6 +315,7 @@ def run_smoke(
     repo_root: Path = REPO_ROOT,
     base_url: str | None = None,
     timeout: float = 15.0,
+    expect_version: str | None = None,
 ) -> list[CheckResult]:
     """Run the offline checks plus the live probes when ``base_url`` is set."""
     results = [
@@ -273,6 +325,7 @@ def run_smoke(
     if base_url:
         results.append(check_healthz(base_url, timeout))
         results.append(check_webhook_gate(base_url, timeout))
+        results.append(check_readyz(base_url, timeout, expect_version=expect_version))
     return results
 
 
@@ -308,6 +361,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=15.0,
         help="Seconds per live probe (default: 15).",
     )
+    parser.add_argument(
+        "--expect-version",
+        default=None,
+        help="Version the deployed instance MUST report at /readyz "
+        "(stale-deployment / wrong-build detector).",
+    )
     return parser
 
 
@@ -317,7 +376,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.timeout <= 0:
         print("smoke: --timeout must be positive", file=sys.stderr)
         return 2
-    results = run_smoke(base_url=args.url, timeout=args.timeout)
+    results = run_smoke(base_url=args.url, timeout=args.timeout, expect_version=args.expect_version)
     return summarize(results, strict=args.strict)
 
 

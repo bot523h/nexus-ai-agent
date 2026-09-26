@@ -9,8 +9,15 @@ on:
     - cron: "17 3 * * *"
     # Weekly housekeeping — Mondays 04:23 UTC (also off the top-of-hour).
     - cron: "23 4 * * 1"
+    # Weekly restore DRILL — Sundays 05:41 UTC. A backup that has never been
+    # restored is a claim; this job keeps the local recovery leg executable.
+    - cron: "41 5 * * 0"
   # Allow manual runs from the Actions tab (e.g. right after setting secrets).
   workflow_dispatch: {}
+
+# Read-only repository access is enough; jobs never push.
+permissions:
+  contents: read
 
 # One shared group: a scheduled backup never overlaps a running one, and a
 # manual run queues behind an in-progress schedule instead of cancelling it.
@@ -22,6 +29,7 @@ jobs:
   backup-db:
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 3 * * *'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       # pg_dump target. When unset, the command backs up the local SQLite
       # file instead (which is empty in CI) — set the secret for real use.
@@ -37,12 +45,99 @@ jobs:
           python-version: "3.12"
       - run: pip install -e .
       # Stateless + idempotent: safe to re-run. Exits non-zero when R2 is
-      # not configured so a silently-skipped backup is visible, not hidden.
-      - run: nexus maintenance backup
+      # not configured so a silently-skipped backup is visible, not hidden
+      # (deliberate design: an unmonitored missing backup is worse than a
+      # red job — owner configures R2_ACCOUNT_ID/R2_ACCESS_KEY_ID/
+      # R2_SECRET_ACCESS_KEY/R2_BUCKET once; see
+      # docs/ops/DISASTER_RECOVERY_RUNBOOK.md).
+      # This runs the exact production entry point `create_backup()`. The
+      # step writes the machine-verifiable evidence (key, sha256, size,
+      # timestamp) to the job log AND the step summary (task-164 AC).
+      - name: Nightly DB backup (round-trip + sidecar verified)
+        run: |
+          set -o pipefail
+          python - <<'EOF' 2>&1 | tee backup.log
+          import json, os
+          from nexus_ai_agent.config.settings import get_settings
+          from nexus_ai_agent.maintenance.backup import create_backup
+          summary = create_backup(settings=get_settings())
+          evidence = {k: summary.get(k) for k in (
+              "key", "sha256", "size_bytes", "timestamp", "source",
+              "uploaded", "verified",
+          )}
+          evidence["sidecar"] = summary.get("sidecar")
+          print("BACKUP_EVIDENCE " + json.dumps(evidence, sort_keys=True))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
+              fh.write("## Nightly backup evidence\n```json\n" +
+                       json.dumps(evidence, indent=2, sort_keys=True) + "\n```\n")
+          EOF
+      # On failure the operator gets the actionable error class AND the full
+      # log artifact — never a bare red X.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: backup-db-log
+          path: backup.log
+          retention-days: 14
+
+  restore-drill:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '41 5 * * 0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      # The LOCAL drill leg: build a database with the REAL application
+      # schema, dump it through the SAME online-backup function the nightly
+      # job uses, then restore-drill it into an isolated target and require
+      # the app's tables back. No R2 secrets and no fake provider: this
+      # proves the artifact→recovery chain end-to-end. The remote leg
+      # (--from-r2/--latest) needs owner credentials and stays owner-side
+      # (docs/ops/DISASTER_RECOVERY_RUNBOOK.md) — it is never faked here.
+      - name: Build a real application-schema backup artifact
+        run: |
+          mkdir -p drill
+          python - <<'EOF'
+          import asyncio
+          from pathlib import Path
+          from nexus_ai_agent.storage.db import create_all_tables
+          from nexus_ai_agent.maintenance.backup import _dump_sqlite, _sha256
+          asyncio.run(create_all_tables("drill/source.sqlite3"))
+          _dump_sqlite(Path("drill/source.sqlite3"), Path("drill/nexus-sqlite-drill.sqlite3"))
+          print("DRILL_ARTIFACT_SHA256 " + _sha256(Path("drill/nexus-sqlite-drill.sqlite3")))
+          EOF
+      - name: Restore-drill the artifact (apply + app-schema proof)
+        run: |
+          set -o pipefail
+          python -m nexus_ai_agent.maintenance.restore \
+            --from-local drill/nexus-sqlite-drill.sqlite3 \
+            --apply --target drill/restored.sqlite3 --force \
+            --expect-app-schema --json 2>&1 | tee drill/drill.json
+      - name: Publish drill evidence
+        run: |
+          python - <<'EOF'
+          import json, os
+          report = json.load(open("drill/drill.json", encoding="utf-8"))
+          assert report["ok"] is True, "restore drill must report ok"
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
+              fh.write("## Restore drill (weekly)\n- engine: sqlite (local leg)\n- chain: " +
+                       " → ".join(s["state"] for s in report["chain"]) +
+                       "\n- ok: " + str(report["ok"]) + "\n")
+          EOF
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: restore-drill-report
+          path: drill/
+          retention-days: 14
 
   housekeeping:
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '23 4 * * 1'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       # Housekeeping needs no database access — R2 secrets only.
       # No bot token here on purpose.
