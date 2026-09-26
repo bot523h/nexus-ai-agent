@@ -206,3 +206,16 @@ is **FIXED_TESTED** locally, not a blanket certification.
 **Next blocker:** coordinate with the PR #90 housekeeping owner and CLI owner to
 close the complete zero-filesystem-mutation dry-run contract, including settings
 initialization, without overlapping their leases.
+
+### Reproducer containment correction
+
+A final safety review found `creative_temp_dir` defaults to the shared sandbox
+path `/tmp/nexus_creative`, not the temporary cwd. The first CLI probe reported
+zero removals, but it still consulted that default root; its evidence is retained
+and is **not** described as fully contained. The corrected standalone reproducer
+clears inherited credentials/path settings and explicitly selects a temporary
+`CREATIVE_TEMP_DIR`. The new regression fixture also directs every directory
+created by settings initialization into `tmp_path`. No product assertion was
+weakened and no production behavior changed in this correction. Replay evidence
+is `remaining-public-cli-contained.txt` and `contained-runs.json`; the original
+checkout's bytes and status remain unchanged.

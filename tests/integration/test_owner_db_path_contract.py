@@ -23,6 +23,15 @@ def isolated_configuration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.chdir(tmp_path)
     for name in ("NEXUS_DB_PATH", "DB_PATH", "NEXUS_DATABASE_URL", "DATABASE_URL"):
         monkeypatch.delenv(name, raising=False)
+    # Settings initialization must not create paths outside this test sandbox.
+    for name, relative in (
+        ("NEXUS_CHECKPOINT_PATH", "checkpoint.sqlite"),
+        ("NEXUS_VECTOR_PATH", "vector.sqlite"),
+        ("NEXUS_MODEL_PATH", "model.gguf"),
+        ("NEXUS_CACHE_DIR", "cache"),
+        ("CREATIVE_TEMP_DIR", "creative"),
+    ):
+        monkeypatch.setenv(name, str(tmp_path / relative))
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

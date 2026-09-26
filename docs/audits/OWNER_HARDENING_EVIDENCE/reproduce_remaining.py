@@ -22,8 +22,15 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         os.chdir(root)
-        for key in ("NEXUS_DB_PATH", "DB_PATH", "NEXUS_DATABASE_URL", "DATABASE_URL"):
-            os.environ.pop(key, None)
+        # Do not inherit cloud credentials or storage roots from the caller.
+        environment = {key: os.environ[key] for key in ("PATH", "PYTHONPATH") if key in os.environ}
+        os.environ.clear()
+        os.environ.update(environment)
+        os.environ.update(
+            HOME=directory,
+            CREATIVE_TEMP_DIR=str(root / "creative-cli"),
+            PYTHONDONTWRITEBYTECODE="1",
+        )
         get_settings.cache_clear()
         command = [
             sys.executable,
