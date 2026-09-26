@@ -63,6 +63,7 @@ placeholder text.
 | Document | What it is |
 |---|---|
 | [ops/DEPLOY_RUNBOOK.md](ops/DEPLOY_RUNBOOK.md) | Koyeb deploy runbook: preflight → deploy → smoke → rollback → incidents. |
+| [ops/DISASTER_RECOVERY_RUNBOOK.md](ops/DISASTER_RECOVERY_RUNBOOK.md) | DR runbook: backup→sidecar→drill→restore chain, failure taxonomy, chaos matrix, owner dependency register. |
 | [ops/deployment-koyeb.md](ops/deployment-koyeb.md) | Koyeb scale-to-zero deployment guide. |
 | [ops/NEON_LIFECYCLE_RUNBOOK.md](ops/NEON_LIFECYCLE_RUNBOOK.md) | Neon/PostgreSQL lifecycle runbook. |
 | [ops/r2-storage.md](ops/r2-storage.md) | Cloudflare R2 blob tier: setup + maintenance secrets. |

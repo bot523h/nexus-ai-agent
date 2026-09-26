@@ -601,6 +601,22 @@
         "src/nexus_ai_agent/cli.py",
         "docs/audits/VERIFICATION_TRUTH_MATRIX.json"
       ]
+    },
+    {
+      "id": "production-dr-deploy",
+      "description": "Production/DR/deploy truth (mission-2): maintenance DR lane (backup/restore/failure taxonomy), readiness+identity API surface, maintenance workflow hardening, deploy smoke/version-identity gate, DR runbooks and DR tests",
+      "paths": [
+        "src/nexus_ai_agent/maintenance/",
+        "src/nexus_ai_agent/api/app.py",
+        "scripts/deploy_smoke.py",
+        "Dockerfile",
+        ".github/workflows/maintenance.yml",
+        "docs/ops/",
+        "tests/unit/test_restore_drill.py",
+        "tests/unit/test_backup_dr_truth.py",
+        "tests/unit/test_readyz_identity.py",
+        "tests/unit/test_deploy_smoke_readyz.py"
+      ]
     }
   ],
   "claims": [
@@ -1942,15 +1958,14 @@
         "job log excerpt of one failed run naming the exact error",
         "green workflow_dispatch run id + the uploaded R2 key"
       ],
-      "exclusive_paths": [
-        ".github/workflows/maintenance.yml"
-      ],
+      "exclusive_paths": [],
       "owner_hint": "owner action for the secrets; any free agent for the forensics/preflight",
       "agent_branch": "arena/01a0dee1-nexus-ai-agent",
       "claimed_at": "2026-09-26T19:15:19Z",
       "ttl_hours": 48,
       "gates_owner": false,
-      "note": ""
+      "note": "",
+      "handoff_note": "File lease for .github/workflows/maintenance.yml released to task-192-production-dr-truth (superset scope: workflow hardening incl. restore-drill job + evidence steps). task-164 remaining scope is OWNER-SIDE: R2 secrets + a real green dispatch of backup-db; it holds no file lease."
     },
     {
       "priority": "P0",
@@ -2424,11 +2439,12 @@
         "docs/ops/DISASTER_RECOVERY_RUNBOOK.md",
         "docs/ops/DEPLOY_RUNBOOK.md"
       ],
-      "status": "claimed",
+      "status": "active",
       "owner": "arena/01a0dee1-nexus-ai-agent",
       "claimed_at": "2026-09-26T19:30:00Z",
       "ttl_hours": 48,
-      "status_note": "cli.py deferred: active lease held by task-181-gate5-closure (ZERO COLLISION). Restore drill exposed via python -m nexus_ai_agent.maintenance.restore instead."
+      "status_note": "cli.py deferred: active lease held by task-181-gate5-closure (ZERO COLLISION). Restore drill exposed via python -m nexus_ai_agent.maintenance.restore instead.",
+      "agent_branch": "arena/01a0dee1-nexus-ai-agent"
     }
   ],
   "deferred_log": [

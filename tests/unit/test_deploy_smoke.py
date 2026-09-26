@@ -150,6 +150,18 @@ class _StubHandler(BaseHTTPRequestHandler):
             self._send(200, {"status": "ok"})
         elif self.path == "/healthz":
             self._send(200, {"status": "broken"})
+        elif self.path == "/readyz" and _StubHandler.mode == "healthy":
+            self._send(
+                200,
+                {
+                    "status": "ready",
+                    "version": "3.13.0",
+                    "deploy_git_sha": None,
+                    "db": {"ok": True, "backend": "sqlite", "detail": None},
+                },
+            )
+        elif self.path == "/readyz":
+            self._send(503, {"status": "not_ready", "db": {"ok": False, "detail": "db down"}})
         else:
             self._send(404, {})
 

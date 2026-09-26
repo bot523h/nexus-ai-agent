@@ -4,6 +4,7 @@ import asyncio
 import hmac as hmac_mod
 import os
 import secrets
+import sqlite3
 import tempfile
 import time
 from pathlib import Path
@@ -223,6 +224,109 @@ async def healthz() -> dict[str, str]:
     platform health gate should ask before routing traffic.
     """
     return {"status": "ok"}
+
+
+def runtime_app_version() -> str:
+    """Installed distribution version with a repo-checkout fallback."""
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as distribution_version
+
+    try:
+        return distribution_version("nexus-ai-agent")
+    except PackageNotFoundError:
+        version_file = Path(__file__).resolve().parents[3] / "VERSION"
+        if version_file.is_file():
+            return version_file.read_text(encoding="utf-8").strip()
+        return "unknown"
+
+
+def _deployment_identity() -> dict[str, object]:
+    """Deploy identity: app version always; git SHA only when baked in."""
+    identity: dict[str, object] = {"version": runtime_app_version()}
+    deploy_sha = (os.environ.get("NEXUS_DEPLOY_GIT_SHA") or "").strip()
+    identity["deploy_git_sha"] = deploy_sha or None
+    return identity
+
+
+async def _database_readiness(timeout: float = 2.5) -> tuple[bool, str]:
+    """Probe DB connectivity WITHOUT schema creation (a probe never mutates).
+
+    Uses a short-lived disposable connection, not the app's engine/pool
+    lifecycle (opening the engine would schema-create on first touch).
+    """
+    from sqlalchemy import text
+
+    from nexus_ai_agent.storage.db import resolve_database_url, to_asyncpg_url
+
+    db_url = resolve_database_url()
+
+    async def _probe() -> tuple[bool, str]:
+        if db_url is not None:
+            from sqlalchemy.ext.asyncio import create_async_engine
+
+            engine = create_async_engine(to_asyncpg_url(db_url))
+            try:
+                async with engine.connect() as conn:
+                    await conn.execute(text("SELECT 1"))
+            finally:
+                await engine.dispose()
+            return True, "postgresql"
+        db_path = Path(get_settings().db_path).expanduser()
+        if not db_path.is_file():
+            return False, f"sqlite database file missing: {db_path}"
+
+        def _sqlite_probe() -> None:
+            # Two-stage, both cheap and bounded:
+            # 1) the main file MUST carry the SQLite header. With an intact
+            #    WAL, SQLite can answer queries even when the main file is
+            #    garbage (page 1 replays from the wal) — so "SELECT works"
+            #    alone can mask a catastrophically corrupt main file, exactly
+            #    the disaster readiness must surface.
+            # 2) then prove structural usability (schema page is readable;
+            #    a plain SELECT 1 never touches on-disk bytes).
+            header = db_path.open("rb").read(16)
+            if header != b"SQLite format 3\x00":
+                raise RuntimeError(
+                    "sqlite database file header is not a SQLite image "
+                    "(corruption?) — run the restore drill; the WAL, if any, "
+                    "may still be intact for manual salvage"
+                )
+            with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+                conn.execute("SELECT name FROM sqlite_master LIMIT 1").fetchall()
+
+        await asyncio.to_thread(_sqlite_probe)
+        return True, "sqlite"
+
+    try:
+        return await asyncio.wait_for(_probe(), timeout=timeout)
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"[:200]
+
+
+@app.get("/readyz")
+async def readyz() -> JSONResponse:
+    """Readiness + deploy identity (separate from liveness on purpose).
+
+    200 only when the application can *use* its database; 503 otherwise —
+    with the failure class, so a platform never routes traffic at an
+    unready instance and an operator never sees a bare "not ready".
+    The identity block lets deploy smoke detect stale/wrong deployments:
+    a running version that differs from the shipped one is failed there,
+    never silently accepted here.
+    """
+    db_ok, db_detail = await _database_readiness()
+    identity = _deployment_identity()
+    payload: dict[str, object] = {
+        "status": "ready" if db_ok else "not_ready",
+        "version": identity["version"],
+        "deploy_git_sha": identity["deploy_git_sha"],
+        "db": {
+            "ok": db_ok,
+            "backend": db_detail if db_ok else None,
+            "detail": None if db_ok else db_detail,
+        },
+    }
+    return JSONResponse(payload, status_code=200 if db_ok else 503)
 
 
 async def _save_upload_to_temp(upload: StarletteUploadFile) -> str:
