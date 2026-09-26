@@ -135,7 +135,7 @@ Advisory only (a determined agent is not stopped):
 
 ---
 
-## D. MUTATION RESULTS (34 classes; expected = "the gate must go red")
+## D. MUTATION RESULTS (35 classes; expected = "the gate must go red")
 
 Run 1 = before hardening (21 classes, `/tmp/audit/before.json`), run 2 = after hardening (34
 classes, `/tmp/audit/after.json`). Every mutation was applied to the real tree, both the governance
@@ -256,7 +256,7 @@ board CLI, the schema, and every existing test keep working unchanged (`19 passe
 | Task | State | Evidence |
 |---|---|---|
 | `task-184-engineering-constitution` | `active_in_review` (PR#84 open; 12/12 checks green at `67e8ff3`) | `gh api pulls/84`; board note corrected for the stale citation |
-| `task-185-constitution-enforcement-audit` | **`active`** — work delivered and verified locally; submission (`active_in_review` + lease release) is **BLOCKED** on CI evidence, because the GitHub API token expired mid-session | see §I; the board note carries the exact next action |
+| `task-185-constitution-enforcement-audit` | **`active_in_review`**, lease released (`exclusive_paths` emptied) — `evidence_sha` cites the head whose push run is 12/12; the one red `python-parity (3.10)` leg is carried in the board note as **BLOCKED — owner action required** | §I; the board note carries the exact next action |
 | G-1…G-8 (findings) | G-1…G-5 `FIXED`; G-6 `PARTIALLY FIXED` (R-1 BLOCKED); G-7/G-8 `DEFERRED_WITH_REASON` | §E/§F/§G |
 | G-9…G-11 | all three `FIXED` (found during the post-hardening run and by CI itself) | §E/§F |
 | R-1…R-10 | as listed in §G | §G |
@@ -273,23 +273,31 @@ board CLI, the schema, and every existing test keep working unchanged (`19 passe
 | PR#63 workflow defines jobs absent from `main` | branch `arena/01a0cf98-nexus-ai-agent` | `board-reconcile` + `distributed-state` present there, absent on `main` |
 | mutation transcripts (before hardening) | `/tmp/audit/before.json` (21 mutations) | 11 survived |
 | mutation transcripts (after hardening) | `/tmp/audit/after.json` (34 mutations) | 0 lost enforcement (2 redundancy-only survivors, R-9) |
-| hardening verification | PR#84 on this branch. **Head `0671cc9`** — run `36188951892` (event `push`): `test` **FAILED**, exit 1; run `36188954963` (event `pull_request`): **SUCCESS**; `python-parity` 3.10/3.11/3.12, `lint-fast`, `lint`, `extras-matrix`×4, `migrate-postgres`, `release-lineage` all **SUCCESS** → 11 of 12 check types green. **Head `493f405`** (same code, doc-only change): runs triggered, **result unreadable** | see the note below |
-| full suite locally | `pytest -q -m "not slow"` → **2343 passed, 30 skipped** in a full clone, and the identical result in a `--depth 1` clone (so the single CI `test` failure is not reproduced by the code) | exit 0 |
+| hardening verification, head `a9dd5ed` (gate + hardened tests + audit record) | run `36187431966` (push) / `36187435425` (pull_request) | both **FAILED** — `lint-fast` + `test`: the evidence binding required a full-history checkout (G-11) |
+| hardening verification, head `0671cc9` (depth-aware binding) | run `36188951892` (push) / `36188954963` (pull_request) | push: `test` **FAILED** exit 1, other 11 check types green; pull_request: **12/12 SUCCESS**; `python-parity` 3.10/3.11/3.12 green in both events |
+| hardening verification, head `493f405` (identical code, doc-only change) | run `36191189104` (push) / `36191193197` (pull_request) | **12/12 SUCCESS in both events** |
+| hardening verification, head `ae0ee02` (CI evidence recorded in the board) | run `36261472056` (push) / `36261476215` (pull_request) | push: **12/12 SUCCESS**; pull_request: **11/12** — only `python-parity (3.10)` failed, the other 11 check types green |
+| full suite locally | `pytest -q -m "not slow"` → **2343 passed, 30 skipped** in a full clone, and the identical result in a `--depth 1` clone | exit 0 |
 | local gate | `python scripts/constitution_gate.py` → `PASS — 14/14 articles intact and in order (Persian + English), content identity verified, all entry points live, enforcement test unskippable, CI wiring present, board evidence SHA-bound.` | exit 0 |
 | local suites | `pytest -q --noconftest` on the 8 governance suites → **159 passed, 1 skipped** (the skip is pre-existing in `test_version_lockstep.py`: package not installed in a bare checkout, CI installs it) | exit 0 |
 | lint | `ruff check .` → `All checks passed!`; `ruff format --check .` → `500 files already formatted` | exit 0 |
 
-**Why the last CI fact is not a green claim.** The one red check (`test`, push event, head `0671cc9`)
-could not be diagnosed: the `pytest.log` artifact sits behind the Actions blob host, which this
-sandbox's egress policy refuses (`SSL_ERROR_SYSCALL`), and `gh` then stopped authenticating
-altogether — `Bad credentials` (HTTP 401) for `gh api`, and `git ls-remote` lost its credentials
-too. Three independent runs of the *same* suite on the *same* head were green (the pull_request
-`test` job and all three `python-parity` legs), and the suite passes locally in both a full and a
-shallow clone, so the balance of evidence says flake — but **the audit does not claim that as
-fact**, because the failing log was never read. `evidence_sha` therefore still cites `67e8ff3`
-(the last head with a complete 12/12 run) and the claim stays `active` until the check runs on
-`493f405` are read and are green. Recorded as **BLOCKED — owner action required (reconnect
-GitHub)**, not as a pass.
+### The two red CI legs, stated exactly
+
+| Head | Event | Failing check | Everything else on that head | Cause |
+|---|---|---|---|---|
+| `0671cc9` | push (`36188951892`) | `test` exit 1 | `test` green in the pull_request event on the **same head**; all three `python-parity` legs green; the same code 12/12 green at `493f405` in **both** events; the suite green locally in a full and in a shallow clone | **not established** |
+| `ae0ee02` | pull_request (`36261476215`) | `python-parity (3.10)` exit 1 | the same leg green in the push event on the **same head**, and green at `0671cc9` and `493f405`; `python-parity` 3.11/3.12 green in both events | **not established** |
+
+The failure moves between legs and between events and never repeats on the same leg, while the
+code under test is byte-identical apart from documentation. That is the signature of a flaky
+leg, not of a defect in this change — but **the audit does not assert it**, because the failing
+logs were never read: the `pytest.log` / `parity-log` artifacts sit behind the Actions blob host,
+which this sandbox's egress policy refuses (`SSL_ERROR_SYSCALL`), and `gh run rerun` answers
+`cannot be rerun; its workflow file may be broken`. What is recorded instead is the exact
+evidence: `evidence_sha` cites a head whose push run is 12/12, and the one red leg is listed above
+and carried into the board note as **BLOCKED — owner action required (read the log, or rerun the
+leg)**, never as a pass.
 
 ---
 
