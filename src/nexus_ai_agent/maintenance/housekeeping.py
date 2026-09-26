@@ -21,8 +21,12 @@ from .backup import BLOB_BACKUP_PREFIX, STAMP_FORMAT
 log = get_logger(__name__)
 
 
-def _clean_temp_dir(temp_dir: Path, cutoff: dt.datetime) -> list[str]:
-    """Return (and delete) files under ``temp_dir`` last modified before cutoff."""
+def _clean_temp_dir(temp_dir: Path, cutoff: dt.datetime, *, dry_run: bool) -> list[str]:
+    """List stale files, deleting them only outside preview mode.
+
+    Require an explicit decision at the destructive boundary so callers cannot
+    accidentally lose the public dry-run policy while delegating cleanup.
+    """
     removed: list[str] = []
     if not temp_dir.exists():
         return removed
@@ -31,7 +35,8 @@ def _clean_temp_dir(temp_dir: Path, cutoff: dt.datetime) -> list[str]:
             continue
         mtime = dt.datetime.fromtimestamp(candidate.stat().st_mtime, dt.timezone.utc)
         if mtime < cutoff:
-            candidate.unlink(missing_ok=True)
+            if not dry_run:
+                candidate.unlink(missing_ok=True)
             removed.append(str(candidate))
     return removed
 
@@ -57,7 +62,12 @@ def run_housekeeping(
     temp_max_age_hours: int = 48,
     backup_retention_days: int = 30,
 ) -> dict[str, Any]:
-    """Clean stale creative temp files and prune old R2 database backups."""
+    """Clean stale creative temp files and prune old R2 database backups.
+
+    With ``dry_run=True``, neither local files nor remote objects are deleted.
+    For compatibility, ``temp_files_removed`` and ``backups_deleted`` list
+    proposed deletions in preview mode; they are not proof of mutation.
+    """
     now = dt.datetime.now(dt.timezone.utc)
     summary: dict[str, Any] = {
         "dry_run": dry_run,
@@ -67,7 +77,9 @@ def run_housekeeping(
     }
 
     summary["temp_files_removed"] = _clean_temp_dir(
-        Path(settings.creative_temp_dir), now - dt.timedelta(hours=temp_max_age_hours)
+        Path(settings.creative_temp_dir),
+        now - dt.timedelta(hours=temp_max_age_hours),
+        dry_run=dry_run,
     )
 
     provider = R2Provider.from_settings(settings)
