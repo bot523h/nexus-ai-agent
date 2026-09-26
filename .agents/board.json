@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-25T17:46:27Z",
+  "updated_at": "2026-09-25T19:43:27Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -601,9 +601,99 @@
         "src/nexus_ai_agent/cli.py",
         "docs/audits/VERIFICATION_TRUTH_MATRIX.json"
       ]
+    },
+    {
+      "id": "release-truth-c",
+      "description": "Release truth audit and narrow regression guards",
+      "paths": [
+        "README.md",
+        "tests/unit/test_version_lockstep.py",
+        ".dockerignore",
+        "tests/unit/test_container_context.py",
+        "README_RELEASE_TRUTH.md"
+      ]
     }
   ],
   "claims": [
+    {
+      "task": "night-shift-owner-db",
+      "zone": "storage-observability",
+      "status": "active",
+      "priority": "P0",
+      "agent_branch": "arena/01a0da13-nexus-ai-agent",
+      "claimed_at": "2026-09-26T05:09:11Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/db.py"
+      ],
+      "prerequisites": [],
+      "scope": "Night-shift owner hardening: configured SQLite default path only; no foreign ownership takeover. This is a file-scoped subclaim of the same mission using existing zones.",
+      "acceptance_criteria": [
+        "Default runtime session and schema creation honor Settings.db_path, retaining explicit override and PostgreSQL precedence",
+        "New isolated regression fails on exact main and passes after minimal fix",
+        "Document remaining DB consumers and ownership blockers; no global closure claim"
+      ],
+      "evidence_required": [
+        "Exact-main failing regression and targeted after-fix tests",
+        "Exact final SHA CI separately from local diagnostics",
+        "Read-only original checkout byte hashes unchanged"
+      ],
+      "note": "Owner authorized additive mission claims only. Existing claims/zones are unchanged; full local engineering gates deferred to gates owner."
+    },
+    {
+      "task": "night-shift-owner-regression",
+      "zone": "storage-r2-smoke",
+      "status": "active",
+      "priority": "P0",
+      "agent_branch": "arena/01a0da13-nexus-ai-agent",
+      "claimed_at": "2026-09-26T05:09:11Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "tests/integration/test_owner_db_path_contract.py"
+      ],
+      "prerequisites": [],
+      "scope": "Night-shift owner hardening: configured SQLite default path only; no foreign ownership takeover. This is a file-scoped subclaim of the same mission using existing zones.",
+      "acceptance_criteria": [
+        "Default runtime session and schema creation honor Settings.db_path, retaining explicit override and PostgreSQL precedence",
+        "New isolated regression fails on exact main and passes after minimal fix",
+        "Document remaining DB consumers and ownership blockers; no global closure claim"
+      ],
+      "evidence_required": [
+        "Exact-main failing regression and targeted after-fix tests",
+        "Exact final SHA CI separately from local diagnostics",
+        "Read-only original checkout byte hashes unchanged"
+      ],
+      "note": "Owner authorized additive mission claims only. Existing claims/zones are unchanged; full local engineering gates deferred to gates owner."
+    },
+    {
+      "task": "night-shift-owner-evidence",
+      "zone": "docs-architecture",
+      "status": "active",
+      "priority": "P0",
+      "agent_branch": "arena/01a0da13-nexus-ai-agent",
+      "claimed_at": "2026-09-26T05:09:11Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "docs/audits/OWNER_HARDENING_CLOSURE.md",
+        "docs/audits/OWNER_HARDENING_EVIDENCE/"
+      ],
+      "prerequisites": [],
+      "scope": "Night-shift owner hardening: configured SQLite default path only; no foreign ownership takeover. This is a file-scoped subclaim of the same mission using existing zones.",
+      "acceptance_criteria": [
+        "Default runtime session and schema creation honor Settings.db_path, retaining explicit override and PostgreSQL precedence",
+        "New isolated regression fails on exact main and passes after minimal fix",
+        "Document remaining DB consumers and ownership blockers; no global closure claim"
+      ],
+      "evidence_required": [
+        "Exact-main failing regression and targeted after-fix tests",
+        "Exact final SHA CI separately from local diagnostics",
+        "Read-only original checkout byte hashes unchanged"
+      ],
+      "note": "Owner authorized additive mission claims only. Existing claims/zones are unchanged; full local engineering gates deferred to gates owner."
+    },
     {
       "task": "task-131",
       "title": "Architecture & documentation suite + board rewrite",
@@ -2203,11 +2293,11 @@
     },
     {
       "priority": "P0",
-      "status": "active_in_review",
+      "status": "expired",
       "prerequisites": [],
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Continuation of sec-boundary-salvage-01a0d4c7 (PR#76 head 5b17a709, CI green): owner-directed adversarial verification proved 5 S3/S5 defects its tests missed (stdlib traceback redaction bypass, mapping/non-string arg corruption, Basic-scheme credentials, CGNAT 100.64.0.0/10 allowed, https->http redirect downgrade followed). Closed on this branch (ff from 5b17a709 + closure commits), 12/12 mutation-killed, full non-slow suite 1989 passed / ruff / format / mypy clean. Takeover recorded in takeover_log; same zone, one owner.",
+      "note": "auto-released by gc at 2026-09-25T19:39:24Z (stale active_in_review lease)",
       "task": "sec-boundary-salvage-01a0d563",
       "title": "Security truth salvage: verify S1-S5 on main 035a896, fix only the real delta",
       "title_fa": "استخراج حقیقت امنیتی: بازبینی S1-S5 روی main 035a896 و اعمال فقط دلتای واقعی",
@@ -2391,6 +2481,32 @@
       "claimed_at": "2026-09-24T23:06:38Z",
       "ttl_hours": 48,
       "prev_agent_branch": "arena/01a0d4b6-nexus-ai-agent"
+    },
+    {
+      "task": "release-truth-c-20260925",
+      "title": "Release lineage, dependency and container audit",
+      "zone": "release-truth-c",
+      "status": "done",
+      "exclusive_paths": [
+        "README.md",
+        "tests/unit/test_version_lockstep.py",
+        ".dockerignore",
+        "tests/unit/test_container_context.py",
+        "README_RELEASE_TRUTH.md"
+      ],
+      "acceptance_criteria": [
+        "Record live release and PR truth; fix proven README drift; preserve packaging compatibility",
+        "Document dependency/container deferrals and targeted checks"
+      ],
+      "evidence_required": [
+        "README_RELEASE_TRUTH.md",
+        "Targeted pytest and ruff results, commit SHA"
+      ],
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Audit and narrow fixes delivered at 7809b9e4e98ee99c9ee5ec6d1d24afb65fb1d54f; evidence README_RELEASE_TRUTH.md. 83 pure targeted tests passed (--noconftest, editable --no-deps); full-tree ruff check/format green (496 files); lockstep/extras matrix green. Clean-tree live release_lineage exits 0 OPEN: no v3.13.0 tag; latest release v3.3.0. No PR closed: all 15 audited old heads retain non-equivalent patches. No tag/release mutation. Packaging/core-minimal and Docker non-root/multi-stage deferred with migration/runtime acceptance criteria; Docker unavailable. Full gates deferred to gates owner; final CI not yet verified. Audit task done, user full DoD remains partial. Overlapping docs index relinquished in f5453da, no index edits."
     }
   ],
   "deferred_log": [

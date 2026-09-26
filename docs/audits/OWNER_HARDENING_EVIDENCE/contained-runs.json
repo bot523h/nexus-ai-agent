@@ -1,0 +1,53 @@
+[
+  {
+    "name": "red-contained",
+    "sha": "2351f099e2f789b80de05c6b382554b5cdcec0f3",
+    "source_sha256": "497d5da36b185b7d8c755df7ac74505c09970d32c66c0e49a5fad14032698c8a",
+    "test_sha256": "73730ecd1100ab15dfbfc7412c52806c35f6d31921412d57796a6a8061f2bcc6",
+    "command": [
+      "/home/user/night-shift/.venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/integration/test_owner_db_path_contract.py",
+      "--tb=short"
+    ],
+    "cwd": "/home/user/night-shift/main",
+    "environment": {
+      "PYTHONPATH": "/home/user/night-shift/main/src",
+      "python": "3.11.2"
+    },
+    "started_at": "2026-09-26T05:21:15.861709+00:00",
+    "finished_at": "2026-09-26T05:21:17.126257+00:00",
+    "exit_code": 1
+  },
+  {
+    "name": "green-contained",
+    "sha": "8e8f0c17300341088b1709f6cf409462c32f2442 + containment-only fixture/reproducer delta",
+    "source_sha256": "759e5a1462fe88514243a78dd32e281b5bda819e96cfd01d0887a36a156a5dd6",
+    "test_sha256": "73730ecd1100ab15dfbfc7412c52806c35f6d31921412d57796a6a8061f2bcc6",
+    "command": [
+      "/home/user/night-shift/.venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/integration/test_owner_db_path_contract.py",
+      "tests/unit/test_db.py",
+      "tests/unit/test_database_url.py",
+      "tests/unit/test_migrations.py",
+      "tests/unit/test_migration_metadata.py",
+      "tests/unit/test_migrate_postgres_guard.py",
+      "tests/unit/test_maintenance_backup.py",
+      "tests/unit/test_agent_board.py",
+      "--tb=short"
+    ],
+    "cwd": "/home/user/night-shift/work",
+    "environment": {
+      "PYTHONPATH": "/home/user/night-shift/work/src",
+      "python": "3.11.2"
+    },
+    "started_at": "2026-09-26T05:21:17.126308+00:00",
+    "finished_at": "2026-09-26T05:21:22.546049+00:00",
+    "exit_code": 0
+  }
+]

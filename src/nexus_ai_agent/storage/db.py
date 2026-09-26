@@ -262,8 +262,16 @@ async def create_all_metadata(engine: Any, metadata: MetaData) -> None:
     raise RuntimeError("unreachable: create_all_metadata retry loop exhausted")  # pragma: no cover
 
 
-async def create_all_tables(db_path: str = "data/app.sqlite") -> None:
-    """Create all SQLModel tables for the selected database, exactly once per path."""
+async def create_all_tables(db_path: str | None = None) -> None:
+    """Create SQLite tables once per path, defaulting to Settings.db_path.
+
+    This SQLite primitive does not select the PostgreSQL backend; get_session
+    and the migration entry points own backend selection.
+    """
+    if db_path is None:
+        from nexus_ai_agent.config.settings import get_settings
+
+        db_path = get_settings().db_path
     await _dispose_replaced_engines()
     normalized_path = str(Path(db_path).expanduser())
     engine = _get_engine(normalized_path)
@@ -328,8 +336,8 @@ async def get_session(db_path: str | None = None) -> AsyncIterator[AsyncSession]
     - ``db_path`` given  → SQLite backend, exactly as before (unchanged).
     - ``db_path`` is ``None`` → the backend comes from the environment:
       ``NEXUS_DATABASE_URL`` set → PostgreSQL, prepared lazily via Alembic
-      (D7: the ``create_all`` stopgap was retired); otherwise the default
-      SQLite path.
+      (D7: the ``create_all`` stopgap was retired); otherwise the configured
+      SQLite path (``NEXUS_DB_PATH`` / legacy ``DB_PATH``).
     """
     await _dispose_replaced_engines()
     if db_path is None:
@@ -340,7 +348,9 @@ async def get_session(db_path: str | None = None) -> AsyncIterator[AsyncSession]
             async with factory() as session:
                 yield session
             return
-        db_path = "data/app.sqlite"
+        from nexus_ai_agent.config.settings import get_settings
+
+        db_path = get_settings().db_path
 
     await create_all_tables(db_path)
     if _session_factory is None:

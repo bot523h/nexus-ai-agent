@@ -158,3 +158,36 @@ def test_installed_distribution_matches_the_repository_version() -> None:
 def test_changelog_has_an_unreleased_section() -> None:
     """A release cut must leave an ``Unreleased`` section behind for the next work."""
     assert "## [Unreleased]" in CHANGELOG.read_text(encoding="utf-8")
+
+
+# Only the current-version banner participates; historical feature headings do not.
+def read_readme_version(text: str) -> str:
+    claims = re.findall(r"^> \*\*Version: v(\d+\.\d+\.\d+)\*\*", text, re.MULTILINE)
+    if len(claims) != 1:
+        raise ValueError("README must have exactly one current Version banner")
+    return claims[0]
+
+
+def test_readme_version_lockstep() -> None:
+    text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    assert read_readme_version(text) == read_repository_version(), "README version drift"
+
+
+def test_readme_version_guard_detects_stale_banner() -> None:
+    text = "> **Version: v3.12.0**\n## Feature introduced in v3.13.0\n"
+    assert read_readme_version(text) != "3.13.0"
+    assert read_readme_version(text.replace("Version: v3.12.0", "Version: v3.13.0")) == "3.13.0"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "## Historical v3.13.0",
+        "> **Version: vbad**",
+        "> **Version: v3.13.0**\n> **Version: v3.13.0**",
+    ],
+)
+def test_readme_version_guard_rejects_missing_or_ambiguous_banner(text: str) -> None:
+    with pytest.raises(ValueError, match="exactly one"):
+        read_readme_version(text)

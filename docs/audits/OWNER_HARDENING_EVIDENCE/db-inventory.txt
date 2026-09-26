@@ -1,0 +1,120 @@
+src/nexus_ai_agent/storage/migrations.py:123:    asyncio.run(create_all_tables(db_path))
+src/nexus_ai_agent/storage/migrations.py:125:    log.info("adopted legacy SQLite database and stamped it at head: %s", db_path)
+src/nexus_ai_agent/storage/migrations.py:177:            db_path = str(Path(get_settings().db_path).expanduser())
+src/nexus_ai_agent/storage/migrations.py:178:            if decide_sqlite_bootstrap(db_path) == "create_all":
+src/nexus_ai_agent/storage/migrations.py:179:                _adopt_legacy_sqlite(db_path)
+src/nexus_ai_agent/storage/migrations.py:208:    db_path = str(Path(get_settings().db_path).expanduser())
+src/nexus_ai_agent/storage/migrations.py:209:    decision = decide_sqlite_bootstrap(db_path)
+src/nexus_ai_agent/storage/migrations.py:213:        _adopt_legacy_sqlite(db_path)
+src/nexus_ai_agent/storage/langgraph_checkpoint.py:13:from langgraph.checkpoint.sqlite import SqliteSaver
+src/nexus_ai_agent/storage/langgraph_checkpoint.py:34:class AsyncCompatibleSqliteSaver(SqliteSaver):
+src/nexus_ai_agent/storage/langgraph_checkpoint.py:37:    The upstream SqliteSaver is sync-only; its async methods raise.
+src/nexus_ai_agent/storage/langgraph_checkpoint.py:41:    LangGraph versions and avoids requiring AsyncSqliteSaver's context manager
+src/nexus_ai_agent/storage/langgraph_checkpoint.py:254:) -> AsyncCompatibleSqliteSaver | PostgresCheckpointer | LifecycleRecordingSaver:
+src/nexus_ai_agent/storage/langgraph_checkpoint.py:291:    conn = sqlite3.connect(path, check_same_thread=False)
+src/nexus_ai_agent/storage/langgraph_checkpoint.py:297:    saver = AsyncCompatibleSqliteSaver(conn)
+src/nexus_ai_agent/storage/checkpoint_lifecycle_store.py:31:        self._connection = sqlite3.connect(path, check_same_thread=False)
+src/nexus_ai_agent/storage/checkpoint_adapter.py:74:        self._connection = sqlite3.connect(path)
+src/nexus_ai_agent/storage/db.py:14:from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+src/nexus_ai_agent/storage/db.py:95:    db_path = Path(get_settings().db_path).expanduser()
+src/nexus_ai_agent/storage/db.py:131:    from sqlalchemy import create_engine as sync_create_engine
+src/nexus_ai_agent/storage/db.py:133:    engine = sync_create_engine(f"sqlite:///{Path(db_path).expanduser()}")
+src/nexus_ai_agent/storage/db.py:144:    from sqlalchemy import create_engine as sync_create_engine
+src/nexus_ai_agent/storage/db.py:146:    engine = sync_create_engine(f"sqlite:///{Path(db_path).expanduser()}")
+src/nexus_ai_agent/storage/db.py:154:def decide_sqlite_bootstrap(db_path: str | None = None) -> str:
+src/nexus_ai_agent/storage/db.py:174:    normalized = str(Path(db_path or get_settings().db_path).expanduser())
+src/nexus_ai_agent/storage/db.py:192:    normalized_path = str(Path(db_path).expanduser())
+src/nexus_ai_agent/storage/db.py:202:        _engine = create_async_engine(f"sqlite+aiosqlite:///{normalized_path}", echo=False)
+src/nexus_ai_agent/storage/db.py:265:async def create_all_tables(db_path: str = "data/app.sqlite") -> None:
+src/nexus_ai_agent/storage/db.py:268:    normalized_path = str(Path(db_path).expanduser())
+src/nexus_ai_agent/storage/db.py:288:        engine = create_async_engine(to_asyncpg_url(normalized), echo=False, pool_pre_ping=True)
+src/nexus_ai_agent/storage/db.py:325:async def get_session(db_path: str | None = None) -> AsyncIterator[AsyncSession]:
+src/nexus_ai_agent/storage/db.py:343:        db_path = "data/app.sqlite"
+src/nexus_ai_agent/storage/db.py:345:    await create_all_tables(db_path)
+src/nexus_ai_agent/storage/adopt_pg.py:29:from sqlalchemy.ext.asyncio import create_async_engine
+src/nexus_ai_agent/storage/adopt_pg.py:97:    engine = create_async_engine(to_asyncpg_url(normalized), echo=False)
+src/nexus_ai_agent/memory/long_term.py:30:            conn = sqlite3.connect(":memory:", check_same_thread=False)
+src/nexus_ai_agent/memory/long_term.py:33:            conn = sqlite3.connect(self._path, check_same_thread=False)
+src/nexus_ai_agent/maintenance/backup.py:77:    with sqlite3.connect(db_path) as src, sqlite3.connect(dest) as dst:
+src/nexus_ai_agent/maintenance/backup.py:114:            with sqlite3.connect(temp_db) as conn:
+src/nexus_ai_agent/maintenance/backup.py:219:            _dump_sqlite(Path(settings.db_path), dump_path)
+src/nexus_ai_agent/features/viral_engine.py:30:    from sqlalchemy import create_engine as _ce
+src/nexus_ai_agent/features/viral_engine.py:33:    return _ce(f"sqlite:///{settings.db_path}", echo=False)
+src/nexus_ai_agent/features/referral.py:9:from sqlalchemy import create_engine as _ce
+src/nexus_ai_agent/features/referral.py:66:    def __init__(self, db_path: str = "data/app.sqlite") -> None:
+src/nexus_ai_agent/features/referral.py:67:        self._db_path = db_path
+src/nexus_ai_agent/features/rag.py:183:        os.makedirs(settings.chroma_db_path, exist_ok=True)
+src/nexus_ai_agent/features/rag.py:184:        return chromadb.PersistentClient(path=settings.chroma_db_path)
+src/nexus_ai_agent/features/personality.py:106:    from sqlalchemy import create_engine as _ce
+src/nexus_ai_agent/features/personality.py:109:    return _ce(f"sqlite:///{settings.db_path}", echo=False)
+src/nexus_ai_agent/features/owner_control.py:82:    from sqlalchemy import create_engine as _ce
+src/nexus_ai_agent/features/owner_control.py:85:    return _ce(f"sqlite:///{settings.db_path}", echo=False)
+src/nexus_ai_agent/features/tools.py:20:from sqlalchemy import create_engine as _create_engine
+src/nexus_ai_agent/features/tools.py:98:    def __init__(self, bot: Any | None = None, db_path: str | None = None) -> None:
+src/nexus_ai_agent/features/tools.py:101:        self._db_path = db_path
+src/nexus_ai_agent/features/tools.py:129:            self._engine = _create_engine(
+src/nexus_ai_agent/features/moderation.py:26:    from sqlalchemy import create_engine as _ce
+src/nexus_ai_agent/features/moderation.py:29:    return _ce(f"sqlite:///{settings.db_path}", echo=False)
+src/nexus_ai_agent/features/gamification.py:26:    from sqlalchemy import create_engine as _ce
+src/nexus_ai_agent/features/gamification.py:29:    return _ce(f"sqlite:///{settings.db_path}", echo=False)
+src/nexus_ai_agent/features/force_join.py:46:    from sqlalchemy import create_engine as _ce
+src/nexus_ai_agent/features/force_join.py:83:        engine = _sync_engine(get_settings().db_path)
+src/nexus_ai_agent/features/force_join.py:98:        engine = _sync_engine(get_settings().db_path)
+src/nexus_ai_agent/features/force_join.py:189:        engine = _sync_engine(get_settings().db_path)
+src/nexus_ai_agent/features/engagement.py:27:    from sqlalchemy import create_engine as _ce
+src/nexus_ai_agent/features/engagement.py:30:    return _ce(f"sqlite:///{settings.db_path}", echo=False)
+src/nexus_ai_agent/features/games.py:29:    from sqlalchemy import create_engine as _ce
+src/nexus_ai_agent/features/games.py:32:    return _ce(f"sqlite:///{settings.db_path}", echo=False)
+src/nexus_ai_agent/features/conversation_store.py:14:from sqlalchemy import create_engine, text
+src/nexus_ai_agent/features/conversation_store.py:29:        store = ConversationStore(db_path="data/app.sqlite")
+src/nexus_ai_agent/features/conversation_store.py:35:    def __init__(self, db_path: str = "data/app.sqlite") -> None:
+src/nexus_ai_agent/features/conversation_store.py:36:        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+src/nexus_ai_agent/features/conversation_store.py:37:        self._engine = create_engine(f"sqlite:///{db_path}", echo=False)
+src/nexus_ai_agent/features/channel_manager.py:26:    from sqlalchemy import create_engine as _ce
+src/nexus_ai_agent/features/channel_manager.py:29:    return _ce(f"sqlite:///{settings.db_path}", echo=False)
+src/nexus_ai_agent/features/analytics.py:25:    from sqlalchemy import create_engine as _ce
+src/nexus_ai_agent/features/analytics.py:28:    return _ce(f"sqlite:///{settings.db_path}", echo=False)
+src/nexus_ai_agent/features/anonymous_chat.py:32:    from sqlalchemy import create_engine as _ce
+src/nexus_ai_agent/features/anonymous_chat.py:113:        engine = _sync_engine(get_settings().db_path)
+src/nexus_ai_agent/features/anonymous_chat.py:170:        engine = _sync_engine(get_settings().db_path)
+src/nexus_ai_agent/features/anonymous_chat.py:215:        engine = _sync_engine(get_settings().db_path)
+src/nexus_ai_agent/features/anonymous_chat.py:235:        engine = _sync_engine(get_settings().db_path)
+src/nexus_ai_agent/features/ads.py:25:    from sqlalchemy import create_engine as _ce
+src/nexus_ai_agent/features/ads.py:28:    return _ce(f"sqlite:///{settings.db_path}", echo=False)
+src/nexus_ai_agent/creative/job_registry.py:14:        self._db_path = Path(db_path)
+src/nexus_ai_agent/creative/job_registry.py:22:            self._db_path.parent.mkdir(parents=True, exist_ok=True)
+src/nexus_ai_agent/creative/job_registry.py:23:            async with aiosqlite.connect(self._db_path) as db:
+src/nexus_ai_agent/creative/job_registry.py:44:        async with aiosqlite.connect(self._db_path) as db:
+src/nexus_ai_agent/creative/job_registry.py:63:        async with aiosqlite.connect(self._db_path) as db:
+src/nexus_ai_agent/creative/job_registry.py:76:        async with aiosqlite.connect(self._db_path) as db:
+src/nexus_ai_agent/creative/job_registry.py:97:        async with aiosqlite.connect(self._db_path) as db:
+src/nexus_ai_agent/config/settings.py:23:    db_path: str = Field(
+src/nexus_ai_agent/config/settings.py:200:    chroma_db_path: str = Field(
+src/nexus_ai_agent/config/settings.py:443:    Path(settings.db_path).parent.mkdir(parents=True, exist_ok=True)
+src/nexus_ai_agent/cli.py:97:    db_path: str | None = typer.Option(
+src/nexus_ai_agent/cli.py:119:        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+src/nexus_ai_agent/cli.py:120:        asyncio.run(create_all_tables(db_path))
+src/nexus_ai_agent/cli.py:897:        queue = InProcessJobQueue(job_queue_db_path(get_settings().db_path))
+src/nexus_ai_agent/cli.py:1044:    Path(settings.db_path).parent.mkdir(parents=True, exist_ok=True)
+src/nexus_ai_agent/core/async_db.py:8:    db = AsyncDB("data/cache.sqlite")
+src/nexus_ai_agent/core/async_db.py:13:- All v3.0.0 SQLite calls were sync (sqlite3.connect) inside async handlers,
+src/nexus_ai_agent/core/async_db.py:38:    everywhere instead of `sqlite3.connect()`.
+src/nexus_ai_agent/core/async_db.py:41:    def __init__(self, db_path: str, *, timeout: float = 10.0) -> None:
+src/nexus_ai_agent/core/async_db.py:42:        self._db_path = db_path
+src/nexus_ai_agent/core/async_db.py:45:        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+src/nexus_ai_agent/core/async_db.py:55:        conn = await aiosqlite.connect(self._db_path, timeout=self._timeout)
+src/nexus_ai_agent/bot/feature_handlers.py:111:        reminders=ReminderSystem(db_path=settings.db_path),
+src/nexus_ai_agent/bot/feature_handlers.py:119:        referral=referral or ReferralEngine(db_path=settings.db_path),
+src/nexus_ai_agent/bot/handlers.py:949:        from sqlalchemy import create_engine as _ce
+src/nexus_ai_agent/bot/handlers.py:954:        _eng = _ce(f"sqlite:///{_gs().db_path}", echo=False)
+src/nexus_ai_agent/bot/handlers.py:975:        from sqlalchemy import create_engine as _ce
+src/nexus_ai_agent/bot/handlers.py:980:        _eng = _ce(f"sqlite:///{_gs().db_path}", echo=False)
+src/nexus_ai_agent/bot/app.py:224:        job_queue_db_path(settings.db_path),
+src/nexus_ai_agent/bot/app.py:232:    conv_store = ConversationStore(db_path=settings.db_path)
+src/nexus_ai_agent/bot/app.py:271:    engines["referral_engine"] = ReferralEngine(db_path=settings.db_path)
+src/nexus_ai_agent/api/app.py:34:    if _creative_registry is None or _creative_registry._db_path != registry_path:
+src/nexus_ai_agent/adapters/in_process_job_queue.py:226:        self.db_path = Path(db_path)
+src/nexus_ai_agent/adapters/in_process_job_queue.py:227:        self._sqlite_path = str(db_path)
+src/nexus_ai_agent/adapters/in_process_job_queue.py:244:            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+src/nexus_ai_agent/adapters/in_process_job_queue.py:250:            self._memory_connection = sqlite3.connect(":memory:", check_same_thread=False)
+src/nexus_ai_agent/adapters/in_process_job_queue.py:1069:        connection = sqlite3.connect(self._sqlite_path, timeout=30)
