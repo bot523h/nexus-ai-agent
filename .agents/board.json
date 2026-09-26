@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-25T17:46:27Z",
+  "updated_at": "2026-09-26T04:51:37Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -600,6 +600,14 @@
         "docs/audits/GATE5_TRUTH_MATRIX.json",
         "src/nexus_ai_agent/cli.py",
         "docs/audits/VERIFICATION_TRUTH_MATRIX.json"
+      ]
+    },
+    {
+      "id": "constitution-housekeeping-dry-run",
+      "paths": [
+        "src/nexus_ai_agent/maintenance/housekeeping.py",
+        "tests/unit/test_housekeeping_contract.py",
+        ".agents/evidence/constitution-2026-09-26.json"
       ]
     }
   ],
@@ -2144,7 +2152,7 @@
       "title_fa": "",
       "zone": "coordination",
       "priority": "P2",
-      "status": "active_in_review",
+      "status": "expired",
       "scope": "PR#67 adds required_packs + a lifecycle bus gate; Gate 2 could not verify against it. After both land, wire the seam (stage 4, after grant+registry, before reservation) and prove pack-required vs pack-absent dispatch.",
       "scope_fa": "",
       "prerequisites": [
@@ -2161,7 +2169,7 @@
       "claimed_at": "2026-09-24T20:37:51Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Continued from arena/01a0d4c8 (PR#75 head e0cba26 is an ancestor of this branch; PR#75 is superseded by PR#77, same stack on PR#72). MERGE ORDER: PR#72 -> PR#77; PR#67 afterwards needs the semantic resolution in COMMAND_CAPABILITY_CONTRACT section 11 (keep 4b, drop 3.5 + payload/surface opt-in, add color.apply_lut to EXPERIMENTAL_OPT_IN_OPERATIONS).",
+      "note": "auto-released by gc at 2026-09-26T04:50:50Z (stale active_in_review lease)",
       "stacked_on": {
         "pr": 72,
         "task": "task-179-gate2-command-reconciliation",
@@ -2203,11 +2211,11 @@
     },
     {
       "priority": "P0",
-      "status": "active_in_review",
+      "status": "expired",
       "prerequisites": [],
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Continuation of sec-boundary-salvage-01a0d4c7 (PR#76 head 5b17a709, CI green): owner-directed adversarial verification proved 5 S3/S5 defects its tests missed (stdlib traceback redaction bypass, mapping/non-string arg corruption, Basic-scheme credentials, CGNAT 100.64.0.0/10 allowed, https->http redirect downgrade followed). Closed on this branch (ff from 5b17a709 + closure commits), 12/12 mutation-killed, full non-slow suite 1989 passed / ruff / format / mypy clean. Takeover recorded in takeover_log; same zone, one owner.",
+      "note": "auto-released by gc at 2026-09-26T04:50:50Z (stale active_in_review lease)",
       "task": "sec-boundary-salvage-01a0d563",
       "title": "Security truth salvage: verify S1-S5 on main 035a896, fix only the real delta",
       "title_fa": "استخراج حقیقت امنیتی: بازبینی S1-S5 روی main 035a896 و اعمال فقط دلتای واقعی",
@@ -2391,6 +2399,35 @@
       "claimed_at": "2026-09-24T23:06:38Z",
       "ttl_hours": 48,
       "prev_agent_branch": "arena/01a0d4b6-nexus-ai-agent"
+    },
+    {
+      "task": "constitution-housekeeping-dry-run",
+      "zone": "constitution-housekeeping-dry-run",
+      "status": "active",
+      "priority": "P0",
+      "scope": "Zero-assumption baseline evidence and a focused local/R2 housekeeping dry-run contract repair; no global engineering-grade claim.",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/maintenance/housekeeping.py",
+        "tests/unit/test_housekeeping_contract.py",
+        ".agents/evidence/constitution-2026-09-26.json"
+      ],
+      "acceptance_criteria": [
+        "Reproduce local deletion in dry-run before fix",
+        "No local unlink or remote delete in dry-run; real cleanup and strict retention boundary preserved",
+        "Mutation of dry-run guard detected; failures propagate",
+        "Record exact-SHA CI separately from local diagnostics and unresolved audit domains"
+      ],
+      "evidence_required": [
+        "Before/after pytest output",
+        "Guard mutation failure and restored passing test",
+        "Baseline and exact-SHA CI metadata"
+      ],
+      "prerequisites": [],
+      "agent_branch": "arena/01a0dc0c-nexus-ai-agent",
+      "claimed_at": "2026-09-26T04:51:37Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": ""
     }
   ],
   "deferred_log": [
