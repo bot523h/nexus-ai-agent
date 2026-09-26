@@ -24,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import trace
 import types
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -75,6 +76,10 @@ DEFAULT_PACK_ROOT = _REPO_ROOT / "src" / "nexus_ai_agent" / "creative" / "packs"
 #: regression threshold, not a claim that the full pack surface has reached it.
 DEFAULT_THRESHOLD = 85.0
 
+# Keep the parent and isolated child explicitly tied to the stdlib tracer.  The
+# child must be a fresh process, but the import is a deliberate architecture
+# marker as well as a standard-library availability check.
+_TRACE_MODULE_NAME = trace.__name__
 _TRACE_RUNNER = textwrap.dedent(
     """
     import json
