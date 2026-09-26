@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-26T18:55:24Z",
+  "updated_at": "2026-09-26T20:18:32Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2421,31 +2421,29 @@
       "priority": "P0",
       "status": "active_in_review",
       "agent_branch": "arena/01a0df05-nexus-ai-agent",
-      "claimed_at": "2026-09-26T18:42:31Z",
+      "claimed_at": "2026-09-26T20:18:32Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "prerequisites": [],
-      "scope": "Forensic hardening of the Continuum snapshot and stdlib pack-coverage measurement contracts: reject partial/empty/failing evidence, make path and pytest embedding behavior observable, and make snapshots schema-valid, atomic, deterministic, and diagnosable. No production-pack or CLI edits.",
-      "scope_fa": "سخت‌سازی فورنزیک قراردادهای snapshot و اندازه‌گیری پوشش Continuum: رد شواهد جزئی/خالی/شکست‌خورده، قابل‌مشاهده کردن رفتار مسیر و pytest توکار، و snapshot schema-valid، اتمیک، قطعی و قابل‌تشخیص؛ بدون ویرایش pack یا CLI.",
+      "scope": "Continuum evidence integration/trust audit: prove that CoverageReport and Snapshot truth are consumed fail-closed by every in-scope reader, CLI, script, validator, and release/readiness gate; patch only a direct false-evidence consumer defect.",
+      "scope_fa": "ممیزی یکپارچگی/اعتماد شواهد Continuum: اثبات مصرف fail-closed حقیقت CoverageReport و Snapshot توسط خواننده‌ها، CLI، script، validator و gateهای release/readiness در محدوده؛ patch فقط برای مصرف‌کنندهٔ مستقیمِ verdict جعلی.",
       "exclusive_paths": [
         "src/nexus_ai_agent/continuum/",
         "tests/unit/test_continuum_hardening.py",
         "tests/unit/test_pack_coverage_harness.py"
       ],
       "acceptance_criteria": [
-        "Coverage cannot return a green verdict for an invalid root, unknown/empty selected pack, empty measured surface, partial target set, or failed pytest execution.",
-        "Coverage report records measurement completeness and deterministic path identity; adversarial numerator/denominator mutations are caught by tests.",
-        "Snapshots reject malformed, incomplete, extra-key, and invalid-type payloads; writes are atomic and canonical JSON is reproducible.",
-        "Snapshot verification reports git/environment/test-discovery failures as observable findings and distinguishes stale/unreadable state from verified state.",
-        "Focused continuum tests, ruff, formatting, mypy, compileall, diff check, and same-command repeatability evidence are recorded; full gates deferred to gates owner."
+        "Consumer graph from producer through serializer/reader/validator/gate/decision is enumerated from live code.",
+        "No in-scope consumer can turn empty, scoped, stale, malformed, or verified=false evidence into acceptance.",
+        "Every confirmed P0/P1 consumer defect has a minimal regression plus adversarial mutation guard.",
+        "PR/main/CI truth is recorded by exact SHA; full gates remain delegated to the gates owner."
       ],
       "evidence_required": [
-        "Negative regression and mutation-guard tests for coverage denominator, numerator, targets, threshold, path/root, and pytest failure behavior.",
-        "Negative regression tests for corrupt/missing/schema-drift snapshot, atomic write interruption, git failure, test-count failure, and environment drift.",
-        "Two identical measurement/snapshot serializations from the same tree and environment, byte-compared.",
-        "Exact command output for targeted quality checks and agent_board overlap check."
+        "Search transcript and consumer/gate matrix with failure semantics and provenance classification.",
+        "Targeted negative tests and mutation RED-to-GREEN restoration for every confirmed consumer defect.",
+        "Two-run reproducibility comparison and exact PR #95/head/main/CI evidence."
       ],
-      "note": "DELIVERED FOR REVIEW: PR #95; Continuum code commits 1eb9064 + 3d18366, branch includes coordination merge 7fd3aea. Evidence: 42 focused/architecture tests passed; canonical 24-target coverage ran twice at 96.87% (4734/4887), pytest exit 0, verified=true, byte-identical JSON SHA256 0d04c5d2bbdd2dd97c0ba9a5956d787d0b5e44b8de7406850bdec0e73769f6ed; ruff check + format check + mypy + compileall + diff check passed. Five reverted mutations (denominator, fake numerator, threshold, schema, atomic replace) each turned its guard RED then restore passed. Live snapshot remains honestly red: recorded commit object unavailable and this sandbox lacks full-suite collection dependencies. Full gates deferred to gates owner."
+      "note": "Continuation claim for the owner-directed Continuum Evidence Integration / Trust Audit. No non-Continuum domain edits without a proven direct false-evidence consumer."
     },
     {
       "task": "task-185-external-intelligence-hardening",
