@@ -45,11 +45,20 @@ class ExecutorAgent(BaseAgent):
             state["response"] = result.get("output") or state.get("response") or "Done."
             return state
 
-        # No tool specified or registry not wired yet.
-        step["status"] = "done"
+        # No tool specified or registry not wired is a refusal, not an
+        # execution. Never turn an unsupported plan into fake success.
+        error_code = "unsupported_operation"
+        message = "No registered executable tool is available for this step."
+        step["status"] = "failed"
         state["current_task"] = task
         state["tool_results"] = state.get("tool_results", []) + [
-            {"success": True, "output": "noop", "error": None}
+            {
+                "success": False,
+                "error_code": error_code,
+                "output": message,
+                "error": message,
+            }
         ]
-        state["response"] = state.get("response") or "Step executed (noop)."
+        state["error"] = f"{error_code}: {message}"
+        state["response"] = message
         return state
