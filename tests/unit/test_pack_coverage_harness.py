@@ -80,6 +80,26 @@ def test_executable_lines_counts_statements_not_comments_or_docstrings(tmp_path:
     assert 9 not in lines  # a *function* docstring is constant-folded away
 
 
+def test_executable_lines_is_empty_for_blank_and_comment_only_modules(tmp_path: Path) -> None:
+    # CPython 3.10 gives the implicit module-level ``return None`` a positive
+    # line number that points at non-code text; 3.11+ reports it at synthetic
+    # line zero.  Both must resolve to an empty surface: a comment-only file
+    # owning even one "executable" line would be a fabricatable, trivially
+    # 100%-coverable denominator (the python-parity 3.10 regression).
+    blank = tmp_path / "blank.py"
+    blank.write_text("", encoding="utf-8")
+    assert executable_lines(blank) == frozenset()
+
+    comment_only = tmp_path / "only_comments.py"
+    comment_only.write_text("# no executable source\n\n# still nothing\n", encoding="utf-8")
+    assert executable_lines(comment_only) == frozenset()
+
+    # A module docstring, by contrast, is a real executable constant.
+    docstring_only = tmp_path / "docstring_only.py"
+    docstring_only.write_text('"""Just a docstring."""\n', encoding="utf-8")
+    assert executable_lines(docstring_only) == frozenset({1})
+
+
 def test_executable_lines_descends_into_comprehensions(tmp_path: Path) -> None:
     source = tmp_path / "nested.py"
     source.write_text(

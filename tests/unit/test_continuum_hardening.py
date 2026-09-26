@@ -396,3 +396,38 @@ def test_test_count_reports_missing_collection_dependency_names(
     monkeypatch.setattr(snapshot.subprocess, "run", failed_collection)
     with pytest.raises(RuntimeError, match="missing import dependencies: missing_dependency"):
         snapshot._test_case_count()
+
+
+# ---------------------------------------------------------------------------
+# Downstream consumers: an untrusted snapshot must never become a green exit.
+# ---------------------------------------------------------------------------
+
+
+def test_cli_continuum_verify_exits_nonzero_when_snapshot_is_untrusted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The operator-facing gate must translate every finding into exit 1.
+
+    ``verify_snapshot`` is the trust boundary; the Typer command is the last
+    consumer before CI/operators.  If the command ever reports findings but
+    exits 0, unverified evidence would be laundered into a green verdict.
+    """
+
+    from typer.testing import CliRunner
+
+    from nexus_ai_agent.cli import app
+
+    runner = CliRunner()
+
+    monkeypatch.setattr(
+        snapshot, "verify_snapshot", lambda: ["state loss detected: evidence is stale"]
+    )
+    outcome = runner.invoke(app, ["continuum", "verify"])
+    assert outcome.exit_code == 1
+    combined = outcome.output + str(outcome.stderr or "")
+    assert "state loss detected" in combined
+
+    monkeypatch.setattr(snapshot, "verify_snapshot", lambda: [])
+    outcome = runner.invoke(app, ["continuum", "verify"])
+    assert outcome.exit_code == 0
+    assert "matches checkout" in outcome.output

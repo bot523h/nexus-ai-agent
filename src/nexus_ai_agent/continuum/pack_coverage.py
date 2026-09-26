@@ -16,6 +16,7 @@ into the next measurement.
 
 from __future__ import annotations
 
+import ast
 import dis
 import json
 import math
@@ -266,9 +267,19 @@ def executable_lines(path: Path) -> frozenset[int]:
     adds a synthetic ``RESUME`` entry at line zero; a Python line tracer can never
     report that synthetic line, so retaining it would create an un-coverable
     denominator and understate real coverage.
+
+    A module whose AST body is empty (blank or comment-only source) has no real
+    executable statements on any supported interpreter.  CPython 3.11+ already
+    reports its implicit ``return None`` at the synthetic line zero, but 3.10
+    assigns it a positive line number pointing at non-code text.  Counting that
+    synthetic line would let a comment-only file fabricate a traceable —and
+    trivially 100%-coverable— surface, so the empty body is rejected explicitly
+    instead of relying on version-specific line numbering.
     """
 
     source = path.read_text(encoding="utf-8")
+    if not ast.parse(source, filename=str(path)).body:
+        return frozenset()
     root = compile(source, str(path.resolve()), "exec")
     lines: set[int] = set()
     stack: list[types.CodeType] = [root]
