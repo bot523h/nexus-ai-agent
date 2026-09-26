@@ -1,5 +1,6 @@
 """LLM provider registry."""
 
+from nexus_ai_agent.llm.errors import RETRYABLE_KINDS, LLMError, is_retryable
 from nexus_ai_agent.llm.fake_llm import FakeLLMProvider
 from nexus_ai_agent.llm.fallback_provider import FallbackProvider
 from nexus_ai_agent.llm.gemini_provider import GeminiProvider
@@ -15,13 +16,16 @@ from nexus_ai_agent.llm.local_server_provider import (
 from nexus_ai_agent.llm.provider import LLMProvider
 
 __all__ = [
+    "RETRYABLE_KINDS",
     "Deployment",
     "FakeLLMProvider",
     "FallbackProvider",
     "GeminiProvider",
+    "LLMError",
     "LLMProvider",
     "LiteLLMRoutingProvider",
     "LlamaServerError",
     "LocalLlamaServerProvider",
     "RouterExhaustedError",
+    "is_retryable",
 ]

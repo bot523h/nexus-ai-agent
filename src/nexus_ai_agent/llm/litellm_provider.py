@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from nexus_ai_agent.config.settings import Settings
+from nexus_ai_agent.llm.errors import LLMError
 from nexus_ai_agent.llm.fake_llm import FakeLLMProvider
 from nexus_ai_agent.llm.fallback_provider import FallbackProvider
 from nexus_ai_agent.llm.provider import LLMProvider
@@ -52,13 +53,17 @@ OLLAMA_COOLDOWN_TIME = 300
 OLLAMA_ALLOWED_FAILS = 2
 
 
-class RouterExhaustedError(RuntimeError):
+class RouterExhaustedError(LLMError):
     """Every deployment in the routing chain failed or is cooling down.
 
-    The message deliberately contains the rate-limit keywords matched by
-    ``FallbackProvider`` ("429", "rate limit", "quota", "daily limit") so a
-    drained router degrades to the FakeLLM fallback instead of propagating.
+    A *typed* rate-limit failure (``kind="RATE_LIMIT"``) so ``FallbackProvider``
+    degrades to the FakeLLM fallback by type, not by scanning message text
+    (LAW 10). The message still carries the human-readable rate-limit keywords
+    for logs and operator clarity.
     """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, kind="RATE_LIMIT")
 
 
 @dataclass(frozen=True)
