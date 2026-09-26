@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-25T17:46:27Z",
+  "updated_at": "2026-09-26T21:40:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -601,6 +601,43 @@
         "src/nexus_ai_agent/cli.py",
         "docs/audits/VERIFICATION_TRUTH_MATRIX.json"
       ]
+    },
+    {
+      "id": "command-truth-and-runtime-hardening",
+      "description": "Owner audit v3.13.0: the surviving fake/silent commands and the engines behind them, plus the runtime-hardening set that the same sweep turned up (self-update subprocess, settings env aliases, deploy shape, API bounds).",
+      "paths": [
+        "src/nexus_ai_agent/bot/surface/",
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/features/moderation.py",
+        "src/nexus_ai_agent/features/viral_engine.py",
+        "src/nexus_ai_agent/features/image_gen.py",
+        "src/nexus_ai_agent/features/speech.py",
+        "src/nexus_ai_agent/features/ai_memory.py",
+        "src/nexus_ai_agent/features/conversation_store.py",
+        "src/nexus_ai_agent/features/referral.py",
+        "src/nexus_ai_agent/agent/updater.py",
+        "src/nexus_ai_agent/agents/store/agent_manager.py",
+        "src/nexus_ai_agent/knowledge/knowledge_manager.py",
+        "src/nexus_ai_agent/storage/models.py",
+        "src/nexus_ai_agent/core/timeutil.py",
+        "src/nexus_ai_agent/config/settings.py",
+        "src/nexus_ai_agent/api/app.py",
+        "src/nexus_ai_agent/api/dashboard.py",
+        "src/nexus_ai_agent/creative/packs/delivery/signing.py",
+        "src/nexus_ai_agent/adapters/langgraph/lifecycle_recording.py",
+        "tests/unit/test_moderation_engine.py",
+        "tests/unit/test_surface_moderation_and_viral.py",
+        "tests/unit/test_surface_registration.py",
+        "tests/unit/test_settings_env_contract.py",
+        "tests/unit/test_updater.py",
+        "tests/unit/test_dashboard_api.py",
+        "tests/unit/test_delivery_signing.py",
+        "tests/unit/test_dockerfile_contract.py",
+        "docs/audits/OWNER_AUDIT_COMMAND_TRUTH_2026-09-26.md",
+        "Dockerfile",
+        "README.md"
+      ],
+      "note": "bot/app.py is deliberately NOT in this zone: it belongs to task-181-gate5-closure and PR#94. The presence-heartbeat wiring that would live there is recorded in deferred_log."
     }
   ],
   "claims": [
@@ -2391,6 +2428,41 @@
       "claimed_at": "2026-09-24T23:06:38Z",
       "ttl_hours": 48,
       "prev_agent_branch": "arena/01a0d4b6-nexus-ai-agent"
+    },
+    {
+      "task": "task-193-owner-audit-command-truth",
+      "title": "Owner audit: command truth (fake handlers -> real engines), moderation/viral/status surfaces, self-update hardening, deploy + settings security",
+      "title_fa": "بازرسی مالک: راست‌گویی فرمان‌ها (هندلرهای قلابی به موتورهای واقعی)، سطوح نظارت/ویرال/وضعیت، سخت‌سازی خودبه‌روزرسانی، امنیت استقرار و تنظیمات",
+      "zone": "command-truth-and-runtime-hardening",
+      "priority": "P0",
+      "status": "active",
+      "gates_owner": false,
+      "claimed_at": "2026-09-26T21:40:00Z",
+      "prerequisites": [],
+      "scope": "Line-by-line owner review. (A) Command truth: eleven registered commands answered with constants or with nothing while the engine behind them existed and had no importer — /mod_config /warn /mute /unmute /reputation (ModerationEngine), /viral_preview /viral_stats /viral_post (ViralEngine), /vision (GeminiEngine.vision), /model /storage (bodies were literally `pass`), /story_style (advertised styles create_story() discards). Extracted into bot/surface/{moderation,viral,status}.py on the existing ._ptb duck-typed pattern so the frozen import boundary is untouched. (B) ModerationEngine correctness: Persian profanity regex matched substrings (10 of 11 ordinary words in the corpus were flagged — خرید/آخر/خروج/بگیرید all cost the author a warning); mute_user wrote an aware datetime that is_muted compared against a naive one, so the first read after any mute raised TypeError; flood tracker was an unbounded process-lifetime dict. (C) Self-update: subprocess.run inside async def with no timeout, inherited stdin and discarded output — a credential prompt froze the whole bot unrecoverably; version compare was `!=` across a `v` prefix, so an up-to-date bot reported an update on every poll. (D) Security: CORS wildcard+credentials reachable via config, unbounded /recent_users?limit, signing keys under 32 bytes accepted, container ran as root, creative scratch defaulted into world-writable /tmp, and 7 settings had no NEXUS_ alias (including workspace_root, the tool sandbox root) so the documented env var was silently ignored. (E) datetime.utcnow() deprecation swept into core/timeutil.py. NOT in scope: bot/app.py (fenced by task-181-gate5-closure) — presence heartbeat wiring deferred, see deferred_log.",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/surface/moderation.py",
+        "src/nexus_ai_agent/bot/surface/viral.py",
+        "src/nexus_ai_agent/bot/surface/status.py",
+        "src/nexus_ai_agent/core/timeutil.py",
+        "src/nexus_ai_agent/features/moderation.py",
+        "src/nexus_ai_agent/features/viral_engine.py",
+        "src/nexus_ai_agent/agent/updater.py",
+        "tests/unit/test_moderation_engine.py",
+        "tests/unit/test_surface_moderation_and_viral.py",
+        "tests/unit/test_settings_env_contract.py"
+      ],
+      "acceptance_criteria": [
+        "no registered command answers with a constant or with an empty body; frozen by tests/unit/test_surface_registration.py (STUB_STRINGS union + empty-body ratchet)",
+        "profanity false-positive corpus proven: 10/11 innocent Persian words flagged before, 0 after, with no loss of true positives",
+        "mute round-trip and the naive/aware TypeError pinned by tests/unit/test_moderation_engine.py",
+        "self-update never blocks the event loop, always times out, closes stdin and reports captured output — each pinned by a test",
+        "README honesty table matches the code in the same change",
+        "all four gates green (ruff check, ruff format --check, mypy src, pytest -m 'not slow')"
+      ],
+      "note": "Owner-mode audit requested in Persian: act as the strictest reviewer and as the project owner, go line by line, turn every weakness into an engineered strength. Evidence for every claim is in docs/audits/OWNER_AUDIT_COMMAND_TRUTH_2026-09-26.md with the exact commands and observed output.",
+      "agent_branch": "arena/01a0df78-nexus-ai-agent",
+      "ttl_hours": 24
     }
   ],
   "deferred_log": [
@@ -2427,6 +2499,16 @@
       "reason_fa": "چون عامل task-179 مالک TESTING.md و docs/README.md است، به‌روزرسانی جدول گیت‌ها و ایندکس را defer کردم؛ مستندات CI موقتاً در .github/DEPENDENCY_MATRIX.md و CHANGELOG ثبت می‌شود.",
       "reason_en": "task-132 (CI extras matrix) must update TESTING.md gate table and docs/README.md index, but those files are exclusively claimed by task-179. Documentation update deferred; CI docs live in .github/DEPENDENCY_MATRIX.md + CHANGELOG entry meanwhile.",
       "resume_when": "task-179 lands (TESTING.md/docs/README.md free) — then port the gate-table rows + docs index line"
+    },
+    {
+      "at": "2026-09-26T21:40:00Z",
+      "by_branch": "arena/01a0df78-nexus-ai-agent",
+      "action": "defer",
+      "task": "task-193-owner-audit-command-truth",
+      "deferred_item": "presence-heartbeat-wiring",
+      "reason": "Deleted the dead install_presence_heartbeat() mock from bot/handlers.py: its body was `pass` under the docstring \"Mock presence heartbeat for now.\", nothing in src/ or tests/ called it, and bot/app.py:373 carries a commented-out call noting it was \"an unawaited mock\". Net effect: PresenceStore.mark_online() had no caller anywhere in src/ and every user read as permanently offline. Removing the mock is safe standalone. REPLACING it needs a catch-all TypeHandler registered in bot/app.py at a group after the -1 access guard, and bot/app.py is an exclusive path of task-181-gate5-closure (active, claimed 2026-09-24T23:06:38Z); PR#94 'bound personality and presence lifecycle' is already in that lane. Stopped at the fence rather than duplicating the work — a working implementation was written, verified against the group semantics, and then reverted.",
+      "reason_fa": "موک مردهٔ install_presence_heartbeat حذف شد؛ سیم‌کشی واقعی presence نیازمند تغییر در bot/app.py است که در اختیار عامل دیگری (task-181) قرار دارد و PR#94 هم روی همین موضوع کار می‌کند. برای جلوگیری از دوباره‌کاری، پشت حصار متوقف شدم تا فراموش نشود.",
+      "resume_when": "task-181-gate5-closure releases bot/app.py, or PR#94 merges"
     }
   ],
   "next_work": [

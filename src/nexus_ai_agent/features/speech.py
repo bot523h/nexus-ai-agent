@@ -58,7 +58,9 @@ class SpeechEngine:
             from gtts import gTTS
 
             # Generate filename
-            h = hashlib.md5(f"{text}{lang}".encode()).hexdigest()[:10]
+            # Cache-key fingerprint only (see features/image_gen.py): declared
+            # non-security so a FIPS build does not raise here.
+            h = hashlib.md5(f"{text}{lang}".encode(), usedforsecurity=False).hexdigest()[:10]
             filename = f"tts_{h}.mp3"
             filepath = self._output_dir / filename
 

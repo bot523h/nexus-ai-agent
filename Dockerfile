@@ -26,8 +26,28 @@ RUN pip install --no-cache-dir .
 # Create necessary directories
 RUN mkdir -p data/chroma data/cache assets/fonts
 
-# Initialize database (optional during build, better at runtime)
-# RUN export PYTHONPATH=$PYTHONPATH:$(pwd)/src && python -m nexus_ai_agent.cli migrate
+# Drop root.
+#
+# The image ran as uid 0 with a process that (a) terminates untrusted input
+# from any Telegram user, (b) shells out to ffmpeg — a large C codebase with a
+# long CVE history — on attacker-supplied media, and (c) can self-update via
+# `git pull` + `pip install .`. A single container escape or an ffmpeg parsing
+# bug therefore started from root rather than from an unprivileged account.
+#
+# `nexus` owns /app so the writable runtime paths created above (data/chroma,
+# data/cache) and NEXUS_CREATIVE_TEMP_DIR stay writable after the switch. The
+# chown is a separate layer on purpose: it runs after every COPY/RUN that
+# writes into /app.
+RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin nexus \
+    && chown -R nexus:nexus /app
+USER nexus
+
+# Creative scratch space lives under /app, not /tmp: in this image /tmp is
+# world-writable and shared with every other process in the container, so a
+# predictable path there is a symlink-swap target. See config/settings.py.
+ENV NEXUS_CREATIVE_TEMP_DIR=/app/data/creative_tmp \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
 EXPOSE 8000
 

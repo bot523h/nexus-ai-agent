@@ -89,6 +89,7 @@ placeholder text.
 | [audits/GATE5_CLOSURE_2026-09-24.md](audits/GATE5_CLOSURE_2026-09-24.md) | Task-181 Gate 5 closure/reconciliation (Agent E): claim-audit truth matrix (prior Gate-5-local claims vs GitHub), PR#71/#74 reconciliation, four reproduced defects (typed failure → COMPLETED, one-state failures, publication leak, trace job_id=null), fixes with regression + 6/6 mutation probes. |
 | [audits/GATE5_TRUTH_MATRIX.json](audits/GATE5_TRUTH_MATRIX.json) | Machine-readable Gate 5 claim→evidence matrix + acceptance-gate answers (CLOSED only with Git + CI evidence). |
 | [audits/DEAD_ENGINES_2026-09-22.md](audits/DEAD_ENGINES_2026-09-22.md) | Dead-engine verification (zero importers, measured gates), five-option wiring analysis, negative controls, and the recorded residuals. |
+| [audits/OWNER_AUDIT_COMMAND_TRUTH_2026-09-26.md](audits/OWNER_AUDIT_COMMAND_TRUTH_2026-09-26.md) | Owner audit (task-193): eleven fake/silent commands wired to the engines that already existed, ModerationEngine correctness (10/11 innocent Persian words were flagged; naive/aware mute crash; unbounded flood tracker), self-update event-loop freeze, and the CORS/limit/signing-key/root-container/settings-alias hardening set. |
 
 ## History (archived — read-only, never a source of truth)
 

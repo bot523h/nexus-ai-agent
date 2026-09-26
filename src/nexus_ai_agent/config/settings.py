@@ -64,12 +64,40 @@ class Settings(BaseSettings):
         default=0,
         validation_alias=AliasChoices("NEXUS_OWNER_TELEGRAM_ID", "OWNER_TELEGRAM_ID"),
     )
-    workspace_root: str = "."
-    n_ctx: int = 2048
-    n_gpu_layers: int = 0
-    max_short_term_messages: int = 20
-    max_tokens_before_summary: int = 3000
-    top_k_memories: int = 3
+    # These six carried no ``validation_alias``. The model declares no
+    # ``env_prefix``, so pydantic-settings fell back to the bare field name and
+    # the only working env vars were ``WORKSPACE_ROOT``, ``N_CTX``, … while
+    # every other setting in this file reads ``NEXUS_*``. Anyone following the
+    # documented convention was silently ignored and got the default.
+    #
+    # ``workspace_root`` is the one that mattered: it is the containment root
+    # the file/shell tools resolve paths against (``bot/safe_paths.py``), so an
+    # operator who set ``NEXUS_WORKSPACE_ROOT`` to confine the agent believed
+    # they had narrowed the sandbox while it silently stayed at ``"."``.
+    #
+    # Both spellings are accepted; the prefixed one wins. Frozen by
+    # ``tests/unit/test_settings_env_contract.py``.
+    workspace_root: str = Field(
+        default=".",
+        validation_alias=AliasChoices("NEXUS_WORKSPACE_ROOT", "WORKSPACE_ROOT"),
+    )
+    n_ctx: int = Field(default=2048, validation_alias=AliasChoices("NEXUS_N_CTX", "N_CTX"))
+    n_gpu_layers: int = Field(
+        default=0, validation_alias=AliasChoices("NEXUS_N_GPU_LAYERS", "N_GPU_LAYERS")
+    )
+    max_short_term_messages: int = Field(
+        default=20,
+        validation_alias=AliasChoices("NEXUS_MAX_SHORT_TERM_MESSAGES", "MAX_SHORT_TERM_MESSAGES"),
+    )
+    max_tokens_before_summary: int = Field(
+        default=3000,
+        validation_alias=AliasChoices(
+            "NEXUS_MAX_TOKENS_BEFORE_SUMMARY", "MAX_TOKENS_BEFORE_SUMMARY"
+        ),
+    )
+    top_k_memories: int = Field(
+        default=3, validation_alias=AliasChoices("NEXUS_TOP_K_MEMORIES", "TOP_K_MEMORIES")
+    )
 
     # Unified multi-cloud storage credentials (optional).
     github_token: str | None = Field(
@@ -343,7 +371,33 @@ class Settings(BaseSettings):
         validation_alias="NEXUS_CREATIVE_GEMINI_API_KEY",
     )
     creative_temp_dir: str = Field(
-        default="/tmp/nexus_creative",
+        # Default moved out of /tmp (owner audit, v3.13.0).
+        #
+        # ``/tmp/nexus_creative`` is a *predictable* path in a directory that
+        # is world-writable on every POSIX host. Any other local user (or any
+        # other container sharing the mount) could pre-create it, or replace a
+        # file inside it with a symlink, and have the bot write
+        # attacker-chosen bytes to an attacker-chosen path — the classic
+        # CWE-377/CWE-59 insecure-temporary-file pair. ``get_settings()``
+        # mkdir -p's this path at import time, which means the race is
+        # available on every single process start.
+        #
+        # ``data/creative_tmp`` sits inside the application's own directory,
+        # which is already the trust boundary for the SQLite database and the
+        # vector store, and is created with the process umask under a
+        # directory the deployment controls. Operators who genuinely want a
+        # tmpfs can still set NEXUS_CREATIVE_TEMP_DIR explicitly — but now
+        # that is a decision, not a default.
+        #
+        # The alias is spelled out because this field had none: with no
+        # ``env_prefix`` on the model, pydantic-settings fell back to the bare
+        # field name, so the only working env var was ``CREATIVE_TEMP_DIR``
+        # while all 72 other settings in this file read ``NEXUS_*``. Anyone
+        # following the house convention set ``NEXUS_CREATIVE_TEMP_DIR`` and
+        # was silently ignored. Both spellings are accepted; the prefixed one
+        # wins, matching every other entry here.
+        default="data/creative_tmp",
+        validation_alias=AliasChoices("NEXUS_CREATIVE_TEMP_DIR", "CREATIVE_TEMP_DIR"),
         description="Temporary directory for creative jobs",
     )
 

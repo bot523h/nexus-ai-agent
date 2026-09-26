@@ -27,6 +27,9 @@ Modules
                        ``/ad_delete`` ``/ad_stats``
 ``channel_management`` ``/post`` ``/schedule`` ``/pin`` ``/ban`` ``/unban`` ``/stats``
                        ``/welcome``
+``moderation``         ``/mod_config`` ``/warn`` ``/mute`` ``/unmute`` ``/reputation``
+``viral``              ``/viral_preview`` ``/viral_stats`` ``/viral_post``
+``status``             ``/model`` ``/storage`` ``/story_style``
 ``onboarding``         the ``onboarding_*`` inline-keyboard callbacks
 """
 
@@ -66,7 +69,16 @@ from .gamification import (
     profile_cmd,
     xp_leaderboard_cmd,
 )
+from .moderation import (
+    mod_config_cmd,
+    mod_mute_cmd,
+    mod_reputation_cmd,
+    mod_unmute_cmd,
+    mod_warn_cmd,
+)
 from .onboarding import onboarding_callback_cmd
+from .status import model_cmd, storage_cmd, story_style_cmd
+from .viral import viral_post_cmd, viral_preview_cmd, viral_stats_cmd
 
 __all__ = [
     "achievements_cmd",
@@ -82,6 +94,12 @@ __all__ = [
     "daily_cmd",
     "doc_delete_cmd",
     "docs_list_cmd",
+    "mod_config_cmd",
+    "mod_mute_cmd",
+    "mod_reputation_cmd",
+    "mod_unmute_cmd",
+    "mod_warn_cmd",
+    "model_cmd",
     "onboarding_callback_cmd",
     "pin_cmd",
     "post_cmd",
@@ -90,7 +108,12 @@ __all__ = [
     "schedule_cmd",
     "session_for",
     "stats_cmd",
+    "storage_cmd",
+    "story_style_cmd",
     "unban_cmd",
+    "viral_post_cmd",
+    "viral_preview_cmd",
+    "viral_stats_cmd",
     "welcome_cmd",
     "xp_leaderboard_cmd",
 ]
@@ -122,4 +145,17 @@ COMMAND_HANDLERS: dict[str, Callable[[Any, Any], Awaitable[None]]] = {
     "unban": unban_cmd,
     "stats": stats_cmd,
     "welcome": welcome_cmd,
+    # Registered command names are the short ones (``/warn``, ``/mute``, …);
+    # the handler symbols keep the ``mod_`` prefix of the module they replaced.
+    "mod_config": mod_config_cmd,
+    "warn": mod_warn_cmd,
+    "mute": mod_mute_cmd,
+    "unmute": mod_unmute_cmd,
+    "reputation": mod_reputation_cmd,
+    "viral_preview": viral_preview_cmd,
+    "viral_stats": viral_stats_cmd,
+    "viral_post": viral_post_cmd,
+    "model": model_cmd,
+    "storage": storage_cmd,
+    "story_style": story_style_cmd,
 }

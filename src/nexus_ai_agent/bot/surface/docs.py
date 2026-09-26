@@ -38,6 +38,15 @@ from ._ptb import args, chat_id, message_text, reply, user_id
 
 logger = logging.getLogger(__name__)
 
+#: The exact sentences ``bot/handlers.py`` answered with before this module.
+#: Held here so ``tests/unit/test_surface_registration.py`` can assert they are
+#: never replied to a user again.
+STUB_STRINGS = (
+    "📚 لیست اسناد شما خالی است (نسخه دمو).",
+    "🗑️ سند حذف شد.",
+    "🔍 حالت چت با سند فعال شد. سوال خود را بپرسید.",
+)
+
 __all__ = [
     "DocSession",
     "chat_with_doc_cmd",

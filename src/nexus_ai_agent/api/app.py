@@ -44,16 +44,38 @@ def parse_cors_origins(raw: str) -> list[str]:
     return [origin.strip() for origin in (raw or "").split(",") if origin.strip()]
 
 
+def cors_policy(origins: list[str]) -> tuple[list[str], bool]:
+    """Return ``(allow_origins, allow_credentials)`` — never both wildcarded.
+
+    Starlette's ``CORSMiddleware`` treats ``allow_origins=["*"]`` together with
+    ``allow_credentials=True`` by *reflecting the request's Origin header* and
+    returning ``Access-Control-Allow-Credentials: true``. That combination
+    hands every website on the internet an authenticated, cookie-bearing
+    channel to this API — it is the exact configuration the browser
+    same-origin policy exists to prevent, and the CORS specification forbids
+    it for that reason.
+
+    The hard default (empty allowlist) already avoided this. The hole was that
+    an operator setting ``NEXUS_API_CORS_ORIGINS=*`` — a plausible thing to try
+    while debugging — silently reintroduced it, because ``bool(["*"])`` is
+    ``True``. A wildcard is still honoured here, but only ever as an
+    *anonymous* one: credentials are forced off.
+    """
+    if any(origin == "*" for origin in origins):
+        return ["*"], False
+    return origins, bool(origins)
+
+
 # CORS is an explicit allowlist (NEXUS_API_CORS_ORIGINS, comma-separated).
 # Default is empty → no cross-origin browser access at all; the served
 # dashboard is same-origin and needs none. The previous default
 # (allow_origins=["*"] + allow_credentials=True) reflected *any* origin —
 # effectively disabling the browser same-origin policy for this API.
-_cors_origins = parse_cors_origins(get_settings().api_cors_origins)
+_cors_origins, _cors_credentials = cors_policy(parse_cors_origins(get_settings().api_cors_origins))
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_credentials=bool(_cors_origins),
+    allow_credentials=_cors_credentials,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-NEXUS-Signature", "X-NEXUS-Timestamp"],
 )
