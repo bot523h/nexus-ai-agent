@@ -34,7 +34,7 @@ def _snapshot(test_count: int = 3) -> ContinuumSnapshot:
     return ContinuumSnapshot(
         schema_version=2,
         plan="forensic",
-        step="recorded-good-commit",
+        step="a" * 40,
         next="verify",
         ledger=[{"status": "complete", "id": "C1"}],
         test_count_expected=test_count,
@@ -183,6 +183,10 @@ def test_fake_numerator_nonfinite_threshold_and_pytest_failure_are_rejected() ->
             ),
             "must be a non-empty string",
         ),
+        (
+            json.dumps({**json.loads(_snapshot().to_json()), "step": ""}),
+            "must be a non-empty Git revision",
+        ),
     ],
 )
 def test_read_snapshot_rejects_corruption_partial_schema_drift_and_invalid_environment(
@@ -253,12 +257,63 @@ def test_verify_snapshot_rejects_a_valid_snapshot_when_the_checkout_is_dirty(
     monkeypatch.setattr(snapshot, "read_snapshot", lambda: value)
     monkeypatch.setattr(snapshot, "current_commit", lambda: "current-head")
     monkeypatch.setattr(snapshot, "_is_ancestor", lambda _old, _head: True)
+    monkeypatch.setattr(snapshot, "_source_tree_matches_snapshot", lambda _step, _head: True)
     monkeypatch.setattr(snapshot, "_working_tree_clean", lambda: False)
     monkeypatch.setattr(snapshot, "_test_case_count", lambda: 3)
     monkeypatch.setattr(snapshot, "_environment", lambda: value.env_fingerprint)
 
     assert snapshot.verify_snapshot() == [
         "working tree drift detected: snapshot verification requires a clean checkout"
+    ]
+
+
+def test_verify_snapshot_rejects_schema_valid_committed_source_drift(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A clean later commit cannot reuse a snapshot from older source roots."""
+
+    root = tmp_path / "repository"
+    root.mkdir()
+    for arguments in (
+        ("init", "-q"),
+        ("config", "user.email", "audit@example.invalid"),
+        ("config", "user.name", "Audit"),
+    ):
+        subprocess.run(["git", *arguments], cwd=root, check=True)
+    source = root / "src" / "service.py"
+    source.parent.mkdir()
+    source.write_text("value = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "src/service.py"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=root, check=True)
+    step = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    value = ContinuumSnapshot(
+        schema_version=2,
+        plan="forensic",
+        step=step,
+        next="verify",
+        ledger=[],
+        test_count_expected=3,
+        env_fingerprint=EnvFingerprint("3.11.2", "1.20.0", "2.0.54"),
+    )
+    monkeypatch.setattr(snapshot, "_REPO_ROOT", root)
+    monkeypatch.setattr(snapshot, "SNAPSHOT_PATH", root / ".nexus" / "continuum.json")
+    snapshot.write_snapshot(value)
+    subprocess.run(["git", "add", ".nexus/continuum.json"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "publish snapshot"], cwd=root, check=True)
+    monkeypatch.setattr(snapshot, "_test_case_count", lambda: 3)
+    monkeypatch.setattr(snapshot, "_environment", lambda: value.env_fingerprint)
+    assert snapshot.verify_snapshot() == []
+
+    source.write_text("value = 2\n", encoding="utf-8")
+    subprocess.run(["git", "add", "src/service.py"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "source changed"], cwd=root, check=True)
+
+    assert snapshot.verify_snapshot() == [
+        "source state drift detected: executable, test, or dependency roots "
+        "changed after the recorded good commit"
     ]
 
 
@@ -269,6 +324,7 @@ def test_verify_snapshot_fails_closed_when_worktree_provenance_cannot_be_checked
     monkeypatch.setattr(snapshot, "read_snapshot", lambda: value)
     monkeypatch.setattr(snapshot, "current_commit", lambda: "current-head")
     monkeypatch.setattr(snapshot, "_is_ancestor", lambda _old, _head: True)
+    monkeypatch.setattr(snapshot, "_source_tree_matches_snapshot", lambda _step, _head: True)
 
     def unavailable_worktree() -> bool:
         raise RuntimeError("git status is unavailable")

@@ -24,6 +24,18 @@ from typing import Any
 SNAPSHOT_SCHEMA_VERSION = 2
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 SNAPSHOT_PATH = _REPO_ROOT / ".nexus" / "continuum.json"
+# Snapshot publication changes only .nexus/continuum.json.  A later change in
+# any of these executable, test, or dependency-declaration roots requires a
+# fresh snapshot rather than borrowing the older commit's evidence.
+_SNAPSHOT_SOURCE_PATHS = (
+    "src",
+    "tests",
+    "scripts",
+    "alembic",
+    "pyproject.toml",
+    "alembic.ini",
+    "VERSION",
+)
 _SNAPSHOT_KEYS = frozenset(
     {
         "schema_version",
@@ -110,6 +122,8 @@ class ContinuumSnapshot:
             if not isinstance(value, str):
                 raise ValueError(f"snapshot.{key} must be a string")
             values[key] = value
+        if not values["step"].strip():
+            raise ValueError("snapshot.step must be a non-empty Git revision")
 
         ledger = data["ledger"]
         if not isinstance(ledger, list) or any(not isinstance(entry, dict) for entry in ledger):
@@ -292,6 +306,40 @@ def _working_tree_clean() -> bool:
     )
 
 
+def _source_tree_matches_snapshot(step: str, head: str) -> bool:
+    """Check that executable/test/dependency roots did not drift after ``step``.
+
+    ``step`` records the commit from which the snapshot's claims were made;
+    publishing that snapshot creates a later commit containing only the
+    snapshot.  Requiring byte-identical ``step == HEAD`` would therefore reject
+    every honestly committed snapshot.  Instead, diff the roots that can alter
+    runtime behaviour, collection, coverage targets, pack membership, or
+    dependency resolution.  A clean working tree alone cannot detect this
+    committed stale-evidence case.
+    """
+
+    try:
+        outcome = subprocess.run(
+            ["git", "diff", "--quiet", step, head, "--", *_SNAPSHOT_SOURCE_PATHS],
+            cwd=_REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise RuntimeError(
+            f"cannot verify snapshot source provenance: cannot execute git ({exc})"
+        ) from exc
+    if outcome.returncode == 0:
+        return True
+    if outcome.returncode == 1:
+        return False
+    detail = (outcome.stderr or outcome.stdout).strip().replace("\n", " ")
+    raise RuntimeError(
+        f"cannot verify snapshot source provenance: git exited {outcome.returncode} ({detail})"
+    )
+
+
 def _environment() -> EnvFingerprint:
     return EnvFingerprint(
         python=f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
@@ -375,17 +423,27 @@ def verify_snapshot() -> list[str]:
     except RuntimeError as exc:
         problems.append(_problem("git verification unavailable", exc))
     else:
-        if snapshot.step:
-            try:
-                ancestor = _is_ancestor(snapshot.step, head)
-            except RuntimeError as exc:
-                problems.append(_problem("git verification unavailable", exc))
+        try:
+            ancestor = _is_ancestor(snapshot.step, head)
+        except RuntimeError as exc:
+            problems.append(_problem("git verification unavailable", exc))
+        else:
+            if not ancestor:
+                problems.append(
+                    "state loss detected: recorded good commit "
+                    f"{snapshot.step} is not reachable from HEAD {head}"
+                )
             else:
-                if not ancestor:
-                    problems.append(
-                        "state loss detected: recorded good commit "
-                        f"{snapshot.step} is not reachable from HEAD {head}"
-                    )
+                try:
+                    source_matches = _source_tree_matches_snapshot(snapshot.step, head)
+                except RuntimeError as exc:
+                    problems.append(_problem("git verification unavailable", exc))
+                else:
+                    if not source_matches:
+                        problems.append(
+                            "source state drift detected: executable, test, or dependency roots "
+                            "changed after the recorded good commit"
+                        )
         try:
             clean = _working_tree_clean()
         except RuntimeError as exc:
