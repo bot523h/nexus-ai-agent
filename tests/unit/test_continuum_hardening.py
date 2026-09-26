@@ -262,6 +262,24 @@ def test_verify_snapshot_rejects_a_valid_snapshot_when_the_checkout_is_dirty(
     ]
 
 
+def test_verify_snapshot_fails_closed_when_worktree_provenance_cannot_be_checked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    value = _snapshot(test_count=3)
+    monkeypatch.setattr(snapshot, "read_snapshot", lambda: value)
+    monkeypatch.setattr(snapshot, "current_commit", lambda: "current-head")
+    monkeypatch.setattr(snapshot, "_is_ancestor", lambda _old, _head: True)
+
+    def unavailable_worktree() -> bool:
+        raise RuntimeError("git status is unavailable")
+
+    monkeypatch.setattr(snapshot, "_working_tree_clean", unavailable_worktree)
+    monkeypatch.setattr(snapshot, "_test_case_count", lambda: 3)
+    monkeypatch.setattr(snapshot, "_environment", lambda: value.env_fingerprint)
+
+    assert snapshot.verify_snapshot() == ["git verification unavailable: git status is unavailable"]
+
+
 def test_verify_snapshot_reports_unavailable_git_and_test_discovery_without_false_state_loss(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
