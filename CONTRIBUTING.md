@@ -31,8 +31,10 @@ make test           # pytest -q -m "not slow"
 ## Multi-agent coordination (required reading for AI agents)
 
 If you are an AI agent (Arena session, Claude Code, …) or a human working in
-parallel with one: **read `AGENTS.md` at the repo root first.** Claims, leases
-and deferrals are managed through `.agents/board.json` and
+parallel with one: **read `AGENTS.md` at the repo root first** — and with it
+[`ENGINEERING_CONSTITUTION.md`](ENGINEERING_CONSTITUTION.md), the NEXUS Engineering Constitution,
+which is binding on every agent and prevails over local rules (its Article 14).
+Claims, leases and deferrals are managed through `.agents/board.json` and
 `scripts/agent_board.py` (see `docs/MULTI_AGENT_PROTOCOL.md` /
 `docs/MULTI_AGENT_PROTOCOL.fa.md`). Claim your task, push the board change
 immediately, never touch a file under another agent's active exclusive paths,

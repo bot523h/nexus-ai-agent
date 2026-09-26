@@ -63,6 +63,18 @@ The files under `tests/architecture/` are the executable form of the boundary la
 | no `TODO`/`FIXME`/placeholder tokens in architecture docs | architecture pages are claims, not notes |
 | `VERSION` == `pyproject.toml` == latest `CHANGELOG` heading | the release-drift guard (task-111 partner) |
 
+`tests/unit/test_engineering_constitution.py` (task-184) does the same job for the **agent
+contract**, because an unenforced law is exactly the "green dashboard" Article 13 of
+[`../../ENGINEERING_CONSTITUTION.md`](../../ENGINEERING_CONSTITUTION.md) forbids optimising for:
+
+| Assertion | Why |
+|---|---|
+| `ENGINEERING_CONSTITUTION.md` exists and still carries all 14 articles in Persian **and** English | a truncated or paraphrased constitution is a red build, not a silent edit |
+| `AGENTS.md` §0, `CONTRIBUTING.md`, `README.md` and the board's `protocol.constitution` all link it | every entry point an agent actually reads must lead to the law |
+| `scripts/agent_board.py show` / `next` / `claim` print the reminder (and fail closed to the default wording) | an arriving agent cannot start work without passing it |
+| `.github/PULL_REQUEST_TEMPLATE.md` names all seven Final Gate gates | Article 14 needs a per-PR form, not only prose |
+| no placeholder token and no dead relative link inside the constitution | Articles 6 and 10 applied to the law itself |
+
 Documentation linting beyond this (Vale prose linting, `markdownlint-cli2`, Mermaid's own parser via [`mermaid-lint`](https://github.com/jasonworden/mermaid-lint), link checkers such as Lychee — the toolchain GitLab documents in its [docs testing](https://docs.gitlab.com/development/documentation/testing/)) is deliberately **not** wired in yet: it would add a Node/Chromium toolchain to a Python-only CI for a documentation set that is currently < 20 files. The trade-off is recorded in [`adr/0002-docs-as-code-enforcement.md`](adr/0002-docs-as-code-enforcement.md).
 
 ## 5. Baseline (2026-09-21, local)
@@ -121,4 +133,5 @@ pytest -q tests/unit/test_docs_integrity.py
 | a boundary (imports, process spawn, manifest) | a fitness function in `tests/architecture/` **and** a row in [`MODULE_MAP.md`](MODULE_MAP.md) §3 |
 | a failure path | an assertion that the failure is typed and the user-visible message is localised |
 | documentation | `pytest -q tests/unit/test_docs_integrity.py` |
+| the agent contract (`AGENTS.md`, board, constitution, PR template) | `pytest -q tests/unit/test_engineering_constitution.py` |
 | a release | `VERSION` + `pyproject.toml` + `CHANGELOG` head all in lockstep (task-111 guard) |
