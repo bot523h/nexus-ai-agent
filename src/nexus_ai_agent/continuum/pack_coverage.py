@@ -1,52 +1,29 @@
-"""Wave 5 — dependency-free coverage measurement for the Nagar capability packs.
+"""Deterministic, stdlib-traced coverage evidence for Nagar capability packs.
 
-This is repository-truth tooling, which is why it lives next to
-:mod:`nexus_ai_agent.continuum.snapshot` rather than inside the pack substrate:
-the substrate is deliberately data-only and its import allowlist
-(``tests/architecture/test_pack_manifest_is_data_only.py``) has no room for
-``trace``/``dis``/``types``.  Keeping the harness here means **no architecture
-gate had to be relaxed** to measure coverage, and the substrate stayed frozen.
+This module deliberately treats a coverage percentage as evidence, not merely a
+number.  A percentage is only eligible for a green verdict when all canonical
+pack targets ran successfully, the complete canonical pack surface was found,
+and the traced test process was isolated from the caller.  Focused runs remain
+useful diagnostics, but they are explicitly reported as incomplete and cannot
+produce a green acceptance verdict.
 
-The repository has no coverage tooling: ``pytest-cov``/``coverage.py`` are not
-declared, and adding a dependency to run a number nobody can reproduce without
-it contradicts the project's "core stays small" rule.  This module measures the
-same property with the **standard library only**:
-
-* :func:`executable_lines` walks a module's code objects with
-  :func:`dis.findlinestarts` — the compiler's own view of "a line that can run",
-  which is exactly the denominator a coverage tool uses;
-* :func:`measure` runs a deterministic set of test modules under
-  :class:`trace.Trace` and collects the numerator (lines that actually ran);
-* :class:`PackCoverage` / :class:`CoverageReport` aggregate per pack and overall,
-  and :func:`coverage_failures` turns the threshold into CI-style findings.
-
-Why per *pack* and not per file: a capability pack is the unit that ships, is
-manifested and is activated.  ``nexus packs list`` answers "what can run?"; this
-harness answers "what has actually been exercised?", and both are properties of
-the same six directories.
-
-Cost: tracing is roughly 3–5× slower than an untraced run, which is why the
-default target list is the pack-focused subset rather than the whole suite
-(``--tests`` overrides it).  The script ``scripts/pack_coverage.py`` is the thin
-CLI over this module — logic lives here because ``scripts/`` is not an installed
-package (the PR#40 lesson, enforced by
-``tests/architecture/test_scripts_import_boundary.py``).
-
-**The bar.**  ``DEFAULT_THRESHOLD`` is 85%: a real bar with margin under the
-weakest pack measured on Wave-5 (`nexus.color.delivery` 87.19%), so a genuine
-regression turns the tool red while the repository it ships with is green.  The
-measured baseline for the default 24-module test set is 94.89% overall
-(audio 96.09 · caption 96.66 · core 96.26 · delivery 87.19 · edit 95.89 ·
-motion 98.12 · slideshow 93.03).  The project's stated goal remains 95% per pack
-(wave4-step7); ``--threshold 95`` shows exactly which packs have not reached it
-yet, and the per-module ``missing_lines`` in the JSON report says where to look.
+The harness uses only :mod:`dis`, :mod:`trace`, and a fresh Python subprocess
+around ``pytest``.  ``pytest`` is a test-time dependency, not a package runtime
+dependency.  The subprocess is essential: repeated ``pytest.main()`` calls in
+the caller process leak imported tests, plugins, caches, and other global state
+into the next measurement.
 """
 
 from __future__ import annotations
 
-import contextlib
 import dis
-import io
+import json
+import math
+import os
+import subprocess
+import sys
+import tempfile
+import textwrap
 import trace
 import types
 from collections.abc import Iterable, Sequence
@@ -90,28 +67,74 @@ DEFAULT_TEST_TARGETS: tuple[str, ...] = (
 #: Files directly under ``creative/packs/`` (the substrate) are grouped here.
 CORE_GROUP = "core"
 
-#: Where the measured packs live, relative to this module.
-DEFAULT_PACK_ROOT = (
-    Path(__file__).resolve().parents[3] / "src" / "nexus_ai_agent" / "creative" / "packs"
-)
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
-#: Default acceptance bar (margin below the weakest measured pack; goal is 95%).
+#: Where the measured packs live, relative to this module.
+DEFAULT_PACK_ROOT = _REPO_ROOT / "src" / "nexus_ai_agent" / "creative" / "packs"
+
+#: Default acceptance bar.  The production goal remains 95%; this is the
+#: regression threshold, not a claim that the full pack surface has reached it.
 DEFAULT_THRESHOLD = 85.0
+
+# Keep the parent and isolated child explicitly tied to the stdlib tracer.  The
+# child must be a fresh process, but the import is a deliberate architecture
+# marker as well as a standard-library availability check.
+_TRACE_MODULE_NAME = trace.__name__
+_TRACE_RUNNER = textwrap.dedent(
+    """
+    import json
+    from pathlib import Path
+    import sys
+    import trace
+
+    import pytest
+
+
+    output_path = Path(sys.argv[1])
+    args = json.loads(sys.argv[2])
+    tracer = trace.Trace(count=1, trace=0)
+    pytest_exit_code = int(tracer.runfunc(pytest.main, args))
+    counts = [
+        [str(Path(filename).resolve()), lineno, hits]
+        for (filename, lineno), hits in sorted(tracer.results().counts.items())
+        if hits and lineno > 0
+    ]
+    output_path.write_text(
+        json.dumps(
+            {"pytest_exit_code": pytest_exit_code, "counts": counts},
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    """
+)
 
 
 @dataclass(frozen=True)
 class ModuleCoverage:
-    """Executed vs. executable lines for one module."""
+    """Executed vs. executable traceable lines for one module."""
 
     path: str
     executed: int
     executable: int
     missing: tuple[int, ...] = ()
 
+    def __post_init__(self) -> None:
+        if not self.path:
+            raise ValueError("module coverage path must be non-empty")
+        if type(self.executed) is not int or type(self.executable) is not int:
+            raise TypeError("coverage counts must be integers")
+        if self.executed < 0 or self.executable < 0 or self.executed > self.executable:
+            raise ValueError("coverage counts must satisfy 0 <= executed <= executable")
+        if any(type(line) is not int or line <= 0 for line in self.missing):
+            raise ValueError("missing lines must be positive integers")
+        if self.missing != tuple(sorted(set(self.missing))):
+            raise ValueError("missing lines must be sorted and unique")
+
     @property
     def percent(self) -> float:
-        if self.executable == 0:  # pragma: no cover - filtered before construction
-            return 100.0
+        if self.executable == 0:
+            return 0.0
         return round(100.0 * self.executed / self.executable, 2)
 
 
@@ -121,6 +144,13 @@ class PackCoverage:
 
     pack: str
     modules: tuple[ModuleCoverage, ...]
+
+    def __post_init__(self) -> None:
+        if not self.pack:
+            raise ValueError("pack name must be non-empty")
+        paths = [module.path for module in self.modules]
+        if len(paths) != len(set(paths)):
+            raise ValueError(f"pack {self.pack!r} contains duplicate module paths")
 
     @property
     def executed(self) -> int:
@@ -132,22 +162,36 @@ class PackCoverage:
 
     @property
     def percent(self) -> float:
-        if self.executable == 0:  # pragma: no cover - filtered before construction
-            return 100.0
+        if self.executable == 0:
+            return 0.0
         return round(100.0 * self.executed / self.executable, 2)
 
     def worst(self, limit: int = 3) -> tuple[ModuleCoverage, ...]:
-        return tuple(sorted(self.modules, key=lambda module: module.percent)[:limit])
+        return tuple(sorted(self.modules, key=lambda module: (module.percent, module.path))[:limit])
 
 
 @dataclass(frozen=True)
 class CoverageReport:
-    """A full measurement: the packs, the threshold and the pytest exit code."""
+    """A measurement and the evidence needed to decide whether it is credible."""
 
     packs: tuple[PackCoverage, ...]
     threshold: float = DEFAULT_THRESHOLD
     tests: tuple[str, ...] = ()
     pytest_exit_code: int = 0
+    measurement_issues: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if isinstance(self.threshold, bool) or not isinstance(self.threshold, (int, float)):
+            raise TypeError("coverage threshold must be a finite number")
+        if not math.isfinite(float(self.threshold)) or self.threshold < 0:
+            raise ValueError("coverage threshold must be finite and >= 0")
+        if type(self.pytest_exit_code) is not int or self.pytest_exit_code < 0:
+            raise ValueError("pytest exit code must be a non-negative integer")
+        names = [pack.pack for pack in self.packs]
+        if len(names) != len(set(names)):
+            raise ValueError("coverage report contains duplicate pack names")
+        if any(not issue for issue in self.measurement_issues):
+            raise ValueError("measurement issues must be non-empty messages")
 
     @property
     def executed(self) -> int:
@@ -159,17 +203,33 @@ class CoverageReport:
 
     @property
     def percent(self) -> float:
-        if self.executable == 0:  # pragma: no cover - requires an empty measurement
-            return 100.0
+        if self.executable == 0:
+            return 0.0
         return round(100.0 * self.executed / self.executable, 2)
+
+    @property
+    def verified(self) -> bool:
+        """Whether the measurement had enough successful evidence for a verdict."""
+
+        return (
+            self.pytest_exit_code == 0
+            and bool(self.packs)
+            and self.executable > 0
+            and not self.measurement_issues
+        )
 
     @property
     def below_threshold(self) -> bool:
         return bool(coverage_failures(self))
 
     def as_dict(self) -> dict[str, object]:
+        """Canonical, JSON-serialisable evidence suitable for an artifact."""
+
+        packs = sorted(self.packs, key=lambda pack: pack.pack)
         return {
             "threshold": self.threshold,
+            "verified": self.verified,
+            "measurement_issues": list(self.measurement_issues),
             "total": {
                 "executed": self.executed,
                 "executable": self.executable,
@@ -191,44 +251,206 @@ class CoverageReport:
                             "percent": module.percent,
                             "missing_lines": list(module.missing),
                         }
-                        for module in pack.modules
+                        for module in sorted(pack.modules, key=lambda module: module.path)
                     ],
                 }
-                for pack in self.packs
+                for pack in packs
             ],
         }
 
 
 def executable_lines(path: Path) -> frozenset[int]:
-    """Line numbers that can execute, as the compiler sees them.
+    """Return compiler line starts that can also be emitted by ``trace``.
 
-    ``dis.findlinestarts`` is used instead of a private ``trace`` helper: it is
-    the documented, stable view of the line table, and it recurses into nested
-    code objects (functions, comprehensions) here so a module's helper bodies
-    count towards the denominator exactly like they do in any coverage tool.
+    Nested functions and comprehensions are included recursively.  CPython 3.11+
+    adds a synthetic ``RESUME`` entry at line zero; a Python line tracer can never
+    report that synthetic line, so retaining it would create an un-coverable
+    denominator and understate real coverage.
     """
+
     source = path.read_text(encoding="utf-8")
-    root = compile(source, str(path), "exec")
+    root = compile(source, str(path.resolve()), "exec")
     lines: set[int] = set()
     stack: list[types.CodeType] = [root]
     while stack:
         code = stack.pop()
-        lines.update(line for _, line in dis.findlinestarts(code))
+        lines.update(line for _, line in dis.findlinestarts(code) if line > 0)
         stack.extend(const for const in code.co_consts if isinstance(const, types.CodeType))
     return frozenset(lines)
 
 
-def _iter_pack_modules(root: Path, packs: Iterable[str] | None) -> list[tuple[str, Path]]:
-    """``(group, path)`` for every module of the pack substrate, sorted."""
-    selected = set(packs) if packs is not None else None
+def _iter_pack_modules(root: Path, packs: set[str] | None) -> list[tuple[str, Path]]:
+    """Return sorted ``(group, path)`` pairs for every Python module in *root*."""
+
     entries: list[tuple[str, Path]] = []
-    for path in sorted(root.rglob("*.py")):
+    for path in sorted(root.rglob("*.py"), key=lambda candidate: candidate.as_posix()):
         relative = path.relative_to(root)
         group = relative.parts[0] if len(relative.parts) > 1 else CORE_GROUP
-        if selected is not None and group not in selected:
-            continue
-        entries.append((group, path))
+        if packs is None or group in packs:
+            entries.append((group, path))
     return entries
+
+
+def _normalised_target(target: str) -> str:
+    """Normalise a pytest node id without losing its ``::`` selection suffix."""
+
+    file_name, separator, selection = target.partition("::")
+    candidate = Path(file_name)
+    if not candidate.is_absolute():
+        candidate = _REPO_ROOT / candidate
+    return str(candidate.resolve()) + (separator + selection if separator else "")
+
+
+def _validate_targets(tests: Sequence[str] | None) -> tuple[str, ...]:
+    if tests is None:
+        targets = DEFAULT_TEST_TARGETS
+    else:
+        if isinstance(tests, str):
+            raise TypeError("tests must be a sequence of pytest target strings, not one string")
+        targets = tuple(tests)
+        if not targets:
+            raise ValueError(
+                "at least one pytest target is required; an empty target set is not evidence"
+            )
+
+    identities: set[str] = set()
+    for target in targets:
+        if not isinstance(target, str) or not target:
+            raise ValueError("pytest targets must be non-empty strings")
+        identity = _normalised_target(target)
+        if identity in identities:
+            raise ValueError(f"duplicate pytest target: {target}")
+        identities.add(identity)
+        path_part = target.partition("::")[0]
+        candidate = Path(path_part)
+        if not candidate.is_absolute():
+            candidate = _REPO_ROOT / candidate
+        if not candidate.exists():
+            raise ValueError(f"pytest target does not exist: {target}")
+    return targets
+
+
+def _validate_pack_selection(
+    root: Path, packs: Iterable[str] | None
+) -> tuple[set[str] | None, set[str]]:
+    all_modules = _iter_pack_modules(root, None)
+    if not all_modules:
+        raise ValueError(f"pack root contains no Python modules: {root}")
+    available = {group for group, _path in all_modules}
+    if packs is None:
+        return None, available
+    if isinstance(packs, str):
+        raise TypeError("packs must be an iterable of pack names, not one string")
+    selected_values = tuple(packs)
+    if not selected_values or any(
+        not isinstance(pack, str) or not pack for pack in selected_values
+    ):
+        raise ValueError("at least one non-empty pack name is required")
+    selected = set(selected_values)
+    if len(selected) != len(selected_values):
+        raise ValueError("duplicate pack selection")
+    unknown = sorted(selected - available)
+    if unknown:
+        raise ValueError(f"unknown pack selection: {', '.join(unknown)}")
+    return selected, available
+
+
+def _measurement_issues(
+    root: Path,
+    targets: tuple[str, ...],
+    selected_packs: set[str] | None,
+    available_packs: set[str],
+) -> tuple[str, ...]:
+    """State why a valid scoped diagnostic cannot claim full-pack acceptance."""
+
+    issues: list[str] = []
+    if root != DEFAULT_PACK_ROOT.resolve():
+        issues.append("non-canonical pack root: diagnostic coverage cannot certify shipped packs")
+    default_targets = {_normalised_target(target) for target in DEFAULT_TEST_TARGETS}
+    target_set = {_normalised_target(target) for target in targets}
+    if target_set != default_targets:
+        issues.append(
+            "partial test target set: "
+            f"ran {len(target_set)} of {len(default_targets)} canonical targets"
+        )
+    if selected_packs is not None and selected_packs != available_packs:
+        issues.append(
+            "partial pack selection: "
+            f"measured {len(selected_packs)} of {len(available_packs)} pack groups"
+        )
+    return tuple(issues)
+
+
+def _run_traced_pytest(targets: tuple[str, ...]) -> tuple[int, dict[str, set[int]]]:
+    """Run pytest in a fresh interpreter and return its line-event numerator.
+
+    Disabling plugin auto-load makes the result independent of arbitrary plugins
+    installed in the parent process.  ``pytest_asyncio`` is loaded explicitly
+    because this repository's own conftest uses asynchronous fixtures.
+    """
+
+    args = ["-q", "-p", "no:cacheprovider", "-p", "pytest_asyncio.plugin", *targets]
+    environment = os.environ.copy()
+    source = str(_REPO_ROOT / "src")
+    old_pythonpath = environment.get("PYTHONPATH")
+    environment["PYTHONPATH"] = (
+        source if not old_pythonpath else source + os.pathsep + old_pythonpath
+    )
+    environment["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+
+    with tempfile.TemporaryDirectory(prefix="nexus-pack-coverage-") as directory:
+        output = Path(directory) / "trace.json"
+        try:
+            completed = subprocess.run(
+                [sys.executable, "-c", _TRACE_RUNNER, str(output), json.dumps(args)],
+                cwd=_REPO_ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=600,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError(f"traced pytest runner failed to start or finish: {exc}") from exc
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout).strip().replace("\n", " ")
+            raise RuntimeError(
+                f"traced pytest runner failed with process exit {completed.returncode}: {detail}"
+            )
+        try:
+            payload = json.loads(output.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError) as exc:
+            raise RuntimeError(
+                f"traced pytest runner produced no valid evidence artifact: {exc}"
+            ) from exc
+
+    pytest_exit_code = payload.get("pytest_exit_code")
+    raw_counts = payload.get("counts")
+    if type(pytest_exit_code) is not int or not isinstance(raw_counts, list):
+        raise RuntimeError("traced pytest runner produced an invalid evidence artifact")
+
+    executed: dict[str, set[int]] = {}
+    for row in raw_counts:
+        if (
+            not isinstance(row, list)
+            or len(row) != 3
+            or not isinstance(row[0], str)
+            or type(row[1]) is not int
+            or type(row[2]) is not int
+            or row[1] <= 0
+            or row[2] <= 0
+        ):
+            raise RuntimeError("traced pytest runner produced malformed line counts")
+        executed.setdefault(str(Path(row[0]).resolve()), set()).add(row[1])
+    return pytest_exit_code, executed
+
+
+def _display_path(path: Path, root: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(_REPO_ROOT.resolve()).as_posix()
+    except ValueError:
+        return resolved.relative_to(root).as_posix()
 
 
 def measure(
@@ -239,45 +461,42 @@ def measure(
     threshold: float = DEFAULT_THRESHOLD,
     quiet: bool = True,
 ) -> CoverageReport:
-    """Run ``tests`` under :class:`trace.Trace` and report pack coverage.
+    """Measure packs under an isolated tracer and return auditable evidence.
 
-    ``pytest`` is imported lazily so this module stays importable (and testable)
-    without the test runner installed — the same reason the CLI is separate.
+    ``quiet`` is retained for API compatibility.  Pytest output is always kept
+    out of the parent process; the report itself is the deterministic output.
+    Invalid roots, selections, targets, thresholds, and trace-runner failures
+    raise an observable exception rather than returning a fabricated green report.
     """
-    import pytest  # local import: the harness is optional at runtime
 
-    root = pack_root or DEFAULT_PACK_ROOT
-    repo_root = root.parents[3]
-    targets = tuple(tests) if tests else DEFAULT_TEST_TARGETS
-    args = ["-q", "-p", "no:cacheprovider", *targets]
-    if quiet:
-        args.insert(0, "--no-header")
+    del quiet  # The subprocess never leaks pytest output into the report stream.
+    if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
+        raise TypeError("coverage threshold must be a finite number")
+    if not math.isfinite(float(threshold)) or threshold < 0:
+        raise ValueError("coverage threshold must be finite and >= 0")
 
-    tracer = trace.Trace(count=1, trace=0)
-    if quiet:
-        # The reporter is the table/JSON, not pytest's progress dots: a CI log
-        # that interleaves both is unreadable, so the runner is silenced here.
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            exit_code = int(tracer.runfunc(pytest.main, args))
-    else:
-        exit_code = int(tracer.runfunc(pytest.main, args))
-    counts = tracer.results().counts
+    root = (pack_root or DEFAULT_PACK_ROOT).resolve()
+    if not root.is_dir():
+        raise ValueError(f"pack root does not exist or is not a directory: {root}")
+    targets = _validate_targets(tests)
+    selected_packs, available_packs = _validate_pack_selection(root, packs)
+    selected_modules = _iter_pack_modules(root, selected_packs)
+    if not selected_modules:
+        raise ValueError("selected pack surface contains no Python modules")
 
-    executed: dict[str, set[int]] = {}
-    for (filename, lineno), hit_count in counts.items():
-        if hit_count:
-            executed.setdefault(str(Path(filename).resolve()), set()).add(lineno)
+    executable_modules = [(group, path, executable_lines(path)) for group, path in selected_modules]
+    executable_modules = [entry for entry in executable_modules if entry[2]]
+    if not executable_modules:
+        raise ValueError("selected pack surface has zero traceable executable lines")
 
+    pytest_exit_code, executed = _run_traced_pytest(targets)
     per_group: dict[str, list[ModuleCoverage]] = {}
-    for group, path in _iter_pack_modules(root, packs):
-        executable = executable_lines(path)
-        if not executable:
-            continue
+    for group, path, executable in executable_modules:
         ran = executed.get(str(path.resolve()), set())
-        covered = sorted(executable & ran)
+        covered = executable & ran
         per_group.setdefault(group, []).append(
             ModuleCoverage(
-                path=str(path.relative_to(repo_root)),
+                path=_display_path(path, root),
                 executed=len(covered),
                 executable=len(executable),
                 missing=tuple(sorted(executable - ran)),
@@ -285,21 +504,30 @@ def measure(
         )
 
     pack_reports = tuple(
-        PackCoverage(pack=group, modules=tuple(modules))
+        PackCoverage(pack=group, modules=tuple(sorted(modules, key=lambda module: module.path)))
         for group, modules in sorted(per_group.items())
     )
     return CoverageReport(
         packs=pack_reports,
-        threshold=threshold,
+        threshold=float(threshold),
         tests=targets,
-        pytest_exit_code=exit_code,
+        pytest_exit_code=pytest_exit_code,
+        measurement_issues=_measurement_issues(root, targets, selected_packs, available_packs),
     )
 
 
 def coverage_failures(report: CoverageReport) -> tuple[str, ...]:
-    """Findings for any unit below the threshold (empty tuple = accept)."""
+    """Return every reason a report is ineligible for a green verdict."""
+
     failures: list[str] = []
-    for pack in report.packs:
+    if not report.packs:
+        failures.append("measurement produced no pack reports")
+    if report.executable == 0:
+        failures.append("measurement produced zero executable lines")
+    if report.pytest_exit_code != 0:
+        failures.append(f"pytest exited with {report.pytest_exit_code}")
+    failures.extend(f"measurement incomplete: {issue}" for issue in report.measurement_issues)
+    for pack in sorted(report.packs, key=lambda candidate: candidate.pack):
         if pack.percent < report.threshold:
             worst = ", ".join(f"{module.path} {module.percent:.2f}%" for module in pack.worst())
             failures.append(
@@ -310,28 +538,39 @@ def coverage_failures(report: CoverageReport) -> tuple[str, ...]:
 
 
 def format_table(report: CoverageReport) -> str:
-    """A compact, stable table: one row per pack plus the total."""
-    width = max([len(pack.pack) for pack in report.packs] + [len("TOTAL")]) + 2
+    """Return a compact, stable table that cannot label invalid evidence as OK."""
+
+    packs = tuple(sorted(report.packs, key=lambda pack: pack.pack))
+    width = max([len(pack.pack) for pack in packs] + [len("TOTAL")]) + 2
     header = (
         f"{'pack'.ljust(width)}{'modules':>8}{'executed':>10}{'executable':>12}{'cover':>9}  status"
     )
     lines = [header, "-" * (width + 41)]
-    for pack in report.packs:
-        status = "OK" if pack.percent >= report.threshold else "BELOW"
+    for pack in packs:
+        status = "BELOW" if pack.percent < report.threshold else "OK"
+        if not report.verified and status == "OK":
+            status = "UNVERIFIED"
         lines.append(
             f"{pack.pack.ljust(width)}{len(pack.modules):>8}{pack.executed:>10}"
             f"{pack.executable:>12}{pack.percent:>8.2f}%  {status}"
         )
     lines.append("-" * (width + 41))
-    total_status = "OK" if report.percent >= report.threshold else "BELOW"
+    total_status = "UNVERIFIED"
+    if report.verified and report.percent >= report.threshold:
+        total_status = "OK"
+    elif report.verified and report.percent < report.threshold:
+        total_status = "BELOW"
     lines.append(
-        f"{'TOTAL'.ljust(width)}{sum(len(pack.modules) for pack in report.packs):>8}"
+        f"{'TOTAL'.ljust(width)}{sum(len(pack.modules) for pack in packs):>8}"
         f"{report.executed:>10}{report.executable:>12}{report.percent:>8.2f}%  {total_status}"
     )
     lines.append(
         f"threshold: {report.threshold:.2f}% · tests: {len(report.tests)} module(s) · "
-        f"pytest exit: {report.pytest_exit_code}"
+        f"pytest exit: {report.pytest_exit_code} · evidence: "
+        f"{'verified' if report.verified else 'incomplete'}"
     )
+    for issue in report.measurement_issues:
+        lines.append(f"! measurement incomplete: {issue}")
     return "\n".join(lines)
 
 
