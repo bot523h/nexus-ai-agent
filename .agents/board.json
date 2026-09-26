@@ -2403,7 +2403,7 @@
     {
       "task": "constitution-housekeeping-dry-run",
       "zone": "constitution-housekeeping-dry-run",
-      "status": "active",
+      "status": "active_in_review",
       "priority": "P0",
       "scope": "Zero-assumption baseline evidence and a focused local/R2 housekeeping dry-run contract repair; no global engineering-grade claim.",
       "exclusive_paths": [
@@ -2427,7 +2427,7 @@
       "claimed_at": "2026-09-26T04:51:37Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": ""
+      "note": "Focused repair delivered at ef6956d1baf70e50cf99fa745090f765b40e4ed0; exact-SHA CI 36219164776 success, 12 jobs. Local diagnostics: 186 passed, 3 dry-run mutants killed. Evidence .agents/evidence/constitution-2026-09-26.json. Master mission remains NEEDS_HARDENING; filesystem/executor/LLM/pack defects remain. Full gates deferred to gates owner; no production release claim."
     }
   ],
   "deferred_log": [

@@ -1,0 +1,1052 @@
+{
+  "schema": 1,
+  "captured_at_utc": "2026-09-26T04:56:45.563425+00:00",
+  "scope": "Partial engineering baseline plus one verified dry-run repair. Not completion of phases 0-20.",
+  "verdict": "NEEDS_HARDENING",
+  "source_main_sha": "2351f099e2f789b80de05c6b382554b5cdcec0f3",
+  "code_sha": "ef6956d1baf70e50cf99fa745090f765b40e4ed0",
+  "code_file_sha256": "f07643270c1571009ea5a58ff9626380d256603cd21cc5696ff0d608a8c82e44",
+  "snapshot": {
+    "version": "3.13.0",
+    "branch": {
+      "command": [
+        "git",
+        "branch",
+        "--show-current"
+      ],
+      "exit_code": 0,
+      "stdout": "arena/01a0dc0c-nexus-ai-agent",
+      "stderr": ""
+    },
+    "initial_worktree": "Clean before board CLI garbage-collected two expired leases; no user edits were present.",
+    "worktree_at_capture": {
+      "command": [
+        "git",
+        "status",
+        "--short"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "live_main": {
+      "command": [
+        "git",
+        "ls-remote",
+        "origin",
+        "refs/heads/main"
+      ],
+      "exit_code": 0,
+      "stdout": "2351f099e2f789b80de05c6b382554b5cdcec0f3\trefs/heads/main",
+      "stderr": ""
+    },
+    "python": "3.11.2",
+    "requires_python": ">=3.10",
+    "declared_dependencies": [
+      "python-telegram-bot>=21.0",
+      "langgraph>=0.2",
+      "langgraph-checkpoint-sqlite>=1.0",
+      "langchain-community>=0.2",
+      "sqlmodel==0.0.42",
+      "sqlalchemy==2.0.54",
+      "alembic==1.20.0",
+      "aiosqlite==0.22.1",
+      "asyncpg==0.31.0",
+      "psycopg[binary,pool]==3.3.5",
+      "langgraph-checkpoint-postgres==3.1.2",
+      "pydantic-settings>=2.0",
+      "sentence-transformers>=3.0",
+      "llama-cpp-python>=0.2",
+      "structlog>=24.0",
+      "sqlite-vec>=0.1",
+      "typer>=0.12",
+      "httpx==0.28.1",
+      "python-multipart>=0.0.9",
+      "duckduckgo-search>=8.0",
+      "fastapi>=0.110",
+      "uvicorn==0.53.0",
+      "numpy>=1.26",
+      "chromadb>=0.5",
+      "flashrank>=0.2",
+      "arabic-reshaper>=3.0",
+      "python-bidi>=0.4",
+      "pillow>=10.0",
+      "beautifulsoup4>=4.12",
+      "psutil>=5.9",
+      "litellm>=1.74,<2",
+      "boto3==1.43.98"
+    ],
+    "extras": {
+      "pdf": [
+        "pypdf>=5.1"
+      ],
+      "speech": [
+        "faster-whisper>=1.0,<2"
+      ],
+      "translate": [
+        "argostranslate>=1.9,<2"
+      ],
+      "dev": [
+        "pytest>=8.0",
+        "pytest-asyncio>=0.23",
+        "ruff>=0.4",
+        "mypy>=1.10",
+        "pytest-mock>=3.12",
+        "pypdf>=5.1",
+        "imageio-ffmpeg>=0.5"
+      ]
+    },
+    "local_environment": "Editable --no-deps installation with targeted test dependencies; not the full project dev environment.",
+    "local_freeze": [
+      "aiosqlite==0.22.1",
+      "annotated-doc==0.0.5",
+      "annotated-types==0.8.0",
+      "anyio==4.15.1",
+      "arabic-reshaper==3.0.1",
+      "certifi==2026.7.22",
+      "greenlet==3.5.6",
+      "h11==0.16.0",
+      "httpcore==1.0.9",
+      "httpx==0.28.1",
+      "idna==3.20",
+      "imageio-ffmpeg==0.6.0",
+      "iniconfig==2.3.0",
+      "markdown-it-py==4.2.0",
+      "mdurl==0.1.2",
+      "-e git+https://github.com/bot523h/nexus-ai-agent.git@ef6956d1baf70e50cf99fa745090f765b40e4ed0#egg=nexus_ai_agent",
+      "numpy==2.4.6",
+      "packaging==26.3",
+      "pillow==12.3.0",
+      "pluggy==1.6.0",
+      "pydantic==2.13.5",
+      "pydantic-settings==2.15.0",
+      "pydantic_core==2.46.5",
+      "Pygments==2.21.0",
+      "pypdf==6.19.0",
+      "pytest==9.1.1",
+      "pytest-asyncio==1.4.0",
+      "python-bidi==0.6.11",
+      "python-dotenv==1.2.3",
+      "rich==15.0.0",
+      "ruff==0.16.8",
+      "shellingham==1.5.4",
+      "SQLAlchemy==2.0.54",
+      "sqlmodel==0.0.42",
+      "structlog==26.1.0",
+      "typer==0.27.2",
+      "typing-inspection==0.4.4",
+      "typing_extensions==4.16.0"
+    ],
+    "local_pip_check": [
+      "nexus-ai-agent 3.13.0 requires alembic, which is not installed.",
+      "nexus-ai-agent 3.13.0 requires asyncpg, which is not installed.",
+      "nexus-ai-agent 3.13.0 requires beautifulsoup4, which is not installed.",
+      "nexus-ai-agent 3.13.0 requires boto3, which is not installed.",
+      "nexus-ai-agent 3.13.0 requires chromadb, which is not installed.",
+      "nexus-ai-agent 3.13.0 requires duckduckgo-search, which is not installed.",
+      "nexus-ai-agent 3.13.0 requires fastapi, which is not installed.",
+      "nexus-ai-agent 3.13.0 requires flashrank, which is not installed.",
+      "nexus-ai-agent 3.13.0 requires langchain-community, which is not installed.",
+      "nexus-ai-agent 3.13.0 requires langgraph, which is not installed.",
+      "nexus-ai-agent 3.13.0 requires langgraph-checkpoint-postgres, which is not installed.",
+      "nexus-ai-agent 3.13.0 requires langgraph-checkpoint-sqlite, which is not installed.",
+      "nexus-ai-agent 3.13.0 requires litellm, which is not installed.",
+      "nexus-ai-agent 3.13.0 requires llama-cpp-python, which is not installed.",
+      "nexus-ai-agent 3.13.0 requires psutil, which is not installed.",
+      "nexus-ai-agent 3.13.0 requires psycopg, which is not installed.",
+      "nexus-ai-agent 3.13.0 requires python-multipart, which is not installed.",
+      "nexus-ai-agent 3.13.0 requires python-telegram-bot, which is not installed.",
+      "nexus-ai-agent 3.13.0 requires sentence-transformers, which is not installed.",
+      "nexus-ai-agent 3.13.0 requires sqlite-vec, which is not installed.",
+      "nexus-ai-agent 3.13.0 requires uvicorn, which is not installed."
+    ],
+    "open_prs": [
+      {
+        "baseRefName": "main",
+        "headRefName": "arena/01a0da85-nexus-ai-agent",
+        "headRefOid": "2f0df4f11eada4307d6170cab9cffff027a5b1a3",
+        "number": 89,
+        "title": "task-122: 12 real command wirings + moderation ingress — forensic closure of 0199e58 (CI 12/12 green, mutations 8/8 killed)",
+        "url": "https://github.com/bot523h/nexus-ai-agent/pull/89"
+      },
+      {
+        "baseRefName": "main",
+        "headRefName": "arena/01a0da5a-nexus-ai-agent",
+        "headRefOid": "5e5a0fd7b7eb70c97d0d44619518f4746811691e",
+        "number": 88,
+        "title": "PACK-SEC-001 root-cause fix (supersedes #86) + first artifact-proof vertical slice + #87 adversarial probe (task-191)",
+        "url": "https://github.com/bot523h/nexus-ai-agent/pull/88"
+      },
+      {
+        "baseRefName": "main",
+        "headRefName": "arena/01a0da2a-nexus-ai-agent",
+        "headRefOid": "2ed4495e657e440f29770c26ad27d6a4c266e5d2",
+        "number": 87,
+        "title": "Studio Core (task-186): capability discovery surface + preview/master execution boundary + Agent 2/3 integration contracts",
+        "url": "https://github.com/bot523h/nexus-ai-agent/pull/87"
+      },
+      {
+        "baseRefName": "main",
+        "headRefName": "arena/01a0da2d-nexus-ai-agent",
+        "headRefOid": "2683d6d8f4da00c538e410479d8ed8b2a319c9bd",
+        "number": 86,
+        "title": "security: fail closed on unverified external packs",
+        "url": "https://github.com/bot523h/nexus-ai-agent/pull/86"
+      },
+      {
+        "baseRefName": "main",
+        "headRefName": "arena/01a0da15-nexus-ai-agent",
+        "headRefOid": "493f4052e1f630dc94901f3f81b2ef98ba403170",
+        "number": 84,
+        "title": "Register the NEXUS Engineering Constitution as an enforced contract (task-184)",
+        "url": "https://github.com/bot523h/nexus-ai-agent/pull/84"
+      },
+      {
+        "baseRefName": "main",
+        "headRefName": "arena/01a0d708-nexus-ai-agent",
+        "headRefOid": "372643afaafd60f2ab79462b14520e46c6ac50f8",
+        "number": 83,
+        "title": "nagar: Operation Truth — recomputed operation evidence chain with mutation guards (task-190)",
+        "url": "https://github.com/bot523h/nexus-ai-agent/pull/83"
+      },
+      {
+        "baseRefName": "main",
+        "headRefName": "arena/01a0d467-nexus-ai-agent",
+        "headRefOid": "1a35ec0697457313f8d2fa604e503c18fd4e6340",
+        "number": 73,
+        "title": "Gate 2.2 — Operation Truth → Executable Evidence Gate (anti-drift)",
+        "url": "https://github.com/bot523h/nexus-ai-agent/pull/73"
+      },
+      {
+        "baseRefName": "main",
+        "headRefName": "arena/01a0d43d-nexus-ai-agent",
+        "headRefOid": "94505f51e56b148f18d92255706df5a0e1452084",
+        "number": 70,
+        "title": "feat(nagar): Operation Matrix + Evidence Gate (reconcile 70 catalog ↔ 57 runtime, preserve 23 gaps)",
+        "url": "https://github.com/bot523h/nexus-ai-agent/pull/70"
+      },
+      {
+        "baseRefName": "main",
+        "headRefName": "arena/01a0d3af-nexus-ai-agent",
+        "headRefOid": "749807486709f08810ae801395004cf1c7945938",
+        "number": 69,
+        "title": "Gate 4: cross-layer vertical slice verification (T01·T02·T22·T31·T64) + Truth Matrix",
+        "url": "https://github.com/bot523h/nexus-ai-agent/pull/69"
+      },
+      {
+        "baseRefName": "main",
+        "headRefName": "arena/01a0d37d-nexus-ai-agent",
+        "headRefOid": "eef827641b0627f3581976d494eb0e71f4dd16b6",
+        "number": 68,
+        "title": "Nagar Gate 2: versioned command and capability boundary",
+        "url": "https://github.com/bot523h/nexus-ai-agent/pull/68"
+      },
+      {
+        "baseRefName": "main",
+        "headRefName": "arena/01a0d2e0-nexus-ai-agent",
+        "headRefOid": "9c3a34f107b4b5f3c878a0ec2a7d82e8c24614d3",
+        "number": 67,
+        "title": "Session 3: artifact-producing Creative Runtime (task-177)",
+        "url": "https://github.com/bot523h/nexus-ai-agent/pull/67"
+      },
+      {
+        "baseRefName": "main",
+        "headRefName": "arena/01a0d2d6-nexus-ai-agent",
+        "headRefOid": "db18cf66f32f32ca4fff63443729973366ace8c2",
+        "number": 66,
+        "title": "P0 creative integration: one production path, closed legacy lane, verified backups (D-0010)",
+        "url": "https://github.com/bot523h/nexus-ai-agent/pull/66"
+      },
+      {
+        "baseRefName": "main",
+        "headRefName": "arena/01a0d2a2-nexus-ai-agent",
+        "headRefOid": "c92244ceed5de06bc97981527672f834873bbcf2",
+        "number": 64,
+        "title": "Creative Runtime (task-176 s2): execution semantics, multi-segment assembly, honest availability",
+        "url": "https://github.com/bot523h/nexus-ai-agent/pull/64"
+      },
+      {
+        "baseRefName": "main",
+        "headRefName": "arena/01a0cf98-nexus-ai-agent",
+        "headRefOid": "3e376bea067f761016725e16d476721f92146813",
+        "number": 63,
+        "title": "task-163: board-Git truth gate + scale-to-zero state tiers (#1 + #3)",
+        "url": "https://github.com/bot523h/nexus-ai-agent/pull/63"
+      },
+      {
+        "baseRefName": "main",
+        "headRefName": "arena/01a0cf50-nexus-ai-agent",
+        "headRefOid": "efea9bae3ebd108ca7fcaef5fa559268ee82c0a4",
+        "number": 60,
+        "title": "M0 runtime integration: InstrumentedJobQueue + readyz factory + Q1–Q5 proofs (task-172)",
+        "url": "https://github.com/bot523h/nexus-ai-agent/pull/60"
+      },
+      {
+        "baseRefName": "main",
+        "headRefName": "arena/01a0cf31-nexus-ai-agent",
+        "headRefOid": "b3385d428cdbdd33e94bb386ae7eef35c8a15ad2",
+        "number": 59,
+        "title": "P3/P4 — effect consistency: transactional outbox + effect-key / idempotent effect",
+        "url": "https://github.com/bot523h/nexus-ai-agent/pull/59"
+      },
+      {
+        "baseRefName": "main",
+        "headRefName": "arena/01a0cf4c-nexus-ai-agent",
+        "headRefOid": "bb06da1cb304aed43f0da76f7119ccfb803af4c8",
+        "number": 58,
+        "title": "Security Boundary hardening — S1/S2/S3/S4/S5 (guard STOP, force-join, redaction, Gemini header, SSRF)",
+        "url": "https://github.com/bot523h/nexus-ai-agent/pull/58"
+      },
+      {
+        "baseRefName": "main",
+        "headRefName": "arena/01a0cf30-nexus-ai-agent",
+        "headRefOid": "2f591618e13b2ed969fb560cca5ba43f00dfb4a4",
+        "number": 57,
+        "title": "feat(research-v2): P1 CLAIM+LEASE + P2 INBOX/RECEIPT (task-160)",
+        "url": "https://github.com/bot523h/nexus-ai-agent/pull/57"
+      },
+      {
+        "baseRefName": "main",
+        "headRefName": "arena/01a0cb43-nexus-ai-agent",
+        "headRefOid": "4c53b35a8ef8ebf653dad61e52e80f5584ac2b33",
+        "number": 56,
+        "title": "chore(hygiene): task-162 — dead-branch janitorial (15 deleted), dated root docs archived, zero-drift diagnostics",
+        "url": "https://github.com/bot523h/nexus-ai-agent/pull/56"
+      },
+      {
+        "baseRefName": "main",
+        "headRefName": "arena/01a0c3aa-nexus-ai-agent",
+        "headRefOid": "8f2029e75a83eba87edf878b2dc5233d103a6eab",
+        "number": 33,
+        "title": "v3.13.0 — deliver the P0 security code, wire the dead engines, fix 4 production bugs",
+        "url": "https://github.com/bot523h/nexus-ai-agent/pull/33"
+      }
+    ],
+    "remote_branches": {
+      "command": [
+        "git",
+        "ls-remote",
+        "--heads",
+        "origin"
+      ],
+      "exit_code": 0,
+      "stdout": "8f2029e75a83eba87edf878b2dc5233d103a6eab\trefs/heads/arena/01a0c3aa-nexus-ai-agent\nf5b253a63820a31c8ed2396978e3398ad491d83c\trefs/heads/arena/01a0c625-nexus-ai-agent\n7fb5634c6ae7be0da0778c55ab3757e253832f35\trefs/heads/arena/01a0c992-nexus-ai-agent\nf2cad64c6b6905b79bb5f97f181c65c5b7ced879\trefs/heads/arena/01a0ca9c-nexus-ai-agent\n46fe7aacbdf8797986fd3f25a38dd4eed620a889\trefs/heads/arena/01a0cb38-nexus-ai-agent\n02ce194db3f2d023a62fdf80874a1b75eb9a5f47\trefs/heads/arena/01a0cb3f-nexus-ai-agent\n4c53b35a8ef8ebf653dad61e52e80f5584ac2b33\trefs/heads/arena/01a0cb43-nexus-ai-agent\n666a4277680f1b7f7f1f909221fa4a4815fdf047\trefs/heads/arena/01a0cb4d-nexus-ai-agent\n5c9c55123aaa4f13dd317b47ad238b748db775b7\trefs/heads/arena/01a0cca8-nexus-ai-agent\n68f777f7585a7376c4900fe13e958cdfb54b9c1c\trefs/heads/arena/01a0ccab-nexus-ai-agent\n3aee275e648f29758c880e4375d87c9e935f3528\trefs/heads/arena/01a0cf27-nexus-ai-agent\n37d70149f8de517e8eb2d7ac5ca649a8266d6acc\trefs/heads/arena/01a0cf29-nexus-ai-agent\n2f591618e13b2ed969fb560cca5ba43f00dfb4a4\trefs/heads/arena/01a0cf30-nexus-ai-agent\nb3385d428cdbdd33e94bb386ae7eef35c8a15ad2\trefs/heads/arena/01a0cf31-nexus-ai-agent\nbb06da1cb304aed43f0da76f7119ccfb803af4c8\trefs/heads/arena/01a0cf4c-nexus-ai-agent\nefea9bae3ebd108ca7fcaef5fa559268ee82c0a4\trefs/heads/arena/01a0cf50-nexus-ai-agent\n3e376bea067f761016725e16d476721f92146813\trefs/heads/arena/01a0cf98-nexus-ai-agent\n13c96b7d08f0dd461dd1c51763176baf90ec4613\trefs/heads/arena/01a0cfcd-nexus-ai-agent\nd437e9bd46b6292e33ae25d86f94949ad89b3002\trefs/heads/arena/01a0d23e-nexus-ai-agent\ncb2bad553e76fc69a577ac58a87c2f2a662432df\trefs/heads/arena/01a0d244-nexus-ai-agent\nc92244ceed5de06bc97981527672f834873bbcf2\trefs/heads/arena/01a0d2a2-nexus-ai-agent\ndb18cf66f32f32ca4fff63443729973366ace8c2\trefs/heads/arena/01a0d2d6-nexus-ai-agent\n9c3a34f107b4b5f3c878a0ec2a7d82e8c24614d3\trefs/heads/arena/01a0d2e0-nexus-ai-agent\nfa43fa16651b7597c5e56ddda6ccb04aa84b6407\trefs/heads/arena/01a0d317-nexus-ai-agent\nf5e54761a6306a68a25d0ce0ed6edb602ff4d35a\trefs/heads/arena/01a0d365-nexus-ai-agent\neef827641b0627f3581976d494eb0e71f4dd16b6\trefs/heads/arena/01a0d37d-nexus-ai-agent\n0c49b5b2367967925266bc5b99acdf9407f32272\trefs/heads/arena/01a0d3a8-nexus-ai-agent\n749807486709f08810ae801395004cf1c7945938\trefs/heads/arena/01a0d3af-nexus-ai-agent\nf450df273d944dc88e3a21337b915b40638ee4dd\trefs/heads/arena/01a0d43c-nexus-ai-agent\n94505f51e56b148f18d92255706df5a0e1452084\trefs/heads/arena/01a0d43d-nexus-ai-agent\n9e9c753082c572d1164148be7da50c061ed53311\trefs/heads/arena/01a0d43e-nexus-ai-agent\n38e605f157cc3a967549e0950f088b611e204d38\trefs/heads/arena/01a0d458-nexus-ai-agent\n1a35ec0697457313f8d2fa604e503c18fd4e6340\trefs/heads/arena/01a0d467-nexus-ai-agent\n05d647e9ccc4e9c3c823020972e01d8cd14fc80a\trefs/heads/arena/01a0d475-nexus-ai-agent\n5f273f08f543ae7916ccdf1eeee8544a44cbf81b\trefs/heads/arena/01a0d4b6-nexus-ai-agent\n5b17a709c24b340f93b74b3126660ec7717f66b7\trefs/heads/arena/01a0d4c7-nexus-ai-agent\ne0cba268897e8d656c69c48104f6519f0dae47e1\trefs/heads/arena/01a0d4c8-nexus-ai-agent\n566207c6c4fa469d402e3f178eef0827052a6f5f\trefs/heads/arena/01a0d50d-nexus-ai-agent\n8233aa398206a93dfcccda0723afcd3ae9643f51\trefs/heads/arena/01a0d547-nexus-ai-agent\n3cb54f13f4a702cc45a6aa163fc3584a67ee298c\trefs/heads/arena/01a0d563-nexus-ai-agent\n4f1da989e58ee9039fd7890d36757c3387bd83a4\trefs/heads/arena/01a0d567-nexus-ai-agent\ncef7045ca630cfe459a0541fbc891de27b4efa41\trefs/heads/arena/01a0d5a1-nexus-ai-agent\nb2fdba20411fc6108a0335175a02ec1e759c82f8\trefs/heads/arena/01a0d5a8-nexus-ai-agent\nc2a47562b7e2ab4b8d1504ad87cb2ec71dbcdb90\trefs/heads/arena/01a0d6d7-nexus-ai-agent\nebba68da6cf88584b84fe67da789a14815762722\trefs/heads/arena/01a0d6df-nexus-ai-agent\nddb37f20aa9ce3c09207b99a5a2e73d746e6d56d\trefs/heads/arena/01a0d703-nexus-ai-agent\n372643afaafd60f2ab79462b14520e46c6ac50f8\trefs/heads/arena/01a0d708-nexus-ai-agent\n6d9300dd2a499ea5252e44609dd2c59ac92a52c0\trefs/heads/arena/01a0d709-nexus-ai-agent\n824f00ced7ed211c4c86c91deb1a1e797b1f3fc0\trefs/heads/arena/01a0d9ef-nexus-ai-agent\n60fe9688d88afa223f47291c15881725c1066691\trefs/heads/arena/01a0d9f4-nexus-ai-agent\n0199e58fce93d62b6db17ea945811235ec6bb2e9\trefs/heads/arena/01a0da12-nexus-ai-agent\n690483c2e1fdd46b67b785cc30689ccb7515b2d0\trefs/heads/arena/01a0da13-nexus-ai-agent\n493f4052e1f630dc94901f3f81b2ef98ba403170\trefs/heads/arena/01a0da15-nexus-ai-agent\n2ed4495e657e440f29770c26ad27d6a4c266e5d2\trefs/heads/arena/01a0da2a-nexus-ai-agent\n4ec86a79e2180fcb1c2e5108490202f8a0d7aaa3\trefs/heads/arena/01a0da2c-nexus-ai-agent\n2683d6d8f4da00c538e410479d8ed8b2a319c9bd\trefs/heads/arena/01a0da2d-nexus-ai-agent\ne2d9ab853d5778b7ae2d127dcb01aea648827adb\trefs/heads/arena/01a0da56-nexus-ai-agent\n5e5a0fd7b7eb70c97d0d44619518f4746811691e\trefs/heads/arena/01a0da5a-nexus-ai-agent\ne405e07d57c8020025f5677db5bed85c88191771\trefs/heads/arena/01a0da61-nexus-ai-agent\n2f0df4f11eada4307d6170cab9cffff027a5b1a3\trefs/heads/arena/01a0da85-nexus-ai-agent\nef6956d1baf70e50cf99fa745090f765b40e4ed0\trefs/heads/arena/01a0dc0c-nexus-ai-agent\n2351f099e2f789b80de05c6b382554b5cdcec0f3\trefs/heads/main",
+      "stderr": ""
+    },
+    "package_structure": [
+      "src/nexus_ai_agent/adapters",
+      "src/nexus_ai_agent/agent",
+      "src/nexus_ai_agent/agents",
+      "src/nexus_ai_agent/api",
+      "src/nexus_ai_agent/application",
+      "src/nexus_ai_agent/bot",
+      "src/nexus_ai_agent/config",
+      "src/nexus_ai_agent/continuum",
+      "src/nexus_ai_agent/core",
+      "src/nexus_ai_agent/creative",
+      "src/nexus_ai_agent/domain",
+      "src/nexus_ai_agent/features",
+      "src/nexus_ai_agent/i18n",
+      "src/nexus_ai_agent/infrastructure",
+      "src/nexus_ai_agent/integrations",
+      "src/nexus_ai_agent/jobs",
+      "src/nexus_ai_agent/knowledge",
+      "src/nexus_ai_agent/llm",
+      "src/nexus_ai_agent/maintenance",
+      "src/nexus_ai_agent/memory",
+      "src/nexus_ai_agent/observability",
+      "src/nexus_ai_agent/orchestration",
+      "src/nexus_ai_agent/personality",
+      "src/nexus_ai_agent/storage",
+      "src/nexus_ai_agent/tools"
+    ],
+    "test_files": 169,
+    "test_counts": {
+      "full_suite": "UNVERIFIED locally: initial collect-only failed with 43 collection errors in partial environment; 1906 collected is NOT the total.",
+      "focused_final": "186 passed",
+      "new_housekeeping": "13 passed",
+      "architecture": "112 passed",
+      "queue_integration": "15 passed"
+    },
+    "databases": [
+      "Application SQLite or PostgreSQL via storage/db.py",
+      "Job SQLite sidecar via worker.py::job_queue_db_path",
+      "LangGraph checkpoint SQLite/PostgreSQL",
+      "Checkpoint lifecycle index/sidecar",
+      "Vector/Chroma stores; comprehensive DB-access inventory not complete"
+    ],
+    "workers": [
+      "worker.py handler registry, InProcessJobQueue in bot event loop; not a separate broker-backed worker fleet"
+    ],
+    "services": [
+      "docker-compose: bot and dashboard",
+      "koyeb.yaml: webhook web service",
+      "maintenance.yml: nightly backup and weekly cleanup"
+    ],
+    "external_integrations": "Declared: Telegram, LLM routing (Gemini/Groq/OpenRouter/Ollama), Cloudflare R2, PostgreSQL/Neon, GitHub, optional cloud storage/search/model downloads. Live connectivity/credentials/deployed revision UNVERIFIED."
+  },
+  "prior_baselines": {
+    "named_2026_09_26_reports": "Not found as named files in this checkout; cannot assert an exhaustive inventory of their blockers.",
+    "task_122": "PR 89 is OPEN, not main. Its claims were read but not accepted as main runtime truth.",
+    "checked_local_records": [
+      "docs/audits/P0_STABILIZATION_2026-09-24.md",
+      "docs/audits/GATE5_CLOSURE_2026-09-24.md (inventory presence)",
+      "docs/architecture/DATA_AND_STORAGE.md (older verified SHA; not authoritative counts)"
+    ]
+  },
+  "classification": {
+    "exists": "Canonical creative surface registration, creative_render worker, command bus, lifecycle queue, verification, maintenance code",
+    "partial": "Resource admission, filesystem containment, pack trust, execution/failure truth",
+    "simulated": "FakeLLMProvider; default FallbackProvider may use it. Test R2 providers are intentionally injected simulations.",
+    "experimental": "Capability lifecycle has EXPERIMENTAL gated by allow_experimental; exhaustive runtime inventory not completed",
+    "legacy": "HTTP creative lane and schema-1 implicit local command trust remain governed paths; not removed",
+    "production_critical": "Ingress authorization, filesystem, queue/artifact publication, DB, provider credentials, backups",
+    "unverified": "Actual deployed SHA, real service backup/restore, full operation execution matrix, full threat model and previous-audit closure"
+  },
+  "findings": [
+    {
+      "id": "HK-DRY-001",
+      "status": "VERIFIED",
+      "finding": "Local housekeeping deletes stale files during dry-run on baseline main",
+      "root_cause": "The public dry_run policy was not passed into the destructive helper; only remote deletion had a guard.",
+      "boundary": "run_housekeeping -> _clean_temp_dir -> Path.unlink",
+      "principle": "Dry-run must guard the operation, not only the surface.",
+      "fix": "Required keyword-only dry_run at helper, forwarded by public function, guard directly around unlink. Legacy summary names retained and documented as candidates in preview mode.",
+      "regression": "tests/unit/test_housekeeping_contract.py",
+      "remaining": "This is not a proof of CLI startup zero-mutation, race-free filesystem containment or all maintenance operations. get_settings creates directories (config/settings.py); the CLI wrapper has not been hardened here."
+    },
+    {
+      "id": "FS-001",
+      "status": "PROVEN",
+      "finding": "ReadFileTool and WriteFileTool follow a workspace symlink to a target outside workspace",
+      "root_cause": "_resolve_sandboxed resolves a path but never checks resolved containment.",
+      "boundary": "tools/files.py::_resolve_sandboxed",
+      "fix": "NOT IMPLEMENTED in this change; requires physically contained operations and an explicit TOCTOU policy.",
+      "evidence": "runtime_probes.symlink_read / symlink_write / outside_changed",
+      "residual_risk": "Direct tool invocation permits reading/writing outside workspace; end-to-end remote exploitability not established."
+    },
+    {
+      "id": "EXEC-001",
+      "status": "PROVEN",
+      "finding": "An execution step naming a tool reports success when registry is absent",
+      "root_cause": "Missing execution infrastructure falls through to the no-op success branch.",
+      "boundary": "agents/executor_agent.py::ExecutorAgent.run",
+      "fix": "NOT IMPLEMENTED; distinguish planning/no-op from typed unavailable execution.",
+      "evidence": "runtime_probes.executor_missing_registry"
+    },
+    {
+      "id": "LLM-001",
+      "status": "PROVEN",
+      "finding": "A successful explanation containing HTTP 429 triggers fallback",
+      "root_cause": "FallbackProvider conflates generated text with provider failure via substring matching.",
+      "boundary": "llm/fallback_provider.py::FallbackProvider.generate",
+      "fix": "NOT IMPLEMENTED; failure class must come from transport/provider contract.",
+      "evidence": "runtime_probes.llm_successful_text_misclassification",
+      "residual_risk": "Fallback defaults to FakeLLMProvider; log also includes result_preview."
+    },
+    {
+      "id": "PACK-001",
+      "status": "PROVEN",
+      "finding": "An external pack with format_only_unverified signature can be activated",
+      "root_cause": "Signature verification creates warnings; activation checks known operations, not cryptographic trust.",
+      "boundary": "creative/packs/verify.py::verify_manifest -> registry.py::register/activate",
+      "fix": "NOT IMPLEMENTED; PRs 86 and 88 are competing open proposals, not main evidence.",
+      "evidence": "runtime_probes.external_pack",
+      "residual_risk": "Probe uses a shipped data-only manifest relabeled external, not arbitrary code execution."
+    },
+    {
+      "id": "QUEUE-CAP-001",
+      "status": "PARTIAL",
+      "finding": "_schedule creates an asyncio task per job without a capacity guard in that function",
+      "root_cause": "Durable state/recovery and admission capacity are separate contracts.",
+      "boundary": "adapters/in_process_job_queue.py::_schedule",
+      "fix": "NOT IMPLEMENTED; load/admission probe still required.",
+      "evidence": "Source inspection, not load testing."
+    },
+    {
+      "id": "DEP-001",
+      "status": "PARTIAL",
+      "finding": "Many direct dependencies have lower bounds only, including heavy native/ML packages in required core dependencies",
+      "root_cause": "pyproject declares install requirements but is not a complete reproducible environment lock.",
+      "boundary": "pyproject.toml",
+      "fix": "NOT IMPLEMENTED; vulnerability scan and production dependency resolution remain unverified."
+    }
+  ],
+  "architecture_map_status": "PARTIAL: principal creative and maintenance paths inspected, not every surface",
+  "architecture_map": [
+    {
+      "stage": "Surface/Validation",
+      "implementation": "bot/creative_surface.py::build_creative_handlers",
+      "sync_async": "async",
+      "state_owner": "Telegram update / queue payload",
+      "boundary": "surface policy, typed parsing",
+      "failure_contract": "input rejection",
+      "evidence_limit": "No new live Telegram probe"
+    },
+    {
+      "stage": "Job/Worker",
+      "implementation": "adapters/in_process_job_queue.py; worker.py::default_job_handlers",
+      "sync_async": "async with SQLite work delegated to threads",
+      "state_owner": "SQLite sidecar",
+      "boundary": "durable lifecycle, CAS/fencing",
+      "failure_contract": "classified terminal/retryable states",
+      "evidence_limit": "15 existing queue integration tests passed"
+    },
+    {
+      "stage": "Command/Authorization/Capability",
+      "implementation": "creative/studio/bus.py; creative/studio/authorization.py",
+      "sync_async": "sync under RLock",
+      "state_owner": "per-bus project state",
+      "boundary": "validation, grants, capability gates, revision, idempotency",
+      "failure_contract": "typed exceptions; in-memory atomic apply",
+      "evidence_limit": "Idempotency is per-bus, not restart-durable"
+    },
+    {
+      "stage": "Operation/IR/Execution",
+      "implementation": "creative/render_jobs.py; creative/rendering/",
+      "sync_async": "mixed sync/async",
+      "state_owner": "job workspace / rendered artifact",
+      "boundary": "typed operation mapping to execution lane",
+      "failure_contract": "unsupported operation must refuse",
+      "evidence_limit": "All 57 operations not individually proven executable"
+    },
+    {
+      "stage": "Verification/Artifact",
+      "implementation": "jobs/verification.py; jobs/creative_verification.py; adapters/in_process_job_queue.py",
+      "sync_async": "verifier in worker thread",
+      "state_owner": "durable job result and artifact",
+      "boundary": "verify before completion; publication fencing",
+      "failure_contract": "refusal must preserve failed lifecycle",
+      "evidence_limit": "No new crash/TOCTOU/chaos campaign"
+    },
+    {
+      "stage": "Notification",
+      "implementation": "bot/app.py; bot/slideshow_notify.py",
+      "sync_async": "async",
+      "state_owner": "completion callback / Telegram",
+      "boundary": "durable completion status",
+      "failure_contract": "failed jobs must not produce success message",
+      "evidence_limit": "Real Telegram delivery unverified"
+    },
+    {
+      "stage": "Maintenance",
+      "implementation": "cli.py -> maintenance/housekeeping.py -> R2Provider",
+      "sync_async": "sync entrypoint; asyncio.run for remote calls",
+      "state_owner": "filesystem + remote keys",
+      "boundary": "per-file unlink and remote delete, no cross-store transaction",
+      "failure_contract": "exceptions propagate; partial real cleanup possible",
+      "evidence_limit": "No retries added; local and remote operations are not atomic together"
+    }
+  ],
+  "contradictions": [
+    {
+      "path": "maintenance/housekeeping.py",
+      "decision": "KEEP",
+      "reason": "Needed retention function, repair policy propagation without another abstraction"
+    },
+    {
+      "path": "tools/files.py",
+      "decision": "KEEP",
+      "reason": "Must harden physical containment; do not confuse string filtering with sandboxing"
+    },
+    {
+      "path": "creative/studio/bus.py schema-1",
+      "decision": "DEPRECATE",
+      "reason": "Existing compatibility lane has implicit local trust; no removal without caller inventory"
+    },
+    {
+      "path": "api/app.py legacy creative routes",
+      "decision": "DEPRECATE",
+      "reason": "Existing governed legacy lane; caller/migration evidence not sufficient here for deletion"
+    }
+  ],
+  "runtime_probe_environment": "Local temporary synthetic data only; LLM provider and registry inputs injected. No real external service or production data used.",
+  "runtime_probe_reproduction_python": "import asyncio\nimport json\nimport os\nimport tempfile\nfrom pathlib import Path\nfrom nexus_ai_agent.agents.executor_agent import ExecutorAgent\nfrom nexus_ai_agent.llm.fake_llm import FakeLLMProvider\nfrom nexus_ai_agent.llm.fallback_provider import FallbackProvider\nfrom nexus_ai_agent.tools.files import ReadFileTool, WriteFileTool\nfrom nexus_ai_agent.creative.packs.runtime import build_pack_runtime\n\nasync def probe():\n    results = {}\n    result = await ExecutorAgent(FakeLLMProvider(), registry=None).run(\n        {'current_task': {'steps': [{'tool': 'missing', 'status': 'pending'}]}}\n    )\n    results['executor_missing_registry'] = result\n    class Explanation(FakeLLMProvider):\n        async def generate(self, prompt, system=''):\n            return 'HTTP 429 is a status code, not a provider failure here.'\n    fallback = FallbackProvider(Explanation())\n    results['llm_successful_text_misclassification'] = {\n        'output': await fallback.generate('Explain HTTP status codes'),\n        'stats': fallback.stats,\n    }\n    with tempfile.TemporaryDirectory() as tmp:\n        base = Path(tmp)\n        root = base / 'workspace'\n        root.mkdir()\n        outside = base / 'outside.txt'\n        outside.write_text('isolated test sentinel')\n        (root / 'link').symlink_to(outside)\n        os.environ['NEXUS_WORKSPACE_ROOT'] = str(root)\n        results['symlink_read'] = await ReadFileTool().execute({'path': 'link'})\n        results['symlink_write'] = await WriteFileTool().execute({'path': 'link', 'content': 'changed'})\n        results['outside_changed'] = outside.read_text() == 'changed'\n    runtime = build_pack_runtime()\n    results['registered_operations_only'] = len(runtime.operation_ids())\n    builtin = runtime.packs.builtin_packs()[0]\n    external_runtime = build_pack_runtime()\n    # New registry: reuse the shipped manifest as untrusted input, without touching disk.\n    from nexus_ai_agent.creative.packs.registry import PackRegistry\n    external = PackRegistry(external_runtime.registry)\n    registered = external.register(builtin.manifest, anchor='external', activate=True)\n    results['external_pack'] = {'active': registered.active, 'signature_state': registered.report.signature_state, 'verification_ok': registered.report.ok}\n    return results\n\nprint(json.dumps(asyncio.run(probe()),indent=2))\n",
+  "runtime_probes": {
+    "executor_missing_registry": {
+      "current_task": {
+        "steps": [
+          {
+            "tool": "missing",
+            "status": "done"
+          }
+        ]
+      },
+      "tool_results": [
+        {
+          "success": true,
+          "output": "noop",
+          "error": null
+        }
+      ],
+      "response": "Step executed (noop)."
+    },
+    "llm_successful_text_misclassification": {
+      "output": "[FAKE] Response to: Explain HTTP status codes\n\n---\n⚠️ _Fallback mode_: The primary AI engine is currently rate-limited. This response was generated locally and may be less accurate. Please try again in a minute for the full AI experience._",
+      "stats": {
+        "primary_calls": 1,
+        "fallback_calls": 1,
+        "fallback_ratio": 0.5
+      }
+    },
+    "symlink_read": {
+      "success": true,
+      "output": "isolated test sentinel",
+      "error": null
+    },
+    "symlink_write": {
+      "success": true,
+      "output": "Wrote /tmp/tmpv4508u2t/outside.txt",
+      "error": null
+    },
+    "outside_changed": true,
+    "registered_operations_only": 57,
+    "external_pack": {
+      "active": true,
+      "signature_state": "format_only_unverified",
+      "verification_ok": true
+    }
+  },
+  "tests": {
+    "before_fix": {
+      "command": ".venv/bin/pytest -q tests/unit/test_housekeeping_contract.py --tb=short",
+      "result": "3 failed, 10 passed",
+      "log": "FFF..........                                                            [100%]\n=================================== FAILURES ===================================\n___________________ test_dry_run_preserves_real_files[False] ___________________\ntests/unit/test_housekeeping_contract.py:62: in test_dry_run_preserves_real_files\n    assert old.exists(), \"dry-run deleted a real stale file\"\nE   AssertionError: dry-run deleted a real stale file\nE   assert False\nE    +  where False = exists()\nE    +    where exists = PosixPath('/tmp/pytest-of-user/pytest-0/test_dry_run_preserves_real_fi0/creative/nested/old.bin').exists\n----------------------------- Captured stdout call -----------------------------\n2026-09-26 12:00:00 [info     ] maintenance_housekeeping_no_r2\n___________________ test_dry_run_preserves_real_files[True] ____________________\ntests/unit/test_housekeeping_contract.py:62: in test_dry_run_preserves_real_files\n    assert old.exists(), \"dry-run deleted a real stale file\"\nE   AssertionError: dry-run deleted a real stale file\nE   assert False\nE    +  where False = exists()\nE    +    where exists = PosixPath('/tmp/pytest-of-user/pytest-0/test_dry_run_preserves_real_fi1/creative/nested/old.bin').exists\n__________________ test_dry_run_does_not_even_attempt_unlink ___________________\ntests/unit/test_housekeeping_contract.py:84: in test_dry_run_does_not_even_attempt_unlink\n    hk.run_housekeeping(settings=settings, dry_run=True)\nsrc/nexus_ai_agent/maintenance/housekeeping.py:69: in run_housekeeping\n    summary[\"temp_files_removed\"] = _clean_temp_dir(\nsrc/nexus_ai_agent/maintenance/housekeeping.py:34: in _clean_temp_dir\n    candidate.unlink(missing_ok=True)\ntests/unit/test_housekeeping_contract.py:80: in forbidden\n    pytest.fail(\"dry-run attempted unlink\")\nE   Failed: dry-run attempted unlink\n=========================== short test summary info ============================\nFAILED tests/unit/test_housekeeping_contract.py::test_dry_run_preserves_real_files[False]\nFAILED tests/unit/test_housekeeping_contract.py::test_dry_run_preserves_real_files[True]\nFAILED tests/unit/test_housekeeping_contract.py::test_dry_run_does_not_even_attempt_unlink\n3 failed, 10 passed in 0.50s\n"
+    },
+    "after_fix": {
+      "command": ".venv/bin/pytest -q tests/unit/test_housekeeping_contract.py tests/unit/test_maintenance_backup.py tests/unit/test_r2_provider.py tests/unit/test_agent_board.py tests/architecture tests/integration/test_in_process_job_queue.py --tb=short",
+      "result": "186 passed",
+      "log": "........................................................................ [ 38%]\n........................................................................ [ 77%]\n..........................................                               [100%]\n186 passed in 10.04s\n"
+    },
+    "mutations": {
+      "source_sha256_restored": "f07643270c1571009ea5a58ff9626380d256603cd21cc5696ff0d608a8c82e44",
+      "results": [
+        {
+          "mutation": "remove_local_dry_run_guard",
+          "exit_code": 1,
+          "summary": "3 failed, 10 passed in 0.47s"
+        },
+        {
+          "mutation": "drop_policy_at_delegation",
+          "exit_code": 1,
+          "summary": "3 failed, 10 passed in 0.57s"
+        },
+        {
+          "mutation": "remove_remote_dry_run_guard",
+          "exit_code": 1,
+          "summary": "2 failed, 11 passed in 0.62s"
+        }
+      ]
+    },
+    "mutation_method": "Replace exactly one occurrence in housekeeping.py, run new contract tests expecting exit 1, restore original bytes in finally, verify source SHA-256 and rerun clean suite.",
+    "initial_environment_failures": [
+      "Missing httpx/numpy prevented initial import before test reproduction",
+      "Missing typer: architecture initially 111 passed, 1 failed; installed typer -> 112 passed",
+      "Queue story test initially timed out. Durable DB error was failed_retryable: No module named arabic_reshaper. Installed arabic-reshaper/python-bidi -> all 15 integration tests passed."
+    ],
+    "lint": "ruff 0.16.8 check . passed; ruff format --check .: 496 files already formatted",
+    "full_suite": "Deferred to exact-SHA CI/gates owner; local collection not complete, no local full-suite success claimed.",
+    "security_scope": "Dry-run local/R2 deletion policy mutation-tested; other security findings are probes, NOT regression fixes.",
+    "e2e": "No live Telegram, cloud credentials, deployment, or complete workflow evidence in this change."
+  },
+  "ci": {
+    "main": {
+      "conclusion": "success",
+      "databaseId": 36176954176,
+      "headSha": "2351f099e2f789b80de05c6b382554b5cdcec0f3",
+      "jobs": [
+        {
+          "name": "migrate-postgres",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36176954176/job/108209770033"
+        },
+        {
+          "name": "extras-matrix (core)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36176954176/job/108209770320"
+        },
+        {
+          "name": "lint-fast (lockstep + pinned ruff, no install)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36176954176/job/108209770334"
+        },
+        {
+          "name": "python-parity (3.10)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36176954176/job/108209770361"
+        },
+        {
+          "name": "release-lineage",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36176954176/job/108209770362"
+        },
+        {
+          "name": "test (pytest -m \"not slow\")",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36176954176/job/108209770379"
+        },
+        {
+          "name": "lint (ruff + mypy + version lockstep)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36176954176/job/108209770500"
+        },
+        {
+          "name": "extras-matrix (translate)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36176954176/job/108209770523"
+        },
+        {
+          "name": "python-parity (3.12)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36176954176/job/108209770571"
+        },
+        {
+          "name": "extras-matrix (speech)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36176954176/job/108209770640"
+        },
+        {
+          "name": "python-parity (3.11)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36176954176/job/108209770695"
+        },
+        {
+          "name": "extras-matrix (pdf)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36176954176/job/108209771349"
+        }
+      ],
+      "status": "completed",
+      "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36176954176"
+    },
+    "maintenance": {
+      "conclusion": "failure",
+      "databaseId": 36115146739,
+      "headSha": "52ab7e8fcf001951f3f93dcaec61a2a14904ab47",
+      "jobs": [
+        {
+          "name": "backup-db",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36115146739/job/108007365860"
+        },
+        {
+          "name": "housekeeping",
+          "status": "completed",
+          "conclusion": "skipped",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36115146739/job/108007367094"
+        }
+      ],
+      "status": "completed",
+      "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36115146739"
+    },
+    "maintenance_failure_cause": "UNVERIFIED: gh run view --log-failed returned EOF; do not infer missing secrets.",
+    "code_sha_run": {
+      "conclusion": "success",
+      "databaseId": 36219164776,
+      "headSha": "ef6956d1baf70e50cf99fa745090f765b40e4ed0",
+      "jobs": [
+        {
+          "name": "lint-fast (lockstep + pinned ruff, no install)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36219164776/job/108341165661"
+        },
+        {
+          "name": "extras-matrix (translate)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36219164776/job/108341165729"
+        },
+        {
+          "name": "lint (ruff + mypy + version lockstep)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36219164776/job/108341165762"
+        },
+        {
+          "name": "extras-matrix (core)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36219164776/job/108341165792"
+        },
+        {
+          "name": "python-parity (3.11)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36219164776/job/108341165794"
+        },
+        {
+          "name": "python-parity (3.12)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36219164776/job/108341165796"
+        },
+        {
+          "name": "extras-matrix (speech)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36219164776/job/108341165805"
+        },
+        {
+          "name": "release-lineage",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36219164776/job/108341165807"
+        },
+        {
+          "name": "python-parity (3.10)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36219164776/job/108341165810"
+        },
+        {
+          "name": "test (pytest -m \"not slow\")",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36219164776/job/108341165815"
+        },
+        {
+          "name": "extras-matrix (pdf)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36219164776/job/108341165846"
+        },
+        {
+          "name": "migrate-postgres",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36219164776/job/108341165889"
+        }
+      ],
+      "status": "completed",
+      "url": "https://github.com/bot523h/nexus-ai-agent/actions/runs/36219164776"
+    },
+    "ci_limits": "Default suite excludes slow tests; green main CI coexists with the reproduced security/contract defects. No production release or restore inference.",
+    "evidence_commit_note": "This snapshot records the tested code commit. The later evidence-only commit needs its own CI; consult PR checks rather than treating this snapshot as that result.",
+    "captured_at_utc": "2026-09-26T05:03:28.673208+00:00"
+  },
+  "evidence_table": [
+    {
+      "domain": "Security",
+      "invariant": "All boundaries fail closed",
+      "implementation": "tools/files.py; creative/packs/verify.py",
+      "test_or_probe": "FS-001; PACK-001",
+      "CI": "See ci; no global invariant proof inferred from green main",
+      "exact_sha": "2351f099e2f789b80de05c6b382554b5cdcec0f3",
+      "status": "PARTIAL"
+    },
+    {
+      "domain": "Filesystem",
+      "invariant": "Resolved target contained; dry-run does not unlink",
+      "implementation": "tools/files.py; maintenance/housekeeping.py",
+      "test_or_probe": "HK-DRY-001 verified; FS-001 remains",
+      "CI": "See ci; no global invariant proof inferred from green main",
+      "exact_sha": "ef6956d1baf70e50cf99fa745090f765b40e4ed0",
+      "status": "PARTIAL"
+    },
+    {
+      "domain": "Database",
+      "invariant": "Canonical configuration and transaction safety",
+      "implementation": "storage/db.py; storage/migrations.py",
+      "test_or_probe": "Baseline CI migrate-postgres; new unified resolver proof not performed",
+      "CI": "See ci; no global invariant proof inferred from green main",
+      "exact_sha": "2351f099e2f789b80de05c6b382554b5cdcec0f3",
+      "status": "PARTIAL"
+    },
+    {
+      "domain": "Queue",
+      "invariant": "Bounded admission plus durable recovery",
+      "implementation": "adapters/in_process_job_queue.py; jobs/lifecycle.py",
+      "test_or_probe": "tests/integration/test_in_process_job_queue.py; capacity untested",
+      "CI": "See ci; no global invariant proof inferred from green main",
+      "exact_sha": "2351f099e2f789b80de05c6b382554b5cdcec0f3",
+      "status": "PARTIAL"
+    },
+    {
+      "domain": "Executor",
+      "invariant": "Success follows execution",
+      "implementation": "agents/executor_agent.py::ExecutorAgent.run",
+      "test_or_probe": "EXEC-001 probe demonstrates violation",
+      "CI": "See ci; no global invariant proof inferred from green main",
+      "exact_sha": "2351f099e2f789b80de05c6b382554b5cdcec0f3",
+      "status": "PARTIAL"
+    },
+    {
+      "domain": "LLM",
+      "invariant": "Generated text is never a transport failure",
+      "implementation": "llm/fallback_provider.py::FallbackProvider.generate",
+      "test_or_probe": "LLM-001 probe demonstrates violation",
+      "CI": "See ci; no global invariant proof inferred from green main",
+      "exact_sha": "2351f099e2f789b80de05c6b382554b5cdcec0f3",
+      "status": "PARTIAL"
+    },
+    {
+      "domain": "Registry",
+      "invariant": "Instance configuration remains isolated",
+      "implementation": "creative/packs/runtime.py::build_runtime_registry",
+      "test_or_probe": "use_tone_library mutates shared module state; isolation not re-proven",
+      "CI": "See ci; no global invariant proof inferred from green main",
+      "exact_sha": "2351f099e2f789b80de05c6b382554b5cdcec0f3",
+      "status": "UNVERIFIED"
+    },
+    {
+      "domain": "Packs",
+      "invariant": "External verification gates activation",
+      "implementation": "creative/packs/registry.py::register/activate",
+      "test_or_probe": "PACK-001 probe demonstrates violation",
+      "CI": "See ci; no global invariant proof inferred from green main",
+      "exact_sha": "2351f099e2f789b80de05c6b382554b5cdcec0f3",
+      "status": "PARTIAL"
+    },
+    {
+      "domain": "CommandBus",
+      "invariant": "Validate/authorize/preconditions/idempotency/atomic apply",
+      "implementation": "creative/studio/bus.py",
+      "test_or_probe": "tests/architecture/test_command_capability_boundary.py passed; legacy schema-1 local trust remains",
+      "CI": "See ci; no global invariant proof inferred from green main",
+      "exact_sha": "2351f099e2f789b80de05c6b382554b5cdcec0f3",
+      "status": "PARTIAL"
+    },
+    {
+      "domain": "Nagar",
+      "invariant": "Registered is distinct from executable with evidence",
+      "implementation": "creative/packs/runtime.py",
+      "test_or_probe": "Runtime probe counted 57 registered operations only",
+      "CI": "See ci; no global invariant proof inferred from green main",
+      "exact_sha": "2351f099e2f789b80de05c6b382554b5cdcec0f3",
+      "status": "PARTIAL"
+    },
+    {
+      "domain": "Storage",
+      "invariant": "Explicit lifecycle and safe deletion",
+      "implementation": "maintenance/housekeeping.py; storage/providers/r2.py",
+      "test_or_probe": "Housekeeping contract + R2 provider tests passed with injected remote provider",
+      "CI": "See ci; no global invariant proof inferred from green main",
+      "exact_sha": "ef6956d1baf70e50cf99fa745090f765b40e4ed0",
+      "status": "PARTIAL"
+    },
+    {
+      "domain": "Backup",
+      "invariant": "Backup verified and real restore proven",
+      "implementation": "maintenance/backup.py",
+      "test_or_probe": "tests/unit/test_maintenance_backup.py passed; scheduled maintenance failed; real service restore not tested",
+      "CI": "See ci; no global invariant proof inferred from green main",
+      "exact_sha": "2351f099e2f789b80de05c6b382554b5cdcec0f3",
+      "status": "PARTIAL"
+    },
+    {
+      "domain": "CI/CD",
+      "invariant": "Exact-SHA gates and release lineage",
+      "implementation": " .github/workflows/ci.yml; .github/workflows/maintenance.yml",
+      "test_or_probe": "Main CI success is not new-change CI or a production restore",
+      "CI": "See ci; no global invariant proof inferred from green main",
+      "exact_sha": "2351f099e2f789b80de05c6b382554b5cdcec0f3",
+      "status": "PARTIAL"
+    }
+  ],
+  "release_readiness": {
+    "status": "BLOCKED",
+    "reason": "Unfixed reproduced security/contract violations and missing release/deployment/restore evidence. No release/tag/version change performed.",
+    "rollback": "Revert focused fix commit ef6956d1baf70e50cf99fa745090f765b40e4ed0 (no schema or data migration); doing so reintroduces dry-run deletion. Prefer forward repair.",
+    "artifacts_checksums": "No release artifacts produced."
+  },
+  "next_work_in_order": [
+    "Contain filesystem access with direct-boundary, symlink and TOCTOU regressions",
+    "Reconcile PR 88/86 external-pack trust fix against live main; never blind merge",
+    "Remove executor fake success and implement typed provider-failure taxonomy",
+    "Establish queue capacity and state-isolation contracts without colliding with active queue owner",
+    "Complete DB/store lifecycle + real backup/restore + deployment baseline",
+    "Complete executable Nagar evidence matrix only after security hardening",
+    "Run full exact-SHA quality gates and review release lineage"
+  ],
+  "coordination": "Only owned runtime/test/evidence files edited; docs/README.md held by another live claim, so evidence lives under .agents/evidence rather than adding an unindexed docs page. No other branch modified.",
+  "threat_model_status": "PARTIAL triage, not a completed threat model or penetration test",
+  "threat_model": [
+    {
+      "threat": "path traversal / symlink escape",
+      "assets": "workspace and external files",
+      "precondition": "Attacker controls path and/or workspace symlink",
+      "boundary": "tools/files.py",
+      "mitigation": "Current lexical filtering insufficient; no containment fix in this PR",
+      "test": "FS-001 isolated read/write probe",
+      "residual_risk": "PROVEN boundary violation; nested links, directory links, mount/junction and races not exhaustively tested"
+    },
+    {
+      "threat": "unauthorized capability / pack tampering",
+      "assets": "pack metadata and executable capability trust",
+      "precondition": "External manifest reaches registration",
+      "boundary": "creative/packs/registry.py",
+      "mitigation": "Known-operation allowlist exists but signature is warning-only",
+      "test": "PACK-001 activation probe",
+      "residual_risk": "PROVEN activation without cryptographic verification; no arbitrary-code-execution claim"
+    },
+    {
+      "threat": "destructive preview",
+      "assets": "local temporary files and remote backup objects",
+      "precondition": "Stale file plus dry_run=True",
+      "boundary": "maintenance/housekeeping.py",
+      "mitigation": "Explicit dry_run forwarded and guarded immediately before unlink; remote guard retained",
+      "test": "13 tests and 3 independently killed mutants",
+      "residual_risk": "CLI initialization and race-resistant filesystem policy outside this repair"
+    },
+    {
+      "threat": "resource exhaustion",
+      "assets": "event loop, DB connections, memory, codecs",
+      "precondition": "High job submission volume",
+      "boundary": "InProcessJobQueue._schedule",
+      "mitigation": "Durability/fencing exists; explicit capacity contract not demonstrated",
+      "test": "No load/admission probe this session",
+      "residual_risk": "UNVERIFIED boundedness"
+    },
+    {
+      "threat": "SSRF / DNS rebinding",
+      "assets": "internal network, credentials",
+      "precondition": "Attacker-controlled fetch URL",
+      "boundary": "core/ssrf_guard.py and downstream fetchers",
+      "mitigation": "Existing helper present; independent enforcement at every consumer not audited here",
+      "test": "No new adversarial network probe",
+      "residual_risk": "UNVERIFIED across ingress paths"
+    },
+    {
+      "threat": "command injection",
+      "assets": "host execution and media",
+      "precondition": "Untrusted command/media parameters",
+      "boundary": "tools/system_shell.py and subprocess/FFmpeg call sites",
+      "mitigation": "No new mitigation claim",
+      "test": "Not investigated beyond path inventory",
+      "residual_risk": "UNVERIFIED"
+    },
+    {
+      "threat": "data leakage",
+      "assets": "tokens, messages, user media",
+      "precondition": "Sensitive values reach logs or providers",
+      "boundary": "provider/logging/storage egress",
+      "mitigation": "No full secret-egress audit; fallback result_preview noted",
+      "test": "LLM-001 uses harmless injected content only",
+      "residual_risk": "UNVERIFIED full logging/redaction coverage"
+    },
+    {
+      "threat": "replay / race / artifact tampering",
+      "assets": "job state and artifacts",
+      "precondition": "Duplicate submission, stale worker or altered artifact",
+      "boundary": "CommandBus and durable queue publication/verification",
+      "mitigation": "Existing idempotency and fencing contracts inspected; CommandBus reservations are process-local",
+      "test": "Existing queue integration and architecture tests executed; no new full chaos campaign",
+      "residual_risk": "Cross-process recovery, TOCTOU and complete corruption matrix not re-proven"
+    }
+  ],
+  "baseline_completion": "PARTIAL: snapshot captured, but complete DB-access inventory, all prior-baseline blockers, all execution paths and deployed environment are not verified."
+}
