@@ -1,0 +1,101 @@
+# EVIDENCE: LLM-FALLBACK-001 REPRODUCTION (RED)
+# campaign_sha_before_fix=2351f099e2f789b80de05c6b382554b5cdcec0f3
+# captured_utc=2026-09-26T05:21:06Z
+# command: PYTHONPATH=src python -m pytest tests/unit/test_fallback_provider_law10.py -q --noconftest
+# code under test: fallback_provider.py @ main 2351f09 (original, buggy)
+#
+FF.F.F                                                                   [100%]
+=================================== FAILURES ===================================
+_____________ test_successful_output_mentioning_429_stays_success ______________
+
+    async def test_successful_output_mentioning_429_stays_success() -> None:
+        """A real answer explaining HTTP 429 must NOT be treated as a rate-limit."""
+        answer = (
+            "To handle HTTP 429 responses, honour the Retry-After header and use "
+            "exponential backoff; do not hammer the endpoint."
+        )
+        primary = _StubProvider(result=answer)
+        llm = FallbackProvider(primary=primary, fallback=FakeLLMProvider())
+    
+        result = await llm.generate("how do I handle 429s?")
+    
+>       assert result == answer  # exact success passthrough, no disclaimer appended
+        ^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: assert '[FAKE] Respo... handle 429s?' == 'To handle HT...the endpoint.'
+E         
+E         - To handle HTTP 429 responses, honour the Retry-After header and use exponential backoff; do not hammer the endpoint.
+E         + [FAKE] Response to: how do I handle 429s?
+
+tests/unit/test_fallback_provider_law10.py:65: AssertionError
+----------------------------- Captured stdout call -----------------------------
+2026-09-26 05:21:06 [warning  ] primary_returned_rate_limit    result_preview='To handle HTTP 429 responses, honour the Retry-After header and use exponential backoff; do not hamm'
+2026-09-26 05:21:06 [info     ] using_fallback_provider        prompt_len=21
+_____ test_successful_output_mentioning_quota_and_rate_limit_stays_success _____
+
+    async def test_successful_output_mentioning_quota_and_rate_limit_stays_success() -> None:
+        answer = "Your daily quota resets at midnight UTC; the rate limit is 60 req/min."
+        primary = _StubProvider(result=answer)
+        llm = FallbackProvider(primary=primary, fallback=FakeLLMProvider())
+    
+        result = await llm.generate("what are the limits?")
+    
+>       assert result == answer
+E       AssertionError: assert '[FAKE] Respo... experience._' == 'Your daily q...s 60 req/min.'
+E         
+E         - Your daily quota resets at midnight UTC; the rate limit is 60 req/min.
+E         + [FAKE] Response to: what are the limits?
+E         + 
+E         + ---
+E         + ⚠️ _Fallback mode_: The primary AI engine is currently rate-limited. This response was generated locally and may be less accurate. Please try again in a minute for the full AI experience._
+
+tests/unit/test_fallback_provider_law10.py:78: AssertionError
+----------------------------- Captured stdout call -----------------------------
+2026-09-26 05:21:06 [warning  ] primary_returned_rate_limit    result_preview='Your daily quota resets at midnight UTC; the rate limit is 60 req/min.'
+2026-09-26 05:21:06 [info     ] using_fallback_provider        prompt_len=20
+_________________ test_typed_timeout_and_unavailable_fall_back _________________
+
+    async def test_typed_timeout_and_unavailable_fall_back() -> None:
+        for kind in ("TIMEOUT", "UNAVAILABLE"):
+            primary = _StubProvider(raises=LLMError("transient", kind=kind))
+            llm = FallbackProvider(primary=primary, fallback=FakeLLMProvider())
+>           result = await llm.generate("hi")
+                     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_fallback_provider_law10.py:100: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/nexus_ai_agent/llm/fallback_provider.py:76: in generate
+    result = await self._primary.generate(prompt, system)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_fallback_provider_law10._StubProvider object at 0x7f1b9718c510>
+prompt = 'hi', system = ''
+
+    async def generate(self, prompt: str, system: str = "") -> str:
+        self.calls += 1
+        if self._raises is not None:
+>           raise self._raises
+E           nexus_ai_agent.llm.errors.LLMError: transient
+
+tests/unit/test_fallback_provider_law10.py:43: LLMError
+_____________ test_untyped_exception_propagates_regardless_of_text _____________
+
+    async def test_untyped_exception_propagates_regardless_of_text() -> None:
+        """LAW 10: an exception whose *text* contains '429' is not necessarily a
+        provider rate-limit. Only typed errors trigger fallback."""
+        primary = _StubProvider(raises=ValueError("unexpected 429 in an unrelated traceback"))
+        llm = FallbackProvider(primary=primary, fallback=FakeLLMProvider())
+    
+>       with pytest.raises(ValueError):
+E       Failed: DID NOT RAISE ValueError
+
+tests/unit/test_fallback_provider_law10.py:120: Failed
+----------------------------- Captured stdout call -----------------------------
+2026-09-26 05:21:06 [warning  ] primary_rate_limited           error='unexpected 429 in an unrelated traceback'
+2026-09-26 05:21:06 [info     ] using_fallback_provider        prompt_len=2
+=========================== short test summary info ============================
+FAILED tests/unit/test_fallback_provider_law10.py::test_successful_output_mentioning_429_stays_success
+FAILED tests/unit/test_fallback_provider_law10.py::test_successful_output_mentioning_quota_and_rate_limit_stays_success
+FAILED tests/unit/test_fallback_provider_law10.py::test_typed_timeout_and_unavailable_fall_back
+FAILED tests/unit/test_fallback_provider_law10.py::test_untyped_exception_propagates_regardless_of_text
+4 failed, 2 passed in 0.25s

@@ -1,0 +1,30 @@
+# EVIDENCE: LLM-FALLBACK-001 EXACT-SHA CI (LAW 16 / LAW 17)
+# campaign_sha        = 0253f0f834500d94621da1373a53e3a399121417
+# found_on_sha        = 2351f099e2f789b80de05c6b382554b5cdcec0f3 (main)
+# pr                  = #93 (arena/01a0dc1e-nexus-ai-agent -> main)
+# ci_run_pull_request = 36221399644
+# ci_run_push         = 36221396780
+# captured_utc        = 2026-09-26 (post-run)
+#
+# Overall conclusion: success (all 13 jobs)
+#
+# Per-job conclusions (gh run view 36221399644 --json jobs):
+#   success  migrate-postgres
+#   success  lint-fast (lockstep + pinned ruff 0.16.8, no install)
+#   success  release-lineage
+#   success  lint (ruff + mypy + version lockstep)
+#   success  extras-matrix (translate)
+#   success  test (pytest -m "not slow")   <-- runs tests/unit/test_fallback_provider_law10.py (6 tests, not slow/integration)
+#   success  extras-matrix (pdf)
+#   success  extras-matrix (speech)
+#   success  extras-matrix (core)
+#   success  python-parity (3.10)
+#   success  python-parity (3.11)
+#   success  python-parity (3.12)
+#
+# NOTE: the CI log receiver (results-receiver.actions.githubusercontent.com) is
+# unreachable from this sandbox (EOF), so the raw per-test pytest line could not
+# be downloaded. The 'test (pytest -m "not slow")' job is success on the exact
+# SHA and collects tests/unit/, which includes the 6 new LAW-10 tests; local
+# execution of the identical suite is captured in
+# LLM-FALLBACK-001_regression_green.txt and LLM-FALLBACK-001_mutation.txt.
