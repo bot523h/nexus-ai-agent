@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-26T18:46:40Z",
+  "updated_at": "2026-09-26T18:53:12Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2419,7 +2419,7 @@
       "title_fa": "سخت‌سازی فورنزیک سامانهٔ شواهد Continuum",
       "zone": "continuum-evidence-measurement",
       "priority": "P0",
-      "status": "active",
+      "status": "active_in_review",
       "agent_branch": "arena/01a0df05-nexus-ai-agent",
       "claimed_at": "2026-09-26T18:42:31Z",
       "ttl_hours": 24,
@@ -2445,7 +2445,7 @@
         "Two identical measurement/snapshot serializations from the same tree and environment, byte-compared.",
         "Exact command output for targeted quality checks and agent_board overlap check."
       ],
-      "note": ""
+      "note": "DELIVERED FOR REVIEW: PR #95; code commit 1eb9064, branch head includes board-zone merge 7fd3aea. Evidence: 31 focused tests passed; ruff check + format check + mypy + compileall + diff check passed; five reverted mutations (denominator, fake numerator, threshold, schema, atomic replace) each turned its guard RED then restore passed. Live snapshot remains honestly red: recorded commit object unavailable and this sandbox lacks full-suite collection dependencies. Canonical coverage run also stayed red on pytest exit 1 despite 96.87% lines. Full gates deferred to gates owner."
     },
     {
       "task": "task-185-external-intelligence-hardening",
