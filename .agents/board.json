@@ -2438,7 +2438,8 @@
       "claimed_at": "2026-09-26T18:43:22Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": ""
+      "note": "Delivered in commit caba9b2: validated immutable personality vectors, explicit unknown-persona errors, token-aware bounded sentiment with decay, prompt trust boundaries, versioned schema-checked atomic persistence, injectable-clock bounded thread-safe presence, and adversarial tests. Evidence: 49 targeted tests passed; ruff check/format, mypy, compileall, and git diff --check passed; full gates deferred to gates owner.",
+      "delivered": "caba9b2"
     }
   ],
   "deferred_log": [
