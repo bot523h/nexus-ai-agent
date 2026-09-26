@@ -319,8 +319,15 @@
       "description": "Wave 10 portrait family (TDD portrait.* operations)",
       "paths": [
         "src/nexus_ai_agent/creative/packs/portrait/",
+        "src/nexus_ai_agent/creative/packs/vision/",
+        "src/nexus_ai_agent/creative/packs/runtime.py",
         "tests/unit/test_portrait_pack.py",
-        "tests/architecture/test_portrait_pack_boundary.py"
+        "tests/unit/test_vision_pack.py",
+        "tests/unit/test_pack_runtime_composition.py",
+        "tests/architecture/test_portrait_pack_boundary.py",
+        "tests/architecture/test_vision_pack_boundary.py",
+        "tests/architecture/test_pack_activation_completeness.py",
+        "scripts/vision_mutation_probes.py"
       ]
     },
     {
@@ -1692,7 +1699,19 @@
       "agent_branch": "arena/01a0df86-nexus-ai-agent",
       "claimed_at": "2026-09-26T21:02:47Z",
       "ttl_hours": 24,
-      "gates_owner": false
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/portrait/",
+        "src/nexus_ai_agent/creative/packs/vision/",
+        "src/nexus_ai_agent/creative/packs/runtime.py",
+        "tests/unit/test_portrait_pack.py",
+        "tests/unit/test_vision_pack.py",
+        "tests/unit/test_pack_runtime_composition.py",
+        "tests/architecture/test_portrait_pack_boundary.py",
+        "tests/architecture/test_vision_pack_boundary.py",
+        "tests/architecture/test_pack_activation_completeness.py",
+        "scripts/vision_mutation_probes.py"
+      ]
     },
     {
       "task": "task-153-scene-pack",
@@ -1713,7 +1732,12 @@
       "agent_branch": "arena/01a0df86-nexus-ai-agent",
       "claimed_at": "2026-09-26T21:02:47Z",
       "ttl_hours": 24,
-      "gates_owner": false
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/scene/",
+        "tests/unit/test_scene_pack.py",
+        "tests/architecture/test_scene_pack_boundary.py"
+      ]
     },
     {
       "task": "task-147-coverage-baseline-drift",
