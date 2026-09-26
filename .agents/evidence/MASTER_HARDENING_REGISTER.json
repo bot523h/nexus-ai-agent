@@ -27,17 +27,18 @@
         "mutation_2_exception_channel_text_classification": "KILLED -> test_untyped_exception_propagates_regardless_of_text goes RED"
       },
       "found_on_sha": "2351f099e2f789b80de05c6b382554b5cdcec0f3",
-      "fix_commit_sha": null,
-      "ci_sha": null,
+      "fix_commit_sha": "0253f0f834500d94621da1373a53e3a399121417",
+      "ci_sha": "0253f0f834500d94621da1373a53e3a399121417 (PR#93, run 36221399644, all 13 jobs success)",
       "evidence": [
         ".agents/evidence/LLM-FALLBACK-001_reproduction.txt",
         ".agents/evidence/LLM-FALLBACK-001_regression_green.txt",
-        ".agents/evidence/LLM-FALLBACK-001_mutation.txt"
+        ".agents/evidence/LLM-FALLBACK-001_mutation.txt",
+        ".agents/evidence/LLM-FALLBACK-001_ci_exact_sha.txt"
       ],
-      "status": "FIXED",
+      "status": "VERIFIED",
       "owner": "arena/01a0dc1e-nexus-ai-agent",
       "dependency": "none (self-contained; no open PR #84-#91 touches fallback_provider.py or errors.py)",
-      "notes": "status becomes VERIFIED only after exact-SHA CI on this branch is green (LAW 16/17)."
+      "notes": "VERIFIED per LAW 16/17: exact-SHA CI (0253f0f) green; reproduction RED on main; regression GREEN; both mutations KILLED."
     },
     {
       "id": "MAINT-BACKUP-001",
@@ -307,7 +308,7 @@
   "wave_gates": {
     "SECURITY": "IN_PROGRESS (PR#91 fs/shell, PR#88 packs green, PR#86 red, PR#89 moderation) — NOT merged to main",
     "DATA": "PARTIAL (housekeeping dry-run PR#90/#91 in flight; backup fail-closed but production backup UNVERIFIED)",
-    "EXECUTION": "IN_PROGRESS (PR#91 executor truth) — NOT merged; Wave D LLM LAW-10 CLOSED on this branch",
+    "EXECUTION": "PARTIAL — LLM LAW-10 VERIFIED (LLM-FALLBACK-001, PR#93, exact-SHA 0253f0f CI green); executor truth still IN_PROGRESS (PR#91, not merged)",
     "QUEUE": "OPEN (no measured explicit policy)",
     "REGISTRY": "IN_PROGRESS (PR#91)",
     "NAGAR": "IN_PROGRESS (PR#83/#70/#73)",
