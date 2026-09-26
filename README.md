@@ -2,7 +2,7 @@
 
 **Telegram AI platform** — multi-provider conversations, cloud storage, 15-language support, image generation, speech synthesis, and the Nagar creative studio. Local/free paths are available; optional hosted services may require credentials and incur charges.
 
-> **Version: v3.12.0** (see `VERSION` and [the changelog](CHANGELOG.md)). Nagar Wave 2.5 and Wave 3 image generation; local upscaling remains deferred.
+> **Version: v3.13.0** (see `VERSION` and [the changelog](CHANGELOG.md)). Nagar Wave 2.5 and Wave 3 image generation; local upscaling remains deferred.
 
 ---
 
@@ -307,19 +307,34 @@ source of truth. **Real** = wired to a working engine with tests.
 
 | Status | Commands |
 |---|---|
-| ✅ Real | `/ai`, `/ask`, `/code`, `/translate`, `/summarize`, `/image`, `/imagine`, `/slideshow`, `/tts`, `/stt`, `/cloud`, `/myfiles`, `/download`, `/cloud_status`, `/referral`, `/referral_board`, `/start` (referral deep-link), `/calc`, `/remind`, `/cancel_remind`, `/reminds`, `/tr`, `/convert`, `/quiz`, `/guess_start`, `/guess`, `/guess_stop`, `/wordle`, `/wordle_stop`, `/poll`, `/anon_start`, `/anon_stop`, `/anon_report` (plus live anonymous delivery), force-join (`/forcejoin_on` + verify gate), `/owner`, `/system`, `/broadcast`, `/admin_logs`, `/personality`, `/engagement_*`, `/joke`, `/challenge`, `/analytics*`, `/track`, `/viral_now`, `/health`, `/agents`, `/myagent`, `/memory`, `/forget_me`, `/story` |
-| ⚠️ Simulated | `/vision` (canned image description), `/post`, `/schedule`, `/ban`, `/unban`, `/stats`, `/welcome`, `/pin`, `/leaderboard`, `/daily`, `/xp_leaderboard`, `/achievements`, `/docs`, `/doc_delete`, `/chat_with_doc`, `/newchat` (claims to clear history but does not), `/ad_*`, `/mod_config`, `/warn`, `/mute`, `/unmute`, `/reputation`, `/viral_preview`, `/viral_stats`, `/viral_post`, `/companion`, `/analyze` |
+| ✅ Real | `/ai`, `/ask`, `/code`, `/translate`, `/summarize`, `/image`, `/imagine`, `/slideshow`, `/tts`, `/stt`, `/cloud`, `/myfiles`, `/download`, `/cloud_status`, `/referral`, `/referral_board`, `/start` (referral deep-link), `/calc`, `/remind`, `/cancel_remind`, `/reminds`, `/tr`, `/convert`, `/quiz`, `/guess_start`, `/guess`, `/guess_stop`, `/wordle`, `/wordle_stop`, `/poll`, `/anon_start`, `/anon_stop`, `/anon_report` (plus live anonymous delivery), force-join (`/forcejoin_on` + verify gate), `/owner`, `/system`, `/broadcast`, `/admin_logs`, `/personality`, `/engagement_*`, `/joke`, `/challenge`, `/analytics*`, `/track`, `/viral_now`, `/health`, `/agents`, `/myagent`, `/memory`, `/forget_me`, `/story`, `/post`, `/schedule`, `/ban`, `/unban`, `/stats`, `/welcome`, `/pin`, `/daily`, `/xp_leaderboard`, `/achievements`, `/docs`, `/doc_delete`, `/chat_with_doc`, `/ad_*`, `/vision`, `/mod_config`, `/warn`, `/mute`, `/unmute`, `/reputation`, `/viral_preview`, `/viral_stats`, `/viral_post`, `/model`, `/storage`, `/story_style` |
+| ⚠️ Simulated | `/leaderboard`, `/newchat` (claims to clear history but does not), `/companion`, `/analyze` |
 
 Simulated commands reply with "(simulated)" or a canned string; they
 are on the roadmap (see `AUDIT_REPORT_2026-09-21.md` §12) but should
 not be treated as working features.
+
+**v3.13.0 owner audit.** Eleven more commands moved from ⚠️ to ✅. Each was
+wired to an engine that already existed and had no importer — the capability
+was built, only the command was fake:
+
+| Command | What it used to answer | What it does now |
+|---|---|---|
+| `/mod_config` `/warn` `/mute` `/unmute` `/reputation` | `"⚠️ User warned (1/3)"` — a counter that never moved | `ModerationEngine`: persisted warnings, mutes and reputation, scoped per (user, chat) |
+| `/viral_preview` `/viral_stats` `/viral_post` | `"12 posts sent, 450 likes total"` | real `ViralPost` row counts; **likes are no longer reported at all** — no column records them |
+| `/vision` | one hard-coded sentence, no image downloaded | `GeminiEngine.vision()` on the actual photo |
+| `/model` `/storage` | *nothing* — the handler body was `pass` | the live LLM routing chain and the real on-disk footprint |
+| `/story_style` | offered `Motivational \| Romantic \| Success` | states the renderer has one fixed style, because `create_story()` discards the parameter |
+
+`/story_style` is deliberately listed as ✅: answering "this is not
+implemented" *is* the honest behaviour, and it is what the code does.
 
 ### 🤖 AI (v2.0.0)
 | Command | Description |
 |---------|-------------|
 | `/ai <text>` | Chat with Gemini AI (with memory) |
 | `/ask <question>` | Single-turn Q&A |
-| `/vision` | Analyze image (reply to photo) |
+| `/vision [question]` | Analyze a real photo with Gemini Vision (send or reply to a photo) |
 | `/code <prompt>` | Generate code |
 | `/translate <text>` | Translate text |
 | `/summarize <text\|URL>` | Summarize content |

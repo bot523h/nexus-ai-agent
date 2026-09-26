@@ -74,6 +74,11 @@ except Exception:  # pragma: no cover
     _HAVE_NACL = False
 
 
+#: Minimum accepted key length. 32 bytes = 256 bits: the Ed25519 seed size and
+#: the natural HMAC-SHA256 key size.
+MIN_KEY_BYTES = 32
+
+
 class SigningError(RuntimeError):
     """Typed failure for every signing/verification error (fail-closed)."""
 
@@ -90,12 +95,27 @@ def _load_key_bytes() -> bytes:
     try:
         # Hex is strictly 64 hex chars → 32 bytes
         if all(c in "0123456789abcdefABCDEF" for c in raw) and len(raw) == 64:
-            return bytes.fromhex(raw)
-        # Fallback: base64
-        padded = raw + "=" * (-len(raw) % 4)
-        return base64.b64decode(padded, validate=True)
-    except Exception as exc:  # pragma: no cover — defensive
+            key = bytes.fromhex(raw)
+        else:
+            # Fallback: base64
+            padded = raw + "=" * (-len(raw) % 4)
+            key = base64.b64decode(padded, validate=True)
+    except Exception as exc:
         raise SigningError(f"NEXUS_SIGNING_KEY is malformed: {exc}") from exc
+
+    # Length floor. The base64 branch accepted *any* decodable string, so
+    # NEXUS_SIGNING_KEY="abcd" yielded a 3-byte key and was signed with
+    # happily — a keyspace of 2^24, brute-forced in well under a second, on the
+    # component whose entire job is proving a delivery pack was not tampered
+    # with. Ed25519 additionally requires exactly 32 bytes of seed, so the
+    # nacl path would have raised a raw ValueError here instead of a typed
+    # SigningError. One floor fixes both.
+    if len(key) < MIN_KEY_BYTES:
+        raise SigningError(
+            f"NEXUS_SIGNING_KEY is too short: {len(key)} bytes, need at least {MIN_KEY_BYTES}. "
+            'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
+        )
+    return key
 
 
 def _canonical_bytes(manifest: dict[str, Any] | bytes | str) -> bytes:

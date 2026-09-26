@@ -116,6 +116,15 @@ class LifecycleRecordingSaver(BaseCheckpointSaver):
         self._touches = TouchCoalescer(drop_window=drop_window)
         self._ops = 0
         self._failures = 0
+        # Strong references to the in-flight best-effort tasks.
+        #
+        # ``loop.create_task`` only keeps a *weak* reference: the event loop
+        # does not own the task, so a task nobody holds can be garbage
+        # collected mid-await. The recording would then vanish with no error
+        # and no log line — the worst shape of data loss, because the health
+        # gate below counts neither a success nor a failure for it and so
+        # never notices. The set is self-pruning via the done callback.
+        self._inflight: set[asyncio.Task[None]] = set()
         # Point the serializer at the wrapped saver so with_allowlist() and
         # Pregel serialisation behave exactly as against the raw saver.
         self.serde = self._saver.serde
@@ -126,6 +135,23 @@ class LifecycleRecordingSaver(BaseCheckpointSaver):
 
     async def flush(self) -> None:
         await self._touches.flush(self._lifecycle)
+        await self.drain()
+
+    async def drain(self) -> None:
+        """Await the best-effort tasks still in flight.
+
+        ``flush()`` used to return while recordings were still mid-await, so a
+        shutdown immediately afterwards dropped them. Exceptions are already
+        handled inside ``_run_best_effort``; this only waits.
+        """
+        pending = [task for task in self._inflight if not task.done()]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    @property
+    def inflight_count(self) -> int:
+        """Number of best-effort recordings currently in flight (for tests)."""
+        return len(self._inflight)
 
     def flush_sync(self) -> None:
         """Best-effort flush from a synchronous context (e.g. ``atexit``).
@@ -175,7 +201,9 @@ class LifecycleRecordingSaver(BaseCheckpointSaver):
             _close_quietly(operation)
             log_lifecycle_event(logging.WARNING, "lifecycle operation skipped", operation=metric)
             return
-        loop.create_task(self._run_best_effort(operation, metric))
+        task = loop.create_task(self._run_best_effort(operation, metric))
+        self._inflight.add(task)
+        task.add_done_callback(self._inflight.discard)
 
     async def _run_best_effort(self, operation: Awaitable[Any], metric: str) -> None:
         self._ops += 1

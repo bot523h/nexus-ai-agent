@@ -182,7 +182,12 @@ class ImageGenEngine:
                         "error": f"❌ خطای API: {resp.status_code}",
                     }
                 # Save image
-                img_hash = hashlib.md5(f"{prompt}{style}{time.time()}".encode()).hexdigest()[:12]
+                # Filename fingerprint only — never a security primitive.  Without
+                # ``usedforsecurity=False`` this call raises ValueError on a
+                # FIPS-enabled OpenSSL build and takes the whole route down.
+                img_hash = hashlib.md5(
+                    f"{prompt}{style}{time.time()}".encode(), usedforsecurity=False
+                ).hexdigest()[:12]
                 filename = f"img_{img_hash}.png"
                 filepath = self._output_dir / filename
                 filepath.write_bytes(resp.content)

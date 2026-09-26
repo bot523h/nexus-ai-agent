@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import datetime
 
 from sqlmodel import select
 
 from nexus_ai_agent.config.settings import get_settings
+from nexus_ai_agent.core.timeutil import utcnow
 from nexus_ai_agent.llm.gemini_provider import GeminiProvider
 from nexus_ai_agent.storage.db import get_session
 from nexus_ai_agent.storage.models import UserMemory
@@ -89,14 +89,14 @@ class AIMemoryEngine:
             if memory is None:
                 memory = UserMemory(
                     user_id=user_id,
-                    last_updated=datetime.utcnow(),
+                    last_updated=utcnow(),
                     ai_memory_consent=state,
-                    ai_memory_consent_at=datetime.utcnow(),
+                    ai_memory_consent_at=utcnow(),
                     ai_memory_prompted=True,
                 )
             else:
                 memory.ai_memory_consent = state
-                memory.ai_memory_consent_at = datetime.utcnow()
+                memory.ai_memory_consent_at = utcnow()
                 memory.ai_memory_prompted = True
             session.add(memory)
             await session.commit()
@@ -110,7 +110,7 @@ class AIMemoryEngine:
             if memory is None:
                 memory = UserMemory(
                     user_id=user_id,
-                    last_updated=datetime.utcnow(),
+                    last_updated=utcnow(),
                     ai_memory_prompted=True,
                 )
             elif not memory.ai_memory_prompted:
@@ -173,7 +173,7 @@ class AIMemoryEngine:
             memory = (await session.execute(stmt)).scalar_one_or_none()
 
             if not memory:
-                memory = UserMemory(user_id=user_id, last_updated=datetime.utcnow())
+                memory = UserMemory(user_id=user_id, last_updated=utcnow())
 
             if data.get("name"):
                 memory.name = data["name"]
@@ -190,7 +190,7 @@ class AIMemoryEngine:
                 new_tags = list(set(existing_tags + data["personality_tags"]))
                 memory.personality_tags = json.dumps(new_tags)
 
-            memory.last_updated = datetime.utcnow()
+            memory.last_updated = utcnow()
             session.add(memory)
             await session.commit()
 

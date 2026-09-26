@@ -45,6 +45,25 @@ EXPECTED: dict[str, str] = {
     "unban": "unban_cmd",
     "stats": "stats_cmd",
     "welcome": "welcome_cmd",
+    # Phase 13: the moderation engine (add_warning/mute_user/unmute_user/
+    # get_reputation) had no importer beyond a single set_config call, so every
+    # warning and every mute was discarded. Registered under the short names.
+    "mod_config": "mod_config_cmd",
+    "warn": "mod_warn_cmd",
+    "mute": "mod_mute_cmd",
+    "unmute": "mod_unmute_cmd",
+    "reputation": "mod_reputation_cmd",
+    # Phase 13: /viral_now called the real engine while its three siblings
+    # answered with constants — including a likes counter no column can produce.
+    "viral_preview": "viral_preview_cmd",
+    "viral_stats": "viral_stats_cmd",
+    "viral_post": "viral_post_cmd",
+    # Phase 13: /storage and /model were registered with a body of ``pass``
+    # (answering with silence); /story_style offered three styles the renderer
+    # discards at ``_ = style``.
+    "model": "model_cmd",
+    "storage": "storage_cmd",
+    "story_style": "story_style_cmd",
 }
 
 #: callback pattern → the surface symbol that must handle it. Kept separate from
@@ -78,6 +97,22 @@ STUB_STRINGS = (
     "📊 Group stats: 150 members, 1.2k messages/day.",
     "👋 Welcome message updated.",
     "📌 Message pinned.",
+    "✅ Onboarding step completed!",
+    # Phase 13: moderation — counters that never moved because nothing wrote.
+    "🛡️ Moderation rules updated.",
+    "⚠️ User warned (1/3).",
+    "🔇 User muted for 10 minutes.",
+    "🔊 User unmuted.",
+    "👤 User Reputation: 85/100 (Good).",
+    # Phase 13: viral — "450 likes" cannot be produced by any column in the
+    # ViralPost table (chat_id, text, viral_score, status, posted_at).
+    "🔥 Preview: Top AI trends of the week...",
+    "🔥 Viral Engine: 12 posts sent, 450 likes total.",
+    "📋 Pending viral posts: 3 in queue.",
+    # Phase 13: /story_style advertised styles create_story() throws away.
+    "🎨 استایل فعلی: Motivational\nگزینه‌ها: Motivational | Romantic | Success",
+    # Phase 13: /vision answered this without downloading the photo.
+    "I see a beautiful landscape in this image.",
 )
 
 
@@ -267,3 +302,84 @@ def test_the_surface_package_exports_exactly_these_commands() -> None:
 
     assert set(COMMAND_HANDLERS) == set(EXPECTED)
     assert all(callable(handler) for handler in COMMAND_HANDLERS.values())
+
+
+def test_no_registered_command_answers_with_silence(tree: ast.Module) -> None:
+    """A registered command whose body is ``pass`` is worse than a stub.
+
+    ``/storage`` and ``/model`` were registered — so Telegram advertised them
+    in the command list — with a body of exactly ``pass``. The user got no
+    reply at all, which is indistinguishable from the bot being down: no
+    error, no log line, nothing to debug against. This test fails if any
+    locally-defined handler reachable from a ``CommandHandler`` registration
+    degenerates to a docstring plus ``pass``.
+    """
+    registered = set(_command_registrations(tree).values())
+    empty: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        if node.name not in registered:
+            continue
+        body = [
+            statement
+            for statement in node.body
+            if not (
+                isinstance(statement, ast.Expr)
+                and isinstance(statement.value, ast.Constant)
+                and isinstance(statement.value.value, str)
+            )
+        ]
+        if not body or all(isinstance(statement, ast.Pass) for statement in body):
+            empty.append(f"{node.name}:{node.lineno}")
+    assert empty == [], f"registered commands that reply with silence: {empty}"
+
+
+def test_moderation_and_viral_surfaces_never_import_telegram() -> None:
+    """The surface layer talks to PTB through duck-typing only (see ._ptb).
+
+    ``tests/architecture/test_import_boundaries.py`` enforces this globally
+    against a frozen baseline; this is the local, fast assertion for the two
+    modules added in this phase, so the failure names the right file.
+    """
+    surface = ROOT / "src" / "nexus_ai_agent" / "bot" / "surface"
+    for name in ("moderation.py", "viral.py", "status.py"):
+        path = surface / name
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                assert all(not a.name.startswith("telegram") for a in node.names), name
+            if isinstance(node, ast.ImportFrom):
+                assert not (node.module or "").startswith("telegram"), name
+
+
+def test_every_surface_module_documents_the_stub_it_replaced() -> None:
+    """Each surface module keeps the exact sentences it removed, verbatim.
+
+    Those tuples are the evidence trail: ``STUB_STRINGS`` in this file is the
+    union, and a module that stops declaring its own would let a future rebase
+    quietly reintroduce the literal it was written to delete.
+    """
+    import importlib
+
+    union: set[str] = set()
+    modules = (
+        "ads",
+        "channel_management",
+        "docs",
+        "onboarding",
+        "moderation",
+        "viral",
+        "status",
+    )
+    for name in modules:
+        module = importlib.import_module(f"nexus_ai_agent.bot.surface.{name}")
+        declared = getattr(module, "STUB_STRINGS", None)
+        assert isinstance(declared, tuple) and declared, f"{name} declares no STUB_STRINGS"
+        union.update(declared)
+
+    # Every sentence a surface module claims to have removed must also be in
+    # this file's guard list, or the global "never reply with it" test above
+    # would not actually cover it.
+    uncovered = sorted(stub for stub in union if stub not in STUB_STRINGS)
+    assert uncovered == [], f"surface stubs not guarded by STUB_STRINGS: {uncovered}"

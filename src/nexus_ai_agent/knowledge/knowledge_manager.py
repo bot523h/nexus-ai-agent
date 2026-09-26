@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from sqlmodel import select
 
 from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.core.instrumentation import instrumented
+from nexus_ai_agent.core.timeutil import utcnow
 from nexus_ai_agent.knowledge.web_trainer import WebTrainer
 from nexus_ai_agent.knowledge.wikipedia_trainer import WikipediaTrainer
 from nexus_ai_agent.llm.gemini_provider import GeminiProvider
@@ -29,7 +30,7 @@ class KnowledgeManager:
         """Retrieve knowledge from cache if not expired."""
         async with get_session() as session:
             statement = select(KnowledgeCache).where(
-                KnowledgeCache.query == query, KnowledgeCache.expires_at > datetime.utcnow()
+                KnowledgeCache.query == query, KnowledgeCache.expires_at > utcnow()
             )
             result = await session.execute(statement)
             cache_entry = result.scalar_one_or_none()
@@ -71,7 +72,7 @@ class KnowledgeManager:
                 query=query,
                 source="combined",
                 content=summary,
-                expires_at=datetime.utcnow() + timedelta(hours=24),
+                expires_at=utcnow() + timedelta(hours=24),
             )
             session.add(cache_entry)
             await session.commit()

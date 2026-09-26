@@ -116,3 +116,80 @@ RUN apt-get update && apt-get install -y libavcodec60
 COPY ffmpeg-bin /usr/local/bin/ffmpeg
 """
     assert not dockerfile_installs_ffmpeg(fixture)
+
+
+# ── the container must not run as root (owner audit, v3.13.0) ───────────────
+
+
+def _last_user_directive(dockerfile_text: str) -> str | None:
+    """The effective USER for the CMD: the last USER instruction in the file."""
+    found: str | None = None
+    for line in dockerfile_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        match = re.match(r"USER\s+(\S+)", stripped, re.IGNORECASE)
+        if match:
+            found = match.group(1)
+    return found
+
+
+def test_the_image_does_not_run_as_root() -> None:
+    """A Telegram bot that shells out to ffmpeg must not be uid 0.
+
+    The process terminates untrusted input from any user and hands
+    attacker-supplied media to ffmpeg, a large C codebase with a long CVE
+    history. Running that as root means a parsing bug starts from the most
+    privileged account in the container instead of an unprivileged one.
+    """
+    user = _last_user_directive(DOCKERFILE.read_text(encoding="utf-8"))
+    assert user is not None, "Dockerfile never drops root: no USER instruction"
+    assert user not in {"root", "0"}, f"Dockerfile runs as {user!r}"
+
+
+def test_the_runtime_user_is_created_before_it_is_selected() -> None:
+    """`USER nexus` against a non-existent account fails at container start."""
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    user = _last_user_directive(text)
+    assert user is not None
+    assert re.search(rf"useradd[^\n]*\b{re.escape(user)}\b", text), (
+        f"USER {user} is selected but never created with useradd"
+    )
+    assert text.index("useradd") < text.rindex(f"USER {user}")
+
+
+def test_app_is_owned_by_the_runtime_user() -> None:
+    """Dropping root without chown leaves the writable paths unwritable."""
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    user = _last_user_directive(text)
+    assert user is not None
+    assert re.search(rf"chown\s+-R\s+{re.escape(user)}", text), (
+        "the runtime user must own /app or data/ and cache writes fail at runtime"
+    )
+
+
+def test_creative_scratch_is_not_under_shared_tmp() -> None:
+    """A predictable path in a world-writable /tmp is a symlink-swap target."""
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    match = re.search(r"NEXUS_CREATIVE_TEMP_DIR=(\S+)", text)
+    assert match, "the image must pin NEXUS_CREATIVE_TEMP_DIR"
+    assert not match.group(1).startswith("/tmp"), match.group(1)
+
+
+def test_a_rootful_dockerfile_fails_the_contract() -> None:
+    """Red-proof: the pre-fix shape must be rejected."""
+    fixture = """FROM python:3.12-slim
+WORKDIR /app
+COPY . .
+RUN pip install --no-cache-dir .
+CMD ["python", "-m", "nexus_ai_agent.cli", "run-bot"]
+"""
+    assert _last_user_directive(fixture) is None
+
+
+def test_an_explicit_root_user_fails_the_contract() -> None:
+    fixture = """FROM python:3.12-slim
+USER nexus
+USER root
+"""
+    assert _last_user_directive(fixture) == "root"
