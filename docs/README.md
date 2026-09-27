@@ -92,6 +92,8 @@ placeholder text.
 | [audits/GATE5_TRUTH_MATRIX.json](audits/GATE5_TRUTH_MATRIX.json) | Machine-readable Gate 5 claim→evidence matrix + acceptance-gate answers (CLOSED only with Git + CI evidence). |
 | [audits/DEAD_ENGINES_2026-09-22.md](audits/DEAD_ENGINES_2026-09-22.md) | Dead-engine verification (zero importers, measured gates), five-option wiring analysis, negative controls, and the recorded residuals. |
 | [audits/CONTINUUM_CLOSURE_2026-09-27.md](audits/CONTINUUM_CLOSURE_2026-09-27.md) | Continuum evidence-foundation closure (task-184 / task-154): 95%-per-pack coverage gate, fail-closed snapshot, replayable mutation campaign, exact-SHA CI — with the recorded lost-lineage recovery. |
+| [audits/MASTER_ARCHITECTURAL_ASSESSMENT_2026-09-27.md](audits/MASTER_ARCHITECTURAL_ASSESSMENT_2026-09-27.md) | Exact-SHA Phase Zero assessment: actual runtime, trust boundaries, Continuum/GitHub truth, five-angle research decisions, gaps, and risk register. |
+| [audits/EXECUTION_PLAN_2026-09-27.md](audits/EXECUTION_PLAN_2026-09-27.md) | Phased implementation plan with dependencies, verification/CI strategy, operational gates, and Definition of Done. |
 
 ## History (archived — read-only, never a source of truth)
 
