@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from typing import Any
 
 from sqlmodel import select
 
@@ -62,13 +63,17 @@ class AgentManager:
                 await session.commit()
 
     @staticmethod
-    async def get_active(user_id: int) -> StoreAgent | None:
-        """Get the currently active agent for a user."""
+    async def get_active(user_id: int, gemini_provider: Any | None = None) -> StoreAgent | None:
+        """Get the currently active agent for a user.
+
+        W1 (task-196): production callers pass the runtime-owned shared
+        provider so the agent never falls back to a private queue-less one.
+        """
         async with get_session() as session:
             stmt = select(UserActiveAgent).where(UserActiveAgent.user_id == user_id)
             active_record = (await session.execute(stmt)).scalar_one_or_none()
 
             if active_record and active_record.agent_name in AGENTS:
                 agent_class = AGENTS[active_record.agent_name]
-                return agent_class()
+                return agent_class(gemini_provider=gemini_provider)
         return None

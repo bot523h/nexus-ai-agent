@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T19:05:00Z",
+  "updated_at": "2026-09-27T19:10:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -675,9 +675,7 @@
         "tests/architecture/test_constructor_ownership.py",
         "tests/unit/test_db_lifecycle_regression.py",
         "tests/unit/test_runtime_shutdown_regression.py",
-        "tests/conftest.py",
-        "tests/integration/test_migrate_cli.py",
-        "tests/integration/test_migrate_adoption.py"
+        "tests/conftest.py"
       ]
     }
   ],
@@ -2778,9 +2776,7 @@
         "tests/architecture/test_constructor_ownership.py",
         "tests/unit/test_db_lifecycle_regression.py",
         "tests/unit/test_runtime_shutdown_regression.py",
-        "tests/conftest.py",
-        "tests/integration/test_migrate_cli.py",
-        "tests/integration/test_migrate_adoption.py"
+        "tests/conftest.py"
       ],
       "owner_hint": "Arena agent on arena/01a0e432-nexus-ai-agent (W1 recovery mission)",
       "agent_branch": "arena/01a0e432-nexus-ai-agent",
@@ -2815,7 +2811,7 @@
           "src/nexus_ai_agent/knowledge/ + src/nexus_ai_agent/integrations/": "task-185 expired at GC (2026-09-27T19:05Z) but still excluded by design — knowledge call sites receive provider through bot/knowledge_handlers.py."
         }
       },
-      "note": "RECOVERY CONTINUATION: W1 head 326f72f (arena/01a0e356) is CI-RED (run 36336910453, 12/16, test_approval pendingapproval). Session is branch-bound to arena/01a0e432 and cannot push to arena/01a0e356 (salvage precedent PR102->PR107, PR108->PR110). This claim transplants W1 verbatim onto main e5b326b + hardens the three defect classes. Original W1 lease (arena/01a0e356, until 2026-09-29) is acknowledged in takeover_log; no history rewritten, no work dropped."
+      "note": "RECOVERY CONTINUATION: W1 head 326f72f (arena/01a0e356) is CI-RED (run 36336910453, 12/16, test_approval pendingapproval). Session is branch-bound to arena/01a0e432 and cannot push to arena/01a0e356 (salvage precedent PR102->PR107, PR108->PR110). This claim transplants W1 verbatim onto main e5b326b + hardens the three defect classes. Original W1 lease (arena/01a0e356, until 2026-09-29) is acknowledged in takeover_log; no history rewritten, no work dropped. Fence tightened 19:10Z: integration migrate fixtures need no direct touch (conftest autouse _isolate_settings_cache covers all settings pollution); removed from exclusive_paths to keep the lease minimal."
     }
   ],
   "deferred_log": [
