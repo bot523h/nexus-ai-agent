@@ -65,6 +65,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   coverage, gate and campaign each twice with `cmp` — writes `SHA256SUMS` and
   uploads `continuum-evidence-<sha>-py<ver>`; `tests/unit/test_ci_continuum_evidence.py`
   pins that the job cannot be softened.
+- **Committed snapshot republished** at `dca3390` (2871 collected tests, Python
+  3.11.2, alembic 1.20.0, SQLAlchemy 2.0.54) with `nexus continuum publish` from a
+  clean checkout. Before publishing, `nexus continuum verify` rejected the previous
+  record with `state loss detected: recorded good commit 04aaffb… is not reachable`
+  — that commit belonged to the lost local lineage (HISTORICAL EVIDENCE LOST —
+  CONTENT RECONSTRUCTED). The record remains machine-bound: `verify` reports it
+  STALE once a later commit touches an evidence root, and CI reports it with
+  `blocking: false`.
 
 ### CI (task-132 — extras smoke matrix, session `arena/01a0d709-nexus-ai-agent`)
 

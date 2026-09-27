@@ -123,6 +123,6 @@
   "next": "Cut v3.14 release metadata (VERSION/CHANGELOG/tag) and republish this record from a clean checkout at the cut; CI gates the verifier (continuum-evidence), not this machine-bound record (D-0006/D-0023).",
   "plan": "Nagar Phase 6",
   "schema_version": 2,
-  "step": "04aaffbdd7c1284db542815e9ce4e415152dc04b",
-  "test_count_expected": 2869
+  "step": "dca3390aa8d5ef106ac6fd0133b245140fb7b3d0",
+  "test_count_expected": 2871
 }
