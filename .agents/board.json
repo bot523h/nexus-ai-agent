@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T16:54:20Z",
+  "updated_at": "2026-09-27T21:10:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -657,6 +657,25 @@
         "tests/unit/test_request_queue.py",
         "scripts/llm_queue_mutations.py",
         "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
+      ]
+    },
+    {
+      "id": "runtime-composition-w1",
+      "description": "W1 canonical runtime composition: one runtime owner for settings snapshot, database identity, LLM engine/provider, request queue, conversation store, and lifecycle shutdown. Constructor-ownership ratchet + database-identity contract + shutdown wiring proof. Recovery (arena/01a0e432) extends the original W1 fence with DB-lifecycle regression, shutdown-cancellation regression, and test-isolation hardening (conftest + migrate fixtures). Explicitly NOT the W2 typed gateway and NOT touching knowledge/, integrations/, .github/, request_queue.py (active/residual claims honored; task-185 expired at GC).",
+      "paths": [
+        "src/nexus_ai_agent/application/runtime.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/bot/feature_handlers.py",
+        "src/nexus_ai_agent/bot/knowledge_handlers.py",
+        "src/nexus_ai_agent/agents/store/agent_manager.py",
+        "src/nexus_ai_agent/llm/gemini_provider.py",
+        "src/nexus_ai_agent/storage/db.py",
+        "tests/unit/test_runtime_composition.py",
+        "tests/architecture/test_constructor_ownership.py",
+        "tests/unit/test_db_lifecycle_regression.py",
+        "tests/unit/test_runtime_shutdown_regression.py",
+        "tests/conftest.py"
       ]
     }
   ],
@@ -2715,6 +2734,130 @@
       "ttl_hours": 24,
       "gates_owner": true,
       "note": "Continues task-195-llm-queue-lifecycle (original branch arena/01a0e2f0, claim released via takeover). MODULE_MAP.md/docs-architecture excluded exactly as the original claim scoped itself. | SESSION-BOUND CONTINUATION 2026-09-27T16:54:20Z: arena/01a0e3b7 fast-forwarded cd79bfe (PR #109 head) and continues the same exclusive paths. This session cannot push to arena/01a0e356. PR #109 python-parity (3.10) is RED on run 36329794486 (asyncio.wait_for raises asyncio.TimeoutError, not builtin TimeoutError)."
+    },
+    {
+      "task": "task-196-w1-runtime-composition",
+      "title": "W1 canonical runtime composition: one owner for DB/LLM/queue/lifecycle + constructor-ownership ratchet + shutdown wiring (RECOVERY)",
+      "title_fa": "ترکیب runtime یکپارچه W1 + بازیابی و سخت‌سازی: رفع pendingapproval، cancellation در shutdown، و bypass در ratchet",
+      "zone": "runtime-composition-w1",
+      "priority": "P0",
+      "status": "completed_released",
+      "scope": "RECOVERY of W1 (326f72f, branch arena/01a0e356, CI run 36336910453: 12/16, 1 failed pendingapproval in test_approval). Transplant the W1 feat verbatim onto main e5b326b (W2 merged), then harden: (1) DB lifecycle — absolute-path normalization for _initialized_paths/_engine_path (relative-key collision across CWDs) + settings-cache isolation in test fixtures; (2) RuntimeContext.aclose cancellation — progress-preserving, idempotent, re-raise semantics; (3) constructor ratchet alias resolution + adversarial tests. All W1 acceptance criteria preserved, plus regression suites for each defect class.",
+      "scope_fa": "",
+      "prerequisites": [
+        "task-195-salvage"
+      ],
+      "acceptance_criteria": [
+        "Gateway identity: the engine instance handlers, feature engines, knowledge handlers and agent paths resolve IS the runtime's single shared engine (behavioral identity assertions, not type checks).",
+        "Database identity: with NEXUS_DATABASE_URL unset and settings.db_path customised (env NEXUS_DB_PATH), get_session(None) opens THAT path, never the hardcoded 'data/app.sqlite' literal; regression proves the default remains 'data/app.sqlite'.",
+        "Constructor ownership: AST guard enumerates every GeminiEngine/GeminiProvider/ConversationStore/GeminiRequestQueue construction site INCLUDING import aliases; all sites are in the approved set; any new site fails the suite.",
+        "Shutdown ownership: invoking the Application post_shutdown hook ACTUALLY closes the request queue (pending waiters settled, closed status), shuts the job queue down and disposes DB connections, in a recorded order; cancellation cannot strand resources; double-close is a no-op.",
+        "Zero regression: full non-slow suite, ruff/format/mypy, board structural tests and the llm_queue mutation harness stay green; W2 timeout contract preserved on 3.10/3.11/3.12; no production-readiness claim is made.",
+        "Negative + mutation proof for each new invariant AND each recovered defect (DB relative-path collision -> RED; shutdown cancellation strand -> RED; ratchet alias bypass -> RED).",
+        "knowledge/, integrations/, .github/, request_queue.py untouched (residual/active claims honored); overlap with stale open PRs recorded in overlap_ack."
+      ],
+      "evidence_required": [
+        "Deterministic reproducer for the pendingapproval failure (migrate_cli + agent_store + ai_memory + approval) RED on W1 tree, GREEN after fix.",
+        "Constructor-site inventory before/after with exact line references.",
+        "pytest counts for tests/unit/test_runtime_composition.py + tests/architecture/test_constructor_ownership.py + new regression suites.",
+        "Mutation/transplant probes for the three recovered defects.",
+        "Exact-head CI 16/16 GREEN on the recovery head, including python-parity 3.10/3.11/3.12."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/application/runtime.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/bot/feature_handlers.py",
+        "src/nexus_ai_agent/bot/knowledge_handlers.py",
+        "src/nexus_ai_agent/agents/store/agent_manager.py",
+        "src/nexus_ai_agent/llm/gemini_provider.py",
+        "src/nexus_ai_agent/storage/db.py",
+        "tests/unit/test_runtime_composition.py",
+        "tests/architecture/test_constructor_ownership.py",
+        "tests/unit/test_db_lifecycle_regression.py",
+        "tests/unit/test_runtime_shutdown_regression.py",
+        "tests/conftest.py"
+      ],
+      "owner_hint": "Arena agent on arena/01a0e432-nexus-ai-agent (W1 recovery mission)",
+      "agent_branch": "arena/01a0e432-nexus-ai-agent",
+      "claimed_at": "2026-09-27T19:05:00Z",
+      "ttl_hours": 48,
+      "gates_owner": true,
+      "overlap_ack": {
+        "stale_open_prs_touching_same_files": {
+          "src/nexus_ai_agent/bot/app.py": [
+            "#33 (assigned_to_E_pr33, ancient)",
+            "#60",
+            "#63",
+            "#66"
+          ],
+          "src/nexus_ai_agent/bot/handlers.py": [
+            "#33",
+            "#89",
+            "#99"
+          ],
+          "src/nexus_ai_agent/storage/db.py": [
+            "#33",
+            "#92"
+          ],
+          "src/nexus_ai_agent/agents/store/agent_manager.py": [
+            "#99"
+          ]
+        },
+        "why": "All overlapping open PRs are 30+ commits behind main with expired/no active board claims; the recovery mission orders W1 next. Seams are minimal and merge-compatible.",
+        "excluded_active": {
+          "src/nexus_ai_agent/features/request_queue.py + tests/unit/test_request_queue.py + scripts/llm_queue_mutations.py + MASTER report": "task-195-salvage (arena/01a0e3b7) active — W2 merged at e5b326b, queue contract preserved verbatim, no touch.",
+          ".github/ + continuum paths": "task-154/task-184 (arena/01a0e2bb) active — no touch.",
+          "src/nexus_ai_agent/knowledge/ + src/nexus_ai_agent/integrations/": "task-185 expired at GC (2026-09-27T19:05Z) but still excluded by design — knowledge call sites receive provider through bot/knowledge_handlers.py."
+        }
+      },
+      "note": "RECOVERY CONTINUATION: W1 head 326f72f (arena/01a0e356) is CI-RED (run 36336910453, 12/16, test_approval pendingapproval). Session is branch-bound to arena/01a0e432 and cannot push to arena/01a0e356 (salvage precedent PR102->PR107, PR108->PR110). This claim transplants W1 verbatim onto main e5b326b + hardens the three defect classes. Original W1 lease (arena/01a0e356, until 2026-09-29) is acknowledged in takeover_log; no history rewritten, no work dropped. Fence tightened 19:10Z: integration migrate fixtures need no direct touch (conftest autouse _isolate_settings_cache covers all settings pollution); removed from exclusive_paths to keep the lease minimal. | CONTINUATION HAND-OVER 2026-09-27T21:10Z: fence released to arena/01a0e442-nexus-ai-agent (owner-directed W1 Final Close-Out): the recovery head adc86cd is CI-green on BOTH cycles (push 36345622271, pull_request 36345625323 — 16/16, verified live by gh) and is merged VERBATIM into the continuation; the only open defect found by close-out forensics (E2/E2b schema fast-path outliving its engine) is fixed there. Nothing rewritten; adc86cd ancestry intact."
+    },
+    {
+      "task": "task-196-closeout-w1",
+      "title": "W1 final close-out: E2/E2b engine-owned schema fast-path + adversarial proof + exact-head CI",
+      "title_fa": "بستن نهایی W1: گارد schema متعلق به engine (E2/E2b) + اثبات adversarial + CI روی exact head",
+      "zone": "runtime-composition-w1",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Owner-directed GOLDEN close-out. Carries PR #112 (09cfe54 + adc86cd) VERBATIM as ancestors. Adds: engine-object-owned schema readiness (weak set) so external file replacement after engine disposal re-initialises instead of permanent 'no such table' (E2/E3a/E4); regression contracts J/K/L in test_db_lifecycle_regression.py; WAL-sidecar restore protocol documented; full mutation battery + full gates + exact-head CI evidence.",
+      "scope_fa": "",
+      "prerequisites": [
+        "task-196-w1-runtime-composition"
+      ],
+      "acceptance_criteria": [
+        "E-matrix E1..E9 green on the final tree (E2/E3a/E3b/E4 heal after engine disposal; E5 CWD aliasing stays fixed).",
+        "test_db_lifecycle_regression.py a..l green (12 tests), J/L kill the path-set-gate mutation RED when reverted.",
+        "Full non-slow suite + ruff/format/mypy green on the final head.",
+        "CI 16/16 terminal-green on BOTH cycles (push + pull_request) for the exact final head SHA.",
+        "Fence identical to the superseded claim; no overlap with active claims (task-195-salvage queue files untouched)."
+      ],
+      "evidence_required": [
+        "Mutation matrix log (each revert -> which test goes RED).",
+        "pytest counts for the lifecycle/shutdown/composition/ratchet suites.",
+        "gh run ids + job conclusions for the exact final head."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/application/runtime.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/bot/feature_handlers.py",
+        "src/nexus_ai_agent/bot/knowledge_handlers.py",
+        "src/nexus_ai_agent/agents/store/agent_manager.py",
+        "src/nexus_ai_agent/llm/gemini_provider.py",
+        "src/nexus_ai_agent/storage/db.py",
+        "tests/unit/test_runtime_composition.py",
+        "tests/architecture/test_constructor_ownership.py",
+        "tests/unit/test_db_lifecycle_regression.py",
+        "tests/unit/test_runtime_shutdown_regression.py",
+        "tests/conftest.py"
+      ],
+      "owner_hint": "Arena agent on arena/01a0e442-nexus-ai-agent (W1 close-out mission)",
+      "agent_branch": "arena/01a0e442-nexus-ai-agent",
+      "claimed_at": "2026-09-27T21:10:00Z",
+      "ttl_hours": 24,
+      "gates_owner": true,
+      "note": "Session-bound continuation: cannot push to arena/01a0e432 (precedent PR#102->#107, PR#109->#110). adc86cd merged verbatim (merge commit carries full ancestry). takeover_log has the hand-over evidence."
     }
   ],
   "deferred_log": [
@@ -3357,6 +3500,21 @@
       "action": "session-bound-continuation",
       "task": "task-195-salvage (PR #109)",
       "reason": "This Arena session is bound to arena/01a0e3b7-nexus-ai-agent and cannot push to arena/01a0e356-nexus-ai-agent. PR #109 head cd79bfe3b8e42b1943ad8ff0d352646fc54df548 is MERGEABLE but UNSTABLE: python-parity (3.10) FAILURE on run 36329794486 (job 108649421192) and the duplicate run 36329718482. Local reproduction on CPython 3.10.16 against that exact tree: 3 failed (test_same_user_timeout_releases_exactly_one_pending_slot, test_withdrawn_queued_requests_never_run_after_backlog_clears, test_timeout_during_rate_wait_wakes_worker_without_provider_invocation), 14 passed. Root cause: asyncio.wait_for raises asyncio.TimeoutError on 3.10, which is not a subclass of builtin TimeoutError (docs.python.org/3.10/library/asyncio-exceptions.html) and is an Exception, so the worker generic handler records queue_processor_error. 3.11+ aliases the names (Changed in version 3.11). History was fast-forwarded onto this branch (cd79bfe remains an ancestor); no rewrite, no force-push. Exclusive paths unchanged. gates_owner stays with this continuation."
+    },
+    {
+      "at": "2026-09-27T19:05:00Z",
+      "by_branch": "arena/01a0e432-nexus-ai-agent",
+      "action": "recovery-continuation",
+      "task": "task-196-w1-runtime-composition (W1)",
+      "reason": "W1 head 326f72f (arena/01a0e356) FAILED exact-head CI run 36336910453 (12 success / 4 failure: test + python-parity 3.10/3.11/3.12, 1 failed test_approval::test_approve_status with sqlite3.OperationalError no such table pendingapproval, 2929 passed). Root cause forensically proven: relative-path collision in _initialized_paths across CWDs (integration NEXUS_DB_PATH pollution + ai_memory chdir + W1 settings-following get_session) leaves repo-root data/app.sqlite empty on fresh checkout. Session is bound to arena/01a0e432 and cannot push to arena/01a0e356 (system constraint; salvage precedent PR102->PR107). Per W1 Recovery Mission authorization, transplant W1 verbatim onto main e5b326b (W2 merged, queue contract preserved) + harden DB/shutdown/ratchet. Original lease acknowledged, not stolen; W1 branch history preserved."
+    },
+    {
+      "at": "2026-09-27T21:10:00Z",
+      "by_branch": "arena/01a0e442-nexus-ai-agent",
+      "action": "continuation",
+      "task": "task-196-closeout-w1 (continues task-196-w1-runtime-composition)",
+      "reason": "Owner-directed GOLDEN MISSION (W1 Final Close-Out) on this session. PR #112 head adc86cdf20fbc9d2a1d4909e7a974de56948f8dc is MERGEABLE/CLEAN with BOTH CI cycles terminal-green (push run 36345622271, pull_request run 36345625323 — 16/16 jobs, verified via gh on 2026-09-27T21:0xZ). The previous session's last push was adc86cd (board trim) at ~19:47Z with no further commits (git ls-remote re-verified). This session is branch-bound and cannot push to arena/01a0e432; close-out continues here with adc86cd merged VERBATIM (commit-for-commit ancestry preserved). Close-out forensics then found one REAL remaining defect that #112 had documented but not closed: E2/E2b — the schema fast-path was keyed by absolute path but still outlived its engine, so an external file replacement (restore/truncation) after any engine disposal caused permanent 'no such table' until process restart. Fixed on top by scoping the readiness claim to the engine OBJECT (weak set), plus J/K/L regression contracts and a WAL-sidecar restore-protocol note. If arena/01a0e432 resumes, it should rebase onto this continuation.",
+      "evidence": "git merge-base --is-ancestor adc86cd HEAD -> true; gh run view 36345622271/36345625323 -> completed/success, 16 jobs success each; E-matrix E1..E9 transcripts; mutation battery log."
     }
   ],
   "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins."

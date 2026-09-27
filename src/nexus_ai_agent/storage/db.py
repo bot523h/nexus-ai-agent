@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import weakref
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from enum import Enum
@@ -21,11 +22,29 @@ log = logging.getLogger(__name__)
 _engine: Any | None = None
 _engine_path: str | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
+# Process-level RECORD of paths whose schema was created in this process.
+# This is bookkeeping for decide_sqlite_bootstrap() ("nothing" short-circuit)
+# and for diagnostics; it is NOT the session gate.  The session gate is
+# engine-owned (see _schema_ready_engines below): a schema claim must die
+# with the engine whose database it describes, otherwise a file replaced
+# while cached (external restore/truncation after an engine disposal) would
+# keep skipping initialisation for the rest of the process (E2/E3a/E4,
+# W1 close-out).
 _initialized_paths: set[str] = set()
 # Engines retired when the SQLite path changes.  Disposing an engine requires
 # an event loop, while _get_engine is synchronous, so retired engines are
 # closed by the next async database operation (see _dispose_replaced_engines).
 _replaced_engines: list[Any] = []
+
+#: The schema fast-path gate, owned by the engine OBJECT (weakly).  An
+#: engine is a member only after ``create_all`` succeeded against THIS
+#: engine's database.  Keyed by object identity, not by path: any engine
+#: disposal — test fixtures resetting the globals, or a path-switch
+#: retiring the engine — drops the object, the weak entry is collected,
+#: and initialisation re-arms for the next engine.  (SQLAlchemy 2.0 has no
+#: engine-level ``info`` dict — only ``Connection.info``, which dies per
+#: connection loan — so a weak set is the honest owner attachment.)
+_schema_ready_engines: weakref.WeakSet = weakref.WeakSet()
 
 # Postgres (NEXUS_DATABASE_URL) state, keyed by the normalized URL.
 _pg_engines: dict[str, Any] = {}
@@ -37,6 +56,30 @@ _pg_prepared_urls: set[str] = set()
 
 # The only URL schemes accepted for NEXUS_DATABASE_URL.
 _SUPPORTED_URL_SCHEMES = ("postgresql", "postgres", "postgresql+asyncpg")
+
+
+def _normalize_sqlite_path(db_path: str) -> str:
+    """Return the canonical absolute identity of a SQLite file path.
+
+    W1 recovery (task-196): ``_initialized_paths`` and ``_engine_path`` are
+    keyed by this value.  The previous spelling (``expanduser`` only) kept
+    relative paths relative, so the same string ``data/app.sqlite`` under two
+    different working directories (e.g. an ``ai_memory`` test's ``tmp_path``
+    vs the repository root) collided on one cache entry: the second file was
+    treated as "already initialized" and its schema was never created
+    (``sqlite3.OperationalError: no such table`` on a fresh checkout).
+
+    ``Path.resolve()`` (strict=False) makes the key absolute against the
+    *current* working directory, normalizes ``.``/``..`` and symlinks, and
+    works for not-yet-existing files on every supported Python (3.10/3.11/3.12
+    share this behaviour).  W1 close-out: absolute identity alone was still
+    not the schema *readiness* owner — a replaced file at a cached absolute
+    path kept skipping initialisation (E2/E3a/E4) — so the session gate moved
+    to the engine itself (``_schema_ready_engines``); this canonical identity now
+    binds the engine (``_engine_path``) and the process record
+    (``_initialized_paths``) unambiguously.
+    """
+    return str(Path(db_path).expanduser().resolve())
 
 
 def normalize_database_url(url: str) -> str:
@@ -92,7 +135,7 @@ def resolve_migration_url() -> str:
 
     from nexus_ai_agent.config.settings import get_settings
 
-    db_path = Path(get_settings().db_path).expanduser()
+    db_path = _normalize_sqlite_path(get_settings().db_path)
     return f"sqlite+aiosqlite:///{db_path}"
 
 
@@ -130,7 +173,7 @@ def _sqlite_has_tables(db_path: str) -> bool:
     """True when the SQLite file has any user table (sqlite_* excluded)."""
     from sqlalchemy import create_engine as sync_create_engine
 
-    engine = sync_create_engine(f"sqlite:///{Path(db_path).expanduser()}")
+    engine = sync_create_engine(f"sqlite:///{_normalize_sqlite_path(db_path)}")
     try:
         inspector = inspect(engine)
         tables = {t for t in inspector.get_table_names() if not t.startswith("sqlite_")}
@@ -143,7 +186,7 @@ def _sqlite_is_alembic_stamped(db_path: str) -> bool:
     """True when the SQLite file carries an ``alembic_version`` table."""
     from sqlalchemy import create_engine as sync_create_engine
 
-    engine = sync_create_engine(f"sqlite:///{Path(db_path).expanduser()}")
+    engine = sync_create_engine(f"sqlite:///{_normalize_sqlite_path(db_path)}")
     try:
         inspector = inspect(engine)
         return "alembic_version" in inspector.get_table_names()
@@ -171,7 +214,7 @@ def decide_sqlite_bootstrap(db_path: str | None = None) -> str:
     """
     from nexus_ai_agent.config.settings import get_settings
 
-    normalized = str(Path(db_path or get_settings().db_path).expanduser())
+    normalized = _normalize_sqlite_path(db_path or get_settings().db_path)
     if normalized in _initialized_paths:
         return _SqliteBootstrapMode.NOTHING.value
     if not Path(normalized).exists():
@@ -189,7 +232,7 @@ def _get_engine(db_path: str) -> Any:
     """Return an engine bound to ``db_path``, recreating it when the path changes."""
     global _engine, _engine_path, _session_factory
 
-    normalized_path = str(Path(db_path).expanduser())
+    normalized_path = _normalize_sqlite_path(db_path)
     if _engine is None or _engine_path != normalized_path:
         Path(normalized_path).parent.mkdir(parents=True, exist_ok=True)
         if _engine is not None:
@@ -263,16 +306,32 @@ async def create_all_metadata(engine: Any, metadata: MetaData) -> None:
 
 
 async def create_all_tables(db_path: str = "data/app.sqlite") -> None:
-    """Create all SQLModel tables for the selected database, exactly once per path."""
+    """Create all SQLModel tables for the selected database, once per engine.
+
+    The fast path is owned by the engine OBJECT (``_schema_ready_engines``);
+    the marker exists only after ``create_all`` succeeds against THIS
+    engine's database, so any engine disposal (fixture reset, path-switch
+    retirement) re-arms initialisation — including when the file at a
+    still-cached path was replaced meanwhile (external restore/truncation;
+    ``create_all`` stays checkfirst-idempotent, so a schema-bearing restore
+    is untouched).
+
+    Operational boundary (unchanged by design): mutating the SQLite FILE
+    while its engine is alive is unsupported — pooled connections are bound
+    to the old inode — and must be followed by engine disposal (in-process,
+    e.g. a path switch) or a process restart.  After disposal the next
+    session heals automatically: this function re-runs ``create_all``.
+    """
     await _dispose_replaced_engines()
-    normalized_path = str(Path(db_path).expanduser())
+    normalized_path = _normalize_sqlite_path(db_path)
     engine = _get_engine(normalized_path)
-    if normalized_path in _initialized_paths:
+    if engine in _schema_ready_engines:
         return
 
     async with engine.begin() as conn:
         await conn.execute(text("PRAGMA journal_mode=WAL"))
     await create_all_metadata(engine, SQLModel.metadata)
+    _schema_ready_engines.add(engine)
     _initialized_paths.add(normalized_path)
 
 
@@ -340,7 +399,14 @@ async def get_session(db_path: str | None = None) -> AsyncIterator[AsyncSession]
             async with factory() as session:
                 yield session
             return
-        db_path = "data/app.sqlite"
+        # W1 (task-196): the no-argument fallback follows the canonical
+        # database decision — ``settings.db_path`` (customisable through
+        # NEXUS_DB_PATH) — instead of a hardcoded literal.  The settings
+        # field default is the historical "data/app.sqlite", so the default
+        # behaviour is unchanged while configuration is finally honoured.
+        from nexus_ai_agent.config.settings import get_settings
+
+        db_path = get_settings().db_path
 
     await create_all_tables(db_path)
     if _session_factory is None:
