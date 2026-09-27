@@ -154,7 +154,7 @@ are not full-repo CI gates, not a real faster-whisper inference,
 and not a burn-in render.
 
 Mutation probes were performed as actual source edits in turn, each source file
-restored in `finally`, with a separate pytest process per mutant. `10/10 killed`:
+restored in `finally`, with a separate pytest process per mutant. `11/11 killed`:
 word-cover projection, ASS RTL marker, microsecond half-up rounding, unknown
 asset guard, unavailable adapter refusal, offline missing-model refusal,
 transcribe without engine evidence, ASS bidi-injection sanitizer, strict model
