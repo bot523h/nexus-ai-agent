@@ -54,6 +54,7 @@ def _golden_transcript() -> TranscriptRef:
     return TranscriptRef(
         transcript_id="tr_golden_fa_01",
         source_asset_id="asset_audio_master",
+        source_sha256="a" * 64,
         language="fa-IR",
         duration_us=3665_500_000,
         segments=(
@@ -112,6 +113,20 @@ def test_word_timing_validates_bounds_and_exposes_properties() -> None:
 
     with pytest.raises(ValueError, match="end_us"):
         WordTiming(word="خطا", start_us=5_000_000, end_us=4_000_000)
+    with pytest.raises(ValueError, match="finite number"):
+        WordTiming(word="خطا", start_us=0, end_us=1, score=float("nan"))
+    with pytest.raises(ValueError, match="finite number"):
+        TranscriptSegment(start_us=0, end_us=1, text="خطا", score=float("inf"))
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        WordTiming(word="x", start_us=0, end_us=1, confidence=0.5)
+
+
+def test_transcript_source_digest_requires_sha256_hex() -> None:
+    with pytest.raises(ValueError, match="source_sha256"):
+        TranscriptRef(
+            transcript_id="bad-digest",
+            source_sha256="not-a-digest",
+        )
 
 
 def test_transcript_segment_bounds_and_properties() -> None:
@@ -293,7 +308,7 @@ def _setup_project_with_audio() -> tuple[Project, CommandBus]:
     audio_record = AssetRecord(
         asset_id="asset_audio_01",
         media_kind="audio",
-        content_sha256="sha256:fakeaudiohash123",
+        content_sha256="sha256:" + "a" * 64,
         duration_us=30_000_000,
     )
     project = project.model_copy(update={"assets": [audio_record]})
@@ -308,7 +323,9 @@ def test_caption_transcribe_permission_level_a_and_execution() -> None:
     spec = registry.get_spec("caption.transcribe")
     assert spec.permission_level == PermissionLevel.IMMEDIATE
 
-    transcript = _golden_transcript()
+    transcript = _golden_transcript().model_copy(
+        update={"source_asset_id": "asset_audio_01", "engine": "unit-test-engine"}
+    )
     cmd = TypedCommand(
         command_id="cmd_transcribe_01",
         operation="caption.transcribe",
@@ -325,6 +342,20 @@ def test_caption_transcribe_permission_level_a_and_execution() -> None:
     assert result.output["language"] == "fa-IR"
     assert result.output["segment_count"] == 4
 
+    mismatched = transcript.model_copy(update={"source_sha256": "c" * 64})
+    bad_hash = TypedCommand(
+        command_id="cmd_transcribe_wrong_source_hash",
+        operation="caption.transcribe",
+        input={
+            "audio_asset_id": "asset_audio_01",
+            "transcript": mismatched.model_dump(mode="json"),
+        },
+    )
+    before = bus.project.state_hash
+    with pytest.raises(CommandValidationError, match="does not match project media asset"):
+        bus.dispatch(bad_hash)
+    assert bus.project.state_hash == before
+
 
 def test_caption_transcribe_rejects_missing_evidence_or_unknown_audio() -> None:
     project, bus = _setup_project_with_audio()
@@ -335,7 +366,9 @@ def test_caption_transcribe_rejects_missing_evidence_or_unknown_audio() -> None:
         operation="caption.transcribe",
         input={"audio_asset_id": "asset_audio_01"},
     )
-    with pytest.raises(CommandValidationError, match="requires pinned transcript evidence"):
+    with pytest.raises(
+        CommandValidationError, match="requires executed CaptionEnginePort evidence"
+    ):
         bus.dispatch(cmd_no_evidence)
 
     # Unknown audio asset
@@ -358,9 +391,16 @@ def test_caption_generate_srt_produces_companion_vtt_and_derived_asset() -> None
     spec = registry.get_spec("caption.generate_srt")
     assert spec.permission_level == PermissionLevel.REVERSIBLE
 
-    transcript = _golden_transcript()
-    # Align source_asset_id with registered audio
-    transcript = transcript.model_copy(update={"source_asset_id": "asset_audio_01"})
+    transcript = _golden_transcript().model_copy(
+        update={
+            "source_asset_id": "asset_audio_01",
+            "engine": "unit-test-fixture",
+            "engine_version": "fixture-1",
+            "model_name": "fixture-model",
+            "model_digest": None,
+            "parameters": {"test_fixture": True},
+        }
+    )
 
     cmd = TypedCommand(
         command_id="cmd_gen_srt_01",
@@ -391,7 +431,26 @@ def test_caption_generate_srt_produces_companion_vtt_and_derived_asset() -> None
     assert record.is_derived is True
     assert record.parent_asset_ids == ("asset_audio_01",)
     assert record.provenance["format"] == "srt"
+    assert record.provenance["source_transcript_id"] == transcript.transcript_id
+    assert record.provenance["engine"] == "unit-test-fixture"
+    assert record.provenance["engine_version"] == "fixture-1"
+    assert record.provenance["model_name"] == "fixture-model"
+    assert record.provenance["model_digest"] is None
+    assert record.provenance["source_audio_sha256"] == transcript.source_sha256
+    assert record.provenance["parameters"] == {"test_fixture": True}
     assert "vtt" in record.provenance["companion_renditions"]
+    before_collision = bus.project.state_hash
+    duplicate = TypedCommand(
+        command_id="cmd_gen_srt_duplicate_asset",
+        operation="caption.generate_srt",
+        input={
+            "transcript": transcript.model_dump(mode="json"),
+            "output_asset_id": "caption_derived_01",
+        },
+    )
+    with pytest.raises(CommandValidationError, match="output asset id already exists"):
+        bus.dispatch(duplicate)
+    assert bus.project.state_hash == before_collision
 
     # Test reversible undo: system.undo must restore original project state
     undo_cmd = TypedCommand(
