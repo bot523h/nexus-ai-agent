@@ -1,0 +1,52 @@
+{
+  "artifact": "LIVE_TRUTH",
+  "campaign": "NEXUS/NAGAR MASTER HARDENING",
+  "captured_at_utc": "2026-09-26T05:20:00Z",
+  "captured_by": "arena/01a0dc1e-nexus-ai-agent",
+  "truth_order": "LIVE CODE > LIVE CI > LIVE PR HISTORY > EVIDENCE > BOARD > DOCUMENTATION",
+  "note": "Prior reports treated as hypothesis only; every field below read from live git/gh/code at capture time.",
+  "git": {
+    "remote_origin": "https://github.com/bot523h/nexus-ai-agent.git",
+    "session_branch": "arena/01a0dc1e-nexus-ai-agent",
+    "session_head_sha": "2351f099e2f789b80de05c6b382554b5cdcec0f3",
+    "origin_main_sha": "2351f099e2f789b80de05c6b382554b5cdcec0f3",
+    "session_head_equals_main": true,
+    "is_shallow_clone": true,
+    "working_tree": "clean (before this campaign's edits)",
+    "unpushed_commits_at_capture": 0
+  },
+  "version": {
+    "VERSION_file": "3.13.0",
+    "pyproject_version": "3.13.0"
+  },
+  "ci_live": {
+    "main_push_latest": {
+      "run_id": 36176954176,
+      "event": "push",
+      "ref": "main",
+      "conclusion": "success",
+      "commit": "2351f09 (Merge PR #82)",
+      "age": "10h"
+    },
+    "maintenance_schedule_latest": {
+      "run_id": 36115146739,
+      "event": "schedule",
+      "ref": "main",
+      "conclusion": "failure",
+      "failing_job": "backup-db",
+      "failing_step": "Run nexus maintenance backup",
+      "prior_failure_run_id": 35975483186,
+      "root_cause": "create_backup() raises ProviderUnavailable (fail-closed by design) because R2 secrets are not validly configured for the scheduled GitHub Actions run; nightly production backup therefore fails and production backup is UNVERIFIED."
+    }
+  },
+  "open_prs": [
+    {"number": 84, "head": "493f4052e1", "branch": "arena/01a0da15-nexus-ai-agent", "ci": "SUCCESS=24", "title": "Register the NEXUS Engineering Constitution as an enforced contract (task-184)"},
+    {"number": 86, "head": "2683d6d8f4", "branch": "arena/01a0da2d-nexus-ai-agent", "ci": "FAILURE=10 SUCCESS=14", "title": "security: fail closed on unverified external packs", "note": "RED; superseded by #88"},
+    {"number": 87, "head": "2ed4495e65", "branch": "arena/01a0da2a-nexus-ai-agent", "ci": "FAILURE=1 SUCCESS=23", "title": "Studio Core (task-186)"},
+    {"number": 88, "head": "5e5a0fd7b7", "branch": "arena/01a0da5a-nexus-ai-agent", "ci": "SUCCESS=24", "title": "PACK-SEC-001 root-cause fix (supersedes #86) + artifact-proof slice + #87 probe"},
+    {"number": 89, "head": "2f0df4f11e", "branch": "arena/01a0da85-nexus-ai-agent", "ci": "SUCCESS=24", "title": "task-122: 12 command wirings + moderation ingress"},
+    {"number": 90, "head": "07106c29f8", "branch": "arena/01a0dc0c-nexus-ai-agent", "ci": "SUCCESS=24", "draft": true, "title": "enforce housekeeping dry-run with mutation-tested evidence"},
+    {"number": 91, "head": "df533957ec", "branch": "arena/01a0dc0b-nexus-ai-agent", "ci": "running (12 checks, no conclusion yet)", "title": "enforce physical filesystem and execution truth contracts"}
+  ],
+  "key_observation": "All hardening waves live in OPEN parallel branches. None are merged to main (2351f09). Therefore main HEAD is still exposed to every wave the directive lists until those PRs merge. This campaign's branch (01a0dc1e) is at main tip and adds the LLM/Wave-D LAW-10 closure."
+}
