@@ -72,7 +72,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   — that commit belonged to the lost local lineage (HISTORICAL EVIDENCE LOST —
   CONTENT RECONSTRUCTED). The record remains machine-bound: `verify` reports it
   STALE once a later commit touches an evidence root, and CI reports it with
-  `blocking: false`.
+  `blocking: false`. After the flaky-test repair below touched `tests/`, `verify`
+  reported `source state drift detected` and the record was republished at
+  `65b7f8a` (same 2871 tests, same interpreter and dependency pins).
 - **Flaky test repaired (out of scope, trust-breaking):** `test_number_guess_keeps_state`
   guessed a fixed `50` against an unpinned `random.randint(1, 100)` secret, so 1 run
   in 100 went red — it failed PR #102's `test` job (pull_request run 36313347629,
