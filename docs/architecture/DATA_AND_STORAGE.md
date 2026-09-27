@@ -96,6 +96,6 @@ Full policy text: [`DATA_LIFECYCLE.md`](DATA_LIFECYCLE.md), [`RETENTION_DECISION
 ## 6. What never enters a store
 
 - No credentials, tokens, or raw prompts in the operation journal or lifecycle metadata (redacted error codes only).
-- No PII in dashboard responses (`api/dashboard.py`, `tests/unit/test_dashboard_privacy.py`).
+- No PII in dashboard responses (`api/dashboard.py`, asserted by `tests/unit/test_dashboard_api.py`).
 - No user prompt egress to a training-capable free endpoint unless the strict-privacy flag is off and the user consented (`features/ai_memory.py` consent gate + `LLM_PROVIDERS.md`).
 - No manifest, tone template, or pack resource may contain an executable key (§[`CREATIVE_STUDIO.md`](CREATIVE_STUDIO.md) §3).

@@ -18,6 +18,7 @@
 | Optional-extras install matrix | one leg per shipping extra + `core` (`test_optional_extras.py`, focused behaviour, skip-inflation audit) | `extras-matrix` job (task-132) | yes |
 | Python parity | the `test`-job selection on 3.10 / 3.11 / 3.12 | `python-parity` job (task-132) | yes |
 | Release lineage | tags + `VERSION` + lockstep on full history | `release-lineage` job (task-132) | yes |
+| Mutation probes (security + guards) | `python scripts/pack_trust_mutations.py`, `scripts/shell_sandbox_mutations.py`, `scripts/docs_and_deploy_guard_mutations.py` (`make mutations`) | `trust-mutations`, `shell-mutations`, `docs-deploy-mutations` jobs | yes |
 
 `make lint && make types && make test` is the local equivalent. **One agent owns the gates at a time** (`.agents/board.json` → `gates_owner`); everyone else may run read-only diagnostics but must not race the same CI job deliberately.
 

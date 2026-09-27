@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security (evidence citations + default deployment — session `arena/01a0e28b-nexus-ai-agent`)
+
+- **A security threat model cited a test file that has never existed.** The T3
+  row of `docs/architecture/SECURITY.md` (dashboard scraping) listed evidence as
+  `tests/unit/test_dashboard_api.py` **and** a second file — a
+  `test_dashboard_privacy.py` that is not in the repository and never was;
+  `DATA_AND_STORAGE.md` §6 quoted the same ghost, and `OVERVIEW.md` Q2 pointed at
+  a `test_access_gate.py` whose real name is `test_access_guard.py`. Measured on
+  `main@e6b06e0`: 199 test-path citations across the living surfaces, three of
+  them unresolvable. A cited test is the evidence for a control, so the seventh
+  check now has a sibling: every `tests/…/*.py` path named in **prose** — the
+  living docs plus Python comments and docstrings — must resolve. A path inside a
+  string literal is **data**, not a claim, and is exempt by design: three
+  legitimate fixtures (the board overlap referee and the extras-parity log
+  parser) exist precisely to exercise strings whose paths must *not* exist, and a
+  guard that forced their deletion would make the codebase worse.
+- **The other half of the P0-5 dashboard decision was a comment in a YAML file.**
+  `/api/dashboard/*` answers unauthenticated when `NEXUS_DASHBOARD_TOKEN` is
+  unset, and the accepted reason is that the default deployment publishes
+  loopback-only. Nothing verified that: `docker-compose.yml` could have been
+  changed from `"127.0.0.1:8000:8000"` to `"8000:8000"` — one line, publishing an
+  unauthenticated API on every interface — with the whole suite still green.
+  `tests/architecture/test_default_deployment_exposure.py` now reads every
+  published port with a dependency-free, indentation-aware parser (PyYAML is a
+  transitive package, not a declared dependency), covering the short *and* long
+  compose spellings, and fails closed if the `dashboard` service it was written
+  for disappears. The test that asserts the token has no default sits beside it,
+  so the two halves of the trade-off cannot drift apart silently.
+- **Quoted counts are claims too.** `OVERVIEW.md` and `REFERENCES.md` both
+  advertised "15 files" for a `tests/architecture/` directory that holds 27 test
+  modules (`docs/README.md` rule 4: numbers must be reproducible). The count is
+  now phrased as test modules and checked against the filesystem — the check
+  failed on its own author within the hour, because adding the new test module
+  moved the number.
+- **The guards are mutation-tested against the artifacts they watch.**
+  `scripts/docs_and_deploy_guard_mutations.py` edits the real
+  `docker-compose.yml`, a real architecture page, a real docstring and the guard
+  logic itself: four port-bind mutants, a stale count, a ghost citation in docs
+  and one in code, plus two guard-disabling mutants. 9/9 killed, wired into
+  `make mutations` and a blocking `docs-deploy-mutations` CI job. Mutation over
+  *artifacts* is the point: the question is not whether a code path exists but
+  whether a one-line edit to the guarded thing actually trips the alarm.
+- **Process record — the ratchet caught its own author.** Commit `c7ff61c`'s
+  CHANGELOG paragraph named the rotted ADR path in prose; the seventh check
+  (added in that same commit) rejects exactly that, so `c7ff61c` is red on
+  `test_every_cited_adr_record_exists` while its *content* is correct. The line
+  is reworded here and the failure is recorded instead of the claim being
+  quietly restated. Naming a rotted citation is now written without the path
+  shape — the guard reports claims, not confessions.
+
 ### Security (restricted shell — ADR 0011, session `arena/01a0e28b-nexus-ai-agent`)
 
 - **The shell sandbox now validates an argument _grammar_, not a list of
@@ -52,8 +102,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/architecture/test_pack_trust_boundary.py` fails if an optional crypto
   backend is ever imported into the trust path.
 - **A dangling ADR citation in the security module.** `creative/packs/trust.py`
-  cited `adr/0009-pack-trust-root.md`; the record it ships is `0006` and 0009 was
-  never written. `tests/unit/test_docs_integrity.py` gains a seventh check —
+  cited `adr/0009-…`; the record it ships is `0006` and 0009 was never written. `tests/unit/test_docs_integrity.py` gains a seventh check —
   every `adr/NNNN-*.md` cited from `src/`, `tests/`, `scripts/` or `docs/` must
   resolve — with a red-proof so the detector itself is covered. The ADR index
   check alone could not see citations made from code.
