@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T12:10:00Z",
+  "updated_at": "2026-09-27T13:02:33Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -614,6 +614,17 @@
         "tests/architecture/test_pack_trust_boundary.py",
         "scripts/pack_trust_mutations.py",
         "docs/architecture/adr/0006-capability-pack-trust-root.md"
+      ]
+    },
+    {
+      "id": "llm-request-queue-lifecycle",
+      "description": "Isolated W2 in-process LLM request-queue lifecycle: cancellation, fair per-user scheduling, attempt accounting, and shutdown. Not the global gateway or a durable/distributed queue.",
+      "paths": [
+        "src/nexus_ai_agent/features/request_queue.py",
+        "tests/unit/test_request_queue.py",
+        "tests/architecture/test_request_queue_boundary.py",
+        "scripts/llm_queue_mutations.py",
+        "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
       ]
     }
   ],
@@ -2082,7 +2093,7 @@
       "agent_branch": "arena/01a0d43c-nexus-ai-agent",
       "claimed_at": "2026-09-24T16:32:01Z",
       "ttl_hours": 48,
-      "gates_owner": true,
+      "gates_owner": false,
       "note": "PR#72 https://github.com/bot523h/nexus-ai-agent/pull/72 (commit 5f955ce) — awaiting merge; merge-order disclosures in PR body (PR#68 supersede, PR#67/PR#70/PR#71 collisions). | STEWARDSHIP-RELEASED 2026-09-24T23:06:38Z by arena/01a0d5a1-nexus-ai-agent: delivery vehicle PR#72 is MERGED; a merged PR must not keep a live lease (PR#51/#47/#65 precedent). exclusive_paths released.",
       "evidence": [
         "contract 80 + boundary 16 + wave1 22: all pass (local)",
@@ -2158,7 +2169,7 @@
       "title_fa": "",
       "zone": "coordination",
       "priority": "P2",
-      "status": "active_in_review",
+      "status": "expired",
       "scope": "PR#67 adds required_packs + a lifecycle bus gate; Gate 2 could not verify against it. After both land, wire the seam (stage 4, after grant+registry, before reservation) and prove pack-required vs pack-absent dispatch.",
       "scope_fa": "",
       "prerequisites": [
@@ -2175,7 +2186,7 @@
       "claimed_at": "2026-09-24T20:37:51Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Continued from arena/01a0d4c8 (PR#75 head e0cba26 is an ancestor of this branch; PR#75 is superseded by PR#77, same stack on PR#72). MERGE ORDER: PR#72 -> PR#77; PR#67 afterwards needs the semantic resolution in COMMAND_CAPABILITY_CONTRACT section 11 (keep 4b, drop 3.5 + payload/surface opt-in, add color.apply_lut to EXPERIMENTAL_OPT_IN_OPERATIONS).",
+      "note": "auto-released by gc at 2026-09-27T12:56:57Z (stale active_in_review lease)",
       "stacked_on": {
         "pr": 72,
         "task": "task-179-gate2-command-reconciliation",
@@ -2217,11 +2228,11 @@
     },
     {
       "priority": "P0",
-      "status": "active_in_review",
+      "status": "expired",
       "prerequisites": [],
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Continuation of sec-boundary-salvage-01a0d4c7 (PR#76 head 5b17a709, CI green): owner-directed adversarial verification proved 5 S3/S5 defects its tests missed (stdlib traceback redaction bypass, mapping/non-string arg corruption, Basic-scheme credentials, CGNAT 100.64.0.0/10 allowed, https->http redirect downgrade followed). Closed on this branch (ff from 5b17a709 + closure commits), 12/12 mutation-killed, full non-slow suite 1989 passed / ruff / format / mypy clean. Takeover recorded in takeover_log; same zone, one owner.",
+      "note": "auto-released by gc at 2026-09-27T12:56:57Z (stale active_in_review lease)",
       "task": "sec-boundary-salvage-01a0d563",
       "title": "Security truth salvage: verify S1-S5 on main 035a896, fix only the real delta",
       "title_fa": "استخراج حقیقت امنیتی: بازبینی S1-S5 روی main 035a896 و اعمال فقط دلتای واقعی",
@@ -2350,7 +2361,7 @@
       "title_fa": "بستن و سازش‌دهی Gate 5: معناشناسی خطا + طبقه‌بندی شش‌حالته + حقیقت نوتیفایر + job_id در ردیابی + نشت استیجینگ",
       "zone": "job-lifecycle-gate5-closure",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "gates_owner": false,
       "prerequisites": [
         "task-178-job-lifecycle",
@@ -2383,7 +2394,7 @@
         "src/nexus_ai_agent/cli.py",
         "docs/audits/VERIFICATION_TRUTH_MATRIX.json"
       ],
-      "note": "AMENDED 2026-09-24: adr/0007 + adr/README.md dropped from exclusive paths (ADR dir is docs-layer-only per adr/README rule 3; failure semantics lives in DECISION_LOG D-0019 — no ADR file created); cli.py added (JobResult/job_id type ripple) and VERIFICATION_TRUTH_MATRIX.json (task-181 revision). | DELIVERED via PR#78 (head b030442, CI green on push run 36056456707 + PR run 36057676037; one flaky PR run 36056491410 on the same head — push run green, retriggered PR run green). Gate 5 closure claims audited + reproduced + fixed: typed failure -> COMPLETED (reproduced), one-state failures, pdf staging leak (old artifact destroyed, reproduced), trace job_id absent (reproduced). Mutation harness 6/6 (scripts/gate5_mutation_probes.py). Evidence: docs/audits/GATE5_CLOSURE_2026-09-24.md + GATE5_TRUTH_MATRIX.json. Supersedes PR#71/#74. | CONTINUATION 2026-09-24T23:06:38Z on arena/01a0d5a1-nexus-ai-agent (owner directive: GATE 5 FINAL REPAIR — execution fencing + artifact publication correctness + durable state truth + re-gate). PR#78 head 5f273f08 is CONFLICTING with main 16daebc (after PR#72/#77 merged); this branch merges 5f273f08 into main commit-for-commit (no rebase/force-push of arena/01a0d4b6) and continues the repair on top. Successor PR supersedes PR#78.",
+      "note": "auto-released by gc at 2026-09-27T12:56:57Z (stale active lease)",
       "acceptance_criteria": [
         "typed render failure (success=False) reaches a failure status, NEVER COMPLETED; notifier must not emit success (regression test)",
         "JobStatus = pending/processing/verifying/completed/failed_retryable/failed_terminal with unit-enforced transition matrix; every illegal transition fails closed",
@@ -2502,6 +2513,46 @@
         "main_ci_run": 36314653561
       },
       "delivered": "e6b06e04d1e541aa5809694e42a571579fa4f460"
+    },
+    {
+      "task": "task-195-llm-queue-lifecycle",
+      "title": "W2 queue lifecycle: cancel abandoned requests, account provider attempts, and schedule users fairly",
+      "title_fa": "سخت‌سازی چرخهٔ عمر صف W2: لغو درخواست رهاشده، حساب‌کردن تلاش واقعی provider و زمان‌بندی منصفانهٔ کاربران",
+      "zone": "llm-request-queue-lifecycle",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Harden only the in-process GeminiRequestQueue contract: remove timed-out/cancelled queued work before provider invocation; propagate cancellation to an in-flight local coroutine; settle waiters deterministically on close; account logical requests separately from actual provider attempts; honor bounded typed retry decisions; and round-robin users within each priority. Strict priority remains across tiers, so lower-tier starvation is an explicit limitation. This is deliberately a standalone W2 slice: not a single global LLM gateway, not persistent/distributed work, and not provider-call cancellation after bytes have reached a remote server. Sequenced ahead of W1 composition only because its implementation/test paths are disjoint and W1 hot paths are currently touched by open PRs #99/#89/#66/#63/#60/#33; no ownership is claimed over those paths.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "A queued request that times out or is cancelled is never passed to its provider coroutine; timeout while rate-waiting wakes the worker immediately.",
+        "Cancellation while locally awaiting a provider is propagated to that task; account for remote outcome uncertainty explicitly rather than claiming an HTTP request can always be recalled.",
+        "Per-user request counts are released exactly once on success, timeout, cancellation, provider failure, and shutdown.",
+        "Round-robin scheduling is proven among users within one priority; priority ordering across tiers is retained and its starvation caveat is documented.",
+        "Each actual provider invocation, including an allowed retry, consumes request/minute and daily capacity; retry is bounded, status-typed, and disabled when configured off.",
+        "Immediate close is idempotent, stops/settles active and queued waiters, returns all queue accounting to zero, and rejects later submissions.",
+        "Deterministic regression/adversarial tests and an architecture boundary guard pass; a mutation probe demonstrates cancellation/accounting regressions are caught.",
+        "Local full lint, format, type, and non-slow test gates plus remote exact-SHA CI are reported without production-readiness claims."
+      ],
+      "evidence_required": [
+        "Exact main/PR/CI SHAs and fresh open-PR path overlap check.",
+        "Before-fix reproduction tests for timeout execution, duplicate pending decrement, fairness, retry/capacity accounting, and shutdown settlement.",
+        "After-fix focused and full gate outputs, architecture test and mutation-probe output.",
+        "Document residual limits: process-local queue, strict-priority starvation, and unknown remote provider outcome after send."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/features/request_queue.py",
+        "tests/unit/test_request_queue.py",
+        "tests/architecture/test_request_queue_boundary.py",
+        "scripts/llm_queue_mutations.py",
+        "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
+      ],
+      "owner_hint": "Arena agent on arena/01a0e2f0-nexus-ai-agent",
+      "agent_branch": "arena/01a0e2f0-nexus-ai-agent",
+      "claimed_at": "2026-09-27T13:02:33Z",
+      "ttl_hours": 24,
+      "gates_owner": true,
+      "note": ""
     }
   ],
   "deferred_log": [
