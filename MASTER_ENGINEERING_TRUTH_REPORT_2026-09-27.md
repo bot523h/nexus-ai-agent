@@ -1,12 +1,13 @@
 # Master Engineering Truth Report — 2026-09-27
 
 **Repository:** `bot523h/nexus-ai-agent`
-**Authoritative `main` at live inspection:** `93c7809ad1bc1cd93212578386159c0a26c5e3f2`
-**Candidate branch:** `arena/01a0e2f0-nexus-ai-agent`
-**Queue implementation commit:** `260dfc62c1aa9f81ec587e9bd935a54d52566b4b`
-**Implementation tree tested locally:** `a33c4f129d459a98d2b1862027909f0b41d40693`
-**Candidate PR / remote CI:** not yet opened/available at this report revision; must be updated after submission.
-**Decision:** the bounded, process-local queue lifecycle slice is locally verified on the candidate tree. It is not yet merged or remotely CI-verified. The overall product is **not proven production-ready, durable, or globally rate-limited**.
+**Authoritative `main` at this revision:** `e5b326b2eaf691a638d030ad57acf1ce60016ef0`
+**Queue fix on that main:** `05315141b59f9a451b85e0a94d4988532c3e2c9e` (ancestor of the merge commit; history not rewritten)
+**Delivery PR:** [#110](https://github.com/bot523h/nexus-ai-agent/pull/110) merged `2026-09-27T18:14:10Z`. Supersedes closed #109.
+**Exact main CI:** [36339890292](https://github.com/bot523h/nexus-ai-agent/actions/runs/36339890292) `conclusion=success` on `e5b326b2eaf691a638d030ad57acf1ce60016ef0`, 16/16 jobs. See §11.
+**Decision:** the bounded, process-local timeout-class contract is merged and exact-SHA CI-verified on main. The product is **not proven production-ready, durable, or globally rate-limited**. W1 composition was not started; its paths are fenced. Sections 1–9 below are historical snapshots and are superseded where §10 and §11 disagree.
+
+**Historical header, retained:** earlier inspection used main `93c7809ad1bc1cd93212578386159c0a26c5e3f2`, candidate `arena/01a0e2f0-nexus-ai-agent`, implementation `260dfc62c1aa9f81ec587e9bd935a54d52566b4b`. That candidate was not the merged vehicle.
 
 ## 1. Scope, truth labels, and evidence boundary
 
@@ -268,11 +269,31 @@ Rejected: rewriting `wait_for` onto `asyncio.wait` (larger cancellation-semantic
 | `mypy src` | PASS (247 files) |
 | `pytest -q -m "not slow"` | **2915 passed, 30 skipped, 16 warnings in 174.30s**, CPython 3.11.2, exit 0. Delta vs §9's 2911 is the four new queue tests. |
 | `tests/unit/test_agent_board.py` | 18 passed in the focused run; the non-slow suite includes the board tests and passed |
-| Remote exact-head CI | **not run yet**. Local green is not PR green and not main green. |
+| Remote exact-head CI | Superseded by §11. At the time this row was written, remote CI had not completed. |
 
 ### 10.5 Still not proven
 
-1. Exact-head CI on this continuation, including python-parity 3.10/3.11/3.12, has not completed. Do not merge on this section alone.
-2. Process-local queue only. No application shutdown wiring, no global gateway, no remote cancellation proof. W1 is not started in this commit.
+1. Exact-head and exact-main CI completed after this section was written. §11 is the merge evidence. Do not treat this list item as the current CI state.
+2. Process-local queue only. No application shutdown wiring, no global gateway, no remote cancellation proof. W1 was not started.
 3. `MODULE_MAP.md` and `.github/` remain outside this claim.
 4. An out-of-contract direct worker cancel racing provider completion on the same loop tick is still the residual documented in §9.4.
+
+## 11. Merge evidence (live re-read, 2026-09-27T18:42:21Z)
+
+This section was written after fetching `origin/main` again. It is the current GitHub truth for the timeout-class fix. It does not promote the product to production-ready.
+
+| Fact | Exact observation |
+|---|---|
+| Session branch | `arena/01a0e3b7-nexus-ai-agent`. No other branch was checked out, created, or pushed. |
+| Fix commit | `05315141b59f9a451b85e0a94d4988532c3e2c9e`. Parent lineage includes `cd79bfe` (fast-forward of the prior queue commit; no rebase, no force-push). |
+| PR | [#110](https://github.com/bot523h/nexus-ai-agent/pull/110) `state=MERGED`, `mergedAt=2026-09-27T18:14:10Z`, `headRefOid=05315141b59f9a451b85e0a94d4988532c3e2c9e`, `mergeCommit=e5b326b2eaf691a638d030ad57acf1ce60016ef0`. #109 stayed closed. |
+| Main after fetch | `origin/main` = `e5b326b2eaf691a638d030ad57acf1ce60016ef0`, subject `Merge pull request #110 from bot523h/arena/01a0e3b7-nexus-ai-agent`. `05315141` is an ancestor. The merged `request_queue.py` contains `_wait_for_timeout_types()` returning `(TimeoutError, asyncio.TimeoutError)`. |
+| PR CI | [36335672218](https://github.com/bot523h/nexus-ai-agent/actions/runs/36335672218) `event=pull_request`, `headSha=05315141b59f9a451b85e0a94d4988532c3e2c9e`, `conclusion=success`. Push run [36335646394](https://github.com/bot523h/nexus-ai-agent/actions/runs/36335646394) is the same SHA and also `conclusion=success`. The PR rollup was 32/32 `SUCCESS`, including python-parity 3.10, 3.11, and 3.12, before merge. |
+| Main CI | [36339890292](https://github.com/bot523h/nexus-ai-agent/actions/runs/36339890292) `event=push`, `headSha=e5b326b2eaf691a638d030ad57acf1ce60016ef0`, `conclusion=success`, 16/16 jobs `success`: lint, lint-fast, test (`not slow`), extras-matrix core/pdf/speech/translate, python-parity 3.10/3.11/3.12, continuum-evidence 3.10/3.11/3.12, trust-mutations, migrate-postgres, release-lineage. Re-read from the API after the watch exited. Main SHA was fetched again and was still `e5b326b2`. |
+
+### 11.1 What this does not prove
+
+- Application shutdown still does not call `request_queue.close()`. W1 was not started.
+- W1 paths are not free. Live claim `task-185-external-intelligence-hardening` owns `src/nexus_ai_agent/knowledge/` and `src/nexus_ai_agent/integrations/`. Open PRs still change `bot/app.py` (#66, #63, #60, #33), `bot/handlers.py` (#99, #89, #33), `features/conversation_store.py` (#99), `features/ai_chat.py` (#58), and `llm/` (#93). `praudit` on this revision saw 28 open PRs, all invisible on the board. No queued or expired claim had exclusive paths clear of those open-PR files.
+- The queue remains process-local. It is not a global LLM gateway and not proof that a remote provider stopped after a local timeout.
+- `MODULE_MAP.md`, `docs/architecture/`, and `.github/` were not edited.
