@@ -24,6 +24,12 @@ async def _dispose_db_engine():
     outlive their loop and emit "Event loop is closed" noise.  Disposing
     while the current loop is still open keeps the suite warning-free and
     gives each test a fresh engine.
+
+    The schema cache (``_initialized_paths``) intentionally survives: it is
+    keyed by absolute file identity (W1 recovery), so a disposed engine never
+    causes a fresh file to skip schema creation, while a reused file keeps
+    its idempotent fast path.  Engine lifetime and schema lifetime stay
+    separate (LAW 11).
     """
     yield
     from nexus_ai_agent.storage import db as db_module
@@ -33,6 +39,22 @@ async def _dispose_db_engine():
         db_module._engine = None
         db_module._engine_path = None
         db_module._session_factory = None
+
+
+@pytest.fixture(autouse=True)
+def _isolate_settings_cache():
+    """Keep ``get_settings()`` hermetic across tests.
+
+    W1 recovery (task-196): ``get_session(None)`` follows
+    ``settings.db_path`` (NEXUS_DB_PATH).  Several fixtures set that variable
+    via ``monkeypatch`` (auto-undone) but leave the ``lru_cache`` holding the
+    previous test's absolute tmp path — the next test then opens the wrong
+    file.  Clearing before *and* after every test makes each test read its
+    own environment, regardless of fixture teardown discipline elsewhere.
+    """
+    settings_module.get_settings.cache_clear()
+    yield
+    settings_module.get_settings.cache_clear()
 
 
 @pytest.fixture()
@@ -57,9 +79,17 @@ def settings_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     from nexus_ai_agent.storage import db as db_module
 
     db_module._engine = None  # type: ignore[attr-defined]
+    db_module._engine_path = None  # type: ignore[attr-defined]
     db_module._session_factory = None  # type: ignore[attr-defined]
 
-    return settings_module.get_settings()
+    yield settings_module.get_settings()
+
+    # Teardown mirrors setup so the override never leaks into the next test
+    # even if the global autouse isolation order ever changes.
+    settings_module.get_settings.cache_clear()
+    db_module._engine = None  # type: ignore[attr-defined]
+    db_module._engine_path = None  # type: ignore[attr-defined]
+    db_module._session_factory = None  # type: ignore[attr-defined]
 
 
 @pytest.fixture()

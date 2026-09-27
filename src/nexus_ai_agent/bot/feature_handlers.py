@@ -100,12 +100,18 @@ class FeatureEngines:
 
 
 def build_feature_engines(
-    settings: Settings, referral: ReferralEngine | None = None
+    settings: Settings,
+    referral: ReferralEngine | None = None,
+    *,
+    llm_provider: Any | None = None,
 ) -> FeatureEngines:
     """Construct the shared engine container.
 
     *referral* may be the application-owned ``ReferralEngine`` (kept in
     ``bot_data``) so that only one referral instance exists per process.
+
+    W1 (task-196): *llm_provider* is the runtime-owned shared provider; the
+    memory engine must not spawn a private queue-less GeminiProvider.
     """
     return FeatureEngines(
         reminders=ReminderSystem(db_path=settings.db_path),
@@ -122,7 +128,7 @@ def build_feature_engines(
         # Single shared instance (task-102 acceptance): the P0-7 consent
         # gate lives inside the engine, so every call site — /memory,
         # /forget_me and the main message handler — shares one gate state.
-        ai_memory=AIMemoryEngine(),
+        ai_memory=AIMemoryEngine(gemini_provider=llm_provider),
     )
 
 

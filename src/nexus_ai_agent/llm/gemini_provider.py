@@ -29,23 +29,44 @@ class GeminiProvider(LLMProvider):
 
     def __init__(
         self,
-        api_key: str,
+        api_key: str = "",
         model: str = "gemini-2.0-flash",
         max_rpm: int = 15,
         max_daily: int = 1500,
         max_history: int = 20,
+        *,
+        engine: GeminiEngine | None = None,
     ) -> None:
-        self._engine = GeminiEngine(
-            api_key=api_key,
-            model=model,
-            max_rpm=max_rpm,
-            max_daily=max_daily,
-            max_history=max_history,
-        )
+        if engine is not None:
+            # Approved W1 path: the provider wraps the runtime's shared
+            # engine (shared queue, shared conversation store).
+            self._engine = engine
+        else:
+            # Legacy fallback (ratchet-pinned, shrink-only): kept for
+            # base_agent / ai_memory / knowledge call sites that do not yet
+            # receive the runtime.  Loudly observable so production
+            # split-brains stay detectable (mission W1, constructor
+            # ownership).
+            log.warning(
+                "gemini_provider_legacy_engine_fallback",
+                extra={
+                    "reason": "constructed without a shared engine; "
+                    "this instance owns a private, queue-less GeminiEngine "
+                    "(no request queue, no conversation store)"
+                },
+            )
+            self._engine = GeminiEngine(
+                api_key=api_key,
+                model=model,
+                max_rpm=max_rpm,
+                max_daily=max_daily,
+                max_history=max_history,
+            )
 
     @property
     def engine(self) -> GeminiEngine:
-        """Access the underlying GeminiEngine for advanced features (vision, code, etc.)."""
+        """Access the underlying GeminiEngine (runtime-owned in production; used
+        for advanced features: vision, code, etc.)."""
         return self._engine
 
     async def generate(self, prompt: str, system: str = "") -> str:

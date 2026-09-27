@@ -198,19 +198,19 @@ def _build_job_completion_notifier(token: str) -> Any:
     return _notify
 
 
-def _init_v2_engines(settings: Settings) -> dict[str, Any]:
+def _init_v2_engines(settings: Settings, runtime: Any) -> dict[str, Any]:
     """Initialize all v2.0.0+ feature engines.
+
+    W1 (task-196): the shared stateful components (request queue, Gemini
+    engine/provider, conversation store, summarizer) come from the runtime
+    factory — this function must NOT construct them.
 
     Returns a dict suitable for storing in application.bot_data.
     """
     from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
-    from nexus_ai_agent.features.ai_chat import GeminiEngine
-    from nexus_ai_agent.features.conversation_store import ConversationStore
     from nexus_ai_agent.features.image_gen import ImageGenEngine
     from nexus_ai_agent.features.referral import ReferralEngine
-    from nexus_ai_agent.features.request_queue import GeminiRequestQueue
     from nexus_ai_agent.features.speech import SpeechEngine
-    from nexus_ai_agent.features.summarizer import SummarizerEngine
     from nexus_ai_agent.storage.unified_cloud import UnifiedCloudStorage
 
     engines: dict[str, Any] = {}
@@ -227,30 +227,18 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
     for job_type, handler in default_job_handlers().items():
         job_queue.register_handler(job_type, handler)
     engines["job_queue"] = job_queue
+    # Late-bind: the runtime closes the job queue at shutdown (W1).
+    runtime.job_queue = job_queue
 
-    # Persistent conversation store
-    conv_store = ConversationStore(db_path=settings.db_path)
-    engines["conversation_store"] = conv_store
+    # Persistent conversation store (runtime-owned).
+    engines["conversation_store"] = runtime.conversation_store
 
-    # Request queue for fair Gemini API access
-    request_queue = GeminiRequestQueue(
-        max_rpm=settings.gemini_max_rpm,
-        max_daily=settings.gemini_max_daily,
-    )
-    engines["request_queue"] = request_queue
+    # Request queue for fair Gemini API access (runtime-owned).
+    engines["request_queue"] = runtime.request_queue
 
-    # Gemini AI Engine
-    gemini_engine: GeminiEngine | None = None
-    if settings.gemini_api_key:
-        gemini_engine = GeminiEngine(
-            api_key=settings.gemini_api_key,
-            model=settings.gemini_model,
-            max_rpm=settings.gemini_max_rpm,
-            max_daily=settings.gemini_max_daily,
-            conversation_store=conv_store,
-            request_queue=request_queue,
-        )
-    engines["gemini_engine"] = gemini_engine
+    # Gemini AI Engine + provider (runtime-owned, shared, queue-wired).
+    engines["gemini_engine"] = runtime.gemini_engine
+    engines["llm_provider"] = runtime.llm_provider
 
     # Image Generation
     engines["image_engine"] = ImageGenEngine()
@@ -258,14 +246,8 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
     # Speech (TTS/STT)
     engines["speech_engine"] = SpeechEngine(output_dir="data/audio")
 
-    # Summarizer
-    summarizer_engine: SummarizerEngine | None = None
-    if settings.gemini_api_key:
-        summarizer_engine = SummarizerEngine(
-            gemini_api_key=settings.gemini_api_key,
-            model=settings.gemini_model,
-        )
-    engines["summarizer_engine"] = summarizer_engine
+    # Summarizer (runtime-owned, shared instance).
+    engines["summarizer_engine"] = runtime.summarizer_engine
 
     # Referral
     engines["referral_engine"] = ReferralEngine(db_path=settings.db_path)
@@ -283,10 +265,29 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
     from nexus_ai_agent.bot.feature_handlers import build_feature_engines
 
     engines["feature_engines"] = build_feature_engines(
-        settings, referral=engines["referral_engine"]
+        settings, referral=engines["referral_engine"], llm_provider=runtime.llm_provider
     )
 
     return engines
+
+
+def make_post_shutdown(runtime: Any, feature_engines: Any) -> Any:
+    """Build the Application post_shutdown hook (W1, task-196).
+
+    The hook closes the feature engines that own resources AND drains the
+    runtime lifecycle (request queue -> job queue -> storage), in that
+    order.  Previously only ``reminders.close()`` ran here, leaking the
+    queue, waiters and DB engines past the application lifetime.
+    """
+
+    async def _post_shutdown(application: Any) -> None:
+        try:
+            feature_engines.reminders.close()
+        except Exception:  # noqa: BLE001
+            pass
+        await runtime.aclose()
+
+    return _post_shutdown
 
 
 def build_application(
@@ -304,8 +305,14 @@ def build_application(
     presence_store = presence or PresenceStore()
     storage_manager = storage or _build_default_storage(settings)
 
+    # W1: the canonical runtime — ONE owner for DB identity, LLM
+    # engine/provider, queue, store and lifecycle shutdown.
+    from nexus_ai_agent.application.runtime import build_runtime
+
+    runtime = build_runtime(settings)
+
     # Initialize all v2.0.0+ engines
-    engines = _init_v2_engines(settings)
+    engines = _init_v2_engines(settings, runtime)
     job_queue = engines["job_queue"]
     feature_engines = engines["feature_engines"]
 
@@ -322,22 +329,17 @@ def build_application(
             logger.exception("feature_engines_startup_failed")
         await job_queue.resume_pending()
 
-    async def _post_shutdown(application: Any) -> None:
-        try:
-            feature_engines.reminders.close()
-        except Exception:  # noqa: BLE001
-            pass
-
     application = (
         ApplicationBuilder()
         .token(token)
         .post_init(_post_init)
-        .post_shutdown(_post_shutdown)
+        .post_shutdown(make_post_shutdown(runtime, feature_engines))
         .build()
     )
     application.bot_data["graph"] = graph
     application.bot_data["presence"] = presence_store
     application.bot_data["storage"] = storage_manager
+    application.bot_data["runtime"] = runtime
     application.bot_data.setdefault("heartbeat_user_ids", set())
 
     # Store engines in bot_data for handler access
@@ -357,6 +359,9 @@ def build_application(
         presence=presence_store,
         storage=storage_manager,
         feature_engines=feature_engines,
+        llm_engine=runtime.gemini_engine,
+        summarizer_engine=runtime.summarizer_engine,
+        llm_provider=runtime.llm_provider,
     ):
         application.add_handler(handler)
 

@@ -1,7 +1,25 @@
+from typing import Any
+
 from telegram import Update
 from telegram.ext import ContextTypes
 
 from nexus_ai_agent.knowledge.knowledge_manager import KnowledgeManager
+
+
+def _shared_llm_provider(context: ContextTypes.DEFAULT_TYPE) -> Any | None:
+    """Resolve the runtime-owned shared GeminiProvider from bot_data (W1).
+
+    Falls back to ``None`` so the KnowledgeManager keeps its legacy
+    self-construction seam when no runtime is wired (tests/standalone).
+    The knowledge/ zone itself is claimed by another agent — the wiring
+    happens HERE instead of inside that zone.
+    """
+
+    bot_data = getattr(getattr(context, "application", None), "bot_data", None)
+    get = getattr(bot_data, "get", None)
+    if get is None:
+        return None
+    return get("llm_provider")
 
 
 async def learn_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -16,7 +34,7 @@ async def learn_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = " ".join(context.args)
     await update.message.reply_text(f"🔍 در حال یادگیری در مورد '{query}'...")
 
-    km = KnowledgeManager()
+    km = KnowledgeManager(gemini_provider=_shared_llm_provider(context))
     try:
         summary = await km.learn(query)
         await update.message.reply_text(summary)
@@ -34,7 +52,7 @@ async def wiki_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     query = " ".join(context.args)
-    km = KnowledgeManager()
+    km = KnowledgeManager(gemini_provider=_shared_llm_provider(context))
     try:
         content = await km.wiki.fetch_summary(query)
         if content:
@@ -55,7 +73,7 @@ async def search_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     query = " ".join(context.args)
-    km = KnowledgeManager()
+    km = KnowledgeManager(gemini_provider=_shared_llm_provider(context))
     try:
         results = await km.web.search_and_summarize(query)
         if results:
