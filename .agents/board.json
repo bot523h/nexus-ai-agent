@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T13:02:33Z",
+  "updated_at": "2026-09-27T13:06:42Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -618,11 +618,10 @@
     },
     {
       "id": "llm-request-queue-lifecycle",
-      "description": "Isolated W2 in-process LLM request-queue lifecycle: cancellation, fair per-user scheduling, attempt accounting, and shutdown. Not the global gateway or a durable/distributed queue.",
+      "description": "Isolated W2 in-process LLM request-queue lifecycle: cancellation, fair per-user scheduling, attempt accounting, and shutdown. Behavioral and mutation proof only in this slice; MODULE_MAP.md is left untouched because current open PRs own overlapping docs paths. Not the global gateway or durable/distributed queue.",
       "paths": [
         "src/nexus_ai_agent/features/request_queue.py",
         "tests/unit/test_request_queue.py",
-        "tests/architecture/test_request_queue_boundary.py",
         "scripts/llm_queue_mutations.py",
         "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
       ]
@@ -2530,20 +2529,20 @@
         "Per-user request counts are released exactly once on success, timeout, cancellation, provider failure, and shutdown.",
         "Round-robin scheduling is proven among users within one priority; priority ordering across tiers is retained and its starvation caveat is documented.",
         "Each actual provider invocation, including an allowed retry, consumes request/minute and daily capacity; retry is bounded, status-typed, and disabled when configured off.",
+        "UTC daily quota rollover releases blocked work without requiring a provider call to trigger the reset.",
         "Immediate close is idempotent, stops/settles active and queued waiters, returns all queue accounting to zero, and rejects later submissions.",
-        "Deterministic regression/adversarial tests and an architecture boundary guard pass; a mutation probe demonstrates cancellation/accounting regressions are caught.",
+        "Deterministic regression/adversarial tests and a mutation probe demonstrate that cancellation/accounting regressions are caught; architecture documentation paths are not edited while open PRs overlap them.",
         "Local full lint, format, type, and non-slow test gates plus remote exact-SHA CI are reported without production-readiness claims."
       ],
       "evidence_required": [
         "Exact main/PR/CI SHAs and fresh open-PR path overlap check.",
-        "Before-fix reproduction tests for timeout execution, duplicate pending decrement, fairness, retry/capacity accounting, and shutdown settlement.",
-        "After-fix focused and full gate outputs, architecture test and mutation-probe output.",
+        "Before-fix reproduction tests for timeout execution, duplicate pending decrement, fairness, retry/capacity accounting, daily rollover, and shutdown settlement.",
+        "After-fix focused and full gate outputs plus mutation-probe output; report the deferred MODULE_MAP boundary mapping explicitly.",
         "Document residual limits: process-local queue, strict-priority starvation, and unknown remote provider outcome after send."
       ],
       "exclusive_paths": [
         "src/nexus_ai_agent/features/request_queue.py",
         "tests/unit/test_request_queue.py",
-        "tests/architecture/test_request_queue_boundary.py",
         "scripts/llm_queue_mutations.py",
         "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
       ],
@@ -2552,7 +2551,7 @@
       "claimed_at": "2026-09-27T13:02:33Z",
       "ttl_hours": 24,
       "gates_owner": true,
-      "note": ""
+      "note": "MODULE_MAP.md and docs/architecture paths are excluded from this claim: current open PRs #105/#107/#102/#87/#69/#68 overlap that documentation zone. Add/refresh the architecture rule only after those owners reconcile; this slice uses behavioral regression and mutation proof."
     }
   ],
   "deferred_log": [
