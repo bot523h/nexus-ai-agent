@@ -1,128 +1,128 @@
 {
-  "schema_version": 2,
-  "plan": "Nagar Phase 6",
-  "step": "52329e6022a0bdd9f3f9e287da581b752204c811",
-  "next": "Review/merge the separate v3.12.0 release metadata PR for Waves 2.5 and 3 image generation. Optional local upscale remains deferred: contract and DECISION_LOG approval before implementation, never implied shipped by the image-generation release.",
+  "env_fingerprint": {
+    "alembic": "1.20.0",
+    "python": "3.11.2",
+    "sqlalchemy": "2.0.54"
+  },
   "ledger": [
     {
-      "id": "C1",
       "commit": "c81f299",
+      "id": "C1",
       "status": "complete"
     },
     {
       "id": "C2",
-      "status": "complete",
-      "scope": "D1-D10 except reverted pgvector in D7 and all of D8"
+      "scope": "D1-D10 except reverted pgvector in D7 and all of D8",
+      "status": "complete"
     },
     {
       "id": "tooling",
-      "status": "approved",
-      "scope": "bootstrap scripts and continuum"
+      "scope": "bootstrap scripts and continuum",
+      "status": "approved"
     },
     {
       "id": "D7/pgvector",
-      "status": "reverted",
-      "reason": "migration must not require pgvector"
+      "reason": "migration must not require pgvector",
+      "status": "reverted"
     },
     {
       "id": "D8",
-      "status": "reverted",
-      "reason": "unused token encryption has no consumer"
+      "reason": "unused token encryption has no consumer",
+      "status": "reverted"
     },
     {
-      "id": "PR3-C1",
       "commit": "063e7df",
-      "status": "complete",
-      "scope": "PG read-only adapter + shared contract + pg golden + CI PG-leg contract tests"
+      "id": "PR3-C1",
+      "scope": "PG read-only adapter + shared contract + pg golden + CI PG-leg contract tests",
+      "status": "complete"
     },
     {
-      "id": "PR3-C2",
       "commit": "aed8728",
-      "status": "complete",
-      "scope": "PG composition (isinstance fix, four-way matrix, sidecar store) + backend-aware CLI + hermetic CLI tests"
+      "id": "PR3-C2",
+      "scope": "PG composition (isinstance fix, four-way matrix, sidecar store) + backend-aware CLI + hermetic CLI tests",
+      "status": "complete"
     },
     {
-      "id": "PR3-C3",
       "commit": "e9e77df",
-      "status": "complete",
-      "scope": "golden management human-in-the-loop tests"
+      "id": "PR3-C3",
+      "scope": "golden management human-in-the-loop tests",
+      "status": "complete"
     },
     {
-      "id": "PR3-C4",
       "commit": "82a6377",
-      "status": "complete",
-      "scope": "Neon runbook + ledger/roadmap/continuum"
+      "id": "PR3-C4",
+      "scope": "Neon runbook + ledger/roadmap/continuum",
+      "status": "complete"
     },
     {
-      "id": "PR3-A-C1",
       "commit": "d214e1a",
-      "status": "complete",
-      "scope": "isolated migration f4a9c2e71b08 + PG lifecycle store + store contract + adopt-pg head-state + golden regen"
+      "id": "PR3-A-C1",
+      "scope": "isolated migration f4a9c2e71b08 + PG lifecycle store + store contract + adopt-pg head-state + golden regen",
+      "status": "complete"
     },
     {
-      "id": "PR3-A-C2",
       "commit": "1133df1",
-      "status": "complete",
-      "scope": "PG composition over in-database lifecycle index + CLI branching + reconciler containment"
+      "id": "PR3-A-C2",
+      "scope": "PG composition over in-database lifecycle index + CLI branching + reconciler containment",
+      "status": "complete"
     },
     {
-      "id": "lifecycle-line",
       "commit": "acdbcb7",
-      "status": "merged",
-      "scope": "PR1/PR2/PR3 checkpoint-lifecycle line merged to main through PR#7 (released as v3.6.0); POST_V1 per-checkpoint deletion stays deferred behind POST_V1_DELETE_MARKER"
+      "id": "lifecycle-line",
+      "scope": "PR1/PR2/PR3 checkpoint-lifecycle line merged to main through PR#7 (released as v3.6.0); POST_V1 per-checkpoint deletion stays deferred behind POST_V1_DELETE_MARKER",
+      "status": "merged"
     },
     {
-      "id": "nagar-wave1",
       "commit": "ac6c25b",
-      "status": "merged",
-      "scope": "Green Cockpit core — typed command envelope, capability registry, reference resolver, atomic bus, five operations (PR#19, released as v3.10.0)"
+      "id": "nagar-wave1",
+      "scope": "Green Cockpit core — typed command envelope, capability registry, reference resolver, atomic bus, five operations (PR#19, released as v3.10.0)",
+      "status": "merged"
     },
     {
-      "id": "nagar-wave2a",
       "commit": "865780e",
-      "status": "merged",
-      "scope": "capability-pack substrate — data-only manifests, verifier, PackRegistry (PR#21)"
+      "id": "nagar-wave2a",
+      "scope": "capability-pack substrate — data-only manifests, verifier, PackRegistry (PR#21)",
+      "status": "merged"
     },
     {
-      "id": "nagar-wave2b",
       "commit": "aa7b2f4",
-      "status": "merged",
-      "scope": "slideshow pack — evidence-carrying commands, 14 tone templates, deterministic planning, one atomic compose (PR#22)"
+      "id": "nagar-wave2b",
+      "scope": "slideshow pack — evidence-carrying commands, 14 tone templates, deterministic planning, one atomic compose (PR#22)",
+      "status": "merged"
     },
     {
-      "id": "nagar-wave2c",
       "commit": "ebe995a",
-      "status": "merged",
-      "scope": "render lane — plan -> RenderIR -> filtergraph -> argv -> one FFmpeg encode -> measured master (PR#23)"
+      "id": "nagar-wave2c",
+      "scope": "render lane — plan -> RenderIR -> filtergraph -> argv -> one FFmpeg encode -> measured master (PR#23)",
+      "status": "merged"
     },
     {
+      "commit": "8b27625",
       "id": "release-3.11.0",
-      "status": "merged",
       "scope": "housekeeping cut: continuum refresh, changelog 3.11.0, roadmap/decision-log refresh (r6: image generation behind an adapter, Wave 2.5 sequencing); merged via PR#24 (2026-09-20)",
-      "commit": "8b27625"
+      "status": "merged"
     },
     {
-      "id": "nagar-wave2.5",
       "commit": "316ed33",
-      "status": "merged",
-      "scope": "Telegram slideshow surface (up to five photos, 30 seconds), existing in-process render queue and completion delivery, workspace cleanup and typed failures; PR#25 merged 2026-09-20."
+      "id": "nagar-wave2.5",
+      "scope": "Telegram slideshow surface (up to five photos, 30 seconds), existing in-process render queue and completion delivery, workspace cleanup and typed failures; PR#25 merged 2026-09-20.",
+      "status": "merged"
     },
     {
-      "id": "nagar-wave3-image-generation",
       "commit": "52329e6",
-      "status": "merged",
-      "scope": "PR#26: isolated Pollinations/Gemini providers, bounded retries and prompt cache, paid-tier/cost guards, /imagine, opt-in slideshow autofill, architecture and failure tests; optional local upscale NOT implemented."
+      "id": "nagar-wave3-image-generation",
+      "scope": "PR#26: isolated Pollinations/Gemini providers, bounded retries and prompt cache, paid-tier/cost guards, /imagine, opt-in slideshow autofill, architecture and failure tests; optional local upscale NOT implemented.",
+      "status": "merged"
     },
     {
       "id": "release-3.12.0",
-      "status": "in_review",
-      "scope": "Separate housekeeping commit/PR after PR#26: VERSION/pyproject lock-step, dated Wave 2.5 + Wave 3 changelog, README, roadmap, decision log and continuum; no runtime change or tag publication."
+      "scope": "Separate housekeeping commit/PR after PR#26: VERSION/pyproject lock-step, dated Wave 2.5 + Wave 3 changelog, README, roadmap, decision log and continuum; no runtime change or tag publication.",
+      "status": "in_review"
     }
   ],
-  "test_count_expected": 649,
-  "env_fingerprint": {
-    "python": "3.11.2",
-    "alembic": "1.20.0",
-    "sqlalchemy": "2.0.54"
-  }
+  "next": "Cut v3.14 release metadata (VERSION/CHANGELOG/tag) and republish this record from a clean checkout at the cut; CI gates the verifier (continuum-evidence), not this machine-bound record (D-0006/D-0023).",
+  "plan": "Nagar Phase 6",
+  "schema_version": 2,
+  "step": "04aaffbdd7c1284db542815e9ce4e415152dc04b",
+  "test_count_expected": 2869
 }

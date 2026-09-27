@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Continuum evidence foundation (task-184, session `arena/01a0e1e0-nexus-ai-agent`; supersedes PR #95 / PR #98)
+
+- **Pack coverage is a real 95% gate (DECISION_LOG D-0023, option A).** A report is
+  accepted only when the run is canonical (the 26 targets derived from
+  `PACK_TEST_TARGETS`, every pack, the default root, bar = `ACCEPTANCE_THRESHOLD`
+  95.0), the measurement is verified (trace child exit 0, pytest passed with 0
+  failed / 0 errors / 0 deselected, nonce-bound trace artifact with exact keys,
+  non-empty surfaces, no mapping or orphan issue) and **every pack** is ≥ 95%.
+  Measured at the PR head on Python 3.11.2: TOTAL 97.63% (4771/4887), weakest pack
+  edit 96.46%; `slideshow` 93.55% → 97.89% through behavioural invariant tests
+  (`tests/unit/test_slideshow_invariants.py`) and the never-mapped
+  `tests/architecture/test_slideshow_adapter_boundary.py` — no exclusions.
+- **Denominator/numerator hardening.** Synthetic lines (3.11+ `RESUME` at line 0,
+  3.10's implicit return of a comment-only module) never enter the denominator;
+  zero-surface modules are refused; executed lines are intersected with the
+  executable surface and hit counts must be integers ≥ 1. Thresholds reject
+  `NaN`, `inf`, negatives and booleans (exit 2).
+- **Target integrity.** Missing, duplicate/respelled, subset, unknown-pack,
+  alternate-root and stale mappings are named; test modules that import a pack are
+  classified by AST (not text grep) as mapped, declared host-layer importers
+  (`HOST_LAYER_PACK_IMPORTERS`) or orphans.
+- **Canonical, SHA-bound artifacts.** `pack_coverage --json-out` writes
+  `nexus.pack-coverage/2` atomically after deleting any stale file; bytes are
+  deterministic (CI runs it twice and `cmp`s); `--verify-artifact` re-measures and
+  requires a byte-for-byte reproduction.
+- **Snapshot v2 fails closed** (`continuum/snapshot.py`, `continuum/provenance.py`):
+  strict canonical parsing (duplicate keys, extra/missing keys, wrong types,
+  non-canonical bytes), full 40/64-hex commit ids only, reachability and ancestry
+  that raise when Git cannot answer (no Git, shallow history), later committed
+  source drift over `src tests scripts migrations assets pyproject.toml alembic.ini`
+  (the stale `alembic` root is gone), dirty/untracked/ignored-but-importable files,
+  pytest-collection test count in an isolated environment (`PYTEST_ADDOPTS` cannot
+  steer it), environment drift, atomic publication. `nexus continuum
+  show|verify|publish`. Fixed: `git status --porcelain -z` was parsed through a
+  helper that stripped leading spaces, misreading the first record.
+- **Executable threat model.** `python scripts/continuum_gate.py` clones the commit,
+  publishes a snapshot, proves `verify` accepts it and rejects 27 attacks
+  (`nexus.continuum-gate/1`); the committed `.nexus/continuum.json` is reported
+  with `blocking: false` (machine-bound release-cut record, D-0006/D-0023).
+- **Replayable mutation campaign.** `python scripts/continuum_mutations.py`
+  (`nexus.continuum-mutations/1`) applies 81 catalogued mutations across the
+  denominator, numerator, threshold, targets, process, snapshot, downstream,
+  determinism, pack (slideshow invariant) and ci families; each record carries id,
+  file, original, mutated, command, expected, observed and a sha256 restoration
+  check. The run refuses dirty targets, ambiguous originals and a red baseline, and
+  fails on any survivor. The `ci` family mutates `.github/workflows/ci.yml` itself
+  (wrong HEAD, `continue-on-error`, missing artifact, dropped `cmp`, dropped 3.10
+  leg, `|| true`, SHA-less artifact name) and must be killed by
+  `tests/unit/test_ci_continuum_evidence.py`.
+- **A hollow pack cannot leave the verdict.** A pack whose every module is
+  comment-only used to disappear from the report and so from the per-pack
+  threshold check; it is now a measurement issue (the canonical run is
+  unverified), pinned by a regression test and mutation `D6`.
+- **CI `continuum-evidence` job** (3.10/3.11/3.12, `fail-fast: false`, full
+  history, HEAD == `GITHUB_SHA`, emptied artifact directory) runs all three —
+  coverage, gate and campaign each twice with `cmp` — writes `SHA256SUMS` and
+  uploads `continuum-evidence-<sha>-py<ver>`; `tests/unit/test_ci_continuum_evidence.py`
+  pins that the job cannot be softened.
+
 ### CI (task-132 — extras smoke matrix, session `arena/01a0d709-nexus-ai-agent`)
 
 - **Every optional extra is now a blocking CI leg.** The new `extras-matrix` job

@@ -108,8 +108,12 @@ len(runtime.operation_ids())  # 57 = wave-1 (5) + pack operations (52)
    registrar). Nothing else composes packs.
 4. `python -c "from nexus_ai_agent.creative.packs.runtime import composition_issues, stale_capabilities; print(composition_issues(), stale_capabilities())"`
    must print `() {}`.
-5. Write the pack's tests and add them to `DEFAULT_TEST_TARGETS` in
-   `continuum/pack_coverage.py` — a pack with no test target silently reports 0%.
+5. Write the pack's tests and map them in `PACK_TEST_TARGETS` in
+   `continuum/pack_coverage.py` (the pack's directory → its test modules). A pack
+   without a mapping is not "0%" any more — the canonical measurement is
+   **unverified** (`pack_mapping_issues`), and a test module that imports a pack
+   but is neither mapped nor a declared host-layer importer
+   (`HOST_LAYER_PACK_IMPORTERS`) is named as an orphan (`pack_test_import_issues`).
 6. Run `python scripts/pack_coverage.py` and the architecture gate:
    `pytest -q tests/architecture/test_pack_activation_completeness.py`.
 
@@ -120,36 +124,79 @@ lives in `continuum/` precisely so that allowlist never has to grow.
 
 ---
 
-## 5. Measuring what actually runs
+## 5. Measuring what actually runs — the 95% acceptance contract (DECISION_LOG D-0023)
 
 ```bash
-python scripts/pack_coverage.py                       # 85% bar, 24-module pack test set
-python scripts/pack_coverage.py --threshold 95        # show what has not reached the goal
+python scripts/pack_coverage.py                                   # canonical: 26 targets, 95% bar
+python scripts/pack_coverage.py --json-out ci-artifacts/pack-coverage.json
+python scripts/pack_coverage.py --verify-artifact ci-artifacts/pack-coverage.json
+python scripts/pack_coverage.py --list-tests
+# diagnostic only — never accepted:
 python scripts/pack_coverage.py --pack delivery --json
 python scripts/pack_coverage.py --tests tests/unit/test_opgap_wave5.py --pack core
-python scripts/pack_coverage.py --list-tests
+python scripts/pack_coverage.py --threshold 80
 ```
 
-Exit status: `0` every measured unit is at/above the bar, `1` at least one is
-below, `2` bad usage. No third-party dependency: the harness uses stdlib
-`trace` + `dis`, and the denominator comes from the compiler's line table.
+**The contract.** A report is *accepted* only when every one of these holds:
 
-**Wave-5 baseline (measured, not claimed)**
+* the run is **canonical** — exactly the 26 targets of `DEFAULT_TEST_TARGETS`
+  (derived from `PACK_TEST_TARGETS`, one entry per composed pack plus the
+  substrate), every pack, the default pack root, and the bar at
+  `ACCEPTANCE_THRESHOLD = 95.0`; a subset, a respelled duplicate, an unknown or
+  partial pack selection, an alternate root or a lowered bar is a diagnostic run;
+* the measurement is **verified** — the trace child exited 0, pytest reported
+  passing tests with 0 failed / 0 errors / 0 deselected, the trace artifact
+  carries the nonce of this run and exactly the expected keys, every measured pack has a
+  non-empty executable surface (comment-only modules leave the surface; a pack
+  with no surface at all is a measurement issue, never a silently dropped pack),
+  and no mapping/orphan issue exists;
+* **every pack** (not the total) is at or above 95.00%.
 
-| unit | modules | cover | status |
-|---|---:|---:|---|
-| core (substrate: manifest/verify/registry/runtime/`__init__`) | 5 | 96.26% | OK |
-| slideshow | 5 | 93.03% | OK |
-| caption | 4 | 96.66% | OK |
-| edit | 3 | 95.89% | OK |
-| motion | 3 | 98.12% | OK |
-| audio | 3 | 96.09% | OK |
-| delivery | 4 | 87.19% | OK (weakest: `signing.py` 68.89%) |
-| **TOTAL** | **27** | **94.89%** | OK |
+The denominator is the compiler's line table of every code object, minus the
+lines that are not source (3.11+ emits a synthetic `RESUME` at line 0; 3.10 numbers
+a comment-only module's implicit return). The numerator is the intersection of
+traced lines with that surface, with integer hit counts ≥ 1 — so executed can
+never exceed executable. No third-party dependency: stdlib `trace` + `dis`.
 
-The 95% goal of `wave4-step7` is not met yet, and the tool now says exactly where
-the gap is: `delivery/signing.py`, `slideshow/models.py` and the pack `__init__`
-re-export blocks.
+**Exit status:** `0` accepted, `1` rejected (below the bar, unverified,
+non-canonical, or `--verify-artifact` did not reproduce the bytes), `2` invalid
+request (bad threshold such as `NaN`, `inf`, negative or `true`; unknown pack;
+missing target). `--json-out` deletes the old file first and writes atomically, so
+a failed run never leaves a previous artifact behind.
+
+**The artifact** (`nexus.pack-coverage/2`) is canonical JSON: sorted keys, no
+wall-clock time, targets sorted, so two runs on the same commit and interpreter
+are byte-identical (CI proves it with `cmp`). It is bound to its commit
+(`provenance.git_commit`, `source_sha256` over the measured sources, the
+interpreter identity) and records `accepted` next to the per-pack numbers.
+
+**Measured at the PR head (Python 3.11.2, 26 targets, 27 modules, 362 tests passed):**
+
+| pack | modules | executed / executable | cover | status |
+|---|---:|---:|---:|---|
+| audio | 3 | 615 / 637 | 96.55% | OK |
+| caption | 4 | 868 / 894 | 97.09% | OK |
+| core (substrate) | 5 | 673 / 694 | 96.97% | OK |
+| delivery | 4 | 566 / 566 | 100.00% | OK |
+| edit | 3 | 490 / 508 | 96.46% | OK |
+| motion | 3 | 679 / 689 | 98.55% | OK |
+| slideshow | 5 | 880 / 899 | 97.89% | OK |
+| **TOTAL** | **27** | **4771 / 4887** | **97.63%** | **ACCEPTED** |
+
+`slideshow` was 93.55% under the old 85% bar; it reached the contract through
+behavioural tests of its public invariants (`tests/unit/test_slideshow_invariants.py`)
+and the existing adapter-boundary tests that had never been mapped
+(`tests/architecture/test_slideshow_adapter_boundary.py`) — no line was excluded and no
+hard path was removed. The `continuum-evidence` CI job re-measures on 3.10, 3.11
+and 3.12 for every push and pull request and uploads the SHA-named artifact; the
+numbers of each run live in that artifact, not in this document.
+
+**Self-defence.** `tests/unit/test_pack_coverage_contract.py` pins every clause
+above, and `python scripts/continuum_mutations.py` replays the mutation campaign
+(`nexus.continuum-mutations/1`): every catalogued weakening of the harness, the
+snapshot verifier, the CLI and the gate is applied, its killing tests run in a
+fresh interpreter, and the file is restored and checked byte for byte. The run
+fails if any applicable mutation survives.
 
 ---
 
@@ -161,5 +208,7 @@ re-export blocks.
 | `packs verify` → `unknown_capability` | the manifest declares an operation the runtime does not know | implement + register the operation, or fix the capability name |
 | `packs activate` → `cannot activate — the runtime does not know …` | the pack is genuinely incomplete | the message lists the missing operations verbatim |
 | `duplicate operation` at import | two registrars claim the same operation id | one operation belongs to exactly one pack; fix the owner |
-| coverage reports a pack at 0% | its tests are missing from `DEFAULT_TEST_TARGETS` | add them (see checklist step 5) |
+| coverage says `unverified` / names a pack without targets | the pack is composed but has no `PACK_TEST_TARGETS` entry, or a mapping names a pack that no longer ships | add or remove the mapping (checklist step 5) |
+| coverage names an orphaned pack test | a test module imports a pack but is neither mapped nor a declared host-layer importer | map it under its pack, or add it to `HOST_LAYER_PACK_IMPORTERS` if it tests the host |
+| coverage exits `1` with every pack ≥ 95% | the run is diagnostic (`--pack`, `--tests`, `--threshold`) or the trace child/pytest failed | run canonically; read `measurement_issues` in the JSON |
 | architecture gate fails on `creative/packs/coverage.py` | the measurement harness was placed in the data-only substrate | keep it in `nexus_ai_agent.continuum` |

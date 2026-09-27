@@ -1590,3 +1590,64 @@ BASELINE GREEN → MUTANT RED → SHA-restored → GREEN. Sources: pg-boss issue
 atomic commit; Python `os.replace` (atomic same-filesystem replace, previous inode not
 preserved); Oban's `fetch_jobs` (available-only claim minting `attempt`) and `Lifeline` rescue
 (expiry-gated takeover) as the mature-implementation reference for options A/E.
+
+### D-0023 — Continuum evidence is a contract, not a report: 95% per pack is a real gate, the snapshot verifier fails closed, and both are defended by an executable threat model and a replayable mutation campaign
+
+*Problem.* Three parallel lineages disagreed about Continuum truth. `main` (`6624a13`)
+shipped a pack-coverage harness with an 85% bar that nothing in CI ran, while the
+roadmap goal was 95%; PR #95 made snapshot verification stricter but was red on the
+Python 3.10 parity leg (a comment-only module's implicit return counted as surface);
+PR #98 healed that leg and claimed mutation results that could not be replayed. The
+committed `.nexus/continuum.json` anchored `52329e6` with an AST-counted
+`test_count_expected` of 649 while pytest collected thousands of cases, and the
+verifier parsed `git status --porcelain -z` through a helper that stripped the
+first record's leading space.
+
+*Decision.*
+1. **Option A — 95% is the acceptance contract.** `ACCEPTANCE_THRESHOLD = 95.0`,
+   per pack, on a canonical run (exactly `DEFAULT_TEST_TARGETS`, derived from
+   `PACK_TEST_TARGETS`, every composed pack, default root) whose measurement is
+   verified (child exit 0; pytest passed, 0 failed/errors/deselected; nonce-bound
+   trace artifact with exact keys; non-empty surfaces; no mapping/orphan issue).
+   Everything else is a *diagnostic* run that exits 1. Option B (a documented
+   difference between the 85% bar and the 95% goal) was rejected because the
+   packs can meet 95% honestly: slideshow was the only pack below it (93.55%) and
+   reached 97.89% through behavioural invariant tests, not exclusions.
+2. **Target integrity is derived, not listed.** `PACK_TEST_TARGETS` must name
+   exactly the composed packs; test modules importing a pack are classified by AST
+   into mapped / declared host-layer importers (`HOST_LAYER_PACK_IMPORTERS`, each
+   with a reason) / orphans. An orphan or stale mapping makes the canonical run
+   unverified.
+3. **The snapshot verifier fails closed** on every row of the threat model in
+   `continuum/snapshot.py`; Git questions it cannot answer (no Git, shallow
+   history, unreachable commit) raise instead of guessing; the test count is the
+   pytest collection count in an isolated environment.
+4. **D-0006 stands for the committed snapshot.** `.nexus/continuum.json` records
+   an interpreter and dependency fingerprint, so it cannot verify on every CI
+   interpreter; it stays a release-cut record, republished with `nexus continuum
+   publish` from a clean checkout. CI gates the **verifier**, not that record:
+   `scripts/continuum_gate.py` publishes a snapshot in a fresh clone of the commit
+   under test, requires `verify` to accept it and to reject 27 attacks with the
+   expected diagnosis, and reports the committed record with `blocking: false`.
+5. **Mutation results must be replayable.** `scripts/continuum_mutations.py`
+   applies every catalogued mutation (81, version-scoped where the line only exists
+   on one interpreter), runs its killing tests in a fresh interpreter, restores the
+   file and checks it by sha256. A survivor fails the run; the answer to a survivor
+   is a stronger test, never a deleted mutation.
+6. **CI enforces it on the exact SHA.** The `continuum-evidence` job (3.10/3.11/3.12,
+   no soft-fail, full history, HEAD == `GITHUB_SHA`, emptied artifact directory)
+   runs coverage, the gate and the campaign twice each with `cmp`, re-checks the
+   coverage artifact with `--verify-artifact`, writes `SHA256SUMS` and uploads
+   `continuum-evidence-<sha>-py<ver>`. The `ci` mutation family attacks this job's
+   own YAML, so softening it is a killed mutation, not a silent edit.
+
+*Rejected.* A `coverage.py` dependency (the stdlib `trace`/`dis` harness already
+measures the compiler's line table; a new dependency buys nothing the contract
+needs). Gating CI on the committed snapshot (every interpreter leg would report
+environment drift by construction). Keeping the 85% bar "for now" (a gate below the
+stated goal is a nominal gate).
+
+*Evidence.* Recorded in the PR that lands this decision with run IDs and artifacts:
+coverage ACCEPTED and byte-identical across two runs; gate control accepted and
+27/27 attacks rejected; mutation campaign with every applicable mutation killed and
+restored.

@@ -73,7 +73,9 @@ Why no Prometheus exporter: the deployment target is a single scale-to-zero proc
 | Is checkpoint lifecycle metadata sane? | `nexus checkpoints inspect [--json]` | lifecycle index (read-only, access timestamps untouched) |
 | Is anything drifting? | `nexus checkpoints reconcile` (dry-run) then `--apply` | reconciler + policies |
 | Is the schema at head? | `nexus migrate` (idempotent) / CI `migrate-postgres` job | Alembic |
-| Did the project state change? | `nexus continuum` | `.nexus/continuum.json` |
+| Did the project state change? | `nexus continuum verify` (exit 1 on any finding) | `.nexus/continuum.json` |
+| Do the packs meet the 95% coverage contract? | `python scripts/pack_coverage.py --json-out …` / CI `continuum-evidence` artifact | `nexus.pack-coverage/2` |
+| Does the evidence system still defend itself? | `python scripts/continuum_gate.py` + `python scripts/continuum_mutations.py` | `nexus.continuum-gate/1`, `nexus.continuum-mutations/1` |
 | Are packs coherent? | `nexus packs list|verify <id>` | manifests + runtime registry |
 | What metrics exist right now? | `nexus metrics snapshot --json` | in-process registry |
 

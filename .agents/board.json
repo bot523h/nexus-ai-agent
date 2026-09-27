@@ -81,12 +81,18 @@
         "scripts/continuum_mutations.py",
         "scripts/pack_coverage.py",
         "src/nexus_ai_agent/continuum/",
+        "tests/unit/test_ci_continuum_evidence.py",
         "tests/unit/test_continuum_gate.py",
         "tests/unit/test_continuum_hardening.py",
+        "tests/unit/test_continuum_mutations.py",
+        "tests/unit/test_continuum_provenance.py",
         "tests/unit/test_continuum_snapshot.py",
-        "tests/unit/test_pack_coverage_harness.py"
+        "tests/unit/test_continuum_snapshot_contract.py",
+        "tests/unit/test_pack_coverage_contract.py",
+        "tests/unit/test_pack_coverage_harness.py",
+        "tests/unit/test_slideshow_invariants.py"
       ],
-      "note": "Zone declaration was missing when task-184 was claimed (board schema tests test_active_claims_carry_owner_timestamp_and_zone / test_exclusive_paths_belong_to_a_declared_zone were RED on the branch tip 49ae131). Declared verbatim from that claim's exclusive_paths by arena/01a0df05-nexus-ai-agent (task-185) — additive repair only, the claim itself was not modified. | 2026-09-27 arena/01a0e1e0 (task-184 continuation): zone extended to the snapshot test, the committed snapshot, the coverage/continuum CLIs and the replayable mutation campaign."
+      "note": "Zone declaration was missing when task-184 was claimed (board schema tests test_active_claims_carry_owner_timestamp_and_zone / test_exclusive_paths_belong_to_a_declared_zone were RED on the branch tip 49ae131). Declared verbatim from that claim's exclusive_paths by arena/01a0df05-nexus-ai-agent (task-185) — additive repair only, the claim itself was not modified. | 2026-09-27 arena/01a0e1e0 (task-184 continuation): zone extended to the snapshot test, the committed snapshot, the coverage/continuum CLIs and the replayable mutation campaign. | 2026-09-27 arena/01a0e1e0: zone extended to the six new contract-test modules (coverage contract, snapshot contract, provenance, mutation campaign, CI-job guard, slideshow invariants)."
     },
     {
       "id": "coordination",
@@ -2444,10 +2450,16 @@
         "scripts/continuum_mutations.py",
         "scripts/pack_coverage.py",
         "src/nexus_ai_agent/continuum/",
+        "tests/unit/test_ci_continuum_evidence.py",
         "tests/unit/test_continuum_gate.py",
         "tests/unit/test_continuum_hardening.py",
+        "tests/unit/test_continuum_mutations.py",
+        "tests/unit/test_continuum_provenance.py",
         "tests/unit/test_continuum_snapshot.py",
-        "tests/unit/test_pack_coverage_harness.py"
+        "tests/unit/test_continuum_snapshot_contract.py",
+        "tests/unit/test_pack_coverage_contract.py",
+        "tests/unit/test_pack_coverage_harness.py",
+        "tests/unit/test_slideshow_invariants.py"
       ],
       "acceptance_criteria": [
         "Consumer graph from producer through serializer/reader/validator/gate/decision is enumerated from live code.",
@@ -2460,7 +2472,7 @@
         "Targeted negative tests and mutation RED-to-GREEN restoration for every confirmed consumer defect.",
         "Two-run reproducibility comparison and exact PR #95/head/main/CI evidence."
       ],
-      "note": "Audit result: two P1 snapshot false-greens were reproduced in isolated Git fixtures and fixed through e924a65: a valid snapshot survived an uncommitted source edit, and a clean later commit could reuse it after src/tests/scripts/migration/dependency drift. Regressions cover clean control, dirty/stale rejection, empty revision rejection, and unavailable git-status fail-closed behaviour in tests/unit/test_continuum_hardening.py. P2 integration gap remains: CoverageReport JSON has no downstream reader and CI/release-lineage invokes neither pack coverage nor snapshot verification; task-154 remains queued rather than claiming a release gate it does not implement. Current committed snapshot correctly blocks CLI verification (unreachable recorded SHA and test-count drift). No non-Continuum domain edits without a proven direct false-evidence consumer.",
+      "note": "Audit result: two P1 snapshot false-greens were reproduced in isolated Git fixtures and fixed through e924a65: a valid snapshot survived an uncommitted source edit, and a clean later commit could reuse it after src/tests/scripts/migration/dependency drift. Regressions cover clean control, dirty/stale rejection, empty revision rejection, and unavailable git-status fail-closed behaviour in tests/unit/test_continuum_hardening.py. P2 integration gap remains: CoverageReport JSON has no downstream reader and CI/release-lineage invokes neither pack coverage nor snapshot verification; task-154 remains queued rather than claiming a release gate it does not implement. Current committed snapshot correctly blocks CLI verification (unreachable recorded SHA and test-count drift). No non-Continuum domain edits without a proven direct false-evidence consumer. | 2026-09-27 arena/01a0e1e0 continuation (supersedes PR #95/#98): the P2 gap is closed — pack coverage is a canonical 95%-per-pack gate (D-0023, option A), the snapshot verifier fails closed on a 27-attack executable threat model (scripts/continuum_gate.py), a 73-mutation replayable campaign (scripts/continuum_mutations.py) fails on any survivor, and the CI job continuum-evidence runs all three on 3.10/3.11/3.12 against the exact SHA. HISTORICAL EVIDENCE LOST — CONTENT RECONSTRUCTED: the first local lineage (c44bf2c…7bda42c) was never pushed and was lost in a sandbox re-provisioning; its surviving working tree (tree ddc76334) was reconstructed on top of 48db056 and every piece of evidence was regenerated on the new lineage — see docs/audits/CONTINUUM_CLOSURE_2026-09-27.md for the exact SHAs, local runs and CI run IDs.",
       "previous_agent_branch": "arena/01a0df05-nexus-ai-agent"
     },
     {

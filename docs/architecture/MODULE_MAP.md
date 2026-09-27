@@ -36,7 +36,7 @@ Dependencies point **downward**. A lower layer may never import a higher one, an
 | `core/` | L3 | SSRF guard, resilient HTTP client, async DB helper, instrumentation decorator | `SafeAsyncTransport`, `ResilientHttpClient`, `AsyncDB` |
 | `application/` | L3 | use-case composition with no framework imports | `get_image_gen_provider` |
 | `infrastructure/observability/` | L3 | metrics registry, structured lifecycle events, redaction | `MetricsRegistry`, `log_lifecycle_event`, `redact` |
-| `continuum/`, `maintenance/`, `integrations/` | L3 | project-state snapshot, housekeeping/backup, external integrations | `snapshot`, `housekeeping` |
+| `continuum/`, `maintenance/`, `integrations/` | L3 | project-state snapshot + evidence contracts (pack coverage, provenance, threat-model gate, mutation campaign), housekeeping/backup, external integrations | `snapshot`, `pack_coverage`, `provenance`, `gate`, `mutations`, `housekeeping` |
 | `storage/` | L4 | SQLModel tables, Alembic bootstrap, checkpoint adapters, lifecycle store, reconciler, R2 | `get_session`, `get_checkpointer`, `CheckpointReconciler` |
 | `adapters/` | L4 | port implementations: in-process job queue, Whisper caption engine, LangGraph lifecycle hooks | `InProcessJobQueue`, `WhisperLocalCaptionEngine` |
 | `llm/` | L4 | provider chain (litellm router), local llama.cpp server provider, fake provider for tests | `build_router`, `LocalServerProvider`, `FakeLLMProvider` |
