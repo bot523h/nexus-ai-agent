@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T16:47:56Z",
+  "updated_at": "2026-09-27T17:23:42Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -668,12 +668,18 @@
         "src/nexus_ai_agent/bot/handlers.py",
         "src/nexus_ai_agent/bot/feature_handlers.py",
         "src/nexus_ai_agent/bot/knowledge_handlers.py",
+        "src/nexus_ai_agent/bot/agent_handlers.py",
         "src/nexus_ai_agent/agents/store/agent_manager.py",
         "src/nexus_ai_agent/llm/gemini_provider.py",
         "src/nexus_ai_agent/storage/db.py",
         "tests/unit/test_runtime_composition.py",
         "tests/architecture/test_constructor_ownership.py"
       ]
+    },
+    {
+      "id": "roadmap-backlog",
+      "description": "Post-W1 golden-mission roadmap: proposed next-work items queued by task-196 (W1). No exclusive paths until an item is activated by an owner with LIVE TRUTH + ownership checks.",
+      "paths": []
     }
   ],
   "claims": [
@@ -2765,6 +2771,7 @@
         "src/nexus_ai_agent/bot/handlers.py",
         "src/nexus_ai_agent/bot/feature_handlers.py",
         "src/nexus_ai_agent/bot/knowledge_handlers.py",
+        "src/nexus_ai_agent/bot/agent_handlers.py",
         "src/nexus_ai_agent/agents/store/agent_manager.py",
         "src/nexus_ai_agent/llm/gemini_provider.py",
         "src/nexus_ai_agent/storage/db.py",
@@ -2804,6 +2811,226 @@
         }
       },
       "note": "Sequenced per the golden-mission wave order: PR #109 (task-195-salvage) merges first, then W1 code follows on this branch. Claim registered immediately per board protocol."
+    },
+    {
+      "task": "task-197-w2-typed-llm-gateway",
+      "title": "W2 policy-owned typed LLM gateway (typed request contract; every model call exactly one policy decision)",
+      "title_fa": "",
+      "zone": "roadmap-backlog",
+      "priority": "P1",
+      "status": "available",
+      "scope": "Per golden mission W2: typed request payload (request_id, actor/tenant, purpose, data classification, consent/policy result, model policy, timeout, cancellation, correlation id, idempotency key) on top of the W1 runtime owner; provider selection/rate/retry/cost/privacy/timeout/cancellation/fallback via policy; negative tests for policy bypass; untyped model output may never execute effectful operations.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Typed request contract enforced for 100% of model calls; policy-bypass negative tests; untyped output cannot execute effectful operations."
+      ],
+      "evidence_required": [],
+      "exclusive_paths": [],
+      "owner_hint": "unassigned — activate any item only after LIVE TRUTH + board check on the exact paths you will touch",
+      "agent_branch": null,
+      "claimed_at": "2026-09-27T17:23:42Z",
+      "ttl_hours": 0,
+      "gates_owner": false,
+      "proposed_by": "arena/01a0e356-nexus-ai-agent (task-196 close-out)"
+    },
+    {
+      "task": "task-198-conversationstore-pg-backend",
+      "title": "ConversationStore on PostgreSQL when canonical backend is Postgres",
+      "title_fa": "",
+      "zone": "roadmap-backlog",
+      "priority": "P1",
+      "status": "available",
+      "scope": "W1 residual: store stays SQLite at settings.db_path even under NEXUS_DATABASE_URL. Migrate to the canonical engine with Alembic, digest-verified migration tests, rollback story, and constructor ratchet update (store gains close()); kills the private _engine.dispose() seam in runtime.aclose.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Store follows canonical backend incl. Postgres; Alembic migration + digest-verified tests + rollback; constructor ratchet updated."
+      ],
+      "evidence_required": [],
+      "exclusive_paths": [],
+      "owner_hint": "unassigned — activate any item only after LIVE TRUTH + board check on the exact paths you will touch",
+      "agent_branch": null,
+      "claimed_at": "2026-09-27T17:23:42Z",
+      "ttl_hours": 0,
+      "gates_owner": false,
+      "proposed_by": "arena/01a0e356-nexus-ai-agent (task-196 close-out)"
+    },
+    {
+      "task": "task-199-conversationstore-close-api",
+      "title": "ConversationStore public close() API (retire runtime's private _engine.dispose())",
+      "title_fa": "",
+      "zone": "roadmap-backlog",
+      "priority": "P1",
+      "status": "available",
+      "scope": "Add an idempotent public close(); runtime.aclose calls it; negative test that closed store rejects writes; update constructor ratchet docs.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Public idempotent close(); closed store rejects writes (negative test); runtime seam updated; ratchet docs updated."
+      ],
+      "evidence_required": [],
+      "exclusive_paths": [],
+      "owner_hint": "unassigned — activate any item only after LIVE TRUTH + board check on the exact paths you will touch",
+      "agent_branch": null,
+      "claimed_at": "2026-09-27T17:23:42Z",
+      "ttl_hours": 0,
+      "gates_owner": false,
+      "proposed_by": "arena/01a0e356-nexus-ai-agent (task-196 close-out)"
+    },
+    {
+      "task": "task-200-w3-memory-trust-boundary",
+      "title": "W3 memory trust boundary: thread checkpoint vs durable facts vs retrieval corpus",
+      "title_fa": "",
+      "zone": "roadmap-backlog",
+      "priority": "P1",
+      "status": "available",
+      "scope": "Per golden mission W3: full memory record metadata (identity, tenant, source, actor, timestamps, confidence, consent, retention/TTL, deletion state, content hash, lineage); retrieved text never implicit authority; memory cannot grant capability/access/approval/tool execution; adversarial prompt-injection-in-memory tests.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Full record metadata; retrieved text has no implicit authority; memory grants no capability/approval/tool execution; adversarial injection-in-memory tests."
+      ],
+      "evidence_required": [],
+      "exclusive_paths": [],
+      "owner_hint": "unassigned — activate any item only after LIVE TRUTH + board check on the exact paths you will touch",
+      "agent_branch": null,
+      "claimed_at": "2026-09-27T17:23:42Z",
+      "ttl_hours": 0,
+      "gates_owner": false,
+      "proposed_by": "arena/01a0e356-nexus-ai-agent (task-196 close-out)"
+    },
+    {
+      "task": "task-201-w4-typed-planner",
+      "title": "W4 typed planner (replace substring-triggered execution parameters)",
+      "title_fa": "",
+      "zone": "roadmap-backlog",
+      "priority": "P1",
+      "status": "available",
+      "scope": "Per golden mission W4: typed command/coordinated execution with schema validity, capability authority, dependency graph, cycle safety, pre/post conditions, execution evidence; keep LLM->Candidate Plan->Typed Command->Capability Authority->CommandBus->Execution->Verification->Evidence chain; negative tests for direct handler bypass around CommandBus.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Typed commands with schema+capability+dependency+cycle validation; no substring-driven effectful execution; CommandBus bypass negative tests."
+      ],
+      "evidence_required": [],
+      "exclusive_paths": [],
+      "owner_hint": "unassigned — activate any item only after LIVE TRUTH + board check on the exact paths you will touch",
+      "agent_branch": null,
+      "claimed_at": "2026-09-27T17:23:42Z",
+      "ttl_hours": 0,
+      "gates_owner": false,
+      "proposed_by": "arena/01a0e356-nexus-ai-agent (task-196 close-out)"
+    },
+    {
+      "task": "task-202-w5-postgres-job-semantics",
+      "title": "W5 durable PostgreSQL job semantics (lease/fencing/outbox/inbox/idempotency)",
+      "title_fa": "",
+      "zone": "roadmap-backlog",
+      "priority": "P1",
+      "status": "available",
+      "scope": "Per golden mission W5: multi-worker competition, lease expiry, fencing tokens, stale-result rejection, duplicate delivery, crash/restart recovery, webhook duplicate, outbox/inbox integration idempotency — all behaviorally proven without adding a broker.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Two-worker lease/fencing/stale/duplicate/crash-restart/webhook/outbox-inbox/idempotency behaviors proven test-first on local Postgres, no broker added."
+      ],
+      "evidence_required": [],
+      "exclusive_paths": [],
+      "owner_hint": "unassigned — activate any item only after LIVE TRUTH + board check on the exact paths you will touch",
+      "agent_branch": null,
+      "claimed_at": "2026-09-27T17:23:42Z",
+      "ttl_hours": 0,
+      "gates_owner": false,
+      "proposed_by": "arena/01a0e356-nexus-ai-agent (task-196 close-out)"
+    },
+    {
+      "task": "task-203-shrink-legacy-llm-seams",
+      "title": "Shrink the ratchet-pinned legacy LLM seams (provider fallback, handlers self-construction)",
+      "title_fa": "",
+      "zone": "roadmap-backlog",
+      "priority": "P1",
+      "status": "available",
+      "scope": "Legacy seams currently warn-log: llm/gemini_provider.py fallback, bot/handlers.py self-construction, base_agent/ai_memory fallbacks, knowledge_manager fallback. Route every production caller through the runtime, then delete the fallback code so the AST ratchet's ALLOWED_SITES shrink to the factory only.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Every production LLM caller goes through the runtime; legacy fallback code deleted; ALLOWED_SITES contains only the factory."
+      ],
+      "evidence_required": [],
+      "exclusive_paths": [],
+      "owner_hint": "unassigned — activate any item only after LIVE TRUTH + board check on the exact paths you will touch",
+      "agent_branch": null,
+      "claimed_at": "2026-09-27T17:23:42Z",
+      "ttl_hours": 0,
+      "gates_owner": false,
+      "proposed_by": "arena/01a0e356-nexus-ai-agent (task-196 close-out)"
+    },
+    {
+      "task": "task-204-shared-feature-engines-ownership",
+      "title": "Decide ownership for ImageGen/Speech/UnifiedCloud engines",
+      "title_fa": "",
+      "zone": "roadmap-backlog",
+      "priority": "P1",
+      "status": "available",
+      "scope": "W1 residual: build_handlers constructs ImageGenEngine/SpeechEngine/UnifiedCloudStorage per build; decide whether they join the runtime owner or are documented as per-construction stateless adapters; add AST pinning either way.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Each engine classified runtime-owned vs stateless-adapter; AST pinning covers both classes; constructor ownership unchanged for shared ones."
+      ],
+      "evidence_required": [],
+      "exclusive_paths": [],
+      "owner_hint": "unassigned — activate any item only after LIVE TRUTH + board check on the exact paths you will touch",
+      "agent_branch": null,
+      "claimed_at": "2026-09-27T17:23:42Z",
+      "ttl_hours": 0,
+      "gates_owner": false,
+      "proposed_by": "arena/01a0e356-nexus-ai-agent (task-196 close-out)"
+    },
+    {
+      "task": "task-205-w6-backup-restore-drill",
+      "title": "W6 backup/restore proof for DB + R2 (digest, independent verify, drill, exact SHA)",
+      "title_fa": "",
+      "zone": "roadmap-backlog",
+      "priority": "P1",
+      "status": "available",
+      "scope": "Per golden mission W6: production recovery cannot be claimed until a backup + independent-restore drill with digest verification lands on a local PostgreSQL and object storage; include pre-restore backup requirement and rollback story.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Backup + digest + independent-restore drill proven on local Postgres and object storage at run-of-record SHAs; pre-restore backup step; rollback documented."
+      ],
+      "evidence_required": [],
+      "exclusive_paths": [],
+      "owner_hint": "unassigned — activate any item only after LIVE TRUTH + board check on the exact paths you will touch",
+      "agent_branch": null,
+      "claimed_at": "2026-09-27T17:23:42Z",
+      "ttl_hours": 0,
+      "gates_owner": false,
+      "proposed_by": "arena/01a0e356-nexus-ai-agent (task-196 close-out)"
+    },
+    {
+      "task": "task-206-w7-code-executor-containment",
+      "title": "W7 code executor containment policy (if arbitrary code is allowed)",
+      "title_fa": "",
+      "zone": "roadmap-backlog",
+      "priority": "P1",
+      "status": "available",
+      "scope": "Per golden mission W7: container/egress/filesystem isolation, child-process/symlink/file-descriptor policies + adversarial escape tests that must reproduce independently; prefer typed capability tools over generic shell (W8 Nagar boundary untouched).",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Containment/egress/filesystem/child-process/symlink/descriptor policies; adversarial escape tests reproduce independently; typed capabilities preferred over shell."
+      ],
+      "evidence_required": [],
+      "exclusive_paths": [],
+      "owner_hint": "unassigned — activate any item only after LIVE TRUTH + board check on the exact paths you will touch",
+      "agent_branch": null,
+      "claimed_at": "2026-09-27T17:23:42Z",
+      "ttl_hours": 0,
+      "gates_owner": false,
+      "proposed_by": "arena/01a0e356-nexus-ai-agent (task-196 close-out)"
     }
   ],
   "deferred_log": [

@@ -340,7 +340,14 @@ async def get_session(db_path: str | None = None) -> AsyncIterator[AsyncSession]
             async with factory() as session:
                 yield session
             return
-        db_path = "data/app.sqlite"
+        # W1 (task-196): the no-argument fallback follows the canonical
+        # database decision — ``settings.db_path`` (customisable through
+        # NEXUS_DB_PATH) — instead of a hardcoded literal.  The settings
+        # field default is the historical "data/app.sqlite", so the default
+        # behaviour is unchanged while configuration is finally honoured.
+        from nexus_ai_agent.config.settings import get_settings
+
+        db_path = get_settings().db_path
 
     await create_all_tables(db_path)
     if _session_factory is None:

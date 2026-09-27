@@ -214,3 +214,41 @@ There is no database migration or persisted queue format to roll back. Reverting
 3. Everything in report §3/§7 still stands: process-local only, no app-wide shutdown wiring, no single gateway, no remote-cancellation guarantee, strict-priority starvation, GIL-sized fairness window, and no production/durability claim. The mutation harness is still not a CI gate (`.github/` ownership respected).
 4. `MODULE_MAP.md` remains deferred to the docs owners, exactly as the original claim scoped itself.
 5. Defect class #2 note: the 3.10 timeout-class-split fix is verified by faithful simulation on 3.11 plus the CI 3.10 leg — there is still no local 3.10 interpreter run in this sandbox. Everything else in §9.4's list stands, and the "out-of-contract direct worker cancel racing provider completion" residual is unchanged.
+
+---
+
+## §10 — W1: Canonical Runtime Composition (task-196, waves after task-195 ship)
+
+**WAVE STATUS: PROOF COMPLETE locally; awaiting exact-head CI + merged-main proof.**
+
+### A — WHAT CHANGED
+- NEW `src/nexus_ai_agent/application/runtime.py`: `DatabaseIdentity`, `resolve_database_identity()` (one canonical backend decision: `NEXUS_DATABASE_URL` → Postgres, else `settings.db_path` → SQLite, with auditable `source` and credential-free `describe()`), `RuntimeContext` (settings + db + request_queue + conversation_store + gemini_engine + llm_provider + summarizer_engine + late-bound job_queue), `aclose()` (ordered, idempotent, per-component guarded: request_queue → job_queue → store engine dispose), and `build_runtime()` — the ONLY approved factory for these components.
+- `storage/db.py:get_session(None)`: the no-argument fallback now follows `settings.db_path` (NEXUS_DB_PATH) instead of a hardcoded literal `"data/app.sqlite"`. Default behavior unchanged (field default IS `"data/app.sqlite"`).
+- `llm/gemini_provider.py`: optional `engine=` seam — approved path wraps the runtime's shared engine; the legacy no-engine fallback is preserved but now emits `gemini_provider_legacy_engine_fallback` (structured warning) so production split-brains are detectable.
+- `bot/handlers.py`: `build_handlers()` accepts `llm_engine=`/`summarizer_engine=`/`llm_provider=`; when absent it keeps legacy self-construction but warns (`handlers_legacy_llm_self_construction`). The free-text agent flow now passes the shared provider to `AgentManager.get_active()`.
+- `bot/app.py`: builds the runtime, reuses its components for `engines`/`bot_data` (plus `llm_provider`, `runtime`), late-binds `runtime.job_queue`, wires `post_shutdown` through the new module-level `make_post_shutdown()`, and hands the shared engine/summarizer/provider to `build_handlers()`. Three internal engines sites in `_init_v2_engines` were deleted (ratchet now forbids them).
+- `bot/feature_handlers.py`: `build_feature_engines(..., llm_provider=)` forwards into `AIMemoryEngine(gemini_provider=…)` — no more per-start queue-less provider there.
+- `bot/knowledge_handlers.py`: resolves `llm_provider` from `bot_data` (defensive `getattr` chain) and injects it into `KnowledgeManager` at all three command sites — WITHOUT touching the knowledge/ zone, which is under an active claim by `arena/01a0df05`.
+- `agents/store/agent_manager.py`: `get_active(user_id, gemini_provider=None)` forwards the provider into agent construction.
+- Governance: `runtime-composition-w1` zone claim (overlap_ack for stale PRs plus takeover_log), 10 new available roadmap items (task-197..206: W2..W7 + residuals), tests `tests/unit/test_runtime_composition.py` (15 contract tests) + `tests/architecture/test_constructor_ownership.py` (AST ratchet pinning ALL `GeminiEngine`/`GeminiProvider`/`ConversationStore`/`GeminiRequestQueue`/`SummarizerEngine` construction sites).
+
+### B — WHY
+Phase-0 forensics + the merged execution plan showed production split-brains: app.py and handlers.py each built their own GeminiEngine + SummarizerEngine; AIMemoryEngine/agents/knowledge handlers spawned queue-less private providers; `get_session(None)` silently ignored configuration; and shutdown closed only reminders (queue/waiters/jobs/DB leaked past application lifetime). W1's owner + ratchet make the drift mechanically detectable instead of convention-based.
+
+### C — PROOF
+- Baseline on pre-W1 tree: the 15 contract tests + AST ratchet RED (the default-path regression guard GREEN by design); 16/16 GREEN after implementation.
+- Full non-slow suite: **2930 passed, 30 skipped** (was 2914 + 16 new). ruff check + format: clean (440 files). mypy: clean (248 files).
+- Mutation/transplant probes (all killed): M1 `aclose` skips `request_queue.close()` ⇒ 3 shutdown tests RED; M2 `build_handlers` ignores the injected engine ⇒ identity test RED; M3 db fallback reverts to literal ⇒ db-identity tests RED. **Lesion recorded:** the first in-place sed transplant was "undone" by restoring the file within the same second — CPython's (mtime, size)-keyed stale pyc kept executing the MUTANT after restore; probes now clear `__pycache__` (and `-p no:cacheprovider` pytest cache) between mutations. Trust requirement: any future transplant campaign MUST invalidate bytecode caches or the evidence is void.
+- Gateway identity is proven by object-identity assertions (`provider.engine is runtime.gemini_engine`, `engine._queue is runtime.request_queue`), a zero-construction spy while building every Telegram handler, and closure-level inspection that command callbacks reference the runtime's engine — not type checks.
+- Shutdown ownership is proven behaviorally: a stalled in-flight waiter is settled by `aclose()` (RequestQueueClosedError), the close order is observed (`request_queue` before `job_queue`), idempotency holds, and the post_shutdown hook PTB actually calls is invoked and observed closing the queue — plus a structural guard that the builder wires `post_shutdown` through `make_post_shutdown`.
+
+### D — LIMITS (honest residuals)
+- `ConversationStore` remains SQLite-at-settings.db_path even on Postgres deployments (historical behavior preserved; task-198). Its engine is released via a private-attribute seam in `aclose()` until a public `close()` lands (task-199).
+- Legacy construction seams remain (ratchet-pinned, warn-logged): provider no-engine fallback, handlers self-construction, `base_agent`/`ai_memory` fallbacks, and `knowledge_manager`'s internal fallback whose file is zoned to another agent (task-203 shrink work).
+- `ImageGenEngine`/`SpeechEngine`/`UnifiedCloudStorage` are still constructed inside `build_handlers` (task-204 decides ownership and pins either way).
+- `bot/agent_handlers.py:myagent_cmd` (display-only) intentionally does not receive a provider — no LLM call happens there.
+- W2 typed/policy gateway arrives as task-197; W1 fixed ownership, not policy payloads.
+- No production readiness is claimed.
+
+### E — NEXT MOVE
+Merge W1 behind task-195 after exact-head CI (must include python-parity 3.10), then start task-197 (W2 typed LLM gateway) on fresh main — design chosen only after re-verifying live truth at that time.
