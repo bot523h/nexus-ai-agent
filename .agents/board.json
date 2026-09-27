@@ -666,9 +666,8 @@
         "src/nexus_ai_agent/cockpit/",
         "tests/unit/test_cockpit.py",
         "tests/architecture/test_cockpit_boundary.py",
-        "tests/browser/cockpit.spec.mjs",
-        "scripts/test_cockpit_browser.mjs",
-        "MANIFEST.in"
+        "MANIFEST.in",
+        "scripts/test_cockpit_browser.py"
       ]
     }
   ],
@@ -2746,9 +2745,8 @@
         "src/nexus_ai_agent/cockpit/",
         "tests/unit/test_cockpit.py",
         "tests/architecture/test_cockpit_boundary.py",
-        "tests/browser/cockpit.spec.mjs",
-        "scripts/test_cockpit_browser.mjs",
-        "MANIFEST.in"
+        "MANIFEST.in",
+        "scripts/test_cockpit_browser.py"
       ],
       "acceptance_criteria": [
         "All counts, operation schemas, pack provenance and pending status derive from the existing PackRuntime/CapabilityRegistry; registration, activation, input validation and execution evidence remain distinct.",
