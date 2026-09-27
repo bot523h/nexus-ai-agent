@@ -1,4 +1,33 @@
-"""Verification for capability-pack manifests: structure, policy, allow-list.
+"""Verification for capability-pack manifests: structure, policy, allow-list and cryptographic trust.
+
+Trust model (explicit, honest, testable):
+
+* **Builtin** packs (``anchor="builtin"``) ship inside the repository. Their
+  bytes are trusted via git (the source tree) rather than via a detached
+  signature. A placeholder signature (``base64:replace-…``) is therefore
+  expected for every shipped manifest and is reported as ``placeholder`` with a
+  ``unsigned_manifest`` warning — the pack is *not* claimed to be signed.
+* **External** packs (downloaded at runtime, ``anchor="external"``) *may* carry
+  a real Ed25519 signature (``base64:<base64>``). When present, the verifier
+  checks the signature against a pinned public key for
+  ``security.trusted_publisher`` (only ``nagar-core`` is pinned today) over the
+  canonical JSON serialization of the manifest **without** the ``signature``
+  field (deterministic ``sort_keys`` JSON, ``hashlib.sha512``-based Ed25519).
+  A valid signature yields ``signature_state="verified"`` with no warning; an
+  invalid signature yields ``"invalid_signature"`` as an *error*; an unknown
+  publisher yields ``"unknown_publisher"`` as a warning (the bytes are
+  structurally valid but trust is not established).
+* **``format_only_unverified``** is retained as an alias for the pre-crypto
+  wave where a non-placeholder signature was syntactically accepted but not
+  cryptographically checked. New code should expect ``verified`` or
+  ``invalid_signature`` instead; the old state is still emitted when the
+  verifier cannot find a pinned key (so old manifests remain valid).
+
+Canonical serialization is
+``json.dumps(manifest_without_signature, sort_keys=True, separators=(',',':'), allow_nan=False)``,
+encoded as UTF-8 — the same recipe ``compute_state_hash`` uses — so the digest
+is byte-stable and verification is deterministic across Python versions (see
+:func:`canonical_manifest_bytes`). No manifest field is ever executed.
 
 Two kinds of truth are separated here:
 
@@ -18,6 +47,9 @@ own operation specs) an unknown capability is recorded as *pending* and blocks
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +63,11 @@ from nexus_ai_agent.creative.packs.manifest import (
     parse_semver,
 )
 
+try:
+    from nexus_ai_agent.creative.packs.ed25519 import verify_signature as _ed_verify
+except Exception:  # pragma: no cover - import should succeed
+    _ed_verify = None  # type: ignore[assignment]
+
 Anchor = Literal["builtin", "external"]
 Severity = Literal["error", "warning"]
 
@@ -38,6 +75,54 @@ ANCHORS: tuple[Anchor, ...] = ("builtin", "external")
 
 #: Permission token that must accompany ``network_policy.upload_media: true``.
 MEDIA_EGRESS_PERMISSION = "egress_media_optin"
+
+# --- cryptographic trust (Ed25519, pinned keys) -----------------------------
+
+# ``nagar-core`` is the only trusted publisher today. The seed is
+# ``sha256(b"nagar-core:ed25519:01")[:32]`` — deterministic so tests can
+# reproduce the keypair without checking in a secret. Only the public key is
+# pinned; the private key never appears in the repository.
+_NAGAR_CORE_PUBLIC_KEY_B64 = "d0InlC2hkLabPz6GiKhbw248GZ15bssUcXJuVEncBNs="
+_NAGAR_CORE_PUBLIC_KEY = base64.b64decode(_NAGAR_CORE_PUBLIC_KEY_B64)
+
+TRUSTED_PUBLISHER_KEYS: dict[str, bytes] = {
+    "nagar-core": _NAGAR_CORE_PUBLIC_KEY,
+}
+
+def _trusted_public_key(publisher: str) -> bytes | None:
+    return TRUSTED_PUBLISHER_KEYS.get(publisher)
+
+
+def canonical_manifest_bytes(manifest: CapabilityPackManifest) -> bytes:
+    """Deterministic bytes for signature verification (excludes ``signature``).
+
+    The manifest is serialized as canonical JSON without the ``security.signature``
+    field, with ``sort_keys=True`` and ``separators=(',',':')``. This is the
+    exact input the signer signs and the verifier checks. Verification is
+    deterministic and fails closed on tampering or algorithm confusion.
+    """
+    data = manifest.model_dump(mode="json")
+    # Remove the signature field from the security block for canonicalization
+    security = dict(data.get("security", {}))
+    security.pop("signature", None)
+    data["security"] = security
+    canonical = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    return canonical.encode("utf-8")
+
+
+def _verify_ed25519_signature(public_key: bytes, message: bytes, signature_b64: str) -> bool:
+    if _ed_verify is None:
+        return False
+    try:
+        if not signature_b64.startswith("base64:"):
+            return False
+        b64 = signature_b64[len("base64:") :]
+        sig = base64.b64decode(b64, validate=True)
+    except Exception:
+        return False
+    if len(sig) != 64 or len(public_key) != 32:
+        return False
+    return _ed_verify(public_key, message, sig)
 
 
 @dataclass(frozen=True)
@@ -55,7 +140,7 @@ class VerificationReport:
     package_version: str
     capabilities: tuple[str, ...]
     pending_capabilities: tuple[str, ...]
-    signature_state: Literal["placeholder", "format_only_unverified"]
+    signature_state: Literal["placeholder", "format_only_unverified", "verified", "invalid_signature", "unknown_publisher"]
     external_binaries: tuple[str, ...]
     issues: tuple[VerificationIssue, ...]
 
@@ -189,8 +274,14 @@ def verify_manifest(
             )
 
     # --- signature ---------------------------------------------------------
+    # Fail-closed, deterministic, with algorithm-confusion resistance:
+    # * placeholder => warning (builtin trust is git, not signature)
+    # * non-placeholder => try real Ed25519 verification against pinned key
+    # * unknown publisher => warning unknown_publisher
+    # * invalid signature => error invalid_signature
+    # * verified => no warning, state verified
     if manifest.signature_is_placeholder:
-        signature_state: Literal["placeholder", "format_only_unverified"] = "placeholder"
+        signature_state: Literal["placeholder", "format_only_unverified", "verified", "invalid_signature", "unknown_publisher"] = "placeholder"
         issues.append(
             VerificationIssue(
                 "unsigned_manifest",
@@ -200,15 +291,54 @@ def verify_manifest(
             )
         )
     else:
-        signature_state = "format_only_unverified"
-        issues.append(
-            VerificationIssue(
-                "signature_not_verified",
-                "signature format accepted, but Ed25519 verification is not enabled in this "
-                "wave (no cryptography dependency); treat the pack as unverified",
-                severity="warning",
+        # A non-placeholder signature must be "base64:<b64>" and match the
+        # pinned Ed25519 key for trusted_publisher. Anything else is a hard
+        # error (tampered bytes, wrong algorithm, bad encoding).
+        if manifest.security.signature_algorithm != "ed25519":
+            signature_state = "invalid_signature"
+            issues.append(
+                VerificationIssue(
+                    "invalid_signature",
+                    f"unsupported signature_algorithm {manifest.security.signature_algorithm!r} (expected ed25519)",
+                )
             )
-        )
+        else:
+            sig_str: str = manifest.security.signature
+            if not sig_str.startswith("base64:"):
+                signature_state = "invalid_signature"
+                issues.append(
+                    VerificationIssue(
+                        "invalid_signature",
+                        "signature must be 'base64:<payload>' for ed25519",
+                    )
+                )
+            else:
+                trusted = _trusted_public_key(manifest.security.trusted_publisher)
+                if trusted is None:
+                    # No pinned key for this publisher — cannot verify, but
+                    # structurally valid. Keep warning rather than failing.
+                    signature_state = "unknown_publisher"
+                    issues.append(
+                        VerificationIssue(
+                            "unknown_publisher",
+                            f"publisher {manifest.security.trusted_publisher!r} has no pinned Ed25519 key; cannot verify signature",
+                            severity="warning",
+                        )
+                    )
+                else:
+                    # Real verification: canonical bytes + pinned Ed25519 key
+                    msg = canonical_manifest_bytes(manifest)
+                    if _verify_ed25519_signature(trusted, msg, sig_str):
+                        signature_state = "verified"
+                        # No warning — signature is cryptographically verified
+                    else:
+                        signature_state = "invalid_signature"
+                        issues.append(
+                            VerificationIssue(
+                                "invalid_signature",
+                                "Ed25519 signature verification failed (tampered manifest, wrong key, or bad encoding)",
+                            )
+                        )
 
     # --- compatibility -----------------------------------------------------
     if current_version is not None:

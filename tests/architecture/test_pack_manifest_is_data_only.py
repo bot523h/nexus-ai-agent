@@ -132,10 +132,14 @@ def test_pack_substrate_imports_stay_in_the_allowlist() -> None:
     assert files, "expected the pack substrate to exist"
     for path in files:
         imports = _top_level_imports(path)
-        # signing.py is a security seam — allow os/nacl/hmac/base64 there
-        allow = ALLOWED_TOP_LEVEL | (
-            {"os", "base64", "hmac", "nacl", "hashlib"} if path.name == "signing.py" else set()
-        )
+        # signing/verify/ed25519 are security seams — allow base64/hmac there
+        # (manifest crypto, key handling). hashlib is already global, but we
+        # keep the explicit allow for clarity. The forbidden set still excludes
+        # os for non-signing files.
+        if path.name in ("signing.py", "verify.py", "ed25519.py"):
+            allow = ALLOWED_TOP_LEVEL | {"os", "base64", "hmac", "nacl", "hashlib"}
+        else:
+            allow = ALLOWED_TOP_LEVEL
         # The forbidden set still applies, but signing's os use is env-only
         # (key loading), not code execution — we allow it.
         forbidden_for_path = FORBIDDEN_TOP_LEVEL - ({"os"} if path.name == "signing.py" else set())

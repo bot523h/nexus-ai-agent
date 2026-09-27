@@ -34,11 +34,14 @@ canonical Gate 2 order (D-0013), each step failing closed:
    against the authorized current project, and semantic time references are
    pinned at receipt (``captured_at_command=True``).
 7. **Idempotency reservation** -- a keyed request reserves
-   ``(project_id, operation, idempotency_key)`` before any handler runs. A
-   redelivery with the same logical payload returns the exact original
-   result; the same key with a different payload is a deterministic
-   ``IdempotencyConflictError``. Reservations are per-bus in-memory: they do
-   not claim cross-process or cross-restart durability.
+   ``(project_id, operation, idempotency_key)`` via :class:`IdempotencyStore`
+   before any handler runs. A redelivery with the same logical payload returns
+   the exact original result; the same key with a different payload is a
+   deterministic ``IdempotencyConflictError``. The default store is
+   :class:`InMemoryIdempotencyStore` (per-bus, not durable across restart or
+   multi-process — see :mod:`nexus_ai_agent.creative.studio.idempotency`).
+   A durable store can be injected at composition time without changing the
+   pipeline's error semantics.
 8. **Revision / precondition check** -- an optimistic-concurrency gate on
    ``state_revision`` and ``state_hash`` evaluated for new work only; a stale
    command is rejected with the state left untouched, and a failed command
@@ -61,7 +64,6 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
-from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
@@ -91,6 +93,11 @@ from nexus_ai_agent.creative.studio.models import (
     Project,
     TypedCommand,
     compute_state_hash,
+)
+from nexus_ai_agent.creative.studio.idempotency import (
+    IdempotencyStore,
+    InMemoryIdempotencyStore,
+    Reservation,
 )
 from nexus_ai_agent.creative.studio.references import ReferenceResolver
 
@@ -140,14 +147,15 @@ def _fingerprint(command: TypedCommand) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-@dataclass(frozen=True)
-class _Reservation:
-    fingerprint: str
-    result: CommandResult | None = None  # None means execution is in flight
-
-
 class CommandBus:
-    """Validates typed commands and applies them atomically to central state."""
+    """Validates typed commands and applies them atomically to central state.
+
+    The bus is injectable: ``idempotency_store`` defaults to
+    :class:`InMemoryIdempotencyStore` (per-bus, process-local). Pass a durable
+    store to make idempotency survive restart — the pipeline is identical,
+    only the backend changes. The store is *not* shared across bus instances
+    unless the caller shares it explicitly.
+    """
 
     def __init__(
         self,
@@ -157,6 +165,7 @@ class CommandBus:
         *,
         authorizer: ProjectAuthorizer | None = None,
         allow_experimental: bool = False,
+        idempotency_store: IdempotencyStore | None = None,
     ) -> None:
         self._registry = registry if registry is not None else build_wave1_registry()
         self._resolver = resolver if resolver is not None else ReferenceResolver()
@@ -170,8 +179,14 @@ class CommandBus:
         # Never let a stale/fabricated hash become an optimistic precondition.
         self._project = Project.model_validate(state.model_dump(mode="json"))
         self._history: list[EditTransaction] = []
-        self._idempotency: dict[tuple[str, str, str], _Reservation] = {}
+        self._idempotency: IdempotencyStore = (
+            idempotency_store if idempotency_store is not None else InMemoryIdempotencyStore()
+        )
         self._executing = False
+    # Back-compat alias for tests that introspect the old private dict name
+    @property
+    def _idempotency_store(self) -> IdempotencyStore:
+        return self._idempotency
 
     @property
     def project(self) -> Project:
@@ -299,16 +314,17 @@ class CommandBus:
                 raise CommandExecutionError("idempotent command is already executing")
             return prior.result.model_copy(deep=True)
 
-        self._idempotency[key] = _Reservation(fingerprint=fingerprint)
+        self._idempotency.put(key, Reservation(fingerprint=fingerprint))
         try:
             self._check_preconditions(command.preconditions)
             result = self._apply_guarded(command, spec, input_data)
-            self._idempotency[key] = _Reservation(fingerprint, result.model_copy(deep=True))
+            self._idempotency.put(key, Reservation(fingerprint, result.model_copy(deep=True)))
             return result
         finally:
-            if self._idempotency.get(key) == _Reservation(fingerprint):
+            cur = self._idempotency.get(key)
+            if cur is not None and cur.fingerprint == fingerprint and cur.result is None:
                 # Any failed precondition/handler released its reservation.
-                self._idempotency.pop(key)
+                self._idempotency.delete(key)
 
     def _apply_guarded(
         self, command: TypedCommand, spec: OperationSpec, input_data: dict[str, Any]

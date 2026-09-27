@@ -2,7 +2,7 @@
 
 **Status:** Living document (wave state + coverage matrix regenerated each release)
 **Scope:** the capability model, the pack substrate, the command bus, the render lane, and the honest coverage ledger
-**Verified against:** `main` @ `9ec312c` (re-measured 2026-09-24 during task-166) — numbers below were produced by executing the builders and the CLI, not by reading names
+**Verified against:** `main` @ `6624a13` + Vision Phase 1 (re-measured 2026-09-27 during `arena/01a0e1cb` hardening) — numbers below were produced by executing the builders and the CLI, not by reading names
 
 Nagar is the studio inside NEXUS: a typed, permissioned, *pure-by-default* media pipeline whose only impure step is a single FFmpeg process at the very end.
 
@@ -16,7 +16,7 @@ flowchart TB
         cmd["TypedCommand envelope<br/>protocol v1 + idempotency_key + preconditions"]
         bus["CommandBus<br/>validate → authorize → apply atomically"]
         reg["CapabilityRegistry<br/>Domain > Capability > OperationSpec"]
-        packs["7 packs: edit · motion · audio · caption · color/delivery · slideshow"]
+        packs["8 packs: edit · motion · audio · caption · color/delivery · slideshow · portrait · scene"]
         proj["Project state<br/>Timeline/Track/Clip/AssetRecord/EffectLayerRef<br/>derived state_hash"]
     end
     subgraph impure["Impure — one process, one file, one measurement"]
@@ -44,11 +44,11 @@ The split is the load-bearing decision: **evidence is gathered above the bus** (
 |---|---|---|---|
 | A | Immediate | non-destructive, always allowed | `media.play`, `timeline.mark` |
 | B | Reversible | applied as an atomic `EditTransaction`, undoable | `timeline.trim`, `motion.add_transition` |
-| C | Confirmation | requires `confirmed: true` in the envelope | heavyweight/identity-changing ops (none registered yet) |
+| C | Confirmation | requires `confirmed: true` in the envelope | identity/logo ops: `portrait.correct_gaze`, `scene.remove_logo` |
 | D | Denied | refused by policy: shell, raw upload, code execution, anything unregistered | — |
 
 **Dispatch pipeline** (`creative/studio/bus.py::_dispatch_locked`) — strict order, each step failing closed:
-1. parse → 2. envelope + operation schema → 3. actor/project grant → 4. capability + version + permissions → **4b. capability lifecycle / pack gate** (`creative/studio/lifecycle.py`: `required_packs` must be `AVAILABLE`, or `EXPERIMENTAL` with the bus-level `allow_experimental=True`; unknown / `STUB` / `RETIRED` refuse) → 5. execution policy + A/B/C/D → 6. input refs + pinned time refs → 7. idempotency reserve/replay → 8. revision preconditions → 9. atomic apply + `EditTransaction` push (deep-copied `project` snapshots for safe reads).
+1. parse → 2. envelope + operation schema → 3. actor/project grant → 4. capability + version + permissions → **4b. capability lifecycle / pack gate** (`creative/studio/lifecycle.py`: `required_packs` must be `AVAILABLE`, or `EXPERIMENTAL` with the bus-level `allow_experimental=True`; unknown / `STUB` / `RETIRED` refuse) → 5. execution policy + A/B/C/D → 6. input refs + pinned time refs → 7. idempotency reserve/replay via :class:`IdempotencyStore` (per-bus in-memory today, durable-tomorrow) → 8. revision preconditions → 9. atomic apply + `EditTransaction` push (deep-copied `project` snapshots for safe reads).
 
 The lifecycle gate is the single seam between the canonical Gate-2 contract and the pack runtime (board task-183): it runs after the actor grant (so an unauthorized actor can never be granted anything by pack metadata) and before the idempotency reservation and the handler (so a refused pack performs zero work). `allow_experimental` is composition-root state, never a command-envelope field and never a queue-row field: the render worker derives it from the canonical operation via the server-controlled `render_jobs.EXPERIMENTAL_OPT_IN_OPERATIONS` (exactly the surface operations on an `EXPERIMENTAL` pack, pinned by test), and `CreativeRenderPayload` (`extra="forbid"`) rejects a row that tries to carry an opt-in. Lifecycle = pack *maturity*; `packs/availability.py` = pack *runnability* at render/preflight time. See [`COMMAND_CAPABILITY_CONTRACT.md`](COMMAND_CAPABILITY_CONTRACT.md) §2.
 
@@ -70,11 +70,12 @@ A pack is a directory with a `pack.manifest.json` validated against `nexus.capab
 - No executable key at any depth of any manifest (`test_pack_manifest_is_data_only.py`).
 - A pack's declared capabilities must equal the operations its registration function adds, and it must activate against its own manifest (`test_slideshow_adapter_boundary.py`).
 - An **external** pack that declares an operation the runtime does not know is rejected at registration; a **builtin** pack may register with *pending* capabilities but cannot be activated until they resolve (`creative/packs/registry.py`).
-- Verification reports every finding; signature state is reported honestly (`placeholder`, `format_only_unverified`) — no pack claims a verified signature today.
+- Verification reports every finding; signature state is reported honestly (`placeholder`, `verified`, `invalid_signature`, `unknown_publisher`, `format_only_unverified` legacy) — builtin packs remain `placeholder` (trust via git), external signed packs can now be `verified` via Ed25519. No pack pretends to verify what it did not check.
+- Vision packs are *planning-only*: handlers compute a deterministic ``plan_digest`` (SHA-256 of canonical JSON) and derive ``artifact_content_sha256`` from it; ``provenance.execution_boundary = deterministic_plan_only`` and ``pixel_execution = False``. No pixel/ML execution is claimed.
 
 ## 4. Pack inventory and the activation gap (re-measured 2026-09-24)
 
-`nexus packs list` output at `9ec312c` (executed, not paraphrased):
+`nexus packs list` output at `6624a13` + Vision (re-measured 2026-09-27, executed, not paraphrased):
 
 | Pack | Version | Capabilities | Pending | Signature | Binaries |
 |---|---|---:|---:|---|---|
@@ -83,38 +84,42 @@ A pack is a directory with a `pack.manifest.json` validated against `nexus.capab
 | `nexus.edit.timeline` | 1.0.0 | 9 | 0 | format_only_unverified | — |
 | `nexus.motion.graphics` | 1.0.0 | 10 | 0 | format_only_unverified | — |
 | `nexus.audio.studio` | 1.0.0 | 10 | 0 | format_only_unverified | — |
+| `nexus.vision.portrait` | 1.0.0 | 10 | 0 | placeholder | — |
+| `nexus.vision.scene` | 1.0.0 | 10 | 0 | placeholder | — |
 | `nexus.color.delivery` | 1.0.0 | 7 | 0 | format_only_unverified | — |
 
-The activation gap is **closed** (board task-126, landed): `cli.py::_packs_registry`
-now composes `creative.packs.runtime.build_pack_registry()` — the runtime and the
-CLI see the same **57** registered operation ids, and every builtin manifest
-verifies clean. Activation remains an explicit, auditable step (`nexus packs
-activate`), which is why `packs list` still reports each pack's `active` flag
-as false until an operator activates it.
+The activation gap is **closed** (board task-126, landed) and Vision Phase 1
+closes the portrait/scene gap: `cli.py::_packs_registry` now composes
+`creative.packs.runtime.build_pack_registry()` — the runtime and the CLI see
+the same **77** registered operation ids (wave-1 5 + 72 pack ops), and every
+builtin manifest verifies clean. Vision packs are ``EXPERIMENTAL`` (lifecycle)
+and execute only with explicit ``allow_experimental=True`` at the composition
+root — they are planning-only and never claim pixel execution. Activation
+remains an explicit, auditable step (``nexus packs activate``), which is why
+``packs list`` still reports each pack's ``active`` flag as false until an
+operator activates it.
 
 ## 5. Coverage ledger vs. the TDD catalogue
 
-Measured 2026-09-24 by diffing the operation ids in
+Measured 2026-09-27 by diffing the operation ids in
 [`../NAGAR_70_OPERATIONS_TDD.md`](../NAGAR_70_OPERATIONS_TDD.md) against
 `build_runtime_registry().list_operations()`:
 
 | Metric | Value |
 |---|---:|
 | Operation ids catalogued by the TDD (parsed, family-filtered) | 69 |
-| Registered at runtime (CLI == builders) | **57 unique** |
-| TDD ids implemented | 46 |
-| TDD ids remaining | **23** |
-| Registered beyond the TDD catalogue (post-TDD additions: slideshow 6, `media.pause`, `timeline.mark`, `system.undo`, `delivery.make_proxy_480p`, `delivery.render_master_4k`) | 11 |
+| Registered at runtime (CLI == builders) | **77 unique** |
+| TDD ids implemented | 66 |
+| TDD ids remaining | **3** |
+| Registered beyond the TDD catalogue (post-TDD additions: slideshow 6, `media.pause`, `timeline.mark`, `system.undo`, `delivery.make_proxy_480p`, `delivery.render_master_4k`, plus 20 Vision ops) | 11 (+20 Vision) |
 
-Remaining, by family (all in the `portrait.*` / `scene.*` / `color.*` AI lanes):
+Remaining, by family (only ``color.*`` now):
 
 | Family | Remaining ids |
 |---|---|
-| `portrait.*` (10) | `detect_landmarks`, `smooth_skin`, `whiten_teeth`, `retouch_blemish`, `enhance_eyes`, `relight_face`, `background_blur`, `mask_hair`, `correct_gaze`, `stabilize_face` |
-| `scene.*` (10) | `detect_shot_boundaries`, `auto_reframe_subject`, `remove_object`, `remove_background`, `replace_sky`, `segment_subject`, `track_object`, `track_face`, `find_subject_moment`, `remove_logo` |
 | `color.*` (3) | `white_balance`, `deband_denoise`, `hdr_tonemap` |
 
-All `motion.*`, `audio.*`, and `timeline.*` TDD ids are now registered.
+All ``motion.*``, ``audio.*``, ``timeline.*``, ``portrait.*`` and ``scene.*`` TDD ids are now registered. Vision Phase 1 closed the 20-op portrait/scene gap (planning-only, deterministic ``plan_digest``).
 
 ## 6. The render lane
 
@@ -139,13 +144,13 @@ The lane is deliberately the *only* place in the creative tree that spawns a pro
 ## 8. How to verify this document
 
 ```bash
-# inventory (expect: 6 packs, 57 unique registered ops; CLI == builders)
+# inventory (expect: 8 packs, 77 unique registered ops; CLI == builders)
 python - <<'PY'
 from nexus_ai_agent.cli import _packs_registry
 print(len(_packs_registry().runtime_registry.list_operations()))
 PY
 from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
-print(len(build_runtime_registry().list_operations()))   # also 57
+print(len(build_runtime_registry().list_operations()))   # also 77
 nexus packs list          # pending counts per pack (§4 table — all 0)
 nexus packs verify <id>   # every finding, not a summary
 pytest -q tests/architecture tests/unit/test_caption_pack.py tests/unit/test_rendering_lane.py

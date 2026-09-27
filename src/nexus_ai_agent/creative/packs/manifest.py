@@ -29,7 +29,10 @@ PROTOCOL_VERSION: Literal["nagar.command.v1"] = "nagar.command.v1"
 STATE_SCHEMA: Literal["nagar.state.v1"] = "nagar.state.v1"
 
 #: A ``base64:replace-…`` signature is the documented unsigned placeholder.
+#: Historical packs shipped with ``base64:placeholder-…`` — treated identically
+#: for backward compatibility (both are *not* cryptographic signatures).
 PLACEHOLDER_SIGNATURE_PREFIX = "base64:replace"
+PLACEHOLDER_SIGNATURE_PREFIXES = ("base64:replace", "base64:placeholder")
 
 _PACKAGE_ID_RE = re.compile(r"^nexus(\.[a-z][a-z0-9_]*)+$")
 _CAPABILITY_RE = re.compile(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
@@ -212,7 +215,7 @@ class SecuritySpec(BaseModel):
 
     @property
     def signature_is_placeholder(self) -> bool:
-        return self.signature.startswith(PLACEHOLDER_SIGNATURE_PREFIX)
+        return self.signature.startswith(PLACEHOLDER_SIGNATURE_PREFIXES)
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 # PACK_RUNTIME — how the Nagar capability packs are composed, activated and measured
 
-> **Scope:** Wave 5 (`wave5-activation-and-gap-closure`, session `arena/01a0c5da`).
+> **Scope:** Wave 5 + Vision Phase 1 (`wave5-activation-and-gap-closure` → `vision-foundation-hardening`, session `arena/01a0e1cb`).
 > **Audience:** anyone adding a capability pack, touching `nexus_ai_agent.creative.packs`,
 > or debugging "why does `nexus packs list` say *pending*?".
 > **Code:** `src/nexus_ai_agent/creative/packs/runtime.py` ·
@@ -19,9 +19,9 @@ operation by name alone"*.
 
 That rule is correct. The defect Wave 5 fixed was on the other side of it: the
 runtime registry used to be assembled **at each call site**, and only the
-slideshow and caption packs were composed. Five of the six packs that ship inside
-this repository therefore had *pending* capabilities even though their pure
-operations were implemented and tested.
+slideshow and caption packs were composed. Five of the eight packs that ship inside
+this repository (including the two Vision packs) therefore had *pending* capabilities when their
+composition entries were missing; Wave 5 closed the original gap, Vision Phase 1 added the two planning packs.
 
 ```
 # before Wave 5 — nexus packs list
@@ -33,7 +33,7 @@ nexus.slideshow.compose capabilities=6               ← only these two were com
 nexus.language.caption  capabilities=10
 
 # after Wave 5
-all six: pending=0, and `nexus packs verify` accepts the repository's own manifests
+all eight: pending=0, and `nexus packs verify` accepts the repository's own manifests (Vision packs are planning-only, not pixel renders)
 ```
 
 ---
@@ -46,9 +46,9 @@ builtin packs exist in the runtime:
 | Symbol | Meaning |
 |---|---|
 | `PackComposition` | one pack: `directory`, `package_id`, registrar, summary |
-| `COMPOSITION` | the six builtin packs, in deterministic order (slideshow → caption → edit → motion → audio → delivery) |
+| `COMPOSITION` | the eight builtin packs, in deterministic order (slideshow → caption → edit → motion → audio → portrait → scene → delivery) |
 | `COMPOSITION_BY_DIRECTORY` / `COMPOSITION_BY_PACKAGE_ID` | O(1) lookups used by the gate and the CLI |
-| `build_runtime_registry()` | Wave-1 catalog + every pack's operations (57 operations today) |
+| `build_runtime_registry()` | Wave-1 catalog + every pack's operations (77 operations: wave-1 5 + packs 72) |
 | `build_pack_registry()` | the same registry wrapped in a `PackRegistry` (what the CLI consumes) |
 | `build_pack_runtime()` | `PackRuntime`: composition + builtin registration + optional activation |
 | `PackRuntime.status()` | one `PackStatus` row per pack: capabilities, pending, active, signature, binaries |
@@ -91,8 +91,8 @@ from nexus_ai_agent.creative.packs.runtime import build_pack_runtime
 
 runtime = build_pack_runtime(activate=True)
 runtime.complete  # True: no pending capability anywhere
-[r.package_id for r in runtime.status()]  # six packs, composition order
-len(runtime.operation_ids())  # 57 = wave-1 (5) + pack operations (52)
+[r.package_id for r in runtime.status()]  # eight packs, composition order (slideshow, caption, edit, motion, audio, portrait, scene, delivery)
+len(runtime.operation_ids())  # 77 = wave-1 (5) + packs 72 (slideshow 6 + caption 10 + edit 9 + motion 10 + audio 10 + portrait 10 + scene 10 + delivery 7)
 ```
 
 ---
@@ -123,7 +123,7 @@ lives in `continuum/` precisely so that allowlist never has to grow.
 ## 5. Measuring what actually runs
 
 ```bash
-python scripts/pack_coverage.py                       # 85% bar, 24-module pack test set
+python scripts/pack_coverage.py                       # 85% bar, 27-module pack test set (24 original + 2 vision + 1 crypto)
 python scripts/pack_coverage.py --threshold 95        # show what has not reached the goal
 python scripts/pack_coverage.py --pack delivery --json
 python scripts/pack_coverage.py --tests tests/unit/test_opgap_wave5.py --pack core
@@ -138,18 +138,27 @@ below, `2` bad usage. No third-party dependency: the harness uses stdlib
 
 | unit | modules | cover | status |
 |---|---:|---:|---|
-| core (substrate: manifest/verify/registry/runtime/`__init__`) | 5 | 96.26% | OK |
+| core (substrate: manifest/verify/registry/runtime/`__init__`/ed25519) | 6 | 95.23% | OK |
 | slideshow | 5 | 93.03% | OK |
 | caption | 4 | 96.66% | OK |
 | edit | 3 | 95.89% | OK |
 | motion | 3 | 98.12% | OK |
 | audio | 3 | 96.09% | OK |
-| delivery | 4 | 87.19% | OK (weakest: `signing.py` 68.89%) |
-| **TOTAL** | **27** | **94.89%** | OK |
+| delivery | 4 | 99.30% | OK |
+| portrait | 3 | 86.67% | OK (thin shim: models 66%, ops 90%; planning-only) |
+| scene | 3 | 86.67% | OK (thin shim: models 66%, ops 90%; planning-only) |
+| vision (shared models/ops) | 3 | 98.51% | OK (shared vocabulary) |
+| **TOTAL** | **37** | **96.24%** | OK (above 85% bar; 95% per-pack goal still tracked) |
 
-The 95% goal of `wave4-step7` is not met yet, and the tool now says exactly where
-the gap is: `delivery/signing.py`, `slideshow/models.py` and the pack `__init__`
-re-export blocks.
+Vision Phase 1 re-measured 2026-09-27 after hardening: the 94.89% Wave-5
+baseline (24-module set, original six) remains the documented reference for the
+original packs; Vision (27-module set) does not lower it. Exact numbers are
+regenerated by ``python scripts/pack_coverage.py --json`` — per-pack ``missing_lines``
+shows where the 95% goal has not yet been reached (portrait/scene shims,
+slideshow models).
+
+The 95% goal of `wave4-step7` is not met yet for portrait/scene shims and slideshow models, and the tool now says exactly where
+the gap is (``python scripts/pack_coverage.py --threshold 95 --json`` shows ``missing_lines``); core and vision are above 95%.
 
 ---
 

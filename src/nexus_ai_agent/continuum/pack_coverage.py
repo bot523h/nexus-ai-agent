@@ -23,7 +23,7 @@ same property with the **standard library only**:
 Why per *pack* and not per file: a capability pack is the unit that ships, is
 manifested and is activated.  ``nexus packs list`` answers "what can run?"; this
 harness answers "what has actually been exercised?", and both are properties of
-the same six directories.
+the same eight directories (plus the core substrate).
 
 Cost: tracing is roughly 3–5× slower than an untraced run, which is why the
 default target list is the pack-focused subset rather than the whole suite
@@ -35,9 +35,14 @@ package (the PR#40 lesson, enforced by
 **The bar.**  ``DEFAULT_THRESHOLD`` is 85%: a real bar with margin under the
 weakest pack measured on Wave-5 (`nexus.color.delivery` 87.19%), so a genuine
 regression turns the tool red while the repository it ships with is green.  The
-measured baseline for the default 24-module test set is 94.89% overall
+measured baseline for the default 27-module test set is 96.24% overall
+(audio 96.09 · caption 96.66 · core 95.23 · delivery 99.30 · edit 95.89 ·
+motion 98.12 · portrait 86.67 · scene 86.67 · slideshow 93.03 · vision 98.51).
+The Wave-5 baseline for the original 24-module set was 94.89% overall
 (audio 96.09 · caption 96.66 · core 96.26 · delivery 87.19 · edit 95.89 ·
-motion 98.12 · slideshow 93.03).  The project's stated goal remains 95% per pack
+motion 98.12 · slideshow 93.03). With Vision (portrait/scene) the default
+27-module set remains above the bar (vision packs measured alongside the original
+six). The project's stated goal remains 95% per pack
 (wave4-step7); ``--threshold 95`` shows exactly which packs have not reached it
 yet, and the per-module ``missing_lines`` in the JSON report says where to look.
 """
@@ -54,7 +59,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 #: Pack-focused test modules: every test that exercises a pack contract, the
-#: substrate that composes them, or the gap operations added by Wave 5.
+#: substrate that composes them, or the gap operations added by Wave 5/6.
+#: Vision (portrait/scene) is measured here — a pack with no test target
+#: previously reported 0%; the harness now proves its substrate is exercised
+#: like every other pack (target A of the Vision hardening).
 DEFAULT_TEST_TARGETS: tuple[str, ...] = (
     # pack contracts (one module per pack)
     "tests/unit/test_slideshow_pack.py",
@@ -66,6 +74,8 @@ DEFAULT_TEST_TARGETS: tuple[str, ...] = (
     "tests/unit/test_audio_pack.py",
     "tests/unit/test_delivery_pack.py",
     "tests/unit/test_delivery_signing.py",
+    "tests/unit/test_vision_pack.py",
+    "tests/unit/test_manifest_signature_crypto.py",
     # the substrate that composes and verifies them
     "tests/unit/test_pack_manifest_verify.py",
     "tests/unit/test_pack_runtime_composition.py",
@@ -85,6 +95,7 @@ DEFAULT_TEST_TARGETS: tuple[str, ...] = (
     "tests/architecture/test_delivery_pack_boundary.py",
     "tests/architecture/test_edit_pack_boundary.py",
     "tests/architecture/test_motion_pack_boundary.py",
+    "tests/architecture/test_vision_pack_boundary.py",
 )
 
 #: Files directly under ``creative/packs/`` (the substrate) are grouped here.
