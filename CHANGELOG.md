@@ -73,6 +73,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CONTENT RECONSTRUCTED). The record remains machine-bound: `verify` reports it
   STALE once a later commit touches an evidence root, and CI reports it with
   `blocking: false`.
+- **Flaky test repaired (out of scope, trust-breaking):** `test_number_guess_keeps_state`
+  guessed a fixed `50` against an unpinned `random.randint(1, 100)` secret, so 1 run
+  in 100 went red — it failed PR #102's `test` job (pull_request run 36313347629,
+  job 108603348287) on a tree byte-identical to the green push run 36313310134.
+  The test now pins the secret and asserts the exact hint plus the per-user attempt
+  counter. Production code is unchanged.
+- **`continuum-evidence` publishes its digest as check-run annotations** (SHA256SUMS
+  lines, coverage verdict + bound commit, gate verdict, every mutation record), so
+  the per-leg evidence is readable through the Checks API without downloading the
+  artifact. The step is read-only and cannot turn a failed leg green.
 
 ### CI (task-132 — extras smoke matrix, session `arena/01a0d709-nexus-ai-agent`)
 

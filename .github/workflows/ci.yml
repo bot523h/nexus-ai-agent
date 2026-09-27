@@ -236,6 +236,36 @@ jobs:
           cd ci-artifacts
           sha256sum *.json > SHA256SUMS
           cat SHA256SUMS
+      - name: Evidence digest as check-run annotations (readable without artifact download)
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          art = Path("ci-artifacts")
+          leg = f"py{os.environ['MATRIX_PYTHON']} @ {os.environ['GITHUB_SHA']}"
+          sums = art / "SHA256SUMS"
+          if sums.is_file():
+              digests = " | ".join(sums.read_text().splitlines())
+              print(f"::notice title=continuum sha256 {leg}::{digests}")
+          cov = art / "pack-coverage.json"
+          if cov.is_file():
+              d = json.loads(cov.read_text())
+              packs = " ".join(f"{p['pack']}={p['percent']}" for p in d["packs"])
+              print(f"::notice title=continuum coverage {leg}::accepted={d['accepted']} commit={d['provenance']['git_commit']} total={d['total']['percent']} {packs}")
+          gate = art / "continuum-gate.json"
+          if gate.is_file():
+              d = json.loads(gate.read_text())
+              print(f"::notice title=continuum gate {leg}::passed={d['passed']} source={d['source_commit']} scenarios={len(d['scenarios'])} committed_snapshot={d['committed_snapshot'].get('status')}")
+          mut = art / "continuum-mutations.json"
+          if mut.is_file():
+              d = json.loads(mut.read_text())
+              rows = " ".join(f"{r['id']}={r['status']}" for r in d["mutations"])
+              print(f"::notice title=continuum mutations {leg}::passed={d['passed']} commit={d['commit']} interpreter={d['interpreter']} summary={d['summary']}")
+              print(f"::notice title=continuum mutation records {leg}::{rows}")
+          PY
+        env:
+          MATRIX_PYTHON: ${{ matrix.python-version }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
