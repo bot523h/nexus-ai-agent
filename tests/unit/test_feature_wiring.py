@@ -24,6 +24,7 @@ from nexus_ai_agent.bot.feature_handlers import (
 )
 from nexus_ai_agent.config import settings as settings_module
 from nexus_ai_agent.config.settings import Settings
+from nexus_ai_agent.features import games as games_module
 from nexus_ai_agent.storage import models as models_module  # noqa: F401
 from nexus_ai_agent.storage.models import Referral, Reminder
 
@@ -189,14 +190,25 @@ async def test_tr_delegates_to_translator(env: SimpleNamespace) -> None:
 # ── games: shared state across calls ──────────────────────────────────
 
 
-async def test_number_guess_keeps_state(env: SimpleNamespace) -> None:
+async def test_number_guess_keeps_state(
+    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The secret is drawn with random.randint(1, 100).  Pin it: an unpinned secret
+    # equals the fixed guess 50 in 1 run out of 100, and that turned PR #102's
+    # `test` job red (pull_request run 36313347629) on an unrelated change.
+    monkeypatch.setattr(games_module.random, "randint", lambda low, high: 37)
     start_update = make_update(user_id=7)
     await env.cmds["guess_start"](start_update, make_context())
     assert "بازی حدس عدد شروع شد" in reply_text(start_update)
 
     guess_update = make_update(user_id=7)
     await env.cmds["guess"](guess_update, make_context(["50"]))
-    assert reply_text(guess_update) in ("⬆️ بزرگ‌تره! (حدس 1)", "⬇️ کوچک‌تره! (حدس 1)")
+    assert reply_text(guess_update) == "⬇️ کوچک‌تره! (حدس 1)"
+
+    # The attempt counter is per-user state carried across calls.
+    win_update = make_update(user_id=7)
+    await env.cmds["guess"](win_update, make_context(["37"]))
+    assert reply_text(win_update) == "🎉 آفرین! عدد 37 بود. با 2 حدس پیدا شد!"
 
     # A different user has no game.
     other_update = make_update(user_id=8)

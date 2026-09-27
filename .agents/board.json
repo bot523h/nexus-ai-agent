@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T12:10:00Z",
+  "updated_at": "2026-09-27T12:27:18Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -71,6 +71,28 @@
         "src/nexus_ai_agent/cli.py",
         "tests/unit/test_packs_cli.py"
       ]
+    },
+    {
+      "id": "continuum-evidence-measurement",
+      "description": "Continuum snapshot + stdlib pack-coverage evidence contracts",
+      "paths": [
+        ".nexus/continuum.json",
+        "scripts/continuum_gate.py",
+        "scripts/continuum_mutations.py",
+        "scripts/pack_coverage.py",
+        "src/nexus_ai_agent/continuum/",
+        "tests/unit/test_ci_continuum_evidence.py",
+        "tests/unit/test_continuum_gate.py",
+        "tests/unit/test_continuum_hardening.py",
+        "tests/unit/test_continuum_mutations.py",
+        "tests/unit/test_continuum_provenance.py",
+        "tests/unit/test_continuum_snapshot.py",
+        "tests/unit/test_continuum_snapshot_contract.py",
+        "tests/unit/test_pack_coverage_contract.py",
+        "tests/unit/test_pack_coverage_harness.py",
+        "tests/unit/test_slideshow_invariants.py"
+      ],
+      "note": "Zone declaration was missing when task-184 was claimed (board schema tests test_active_claims_carry_owner_timestamp_and_zone / test_exclusive_paths_belong_to_a_declared_zone were RED on the branch tip 49ae131). Declared verbatim from that claim's exclusive_paths by arena/01a0df05-nexus-ai-agent (task-185) — additive repair only, the claim itself was not modified. | 2026-09-27 arena/01a0e1e0 (task-184 continuation): zone extended to the snapshot test, the committed snapshot, the coverage/continuum CLIs and the replayable mutation campaign. | 2026-09-27 arena/01a0e1e0: zone extended to the six new contract-test modules (coverage contract, snapshot contract, provenance, mutation campaign, CI-job guard, slideshow invariants)."
     },
     {
       "id": "coordination",
@@ -199,6 +221,17 @@
       ]
     },
     {
+      "id": "external-intelligence",
+      "description": "External Intelligence & Integration Reliability: Wikipedia/web/DDG retrieval, free tools, typed failure + provenance contract",
+      "paths": [
+        "src/nexus_ai_agent/knowledge/",
+        "src/nexus_ai_agent/integrations/",
+        "tests/unit/test_knowledge_hardening.py",
+        "tests/unit/test_free_tools_hardening.py",
+        "tests/unit/test_external_contracts.py"
+      ]
+    },
+    {
       "id": "feature-wiring",
       "description": "Wire feature engines to the Telegram surface",
       "paths": [
@@ -281,258 +314,6 @@
       ]
     },
     {
-      "id": "llm-local",
-      "description": "Optional local LLM providers",
-      "paths": [
-        "src/nexus_ai_agent/llm/",
-        "tests/unit/test_local_server_provider.py"
-      ]
-    },
-    {
-      "id": "nagar-caption-engine",
-      "description": "Wave 9 local speech + caption pool",
-      "paths": [
-        "src/nexus_ai_agent/adapters/whisper_local.py",
-        "src/nexus_ai_agent/creative/packs/caption/",
-        "tests/unit/test_caption_engine_adapters.py"
-      ]
-    },
-    {
-      "id": "nagar-creative-edit",
-      "paths": [
-        "src/nexus_ai_agent/creative/",
-        "tests/unit/test_timeline_edit*.py"
-      ],
-      "note": "historical (wave-3 edit lane, delivered via PR#31)"
-    },
-    {
-      "id": "nagar-opgap",
-      "description": "TDD op-gap slices for audio/motion",
-      "paths": [
-        "src/nexus_ai_agent/creative/packs/audio/",
-        "src/nexus_ai_agent/creative/packs/motion/",
-        "tests/unit/test_opgap_audio_motion.py"
-      ]
-    },
-    {
-      "id": "nagar-portrait",
-      "description": "Wave 10 portrait family (TDD portrait.* operations)",
-      "paths": [
-        "src/nexus_ai_agent/creative/packs/portrait/",
-        "tests/unit/test_portrait_pack.py",
-        "tests/architecture/test_portrait_pack_boundary.py"
-      ]
-    },
-    {
-      "id": "nagar-render-lane",
-      "description": "Wave 8 apply lane",
-      "paths": [
-        "src/nexus_ai_agent/creative/rendering/",
-        "tests/unit/test_rendering_lane.py",
-        "tests/architecture/test_rendering_lane_boundary.py"
-      ]
-    },
-    {
-      "id": "nagar-runtime-activation",
-      "paths": [
-        "src/nexus_ai_agent/creative/packs/runtime.py"
-      ],
-      "note": "wave-5 activation (delivered PR#46)"
-    },
-    {
-      "id": "nagar-scene",
-      "paths": [
-        "src/nexus_ai_agent/creative/packs/scene/",
-        "tests/unit/test_scene_pack.py",
-        "tests/architecture/test_scene_pack_boundary.py"
-      ],
-      "note": "scene pack (canonical task-153, renumbered from WAVE5 task-144)"
-    },
-    {
-      "id": "packaging+interop",
-      "description": "Packaging (extras/uv/slim image) and interop",
-      "paths": [
-        "pyproject.toml",
-        "Dockerfile",
-        "docker-compose.yml",
-        ".env.example",
-        "src/nexus_ai_agent/optional_deps.py",
-        "src/nexus_ai_agent/adapters/conversation_store_sqlite.py"
-      ]
-    },
-    {
-      "id": "pr51-ci-repair",
-      "description": "PR#51 integration: CI red-root-cause repair (RAG test, board clock bombs, job-queue hook race)",
-      "paths": [
-        "tests/unit/test_agent_board.py",
-        "tests/unit/test_rag_eval.py",
-        "tests/integration/test_in_process_job_queue.py",
-        "CHANGELOG.md"
-      ]
-    },
-    {
-      "id": "quality-packs",
-      "paths": [
-        "scripts/pack_coverage.py",
-        "src/nexus_ai_agent/continuum/pack_coverage.py",
-        "tests/unit/test_pack_coverage_harness.py"
-      ],
-      "note": "pack-coverage harness quality lane (task-147)"
-    },
-    {
-      "id": "release-metadata",
-      "paths": [
-        "README.md",
-        ".nexus/continuum.json",
-        "CHANGELOG.md",
-        "VERSION"
-      ],
-      "note": "release lockstep residue"
-    },
-    {
-      "id": "repo-hygiene",
-      "description": "Release metadata, root docs, archival",
-      "paths": [
-        "VERSION",
-        "CHANGELOG.md",
-        "README.md",
-        "ROADMAP_STATUS.md",
-        "REQUIREMENTS_LEDGER.md",
-        "docs/history/",
-        "scripts/"
-      ]
-    },
-    {
-      "id": "storage-observability",
-      "paths": [
-        "src/nexus_ai_agent/storage/",
-        "docs/ops/"
-      ],
-      "note": "storage observability (queued)"
-    },
-    {
-      "id": "storage-r2-integration",
-      "paths": [
-        "src/nexus_ai_agent/storage/providers/r2.py"
-      ],
-      "note": "R2 retry integration (queued)"
-    },
-    {
-      "id": "storage-r2-smoke",
-      "paths": [
-        "tests/integration/"
-      ],
-      "note": "R2 smoke (queued)"
-    },
-    {
-      "id": "storage-resilience",
-      "paths": [
-        "src/nexus_ai_agent/storage/resilience.py"
-      ],
-      "note": "historical storage resilience (PR#43)"
-    },
-    {
-      "id": "storage-resilience-boundaries",
-      "paths": [
-        "src/nexus_ai_agent/storage/resilience.py",
-        "tests/unit/test_storage_resilience.py"
-      ],
-      "note": "delivered via PR#43"
-    },
-    {
-      "id": "storage-runbook",
-      "paths": [
-        "docs/ops/"
-      ],
-      "note": "storage runbook (queued)"
-    },
-    {
-      "id": "release-docker-ffmpeg",
-      "description": "task-163 (arena/01a0cfcd): production image FFmpeg fix — Dockerfile, its contract ratchet, and the board-CLI overlap test the file-scoped lease forces hermetic",
-      "paths": [
-        "Dockerfile",
-        "tests/unit/test_dockerfile_contract.py",
-        "tests/unit/test_agent_board.py"
-      ]
-    },
-    {
-      "id": "p0-stabilization",
-      "description": "Owner directive 2026-09-24: P0-A legacy creative pipeline hardening, P0-B creative surface runtime wiring, P0-C backup reliability (repo-side)",
-      "paths": [
-        "src/nexus_ai_agent/api/app.py",
-        "src/nexus_ai_agent/creative/legacy_boundary.py",
-        "src/nexus_ai_agent/bot/creative_surface.py",
-        "src/nexus_ai_agent/worker.py",
-        "src/nexus_ai_agent/bot/app.py",
-        "src/nexus_ai_agent/config/settings.py",
-        "src/nexus_ai_agent/creative/render_jobs.py",
-        "src/nexus_ai_agent/maintenance/backup.py",
-        "src/nexus_ai_agent/i18n/locales/",
-        "tests/unit/test_creative_surface.py",
-        "tests/unit/test_creative_render_jobs.py",
-        "tests/unit/test_security_hardening.py",
-        "tests/unit/test_maintenance_backup.py",
-        "tests/architecture/test_legacy_creative_boundary.py",
-        "docs/architecture/adr/0006-legacy-creative-pipeline.md",
-        "docs/architecture/adr/README.md",
-        "docs/architecture/CREATIVE_STUDIO.md",
-        "docs/architecture/OBSERVABILITY.md",
-        "docs/audits/P0_STABILIZATION_2026-09-24.md",
-        "docs/README.md",
-        ".github/workflows/maintenance.yml",
-        "CHANGELOG.md",
-        "docs/ops/r2-storage.md"
-      ]
-    },
-    {
-      "id": "nagar-contract-gate",
-      "description": "Gate 2 canonical command + capability reconciliation (contract boundary only): studio envelope/registry/bus, contract tests + guards, contract doc + ADR 0005 + D-0013. Locked out: creative/rendering/*, creative/packs/*, creative/slideshow/* (runtime-owned), adapters/* (lifecycle-owned).",
-      "paths": [
-        "src/nexus_ai_agent/creative/studio/",
-        "tests/unit/test_command_capability_contract.py",
-        "tests/unit/test_pack_manifest_verify.py",
-        "tests/architecture/test_command_capability_boundary.py",
-        "docs/architecture/COMMAND_CAPABILITY_CONTRACT.md",
-        "docs/architecture/adr/",
-        "docs/architecture/CREATIVE_STUDIO.md",
-        "docs/architecture/MODULE_MAP.md",
-        "docs/architecture/TESTING.md",
-        "docs/README.md",
-        "docs/DECISION_LOG.md"
-      ]
-    },
-    {
-      "id": "nagar-runtime-call-sites",
-      "description": "Runtime-owned in-process bus call sites (slideshow service/upscale, render_jobs): explicit service grants + source refs. Owner: runtime lane (Agent 1).",
-      "paths": [
-        "src/nexus_ai_agent/creative/slideshow/service.py",
-        "src/nexus_ai_agent/creative/slideshow/upscale.py",
-        "src/nexus_ai_agent/creative/render_jobs.py"
-      ]
-    },
-    {
-      "id": "security-boundary",
-      "description": "P0 security boundary: telegram access guard dispatcher semantics, force-join gate, log redaction, Gemini key transport, SSRF-safe outbound fetch",
-      "paths": [
-        "src/nexus_ai_agent/bot/access_guard.py",
-        "src/nexus_ai_agent/features/force_join.py",
-        "src/nexus_ai_agent/observability/logging.py",
-        "src/nexus_ai_agent/infrastructure/observability/",
-        "src/nexus_ai_agent/core/ssrf_guard.py",
-        "src/nexus_ai_agent/api/app.py",
-        "src/nexus_ai_agent/features/ai_chat.py",
-        "src/nexus_ai_agent/features/summarizer.py",
-        "src/nexus_ai_agent/creative/video_director.py",
-        "src/nexus_ai_agent/creative/slideshow/analysis.py",
-        "tests/unit/test_access_guard.py",
-        "tests/unit/test_observability.py",
-        "tests/unit/test_force_join_gate.py",
-        "tests/unit/test_api_ssrf_download.py",
-        "tests/unit/test_creative_studio.py",
-        "tests/unit/test_gemini_key_transport.py"
-      ]
-    },
-    {
       "id": "job-lifecycle",
       "description": "Canonical Job lifecycle: state machine, artifact verification contract, retry/failure semantics (task-178, Agent C)",
       "paths": [
@@ -545,29 +326,6 @@
         "docs/architecture/JOB_LIFECYCLE.md",
         "docs/DECISION_LOG.md",
         "docs/README.md"
-      ]
-    },
-    {
-      "id": "job-verification-gap-closure",
-      "description": "task-180: artifact verifiers for slideshow_render/story/pdf_extract + cross-PR truth gate (continuation of task-178, stacked on PR#71 head)",
-      "paths": [
-        "src/nexus_ai_agent/jobs/verification.py",
-        "src/nexus_ai_agent/jobs/creative_verification.py",
-        "src/nexus_ai_agent/jobs/feature_verification.py",
-        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
-        "src/nexus_ai_agent/worker.py",
-        "tests/unit/test_job_verification_gaps.py",
-        "tests/integration/test_verification_gap_closure.py",
-        "tests/architecture/test_verification_registry_ratchet.py",
-        "tests/architecture/test_legacy_lane_verification_gap.py",
-        "tests/integration/test_in_process_job_queue.py",
-        "tests/integration/test_bot_slideshow_flow.py",
-        "docs/audits/VERIFICATION_GAP_REPORT_2026-09-24.md",
-        "docs/audits/VERIFICATION_TRUTH_MATRIX.json",
-        "docs/audits/CROSS_PR_TRUTH_2026-09-24.md",
-        "docs/DECISION_LOG.md",
-        "docs/README.md",
-        "docs/architecture/JOB_LIFECYCLE.md"
       ]
     },
     {
@@ -615,6 +373,281 @@
         "scripts/pack_trust_mutations.py",
         "docs/architecture/adr/0006-capability-pack-trust-root.md"
       ]
+    },
+    {
+      "id": "job-verification-gap-closure",
+      "description": "task-180: artifact verifiers for slideshow_render/story/pdf_extract + cross-PR truth gate (continuation of task-178, stacked on PR#71 head)",
+      "paths": [
+        "src/nexus_ai_agent/jobs/verification.py",
+        "src/nexus_ai_agent/jobs/creative_verification.py",
+        "src/nexus_ai_agent/jobs/feature_verification.py",
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        "src/nexus_ai_agent/worker.py",
+        "tests/unit/test_job_verification_gaps.py",
+        "tests/integration/test_verification_gap_closure.py",
+        "tests/architecture/test_verification_registry_ratchet.py",
+        "tests/architecture/test_legacy_lane_verification_gap.py",
+        "tests/integration/test_in_process_job_queue.py",
+        "tests/integration/test_bot_slideshow_flow.py",
+        "docs/audits/VERIFICATION_GAP_REPORT_2026-09-24.md",
+        "docs/audits/VERIFICATION_TRUTH_MATRIX.json",
+        "docs/audits/CROSS_PR_TRUTH_2026-09-24.md",
+        "docs/DECISION_LOG.md",
+        "docs/README.md",
+        "docs/architecture/JOB_LIFECYCLE.md"
+      ]
+    },
+    {
+      "id": "llm-local",
+      "description": "Optional local LLM providers",
+      "paths": [
+        "src/nexus_ai_agent/llm/",
+        "tests/unit/test_local_server_provider.py"
+      ]
+    },
+    {
+      "id": "nagar-caption-engine",
+      "description": "Wave 9 local speech + caption pool",
+      "paths": [
+        "src/nexus_ai_agent/adapters/whisper_local.py",
+        "src/nexus_ai_agent/creative/packs/caption/",
+        "tests/unit/test_caption_engine_adapters.py"
+      ]
+    },
+    {
+      "id": "nagar-contract-gate",
+      "description": "Gate 2 canonical command + capability reconciliation (contract boundary only): studio envelope/registry/bus, contract tests + guards, contract doc + ADR 0005 + D-0013. Locked out: creative/rendering/*, creative/packs/*, creative/slideshow/* (runtime-owned), adapters/* (lifecycle-owned).",
+      "paths": [
+        "src/nexus_ai_agent/creative/studio/",
+        "tests/unit/test_command_capability_contract.py",
+        "tests/unit/test_pack_manifest_verify.py",
+        "tests/architecture/test_command_capability_boundary.py",
+        "docs/architecture/COMMAND_CAPABILITY_CONTRACT.md",
+        "docs/architecture/adr/",
+        "docs/architecture/CREATIVE_STUDIO.md",
+        "docs/architecture/MODULE_MAP.md",
+        "docs/architecture/TESTING.md",
+        "docs/README.md",
+        "docs/DECISION_LOG.md"
+      ]
+    },
+    {
+      "id": "nagar-creative-edit",
+      "paths": [
+        "src/nexus_ai_agent/creative/",
+        "tests/unit/test_timeline_edit*.py"
+      ],
+      "note": "historical (wave-3 edit lane, delivered via PR#31)"
+    },
+    {
+      "id": "nagar-opgap",
+      "description": "TDD op-gap slices for audio/motion",
+      "paths": [
+        "src/nexus_ai_agent/creative/packs/audio/",
+        "src/nexus_ai_agent/creative/packs/motion/",
+        "tests/unit/test_opgap_audio_motion.py"
+      ]
+    },
+    {
+      "id": "nagar-portrait",
+      "description": "Wave 10 portrait family (TDD portrait.* operations)",
+      "paths": [
+        "src/nexus_ai_agent/creative/packs/portrait/",
+        "tests/unit/test_portrait_pack.py",
+        "tests/architecture/test_portrait_pack_boundary.py"
+      ]
+    },
+    {
+      "id": "nagar-render-lane",
+      "description": "Wave 8 apply lane",
+      "paths": [
+        "src/nexus_ai_agent/creative/rendering/",
+        "tests/unit/test_rendering_lane.py",
+        "tests/architecture/test_rendering_lane_boundary.py"
+      ]
+    },
+    {
+      "id": "nagar-runtime-activation",
+      "paths": [
+        "src/nexus_ai_agent/creative/packs/runtime.py"
+      ],
+      "note": "wave-5 activation (delivered PR#46)"
+    },
+    {
+      "id": "nagar-runtime-call-sites",
+      "description": "Runtime-owned in-process bus call sites (slideshow service/upscale, render_jobs): explicit service grants + source refs. Owner: runtime lane (Agent 1).",
+      "paths": [
+        "src/nexus_ai_agent/creative/slideshow/service.py",
+        "src/nexus_ai_agent/creative/slideshow/upscale.py",
+        "src/nexus_ai_agent/creative/render_jobs.py"
+      ]
+    },
+    {
+      "id": "nagar-scene",
+      "paths": [
+        "src/nexus_ai_agent/creative/packs/scene/",
+        "tests/unit/test_scene_pack.py",
+        "tests/architecture/test_scene_pack_boundary.py"
+      ],
+      "note": "scene pack (canonical task-153, renumbered from WAVE5 task-144)"
+    },
+    {
+      "id": "p0-stabilization",
+      "description": "Owner directive 2026-09-24: P0-A legacy creative pipeline hardening, P0-B creative surface runtime wiring, P0-C backup reliability (repo-side)",
+      "paths": [
+        "src/nexus_ai_agent/api/app.py",
+        "src/nexus_ai_agent/creative/legacy_boundary.py",
+        "src/nexus_ai_agent/bot/creative_surface.py",
+        "src/nexus_ai_agent/worker.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/config/settings.py",
+        "src/nexus_ai_agent/creative/render_jobs.py",
+        "src/nexus_ai_agent/maintenance/backup.py",
+        "src/nexus_ai_agent/i18n/locales/",
+        "tests/unit/test_creative_surface.py",
+        "tests/unit/test_creative_render_jobs.py",
+        "tests/unit/test_security_hardening.py",
+        "tests/unit/test_maintenance_backup.py",
+        "tests/architecture/test_legacy_creative_boundary.py",
+        "docs/architecture/adr/0006-legacy-creative-pipeline.md",
+        "docs/architecture/adr/README.md",
+        "docs/architecture/CREATIVE_STUDIO.md",
+        "docs/architecture/OBSERVABILITY.md",
+        "docs/audits/P0_STABILIZATION_2026-09-24.md",
+        "docs/README.md",
+        ".github/workflows/maintenance.yml",
+        "CHANGELOG.md",
+        "docs/ops/r2-storage.md"
+      ]
+    },
+    {
+      "id": "packaging+interop",
+      "description": "Packaging (extras/uv/slim image) and interop",
+      "paths": [
+        "pyproject.toml",
+        "Dockerfile",
+        "docker-compose.yml",
+        ".env.example",
+        "src/nexus_ai_agent/optional_deps.py",
+        "src/nexus_ai_agent/adapters/conversation_store_sqlite.py"
+      ]
+    },
+    {
+      "id": "pr51-ci-repair",
+      "description": "PR#51 integration: CI red-root-cause repair (RAG test, board clock bombs, job-queue hook race)",
+      "paths": [
+        "tests/unit/test_agent_board.py",
+        "tests/unit/test_rag_eval.py",
+        "tests/integration/test_in_process_job_queue.py",
+        "CHANGELOG.md"
+      ]
+    },
+    {
+      "id": "quality-packs",
+      "paths": [
+        "scripts/pack_coverage.py",
+        "src/nexus_ai_agent/continuum/pack_coverage.py",
+        "tests/unit/test_pack_coverage_harness.py"
+      ],
+      "note": "pack-coverage harness quality lane (task-147)"
+    },
+    {
+      "id": "release-docker-ffmpeg",
+      "description": "task-163 (arena/01a0cfcd): production image FFmpeg fix — Dockerfile, its contract ratchet, and the board-CLI overlap test the file-scoped lease forces hermetic",
+      "paths": [
+        "Dockerfile",
+        "tests/unit/test_dockerfile_contract.py",
+        "tests/unit/test_agent_board.py"
+      ]
+    },
+    {
+      "id": "release-metadata",
+      "paths": [
+        "README.md",
+        ".nexus/continuum.json",
+        "CHANGELOG.md",
+        "VERSION"
+      ],
+      "note": "release lockstep residue"
+    },
+    {
+      "id": "repo-hygiene",
+      "description": "Release metadata, root docs, archival",
+      "paths": [
+        "VERSION",
+        "CHANGELOG.md",
+        "README.md",
+        "ROADMAP_STATUS.md",
+        "REQUIREMENTS_LEDGER.md",
+        "docs/history/",
+        "scripts/"
+      ]
+    },
+    {
+      "id": "security-boundary",
+      "description": "P0 security boundary: telegram access guard dispatcher semantics, force-join gate, log redaction, Gemini key transport, SSRF-safe outbound fetch",
+      "paths": [
+        "src/nexus_ai_agent/bot/access_guard.py",
+        "src/nexus_ai_agent/features/force_join.py",
+        "src/nexus_ai_agent/observability/logging.py",
+        "src/nexus_ai_agent/infrastructure/observability/",
+        "src/nexus_ai_agent/core/ssrf_guard.py",
+        "src/nexus_ai_agent/api/app.py",
+        "src/nexus_ai_agent/features/ai_chat.py",
+        "src/nexus_ai_agent/features/summarizer.py",
+        "src/nexus_ai_agent/creative/video_director.py",
+        "src/nexus_ai_agent/creative/slideshow/analysis.py",
+        "tests/unit/test_access_guard.py",
+        "tests/unit/test_observability.py",
+        "tests/unit/test_force_join_gate.py",
+        "tests/unit/test_api_ssrf_download.py",
+        "tests/unit/test_creative_studio.py",
+        "tests/unit/test_gemini_key_transport.py"
+      ]
+    },
+    {
+      "id": "storage-observability",
+      "paths": [
+        "src/nexus_ai_agent/storage/",
+        "docs/ops/"
+      ],
+      "note": "storage observability (queued)"
+    },
+    {
+      "id": "storage-r2-integration",
+      "paths": [
+        "src/nexus_ai_agent/storage/providers/r2.py"
+      ],
+      "note": "R2 retry integration (queued)"
+    },
+    {
+      "id": "storage-r2-smoke",
+      "paths": [
+        "tests/integration/"
+      ],
+      "note": "R2 smoke (queued)"
+    },
+    {
+      "id": "storage-resilience",
+      "paths": [
+        "src/nexus_ai_agent/storage/resilience.py"
+      ],
+      "note": "historical storage resilience (PR#43)"
+    },
+    {
+      "id": "storage-resilience-boundaries",
+      "paths": [
+        "src/nexus_ai_agent/storage/resilience.py",
+        "tests/unit/test_storage_resilience.py"
+      ],
+      "note": "delivered via PR#43"
+    },
+    {
+      "id": "storage-runbook",
+      "paths": [
+        "docs/ops/"
+      ],
+      "note": "storage runbook (queued)"
     }
   ],
   "claims": [
@@ -1744,7 +1777,7 @@
       "title_fa": "",
       "zone": "ci-quality",
       "priority": "P1",
-      "status": "queued",
+      "status": "active",
       "scope": "non-blocking bootstrap job first, then blocking; sequenced after PR#33 lands",
       "scope_fa": "non-blocking bootstrap job first, then blocking; sequenced after PR#33 lands",
       "prerequisites": [],
@@ -1752,7 +1785,12 @@
         "CI job runs scripts/pack_coverage.py and reports per-pack coverage",
         "non-blocking (continue-on-error) at bootstrap, flip to blocking with evidence"
       ],
-      "note": "canonical ID resolved 2026-09-22"
+      "note": "Claimed by the Continuum closure session together with task-184. Goes straight to a BLOCKING job (owner directive: no continue-on-error bootstrap); evidence recorded on release.",
+      "agent_branch": "arena/01a0e2bb-nexus-ai-agent",
+      "claimed_at": "2026-09-27T12:27:18Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": []
     },
     {
       "task": "task-155-packs-doctor",
@@ -2158,7 +2196,7 @@
       "title_fa": "",
       "zone": "coordination",
       "priority": "P2",
-      "status": "active_in_review",
+      "status": "expired",
       "scope": "PR#67 adds required_packs + a lifecycle bus gate; Gate 2 could not verify against it. After both land, wire the seam (stage 4, after grant+registry, before reservation) and prove pack-required vs pack-absent dispatch.",
       "scope_fa": "",
       "prerequisites": [
@@ -2175,7 +2213,7 @@
       "claimed_at": "2026-09-24T20:37:51Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Continued from arena/01a0d4c8 (PR#75 head e0cba26 is an ancestor of this branch; PR#75 is superseded by PR#77, same stack on PR#72). MERGE ORDER: PR#72 -> PR#77; PR#67 afterwards needs the semantic resolution in COMMAND_CAPABILITY_CONTRACT section 11 (keep 4b, drop 3.5 + payload/surface opt-in, add color.apply_lut to EXPERIMENTAL_OPT_IN_OPERATIONS).",
+      "note": "auto-released by gc at 2026-09-26T18:41:55Z (stale active_in_review lease)",
       "stacked_on": {
         "pr": 72,
         "task": "task-179-gate2-command-reconciliation",
@@ -2217,11 +2255,11 @@
     },
     {
       "priority": "P0",
-      "status": "active_in_review",
+      "status": "expired",
       "prerequisites": [],
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Continuation of sec-boundary-salvage-01a0d4c7 (PR#76 head 5b17a709, CI green): owner-directed adversarial verification proved 5 S3/S5 defects its tests missed (stdlib traceback redaction bypass, mapping/non-string arg corruption, Basic-scheme credentials, CGNAT 100.64.0.0/10 allowed, https->http redirect downgrade followed). Closed on this branch (ff from 5b17a709 + closure commits), 12/12 mutation-killed, full non-slow suite 1989 passed / ruff / format / mypy clean. Takeover recorded in takeover_log; same zone, one owner.",
+      "note": "auto-released by gc at 2026-09-26T18:41:55Z (stale active_in_review lease)",
       "task": "sec-boundary-salvage-01a0d563",
       "title": "Security truth salvage: verify S1-S5 on main 035a896, fix only the real delta",
       "title_fa": "استخراج حقیقت امنیتی: بازبینی S1-S5 روی main 035a896 و اعمال فقط دلتای واقعی",
@@ -2350,7 +2388,7 @@
       "title_fa": "بستن و سازش‌دهی Gate 5: معناشناسی خطا + طبقه‌بندی شش‌حالته + حقیقت نوتیفایر + job_id در ردیابی + نشت استیجینگ",
       "zone": "job-lifecycle-gate5-closure",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "gates_owner": false,
       "prerequisites": [
         "task-178-job-lifecycle",
@@ -2383,7 +2421,7 @@
         "src/nexus_ai_agent/cli.py",
         "docs/audits/VERIFICATION_TRUTH_MATRIX.json"
       ],
-      "note": "AMENDED 2026-09-24: adr/0007 + adr/README.md dropped from exclusive paths (ADR dir is docs-layer-only per adr/README rule 3; failure semantics lives in DECISION_LOG D-0019 — no ADR file created); cli.py added (JobResult/job_id type ripple) and VERIFICATION_TRUTH_MATRIX.json (task-181 revision). | DELIVERED via PR#78 (head b030442, CI green on push run 36056456707 + PR run 36057676037; one flaky PR run 36056491410 on the same head — push run green, retriggered PR run green). Gate 5 closure claims audited + reproduced + fixed: typed failure -> COMPLETED (reproduced), one-state failures, pdf staging leak (old artifact destroyed, reproduced), trace job_id absent (reproduced). Mutation harness 6/6 (scripts/gate5_mutation_probes.py). Evidence: docs/audits/GATE5_CLOSURE_2026-09-24.md + GATE5_TRUTH_MATRIX.json. Supersedes PR#71/#74. | CONTINUATION 2026-09-24T23:06:38Z on arena/01a0d5a1-nexus-ai-agent (owner directive: GATE 5 FINAL REPAIR — execution fencing + artifact publication correctness + durable state truth + re-gate). PR#78 head 5f273f08 is CONFLICTING with main 16daebc (after PR#72/#77 merged); this branch merges 5f273f08 into main commit-for-commit (no rebase/force-push of arena/01a0d4b6) and continues the repair on top. Successor PR supersedes PR#78.",
+      "note": "auto-released by gc at 2026-09-27T08:13:50Z (stale active lease)",
       "acceptance_criteria": [
         "typed render failure (success=False) reaches a failure status, NEVER COMPLETED; notifier must not emit success (regression test)",
         "JobStatus = pending/processing/verifying/completed/failed_retryable/failed_terminal with unit-enforced transition matrix; every illegal transition fails closed",
@@ -2502,6 +2540,91 @@
         "main_ci_run": 36314653561
       },
       "delivered": "e6b06e04d1e541aa5809694e42a571579fa4f460"
+    },
+    {
+      "task": "task-184-continuum-evidence-hardening",
+      "title": "Continuum evidence-system forensic hardening",
+      "title_fa": "سخت‌سازی فورنزیک سامانهٔ شواهد Continuum",
+      "zone": "continuum-evidence-measurement",
+      "priority": "P0",
+      "status": "active",
+      "agent_branch": "arena/01a0e2bb-nexus-ai-agent",
+      "claimed_at": "2026-09-27T12:27:18Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "prerequisites": [],
+      "scope": "Continuum evidence integration/trust audit: prove that CoverageReport and Snapshot truth are consumed fail-closed by every in-scope reader, CLI, script, validator, and release/readiness gate; patch only a direct false-evidence consumer defect.",
+      "scope_fa": "ممیزی یکپارچگی/اعتماد شواهد Continuum: اثبات مصرف fail-closed حقیقت CoverageReport و Snapshot توسط خواننده‌ها، CLI، script، validator و gateهای release/readiness در محدوده؛ patch فقط برای مصرف‌کنندهٔ مستقیمِ verdict جعلی.",
+      "exclusive_paths": [
+        ".nexus/continuum.json",
+        "scripts/continuum_gate.py",
+        "scripts/continuum_mutations.py",
+        "scripts/pack_coverage.py",
+        "src/nexus_ai_agent/continuum/",
+        "tests/unit/test_ci_continuum_evidence.py",
+        "tests/unit/test_continuum_gate.py",
+        "tests/unit/test_continuum_hardening.py",
+        "tests/unit/test_continuum_mutations.py",
+        "tests/unit/test_continuum_provenance.py",
+        "tests/unit/test_continuum_snapshot.py",
+        "tests/unit/test_continuum_snapshot_contract.py",
+        "tests/unit/test_pack_coverage_contract.py",
+        "tests/unit/test_pack_coverage_harness.py",
+        "tests/unit/test_slideshow_invariants.py"
+      ],
+      "acceptance_criteria": [
+        "Consumer graph from producer through serializer/reader/validator/gate/decision is enumerated from live code.",
+        "No in-scope consumer can turn empty, scoped, stale, malformed, or verified=false evidence into acceptance.",
+        "Every confirmed P0/P1 consumer defect has a minimal regression plus adversarial mutation guard.",
+        "PR/main/CI truth is recorded by exact SHA; full gates remain delegated to the gates owner."
+      ],
+      "evidence_required": [
+        "Search transcript and consumer/gate matrix with failure semantics and provenance classification.",
+        "Targeted negative tests and mutation RED-to-GREEN restoration for every confirmed consumer defect.",
+        "Two-run reproducibility comparison and exact PR #95/head/main/CI evidence."
+      ],
+      "note": "Audit result: two P1 snapshot false-greens were reproduced in isolated Git fixtures and fixed through e924a65: a valid snapshot survived an uncommitted source edit, and a clean later commit could reuse it after src/tests/scripts/migration/dependency drift. Regressions cover clean control, dirty/stale rejection, empty revision rejection, and unavailable git-status fail-closed behaviour in tests/unit/test_continuum_hardening.py. P2 integration gap remains: CoverageReport JSON has no downstream reader and CI/release-lineage invokes neither pack coverage nor snapshot verification; task-154 remains queued rather than claiming a release gate it does not implement. Current committed snapshot correctly blocks CLI verification (unreachable recorded SHA and test-count drift). No non-Continuum domain edits without a proven direct false-evidence consumer. | 2026-09-27 arena/01a0e1e0 continuation (supersedes PR #95/#98): the P2 gap is closed — pack coverage is a canonical 95%-per-pack gate (D-0023, option A), the snapshot verifier fails closed on a 27-attack executable threat model (scripts/continuum_gate.py), a 73-mutation replayable campaign (scripts/continuum_mutations.py) fails on any survivor, and the CI job continuum-evidence runs all three on 3.10/3.11/3.12 against the exact SHA. HISTORICAL EVIDENCE LOST — CONTENT RECONSTRUCTED: the first local lineage (c44bf2c…7bda42c) was never pushed and was lost in a sandbox re-provisioning; its surviving working tree (tree ddc76334) was reconstructed on top of 48db056 and every piece of evidence was regenerated on the new lineage — see docs/audits/CONTINUUM_CLOSURE_2026-09-27.md for the exact SHAs, local runs and CI run IDs. | 2026-09-27 arena/01a0e2bb continuation (same mission owner, new session branch; a session is bound to exactly one branch and cannot push to arena/01a0e1e0): the previous session's final local commit 6198510f0a06a803ba445e03bba1e44306eaf0f9 was never pushed and is unrecoverable (git fetch origin <sha> -> 'not our ref'), so its content fix was re-derived from the failing PR #102 head eb6551b instead of copied. PR #102 was red on `test` and `python-parity` 3.10/3.11/3.12 (runs 36315364432 / 36315366459) because docs/audits/CONTINUUM_CLOSURE_2026-09-27.md was not listed in docs/README.md, which tests/unit/test_docs_integrity.py enforces; reproduced locally as '1 failed, 2893 passed, 30 skipped'. Fixed by indexing the document -- the invariant, the threshold and the measurement are untouched.",
+      "previous_agent_branch": "arena/01a0e1e0-nexus-ai-agent"
+    },
+    {
+      "task": "task-185-external-intelligence-hardening",
+      "title": "External Intelligence hardening: typed failure, provenance, non-blocking IO, secret transport, hostile input",
+      "title_fa": "سخت‌سازی هوش خارجی: خطای تایپ‌شده، منشأ داده، IO غیرمسدودکننده، انتقال امن کلید، ورودی خصمانه",
+      "zone": "external-intelligence",
+      "priority": "P0",
+      "status": "active",
+      "gates_owner": false,
+      "prerequisites": [],
+      "scope": "knowledge/{knowledge_manager,web_trainer,wikipedia_trainer}.py and integrations/free_tools.py have ZERO tests on main and convert every external failure into a success-shaped value: get_text()/get_json() erase HTTP status and network errors ('' / {}), Wikipedia scrapes a 404 'article does not exist' page into user-visible 'knowledge', CurrencyTool returns 0.0 for a missing rate, every search path returns [] for both 'no results' and 'provider exploded', the NewsAPI key travels in the URL query string (and is logged by core/http_client on failure), the synchronous DDGS SDK is called directly inside async functions (event-loop block), BeautifulSoup parses unbounded attacker-controlled HTML on the loop, user input is interpolated raw into URL paths, and KnowledgeManager caches an LLM summary built from zero real sources for 24h using scalar_one_or_none() against a table it can populate with duplicates. Deliverable: a typed SourceResult/ExternalSourceError + Provenance contract, honest failure propagation, header-based secret transport, percent-encoded URL construction, to_thread offloading, bounded responses, query normalisation + stampede guard, and regression/adversarial/mutation tests.",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/knowledge/",
+        "src/nexus_ai_agent/integrations/",
+        "tests/unit/test_knowledge_hardening.py",
+        "tests/unit/test_free_tools_hardening.py",
+        "tests/unit/test_external_contracts.py"
+      ],
+      "acceptance_criteria": [
+        "No function in knowledge/ or integrations/ returns a success-shaped value ([], {}, '', None, 0.0) for a network/provider/HTTP failure: every failure is an ExternalSourceError with a typed ExternalErrorKind.",
+        "Every externally-derived payload carries Provenance (source, source_type, url, retrieved_at, truncated, degraded, fallback_path); truncation and degradation are marked, never silent.",
+        "No secret ever appears in a URL, log line, exception message or provenance record: the NewsAPI key travels in an X-Api-Key header and a redaction helper covers error text.",
+        "No synchronous third-party SDK call and no HTML parse runs on the event loop: DDGS and BeautifulSoup are offloaded with asyncio.to_thread and remain cancellable.",
+        "All user-influenced URL components are percent-encoded and validated; host/scheme cannot be injected through a query or lang argument.",
+        "Wikipedia cannot present a 404/disambiguation page as an article; HTTP status and response type are checked, not assumed.",
+        "KnowledgeManager never caches or returns a summary when zero real sources succeeded, normalises its cache key, tolerates duplicate cache rows, and de-duplicates concurrent identical learns.",
+        "Public legacy signatures used by out-of-zone callers (bot/knowledge_handlers.py, bot/tool_handlers.py) keep working unchanged.",
+        "tests/unit/test_knowledge_hardening.py + tests/unit/test_free_tools_hardening.py + tests/unit/test_external_contracts.py cover regression, adversarial and mutation cases and pass."
+      ],
+      "evidence_required": [
+        "ruff check + ruff format --check on the owned files (exact output)",
+        "mypy on the owned files (exact output)",
+        "pytest -q on the three owned test files (exact counts)",
+        "mutation probes: deliberately wrong implementations injected, guard tests observed RED, then restored GREEN",
+        "reproduction transcript for each finding against the pre-fix code"
+      ],
+      "note": "",
+      "agent_branch": "arena/01a0df05-nexus-ai-agent",
+      "claimed_at": "2026-09-26T18:46:40Z",
+      "ttl_hours": 24
     }
   ],
   "deferred_log": [
@@ -3115,6 +3238,21 @@
       "task": "task-181-gate5-closure",
       "reason": "Same mission owner (Gate 5 closure), new session branch (a session is bound to exactly one branch and cannot push to arena/01a0d4b6). PR#78 head 5f273f08 is mergeable=CONFLICTING against main 16daebc; this branch merges 5f273f08 commit-for-commit (board/DECISION_LOG/README conflicts resolved by keeping both sides) and repairs the open Gate 5 findings (execution fencing, artifact publication, durable completion truth). No force-push, rebase, or overwrite of PR#78.",
       "evidence": "gh pr view 78 --json headRefOid,mergeable,mergeStateStatus => 5f273f08 / CONFLICTING / DIRTY at 2026-09-24T23:06:38Z"
+    },
+    {
+      "at": "2026-09-27T08:20:00Z",
+      "by_branch": "arena/01a0e1e0-nexus-ai-agent",
+      "action": "continuation",
+      "task": "task-184-continuum-evidence-hardening",
+      "reason": "Owner directive (Continuum complete forensic closure): finish task-184 in one canonical lineage. PR#95 head 7a8d7a7 was red only on python-parity (3.10) (run 36270588298); PR#98 (arena/01a0df7f) carries 7a8d7a7 unmodified plus the 3.10 fix c26c2ba (runs 36272370688 push / 36272949657 pull_request green). This branch fast-forwards to c26c2ba commit-for-commit (no rebase, no force-push, no rewrite of either PR) and continues the hardening; PR#95 and PR#98 are superseded by the PR from this branch.",
+      "evidence": "gh pr view 95/98 --json headRefOid,mergeStateStatus => 7a8d7a72/UNSTABLE, c26c2bad/CLEAN; merge-base with main 6624a13 for both at 2026-09-27T08:05Z"
+    },
+    {
+      "at": "2026-09-27T12:27:18Z",
+      "by_branch": "arena/01a0e2bb-nexus-ai-agent",
+      "action": "continuation",
+      "task": "task-184-continuum-evidence-hardening + task-154-pack-coverage-ci",
+      "reason": "Same mission owner (Continuum complete forensic closure), new session branch: a session is bound to exactly one branch and cannot push to arena/01a0e1e0. PR #102 (head eb6551b) is red on `test` and python-parity 3.10/3.11/3.12 (docs index invariant), and the previous session's corrected head 6198510f0a06a803ba445e03bba1e44306eaf0f9 was never pushed and does not exist on the remote (verified: git fetch origin 6198510f0a06a803ba445e03bba1e44306eaf0f9 -> 'upload-pack: not our ref'). The correction is therefore re-derived and re-proven here rather than recreated from a report. The work ships as a successor PR from this branch; PR #95, #98 and #102 are closed only after that successor is merged to main and evidenced."
     }
   ],
   "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins."

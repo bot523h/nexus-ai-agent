@@ -28,9 +28,11 @@ from nexus_ai_agent.continuum.pack_coverage import (
     DEFAULT_PACK_ROOT,
     DEFAULT_TEST_TARGETS,
     DEFAULT_THRESHOLD,
+    CoverageProvenance,
     CoverageReport,
     ModuleCoverage,
     PackCoverage,
+    RunOutcomes,
     coverage_failures,
     executable_lines,
     format_table,
@@ -44,8 +46,22 @@ def _module(path: str, executed: int, executable: int) -> ModuleCoverage:
     return ModuleCoverage(path=path, executed=executed, executable=executable)
 
 
+_OUTCOMES = RunOutcomes(
+    collected=3, deselected=0, passed=3, failed=0, skipped=0, errors=0, xfailed=0
+)
+_PROVENANCE = CoverageProvenance(
+    git_commit="a" * 40,
+    worktree_drift=(),
+    source_digest="sha256:" + "0" * 64,
+    interpreter="cpython-3.11.2",
+)
+
+
 def _report(*packs: PackCoverage, threshold: float = DEFAULT_THRESHOLD) -> CoverageReport:
-    return CoverageReport(packs=tuple(packs), threshold=threshold)
+    """A report carrying complete run evidence, so only the numbers are judged."""
+    return CoverageReport(
+        packs=tuple(packs), threshold=threshold, outcomes=_OUTCOMES, provenance=_PROVENANCE
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -69,16 +85,35 @@ def test_executable_lines_counts_statements_not_comments_or_docstrings(tmp_path:
         encoding="utf-8",
     )
     lines = executable_lines(source)
-    # CPython's line table for a module is 1-based for statements, but on 3.11+
-    # a module prologue (RESUME) reports line 0 and a *module* docstring really
-    # does compile to a store of ``__doc__`` — both are what a coverage tool
-    # counts, and the harness must agree with the compiler rather than with
-    # intuition.  On 3.10 there is no RESUME prologue, so line 0 never appears.
-    expected = {0, 1, 4, 5, 6, 8, 10} if sys.version_info >= (3, 11) else {1, 4, 5, 6, 8, 10}
+    # CPython 3.11+ exposes a synthetic RESUME entry at line zero.  A line
+    # tracer never emits line zero, therefore counting it would create an
+    # impossible denominator and understate real coverage.
+    expected = {1, 4, 5, 6, 8, 10}
     assert lines == frozenset(expected), sorted(lines)
+    assert 0 not in lines  # synthetic compiler bookkeeping is not traceable
     assert 3 not in lines  # a comment never executes
     assert 7 not in lines  # a blank line never executes
     assert 9 not in lines  # a *function* docstring is constant-folded away
+
+
+def test_executable_lines_is_empty_for_blank_and_comment_only_modules(tmp_path: Path) -> None:
+    # CPython 3.10 gives the implicit module-level ``return None`` a positive
+    # line number that points at non-code text; 3.11+ reports it at synthetic
+    # line zero.  Both must resolve to an empty surface: a comment-only file
+    # owning even one "executable" line would be a fabricatable, trivially
+    # 100%-coverable denominator (the python-parity 3.10 regression).
+    blank = tmp_path / "blank.py"
+    blank.write_text("", encoding="utf-8")
+    assert executable_lines(blank) == frozenset()
+
+    comment_only = tmp_path / "only_comments.py"
+    comment_only.write_text("# no executable source\n\n# still nothing\n", encoding="utf-8")
+    assert executable_lines(comment_only) == frozenset()
+
+    # A module docstring, by contrast, is a real executable constant.
+    docstring_only = tmp_path / "docstring_only.py"
+    docstring_only.write_text('"""Just a docstring."""\n', encoding="utf-8")
+    assert executable_lines(docstring_only) == frozenset({1})
 
 
 def test_executable_lines_descends_into_comprehensions(tmp_path: Path) -> None:
@@ -151,10 +186,13 @@ def test_report_aggregates_and_percentages() -> None:
     assert [m.path for m in pack.worst(2)] == ["a.py", "b.py"]
 
 
-def test_zero_executable_module_is_full_coverage() -> None:
-    """A module with nothing to run cannot drag a pack down."""
-    assert _module("empty.py", 0, 0).percent == 100.0
-    assert PackCoverage(pack="empty", modules=()).percent == 100.0
+def test_zero_executable_surface_is_not_a_green_measurement() -> None:
+    """An empty numerator/denominator is absent evidence, never 100% coverage."""
+    assert _module("empty.py", 0, 0).percent == 0.0
+    assert PackCoverage(pack="empty", modules=()).percent == 0.0
+    failures = coverage_failures(CoverageReport(packs=()))
+    assert "measurement produced no pack reports" in failures
+    assert "measurement produced zero executable lines" in failures
 
 
 # ---------------------------------------------------------------------------
@@ -164,12 +202,33 @@ def test_zero_executable_module_is_full_coverage() -> None:
 
 def test_as_dict_is_json_serialisable_and_keyed_for_ci() -> None:
     report = _report(
-        PackCoverage(pack="edit", modules=(_module("edit/models.py", 9, 10),)),
-        threshold=85.0,
+        PackCoverage(pack="edit", modules=(_module("edit/models.py", 19, 20),)),
     )
     payload = json.loads(json.dumps(report.as_dict()))
-    assert set(payload) == {"threshold", "total", "pytest_exit_code", "tests", "packs"}
-    assert payload["total"] == {"executed": 9, "executable": 10, "percent": 90.0}
+    assert set(payload) == {
+        "schema",
+        "accepted",
+        "acceptance_threshold",
+        "failures",
+        "threshold",
+        "verified",
+        "measurement_issues",
+        "total",
+        "pytest_exit_code",
+        "test_outcomes",
+        "provenance",
+        "tests",
+        "packs",
+    }
+    assert payload["schema"] == "nexus.pack-coverage/2"
+    assert payload["accepted"] is True
+    assert payload["failures"] == []
+    assert payload["acceptance_threshold"] == 95.0
+    assert payload["verified"] is True
+    assert payload["measurement_issues"] == []
+    assert payload["total"] == {"executed": 19, "executable": 20, "percent": 95.0}
+    assert payload["test_outcomes"]["deselected"] == 0
+    assert payload["provenance"]["git_commit"] == "a" * 40
     assert payload["packs"][0]["pack"] == "edit"
     assert payload["packs"][0]["modules"][0]["missing_lines"] == []  # not computed here
 
@@ -178,21 +237,35 @@ def test_format_table_marks_below_threshold_rows() -> None:
     report = _report(
         PackCoverage(pack="delivery", modules=(_module("delivery/signing.py", 6, 10),)),
         PackCoverage(pack="core", modules=(_module("core/registry.py", 10, 10),)),
-        threshold=85.0,
     )
     table = format_table(report)
     lines = table.splitlines()
     assert lines[0].startswith("pack")
-    assert any("delivery" in line and "BELOW" in line for line in lines)
-    assert any("core" in line and "OK" in line for line in lines)
-    assert any(line.startswith("TOTAL") for line in lines)
+    assert any(line.startswith("delivery") and line.endswith("BELOW") for line in lines)
+    assert any(line.startswith("core") and line.endswith("OK") for line in lines)
+    assert any(line.startswith("TOTAL") and line.endswith("BELOW") for line in lines)
     assert f"threshold: {report.threshold:.2f}%" in table
+    assert lines[-1].startswith("verdict: NOT ACCEPTED")
 
 
-def test_format_table_handles_an_empty_measurement() -> None:
+def test_format_table_never_labels_a_lowered_threshold_ok() -> None:
+    """85% is a diagnostic bar: every row that clears it is DIAGNOSTIC, never OK."""
+    report = _report(
+        PackCoverage(pack="core", modules=(_module("core/registry.py", 9, 10),)),
+        threshold=85.0,
+    )
+    lines = format_table(report).splitlines()
+    assert any(line.startswith("core") and line.endswith("DIAGNOSTIC") for line in lines)
+    assert any(line.startswith("TOTAL") and line.endswith("NOT ACCEPTED") for line in lines)
+    assert not any(line.endswith(" OK") for line in lines)
+    assert lines[-1].startswith("verdict: NOT ACCEPTED")
+
+
+def test_format_table_marks_an_empty_measurement_unverified() -> None:
     table = format_table(_report())
     assert "TOTAL" in table
-    assert "100.00%" in table
+    assert "0.00%" in table
+    assert "UNVERIFIED" in table
 
 
 # ---------------------------------------------------------------------------
