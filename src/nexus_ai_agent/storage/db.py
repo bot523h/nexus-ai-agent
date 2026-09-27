@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import weakref
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from enum import Enum
@@ -21,11 +22,29 @@ log = logging.getLogger(__name__)
 _engine: Any | None = None
 _engine_path: str | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
+# Process-level RECORD of paths whose schema was created in this process.
+# This is bookkeeping for decide_sqlite_bootstrap() ("nothing" short-circuit)
+# and for diagnostics; it is NOT the session gate.  The session gate is
+# engine-owned (see _schema_ready_engines below): a schema claim must die
+# with the engine whose database it describes, otherwise a file replaced
+# while cached (external restore/truncation after an engine disposal) would
+# keep skipping initialisation for the rest of the process (E2/E3a/E4,
+# W1 close-out).
 _initialized_paths: set[str] = set()
 # Engines retired when the SQLite path changes.  Disposing an engine requires
 # an event loop, while _get_engine is synchronous, so retired engines are
 # closed by the next async database operation (see _dispose_replaced_engines).
 _replaced_engines: list[Any] = []
+
+#: The schema fast-path gate, owned by the engine OBJECT (weakly).  An
+#: engine is a member only after ``create_all`` succeeded against THIS
+#: engine's database.  Keyed by object identity, not by path: any engine
+#: disposal — test fixtures resetting the globals, or a path-switch
+#: retiring the engine — drops the object, the weak entry is collected,
+#: and initialisation re-arms for the next engine.  (SQLAlchemy 2.0 has no
+#: engine-level ``info`` dict — only ``Connection.info``, which dies per
+#: connection loan — so a weak set is the honest owner attachment.)
+_schema_ready_engines: weakref.WeakSet = weakref.WeakSet()
 
 # Postgres (NEXUS_DATABASE_URL) state, keyed by the normalized URL.
 _pg_engines: dict[str, Any] = {}
@@ -53,9 +72,12 @@ def _normalize_sqlite_path(db_path: str) -> str:
     ``Path.resolve()`` (strict=False) makes the key absolute against the
     *current* working directory, normalizes ``.``/``..`` and symlinks, and
     works for not-yet-existing files on every supported Python (3.10/3.11/3.12
-    share this behaviour).  Engine lifetime (``_engine``/``_engine_path``) and
-    schema lifetime (``_initialized_paths``) stay separate — the fix only makes
-    the file identity unambiguous.
+    share this behaviour).  W1 close-out: absolute identity alone was still
+    not the schema *readiness* owner — a replaced file at a cached absolute
+    path kept skipping initialisation (E2/E3a/E4) — so the session gate moved
+    to the engine itself (``_schema_ready_engines``); this canonical identity now
+    binds the engine (``_engine_path``) and the process record
+    (``_initialized_paths``) unambiguously.
     """
     return str(Path(db_path).expanduser().resolve())
 
@@ -284,16 +306,32 @@ async def create_all_metadata(engine: Any, metadata: MetaData) -> None:
 
 
 async def create_all_tables(db_path: str = "data/app.sqlite") -> None:
-    """Create all SQLModel tables for the selected database, exactly once per path."""
+    """Create all SQLModel tables for the selected database, once per engine.
+
+    The fast path is owned by the engine OBJECT (``_schema_ready_engines``);
+    the marker exists only after ``create_all`` succeeds against THIS
+    engine's database, so any engine disposal (fixture reset, path-switch
+    retirement) re-arms initialisation — including when the file at a
+    still-cached path was replaced meanwhile (external restore/truncation;
+    ``create_all`` stays checkfirst-idempotent, so a schema-bearing restore
+    is untouched).
+
+    Operational boundary (unchanged by design): mutating the SQLite FILE
+    while its engine is alive is unsupported — pooled connections are bound
+    to the old inode — and must be followed by engine disposal (in-process,
+    e.g. a path switch) or a process restart.  After disposal the next
+    session heals automatically: this function re-runs ``create_all``.
+    """
     await _dispose_replaced_engines()
     normalized_path = _normalize_sqlite_path(db_path)
     engine = _get_engine(normalized_path)
-    if normalized_path in _initialized_paths:
+    if engine in _schema_ready_engines:
         return
 
     async with engine.begin() as conn:
         await conn.execute(text("PRAGMA journal_mode=WAL"))
     await create_all_metadata(engine, SQLModel.metadata)
+    _schema_ready_engines.add(engine)
     _initialized_paths.add(normalized_path)
 
 

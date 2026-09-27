@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 from pathlib import Path
 
 import pytest
@@ -262,3 +263,117 @@ def test_i_normalize_returns_absolute_canonical_identity(tmp_path: Path) -> None
     # Absolute input is stable.
     target = str(tmp_path / "i.sqlite")
     assert _normalize_sqlite_path(target) == str(Path(target).resolve())
+
+
+# ── J. E2/E2b: file replaced after engine disposal → re-initialised ────
+
+
+@pytest.mark.asyncio
+async def test_j_file_replaced_under_a_disposed_engine_is_reinitialised(
+    tmp_path: Path,
+) -> None:
+    """E2 close-out: the schema claim is owned by the engine, not by the path
+    string.  An externally replaced file (delete + empty recreate) after an
+    engine disposal must get its schema back automatically — previously the
+    absolute path stayed in ``_initialized_paths`` for the rest of the
+    process and every session failed with ``no such table`` until restart.
+    Mutation killer: gating on ``_initialized_paths`` instead of the engine
+    makes this test RED (``OperationalError: no such table``)."""
+    db_path = str(tmp_path / "j.sqlite")
+    async with get_session(db_path) as session:
+        session.add(PendingApproval(change_type="j", description="original"))
+        await session.commit()
+
+    # conftest._dispose_db_engine equivalent: engine dies, process record survives.
+    assert db_module._engine is not None
+    await db_module._engine.dispose()
+    db_module._engine = None
+    db_module._engine_path = None
+    db_module._session_factory = None
+    assert _normalize_sqlite_path(db_path) in db_module._initialized_paths
+
+    # External replacement while the path is still cached.
+    Path(db_path).unlink()
+    Path(db_path).touch()
+
+    # No restart: the next session must heal (schema recreated, file usable).
+    async with get_session(db_path) as session:
+        assert (await session.execute(select(PendingApproval))).scalars().all() == []
+        session.add(PendingApproval(change_type="j", description="healed"))
+        await session.commit()
+    assert await _row_count(db_path) == 1
+
+
+# ── K. E3b: atomic restore of a schema-bearing backup preserves rows ────
+
+
+@pytest.mark.asyncio
+async def test_k_atomic_schema_bearing_restore_preserves_rows(tmp_path: Path) -> None:
+    """Anti-overcorrection guard: re-initialisation is checkfirst-idempotent,
+    so healing after an atomic restore (``os.replace`` / ``mv``) must never
+    clobber the data that arrived inside the backup file.
+
+    The restore protocol this pins: every engine touching the file is
+    disposed first (graceful close checkpoints WAL and removes the
+    ``-wal``/``-shm`` sidecars), THEN the file is swapped.  Swapping over
+    live WAL sidecars replays foreign frames against the new file — silent
+    data mixing that NO schema gate can see; that belongs to the operational
+    boundary documented on ``create_all_tables``."""
+    live = str(tmp_path / "live.sqlite")
+    backup = str(tmp_path / "backup.sqlite")
+
+    # A live, cached DB existed earlier in this process.
+    async with get_session(live) as session:
+        session.add(PendingApproval(change_type="k", description="stale-live-row"))
+        await session.commit()
+    # The backup was built off-line in the same process (live engine retired).
+    async with get_session(backup) as session:
+        session.add(PendingApproval(change_type="k", description="from-backup"))
+        await session.commit()
+
+    # Quiesce: dispose the current (backup) engine AND the retired (live)
+    # engine so WAL checkpoints flush and sidecars disappear on both files.
+    assert db_module._engine is not None
+    await db_module._engine.dispose()
+    db_module._engine = None
+    db_module._engine_path = None
+    db_module._session_factory = None
+    while db_module._replaced_engines:
+        await db_module._replaced_engines.pop().dispose()
+    assert not Path(live + "-wal").exists()
+    assert not Path(backup + "-wal").exists()
+
+    os.replace(backup, live)
+
+    async with get_session(live) as session:
+        rows = (await session.execute(select(PendingApproval))).scalars().all()
+        assert [r.description for r in rows] == ["from-backup"]
+
+
+# ── L. E3a: atomic replace with an EMPTY file → re-initialised ──────────
+
+
+@pytest.mark.asyncio
+async def test_l_atomic_replace_with_empty_file_is_reinitialised(tmp_path: Path) -> None:
+    """E3a: swap-through-rename of an empty file (operator restoring a blank
+    DB) after engine disposal must re-initialise exactly like delete+recreate
+    (test J) — the evidence entry is the file replacement, not its mechanism."""
+    live = str(tmp_path / "live.sqlite")
+    blank = tmp_path / "blank.sqlite"
+    blank.touch()
+
+    async with get_session(live) as session:
+        session.add(PendingApproval(change_type="l", description="before"))
+        await session.commit()
+    await db_module._engine.dispose()
+    db_module._engine = None
+    db_module._engine_path = None
+    db_module._session_factory = None
+
+    os.replace(blank, live)
+
+    async with get_session(live) as session:
+        assert (await session.execute(select(PendingApproval))).scalars().all() == []
+        session.add(PendingApproval(change_type="l", description="healed"))
+        await session.commit()
+    assert await _row_count(live) == 1
