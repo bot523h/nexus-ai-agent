@@ -16,6 +16,12 @@ the only stateful piece of that guarantee:
   protocol and being injected at composition time. The bus's pipeline
   (reserve → check preconditions → apply → commit) already uses only the
   protocol's methods, so swapping the backend does not change error semantics.
+  A reference durable backend :class:`adapters.file_idempotency.FileIdempotencyStore`
+  is shipped (atomic ``.tmp → rename`` JSON, ``RLock`` + reload-on-read) — it
+  proves the protocol can be made durable across ``FileIdempotencyStore``
+  instances sharing the same path and across process restart, while the bus
+  still holds the external lock. A DB or SQLite backend would follow the same
+  shape.
 
 The abstraction is intentionally minimal: a typed key, a fingerprint, an
 optional result, and a clear “in-flight” marker (``result is None``). No TTL,

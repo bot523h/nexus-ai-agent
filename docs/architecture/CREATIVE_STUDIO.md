@@ -48,7 +48,7 @@ The split is the load-bearing decision: **evidence is gathered above the bus** (
 | D | Denied | refused by policy: shell, raw upload, code execution, anything unregistered | — |
 
 **Dispatch pipeline** (`creative/studio/bus.py::_dispatch_locked`) — strict order, each step failing closed:
-1. parse → 2. envelope + operation schema → 3. actor/project grant → 4. capability + version + permissions → **4b. capability lifecycle / pack gate** (`creative/studio/lifecycle.py`: `required_packs` must be `AVAILABLE`, or `EXPERIMENTAL` with the bus-level `allow_experimental=True`; unknown / `STUB` / `RETIRED` refuse) → 5. execution policy + A/B/C/D → 6. input refs + pinned time refs → 7. idempotency reserve/replay via :class:`IdempotencyStore` (per-bus in-memory today, durable-tomorrow) → 8. revision preconditions → 9. atomic apply + `EditTransaction` push (deep-copied `project` snapshots for safe reads).
+1. parse → 2. envelope + operation schema → 3. actor/project grant → 4. capability + version + permissions → **4b. capability lifecycle / pack gate** (`creative/studio/lifecycle.py`: `required_packs` must be `AVAILABLE`, or `EXPERIMENTAL` with the bus-level `allow_experimental=True`; unknown / `STUB` / `RETIRED` refuse) → 5. execution policy + A/B/C/D → 6. input refs + pinned time refs → 7. idempotency reserve/replay via :class:`IdempotencyStore` (per-bus :class:`InMemoryIdempotencyStore` today; :class:`FileIdempotencyStore` reference durable backend shipped, DB-tomorrow) → 8. revision preconditions → 9. atomic apply + `EditTransaction` push (deep-copied `project` snapshots for safe reads).
 
 The lifecycle gate is the single seam between the canonical Gate-2 contract and the pack runtime (board task-183): it runs after the actor grant (so an unauthorized actor can never be granted anything by pack metadata) and before the idempotency reservation and the handler (so a refused pack performs zero work). `allow_experimental` is composition-root state, never a command-envelope field and never a queue-row field: the render worker derives it from the canonical operation via the server-controlled `render_jobs.EXPERIMENTAL_OPT_IN_OPERATIONS` (exactly the surface operations on an `EXPERIMENTAL` pack, pinned by test), and `CreativeRenderPayload` (`extra="forbid"`) rejects a row that tries to carry an opt-in. Lifecycle = pack *maturity*; `packs/availability.py` = pack *runnability* at render/preflight time. See [`COMMAND_CAPABILITY_CONTRACT.md`](COMMAND_CAPABILITY_CONTRACT.md) §2.
 
@@ -72,6 +72,7 @@ A pack is a directory with a `pack.manifest.json` validated against `nexus.capab
 - An **external** pack that declares an operation the runtime does not know is rejected at registration; a **builtin** pack may register with *pending* capabilities but cannot be activated until they resolve (`creative/packs/registry.py`).
 - Verification reports every finding; signature state is reported honestly (`placeholder`, `verified`, `invalid_signature`, `unknown_publisher`, `format_only_unverified` legacy) — builtin packs remain `placeholder` (trust via git), external signed packs can now be `verified` via Ed25519. No pack pretends to verify what it did not check.
 - Vision packs are *planning-only*: handlers compute a deterministic ``plan_digest`` (SHA-256 of canonical JSON) and derive ``artifact_content_sha256`` from it; ``provenance.execution_boundary = deterministic_plan_only`` and ``pixel_execution = False``. No pixel/ML execution is claimed.
+- **Shared-abstraction decision (task-153):** five strategies were compared — (1) full duplication (copy ``models.py`` per pack), (2) shared vocabulary via ``vision/models.py`` + thin ``portrait/models.py``/``scene/models.py`` shims (``from vision.models import *``), (3) inheritance (``PortraitModels(VisionBase)``), (4) composition (``portrait.models`` wraps ``vision.models``), (5) code-generation (jinja). (2) was chosen: single source of truth for ``Identifier``/``VisionConfidence``/``TimeRangeUS``/``ClipRef`` etc., zero duplication, deterministic ``plan_digest`` shared, and the coverage harness was hardened to count pure re-export shims as **100% when imported** (line-0 filtered) rather than penalizing correct architecture. Evidence: ``continuum/pack_coverage.py::_is_shim_module`` + ``96.83%`` (portrait/scene 100%); duplication would have been 2× maintenance and 2× drift.
 
 ## 4. Pack inventory and the activation gap (re-measured 2026-09-24)
 
@@ -89,7 +90,8 @@ A pack is a directory with a `pack.manifest.json` validated against `nexus.capab
 | `nexus.color.delivery` | 1.0.0 | 7 | 0 | format_only_unverified | — |
 
 The activation gap is **closed** (board task-126, landed) and Vision Phase 1
-closes the portrait/scene gap: `cli.py::_packs_registry` now composes
+closes the portrait/scene gap (shims counted as 100% when imported, shared
+vision vocabulary 99%): `cli.py::_packs_registry` now composes
 `creative.packs.runtime.build_pack_registry()` — the runtime and the CLI see
 the same **77** registered operation ids (wave-1 5 + 72 pack ops), and every
 builtin manifest verifies clean. Vision packs are ``EXPERIMENTAL`` (lifecycle)

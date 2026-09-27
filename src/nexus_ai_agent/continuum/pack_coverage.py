@@ -23,7 +23,10 @@ same property with the **standard library only**:
 Why per *pack* and not per file: a capability pack is the unit that ships, is
 manifested and is activated.  ``nexus packs list`` answers "what can run?"; this
 harness answers "what has actually been exercised?", and both are properties of
-the same eight directories (plus the core substrate).
+the same eight directories (plus the core substrate). Pure re-export shims
+(``portrait/models.py`` → ``vision/models.py``) are counted as 100% when
+imported — the harness proves import, not duplicate logic — and line 0 (compiler
+sentinel) is excluded from the denominator.
 
 Cost: tracing is roughly 3–5× slower than an untraced run, which is why the
 default target list is the pack-focused subset rather than the whole suite
@@ -35,9 +38,9 @@ package (the PR#40 lesson, enforced by
 **The bar.**  ``DEFAULT_THRESHOLD`` is 85%: a real bar with margin under the
 weakest pack measured on Wave-5 (`nexus.color.delivery` 87.19%), so a genuine
 regression turns the tool red while the repository it ships with is green.  The
-measured baseline for the default 27-module test set is 96.24% overall
-(audio 96.09 · caption 96.66 · core 95.23 · delivery 99.30 · edit 95.89 ·
-motion 98.12 · portrait 86.67 · scene 86.67 · slideshow 93.03 · vision 98.51).
+measured baseline for the default 27-module test set is 96.83% overall
+(audio 96.55 · caption 97.09 · core 95.89 · delivery 100.00 · edit 96.46 ·
+motion 98.55 · portrait 100.00 · scene 100.00 · slideshow 93.55 · vision 99.00).
 The Wave-5 baseline for the original 24-module set was 94.89% overall
 (audio 96.09 · caption 96.66 · core 96.26 · delivery 87.19 · edit 95.89 ·
 motion 98.12 · slideshow 93.03). With Vision (portrait/scene) the default
@@ -224,9 +227,48 @@ def executable_lines(path: Path) -> frozenset[int]:
     stack: list[types.CodeType] = [root]
     while stack:
         code = stack.pop()
-        lines.update(line for _, line in dis.findlinestarts(code))
+        lines.update(line for _, line in dis.findlinestarts(code) if line != 0)
         stack.extend(const for const in code.co_consts if isinstance(const, types.CodeType))
     return frozenset(lines)
+
+
+def _is_shim_module(path: Path) -> bool:
+    """True if *path* is a pure re-export shim (``from X import *`` only).
+
+    Thin portrait/scene ``models.py`` shims are intentional shared-abstraction
+    facades: they exist so ``nexus packs list`` has a file per pack, but the
+    real contracts live in ``vision/models.py``. Counting them as 0% because
+    the tracer never hits line 0 would penalize the correct architecture.
+    A shim is defined as a file whose non-empty, non-comment, non-docstring
+    code is a single ``from ... import *`` (or a short ``import`` block). The
+    harness still requires the shim to be *imported* during the test run;
+    otherwise it reports 0% (not imported) rather than 100%.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception:
+        return False
+    lines = []
+    in_docstring = False
+    for raw in text.splitlines():
+        s = raw.strip()
+        if not s or s.startswith("#"):
+            continue
+        if s.startswith('"""') or s.startswith("'''"):
+            # single-line docstring
+            if s.count('"""') == 2 or s.count("'''") == 2:
+                continue
+            in_docstring = not in_docstring
+            continue
+        if in_docstring:
+            continue
+        lines.append(s)
+    if len(lines) == 1 and lines[0].startswith("from ") and "import *" in lines[0]:
+        return True
+    if len(lines) <= 2 and all(l.startswith("from ") or l.startswith("import ") for l in lines):
+        # allow ``from X import Y as _Y`` re-export block
+        return True
+    return False
 
 
 def _iter_pack_modules(root: Path, packs: Iterable[str] | None) -> list[tuple[str, Path]]:
@@ -285,6 +327,19 @@ def measure(
         if not executable:
             continue
         ran = executed.get(str(path.resolve()), set())
+        # Shims are facades: if they were imported at all, they are 100%.
+        # The tracer still proves import; we just don't penalize line-0 or
+        # import-star nuances. A shim that was *never* imported stays 0%.
+        if _is_shim_module(path) and ran:
+            per_group.setdefault(group, []).append(
+                ModuleCoverage(
+                    path=str(path.relative_to(repo_root)),
+                    executed=len(executable),
+                    executable=len(executable),
+                    missing=(),
+                )
+            )
+            continue
         covered = sorted(executable & ran)
         per_group.setdefault(group, []).append(
             ModuleCoverage(
