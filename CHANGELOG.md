@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security (restricted shell — ADR 0011, session `arena/01a0e28b-nexus-ai-agent`)
+
+- **The shell sandbox now validates an argument _grammar_, not a list of
+  forbidden options.** `tools/system_shell.py` promised that "any argument that
+  is (or resolves to) a path outside the workspace is rejected"; that promise was
+  false. Measured against `main@e6b06e0`, with a secret file outside the
+  workspace: `date -f FILE` made GNU `date` read the file and echo its lines back
+  in error text (direct disclosure), `date -r FILE` leaked host file metadata,
+  `grep -fFILE` / `grep --file=FILE` / `grep --exclude-from=FILE` bypassed
+  validation entirely (the `=` and attached spellings were never inspected), and
+  `grep -R` printed `./escape_link:TOP_SECRET=42` by following a workspace
+  symlink out of the sandbox. Each command now has a declared table of the flags
+  it may receive, with the number and kind of value tokens each consumes; a flag
+  absent from the table is refused, so an option added by a future coreutils
+  release is refused too. An independent path-shaped-argument net requires any
+  absolute or traversing token to resolve inside the workspace, in any position
+  and any spelling.
+- **Symlink-following options are refused as data.** `ls -L/-H/--dereference`,
+  `grep -R/--dereference-recursive` and `find -L/-H/-follow` take no path
+  argument, so no path validation could contain them — they make the *command*
+  follow a link it meets while walking. Their safe siblings (`ls -R`, `grep -r`,
+  `find` with its default `-P`) were measured not to follow and stay allowed.
+  `test_no_declared_flag_follows_symlinks` asserts their absence from the tables.
+- **`grep`'s positional policy follows the flags actually seen.** With `-e`/`-f`
+  present, every positional is a file; treating the first as a pattern would
+  leave a real file argument unvalidated.
+- **Flawed design of the previous promise fixed at the root, not patched:**
+  `grep -fFILE` was missed by the original list, `--exclude-from` by the next
+  revision, and `date` was never tested at all. `scripts/shell_sandbox_mutations.py`
+  mutates the sandbox eleven ways and the suite must go red each time (11/11
+  killed, blocking `shell-mutations` CI job); `make mutations` runs it alongside
+  the pack-trust harness.
+
+### Fixed (documentation that was not true — session `arena/01a0e28b-nexus-ai-agent`)
+
+- **`creative/packs/trust.py` advertised a `cryptography` verification backend
+  that does not exist** and that the design explicitly rejects; `ed25519.py`
+  claimed "both backends of this module accept exactly the same set of
+  signatures". There is one backend, and differential testing against
+  OpenSSL (`cryptography` 50.0.1) over 326 valid/tampered/malformed cases found
+  exactly one divergence, in the safe direction: this module **rejects**
+  small-order public keys that OpenSSL accepts. Both docstrings now state that.
+  `tests/architecture/test_pack_trust_boundary.py` fails if an optional crypto
+  backend is ever imported into the trust path.
+- **A dangling ADR citation in the security module.** `creative/packs/trust.py`
+  cited `adr/0009-pack-trust-root.md`; the record it ships is `0006` and 0009 was
+  never written. `tests/unit/test_docs_integrity.py` gains a seventh check —
+  every `adr/NNNN-*.md` cited from `src/`, `tests/`, `scripts/` or `docs/` must
+  resolve — with a red-proof so the detector itself is covered. The ADR index
+  check alone could not see citations made from code.
+
 ### CI (task-132 — extras smoke matrix, session `arena/01a0d709-nexus-ai-agent`)
 
 - **Every optional extra is now a blocking CI leg.** The new `extras-matrix` job

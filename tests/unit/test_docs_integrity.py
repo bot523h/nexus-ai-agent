@@ -234,3 +234,91 @@ def test_architecture_pages_start_with_a_single_h1(path: Path) -> None:
     assert lines and lines[0].startswith("# "), f"{path.name} does not start with an H1"
     h1_count = sum(1 for line in lines if line.startswith("# "))
     assert h1_count == 1, f"{path.name} has {h1_count} H1 headings (expected exactly 1)"
+
+
+# --------------------------------------------------------------------------- #
+# 7. ADR references made *from code* resolve
+# --------------------------------------------------------------------------- #
+#: Where an ADR path may be cited.  Code counts: a module docstring saying
+#: "this ADR governs me" is the strongest form of the documentation contract,
+#: and until this check existed nothing verified that the record it names was
+#: even present.  It was not: ``creative/packs/trust.py`` cited the record
+#: numbered ``0009-pack-trust-root.md`` while the record it shipped is ``0006``.
+_CITATION_ROOTS = ("src", "tests", "scripts", "docs")
+_ADR_PATH = re.compile(r"(?:docs/architecture/)?adr/(\d{4}-[a-z0-9-]+\.md)")
+#: A citation is *outbound* only if it names a path; ``ADR 0006`` / ``ADR-0006``
+#: prose form is checked by the index test above.
+_SELF_REFERENCE_CONTEXT = ("template.md",)
+
+
+def _citation_files() -> list[Path]:
+    files: list[Path] = []
+    for root in _CITATION_ROOTS:
+        base = REPO_ROOT / root
+        if not base.is_dir():
+            continue
+        for pattern in ("*.py", "*.md"):
+            files.extend(p for p in base.rglob(pattern) if "__pycache__" not in p.parts)
+    files.extend(REPO_ROOT.glob("*.md"))
+    return sorted(set(files))
+
+
+def _dangling_adr_citations(text: str, existing: set[str]) -> list[str]:
+    """Citation numbers in *text* that name no record in *existing*.
+
+    Kept pure so the red-proof below can run it against a fixture rather than
+    having to break the repository to prove the guard can fail.
+    """
+    dangling: list[str] = []
+    for match in _ADR_PATH.finditer(text):
+        cited = match.group(1)
+        if cited in _SELF_REFERENCE_CONTEXT:
+            continue
+        if cited not in existing:
+            line = text[: match.start()].count("\n") + 1
+            dangling.append(f"line {line} -> adr/{cited}")
+    return dangling
+
+
+def test_every_cited_adr_record_exists() -> None:
+    """A dangling ADR citation is a documentation claim that cannot be checked.
+
+    The ADR index test (check 5) only ties ``adr/README.md`` to the files in
+    ``adr/``.  A reference from a Python docstring to a record number that was
+    never written therefore drifted undetected — exactly the docs-as-code
+    failure mode ADR 0002 exists to prevent.  It had already happened:
+    ``creative/packs/trust.py`` cited record 0009 for three days while the
+    record it shipped was 0006.
+    """
+    adr_dir = DOCS / "architecture" / "adr"
+    existing = {path.name for path in adr_dir.glob("*.md")}
+    assert existing, "no ADR records found"
+    dangling: list[str] = []
+    for path in _citation_files():
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for problem in _dangling_adr_citations(text, existing):
+            dangling.append(f"{path.relative_to(REPO_ROOT)}:{problem.removeprefix('line ')}")
+    assert not dangling, "ADR citations that resolve to nothing:\n" + "\n".join(dangling)
+
+
+#: A record that has never existed, and the path prefix the citation regex
+#: anchors on.  Both are assembled at run time on purpose: this module is inside
+#: the guard's own scan scope, so a literal citation written here would make the
+#: guard report its own red-proof fixture as a defect.
+_MISSING_RECORD = "0009-pack-trust-root.md"
+_ADR_PREFIX = "adr/"
+
+
+def test_the_dangling_citation_detector_can_actually_fire() -> None:
+    """Red-proof: a citation guard that cannot fire is not a guard."""
+    existing = {"0006-capability-pack-trust-root.md"}
+    dangling = f"see {_ADR_PREFIX}{_MISSING_RECORD}"
+    assert _dangling_adr_citations(dangling, existing) == [
+        f"line 1 -> {_ADR_PREFIX}{_MISSING_RECORD}"
+    ]
+    assert (
+        _dangling_adr_citations(f"see {_ADR_PREFIX}0006-capability-pack-trust-root.md", existing)
+        == []
+    )
+    # A bare record *number* is prose, not a path citation, and must not fire.
+    assert _dangling_adr_citations("governed by ADR 0009 and ADR-0012", existing) == []

@@ -21,10 +21,13 @@ types:
 test:
 	pytest -q -m "not slow"
 
-# Adversarial proof for the capability-pack trust plane (ADR 0006): every
-# mutation of the trust boundary must turn the trust suite red.
+# Adversarial proof for every security boundary that ships a mutation harness:
+# the pack trust plane (ADR 0006) and the restricted-shell sandbox (ADR 0011).
+# Each mutation must turn its boundary's suite red; a survivor is a guard that
+# exists only in prose.
 mutations:
 	python scripts/pack_trust_mutations.py
+	python scripts/shell_sandbox_mutations.py
 
 migrate:
 	python -m nexus_ai_agent.cli migrate

@@ -13,8 +13,8 @@ Layers (never allowed to self-authorise each other)
 ``authority``  a public key listed in the trust root for that publisher
 ``decision``   :class:`TrustDecision` — one explicit state, never a bool
 
-Architecture (ADR: docs/architecture/adr/0009-pack-trust-root.md)
------------------------------------------------------------------
+Architecture (ADR: docs/architecture/adr/0006-capability-pack-trust-root.md)
+----------------------------------------------------------------------------
 TUF-inspired, deliberately reduced:
 
 * an explicit, versioned root document listing publishers → public keys, with
@@ -30,9 +30,17 @@ TUF-inspired, deliberately reduced:
 
 Cryptography
 ------------
-Verification uses :mod:`cryptography` when it is installed, and otherwise a
-pure-Python RFC 8032 verifier (:mod:`nexus_ai_agent.creative.packs.ed25519`).
-Both paths verify only *public* data with *public* keys — there is no secret
+Verification uses **exactly one** implementation, always active:
+:mod:`nexus_ai_agent.creative.packs.ed25519`, a pure-Python RFC 8032 verifier.
+There is deliberately **no** ``cryptography``/PyNaCl backend.  An optional
+backend would mean two implementations that can disagree on exactly the edge
+cases that module pins — canonical ``S``, canonical point encodings, small-order
+keys — plus a "library missing" path that decays into "not verified, but
+allowed".  (An earlier revision of this docstring advertised such an optional
+backend.  It never existed; ``tests/architecture/test_pack_trust_boundary.py``
+now fails if one is introduced.)
+
+Verification touches only *public* data with *public* keys — there is no secret
 in this process, and **no signing code ships in production**: this module can
 only say yes or no, it can never mint authority.
 

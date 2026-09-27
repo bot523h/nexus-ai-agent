@@ -41,7 +41,7 @@ flowchart LR
 | T3 | **Spoofing** | dashboard scraping | bearer token required, constant-time compare, PII-free payloads | `tests/unit/test_dashboard_api.py`, `tests/unit/test_dashboard_privacy.py` | closed (P0-5) |
 | T4 | **Elevation** | bypassing force-join gates | real `get_chat_member` check with cache; confirmation button cannot self-approve | `tests/unit/test_force_join_gate.py` | closed (P0-3) |
 | T5 | **Tampering** | path traversal on `/cloud`, `/download`, uploads | `safe_paths.safe_join` + `sanitize_file_name` | `tests/unit/test_safe_paths.py`, `tests/unit/test_security_hardening.py` | closed (P0-6) |
-| T6 | **Tampering** | prompt-injected tool execution / shell escape | shell tool off by default, allow-listed commands, path validation | `tests/unit/test_shell_sandbox.py`, `tests/unit/test_tools_sandbox.py` | closed |
+| T6 | **Tampering** | prompt-injected tool execution / shell escape | shell tool off by default, allow-listed commands, and a **declared per-command argument grammar** after ADR 0011: an unlisted flag is refused, every `path`-kind flag value is validated by `WorkspaceFilesystem`, symlink-following options (`ls -L`, `grep -R`, `find -L`) are absent from the tables by design, and no shell metacharacter reaches a `shell=False` argv | `tests/unit/test_shell_sandbox.py` (attack half + legitimate-surface half), `tests/unit/test_filesystem_boundary.py`, `tests/unit/test_tools_sandbox.py`, `scripts/shell_sandbox_mutations.py` | closed (ADR 0011; T6 was **false** before it — `date -f`, `grep -fFILE` and `grep -R` were measured escape/disclosure paths on `main@e6b06e0`) |
 | T7 | **Information disclosure** | private prompts or transcripts sent to a third party | per-user consent gate (tri-state) + minimum-egress interval + strict-privacy provider removal | `tests/unit/test_ai_memory_consent.py` | closed (P0-7) |
 | T8 | **Information disclosure** | secrets in logs | redaction at the observability boundary in *both* pipelines (stdlib filter + structlog processor + wrapped rendered-line formatter, and the lifecycle `redact_fields` gate): bearer **and Basic-scheme** values, `token=`/`api_key=`/`password=` incl. single-quoted dict-repr keys, bare `?key=`/`?token=` query params, `x-goog-api-key` headers, bare and API-URL bot tokens, URL userinfo, secret-ish keys in nested structures, mapping-style (`%(password)s`) and non-string args, and `exc_info`/`stack_info` traceback text — asserted on captured rendered log output | `tests/unit/test_observability.py`, `tests/unit/test_structured_events.py` | closed (S3 closure, D-0016) |
 | T9 | **Information disclosure** | SSRF via summariser/WebTrainer/image URLs and the legacy `video_url` download | DNS/address validation + validating transport (private, metadata, loopback **and CGNAT 100.64.0.0/10** ranges refused): fail-fast `validate_url` at job creation **and** `SafeAsyncTransport` at fetch time — every connection incl. redirect hops is re-resolved, re-checked and IP-pinned (DNS-rebinding TOCTOU closed), and the **https-only scheme is re-enforced on every request** so an https→http redirect downgrade is refused, never followed | `tests/unit/test_http_client_ssrf.py`, `tests/unit/test_summarizer_ssrf.py`, `tests/unit/test_api_ssrf_download.py` | closed (S5 closure, D-0016) |
@@ -102,6 +102,40 @@ credentials ([ADR 0006](adr/0006-capability-pack-trust-root.md)):
 - no signing primitive and no private key material ship in the runtime;
   `tests/architecture/test_pack_trust_boundary.py` fails if one appears,
   and `scripts/pack_trust_mutations.py` proves the guards kill 12 attacks.
+
+## 4c. The restricted-shell boundary (T6)
+
+`tools/system_shell.py` is the one place where an agent's *text* becomes an
+argument vector executed by a real program, so it is treated as a sandbox rather
+than as a convenience wrapper ([ADR 0011](adr/0011-restricted-shell-flag-grammar.md)).
+
+- **Deny by default.** Each allowlisted command (`ls`, `pwd`, `echo`, `cat`,
+  `grep`, `find`, `date`) has a declared table of the flags it may receive, with
+  the number and kind of value tokens each consumes. A flag absent from the
+  table is refused — so an option added by a future coreutils release is refused
+  too, instead of silently widening the sandbox.
+- **Completeness is executable.** `test_every_declared_path_flag_is_validated`
+  walks the live table and requires every `path`-kind flag to refuse an outside
+  value; a table entry declared but not wired fails the suite.
+- **One physical boundary.** Every `path`-kind value and every path-shaped token
+  goes through `WorkspaceFilesystem`, which rejects absolute paths, `..`,
+  NUL bytes, non-POSIX spellings and any path with a **symlink component** — so
+  validation and use cannot be separated by a re-pointed link.
+- **Symlink-following options are refused as data, not as prose.** `-L`/`-H`
+  (`ls`), `-R`/`--dereference-recursive` (`grep`) and `-L`/`-H`/`-follow`
+  (`find`) take no path argument, so no validation could contain them: they make
+  the *command* follow a link it meets while walking. Measured on the pre-0011
+  code, with `ws/escape_link -> /tmp/secret.env`,
+  `grep -R TOP_SECRET .` printed `./escape_link:TOP_SECRET=42`.
+  `test_no_declared_flag_follows_symlinks` asserts their absence from the tables.
+- **No shell.** `subprocess.run(argv, shell=False, cwd=workspace_root)`;
+  `shlex.split` is used only to tokenise, never to interpret.
+- **Bounded blast radius.** 10-second timeout per command; `enable_shell=False`
+  marks the tool `BLOCKED` so the registry refuses it entirely.
+- **Honest about what it cannot do.** The sandbox contains *what an argument may
+  name*, not *what an allowlisted program does with it*; `date -f`, `date -r`,
+  `date -d`, `ls -L` and `grep -R` are refused rather than validated, because
+  there is no safe meaning for them here.
 
 ## 5. Secrets and configuration
 
