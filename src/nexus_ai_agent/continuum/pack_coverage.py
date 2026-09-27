@@ -38,7 +38,7 @@ package (the PR#40 lesson, enforced by
 **The bar.**  ``DEFAULT_THRESHOLD`` is 85%: a real bar with margin under the
 weakest pack measured on Wave-5 (`nexus.color.delivery` 87.19%), so a genuine
 regression turns the tool red while the repository it ships with is green.  The
-measured baseline for the default 27-module test set is 96.83% overall
+measured baseline for the default 27-module test set is 96.84% overall
 (audio 96.55 · caption 97.09 · core 95.89 · delivery 100.00 · edit 96.46 ·
 motion 98.55 · portrait 100.00 · scene 100.00 · slideshow 93.55 · vision 99.00).
 The Wave-5 baseline for the original 24-module set was 94.89% overall

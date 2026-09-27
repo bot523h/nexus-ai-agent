@@ -148,7 +148,7 @@ below, `2` bad usage. No third-party dependency: the harness uses stdlib
 | portrait | 2 | 100.00% | OK (shim → vision, counted as 100% when imported) |
 | scene | 2 | 100.00% | OK (shim → vision, counted as 100% when imported) |
 | vision (shared models/ops) | 2 | 99.00% | OK (shared vocabulary, 251/255) |
-| **TOTAL** | **34** | **96.83%** | OK (above 85% bar; 95% per-pack goal still tracked) |
+| **TOTAL** | **34** | **96.84%** | OK (above 85% bar; 95% per-pack goal still tracked) |
 
 Vision Phase 1 re-measured 2026-09-27 after hardening (line-0 filtered, shims
 counted as 100% when imported): the 94.89% Wave-5 baseline (24-module set,

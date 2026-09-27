@@ -215,6 +215,63 @@ def test_export_otio_execution() -> None:
     assert otio_asset.provenance["frame_rate"] == 24.0
 
 
+
+def test_export_otio_markers() -> None:
+    """OTIO marker interop (task-121): include_markers controls Marker.1 emission."""
+    # Project with two timeline markers (deterministic, sorted by timecode_us)
+    from nexus_ai_agent.creative.studio.models import Marker
+
+    clip = AssetRecord(asset_id="clip_m1", media_kind="video", content_sha256="sha256:clipm1", duration_us=5_000_000)
+    timeline = Timeline(
+        timeline_id="tl_markers",
+        duration_us=10_000_000,
+        markers=[
+            Marker(marker_id="mk1", timecode_us=1_000_000, label="Intro", color="red"),
+            Marker(marker_id="mk2", timecode_us=3_000_000, label="Beat", color="blue"),
+        ],
+    )
+    project = new_project("p_markers", "Marker Project", timeline)
+    project = project.model_copy(update={"assets": [clip]})
+    bus = CommandBus(project, registry=build_delivery_registry(), allow_experimental=True)
+
+    # include_markers=True → Marker.1 on Stack and Timeline
+    cmd = TypedCommand(
+        command_id="cmd_otio_markers",
+        operation="delivery.export_otio",
+        input={"timeline_id": "tl_markers", "frame_rate": 24.0, "include_markers": True},
+    )
+    res = bus.dispatch(cmd)
+    assert res.status == "applied"
+    otio_doc = json.loads(res.output["otio_json"])
+    # Markers appear both at top-level and inside Stack (cover both readers)
+    markers_top = otio_doc.get("markers", [])
+    markers_stack = otio_doc["tracks"].get("markers", [])
+    assert len(markers_top) == 2
+    assert len(markers_stack) == 2
+    # Deterministic order by timecode_us
+    assert markers_top[0]["metadata"]["nagar_marker_id"] == "mk1"
+    assert markers_top[0]["name"] == "Intro"
+    assert markers_top[0]["color"] == "RED"
+    assert markers_top[0]["time"]["value"] == 24  # 1s at 24fps
+    assert markers_top[1]["metadata"]["nagar_marker_id"] == "mk2"
+    assert markers_top[1]["time"]["value"] == 72  # 3s at 24fps
+    assert markers_top[1]["color"] == "BLUE"
+
+    # include_markers=False → no markers
+    project2 = new_project("p_markers2", "Marker Project 2", timeline)
+    project2 = project2.model_copy(update={"assets": [clip]})
+    bus2 = CommandBus(project2, registry=build_delivery_registry(), allow_experimental=True)
+    cmd2 = TypedCommand(
+        command_id="cmd_otio_no_markers",
+        operation="delivery.export_otio",
+        input={"timeline_id": "tl_markers", "frame_rate": 24.0, "include_markers": False},
+    )
+    res2 = bus2.dispatch(cmd2)
+    otio_doc2 = json.loads(res2.output["otio_json"])
+    assert "markers" not in otio_doc2
+    assert "markers" not in otio_doc2["tracks"]
+
+
 def test_render_master_4k_requires_confirmation() -> None:
     project, bus = _setup_delivery_bus()
 

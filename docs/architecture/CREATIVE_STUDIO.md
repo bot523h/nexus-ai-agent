@@ -121,7 +121,7 @@ Remaining, by family (only ``color.*`` now):
 |---|---|
 | `color.*` (3) | `white_balance`, `deband_denoise`, `hdr_tonemap` |
 
-All ``motion.*``, ``audio.*``, ``timeline.*``, ``portrait.*`` and ``scene.*`` TDD ids are now registered. Vision Phase 1 closed the 20-op portrait/scene gap (planning-only, deterministic ``plan_digest``).
+All ``motion.*``, ``audio.*``, ``timeline.*``, ``portrait.*`` and ``scene.*`` TDD ids are now registered. Vision Phase 1 closed the 20-op portrait/scene gap (planning-only, deterministic ``plan_digest``). Delivery OTIO now emits Timeline markers as OTIO ``Marker.1`` on the Stack (sorted, ``include_markers``-gated, color-mapped, ``RationalTime`` at export rate) — task-121 closed.
 
 ## 6. The render lane
 

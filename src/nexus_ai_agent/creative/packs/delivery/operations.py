@@ -331,6 +331,30 @@ def _export_otio(project: Project, context: OperationContext) -> OperationOutcom
     video_track = OtioTrack(name="Video 1", kind="Video", children=video_clips)
     audio_track = OtioTrack(name="Audio 1", kind="Audio", children=audio_clips)
 
+    # --- markers (task-121, OTIO Marker.1 on Stack) ---
+    # When include_markers is True, every Timeline Marker is emitted as an
+    # OTIO Marker.1 on the Stack (deterministic, sorted by timecode_us).
+    # Timecode is converted to RationalTime at the export rate; color is
+    # carried in metadata. When False, markers are omitted (clean interop).
+    otio_markers: list[dict[str, Any]] = []
+    if payload.include_markers:
+        for marker in sorted(project.timeline.markers, key=lambda m: m.timecode_us):
+            # OTIO time is in frames at the export rate
+            marker_frames = int((marker.timecode_us / 1_000_000.0) * rate)
+            otio_markers.append(
+                {
+                    "OTIO_SCHEMA": "Marker.1",
+                    "name": marker.label or marker.marker_id,
+                    "time": RationalTime(value=marker_frames, rate=rate).model_dump(mode="json"),
+                    "color": (marker.color.upper() if marker.color else "RED"),
+                    "metadata": {
+                        "nagar_marker_id": marker.marker_id,
+                        "nagar_label": marker.label,
+                        "nagar_timecode_us": marker.timecode_us,
+                    },
+                }
+            )
+
     otio_doc: dict[str, Any] = {
         "OTIO_SCHEMA": "Timeline.1",
         "name": project.name or project.project_id,
@@ -340,6 +364,7 @@ def _export_otio(project: Project, context: OperationContext) -> OperationOutcom
                 video_track.model_dump(mode="json"),
                 audio_track.model_dump(mode="json"),
             ],
+            **({"markers": otio_markers} if otio_markers else {}),
         },
         "metadata": {
             "nagar_project_id": project.project_id,
@@ -347,6 +372,9 @@ def _export_otio(project: Project, context: OperationContext) -> OperationOutcom
             "export_standard": "OpenTimelineIO-v1.0",
         },
     }
+    # Top-level markers for OTIO readers that look at Timeline.markers
+    if otio_markers:
+        otio_doc["markers"] = otio_markers
 
     otio_json = json.dumps(otio_doc, indent=2, sort_keys=True)
     derived_sha256 = hashlib.sha256(otio_json.encode("utf-8")).hexdigest()
