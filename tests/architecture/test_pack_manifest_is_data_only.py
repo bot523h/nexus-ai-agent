@@ -28,8 +28,10 @@ PACKS = REPO_ROOT / "src" / "nexus_ai_agent" / "creative" / "packs"
 ALLOWED_TOP_LEVEL = {
     "__future__",
     "collections",
+    "binascii",
     "dataclasses",
     "datetime",
+    "enum",
     "hashlib",
     "importlib",
     "json",
