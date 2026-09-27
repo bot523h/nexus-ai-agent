@@ -24,6 +24,8 @@ from nexus_ai_agent.creative.packs.caption import (
     format_ass,
     format_ass_timestamp,
     format_karaoke_dialogue,
+    format_srt,
+    format_vtt,
     is_persian_or_arabic,
     wrap_rtl_bidi,
 )
@@ -44,6 +46,7 @@ def _sample_persian_transcript() -> TranscriptRef:
     return TranscriptRef(
         transcript_id="tr_persian_01",
         source_asset_id="asset_audio_vazir",
+        source_sha256="b" * 64,
         language="fa",
         duration_us=10_000_000,
         segments=(
@@ -105,6 +108,79 @@ def test_wrap_rtl_bidi_anchors_punctuation_and_normalizes_newlines() -> None:
     english_text = "Hello World\nLine two"
     wrapped_en = wrap_rtl_bidi(english_text)
     assert wrapped_en == "Hello World\\NLine two"
+
+
+def test_ass_mixed_persian_latin_escape_and_rtl_injection() -> None:
+    from nexus_ai_agent.creative.packs.caption.formatters import escape_ass_text
+
+    mixed = "نسخهٔ v2.1 آماده است — قیمت ۱۲٫۵ دلار؟ https://example.test/a?x=1&y=2"
+    escaped = escape_ass_text(mixed + " {\\pos(0,0)}\nInjected")
+    assert "v2.1" in escaped
+    assert "https://example.test/a?x=1&y=2" in escaped
+    assert r"\{" in escaped and r"\}" in escaped
+    assert "\nInjected" not in escaped
+    assert "\u202e" not in escape_ass_text("متن\u202eLTR")
+    assert "\x00" not in escape_ass_text("متن\x00 سالم")
+    assert wrap_rtl_bidi("می‌روم eBay، نسخه 2.1!") != "می‌روم eBay، نسخه 2.1!"
+
+
+def test_ass_centisecond_boundaries_and_karaoke_total_are_integer_exact() -> None:
+    assert format_ass_timestamp(9_999) == "0:00:00.00"
+    assert format_ass_timestamp(10_000) == "0:00:00.01"
+    assert format_ass_timestamp(999_999) == "0:00:00.99"
+    assert format_ass_timestamp(1_000_000) == "0:00:01.00"
+    seg = TranscriptSegment(
+        start_us=0,
+        end_us=30_001,
+        text="alpha beta gamma",
+        words=(
+            WordTiming(word="alpha", start_us=1, end_us=9_999),
+            WordTiming(word="beta", start_us=10_000, end_us=19_999),
+            WordTiming(word="gamma", start_us=19_999, end_us=30_000),
+        ),
+    )
+    import re
+
+    durations = [int(value) for value in re.findall(r"\\k(\d+)", format_karaoke_dialogue(seg))]
+    assert sum(durations) == (seg.end_us - seg.start_us) // 10_000 == 3
+
+
+def test_packaged_vazirmatn_font_matches_manifest_digest() -> None:
+    import hashlib
+    import json
+
+    from nexus_ai_agent.creative.packs.caption.font_asset import vazirmatn_asset
+
+    path, digest = vazirmatn_asset()
+    manifest = json.loads((path.parents[1] / "pack.manifest.json").read_text(encoding="utf-8"))
+    artifact = next(
+        item for item in manifest["artifacts"] if item["artifact_id"] == "vazirmatn-font"
+    )
+    assert path.is_file() and path.stat().st_size > 100_000
+    assert artifact["sha256"] == f"sha256:{digest}"
+    assert digest == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert path.with_name("OFL.txt").is_file()
+
+
+def test_subtitle_formatters_reject_invalid_order_and_unrepresentable_time() -> None:
+    out_of_order = (
+        TranscriptSegment(start_us=1_000_000, end_us=2_000_000, text="later"),
+        TranscriptSegment(start_us=0, end_us=500_000, text="earlier"),
+    )
+    with pytest.raises(ValueError, match="ordered"):
+        format_srt(out_of_order)
+    with pytest.raises(ValueError, match="ordered"):
+        format_vtt(out_of_order)
+    with pytest.raises(ValueError, match="ordered"):
+        format_ass(out_of_order)
+
+    too_short = (TranscriptSegment(start_us=0, end_us=999, text="tiny"),)
+    with pytest.raises(ValueError, match="below the output format time resolution"):
+        format_srt(too_short)
+    with pytest.raises(ValueError, match="below the output format time resolution"):
+        format_vtt(too_short)
+    with pytest.raises(ValueError, match="below the output format time resolution"):
+        format_ass((TranscriptSegment(start_us=0, end_us=9_999, text="tiny"),))
 
 
 def test_format_karaoke_dialogue() -> None:
@@ -197,6 +273,7 @@ def test_generate_ass_rtl_command_dispatch_and_undo() -> None:
     assert ass_asset.media_kind == "caption"
     assert ass_asset.provenance["format"] == "ass"
     assert ass_asset.provenance["font"] == "Vazirmatn"
+    assert ass_asset.provenance["source_audio_sha256"] == tr.source_sha256
 
     # Test reversible undo
     undo_cmd = TypedCommand(command_id="cmd_undo_ass", operation="system.undo", input={})
@@ -206,7 +283,7 @@ def test_generate_ass_rtl_command_dispatch_and_undo() -> None:
     assert bus.project.assets[0].asset_id == "asset_audio_vazir"
 
 
-def test_style_vazirmatn_command_dispatch_and_undo() -> None:
+def test_style_vazirmatn_fails_closed_without_caption_bytes() -> None:
     project, bus = _setup_project()
     tr = _sample_persian_transcript()
 
@@ -233,15 +310,11 @@ def test_style_vazirmatn_command_dispatch_and_undo() -> None:
             "bold": True,
         },
     )
-    style_res = bus.dispatch(style_cmd)
-    assert style_res.status == "applied"
-    assert style_res.output["styled_asset_id"] == "caption_for_styling_vazir"
-    assert style_res.output["font_size"] == 52
-
-    # Verify styled record
-    styled_record = next(a for a in bus.project.assets if a.asset_id == "caption_for_styling_vazir")
-    assert styled_record.provenance["font"] == "Vazirmatn"
-    assert styled_record.parent_asset_ids == ("caption_for_styling",)
+    # The project index does not contain serialized caption bytes; styling only
+    # metadata would be fabricated success. No derived record may be created.
+    with pytest.raises(CommandValidationError, match="caption_style_content_unavailable"):
+        bus.dispatch(style_cmd)
+    assert not any(a.asset_id == "caption_for_styling_vazir" for a in bus.project.assets)
 
 
 def test_style_vazirmatn_rejects_non_existent_asset() -> None:
@@ -368,13 +441,9 @@ def test_search_transcript_matches_keywords_and_words() -> None:
     assert res_empty.output["total_hits"] == 0
 
 
-def test_burn_in_level_c_requires_confirmation_and_registers_derived_video() -> None:
-    project, bus = _setup_project()
-    registry = build_caption_registry()
-    spec = registry.get_spec("caption.burn_in")
-    assert spec.permission_level == PermissionLevel.CONFIRMATION
-
-    # Add a mock video asset and caption asset
+def test_burn_in_level_c_fails_closed_without_measured_render_artifact() -> None:
+    timeline = Timeline(timeline_id="tl_burn", duration_us=10_000_000)
+    project = new_project("p_burn", "burn-in fail-closed", timeline)
     video_rec = AssetRecord(
         asset_id="asset_video_master",
         media_kind="video",
@@ -387,9 +456,11 @@ def test_burn_in_level_c_requires_confirmation_and_registers_derived_video() -> 
         content_sha256="sha256:asshash999",
         duration_us=10_000_000,
     )
-    bus._project = bus.project.model_copy(
-        update={"assets": [*bus.project.assets, video_rec, caption_rec]}
-    )
+    project = project.model_copy(update={"assets": [video_rec, caption_rec]})
+    registry = build_caption_registry()
+    bus = CommandBus(project, registry=registry)
+    spec = registry.get_spec("caption.burn_in")
+    assert spec.permission_level == PermissionLevel.CONFIRMATION
 
     # Missing confirmation -> fails with PermissionDeniedError at command bus gate
     cmd_unconfirmed = TypedCommand(
@@ -406,7 +477,6 @@ def test_burn_in_level_c_requires_confirmation_and_registers_derived_video() -> 
     with pytest.raises(PermissionDeniedError, match="level C"):
         bus.dispatch(cmd_unconfirmed)
 
-    # Confirmed -> succeeds
     cmd_burn = TypedCommand(
         command_id="cmd_burn_ok",
         operation="caption.burn_in",
@@ -418,18 +488,8 @@ def test_burn_in_level_c_requires_confirmation_and_registers_derived_video() -> 
             "confirmed": True,
         },
     )
-    burn_res = bus.dispatch(cmd_burn)
-    assert burn_res.status == "applied"
-    assert burn_res.output["derived_asset_id"] == "burned_master_01"
-
-    # Verify derived asset in project
-    burned_rec = next(a for a in bus.project.assets if a.asset_id == "burned_master_01")
-    assert burned_rec.media_kind == "video"
-    assert burned_rec.parent_asset_ids == ("asset_video_master", "asset_caption_ass")
-    assert burned_rec.provenance["burn_in"] is True
-
-    # Test reversible undo
-    undo_cmd = TypedCommand(command_id="cmd_undo_burn", operation="system.undo", input={})
-    undo_res = bus.dispatch(undo_cmd)
-    assert undo_res.status == "applied"
+    before = bus.project.state_hash
+    with pytest.raises(CommandValidationError, match="caption_burn_in_renderer_unavailable"):
+        bus.dispatch(cmd_burn)
+    assert bus.project.state_hash == before
     assert "burned_master_01" not in [a.asset_id for a in bus.project.assets]

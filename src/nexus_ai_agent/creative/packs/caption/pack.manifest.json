@@ -3,7 +3,7 @@
   "package_id": "nexus.language.caption",
   "version": "1.0.0",
   "display_name": "Local Persian and multilingual captions",
-  "download_size_mb": 384.0,
+  "download_size_mb": 0.123,
   "capabilities": [
     "caption.transcribe",
     "caption.align_words",
@@ -18,22 +18,16 @@
   ],
   "runtime": {
     "native": {
-      "adapter_id": "nagar.local.whisperx.caption.v1",
-      "sandbox": "process_isolated",
+      "adapter_id": "nagar.local.faster-whisper.caption.v1",
+      "sandbox": "in_process",
       "network_required": false
     },
-    "browser": {
-      "preferred": "onnx_webgpu",
-      "fallback": "onnx_wasm_simd",
-      "worker_required": true
-    }
+    "browser": null
   },
   "permissions": [
     "read_project_audio",
-    "read_project_video_frames",
     "write_transcript_assets",
-    "write_derived_caption_assets",
-    "write_timeline_layers"
+    "write_derived_caption_assets"
   ],
   "network_policy": {
     "upload_media": false,
@@ -55,32 +49,16 @@
   },
   "artifacts": [
     {
-      "artifact_id": "whisper-small-int8",
-      "kind": "onnx_model",
-      "path": "models/whisper-small-int8.ort",
-      "size_mb": 142.0,
-      "sha256": "sha256:replace-with-real-digest",
-      "license": "model-license-reference"
-    },
-    {
-      "artifact_id": "persian-aligner",
-      "kind": "onnx_model",
-      "path": "models/fa-aligner.ort",
-      "size_mb": 68.0,
-      "sha256": "sha256:replace-with-real-digest",
-      "license": "model-license-reference"
-    },
-    {
-      "artifact_id": "vazirmatn-regular",
+      "artifact_id": "vazirmatn-font",
       "kind": "font",
-      "path": "fonts/Vazirmatn-Regular.ttf",
-      "size_mb": 1.2,
-      "sha256": "sha256:replace-with-real-digest",
+      "path": "fonts/Vazirmatn.ttf",
+      "size_mb": 0.123,
+      "sha256": "sha256:b69fd4c680b8f3f225feabcc655a2c585d97627b8f5f5c0f9985e894069f3a56",
       "license": "OFL-1.1"
     }
   ],
   "resource_budget": {
-    "max_resident_model_mb": 900,
+    "max_resident_model_mb": 2048,
     "max_audio_minutes_in_memory": 2.0,
     "max_preview_resolution": "1280x720"
   },
@@ -91,7 +69,7 @@
   },
   "security": {
     "signature_algorithm": "ed25519",
-    "signature": "base64:replace-with-signed-manifest",
+    "signature": "base64:replace-with-real-signature",
     "trusted_publisher": "nagar-core",
     "allow_arbitrary_native_code": false,
     "allow_arbitrary_wasm_imports": false
