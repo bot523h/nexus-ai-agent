@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 import nexus_ai_agent.continuum.pack_coverage as coverage
+import nexus_ai_agent.continuum.provenance as provenance
 import nexus_ai_agent.continuum.snapshot as snapshot
 from nexus_ai_agent.continuum.pack_coverage import (
     CoverageReport,
@@ -221,7 +222,7 @@ def test_snapshot_json_is_canonical_and_atomic_write_preserves_prior_file_on_int
     def interrupted_replace(_source: Path, _destination: Path) -> None:
         raise OSError("simulated interrupted replacement")
 
-    monkeypatch.setattr(snapshot.os, "replace", interrupted_replace)
+    monkeypatch.setattr(provenance.os, "replace", interrupted_replace)
     with pytest.raises(OSError, match="simulated interrupted replacement"):
         snapshot.write_snapshot(value)
     assert path.read_text(encoding="utf-8") == '{"old": true}\n'
@@ -362,7 +363,9 @@ def test_test_count_reader_accepts_only_a_successful_integer_collection_artifact
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def collection_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        Path(command[3]).write_text('{"count": 7, "exit_code": 0}', encoding="utf-8")
+        Path(command[3]).write_text(
+            '{"count": 7, "deselected": 0, "exit_code": 0}', encoding="utf-8"
+        )
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setattr(snapshot.subprocess, "run", collection_run)
@@ -371,7 +374,9 @@ def test_test_count_reader_accepts_only_a_successful_integer_collection_artifact
     def malformed_collection(
         command: list[str], **_kwargs: object
     ) -> subprocess.CompletedProcess[str]:
-        Path(command[3]).write_text('{"count": true, "exit_code": 0}', encoding="utf-8")
+        Path(command[3]).write_text(
+            '{"count": true, "deselected": 0, "exit_code": 0}', encoding="utf-8"
+        )
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setattr(snapshot.subprocess, "run", malformed_collection)
@@ -385,7 +390,9 @@ def test_test_count_reports_missing_collection_dependency_names(
     def failed_collection(
         command: list[str], **_kwargs: object
     ) -> subprocess.CompletedProcess[str]:
-        Path(command[3]).write_text('{"count": null, "exit_code": 2}', encoding="utf-8")
+        Path(command[3]).write_text(
+            '{"count": null, "deselected": 0, "exit_code": 2}', encoding="utf-8"
+        )
         return subprocess.CompletedProcess(
             command,
             0,

@@ -187,30 +187,69 @@ def adopt_pg(
 
 @app.command()
 def continuum(
-    mode: str = typer.Argument("show", help="show | verify"),
+    mode: str = typer.Argument("show", help="show | verify | publish"),
+    plan: str | None = typer.Option(None, "--plan", help="publish: plan label (default: keep)"),
+    next_step: str | None = typer.Option(
+        None, "--next", help="publish: next action (default: keep the current one)"
+    ),
 ) -> None:
-    """Show or verify the committed project-state snapshot (.nexus/continuum.json).
+    """Show, verify or publish the project-state snapshot (.nexus/continuum.json).
 
-    ``show`` prints the snapshot; ``verify`` compares HEAD against the
-    recorded last-good commit and exits non-zero on drift.
+    ``show`` prints the schema-valid canonical snapshot (exit 1 when it is
+    unreadable); ``verify`` checks commit reachability, source drift, working
+    tree, test count and environment and exits 1 on any finding; ``publish``
+    measures those facts from the clean checkout and writes the snapshot
+    atomically (commit it separately — DECISION_LOG D-0006/D-0023).
     """
-    from nexus_ai_agent.continuum.snapshot import verify_snapshot
+    from nexus_ai_agent.continuum import snapshot as continuum_snapshot
 
     if mode == "show":
-        from nexus_ai_agent.continuum.snapshot import SNAPSHOT_PATH
-
-        typer.echo(f"# {SNAPSHOT_PATH}")
-        typer.echo(SNAPSHOT_PATH.read_text(encoding="utf-8"))
+        try:
+            value = continuum_snapshot.read_snapshot()
+        except (OSError, ValueError) as exc:
+            typer.echo(f"✗ snapshot unreadable: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        typer.echo(f"# {continuum_snapshot.SNAPSHOT_PATH} (schema-valid; run `verify` for trust)")
+        typer.echo(value.to_json(), nl=False)
         return
     if mode == "verify":
-        problems = verify_snapshot()
+        problems = continuum_snapshot.verify_snapshot()
         if problems:
             for problem in problems:
                 typer.echo(f"✗ {problem}", err=True)
             raise typer.Exit(code=1)
         typer.echo("✓ continuum snapshot matches checkout")
         return
-    raise typer.BadParameter("mode must be 'show' or 'verify'")
+    if mode == "publish":
+        try:
+            previous = continuum_snapshot.read_snapshot()
+        except (OSError, ValueError):
+            previous = None
+        if previous is not None:
+            plan_value = previous.plan if plan is None else plan
+            next_value = previous.next if next_step is None else next_step
+            ledger = previous.ledger
+        elif plan is not None and next_step is not None:
+            plan_value, next_value, ledger = plan, next_step, []
+        else:
+            typer.echo(
+                "✗ no readable snapshot to inherit from: pass both --plan and --next", err=True
+            )
+            raise typer.Exit(code=2)
+        try:
+            value = continuum_snapshot.capture_snapshot(
+                plan=plan_value, next_step=next_value, ledger=ledger
+            )
+            path = continuum_snapshot.write_snapshot(value)
+        except (OSError, RuntimeError, ValueError) as exc:
+            typer.echo(f"✗ cannot publish snapshot: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        typer.echo(
+            f"✓ published {path} at step {value.step} "
+            f"({value.test_count_expected} tests, python {value.env_fingerprint.python})"
+        )
+        return
+    raise typer.BadParameter("mode must be 'show', 'verify' or 'publish'")
 
 
 @metrics_app.command("snapshot")

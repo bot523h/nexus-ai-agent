@@ -28,9 +28,11 @@ from nexus_ai_agent.continuum.pack_coverage import (
     DEFAULT_PACK_ROOT,
     DEFAULT_TEST_TARGETS,
     DEFAULT_THRESHOLD,
+    CoverageProvenance,
     CoverageReport,
     ModuleCoverage,
     PackCoverage,
+    RunOutcomes,
     coverage_failures,
     executable_lines,
     format_table,
@@ -44,8 +46,22 @@ def _module(path: str, executed: int, executable: int) -> ModuleCoverage:
     return ModuleCoverage(path=path, executed=executed, executable=executable)
 
 
+_OUTCOMES = RunOutcomes(
+    collected=3, deselected=0, passed=3, failed=0, skipped=0, errors=0, xfailed=0
+)
+_PROVENANCE = CoverageProvenance(
+    git_commit="a" * 40,
+    worktree_drift=(),
+    source_digest="sha256:" + "0" * 64,
+    interpreter="cpython-3.11.2",
+)
+
+
 def _report(*packs: PackCoverage, threshold: float = DEFAULT_THRESHOLD) -> CoverageReport:
-    return CoverageReport(packs=tuple(packs), threshold=threshold)
+    """A report carrying complete run evidence, so only the numbers are judged."""
+    return CoverageReport(
+        packs=tuple(packs), threshold=threshold, outcomes=_OUTCOMES, provenance=_PROVENANCE
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -186,22 +202,33 @@ def test_zero_executable_surface_is_not_a_green_measurement() -> None:
 
 def test_as_dict_is_json_serialisable_and_keyed_for_ci() -> None:
     report = _report(
-        PackCoverage(pack="edit", modules=(_module("edit/models.py", 9, 10),)),
-        threshold=85.0,
+        PackCoverage(pack="edit", modules=(_module("edit/models.py", 19, 20),)),
     )
     payload = json.loads(json.dumps(report.as_dict()))
     assert set(payload) == {
+        "schema",
+        "accepted",
+        "acceptance_threshold",
+        "failures",
         "threshold",
         "verified",
         "measurement_issues",
         "total",
         "pytest_exit_code",
+        "test_outcomes",
+        "provenance",
         "tests",
         "packs",
     }
+    assert payload["schema"] == "nexus.pack-coverage/2"
+    assert payload["accepted"] is True
+    assert payload["failures"] == []
+    assert payload["acceptance_threshold"] == 95.0
     assert payload["verified"] is True
     assert payload["measurement_issues"] == []
-    assert payload["total"] == {"executed": 9, "executable": 10, "percent": 90.0}
+    assert payload["total"] == {"executed": 19, "executable": 20, "percent": 95.0}
+    assert payload["test_outcomes"]["deselected"] == 0
+    assert payload["provenance"]["git_commit"] == "a" * 40
     assert payload["packs"][0]["pack"] == "edit"
     assert payload["packs"][0]["modules"][0]["missing_lines"] == []  # not computed here
 
@@ -210,15 +237,28 @@ def test_format_table_marks_below_threshold_rows() -> None:
     report = _report(
         PackCoverage(pack="delivery", modules=(_module("delivery/signing.py", 6, 10),)),
         PackCoverage(pack="core", modules=(_module("core/registry.py", 10, 10),)),
-        threshold=85.0,
     )
     table = format_table(report)
     lines = table.splitlines()
     assert lines[0].startswith("pack")
-    assert any("delivery" in line and "BELOW" in line for line in lines)
-    assert any("core" in line and "OK" in line for line in lines)
-    assert any(line.startswith("TOTAL") for line in lines)
+    assert any(line.startswith("delivery") and line.endswith("BELOW") for line in lines)
+    assert any(line.startswith("core") and line.endswith("OK") for line in lines)
+    assert any(line.startswith("TOTAL") and line.endswith("BELOW") for line in lines)
     assert f"threshold: {report.threshold:.2f}%" in table
+    assert lines[-1].startswith("verdict: NOT ACCEPTED")
+
+
+def test_format_table_never_labels_a_lowered_threshold_ok() -> None:
+    """85% is a diagnostic bar: every row that clears it is DIAGNOSTIC, never OK."""
+    report = _report(
+        PackCoverage(pack="core", modules=(_module("core/registry.py", 9, 10),)),
+        threshold=85.0,
+    )
+    lines = format_table(report).splitlines()
+    assert any(line.startswith("core") and line.endswith("DIAGNOSTIC") for line in lines)
+    assert any(line.startswith("TOTAL") and line.endswith("NOT ACCEPTED") for line in lines)
+    assert not any(line.endswith(" OK") for line in lines)
+    assert lines[-1].startswith("verdict: NOT ACCEPTED")
 
 
 def test_format_table_marks_an_empty_measurement_unverified() -> None:
