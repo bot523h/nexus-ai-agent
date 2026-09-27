@@ -12,7 +12,7 @@ that guard turns the suite red.
 | Domain | Question it answers | Status (2026-09-27) |
 |---|---|---|
 | A — command truth | did the action the user was told about actually happen? | NOT PROVEN (open PR #99) |
-| B — pack trust | may this capability pack execute? | PROVEN (ADR 0006, this branch) |
+| B — pack trust | may this capability pack execute? | PROVEN (ADR 0006; PR #101 merged as `e6b06e0`; main CI run `36314653561` green) |
 | C — execution truth | were pixels really produced, or only planned? | NOT PROVEN (open PR #97) |
 | D — evidence truth | is the coverage/CI evidence measured, or asserted? | NOT PROVEN (open PRs #95, #98) |
 | E — replay truth | can the same command commit twice? | PARTIALLY PROVEN (process-local, documented) |
@@ -54,7 +54,7 @@ All four are architecture ratchets in
 |---|---|---|
 | `creative/packs/trust.py` + `trust_root.json` | **canonical** for pack activation authority | ADR 0006 |
 | `creative/packs/delivery/signing.py` | **not** an activation authority | Transport seam for exported OTIO documents. Its PyNaCl-absent fallback is symmetric HMAC-SHA256 under the same secret used to verify, so a verifier can forge; it must not be described as Ed25519-equivalent. Owned by the `delivery-interop` zone / PR #99 — handoff recorded on that PR. Not reachable from any production call site today (only its own tests import it). |
-| `TRUSTED_SIGNATURE_STATES = frozenset()` (PRs #86/#88) | superseded | Same gate, unreachable state. Those branches also have **no merge base with `main`**; see the audit note on each PR. |
+| `TRUSTED_SIGNATURE_STATES = frozenset()` (PRs #86/#88) | superseded | Same gate, unreachable state. After #101 merged, GitHub reports both branches `CONFLICTING/DIRTY` against `main`; a local no-merge-base result from a shallow checkout is not treated as lineage evidence. |
 
 ## Threat model (ADR 0006, restated here for the whole plane)
 

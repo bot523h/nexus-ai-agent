@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T12:00:00Z",
+  "updated_at": "2026-09-27T12:10:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2412,8 +2412,8 @@
       "title_fa": "ریشهٔ اعتماد پک‌ها: مرجع بیرونی، تأیید Ed25519 و فعال‌سازی fail-closed",
       "zone": "pack-trust-root",
       "priority": "P0",
-      "status": "active_in_review",
-      "gates_owner": true,
+      "status": "done",
+      "gates_owner": false,
       "prerequisites": [],
       "scope": "Trust + Truth control plane, domain B (capability/pack trust). A manifest's own fields stop being its credentials: trust root (public keys only, empty by default, not env-swappable), one canonical signing serialisation, RFC 8032 Ed25519 verification with pinned edge cases, nine distinct TrustStates with exactly one trusted, activation of external packs gated on 'verified'. Supersedes the empty-TRUSTED_SIGNATURE_STATES approach proposed in PR#86/#88 by giving the state a reachable, testable definition. Also fixes the placeholder-prefix blind spot that reported four shipped manifests as 'format_only_unverified' instead of unsigned.",
       "exclusive_paths": [
@@ -2426,7 +2426,7 @@
         "scripts/pack_trust_mutations.py",
         "docs/architecture/adr/0006-capability-pack-trust-root.md"
       ],
-      "note": "Touches creative/packs/{verify,registry,manifest}.py minimally (trust wiring only) — those files are also edited by PR#86/#88; the trust gate here replaces their empty-set gate and the PRs must rebase onto it.",
+      "note": "Delivered by PR #101. Exact head 701fdb5; merge/main e6b06e0; main CI run 36314653561 green (13/13); main focused trust proof 89 passed; mutation 12/12 killed.",
       "acceptance_criteria": [
         "An external pack with an unknown publisher, a forged signature, a revoked key or any tampered field cannot be activated.",
         "Exactly one TrustState grants trust; every other outcome is distinguishable.",
@@ -2438,19 +2438,19 @@
         "python scripts/pack_trust_mutations.py",
         "make lint / make types / pytest -m 'not slow'"
       ],
-      "agent_branch": "arena/01a0e200-nexus-ai-agent",
-      "claimed_at": "2026-09-27T00:00:00Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "integration": {
         "canonical_pr": 101,
-        "head_sha_at_record": "pending-next-commit",
+        "head_sha_at_record": "701fdb5e0a6cfa6591ee5a6bad895ebfc19cde43",
         "supersedes": [
           "PR#86 (TRUSTED_SIGNATURE_STATES empty gate)",
           "PR#88 (same gate + artifact-proof slice)"
         ],
-        "supersede_reason_en": "Same enforcement point, but the empty trusted-state set makes 'verified' unreachable and therefore untestable. Both branches additionally have NO merge base with main (unrelated histories), so neither can carry the gate to main as-is.",
-        "supersede_reason_fa": "همان نقطهٔ اعمال، اما مجموعهٔ تهی باعث می‌شود حالت verified هرگز قابل دسترسی و آزمون نباشد؛ ضمناً هر دو شاخه با main مبنای ادغام مشترک ندارند.",
-        "do_not_close_until": "successor is on main",
+        "supersede_reason_en": "Same enforcement point, but the empty trusted-state set makes 'verified' unreachable and therefore untestable. After #101 merged, GitHub reports #86/#88 CONFLICTING/DIRTY against main; a prior local 'no merge base' observation came from a shallow checkout and is not lineage evidence.",
+        "supersede_reason_fa": "همان نقطهٔ اعمال، اما مجموعهٔ تهی حالت verified را غیرقابل‌دسترسی و آزمون می‌کند. پس از ادغام #101، گیت‌هاب هر دو PR را در برابر main به‌صورت CONFLICTING/DIRTY گزارش می‌کند؛ مشاهدهٔ محلی قبلی دربارهٔ merge-base ناشی از checkout کم‌عمق بود و مدرک lineage نیست.",
+        "do_not_close_until": "MET: successor merged to main at e6b06e0; PR #86 closed with technical record; PR #88 remains open because its independent artifact-proof slice is not superseded.",
         "overlap_resolution": [
           {
             "path": "src/nexus_ai_agent/creative/packs/registry.py",
@@ -2497,8 +2497,11 @@
             "exploitability_today": "no production call site imports the module; latent narrative/security defect, not a live vulnerability",
             "requested_disposition": "drop the symmetric fallback or rename the seam to an authenticity tag and correct the docstring"
           }
-        ]
-      }
+        ],
+        "main_sha_at_record": "e6b06e04d1e541aa5809694e42a571579fa4f460",
+        "main_ci_run": 36314653561
+      },
+      "delivered": "e6b06e04d1e541aa5809694e42a571579fa4f460"
     }
   ],
   "deferred_log": [
