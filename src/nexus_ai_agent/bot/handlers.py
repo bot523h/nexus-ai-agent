@@ -202,6 +202,9 @@ def build_handlers(
     presence: PresenceStore,
     storage: Any,
     feature_engines: FeatureEngines | None = None,
+    llm_engine: GeminiEngine | None = None,
+    summarizer_engine: SummarizerEngine | None = None,
+    llm_provider: Any | None = None,
 ) -> list[Any]:
     # ── Middleware & Utilities ────────────────────────────────────
     auth = AuthMiddleware(settings.allowed_user_ids, settings.owner_telegram_id)
@@ -234,10 +237,21 @@ def build_handlers(
     # Strong references to in-flight background tasks (fire-and-forget
     # create_task() without a held reference may be GC'd mid-execution).
     _held_background_tasks: set[asyncio.Task[Any]] = set()
-    # v2.0.0 specific engines
-    gemini_engine: GeminiEngine | None = None
-    summarizer_engine: SummarizerEngine | None = None
-    if settings.gemini_api_key:
+    # v2.0.0 specific engines.
+    # W1 (task-196): the application hands in the runtime-owned shared
+    # engine/summarizer — the handler layer must not construct its own.
+    # The legacy self-construction below remains ONLY for standalone/test
+    # callers; it is ratchet-pinned (zero queue wiring) and loudly logged.
+    gemini_engine = llm_engine
+    if gemini_engine is None and summarizer_engine is None and settings.gemini_api_key:
+        logger.warning(
+            "handlers_legacy_llm_self_construction",
+            extra={
+                "reason": "llm_engine/summarizer_engine were not injected; "
+                "building private engines with NO request queue — production "
+                "must pass the runtime-owned instances (W1 approved factory)"
+            },
+        )
         gemini_engine = GeminiEngine(
             api_key=settings.gemini_api_key,
             model=settings.gemini_model,
@@ -895,7 +909,9 @@ def build_handlers(
             _held_background_tasks.add(task)
             task.add_done_callback(_held_background_tasks.discard)
 
-        active_agent = await AgentManager.get_active(user_id)
+        # W1 (task-196): the shared provider flows to agent instances — no
+        # per-message private queue-less GeminiProvider.
+        active_agent = await AgentManager.get_active(user_id, gemini_provider=llm_provider)
         if active_agent:
             user_context = await memory_engine.get_context(user_id)
             response = await active_agent.respond(
