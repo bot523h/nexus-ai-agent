@@ -143,6 +143,29 @@ MUTATIONS: tuple[Mutation, ...] = (
         "test_daily_quota_rollover_rechecks_capacity_while_waiting",
         "daily quota must roll over without requiring another provider attempt",
     ),
+    Mutation(
+        "external_worker_cancellation_is_propagated",
+        "                    task.cancel()\n"
+        "                    raise\n"
+        "                if req.cancel_event.is_set() or self._closed:",
+        "                    task.cancel()\n"
+        "                    pass  # mutation: worker swallows an external shutdown\n"
+        "                if req.cancel_event.is_set() or self._closed:",
+        "test_worker_cancellation_settles_active_work_and_close_is_idempotent",
+        "an externally cancelled worker must propagate instead of re-running work",
+    ),
+    Mutation(
+        "provider_self_cancel_settles_as_typed_failure",
+        "                req.failed = True\n"
+        "                log.error(\n"
+        '                    "queue_provider_cancelled",',
+        "                req.failed = True\n"
+        "                raise  # mutation: a provider self-cancel climbs into the worker\n"
+        "                log.error(\n"
+        '                    "queue_provider_cancelled",',
+        "test_provider_self_cancellation_is_typed_failure_and_worker_survives",
+        "a provider cancelling itself must settle as a typed failure, never kill the worker",
+    ),
 )
 
 

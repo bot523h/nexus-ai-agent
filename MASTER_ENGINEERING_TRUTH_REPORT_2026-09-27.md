@@ -159,3 +159,44 @@ There is no database migration or persisted queue format to roll back. Reverting
 - Candidate typed provider failure PR #93: <https://github.com/bot523h/nexus-ai-agent/pull/93>
 - Candidate Continuum successor PR #107: <https://github.com/bot523h/nexus-ai-agent/pull/107>
 - Candidate deployment/restore PR #96: <https://github.com/bot523h/nexus-ai-agent/pull/96>
+
+---
+
+## 9. Successor addendum — PR #108 salvage and the Python 3.10 cancellation defect (2026-09-27, `arena/01a0e356-nexus-ai-agent`)
+
+**Successor context.** This report was written for candidate branch `arena/01a0e2f0-nexus-ai-agent` before a PR existed. It became PR #108 (head `5a4cb23b26fab15c7624d3e6c9bfc8f8006f8c35`), which at live re-inspection was **CONFLICTING** with main `05dec617f5c596ef9023cab9c42acc689efec583` (merge-base `93c7809...`; **4 ahead / 30 behind**) and **RED on python-parity (3.10)** on both check runs recorded for that head (check runs `108632462990` and `108632643506`, runs `36323757857` / `36323747749`); all other legs including 3.11/3.12 parity, lint, type, non-slow tests, extras, trust-mutations, migrate-postgres and release-lineage were green. A session is bound to exactly one branch and cannot push to `arena/01a0e2f0`, so — per the PR #102 → PR #107 precedent — the four commits `565c429`, `1564ba4`, `260dfc6`, `5a4cb23` were merged **verbatim** (no rebase, no force-push, authorship and SHAs preserved) into the successor branch `arena/01a0e356-nexus-ai-agent` as merge commit by `arena/01a0e356` onto `05dec617`. Changed-tree equivalence was verified before that commit: the four feature/report paths are byte-identical to `5a4cb23` (`git diff --quiet`); the only conflict was `.agents/board.json`, resolved semantically (main's claim statuses and gc notes are canonical; the `llm-request-queue-lifecycle` zone and the task-195 claim were appended; the claim was released via `takeover_log`; continuation claim `task-195-salvage` registered with `gates_owner=true`).
+
+### 9.1 Root cause of the 3.10 failure (reproduced chain)
+
+| Step | Evidence |
+|---|---|
+| Runtime witness | python-parity (3.10) FAILURE on head `5a4cb23` in both duplicate check runs; 3.11/3.12 green. |
+| Root-cause line | `src/nexus_ai_agent/features/request_queue.py:435` (at `5a4cb23`): `current.cancelling()` in `_execute`'s `except asyncio.CancelledError` handler. `asyncio.Task.cancelling()` exists only from Python 3.11; on 3.10 the first cancellation processed by a worker task raises `AttributeError` inside the handler. The path is exercised by `test_caller_cancellation_propagates_to_running_provider_task` and `test_worker_cancellation_settles_active_work_and_close_is_idempotent`, both shipped by the same PR. |
+| Local reproduction tripwire | AST parity guard `test_queue_module_stays_within_python_310_asyncio_api` added in the successor: **RED** on the original `5a4cb23` source (reports `cancelling` at line 435), **GREEN** after the fix. The sandbox has no Python 3.10 interpreter and no package source for it; the remote 3.10 parity leg remains the runtime witness of record (see §9.3 limits). |
+
+### 9.2 Fix design (selected over alternatives)
+
+`_execute` must distinguish three cancellation sources: (1) external cancellation of the *worker task itself* → propagate; (2) request withdrawal / `close()`, which cancel `req.execution_task` after recording `cancel_event`/`_closed` → `_RequestCancelled`; (3) a provider coroutine cancelling itself → typed failure that must not kill the worker.
+
+`Task.cancelling()` answered (1) by inspecting pending cancel requests — an API that does not exist on 3.10, and on 3.10 an externally delivered cancel is consumed by the awaited future and leaves no introspectable remainder. The selected recipe therefore changes the *observable*: the provider task is awaited through `asyncio.shield(task)`. An external worker cancellation then appears as `CancelledError` **with the provider task still running** (`task.done() is False`); the shield does not propagate into the provider task, so the code calls `task.cancel()` explicitly (preserving the pre-existing implicit propagation semantics that the running provider must receive cancellation) and re-raises. Provider-side cancellations (withdrawal, close, self-cancel) all complete the task before the worker observes the exception (`task.done() is True`), and are disambiguated by the already-recorded `cancel_event`/`_closed` state. Rejected: feature-detecting `cancelling()` (cannot recover the distinction on 3.10 at all), and swallowing external cancellation into a typed failure (breaks shutdown semantics and `_process_loop`'s settle-closed invariant). All primitives used exist on 3.8–3.12; `submit()` already used the same `wait_for(shield(future))` pattern, so the recipe is also stylistically canonical for this module.
+
+### 9.3 Proof table (successor head)
+
+| Proof | Result | Scope/limit |
+|---|---|---|
+| Original 15 queue tests | **PASS** (Python 3.11.2) | identical semantics retained. |
+| `test_queue_module_stays_within_python_310_asyncio_api` | **RED→GREEN** | RED on `5a4cb23` source (line 435), GREEN after fix; AST-based, comments may document history. Runtime parity remains the CI 3.10 leg — exact-head run ID recorded in the PR. |
+| `test_provider_self_cancellation_is_typed_failure_and_worker_survives` | **PASS (new)** | fills the previously untested self-cancel branch (failure type, accounting, worker survival, strict counters). |
+| Mutation campaign `scripts/llm_queue_mutations.py` | **14/14 killed, restored baseline GREEN** (25 s) | 12 original + 2 new mutants: `external_worker_cancellation_is_propagated` (dropping the worker `raise`), `provider_self_cancel_settles_as_typed_failure` (self-cancel climbs into worker). A deliberately unshielded `await task` is *not* a mutant: on 3.11+ all behavior tests pass with it — it is exactly the version-dependent trap class caught by the parity guard + CI leg instead. |
+| ruff check + format (repo-wide) | **PASS** (532 files) | successor-owned files explicitly checked. |
+| mypy `src` | **PASS** (247 files) | unchanged strictness settings. |
+| Board structural tests + `agent_board.py check` | **75 PASS; `no overlap — safe to proceed` (exit 0)** | coordination contract. |
+| Full non-slow suite | **2911 passed, 30 skipped, 16 warnings in 160.27 s** (`pytest -q -m "not slow"`, Python 3.11.2, successor tree) | includes the two tests added by the successor; slow-marked tests not claimed as run. |
+| Exact-head remote CI (all legs incl. 3.10 parity, continuum, trust-mutations) | recorded in the PR body | remote witness of record for this addendum. |
+
+### 9.4 What is still **not** proven (unchanged from §7, plus)
+
+1. The fix is verified locally on 3.11.2 and on CI 3.10/3.11/3.12; no interpreter matrix beyond CI exists. The sandbox used for the fix could not execute 3.10 (no interpreter, no external package source), so the local leg of the RED→GREEN proof is the AST tripwire plus the historical failing check runs.
+2. Out-of-contract direct `processor_task.cancel()` racing provider completion on the same event-loop tick settles as a typed provider failure instead of propagating (single-instruction window; in-contract paths — `close()`/`_cancel_request` — record state first and are unaffected). Documented in the code comment.
+3. Everything in report §3/§7 still stands: process-local only, no app-wide shutdown wiring, no single gateway, no remote-cancellation guarantee, strict-priority starvation, GIL-sized fairness window, and no production/durability claim. The mutation harness is still not a CI gate (`.github/` ownership respected).
+4. `MODULE_MAP.md` remains deferred to the docs owners, exactly as the original claim scoped itself.

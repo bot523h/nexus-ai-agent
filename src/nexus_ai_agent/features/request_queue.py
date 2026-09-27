@@ -425,19 +425,34 @@ class GeminiRequestQueue:
             task = asyncio.create_task(self._invoke_provider(req))
             req.execution_task = task
             try:
-                return await task
+                # Await through a shield so that the three cancellation sources
+                # stay distinguishable without Python-version-specific task
+                # introspection (requires-python >= 3.10; Task.cancelling() is
+                # 3.11+): an external cancellation of this worker leaves the
+                # shielded provider task RUNNING, while any provider-task-side
+                # cancellation (request withdrawal, close, or a provider
+                # cancelling itself) completes the task before we observe it.
+                return await asyncio.shield(task)
             except _RequestCancelled:
                 raise
             except _RequestTimedOut:
                 raise
             except asyncio.CancelledError:
-                current = asyncio.current_task()
-                if current is not None and current.cancelling():
+                if not task.done():
+                    # The shield was interrupted: this worker task itself was
+                    # cancelled from outside (shutdown-level cancellation; both
+                    # in-contract paths — close() and _cancel_request — instead
+                    # cancel the provider task after recording their state).
+                    # The shield does not propagate cancellation into the
+                    # provider task, so do it explicitly, then propagate.
+                    task.cancel()
                     raise
                 if req.cancel_event.is_set() or self._closed:
                     raise _RequestCancelled from None
                 # A provider coroutine may cancel itself. Do not let that kill
-                # the queue worker or silently retry an unknown outcome.
+                # the queue worker or silently retry an unknown outcome. An
+                # out-of-contract direct worker cancel racing provider
+                # completion on the same loop tick settles here too.
                 req.failed = True
                 log.error(
                     "queue_provider_cancelled",

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -15,6 +17,51 @@ from nexus_ai_agent.features.request_queue import (
     Priority,
     RequestQueueClosedError,
 )
+
+_QUEUE_MODULE = (
+    Path(__file__).resolve().parents[2] / "src" / "nexus_ai_agent" / "features" / "request_queue.py"
+)
+
+#: asyncio callables/methods that do not exist on Python 3.10 (the declared
+#: floor in pyproject ``requires-python``).  PR #108 (head 5a4cb23) failed the
+#: CI python-parity (3.10) leg twice (check runs 108632462990/108632643506)
+#: because the worker-cancellation branch called ``Task.cancelling()``.  The
+#: version-independent recipe expresses the same semantics with
+#: ``asyncio.shield`` + ``task.done()``; this guard keeps the module on it.
+#: Matched on the AST so comments/docstrings may still document the history.
+_FORBIDDEN_PY311_PLUS_ATTR_CALLS = frozenset({"cancelling", "uncancel"})
+_FORBIDDEN_PY311_PLUS_NAME_CALLS = frozenset({"timeout", "timeout_at", "TaskGroup"})
+
+
+def test_queue_module_stays_within_python_310_asyncio_api() -> None:
+    """Python 3.10 parity contract: no >3.10 asyncio construct in the module.
+
+    This is the regression tripwire for the 5a4cb23 defect class: reintroduce
+    a 3.11+ asyncio API call anywhere in request_queue.py and this test is RED
+    before CI's 3.10 parity leg even starts.
+    """
+    tree = ast.parse(_QUEUE_MODULE.read_text(encoding="utf-8"))
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr in _FORBIDDEN_PY311_PLUS_ATTR_CALLS:
+            offenders.append(f"{func.attr}() at line {node.lineno}")
+        elif isinstance(func, ast.Name) and func.id in _FORBIDDEN_PY311_PLUS_NAME_CALLS:
+            offenders.append(f"{func.id}() at line {node.lineno}")
+        elif (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "asyncio"
+            and func.attr in _FORBIDDEN_PY311_PLUS_NAME_CALLS
+        ):
+            offenders.append(f"asyncio.{func.attr}() at line {node.lineno}")
+    assert not offenders, (
+        "request_queue.py uses asyncio APIs unavailable on Python 3.10: "
+        + ", ".join(offenders)
+        + ". requires-python is >=3.10; use the shield/done/cancel_event recipe."
+    )
 
 
 async def _wait_until(predicate: Callable[[], bool], *, timeout: float = 1.0) -> None:
@@ -288,6 +335,34 @@ async def test_worker_cancellation_settles_active_work_and_close_is_idempotent()
     finally:
         await queue.close()
         await asyncio.gather(caller, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_provider_self_cancellation_is_typed_failure_and_worker_survives() -> None:
+    """A provider coroutine that cancels itself is a typed failure, never a
+    dead worker and never a silent retry of an unknown remote outcome."""
+    queue = GeminiRequestQueue(max_rpm=10, max_daily=10)
+
+    async def self_cancelling_provider() -> str:
+        raise asyncio.CancelledError()
+
+    try:
+        result = await queue.submit(self_cancelling_provider, user_id=11, timeout=5)
+        assert "failed" in result  # typed failure message reached the caller
+
+        status = queue.get_status()
+        assert status["logical_failed"] == 1
+        assert status["logical_cancelled"] == 0
+        assert status["logical_closed"] == 0
+        assert status["provider_attempts"] == 1
+        assert status["pending_requests"] == 0
+
+        # The worker survived: the next request is processed normally.
+        assert await queue.submit(lambda: _result("alive"), user_id=12, timeout=5) == "alive"
+        assert queue.get_status()["logical_succeeded"] == 1
+        assert queue.get_status()["provider_attempts"] == 2
+    finally:
+        await queue.close()
 
 
 @pytest.mark.asyncio
