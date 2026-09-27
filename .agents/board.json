@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-26T20:18:32Z",
+  "updated_at": "2026-09-27T08:14:03Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -76,11 +76,17 @@
       "id": "continuum-evidence-measurement",
       "description": "Continuum snapshot + stdlib pack-coverage evidence contracts",
       "paths": [
+        ".nexus/continuum.json",
+        "scripts/continuum_gate.py",
+        "scripts/continuum_mutations.py",
+        "scripts/pack_coverage.py",
         "src/nexus_ai_agent/continuum/",
+        "tests/unit/test_continuum_gate.py",
         "tests/unit/test_continuum_hardening.py",
+        "tests/unit/test_continuum_snapshot.py",
         "tests/unit/test_pack_coverage_harness.py"
       ],
-      "note": "Zone declaration was missing when task-184 was claimed (board schema tests test_active_claims_carry_owner_timestamp_and_zone / test_exclusive_paths_belong_to_a_declared_zone were RED on the branch tip 49ae131). Declared verbatim from that claim's exclusive_paths by arena/01a0df05-nexus-ai-agent (task-185) — additive repair only, the claim itself was not modified."
+      "note": "Zone declaration was missing when task-184 was claimed (board schema tests test_active_claims_carry_owner_timestamp_and_zone / test_exclusive_paths_belong_to_a_declared_zone were RED on the branch tip 49ae131). Declared verbatim from that claim's exclusive_paths by arena/01a0df05-nexus-ai-agent (task-185) — additive repair only, the claim itself was not modified. | 2026-09-27 arena/01a0e1e0 (task-184 continuation): zone extended to the snapshot test, the committed snapshot, the coverage/continuum CLIs and the replayable mutation campaign."
     },
     {
       "id": "coordination",
@@ -1751,7 +1757,7 @@
       "title_fa": "",
       "zone": "ci-quality",
       "priority": "P1",
-      "status": "queued",
+      "status": "active",
       "scope": "non-blocking bootstrap job first, then blocking; sequenced after PR#33 lands",
       "scope_fa": "non-blocking bootstrap job first, then blocking; sequenced after PR#33 lands",
       "prerequisites": [],
@@ -1759,7 +1765,12 @@
         "CI job runs scripts/pack_coverage.py and reports per-pack coverage",
         "non-blocking (continue-on-error) at bootstrap, flip to blocking with evidence"
       ],
-      "note": "canonical ID resolved 2026-09-22"
+      "note": "Claimed by the Continuum closure session together with task-184. Goes straight to a BLOCKING job (owner directive: no continue-on-error bootstrap); evidence recorded on release.",
+      "agent_branch": "arena/01a0e1e0-nexus-ai-agent",
+      "claimed_at": "2026-09-27T08:14:03Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": []
     },
     {
       "task": "task-155-packs-doctor",
@@ -2357,7 +2368,7 @@
       "title_fa": "بستن و سازش‌دهی Gate 5: معناشناسی خطا + طبقه‌بندی شش‌حالته + حقیقت نوتیفایر + job_id در ردیابی + نشت استیجینگ",
       "zone": "job-lifecycle-gate5-closure",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "gates_owner": false,
       "prerequisites": [
         "task-178-job-lifecycle",
@@ -2390,7 +2401,7 @@
         "src/nexus_ai_agent/cli.py",
         "docs/audits/VERIFICATION_TRUTH_MATRIX.json"
       ],
-      "note": "AMENDED 2026-09-24: adr/0007 + adr/README.md dropped from exclusive paths (ADR dir is docs-layer-only per adr/README rule 3; failure semantics lives in DECISION_LOG D-0019 — no ADR file created); cli.py added (JobResult/job_id type ripple) and VERIFICATION_TRUTH_MATRIX.json (task-181 revision). | DELIVERED via PR#78 (head b030442, CI green on push run 36056456707 + PR run 36057676037; one flaky PR run 36056491410 on the same head — push run green, retriggered PR run green). Gate 5 closure claims audited + reproduced + fixed: typed failure -> COMPLETED (reproduced), one-state failures, pdf staging leak (old artifact destroyed, reproduced), trace job_id absent (reproduced). Mutation harness 6/6 (scripts/gate5_mutation_probes.py). Evidence: docs/audits/GATE5_CLOSURE_2026-09-24.md + GATE5_TRUTH_MATRIX.json. Supersedes PR#71/#74. | CONTINUATION 2026-09-24T23:06:38Z on arena/01a0d5a1-nexus-ai-agent (owner directive: GATE 5 FINAL REPAIR — execution fencing + artifact publication correctness + durable state truth + re-gate). PR#78 head 5f273f08 is CONFLICTING with main 16daebc (after PR#72/#77 merged); this branch merges 5f273f08 into main commit-for-commit (no rebase/force-push of arena/01a0d4b6) and continues the repair on top. Successor PR supersedes PR#78.",
+      "note": "auto-released by gc at 2026-09-27T08:13:50Z (stale active lease)",
       "acceptance_criteria": [
         "typed render failure (success=False) reaches a failure status, NEVER COMPLETED; notifier must not emit success (regression test)",
         "JobStatus = pending/processing/verifying/completed/failed_retryable/failed_terminal with unit-enforced transition matrix; every illegal transition fails closed",
@@ -2419,17 +2430,23 @@
       "title_fa": "سخت‌سازی فورنزیک سامانهٔ شواهد Continuum",
       "zone": "continuum-evidence-measurement",
       "priority": "P0",
-      "status": "active_in_review",
-      "agent_branch": "arena/01a0df05-nexus-ai-agent",
-      "claimed_at": "2026-09-26T20:18:32Z",
+      "status": "active",
+      "agent_branch": "arena/01a0e1e0-nexus-ai-agent",
+      "claimed_at": "2026-09-27T08:20:00Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "prerequisites": [],
       "scope": "Continuum evidence integration/trust audit: prove that CoverageReport and Snapshot truth are consumed fail-closed by every in-scope reader, CLI, script, validator, and release/readiness gate; patch only a direct false-evidence consumer defect.",
       "scope_fa": "ممیزی یکپارچگی/اعتماد شواهد Continuum: اثبات مصرف fail-closed حقیقت CoverageReport و Snapshot توسط خواننده‌ها، CLI، script، validator و gateهای release/readiness در محدوده؛ patch فقط برای مصرف‌کنندهٔ مستقیمِ verdict جعلی.",
       "exclusive_paths": [
+        ".nexus/continuum.json",
+        "scripts/continuum_gate.py",
+        "scripts/continuum_mutations.py",
+        "scripts/pack_coverage.py",
         "src/nexus_ai_agent/continuum/",
+        "tests/unit/test_continuum_gate.py",
         "tests/unit/test_continuum_hardening.py",
+        "tests/unit/test_continuum_snapshot.py",
         "tests/unit/test_pack_coverage_harness.py"
       ],
       "acceptance_criteria": [
@@ -2443,7 +2460,8 @@
         "Targeted negative tests and mutation RED-to-GREEN restoration for every confirmed consumer defect.",
         "Two-run reproducibility comparison and exact PR #95/head/main/CI evidence."
       ],
-      "note": "Audit result: two P1 snapshot false-greens were reproduced in isolated Git fixtures and fixed through e924a65: a valid snapshot survived an uncommitted source edit, and a clean later commit could reuse it after src/tests/scripts/migration/dependency drift. Regressions cover clean control, dirty/stale rejection, empty revision rejection, and unavailable git-status fail-closed behaviour in tests/unit/test_continuum_hardening.py. P2 integration gap remains: CoverageReport JSON has no downstream reader and CI/release-lineage invokes neither pack coverage nor snapshot verification; task-154 remains queued rather than claiming a release gate it does not implement. Current committed snapshot correctly blocks CLI verification (unreachable recorded SHA and test-count drift). No non-Continuum domain edits without a proven direct false-evidence consumer."
+      "note": "Audit result: two P1 snapshot false-greens were reproduced in isolated Git fixtures and fixed through e924a65: a valid snapshot survived an uncommitted source edit, and a clean later commit could reuse it after src/tests/scripts/migration/dependency drift. Regressions cover clean control, dirty/stale rejection, empty revision rejection, and unavailable git-status fail-closed behaviour in tests/unit/test_continuum_hardening.py. P2 integration gap remains: CoverageReport JSON has no downstream reader and CI/release-lineage invokes neither pack coverage nor snapshot verification; task-154 remains queued rather than claiming a release gate it does not implement. Current committed snapshot correctly blocks CLI verification (unreachable recorded SHA and test-count drift). No non-Continuum domain edits without a proven direct false-evidence consumer.",
+      "previous_agent_branch": "arena/01a0df05-nexus-ai-agent"
     },
     {
       "task": "task-185-external-intelligence-hardening",
@@ -3097,6 +3115,14 @@
       "task": "task-181-gate5-closure",
       "reason": "Same mission owner (Gate 5 closure), new session branch (a session is bound to exactly one branch and cannot push to arena/01a0d4b6). PR#78 head 5f273f08 is mergeable=CONFLICTING against main 16daebc; this branch merges 5f273f08 commit-for-commit (board/DECISION_LOG/README conflicts resolved by keeping both sides) and repairs the open Gate 5 findings (execution fencing, artifact publication, durable completion truth). No force-push, rebase, or overwrite of PR#78.",
       "evidence": "gh pr view 78 --json headRefOid,mergeable,mergeStateStatus => 5f273f08 / CONFLICTING / DIRTY at 2026-09-24T23:06:38Z"
+    },
+    {
+      "at": "2026-09-27T08:20:00Z",
+      "by_branch": "arena/01a0e1e0-nexus-ai-agent",
+      "action": "continuation",
+      "task": "task-184-continuum-evidence-hardening",
+      "reason": "Owner directive (Continuum complete forensic closure): finish task-184 in one canonical lineage. PR#95 head 7a8d7a7 was red only on python-parity (3.10) (run 36270588298); PR#98 (arena/01a0df7f) carries 7a8d7a7 unmodified plus the 3.10 fix c26c2ba (runs 36272370688 push / 36272949657 pull_request green). This branch fast-forwards to c26c2ba commit-for-commit (no rebase, no force-push, no rewrite of either PR) and continues the hardening; PR#95 and PR#98 are superseded by the PR from this branch.",
+      "evidence": "gh pr view 95/98 --json headRefOid,mergeStateStatus => 7a8d7a72/UNSTABLE, c26c2bad/CLEAN; merge-base with main 6624a13 for both at 2026-09-27T08:05Z"
     }
   ],
   "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins."
