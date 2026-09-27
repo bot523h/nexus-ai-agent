@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T12:00:00Z",
+  "updated_at": "2026-09-27T11:30:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2412,7 +2412,7 @@
       "title_fa": "ریشهٔ اعتماد پک‌ها: مرجع بیرونی، تأیید Ed25519 و فعال‌سازی fail-closed",
       "zone": "pack-trust-root",
       "priority": "P0",
-      "status": "active_in_review",
+      "status": "completed_merged",
       "gates_owner": true,
       "prerequisites": [],
       "scope": "Trust + Truth control plane, domain B (capability/pack trust). A manifest's own fields stop being its credentials: trust root (public keys only, empty by default, not env-swappable), one canonical signing serialisation, RFC 8032 Ed25519 verification with pinned edge cases, nine distinct TrustStates with exactly one trusted, activation of external packs gated on 'verified'. Supersedes the empty-TRUSTED_SIGNATURE_STATES approach proposed in PR#86/#88 by giving the state a reachable, testable definition. Also fixes the placeholder-prefix blind spot that reported four shipped manifests as 'format_only_unverified' instead of unsigned.",
@@ -2443,7 +2443,7 @@
       "ttl_hours": 24,
       "integration": {
         "canonical_pr": 101,
-        "head_sha_at_record": "pending-next-commit",
+        "head_sha_at_record": "701fdb5e0a6cfa6591ee5a6bad895ebfc19cde43",
         "supersedes": [
           "PR#86 (TRUSTED_SIGNATURE_STATES empty gate)",
           "PR#88 (same gate + artifact-proof slice)"
@@ -2497,7 +2497,10 @@
             "exploitability_today": "no production call site imports the module; latent narrative/security defect, not a live vulnerability",
             "requested_disposition": "drop the symmetric fallback or rename the seam to an authenticity tag and correct the docstring"
           }
-        ]
+        ],
+        "merge_commit": "e6b06e04d1e541aa5809694e42a571579fa4f460",
+        "main_ci_run": 36314653561,
+        "main_ci_result": "13/13 success (incl. python-parity 3.10/3.11/3.12 and trust-mutations)"
       }
     }
   ],

@@ -12,10 +12,10 @@ that guard turns the suite red.
 | Domain | Question it answers | Status (2026-09-27) |
 |---|---|---|
 | A — command truth | did the action the user was told about actually happen? | NOT PROVEN (open PR #99) |
-| B — pack trust | may this capability pack execute? | PROVEN (ADR 0006, this branch) |
+| B — pack trust | may this capability pack execute? | PROVEN — on `main` at merge commit `e6b06e04`, CI run 36314653561 green 13/13 incl. `trust-mutations` |
 | C — execution truth | were pixels really produced, or only planned? | NOT PROVEN (open PR #97) |
 | D — evidence truth | is the coverage/CI evidence measured, or asserted? | NOT PROVEN (open PRs #95, #98) |
-| E — replay truth | can the same command commit twice? | PARTIALLY PROVEN (process-local, documented) |
+| E — replay truth | can the same command commit twice? | PARTIALLY PROVEN — process-local reservations, honestly documented in `studio/bus.py`; restart and multi-worker semantics unproven |
 
 ## Domain B interfaces (the part that is proven)
 
