@@ -30,9 +30,17 @@ This note distinguishes pack registration from operations that actually execute.
   command operation only performs glossary substitutions; it does not dispatch
   through Argos. The distinction is now included in its result/provenance.
 - `caption.style_vazirmatn` previously wrote a new asset record with the same
-  content hash as its parent. `caption.burn_in` previously registered a hash of
-  two parent hashes as though that hash represented rendered video bytes. Both
-  were false artifact claims. They now fail closed before project-state apply.
+  content hash as its parent. It now requires the typed transcript, verifies a
+  canonical transcript SHA-256 and source-media lineage against the parent
+  caption, emits actual deterministic ASS text, hashes the output, and records
+  the packaged font's measured SHA-256. This proves document generation, not
+  durable byte storage or pixel rendering. `caption.burn_in` still fails closed:
+  a hash of parent hashes is never represented as rendered video bytes.
+- `caption.transcribe` now requires engine identity plus source SHA-256 and
+  validates that digest against the registered audio/video AssetRecord before
+  CommandBus state changes. SRT/ASS generation also validates source asset type
+  and available digest evidence. Engine-backed transcribe callers missing that
+  evidence fail closed.
 - The lane's real media burn-in is explicitly deferred by board task-174, whose
   scope owns `rendering/ir.py`, `rendering/compiler.py`, `render_jobs.py`, and
   `bot/creative_surface.py`; `render_jobs.py` is additionally fenced by active
@@ -47,16 +55,64 @@ This note distinguishes pack registration from operations that actually execute.
 
 | Operation | Contract | Pure logic | Real adapter | Runtime | Render | Tests | Status |
 |---|---|---|---|---|---|---|---|
-| `caption.transcribe` | typed + strict | provenance/source checks | faster-whisper port | creative worker | SRT document output | adapter + bus | PARTIAL: model weights not shipped; local directory required; worker lineage needs integration follow-up |
+| `caption.transcribe` | typed + strict | source digest bound to media AssetRecord | faster-whisper port | creative worker | SRT document output | adapter + bus | PARTIAL: model weights not shipped; local directory required; no real ASR fixture in this environment |
 | `caption.align_words` | typed | exact-cover monotone projection | not needed | CommandBus | n/a | adversarial overlap/range/zero-span | FIXED |
 | `caption.diarize` | typed | merge/group/assign | energy VAD anchors only | CommandBus | n/a | deterministic anchors/turns | HONEST HEURISTIC; no neural identity |
 | `caption.translate_local` | typed | glossary substitutions + coverage | Argos adapter exists separately | bus and adapter not joined | n/a | adapter + glossary tests | PARTIAL: not neural translation through this bus operation |
 | `caption.generate_srt` | typed | integer-microsecond SRT/VTT | n/a | CommandBus | UTF-8 document bytes in worker | golden + hash | PASS for pure document output |
 | `caption.generate_ass_rtl` | typed | strict ASS/RTL/karaoke | n/a | CommandBus | no measured FFmpeg render here | golden + mixed-script/injection | PASS as ASS document generation; render is not proven |
-| `caption.style_vazirmatn` | typed | config schema | n/a | CommandBus | no caption bytes in project index | fail-closed test | UNAVAILABLE; requires content resolution, does not claim styled output |
+| `caption.style_vazirmatn` | typed transcript + bounded style schema | canonical transcript/source lineage check; deterministic ASS | packaged Vazirmatn font | CommandBus | returns actual ASS document + derived content hash | success + tamper rejection | PASS for ASS document generation; durable storage and rendered pixels not proven |
 | `caption.highlight_words` | typed | ASS karaoke projection | n/a | CommandBus | no visual render in this lane | timing + golden | PASS for subtitle timing tags, not visual pixel proof |
 | `caption.search_transcript` | typed | deterministic segment/word search | n/a | CommandBus | n/a | positive/negative queries | PASS |
 | `caption.burn_in` | typed + confirmation | no fake result | trusted renderer not connected | CommandBus refusal | blocked by task-174/task-181 | failure/state-hash test | UNAVAILABLE; no derived artifact claimed |
+
+## Twenty golden engineering invariants
+
+These are executable review constraints for this lane, not claims that every
+backend or media integration exists:
+
+1. **Output truth:** only return an artifact after generating its actual bytes;
+   hashes of inputs or parent hashes are not rendered artifacts.
+2. **Fail closed:** missing engines, weights, fonts, caption content, or trusted
+   renderers produce typed refusal, never a plausible placeholder.
+3. **Offline by default:** no model, glossary, translation package, or cloud
+   service is fetched implicitly; downloads require explicit opt-in.
+4. **Typed boundaries:** Pack input/output crosses `CaptionEnginePort` and local
+   adapters as validated models, not loosely-shaped backend dictionaries.
+5. **Authorization continuity:** permissions, capability checks, and user
+   confirmation remain enforced by CommandBus; handlers do not bypass them.
+6. **Media binding:** transcript source IDs and SHA-256 values must match a
+   registered audio/video asset wherever that evidence is supplied or required.
+7. **Transformation lineage:** every derived document records its parent,
+   source transcript digest, source media digest, and transformation identity.
+8. **Content addressing:** output hashes are computed from the exact UTF-8 bytes
+   returned, not reused from parents or calculated from metadata.
+9. **Integer timing:** canonical time is integer microseconds; no float timing
+   arithmetic is used in projection or serialization.
+10. **Exact projection:** inferred word timings are monotone, bounded, and cover
+    the intended segment span without cumulative drift.
+11. **Explicit quantization:** millisecond/centisecond conversion has named,
+    deterministic rounding and rejects positive cues that collapse to zero.
+12. **Injection-safe serialization:** untrusted ASS control syntax and bidi
+    overrides are neutralized before document output.
+13. **Script fidelity:** Persian/Arabic text is preserved in logical order;
+    the pack does not pretend to do shaping or visual reordering itself.
+14. **Measured font provenance:** the packaged Vazirmatn binary is hashed from
+    bytes and licensed alongside the package; no invented digest is accepted.
+15. **Bounded work:** audio duration, model cache cardinality, CPU concurrency,
+    cue counts, and renderer resources are bounded or rejected.
+16. **Event-loop safety:** blocking decode/translation work is dispatched to
+    worker threads; async handlers do not run inference inline.
+17. **Reproducibility:** identical validated transcript and style inputs yield
+    byte-identical SRT/VTT/ASS documents and the same output digest.
+18. **Failure atomicity:** validation or handler failure leaves project state,
+    history, and outputs unchanged; duplicate output IDs cannot overwrite assets.
+19. **Atomic materialization:** filesystem artifacts are written via the trusted
+    worker's atomic-write path; the pure pack does not claim that persistence
+    occurred merely because it returned a document.
+20. **Ownership respect:** renderer IR/compiler/worker/surface changes stay
+    fenced by board owners; integration proceeds through coordination, never by
+    editing around exclusive-path claims.
 
 ## Research decisions (primary sources)
 
@@ -136,22 +192,28 @@ This note distinguishes pack registration from operations that actually execute.
 
 ## Local verification state
 
-Targeted unit files passed in an isolated pytest process after installing only
-its test/runtime dependencies and bypassing the repository-wide eager creative
-package initializer (the sandbox did not have the project environment installed):
-`52 passed` (`pytest --confcutdir=/tmp/nexus-caption-tests -o asyncio_mode=auto -q
-/tmp/nexus-caption-tests`). Seven caption architecture guard functions passed by
-invoking the actual test functions with the same isolation shim. `ruff check`,
-`ruff format --check`, `mypy --follow-imports=silent` (five touched source files),
-`compileall`, JSON parsing, font digest check, wheel build, and `git diff --check`
-passed. `verify_manifest_file` against all ten operation IDs and current version
-reported no errors, no pending capabilities, and exactly the expected
-`unsigned_manifest` warning; the manifest is deliberately **not** downloadable as
-trusted because its Ed25519 signature remains a placeholder. The built
-`nexus_ai_agent-3.13.0-py3-none-any.whl` contained both
-`caption/fonts/Vazirmatn.ttf` and `caption/fonts/OFL.txt`. These
-are not full-repo CI gates, not a real faster-whisper inference,
-and not a burn-in render.
+The three caption unit files were run in isolation during early diagnostics
+(`52 passed`), then the complete non-slow repository suite was run after
+installing `.[dev]`: **2,335 passed, 30 skipped, 0 failed** on Python 3.11.2.
+The skips are explicitly reported by pytest: PostgreSQL-only integration cases,
+core/extras-specific matrix contracts, and optional test-leg checks. Targeted
+caption/architecture/worker/docs tests also passed: `130 passed`. Full-repository
+`ruff check .`, `ruff format --check .` (503 files), `mypy src` (242 source
+files), version lockstep, compile checks, and `git diff --check` passed. The
+working branch fixes three failures observed on the prior PR head: the worker
+fake engine now provides measured source provenance; the pack import allowlist
+includes the pure-stdlib `unicodedata`; and this audit is indexed in
+`docs/README.md`.
+
+The manifest verifier still reports exactly the expected `unsigned_manifest`
+warning; the Ed25519 signature remains a placeholder and is deliberately not
+trusted/downloadable. No model weights or Persian audio fixture were
+shipped/downloaded, no real faster-whisper inference was performed, and no
+real Argos package translation was run. PyAV/ffprobe probing and FFmpeg/libass/
+HarfBuzz render validation were not performed here; burn-in remains blocked by
+the task-174/task-181 renderer ownership fences. The full local suite is strong
+but does not replace the pending exact-commit GitHub CI run on the new commit,
+Python 3.10/3.12 parity, PostgreSQL integrations, or measured media rendering.
 
 Mutation probes were performed as actual source edits in turn, each source file
 restored in `finally`, with a separate pytest process per mutant. `11/11 killed`:
@@ -161,16 +223,16 @@ transcribe without engine evidence, ASS bidi-injection sanitizer, strict model
 extra rejection, burn-in false-success refusal, and the 2-minute audio resource
 cap. Exact runner: `python /tmp/run_caption_mutations.py`; all 11 reported
 `KILLED` and the script reported `11/11 mutants killed; source restored after
-each probe`.
+each probe`. Two additional real-source mutations were applied to the current
+lineage guards: disabling style transcript-digest equality and disabling media
+SHA-256 equality. Each made its targeted regression test fail; both sources were
+restored in `finally` and reported `KILLED` (`2/2`).
 
-The sandbox initially had no pytest, pydantic, numpy, ruff or mypy; an ignored
-`.venv` was recreated only for local diagnostics. Normal repository-wide pytest
-collection was invoked and stops in `tests/conftest.py` before collection because
-`pydantic_settings` is absent from this diagnostic environment; no full-project
-suite is claimed. PyAV,
-FFmpeg, and ffprobe are unavailable here, so the duration probe was exercised
-with test doubles only and no real media inference, subtitle render, or burn-in
-was run. No model weights or Persian audio fixture are shipped/downloaded. The
-manifest verifier explicitly reports the signature placeholder; no signature,
-PR, or exact-head CI success is claimed by this local audit. Delivery state is
-reported separately.
+The manifest verifier explicitly reports the signature placeholder; no
+signature is fabricated. No model weights or Persian audio fixture are
+shipped/downloaded; no real faster-whisper inference or Argos package
+translation was run. PyAV/ffprobe probing and FFmpeg/libass/HarfBuzz rendering
+were not performed. Local tests/CI evidence do not convert these unexecuted
+integrations into completion claims. Exact-head GitHub CI for the new commit is
+still required after push; PR #100's prior SHA is not treated as evidence for
+the updated tree.

@@ -308,7 +308,7 @@ def _setup_project_with_audio() -> tuple[Project, CommandBus]:
     audio_record = AssetRecord(
         asset_id="asset_audio_01",
         media_kind="audio",
-        content_sha256="sha256:fakeaudiohash123",
+        content_sha256="sha256:" + "a" * 64,
         duration_us=30_000_000,
     )
     project = project.model_copy(update={"assets": [audio_record]})
@@ -323,7 +323,9 @@ def test_caption_transcribe_permission_level_a_and_execution() -> None:
     spec = registry.get_spec("caption.transcribe")
     assert spec.permission_level == PermissionLevel.IMMEDIATE
 
-    transcript = _golden_transcript().model_copy(update={"source_asset_id": "asset_audio_01"})
+    transcript = _golden_transcript().model_copy(
+        update={"source_asset_id": "asset_audio_01", "engine": "unit-test-engine"}
+    )
     cmd = TypedCommand(
         command_id="cmd_transcribe_01",
         operation="caption.transcribe",
@@ -339,6 +341,20 @@ def test_caption_transcribe_permission_level_a_and_execution() -> None:
     assert result.output["transcript_id"] == "tr_golden_fa_01"
     assert result.output["language"] == "fa-IR"
     assert result.output["segment_count"] == 4
+
+    mismatched = transcript.model_copy(update={"source_sha256": "c" * 64})
+    bad_hash = TypedCommand(
+        command_id="cmd_transcribe_wrong_source_hash",
+        operation="caption.transcribe",
+        input={
+            "audio_asset_id": "asset_audio_01",
+            "transcript": mismatched.model_dump(mode="json"),
+        },
+    )
+    before = bus.project.state_hash
+    with pytest.raises(CommandValidationError, match="does not match project media asset"):
+        bus.dispatch(bad_hash)
+    assert bus.project.state_hash == before
 
 
 def test_caption_transcribe_rejects_missing_evidence_or_unknown_audio() -> None:

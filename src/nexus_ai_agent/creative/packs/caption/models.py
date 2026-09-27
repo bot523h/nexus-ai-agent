@@ -286,14 +286,16 @@ class StyleVazirmatnInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     caption_asset_id: str = Field(min_length=1)
+    transcript: TranscriptRef
+    output_asset_id: str | None = Field(default=None, min_length=1)
     font_size: int = Field(default=48, ge=8, le=144)
-    primary_colour: str = "&H00FFFFFF"
-    outline_colour: str = "&H00000000"
-    shadow_colour: str = "&H80000000"
+    primary_colour: str = Field(default="&H00FFFFFF", pattern=r"^&H[0-9A-Fa-f]{8}$")
+    outline_colour: str = Field(default="&H00000000", pattern=r"^&H[0-9A-Fa-f]{8}$")
+    shadow_colour: str = Field(default="&H80000000", pattern=r"^&H[0-9A-Fa-f]{8}$")
     alignment: int = Field(default=2, ge=1, le=9)
     bold: bool = True
-    play_res_x: int = Field(default=1280, ge=320)
-    play_res_y: int = Field(default=720, ge=240)
+    play_res_x: int = Field(default=1280, ge=320, le=7680)
+    play_res_y: int = Field(default=720, ge=240, le=4320)
 
 
 class HighlightWordsInput(BaseModel):

@@ -13,6 +13,8 @@ Covers:
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
 from nexus_ai_agent.creative.packs.caption import (
@@ -234,7 +236,7 @@ def _setup_project() -> tuple[Project, CommandBus]:
     audio = AssetRecord(
         asset_id="asset_audio_vazir",
         media_kind="audio",
-        content_sha256="sha256:vaziraudio12345",
+        content_sha256="sha256:" + "b" * 64,
         duration_us=15_000_000,
     )
     project = project.model_copy(update={"assets": [audio]})
@@ -283,38 +285,78 @@ def test_generate_ass_rtl_command_dispatch_and_undo() -> None:
     assert bus.project.assets[0].asset_id == "asset_audio_vazir"
 
 
-def test_style_vazirmatn_fails_closed_without_caption_bytes() -> None:
+def test_style_vazirmatn_creates_content_addressed_ass_from_bound_transcript() -> None:
     project, bus = _setup_project()
     tr = _sample_persian_transcript()
-
-    # First register an ASS caption
-    cmd_ass = TypedCommand(
-        command_id="cmd_ass_base",
-        operation="caption.generate_ass_rtl",
-        input={
-            "transcript": tr.model_dump(mode="json"),
-            "output_asset_id": "caption_for_styling",
-        },
+    bus.dispatch(
+        TypedCommand(
+            command_id="cmd_srt_base_for_style",
+            operation="caption.generate_srt",
+            input={
+                "transcript": tr.model_dump(mode="json"),
+                "output_asset_id": "caption_for_styling",
+                "include_vtt": False,
+            },
+        )
     )
-    bus.dispatch(cmd_ass)
 
-    # Now apply style_vazirmatn
     style_cmd = TypedCommand(
         command_id="cmd_style_vazir",
         operation="caption.style_vazirmatn",
         input={
             "caption_asset_id": "caption_for_styling",
+            "transcript": tr.model_dump(mode="json"),
             "font_size": 52,
-            "primary_colour": "&H00FFFF00",  # Yellow in ASS
+            "primary_colour": "&H00FFFF00",
             "alignment": 2,
             "bold": True,
         },
     )
-    # The project index does not contain serialized caption bytes; styling only
-    # metadata would be fabricated success. No derived record may be created.
-    with pytest.raises(CommandValidationError, match="caption_style_content_unavailable"):
-        bus.dispatch(style_cmd)
-    assert not any(a.asset_id == "caption_for_styling_vazir" for a in bus.project.assets)
+    result = bus.dispatch(style_cmd)
+    assert result.status == "applied"
+    assert result.output["caption_asset"]["format"] == "ass"
+    assert result.output["caption_asset"]["content"].startswith("[Script Info]")
+    styled_id = result.output["styled_asset_id"]
+    styled = next(asset for asset in bus.project.assets if asset.asset_id == styled_id)
+    content = result.output["caption_asset"]["content"]
+    assert styled.parent_asset_ids == ("caption_for_styling",)
+    assert styled.content_sha256 == result.output["content_sha256"]
+    assert styled.content_sha256 == hashlib.sha256(content.encode("utf-8")).hexdigest()
+    assert styled.provenance["source_transcript_sha256"]
+    assert styled.provenance["font_sha256"] == result.output["font_sha256"]
+    assert styled.provenance["styled_by"] == "caption.style_vazirmatn"
+
+    repeated = bus.dispatch(
+        TypedCommand(
+            command_id="cmd_style_vazir_repeat",
+            operation="caption.style_vazirmatn",
+            input={
+                "caption_asset_id": "caption_for_styling",
+                "transcript": tr.model_dump(mode="json"),
+                "output_asset_id": "caption_for_styling_repeat",
+                "font_size": 52,
+                "primary_colour": "&H00FFFF00",
+                "alignment": 2,
+                "bold": True,
+            },
+        )
+    )
+    assert repeated.output["content_sha256"] == result.output["content_sha256"]
+    assert repeated.output["caption_asset"]["content"] == content
+
+    before = bus.project.state_hash
+    tampered = tr.model_copy(update={"segments": ()})
+    forged = TypedCommand(
+        command_id="cmd_style_vazir_forged",
+        operation="caption.style_vazirmatn",
+        input={
+            "caption_asset_id": "caption_for_styling",
+            "transcript": tampered.model_dump(mode="json"),
+        },
+    )
+    with pytest.raises(CommandValidationError, match="transcript digest"):
+        bus.dispatch(forged)
+    assert bus.project.state_hash == before
 
 
 def test_style_vazirmatn_rejects_non_existent_asset() -> None:
@@ -322,7 +364,10 @@ def test_style_vazirmatn_rejects_non_existent_asset() -> None:
     cmd = TypedCommand(
         command_id="cmd_bad_style",
         operation="caption.style_vazirmatn",
-        input={"caption_asset_id": "non_existent"},
+        input={
+            "caption_asset_id": "non_existent",
+            "transcript": _sample_persian_transcript().model_dump(mode="json"),
+        },
     )
     with pytest.raises(CommandValidationError, match="unknown asset"):
         bus.dispatch(cmd)

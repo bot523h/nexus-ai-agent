@@ -16,6 +16,7 @@ completes the manifest with three more pure operations:
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 
 from nexus_ai_agent.creative.packs.caption.formatters import (
@@ -37,6 +38,7 @@ from nexus_ai_agent.creative.packs.caption.models import (
     OPERATION_TRANSCRIBE,
     OPERATION_TRANSLATE_LOCAL,
     AlignWordsInput,
+    AssStyleConfig,
     BurnInInput,
     CaptionAsset,
     DiarizeInput,
@@ -77,6 +79,47 @@ def _require_fresh_asset_id(project: Project, asset_id: str) -> None:
         raise CommandValidationError(f"caption output asset id already exists: {asset_id!r}")
 
 
+def _transcript_sha256(transcript: TranscriptRef) -> str:
+    """Content address the complete typed transcript, not its caller-chosen ID."""
+    canonical = json.dumps(
+        transcript.model_dump(mode="json"),
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _validate_transcript_source(
+    project: Project,
+    transcript: TranscriptRef,
+    *,
+    expected_asset_id: str | None = None,
+    require_digest_for_engine: bool = False,
+) -> None:
+    """Bind typed transcript provenance to an authorized project media record."""
+    source_id = transcript.source_asset_id or expected_asset_id
+    if expected_asset_id is not None and source_id != expected_asset_id:
+        raise CommandValidationError("transcript source_asset_id does not match audio_asset_id")
+    if not source_id:
+        if require_digest_for_engine and transcript.engine and not transcript.source_sha256:
+            raise CommandValidationError("engine transcript is missing source SHA-256 provenance")
+        return
+    source = _asset_index(project).get(source_id)
+    if source is None:
+        raise CommandValidationError(f"transcript references unknown source asset: {source_id!r}")
+    if source.media_kind not in {"audio", "video"}:
+        raise CommandValidationError("transcript source must be an audio or video asset")
+    if transcript.source_sha256 is None:
+        if require_digest_for_engine and transcript.engine:
+            raise CommandValidationError("engine transcript is missing source SHA-256 provenance")
+        return
+    digest = source.content_sha256.removeprefix("sha256:").lower()
+    if digest != transcript.source_sha256:
+        raise CommandValidationError("transcript source SHA-256 does not match project media asset")
+
+
 def _transcribe(project: Project, context: OperationContext) -> OperationOutcome:
     """Level A (IMMEDIATE) handler for caption.transcribe."""
     payload = TranscribeInput.model_validate(context.input_data)
@@ -94,8 +137,16 @@ def _transcribe(project: Project, context: OperationContext) -> OperationOutcome
             "no transcript was supplied and no local engine ran in the pure pack"
         )
     transcript = payload.transcript
-    if transcript.source_asset_id and transcript.source_asset_id != payload.audio_asset_id:
-        raise CommandValidationError("transcript source_asset_id does not match audio_asset_id")
+    if not transcript.engine or not transcript.source_sha256:
+        raise CommandValidationError(
+            "caption.transcribe requires engine identity and source SHA-256 evidence"
+        )
+    _validate_transcript_source(
+        project,
+        transcript,
+        expected_asset_id=payload.audio_asset_id,
+        require_digest_for_engine=True,
+    )
     if not transcript.source_asset_id:
         transcript = transcript.model_copy(update={"source_asset_id": payload.audio_asset_id})
 
@@ -126,13 +177,8 @@ def _generate_srt(project: Project, context: OperationContext) -> OperationOutco
     payload = GenerateSrtInput.model_validate(context.input_data)
     transcript = payload.transcript
 
-    if project.assets and transcript.source_asset_id:
-        known = _asset_index(project)
-        if transcript.source_asset_id not in known:
-            raise CommandValidationError(
-                f"caption.generate_srt transcript references unknown source asset: "
-                f"{transcript.source_asset_id!r}"
-            )
+    if transcript.source_asset_id:
+        _validate_transcript_source(project, transcript)
 
     srt_text = format_srt(transcript)
     srt_sha256 = hashlib.sha256(srt_text.encode("utf-8")).hexdigest()
@@ -173,6 +219,7 @@ def _generate_srt(project: Project, context: OperationContext) -> OperationOutco
             "format": "srt",
             "companion_renditions": companion_hashes,
             "source_transcript_id": transcript.transcript_id,
+            "source_transcript_sha256": _transcript_sha256(transcript),
             "language": transcript.language,
             "engine": transcript.engine,
             "engine_version": transcript.engine_version,
@@ -209,13 +256,8 @@ def _generate_ass_rtl(project: Project, context: OperationContext) -> OperationO
     payload = GenerateAssInput.model_validate(context.input_data)
     transcript = payload.transcript
 
-    if project.assets and transcript.source_asset_id:
-        known = _asset_index(project)
-        if transcript.source_asset_id not in known:
-            raise CommandValidationError(
-                f"caption.generate_ass_rtl transcript references unknown source asset: "
-                f"{transcript.source_asset_id!r}"
-            )
+    if transcript.source_asset_id:
+        _validate_transcript_source(project, transcript)
 
     ass_text = format_ass(
         transcript,
@@ -259,6 +301,7 @@ def _generate_ass_rtl(project: Project, context: OperationContext) -> OperationO
         provenance={
             "format": "ass",
             "source_transcript_id": transcript.transcript_id,
+            "source_transcript_sha256": _transcript_sha256(transcript),
             "language": transcript.language,
             "engine": transcript.engine,
             "engine_version": transcript.engine_version,
@@ -291,30 +334,106 @@ def _generate_ass_rtl(project: Project, context: OperationContext) -> OperationO
 
 
 def _style_vazirmatn(project: Project, context: OperationContext) -> OperationOutcome:
-    """Level B (REVERSIBLE) handler for caption.style_vazirmatn.
-
-    Applies Vazirmatn font styling and layout parameters to caption assets.
-    """
+    """Create a real ASS rendition from transcript evidence bound to its parent asset."""
     payload = StyleVazirmatnInput.model_validate(context.input_data)
     known = _asset_index(project)
-    if payload.caption_asset_id not in known:
+    target_asset = known.get(payload.caption_asset_id)
+    if target_asset is None:
         raise CommandValidationError(
             f"caption.style_vazirmatn references unknown asset: {payload.caption_asset_id!r}"
         )
-
-    target_asset = known[payload.caption_asset_id]
     if target_asset.media_kind != "caption":
         raise CommandValidationError(
             f"caption.style_vazirmatn requires a caption asset, got: {target_asset.media_kind!r}"
         )
 
-    # The current project index stores only asset hashes/metadata, not caption
-    # bytes. Registering another AssetRecord with the parent's hash would claim
-    # a style transformation that never happened. Generate ASS with an explicit
-    # AssStyleConfig (caption.generate_ass_rtl) until storage resolves bytes.
-    raise CommandValidationError(
-        "caption_style_content_unavailable: style requires the caption payload; "
-        "no derived asset was created"
+    transcript = payload.transcript
+    provenance = target_asset.provenance
+    if transcript.transcript_id != provenance.get("source_transcript_id"):
+        raise CommandValidationError("caption style transcript does not match parent provenance")
+    expected_digest = provenance.get("source_transcript_sha256")
+    if not isinstance(expected_digest, str) or _transcript_sha256(transcript) != expected_digest:
+        raise CommandValidationError("caption style transcript digest does not match parent asset")
+    if transcript.source_sha256 != provenance.get("source_audio_sha256"):
+        raise CommandValidationError(
+            "caption style source audio digest does not match parent asset"
+        )
+    if (
+        transcript.source_asset_id
+        and transcript.source_asset_id not in target_asset.parent_asset_ids
+    ):
+        raise CommandValidationError("caption style source asset does not match parent lineage")
+
+    style_cfg = AssStyleConfig(
+        name="Vazirmatn",
+        font_name="Vazirmatn",
+        font_size=payload.font_size,
+        primary_colour=payload.primary_colour,
+        outline_colour=payload.outline_colour,
+        back_colour=payload.shadow_colour,
+        alignment=payload.alignment,
+        bold=payload.bold,
+    )
+    ass_text = format_ass(
+        transcript,
+        style=style_cfg,
+        enable_rtl_wrap=True,
+        play_res_x=payload.play_res_x,
+        play_res_y=payload.play_res_y,
+    )
+    content_sha256 = hashlib.sha256(ass_text.encode("utf-8")).hexdigest()
+    from nexus_ai_agent.creative.packs.caption.font_asset import vazirmatn_asset
+
+    font_path, font_sha256 = vazirmatn_asset()
+    asset_id = payload.output_asset_id or f"{payload.caption_asset_id}_vazir_{content_sha256[:12]}"
+    _require_fresh_asset_id(project, asset_id)
+    caption_asset = CaptionAsset(
+        asset_id=asset_id,
+        source_transcript_id=transcript.transcript_id,
+        content=ass_text,
+        content_sha256=content_sha256,
+        format="ass",
+        language=transcript.language,
+        line_count=len(transcript.segments),
+        duration_us=transcript.duration_us,
+    )
+    record = AssetRecord(
+        asset_id=asset_id,
+        media_kind="caption",
+        content_sha256=content_sha256,
+        duration_us=transcript.duration_us,
+        parent_asset_ids=(target_asset.asset_id,),
+        provenance={
+            "format": "ass",
+            "source_transcript_id": transcript.transcript_id,
+            "source_transcript_sha256": expected_digest,
+            "source_audio_sha256": transcript.source_sha256,
+            "engine": transcript.engine,
+            "engine_version": transcript.engine_version,
+            "model_name": transcript.model_name,
+            "model_digest": transcript.model_digest,
+            "parameters": transcript.parameters,
+            "parent_caption_sha256": target_asset.content_sha256,
+            "font": "Vazirmatn",
+            "font_asset_path": str(font_path.name),
+            "font_sha256": font_sha256,
+            "style_config": style_cfg.model_dump(mode="json"),
+            "styled_by": OPERATION_STYLE_VAZIRMATN,
+        },
+    )
+    new_project = project.model_copy(update={"assets": [*project.assets, record]})
+    return OperationOutcome(
+        new_project,
+        context.history,
+        {
+            "styled_asset_id": asset_id,
+            "parent_asset_id": target_asset.asset_id,
+            "caption_asset": caption_asset.model_dump(mode="json"),
+            "content_sha256": content_sha256,
+            "font_name": "Vazirmatn",
+            "font_sha256": font_sha256,
+            "style": style_cfg.model_dump(mode="json"),
+        },
     )
 
 
