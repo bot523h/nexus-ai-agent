@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T22:49:16Z",
+  "updated_at": "2026-09-27T22:49:53Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2831,7 +2831,7 @@
       "claimed_at": "2026-09-27T22:42:47Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "W3 mission-authorized claim. Main-bound full gates are owned by active task-195-salvage; run focused diagnostics locally. PR #99 overlaps features/ai_memory.py and storage/models.py; its task-193 lease expired at 21:40Z, head ed2421e is 46 commits behind main and dirty. No PR #112/#113 paths are in this W3 claim; those W1 PRs overlap bot/app/feature_handlers/handlers and storage/db, which W3 will not edit. Task-124 P0-9 graph-memory portion is transferred to W3; its zone now excludes memory/. Do not touch overlapping PR files unless needed for W3; coordinate before any highest-conflict handler edit."
+      "note": "W3 mission-authorized claim. Full main-bound gates are owned by active task-195-salvage; run focused diagnostics locally. PR #99 overlaps features/ai_memory.py and storage/models.py; task-193 lease expired 21:40Z, head ed2421e is 46 commits behind main and dirty. I left a scope handoff comment on #99 before source changes. PR #112/#113 paths are not in this claim; W3 will not edit bot/app, feature_handlers, handlers, storage/db, or agent_manager. Task-124 P0-9 graph-memory portion is transferred to W3; its zone excludes memory/. No other live board lease overlaps these W3 paths."
     }
   ],
   "deferred_log": [
