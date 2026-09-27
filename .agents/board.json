@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T16:54:20Z",
+  "updated_at": "2026-09-27T22:26:33Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -657,6 +657,15 @@
         "tests/unit/test_request_queue.py",
         "scripts/llm_queue_mutations.py",
         "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
+      ]
+    },
+    {
+      "id": "runtime-webhook-lifecycle",
+      "description": "W1 custom webhook lifecycle adapter; dispatch the canonical PTB startup/shutdown hooks and prove partial-start cleanup without taking runtime composition ownership.",
+      "paths": [
+        "src/nexus_ai_agent/bot/webhook.py",
+        "tests/unit/test_webhook_mode.py",
+        "tests/integration/test_webhook_lifecycle.py"
       ]
     }
   ],
@@ -2602,7 +2611,7 @@
       "title_fa": "سخت‌سازی هوش خارجی: خطای تایپ‌شده، منشأ داده، IO غیرمسدودکننده، انتقال امن کلید، ورودی خصمانه",
       "zone": "external-intelligence",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "gates_owner": false,
       "prerequisites": [],
       "scope": "knowledge/{knowledge_manager,web_trainer,wikipedia_trainer}.py and integrations/free_tools.py have ZERO tests on main and convert every external failure into a success-shaped value: get_text()/get_json() erase HTTP status and network errors ('' / {}), Wikipedia scrapes a 404 'article does not exist' page into user-visible 'knowledge', CurrencyTool returns 0.0 for a missing rate, every search path returns [] for both 'no results' and 'provider exploded', the NewsAPI key travels in the URL query string (and is logged by core/http_client on failure), the synchronous DDGS SDK is called directly inside async functions (event-loop block), BeautifulSoup parses unbounded attacker-controlled HTML on the loop, user input is interpolated raw into URL paths, and KnowledgeManager caches an LLM summary built from zero real sources for 24h using scalar_one_or_none() against a table it can populate with duplicates. Deliverable: a typed SourceResult/ExternalSourceError + Provenance contract, honest failure propagation, header-based secret transport, percent-encoded URL construction, to_thread offloading, bounded responses, query normalisation + stampede guard, and regression/adversarial/mutation tests.",
@@ -2631,7 +2640,7 @@
         "mutation probes: deliberately wrong implementations injected, guard tests observed RED, then restored GREEN",
         "reproduction transcript for each finding against the pre-fix code"
       ],
-      "note": "",
+      "note": "auto-released by gc at 2026-09-27T22:26:33Z (stale active lease)",
       "agent_branch": "arena/01a0df05-nexus-ai-agent",
       "claimed_at": "2026-09-26T18:46:40Z",
       "ttl_hours": 24
@@ -2715,6 +2724,42 @@
       "ttl_hours": 24,
       "gates_owner": true,
       "note": "Continues task-195-llm-queue-lifecycle (original branch arena/01a0e2f0, claim released via takeover). MODULE_MAP.md/docs-architecture excluded exactly as the original claim scoped itself. | SESSION-BOUND CONTINUATION 2026-09-27T16:54:20Z: arena/01a0e3b7 fast-forwarded cd79bfe (PR #109 head) and continues the same exclusive paths. This session cannot push to arena/01a0e356. PR #109 python-parity (3.10) is RED on run 36329794486 (asyncio.wait_for raises asyncio.TimeoutError, not builtin TimeoutError)."
+    },
+    {
+      "task": "task-197-w1-webhook-lifecycle-adapter",
+      "title": "W1 webhook lifecycle adapter and failure-safe hook dispatch",
+      "title_fa": "آداپتور چرخهٔ عمر وب‌هوک W1 و اجرای امن هوک‌ها هنگام شکست",
+      "zone": "runtime-webhook-lifecycle",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Close only the custom webhook adapter gap: share the registered PTB post_init/post_shutdown lifecycle with polling, remove duplicate job resume, and make startup/shutdown failure handling deterministic. This claim deliberately does NOT touch PR #113 task-196 exclusive runtime/app/DB/provider files; those remain owned by arena/01a0e442 while its lease is active. No W2 gateway changes.",
+      "scope_fa": "فقط شکاف آداپتور وب‌هوک را می‌بندد؛ فایل‌های انحصاری task-196 در PR #113 دست‌نخورده می‌مانند.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Webhook dispatches the exact registered post_init and post_shutdown callbacks used by PTB polling; each is invoked at most once, and job_queue.resume_pending is not duplicated.",
+        "Failures before initialize and after initialize/job resume/start/set_webhook/serve still reach all applicable cleanup stages; a stop failure cannot skip application.shutdown or the shared runtime post_shutdown hook.",
+        "Cleanup continues after ordinary failures, preserves deterministic first-failure reporting, and cancellation is propagated only after cleanup progress; behavior is Python 3.10/3.11/3.12 compatible.",
+        "A dynamic _serve_webhook integration test exercises real orchestration with controlled application, Telegram bot, queue/runtime callbacks, and uvicorn server fakes, including SIGTERM-style cancellation and double shutdown.",
+        "M1 (skip shared lifecycle dispatch) and M10 (bypass lifecycle adapter) mutations each make the relevant regression test RED, then restored tree is GREEN.",
+        "Only webhook.py and the declared webhook test files are modified; no active PR #113 runtime-composition lease is overridden."
+      ],
+      "evidence_required": [
+        "Pre-fix dynamic failure transcript against the current main/base behavior.",
+        "Focused webhook and integration test results on the exact source SHA, plus mutation RED/restore GREEN transcript for M1 and M10.",
+        "Exact push and pull_request CI conclusions; full local gates are deferred to the sole main gates owner.",
+        "agent_board.py check --files output for every code/test path before the first source edit."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/webhook.py",
+        "tests/unit/test_webhook_mode.py",
+        "tests/integration/test_webhook_lifecycle.py"
+      ],
+      "owner_hint": "arena/01a0e490-nexus-ai-agent",
+      "agent_branch": "arena/01a0e490-nexus-ai-agent",
+      "claimed_at": "2026-09-27T22:26:33Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": ""
     }
   ],
   "deferred_log": [
