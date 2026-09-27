@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T23:15:17Z",
+  "updated_at": "2026-09-27T23:22:15Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2762,7 +2762,7 @@
       "title_fa": "معماری و پیاده‌سازی راستی‌آزمایی‌شدهٔ اعتماد حافظهٔ W3",
       "zone": "memory-trust",
       "priority": "P0",
-      "status": "active",
+      "status": "deferred",
       "scope": "Replace unproven profile extraction and append-all vector chat memory with one provenance-bearing, temporal, scope-isolated Memory Trust contract on the existing SQLite/PostgreSQL SQLModel/Alembic storage. Keep conversation/checkpoint state distinct. No memory authority and no private LLM path.",
       "scope_fa": "جایگزینی استخراج بی‌منشأ و ذخیرهٔ همهٔ turnها در بردار با یک قرارداد واحد حافظهٔ دارای provenance، زمان و جداسازی scope روی لایهٔ موجود SQLite/PostgreSQL و SQLModel/Alembic؛ جداسازی از conversation/checkpoint و منع authority یا مسیر خصوصی LLM.",
       "prerequisites": [],
@@ -2828,7 +2828,7 @@
       ],
       "owner_hint": "arena/01a0e500-nexus-ai-agent",
       "agent_branch": "arena/01a0e500-nexus-ai-agent",
-      "claimed_at": "2026-09-27T22:42:47Z",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "W3 mission-authorized claim. Full main-bound gates are owned by active task-195-salvage; run focused diagnostics locally. Source implementation is now in progress on this branch at exact main base e5b326b2eaf691a638d030ad57acf1ce60016ef0; current edits are pending review/validation in the claimed memory-trust paths: agents/base.py, chat_agent.py, gemma_agent.py, phi_agent.py, qwen_agent.py, agents/store/base_agent.py, bot/memory_handlers.py, features/ai_memory.py, memory/{trust,boundary,long_term}.py, orchestration/{graph,state}.py, personality/engine.py, storage/models.py. No migration, focused test, or documentation evidence has been added/validated yet. PR #99 remains OPEN on arena/01a0df78 at head ed2421ec534ee603dc399a83788ceb71ae1870a6 and DIRTY; it overlaps features/ai_memory.py and storage/models.py. Handoff comment was posted before W3 source edits; W3 does not edit #99 branch and will reconcile its changes if it lands first. The task-193 lease expired at 21:40Z; no live board lease overlaps the changed W3 paths. Current `agent_board.py check --files` passes for every changed path, including new untracked memory modules; PRs #112/#113 do not overlap W3 paths. Task-124 P0-9 graph-memory portion is transferred to W3; its zone excludes memory/. W3 will not edit bot/app, feature_handlers, handlers, storage/db, or agent_manager. Documentation overlap gate: open PR #105 (head 80013e3225c3fd713c86e9d4800cde6032e8f2e7, OPEN/DIRTY, no live head-branch claim per praudit) also changes docs/README.md and docs/architecture/{DATA_AND_STORAGE,MODULE_MAP,REFERENCES,SECURITY,TESTING}. W3 has not edited those files; the owner was notified on #105 and these overlapping docs remain blocked until ownership/merge disposition is reconciled. A new MEMORY_TRUST.md is non-overlapping; its docs/README.md index entry is deferred. No documentation validation evidence exists yet."
@@ -2868,6 +2868,14 @@
       "reason_fa": "چون عامل task-179 مالک TESTING.md و docs/README.md است، به‌روزرسانی جدول گیت‌ها و ایندکس را defer کردم؛ مستندات CI موقتاً در .github/DEPENDENCY_MATRIX.md و CHANGELOG ثبت می‌شود.",
       "reason_en": "task-132 (CI extras matrix) must update TESTING.md gate table and docs/README.md index, but those files are exclusively claimed by task-179. Documentation update deferred; CI docs live in .github/DEPENDENCY_MATRIX.md + CHANGELOG entry meanwhile.",
       "resume_when": "task-179 lands (TESTING.md/docs/README.md free) — then port the gate-table rows + docs index line"
+    },
+    {
+      "task": "task-197-memory-trust",
+      "deferred_by_branch": "arena/01a0e500-nexus-ai-agent",
+      "at": "2026-09-27T23:22:15Z",
+      "reason_fa": "چون عامل دیگری روی این محدوده کار می‌کرد متوقف شدم؛ این کار پس از آزاد شدن ناحیه انجام خواهد شد تا فراموش نشود.",
+      "reason_en": "Paused for governance reconciliation after an independent live audit on 2026-09-27. The active W3 lease is on this branch, exact main remains e5b326b2eaf691a638d030ad57acf1ce60016ef0, and the remote W3 head is d3baac5ed47ea90a40651d214e07b1ed57e2ad37. `praudit --repo bot523h/nexus-ai-agent --json` found 21 open PR heads with no live board claim whose changed paths intersect W3 exclusive paths: direct code overlaps #99 (features/ai_memory.py, storage/models.py), #96 (orchestration/graph.py), #94 (personality/engine.py), and #63 (migration/test paths); the planned docs also collide with #105 and multiple open docs PRs (#100, #88, #87, #84, #73, #70, #69, #68, #67, #66, #64, #60, #59, #57, #56, #33, plus the doc paths in #99/#96/#63). Board `check` returned no overlap only because those PR heads have no live leases; it is not PR coordination evidence. #99 and #105 were notified, with no owner acknowledgement visible. No PR branches were changed. W3 working-tree source/test changes remain uncommitted and unvalidated since formatting; resume only after all relevant owners/maintainers reconcile the intersections, publish ownership/lease/base state, and rerun the complete diff review.",
+      "resume_when": "The owners/maintainers have acknowledged and resolved all W3-overlapping open PRs, the board is published with current ownership/leases, and the exact branch base/head ancestry is reverified."
     }
   ],
   "next_work": [
