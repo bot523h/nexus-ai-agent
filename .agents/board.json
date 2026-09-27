@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-25T17:46:27Z",
+  "updated_at": "2026-09-27T12:00:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -600,6 +600,20 @@
         "docs/audits/GATE5_TRUTH_MATRIX.json",
         "src/nexus_ai_agent/cli.py",
         "docs/audits/VERIFICATION_TRUTH_MATRIX.json"
+      ]
+    },
+    {
+      "id": "pack-trust-root",
+      "description": "Capability-pack trust root: Ed25519 verification, trust states, activation gate (ADR 0006)",
+      "paths": [
+        "src/nexus_ai_agent/creative/packs/trust.py",
+        "src/nexus_ai_agent/creative/packs/ed25519.py",
+        "src/nexus_ai_agent/creative/packs/trust_root.json",
+        "tests/unit/test_pack_trust_root.py",
+        "tests/unit/ed25519_testkit.py",
+        "tests/architecture/test_pack_trust_boundary.py",
+        "scripts/pack_trust_mutations.py",
+        "docs/architecture/adr/0006-capability-pack-trust-root.md"
       ]
     }
   ],
@@ -2391,6 +2405,100 @@
       "claimed_at": "2026-09-24T23:06:38Z",
       "ttl_hours": 48,
       "prev_agent_branch": "arena/01a0d4b6-nexus-ai-agent"
+    },
+    {
+      "task": "task-194-pack-trust-root",
+      "title": "Capability-pack trust root: external authority, Ed25519 verification, fail-closed activation",
+      "title_fa": "ریشهٔ اعتماد پک‌ها: مرجع بیرونی، تأیید Ed25519 و فعال‌سازی fail-closed",
+      "zone": "pack-trust-root",
+      "priority": "P0",
+      "status": "active_in_review",
+      "gates_owner": true,
+      "prerequisites": [],
+      "scope": "Trust + Truth control plane, domain B (capability/pack trust). A manifest's own fields stop being its credentials: trust root (public keys only, empty by default, not env-swappable), one canonical signing serialisation, RFC 8032 Ed25519 verification with pinned edge cases, nine distinct TrustStates with exactly one trusted, activation of external packs gated on 'verified'. Supersedes the empty-TRUSTED_SIGNATURE_STATES approach proposed in PR#86/#88 by giving the state a reachable, testable definition. Also fixes the placeholder-prefix blind spot that reported four shipped manifests as 'format_only_unverified' instead of unsigned.",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/trust.py",
+        "src/nexus_ai_agent/creative/packs/ed25519.py",
+        "src/nexus_ai_agent/creative/packs/trust_root.json",
+        "tests/unit/test_pack_trust_root.py",
+        "tests/unit/ed25519_testkit.py",
+        "tests/architecture/test_pack_trust_boundary.py",
+        "scripts/pack_trust_mutations.py",
+        "docs/architecture/adr/0006-capability-pack-trust-root.md"
+      ],
+      "note": "Touches creative/packs/{verify,registry,manifest}.py minimally (trust wiring only) — those files are also edited by PR#86/#88; the trust gate here replaces their empty-set gate and the PRs must rebase onto it.",
+      "acceptance_criteria": [
+        "An external pack with an unknown publisher, a forged signature, a revoked key or any tampered field cannot be activated.",
+        "Exactly one TrustState grants trust; every other outcome is distinguishable.",
+        "No signing primitive and no private key material in the shipped package.",
+        "12/12 adversarial mutations killed; full non-slow suite, lint, format and mypy green."
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_pack_trust_root.py tests/architecture/test_pack_trust_boundary.py",
+        "python scripts/pack_trust_mutations.py",
+        "make lint / make types / pytest -m 'not slow'"
+      ],
+      "agent_branch": "arena/01a0e200-nexus-ai-agent",
+      "claimed_at": "2026-09-27T00:00:00Z",
+      "ttl_hours": 24,
+      "integration": {
+        "canonical_pr": 101,
+        "head_sha_at_record": "pending-next-commit",
+        "supersedes": [
+          "PR#86 (TRUSTED_SIGNATURE_STATES empty gate)",
+          "PR#88 (same gate + artifact-proof slice)"
+        ],
+        "supersede_reason_en": "Same enforcement point, but the empty trusted-state set makes 'verified' unreachable and therefore untestable. Both branches additionally have NO merge base with main (unrelated histories), so neither can carry the gate to main as-is.",
+        "supersede_reason_fa": "همان نقطهٔ اعمال، اما مجموعهٔ تهی باعث می‌شود حالت verified هرگز قابل دسترسی و آزمون نباشد؛ ضمناً هر دو شاخه با main مبنای ادغام مشترک ندارند.",
+        "do_not_close_until": "successor is on main",
+        "overlap_resolution": [
+          {
+            "path": "src/nexus_ai_agent/creative/packs/registry.py",
+            "other": "PR#86/#88",
+            "final_owner": "task-194",
+            "reason": "activation gate replaced by reachable trusted state (ADR 0006)"
+          },
+          {
+            "path": "src/nexus_ai_agent/creative/packs/verify.py",
+            "other": "PR#88",
+            "final_owner": "task-194",
+            "reason": "signature_state is now the trust verdict; report.ok separated from report.trusted"
+          },
+          {
+            "path": "docs/architecture/SECURITY.md",
+            "other": "PR#86/#88",
+            "final_owner": "shared-append",
+            "reason": "new section 4b appended; no line of the existing sections touched"
+          },
+          {
+            "path": ".agents/board.json",
+            "other": "PR#88/#94/#95/#97/#98/#99",
+            "final_owner": "append-only",
+            "reason": "only a new zone and a new claim are appended; conflicts are a single JSON hunk"
+          },
+          {
+            "path": "docs/README.md",
+            "other": "PR#99/#100",
+            "final_owner": "append-only",
+            "reason": "index rows appended"
+          },
+          {
+            "path": "tests/architecture/test_pack_manifest_is_data_only.py",
+            "other": "PR#100",
+            "final_owner": "shared",
+            "reason": "allow-list gained binascii/enum (pure stdlib); PR#100 edits a different assertion and merges clean"
+          }
+        ],
+        "handoffs": [
+          {
+            "to_zone": "delivery-interop",
+            "to_pr": 99,
+            "issue": "delivery/signing.py HMAC-SHA256 fallback uses the verification secret as the signing secret, so a verifier can forge; the module documents it as contract-equivalent to Ed25519.",
+            "exploitability_today": "no production call site imports the module; latent narrative/security defect, not a live vulnerability",
+            "requested_disposition": "drop the symmetric fallback or rename the seam to an authenticity tag and correct the docstring"
+          }
+        ]
+      }
     }
   ],
   "deferred_log": [
