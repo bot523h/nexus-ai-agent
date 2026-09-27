@@ -2,6 +2,14 @@
 
 Session branch: `arena/01a0e1e0-nexus-ai-agent`. Successor PR: **#102**. It supersedes #95 and #98.
 
+> **Continuation (2026-09-27, session branch `arena/01a0e2bb-nexus-ai-agent`).** A session is bound to
+> exactly one branch, so this work cannot be pushed to `arena/01a0e1e0`. The previous session's corrected
+> head `6198510f0a06a803ba445e03bba1e44306eaf0f9` was **never pushed and does not exist** — `git fetch origin
+> 6198510f0a06a803ba445e03bba1e44306eaf0f9` answers `upload-pack: not our ref`. Its content is therefore
+> **re-derived** here from the failing head `eb6551b`, never copied from a report, and the delivery vehicle
+> becomes a successor PR raised from `arena/01a0e2bb-nexus-ai-agent`. #95, #98 and #102 stay open until that
+> successor is merged to `main` and evidenced (§12).
+
 Every claim below carries one of four labels: **PROVEN**, **PARTIALLY PROVEN**, **NOT PROVEN** or **BLOCKED**. A claim is PROVEN only by an artifact named here: a commit, a run, a job, an artifact or a local log.
 
 > **Scope of this version.** This file is committed *inside* PR #102, so it cannot contain the CI run of the commit that carries it, or the merge. Those facts live in two places: the evidence comments on PR #102, and the closure addendum (§12) that lands on `main` after the merge. Sections that depend on them say so, and are labelled NOT PROVEN in this version.
@@ -146,7 +154,14 @@ Each artifact was produced twice and compared with `cmp`. The byte-identical res
 
 ## 10. PR / merge / main
 
-- PR #102: open, base `main`. The body carries the exact SHA and the lineage.
+- PR #102: open, base `main`, head `eb6551b`. The body carries the exact SHA and the lineage.
+  Its `test` job and all three `python-parity` legs are **red**:
+  `docs/audits/CONTINUUM_CLOSURE_2026-09-27.md` — the file you are reading — was added without a row in
+  `docs/README.md`, and `tests/unit/test_docs_integrity.py::test_every_document_is_indexed_in_docs_readme`
+  rejects exactly that. Reproduced locally on `eb6551b`: `1 failed, 2893 passed, 30 skipped`. The fix
+  indexes the document; the invariant, the threshold and the measurement are untouched.
+- Delivery vehicle: a successor PR from `arena/01a0e2bb-nexus-ai-agent`, whose history contains
+  `eb6551b` (so every commit above is preserved verbatim) plus `main` `f53923d` merged in.
 - Merge, `main` ancestry, `main` CI, `continuum verify` on `main`, release lineage: recorded in §12 after the merge. Status: NOT PROVEN in this version.
 
 ## 11. Limitations

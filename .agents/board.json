@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T12:10:00Z",
+  "updated_at": "2026-09-27T12:27:18Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1786,8 +1786,8 @@
         "non-blocking (continue-on-error) at bootstrap, flip to blocking with evidence"
       ],
       "note": "Claimed by the Continuum closure session together with task-184. Goes straight to a BLOCKING job (owner directive: no continue-on-error bootstrap); evidence recorded on release.",
-      "agent_branch": "arena/01a0e1e0-nexus-ai-agent",
-      "claimed_at": "2026-09-27T08:14:03Z",
+      "agent_branch": "arena/01a0e2bb-nexus-ai-agent",
+      "claimed_at": "2026-09-27T12:27:18Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "exclusive_paths": []
@@ -2548,8 +2548,8 @@
       "zone": "continuum-evidence-measurement",
       "priority": "P0",
       "status": "active",
-      "agent_branch": "arena/01a0e1e0-nexus-ai-agent",
-      "claimed_at": "2026-09-27T08:20:00Z",
+      "agent_branch": "arena/01a0e2bb-nexus-ai-agent",
+      "claimed_at": "2026-09-27T12:27:18Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "prerequisites": [],
@@ -2583,8 +2583,8 @@
         "Targeted negative tests and mutation RED-to-GREEN restoration for every confirmed consumer defect.",
         "Two-run reproducibility comparison and exact PR #95/head/main/CI evidence."
       ],
-      "note": "Audit result: two P1 snapshot false-greens were reproduced in isolated Git fixtures and fixed through e924a65: a valid snapshot survived an uncommitted source edit, and a clean later commit could reuse it after src/tests/scripts/migration/dependency drift. Regressions cover clean control, dirty/stale rejection, empty revision rejection, and unavailable git-status fail-closed behaviour in tests/unit/test_continuum_hardening.py. P2 integration gap remains: CoverageReport JSON has no downstream reader and CI/release-lineage invokes neither pack coverage nor snapshot verification; task-154 remains queued rather than claiming a release gate it does not implement. Current committed snapshot correctly blocks CLI verification (unreachable recorded SHA and test-count drift). No non-Continuum domain edits without a proven direct false-evidence consumer. | 2026-09-27 arena/01a0e1e0 continuation (supersedes PR #95/#98): the P2 gap is closed — pack coverage is a canonical 95%-per-pack gate (D-0023, option A), the snapshot verifier fails closed on a 27-attack executable threat model (scripts/continuum_gate.py), a 73-mutation replayable campaign (scripts/continuum_mutations.py) fails on any survivor, and the CI job continuum-evidence runs all three on 3.10/3.11/3.12 against the exact SHA. HISTORICAL EVIDENCE LOST — CONTENT RECONSTRUCTED: the first local lineage (c44bf2c…7bda42c) was never pushed and was lost in a sandbox re-provisioning; its surviving working tree (tree ddc76334) was reconstructed on top of 48db056 and every piece of evidence was regenerated on the new lineage — see docs/audits/CONTINUUM_CLOSURE_2026-09-27.md for the exact SHAs, local runs and CI run IDs.",
-      "previous_agent_branch": "arena/01a0df05-nexus-ai-agent"
+      "note": "Audit result: two P1 snapshot false-greens were reproduced in isolated Git fixtures and fixed through e924a65: a valid snapshot survived an uncommitted source edit, and a clean later commit could reuse it after src/tests/scripts/migration/dependency drift. Regressions cover clean control, dirty/stale rejection, empty revision rejection, and unavailable git-status fail-closed behaviour in tests/unit/test_continuum_hardening.py. P2 integration gap remains: CoverageReport JSON has no downstream reader and CI/release-lineage invokes neither pack coverage nor snapshot verification; task-154 remains queued rather than claiming a release gate it does not implement. Current committed snapshot correctly blocks CLI verification (unreachable recorded SHA and test-count drift). No non-Continuum domain edits without a proven direct false-evidence consumer. | 2026-09-27 arena/01a0e1e0 continuation (supersedes PR #95/#98): the P2 gap is closed — pack coverage is a canonical 95%-per-pack gate (D-0023, option A), the snapshot verifier fails closed on a 27-attack executable threat model (scripts/continuum_gate.py), a 73-mutation replayable campaign (scripts/continuum_mutations.py) fails on any survivor, and the CI job continuum-evidence runs all three on 3.10/3.11/3.12 against the exact SHA. HISTORICAL EVIDENCE LOST — CONTENT RECONSTRUCTED: the first local lineage (c44bf2c…7bda42c) was never pushed and was lost in a sandbox re-provisioning; its surviving working tree (tree ddc76334) was reconstructed on top of 48db056 and every piece of evidence was regenerated on the new lineage — see docs/audits/CONTINUUM_CLOSURE_2026-09-27.md for the exact SHAs, local runs and CI run IDs. | 2026-09-27 arena/01a0e2bb continuation (same mission owner, new session branch; a session is bound to exactly one branch and cannot push to arena/01a0e1e0): the previous session's final local commit 6198510f0a06a803ba445e03bba1e44306eaf0f9 was never pushed and is unrecoverable (git fetch origin <sha> -> 'not our ref'), so its content fix was re-derived from the failing PR #102 head eb6551b instead of copied. PR #102 was red on `test` and `python-parity` 3.10/3.11/3.12 (runs 36315364432 / 36315366459) because docs/audits/CONTINUUM_CLOSURE_2026-09-27.md was not listed in docs/README.md, which tests/unit/test_docs_integrity.py enforces; reproduced locally as '1 failed, 2893 passed, 30 skipped'. Fixed by indexing the document -- the invariant, the threshold and the measurement are untouched.",
+      "previous_agent_branch": "arena/01a0e1e0-nexus-ai-agent"
     },
     {
       "task": "task-185-external-intelligence-hardening",
@@ -3246,6 +3246,13 @@
       "task": "task-184-continuum-evidence-hardening",
       "reason": "Owner directive (Continuum complete forensic closure): finish task-184 in one canonical lineage. PR#95 head 7a8d7a7 was red only on python-parity (3.10) (run 36270588298); PR#98 (arena/01a0df7f) carries 7a8d7a7 unmodified plus the 3.10 fix c26c2ba (runs 36272370688 push / 36272949657 pull_request green). This branch fast-forwards to c26c2ba commit-for-commit (no rebase, no force-push, no rewrite of either PR) and continues the hardening; PR#95 and PR#98 are superseded by the PR from this branch.",
       "evidence": "gh pr view 95/98 --json headRefOid,mergeStateStatus => 7a8d7a72/UNSTABLE, c26c2bad/CLEAN; merge-base with main 6624a13 for both at 2026-09-27T08:05Z"
+    },
+    {
+      "at": "2026-09-27T12:27:18Z",
+      "by_branch": "arena/01a0e2bb-nexus-ai-agent",
+      "action": "continuation",
+      "task": "task-184-continuum-evidence-hardening + task-154-pack-coverage-ci",
+      "reason": "Same mission owner (Continuum complete forensic closure), new session branch: a session is bound to exactly one branch and cannot push to arena/01a0e1e0. PR #102 (head eb6551b) is red on `test` and python-parity 3.10/3.11/3.12 (docs index invariant), and the previous session's corrected head 6198510f0a06a803ba445e03bba1e44306eaf0f9 was never pushed and does not exist on the remote (verified: git fetch origin 6198510f0a06a803ba445e03bba1e44306eaf0f9 -> 'upload-pack: not our ref'). The correction is therefore re-derived and re-proven here rather than recreated from a report. The work ships as a successor PR from this branch; PR #95, #98 and #102 are closed only after that successor is merged to main and evidenced."
     }
   ],
   "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins."
