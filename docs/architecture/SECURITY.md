@@ -38,10 +38,10 @@ flowchart LR
 |---|---|---|---|---|---|
 | T1 | **Spoofing** | stranger finds the bot and commands it | deny-by-default access gate at handler group −1: sync `check_update` (PTB calls it unawaited) + `ApplicationHandlerStop` on every denial path, proven through the real `Application.process_update` group loop | `tests/unit/test_access_guard.py`, `tests/unit/test_auth_middleware.py` | closed (PR#34, P0-2; dispatcher semantics re-proven sec-boundary salvage) |
 | T2 | **Spoofing** | forged webhook deliveries | `X-Telegram-Bot-Api-Secret-Token` compared with `secrets.compare_digest` | `tests/unit/test_webhook_mode.py` | closed |
-| T3 | **Spoofing** | dashboard scraping | bearer token required, constant-time compare, PII-free payloads | `tests/unit/test_dashboard_api.py`, `tests/unit/test_dashboard_privacy.py` | closed (P0-5) |
+| T3 | **Spoofing** | dashboard scraping | optional bearer token (`NEXUS_DASHBOARD_TOKEN`, constant-time compare) — the dashboard answers unauthenticated when the token is unset, and the reason that is acceptable is the second half of P0-5: the default deployment publishes **loopback-only**, so the API is not reachable off-host. Payloads are PII-free in every mode (surrogate id + join time only). | `tests/unit/test_dashboard_api.py` (payload keys are asserted), `tests/architecture/test_default_deployment_exposure.py` (the default publish is loopback-only) | closed (P0-5; T3 previously cited a test file that never existed, and the loopback half was unverified until 2026-09-27) |
 | T4 | **Elevation** | bypassing force-join gates | real `get_chat_member` check with cache; confirmation button cannot self-approve | `tests/unit/test_force_join_gate.py` | closed (P0-3) |
 | T5 | **Tampering** | path traversal on `/cloud`, `/download`, uploads | `safe_paths.safe_join` + `sanitize_file_name` | `tests/unit/test_safe_paths.py`, `tests/unit/test_security_hardening.py` | closed (P0-6) |
-| T6 | **Tampering** | prompt-injected tool execution / shell escape | shell tool off by default, allow-listed commands, path validation | `tests/unit/test_shell_sandbox.py`, `tests/unit/test_tools_sandbox.py` | closed |
+| T6 | **Tampering** | prompt-injected tool execution / shell escape | shell tool off by default, allow-listed commands, and a **declared per-command argument grammar** after ADR 0011: an unlisted flag is refused, every `path`-kind flag value is validated by `WorkspaceFilesystem`, symlink-following options (`ls -L`, `grep -R`, `find -L`) are absent from the tables by design, and no shell metacharacter reaches a `shell=False` argv | `tests/unit/test_shell_sandbox.py` (attack half + legitimate-surface half), `tests/unit/test_filesystem_boundary.py`, `tests/unit/test_tools_sandbox.py`, `scripts/shell_sandbox_mutations.py` | closed (ADR 0011; T6 was **false** before it — `date -f`, `grep -fFILE` and `grep -R` were measured escape/disclosure paths on `main@e6b06e0`) |
 | T7 | **Information disclosure** | private prompts or transcripts sent to a third party | per-user consent gate (tri-state) + minimum-egress interval + strict-privacy provider removal | `tests/unit/test_ai_memory_consent.py` | closed (P0-7) |
 | T8 | **Information disclosure** | secrets in logs | redaction at the observability boundary in *both* pipelines (stdlib filter + structlog processor + wrapped rendered-line formatter, and the lifecycle `redact_fields` gate): bearer **and Basic-scheme** values, `token=`/`api_key=`/`password=` incl. single-quoted dict-repr keys, bare `?key=`/`?token=` query params, `x-goog-api-key` headers, bare and API-URL bot tokens, URL userinfo, secret-ish keys in nested structures, mapping-style (`%(password)s`) and non-string args, and `exc_info`/`stack_info` traceback text — asserted on captured rendered log output | `tests/unit/test_observability.py`, `tests/unit/test_structured_events.py` | closed (S3 closure, D-0016) |
 | T9 | **Information disclosure** | SSRF via summariser/WebTrainer/image URLs and the legacy `video_url` download | DNS/address validation + validating transport (private, metadata, loopback **and CGNAT 100.64.0.0/10** ranges refused): fail-fast `validate_url` at job creation **and** `SafeAsyncTransport` at fetch time — every connection incl. redirect hops is re-resolved, re-checked and IP-pinned (DNS-rebinding TOCTOU closed), and the **https-only scheme is re-enforced on every request** so an https→http redirect downgrade is refused, never followed | `tests/unit/test_http_client_ssrf.py`, `tests/unit/test_summarizer_ssrf.py`, `tests/unit/test_api_ssrf_download.py` | closed (S5 closure, D-0016) |
@@ -50,6 +50,7 @@ flowchart LR
 | T12 | **Elevation** | media command escapes the studio permission ladder | `PermissionLevel` A–D enforced in the bus before any handler runs | `tests/unit/test_creative_studio.py`, `tests/unit/test_nagar_wave1_green_cockpit.py` | closed |
 | T13 | **Information disclosure** | destructive cleanup deletes history | messages never deleted by checkpoint cleanup; unknown state ⇒ no delete; human-only golden updates | `tests/unit/test_checkpoint_lifecycle.py`, `tests/unit/test_lifecycle_adversarial.py`, `tests/unit/test_reconciler.py` | closed |
 | T14 | **Elevation** | any user mutates another chat's data by guessing an id (the ad engine's `pause/resume/delete_campaign` take a bare `campaign_id`) | `bot/surface/ads.py::_load_owned` re-reads the row and compares `chat_id`; the owner bypasses; channel moderation commands are owner-gated and no longer answer anyone with a fake success | `tests/unit/test_surface_ads.py::test_pausing_another_chats_campaign_is_refused_and_changes_nothing`, `tests/unit/test_surface_channel_management.py::test_ban_is_owner_only_and_sends_nothing` | closed (D-0009) |
+| T15 | **Tampering (evidence integrity)** | a page, docstring or count claims evidence that is not there — the review then "verifies" a control against a test file that was never written | every `tests/…/*.py` path named in **prose** (living docs + Python comments/docstrings; string literals are data and are exempt by design) must resolve, and a quoted `` `tests/<dir>/` (N test modules) `` count must match the filesystem. Scope is the **living** surface: dated records (`audits/`, `history/`, `DECISION_LOG.md`) may narrate deleted files | `tests/unit/test_docs_integrity.py` (checks 8–9 + red-proofs), `scripts/docs_and_deploy_guard_mutations.py` (9 artifact mutants) | closed (2026-09-27; **false** before — this page's own T3 row cited a test file named `test_dashboard_privacy.py`, which has never existed in `tests/unit/`, and two pages advertised "15 files" for a 26-module directory. Naming a rotted citation is itself written without the path shape, so the guard reports claims and not confessions) |
 
 ## 3. P0 audit follow-through (honest status)
 
@@ -102,6 +103,40 @@ credentials ([ADR 0006](adr/0006-capability-pack-trust-root.md)):
 - no signing primitive and no private key material ship in the runtime;
   `tests/architecture/test_pack_trust_boundary.py` fails if one appears,
   and `scripts/pack_trust_mutations.py` proves the guards kill 12 attacks.
+
+## 4c. The restricted-shell boundary (T6)
+
+`tools/system_shell.py` is the one place where an agent's *text* becomes an
+argument vector executed by a real program, so it is treated as a sandbox rather
+than as a convenience wrapper ([ADR 0011](adr/0011-restricted-shell-flag-grammar.md)).
+
+- **Deny by default.** Each allowlisted command (`ls`, `pwd`, `echo`, `cat`,
+  `grep`, `find`, `date`) has a declared table of the flags it may receive, with
+  the number and kind of value tokens each consumes. A flag absent from the
+  table is refused — so an option added by a future coreutils release is refused
+  too, instead of silently widening the sandbox.
+- **Completeness is executable.** `test_every_declared_path_flag_is_validated`
+  walks the live table and requires every `path`-kind flag to refuse an outside
+  value; a table entry declared but not wired fails the suite.
+- **One physical boundary.** Every `path`-kind value and every path-shaped token
+  goes through `WorkspaceFilesystem`, which rejects absolute paths, `..`,
+  NUL bytes, non-POSIX spellings and any path with a **symlink component** — so
+  validation and use cannot be separated by a re-pointed link.
+- **Symlink-following options are refused as data, not as prose.** `-L`/`-H`
+  (`ls`), `-R`/`--dereference-recursive` (`grep`) and `-L`/`-H`/`-follow`
+  (`find`) take no path argument, so no validation could contain them: they make
+  the *command* follow a link it meets while walking. Measured on the pre-0011
+  code, with `ws/escape_link -> /tmp/secret.env`,
+  `grep -R TOP_SECRET .` printed `./escape_link:TOP_SECRET=42`.
+  `test_no_declared_flag_follows_symlinks` asserts their absence from the tables.
+- **No shell.** `subprocess.run(argv, shell=False, cwd=workspace_root)`;
+  `shlex.split` is used only to tokenise, never to interpret.
+- **Bounded blast radius.** 10-second timeout per command; `enable_shell=False`
+  marks the tool `BLOCKED` so the registry refuses it entirely.
+- **Honest about what it cannot do.** The sandbox contains *what an argument may
+  name*, not *what an allowlisted program does with it*; `date -f`, `date -r`,
+  `date -d`, `ls -L` and `grep -R` are refused rather than validated, because
+  there is no safe meaning for them here.
 
 ## 5. Secrets and configuration
 

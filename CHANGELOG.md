@@ -7,6 +7,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security (evidence citations + default deployment — session `arena/01a0e28b-nexus-ai-agent`)
+
+- **A security threat model cited a test file that has never existed.** The T3
+  row of `docs/architecture/SECURITY.md` (dashboard scraping) listed evidence as
+  `tests/unit/test_dashboard_api.py` **and** a second file — a
+  `test_dashboard_privacy.py` that is not in the repository and never was;
+  `DATA_AND_STORAGE.md` §6 quoted the same ghost, and `OVERVIEW.md` Q2 pointed at
+  a `test_access_gate.py` whose real name is `test_access_guard.py`. Measured on
+  `main@e6b06e0`: 199 test-path citations across the living surfaces, three of
+  them unresolvable. A cited test is the evidence for a control, so the seventh
+  check now has a sibling: every `tests/…/*.py` path named in **prose** — the
+  living docs plus Python comments and docstrings — must resolve. A path inside a
+  string literal is **data**, not a claim, and is exempt by design: three
+  legitimate fixtures (the board overlap referee and the extras-parity log
+  parser) exist precisely to exercise strings whose paths must *not* exist, and a
+  guard that forced their deletion would make the codebase worse.
+- **The other half of the P0-5 dashboard decision was a comment in a YAML file.**
+  `/api/dashboard/*` answers unauthenticated when `NEXUS_DASHBOARD_TOKEN` is
+  unset, and the accepted reason is that the default deployment publishes
+  loopback-only. Nothing verified that: `docker-compose.yml` could have been
+  changed from `"127.0.0.1:8000:8000"` to `"8000:8000"` — one line, publishing an
+  unauthenticated API on every interface — with the whole suite still green.
+  `tests/architecture/test_default_deployment_exposure.py` now reads every
+  published port with a dependency-free, indentation-aware parser (PyYAML is a
+  transitive package, not a declared dependency), covering the short *and* long
+  compose spellings, and fails closed if the `dashboard` service it was written
+  for disappears. The test that asserts the token has no default sits beside it,
+  so the two halves of the trade-off cannot drift apart silently.
+- **Quoted counts are claims too.** `OVERVIEW.md` and `REFERENCES.md` both
+  advertised "15 files" for a `tests/architecture/` directory that holds 27 test
+  modules (`docs/README.md` rule 4: numbers must be reproducible). The count is
+  now phrased as test modules and checked against the filesystem — the check
+  failed on its own author within the hour, because adding the new test module
+  moved the number.
+- **The guards are mutation-tested against the artifacts they watch.**
+  `scripts/docs_and_deploy_guard_mutations.py` edits the real
+  `docker-compose.yml`, a real architecture page, a real docstring and the guard
+  logic itself: four port-bind mutants, a stale count, a ghost citation in docs
+  and one in code, plus two guard-disabling mutants. 9/9 killed, wired into
+  `make mutations` and a blocking `docs-deploy-mutations` CI job. Mutation over
+  *artifacts* is the point: the question is not whether a code path exists but
+  whether a one-line edit to the guarded thing actually trips the alarm.
+- **Process record — the ratchet caught its own author.** Commit `c7ff61c`'s
+  CHANGELOG paragraph named the rotted ADR path in prose; the seventh check
+  (added in that same commit) rejects exactly that, so `c7ff61c` is red on
+  `test_every_cited_adr_record_exists` while its *content* is correct. The line
+  is reworded here and the failure is recorded instead of the claim being
+  quietly restated. Naming a rotted citation is now written without the path
+  shape — the guard reports claims, not confessions.
+
+### Security (restricted shell — ADR 0011, session `arena/01a0e28b-nexus-ai-agent`)
+
+- **The shell sandbox now validates an argument _grammar_, not a list of
+  forbidden options.** `tools/system_shell.py` promised that "any argument that
+  is (or resolves to) a path outside the workspace is rejected"; that promise was
+  false. Measured against `main@e6b06e0`, with a secret file outside the
+  workspace: `date -f FILE` made GNU `date` read the file and echo its lines back
+  in error text (direct disclosure), `date -r FILE` leaked host file metadata,
+  `grep -fFILE` / `grep --file=FILE` / `grep --exclude-from=FILE` bypassed
+  validation entirely (the `=` and attached spellings were never inspected), and
+  `grep -R` printed `./escape_link:TOP_SECRET=42` by following a workspace
+  symlink out of the sandbox. Each command now has a declared table of the flags
+  it may receive, with the number and kind of value tokens each consumes; a flag
+  absent from the table is refused, so an option added by a future coreutils
+  release is refused too. An independent path-shaped-argument net requires any
+  absolute or traversing token to resolve inside the workspace, in any position
+  and any spelling.
+- **Symlink-following options are refused as data.** `ls -L/-H/--dereference`,
+  `grep -R/--dereference-recursive` and `find -L/-H/-follow` take no path
+  argument, so no path validation could contain them — they make the *command*
+  follow a link it meets while walking. Their safe siblings (`ls -R`, `grep -r`,
+  `find` with its default `-P`) were measured not to follow and stay allowed.
+  `test_no_declared_flag_follows_symlinks` asserts their absence from the tables.
+- **`grep`'s positional policy follows the flags actually seen.** With `-e`/`-f`
+  present, every positional is a file; treating the first as a pattern would
+  leave a real file argument unvalidated.
+- **Flawed design of the previous promise fixed at the root, not patched:**
+  `grep -fFILE` was missed by the original list, `--exclude-from` by the next
+  revision, and `date` was never tested at all. `scripts/shell_sandbox_mutations.py`
+  mutates the sandbox eleven ways and the suite must go red each time (11/11
+  killed, blocking `shell-mutations` CI job); `make mutations` runs it alongside
+  the pack-trust harness.
+
+### Fixed (documentation that was not true — session `arena/01a0e28b-nexus-ai-agent`)
+
+- **`creative/packs/trust.py` advertised a `cryptography` verification backend
+  that does not exist** and that the design explicitly rejects; `ed25519.py`
+  claimed "both backends of this module accept exactly the same set of
+  signatures". There is one backend, and differential testing against
+  OpenSSL (`cryptography` 50.0.1) over 326 valid/tampered/malformed cases found
+  exactly one divergence, in the safe direction: this module **rejects**
+  small-order public keys that OpenSSL accepts. Both docstrings now state that.
+  `tests/architecture/test_pack_trust_boundary.py` fails if an optional crypto
+  backend is ever imported into the trust path.
+- **A dangling ADR citation in the security module.** `creative/packs/trust.py`
+  cited `adr/0009-…`; the record it ships is `0006` and 0009 was never written. `tests/unit/test_docs_integrity.py` gains a seventh check —
+  every `adr/NNNN-*.md` cited from `src/`, `tests/`, `scripts/` or `docs/` must
+  resolve — with a red-proof so the detector itself is covered. The ADR index
+  check alone could not see citations made from code.
+
 ### CI (task-132 — extras smoke matrix, session `arena/01a0d709-nexus-ai-agent`)
 
 - **Every optional extra is now a blocking CI leg.** The new `extras-matrix` job

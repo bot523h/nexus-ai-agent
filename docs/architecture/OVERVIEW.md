@@ -40,9 +40,9 @@ Both products share one runtime, one persistence layer, and one quality contract
 | # | Attribute | Concrete promise | Enforced by |
 |---|---|---|---|
 | Q1 | **Offline-first / zero marginal cost** | The whole core runs with no cloud credentials; cloud is an ordered *fallback chain*, never a requirement | `src/nexus_ai_agent/llm/` (router chain), [`LLM_PROVIDERS.md`](LLM_PROVIDERS.md), `nexus smoke` (CLI) |
-| Q2 | **Deny-by-default security and privacy** | No user reaches a handler unless allowed; no prompt, image, or transcript leaves the process without an explicit consent flag | `bot/access_guard.py`, `bot/middleware.py`, `features/ai_memory.py` (consent), `tests/unit/test_access_gate.py`, `tests/unit/test_ai_memory_consent.py`, [`SECURITY.md`](SECURITY.md) |
+| Q2 | **Deny-by-default security and privacy** | No user reaches a handler unless allowed; no prompt, image, or transcript leaves the process without an explicit consent flag | `bot/access_guard.py`, `bot/middleware.py`, `features/ai_memory.py` (consent), `tests/unit/test_access_guard.py`, `tests/unit/test_ai_memory_consent.py`, [`SECURITY.md`](SECURITY.md) |
 | Q3 | **Evidence over assumption** | Every rendered artifact is reported with probed measurements; a job that cannot verify its output fails loudly | `creative/rendering/executor.py` (`probe_video` + `sha256`, staging + atomic publish), `tests/unit/test_rendering_lane.py` |
-| Q4 | **Evolvability under parallel authorship** | Layer laws, pack purity, and monolith constraints are executable; a violation fails CI, not review | `tests/architecture/` (15 files), [`MODULE_MAP.md`](MODULE_MAP.md) §4 |
+| Q4 | **Evolvability under parallel authorship** | Layer laws, pack purity, and monolith constraints are executable; a violation fails CI, not review | `tests/architecture/` (27 test modules), [`MODULE_MAP.md`](MODULE_MAP.md) §4 |
 | Q5 | **Operability with no moving parts** | Liveness is DB-free, migrations are idempotent, queue state is durable and resumable, one CLI entrypoint | `src/nexus_ai_agent/api/app.py::healthz`, `src/nexus_ai_agent/cli.py`, `adapters/in_process_job_queue.py`, [`../ops/DEPLOY_RUNBOOK.md`](../ops/DEPLOY_RUNBOOK.md) |
 
 Secondary (documented, not yet automated): localisation completeness and latency budgets — see [`TESTING.md`](TESTING.md) §5 for the honest gap list.

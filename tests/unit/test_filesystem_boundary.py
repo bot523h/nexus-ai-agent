@@ -87,3 +87,32 @@ def test_policy_does_not_follow_leaf_symlink_on_unlink(tmp_path: Path) -> None:
         WorkspaceFilesystem(workspace).unlink("link.txt")
     assert outside.read_text(encoding="utf-8") == "keep"
     assert link.is_symlink()
+
+
+def test_symlink_is_refused_even_when_its_target_is_inside_the_workspace(
+    tmp_path: Path,
+) -> None:
+    """The boundary rejects *symlinks*, not merely symlinks that escape.
+
+    A link pointing outside is already caught by the ``is_relative_to`` check on
+    the resolved path, so that case proves nothing about the no-symlink rule.
+    This test covers the case only the symlink-component check can catch: a link
+    whose target is a perfectly ordinary file inside the same workspace.
+
+    It is also load-bearing for TOCTOU: validation and use are two separate
+    syscalls, so a path that involves a link can be re-pointed between them.  A
+    boundary that only rejects escaping links is a boundary that can be moved.
+    """
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("hello", encoding="utf-8")
+    link = workspace / "inner_link"
+    try:
+        link.symlink_to("notes.txt")
+    except OSError as exc:  # pragma: no cover - Windows without symlink privilege
+        pytest.skip(f"symlinks unavailable: {exc}")
+
+    boundary = WorkspaceFilesystem(workspace)
+    with pytest.raises(FilesystemBoundaryError):
+        boundary.read_text("inner_link")
+    assert boundary.read_text("notes.txt") == "hello"

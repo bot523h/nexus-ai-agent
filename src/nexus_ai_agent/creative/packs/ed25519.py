@@ -27,9 +27,19 @@ Pinned semantics (RFC 8032 leaves choices open; ambiguity is a bug)
    encodings are rejected.
 3. Small-order ``A`` is rejected: such a key verifies "anything" for an
    attacker who knows the discrete log.
-4. The cofactorless equation ``[S]B = R + [k]A`` is used, matching RFC 8032
-   section 5.1.7 and what ``cryptography``/OpenSSL do — so both backends of
-   this module accept exactly the same set of signatures.
+4. The cofactorless equation ``[S]B = R + [k]A`` is used, per RFC 8032
+   section 5.1.7 — "It's sufficient, but not required, to instead check
+   ``[S]B = R + [k]A'``".
+5. This module is deliberately **stricter than OpenSSL** on small-order public
+   keys, and the divergence is one-directional.  Measured 2026-09-27 against
+   ``cryptography`` 50.0.1 (OpenSSL 3.x): for the order-4 key ``00…0080`` and
+   an all-zero signature, ``Ed25519PublicKey.verify`` **accepts** — the
+   cofactorless equation happens to hold, because both ``R`` and ``A`` live in
+   the same order-4 subgroup — while this module rejects under rule 3 before it
+   ever evaluates the equation.  Everything this module accepts, OpenSSL
+   accepts; a signature OpenSSL accepts may be refused here.  Refusing is the
+   correct direction for a trust root, and this is the only measured divergence
+   (326 random valid/tampered/malformed cases agreed exactly).
 
 References: RFC 8032; "Taming the many EdDSAs" (eprint 2020/1244).
 """

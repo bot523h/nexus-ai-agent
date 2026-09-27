@@ -509,3 +509,48 @@ def test_verification_reports_trust_without_granting_it(root: TrustRoot) -> None
     assert report.ok is True  # structurally fine…
     assert report.trusted is False  # …and still not authorised
     assert "unsigned_manifest" in {issue.code for issue in report.warnings}
+
+
+def test_the_order_four_small_order_key_is_also_rejected() -> None:
+    """A second small-order subgroup, not just the identity.
+
+    ``IDENTITY_PUBLIC_KEY`` has order 1 and ``forge_for_identity_key`` tailors a
+    signature to it.  The key below has **order 4**, so it is small-order for a
+    different reason: ``8·A = identity`` while ``A`` itself is neither the
+    identity nor the order-2 point.  A verifier that checked only for the
+    identity encoding would pass this one.
+
+    The pair ``(order-4 key, all-zero signature)`` is also the one measured
+    divergence from OpenSSL: ``Ed25519PublicKey.verify`` accepts it, because
+    ``R`` and ``A`` share the order-4 subgroup and the cofactorless equation
+    happens to hold.  Rejecting it is this module's deliberate rule 3.
+    """
+    order_four = bytes.fromhex("00" * 31 + "80")
+    from nexus_ai_agent.creative.packs.ed25519 import _decode_point, _has_small_order
+
+    point = _decode_point(order_four)
+    assert point is not None, "the key must decode, or this proves nothing"
+    assert _has_small_order(point) is True
+
+    for message in (b"", b"m", b"transfer everything"):
+        with pytest.raises(Ed25519Error, match="small order"):
+            verify_ed25519(order_four, message, b"\x00" * 64)
+
+
+def test_the_shipped_verifier_agrees_with_rfc8032_on_a_long_message() -> None:
+    """RFC 8032 §7.1 TEST SHA(abc): a 64-byte message, not just the short ones.
+
+    The two vectors already in this file use 0- and 1-byte messages; a verifier
+    that mishandled multi-block hashing would pass both.
+    """
+    verify_ed25519(
+        bytes.fromhex("ec172b93ad5e563bf4932c70e1245034c35467ef2efd4d64ebf819683467e2bf"),
+        bytes.fromhex(
+            "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a"
+            "2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"
+        ),
+        bytes.fromhex(
+            "dc2a4459e7369633a52b1bf277839a00201009a3efbf3ecb69bea2186c26b589"
+            "09351fc9ac90b3ecfdfbc7c66431e0303dca179c138ac17ad9bef1177331a704"
+        ),
+    )

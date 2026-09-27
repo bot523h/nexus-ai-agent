@@ -167,3 +167,82 @@ def test_the_activation_guard_has_a_positive_control() -> None:
         if "RegisteredPack(" in path.read_text(encoding="utf-8")
     ]
     assert hits == ["creative/packs/registry.py"]
+
+
+# --------------------------------------------------------------------------
+# Exactly one verifier (ADR 0006 §"Cryptography")
+# --------------------------------------------------------------------------
+# ``trust.py`` once advertised an optional ``cryptography`` backend that did not
+# exist, and ``ed25519.py`` claimed that "both backends accept exactly the same
+# set of signatures".  Both statements were false, and the second was the more
+# dangerous: a maintainer who believes two backends agree will happily add the
+# second one, and a second implementation would not carry the pinned edge-case
+# rules (canonical ``S``, canonical point encodings, small-order rejection) —
+# the small-order rule in particular is what stops an attacker-chosen key from
+# verifying anything.  The claim is therefore pinned in code, not in prose.
+
+#: Third-party crypto libraries a second verifier would plausibly be built on.
+_OPTIONAL_CRYPTO_BACKENDS = ("cryptography", "nacl", "openssl", "ecdsa", "pynacl")
+
+
+@pytest.mark.parametrize("path", [TRUST, ED25519], ids=lambda p: p.name)
+def test_the_trust_path_imports_no_optional_crypto_backend(path: Path) -> None:
+    """One verifier, no fallback.  A second backend is a security decision."""
+    tree = _tree(path)
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    offenders = sorted(imported & set(_OPTIONAL_CRYPTO_BACKENDS))
+    assert not offenders, (
+        f"{path.name} imports {offenders}: a second verifier would not carry the "
+        "pinned edge-case rules, and a 'library missing' path decays into "
+        "'not verified, but allowed'"
+    )
+
+
+def test_the_shipped_verifier_backend_is_the_pure_python_one() -> None:
+    """The one implementation must be the one that is actually used."""
+    from nexus_ai_agent.creative.packs.ed25519 import BACKEND
+
+    assert BACKEND == "pure-python"
+
+
+#: Phrases that only make sense if a second verifier exists.
+_FALSE_BACKEND_CLAIMS = (
+    "both backends",
+    "when it is installed",
+    "accept exactly the same set",
+)
+
+
+def _false_backend_claims(source: str) -> list[str]:
+    """Detector, kept pure so its red-proof can run on a fixture."""
+    return [claim for claim in _FALSE_BACKEND_CLAIMS if claim in source]
+
+
+def test_the_ed25519_module_does_not_claim_a_second_backend() -> None:
+    """Doc-truth ratchet: the module must not describe a backend that is absent.
+
+    The pre-fix module docstring said the cofactorless equation matched "what
+    ``cryptography``/OpenSSL do — so both backends of this module accept exactly
+    the same set of signatures".  There was no second backend, and the sets are
+    not equal (small-order keys are refused here and accepted by OpenSSL).
+    """
+    found = _false_backend_claims(ED25519.read_text(encoding="utf-8"))
+    assert not found, f"ed25519.py still claims {found}; there is exactly one backend"
+
+
+def test_the_false_backend_claim_detector_can_actually_fire() -> None:
+    """Red-proof: the ratchet above is worthless if the detector is inert."""
+    historical = (
+        "matching RFC 8032 section 5.1.7 and what ``cryptography``/OpenSSL do — "
+        "so both backends of this module accept exactly the same set of signatures."
+    )
+    assert _false_backend_claims(historical) == [
+        "both backends",
+        "accept exactly the same set",
+    ]
+    assert _false_backend_claims("one implementation, always active") == []
