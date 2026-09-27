@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="fa" dir="rtl" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <meta
+      name="description"
+      content="اتاق فرمان نکسوس؛ کاوش قابلیت‌های واقعی و بررسی امن ورودی فرمان‌ها، بدون اجرا."
+    />
+    <title>NEXUS — اتاق فرمان</title>
+    <link rel="icon" href="/static/mark.svg" type="image/svg+xml" />
+    <link
+      rel="preload"
+      href="/static/vazirmatn.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link rel="stylesheet" href="/static/cockpit.css" />
+    <script src="/static/cockpit.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">رفتن به محتوای اصلی</a>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="ناوبری اصلی">
+        <a class="brand" href="#overview" aria-label="نکسوس؛ نمای کلی">
+          <img src="/static/mark.svg" width="40" height="40" alt="" />
+          <span
+            ><strong dir="ltr">NEXUS<span class="brand-dot">.</span></strong
+            ><small>اتاق فرمان هوشمند</small></span
+          >
+        </a>
+        <div class="workspace-switch">
+          <span class="workspace-avatar">N</span
+          ><span>فضای کار محلی<small dir="ltr">LOCAL WORKSPACE</small></span
+          ><svg class="icon small" aria-hidden="true">
+            <use href="/static/icons.svg#server"></use>
+          </svg>
+        </div>
+        <p class="nav-label">فضای کار</p>
+        <nav class="primary-nav">
+          <a href="#overview" data-nav="overview" aria-current="page"
+            ><svg class="icon" aria-hidden="true">
+              <use href="/static/icons.svg#dashboard"></use></svg
+            ><span>نمای کلی</span></a
+          >
+          <a href="#capabilities" data-nav="capabilities"
+            ><svg class="icon" aria-hidden="true">
+              <use href="/static/icons.svg#layers"></use></svg
+            ><span>کتابخانهٔ قابلیت‌ها</span
+            ><span class="nav-count" data-count="operations">—</span></a
+          >
+          <a href="#lab" data-nav="lab"
+            ><svg class="icon" aria-hidden="true">
+              <use href="/static/icons.svg#terminal"></use></svg
+            ><span>آزمایشگاه فرمان</span><span class="nav-new">LAB</span></a
+          >
+          <a href="#favorites" data-nav="favorites"
+            ><svg class="icon" aria-hidden="true">
+              <use href="/static/icons.svg#star"></use></svg
+            ><span>نشان‌شده‌ها</span
+            ><span class="nav-count" data-count="favorites">۰</span></a
+          >
+        </nav>
+        <p class="nav-label second-label">شناخت سیستم</p>
+        <nav class="primary-nav">
+          <a href="#trust" data-nav="trust"
+            ><svg class="icon" aria-hidden="true">
+              <use href="/static/icons.svg#shield"></use></svg
+            ><span>اعتماد و شفافیت</span></a
+          >
+          <a href="#guide" data-nav="guide"
+            ><svg class="icon" aria-hidden="true">
+              <use href="/static/icons.svg#book"></use></svg
+            ><span>راهنمای اتاق فرمان</span
+            ><svg class="icon small trailing" aria-hidden="true">
+              <use href="/static/icons.svg#arrow-up-left"></use></svg
+          ></a>
+        </nav>
+        <div class="sidebar-bottom">
+          <div class="safe-card">
+            <span class="safe-icon"
+              ><svg class="icon" aria-hidden="true">
+                <use href="/static/icons.svg#shield-check"></use></svg></span
+            ><strong>اول بررسی، بعد اجرا.</strong>
+            <p>
+              اینجا هیچ فرمانی اجرا نمی‌شود؛ با خیال روشن، قابلیت‌ها را کشف
+              کنید.
+            </p>
+            <a href="#guide"
+              >مرزهای این محیط<svg class="icon small" aria-hidden="true">
+                <use href="/static/icons.svg#arrow-left"></use></svg
+            ></a>
+          </div>
+          <div class="sidebar-footer">
+            <span class="status-dot"></span><span>کاتالوگ محلی</span
+            ><span class="version" data-version dir="ltr">—</span>
+          </div>
+        </div>
+      </aside>
+      <div class="workspace">
+        <header class="topbar">
+          <div class="breadcrumb">
+            <span class="desktop-crumb">فضای کار</span
+            ><span class="crumb-separator desktop-crumb">/</span
+            ><span id="breadcrumb-current">نمای کلی</span
+            ><img
+              class="mobile-logo"
+              src="/static/mark.svg"
+              width="28"
+              height="28"
+              alt="NEXUS"
+            />
+          </div>
+          <div class="topbar-actions">
+            <span class="local-badge"
+              ><span class="status-dot"></span
+              ><span id="mode-label">نمای محلی</span></span
+            >
+            <button
+              class="palette-trigger"
+              id="open-palette"
+              type="button"
+              aria-label="جست‌وجوی فرمان"
+              aria-haspopup="dialog"
+            >
+              <svg class="icon small" aria-hidden="true">
+                <use href="/static/icons.svg#search"></use></svg
+              ><span>جست‌وجوی فرمان</span><kbd dir="ltr">⌘ K</kbd>
+            </button>
+            <span class="topbar-divider"></span>
+            <button
+              class="icon-button"
+              id="refresh"
+              type="button"
+              aria-label="بازخوانی کاتالوگ"
+              title="بازخوانی کاتالوگ"
+            >
+              <svg class="icon" aria-hidden="true">
+                <use href="/static/icons.svg#refresh"></use>
+              </svg>
+            </button>
+            <button
+              class="icon-button"
+              id="theme-toggle"
+              type="button"
+              aria-label="فعال‌کردن پوستهٔ روشن"
+              title="تغییر پوسته"
+            >
+              <svg class="icon" aria-hidden="true">
+                <use id="theme-icon" href="/static/icons.svg#sun"></use>
+              </svg>
+            </button>
+            <button
+              class="icon-button"
+              id="lock-session"
+              type="button"
+              aria-label="قفل‌کردن پنل"
+              title="قفل‌کردن پنل"
+              hidden
+            >
+              <svg class="icon" aria-hidden="true">
+                <use href="/static/icons.svg#lock"></use>
+              </svg>
+            </button>
+          </div>
+        </header>
+        <div
+          class="connection-banner"
+          id="connection-banner"
+          role="status"
+          hidden
+        >
+          <svg class="icon small" aria-hidden="true">
+            <use href="/static/icons.svg#alert"></use></svg
+          ><span id="connection-message"></span
+          ><button id="retry-connection" type="button">تلاش دوباره</button>
+        </div>
+        <main id="main" tabindex="-1" aria-busy="true">
+          <div class="loading-state">
+            <span class="loader"></span>
+            <h1>در حال خواندن کاتالوگ واقعی…</h1>
+            <p>بدون اتصال به ربات، مدل یا پایگاه داده.</p>
+          </div>
+        </main>
+        <footer class="page-footer">
+          <span>کنترل روشن. تصمیم آگاهانه.</span
+          ><span id="snapshot-time">NEXUS COCKPIT</span>
+        </footer>
+      </div>
+    </div>
+    <nav class="mobile-nav" aria-label="ناوبری موبایل">
+      <a href="#overview" data-nav="overview"
+        ><svg class="icon" aria-hidden="true">
+          <use href="/static/icons.svg#dashboard"></use></svg
+        ><span>نمای کلی</span></a
+      >
+      <a href="#capabilities" data-nav="capabilities"
+        ><svg class="icon" aria-hidden="true">
+          <use href="/static/icons.svg#layers"></use></svg
+        ><span>قابلیت‌ها</span></a
+      >
+      <a href="#lab" data-nav="lab"
+        ><svg class="icon" aria-hidden="true">
+          <use href="/static/icons.svg#terminal"></use></svg
+        ><span>آزمایشگاه</span></a
+      >
+      <a href="#trust" data-nav="trust"
+        ><svg class="icon" aria-hidden="true">
+          <use href="/static/icons.svg#shield"></use></svg
+        ><span>شفافیت</span></a
+      >
+    </nav>
+    <dialog
+      id="command-palette"
+      class="palette-dialog"
+      aria-labelledby="palette-title"
+    >
+      <div class="palette-heading">
+        <h2 id="palette-title">چه چیزی در ذهن دارید؟</h2>
+        <button
+          class="icon-button"
+          type="button"
+          data-close-dialog="command-palette"
+          aria-label="بستن جست‌وجوی فرمان"
+        >
+          <svg class="icon" aria-hidden="true">
+            <use href="/static/icons.svg#close"></use>
+          </svg>
+        </button>
+      </div>
+      <div class="palette-search">
+        <svg class="icon" aria-hidden="true">
+          <use href="/static/icons.svg#search"></use></svg
+        ><input
+          id="palette-input"
+          type="search"
+          placeholder="نام فارسی، شناسه یا یک قابلیت…"
+          aria-label="جست‌وجوی فرمان"
+          role="combobox"
+          aria-expanded="true"
+          aria-controls="palette-results"
+          aria-autocomplete="list"
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </div>
+      <div
+        id="palette-results"
+        class="palette-results"
+        role="listbox"
+        aria-label="نتایج جست‌وجو"
+      ></div>
+      <div class="palette-footer">
+        <span><kbd>↑</kbd><kbd>↓</kbd> جابه‌جایی</span
+        ><span><kbd>Enter</kbd> انتخاب</span><span><kbd>Esc</kbd> بستن</span>
+      </div>
+    </dialog>
+    <dialog
+      id="inspector"
+      class="inspector-dialog"
+      aria-labelledby="inspector-title"
+    >
+      <div id="inspector-content"></div>
+    </dialog>
+    <div class="toast" id="toast" role="status" hidden></div>
+    <div
+      class="sr-only"
+      id="announcer"
+      aria-live="polite"
+      aria-atomic="true"
+    ></div>
+    <noscript
+      ><div class="noscript-note">
+        این رابط برای کاوش تعاملی به جاوااسکریپت نیاز دارد. هیچ اسکریپت خارجی
+        بارگذاری نمی‌شود.
+      </div></noscript
+    >
+  </body>
+</html>
