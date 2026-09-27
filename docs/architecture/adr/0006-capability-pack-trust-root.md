@@ -110,6 +110,32 @@ activation time, and costs single-digit milliseconds.
 - (~) `security.signature_algorithm` stays `Literal["ed25519"]`; a second
   algorithm would need a new `TrustState` and a new `TRUSTED_STATES` member.
 
+## Threat model scope
+
+**In scope (tested):** manifest tampering, forged publisher, forged signature,
+revoked key, malformed signature, canonicalisation ambiguity, activation
+bypass, unreadable trust root.
+
+**Out of scope (assumptions, not defects):** compromise of the shipped
+trust-root distribution, compromise of a publisher's private key, compromise
+of the host filesystem.
+
+## Duplicate authority
+
+`creative/packs/delivery/signing.py` is a second sign/verify seam with its own
+serializer and a **symmetric** HMAC-SHA256 fallback under the same secret used
+to verify — a verifier there can forge, so it is not equivalent to Ed25519 and
+must never be described as such. It is a transport seam for exported OTIO
+documents, has no production call site today (only its own tests import it),
+and is owned by the `delivery-interop` zone / PR #99. This ADR makes
+`packs/trust.py` the single authority for pack activation;
+`tests/architecture/test_pack_trust_boundary.py` fails if the trust path ever
+reaches into that seam, or if it reaches back.
+
+The `TRUSTED_SIGNATURE_STATES = frozenset()` gate proposed in PRs #86/#88 is
+superseded by this record: identical enforcement point, but with a reachable,
+testable `verified` state.
+
 ## Confirmation
 
 - `tests/unit/test_pack_trust_root.py` — 35 tests: the state machine, per-field

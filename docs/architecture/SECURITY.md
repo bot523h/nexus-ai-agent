@@ -98,6 +98,7 @@ credentials ([ADR 0006](adr/0006-capability-pack-trust-root.md)):
   `no_trusted_keys`, `revoked_key`, `signature_invalid`, `verified`); exactly
   one of them — `verified` — allows `PackRegistry.activate()` to grant an
   external pack execution authority;
+- the delivery pack's `signing.py` seam is **not** an activation authority (its PyNaCl-less fallback is symmetric HMAC under the verification secret); the boundary map is [`TRUST_CONTROL_PLANE.md`](TRUST_CONTROL_PLANE.md);
 - no signing primitive and no private key material ship in the runtime;
   `tests/architecture/test_pack_trust_boundary.py` fails if one appears,
   and `scripts/pack_trust_mutations.py` proves the guards kill 12 attacks.

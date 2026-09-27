@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T00:00:00Z",
+  "updated_at": "2026-09-27T12:00:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2440,7 +2440,65 @@
       ],
       "agent_branch": "arena/01a0e200-nexus-ai-agent",
       "claimed_at": "2026-09-27T00:00:00Z",
-      "ttl_hours": 24
+      "ttl_hours": 24,
+      "integration": {
+        "canonical_pr": 101,
+        "head_sha_at_record": "pending-next-commit",
+        "supersedes": [
+          "PR#86 (TRUSTED_SIGNATURE_STATES empty gate)",
+          "PR#88 (same gate + artifact-proof slice)"
+        ],
+        "supersede_reason_en": "Same enforcement point, but the empty trusted-state set makes 'verified' unreachable and therefore untestable. Both branches additionally have NO merge base with main (unrelated histories), so neither can carry the gate to main as-is.",
+        "supersede_reason_fa": "همان نقطهٔ اعمال، اما مجموعهٔ تهی باعث می‌شود حالت verified هرگز قابل دسترسی و آزمون نباشد؛ ضمناً هر دو شاخه با main مبنای ادغام مشترک ندارند.",
+        "do_not_close_until": "successor is on main",
+        "overlap_resolution": [
+          {
+            "path": "src/nexus_ai_agent/creative/packs/registry.py",
+            "other": "PR#86/#88",
+            "final_owner": "task-194",
+            "reason": "activation gate replaced by reachable trusted state (ADR 0006)"
+          },
+          {
+            "path": "src/nexus_ai_agent/creative/packs/verify.py",
+            "other": "PR#88",
+            "final_owner": "task-194",
+            "reason": "signature_state is now the trust verdict; report.ok separated from report.trusted"
+          },
+          {
+            "path": "docs/architecture/SECURITY.md",
+            "other": "PR#86/#88",
+            "final_owner": "shared-append",
+            "reason": "new section 4b appended; no line of the existing sections touched"
+          },
+          {
+            "path": ".agents/board.json",
+            "other": "PR#88/#94/#95/#97/#98/#99",
+            "final_owner": "append-only",
+            "reason": "only a new zone and a new claim are appended; conflicts are a single JSON hunk"
+          },
+          {
+            "path": "docs/README.md",
+            "other": "PR#99/#100",
+            "final_owner": "append-only",
+            "reason": "index rows appended"
+          },
+          {
+            "path": "tests/architecture/test_pack_manifest_is_data_only.py",
+            "other": "PR#100",
+            "final_owner": "shared",
+            "reason": "allow-list gained binascii/enum (pure stdlib); PR#100 edits a different assertion and merges clean"
+          }
+        ],
+        "handoffs": [
+          {
+            "to_zone": "delivery-interop",
+            "to_pr": 99,
+            "issue": "delivery/signing.py HMAC-SHA256 fallback uses the verification secret as the signing secret, so a verifier can forge; the module documents it as contract-equivalent to Ed25519.",
+            "exploitability_today": "no production call site imports the module; latent narrative/security defect, not a live vulnerability",
+            "requested_disposition": "drop the symmetric fallback or rename the seam to an authenticity tag and correct the docstring"
+          }
+        ]
+      }
     }
   ],
   "deferred_log": [

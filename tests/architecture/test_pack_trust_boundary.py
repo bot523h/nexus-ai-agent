@@ -117,3 +117,53 @@ def test_trust_modules_import_without_optional_dependencies(module: str) -> None
     import importlib
 
     importlib.import_module(module)
+
+
+# --------------------------------------------------------------------------
+# No duplicate authority (integration guard, ADR 0006 §"Duplicate authority")
+# --------------------------------------------------------------------------
+
+#: The delivery pack ships its own sign/verify seam
+#: (``creative/packs/delivery/signing.py``) whose fallback is symmetric
+#: HMAC-SHA256 under the *same* secret used to verify — a verifier there can
+#: forge.  It is a transport seam for exported OTIO documents, not a trust
+#: root, and it must never become one: pack *activation* authority has exactly
+#: one source, :mod:`nexus_ai_agent.creative.packs.trust`.
+DELIVERY_SIGNING = "nexus_ai_agent.creative.packs.delivery.signing"
+
+
+def test_pack_trust_never_delegates_to_the_delivery_signing_seam() -> None:
+    for path in (TRUST, ED25519, VERIFY, REGISTRY, PACKS / "manifest.py"):
+        source = path.read_text(encoding="utf-8")
+        assert "delivery.signing" not in source, (
+            f"{path.name} reaches into the delivery signing seam; "
+            "activation authority must come from the trust root alone"
+        )
+        assert "NEXUS_SIGNING_KEY" not in source
+
+
+def test_the_delivery_seam_cannot_reach_the_trust_root() -> None:
+    """Symmetry guard: the weaker seam must not import the stronger one either."""
+    source = (PACKS / "delivery" / "signing.py").read_text(encoding="utf-8")
+    for forbidden in ("packs.trust", "trust_root", "TRUSTED_SIGNATURE_STATES"):
+        assert forbidden not in source
+
+
+def test_only_the_trust_root_decides_pack_activation() -> None:
+    """Repo-wide: nothing else may write a pack's ``active`` flag."""
+    offenders = [
+        path.relative_to(SRC).as_posix()
+        for path in SRC.rglob("*.py")
+        if "RegisteredPack(" in path.read_text(encoding="utf-8") and path.name != "registry.py"
+    ]
+    assert offenders == [], f"{offenders} construct RegisteredPack outside the registry"
+
+
+def test_the_activation_guard_has_a_positive_control() -> None:
+    """A guard that can never fire is decoration: prove this one can."""
+    hits = [
+        path.relative_to(SRC).as_posix()
+        for path in SRC.rglob("*.py")
+        if "RegisteredPack(" in path.read_text(encoding="utf-8")
+    ]
+    assert hits == ["creative/packs/registry.py"]
