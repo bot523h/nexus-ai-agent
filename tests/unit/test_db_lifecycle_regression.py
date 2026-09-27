@@ -350,6 +350,43 @@ async def test_k_atomic_schema_bearing_restore_preserves_rows(tmp_path: Path) ->
         assert [r.description for r in rows] == ["from-backup"]
 
 
+# ── M. engine identity: one engine = one absolute file (no disposal) ────
+
+
+@pytest.mark.asyncio
+async def test_m_engine_stays_bound_to_absolute_file_across_cwd_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pins ``resolve()`` inside ``_get_engine`` itself, WITHOUT any disposal
+    between CWD changes: the engine-path key is the absolute file identity,
+    so a CWD change RETIRES the engine instead of silently reusing a relative
+    URL against a different working directory.  Mutation killer: expanding
+    the key with ``expanduser`` only (no ``resolve()``) reuses dir-A's engine
+    in dir-B and this test reads dir-A's row where an empty database is
+    expected → RED."""
+    dir_a = tmp_path / "a"
+    dir_b = tmp_path / "b"
+    dir_a.mkdir()
+    dir_b.mkdir()
+
+    monkeypatch.chdir(dir_a)
+    async with get_session("data/app.sqlite") as session:
+        session.add(PendingApproval(change_type="m", description="in-a"))
+        await session.commit()
+
+    # NO disposal: only the absolute binding may separate the two files.
+    monkeypatch.chdir(dir_b)
+    async with get_session("data/app.sqlite") as session:
+        assert (await session.execute(select(PendingApproval))).scalars().all() == []
+        session.add(PendingApproval(change_type="m", description="in-b"))
+        await session.commit()
+
+    monkeypatch.chdir(dir_a)
+    async with get_session("data/app.sqlite") as session:
+        rows = (await session.execute(select(PendingApproval))).scalars().all()
+        assert [r.description for r in rows] == ["in-a"]
+
+
 # ── L. E3a: atomic replace with an EMPTY file → re-initialised ──────────
 
 

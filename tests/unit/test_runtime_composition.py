@@ -459,3 +459,23 @@ def test_create_application_wires_post_shutdown_through_runtime():
     source = inspect.getsource(bot_app)
     assert "make_post_shutdown(" in source
     assert ".post_shutdown(make_post_shutdown(" in source
+
+
+# ── Settings-cache isolation contract (conftest autouse fixture) ────────
+#
+# ``_isolate_settings_cache`` (tests/conftest.py) clears the process-wide
+# ``get_settings`` lru-cache after every test.  The pair below is the LAW-7
+# detector for that fixture: part one deliberately pins a tmp NEXUS_DB_PATH
+# in the cache and leaves it; part two (running immediately after) must see
+# its own environment.  Removing the conftest fixture makes part two read
+# part one's leaked path → RED.
+
+
+def test_settings_isolation_part_one_pins_env_path(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NEXUS_DB_PATH", str(tmp_path / "pinned.sqlite"))
+    get_settings.cache_clear()
+    assert get_settings().db_path == str(tmp_path / "pinned.sqlite")
+
+
+def test_settings_isolation_part_two_sees_own_environment() -> None:
+    assert get_settings().db_path == "data/app.sqlite"
