@@ -127,7 +127,7 @@ lives in `continuum/` precisely so that allowlist never has to grow.
 ## 5. Measuring what actually runs — the 95% acceptance contract (DECISION_LOG D-0023)
 
 ```bash
-python scripts/pack_coverage.py                                   # canonical: 26 targets, 95% bar
+python scripts/pack_coverage.py                                   # canonical: 27 targets, 95% bar
 python scripts/pack_coverage.py --json-out ci-artifacts/pack-coverage.json
 python scripts/pack_coverage.py --verify-artifact ci-artifacts/pack-coverage.json
 python scripts/pack_coverage.py --list-tests
@@ -139,7 +139,7 @@ python scripts/pack_coverage.py --threshold 80
 
 **The contract.** A report is *accepted* only when every one of these holds:
 
-* the run is **canonical** — exactly the 26 targets of `DEFAULT_TEST_TARGETS`
+* the run is **canonical** — exactly the 27 targets of `DEFAULT_TEST_TARGETS`
   (derived from `PACK_TEST_TARGETS`, one entry per composed pack plus the
   substrate), every pack, the default pack root, and the bar at
   `ACCEPTANCE_THRESHOLD = 95.0`; a subset, a respelled duplicate, an unknown or
@@ -151,6 +151,12 @@ python scripts/pack_coverage.py --threshold 80
   with no surface at all is a measurement issue, never a silently dropped pack),
   and no mapping/orphan issue exists;
 * **every pack** (not the total) is at or above 95.00%.
+
+The `core` group is every module directly under `creative/packs/`, measured from
+the substrate targets. A substrate module whose tests are not canonical targets is
+measured as unexercised; `tests/unit/test_pack_coverage_contract.py` therefore
+requires every substrate module imported by any test to be imported by a canonical
+target (the trust-root suite of PR #101 was added to `SUBSTRATE_TEST_TARGETS` this way).
 
 The denominator is the compiler's line table of every code object, minus the
 lines that are not source (3.11+ emits a synthetic `RESUME` at line 0; 3.10 numbers
@@ -170,18 +176,18 @@ are byte-identical (CI proves it with `cmp`). It is bound to its commit
 (`provenance.git_commit`, `source_sha256` over the measured sources, the
 interpreter identity) and records `accepted` next to the per-pack numbers.
 
-**Measured at the PR head (Python 3.11.2, 26 targets, 27 modules, 362 tests passed):**
+**Measured at `f68757e` (Python 3.11.2, 27 targets, 29 modules, 397 tests passed):**
 
 | pack | modules | executed / executable | cover | status |
 |---|---:|---:|---:|---|
 | audio | 3 | 615 / 637 | 96.55% | OK |
 | caption | 4 | 868 / 894 | 97.09% | OK |
-| core (substrate) | 5 | 673 / 694 | 96.97% | OK |
+| core (substrate) | 7 | 980 / 1022 | 95.89% | OK |
 | delivery | 4 | 566 / 566 | 100.00% | OK |
 | edit | 3 | 490 / 508 | 96.46% | OK |
 | motion | 3 | 679 / 689 | 98.55% | OK |
 | slideshow | 5 | 880 / 899 | 97.89% | OK |
-| **TOTAL** | **27** | **4771 / 4887** | **97.63%** | **ACCEPTED** |
+| **TOTAL** | **29** | **5078 / 5215** | **97.37%** | **ACCEPTED** |
 
 `slideshow` was 93.55% under the old 85% bar; it reached the contract through
 behavioural tests of its public invariants (`tests/unit/test_slideshow_invariants.py`)

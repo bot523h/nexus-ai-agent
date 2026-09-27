@@ -61,11 +61,11 @@ every push and pull request by the CI `continuum-evidence` job on Python 3.10, 3
 and 3.12:
 
 * **Pack coverage — a real 95% gate.** `python scripts/pack_coverage.py` accepts a
-  report only when the run is canonical (26 targets derived from
+  report only when the run is canonical (27 targets derived from
   `PACK_TEST_TARGETS`, all 7 units, default root, bar 95.0), the measurement is
   verified (child exit 0, 0 failed / 0 errors / 0 deselected, nonce-bound trace
   artifact, no orphaned or stale mapping) and every pack is ≥ 95%. Measured at the
-  PR head on Python 3.11.2: TOTAL 97.63%, weakest pack edit 96.46%, slideshow
+  PR head (`f68757e`) on Python 3.11.2: TOTAL 97.37%, weakest pack core 95.89%, slideshow
   97.89% (was 93.55% under the old 85% bar). The artifact is canonical and
   byte-reproducible.
 * **Snapshot verification fails closed.** `nexus continuum verify` exits 1 on an

@@ -10,13 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Continuum evidence foundation (task-184, session `arena/01a0e1e0-nexus-ai-agent`; supersedes PR #95 / PR #98)
 
 - **Pack coverage is a real 95% gate (DECISION_LOG D-0023, option A).** A report is
-  accepted only when the run is canonical (the 26 targets derived from
+  accepted only when the run is canonical (the 27 targets derived from
   `PACK_TEST_TARGETS`, every pack, the default root, bar = `ACCEPTANCE_THRESHOLD`
   95.0), the measurement is verified (trace child exit 0, pytest passed with 0
   failed / 0 errors / 0 deselected, nonce-bound trace artifact with exact keys,
   non-empty surfaces, no mapping or orphan issue) and **every pack** is ≥ 95%.
-  Measured at the PR head on Python 3.11.2: TOTAL 97.63% (4771/4887), weakest pack
-  edit 96.46%; `slideshow` 93.55% → 97.89% through behavioural invariant tests
+  Measured at `f68757e` on Python 3.11.2: TOTAL 97.37% (5078/5215), weakest pack
+  core 95.89%; `slideshow` 93.55% → 97.89% through behavioural invariant tests
   (`tests/unit/test_slideshow_invariants.py`) and the never-mapped
   `tests/architecture/test_slideshow_adapter_boundary.py` — no exclusions.
 - **Denominator/numerator hardening.** Synthetic lines (3.11+ `RESUME` at line 0,
@@ -74,7 +74,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   STALE once a later commit touches an evidence root, and CI reports it with
   `blocking: false`. After the flaky-test repair below touched `tests/`, `verify`
   reported `source state drift detected` and the record was republished at
-  `65b7f8a` (same 2871 tests, same interpreter and dependency pins).
+  `65b7f8a` (same 2871 tests, same interpreter and dependency pins). After the merge
+  of `main` (PR #101) and the substrate-target fix below it was republished at
+  `f68757e` (2924 collected tests, same interpreter and dependency pins).
+- **Merged `main` (PR #101, capability-pack trust root) and caught its coverage gap.**
+  PR #101 landed while this PR was in CI. On the merge the canonical run was
+  NOT ACCEPTED — `core` 79.26% < 95% (`ed25519.py` 27.27%, `trust.py` 43.75%) —
+  because the new substrate modules' contract suite `tests/unit/test_pack_trust_root.py`
+  was not a canonical target. It is now in `SUBSTRATE_TEST_TARGETS` (27 targets;
+  `core` 95.89%, no exclusions). A new contract test requires every substrate
+  module imported by any test to be imported by a canonical target (RED on
+  `['ed25519', 'trust']` before the fix).
 - **Flaky test repaired (out of scope, trust-breaking):** `test_number_guess_keeps_state`
   guessed a fixed `50` against an unpinned `random.randint(1, 100)` secret, so 1 run
   in 100 went red — it failed PR #102's `test` job (pull_request run 36313347629,
