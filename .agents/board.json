@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T15:12:52Z",
+  "updated_at": "2026-09-27T16:47:56Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -657,6 +657,22 @@
         "tests/unit/test_request_queue.py",
         "scripts/llm_queue_mutations.py",
         "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
+      ]
+    },
+    {
+      "id": "runtime-composition-w1",
+      "description": "W1 canonical runtime composition: one runtime owner for settings snapshot, database identity, LLM engine/provider, request queue, conversation store, and lifecycle shutdown. Constructor-ownership ratchet + database-identity contract + shutdown wiring proof. Explicitly NOT the W2 typed gateway (policy payloads come next wave) and NOT touching knowledge/, integrations/, .github/ (active claims by arena/01a0df05 and arena/01a0e2bb are honored).",
+      "paths": [
+        "src/nexus_ai_agent/application/runtime.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/bot/feature_handlers.py",
+        "src/nexus_ai_agent/bot/knowledge_handlers.py",
+        "src/nexus_ai_agent/agents/store/agent_manager.py",
+        "src/nexus_ai_agent/llm/gemini_provider.py",
+        "src/nexus_ai_agent/storage/db.py",
+        "tests/unit/test_runtime_composition.py",
+        "tests/architecture/test_constructor_ownership.py"
       ]
     }
   ],
@@ -2714,6 +2730,80 @@
       "ttl_hours": 24,
       "gates_owner": true,
       "note": "Continues task-195-llm-queue-lifecycle (original branch arena/01a0e2f0, claim released via takeover). MODULE_MAP.md/docs-architecture excluded exactly as the original claim scoped itself."
+    },
+    {
+      "task": "task-196-w1-runtime-composition",
+      "title": "W1 canonical runtime composition: one owner for DB/LLM/queue/lifecycle + constructor-ownership ratchet + shutdown wiring",
+      "title_fa": "ترکیب runtime یکپارچه W1: یک مالک برای دیتابیس/LLM/صف/چرخهٔ عمر + ratchet مالکیت سازنده‌ها + سیم‌کشی shutdown",
+      "zone": "runtime-composition-w1",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Per the merged Phase Zero plan (docs/audits/EXECUTION_PLAN_2026-09-27.md, anchor f53923d) W1 follows the queue salvage (task-195). Deliver RuntimeContext/aproved factory: single settings snapshot, canonical database identity (env NEXUS_DATABASE_URL > settings.db_path; get_session(None) must stop silently falling back to a hardcoded literal 'data/app.sqlite'), one GeminiEngine wired to the shared queue+store, one GeminiProvider sharing that engine, one ConversationStore/SummarizerEngine instance identity, and an ordered aclose() (request_queue -> job_queue -> engines -> db disposal) wired into Application.post_shutdown. Ratchet: direct GeminiEngine/GeminiProvider/ConversationStore/GeminiRequestQueue construction outside the approved factory seams is AST-detectable; legacy fallback seams are enumerated, warn-logged and shrink-only. Call-site rewiring: handlers, feature engines (AIMemoryEngine), knowledge handlers and agent manager receive the shared provider/engine instead of constructing their own.",
+      "scope_fa": "",
+      "prerequisites": [
+        "task-195-salvage"
+      ],
+      "acceptance_criteria": [
+        "Gateway identity: the engine instance handlers, feature engines, knowledge handlers and agent paths resolve IS the runtime's single shared engine (behavioral identity assertions, not type checks).",
+        "Database identity: with NEXUS_DATABASE_URL unset and settings.db_path customised (env NEXUS_DB_PATH), get_session(None) opens THAT path, never the hardcoded 'data/app.sqlite' literal; regression proves the default remains 'data/app.sqlite'.",
+        "Constructor ownership: AST guard enumerates every GeminiEngine/GeminiProvider/ConversationStore/GeminiRequestQueue construction site; all sites are in the approved set (runtime factory + explicitly justified legacy seams that warn-log); any new site fails the suite.",
+        "Shutdown ownership: invoking the Application post_shutdown hook ACTUALLY closes the request queue (pending waiters settled, closed status), shuts the job queue down and disposes DB connections, in a recorded order; 'close() exists' is not accepted as proof.",
+        "Zero regression: full non-slow suite, ruff/format/mypy, board structural tests and the llm_queue mutation harness (16/16) stay green; no production-readiness claim is made.",
+        "Negative + mutation proof for each new invariant (shutdown skips queue close -> RED; handlers ignore injected engine -> RED; db identity falls back to literal -> RED).",
+        "knowledge/, integrations/, .github/ are untouched (active claims by arena/01a0df05/task-185 and arena/01a0e2bb/task-154 honored); overlap with stale open PRs touching app.py/handlers.py/db.py is recorded in overlap_ack."
+      ],
+      "evidence_required": [
+        "Baseline RED transcripts for shutdown wiring, engine identity, and db fallback on main-lineage tree.",
+        "Constructor-site inventory before/after with exact line references.",
+        "pytest counts for tests/unit/test_runtime_composition.py + tests/architecture/test_constructor_ownership.py.",
+        "Mutation/transplant probes for the three new invariants.",
+        "Exact-head CI run IDs including python-parity 3.10 and merged-main proof."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/application/runtime.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/bot/feature_handlers.py",
+        "src/nexus_ai_agent/bot/knowledge_handlers.py",
+        "src/nexus_ai_agent/agents/store/agent_manager.py",
+        "src/nexus_ai_agent/llm/gemini_provider.py",
+        "src/nexus_ai_agent/storage/db.py",
+        "tests/unit/test_runtime_composition.py",
+        "tests/architecture/test_constructor_ownership.py"
+      ],
+      "owner_hint": "Arena agent on arena/01a0e356-nexus-ai-agent",
+      "agent_branch": "arena/01a0e356-nexus-ai-agent",
+      "claimed_at": "2026-09-27T16:47:56Z",
+      "ttl_hours": 48,
+      "gates_owner": true,
+      "overlap_ack": {
+        "stale_open_prs_touching_same_files": {
+          "src/nexus_ai_agent/bot/app.py": [
+            "#33 (assigned_to_E_pr33, ancient)",
+            "#60",
+            "#63",
+            "#66"
+          ],
+          "src/nexus_ai_agent/bot/handlers.py": [
+            "#33",
+            "#89",
+            "#99"
+          ],
+          "src/nexus_ai_agent/storage/db.py": [
+            "#33",
+            "#92"
+          ],
+          "src/nexus_ai_agent/agents/store/agent_manager.py": [
+            "#99"
+          ]
+        },
+        "why": "All overlapping open PRs are 30+ commits behind main with expired/no active board claims; the golden mission orders W1 next. The seams here are minimal and merge-compatible; any future reconciliation of those PRs re-bases onto the runtime.",
+        "excluded_active": {
+          "src/nexus_ai_agent/knowledge/ + src/nexus_ai_agent/integrations/": "task-185 (arena/01a0df05) active until 2026-09-27T18:46Z — knowledge call sites receive the provider through bot/knowledge_handlers.py instead of touching knowledge/ sources.",
+          ".github/": "task-154/task-184 (arena/01a0e2bb) active — queue mutation harness stays a local gate as before."
+        }
+      },
+      "note": "Sequenced per the golden-mission wave order: PR #109 (task-195-salvage) merges first, then W1 code follows on this branch. Claim registered immediately per board protocol."
     }
   ],
   "deferred_log": [
@@ -3349,6 +3439,13 @@
       "action": "continuation",
       "task": "task-195-llm-queue-lifecycle (PR #108)",
       "reason": "Golden-mission directive (Live Main / Zero Regression). PR #108 head 5a4cb23b26fab15c7624d3e6c9bfc8f8006f8c35 (branch arena/01a0e2f0) is CONFLICTING with main 05dec617 on .agents/board.json (merge-base 93c7809; ahead 4 / behind 30) and RED on python-parity (3.10) — check runs 108632462990 and 108632643506 both FAILURE; root cause asyncio.Task.cancelling() (3.11+) at request_queue._execute's CancelledError branch, absent on 3.10. A session is bound to exactly one branch and cannot push to arena/01a0e2f0, so per the PR#102->PR#107 salvage precedent the branch is merged verbatim (commits 565c429, 1564ba4, 260dfc6, 5a4cb23 keep their SHAs and authorship) and the defect is fixed in a follow-up commit. No history was rewritten and no feature work was dropped."
+    },
+    {
+      "at": "2026-09-27T16:47:56Z",
+      "by_branch": "arena/01a0e356-nexus-ai-agent",
+      "action": "claim",
+      "task": "task-196-w1-runtime-composition",
+      "reason": "Golden-mission W1 wave. Zones previously covering these files (feature-wiring, core-database, job-lifecycle-gate5-closure, llm-local) have no active claims (expired/ancient; verified in main board at 05dec617 + this branch). overlap_ack records the stale open PRs that textually touch app.py/handlers.py/db.py; knowledge/ and .github/ are deliberately excluded while task-185 and task-154/184 hold live leases."
     }
   ],
   "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins."
