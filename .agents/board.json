@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T12:27:18Z",
+  "updated_at": "2026-09-27T15:12:52Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -648,6 +648,16 @@
         "docs/ops/"
       ],
       "note": "storage runbook (queued)"
+    },
+    {
+      "id": "llm-request-queue-lifecycle",
+      "description": "Isolated W2 in-process LLM request-queue lifecycle: cancellation, fair per-user scheduling, attempt accounting, and shutdown. Behavioral and mutation proof only in this slice; MODULE_MAP.md is left untouched because current open PRs own overlapping docs paths. Not the global gateway or durable/distributed queue.",
+      "paths": [
+        "src/nexus_ai_agent/features/request_queue.py",
+        "tests/unit/test_request_queue.py",
+        "scripts/llm_queue_mutations.py",
+        "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
+      ]
     }
   ],
   "claims": [
@@ -2625,6 +2635,85 @@
       "agent_branch": "arena/01a0df05-nexus-ai-agent",
       "claimed_at": "2026-09-26T18:46:40Z",
       "ttl_hours": 24
+    },
+    {
+      "task": "task-195-llm-queue-lifecycle",
+      "title": "W2 queue lifecycle: cancel abandoned requests, account provider attempts, and schedule users fairly",
+      "title_fa": "سخت‌سازی چرخهٔ عمر صف W2: لغو درخواست رهاشده، حساب‌کردن تلاش واقعی provider و زمان‌بندی منصفانهٔ کاربران",
+      "zone": "llm-request-queue-lifecycle",
+      "priority": "P0",
+      "status": "completed_released",
+      "scope": "Harden only the in-process GeminiRequestQueue contract: remove timed-out/cancelled queued work before provider invocation; propagate cancellation to an in-flight local coroutine; settle waiters deterministically on close; account logical requests separately from actual provider attempts; honor bounded typed retry decisions; and round-robin users within each priority. Strict priority remains across tiers, so lower-tier starvation is an explicit limitation. This is deliberately a standalone W2 slice: not a single global LLM gateway, not persistent/distributed work, and not provider-call cancellation after bytes have reached a remote server. Sequenced ahead of W1 composition only because its implementation/test paths are disjoint and W1 hot paths are currently touched by open PRs #99/#89/#66/#63/#60/#33; no ownership is claimed over those paths.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "A queued request that times out or is cancelled is never passed to its provider coroutine; timeout while rate-waiting wakes the worker immediately.",
+        "Cancellation while locally awaiting a provider is propagated to that task; account for remote outcome uncertainty explicitly rather than claiming an HTTP request can always be recalled.",
+        "Per-user request counts are released exactly once on success, timeout, cancellation, provider failure, and shutdown.",
+        "Round-robin scheduling is proven among users within one priority; priority ordering across tiers is retained and its starvation caveat is documented.",
+        "Each actual provider invocation, including an allowed retry, consumes request/minute and daily capacity; retry is bounded, status-typed, and disabled when configured off.",
+        "UTC daily quota rollover releases blocked work without requiring a provider call to trigger the reset.",
+        "Immediate close is idempotent, stops/settles active and queued waiters, returns all queue accounting to zero, and rejects later submissions.",
+        "Deterministic regression/adversarial tests and a mutation probe demonstrate that cancellation/accounting regressions are caught; architecture documentation paths are not edited while open PRs overlap them.",
+        "Local full lint, format, type, and non-slow test gates plus remote exact-SHA CI are reported without production-readiness claims."
+      ],
+      "evidence_required": [
+        "Exact main/PR/CI SHAs and fresh open-PR path overlap check.",
+        "Before-fix reproduction tests for timeout execution, duplicate pending decrement, fairness, retry/capacity accounting, daily rollover, and shutdown settlement.",
+        "After-fix focused and full gate outputs plus mutation-probe output; report the deferred MODULE_MAP boundary mapping explicitly.",
+        "Document residual limits: process-local queue, strict-priority starvation, and unknown remote provider outcome after send."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/features/request_queue.py",
+        "tests/unit/test_request_queue.py",
+        "scripts/llm_queue_mutations.py",
+        "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
+      ],
+      "owner_hint": "Arena agent on arena/01a0e2f0-nexus-ai-agent",
+      "agent_branch": "arena/01a0e2f0-nexus-ai-agent",
+      "claimed_at": "2026-09-27T13:02:33Z",
+      "ttl_hours": 24,
+      "gates_owner": true,
+      "note": "MODULE_MAP.md and docs/architecture paths are excluded from this claim: current open PRs #105/#107/#102/#87/#69/#68 overlap that documentation zone. Add/refresh the architecture rule only after those owners reconcile; this slice uses behavioral regression and mutation proof. | SALVAGE-RELEASED 2026-09-27T15:12:52Z by arena/01a0e356-nexus-ai-agent: PR #108 (head 5a4cb23b, merge-base 93c7809, 4 ahead / 30 behind main 05dec617) is CONFLICTING on .agents/board.json and RED on python-parity (3.10) in both check runs on its head — root cause: asyncio.Task.cancelling() (Python 3.11+) called on the worker cancellation path, undefined on 3.10. A session is bound to exactly one branch and cannot push to arena/01a0e2f0; per the PR#102->PR#107 precedent the four commits 565c429..5a4cb23 are merged into the successor branch VERBATIM (git merge, no rebase/force-push, authorship preserved) and the 3.10 defect is fixed under claim task-195-salvage; takeovers in takeover_log. This claim must not keep a live lease."
+    },
+    {
+      "task": "task-195-salvage",
+      "title": "W2 queue lifecycle salvage: land PR #108 verbatim onto main lineage + fix the Python 3.10 cancellation defect",
+      "title_fa": "نجات چرخهٔ عمر صف W2: نشاندن PR #108 با حفظ کامل commitها روی خط main + رفع نقص cancellation پایتون ۳.۱۰",
+      "zone": "llm-request-queue-lifecycle",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Successor to PR #108 (supersedes it; original head 5a4cb23 preserved commit-for-commit). Scope identical to task-195-llm-queue-lifecycle plus the reconciliation: (a) semantic board merge — main's claim statuses/gc notes are canonical, PR108's zone+claim are appended; (b) version-independent worker-cancellation semantics; (c) exact-head CI against main 05dec617 lineage.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Original PR #108 commits 565c429..5a4cb23 remain present in the successor branch history byte-for-byte (ancestry proof, no cherry-pick rewrite)",
+        "The in-flight provider/cancellation path uses no asyncio API newer than Python 3.10 (contract test guards the module against versioned asyncio APIs)",
+        "RED evidence of the 5a4cb23 defect: Task.cancelling() AttributeError chain documented; after fix, the cancellation test semantics hold unchanged",
+        "External worker-task cancellation propagates AND cancels the in-flight provider task without leaking it (behavioral regression test)",
+        "All twelve original mutants in scripts/llm_queue_mutations.py stay killed; at least one new mutant covers the recovered external-cancellation branch",
+        "All nine original task-195 acceptance criteria remain satisfied verbatim",
+        "Local ruff/format/mypy/pytest gates plus remote exact-SHA CI (including python-parity 3.10/3.11/3.12 and trust-mutations) are green; no production-readiness claim",
+        "MODULE_MAP.md and docs/architecture stay untouched in this wave (active docs-zone ownership by other PRs is respected)"
+      ],
+      "evidence_required": [
+        "git merge-base/ancestry transcript for PR #108 vs main 05dec617",
+        "The two failing python-parity (3.10) check-run IDs on 5a4cb23 and the fixed green run on the successor head",
+        "pytest -q tests/unit/test_request_queue.py exact counts + mutation harness 13/13 (12 original + >=1 new) output",
+        "python scripts/agent_board.py check --files exit 0"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/features/request_queue.py",
+        "tests/unit/test_request_queue.py",
+        "scripts/llm_queue_mutations.py",
+        "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
+      ],
+      "owner_hint": "Arena agent on arena/01a0e356-nexus-ai-agent",
+      "agent_branch": "arena/01a0e356-nexus-ai-agent",
+      "claimed_at": "2026-09-27T15:12:52Z",
+      "ttl_hours": 24,
+      "gates_owner": true,
+      "note": "Continues task-195-llm-queue-lifecycle (original branch arena/01a0e2f0, claim released via takeover). MODULE_MAP.md/docs-architecture excluded exactly as the original claim scoped itself."
     }
   ],
   "deferred_log": [
@@ -3253,6 +3342,13 @@
       "action": "continuation",
       "task": "task-184-continuum-evidence-hardening + task-154-pack-coverage-ci",
       "reason": "Same mission owner (Continuum complete forensic closure), new session branch: a session is bound to exactly one branch and cannot push to arena/01a0e1e0. PR #102 (head eb6551b) is red on `test` and python-parity 3.10/3.11/3.12 (docs index invariant), and the previous session's corrected head 6198510f0a06a803ba445e03bba1e44306eaf0f9 was never pushed and does not exist on the remote (verified: git fetch origin 6198510f0a06a803ba445e03bba1e44306eaf0f9 -> 'upload-pack: not our ref'). The correction is therefore re-derived and re-proven here rather than recreated from a report. The work ships as a successor PR from this branch; PR #95, #98 and #102 are closed only after that successor is merged to main and evidenced."
+    },
+    {
+      "at": "2026-09-27T15:12:52Z",
+      "by_branch": "arena/01a0e356-nexus-ai-agent",
+      "action": "continuation",
+      "task": "task-195-llm-queue-lifecycle (PR #108)",
+      "reason": "Golden-mission directive (Live Main / Zero Regression). PR #108 head 5a4cb23b26fab15c7624d3e6c9bfc8f8006f8c35 (branch arena/01a0e2f0) is CONFLICTING with main 05dec617 on .agents/board.json (merge-base 93c7809; ahead 4 / behind 30) and RED on python-parity (3.10) — check runs 108632462990 and 108632643506 both FAILURE; root cause asyncio.Task.cancelling() (3.11+) at request_queue._execute's CancelledError branch, absent on 3.10. A session is bound to exactly one branch and cannot push to arena/01a0e2f0, so per the PR#102->PR#107 salvage precedent the branch is merged verbatim (commits 565c429, 1564ba4, 260dfc6, 5a4cb23 keep their SHAs and authorship) and the defect is fixed in a follow-up commit. No history was rewritten and no feature work was dropped."
     }
   ],
   "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins."
