@@ -166,6 +166,26 @@ MUTATIONS: tuple[Mutation, ...] = (
         "test_provider_self_cancellation_is_typed_failure_and_worker_survives",
         "a provider cancelling itself must settle as a typed failure, never kill the worker",
     ),
+    Mutation(
+        "caller_timeout_catch_is_version_independent",
+        "        except _timeout_errors():\n"
+        "            cancelled = await self._cancel_request(req, timed_out=True)",
+        "        except TimeoutError:  # mutation: 3.10 timeout-class split returns\n"
+        "            cancelled = await self._cancel_request(req, timed_out=True)",
+        "test_submit_timeout_survives_py310_timeout_class_split",
+        "a caller timeout must be recognized on Python 3.10, not escape raw",
+    ),
+    Mutation(
+        "capacity_wait_timeout_catch_is_version_independent",
+        "        except _timeout_errors():\n"
+        "            return req.cancel_event.is_set() or self._closed\n"
+        "        return True",
+        "        except TimeoutError:  # mutation: 3.10 timeout-class split returns\n"
+        "            return req.cancel_event.is_set() or self._closed\n"
+        "        return True",
+        "test_capacity_quota_window_wait_survives_py310_timeout_class_split",
+        "a worker-side capacity-wait timeout must not become a fake provider error on 3.10",
+    ),
 )
 
 

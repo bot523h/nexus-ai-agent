@@ -34,6 +34,21 @@ _CLOSED_MESSAGE = "AI request queue is closed."
 _MAX_RETRY_BACKOFF_SECONDS = 30.0
 
 
+def _timeout_errors() -> tuple[type[BaseException], ...]:
+    """Classes that an ``asyncio.wait_for`` timeout can carry, resolved now.
+
+    Python 3.10 raises a DISTINCT ``asyncio.TimeoutError`` class on wait_for
+    timeout (unified with builtin ``TimeoutError`` only in 3.11), so a bare
+    ``except TimeoutError`` never sees a 3.10 timeout — it escapes and is
+    misaccounted as a provider error. Resolving the pair at catch time (not
+    import time) keeps every supported interpreter correct and dodges the
+    static 3.12 alias-deprecation noise. Every timeout catch in this module
+    MUST use this — tests/unit/test_request_queue.py guards the rule.
+    """
+    asyncio_timeout = getattr(asyncio, "TimeoutError", TimeoutError)
+    return (TimeoutError,) if asyncio_timeout is TimeoutError else (TimeoutError, asyncio_timeout)
+
+
 class Priority(IntEnum):
     """Request priority — lower value is selected first."""
 
@@ -214,7 +229,7 @@ class GeminiRequestQueue:
         remaining = max(0.0, deadline - loop.time()) if deadline is not None else None
         try:
             return await asyncio.wait_for(asyncio.shield(future), timeout=remaining)
-        except TimeoutError:
+        except _timeout_errors():
             cancelled = await self._cancel_request(req, timed_out=True)
             if not cancelled and future.done() and not future.cancelled():
                 # Completion/shutdown may have won the deadline race. Preserve
@@ -533,7 +548,7 @@ class GeminiRequestQueue:
             return req.cancel_event.is_set() or self._closed
         try:
             await asyncio.wait_for(req.cancel_event.wait(), timeout=delay)
-        except TimeoutError:
+        except _timeout_errors():
             return req.cancel_event.is_set() or self._closed
         return True
 

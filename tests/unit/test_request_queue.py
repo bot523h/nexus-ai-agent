@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import ast
 import asyncio
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 from pathlib import Path
@@ -43,6 +44,13 @@ def test_queue_module_stays_within_python_310_asyncio_api() -> None:
     tree = ast.parse(_QUEUE_MODULE.read_text(encoding="utf-8"))
     offenders: list[str] = []
     for node in ast.walk(tree):
+        if isinstance(node, ast.ExceptHandler):
+            # Python 3.10: wait_for raises a class distinct from builtin
+            # TimeoutError; a bare `except TimeoutError` never sees it.
+            # Module timeouts must be caught via _timeout_errors().
+            if isinstance(node.type, ast.Name) and node.type.id == "TimeoutError":
+                offenders.append(f"bare 'except TimeoutError' at line {node.lineno}")
+            continue
         if not isinstance(node, ast.Call):
             continue
         func = node.func
@@ -58,9 +66,10 @@ def test_queue_module_stays_within_python_310_asyncio_api() -> None:
         ):
             offenders.append(f"asyncio.{func.attr}() at line {node.lineno}")
     assert not offenders, (
-        "request_queue.py uses asyncio APIs unavailable on Python 3.10: "
+        "request_queue.py uses asyncio constructs that break Python 3.10: "
         + ", ".join(offenders)
-        + ". requires-python is >=3.10; use the shield/done/cancel_event recipe."
+        + ". requires-python is >=3.10; use the shield/done/cancel_event recipe "
+        "and catch timeouts via _timeout_errors()."
     )
 
 
@@ -76,6 +85,40 @@ class _StatusError(RuntimeError):
     def __init__(self, status_code: int, message: str = "provider rejected request") -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+class _SplitTimeoutError(Exception):
+    """Stand-in for Python 3.10's distinct ``asyncio.TimeoutError`` class."""
+
+
+#: The class ``asyncio.wait_for`` raises on timeout on THIS interpreter,
+#: captured before any patching. 3.10: a class distinct from builtin
+#: ``TimeoutError``; 3.11+: the builtin class itself.
+_NATIVE_WAIT_FOR_TIMEOUT: type[BaseException] = asyncio.TimeoutError
+
+
+@pytest.fixture
+def py310_timeout_split(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Faithfully emulate Python 3.10's wait_for-timeout class split.
+
+    Binds ``asyncio.TimeoutError`` to a distinct class and makes ``wait_for``
+    raise it on timeout — exactly what Python 3.10 does natively. Because the
+    patched attribute is re-read while matching ``except`` clauses, code that
+    catches ``(TimeoutError, asyncio.TimeoutError)``— as this codebase must —
+    works identically under the emulation; a bare ``except TimeoutError`` is
+    exposed as the 3.10 defect it is.
+    """
+    real_wait_for = asyncio.wait_for
+
+    async def wait_for_split(aw: object, timeout: float | None) -> object:
+        try:
+            return await real_wait_for(aw, timeout)
+        except _NATIVE_WAIT_FOR_TIMEOUT:
+            raise _SplitTimeoutError() from None
+
+    monkeypatch.setattr(asyncio, "TimeoutError", _SplitTimeoutError)
+    monkeypatch.setattr(asyncio, "wait_for", wait_for_split)
+    yield
 
 
 @pytest.mark.asyncio
@@ -335,6 +378,85 @@ async def test_worker_cancellation_settles_active_work_and_close_is_idempotent()
     finally:
         await queue.close()
         await asyncio.gather(caller, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_submit_timeout_survives_py310_timeout_class_split(
+    py310_timeout_split: None,
+) -> None:
+    """5a4cb23 defect class #2: on Python 3.10 wait_for's timeout is a distinct
+    class, so a bare ``except TimeoutError`` never translated the caller
+    timeout — it escaped raw (no _TIMEOUT_MESSAGE) and stranded accounting."""
+    queue = GeminiRequestQueue(max_rpm=10, max_daily=10)
+
+    async def slow_provider() -> str:
+        await asyncio.sleep(10)
+        return "unreachable"
+
+    try:
+        with pytest.raises(TimeoutError, match="timed out"):
+            await queue.submit(slow_provider, user_id=21, timeout=0.05)
+        status = queue.get_status()
+        assert status["logical_timed_out"] == 1
+        assert status["pending_requests"] == 0
+        assert status["provider_attempts"] == 1
+    finally:
+        await queue.close()
+
+
+@pytest.mark.asyncio
+async def test_rate_wait_timeout_survives_py310_timeout_class_split(
+    py310_timeout_split: None,
+) -> None:
+    """The capacity-wait loop's own wait_for must also understand the 3.10
+    class: without the pair catch, a timeout during rate-wait surfaced as a
+    fake 'provider error' (queue_processor_error) instead of _RequestTimedOut."""
+    queue = GeminiRequestQueue(max_rpm=1, max_daily=10)
+
+    async def slow_provider() -> str:
+        await asyncio.sleep(10)
+        return "unreachable"
+
+    first = asyncio.create_task(queue.submit(slow_provider, user_id=22, timeout=5))
+    try:
+        await _wait_until(lambda: queue.get_status()["provider_attempts"] == 1, timeout=2)
+        with pytest.raises(TimeoutError, match="timed out"):
+            await queue.submit(slow_provider, user_id=23, timeout=0.3)
+        status = queue.get_status()
+        assert status["logical_timed_out"] == 1
+        assert status["logical_failed"] == 0
+        assert status["provider_attempts"] == 1
+    finally:
+        first.cancel()
+        await asyncio.gather(first, return_exceptions=True)
+        await queue.close()
+
+
+@pytest.mark.asyncio
+async def test_capacity_quota_window_wait_survives_py310_timeout_class_split(
+    py310_timeout_split: None,
+) -> None:
+    """Worker-side wait_for timeout under the 3.10 class split: when the
+    worker (not the caller) wakes from a capacity wait, an unrecognized
+    split-timeout must NOT be misaccounted as a provider error."""
+    queue = GeminiRequestQueue(max_rpm=1, max_daily=10)
+    # Capacity was consumed one call ~59.95s ago: the worker's capacity wait
+    # will time out after ~0.15s — long before any caller deadline — and the
+    # minute window then opens legitimately.
+    queue._minute_timestamps.append(time.monotonic() - 59.95)
+
+    async def quick_provider() -> str:
+        return "recovered"
+
+    try:
+        assert await queue.submit(quick_provider, user_id=24, timeout=5) == "recovered"
+        status = queue.get_status()
+        assert status["logical_succeeded"] == 1
+        assert status["logical_failed"] == 0
+        assert status["logical_timed_out"] == 0
+        assert status["provider_attempts"] == 1
+    finally:
+        await queue.close()
 
 
 @pytest.mark.asyncio
