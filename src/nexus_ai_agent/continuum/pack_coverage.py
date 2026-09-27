@@ -100,6 +100,8 @@ SUBSTRATE_TEST_TARGETS: tuple[str, ...] = (
     "tests/unit/test_pack_manifest_verify.py",
     "tests/unit/test_pack_runtime_composition.py",
     "tests/unit/test_nagar_wave1_green_cockpit.py",
+    # capability-pack trust root (ADR 0006): trust.py, ed25519.py, verify.py
+    "tests/unit/test_pack_trust_root.py",
     # Wave 5 gap operations (the two op-gap waves)
     "tests/unit/test_opgap_audio_motion.py",
     "tests/unit/test_opgap_wave5.py",

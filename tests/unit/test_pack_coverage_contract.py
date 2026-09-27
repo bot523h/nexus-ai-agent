@@ -19,6 +19,7 @@ child; the evidence pipeline around it runs for real.
 
 from __future__ import annotations
 
+import ast
 import json
 import subprocess
 import sys
@@ -417,6 +418,43 @@ def test_every_canonical_target_exists_is_unique_and_exercises_its_pack() -> Non
 def test_no_pack_test_module_is_left_out_of_the_evidence() -> None:
     assert pack_test_import_issues() == ()
     assert set(HOST_LAYER_PACK_IMPORTERS).isdisjoint(DEFAULT_TEST_TARGETS)
+
+
+def _substrate_imports(test_file: Path, substrate: frozenset[str]) -> set[str]:
+    """Substrate modules (files directly under ``creative/packs/``) *test_file* imports."""
+    package = "nexus_ai_agent.creative.packs"
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(test_file.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.ImportFrom) and node.module is not None:
+            if node.module == package:
+                found.update(alias.name for alias in node.names)
+            elif node.module.startswith(package + "."):
+                found.add(node.module.split(".")[3])
+        elif isinstance(node, ast.Import):
+            found.update(
+                alias.name.split(".")[3]
+                for alias in node.names
+                if alias.name.startswith(package + ".")
+            )
+    return found & substrate
+
+
+def test_every_tested_substrate_module_is_exercised_by_the_canonical_targets() -> None:
+    # The core group is measured from the canonical targets only.  A substrate
+    # module whose tests live outside them is measured as unexercised: PR #101
+    # added creative/packs/trust.py + ed25519.py with their contract suite
+    # outside SUBSTRATE_TEST_TARGETS and core fell to 79.26% after the merge.
+    substrate = frozenset(
+        path.stem for path in DEFAULT_PACK_ROOT.glob("*.py") if path.stem != "__init__"
+    )
+    tested: set[str] = set()
+    for test_file in sorted((REPO_ROOT / "tests").rglob("test_*.py")):
+        tested |= _substrate_imports(test_file, substrate)
+    canonical: set[str] = set()
+    for target in DEFAULT_TEST_TARGETS:
+        canonical |= _substrate_imports(REPO_ROOT / target, substrate)
+    assert tested, "the scan must see the substrate imports of the suite"
+    assert sorted(tested - canonical) == []
 
 
 def test_an_orphaned_pack_test_makes_the_canonical_measurement_unverified(
