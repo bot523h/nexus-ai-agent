@@ -39,6 +39,7 @@ placeholder text.
 | [architecture/adr/0003-mermaid-flowchart-for-c4-views.md](architecture/adr/0003-mermaid-flowchart-for-c4-views.md) | Express C4 views with Mermaid `flowchart`. |
 | [architecture/adr/0004-board-schema-2.md](architecture/adr/0004-board-schema-2.md) | Coordination board schema 2: prerequisites, acceptance criteria, history split. |
 | [architecture/adr/0005-canonical-command-capability-contract.md](architecture/adr/0005-canonical-command-capability-contract.md) | Canonical command and capability contract: versioning, location, and reconciliation. |
+| [architecture/adr/0006-capability-pack-trust-root.md](architecture/adr/0006-capability-pack-trust-root.md) | Capability packs get an explicit trust root (Ed25519, offline, fail-closed). |
 
 ## Authoritative records
 

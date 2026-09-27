@@ -80,6 +80,28 @@ The single process boundary in the creative tree is treated as hostile-input han
 - one timeout per call, output written to `.part` and atomically renamed, `overwrite=False` by default;
 - the produced file is probed by the same binary — evidence, not assumption.
 
+## 4b. The capability-pack supply-chain boundary
+
+A downloaded pack manifest is hostile input, and its own fields are never its
+credentials ([ADR 0006](adr/0006-capability-pack-trust-root.md)):
+
+- authority lives in `creative/packs/trust_root.json` — public keys only, and
+  currently **empty**, so every external pack is refused activation;
+- the trust root is not swappable through an environment variable; a caller
+  that owns a different root passes it explicitly;
+- `security.trusted_publisher` and `security.signature` are *claims*: the
+  signature is checked with RFC 8032 Ed25519 over `canonical_signing_bytes()`
+  (the whole manifest minus the signature field) against an **active** key
+  listed for that publisher in the trust root;
+- nine distinct outcomes (`placeholder`, `unsupported_algorithm`,
+  `malformed_signature`, `no_trust_root`, `unknown_publisher`,
+  `no_trusted_keys`, `revoked_key`, `signature_invalid`, `verified`); exactly
+  one of them — `verified` — allows `PackRegistry.activate()` to grant an
+  external pack execution authority;
+- no signing primitive and no private key material ship in the runtime;
+  `tests/architecture/test_pack_trust_boundary.py` fails if one appears,
+  and `scripts/pack_trust_mutations.py` proves the guards kill 12 attacks.
+
 ## 5. Secrets and configuration
 
 - No secret has a default value. Missing credentials disable the feature (for example: no `GEMINI_API_KEY` ⇒ the paid image path stays closed) rather than degrading silently.
