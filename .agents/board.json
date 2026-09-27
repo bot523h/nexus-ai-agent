@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T20:27:57Z",
+  "updated_at": "2026-09-27T21:01:58Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2733,9 +2733,9 @@
       "title_fa": "اتاق فرمان فارسی NEXUS: کاوش قابلیت‌های واقعی و آزمایش بی‌اثر ورودی فرمان‌ها",
       "zone": "cockpit-command-lab",
       "priority": "P1",
-      "status": "active",
-      "agent_branch": "arena/01a0e48b-nexus-ai-agent",
-      "claimed_at": "2026-09-27T20:27:57Z",
+      "status": "done",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "prerequisites": [],
@@ -2760,7 +2760,7 @@
         "Browser smoke covering search, filtering, palette keyboard navigation, schema success/failure, reports, auth and narrow viewport.",
         "agent_board.py check reports no active overlap; live PR file inventory checked before claim."
       ],
-      "note": ""
+      "note": "DELIVERED 2026-09-27 by arena/01a0e48b-nexus-ai-agent: additive cockpit + input-only schema lab; no existing runtime/legacy API/CLI authority changes. Local diagnostics: `.venv/bin/python -m pytest -q tests/unit/test_cockpit.py tests/architecture/test_cockpit_boundary.py` -> 81 passed; expanded selection with pack-runtime/command-contract/manifest/trust-root/board/docs/import-boundary tests -> 335 passed (one existing Starlette httpx deprecation warning). Scoped ruff check+format -> pass (7 files); `mypy src/nexus_ai_agent/cockpit --follow-imports=silent` -> no issues in 4 files; node --check and Prettier check -> pass. `scripts/test_cockpit_browser.py` against preview + protected servers, local Chromium 153, local axe-core -> 22 scenarios passed incl. 320/390px layouts, dark/light, keyboard/skip link/Escape, XSS text rendering, stale request rejection, auth clearing, downloads and no third-party requests. Wheel built with `python -m build --wheel --no-isolation`; installed to an isolated --target and imported from that target: all 8 assets byte-identical, 6 builtin manifests and real 57-operation registry + schema validation passed. Browser/axe dependencies are optional diagnostic-only; the UI has no new runtime dependency. Full repository gates DEFERRED TO GATES OWNER; no production-readiness, live-bot, cryptographic-placeholder or cross-browser guarantee. Open PR inventory rechecked: 30 PRs, zero implementation-path overlaps. Shared docs index/architecture decision log remains deferred to its existing owners; executable --help and in-product guide document setup/security/scope."
     }
   ],
   "deferred_log": [
