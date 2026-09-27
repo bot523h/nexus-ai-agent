@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T22:42:47Z",
+  "updated_at": "2026-09-27T22:43:50Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -38,9 +38,8 @@
   "zones": [
     {
       "id": "audit-remainder",
-      "description": "P0-8 single-wiring + P0-9 graph memory write path",
+      "description": "Remaining P0-8 single-wiring and RAG audit work; P0-9 long-term memory is owned by W3 task-197",
       "paths": [
-        "src/nexus_ai_agent/memory/",
         "src/nexus_ai_agent/features/rag.py",
         "tests/unit/test_audit_remainder.py"
       ]
@@ -879,33 +878,36 @@
     },
     {
       "task": "task-124",
-      "title": "Audit remainder: P0-8 single wiring + P0-9 graph memory write path",
-      "title_fa": "باقی‌ماندهٔ ممیزی: P0-8 و P0-9",
+      "title": "Audit remainder: P0-8 single wiring + verify W3 memory handoff",
+      "title_fa": "ممیزی باقی‌مانده: تک‌سیم‌کشی P0-8 و راستی‌آزمایی واگذاری حافظه به W3",
       "zone": "audit-remainder",
       "priority": "P0",
       "status": "available_sequenced_post_32_33",
-      "scope": "هر انجین دقیقاً یک مسیر سیم‌کشی داشته باشد (تست ONE-OWNER) و مسیر نوشتن حافظهٔ گراف با round-trip.",
-      "scope_fa": "هر انجین دقیقاً یک مسیر سیم‌کشی داشته باشد (تست ONE-OWNER) و مسیر نوشتن حافظهٔ گراف با round-trip.",
+      "scope": "P0-8 engine single-wiring audit remains queued after task-122/task-123. P0-9 graph memory is transferred to task-197 W3; verify W3 explicit provenance-bearing write/read integration rather than rebuilding append-all memory. RAG audit remains in this zone.",
+      "scope_fa": "ممیزی تک‌سیم‌کشی P0-8 پس از task-122/task-123؛ مسیر حافظهٔ گراف P0-9 به task-197/W3 واگذار شده است و باید همان write/read صریح و دارای provenance را بررسی کند، نه اینکه نویسندهٔ append-all موازی بسازد. ممیزی RAG در این zone باقی می‌ماند.",
       "prerequisites": [
         "task-122",
         "task-123"
       ],
       "acceptance_criteria": [
-        "تست ONE-OWNER سبز؛ موتور بایپس‌شده یا حذف یا آداپت شده",
-        "write→read گراف با تست round-trip",
-        "صفر رگرسیون"
+        "ONE-OWNER wiring test passes; bypassed/duplicate engine is removed or adapted",
+        "P0-9 explicit provenance-bearing memory write/read round-trip is provided and verified by W3 task-197; do not create a parallel memory writer",
+        "Zero regression"
       ],
       "evidence_required": [
         "pytest tests/unit/test_audit_remainder.py",
         "CI سبز"
       ],
-      "exclusive_paths": [],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/features/rag.py",
+        "tests/unit/test_audit_remainder.py"
+      ],
       "owner_hint": "عامل A (با بازگشت) وگرنه عامل آزاد",
       "agent_branch": "",
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "exclusive_paths released with terminal status during schema-2 merge (history in scope)"
+      "note": "P0-9 transferred to task-197-memory-trust (active on arena/01a0e500-nexus-ai-agent); memory/ is intentionally removed from this zone to prevent overlapping ownership. task-124 remains available after task-122/task-123 for P0-8 and RAG-only work."
     },
     {
       "task": "task-126",
@@ -2882,23 +2884,23 @@
       "id": "task-124",
       "priority": "P0",
       "zone": "audit-remainder",
-      "title": "P0-8 single wiring + P0-9 graph memory write path",
-      "title_fa": "بستن P0-8 و P0-9",
-      "why_fa": "دو یافتهٔ باز ممیزی امنیتی/کارکردی با معیار پذیرش روشن.",
+      "title": "P0-8 single wiring + verify W3 memory handoff",
+      "title_fa": "ممیزی باقی‌مانده: تک‌سیم‌کشی P0-8 و راستی‌آزمایی واگذاری حافظه به W3",
+      "why_fa": "P0-8 تک‌سیم‌کشی همچنان باز است؛ P0-9 حافظهٔ گراف به task-197/W3 منتقل شده تا نویسندهٔ موازی ساخته نشود.",
       "acceptance_criteria": [
-        "تست ONE-OWNER سبز",
-        "write→read گراف با round-trip",
-        "صفر رگرسیون"
+        "ONE-OWNER wiring test passes; bypassed/duplicate engine is removed or adapted",
+        "P0-9 explicit provenance-bearing memory write/read round-trip is provided and verified by W3 task-197; do not create a parallel memory writer",
+        "Zero regression"
       ],
       "prerequisites": [
         "task-122",
         "task-123"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/memory/",
         "src/nexus_ai_agent/features/rag.py",
         "tests/unit/test_audit_remainder.py"
-      ]
+      ],
+      "note": "P0-9 transferred to task-197-memory-trust (active on arena/01a0e500-nexus-ai-agent); memory/ is intentionally removed from this zone to prevent overlapping ownership. task-124 remains available after task-122/task-123 for P0-8 and RAG-only work."
     },
     {
       "id": "task-122",
