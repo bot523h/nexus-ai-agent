@@ -166,6 +166,42 @@ MUTATIONS: tuple[Mutation, ...] = (
         "test_provider_self_cancellation_is_typed_failure_and_worker_survives",
         "a provider cancelling itself must settle as a typed failure, never kill the worker",
     ),
+    Mutation(
+        "wait_for_timeout_includes_py310_asyncio_timeout",
+        "    return (TimeoutError, asyncio.TimeoutError)\n",
+        "    return (TimeoutError,)  # mutation: drop 3.10 asyncio.TimeoutError\n",
+        "test_py310_shaped_rate_wait_timeout_is_not_a_processor_error",
+        "wait_for timeouts must be recognized when asyncio.TimeoutError is not builtin",
+    ),
+    Mutation(
+        "rate_wait_timeout_is_not_a_processor_error",
+        "            if not _is_wait_for_timeout(exc):\n"
+        "                raise\n"
+        "            # The delay elapsed. On 3.10 this is asyncio.TimeoutError, not\n",
+        "            if not isinstance(exc, TimeoutError):\n"
+        "                raise\n"
+        "            # The delay elapsed. On 3.10 this is asyncio.TimeoutError, not\n",
+        "test_py310_shaped_rate_wait_timeout_is_not_a_processor_error",
+        "a rate-wait or retry wait_for timeout must not become queue_processor_error",
+    ),
+    Mutation(
+        "caller_wait_timeout_uses_version_correct_classifier",
+        "            if not _is_wait_for_timeout(exc):\n"
+        "                raise\n"
+        "            # wait_for's timer and a worker-settled TimeoutError both land here.\n",
+        "            if not isinstance(exc, TimeoutError):\n"
+        "                raise\n"
+        "            # wait_for's timer and a worker-settled TimeoutError both land here.\n",
+        "test_py310_shaped_caller_timeout_is_builtin_and_settles_once",
+        "the caller wait must classify a 3.10-shaped wait_for timeout",
+    ),
+    Mutation(
+        "caller_timeout_is_builtin_timeout_error",
+        "            raise TimeoutError(_TIMEOUT_MESSAGE) from None\n",
+        "            raise exc  # mutation: leak the wait_for timeout class\n",
+        "test_py310_shaped_caller_timeout_is_builtin_and_settles_once",
+        "the caller-visible timeout must be builtin TimeoutError on every supported interpreter",
+    ),
 )
 
 

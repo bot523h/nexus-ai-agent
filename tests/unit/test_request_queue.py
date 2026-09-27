@@ -12,15 +12,17 @@ from types import SimpleNamespace
 
 import pytest
 
+import nexus_ai_agent.features.request_queue as request_queue_module
 from nexus_ai_agent.features.request_queue import (
     GeminiRequestQueue,
     Priority,
     RequestQueueClosedError,
+    _is_wait_for_timeout,
 )
 
-_QUEUE_MODULE = (
-    Path(__file__).resolve().parents[2] / "src" / "nexus_ai_agent" / "features" / "request_queue.py"
-)
+# Resolve through the imported module so a mutation copy on PYTHONPATH is the
+# file under test, not the working tree the test file happens to sit beside.
+_QUEUE_MODULE = Path(request_queue_module.__file__)
 
 #: asyncio callables/methods that do not exist on Python 3.10 (the declared
 #: floor in pyproject ``requires-python``).  PR #108 (head 5a4cb23) failed the
@@ -30,7 +32,9 @@ _QUEUE_MODULE = (
 #: ``asyncio.shield`` + ``task.done()``; this guard keeps the module on it.
 #: Matched on the AST so comments/docstrings may still document the history.
 _FORBIDDEN_PY311_PLUS_ATTR_CALLS = frozenset({"cancelling", "uncancel"})
-_FORBIDDEN_PY311_PLUS_NAME_CALLS = frozenset({"timeout", "timeout_at", "TaskGroup"})
+_FORBIDDEN_PY311_PLUS_NAME_CALLS = frozenset(
+    {"timeout", "timeout_at", "TaskGroup", "Barrier", "Runner"}
+)
 
 
 def test_queue_module_stays_within_python_310_asyncio_api() -> None:
@@ -57,11 +61,89 @@ def test_queue_module_stays_within_python_310_asyncio_api() -> None:
             and func.attr in _FORBIDDEN_PY311_PLUS_NAME_CALLS
         ):
             offenders.append(f"asyncio.{func.attr}() at line {node.lineno}")
+    except_star = getattr(ast, "ExceptStar", None)
+    if except_star is not None:
+        for node in ast.walk(tree):
+            if isinstance(node, except_star):
+                offenders.append(f"except* at line {node.lineno}")
     assert not offenders, (
         "request_queue.py uses asyncio APIs unavailable on Python 3.10: "
         + ", ".join(offenders)
         + ". requires-python is >=3.10; use the shield/done/cancel_event recipe."
     )
+
+
+def _ast_contains(root: ast.AST, target: ast.AST) -> bool:
+    return any(node is target for node in ast.walk(root))
+
+
+def _handler_classifies_wait_timeout(handler: ast.ExceptHandler) -> bool:
+    for node in ast.walk(handler):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else None
+        if name in {"_is_wait_for_timeout", "_wait_for_timeout_types"}:
+            return True
+    return False
+
+
+def test_every_wait_for_classifies_py310_timeout() -> None:
+    """Every asyncio.wait_for must classify both timeout classes.
+
+    ``except TimeoutError`` is green on 3.11+ and wrong on 3.10, where
+    ``asyncio.wait_for`` raises ``asyncio.TimeoutError`` (not a subclass of
+    the builtin). That miss falls into the worker's ``except Exception`` and
+    becomes ``queue_processor_error``.
+    """
+    tree = ast.parse(_QUEUE_MODULE.read_text(encoding="utf-8"))
+    parents: dict[ast.AST, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ExceptHandler) and isinstance(node.type, ast.Name):
+            if node.type.id == "TimeoutError":
+                offenders.append(f"bare except TimeoutError at line {node.lineno}")
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (
+            isinstance(func, ast.Attribute)
+            and func.attr == "wait_for"
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "asyncio"
+        ):
+            continue
+        current: ast.AST | None = node
+        nearest: ast.Try | None = None
+        while current in parents:
+            current = parents[current]
+            if isinstance(current, ast.Try) and any(
+                _ast_contains(stmt, node) for stmt in current.body
+            ):
+                nearest = current
+                break
+        if nearest is None or not any(
+            _handler_classifies_wait_timeout(handler) for handler in nearest.handlers
+        ):
+            offenders.append(
+                f"asyncio.wait_for() at line {node.lineno} lacks a 3.10 timeout classifier"
+            )
+    assert not offenders, (
+        "request_queue.py wait_for timeout handling is not version-correct: " + ", ".join(offenders)
+    )
+
+
+class _Py310WaitTimeout(Exception):
+    """Stand-in for CPython 3.10 ``asyncio.TimeoutError``.
+
+    That class subclasses ``Exception`` directly and is not builtin
+    ``TimeoutError``. On 3.11+ the names are aliases, so a regression that
+    catches only the builtin is invisible unless this shape is injected.
+    """
 
 
 async def _wait_until(predicate: Callable[[], bool], *, timeout: float = 1.0) -> None:
@@ -110,6 +192,7 @@ async def test_same_user_timeout_releases_exactly_one_pending_slot() -> None:
         assert queue.get_status()["queue_size"] == 0
         assert queue.get_status()["pending_requests"] == 1
         assert queue.get_status()["logical_timed_out"] == 1
+        assert queue.get_status()["logical_failed"] == 0
 
         release_first.set()
         assert await first_task == "first"
@@ -199,6 +282,158 @@ async def test_timeout_during_rate_wait_wakes_worker_without_provider_invocation
         assert status["provider_attempts"] == 1
         assert status["pending_requests"] == 0
         assert status["active_requests"] == 0
+        assert status["logical_timed_out"] == 1
+        assert status["logical_failed"] == 0
+        assert status["logical_succeeded"] == 1
+    finally:
+        await queue.close()
+
+
+def _install_py310_timeout_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make ``asyncio.TimeoutError`` a distinct class, as it is on Python 3.10."""
+    monkeypatch.setattr(asyncio, "TimeoutError", _Py310WaitTimeout)
+    assert _is_wait_for_timeout(_Py310WaitTimeout())
+    assert not isinstance(_Py310WaitTimeout(), TimeoutError)
+
+
+def _arm_unretrieved_trap() -> list[str]:
+    leaks: list[str] = []
+    loop = asyncio.get_running_loop()
+
+    def handler(_loop: asyncio.AbstractEventLoop, context: dict[str, object]) -> None:
+        message = str(context.get("message", ""))
+        if "never retrieved" in message:
+            leaks.append(message)
+
+    loop.set_exception_handler(handler)
+    return leaks
+
+
+@pytest.mark.asyncio
+async def test_py310_shaped_caller_timeout_is_builtin_and_settles_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Caller wait_for timeout must be builtin TimeoutError even on the 3.10 class.
+
+    The timer fires before dequeue. The provider factory is never called, one
+    pending slot is released, and no Future exception is left unretrieved.
+    """
+    _install_py310_timeout_shape(monkeypatch)
+    real_wait_for = asyncio.wait_for
+
+    async def wait_for(awaitable: object, timeout: float | None = None) -> object:
+        if isinstance(awaitable, asyncio.Future):
+            raise _Py310WaitTimeout()
+        return await real_wait_for(awaitable, timeout)
+
+    monkeypatch.setattr(asyncio, "wait_for", wait_for)
+    queue = GeminiRequestQueue(max_rpm=10, max_daily=10)
+    provider_called = asyncio.Event()
+    leaks = _arm_unretrieved_trap()
+
+    async def provider() -> str:
+        provider_called.set()
+        return "must-not-run"
+
+    try:
+        with pytest.raises(TimeoutError, match="timed out") as exc_info:
+            await queue.submit(provider, user_id=3, timeout=5)
+        assert type(exc_info.value) is TimeoutError
+        assert not isinstance(exc_info.value, _Py310WaitTimeout)
+        await asyncio.sleep(0)
+        assert not provider_called.is_set()
+        status = queue.get_status()
+        assert status["logical_submitted"] == 1
+        assert status["logical_timed_out"] == 1
+        assert status["logical_failed"] == 0
+        assert status["logical_cancelled"] == 0
+        assert status["pending_requests"] == 0
+        assert status["provider_attempts"] == 0
+        assert status["queue_size"] == 0
+        assert not leaks
+    finally:
+        asyncio.get_running_loop().set_exception_handler(None)
+        await queue.close()
+
+
+@pytest.mark.asyncio
+async def test_py310_shaped_rate_wait_timeout_is_not_a_processor_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 3.10-shaped rate-wait timeout must not become queue_processor_error.
+
+    The caller's shield wait is left on the real future so the assertion sees
+    the worker settlement, not a racing caller timer.
+    """
+    real_wait_for = asyncio.wait_for
+
+    async def wait_for(awaitable: object, timeout: float | None = None) -> object:
+        if isinstance(awaitable, asyncio.Future):
+            return await real_wait_for(awaitable, None)
+        if asyncio.iscoroutine(awaitable):
+            # The production wait_for would own this coroutine. Drop it explicitly
+            # so the injected timeout does not warn "coroutine was never awaited".
+            awaitable.close()
+        await asyncio.sleep(0.01)
+        raise _Py310WaitTimeout()
+
+    queue = GeminiRequestQueue(max_rpm=1, max_daily=10)
+    provider_called = asyncio.Event()
+    leaks = _arm_unretrieved_trap()
+
+    async def provider() -> str:
+        provider_called.set()
+        return "must-not-run"
+
+    try:
+        assert await queue.submit(lambda: _result("first"), user_id=1, timeout=2) == "first"
+        _install_py310_timeout_shape(monkeypatch)
+        monkeypatch.setattr(asyncio, "wait_for", wait_for)
+        with pytest.raises(TimeoutError, match="timed out") as exc_info:
+            await queue.submit(provider, user_id=4, timeout=0.05)
+        assert type(exc_info.value) is TimeoutError
+        assert not isinstance(exc_info.value, _Py310WaitTimeout)
+        await asyncio.sleep(0)
+        assert not provider_called.is_set()
+        status = queue.get_status()
+        assert status["provider_attempts"] == 1
+        assert status["logical_succeeded"] == 1
+        assert status["logical_timed_out"] == 1
+        assert status["logical_failed"] == 0
+        assert status["pending_requests"] == 0
+        assert status["active_requests"] == 0
+        assert status["rate_waiting_requests"] == 0
+        assert not leaks
+    finally:
+        asyncio.get_running_loop().set_exception_handler(None)
+        await queue.close()
+
+
+@pytest.mark.asyncio
+async def test_positive_retry_backoff_elapsed_is_not_a_processor_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A positive retry backoff uses wait_for; its timeout must not fail the request."""
+    queue = GeminiRequestQueue(max_rpm=10, max_daily=10, max_retries=1)
+    attempts = 0
+
+    async def provider() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise _StatusError(503)
+        return "retried"
+
+    monkeypatch.setattr(queue, "_retry_delay_seconds", lambda _exc, _number: 0.01)
+    try:
+        assert await queue.submit(provider, user_id=9, timeout=2) == "retried"
+        status = queue.get_status()
+        assert attempts == 2
+        assert status["provider_attempts"] == 2
+        assert status["logical_succeeded"] == 1
+        assert status["logical_failed"] == 0
+        assert status["logical_timed_out"] == 0
+        assert status["pending_requests"] == 0
     finally:
         await queue.close()
 

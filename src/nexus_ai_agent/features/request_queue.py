@@ -65,6 +65,29 @@ class _RequestTimedOut(Exception):
     """Internal signal: the absolute caller deadline elapsed before completion."""
 
 
+def _wait_for_timeout_types() -> tuple[type[BaseException], ...]:
+    """Classes ``asyncio.wait_for`` may raise when its own timeout elapses.
+
+    CPython 3.10 raises ``asyncio.TimeoutError``. That class subclasses
+    ``Exception`` and is not builtin ``TimeoutError``
+    (https://docs.python.org/3.10/library/asyncio-exceptions.html#asyncio.TimeoutError).
+    CPython 3.11+ aliases the two names and ``wait_for`` raises builtin
+    ``TimeoutError`` (https://docs.python.org/3/library/asyncio-task.html#asyncio.wait_for,
+    "Changed in version 3.11"). ``except TimeoutError`` therefore misses the
+    3.10 timeout. Because the 3.10 class still subclasses ``Exception``, the
+    worker's generic handler would otherwise record ``queue_processor_error``
+    and settle a failure instead of a timeout. Look the classes up at handler
+    time so 3.10 and 3.11+ share one contract. Caller-visible timeouts are
+    always builtin ``TimeoutError``.
+    """
+    return (TimeoutError, asyncio.TimeoutError)
+
+
+def _is_wait_for_timeout(exc: BaseException) -> bool:
+    """True when ``exc`` is a ``wait_for`` timeout on any supported interpreter."""
+    return isinstance(exc, _wait_for_timeout_types())
+
+
 @dataclass(eq=False)
 class _Request:
     """One logical request, tracked independently from provider attempts."""
@@ -168,7 +191,9 @@ class GeminiRequestQueue:
         a remote provider may already have received and processed the request.
 
         Raises:
-            TimeoutError: The caller's deadline expired.
+            TimeoutError: The caller's deadline expired. Always the builtin
+                ``TimeoutError``, including on Python 3.10 where
+                ``asyncio.wait_for`` itself raises ``asyncio.TimeoutError``.
             RequestQueueClosedError: The queue is closing or already closed.
             TypeError or ValueError: The factory, priority, or timeout is invalid.
         """
@@ -214,12 +239,21 @@ class GeminiRequestQueue:
         remaining = max(0.0, deadline - loop.time()) if deadline is not None else None
         try:
             return await asyncio.wait_for(asyncio.shield(future), timeout=remaining)
-        except TimeoutError:
+        except Exception as exc:
+            if not _is_wait_for_timeout(exc):
+                raise
+            # wait_for's timer and a worker-settled TimeoutError both land here.
+            # On 3.10 the timer exception is asyncio.TimeoutError, which is not
+            # a builtin TimeoutError; translate it before it escapes the caller.
             cancelled = await self._cancel_request(req, timed_out=True)
             if not cancelled and future.done() and not future.cancelled():
                 # Completion/shutdown may have won the deadline race. Preserve
                 # the already-settled outcome instead of reporting a false timeout.
                 return future.result()
+            if future.done() and not future.cancelled():
+                # Retrieve a concurrent settler's exception. The caller-visible
+                # outcome remains timeout and must not leave an unretrieved Future.
+                future.exception()
             raise TimeoutError(_TIMEOUT_MESSAGE) from None
         except asyncio.CancelledError:
             await asyncio.shield(self._cancel_request(req, timed_out=False))
@@ -402,6 +436,11 @@ class GeminiRequestQueue:
                 await asyncio.shield(self._settle_closed(req))
                 raise
             except Exception as exc:
+                # A wait_for timeout must never reach this arm. On Python 3.10
+                # asyncio.TimeoutError subclasses Exception but not builtin
+                # TimeoutError, so a missed classifier becomes a false internal
+                # failure (queue_processor_error) instead of a timeout settlement.
+                # Call sites classify that exception before it gets here.
                 # An internal queue failure is visible as a safe terminal result,
                 # counted, and logged by type; it cannot strand later waiters.
                 log.error(
@@ -533,7 +572,13 @@ class GeminiRequestQueue:
             return req.cancel_event.is_set() or self._closed
         try:
             await asyncio.wait_for(req.cancel_event.wait(), timeout=delay)
-        except TimeoutError:
+        except Exception as exc:
+            if not _is_wait_for_timeout(exc):
+                raise
+            # The delay elapsed. On 3.10 this is asyncio.TimeoutError, not
+            # builtin TimeoutError; treating it as withdrawal or as a processor
+            # error would skip a retry or fail a rate-wait that should time out
+            # through _check_request / _RequestTimedOut instead.
             return req.cancel_event.is_set() or self._closed
         return True
 
@@ -585,6 +630,7 @@ class GeminiRequestQueue:
             if not req.future.done():
                 req.future.set_exception(TimeoutError(_TIMEOUT_MESSAGE))
             self._ready_event.set()
+            log.info("queue_request_timed_out", request_id=req.request_id, phase="worker")
 
     async def _settle_cancelled_if_needed(self, req: _Request) -> None:
         async with self._lock:
@@ -643,6 +689,7 @@ class GeminiRequestQueue:
             self._release_pending_locked(req)
             if timed_out:
                 self._logical_timed_out += 1
+                log.info("queue_request_timed_out", request_id=req.request_id, phase="caller")
             else:
                 self._logical_cancelled += 1
             if not req.future.done():

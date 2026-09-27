@@ -200,3 +200,79 @@ There is no database migration or persisted queue format to roll back. Reverting
 2. Out-of-contract direct `processor_task.cancel()` racing provider completion on the same event-loop tick settles as a typed provider failure instead of propagating (single-instruction window; in-contract paths — `close()`/`_cancel_request` — record state first and are unaffected). Documented in the code comment.
 3. Everything in report §3/§7 still stands: process-local only, no app-wide shutdown wiring, no single gateway, no remote-cancellation guarantee, strict-priority starvation, GIL-sized fairness window, and no production/durability claim. The mutation harness is still not a CI gate (`.github/` ownership respected).
 4. `MODULE_MAP.md` remains deferred to the docs owners, exactly as the original claim scoped itself.
+
+---
+
+## 10. Session-bound continuation — Python 3.10 `wait_for` timeout contract (2026-09-27, `arena/01a0e3b7-nexus-ai-agent`)
+
+**This section supersedes any reading of §9 that treats `cd79bfe` as green on Python 3.10.** §9 recorded the `Task.cancelling()` fix. That fix is still in history. It did not fix the timeout-class split. Remote CI on that head is RED.
+
+### 10.1 Live truth (recomputed, not inherited)
+
+| Item | Value |
+|---|---|
+| Session branch | `arena/01a0e3b7-nexus-ai-agent` (this session cannot push any other branch) |
+| `origin/main` | `05dec617f5c596ef9023cab9c42acc689efec583` |
+| Merge-base with main | `05dec617f5c596ef9023cab9c42acc689efec583` (main is an ancestor) |
+| Fast-forwarded predecessor | `origin/arena/01a0e356-nexus-ai-agent` = `cd79bfe3b8e42b1943ad8ff0d352646fc54df548` |
+| PR #109 | OPEN, head `cd79bfe`, `mergeable=MERGEABLE`, `mergeStateStatus=UNSTABLE` |
+| Exact failing CI | run [36329794486](https://github.com/bot523h/nexus-ai-agent/actions/runs/36329794486), job `python-parity (3.10)` id `108649421192`, conclusion **failure**. Duplicate run [36329718482](https://github.com/bot523h/nexus-ai-agent/actions/runs/36329718482) same conclusion. 3.11 and 3.12 parity on that head were success. |
+| Board | claim `task-195-salvage` moved to this branch via `takeover_log` action `session-bound-continuation` at `2026-09-27T16:54:20Z`. `agent_board.py check` on the owned paths: **no overlap — safe to proceed**. |
+| Working tree before this commit | uncommitted fix on top of the fast-forward. Not pushed. Not CI. |
+
+No history was rewritten. No force-push. `cd79bfe` remains an ancestor.
+
+### 10.2 RED, reproduced on CPython 3.10.16 against `cd79bfe`
+
+Local interpreter: CPython 3.10.16 built from the `v3.10.16` tag. Before the fix, `tests/unit/test_request_queue.py` on that tree:
+
+**3 failed, 14 passed.**
+
+Failed:
+
+- `test_same_user_timeout_releases_exactly_one_pending_slot`
+- `test_withdrawn_queued_requests_never_run_after_backlog_clears`
+- `test_timeout_during_rate_wait_wakes_worker_without_provider_invocation`
+
+The third failure also logged `queue_processor_error error_type=TimeoutError`. Traceback: `submit` line `await asyncio.wait_for(asyncio.shield(future), timeout=remaining)` raised `asyncio.exceptions.TimeoutError`.
+
+Class relationship measured on that interpreter:
+
+- `TimeoutError is asyncio.TimeoutError` → **False**
+- `issubclass(asyncio.TimeoutError, TimeoutError)` → **False**
+- `asyncio.TimeoutError` MRO: `Exception`, not `OSError` / builtin `TimeoutError`
+- Same check on CPython 3.11.2: the two names **are** the same object
+
+Official contract:
+
+- Python 3.10: [`asyncio.TimeoutError` is different from builtin `TimeoutError`](https://docs.python.org/3.10/library/asyncio-exceptions.html#asyncio.TimeoutError)
+- Python 3.11+: [`asyncio.wait_for` changed to raise `TimeoutError` instead of `asyncio.TimeoutError`](https://docs.python.org/3/library/asyncio-task.html#asyncio.wait_for)
+
+`except TimeoutError` therefore misses the 3.10 timer exception. Because that class still subclasses `Exception`, the worker arm logs `queue_processor_error` and settles a failure. The caller sees `asyncio.TimeoutError`, not the documented builtin `TimeoutError`. Pending accounting is not released on the caller path. Retry backoff with a positive delay hits the same miss (`_retry_delay_seconds` returning `0.0` in older tests never entered `wait_for`, which is why those tests stayed green).
+
+### 10.3 Fix (production, not a test weakening)
+
+`_wait_for_timeout_types()` returns `(TimeoutError, asyncio.TimeoutError)` and is looked up at handler time. Both `submit` and `_wait_for_cancellation` classify with `_is_wait_for_timeout` before any other `Exception` handling. The caller-visible raise remains builtin `TimeoutError`. A concurrent settler's exception is retrieved so it cannot warn "Future exception was never retrieved". Settlement still goes through the existing single-transition accounting (`accounted` flag, state gate). No new dependency. No 3.11+ asyncio API (`timeout()`, `TaskGroup`, `cancelling()`, `uncancel()` remain forbidden).
+
+Rejected: rewriting `wait_for` onto `asyncio.wait` (larger cancellation-semantic change than the defect), and catching only `asyncio.TimeoutError` (misses 3.11+ builtin `TimeoutError` if a future was settled with that class and also fails the public contract on 3.10 if the timer class leaks).
+
+### 10.4 Local proof after the fix (not remote CI)
+
+| Proof | Result |
+|---|---|
+| Queue tests, CPython 3.10.16 | **21 passed** in 0.39s (`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`, `-p pytest_asyncio.plugin`, `--noconftest`) |
+| Queue tests, CPython 3.11.2 | **21 passed** in 0.35s |
+| Mutation campaign | **18/18 killed**, baseline GREEN, restored baseline GREEN. New mutants: `wait_for_timeout_includes_py310_asyncio_timeout`, `rate_wait_timeout_is_not_a_processor_error`, `caller_wait_timeout_uses_version_correct_classifier`, `caller_timeout_is_builtin_timeout_error`. A revert of the classifier or of either call site is RED on 3.11 because the tests inject a non-builtin timeout class. |
+| `ruff check .` | PASS |
+| `ruff format --check .` | PASS (532 files) |
+| `mypy src` | PASS (247 files) |
+| `pytest -q -m "not slow"` | **2915 passed, 30 skipped, 16 warnings in 174.30s**, CPython 3.11.2, exit 0. Delta vs §9's 2911 is the four new queue tests. |
+| `tests/unit/test_agent_board.py` | 18 passed in the focused run; the non-slow suite includes the board tests and passed |
+| Remote exact-head CI | **not run yet**. Local green is not PR green and not main green. |
+
+### 10.5 Still not proven
+
+1. Exact-head CI on this continuation, including python-parity 3.10/3.11/3.12, has not completed. Do not merge on this section alone.
+2. Process-local queue only. No application shutdown wiring, no global gateway, no remote cancellation proof. W1 is not started in this commit.
+3. `MODULE_MAP.md` and `.github/` remain outside this claim.
+4. An out-of-contract direct worker cancel racing provider completion on the same loop tick is still the residual documented in §9.4.
