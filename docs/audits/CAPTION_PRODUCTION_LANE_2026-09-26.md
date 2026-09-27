@@ -233,6 +233,8 @@ signature is fabricated. No model weights or Persian audio fixture are
 shipped/downloaded; no real faster-whisper inference or Argos package
 translation was run. PyAV/ffprobe probing and FFmpeg/libass/HarfBuzz rendering
 were not performed. Local tests/CI evidence do not convert these unexecuted
-integrations into completion claims. Exact-head GitHub CI for the new commit is
-still required after push; PR #100's prior SHA is not treated as evidence for
-the updated tree.
+integrations into completion claims. GitHub Actions run `36306695220` passed on
+code commit `7694ac7492d02d3edf752c4424aee01c03454da3`; all 12 jobs were green,
+including the full non-slow suite, Python 3.10/3.11/3.12 parity, PostgreSQL
+migrations/integration, extras matrices, and lint/type checks. That is distinct
+from the earlier failing run on `390481ffddbbe36ce664db469a427848c6186497`.
