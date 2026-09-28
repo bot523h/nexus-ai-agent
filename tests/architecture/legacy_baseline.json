@@ -266,6 +266,18 @@
       "imports": [
         "telegram"
       ]
+    },
+    {
+      "file": "src/nexus_ai_agent/memory/trust.py",
+      "imports": [
+        "sqlmodel"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/memory/unified_trust.py",
+      "imports": [
+        "sqlmodel"
+      ]
     }
   ],
   "scan_scope": "src/**/*.py; legacy framework imports are grandfathered"

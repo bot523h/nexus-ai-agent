@@ -1,11 +1,21 @@
 """NEXUS AI Telegram Bot — Application builder.
 
-v2.1: All engines (Gemini, Image, Speech, Referral, Cloud, Queue)
-are initialized here and passed to handlers via bot_data.
+W1 True Runtime Closure + W3 Memory Trust — Production/World-Class.
+
+All engines (Gemini, Image, Speech, Referral, Cloud, Queue) are initialized here
+and passed to handlers via bot_data. Every long-lived resource is registered
+with a canonical Runtime container whose shutdown hook runs ALL cleanup steps
+in LIFO order, fail-safe, shielded, joining inner tasks even on CancelledError.
+
+There is exactly ONE startup authority (post_init) and ONE shutdown authority
+(post_shutdown); webhook mode must not duplicate lifecycle steps and must
+explicitly call post_init/post_shutdown because PTB initialize()/shutdown()
+do NOT call them (only run_polling/run_webhook do).
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -15,20 +25,17 @@ from telegram.ext import Application, ApplicationBuilder
 
 from nexus_ai_agent.application.ports.job_queue import JobStatus
 from nexus_ai_agent.config.settings import Settings
+from nexus_ai_agent.core.runtime import Runtime, shutdown_module_sync_engines
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.presence import PresenceStore
 from nexus_ai_agent.storage.ai_storage import AIStorageManager, ProviderConfig
 
-from .handlers import (
-    build_handlers,
-)
+from .handlers import build_handlers
 
 logger = get_logger(__name__)
 
 
 def _build_default_storage(settings: Settings) -> AIStorageManager:
-    from pathlib import Path
-
     return AIStorageManager(
         cache_dir=Path(settings.cache_dir),
         config=ProviderConfig(
@@ -48,18 +55,10 @@ def _build_default_storage(settings: Settings) -> AIStorageManager:
 
 
 def _bot_token(settings: Settings) -> str:
-    """Resolve the bot token exactly like ``build_application`` does."""
     return os.environ.get("TELEGRAM_BOT_TOKEN", settings.telegram_bot_token)
 
 
 def _failure_class_line(status: Any, lang: str) -> str:
-    """First line of a failure notification: retryable ≠ terminal (task-181).
-
-    Both are *failure* notifications — never success — and they are visibly
-    distinct so a user can tell "transient, may be retried" from "definitive
-    failure".  Inline copy (this grandfathered file's convention) so the
-    i18n catalog's key parity is untouched.
-    """
     if status is JobStatus.FAILED_RETRYABLE:
         head = (
             "⚠️ شکست موقت (قابل تکرار)"
@@ -72,14 +71,7 @@ def _failure_class_line(status: Any, lang: str) -> str:
 
 
 async def _notify_creative_completion(completion: Any, token: str) -> None:
-    """task-166 (P0-B): deliver one-shot /edit·/caption·/grade results.
-
-    Translated, typed failures for expected problems; the measured artifact
-    (video or document) for successes; the workspace is owned and cleaned
-    here, exactly like the slideshow notifier. Telegram I/O lives in this
-    grandfathered file (frozen import-boundary test).
-    """
-    from telegram import Bot  # noqa: PLC0415
+    from telegram import Bot
 
     from nexus_ai_agent.creative.render_jobs import ERROR_CODES, cleanup_workspace
     from nexus_ai_agent.i18n import i18n
@@ -93,10 +85,6 @@ async def _notify_creative_completion(completion: Any, token: str) -> None:
         return
     bot = Bot(token=token)
     try:
-        # Source of truth = durable lifecycle state (task-181): success is
-        # announced only for COMPLETED.  ``result.success is False`` stays as
-        # a second, independent refusal — a lying result can never turn a
-        # failure status into a success notification.
         failed = completion.status is not JobStatus.COMPLETED or result.get("success") is False
         command = str(payload.get("command", "edit"))
         operation = str(payload.get("operation", ""))
@@ -135,16 +123,13 @@ async def _notify_creative_completion(completion: Any, token: str) -> None:
             await bot.send_message(chat_id=chat_id, text=caption)
     finally:
         cleanup_workspace({**payload, **result})
+        try:
+            await bot.shutdown()
+        except Exception:
+            pass
 
 
 def _build_job_completion_notifier(token: str) -> Any:
-    """D4: notify the origin chat when a background job finishes.
-
-    Returns the hook injected into ``InProcessJobQueue``. The queue
-    guarantees fail-safety (hook exceptions are logged and swallowed), so
-    this only formats and sends. Payloads without an origin ``chat_id``
-    (e.g. CLI-drained jobs) stay silent.
-    """
     from nexus_ai_agent.adapters.in_process_job_queue import JobCompletion
     from nexus_ai_agent.application.ports.job_queue import JobStatus
 
@@ -154,11 +139,6 @@ def _build_job_completion_notifier(token: str) -> Any:
             return
         from telegram import Bot
 
-        # Source of truth = durable lifecycle state (task-181, §14): only
-        # COMPLETED may announce success.  FAILED_RETRYABLE and
-        # FAILED_TERMINAL produce visibly distinct *failure* notifications;
-        # any non-terminal state (VERIFYING at delivery time) stays silent —
-        # a success message is impossible outside COMPLETED.
         if completion.status is JobStatus.FAILED_RETRYABLE:
             text = (
                 f"⚠️ پردازش «{completion.job_type}» ناموفق بود (قابل تکرار).\n"
@@ -181,27 +161,46 @@ def _build_job_completion_notifier(token: str) -> Any:
             )
             return
         if completion.job_type == "slideshow_render":
-            # Wave 2.5 (D4 extension, r7 item 4): deliver the rendered master
-            # and own its cleanup; failures arrive as short mapped messages.
             from nexus_ai_agent.bot.slideshow_notify import notify_slideshow_completion
 
             await notify_slideshow_completion(completion, token)
             return
         if completion.job_type == "creative_render":
-            # task-166 (P0-B): translated, typed failures; measured artifact
-            # delivery; workspace owned and cleaned by the notifier.
             await _notify_creative_completion(completion, token)
             return
         bot = Bot(token=token)
-        await bot.send_message(chat_id=int(str(raw_chat_id)), text=text)
+        try:
+            await bot.send_message(chat_id=int(str(raw_chat_id)), text=text)
+        finally:
+            try:
+                await bot.shutdown()
+            except Exception:
+                pass
 
     return _notify
 
 
-def _init_v2_engines(settings: Settings) -> dict[str, Any]:
-    """Initialize all v2.0.0+ feature engines.
+async def _safe_aclose(obj: Any) -> None:
+    closer = getattr(obj, "aclose", None) or getattr(obj, "close", None)
+    if closer is None:
+        return
+    try:
+        result = closer()
+        if hasattr(result, "__await__"):
+            await result
+    except Exception:
+        logger.warning("runtime_resource_close_failed", exc_info=True)
 
-    Returns a dict suitable for storing in application.bot_data.
+
+def _init_v2_engines(
+    settings: Settings, runtime: Runtime, long_term_memory: Any | None = None
+) -> dict[str, Any]:
+    """Initialize all v2.0.0+ feature engines and register cleanup.
+
+    Every engine that creates resources is registered with runtime so shutdown
+    disposes them deterministically, fail-safe. Own-what-you-create (W1 Law 5).
+    Engines dict is assigned early to runtime.engines to avoid partial leak.
+    Cleanup lambdas capture engine directly via closure, not via dict lookup.
     """
     from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
     from nexus_ai_agent.features.ai_chat import GeminiEngine
@@ -214,10 +213,9 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
     from nexus_ai_agent.storage.unified_cloud import UnifiedCloudStorage
 
     engines: dict[str, Any] = {}
+    # Assign early — if later construction fails, shutdown still sees earlier engines
+    runtime.engines = engines
 
-    # Application-owned background jobs. The queue is a SQLite sidecar owned
-    # by this adapter; execution remains on the bot process event loop.
-    # D4: finished jobs notify the origin Telegram chat (fail-safe hook).
     from nexus_ai_agent.worker import default_job_handlers, job_queue_db_path
 
     job_queue = InProcessJobQueue(
@@ -227,20 +225,24 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
     for job_type, handler in default_job_handlers().items():
         job_queue.register_handler(job_type, handler)
     engines["job_queue"] = job_queue
+    runtime.add_cleanup(lambda rt, q=job_queue: q.shutdown())
 
-    # Persistent conversation store
     conv_store = ConversationStore(db_path=settings.db_path)
     engines["conversation_store"] = conv_store
+    runtime.add_cleanup(lambda rt, cs=conv_store: asyncio.to_thread(cs.close))
 
-    # Request queue for fair Gemini API access
     request_queue = GeminiRequestQueue(
         max_rpm=settings.gemini_max_rpm,
         max_daily=settings.gemini_max_daily,
     )
     engines["request_queue"] = request_queue
+    runtime.add_cleanup(lambda rt, rq=request_queue: rq.close())
 
-    # Gemini AI Engine
+    # Gemini AI Engine + Provider — ONE engine, ONE provider (W1 Law 4,5,8)
+    from nexus_ai_agent.llm.gemini_provider import GeminiProvider
+
     gemini_engine: GeminiEngine | None = None
+    gemini_provider: GeminiProvider | None = None
     if settings.gemini_api_key:
         gemini_engine = GeminiEngine(
             api_key=settings.gemini_api_key,
@@ -250,15 +252,19 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
             conversation_store=conv_store,
             request_queue=request_queue,
         )
+        gemini_provider = GeminiProvider(engine=gemini_engine)
     engines["gemini_engine"] = gemini_engine
+    engines["gemini_provider"] = gemini_provider
 
-    # Image Generation
-    engines["image_engine"] = ImageGenEngine()
+    # Image Generation (no long-lived resources)
+    image_engine = ImageGenEngine()
+    engines["image_engine"] = image_engine
 
     # Speech (TTS/STT)
-    engines["speech_engine"] = SpeechEngine(output_dir="data/audio")
+    speech_engine = SpeechEngine(output_dir="data/audio")
+    engines["speech_engine"] = speech_engine
 
-    # Summarizer
+    # Summarizer — owns httpx.AsyncClient
     summarizer_engine: SummarizerEngine | None = None
     if settings.gemini_api_key:
         summarizer_engine = SummarizerEngine(
@@ -266,25 +272,41 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
             model=settings.gemini_model,
         )
     engines["summarizer_engine"] = summarizer_engine
+    if summarizer_engine is not None:
+        runtime.add_cleanup(lambda rt, s=summarizer_engine: _safe_aclose(s))
 
-    # Referral
-    engines["referral_engine"] = ReferralEngine(db_path=settings.db_path)
+    # Referral — owns sync SQLite engine
+    referral_engine = ReferralEngine(db_path=settings.db_path)
+    engines["referral_engine"] = referral_engine
+    runtime.add_cleanup(lambda rt, r=referral_engine: asyncio.to_thread(r.close))
 
-    # Unified Cloud Storage
-    engines["unified_cloud"] = UnifiedCloudStorage(
+    # Unified Cloud Storage (no long-lived)
+    unified_cloud = UnifiedCloudStorage(
         dropbox_token=settings.dropbox_token,
         pcloud_token=settings.pcloud_token,
         internxt_token=settings.internxt_token,
     )
+    engines["unified_cloud"] = unified_cloud
 
-    # Shared feature-engine container (feature-wiring batch). Reuses the
-    # referral instance above so exactly ONE ReferralEngine exists per
-    # process (P0-8: single source of truth for documented engines).
+    # Shared feature-engine container — reuses referral and runtime provider
     from nexus_ai_agent.bot.feature_handlers import build_feature_engines
 
-    engines["feature_engines"] = build_feature_engines(
-        settings, referral=engines["referral_engine"]
+    feature_engines = build_feature_engines(
+        settings, referral=referral_engine, gemini_provider=gemini_provider
     )
+    engines["feature_engines"] = feature_engines
+
+    # ReminderSystem has its own sync engine and scheduled tasks
+    # Use aclose for proper task joining
+    runtime.add_cleanup(lambda rt, fe=feature_engines: fe.reminders.aclose())
+
+    # Feature sync engines (force_join, anonymous_chat) — lru_cache-style caches
+    runtime.add_cleanup(lambda rt: asyncio.to_thread(shutdown_module_sync_engines))
+
+    # LongTermMemory (legacy) — if provided, ensure its sqlite conn is closed
+    if long_term_memory is not None:
+        engines["long_term_memory"] = long_term_memory
+        runtime.add_cleanup(lambda rt, lt=long_term_memory: _safe_aclose(lt))
 
     return engines
 
@@ -296,6 +318,7 @@ def build_application(
     *,
     presence: PresenceStore | None = None,
     session_factory: Callable[[], Any] | None = None,
+    long_term_memory: Any | None = None,
 ) -> Application:
     token = os.environ.get("TELEGRAM_BOT_TOKEN", settings.telegram_bot_token)
     if not token or token == "CHANGE_ME":
@@ -304,29 +327,44 @@ def build_application(
     presence_store = presence or PresenceStore()
     storage_manager = storage or _build_default_storage(settings)
 
-    # Initialize all v2.0.0+ engines
-    engines = _init_v2_engines(settings)
+    # W1 canonical runtime: single authority for construction + shutdown
+    runtime = Runtime(settings=settings)
+
+    # Initialize all v2.0.0+ engines; every long-lived resource registers
+    # its cleanup with the runtime before the application is built.
+    engines = _init_v2_engines(settings, runtime, long_term_memory=long_term_memory)
+    # runtime.engines already assigned inside _init_v2_engines, but keep reference
+    runtime.engines = engines
     job_queue = engines["job_queue"]
     feature_engines = engines["feature_engines"]
 
     async def _post_init(application: Any) -> None:
-        # Bind the runtime bot to the bindable engines (reminders,
-        # force-join, anonymous chat) and restore pending reminders so
-        # a restart does not silently drop them.
+        """ONE canonical startup hook (W1 Law 4)."""
         try:
             feature_engines.reminders.bind(application.bot)
             feature_engines.force_join.bind(application.bot)
             feature_engines.anon.bind(application.bot)
             await feature_engines.reminders.restore_pending()
-        except Exception:  # noqa: BLE001 — startup wiring must not kill the bot
+        except Exception:
             logger.exception("feature_engines_startup_failed")
-        await job_queue.resume_pending()
+        try:
+            await job_queue.resume_pending()
+        except Exception:
+            logger.exception("job_queue_resume_pending_failed")
 
     async def _post_shutdown(application: Any) -> None:
+        """ONE canonical shutdown hook (W1 Law 4)."""
+        # W1 Fix: close ChannelManager tasks before runtime global dispose
         try:
-            feature_engines.reminders.close()
-        except Exception:  # noqa: BLE001
-            pass
+            cm = application.bot_data.get("channel_manager")
+            if cm is not None:
+                await _safe_aclose(cm)
+        except Exception:
+            logger.exception("channel_manager_shutdown_failed")
+        try:
+            await runtime.shutdown()
+        except Exception:
+            logger.exception("runtime_shutdown_failed")
 
     application = (
         ApplicationBuilder()
@@ -338,14 +376,12 @@ def build_application(
     application.bot_data["graph"] = graph
     application.bot_data["presence"] = presence_store
     application.bot_data["storage"] = storage_manager
+    application.bot_data["runtime"] = runtime
     application.bot_data.setdefault("heartbeat_user_ids", set())
 
-    # Store engines in bot_data for handler access
     for key, value in engines.items():
         application.bot_data[key] = value
 
-    # P0-2: global deny-by-default access guard, group -1 = before every
-    # other handler (commands, callbacks, and free text alike).
     from nexus_ai_agent.bot.access_guard import build_access_guard
 
     application.add_handler(build_access_guard(settings), group=-1)
@@ -360,17 +396,12 @@ def build_application(
     ):
         application.add_handler(handler)
 
-    # task-166 (P0-B): register the creative studio surface (/edit /caption
-    # /grade) against the same job queue the worker drains, so the canonical
-    # Telegram → queue → registry → bus → lane → artifact chain is live.
     from telegram.ext import CommandHandler as _CommandHandler
 
     from nexus_ai_agent.bot.creative_surface import build_creative_handlers
 
     for _name, _fn in build_creative_handlers(job_queue).items():
         application.add_handler(_CommandHandler(_name, _fn))
-    # Custom command handlers removed as they should be part of build_handlers or imported correctly
-    # install_presence_heartbeat(application) # Removed as it was an unawaited mock
     return application
 
 
@@ -381,43 +412,23 @@ def _get_session_factory() -> Callable[[], Any]:
 
 
 class WebhookApplicationAdapter:
-    """Bridge raw Telegram webhook payloads into the PTB Application (v3.8.0).
-
-    Lives here, in ``bot/app.py``, on purpose: the frozen import-boundary
-    test (``tests/architecture/test_import_boundaries.py``) only tolerates
-    the ``telegram`` package in grandfathered files and this file is one of
-    them.  ``api/app.py`` and ``bot/webhook.py`` must stay telegram-free;
-    they call this adapter instead.
-    """
+    """Bridge raw Telegram webhook payloads into the PTB Application (v3.8.0)."""
 
     def __init__(self, application: Any) -> None:
         self._application = application
 
     def parse_update(self, payload: dict[str, Any]) -> Any | None:
-        """Convert a raw webhook JSON payload into a PTB ``Update``.
-
-        Returns ``None`` when the payload carries no ``update_id``
-        (Telegram always sends one; anything else is malformed).  Raises
-        for payloads ``Update.de_json`` cannot make sense of.
-        """
         from telegram import Update
 
         if payload.get("update_id") is None:
-            # Telegram always includes update_id; PTB's de_json raises
-            # (Update.__init__ requires it) for payloads without one —
-            # surface that as "no update" so the API answers 400.
             return None
         bot = getattr(self._application, "bot", None)
-        # Annotated as Any on purpose: PTB types de_json() as non-optional,
-        # but at runtime it returns None for falsy payloads (and may raise
-        # for garbage) — exactly the cases this method must surface.
         update: Any = Update.de_json(payload, bot)
         if update is None or update.update_id is None:
             return None
         return update
 
     def enqueue(self, update: Any) -> None:
-        """Hand a parsed ``Update`` to the application's update queue."""
         queue = getattr(self._application, "update_queue", None)
         if queue is None:
             raise RuntimeError("application has no update_queue (not initialized?)")

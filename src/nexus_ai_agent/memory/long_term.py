@@ -1,20 +1,34 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import struct
 from pathlib import Path
 
 from nexus_ai_agent.llm.provider import LLMProvider
+from nexus_ai_agent.observability.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class LongTermMemory:
+    """Legacy vector memory — marked as legacy attack surface until replaced by Memory Trust.
+
+    W1 Fix: owns sqlite3.Connection that must be closed deterministically.
+    W3: This class bypasses owner isolation and provenance. New code must use
+    memory.trust.MemoryTrustService. This class remains for backward compat
+    but is explicitly marked LEGACY.
+    """
+
     DIM = 384
+    IS_LEGACY = True  # Law 13: legacy path explicit
 
     def __init__(self, vector_path: str, llm: LLMProvider) -> None:
         self._path = vector_path
         self._llm = llm
         self._conn: sqlite3.Connection | None = None
         self._use_vec: bool = False
+        self._closed = False
 
     def _conn_(self) -> sqlite3.Connection:
         """
@@ -23,6 +37,8 @@ class LongTermMemory:
         This module must be offline-safe:
           - If sqlite-vec can't be loaded, we still store content and allow basic retrieval.
         """
+        if self._closed:
+            raise RuntimeError("LongTermMemory closed")
         if self._conn is not None:
             return self._conn
 
@@ -120,3 +136,29 @@ class LongTermMemory:
             return ""
         joined = "\n- ".join(results)
         return f"Relevant memories:\n- {joined}"
+
+    async def aclose(self) -> None:
+        """W1 True Runtime Closure: close sqlite3 connection in thread (blocking)."""
+        if self._closed:
+            return
+        self._closed = True
+        conn = self._conn
+        self._conn = None
+        if conn is not None:
+            try:
+                await asyncio.to_thread(conn.close)
+            except Exception:
+                logger.warning("long_term_memory_close_failed", exc_info=True)
+
+    def close(self) -> None:
+        """Sync best-effort close (legacy)."""
+        if self._closed:
+            return
+        self._closed = True
+        conn = self._conn
+        self._conn = None
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass

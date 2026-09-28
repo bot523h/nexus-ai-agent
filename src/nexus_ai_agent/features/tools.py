@@ -132,13 +132,44 @@ class ReminderSystem:
         return self._engine
 
     def close(self) -> None:
-        """Cancel scheduled tasks and dispose the engine (shutdown hook)."""
-        for task in self._tasks.values():
+        """Cancel scheduled tasks and dispose the engine (sync shutdown hook).
+
+        Cancelling tasks from a non-loop thread is not safe in asyncio debug
+        mode — this sync version is best-effort for legacy callers. New code
+        should use :meth:`aclose` which properly joins tasks.
+        """
+        for task in list(self._tasks.values()):
             if not task.done():
-                task.cancel()
+                try:
+                    task.cancel()
+                except Exception:
+                    pass
         self._tasks.clear()
         if self._engine is not None:
-            self._engine.dispose()
+            try:
+                self._engine.dispose()
+            except Exception:
+                pass
+            self._engine = None
+
+    async def aclose(self) -> None:
+        """Cancel scheduled tasks, await them, and dispose engine (async).
+
+        This is the canonical shutdown path — cancellation-safe and joined.
+        """
+        tasks = list(self._tasks.values())
+        self._tasks.clear()
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        if self._engine is not None:
+            try:
+                # Dispose in thread to avoid blocking event loop
+                await asyncio.to_thread(self._engine.dispose)
+            except Exception:
+                logger.exception("reminder_engine_dispose_failed")
             self._engine = None
 
     # -- user-facing API -----------------------------------------------------

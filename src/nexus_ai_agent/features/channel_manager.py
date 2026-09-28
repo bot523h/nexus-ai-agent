@@ -22,11 +22,38 @@ logger = get_logger(__name__)
 
 
 def _sync_engine() -> Any:
-    """Return a synchronous SQLAlchemy engine for simple CRUD inside features."""
+    """Return a synchronous SQLAlchemy engine for simple CRUD inside features.
+
+    W1 Fix: engine is created per-call and must be disposed by caller.
+    This helper is retained for backward compat but new code should use
+    runtime-owned session factory. Caller must dispose via engine.dispose().
+    """
     from sqlalchemy import create_engine as _ce
 
     settings = get_settings()
     return _ce(f"sqlite:///{settings.db_path}", echo=False)
+
+
+def _session_scope() -> Any:
+    """Context manager yielding Session with proper engine dispose."""
+    from contextlib import contextmanager
+
+    from sqlmodel import Session
+
+    @contextmanager
+    def _cm():
+        engine = _sync_engine()
+        try:
+            with Session(engine) as session:
+                yield session
+                session.commit()
+        finally:
+            try:
+                engine.dispose()
+            except Exception:
+                pass
+
+    return _cm()
 
 
 class ChannelManager:
@@ -36,6 +63,7 @@ class ChannelManager:
         self.bot = bot
         self._scheduled_tasks: dict[int, asyncio.Task[Any]] = {}
         self._welcome_cache: dict[int, str] = {}
+        self._closed = False
         self.channel_id = -1003945319426  # Numerical ID for @nexus_ai_official
         self.viral_engine = ViralEngine(bot)
 
@@ -64,8 +92,8 @@ class ChannelManager:
 
     async def schedule_post(self, chat_id: int, text: str, when: datetime) -> int:
         """Schedule a post for *when* (UTC). Returns the schedule DB id."""
-        engine = _sync_engine()
-        with Session(engine) as session:
+        # W1 Fix: use _session_scope that disposes engine, and track task for closure
+        with _session_scope() as session:
             schedule = ChannelSchedule(
                 chat_id=chat_id,
                 text=text,
@@ -81,19 +109,56 @@ class ChannelManager:
         if delay > 0:
 
             async def _send() -> None:
-                await asyncio.sleep(delay)
-                await self.post_to_channel(chat_id, text)
-                engine2 = _sync_engine()
-                with Session(engine2) as s2:
-                    obj = s2.get(ChannelSchedule, schedule_id)
-                    if obj is not None:
-                        obj.status = "sent"
-                        s2.commit()
+                try:
+                    await asyncio.sleep(delay)
+                    await self.post_to_channel(chat_id, text)
+                    with _session_scope() as s2:
+                        obj = s2.get(ChannelSchedule, schedule_id)
+                        if obj is not None:
+                            obj.status = "sent"
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("channel_schedule_send_failed", schedule_id=schedule_id)
 
             task = asyncio.create_task(_send())
             self._scheduled_tasks[schedule_id] = task
+            # Auto-remove on completion to avoid unbounded dict growth
+            def _done(_t: asyncio.Task[Any], sid: int = schedule_id) -> None:
+                self._scheduled_tasks.pop(sid, None)
+
+            task.add_done_callback(_done)
 
         return schedule_id
+
+    async def aclose(self) -> None:
+        """W1 True Runtime Closure: cancel all scheduled tasks and join (fail-safe)."""
+        if self._closed:
+            return
+        self._closed = True
+        tasks = list(self._scheduled_tasks.values())
+        self._scheduled_tasks.clear()
+        for t in tasks:
+            t.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def close(self) -> None:
+        """Sync best-effort close (legacy). Schedules async close if loop running."""
+        if self._closed:
+            return
+        self._closed = True
+        tasks = list(self._scheduled_tasks.values())
+        self._scheduled_tasks.clear()
+        for t in tasks:
+            t.cancel()
+        # Best-effort: if loop running, schedule gather, else ignore
+        try:
+            loop = asyncio.get_running_loop()
+            if loop.is_running():
+                loop.create_task(asyncio.gather(*tasks, return_exceptions=True))
+        except RuntimeError:
+            pass
 
     async def ban_user(self, chat_id: int, user_id: int, *, reason: str = "") -> bool:
         """Ban *user_id* from *chat_id*. Returns True on success."""
@@ -132,8 +197,7 @@ class ChannelManager:
     def set_welcome_message(self, chat_id: int, text: str) -> None:
         """Store a welcome message for *chat_id* (in DB + cache)."""
         self._welcome_cache[chat_id] = text
-        engine = _sync_engine()
-        with Session(engine) as session:
+        with _session_scope() as session:
             existing = session.exec(
                 select(WelcomeMessage).where(WelcomeMessage.chat_id == chat_id)
             ).first()
@@ -141,14 +205,12 @@ class ChannelManager:
                 existing.text = text
             else:
                 session.add(WelcomeMessage(chat_id=chat_id, text=text))
-            session.commit()
 
     def get_welcome_message(self, chat_id: int) -> str:
         """Return the welcome message for *chat_id*, or empty string."""
         if chat_id in self._welcome_cache:
             return self._welcome_cache[chat_id]
-        engine = _sync_engine()
-        with Session(engine) as session:
+        with _session_scope() as session:
             obj = session.exec(
                 select(WelcomeMessage).where(WelcomeMessage.chat_id == chat_id)
             ).first()
@@ -172,8 +234,7 @@ class ChannelManager:
     async def post_top_users(self) -> bool:
         """Fetch top 10 users by XP/activity and post to channel."""
         bot = self._require_bot()
-        engine = _sync_engine()
-        with Session(engine) as session:
+        with _session_scope() as session:
             stmt = select(User).order_by(desc(User.id)).limit(10)
             users = session.exec(stmt).all()
 
@@ -197,8 +258,7 @@ class ChannelManager:
     async def post_viral_content(self) -> int:
         """Post pending viral content to channel."""
         bot = self._require_bot()
-        engine = _sync_engine()
-        with Session(engine) as session:
+        with _session_scope() as session:
             stmt = (
                 select(ViralPost)
                 .where(ViralPost.status == "pending")
@@ -220,7 +280,6 @@ class ChannelManager:
                     post.status = "failed"
                     session.add(post)
 
-            session.commit()
             return count
 
     async def run_nightly_tasks(self) -> None:

@@ -100,13 +100,19 @@ class FeatureEngines:
 
 
 def build_feature_engines(
-    settings: Settings, referral: ReferralEngine | None = None
+    settings: Settings,
+    referral: ReferralEngine | None = None,
+    gemini_provider: Any | None = None,
 ) -> FeatureEngines:
     """Construct the shared engine container.
 
     *referral* may be the application-owned ``ReferralEngine`` (kept in
     ``bot_data``) so that only one referral instance exists per process.
+    *gemini_provider* is the runtime-owned canonical provider (W1 Law 8) —
+    when supplied, AIMemoryEngine uses it instead of constructing a private
+    one, preserving single provider identity.
     """
+
     return FeatureEngines(
         reminders=ReminderSystem(db_path=settings.db_path),
         calculator=Calculator(),
@@ -122,7 +128,8 @@ def build_feature_engines(
         # Single shared instance (task-102 acceptance): the P0-7 consent
         # gate lives inside the engine, so every call site — /memory,
         # /forget_me and the main message handler — shares one gate state.
-        ai_memory=AIMemoryEngine(),
+        # W1/W3: pass runtime-owned provider to preserve identity.
+        ai_memory=AIMemoryEngine(gemini_provider=gemini_provider),
     )
 
 

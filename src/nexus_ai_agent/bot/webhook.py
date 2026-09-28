@@ -2,7 +2,7 @@
 
 This module owns the *orchestration* of webhook mode — running the bot as an
 HTTP service that Telegram POSTs updates to, instead of the always-on
-long-polling loop.  This is what makes zero-idle-cost deployments possible on
+long-polling loop. This is what makes zero-idle-cost deployments possible on
 platforms that scale a web service to zero (e.g. a Koyeb ``web`` service).
 
 Responsibilities:
@@ -13,14 +13,19 @@ Responsibilities:
   inject ``PORT``);
 * :func:`run_webhook` — initialize the PTB application, register the webhook
   with a shared secret header, serve the FastAPI app with uvicorn, and shut
-  down gracefully on SIGTERM (scale-to-zero platforms SIGTERM the process on
-  scale-in; they do not wait politely forever).
+  down gracefully on SIGTERM.
 
 Import boundary: this file must NOT import the ``telegram`` package — the
 frozen import-boundary test (``tests/architecture/test_import_boundaries.py``)
-only tolerates ``telegram`` in grandfathered files.  Raw webhook payloads are
+only tolerates ``telegram`` in grandfathered files. Raw webhook payloads are
 converted into PTB ``Update`` objects by ``WebhookApplicationAdapter`` in
 ``bot/app.py``, which is one of those grandfathered files.
+
+W1 Fix: PTB's initialize()/shutdown() do NOT call post_init/post_shutdown
+(only run_polling/run_webhook do). Since we manually orchestrate webhook via
+FastAPI+uvicorn, we must explicitly call post_init after start and
+post_shutdown before stop/shutdown. Also start() is now inside try/finally so
+failure still triggers cleanup, and each shutdown step is fail-safe.
 """
 
 from __future__ import annotations
@@ -30,14 +35,14 @@ import os
 from typing import Any
 
 from nexus_ai_agent.config.settings import Settings, get_settings
+from nexus_ai_agent.observability.logging import get_logger
+
+logger = get_logger(__name__)
 
 DEFAULT_RUN_MODE = "polling"
 VALID_RUN_MODES = ("polling", "webhook")
 DEFAULT_WEBHOOK_PORT = 8000
 
-#: Header Telegram uses to echo back the ``secret_token`` given to
-#: ``set_webhook``.  ``api/app.py`` compares it (constant-time) against
-#: ``NEXUS_WEBHOOK_SECRET`` on every delivery.
 TELEGRAM_SECRET_TOKEN_HEADER = "X-Telegram-Bot-Api-Secret-Token"
 
 _UVICORN_LOG_LEVELS = {"critical", "error", "warning", "info", "debug", "trace"}
@@ -48,12 +53,6 @@ class WebhookConfigError(RuntimeError):
 
 
 def resolve_run_mode(cli_value: str | None = None) -> str:
-    """Resolve the run mode: CLI argument > ``NEXUS_RUN_MODE`` > ``"polling"``.
-
-    An empty/whitespace CLI value counts as "not provided" (the CLI flag
-    defaults to ``None`` so the environment can win when the flag is
-    omitted).  Unknown values raise ``ValueError``.
-    """
     value = (cli_value or "").strip().lower()
     if not value:
         value = os.environ.get("NEXUS_RUN_MODE", "").strip().lower()
@@ -67,13 +66,6 @@ def resolve_run_mode(cli_value: str | None = None) -> str:
 
 
 def resolve_webhook_port() -> int:
-    """HTTP port for webhook mode: ``PORT`` > ``DASHBOARD_PORT`` > ``8000``.
-
-    The first variable that is set wins; an unset variable falls through to
-    the next candidate.  A set-but-non-integer value is a configuration
-    error and raises ``ValueError`` (fail fast rather than silently binding
-    somewhere unexpected).
-    """
     for var in ("PORT", "DASHBOARD_PORT"):
         raw = os.environ.get(var, "").strip()
         if not raw:
@@ -83,27 +75,11 @@ def resolve_webhook_port() -> int:
 
 
 def build_webhook_bind() -> tuple[str, int]:
-    """Return the ``(host, port)`` uvicorn should bind for webhook mode.
-
-    The host defaults to ``0.0.0.0`` because webhook mode exists precisely
-    to be reached from outside a container; ``DASHBOARD_HOST`` may override
-    it.  Port priority: ``PORT`` > ``DASHBOARD_PORT`` > ``8000``.
-    """
     host = os.environ.get("DASHBOARD_HOST", "").strip() or "0.0.0.0"
     return host, resolve_webhook_port()
 
 
 def run_webhook(application: Any, *, settings: Settings | None = None) -> None:
-    """Run the bot in webhook mode (blocking until graceful shutdown).
-
-    Steps: validate configuration → publish the application (and secret) on
-    the FastAPI app state → initialize/start the PTB application → register
-    the webhook with Telegram (echoing a shared secret) → serve with
-    uvicorn.  SIGTERM/SIGINT make uvicorn stop accepting new requests and
-    drain in-flight ones; afterwards the PTB application is stopped and shut
-    down cleanly, which is what scale-to-zero needs when the platform
-    terminates the process.
-    """
     settings = settings if settings is not None else get_settings()
     webhook_url = (settings.webhook_url or "").strip()
     webhook_secret = (settings.webhook_secret or "").strip()
@@ -147,24 +123,39 @@ async def _serve_webhook(
     port: int,
     log_level: str,
 ) -> None:
-    """Serve webhook mode on a running event loop (see :func:`run_webhook`)."""
+    """Serve webhook mode on a running event loop.
+
+    W1 canonical lifecycle (fixed):
+    - PTB's initialize() does NOT run post_init, shutdown() does NOT run
+      post_shutdown — only run_polling/run_webhook do. Since we manually
+      orchestrate via uvicorn, we explicitly invoke post_init after start
+      and post_shutdown before stop/shutdown.
+    - start() is inside try so failure still triggers shutdown chain.
+    - No duplicate resume_pending — post_init is the ONE authority.
+    - Each shutdown step fail-safe: one failure never strands later resources.
+    """
     import uvicorn
 
-    # 1) Bring the application up.  No Updater is started, so nothing polls:
-    #    Telegram POSTs updates to /webhook/telegram instead.
+    # 1) Bring the application up — initialize creates bot, update_queue etc
     await application.initialize()
-    job_queue = getattr(application, "bot_data", {}).get("job_queue")
-    if job_queue is not None:
-        await job_queue.resume_pending()
-    await application.start()
+
     try:
-        # 2) Register the webhook.  Telegram will echo `webhook_secret` back
-        #    in TELEGRAM_SECRET_TOKEN_HEADER on every delivery.
+        # start() may fail (e.g., network) — must still cleanup, so inside try
+        await application.start()
+
+        # 2) Explicitly run post_init — canonical startup authority (W1 Law 4)
+        # PTB would do this in run_webhook(), but we are not using run_webhook
+        post_init = getattr(application, "post_init", None)
+        if callable(post_init):
+            try:
+                await post_init(application)
+            except Exception:
+                logger.exception("webhook_post_init_failed")
+
+        # 3) Register the webhook with Telegram
         await application.bot.set_webhook(url=webhook_url, secret_token=webhook_secret)
 
-        # 3) Serve.  uvicorn installs SIGINT/SIGTERM handlers that set
-        #    `should_exit`; the server then stops accepting connections and
-        #    drains in-flight requests before serve() returns.
+        # 4) Serve FastAPI with uvicorn — SIGTERM/SIGINT handled by uvicorn
         level = log_level.strip().lower()
         config = uvicorn.Config(
             api_app,
@@ -174,9 +165,23 @@ async def _serve_webhook(
         )
         server = uvicorn.Server(config)
         await server.serve()
+
     finally:
-        # 4) Graceful application shutdown: stop consuming updates and close
-        #    the bot's HTTP sessions.  Runs even if serving failed, so a
-        #    platform-issued SIGTERM never leaves half-open resources behind.
-        await application.stop()
-        await application.shutdown()
+        # 5) Graceful shutdown in canonical PTB order + explicit post_shutdown
+        # post_shutdown runs Runtime.shutdown() which disposes ALL engines
+        try:
+            post_shutdown = getattr(application, "post_shutdown", None)
+            if callable(post_shutdown):
+                await post_shutdown(application)
+        except Exception:
+            logger.exception("webhook_post_shutdown_failed")
+
+        try:
+            await application.stop()
+        except Exception:
+            logger.exception("webhook_application_stop_failed")
+
+        try:
+            await application.shutdown()
+        except Exception:
+            logger.exception("webhook_application_shutdown_failed")

@@ -23,6 +23,7 @@ from sqlalchemy import MetaData
 from sqlmodel import SQLModel
 
 from nexus_ai_agent.features import referral as _referral  # noqa: F401
+from nexus_ai_agent.memory import trust as _memory_trust  # noqa: F401 (W3 memory trust)
 from nexus_ai_agent.storage import db as _db  # noqa: F401  (populates SQLModel.metadata)
 
 #: The metadata objects Alembic should autogenerate against, in priority order.

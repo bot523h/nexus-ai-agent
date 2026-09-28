@@ -328,8 +328,8 @@ async def get_session(db_path: str | None = None) -> AsyncIterator[AsyncSession]
     - ``db_path`` given  → SQLite backend, exactly as before (unchanged).
     - ``db_path`` is ``None`` → the backend comes from the environment:
       ``NEXUS_DATABASE_URL`` set → PostgreSQL, prepared lazily via Alembic
-      (D7: the ``create_all`` stopgap was retired); otherwise the default
-      SQLite path.
+      (D7: the ``create_all`` stopgap was retired); otherwise the configured
+      SQLite path from settings (W1 Law 9 — DB identity).
     """
     await _dispose_replaced_engines()
     if db_path is None:
@@ -340,7 +340,9 @@ async def get_session(db_path: str | None = None) -> AsyncIterator[AsyncSession]
             async with factory() as session:
                 yield session
             return
-        db_path = "data/app.sqlite"
+        from nexus_ai_agent.config.settings import get_settings
+
+        db_path = get_settings().db_path
 
     await create_all_tables(db_path)
     if _session_factory is None:

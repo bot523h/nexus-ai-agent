@@ -1115,8 +1115,8 @@ def run_bot(
     # Graph
     graph = compile_graph(llm, checkpointer, long_term, registry)
 
-    # Bot
-    application = build_application(settings, graph)
+    # Bot — pass long_term for W1 closure (runtime will aclose it)
+    application = build_application(settings, graph, long_term_memory=long_term)
 
     if run_mode == "webhook":
         typer.echo("✓ Starting bot in webhook mode…")
