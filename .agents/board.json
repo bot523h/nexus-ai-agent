@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-28T19:04:02Z",
+  "updated_at": "2026-09-28T19:15:01Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -684,6 +684,14 @@
       "paths": [
         "src/nexus_ai_agent/infrastructure/observability/redaction.py",
         "tests/unit/test_redaction_boundary.py"
+      ]
+    },
+    {
+      "id": "conversation-history-store",
+      "description": "Schema bootstrap of the SQLite conversation-history store: whether a failed index creation is recorded. Confined to features/conversation_store.py and a new test. No other store path is touched.",
+      "paths": [
+        "src/nexus_ai_agent/features/conversation_store.py",
+        "tests/unit/test_conversation_store_schema.py"
       ]
     }
   ],
@@ -2848,6 +2856,39 @@
       "owner_hint": "Arena agent on arena/01a0e907-nexus-ai-agent",
       "agent_branch": "arena/01a0e907-nexus-ai-agent",
       "claimed_at": "2026-09-28T19:04:02Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": ""
+    },
+    {
+      "task": "task-204-conversation-index-observability",
+      "title": "A failed conversation-history index creation must not be silently swallowed",
+      "title_fa": "شکست ساخت ایندکس تاریخچهٔ گفتگو نباید بی‌صدا بلعیده شود",
+      "zone": "conversation-history-store",
+      "priority": "P2",
+      "status": "active",
+      "scope": "ConversationStore._ensure_table wraps `CREATE INDEX IF NOT EXISTS ...` in `except Exception: pass` with the comment 'Index may already exist'. That justification is provably false: IF NOT EXISTS already suppresses the index-already-exists error, so the only exceptions this handler can see are real ones. Reproduced on e5b326b: with a TABLE squatting the name ix_conv_history_conv_id, SQLite raises OperationalError('there is already a table named ...') and the handler swallows it, leaving get_history scanning without its index and nothing in the logs. The CREATE TABLE statement immediately above is NOT wrapped, so the two statements are also treated inconsistently.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "RED proof on unfixed e5b326b: the squatted-index-name reproducer raises and is swallowed with no log record",
+        "After the fix the same failure produces exactly one structured warning naming the error type",
+        "The store still constructs and serves history (the non-fatal behaviour is preserved, not tightened)",
+        "The misleading comment is replaced by the real reason the handler stays non-fatal",
+        "Zero regression against the measured 3061 passed / 30 skipped baseline on 0009976"
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_conversation_store_schema.py before and after",
+        "Full `pytest -q -m 'not slow'` count vs the 3061/30 baseline",
+        "ruff check / ruff format --check / mypy src clean"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/features/conversation_store.py",
+        "tests/unit/test_conversation_store_schema.py"
+      ],
+      "owner_hint": "Arena agent on arena/01a0e907-nexus-ai-agent",
+      "agent_branch": "arena/01a0e907-nexus-ai-agent",
+      "claimed_at": "2026-09-28T19:15:01Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "note": ""

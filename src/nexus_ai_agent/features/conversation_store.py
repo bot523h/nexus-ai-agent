@@ -58,8 +58,22 @@ class ConversationStore:
                         "ON conversation_history(conv_id)"
                     )
                 )
-            except Exception:
-                pass  # Index may already exist
+            except Exception as exc:
+                # Non-fatal, and deliberately so: a missing index is a
+                # performance problem, not a correctness one, so it must not
+                # stop the store from opening.  The silence was the defect.
+                #
+                # The previous handler said "Index may already exist", which
+                # cannot happen: IF NOT EXISTS already suppresses that error,
+                # so the only exceptions reaching this handler are real ones.
+                # Reproduced with a table squatting the index name, which makes
+                # SQLite raise OperationalError("there is already a table named
+                # ix_conv_history_conv_id") — the store then served every
+                # history query as an unindexed scan with nothing in the logs.
+                log.warning(
+                    "conversation_history_index_unavailable",
+                    error_type=type(exc).__name__,
+                )
 
     def get_history(self, conv_id: str, *, limit: int = 20) -> list[dict[str, Any]]:
         """Get recent conversation history for *conv_id*.
