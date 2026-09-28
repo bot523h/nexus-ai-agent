@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-28T20:59:48Z",
+  "updated_at": "2026-09-28T21:42:16Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1427,14 +1427,14 @@
     {
       "task": "task-139-storage-resilience-r2-smoke",
       "zone": "storage-r2-smoke",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0e9b7-nexus-ai-agent",
+      "claimed_at": "2026-09-28T21:42:16Z",
       "ttl_hours": 24,
-      "status": "queued",
+      "status": "active",
       "gates_owner": false,
       "exclusive_paths": [],
       "scope": "Create a fake-client R2 smoke harness for retry/no-retry paths; no real Cloudflare credentials, no network.",
-      "note": "Added by task-136 as the next ten-step network; obey status/dependency before claiming. | status normalized schema1 'queued_after_task137' -> 'queued' during schema-2 merge | exclusive_paths released with terminal status during schema-2 merge (history in scope)",
+      "note": "",
       "acceptance_criteria": [
         "scope delivered and proven by tests named in the PR; no unrelated files touched"
       ]
