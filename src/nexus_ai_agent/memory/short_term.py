@@ -62,9 +62,7 @@ class ShortTermMemory:
         max_messages: int | None = None,
         max_tokens_before_summary: int | None = None,
     ) -> None:
-        self.max_messages = (
-            self.MAX_MESSAGES if max_messages is None else max(1, int(max_messages))
-        )
+        self.max_messages = self.MAX_MESSAGES if max_messages is None else max(1, int(max_messages))
         self.max_tokens_before_summary = (
             self.MAX_TOKENS_BEFORE_SUMMARY
             if max_tokens_before_summary is None

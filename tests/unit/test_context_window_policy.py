@@ -112,9 +112,7 @@ def test_empty_and_missing_input_is_safe() -> None:
 def test_render_is_the_single_join_and_uses_the_window() -> None:
     messages = _conversation(30)
     rendered = ShortTermMemory(max_messages=3).render(messages)
-    assert rendered == "\n".join(
-        f"{m['role']}: {m['content']}" for m in messages[-3:]
-    )
+    assert rendered == "\n".join(f"{m['role']}: {m['content']}" for m in messages[-3:])
 
 
 def test_render_tolerates_a_malformed_message() -> None:
@@ -134,9 +132,10 @@ def test_should_summarize_is_a_sync_predicate_on_the_budget() -> None:
     """It was ``async`` while doing no I/O — a pointless await on a pure check."""
     policy = ShortTermMemory(max_tokens_before_summary=10)
     assert policy.should_summarize(_conversation(40)) is True
-    assert ShortTermMemory(max_tokens_before_summary=100_000).should_summarize(
-        _conversation(4)
-    ) is False
+    assert (
+        ShortTermMemory(max_tokens_before_summary=100_000).should_summarize(_conversation(4))
+        is False
+    )
 
 
 @pytest.mark.asyncio
@@ -180,9 +179,9 @@ async def test_every_persona_sees_the_same_window(settings_override) -> None:
         assert llm.prompts, f"{name} did not reach the model"
         seen[name] = llm.prompts[0]
 
-    conversations = {prompt.split("\nassistant:")[0] for prompt in seen.values()}
-    # chat_agent has no "\nassistant:" suffix, so compare on the shared window
-    # instead: every persona must contain exactly the configured last N messages.
+    # chat_agent appends no "\nassistant:" marker while the personas do, so the
+    # comparison is made on the window itself: every persona must render exactly
+    # the configured messages, and nothing else.
     policy = ShortTermMemory(
         max_messages=settings_module.get_settings().max_short_term_messages,
         max_tokens_before_summary=settings_module.get_settings().max_tokens_before_summary,
@@ -193,7 +192,6 @@ async def test_every_persona_sees_the_same_window(settings_override) -> None:
             line for line in prompt.splitlines() if line.startswith(("user: ", "assistant: "))
         )
         assert window_in_prompt == expected, f"{name} rendered a different window"
-    assert len(conversations) >= 1
 
 
 @pytest.mark.asyncio
@@ -210,10 +208,13 @@ async def test_the_settings_knob_is_live_not_decoration(settings_override, limit
         agent.llm = llm  # type: ignore[assignment]
         await agent.run(_state(_conversation(40)))  # type: ignore[arg-type]
 
-        rendered = llm.prompts[0].split("\nassistant:")[0]
-        assert rendered.count("message number") == limit
-        assert f"message number {39}" in rendered
-        assert f"message number {39 - limit}" not in rendered
+        # Count over the whole prompt: the conversation itself contains
+        # "assistant: ..." lines, so splitting on the trailing "\nassistant:"
+        # marker would cut at the first message instead of the last.
+        prompt = llm.prompts[0]
+        assert prompt.count("message number") == limit
+        assert f"message number {39}" in prompt
+        assert f"message number {39 - limit}" not in prompt
     finally:
         os.environ.pop("MAX_SHORT_TERM_MESSAGES", None)
         settings_module.get_settings.cache_clear()
@@ -258,7 +259,9 @@ def test_short_term_stays_a_pure_leaf() -> None:
             imported.extend(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.append(node.module)
-    assert not any(name.startswith(("nexus_ai_agent.config", "nexus_ai_agent.features")) for name in imported), imported
+    assert not any(
+        name.startswith(("nexus_ai_agent.config", "nexus_ai_agent.features")) for name in imported
+    ), imported
 
 
 def test_base_agent_owns_the_settings_read() -> None:
