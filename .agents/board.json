@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-28T17:51:40Z",
+  "updated_at": "2026-09-28T19:04:02Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -676,6 +676,14 @@
       "paths": [
         "src/nexus_ai_agent/orchestration/graph.py",
         "tests/unit/test_graph_memory.py"
+      ]
+    },
+    {
+      "id": "observability-redaction-boundary",
+      "description": "The log-boundary redactor: the fail-closed guarantee that no field or URL reaches a log line unless it has been vetted. Confined to infrastructure/observability/redaction.py and a new dedicated test. Deliberately excludes infrastructure/observability/structured.py and observability/logging.py (no active lease, but untouched to keep this security fix reviewable).",
+      "paths": [
+        "src/nexus_ai_agent/infrastructure/observability/redaction.py",
+        "tests/unit/test_redaction_boundary.py"
       ]
     }
   ],
@@ -2805,6 +2813,41 @@
       "owner_hint": "Arena agent on arena/01a0e907-nexus-ai-agent",
       "agent_branch": "arena/01a0e907-nexus-ai-agent",
       "claimed_at": "2026-09-28T17:51:40Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": ""
+    },
+    {
+      "task": "task-203-redaction-fail-closed",
+      "title": "Redaction boundary must fail closed and must not skip percent-encoded values",
+      "title_fa": "مرز redaction باید fail-closed باشد و مقادیر percent-encoded را رد نکند",
+      "zone": "observability-redaction-boundary",
+      "priority": "P1",
+      "status": "active",
+      "scope": "redaction.py is the single choke point that scrubs every structured log field. Two of its rules are permissive by default, and both were reproduced on e5b326b: (1) _redact_urls catches ValueError and returns the RAW url, so an unparseable authority is emitted unvetted - `https://user:hunter2@example.com:notaport/api` and `https://user:hunter2@[::1/x` both leak the password verbatim through redact_fields(); a malformed port is exactly what gets logged when a connection fails. (2) _QUERY_KEY and _GOOGLE_API_KEY carry a (?!%) negative lookahead that suppresses redaction purely because a value is percent-encoded, so `?key=%53ECRETVALUE` and `?access_key=%53ECRET` pass through untouched. Neither behaviour is pinned by any test or explained by any comment.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "RED proof on unfixed e5b326b for all four leaks: bad-port userinfo, invalid-IPv6 userinfo, ?key=%..., ?access_key=%...",
+        "After the fix, an unparseable URL authority is never emitted unvetted (fail closed), and the scheme+path survive for debuggability",
+        "After the fix, a percent-encoded secret value is redacted exactly like a plain one, for every key name in the pattern",
+        "No previously-redacted shape stops being redacted (idempotence and the existing 22-case corpus stay green)",
+        "The over-redaction trade is documented: a URL template such as ?key=%s becomes ?key=[REDACTED], which is a readability loss, not a leak",
+        "Zero regression against the measured 3008 passed / 30 skipped baseline on 89a2f81"
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_redaction_boundary.py before and after",
+        "Full `pytest -q -rs -m 'not slow'` count vs the 3008/30 baseline",
+        "ruff check / ruff format --check / mypy src clean",
+        "Exact-SHA CI on the PR head"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/infrastructure/observability/redaction.py",
+        "tests/unit/test_redaction_boundary.py"
+      ],
+      "owner_hint": "Arena agent on arena/01a0e907-nexus-ai-agent",
+      "agent_branch": "arena/01a0e907-nexus-ai-agent",
+      "claimed_at": "2026-09-28T19:04:02Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "note": ""
