@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-28T12:00:30Z",
+  "updated_at": "2026-09-28T12:10:43Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3292,7 +3292,7 @@
       "task": "mission-publication-frontier-01a0e742",
       "zone": "mission-publication-frontier-01a0e742",
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "scope": "Repair existing coordination authority with live remote publication frontier; exact outbound commit scope, fail-closed metadata and race checks; preserve ac2 separately; characterize consent-generation race and triage advisories without editing leased runtime code.",
       "exclusive_paths": [
         "scripts/agent_board.py",
@@ -3323,8 +3323,8 @@
         "Primary-advisory triage and isolated memory-race reproduction",
         "Focused CI check for publication guard"
       ],
-      "agent_branch": "arena/01a0e742-nexus-ai-agent",
-      "claimed_at": "2026-09-28T12:00:30Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "note": " Probe evidence: ci-artifacts/mission-20260928/consent-race.json (source sha256 8ac6aa7a..., FAILURE x2). Live preflight calibrated and SUCCESS at 0d1ec8d."
