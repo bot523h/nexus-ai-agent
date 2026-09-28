@@ -693,7 +693,14 @@
         "scripts/llm_gateway_mutations.py",
         "docs/architecture/LLM_GATEWAY.md",
         "docs/architecture/adr/0012-global-llm-gateway-authority.md",
-        "W2_LLM_GATEWAY_TRUTH_REPORT_2026-09-27.md"
+        "W2_LLM_GATEWAY_TRUTH_REPORT_2026-09-27.md",
+        "tests/unit/test_llm_gateway_registry_race.py",
+        "tests/unit/test_llm_gateway_engine.py",
+        "tests/unit/test_llm_gateway_resilience.py",
+        "tests/unit/test_llm_gateway_golden.py",
+        "scripts/w2_golden_proof.py",
+        "W2_GOLDEN_PROOF_2026-09-28.md",
+        "tests/unit/test_llm_gateway_facade.py"
       ],
       "note": "Deliberately EXCLUDED (documented, not forgotten): features/request_queue.py + its tests + scripts/llm_queue_mutations.py + MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md (active lease task-195-salvage, gates_owner); knowledge/ and integrations/ (active lease task-185); creative/image_gen/ and creative/slideshow/analysis.py (own hardened ports, sync-only transport injection pinned by tests) — recorded as explicit architectural exceptions with residual-risk entries in the W2 report."
     }
@@ -2822,7 +2829,8 @@
         "tests/unit/test_llm_gateway_resilience.py",
         "tests/unit/test_llm_gateway_golden.py",
         "scripts/w2_golden_proof.py",
-        "W2_GOLDEN_PROOF_2026-09-28.md"
+        "W2_GOLDEN_PROOF_2026-09-28.md",
+        "tests/unit/test_llm_gateway_facade.py"
       ],
       "owner_hint": "W2 engineering owner (this session)",
       "agent_branch": "arena/01a0e846-nexus-ai-agent",
