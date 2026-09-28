@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-28T14:20:30Z",
+  "updated_at": "2026-09-28T14:32:38Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3388,6 +3388,40 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "note": " Phase2 probe (deterministic, 8 cases): invariant VIOLATED on both the branch/main source (sha 13cea73cf8e8) and the live W2 tip 9e795318 (sha 31edb93f1389) in forget_before_completion, stale_writer_replay, concurrent_extraction_dual_writer; cancellation, denied-replay and double-forget are safe. Controls green. Evidence: ci-artifacts/hardening/probe-*.json. Sandbox restore lost the ac2b7d5 quarantine artifacts (tag/stash/patch); object absent from every remote ref; recovery impossible from git. Released locally; GitHub auth expired before push (push pending). CI on d1a7423 green except flaky 3.10 push-event parity (passed on identical tree in PR event); 029b394 rerun watch UNVERIFIED."
+    },
+    {
+      "task": "task-200-w3-memory-trust-boundary",
+      "zone": "roadmap-backlog",
+      "priority": "P1",
+      "status": "active",
+      "scope": "W3 slice 1 (lease-safe): memory record trust metadata + no-implicit-authority rendering + capability-grant rejection + adversarial injection corpus, confined to src/nexus_ai_agent/memory/ and new tests; ai_memory.py integration deferred behind the live W2 fence.",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/memory/",
+        "tests/unit/test_memory_trust_boundary.py",
+        "tests/unit/test_memory_injection_corpus.py",
+        "docs/architecture/MODULE_MAP.md",
+        "docs/audits/2026-09-28-successor-audit.fa.md",
+        "ci-artifacts/hardening/w3-slice-notes.md"
+      ],
+      "acceptance_criteria": [
+        "Frozen metadata record binds content hash, identity, tenant, source, actor, timestamps, confidence, consent, retention/TTL, deletion tombstone and lineage",
+        "Records claiming capability/approval/tool-execution grants are rejected at validation (memory grants no authority)",
+        "Retrieved text renders only inside an explicit untrusted block; fence-escape attempts stay inert under a deterministic corpus",
+        "TTL expiry and tombstones filter retrieval candidates",
+        "New boundary law row in MODULE_MAP names the enforcing tests",
+        "No live-leased file edited (features/ai_memory.py integration explicitly deferred to W2 handoff)"
+      ],
+      "evidence_required": [
+        "pytest evidence for both new test modules",
+        "ruff check/format clean",
+        "preflight SUCCESS before push",
+        "claim pushed before code"
+      ],
+      "agent_branch": "arena/01a0e742-nexus-ai-agent",
+      "claimed_at": "2026-09-28T14:32:38Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": ""
     }
   ],
   "deferred_log": [
