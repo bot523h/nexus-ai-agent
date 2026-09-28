@@ -862,6 +862,17 @@
         ".agents/board.json",
         "pyproject.toml"
       ]
+    },
+    {
+      "id": "task-200-w3-memory-trust-boundary",
+      "paths": [
+        "src/nexus_ai_agent/memory/",
+        "tests/unit/test_memory_trust_boundary.py",
+        "tests/unit/test_memory_injection_corpus.py",
+        "docs/architecture/MODULE_MAP.md",
+        "docs/audits/2026-09-28-successor-audit.fa.md",
+        "ci-artifacts/hardening/w3-slice-notes.md"
+      ]
     }
   ],
   "claims": [
