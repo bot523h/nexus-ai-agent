@@ -661,7 +661,7 @@ async def test_withdrawal_after_initial_gate_before_admission(monkeypatch):
         await gateway.aclose()
 
 
-async def test_cancellation_during_timeout_cleanup_preserves_task_ownership():
+async def test_cancellation_during_timeout_cleanup_preserves_task_ownership(monkeypatch):
     entered, cancelled, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
     class Stubborn(ScriptedAdapter):
@@ -677,20 +677,50 @@ async def test_cancellation_during_timeout_cleanup_preserves_task_ownership():
                     cancelled.set()
             return AdapterResult(text="late")
 
+    # Force the timeout result only after adapter entry, then hold settlement
+    # until the caller cancels it. A 10ms real deadline could expire during
+    # admission under load and never exercise the cleanup ownership boundary.
+    import nexus_ai_agent.llm.gateway.engine as engine
+
+    cleanup_entered, cleanup_release = asyncio.Event(), asyncio.Event()
+
+    class ControlledAsyncio:
+        provider_waits = 0
+
+        def __getattr__(self, name):
+            return getattr(asyncio, name)
+
+        async def wait(self, tasks, *, timeout=None, **kwargs):
+            if "return_when" in kwargs:
+                self.provider_waits += 1
+                if self.provider_waits == 1:
+                    await entered.wait()
+                    return set(), set(tasks)  # deterministic provider timeout
+            else:
+                cleanup_entered.set()
+                await cleanup_release.wait()
+            return await asyncio.wait(tasks, timeout=timeout, **kwargs)
+
+    monkeypatch.setattr(engine, "asyncio", ControlledAsyncio())
     adapter = Stubborn("p", ["ok"])
-    gateway = _gateway([adapter], retry=NO_RETRY)
-    owner = asyncio.create_task(gateway.execute(request(deadline_seconds=0.01)))
-    await asyncio.wait_for(entered.wait(), 2)
-    await asyncio.wait_for(cancelled.wait(), 2)
-    owner.cancel()
-    await asyncio.gather(owner, return_exceptions=True)
+    gateway = _gateway([adapter], retry=NO_RETRY, clock=VirtualClock())
+    owner = asyncio.create_task(gateway.execute(request()))
     try:
+        await asyncio.wait_for(entered.wait(), 2)
+        await asyncio.wait_for(cancelled.wait(), 2)
+        await asyncio.wait_for(cleanup_entered.wait(), 2)
+        owner.cancel()
+        result = await asyncio.gather(owner, return_exceptions=True)
+        assert isinstance(result[0], asyncio.CancelledError)
         with pytest.raises(OverloadedError):
             await gateway.execute(request())
         assert adapter.calls == 1
     finally:
         release.set()
-        await asyncio.sleep(0)
+        cleanup_release.set()
+        if not owner.done():
+            owner.cancel()
+        await asyncio.gather(owner, return_exceptions=True)
         await gateway.aclose()
 
 
