@@ -8,7 +8,11 @@ Two jobs:
    downstream re-derives that.
 2. :func:`get_llm_gateway` — the process-wide accessor. Same shape as the
    repository's existing ``get_settings()`` / ``get_http_client()`` singletons, so
-   the convention is familiar and there is exactly one authority per process.
+   the convention is familiar and there is exactly one authority per process —
+   including when two threads reach first use at the same instant, which is why
+   the lazy build is double-checked under a lock (this codebase calls the LLM from
+   ``asyncio.to_thread`` workers, so "one authority" has to survive real threads,
+   not just a single caller asking twice).
    A composition root (W1's ``RuntimeContext``) may install its own instance
    with :func:`set_llm_gateway`; whoever installs first wins, and a second,
    *different* installation is logged rather than silently replacing the
@@ -40,6 +44,7 @@ caller renders, not a fabricated answer with a disclaimer.
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any
@@ -80,25 +85,46 @@ DEGRADED_PROVIDER = "local-degraded"
 
 _gateway: LLMGateway | None = None
 
+#: "Exactly one authority per process" is a promise about *concurrent* first use
+#: too, and this repository reaches the LLM from threads (``asyncio.to_thread`` in
+#: the job queue, in whisper, in the render pipeline). A lock-free check-then-build
+#: lets two threads that arrive together each construct an authority: one wins the
+#: global, the other keeps serving its caller — a silent split brain with two sets
+#: of concurrency bounds, rate windows, breaker state and metrics, plus an adapter
+#: whose HTTP pool nobody owns and therefore nobody closes. Both locks are held
+#: only around in-memory construction, and neither is ever held while calling the
+#: other accessor, so they cannot deadlock each other.
+_AUTHORITY_LOCK = threading.Lock()
+_CREDENTIAL_LOCK = threading.Lock()
+
 
 def get_llm_gateway(settings: Settings | None = None) -> LLMGateway:
     """Return the process-wide authority, building it from settings on first use.
 
     Building is lazy so importing a module never touches the network or reads
     credentials, and so a test can install its own gateway before anything asks.
+    The build is double-checked under :data:`_AUTHORITY_LOCK`: a thread that had
+    to wait returns the authority that won instead of constructing a second one.
     """
 
     global _gateway
-    if _gateway is None or _gateway.closed:
+    current = _gateway
+    if current is not None and not current.closed:
+        return current
+    with _AUTHORITY_LOCK:
+        current = _gateway
+        if current is not None and not current.closed:
+            return current
         from nexus_ai_agent.config.settings import get_settings
 
-        _gateway = build_gateway_from_settings(settings or get_settings())
+        built = build_gateway_from_settings(settings or get_settings())
+        _gateway = built
         log.info(
             "llm_gateway_installed",
-            routes=[route.key for route in _gateway.policy.routes],
-            adapters=sorted(_gateway._adapters),  # noqa: SLF001 — same package, status only
+            routes=[route.key for route in built.policy.routes],
+            adapters=sorted(built._adapters),  # noqa: SLF001 — same package, status only
         )
-    return _gateway
+        return built
 
 
 def set_llm_gateway(gateway: LLMGateway | None) -> LLMGateway | None:
@@ -435,48 +461,52 @@ def gateway_for_credentials(
         return get_llm_gateway(settings)
 
     cache_key = (api_key, model)
-    existing = _CREDENTIAL_GATEWAYS.get(cache_key)
-    if existing is not None and not existing.closed:
-        _CREDENTIAL_GATEWAYS.move_to_end(cache_key)
-        return existing
+    # One credential set must resolve to one gateway even when two threads ask at
+    # the same instant: a duplicated scoped gateway silently halves its rate
+    # window and its concurrency bound, and the loser is never closed.
+    with _CREDENTIAL_LOCK:
+        existing = _CREDENTIAL_GATEWAYS.get(cache_key)
+        if existing is not None and not existing.closed:
+            _CREDENTIAL_GATEWAYS.move_to_end(cache_key)
+            return existing
 
-    adapter = GeminiHttpAdapter(api_key=api_key, default_model=model, base_url=base_url)
-    route = Route(
-        provider=adapter.name,
-        model=model,
-        operations=adapter.operations,
-        modalities=adapter.modalities,
-        rank=10,
-        label="gemini-rest-scoped",
-    )
-    policy = default_policy(
-        routes=(route,),
-        timeout=TimeoutBudget(),
-        retry=RetryPolicy(max_attempts=3),
-        rate_limit=RateLimitPolicy(
-            per_provider={
-                adapter.name: ProviderRateLimit(
-                    requests_per_minute=requests_per_minute,
-                    requests_per_day=requests_per_day,
-                )
-            }
-        ),
-        # A scoped gateway has exactly one route, so there is nothing to fall
-        # back to. Saying so explicitly keeps LAW 8 honest: no hidden hop.
-        fallback=FallbackPolicy(enabled=False, max_hops=0, allow_degraded_routes=False),
-    )
-    gateway = LLMGateway(policy=policy)
-    gateway.register(adapter, (route,))
-    _CREDENTIAL_GATEWAYS[cache_key] = gateway
-    while len(_CREDENTIAL_GATEWAYS) > _CREDENTIAL_GATEWAY_CAP:
-        _evict_oldest_credential_gateway()
-    log.info(
-        "llm_gateway_scoped_installed",
-        model=model,
-        routes=[r.key for r in policy.routes],
-        cached=len(_CREDENTIAL_GATEWAYS),
-    )
-    return gateway
+        adapter = GeminiHttpAdapter(api_key=api_key, default_model=model, base_url=base_url)
+        route = Route(
+            provider=adapter.name,
+            model=model,
+            operations=adapter.operations,
+            modalities=adapter.modalities,
+            rank=10,
+            label="gemini-rest-scoped",
+        )
+        policy = default_policy(
+            routes=(route,),
+            timeout=TimeoutBudget(),
+            retry=RetryPolicy(max_attempts=3),
+            rate_limit=RateLimitPolicy(
+                per_provider={
+                    adapter.name: ProviderRateLimit(
+                        requests_per_minute=requests_per_minute,
+                        requests_per_day=requests_per_day,
+                    )
+                }
+            ),
+            # A scoped gateway has exactly one route, so there is nothing to fall
+            # back to. Saying so explicitly keeps LAW 8 honest: no hidden hop.
+            fallback=FallbackPolicy(enabled=False, max_hops=0, allow_degraded_routes=False),
+        )
+        gateway = LLMGateway(policy=policy)
+        gateway.register(adapter, (route,))
+        _CREDENTIAL_GATEWAYS[cache_key] = gateway
+        while len(_CREDENTIAL_GATEWAYS) > _CREDENTIAL_GATEWAY_CAP:
+            _evict_oldest_credential_gateway()
+        log.info(
+            "llm_gateway_scoped_installed",
+            model=model,
+            routes=[r.key for r in policy.routes],
+            cached=len(_CREDENTIAL_GATEWAYS),
+        )
+        return gateway
 
 
 def _evict_oldest_credential_gateway() -> None:

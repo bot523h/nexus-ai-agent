@@ -46,6 +46,7 @@ ADVERSARIAL = "tests/unit/test_llm_gateway_adversarial.py"
 LOAD = "tests/unit/test_llm_gateway_load.py"
 SECURITY = "tests/unit/test_llm_gateway_security.py"
 FACADE = "tests/unit/test_llm_gateway_facade.py"
+REGISTRY_RACE = "tests/unit/test_llm_gateway_registry_race.py"
 
 #: Every gateway test file: the baseline and the restored copy must be green.
 ALL_TESTS: tuple[str, ...] = (
@@ -62,6 +63,7 @@ ALL_TESTS: tuple[str, ...] = (
     LOAD,
     SECURITY,
     FACADE,
+    REGISTRY_RACE,
 )
 
 
@@ -642,6 +644,28 @@ MUTATIONS: tuple[Mutation, ...] = (
         "a cooled-down breaker must allow a half-open probe",
     ),
     # ── LAW 1/12: one authority, compatible surface ────────────────────────
+    Mutation(
+        "registry_builds_the_process_authority_without_taking_the_lock",
+        GATEWAY / "registry.py",
+        """    with _AUTHORITY_LOCK:
+        current = _gateway""",
+        """    if True:
+        current = _gateway""",
+        REGISTRY_RACE,
+        "test_concurrent_first_use_builds_exactly_one_process_authority",
+        "one process has one authority even when threads reach first use together",
+    ),
+    Mutation(
+        "registry_resolves_a_credential_without_taking_the_lock",
+        GATEWAY / "registry.py",
+        """    with _CREDENTIAL_LOCK:
+        existing = _CREDENTIAL_GATEWAYS.get(cache_key)""",
+        """    if True:
+        existing = _CREDENTIAL_GATEWAYS.get(cache_key)""",
+        REGISTRY_RACE,
+        "test_concurrent_scoped_credential_resolution_builds_exactly_one_gateway",
+        "one credential set resolves to one gateway, so its bounds are not split",
+    ),
     Mutation(
         "engine_accepts_work_after_close",
         GATEWAY / "engine.py",

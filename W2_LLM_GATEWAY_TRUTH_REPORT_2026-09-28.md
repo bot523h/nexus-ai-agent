@@ -85,8 +85,8 @@ Caller (features/, agents/, creative/, llm/ providers)
 ```
 
 Implemented in `src/nexus_ai_agent/llm/gateway/` (11 modules) plus
-`src/nexus_ai_agent/llm/errors.py`: 7,189 lines total. Module sizes: engine 1,632 ·
-adapters 1,249 · policy 824 · scheduler 536 · contract 503 · registry 491 ·
+`src/nexus_ai_agent/llm/errors.py`: 7,219 lines total. Module sizes: engine 1,632 ·
+adapters 1,249 · policy 824 · scheduler 536 · registry 521 · contract 503 ·
 observability 473 · errors 463 · resilience 393 · facade 319 · `__init__` 191 ·
 usage 115.
 
@@ -272,7 +272,23 @@ is a typed `internal_gateway_failure`, never a guessed answer.
 the process authority; a *different* key → a scoped single-route gateway
 (LRU-capped at 16, fallback disabled, so one caller's credentials cannot borrow
 another's routes); an empty key → a typed refusal rather than a silent anonymous
-call. `facade.GatewayLLMProvider` keeps the pre-W2 surface — `generate`,
+call.
+
+"One authority per process" is enforced under real threads, not only for a single
+caller asking twice: both accessors build under a lock (`_AUTHORITY_LOCK`,
+`_CREDENTIAL_LOCK`) with a double-checked read, because this codebase calls the LLM
+from `asyncio.to_thread` workers (job queue, whisper, render pipeline). Defect #23,
+found after the first delivery: with a lock-free check-then-build, eight threads
+reaching first use together produced **eight authorities in one process** — the
+captured log printed `llm_gateway_installed` once per thread — which means eight
+sets of concurrency bounds, rate windows, breaker state and metrics, and seven
+losers whose adapter HTTP pools nobody owns or closes. `tests/unit/test_llm_gateway_registry_race.py`
+(7 tests) pins it: one build under a concurrent burst, the rebuild-after-close path
+raced too, the credential cache raced too, a mixed burst of both accessors must
+complete rather than deadlock, the warm path must never acquire the lock
+(steady-state cost unchanged), and laziness must be unchanged. Both locks are now
+mutation-anchored (`registry_builds_the_process_authority_without_taking_the_lock`,
+`registry_resolves_a_credential_without_taking_the_lock`). `facade.GatewayLLMProvider` keeps the pre-W2 surface — `generate`,
 `complete`, `embed` — and the user-facing failure strings byte-for-byte
 (`UNAVAILABLE_MESSAGE`, `DEGRADED_DISCLAIMER`, the busy message), because they are
 product copy; provider detail never reaches a chat surface. `embed` raises a typed
@@ -323,21 +339,28 @@ asyncpg/psycopg all present).
 | Gate | Command | Result |
 |---|---|---|
 | architecture (structure) | `pytest tests/architecture/test_llm_gateway_authority.py` | **12 passed** |
-| gateway behaviour | `pytest tests/unit -k llm_gateway` | **637 passed, 1 skipped** (13 files) |
-| mutation campaign | `python scripts/llm_gateway_mutations.py` | **49/49 mutants killed**; baseline GREEN before, restored copy GREEN after; exit 0 |
-| full suite | `pytest -q -rs -m "not slow"` | **3564 passed, 31 skipped, 0 failed** in 177.56s |
-| baseline parity | vs. the recorded pre-W2 baseline 2915 passed / 30 skipped | **+649 passed, +1 skipped = +650 = 638 gateway tests + 12 architecture tests.** Nothing pre-existing regressed and the delta is fully accounted for |
+| gateway behaviour | `pytest tests/unit/test_llm_gateway_*.py` (14 files) | **642 passed, 1 skipped** (643 collected) |
+| gateway + architecture together | `pytest tests/unit/test_llm_gateway_*.py tests/architecture/test_llm_gateway_authority.py` | **654 passed, 1 skipped** |
+| mutation campaign | `python scripts/llm_gateway_mutations.py` | **51/51 mutants killed**; baseline GREEN (14 files) before, restored copy GREEN after; exit 0 |
+| docs integrity | `pytest tests/unit/test_docs_integrity.py` | **59 passed** |
+| full suite | `pytest -q -rs -m "not slow"` | **3571 passed, 31 skipped, 0 failed** in 179.42s |
+| baseline parity | vs. the recorded pre-W2 baseline 2915 passed / 30 skipped | **+656 passed, +1 skipped = +657 collected = 643 gateway-file tests + 12 architecture tests + 2 `docs_integrity` parameters created by the new `LLM_GATEWAY.md` page.** Nothing pre-existing regressed and the delta is fully accounted for |
 | lint | `ruff check src tests scripts` | All checks passed! |
-| format | `ruff format --check src tests scripts` | 479 files already formatted |
+| format | `ruff format --check src tests scripts` | 480 files already formatted |
 | types | `mypy src` | Success: no issues found in 259 source files |
 
-Test volume added: 13 behaviour files (9,385 lines) + the architecture gate (762
-lines) + the mutation harness (802 lines) = 10,949 lines.
+The defect-#23 fix was proven the honest way: the 7 new registry tests were run
+against the *unfixed* registry first and **6 of 7 failed**, with the captured log
+printing `llm_gateway_installed` five times for one process; after the lock, all 7
+pass and the other 647 gateway tests are unchanged.
 
-**Mutation campaign shape.** 49 mutations across 8 modules (engine 20, scheduler 7,
-adapters 7, policy 4, resilience 4, observability 3, facade 2, usage 2), grouped by
-law: LAW 7 retry/bound, LAW 8 fallback, LAW 5 cancellation, LAW 6 bounds, LAW 4
-single policy surface, LAW 3 typed truth, LAW 10/11 observability and truthful
+Test volume added: 14 behaviour files (9,662 lines) + the architecture gate (762
+lines) + the mutation harness (826 lines) = 11,250 lines.
+
+**Mutation campaign shape.** 51 mutations across 9 modules (engine 20, scheduler 7,
+adapters 7, policy 4, resilience 4, observability 3, facade 2, usage 2, registry 2),
+grouped by law: LAW 7 retry/bound, LAW 8 fallback, LAW 5 cancellation, LAW 6 bounds,
+LAW 4 single policy surface, LAW 3 typed truth, LAW 10/11 observability and truthful
 accounting, LAW 3 resilience primitives, LAW 1/12 one authority + compatible
 surface. The harness copies `src/nexus_ai_agent` to a temporary directory, refuses
 to mutate a red baseline, runs each mutant against its designated test, restores the
@@ -356,10 +379,13 @@ retargeted mutations, three new mutations. The interpreter-signal guard needed a
 settled future rather than a task, because `asyncio.Task.__step` re-raises
 `KeyboardInterrupt`/`SystemExit` into the loop before the engine can see them.
 
-**22 real defects in the authority were found and fixed by this programme** (21 by
+**23 real defects in the authority were found and fixed by this programme** (21 by
 the adversarial/security/load suites during construction, the 22nd — a waiter
 stranded beside idle capacity because `_pump` only ran on release — by the mutation
-harness). They are listed with their killing tests in §21 of the PR description.
+harness, and the 23rd — a lock-free check-then-build that let concurrent first use
+mint several authorities in one process — by re-reading the delivered registry
+against its own documented promise, then proving it red before fixing it). They are
+listed with their killing tests in §21 of the PR description.
 
 **Governance.** `gates_owner` is *not* held by this claim: `task-195-salvage`
 (`arena/01a0e3b7-nexus-ai-agent`) holds the active gates lease until
@@ -369,6 +395,21 @@ verdict is deferred to the gates owner and to this branch's own CI on the exact 
 SHA. No other agent's branch, PR or file was touched; `bot/app.py`,
 `bot/handlers.py` (PR #113) and `features/request_queue.py` (task-195-salvage) were
 left alone by design.
+
+**CI, observed honestly.** On `879cdb2` — the commit that carries all W2 code —
+every leg observed was green: `test (pytest -m "not slow")`, `lint (ruff + mypy +
+version lockstep)`, `python-parity 3.10/3.11/3.12`, `extras-matrix
+core/pdf/speech/translate`, `trust-mutations`, `migrate-postgres`,
+`release-lineage`, `lint-fast`, `continuum-evidence 3.10/3.11/3.12`. On the later
+board-note commit `a18c65e` four legs failed **at the dependency-install step**
+(`pip install -e ".[dev]"` / "Install the leg environment"), each after ~2 minutes,
+while every other leg in the same run — including the same install inside `test` and
+`python-parity` — succeeded; that commit changed only `.agents/board.json`. The
+step-level evidence says runner/network flake, not code. The integration token
+cannot re-run jobs (`POST /actions/runs/{id}/rerun-failed-jobs` → `403 Resource not
+accessible by integration`, i.e. no `actions:write`), so CI is re-triggered by
+pushing the defect-#23 hardening commit; the observed result for the final head is
+recorded on PR #116 rather than asserted here.
 
 ## 21. Honest limits and the remaining blocker
 
