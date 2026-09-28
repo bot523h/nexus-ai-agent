@@ -4,6 +4,14 @@ Since v3.7.0 the LLM engine is no longer bound to a single provider
 (Gemini). Generation is routed through a priority chain of free-tier
 providers orchestrated by `litellm.Router`.
 
+> **W2 update.** Since the Global LLM Gateway landed, this chain is a *deployment
+> selector inside one gateway route*, not the retry/fallback authority. Retry,
+> timeouts, concurrency, local rate windows, circuit breaking, typed error
+> classification, observability and cost truth are decided once, in
+> `llm/gateway/` — see [LLM_GATEWAY.md](LLM_GATEWAY.md). The Router is wrapped by
+> `LitellmRouterAdapter` and registered with `max_attempts=1`, so no retry nests
+> inside the chain's own cooldown logic.
+
 ## Priority chain
 
 ```

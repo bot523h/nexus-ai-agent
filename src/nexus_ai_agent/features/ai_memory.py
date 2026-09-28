@@ -8,11 +8,53 @@ from datetime import datetime
 from sqlmodel import select
 
 from nexus_ai_agent.config.settings import get_settings
+from nexus_ai_agent.llm.errors import LLMError
+from nexus_ai_agent.llm.gateway.contract import (
+    Caller,
+    CallerCategory,
+    GenerationParams,
+    LLMOperation,
+    LLMRequest,
+)
+from nexus_ai_agent.llm.gateway.facade import json_object_validator
 from nexus_ai_agent.llm.gemini_provider import GeminiProvider
 from nexus_ai_agent.storage.db import get_session
 from nexus_ai_agent.storage.models import UserMemory
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_json_object(text: str) -> dict:
+    """Parse a model answer into a JSON object — strictly, or raise.
+
+    Accepts a bare object and a fenced code block (models wrap JSON in ```
+    often enough that refusing them would discard valid answers). Rejects
+    anything that is not an object: returning ``{}`` for nonsense would make an
+    unparseable answer indistinguishable from "no new information found".
+    """
+
+    candidate = (text or "").strip()
+    if candidate.startswith("```"):
+        candidate = _strip_code_fences(candidate)
+    payload = json.loads(candidate)
+    if not isinstance(payload, dict):
+        raise TypeError("expected a JSON object from the extractor")
+    return payload
+
+
+def _strip_code_fences(text: str) -> str:
+    """Remove a leading/trailing ``` fence and an optional language tag."""
+
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        first_newline = stripped.find("\n")
+        if first_newline == -1:
+            return ""
+        stripped = stripped[first_newline + 1 :]
+    if stripped.endswith("```"):
+        stripped = stripped[:-3]
+    return stripped.strip()
+
 
 # Consent states for ``UserMemory.ai_memory_consent`` (tri-state).
 CONSENT_UNSET = "unset"
@@ -151,20 +193,88 @@ class AIMemoryEngine:
         If no new information is found, return an empty JSON object {{}}.
         """
 
+        system = "You are a personal information extractor."
         try:
-            response_text = await self.gemini.generate(
-                prompt=prompt, system="You are a personal information extractor."
+            data = await self._extract(prompt, system, user_id=user_id)
+        except LLMError as exc:
+            # Typed: the gateway already classified this from the status code and
+            # the provider's structured error body. Log the kind, not a message
+            # dump that could carry prompt text (this prompt contains user data).
+            logger.warning(
+                "ai_memory_llm_failure",
+                extra={
+                    "error_kind": exc.kind.value,
+                    "status": exc.status_code,
+                    "request_id": exc.request_id,
+                },
             )
-            # Basic JSON extraction from response
-            start = response_text.find("{")
-            end = response_text.rfind("}") + 1
-            if start != -1 and end != -1:
-                data = json.loads(response_text[start:end])
-                if data:
-                    await self._save_memory(user_id, data)
-        except Exception as e:
-            logger.error(f"Failed to update AI memory: {e}")
+            return EGRESSED
+        except (ValueError, TypeError) as exc:
+            # The model answered, but not with the JSON object we asked for.
+            # That is a contract failure, not a reason to guess: nothing is
+            # written to the database from a half-parsed answer.
+            logger.warning(
+                "ai_memory_unparseable_response",
+                extra={"error": type(exc).__name__, "user_id": user_id},
+            )
+            return EGRESSED
+        except Exception:
+            logger.exception("ai_memory_unexpected_failure", extra={"user_id": user_id})
+            return EGRESSED
+
+        if data:
+            await self._save_memory(user_id, data)
         return EGRESSED
+
+    async def _extract(self, prompt: str, system: str, *, user_id: int) -> dict:
+        """Run the extraction and return the validated JSON object (or ``{}``).
+
+        Two paths, one contract:
+
+        * **typed** — when the provider exposes its gateway (the real
+          ``GeminiProvider`` does), the request goes through it with an
+          ``output_validator`` and ``responseMimeType=application/json``. The
+          gateway validates the answer inside the authority, so a malformed
+          reply becomes a typed ``STRUCTURED_OUTPUT_INVALID`` instead of a
+          half-parsed dict, and the attempt is observable like every other.
+        * **compatibility** — an injected double with only ``generate()``
+          (used by the consent-gate tests) still works. Its answer is parsed by
+          the same strict helper, so both paths reject the same nonsense.
+
+        What is gone from both paths is ``text.find("{")``/``rfind("}")``: that
+        pattern accepts any answer containing a brace *anywhere* — including a
+        model that apologises in prose and quotes a stray ``{`` — and then hands
+        a truncated slice to ``json.loads``.
+        """
+
+        gateway = getattr(self.gemini, "gateway", None)
+        if gateway is not None:
+            request = LLMRequest(
+                caller=Caller(category=CallerCategory.MEMORY, name="features.ai_memory"),
+                purpose="memory-extract",
+                operation=LLMOperation.CHAT,
+                prompt=prompt,
+                system=system,
+                provider="gemini",
+                # Personal data extraction must not be answered by a locally
+                # faked provider: a fabricated "name" would be written to the
+                # user's permanent memory record (LAW 8, LAW 11).
+                allow_fallback=False,
+                generation=GenerationParams(
+                    response_mime_type="application/json",
+                    temperature=0.0,
+                ),
+                output_validator=json_object_validator(),
+                metadata={"user_id": str(user_id)},
+            )
+            response = await gateway.execute(request)
+            structured = response.structured
+            if isinstance(structured, dict):
+                return structured
+            return _parse_json_object(response.text)
+
+        response_text = await self.gemini.generate(prompt=prompt, system=system)
+        return _parse_json_object(response_text)
 
     async def _save_memory(self, user_id: int, data: dict) -> None:
         """Merge new data into persistent UserMemory."""
