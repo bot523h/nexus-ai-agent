@@ -30,6 +30,9 @@ import os
 from typing import Any
 
 from nexus_ai_agent.config.settings import Settings, get_settings
+from nexus_ai_agent.observability.logging import get_logger
+
+logger = get_logger(__name__)
 
 DEFAULT_RUN_MODE = "polling"
 VALID_RUN_MODES = ("polling", "webhook")
@@ -147,19 +150,26 @@ async def _serve_webhook(
     port: int,
     log_level: str,
 ) -> None:
-    """Serve webhook mode on a running event loop (see :func:`run_webhook`)."""
+    """Serve webhook mode on a running event loop (see :func:`run_webhook`).
+
+    W1 canonical lifecycle: PTB's ``initialize()`` runs ``post_init`` (our
+    ONE startup authority, which binds engines + restores reminders +
+    resumes pending jobs), and PTB's ``shutdown()`` runs ``post_shutdown``
+    (our ONE shutdown authority which tears down every resource through the
+    Runtime).  We therefore do NOT duplicate ``resume_pending`` here, and
+    we rely on the standard ``initialize → start → (serve) → stop →
+    shutdown`` ordering so no lifecycle step is bypassed or run twice.
+    """
     import uvicorn
 
-    # 1) Bring the application up.  No Updater is started, so nothing polls:
-    #    Telegram POSTs updates to /webhook/telegram instead.
+    # 1) Bring the application up: runs post_init (engine bindings +
+    #    pending-job resume).  No Updater is started — Telegram POSTs
+    #    updates to /webhook/telegram instead.
     await application.initialize()
-    job_queue = getattr(application, "bot_data", {}).get("job_queue")
-    if job_queue is not None:
-        await job_queue.resume_pending()
     await application.start()
     try:
-        # 2) Register the webhook.  Telegram will echo `webhook_secret` back
-        #    in TELEGRAM_SECRET_TOKEN_HEADER on every delivery.
+        # 2) Register the webhook.  Telegram will echo `webhook_secret`
+        #    back in TELEGRAM_SECRET_TOKEN_HEADER on every delivery.
         await application.bot.set_webhook(url=webhook_url, secret_token=webhook_secret)
 
         # 3) Serve.  uvicorn installs SIGINT/SIGTERM handlers that set
@@ -175,8 +185,17 @@ async def _serve_webhook(
         server = uvicorn.Server(config)
         await server.serve()
     finally:
-        # 4) Graceful application shutdown: stop consuming updates and close
-        #    the bot's HTTP sessions.  Runs even if serving failed, so a
-        #    platform-issued SIGTERM never leaves half-open resources behind.
-        await application.stop()
-        await application.shutdown()
+        # 4) Graceful shutdown in canonical PTB order:
+        #      stop       → stop consuming updates, close bot HTTPClient
+        #      shutdown   → run post_shutdown → Runtime.shutdown() which
+        #                    disposes ALL engines/queues/clients/DBs.
+        #    Runs even if serving failed, so a platform-issued SIGTERM
+        #    never leaves half-open resources behind.
+        try:
+            await application.stop()
+        except Exception:  # noqa: BLE001 — don't strand shutdown
+            logger.exception("webhook_application_stop_failed")
+        try:
+            await application.shutdown()
+        except Exception:  # noqa: BLE001
+            logger.exception("webhook_application_shutdown_failed")

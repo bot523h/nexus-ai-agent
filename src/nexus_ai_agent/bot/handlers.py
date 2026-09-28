@@ -212,19 +212,12 @@ def build_handlers(
     _ = storage
 
     # ── Feature Engines ───────────────────────────────────────────
-    # These are mostly accessed via bot_data, but local aliases help
-    image_engine = ImageGenEngine()
-    speech_engine = SpeechEngine(output_dir="data/audio")
-    unified_cloud = UnifiedCloudStorage(
-        dropbox_token=settings.dropbox_token,
-        pcloud_token=settings.pcloud_token,
-        internxt_token=settings.internxt_token,
-    )
-    # Shared feature engines — single source of truth (P0-8). The
-    # application passes its own container so ``bot_data`` and the
-    # handlers reference the SAME instances; when absent (tests) a
-    # fresh container is built here. Referral is reused rather than
-    # re-constructed.
+    # W1 (Law 8 — NO HIDDEN BYPASS): engines are owned by the runtime
+    # container in bot/app.py.  Handlers resolve them lazily from
+    # context.bot_data at request time so there is exactly ONE instance
+    # per process and shutdown can own them.  Local construction only
+    # happens when ``feature_engines`` is omitted (isolated unit tests)
+    # and is gated to a fallback path.
     engines = feature_engines or build_feature_engines(settings)
     referral_engine = engines.referral
     feature_cmds = build_feature_command_handlers(engines, settings)
@@ -234,18 +227,52 @@ def build_handlers(
     # Strong references to in-flight background tasks (fire-and-forget
     # create_task() without a held reference may be GC'd mid-execution).
     _held_background_tasks: set[asyncio.Task[Any]] = set()
-    # v2.0.0 specific engines
-    gemini_engine: GeminiEngine | None = None
-    summarizer_engine: SummarizerEngine | None = None
-    if settings.gemini_api_key:
-        gemini_engine = GeminiEngine(
+
+    # Test-only fallback engines: constructed ONLY when handlers are
+    # built without a runtime (unit tests).  In production the
+    # application registers runtime-owned engines in bot_data and the
+    # resolvers below return them instead.
+    _fallback_image = ImageGenEngine()
+    _fallback_speech = SpeechEngine(output_dir="data/audio")
+    _fallback_unified_cloud = UnifiedCloudStorage(
+        dropbox_token=settings.dropbox_token,
+        pcloud_token=settings.pcloud_token,
+        internxt_token=settings.internxt_token,
+    )
+    _fallback_gemini: GeminiEngine | None = None
+    _fallback_summarizer: SummarizerEngine | None = None
+    if settings.gemini_api_key and feature_engines is None:
+        _fallback_gemini = GeminiEngine(
             api_key=settings.gemini_api_key,
             model=settings.gemini_model,
         )
-        summarizer_engine = SummarizerEngine(
+        _fallback_summarizer = SummarizerEngine(
             gemini_api_key=settings.gemini_api_key,
             model=settings.gemini_model,
         )
+
+    def _resolve(context: ContextTypes.DEFAULT_TYPE, key: str, fallback: Any = None) -> Any:
+        """Return the runtime-owned engine from bot_data, or *fallback*."""
+        bot_data = getattr(context, "bot_data", None) or {}
+        return bot_data.get(key, fallback)
+
+    def _image_engine(context: ContextTypes.DEFAULT_TYPE) -> Any:
+        return _resolve(context, "image_engine", _fallback_image)
+
+    def _speech_engine(context: ContextTypes.DEFAULT_TYPE) -> Any:
+        return _resolve(context, "speech_engine", _fallback_speech)
+
+    def _unified_cloud(context: ContextTypes.DEFAULT_TYPE) -> Any:
+        return _resolve(context, "unified_cloud", _fallback_unified_cloud)
+
+    def _gemini(context: ContextTypes.DEFAULT_TYPE) -> GeminiEngine | None:
+        return _resolve(context, "gemini_engine", _fallback_gemini)
+
+    def _summarizer(context: ContextTypes.DEFAULT_TYPE) -> SummarizerEngine | None:
+        return _resolve(context, "summarizer_engine", _fallback_summarizer)
+
+    def _gemini_provider(context: ContextTypes.DEFAULT_TYPE) -> Any:
+        return _resolve(context, "gemini_provider", None)
 
     # ── Command Handlers ──────────────────────────────────────────
     # /start also parses referral deep links (P0-4): one real handler
@@ -340,7 +367,8 @@ def build_handlers(
 
     # ── v2.0.0: AI Commands ────────────────────────────────────────
     async def ai_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if gemini_engine is None:
+        ge = _gemini(context)
+        if ge is None:
             await _reply(update, "❌ Gemini AI not configured.")
             return
         text = " ".join(context.args) if context.args else ""
@@ -349,32 +377,35 @@ def build_handlers(
             return
         user_id = _user_id(update) or 0
         conv_id = f"tg:{_chat_id(update)}"
-        result = await gemini_engine.chat(text, conv_id=conv_id, user_id=user_id)
+        result = await ge.chat(text, conv_id=conv_id, user_id=user_id)
         await _reply(update, f"🤖 {result}")
 
     async def ask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await ai_cmd(update, context)
 
     async def code_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if gemini_engine is None:
+        ge = _gemini(context)
+        if ge is None:
             await _reply(update, "❌ Gemini AI not configured.")
             return
         text = " ".join(context.args) if context.args else ""
         user_id = _user_id(update) or 0
-        result = await gemini_engine.code(text, user_id=user_id)
+        result = await ge.code(text, user_id=user_id)
         await _reply(update, f"👨‍💻 Code:\n\n```python\n{result}\n```", parse_mode="Markdown")
 
     async def ai_translate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if gemini_engine is None:
+        ge = _gemini(context)
+        if ge is None:
             await _reply(update, "❌ Gemini AI not configured.")
             return
         text = " ".join(context.args) if context.args else ""
         user_id = _user_id(update) or 0
-        result = await gemini_engine.translate(text, target_lang="Persian", user_id=user_id)
+        result = await ge.translate(text, target_lang="Persian", user_id=user_id)
         await _reply(update, f"🌐 {result}")
 
     async def vision_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if gemini_engine is None:
+        ge = _gemini(context)
+        if ge is None:
             await _reply(update, "❌ Gemini AI not configured.")
             return
         try:
@@ -407,16 +438,17 @@ def build_handlers(
             if len(parts) >= 2:
                 style = parts[0].split(":")[1].lower()
                 prompt = parts[1]
-        result = await image_engine.generate(prompt, style=style, user_id=user_id)
+        result = await _image_engine(context).generate(prompt, style=style, user_id=user_id)
         if result.get("error"):
             await _reply(update, f"❌ {result['error']}")
         elif result.get("file_path"):
             msg = _message(update)
             if msg is not None:
-                await msg.reply_photo(
-                    photo=open(result["file_path"], "rb"),
-                    caption=f"🎨 {prompt[:100]}",
-                )
+                with open(result["file_path"], "rb") as _fh:
+                    await msg.reply_photo(
+                        photo=_fh,
+                        caption=f"🎨 {prompt[:100]}",
+                    )
         else:
             await _reply(update, "❌ Image generation failed.")
 
@@ -468,19 +500,22 @@ def build_handlers(
         if not tts_text:
             await _reply(update, "❌ Provide text after language code.")
             return
-        result = await speech_engine.text_to_speech(tts_text, lang=lang)
+        se = _speech_engine(context)
+        result = await se.text_to_speech(tts_text, lang=lang)
         if result.get("error"):
             await _reply(update, f"❌ {result['error']}")
         elif result.get("file_path"):
             msg = _message(update)
             if msg is not None:
-                await msg.reply_voice(voice=open(result["file_path"], "rb"))
+                with open(result["file_path"], "rb") as _fh:
+                    await msg.reply_voice(voice=_fh)
         else:
             await _reply(update, "❌ TTS failed.")
 
     # ── v2.0.0: /stt — Speech to Text ──
     async def stt_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if gemini_engine is None:
+        _ge = _gemini(context)
+        if _ge is None:
             await _reply(update, "❌ Gemini AI not configured.")
             return
         user_id = _user_id(update)
@@ -517,10 +552,11 @@ def build_handlers(
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 tmp.write(bytes(audio_bytes))
                 tmp_path = tmp.name
-            result = await speech_engine.speech_to_text(
+            se = _speech_engine(context)
+            result = await se.speech_to_text(
                 tmp_path,
                 lang="fa",
-                gemini_engine=gemini_engine,
+                gemini_engine=_ge,
             )
             import os
 
@@ -534,7 +570,8 @@ def build_handlers(
 
     # ── v2.0.0: /summarize — Smart Summarizer ──
     async def summarize_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if summarizer_engine is None:
+        _se = _summarizer(context)
+        if _se is None:
             await _reply(update, "❌ Summarizer not configured (requires GEMINI_API_KEY).")
             return
         user_id = _user_id(update)
@@ -558,9 +595,9 @@ def build_handlers(
                 mode = parts[0].split(":")[1].lower()
                 content_text = parts[1]
         if content_text.startswith("http://") or content_text.startswith("https://"):
-            result = await summarizer_engine.summarize_url(content_text, mode=mode)
+            result = await _se.summarize_url(content_text, mode=mode)
         else:
-            result = await summarizer_engine.summarize_text(content_text, mode=mode)
+            result = await _se.summarize_text(content_text, mode=mode)
         await _reply(update, SummarizerEngine.format_result(result))
 
     # ── v2.0.0: /cloud — Upload file to unified cloud ──
@@ -602,7 +639,8 @@ def build_handlers(
                 await _reply(update, f"❌ نام فایل نامعتبر است: {exc}")
                 return
             tmp_path.write_bytes(bytes(file_bytes))
-            result = await unified_cloud.upload_file(
+            result = uc = _unified_cloud(context)
+            await uc.upload_file(
                 tmp_path,
                 remote_key=doc.file_name or "unnamed",
             )
@@ -681,7 +719,8 @@ def build_handlers(
         dl_dir = _Path2("data/cloud_downloads")
         dl_dir.mkdir(parents=True, exist_ok=True)
         local_path = safe_join(dl_dir, display_name, suffix=f"_{uuid4().hex[:8]}")
-        result = await unified_cloud.download_file(
+        result = uc = _unified_cloud(context)
+        result = await uc.download_file(
             cloud_file.remote_path or display_name,
             local_path,
         )
@@ -707,7 +746,8 @@ def build_handlers(
 
     # ── v2.0.0: /cloud_status — Cloud storage status ──
     async def cloud_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        status = await unified_cloud.get_status()
+        uc = _unified_cloud(context)
+        status = await uc.get_status()
         await _reply(update, f"☁️ Cloud Storage Status\n\n{status}")
 
     # ── v2.0.0: /referral — Referral system ──
@@ -895,7 +935,9 @@ def build_handlers(
             _held_background_tasks.add(task)
             task.add_done_callback(_held_background_tasks.discard)
 
-        active_agent = await AgentManager.get_active(user_id)
+        # W1 Law 8: inject the runtime-owned GeminiProvider so the agent
+        # never creates a private provider (no hidden bypass).
+        active_agent = await AgentManager.get_active(user_id, provider=_gemini_provider(context))
         if active_agent:
             user_context = await memory_engine.get_context(user_id)
             response = await active_agent.respond(
@@ -952,11 +994,14 @@ def build_handlers(
         from nexus_ai_agent.config.settings import get_settings as _gs
 
         _eng = _ce(f"sqlite:///{_gs().db_path}", echo=False)
-        with _Session(_eng) as _s:
-            from nexus_ai_agent.storage.models import Chat as _Chat
+        try:
+            with _Session(_eng) as _s:
+                from nexus_ai_agent.storage.models import Chat as _Chat
 
-            _chats = _s.exec(select(_Chat)).all()
-            _ids = [c.chat_id for c in _chats]
+                _chats = _s.exec(select(_Chat)).all()
+                _ids = [c.chat_id for c in _chats]
+        finally:
+            _eng.dispose()
         result = await OwnerControl.owner_broadcast(context.bot, _ids, text)
         await _reply(
             update,
@@ -978,11 +1023,14 @@ def build_handlers(
         from nexus_ai_agent.config.settings import get_settings as _gs
 
         _eng = _ce(f"sqlite:///{_gs().db_path}", echo=False)
-        with _Session(_eng) as _s:
-            from nexus_ai_agent.storage.models import Chat as _Chat
+        try:
+            with _Session(_eng) as _s:
+                from nexus_ai_agent.storage.models import Chat as _Chat
 
-            _chats = _s.exec(select(_Chat)).all()
-            _ids = [c.chat_id for c in _chats]
+                _chats = _s.exec(select(_Chat)).all()
+                _ids = [c.chat_id for c in _chats]
+        finally:
+            _eng.dispose()
         result = await OwnerControl.owner_broadcast(context.bot, _ids, text)
         await _reply(
             update,
