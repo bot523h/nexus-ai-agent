@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -31,11 +32,19 @@ from nexus_ai_agent.storage.providers.r2 import PRESIGN_MAX_SECONDS, R2Provider
 class FakeR2Client:
     """Mimics the boto3 S3 client surface used by R2Provider (no network)."""
 
-    def __init__(self, *, page_size: int = 2) -> None:
+    def __init__(
+        self,
+        *,
+        page_size: int = 2,
+        omit_truncated_token: bool = False,
+        delete_errors: list[dict[str, str]] | None = None,
+    ) -> None:
         self.objects: dict[str, bytes] = {}
         self.presign_calls: list[tuple[str, dict[str, str], int]] = []
         self.deleted: list[str] = []
         self._page_size = page_size
+        self._omit_truncated_token = omit_truncated_token
+        self._delete_errors = delete_errors or []
 
     def upload_file(self, filename: str, bucket: str, key: str) -> None:
         self.objects[key] = Path(filename).read_bytes()
@@ -58,7 +67,7 @@ class FakeR2Client:
             "Contents": [{"Key": k} for k in page],
             "IsTruncated": truncated,
         }
-        if truncated:
+        if truncated and not self._omit_truncated_token:
             response["NextContinuationToken"] = str(start + self._page_size)
         return response
 
@@ -68,7 +77,10 @@ class FakeR2Client:
         for obj in objects:
             self.objects.pop(obj["Key"], None)
             self.deleted.append(obj["Key"])
-        return {"Deleted": [{"Key": obj["Key"]} for obj in objects]}
+        response = {"Deleted": [{"Key": obj["Key"]} for obj in objects]}
+        if self._delete_errors:
+            response["Errors"] = self._delete_errors
+        return response
 
     def generate_presigned_url(self, ClientMethod: str, Params: dict, ExpiresIn: int) -> str:
         self.presign_calls.append((ClientMethod, dict(Params), ExpiresIn))
@@ -77,15 +89,16 @@ class FakeR2Client:
 
 def make_provider(**overrides: object) -> tuple[R2Provider, FakeR2Client]:
     client = FakeR2Client()
-    kwargs: dict = {
-        "account_id": "acc",
-        "access_key_id": "ak",
-        "secret_access_key": "sk",
-        "bucket": "bkt",
-        "client": client,
-    }
-    kwargs.update(overrides)
-    return R2Provider(**kwargs), client  # type: ignore[arg-type]
+    return (
+        R2Provider(
+            account_id=cast(str, overrides.get("account_id", "acc")),
+            access_key_id=cast(str, overrides.get("access_key_id", "ak")),
+            secret_access_key=cast(str, overrides.get("secret_access_key", "sk")),
+            bucket=cast(str, overrides.get("bucket", "bkt")),
+            client=overrides.get("client", client),
+        ),
+        client,
+    )
 
 
 # ── is_configured ─────────────────────────────────────────────────────
@@ -146,6 +159,41 @@ def test_list_files_paginates(tmp_path: Path) -> None:
     keys = asyncio.run(provider.list_files(prefix="backups/db/"))
     assert keys == sorted(client.objects)
     assert len(keys) == 5  # more than one page → pagination loop exercised
+
+
+def test_list_files_fails_closed_when_truncated_page_has_no_token() -> None:
+    client = FakeR2Client(page_size=2, omit_truncated_token=True)
+    client.objects = {f"backups/db/{i}.sql": b"" for i in range(3)}
+    provider = R2Provider(
+        account_id="acc",
+        access_key_id="ak",
+        secret_access_key="sk",
+        bucket="bkt",
+        client=client,
+    )
+
+    with pytest.raises(StorageError, match="truncated"):
+        asyncio.run(provider.list_files(prefix="backups/db/"))
+
+
+def test_delete_objects_reports_partial_provider_errors_without_fake_success() -> None:
+    client = FakeR2Client(delete_errors=[{"Key": "backups/db/old/1.sql", "Code": "AccessDenied"}])
+    client.objects = {f"backups/db/old/{i}.sql": b"" for i in range(2)}
+    provider = R2Provider(
+        account_id="acc",
+        access_key_id="ak",
+        secret_access_key="sk",
+        bucket="bkt",
+        client=client,
+    )
+
+    with pytest.raises(StorageError) as error:
+        asyncio.run(provider.delete_objects(keys=["backups/db/old/0.sql", "backups/db/old/1.sql"]))
+
+    message = str(error.value)
+    assert "partial failure" in message
+    assert "AccessDenied" in message
+    assert "backups/db/old/1.sql" not in message  # key stays out of logs/errors
 
 
 def test_delete_objects_batches(tmp_path: Path) -> None:
@@ -243,8 +291,8 @@ def make_manager(tmp_path: Path) -> tuple[AIStorageManager, R2Provider, list[_Re
     # Swap the user-file providers for recording fakes (they are configured,
     # so the round-robin WOULD pick them if the blob tier leaked into it).
     fakes = [_RecordingProvider(name) for name in ("github_releases", "mega")]
-    manager.github = fakes[0]  # type: ignore[assignment]
-    manager.mega = fakes[1]  # type: ignore[assignment]
+    manager.github = fakes[0]
+    manager.mega = fakes[1]
     return manager, manager.r2, fakes
 
 
@@ -263,7 +311,7 @@ def test_blob_upload_goes_to_r2_only(tmp_path: Path) -> None:
 
     asyncio.run(manager.upload(local_path=f, remote_key="backups/db/20260920-031700/nexus-pg.sql"))
 
-    assert r2._client.objects == {  # type: ignore[attr-defined]
+    assert cast(FakeR2Client, r2._client).objects == {
         "backups/db/20260920-031700/nexus-pg.sql": b"dump"
     }
     for fake in fakes:
@@ -278,7 +326,7 @@ def test_user_file_never_reaches_r2(tmp_path: Path) -> None:
     asyncio.run(manager.upload(local_path=f, remote_key="photos/photo.png"))
 
     assert fakes[0].uploaded == ["photos/photo.png"]  # github_releases preferred
-    assert r2._client.objects == {}  # type: ignore[attr-defined] — R2 untouched
+    assert cast(FakeR2Client, r2._client).objects == {}  # R2 untouched
 
 
 def test_r2_never_enters_user_file_candidates(tmp_path: Path) -> None:
@@ -293,7 +341,7 @@ def test_r2_never_enters_user_file_candidates(tmp_path: Path) -> None:
 def test_blob_download_uses_r2_only(tmp_path: Path) -> None:
     manager, r2, fakes = make_manager(tmp_path)
     key = "backups/db/20260920-031700/nexus-pg.sql"
-    r2._client.objects[key] = b"dump"  # type: ignore[attr-defined]
+    cast(FakeR2Client, r2._client).objects[key] = b"dump"
     dst = tmp_path / "restored.sql"
 
     result = asyncio.run(manager.download(remote_key=key, local_path=dst))
