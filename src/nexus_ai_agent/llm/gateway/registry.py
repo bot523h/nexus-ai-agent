@@ -15,9 +15,9 @@ Two jobs:
    ``asyncio.to_thread`` workers, so "one authority" has to survive real threads
    and not just a single caller asking twice.
    A composition root (W1's ``RuntimeContext``) may install its own instance
-   with :func:`set_llm_gateway`; whoever installs first wins, and a second,
-   *different* installation is logged rather than silently replacing the
-   authority — a split brain must be visible, not hidden.
+   with :func:`set_llm_gateway`; whoever installs first wins. A second live
+   installation is rejected. Reset revokes idle references, and refuses active
+   work: it cannot silently create a second execution authority.
 
 Composition mirrors the documented pre-W2 priority in
 ``llm/litellm_provider.build_llm_provider`` so migrating a caller onto the
@@ -44,16 +44,19 @@ caller renders, not a fabricated answer with a disclaimer.
 
 from __future__ import annotations
 
-import asyncio
 import threading
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
 from nexus_ai_agent.config.settings import Settings
-from nexus_ai_agent.llm.errors import LLMErrorKind
-from nexus_ai_agent.llm.gateway.adapters import GeminiHttpAdapter, LegacyProviderAdapter
-from nexus_ai_agent.llm.gateway.contract import LLMOperation, Modality
+from nexus_ai_agent.llm.errors import GatewayInternalError, LLMErrorKind, OverloadedError
+from nexus_ai_agent.llm.gateway.adapters import (
+    GeminiHttpAdapter,
+    LegacyProviderAdapter,
+    LitellmRouterAdapter,
+)
+from nexus_ai_agent.llm.gateway.contract import LLMOperation
 from nexus_ai_agent.llm.gateway.engine import LLMGateway
 from nexus_ai_agent.llm.gateway.policy import (
     ConcurrencyPolicy,
@@ -121,6 +124,8 @@ def get_llm_gateway(settings: Settings | None = None) -> LLMGateway:
             return current
         from nexus_ai_agent.config.settings import get_settings
 
+        if current is not None:
+            current.retire()
         built = build_gateway_from_settings(settings or get_settings())
         _gateway = built
         log.info(
@@ -132,40 +137,37 @@ def get_llm_gateway(settings: Settings | None = None) -> LLMGateway:
 
 
 def set_llm_gateway(gateway: LLMGateway | None) -> LLMGateway | None:
-    """Install (or clear, with ``None``) the process-wide authority.
+    """Install once, or revoke an idle authority with ``None``.
 
-    Returns the previously installed gateway so a composition root can close it.
-    Installing a *different* gateway over a live one is allowed — a composition
-    root owns that decision — but it is logged, because two authorities in one
-    process is the split-brain this module exists to prevent.
+    All writers use the getter's lock. A different live installation is a typed
+    conflict, not a warning followed by split brain. The loser remains owned by
+    its builder and must be closed there. Returned retired instances still need
+    ``aclose()``; revocation is not transport cleanup.
     """
-
     global _gateway
-    previous = _gateway
-    if (
-        previous is not None
-        and gateway is not None
-        and previous is not gateway
-        and not previous.closed
-    ):
-        log.warning(
-            "llm_gateway_replaced_while_live",
-            previous_routes=[route.key for route in previous.policy.routes],
-            new_routes=[route.key for route in gateway.policy.routes],
-        )
-    _gateway = gateway
-    return previous
+    with _AUTHORITY_LOCK:
+        previous = _gateway
+        if previous is gateway:
+            return previous
+        if previous is not None:
+            if gateway is not None and not previous.closed:
+                gateway.retire()
+                raise GatewayInternalError("a live LLM authority is already installed")
+            previous.retire()
+        _gateway = gateway
+        return previous
 
 
-#: Explicit alias: composition roots read better with the intent-revealing name.
 install_llm_gateway = set_llm_gateway
 
 
-def reset_llm_gateway() -> None:
-    """Clear the accessor without closing the gateway (test isolation helper)."""
+def reset_llm_gateway() -> LLMGateway | None:
+    """Revoke idle references atomically; caller closes the returned old gateway.
 
-    global _gateway
-    _gateway = None
+    Active work must first be drained/cancelled by the async lifecycle owner.
+    This is not a way to create a parallel authority during an in-flight call.
+    """
+    return set_llm_gateway(None)
 
 
 def build_gateway_from_settings(
@@ -194,9 +196,9 @@ def build_gateway_from_settings(
     if settings.llm_routing_enabled:
         chain = _build_routing_adapter(settings)
         if chain is not None:
-            adapter, route = chain
-            adapters.append(adapter)
-            routes.append(route)
+            adapter, route, embedding_adapter = chain
+            adapters.extend((adapter, embedding_adapter))
+            routes.extend((route, embedding_adapter.route(rank=10)))
             rules.append(RouteRule(provider=route.provider, model=route.model, purpose=None))
             # This is exactly where the legacy composition wrapped the chain in
             # FallbackProvider(primary=chain, fallback=FakeLLMProvider()), so the
@@ -275,7 +277,8 @@ def build_gateway_from_settings(
         routes=routes,
         rules=tuple(rules),
         timeout=timeout,
-        retry=RetryPolicy(max_attempts=3),
+        # The Router already walks deployments. Never retry its entire chain.
+        retry=RetryPolicy(max_attempts=1 if degraded_allowed else 3),
         concurrency=ConcurrencyPolicy(
             max_inflight_global=4,
             max_inflight_per_provider=2,
@@ -323,13 +326,13 @@ def build_gateway_from_settings(
 # ── adapter construction (import-guarded: optional dependencies) ────────
 
 
-def _build_routing_adapter(settings: Settings) -> tuple[Any, Route] | None:
+def _build_routing_adapter(settings: Settings) -> tuple[Any, Route, Any] | None:
     """Wrap the litellm routing chain as one gateway route."""
 
     try:
         from nexus_ai_agent.llm.litellm_provider import (
             LiteLLMRoutingProvider,
-            RouterExhaustedError,
+            classify_router_failure,
         )
     except ImportError:
         log.warning("litellm_not_installed", hint="pip install 'litellm>=1.74,<2'")
@@ -342,28 +345,33 @@ def _build_routing_adapter(settings: Settings) -> tuple[Any, Route] | None:
         log.info("no_providers_configured_for_routing_chain")
         return None
 
-    adapter = LegacyProviderAdapter(
+    # Do not wrap provider.generate(): that method is a compatibility facade
+    # which would enter its own private gateway and duplicate all policy state.
+    adapter = LitellmRouterAdapter(
+        provider._router,
+        primary_name=provider.chain_names[0],
+        chain_names=provider.chain_names,
+        model=provider.chain_names[0],
+        classify=classify_router_failure,
+        on_response=provider._record,
+    )
+    # Preserve the historical deterministic 384-dimensional local embeddings.
+    # This adapter exposes embed ONLY, never the provider's generate method.
+    embedding_adapter = LegacyProviderAdapter(
         provider,
-        name="routing",
-        model=provider.chain_names[0] if provider.chain_names else "routing",
-        operations=frozenset(
-            {LLMOperation.CHAT, LLMOperation.TEXT_COMPLETION, LLMOperation.EMBEDDINGS}
-        ),
-        modalities=frozenset({Modality.TEXT}),
-        # Typed-by-class mapping. ``RouterExhaustedError`` *means* "every
-        # deployment is rate-limited or quota-exhausted"; that meaning comes from
-        # the exception's identity, not from scanning its message for "429".
-        error_kinds={RouterExhaustedError: LLMErrorKind.QUOTA_EXHAUSTED},
+        name="routing-embedding",
+        model="local-hash-384",
+        operations=frozenset({LLMOperation.EMBEDDINGS}),
     )
     route = Route(
-        provider="routing",
-        model=adapter._model,  # noqa: SLF001 — same package composition code
+        provider=adapter.name,
+        model=adapter.model,
         operations=adapter.operations,
         modalities=adapter.modalities,
         rank=10,
         label="litellm-chain:" + ">".join(provider.chain_names),
     )
-    return adapter, route
+    return adapter, route, embedding_adapter
 
 
 def _build_llama_server_adapter(settings: Settings) -> Any | None:
@@ -452,8 +460,8 @@ def gateway_for_credentials(
     3. An empty key → the process authority, which has no Gemini route and
        therefore answers with a typed ``POLICY_REFUSAL`` instead of pretending.
 
-    The cache is LRU-bounded; an evicted gateway is closed on the running loop
-    when there is one, so its pooled HTTP client is not leaked.
+    The cache is capacity-bounded. Live entries are never evicted: new scopes
+    are refused until the composition owner closes an existing gateway.
     """
 
     from nexus_ai_agent.config.settings import get_settings
@@ -473,6 +481,15 @@ def gateway_for_credentials(
         if existing is not None and not existing.closed:
             _CREDENTIAL_GATEWAYS.move_to_end(cache_key)
             return existing
+
+        # An LRU eviction can detach a still-live authority (especially without
+        # a running loop). Reject new scopes rather than split the same quota.
+        for key, stale in tuple(_CREDENTIAL_GATEWAYS.items()):
+            if stale.closed:
+                stale.retire()
+                del _CREDENTIAL_GATEWAYS[key]
+        if len(_CREDENTIAL_GATEWAYS) >= _CREDENTIAL_GATEWAY_CAP:
+            raise OverloadedError("credential authority capacity is full")
 
         adapter = GeminiHttpAdapter(api_key=api_key, default_model=model, base_url=base_url)
         route = Route(
@@ -502,8 +519,6 @@ def gateway_for_credentials(
         gateway = LLMGateway(policy=policy)
         gateway.register(adapter, (route,))
         _CREDENTIAL_GATEWAYS[cache_key] = gateway
-        while len(_CREDENTIAL_GATEWAYS) > _CREDENTIAL_GATEWAY_CAP:
-            _evict_oldest_credential_gateway()
         log.info(
             "llm_gateway_scoped_installed",
             model=model,
@@ -511,15 +526,3 @@ def gateway_for_credentials(
             cached=len(_CREDENTIAL_GATEWAYS),
         )
         return gateway
-
-
-def _evict_oldest_credential_gateway() -> None:
-    """Drop the least-recently-used scoped gateway and close it if we can."""
-
-    _key, stale = _CREDENTIAL_GATEWAYS.popitem(last=False)
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        log.warning("llm_gateway_scoped_evicted_without_loop")
-        return
-    loop.create_task(stale.aclose())

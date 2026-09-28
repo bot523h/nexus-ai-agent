@@ -47,6 +47,7 @@ LOAD = "tests/unit/test_llm_gateway_load.py"
 SECURITY = "tests/unit/test_llm_gateway_security.py"
 FACADE = "tests/unit/test_llm_gateway_facade.py"
 REGISTRY_RACE = "tests/unit/test_llm_gateway_registry_race.py"
+GOLDEN = "tests/unit/test_llm_gateway_golden.py"
 
 #: Every gateway test file: the baseline and the restored copy must be green.
 ALL_TESTS: tuple[str, ...] = (
@@ -64,6 +65,7 @@ ALL_TESTS: tuple[str, ...] = (
     SECURITY,
     FACADE,
     REGISTRY_RACE,
+    GOLDEN,
 )
 
 
@@ -273,9 +275,9 @@ MUTATIONS: tuple[Mutation, ...] = (
                 self._rejected += 1
                 raise OverloadedError(
                     "LLM gateway queue is full; request shed to protect the process",""",
-        ENGINE,
-        "test_saturation_sheds_with_a_typed_overload_instead_of_growing",
-        "saturation must shed typed load, never grow the queue without bound",
+        SCHEDULER,
+        "test_reject_mode_sheds_immediately_instead_of_growing_the_queue",
+        "scheduler must independently enforce its queue bound (engine also bounds ingress)",
     ),
     Mutation(
         "scheduler_strands_a_waiter_beside_idle_capacity",
@@ -669,10 +671,10 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "engine_accepts_work_after_close",
         GATEWAY / "engine.py",
-        """        if self._closed:
-            raise GatewayClosedError(""",
-        """        if False:
-            raise GatewayClosedError(""",
+        """            if self._closed or self._retired:
+                raise GatewayClosedError(""",
+        """            if False:
+                raise GatewayClosedError(""",
         ENGINE,
         "test_a_closed_gateway_refuses_new_work_typed",
         "a closed authority must refuse new work with a typed error",
@@ -696,6 +698,168 @@ MUTATIONS: tuple[Mutation, ...] = (
         FACADE,
         "test_a_rendered_failure_never_leaks_provider_detail_to_a_chat_surface",
         "a user-facing failure message must not carry provider detail",
+    ),
+)
+
+
+# Golden hardening extends rather than replaces the inherited battery.
+MUTATIONS += (
+    Mutation(
+        "registry_allows_second_live_installation",
+        GATEWAY / "registry.py",
+        "if gateway is not None and not previous.closed:",
+        "if False:",
+        GOLDEN,
+        "test_concurrent_installers_cannot_replace_live_authority",
+        "one atomic installer wins; no warning-only replacement",
+    ),
+    Mutation(
+        "registry_reset_does_not_revoke_old_reference",
+        GATEWAY / "engine.py",
+        "self._retired = True",
+        "self._retired = False",
+        GOLDEN,
+        "test_reset_revokes_stale_reference",
+        "reset cannot leave a live old authority",
+    ),
+    Mutation(
+        "breaker_permit_releases_twice",
+        GATEWAY / "resilience.py",
+        "if self.released:",
+        "if False:",
+        GOLDEN,
+        "test_probe_a_never_releases_probe_b",
+        "each probe has exactly one owned release",
+    ),
+    Mutation(
+        "retry_bypasses_breaker_permission",
+        GATEWAY / "engine.py",
+        "permit = breaker.acquire(self._clock())",
+        "from nexus_ai_agent.llm.gateway.resilience import CircuitPermit\n"
+        "            permit = CircuitPermit(breaker, False, breaker._generation)",
+        GOLDEN,
+        "test_retry_must_reacquire_breaker_permission",
+        "retries cannot bypass OPEN",
+    ),
+    Mutation(
+        "old_success_heals_new_generation",
+        GATEWAY / "resilience.py",
+        "if not self.released and self.generation == self.breaker._generation:",
+        "if not self.released:",
+        GOLDEN,
+        "test_late_success_cannot_heal_new_breaker_generation",
+        "late outcomes cannot heal new trips",
+    ),
+    Mutation(
+        "idempotent_waiter_ignores_deadline",
+        GATEWAY / "engine.py",
+        "timeout=context.remaining(self._clock()),",
+        "timeout=None,",
+        GOLDEN,
+        "test_idempotent_waiter_has_its_own_deadline",
+        "coalescing does not erase a deadline",
+    ),
+    Mutation(
+        "binary_idempotency_hashes_length_only",
+        GATEWAY / "engine.py",
+        "add(value.data)",
+        "text(len(value.data))",
+        GOLDEN,
+        "test_idempotency_hash_distinguishes_equal_length_binary_payloads",
+        "equal length is not equal content",
+    ),
+    Mutation(
+        "internal_traceback_logs_secret",
+        GATEWAY / "observability.py",
+        "self._log.error(event, **payload)",
+        "self._log.error(event, exc_info=True, **payload)",
+        GOLDEN,
+        "test_internal_error_logging_never_serializes_exception_chain",
+        "internal error chains are provider-controlled content too",
+    ),
+    Mutation(
+        "abandoned_task_is_forgotten",
+        GATEWAY / "engine.py",
+        "self._abandoned.add(task)",
+        "pass  # forget the still-running task",
+        GOLDEN,
+        "test_abandoned_provider_blocks_new_execution_until_it_settles",
+        "bounded reference storage must not conceal unbounded live work",
+    ),
+    Mutation(
+        "gateway_accepts_a_foreign_event_loop",
+        GATEWAY / "engine.py",
+        "if self._owner_loop is not None and self._owner_loop is not loop:",
+        "if False:",
+        GOLDEN,
+        "test_execution_cannot_cross_event_loops",
+        "loop-local resources fail closed",
+    ),
+    Mutation(
+        "gateway_accepts_an_inherited_worker_object",
+        GATEWAY / "engine.py",
+        "if os.getpid() != self._owner_pid:",
+        "if False:",
+        GOLDEN,
+        "test_worker_must_not_execute_inherited_authority",
+        "process-local authority is not an inherited worker transport pool",
+    ),
+)
+
+
+MUTATIONS += (
+    Mutation(
+        "observability_drops_request_id",
+        GATEWAY / "observability.py",
+        '"request_id": self.request_id,',
+        '"missing_id": self.request_id,',
+        OBSERVABILITY,
+        "test_a_record_names_everything_an_operator_needs",
+        "request correlation cannot disappear",
+    ),
+    Mutation(
+        "engine_ignores_retry_after",
+        GATEWAY / "engine.py",
+        "provider_wait = parse_retry_after(error.retry_after) "
+        "if retry.respect_retry_after else None",
+        "provider_wait = None",
+        ENGINE,
+        "test_a_provider_retry_after_is_honoured_as_the_backoff_floor",
+        "a provider Retry-After is a lower bound, not advice",
+    ),
+    Mutation(
+        "facade_bypasses_gateway",
+        GATEWAY / "facade.py",
+        "response = await gateway.execute(request)",
+        'return "bypassed execution"',
+        FACADE,
+        "test_generate_passes_the_system_prompt_as_a_system_field_not_a_user_hack",
+        "the facade must actually reach the gateway adapter",
+    ),
+    Mutation(
+        "retry_after_is_silently_shortened",
+        GATEWAY / "engine.py",
+        "if provider_wait is not None and "
+        "provider_wait > self._policy.timeout.max_backoff_seconds:",
+        "if False:",
+        GOLDEN,
+        "test_retry_after_above_backoff_budget_is_refused_never_shortened",
+        "bounded backoff must not violate Retry-After",
+    ),
+)
+
+
+MUTATIONS += (
+    Mutation(
+        "engine_swallows_task_cancellation",
+        GATEWAY / "engine.py",
+        "self._abandon((provider_task, cancel_task), adapter=adapter.name, request_id=request_id)\n"
+        "            raise",
+        "self._abandon((provider_task, cancel_task), adapter=adapter.name, request_id=request_id)\n"
+        "            return AdapterResult(text='cancellation swallowed')",
+        CANCELLATION,
+        "test_cancelling_the_callers_task_propagates_cancelled_error_untouched",
+        "task cancellation cannot be laundered into success",
     ),
 )
 

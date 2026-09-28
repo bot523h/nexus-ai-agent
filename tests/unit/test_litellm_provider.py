@@ -20,6 +20,17 @@ from nexus_ai_agent.llm.litellm_provider import (
 )
 
 
+@pytest.fixture(autouse=True)
+async def _factory_authority_lifecycle(monkeypatch):
+    from nexus_ai_agent.llm.gateway import registry
+
+    monkeypatch.setattr(registry, "_gateway", None)
+    yield
+    authority = registry.reset_llm_gateway()
+    if authority is not None:
+        await authority.aclose()
+
+
 class FakeRouter:
     """Stand-in for litellm.Router — records calls, replays canned responses."""
 
@@ -241,10 +252,14 @@ async def test_embed_is_deterministic_and_parity_with_gemini_provider() -> None:
 # ── factory ────────────────────────────────────────────────────────────────
 
 
-async def test_factory_builds_routing_chain_wrapped_in_fallback() -> None:
+async def test_factory_builds_a_canonical_gateway_facade() -> None:
     llm, label = build_llm_provider(make_settings())
-    assert isinstance(llm, FallbackProvider)
-    assert isinstance(llm.primary, LiteLLMRoutingProvider)
+    from nexus_ai_agent.llm.gateway.facade import GatewayLLMProvider
+    from nexus_ai_agent.llm.gateway.registry import get_llm_gateway
+
+    assert isinstance(llm, GatewayLLMProvider)
+    assert llm.authority() is get_llm_gateway()
+    assert llm.authority().adapter("routing") is not None
     assert "nexus-ollama" in label
 
 

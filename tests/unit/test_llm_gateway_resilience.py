@@ -251,8 +251,9 @@ def test_a_failed_probe_reopens_the_circuit_and_restarts_the_cool_down() -> None
     breaker, clock = _breaker(failure_threshold=1, recovery_seconds=10.0)
     breaker.record_failure(LLMErrorKind.TRANSIENT_PROVIDER, clock())
     clock.advance(10.5)
-    assert breaker.allow(clock()) is True
-    breaker.record_failure(LLMErrorKind.TRANSIENT_PROVIDER, clock())
+    permit = breaker.acquire(clock())
+    assert permit is not None
+    permit.failure(LLMErrorKind.TRANSIENT_PROVIDER, clock())
     assert breaker.state(clock()) is CircuitState.OPEN
     assert breaker.allow(clock()) is False
     clock.advance(5.0)

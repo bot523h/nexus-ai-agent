@@ -96,6 +96,7 @@ class GatewayLLMProvider(LLMProvider):
     on_failure: Literal["raise", "message"] = "raise"
     degraded_disclaimer: str | None = DEGRADED_DISCLAIMER
     metadata: Mapping[str, str] | None = None
+    provider: str | None = None
 
     def __post_init__(self) -> None:
         if self.on_failure not in {"raise", "message"}:
@@ -120,6 +121,7 @@ class GatewayLLMProvider(LLMProvider):
             on_failure=self.on_failure,
             degraded_disclaimer=self.degraded_disclaimer,
             metadata=self.metadata,
+            provider=self.provider,
         )
 
     # ── LLMProvider contract ─────────────────────────────────────────
@@ -128,6 +130,7 @@ class GatewayLLMProvider(LLMProvider):
 
         request = LLMRequest(
             caller=self.caller,
+            provider=self.provider,
             purpose=self.purpose,
             operation=LLMOperation.CHAT,
             prompt=prompt,
@@ -159,6 +162,7 @@ class GatewayLLMProvider(LLMProvider):
 
         request = LLMRequest(
             caller=self.caller,
+            provider=self.provider,
             purpose=purpose or self.purpose,
             operation=LLMOperation.CHAT,
             prompt=prompt,
@@ -181,6 +185,7 @@ class GatewayLLMProvider(LLMProvider):
 
         request = LLMRequest(
             caller=self.caller,
+            provider=self.provider,
             purpose="embeddings",
             operation=LLMOperation.EMBEDDINGS,
             prompt=text,
@@ -204,6 +209,7 @@ class GatewayLLMProvider(LLMProvider):
     async def embed_typed(self, text: str) -> LLMResponse:
         request = LLMRequest(
             caller=self.caller,
+            provider=self.provider,
             purpose="embeddings",
             operation=LLMOperation.EMBEDDINGS,
             prompt=text,

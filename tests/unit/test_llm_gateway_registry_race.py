@@ -263,9 +263,10 @@ async def test_a_warm_authority_never_touches_the_lock_under_load(
         def __exit__(self, *exc: object) -> None:  # pragma: no cover - never reached
             return None
 
-    monkeypatch.setattr(registry, "_AUTHORITY_LOCK", Unacquirable())
-
-    handed_out = await _race(lambda _: get_llm_gateway(), threads=4)
+    # Restore before fixture teardown: reset is now correctly a locked writer.
+    with monkeypatch.context() as patch:
+        patch.setattr(registry, "_AUTHORITY_LOCK", Unacquirable())
+        handed_out = await _race(lambda _: get_llm_gateway(), threads=4)
 
     assert all(gateway is warm for gateway in handed_out)
     assert len(built) == 1

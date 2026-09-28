@@ -760,3 +760,59 @@ async def fetch_page(url: str) -> str:
         return (await client.get(url)).text
 """
     assert not call_graph_evidence(innocent), "an unrelated HTTP caller is not LLM egress"
+
+
+# Constructor ratchet is separate from endpoint detection. These entries are
+# inventory, NOT proof that every entry is a single authority. The LiteLLM
+# compatibility constructor remains a release blocker in the golden report.
+GATEWAY_CONSTRUCTION_SITES = {
+    ("llm/gateway/engine.py", "GatewayBuilder.build"),
+    ("llm/gateway/registry.py", "build_gateway_from_settings"),
+    ("llm/gateway/registry.py", "gateway_for_credentials"),
+    ("llm/litellm_provider.py", "LiteLLMRoutingProvider.gateway"),
+}
+
+
+def _gateway_constructors(source: str) -> set[str]:
+    tree = ast.parse(source)
+    aliases = {"LLMGateway"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            aliases.update(
+                alias.asname or alias.name for alias in node.names if alias.name == "LLMGateway"
+            )
+    found: set[str] = set()
+
+    def walk(node: ast.AST, scope: tuple[str, ...] = ()) -> None:
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            scope += (node.name,)
+        if isinstance(node, ast.Call):
+            called = node.func
+            if (isinstance(called, ast.Name) and called.id in aliases) or (
+                isinstance(called, ast.Attribute) and called.attr == "LLMGateway"
+            ):
+                found.add(".".join(scope) or "<module>")
+        for child in ast.iter_child_nodes(node):
+            walk(child, scope)
+
+    walk(tree)
+    return found
+
+
+def test_no_new_gateway_constructor_authority_can_hide_behind_an_alias():
+    found = {
+        (str(path.relative_to(SRC)), scope)
+        for path in SRC.rglob("*.py")
+        for scope in _gateway_constructors(path.read_text(encoding="utf-8"))
+    }
+    assert found == GATEWAY_CONSTRUCTION_SITES, (
+        "Unreviewed constructor or stale exception: " + repr(found ^ GATEWAY_CONSTRUCTION_SITES)
+    )
+
+
+def test_gateway_constructor_detector_is_live():
+    assert _gateway_constructors("from gateway import LLMGateway as Hidden\nHidden()") == {
+        "<module>"
+    }
+    assert _gateway_constructors("def bypass():\n return engine.LLMGateway()") == {"bypass"}
+    assert not _gateway_constructors("def pure():\n return 'LLMGateway()'")

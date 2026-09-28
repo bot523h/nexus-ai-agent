@@ -138,7 +138,9 @@ def _gateway(
             max_inflight_global=4,
             max_inflight_per_provider=4,
             max_inflight_per_tenant=2,
-            max_queued=64,
+            # All-success burst cases require room for their declared load.
+            # Finite-admission rejection is exercised separately below.
+            max_queued=256,
             overload_behavior=OverloadBehavior.WAIT,
         ),
         **policy_kwargs,
@@ -265,7 +267,7 @@ async def test_saturation_sheds_a_bounded_number_and_never_grows_the_queue() -> 
     snapshot = gateway.status()["scheduler"]
     assert snapshot["queued"] == 0
     assert snapshot["inflight_global"] == 0
-    assert snapshot["rejected"] >= 50
+    assert gateway.metrics.outcomes["overloaded"] == len(shed)
 
 
 async def test_a_burst_completes_instead_of_serialising_everything() -> None:
@@ -624,9 +626,15 @@ async def test_a_flood_of_distinct_idempotency_keys_stays_bounded() -> None:
         idempotency_capacity=8,
     )
     gateway.register(adapter, None)
-    await asyncio.gather(
-        *[gateway.execute(_request(i, idempotency_key=f"key-{i}")) for i in range(200)]
+    outcomes = await asyncio.gather(
+        *[gateway.execute(_request(i, idempotency_key=f"key-{i}")) for i in range(200)],
+        return_exceptions=True,
     )
+    # Live single-flight entries are not an LRU: evicting one permits duplicate
+    # execution. Capacity is now backpressure, not loss of live ownership.
+    assert sum(isinstance(o, LLMResponse) for o in outcomes) == 8
+    assert sum(isinstance(o, OverloadedError) for o in outcomes) == 192
+    assert adapter.calls == 8
     status = gateway.status()["idempotency"]
     assert status["cached"] <= 8
     assert status["inflight"] == 0

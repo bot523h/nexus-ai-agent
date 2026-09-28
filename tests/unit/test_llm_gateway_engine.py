@@ -1076,8 +1076,7 @@ async def test_saturation_sheds_with_a_typed_overload_instead_of_growing() -> No
     overloaded = [o for o in outcomes if isinstance(o, OverloadedError)]
     assert len(overloaded) >= 3
     assert all(o.kind is LLMErrorKind.OVERLOADED for o in overloaded)
-    snapshot = gateway.status()["scheduler"]
-    assert snapshot["rejected"] >= 3
+    assert gateway.metrics.outcomes["overloaded"] == len(overloaded)
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)

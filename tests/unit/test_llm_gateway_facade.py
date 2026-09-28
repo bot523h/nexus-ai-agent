@@ -521,12 +521,15 @@ def test_the_registry_hands_back_the_same_instance() -> None:
     assert get_llm_gateway() is gateway
 
 
-def test_installing_returns_the_previous_gateway_so_it_can_be_closed() -> None:
+def test_installing_cannot_replace_a_live_gateway() -> None:
     first = _gateway(FakeAdapter("a"))
     second = _gateway(FakeAdapter("b"))
     assert set_llm_gateway(first) is None
-    assert set_llm_gateway(second) is first
-    assert get_llm_gateway() is second
+    from nexus_ai_agent.llm.errors import GatewayInternalError
+
+    with pytest.raises(GatewayInternalError):
+        set_llm_gateway(second)
+    assert get_llm_gateway() is first
 
 
 def test_a_closed_authority_is_replaced_rather_than_served() -> None:
@@ -645,18 +648,26 @@ async def test_a_scoped_gateway_is_cached_per_credential_and_model() -> None:
         _CREDENTIAL_GATEWAYS.clear()
 
 
-async def test_the_scoped_cache_is_bounded_and_evicts_the_oldest() -> None:
+async def test_the_scoped_cache_rejects_new_scopes_without_evicting_live_authority() -> None:
     from nexus_ai_agent.llm.gateway.registry import _CREDENTIAL_GATEWAY_CAP
 
     reset_llm_gateway()
     built: list[LLMGateway] = []
     try:
-        for index in range(_CREDENTIAL_GATEWAY_CAP + 5):
+        for index in range(_CREDENTIAL_GATEWAY_CAP):
             built.append(
                 gateway_for_credentials(f"AIzaSyTEST-ONLY-KEY-{index:020d}", "gemini-2.0-flash")
             )
-        assert len(_CREDENTIAL_GATEWAYS) <= _CREDENTIAL_GATEWAY_CAP
-        await asyncio.sleep(0)  # let the eviction close tasks run
+        from nexus_ai_agent.llm.errors import OverloadedError
+
+        with pytest.raises(OverloadedError):
+            gateway_for_credentials("another-synthetic-key", "gemini-2.0-flash")
+        assert len(_CREDENTIAL_GATEWAYS) == _CREDENTIAL_GATEWAY_CAP
+        assert (
+            gateway_for_credentials("AIzaSyTEST-ONLY-KEY-00000000000000000000", "gemini-2.0-flash")
+            is built[0]
+        )
+        assert not built[0].closed
     finally:
         for gateway in built:
             if not gateway.closed:

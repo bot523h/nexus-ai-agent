@@ -45,7 +45,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from nexus_ai_agent.config.settings import Settings
@@ -59,7 +58,6 @@ from nexus_ai_agent.llm.errors import (
     UpstreamTimeoutError,
 )
 from nexus_ai_agent.llm.fake_llm import FakeLLMProvider
-from nexus_ai_agent.llm.fallback_provider import FallbackProvider
 from nexus_ai_agent.llm.gateway.adapters import LitellmRouterAdapter
 from nexus_ai_agent.llm.gateway.contract import (
     Caller,
@@ -491,51 +489,30 @@ class LiteLLMRoutingProvider(LLMProvider):
 
 
 def build_llm_provider(settings: Settings) -> tuple[LLMProvider, str]:
-    """Compose the default LLM engine for ``nexus run-bot``.
+    """Canonical CLI composition: model execution goes through the registry.
 
-    Priority:
-      1. litellm routing chain (when enabled and ≥1 provider configured),
-         wrapped in the existing ``FallbackProvider`` (outer layer → FakeLLM).
-      2. llama.cpp server (when ``llama_server_base_url`` is set).
-      3. Legacy local GGUF path (unchanged behaviour).
-      4. ``FakeLLMProvider`` when nothing is available.
-
-    Returns ``(provider, human-readable label)``.
+    Local provider classes and the injected Router facade remain explicit legacy
+    adapter/test APIs. This production factory must never return those raw APIs.
+    The no-model FakeLLM stub performs no model execution and stays compatible.
     """
-    if settings.llm_routing_enabled:
-        try:
-            routing = LiteLLMRoutingProvider(settings)
-        except ImportError:
-            log.warning("litellm_not_installed", hint="pip install 'litellm>=1.74,<2'")
-        except ValueError:
-            log.info("no_providers_configured_for_routing_chain")
-        else:
-            outer = FallbackProvider(primary=routing, fallback=FakeLLMProvider())
-            label = f"litellm routing chain ({' → '.join(routing.chain_names)}) + FakeLLM outer"
-            return outer, label
+    from nexus_ai_agent.llm.gateway.facade import GatewayLLMProvider
+    from nexus_ai_agent.llm.gateway.registry import get_llm_gateway
 
-    if settings.llama_server_base_url:
-        from nexus_ai_agent.llm.local_server_provider import (
-            LocalLlamaServerProvider,
+    gateway = get_llm_gateway(settings)
+    caller = Caller(category=CallerCategory.AGENT, name="cli.default-provider")
+    routing = gateway.adapter("routing")
+    if settings.llm_routing_enabled and routing is not None:
+        names = getattr(routing, "chain_names", ())
+        label = f"litellm routing chain ({' → '.join(names)}) + gateway fallback"
+        return GatewayLLMProvider(caller=caller, gateway=gateway), label
+    if settings.llama_server_base_url and gateway.adapter("llama-server") is not None:
+        return (
+            GatewayLLMProvider(caller=caller, gateway=gateway, provider="llama-server"),
+            f"llama.cpp server ({settings.llama_server_base_url})",
         )
-
-        server = LocalLlamaServerProvider(
-            settings.llama_server_base_url,
-            model=settings.llama_server_model,
-            timeout=float(settings.llama_server_timeout),
-            max_tokens=settings.llama_server_max_tokens,
+    if gateway.adapter("llama-cpp") is not None:
+        return (
+            GatewayLLMProvider(caller=caller, gateway=gateway, provider="llama-cpp"),
+            f"local GGUF ({settings.model_path})",
         )
-        return server, f"llama.cpp server ({settings.llama_server_base_url})"
-
-    model_path = Path(settings.model_path)
-    if model_path.exists():
-        from nexus_ai_agent.llm.local_llama_cpp import LocalLlamaCppProvider
-
-        local = LocalLlamaCppProvider(
-            settings.model_path,
-            n_ctx=settings.n_ctx,
-            n_gpu_layers=settings.n_gpu_layers,
-        )
-        return local, f"local GGUF ({settings.model_path})"
-
     return FakeLLMProvider(), "FakeLLM (no providers configured, no GGUF model found)"

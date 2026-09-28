@@ -1,17 +1,17 @@
 # LLM Gateway — the single authority for every model call
 
-**Status:** implemented (W2), on `main`'s L4 layer as `src/nexus_ai_agent/llm/gateway/`.
-**Decision:** [D-0024 in the decision log](../DECISION_LOG.md) · provider chain context:
-[LLM_PROVIDERS.md](LLM_PROVIDERS.md) · module layer: [MODULE_MAP.md](MODULE_MAP.md).
-**Enforcement:** `tests/architecture/test_llm_gateway_authority.py` (structure),
-`tests/unit/test_llm_gateway_*.py` (behaviour), `scripts/llm_gateway_mutations.py`
-(49 mutations, each killed by a named test).
+**Status:** candidate branch implementation, **W2 NOT VERIFIED**. This file does
+not assert that the candidate has merged to main or passed exact-head CI.
+**Decision context:** [D-0024](../DECISION_LOG.md) · [providers](LLM_PROVIDERS.md).
+**Enforcement:** `tests/architecture/test_llm_gateway_authority.py`,
+`tests/unit/test_llm_gateway_*.py`, `scripts/llm_gateway_mutations.py`.
+The mutation inventory is executable (`--list`); historical counts are not proof.
 
-Every LLM call in NEXUS goes through one authority. Not "most calls", not "calls
-that remembered to": one class, `LLMGateway`, which owns the contract, the typed
-errors, the policy decisions, the bounds, the cancellation semantics and the
-observations. A caller hands it an `LLMRequest` and receives an `LLMResponse` or a
-typed `LLMError` — never a string that has to be parsed to find out what happened.
+The installed deployment gateway is process-local and executes on one event loop.
+It is not a fleet-wide authority and not "one object forever". Non-deployment
+credential scopes and explicitly constructed legacy Router facades still have
+separate policy state. Two image/vision egress exceptions remain (§12). Therefore
+"every model call shares one authority" is a target, not a current guarantee.
 
 ## 1. Why an authority, and not another wrapper
 
@@ -90,14 +90,15 @@ Request path, in the order the engine actually executes it:
 3. **idempotency** — an in-flight identical request is coalesced (bounded cache,
    keyed by a fingerprint of tenant + operation + pin + payload);
 4. **per route, per attempt:** cancellation check → closed check → deadline check →
-   circuit state → rate gate (charge or typed refusal) → admission (bulkhead) →
-   adapter call under a per-attempt timeout → typed result;
+   admission (bulkhead) → acquire a breaker permit for this attempt → rate gate
+   (charge or typed refusal) → adapter call under a per-attempt timeout → typed result;
 5. **on failure:** classify (already typed) → breaker accounting → retry decision
    (kind, attempts left, `Retry-After`, backoff that fits the remaining budget) →
    otherwise fallback decision (eligibility, hops, capability, degraded routes) →
    otherwise raise the terminal typed error;
-6. **always:** exactly one `RequestRecord` per request, cost applied only when it
-   can be computed truthfully.
+6. **observation:** physical executions emit records without prompt/answer text.
+   Reused idempotent results and early lifecycle refusals do not yet have complete
+   per-logical-caller observation coverage; this remains a verification gap.
 
 ## 3. The contract
 
@@ -190,7 +191,10 @@ Every sleep in the engine is cancellation-aware (`_sleep(delay, token)` returns 
 long it actually slept), so a withdrawal during a 2-second backoff lands in
 milliseconds, not after the nap. Provider tasks are raced explicitly against the
 budget and the withdrawal watcher; a task that ignores cancellation is abandoned
-into a bounded deque (cap 16, grace 0.25s/0.05s) instead of being awaited forever,
+and tracked until it actually settles (grace 0.25s/0.05s). New provider attempts
+are refused while any abandoned task remains live; reference eviction cannot
+conceal ongoing work. No Python coroutine mechanism can forcibly kill a hostile
+adapter or undo a request already received by a remote provider,
 and a *late* answer that arrives after the budget expired is reported as
 `deadline_exceeded` rather than handed back as a kept promise. `KeyboardInterrupt`,
 `SystemExit` and `GeneratorExit` are re-raised verbatim: Ctrl-C is the operator
@@ -254,7 +258,7 @@ anything that is not an `AdapterResult`.
 | `LitellmRouterAdapter` | a `litellm.Router` chain | the Router stays the *deployment* selector inside one route; the chain's exhaustion maps to `quota_exhausted` by exception identity, never by message |
 | `LegacyProviderAdapter` | any pre-W2 `LLMProvider` | wraps `gemini_provider`, `local_server_provider`, `local_llama_cpp` with an explicit `{ExceptionType: kind}` map, so a legacy typed error becomes a gateway kind at the boundary |
 
-## 10. Registry: one authority per process, scoped by credentials
+## 10. Registry: installed deployment authority and explicit credential scopes
 
 `registry.py` answers "which gateway do I use?" without letting callers build
 policy:
@@ -265,7 +269,7 @@ policy:
   every configured provider as a route);
 * `gateway_for_credentials(key, model, …)` — three cases: the deployment key
   returns the process authority; a *different* key returns a scoped single-route
-  gateway (LRU-capped at 16, fallback disabled, so one caller's credentials cannot
+  gateway (capacity-capped at 16, fallback disabled, so one caller's credentials cannot
   borrow another's routes); an empty key gets a typed refusal instead of a silent
   anonymous call;
 * both accessors build under a lock (`_AUTHORITY_LOCK`, `_CREDENTIAL_LOCK`) with a
@@ -279,6 +283,16 @@ policy:
   keeps serving its caller while nobody owns its adapter's HTTP pool any more
   (`tests/unit/test_llm_gateway_registry_race.py`, including a deadlock test for
   the locks themselves);
+* all installers use the same lock; a second live installation is a typed conflict
+  and the rejected idle candidate is revoked. Reset revokes stale idle references,
+  returns the old object for async cleanup, and refuses active work. An old
+  reference cannot continue execution after reset. Close/drain precedes restart;
+* execution binds to the first event loop and construction PID. A foreign loop
+  or inherited worker object is refused. Fresh worker processes construct their
+  own authority; forking a multithreaded live runtime is not a supported lifecycle;
+* live credential scopes are never evicted. Overflow rejects until an owner closes
+  a scope. This prevents eviction-induced split brain, but does not merge quotas
+  across models/credentials;
 * `DEGRADED_PROVIDER = "local-degraded"` — the marker for local/fake routes that
   may serve as a last hop and must be visible on the response.
 
@@ -359,8 +373,8 @@ places is two policies.
 | Gate | Command | What it proves |
 |---|---|---|
 | structure | `pytest tests/architecture/test_llm_gateway_authority.py` | the call graph is exactly the inventory; only the gateway, its wrapped providers and the 2 pinned bypasses make provider requests; no substring classification anywhere; the detectors are live |
-| behaviour | `pytest tests/unit -k llm_gateway` | 13 files: contract, errors, policy, resilience, scheduler, adapters, engine, observability, cancellation, facade, adversarial, security, load |
-| mutations | `python scripts/llm_gateway_mutations.py` | 49 mutations, each weakening exactly one law, each killed by a named test; a survivor fails the run and is answered with a stronger test, never a deleted mutation |
+| behaviour | `pytest tests/unit -k llm_gateway` | contract, errors, policy, resilience, scheduler, adapters, engine, observability, cancellation, facade, adversarial, security, load, registry races, golden schedules |
+| mutations | `python scripts/llm_gateway_mutations.py` | the executable battery weakens named invariants; a survivor fails the run and is answered with a stronger test, never a deleted mutation |
 | types | `mypy src` | the contract is checked, not documented |
 | style | `ruff check src tests scripts` | — |
 
@@ -382,3 +396,37 @@ tree.
 * **Idempotency coalesces, it does not persist.** The cache is a bounded in-memory
   window (`idempotency_ttl_seconds`, default 300s); a restart forgets, and a
   duplicate across processes is not detected.
+
+
+## 16. Golden hardening contracts
+
+* **Probe ownership:** `CircuitPermit` records whether this attempt acquired a
+  half-open slot and the breaker generation. Its idempotent release cannot consume
+  another attempt's slot. Outcome accounting no longer releases slots implicitly.
+  Late successes cannot heal a newer trip. Every retry reacquires permission.
+  `test_probe_a_never_releases_probe_b` covers success, failure, cancellation,
+  invalid result, raw exception and timeout with two controlled in-flight probes.
+* **Admission:** at most `max_inflight_global + max_queued` logical requests can
+  remain admitted, including coalesced waiters. WAIT cannot create an unbounded
+  second waiting population. Sinks are capped at 128. Live idempotency entries are
+  rejected at capacity, never evicted. Completed entries remain a bounded LRU.
+* **Retry-After:** above either the provider-wait ceiling or the configured backoff
+  budget, decline the retry; never truncate the provider's lower bound.
+* **Idempotency:** length-framed content hashes include all binary parts, message
+  parts, generation settings and caller identity. A waiter has its own deadline
+  and cancellation token, without cancelling the owner's execution.
+* **Security:** internal errors do not emit traceback chains; shutdown logs omit
+  raw exceptions. The log projection hashes caller-supplied idempotency tokens.
+  Metadata remains redacted by known patterns, not a universal detector of arbitrary
+  personal data; application-supplied labels must not carry user content.
+* **Canonical CLI:** `build_llm_provider` returns a registry-bound facade for real
+  model paths. Local route pins preserve server/GGUF selection. The process routing
+  adapter calls Router directly, not another gateway; local hash embeddings retain
+  their old 384-dimensional algorithm via an embeddings-only legacy adapter.
+  Routing-chain compositions have one gateway attempt, preventing nested retries.
+  FakeLLM with no model configured is still a non-model compatibility stub.
+* **Proof commands:** `python scripts/w2_golden_proof.py race --runs 40`,
+  `... engine --runs 40`, `... full --runs 20`. Logs are disposable under
+  `ci-artifacts/w2`; summaries bind HEAD, content hash, interpreter, hash seed,
+  exit status and log digest. Fresh pytest processes are not clean machines or
+  independent evidence of unavailable PostgreSQL/model infrastructure.

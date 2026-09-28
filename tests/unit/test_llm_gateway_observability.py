@@ -482,8 +482,8 @@ def test_the_default_sink_logs_a_provider_error_at_warning_without_a_traceback()
     assert "exc_info" not in kwargs  # a traceback per 503 is noise
 
 
-def test_a_gateway_internal_failure_is_logged_at_error_with_a_traceback() -> None:
-    """Our own bug deserves the stack; a provider's outage does not."""
+def test_a_gateway_internal_failure_is_logged_without_a_sensitive_traceback() -> None:
+    """Internal errors can chain provider payloads; no traceback is safe here."""
 
     logger = _FakeLogger()
     record = build_error_record(
@@ -497,7 +497,7 @@ def test_a_gateway_internal_failure_is_logged_at_error_with_a_traceback() -> Non
     StructlogSink(logger=logger).emit(record)
     level, _, kwargs = logger.calls[0]
     assert level == "error"
-    assert kwargs.get("exc_info") is True
+    assert not kwargs.get("exc_info")
 
 
 @pytest.mark.parametrize(

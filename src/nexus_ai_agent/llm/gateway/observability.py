@@ -32,6 +32,7 @@ is exactly the unjustified complexity the mission forbids.
 
 from __future__ import annotations
 
+import hashlib
 import time
 from collections import Counter, deque
 from collections.abc import Iterable, Mapping, Sequence
@@ -201,7 +202,9 @@ class RequestRecord:
         if self.metadata:
             data["meta"] = dict(self.metadata)
         if self.idempotency_key is not None:
-            data["idempotency_key"] = self.idempotency_key
+            data["idempotency_key_hash"] = hashlib.sha256(
+                self.idempotency_key.encode("utf-8", "replace")
+            ).hexdigest()
         return data
 
     def otel_attributes(self) -> dict[str, Any]:
@@ -259,8 +262,8 @@ class StructlogSink:
 
     Errors are logged at ``error`` *without* a traceback: the typed error already
     carries the classification, and a traceback per throttled request is noise
-    that hides the signal. Gateway-internal failures do get the traceback,
-    because those are our bugs.
+    that hides the signal. Internal failures also omit tracebacks: chained raw
+    adapter exceptions may contain credentials or prompt text.
     """
 
     def __init__(self, logger: Any | None = None) -> None:
@@ -275,7 +278,7 @@ class StructlogSink:
             elif record.outcome in (OUTCOME_CANCELLED, OUTCOME_OVERLOADED, OUTCOME_CLOSED):
                 self._log.info(event, **payload)
             elif record.error_kind is LLMErrorKind.GATEWAY_INTERNAL:
-                self._log.error(event, exc_info=True, **payload)
+                self._log.error(event, **payload)
             else:
                 self._log.warning(event, **payload)
         except Exception:  # noqa: BLE001 — observability must never break a request

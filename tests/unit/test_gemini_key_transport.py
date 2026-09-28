@@ -29,6 +29,21 @@ from nexus_ai_agent.features.ai_chat import GeminiEngine
 from nexus_ai_agent.features.summarizer import SummarizerEngine
 
 
+@pytest.fixture(autouse=True)
+async def _close_scoped_test_gateways():
+    """Each test owns a loop; close its shared pools before that loop disappears.
+
+    Feature.close deliberately does not close a shared authority. This module
+    acts as composition owner for its synthetic credential gateways instead.
+    """
+    from nexus_ai_agent.llm.gateway.registry import _CREDENTIAL_GATEWAYS
+
+    yield
+    for gateway in tuple(_CREDENTIAL_GATEWAYS.values()):
+        await gateway.aclose()
+    _CREDENTIAL_GATEWAYS.clear()
+
+
 def _json_dumps(payload: Any) -> str:
     import json
 

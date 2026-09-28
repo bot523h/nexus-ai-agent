@@ -156,6 +156,38 @@ class CircuitState(str, Enum):
 
 
 @dataclass
+class CircuitPermit:
+    """One attempt's permission, independent of subsequent breaker transitions.
+
+    Outcome accounting and resource accounting are separate. Cleanup may run
+    twice, but only this permit can return its slot, and only once. A late
+    outcome from an older generation cannot heal a newly opened circuit.
+    """
+
+    breaker: CircuitBreaker
+    probe: bool
+    generation: int
+    released: bool = False
+
+    def release(self) -> None:
+        if self.released:
+            return
+        self.released = True
+        if self.probe:
+            self.breaker.release_probe()
+
+    def success(self, now: float) -> None:
+        if not self.released and self.generation == self.breaker._generation:
+            self.breaker.record_success(now)
+        self.release()
+
+    def failure(self, kind: LLMErrorKind, now: float) -> None:
+        if not self.released and self.generation == self.breaker._generation:
+            self.breaker.record_failure(kind, now)
+        self.release()
+
+
+@dataclass
 class CircuitBreaker:
     """Per-route breaker: closed → open (after N health failures) → half-open probe.
 
@@ -173,6 +205,7 @@ class CircuitBreaker:
     _opened_at: float | None = None
     _probes_in_flight: int = 0
     _trip_count: int = 0
+    _generation: int = 0
 
     def state(self, now: float | None = None) -> CircuitState:
         if not self.policy.enabled:
@@ -208,6 +241,12 @@ class CircuitBreaker:
             self._probes_in_flight += 1
         return True
 
+    def acquire(self, now: float | None = None) -> CircuitPermit | None:
+        probe = self.state(now) is CircuitState.HALF_OPEN
+        if not self.allow(now):
+            return None
+        return CircuitPermit(self, probe, self._generation)
+
     def release_probe(self) -> None:
         """Give back a probe slot without recording an outcome (e.g. cancellation)."""
 
@@ -217,33 +256,32 @@ class CircuitBreaker:
     def record_success(self, now: float | None = None) -> None:
         _ = now  # success closes the circuit immediately; no timing decision
         self._consecutive_failures = 0
-        if self._probes_in_flight > 0:
-            self._probes_in_flight -= 1
         if self._opened_at is None:
             self._consecutive_successes = 0
             return
         self._consecutive_successes += 1
         if self._consecutive_successes >= self.policy.success_threshold:
             self._opened_at = None
+            self._generation += 1
             self._consecutive_successes = 0
 
     def record_failure(self, kind: LLMErrorKind, now: float | None = None) -> None:
         if not self.policy.enabled or not self.policy.counts(kind):
             return
         moment = self.clock() if now is None else now
-        if self._probes_in_flight > 0:
-            self._probes_in_flight -= 1
         self._consecutive_successes = 0
         self._consecutive_failures += 1
         if self._opened_at is None:
             if self._consecutive_failures >= self.policy.failure_threshold:
                 self._opened_at = moment
                 self._trip_count += 1
+                self._generation += 1
                 self._consecutive_failures = 0
             return
         # A failed half-open probe re-opens for another full recovery window.
         self._opened_at = moment
         self._trip_count += 1
+        self._generation += 1
 
     def snapshot(self, now: float | None = None) -> dict[str, Any]:
         return {

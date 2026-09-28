@@ -56,8 +56,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import random
-from collections import OrderedDict, deque
+import threading
+from collections import OrderedDict
 from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
@@ -154,8 +156,8 @@ def _is_timeout(exc: BaseException) -> bool:
 _CANCEL_GRACE_SECONDS = 0.25
 #: How long to wait for a cancelled call in every other case (withdrawal, error).
 _SETTLE_GRACE_SECONDS = 0.05
-#: Bound on how many abandoned calls we keep a reference to.
-_ABANDONED_CAP = 16
+#: Administrative observer bound; not a traffic-dependent buffer.
+_MAX_SINKS = 128
 
 
 @dataclass
@@ -245,6 +247,8 @@ class LLMGateway:
         self._rng = rng or random.Random()
         self._prices = DEFAULT_PRICE_TABLE if price_table is None else price_table
         self._sinks: list[ObservationSink] = list(sinks or [])
+        if len(self._sinks) > _MAX_SINKS:
+            raise ValueError("too many observation sinks")
         if attach_default_sink and not self._sinks:
             self._sinks.append(StructlogSink())
         self._metrics = GatewayMetrics()
@@ -254,9 +258,14 @@ class LLMGateway:
         self._inflight: OrderedDict[str, asyncio.Future[LLMResponse]] = OrderedDict()
         self._completed: OrderedDict[str, tuple[float, LLMResponse]] = OrderedDict()
         self._closed = False
+        self._retired = False
+        self._active_calls = 0
+        self._owner_pid = os.getpid()
+        self._owner_loop: asyncio.AbstractEventLoop | None = None
+        self._execution_lock = threading.Lock()
         self._executed = 0
         self._missing_adapters_logged: set[str] = set()
-        self._abandoned: deque[asyncio.Future[Any]] = deque(maxlen=_ABANDONED_CAP)
+        self._abandoned: set[asyncio.Future[Any]] = set()
 
     # ── registration ─────────────────────────────────────────────────
     @property
@@ -269,12 +278,14 @@ class LLMGateway:
 
     @property
     def closed(self) -> bool:
-        return self._closed
+        return self._closed or self._retired
 
     def add_sink(self, sink: ObservationSink) -> None:
         """Attach an additional observation sink (bounded list, no duplicates)."""
 
         if sink not in self._sinks:
+            if len(self._sinks) >= _MAX_SINKS:
+                raise ValueError("too many observation sinks")
             self._sinks.append(sink)
 
     def register(self, adapter: ProviderAdapter, routes: Sequence[Route] | None = None) -> None:
@@ -314,7 +325,35 @@ class LLMGateway:
         return self._adapters.get(provider)
 
     # ── public execution API ─────────────────────────────────────────
+    def retire(self) -> None:
+        """Revoke an idle registry reference; cleanup remains the owner's job.
+
+        A synchronous reset cannot drain active async work. Refusing that reset
+        is safer than publishing a second authority while the first is running.
+        """
+        with self._execution_lock:
+            if self._active_calls or any(not task.done() for task in self._abandoned):
+                raise GatewayInternalError("cannot retire an authority with active work")
+            self._retired = True
+
     async def execute(self, request: LLMRequest) -> LLMResponse:
+        loop = asyncio.get_running_loop()
+        with self._execution_lock:
+            if self._closed or self._retired:
+                raise GatewayClosedError("LLM gateway is closed or retired")
+            if os.getpid() != self._owner_pid:
+                raise GatewayInternalError("inherited gateway cannot execute in a worker process")
+            if self._owner_loop is not None and self._owner_loop is not loop:
+                raise GatewayInternalError("gateway execution belongs to a different event loop")
+            self._owner_loop = loop
+            self._active_calls += 1
+        try:
+            return await self._execute(request)
+        finally:
+            with self._execution_lock:
+                self._active_calls -= 1
+
+    async def _execute(self, request: LLMRequest) -> LLMResponse:
         """Run *request* through policy, admission, provider and observability.
 
         Returns an :class:`LLMResponse` or raises an :class:`LLMError` (or
@@ -323,8 +362,6 @@ class LLMGateway:
         accidentally treat a failure as an answer.
         """
 
-        if self._closed:
-            raise GatewayClosedError("LLM gateway is closed")
         request_id = new_request_id()
         started = self._clock()
         current_plan = self._plan(request, started)
@@ -366,6 +403,13 @@ class LLMGateway:
             self._fail(request, context, context_gate, outcome=OUTCOME_ERROR, metadata=metadata)
             raise context_gate
 
+        capacity = (
+            self._policy.concurrency.max_inflight_global + self._policy.concurrency.max_queued
+        )
+        if self._active_calls > capacity or any(not task.done() for task in self._abandoned):
+            error = OverloadedError("gateway has no safe execution capacity", request_id=request_id)
+            self._fail(request, context, error, outcome=OUTCOME_OVERLOADED, metadata=metadata)
+            raise error
         if request.idempotency_key:
             return await self._execute_idempotent(request, context, metadata)
         return await self._run(request, current_plan, context, metadata)
@@ -502,7 +546,7 @@ class LLMGateway:
         try:
             await self._scheduler.aclose()
         except Exception:  # noqa: BLE001 — shutdown must continue
-            log.exception("llm_gateway_scheduler_close_failed")
+            log.error("llm_gateway_scheduler_close_failed")
         for name, adapter in list(self._adapters.items()):
             try:
                 await adapter.aclose()
@@ -510,11 +554,11 @@ class LLMGateway:
                 log.warning("llm_gateway_adapter_close_cancelled", adapter=name)
                 raise
             except Exception:  # noqa: BLE001
-                log.exception("llm_gateway_adapter_close_failed", adapter=name)
+                log.error("llm_gateway_adapter_close_failed", adapter=name)
         for task in list(self._abandoned):
             if not task.done():
                 task.cancel()
-        self._abandoned.clear()
+        # Done callbacks remove settled tasks. Never forget a still-live task.
         for future in list(self._inflight.values()):
             if not future.done():
                 future.cancel()
@@ -624,28 +668,34 @@ class LLMGateway:
                 self._completed.pop(key, None)
 
         loop = asyncio.get_running_loop()
+        self._check_cancellation(request, context)
         existing = self._inflight.get(key)
         if existing is not None:
+            cancel_task = (
+                _watch_cancel(request.cancellation) if request.cancellation is not None else None
+            )
+            watched = {existing}
+            if cancel_task is not None:
+                watched.add(cancel_task)
             try:
-                return await asyncio.shield(existing)
-            except asyncio.CancelledError:
-                if existing.done():
-                    # The shared execution itself ended in cancellation: its
-                    # owner walked away. *Our* task is alive, so a bare
-                    # CancelledError here would falsely tell the event loop that
-                    # this caller was cancelled too (LAW 5). Report the truth as
-                    # a typed error the caller can catch and retry.
-                    error = CancelledByCallerError(
-                        "the shared execution for this idempotency key was cancelled by its owner",
+                done, _ = await asyncio.wait(
+                    watched,
+                    timeout=context.remaining(self._clock()),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if cancel_task is not None and cancel_task in done:
+                    raise CancelledByCallerError(request_id=context.request_id)
+                if existing not in done:
+                    raise self._deadline_error(request, context, None)
+                try:
+                    return existing.result()
+                except asyncio.CancelledError:
+                    raise CancelledByCallerError(
+                        "shared execution was cancelled by its owner",
                         request_id=context.request_id,
                         detail="shared_execution_cancelled",
-                    )
-                    self._fail(
-                        request, context, error, outcome=OUTCOME_CANCELLED, metadata=metadata
-                    )
-                    raise error from None
-                # Our own task was cancelled; the shared execution keeps running
-                # for the other waiters (that is what shield() is for).
+                    ) from None
+            except asyncio.CancelledError:
                 self._fail(
                     request,
                     context,
@@ -654,17 +704,33 @@ class LLMGateway:
                     metadata=metadata,
                 )
                 raise
+            except LLMError as exc:
+                self._fail(request, context, exc, outcome=_outcome_for(exc), metadata=metadata)
+                raise
+            finally:
+                if cancel_task is not None:
+                    cancel_task.cancel()
+                    await self._settle(
+                        (cancel_task,),
+                        adapter="idempotency",
+                        request_id=context.request_id,
+                        grace=_SETTLE_GRACE_SECONDS,
+                    )
 
+        if len(self._inflight) >= max(1, self._idempotency_capacity):
+            error = OverloadedError("idempotency admission is full", request_id=context.request_id)
+            self._fail(request, context, error, outcome=OUTCOME_OVERLOADED, metadata=metadata)
+            raise error
         future: asyncio.Future[LLMResponse] = loop.create_future()
         self._inflight[key] = future
         self._inflight.move_to_end(key)
-        while len(self._inflight) > max(1, self._idempotency_capacity):
-            self._inflight.popitem(last=False)
         try:
             response = await self._run(request, self._plan(request, now), context, metadata)
         except BaseException as exc:
             if not future.done():
                 future.set_exception(exc)
+                # Mark observed even when there were no coalesced waiters.
+                future.exception()
             raise
         else:
             if not future.done():
@@ -712,7 +778,7 @@ class LLMGateway:
                 continue
 
             breaker = self._breaker(route.key)
-            if not breaker.allow(self._clock()):
+            if breaker.is_open(self._clock()):
                 context.circuit_open = True
                 last_error = TransientProviderError(
                     f"circuit breaker open for {route.key}",
@@ -735,7 +801,6 @@ class LLMGateway:
                     metadata,
                 )
             except asyncio.CancelledError:
-                breaker.release_probe()
                 self._fail(
                     request,
                     context,
@@ -745,7 +810,6 @@ class LLMGateway:
                 )
                 raise
             except LLMError as exc:
-                breaker.release_probe()
                 last_error = exc
                 tried_any = True
                 if not exc.fallback_eligible or not self._policy.fallback.allows(exc.kind):
@@ -852,7 +916,21 @@ class LLMGateway:
             context.queued_seconds += admission.queued_seconds
 
             context.served_by_degraded_route = route.degraded
+            permit = breaker.acquire(self._clock())
             try:
+                if any(not task.done() for task in self._abandoned):
+                    raise OverloadedError(
+                        "provider cleanup has not settled", request_id=context.request_id
+                    )
+                if permit is None:
+                    context.circuit_open = True
+                    raise TransientProviderError(
+                        "circuit breaker denies this attempt",
+                        provider=route.provider,
+                        model=route.model,
+                        request_id=context.request_id,
+                        detail="circuit_open",
+                    )
                 # ── provider-aware rate gate (inside the held slot) ───
                 await self._rate_gate(route, request, context)
 
@@ -892,7 +970,7 @@ class LLMGateway:
                             outcome="cancelled",
                         )
                     )
-                    breaker.release_probe()
+                    permit.release()
                     raise
                 except LLMError as exc:
                     duration = self._clock() - started_attempt
@@ -915,7 +993,7 @@ class LLMGateway:
                             status_code=stamped.status_code,
                         )
                     )
-                    breaker.record_failure(stamped.kind, self._clock())
+                    permit.failure(stamped.kind, self._clock())
                     last_error = stamped
                     # Retry decision — the only place in the repository that
                     # makes one for an LLM call (LAW 4, LAW 7).
@@ -942,11 +1020,11 @@ class LLMGateway:
                     # and the budget is the one promise the caller can rely on
                     # (LAW 7). Both overruns are reported instead of absorbed.
                     if context.deadline_at is not None and self._clock() >= context.deadline_at:
-                        breaker.release_probe()
+                        permit.release()
                         raise self._deadline_error(request, context, last_error)
                     tolerance = max(0.05, attempt_timeout * 0.1)
                     if duration > attempt_timeout + tolerance:
-                        breaker.release_probe()
+                        permit.release()
                         raise self._timeout_error(
                             route, context.request_id, attempt_index + 1, clamped
                         )
@@ -966,7 +1044,7 @@ class LLMGateway:
                                 error_kind=LLMErrorKind.GATEWAY_INTERNAL.value,
                             )
                         )
-                        breaker.release_probe()
+                        permit.release()
                         raise GatewayInternalError(
                             f"adapter {adapter.name} returned "
                             f"{type(result).__name__} instead of AdapterResult",
@@ -985,10 +1063,23 @@ class LLMGateway:
                             outcome="success",
                         )
                     )
-                    breaker.record_success(self._clock())
-                    return self._succeed(request, route, result, context, metadata)
+                    permit.success(self._clock())
+                    break
             finally:
-                self._scheduler.release(admission)
+                # Release the owned permit even if scheduler cleanup raises.
+                if permit is not None:
+                    permit.release()
+                try:
+                    self._scheduler.release(admission)
+                except Exception:
+                    raise GatewayInternalError(
+                        "scheduler cleanup failed",
+                        provider=route.provider,
+                        model=route.model,
+                        request_id=context.request_id,
+                    ) from None
+        # Only publish success after owned resources have been released.
+        return self._succeed(request, route, result, context, metadata)
 
     async def _invoke(
         self,
@@ -1115,7 +1206,9 @@ class LLMGateway:
         for task in tasks:
             if task is None or task.done():
                 continue
-            self._abandoned.append(task)
+            self._abandoned.add(task)
+            task.add_done_callback(self._abandoned.discard)
+            task.add_done_callback(_observe_task_outcome)
             log.error(
                 "llm_gateway_call_abandoned_during_cancellation",
                 adapter=adapter,
@@ -1249,6 +1342,8 @@ class LLMGateway:
 
         provider_wait = parse_retry_after(error.retry_after) if retry.respect_retry_after else None
         if provider_wait is not None and provider_wait > retry.max_retry_after_seconds:
+            return None
+        if provider_wait is not None and provider_wait > self._policy.timeout.max_backoff_seconds:
             return None
         computed = compute_backoff(
             attempt_index, retry, rng=self._rng, previous_delay=previous_delay
@@ -1475,33 +1570,52 @@ def _scoped_idempotency_key(request: LLMRequest) -> str:
     fingerprint of it (LAW 6, LAW 10).
     """
 
-    declared = request.idempotency_key or ""
     digest = hashlib.sha256()
-    digest.update(str(request.caller.tenant_id).encode("utf-8"))
-    digest.update(b"\x00")
-    digest.update(request.operation.value.encode("utf-8"))
-    digest.update(b"\x00")
-    digest.update((request.provider or "").encode("utf-8"))
-    digest.update(b"\x00")
-    digest.update((request.model or "").encode("utf-8"))
-    digest.update(b"\x00")
-    digest.update(request.prompt.encode("utf-8", "replace"))
-    digest.update(b"\x00")
-    digest.update((request.system or "").encode("utf-8", "replace"))
+
+    def add(value: bytes) -> None:
+        # Length framing prevents delimiter injection and preserves boundaries.
+        digest.update(len(value).to_bytes(8, "big"))
+        digest.update(value)
+
+    def text(value: object) -> None:
+        add(str(value).encode("utf-8", "replace"))
+
+    def part(value: ContentPart) -> None:
+        text(value.mime_type)
+        add(value.data)
+        text(value.text)
+
+    for value in (
+        request.idempotency_key,
+        request.caller.tenant_id,
+        request.caller.label,
+        request.operation.value,
+        request.provider,
+        request.model,
+        request.purpose,
+        request.prompt,
+        request.system,
+        request.generation,
+        request.allow_fallback,
+        id(request.output_validator) if request.output_validator else None,
+    ):
+        text(value)
+    text(len(request.messages))
     for message in request.messages:
-        digest.update(b"\x01")
-        digest.update(message.role.encode("utf-8", "replace"))
-        digest.update(b"\x02")
-        digest.update(message.content.encode("utf-8", "replace"))
-        digest.update(b"\x02")
-        digest.update(str(len(message.parts)).encode("utf-8"))
-    digest.update(b"\x01")
-    digest.update(str(len(request.parts)).encode("utf-8"))
-    for part in request.parts:
-        digest.update(b"\x02")
-        digest.update(part.mime_type.encode("utf-8", "replace"))
-        digest.update(str(len(part.data or b"")).encode("utf-8"))
-    return f"{declared[:128]}|{digest.hexdigest()[:32]}"
+        text(message.role)
+        text(message.content)
+        text(len(message.parts))
+        for message_part in message.parts:
+            part(message_part)
+    text(len(request.parts))
+    for request_part in request.parts:
+        part(request_part)
+    return digest.hexdigest()
+
+
+def _observe_task_outcome(task: asyncio.Future[Any]) -> None:
+    if not task.cancelled():
+        task.exception()  # retrieve, never log provider-owned exception content
 
 
 def _outcome_for(error: LLMError) -> str:
