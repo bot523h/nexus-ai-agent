@@ -151,6 +151,11 @@ def _sqlite_is_alembic_stamped(db_path: str) -> bool:
         engine.dispose()
 
 
+def _sqlite_path(db_path: str) -> str:
+    """File identity must not change with cwd; retain SQLite's memory sentinel."""
+    return db_path if db_path == ":memory:" else str(Path(db_path).expanduser().resolve())
+
+
 def decide_sqlite_bootstrap(db_path: str | None = None) -> str:
     """Decide the SQLite bootstrap path (D5), without mutating anything.
 
@@ -171,7 +176,7 @@ def decide_sqlite_bootstrap(db_path: str | None = None) -> str:
     """
     from nexus_ai_agent.config.settings import get_settings
 
-    normalized = str(Path(db_path or get_settings().db_path).expanduser())
+    normalized = _sqlite_path(db_path or get_settings().db_path)
     if normalized in _initialized_paths:
         return _SqliteBootstrapMode.NOTHING.value
     if not Path(normalized).exists():
@@ -189,7 +194,7 @@ def _get_engine(db_path: str) -> Any:
     """Return an engine bound to ``db_path``, recreating it when the path changes."""
     global _engine, _engine_path, _session_factory
 
-    normalized_path = str(Path(db_path).expanduser())
+    normalized_path = _sqlite_path(db_path)
     if _engine is None or _engine_path != normalized_path:
         Path(normalized_path).parent.mkdir(parents=True, exist_ok=True)
         if _engine is not None:
@@ -265,7 +270,7 @@ async def create_all_metadata(engine: Any, metadata: MetaData) -> None:
 async def create_all_tables(db_path: str = "data/app.sqlite") -> None:
     """Create all SQLModel tables for the selected database, exactly once per path."""
     await _dispose_replaced_engines()
-    normalized_path = str(Path(db_path).expanduser())
+    normalized_path = _sqlite_path(db_path)
     engine = _get_engine(normalized_path)
     if normalized_path in _initialized_paths:
         return
@@ -329,7 +334,7 @@ async def get_session(db_path: str | None = None) -> AsyncIterator[AsyncSession]
     - ``db_path`` is ``None`` → the backend comes from the environment:
       ``NEXUS_DATABASE_URL`` set → PostgreSQL, prepared lazily via Alembic
       (D7: the ``create_all`` stopgap was retired); otherwise the default
-      SQLite path.
+      configured ``Settings.db_path`` (``NEXUS_DB_PATH``).
     """
     await _dispose_replaced_engines()
     if db_path is None:
@@ -340,7 +345,9 @@ async def get_session(db_path: str | None = None) -> AsyncIterator[AsyncSession]
             async with factory() as session:
                 yield session
             return
-        db_path = "data/app.sqlite"
+        from nexus_ai_agent.config.settings import get_settings
+
+        db_path = get_settings().db_path
 
     await create_all_tables(db_path)
     if _session_factory is None:

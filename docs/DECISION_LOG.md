@@ -1651,3 +1651,124 @@ stated goal is a nominal gate).
 coverage ACCEPTED and byte-identical across two runs; gate control accepted and
 27/27 attacks rejected; mutation campaign with every applicable mutation killed and
 restored.
+
+
+## 2026-09-28 — Audit repair: executable session, media and distribution contracts
+
+**Scope:** `arena/01a0e742-nexus-ai-agent`, `audit-contract-repair-01a0e742`.
+This is a narrow repair, not the parallel W1 runtime-ownership or W2 LLM-gateway
+rewrite. The source audit is frozen at `e5b326b`; changed behavior is recorded here.
+
+**Decisions**
+
+1. Retain SQLAlchemy `AsyncSession` as the runtime database contract. Correct all
+   seven async `.exec()` consumers (six in handlers, one in onboarding); do not
+   monkey-patch `.exec` onto the real session or weaken test doubles to hide it.
+   Model reads explicitly unwrap scalar results. No-argument SQLite selection
+   honors `Settings.db_path`, and connection/cache keys use canonical file paths.
+2. Preserve public image/TTS dictionary compatibility while introducing shared
+   `MediaResult`/`ImageResult`/`SpeechResult` TypedDicts. A consumer validates the
+   canonical `success=True, path, error=None` contract before opening a file.
+   Stream lifetime spans the awaited Telegram send; all exit paths close it,
+   without deleting engine-owned cached media. Delivery errors propagate rather
+   than being reclassified as generation success/failure.
+3. Declare gTTS as a lightweight core dependency because `/tts` is a core command;
+   the `[speech]` extra still means optional local Whisper ASR. Do not reorganize
+   unrelated heavyweight dependencies during this bug fix.
+4. Ship package JSON explicitly. Keep Alembic revisions authored only under root
+   `migrations/`; a small build-only hook copies them and `alembic.ini` into
+   `storage/_alembic`. Include the inputs in sdists. Installed and editable
+   discovery are explicit and independent of cwd; incomplete packages fail closed.
+5. Prove the distribution, not only editable source: add wheel/sdist isolation
+   tests and a clean wheel-install CI matrix. Existing editable CI remains useful
+   for development but is no longer the sole packaging test.
+
+**Rejected:** switching the whole application to a different session class;
+hand-maintained duplicate migrations; placing runtime files at an installation-
+prefix-dependent data-files path; changing all legacy media consumers to an
+incompatible new object in the same patch; a broad runtime rewrite mixed with
+these contract fixes.
+
+**Operational consequence:** backup and inspect both the configured SQLite file
+and legacy `data/app.sqlite` before rollout where a custom path was configured.
+There is no automatic data merge. Cloud provider receipts/tenant keys, FakeLLM
+policy, global erasure and distributed queue ownership remain separate work.
+
+**Evidence:** `tests/integration/test_runtime_contracts.py`,
+`tests/unit/test_media_result.py`, `tests/unit/test_wheel_install.py`;
+[implementation report](audits/2026-09-28-contract-repair-report.fa.md).
+
+
+## 2026-09-28 — Publication frontier guard; quarantined ten-axis candidate; consent-race evidence
+
+**Decision:** Publication approval is now computed from the *observed remote frontier*
+(`git ls-remote` over `main` + `arena/*`) and the **full outgoing commit range**
+(`rev-list` + `diff-tree -m --no-renames`), with owner-head lease precedence and a
+`NOT_VERIFIED` outcome for every unprovable premise. The previous approval signal — the
+local-board `check --files` over a developer-supplied list — is reclassified as advisory:
+it cannot see content hidden by reverts inside the outgoing range, and it trusts inherited
+stale board copies over the owner's actual head. Both blind spots were demonstrated live
+before the decision (revert concealment on a disposable repository; the 2026-09-28
+PR #112/#113 "local safe, remote owner" incident). Full rationale and rejected alternatives:
+[ADR-0007](architecture/adr/0007-remote-publication-frontier.md); operating procedure and
+observed runs: [INTEGRATION_PREFLIGHT](ops/INTEGRATION_PREFLIGHT.md).
+Boundary law **R14** in `docs/architecture/MODULE_MAP.md` §3 names the enforcing tests.
+
+**Consequence for the ten-axis candidate:** commit `ac2b7d5…` was removed from the publish
+ancestry (live leases W2/W1/DR on shared files) and preserved out-of-history as local tag
+`preserved-production-ac2b7d5`, a named stash, and a hashed patch
+(`ci-artifacts/mission-20260928/preserved-ac2b7d5.patch`, sha256 `10485146…`). It is a
+candidate, not delivered work: a new executable probe
+(`scripts/probes/consent_generation_race.py`) **reproduces a privacy invariant violation**
+in it — an AI extraction started before `forget_user` re-persists the erased profile even
+when consent is `denied` (both probe cases FAILURE; the engine under W2 lease serializes
+per-user operations but nothing invalidates the in-flight `_save_memory`). Probe exit 0
+against the reconciled union is now an explicit board acceptance criterion before any
+`ai_memory` integration.
+
+**Dependency findings:** all six unique advisory IDs re-derived from primary sources with
+per-finding reachability evidence and honest statuses (chromadb×4 NOT_REACHABLE_WITH_EVIDENCE,
+click BLOCKED by the gTTS `click<8.2` pin, diskcache NOT_REACHABLE_WITH_EVIDENCE):
+[2026-09-28-dependency-triage.json](audits/2026-09-28-dependency-triage.json). Nothing suppressed.
+
+**Rejected:** approving publication from the working-tree diff; deriving ownership from the
+GitHub PR API (derived metadata, lags pushes, not reproducible offline); force-push
+resolution; silently fixing the leased `ai_memory.py` in this session.
+
+**Evidence:** `tests/unit/test_agent_board_remote.py` (13 cases, disposable real
+repositories), `tests/unit/test_agent_board.py` (40 passed together in 1.58s),
+live preflight runs recorded in the runbook, probe output
+`ci-artifacts/mission-20260928/consent-race.json`. Remote CI execution of the new
+`publication-frontier` workflow: UNVERIFIED at time of writing.
+
+## 2026-09-28 — Hardening proof: quarantine loss recorded; dev extra gains the wheel backend; privacy invariant handed to W2
+
+**Incident (truth correction):** the sandbox was rebuilt from a fresh shallow clone of
+`main`; the previous session's worktree files survived, and the local branch was re-synced
+to the remote tip with zero drift. The ten-axis candidate quarantine recorded earlier on
+this date (local tag, named stash, git-ignored patch) did **not** survive: the candidate
+commit object exists on no ref anywhere. The candidate `ac2b7d5…` is unrecoverable and
+must be rebuilt by its owners after the W1/W2/DR handoffs — passing
+`scripts/probes/consent_generation_race.py` (exit 0) and a fresh publication preflight.
+
+**Privacy invariant (executable, handed to the owner):** the 8-case deterministic probe
+reproduces, on BOTH the main/branch source and the live W2 tip (`9e795318`), that an
+extraction started before `forget_user`, a replayed writer, and dual concurrent
+extractions all re-persist the erased profile; cancellation, denied-consent replay and
+idempotent forget are safe. The fix belongs to the W2-leased `features/ai_memory.py`
+(invalidation for in-flight writes); this session deliberately did not edit leased code.
+
+**Dependency of tests on the build backend:** the full-suite red on this branch
+(`test`/`python-parity` jobs) was reproduced locally: the sdist/wheel contract tests build
+with `--no-isolation`, which requires the `wheel` package; the `[dev]` extra now carries
+`wheel>=0.43` (the standalone wheel-contract job stayed green only because it installs
+`wheel` itself). Guard CI job now installs `pytest-asyncio` (repo pytest config sets
+`asyncio_mode`) and runs the self-contained board modules with `--noconftest`.
+
+**Rejected:** fixing the leased `ai_memory.py` in this session; rewriting history to hide
+the quarantine loss; treating the standalone wheel-contract green as proof of the full
+suite.
+
+**Evidence:** `docs/audits/2026-09-28-hardening-proof.fa.md`;
+`ci-artifacts/hardening/` probe JSONs and suite logs (workspace evidence).
+

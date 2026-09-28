@@ -1,0 +1,98 @@
+{
+  "audited_at": "2026-09-28",
+  "branch": "arena/01a0e742-nexus-ai-agent",
+  "scope": "uv.lock Python 3.11 resolution as audited in ci-artifacts/production-wave (245 locked resolutions, 184 audited packages, pip-audit 2.10.1)",
+  "method": "Every finding was re-derived from primary sources on 2026-09-28: PyPI JSON metadata (ci-artifacts/mission-20260928/advisories/*.json), pypa/advisory-database YAML (fetched via GitHub API for PYSEC-2026-2132), osv.dev records (PYSEC-2026-2447 fetched; CVSS4.0 5.2 AV:L), plus literal greps over src/ and tests/ recorded below. No advisory is suppressed and no ignore file is added.",
+  "production_verified": false,
+  "findings": [
+    {
+      "id": "PYSEC-2026-311",
+      "aliases": ["CVE-2026-45829", "GHSA-f4j7-r4q5-qw2c"],
+      "package": "chromadb",
+      "version": "1.5.9",
+      "summary": "pre-authentication code injection via malicious model repository when trust_remote_code=true on the Chroma server collections API",
+      "fixed_in": null,
+      "status": "NOT_REACHABLE_WITH_EVIDENCE",
+      "reachability_evidence": [
+        "grep -rn 'trust_remote_code' src/ tests/ -> 0 matches",
+        "sole chromadb construction is the embedded local client: src/nexus_ai_agent/features/rag.py:184 (chromadb.PersistentClient(path=settings.chroma_db_path)); no server endpoint, no tenant/collection HTTP surface is exposed by this application"
+      ],
+      "mitigation": "embedded-client usage only; keep it that way (any future Chroma server deployment re-opens this finding)",
+      "upgrade_cost": "no fixed release listed by the advisory at audit time"
+    },
+    {
+      "id": "PYSEC-2026-3813",
+      "aliases": ["CVE-2026-45830", "GHSA-2wm9-hf6c-p5cr"],
+      "package": "chromadb",
+      "version": "1.5.9",
+      "summary": "missing tenant authorization validation on Chroma server collections API",
+      "fixed_in": null,
+      "status": "NOT_REACHABLE_WITH_EVIDENCE",
+      "reachability_evidence": [
+        "no Chroma server is started or exposed by src/ (see PYSEC-2026-311 evidence); the vulnerability class requires an authenticated multi-tenant server API"
+      ],
+      "mitigation": "same as PYSEC-2026-311",
+      "upgrade_cost": "no fixed release listed at audit time"
+    },
+    {
+      "id": "PYSEC-2026-3814",
+      "aliases": ["CVE-2026-45833", "GHSA-36p7-vc44-83pf"],
+      "package": "chromadb",
+      "version": "1.5.9",
+      "summary": "authenticated code injection via trust_remote_code with UPDATE_COLLECTION permission",
+      "fixed_in": null,
+      "status": "NOT_REACHABLE_WITH_EVIDENCE",
+      "reachability_evidence": [
+        "no server deployment, no collection UPDATE path, no trust_remote_code literal (0 grep matches)"
+      ],
+      "mitigation": "same as PYSEC-2026-311",
+      "upgrade_cost": "no fixed release listed at audit time"
+    },
+    {
+      "id": "PYSEC-2026-3815",
+      "aliases": ["CVE-2026-45831", "GHSA-xph7-9rjv-w5fr"],
+      "package": "chromadb",
+      "version": "1.5.9",
+      "summary": "SimpleRBACAuthorizationProvider ignores tenant/database/collection scope",
+      "fixed_in": null,
+      "status": "NOT_REACHABLE_WITH_EVIDENCE",
+      "reachability_evidence": [
+        "grep over src/ shows no SimpleRBACAuthorizationProvider usage and no Chroma server configuration at all"
+      ],
+      "mitigation": "same as PYSEC-2026-311",
+      "upgrade_cost": "no fixed release listed at audit time"
+    },
+    {
+      "id": "PYSEC-2026-2132",
+      "aliases": ["CVE-2026-7246", "GHSA-47fr-3ffg-hgmw"],
+      "package": "click",
+      "version": "8.1.8",
+      "summary": "command injection in click.edit() from an unprivileged account",
+      "fixed_in": "8.3.3",
+      "status": "BLOCKED",
+      "reachability_evidence": [
+        "grep -rn 'click.edit' src/ tests/ scripts/ -> 0 matches: the vulnerable API is not called by this application"
+      ],
+      "blocked_by": "core dependency gTTS (pyproject.toml:15 'gTTS>=2.5,<3'); PyPI metadata for gTTS 2.5.4 requires_dist includes 'click<8.2,>=7.1', which conflicts with the 8.3.3 fix version (captured in ci-artifacts/mission-20260928/advisories/gTTS.json)",
+      "mitigation": "not-reachable evidence above; upgrade path requires gTTS releasing a click>=8.3 compatible version or replacing gTTS",
+      "upgrade_cost": "dependency resolution conflict; tracked, not waived"
+    },
+    {
+      "id": "PYSEC-2026-2447",
+      "aliases": ["CVE-2025-69872", "GHSA-w8v5-vhqr-4h9v"],
+      "package": "diskcache",
+      "version": "5.6.3",
+      "summary": "pickle-based cache deserialization; arbitrary code execution when an attacker with cache-directory write access is read from",
+      "fixed_in": null,
+      "cvss_v4": "5.2 (AV:L/AC:L/AT:N/PR:L/UI:A/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N/E:P) per osv.dev",
+      "status": "NOT_REACHABLE_WITH_EVIDENCE",
+      "reachability_evidence": [
+        "grep -rn 'diskcache' src/ -> 0 matches: the application never imports diskcache; it arrives transitively (chromadb dependency tree)",
+        "exploitation requires an attacker that can already write into this process's cache directory, which is a local privileged position separate from any remote surface"
+      ],
+      "mitigation": "transitive-only presence; revisit if diskcache ever becomes a direct dependency or if cache directories become attacker-writable",
+      "upgrade_cost": "no fixed release listed at audit time"
+    }
+  ],
+  "notes": "Status vocabulary: FIXED / MITIGATED / ACCEPTED_WITH_EVIDENCE / NOT_REACHABLE_WITH_EVIDENCE / BLOCKED / UNVERIFIED. 'NOT_REACHABLE_WITH_EVIDENCE' is per-finding and revocable: the grep evidence and usage constraint are recorded so any architectural change re-opens the finding instead of silently inheriting the old verdict."
+}

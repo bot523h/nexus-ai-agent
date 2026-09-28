@@ -99,15 +99,35 @@ def migration_lock() -> Iterator[None]:
         fh.close()
 
 
-# Repository root: src/nexus_ai_agent/storage/migrations.py → 4 levels up.
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-
-
 def build_alembic_config() -> AlembicConfig:
-    """Build an Alembic config that discovers this repo's scripts by path."""
-    config = AlembicConfig(str(_REPO_ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(_REPO_ROOT / "migrations"))
-    config.set_main_option("sqlalchemy.url", resolve_migration_url())
+    """Resolve scripts from the installed artifact, or this editable checkout.
+
+    Never search cwd or a caller-controlled alembic.ini. Wheels carry a build-
+    time copy of the canonical migration tree; editable installs use that tree
+    directly. A broken distribution fails explicitly instead of creating an
+    empty database or silently falling back to create_all.
+    """
+    packaged = Path(__file__).resolve().parent / "_alembic"
+    checkout = Path(__file__).resolve().parents[3]
+    if packaged.is_dir():
+        scripts = packaged
+        ini = packaged / "alembic.ini"
+    else:
+        scripts = checkout / "migrations"
+        ini = checkout / "alembic.ini"
+    if (
+        not ini.is_file()
+        or not (scripts / "env.py").is_file()
+        or not (scripts / "versions").is_dir()
+    ):
+        raise RuntimeError(
+            "Alembic resources are missing; reinstall a complete nexus-ai-agent wheel"
+        )
+    config = AlembicConfig(str(ini))
+    config.set_main_option("script_location", str(scripts).replace("%", "%%"))
+    config.set_main_option("sqlalchemy.url", resolve_migration_url().replace("%", "%%"))
+    # Import the installed application, never prepend an arbitrary working dir.
+    config.set_main_option("prepend_sys_path", "")
     return config
 
 

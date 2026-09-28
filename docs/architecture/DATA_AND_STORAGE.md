@@ -59,6 +59,28 @@ flowchart LR
 - **Drift is a failure, not a repair:** `storage/checkpoint_fingerprint.py` compares a live fingerprint to a golden manifest; updating goldens is human-only (`nexus golden update`, enforced by tests).
 - **Concurrency:** migrations take a lock (`storage/migrations.py::migration_lock`); concurrent first-run migrations are covered by `tests/integration/test_migrate_race_condition.py` and the CI `migrate-postgres` job (real `pgvector/pgvector:pg16`), which also asserts the stamp equals the head revision and that a second `nexus migrate` is a no-op.
 
+### Installed-runtime contracts (2026-09-28)
+
+- `get_session()` yields **SQLAlchemy `AsyncSession`**, not SQLModel's session.
+  Consumers use `execute(select(...)).scalars()` when they need model instances.
+  The handler factory carries an explicit async-context-manager type.
+- With no explicit path, PostgreSQL still takes precedence when configured;
+  otherwise `Settings.db_path` is used. Explicit SQLite paths still override
+  PostgreSQL. File paths are expanded and resolved before connection/cache lookup;
+  `:memory:` retains its SQLite meaning.
+- Root `migrations/` remains the sole authored Alembic tree. `setup.py::BuildPy`
+  packages a copy in `storage/_alembic`; it is **not** a second editable schema.
+  Installed code resolves that tree, editable installs resolve the root tree,
+  and neither trusts cwd's `alembic.ini`. Missing resources fail explicitly.
+- Enforcing tests: `tests/integration/test_runtime_contracts.py` (real sessions,
+  path selection, access-guard/Telegram dispatch) and
+  `tests/unit/test_wheel_install.py` (wheel and sdist-to-wheel migration roundtrip).
+
+**Upgrade warning:** older code could write no-argument sessions to
+`data/app.sqlite` even with `NEXUS_DB_PATH` pointing elsewhere. Before deploying
+this correction, back up both locations and reconcile any split data deliberately.
+The correction does not merge databases, move files, or delete old data.
+
 ## 3. Entity ownership (naming discipline)
 
 SQLModel classes are the schema; product names are the contract.

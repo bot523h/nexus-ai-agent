@@ -10,10 +10,10 @@ import asyncio
 import hashlib
 import time
 from pathlib import Path
-from typing import Any
 
 import httpx
 
+from nexus_ai_agent.features.media_result import ImageResult
 from nexus_ai_agent.observability.logging import get_logger
 
 log = get_logger(__name__)
@@ -118,7 +118,7 @@ class ImageGenEngine:
         size: str = "1024x1024",
         seed: int | None = None,
         user_id: int = 0,
-    ) -> dict[str, Any]:
+    ) -> ImageResult:
         """Generate an image from text prompt.
 
         Returns dict with keys: success, path, prompt, style, size, error.

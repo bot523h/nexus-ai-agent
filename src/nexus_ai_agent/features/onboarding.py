@@ -14,9 +14,11 @@ confusion that leads to user drop-off.
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 
 import structlog
+from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
@@ -33,7 +35,9 @@ _ONBOARDING_STEPS = [
 ]
 
 
-async def is_first_time_user(user_id: int, db_session_factory: Any) -> bool:
+async def is_first_time_user(
+    user_id: int, db_session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]]
+) -> bool:
     """Check if this is the user's first interaction with the bot."""
     try:
         from sqlmodel import select as _sel
@@ -42,8 +46,10 @@ async def is_first_time_user(user_id: int, db_session_factory: Any) -> bool:
 
         async with db_session_factory() as session:
             existing = (
-                await session.exec(_sel(UserLanguage).where(UserLanguage.user_id == user_id))
-            ).first()
+                (await session.execute(_sel(UserLanguage).where(UserLanguage.user_id == user_id)))
+                .scalars()
+                .first()
+            )
             return existing is None
     except Exception:
         # If we can't check, assume first time (better to onboard than not)
