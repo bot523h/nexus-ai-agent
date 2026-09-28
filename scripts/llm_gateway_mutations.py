@@ -864,6 +864,37 @@ MUTATIONS += (
 )
 
 
+MUTATIONS += (
+    Mutation(
+        "cached_caller_loses_its_trace",
+        GATEWAY / "engine.py",
+        "return self._reuse_response(request, response, context, metadata)",
+        "return response",
+        GOLDEN,
+        "test_idempotent_callers_each_have_a_record_without_duplicate_usage",
+        "cached logical callers retain distinct correlation and truthful usage",
+    ),
+    Mutation(
+        "provider_metric_cardinality_is_unbounded",
+        GATEWAY / "observability.py",
+        "if key not in self.provider_errors and len(self.provider_errors) >= 128:",
+        "if False:",
+        GOLDEN,
+        "test_hostile_provider_labels_do_not_create_unbounded_metric_keys",
+        "caller-controlled refused provider labels cannot grow a metric map forever",
+    ),
+    Mutation(
+        "classification_import_performs_network_io",
+        Path("llm/litellm_provider.py"),
+        'os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")',
+        "pass",
+        GOLDEN,
+        "test_error_classification_sets_offline_pricing_before_sdk_import",
+        "the error-type classifier must not fetch mutable remote pricing at import",
+    ),
+)
+
+
 def _run_pytest(
     package_root: Path, targets: tuple[str, ...] | str, timeout: int
 ) -> subprocess.CompletedProcess[str]:
