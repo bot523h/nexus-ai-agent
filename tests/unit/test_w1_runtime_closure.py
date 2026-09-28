@@ -191,9 +191,7 @@ async def test_failing_cleanup_step_does_not_strand_later_steps() -> None:
 
     await runtime.shutdown()
 
-    assert order == ["good", "bad"], (
-        "both cleanup steps must run even though 'bad' raises"
-    )
+    assert order == ["good", "bad"], "both cleanup steps must run even though 'bad' raises"
 
 
 @pytest.mark.asyncio
@@ -288,28 +286,42 @@ async def test_agent_manager_get_active_passes_provider(
             return rec
 
     class _AwaitableResult:
-        def __init__(self, result): self._result = result
+        def __init__(self, result):
+            self._result = result
+
         def __await__(self):
-            async def _r(): return self._result
+            async def _r():
+                return self._result
+
             return _r().__await__()
 
     class _FakeSessionCtx:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): return False
-        def execute(self, *a, **kw): return _AwaitableResult(_FakeResult())
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def execute(self, *a, **kw):
+            return _AwaitableResult(_FakeResult())
+
     def _fake_session_factory(*args, **kwargs):
         return _FakeSessionCtx()
 
     import nexus_ai_agent.agents.store.agent_manager as am
+
     monkeypatch.setattr(am, "get_session", _fake_session_factory)
 
     provider = MagicMock()
     constructed_with: dict[str, Any] = {}
+
     class _StubCoding:
         name = "Coding"
+
         def __init__(self, gemini_provider=None, allow_legacy_fallback=False):
             constructed_with["provider"] = gemini_provider
             constructed_with["legacy"] = allow_legacy_fallback
+
     monkeypatch.setitem(am_mod.AGENTS, "coding", _StubCoding)
 
     agent = await am_mod.AgentManager.get_active(42, provider=provider)
@@ -359,22 +371,34 @@ async def test_webhook_shutdown_ordering(monkeypatch: pytest.MonkeyPatch) -> Non
     calls: list[str] = []
 
     class _FakeApp:
-        async def initialize(self): calls.append("initialize")
-        async def start(self): calls.append("start")
+        async def initialize(self):
+            calls.append("initialize")
+
+        async def start(self):
+            calls.append("start")
+
         class bot:
             @staticmethod
-            async def set_webhook(url, secret_token): calls.append("set_webhook")
+            async def set_webhook(url, secret_token):
+                calls.append("set_webhook")
+
         async def stop(self):
             calls.append("stop")
             raise RuntimeError("stop failed")
-        async def shutdown(self): calls.append("shutdown")
+
+        async def shutdown(self):
+            calls.append("shutdown")
 
     class _FakeServer:
-        def __init__(self, config): pass
-        async def serve(self): calls.append("serve")
+        def __init__(self, config):
+            pass
+
+        async def serve(self):
+            calls.append("serve")
 
     class _FakeConfig:
-        def __init__(self, app, **kw): pass
+        def __init__(self, app, **kw):
+            pass
 
     fake_uvicorn = ModuleType("uvicorn")
     fake_uvicorn.Config = _FakeConfig
@@ -403,6 +427,7 @@ async def test_webhook_shutdown_ordering(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_force_join_and_anon_chat_expose_shutdown() -> None:
     from nexus_ai_agent.features import anonymous_chat, force_join
+
     assert callable(force_join._shutdown_engines)
     assert callable(anonymous_chat._shutdown_engines)
 
@@ -414,6 +439,7 @@ async def test_shutdown_module_sync_engines_is_safe(
     """Calling shutdown_module_sync_engines after engines are created
     disposes them without raising."""
     from nexus_ai_agent.config import settings as sm
+
     fake = _FakeSettings(tmp_path)
     monkeypatch.setattr(sm, "get_settings", lambda: fake)
 
@@ -462,10 +488,14 @@ def test_build_application_registers_runtime(
 
     class _FakeApp:
         bot_data: dict[str, Any] = {}
-        def add_handler(self, *a, **kw): pass
+
+        def add_handler(self, *a, **kw):
+            pass
+
         class bot:
             @staticmethod
-            async def set_webhook(*a, **kw): pass
+            async def set_webhook(*a, **kw):
+                pass
 
     class _FakeBuilder:
         def __init__(self):
@@ -482,6 +512,7 @@ def test_build_application_registers_runtime(
         def post_shutdown(self, fn):
             self._post_shutdown = fn
             return self
+
         def build(self):
             app = _FakeApp()
             app._post_init = self._post_init
