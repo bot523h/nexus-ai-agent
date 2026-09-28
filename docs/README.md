@@ -111,6 +111,7 @@ placeholder text.
 | [audits/MASTER_ARCHITECTURAL_ASSESSMENT_2026-09-27.md](audits/MASTER_ARCHITECTURAL_ASSESSMENT_2026-09-27.md) | Exact-SHA Phase Zero assessment: actual runtime, trust boundaries, Continuum/GitHub truth, five-angle research decisions, gaps, and risk register. |
 | [audits/EXECUTION_PLAN_2026-09-27.md](audits/EXECUTION_PLAN_2026-09-27.md) | Phased implementation plan with dependencies, verification/CI strategy, operational gates, and Definition of Done. |
 | [audits/FORENSIC_MAINLINE_RECOVERY_2026-10-06.md](audits/FORENSIC_MAINLINE_RECOVERY_2026-10-06.md) | Exact-SHA mainline truth audit: release-metadata defects (README version, lockstep guard, Continuum snapshot) with the delivered fixes and honest production limitations. |
+| [audits/2026-09-28-master-forensic-evolution.md](audits/2026-09-28-master-forensic-evolution.md) | Storage/R2 forensic evolution report: live truth, governance, four unified-cloud fixes, two R2 fail-closed fixes, mutation evidence, and residual handoffs. |
 
 ## History (archived — read-only, never a source of truth)
 
