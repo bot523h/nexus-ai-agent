@@ -36,7 +36,8 @@ import hashlib
 import time
 from collections import Counter, deque
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from itertools import islice
 from typing import Any, Protocol
 
 from nexus_ai_agent.llm.errors import LLMError, LLMErrorKind
@@ -137,6 +138,22 @@ class RequestRecord:
     #: Present only when the caller supplied one; never derived from content.
     idempotency_key: str | None = None
 
+    def __post_init__(self) -> None:
+        # Sanitize before *any* sink sees a record, not only the default logger.
+        object.__setattr__(
+            self, "caller", replace(self.caller, name=redact_secrets(self.caller.name)[:128])
+        )
+        for name in ("purpose", "provider", "model"):
+            value = getattr(self, name)
+            if value is not None:
+                object.__setattr__(self, name, redact_secrets(value[:256]))
+        if self.idempotency_key is not None:
+            object.__setattr__(
+                self,
+                "idempotency_key",
+                hashlib.sha256(self.idempotency_key.encode("utf-8", "replace")).hexdigest(),
+            )
+
     @property
     def attempts_count(self) -> int:
         return len(self.attempts)
@@ -202,9 +219,7 @@ class RequestRecord:
         if self.metadata:
             data["meta"] = dict(self.metadata)
         if self.idempotency_key is not None:
-            data["idempotency_key_hash"] = hashlib.sha256(
-                self.idempotency_key.encode("utf-8", "replace")
-            ).hexdigest()
+            data["idempotency_key_hash"] = self.idempotency_key
         return data
 
     def otel_attributes(self) -> dict[str, Any]:
@@ -248,7 +263,7 @@ def sanitize_metadata(metadata: Mapping[str, str] | None) -> dict[str, str]:
     if not metadata:
         return {}
     clean: dict[str, str] = {}
-    for key, value in list(metadata.items())[:MAX_METADATA_FIELDS]:
+    for key, value in islice(metadata.items(), MAX_METADATA_FIELDS):
         if key.lower() in _BLOCKED_METADATA_KEYS:
             continue
         text = value if isinstance(value, str) else str(value)
@@ -373,7 +388,10 @@ class GatewayMetrics:
             if record.policy.circuit_open:
                 self.circuit_open_events += 1
         if record.error_kind is not None and record.provider:
-            self.provider_errors[f"{record.provider}:{record.error_kind.value}"] += 1
+            key = f"{record.provider}:{record.error_kind.value}"
+            if key not in self.provider_errors and len(self.provider_errors) >= 128:
+                key = "<other>"
+            self.provider_errors[key] += 1
         if record.usage.is_known:
             self.usage_reported += 1
             self.usage_input_tokens += record.usage.input_tokens or 0

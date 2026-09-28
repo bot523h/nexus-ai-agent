@@ -565,3 +565,75 @@ async def test_retry_after_above_backoff_budget_is_refused_never_shortened():
         assert sleeps == []
     finally:
         await gateway.aclose()
+
+
+async def test_idempotent_callers_each_have_a_record_without_duplicate_usage():
+    from nexus_ai_agent.llm.gateway.contract import Usage, UsageSource
+
+    adapter = ScriptedAdapter(
+        "p",
+        ["ok"],
+        delay=0.01,
+        usage=Usage(source=UsageSource.PROVIDER, input_tokens=3, output_tokens=2, total_tokens=5),
+    )
+    gateway = _gateway([adapter])
+    try:
+        a, b = await asyncio.gather(
+            *(gateway.execute(request(idempotency_key="same")) for _ in range(2))
+        )
+        c = await gateway.execute(request(idempotency_key="same"))
+        assert len({a.request_id, b.request_id, c.request_id}) == 3
+        assert gateway.metrics.requests == 3
+        assert gateway.metrics.attempts == 1
+        assert gateway.metrics.usage_input_tokens == 3
+        assert adapter.calls == 1
+    finally:
+        await gateway.aclose()
+
+
+async def test_invalid_structured_output_has_one_failure_record():
+    gateway = _gateway([ScriptedAdapter("p", ["not json"])])
+
+    def invalid(text):
+        raise ValueError("synthetic")
+
+    try:
+        with pytest.raises(LLMError):
+            await gateway.execute(request(output_validator=invalid))
+        assert gateway.metrics.requests == 1
+    finally:
+        await gateway.aclose()
+
+
+async def test_hostile_provider_labels_do_not_create_unbounded_metric_keys():
+    gateway = _gateway([ScriptedAdapter("p", ["ok"])])
+    try:
+        for index in range(300):
+            with pytest.raises(LLMError):
+                await gateway.execute(request(provider=f"unregistered-{index}"))
+        assert len(gateway.metrics.provider_errors) <= 129
+    finally:
+        await gateway.aclose()
+
+
+def test_error_classification_sets_offline_pricing_before_sdk_import(monkeypatch):
+    import builtins
+    import os
+    from types import SimpleNamespace
+
+    from nexus_ai_agent.llm import litellm_provider
+
+    monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
+    monkeypatch.setattr(litellm_provider, "_LITELLM_KINDS", None)
+    real_import = builtins.__import__
+    seen = []
+
+    def importing(name, *args, **kwargs):
+        if name == "litellm":
+            seen.append(os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP"))
+            return SimpleNamespace(exceptions=SimpleNamespace())
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", importing)
+    litellm_provider._litellm_error_types()
+    assert seen == ["True"]

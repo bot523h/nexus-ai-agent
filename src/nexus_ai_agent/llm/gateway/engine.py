@@ -380,6 +380,11 @@ class LLMGateway:
                 current_plan.budget.total_seconds, request.deadline_seconds
             )
         metadata = sanitize_metadata(request.metadata)
+        try:
+            self._check_cancellation(request, context)
+        except LLMError as exc:
+            self._fail(request, context, exc, outcome=_outcome_for(exc), metadata=metadata)
+            raise
 
         if current_plan.refused:
             assert current_plan.refusal is not None
@@ -662,9 +667,7 @@ class LLMGateway:
             if cached is not None:
                 expires_at, response = cached
                 if expires_at > now:
-                    hit = response.policy
-                    policy_outcome = replace(hit, idempotency_hit=True) if hit is not None else None
-                    return replace(response, policy=policy_outcome)
+                    return self._reuse_response(request, response, context, metadata)
                 self._completed.pop(key, None)
 
         loop = asyncio.get_running_loop()
@@ -688,7 +691,7 @@ class LLMGateway:
                 if existing not in done:
                     raise self._deadline_error(request, context, None)
                 try:
-                    return existing.result()
+                    return self._reuse_response(request, existing.result(), context, metadata)
                 except asyncio.CancelledError:
                     raise CancelledByCallerError(
                         "shared execution was cancelled by its owner",
@@ -1457,7 +1460,6 @@ class LLMGateway:
                     request_id=context.request_id,
                     attempt=context.total_attempts,
                 )
-                self._fail(request, context, error, outcome=OUTCOME_ERROR, metadata=metadata)
                 raise error from exc
 
         usage: Usage = result.usage if isinstance(result.usage, Usage) else Usage()
@@ -1499,6 +1501,55 @@ class LLMGateway:
                 timings=response.timings,
                 policy=response.policy,
                 attempts=response.attempts,
+                started_at=context.started,
+                ended_at=now,
+                prompt_chars=request.prompt_size_chars(),
+                payload_bytes=request.payload_bytes(),
+                metadata=metadata,
+                idempotency_key=request.idempotency_key,
+            )
+        )
+        return response
+
+    def _reuse_response(
+        self,
+        request: LLMRequest,
+        original: LLMResponse,
+        context: _AttemptContext,
+        metadata: Mapping[str, str],
+    ) -> LLMResponse:
+        """One logical caller, one trace; result reuse does not spend tokens again."""
+        now = self._clock()
+        outcome = (
+            replace(original.policy, idempotency_hit=True, attempts=0, retries=0)
+            if (original.policy is not None)
+            else PolicyOutcome(
+                route_provider=original.provider, route_model=original.model, idempotency_hit=True
+            )
+        )
+        response = replace(
+            original,
+            request_id=context.request_id,
+            caller=request.caller,
+            policy=outcome,
+            timings=context.timings(now),
+            attempts=(),
+            usage=Usage(),
+        )
+        self._executed += 1
+        self._emit(
+            RequestRecord(
+                request_id=context.request_id,
+                caller=request.caller,
+                purpose=request.purpose,
+                operation=request.operation,
+                outcome=OUTCOME_DEGRADED if response.degraded else OUTCOME_SUCCESS,
+                provider=response.provider,
+                model=response.model,
+                usage=response.usage,
+                finish_reason=response.finish_reason,
+                timings=response.timings,
+                policy=outcome,
                 started_at=context.started,
                 ended_at=now,
                 prompt_chars=request.prompt_size_chars(),

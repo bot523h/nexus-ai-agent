@@ -1233,7 +1233,7 @@ async def test_two_concurrent_calls_with_one_key_share_a_single_execution() -> N
         gateway.execute(_request(idempotency_key="k1")),
     )
     assert adapter.calls == 1
-    assert first.request_id == second.request_id
+    assert first.request_id != second.request_id  # logical callers have distinct traces
     assert first.text == second.text == "answer"
 
 

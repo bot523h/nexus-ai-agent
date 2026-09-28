@@ -97,8 +97,9 @@ Request path, in the order the engine actually executes it:
    otherwise fallback decision (eligibility, hops, capability, degraded routes) →
    otherwise raise the terminal typed error;
 6. **observation:** physical executions emit records without prompt/answer text.
-   Reused idempotent results and early lifecycle refusals do not yet have complete
-   per-logical-caller observation coverage; this remains a verification gap.
+   Coalesced/cached callers receive distinct correlation IDs and records, without
+   attributing the original provider's token spend twice. Lifecycle violations
+   (closed, foreign PID/loop) are rejected before execution admission.
 
 ## 3. The contract
 
@@ -416,7 +417,9 @@ tree.
   parts, generation settings and caller identity. A waiter has its own deadline
   and cancellation token, without cancelling the owner's execution.
 * **Security:** internal errors do not emit traceback chains; shutdown logs omit
-  raw exceptions. The log projection hashes caller-supplied idempotency tokens.
+  raw exceptions. Records hash caller-supplied idempotency tokens before any sink
+  sees them. Provider/model/purpose/caller labels are bounded and redacted;
+  error metric cardinality is capped at 128 named labels plus an overflow bucket.
   Metadata remains redacted by known patterns, not a universal detector of arbitrary
   personal data; application-supplied labels must not carry user content.
 * **Canonical CLI:** `build_llm_provider` returns a registry-bound facade for real

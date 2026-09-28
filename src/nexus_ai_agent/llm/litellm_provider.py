@@ -120,6 +120,9 @@ def _litellm_error_types() -> list[tuple[type[BaseException], LLMErrorKind]]:
     if _LITELLM_KINDS is not None:
         return _LITELLM_KINDS
     table: list[tuple[type[BaseException], LLMErrorKind]] = []
+    # Classification can be the first SDK import, before Router construction.
+    # It must not perform a network fetch or introduce retry jitter into tests.
+    os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     try:
         import litellm
     except ImportError:
