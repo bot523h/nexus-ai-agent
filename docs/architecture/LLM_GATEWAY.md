@@ -279,7 +279,7 @@ anything that is not an `AdapterResult`.
 | Adapter | Talks to | Notes |
 |---|---|---|
 | `GeminiHttpAdapter` | Gemini REST over httpx | classifies from status code + declared `error.status`; honours `Retry-After`; treats a blocking `finishReason` as `content_blocked`, not as an empty answer; `base_url` is validated (https unless loopback, no userinfo, host required) — `None` means the default endpoint, an explicit empty string is refused |
-| `LitellmRouterAdapter` | a `litellm.Router` chain | the Router stays the *deployment* selector inside one route; the chain's exhaustion maps to `quota_exhausted` by exception identity, never by message |
+| `LitellmRouterAdapter` | one configured SDK deployment in canonical composition | SDK retries/fallbacks/cooldowns disabled; gateway owns each hop. Explicit legacy construction retains its historical chain outside deployment scope. |
 | `LegacyProviderAdapter` | any pre-W2 `LLMProvider` | wraps `gemini_provider`, `local_server_provider`, `local_llama_cpp` with an explicit `{ExceptionType: kind}` map, so a legacy typed error becomes a gateway kind at the boundary |
 
 ## 10. Registry: installed deployment authority and explicit credential scopes
@@ -350,7 +350,7 @@ fails if it drifts from this table in either direction.
 | `agents/store/base_agent.py` | gateway | duck-typed `gemini.gateway` → `execute` with gateway `Message` turns; otherwise the legacy provider contract |
 | `creative/video_director.py` | gateway | `gateway_for_credentials(api_key, model)` → `execute` |
 | `llm/gemini_provider.py` | gateway | `GeminiProvider.execute` runs through the ChatEngine's gateway and exposes it as `.gateway` |
-| `llm/litellm_provider.py` | adapter / explicit legacy bridge | canonical registry uses `build_raw_routing_adapter` with Router retries/fallbacks disabled; explicitly constructed legacy `LiteLLMRoutingProvider` retains a private gateway and SDK routing chain, outside the deployment-authority guarantee |
+| `llm/litellm_provider.py` | adapter / explicit legacy bridge | canonical registry uses `_build_routing_adapter` to expose individual deployments with SDK retries/fallbacks/cooldowns disabled; explicitly constructed legacy `LiteLLMRoutingProvider` retains a private gateway and SDK routing chain, outside the deployment-authority guarantee |
 | `llm/local_server_provider.py` | gateway | wrapped by `LegacyProviderAdapter` in `registry._build_llama_server_adapter` |
 | `llm/local_llama_cpp.py` | gateway | wrapped by `LegacyProviderAdapter` in `registry._build_llama_cpp_adapter` |
 | `llm/fallback_provider.py` | gateway-typed | provider-level compatibility wrapper; decisions from typed `fallback_eligible` |
@@ -448,12 +448,40 @@ tree.
   personal data; application-supplied labels must not carry user content.
 * **Canonical CLI:** `build_llm_provider` returns a registry-bound facade for real
   model paths. Local route pins preserve server/GGUF selection. The process routing
-  adapter calls Router directly, not another gateway; local hash embeddings retain
-  their old 384-dimensional algorithm via an embeddings-only legacy adapter.
-  Routing-chain compositions have one gateway attempt, preventing nested retries.
+  adapters each call one SDK deployment, not another gateway. SDK retries,
+  fallback and cooldown policy are disabled; each hop re-enters gateway admission,
+  breaker and quota policy and appears in the response. Gemini uses the same REST
+  adapter/identity as direct callers, not a separate SDK quota alias. Local hash
+  embeddings retain their old 384-dimensional algorithm via an embeddings-only
+  adapter and an operation-specific route rule. Canonical defaults allow one
+  attempt per deployment; only gateway policy can authorize another route.
   FakeLLM with no model configured is still a non-model compatibility stub.
 * **Proof commands:** `python scripts/w2_golden_proof.py race --runs 40`,
   `... engine --runs 40`, `... full --runs 20`. Logs are disposable under
   `ci-artifacts/w2`; summaries bind HEAD, content hash, interpreter, hash seed,
   exit status and log digest. Fresh pytest processes are not clean machines or
   independent evidence of unavailable PostgreSQL/model infrastructure.
+
+
+### SDK boundary correction (2026-09-28)
+
+The earlier statement that the canonical raw Router already disabled SDK fallback
+was wrong. A real SDK Router with its final transport replaced executed Ollama
+then Groq despite `allow_fallback=False`, while gateway telemetry reported one
+successful attempt and no fallback. A separate canonical/direct Gemini test
+exposed split local quota accounting behind the `routing` alias. Removing a nested
+gateway had not removed this SDK policy owner.
+
+Canonical construction now exposes the configured deployment sequence as distinct
+routes with actual model names (including privacy-relevant `:free` suffixes).
+The SDK has no configured fallback chain or cooldown policy, and each adapter call
+explicitly overrides SDK fallback/retry defaults. Gemini is registered once through
+its existing REST adapter. Unknown single-deployment exceptions stay internal
+errors; content/context exceptions retain their specific kind; 429 retains
+Retry-After. The explicit legacy Router bridge remains non-deployment scope.
+
+Proof uses the real installed SDK, controlled completion results and controlled
+HTTP 503 responses for Groq/OpenRouter. It is not live-account or universal
+transitive-SDK verification. Configured provider-name limits do not identify
+arbitrary operator-defined aliases for the same physical endpoint. The two pinned
+image/synchronous-vision exceptions still do not share canonical Gemini quota.

@@ -1001,3 +1001,258 @@ async def test_native_model_access_is_serialized_inside_admitted_work(
         release.set()
         await asyncio.gather(*owners, return_exceptions=True)
         await gateway.aclose()
+
+
+@pytest.mark.parametrize(
+    ("allow_fallback", "failure"),
+    [(False, "transient"), (True, "transient"), (True, "blocked"), (True, "unknown")],
+)
+async def test_canonical_sdk_hops_are_owned_and_reported_by_gateway(
+    monkeypatch, allow_fallback, failure, capsys, caplog
+):
+    # Exercise the real SDK Router, replacing only the final transport. A fake
+    # Router that always succeeds missed the hidden fallback in the old factory.
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm = pytest.importorskip("litellm")
+    from nexus_ai_agent.config.settings import Settings
+    from nexus_ai_agent.llm import litellm_provider
+
+    monkeypatch.setattr(litellm_provider, "_LITELLM_KINDS", None)
+    calls = []
+
+    async def transport(**kwargs):
+        calls.append(kwargs["model"])
+        if kwargs["model"].startswith("ollama/"):
+            if failure == "unknown":
+                raise ValueError("synthetic-secret")
+            error_type = (
+                litellm.ContentPolicyViolationError
+                if failure == "blocked"
+                else litellm.ServiceUnavailableError
+            )
+            raise error_type(message="synthetic", llm_provider="ollama", model=kwargs["model"])
+        return litellm.ModelResponse(
+            model=kwargs["model"],
+            choices=[{"message": {"role": "assistant", "content": "backup"}}],
+        )
+
+    monkeypatch.setattr(litellm, "acompletion", transport)
+    settings = Settings(
+        _env_file=None,
+        NEXUS_OLLAMA_MODEL="synthetic",
+        GROQ_API_KEY="synthetic-not-a-real-key",
+        GEMINI_API_KEY=None,
+        OPENROUTER_API_KEY=None,
+        NEXUS_MODEL_PATH="/nonexistent/model.gguf",
+    )
+    gateway = registry.build_gateway_from_settings(settings)
+    try:
+        if allow_fallback and failure == "transient":
+            response = await gateway.execute(request(allow_fallback=True))
+            assert response.text == "backup"
+            assert response.provider == "groq"
+            assert response.policy.fallback_used
+            assert response.policy.attempts == 2
+            assert [a.provider for a in response.attempts] == ["ollama", "groq"]
+            assert calls == ["ollama/synthetic", "groq/llama-3.3-70b-versatile"]
+        else:
+            with pytest.raises(LLMError) as caught:
+                await gateway.execute(request(allow_fallback=allow_fallback))
+            assert (
+                caught.value.kind
+                is {
+                    "transient": LLMErrorKind.TRANSIENT_PROVIDER,
+                    "blocked": LLMErrorKind.CONTENT_BLOCKED,
+                    "unknown": LLMErrorKind.GATEWAY_INTERNAL,
+                }[failure]
+            )
+            assert "synthetic-secret" not in str(caught.value)
+            assert calls == ["ollama/synthetic"]
+        router = gateway.adapter("routing-embedding").inner._router
+        assert not router.fallbacks  # SDK normalizes [] to its None default
+        assert router.num_retries == 0
+        assert router.disable_cooldowns is True
+        # SDK global/default configuration cannot re-enable hidden policy.
+        router.fallbacks = [{"nexus-ollama": ["nexus-groq"]}]
+        router.num_retries = 2
+        calls.clear()
+        with pytest.raises(LLMError):
+            await gateway.execute(request(allow_fallback=False))
+        assert calls == ["ollama/synthetic"]
+        if failure == "unknown":
+            captured = capsys.readouterr()
+            assert "synthetic-secret" not in captured.out + captured.err + caplog.text
+    finally:
+        await gateway.aclose()
+
+
+async def test_canonical_gemini_has_one_route_and_one_quota_window(monkeypatch):
+    from nexus_ai_agent.config.settings import Settings
+    from nexus_ai_agent.llm.gateway.adapters import GeminiHttpAdapter
+    from nexus_ai_agent.llm.gateway.policy import ProviderRateLimit, RateLimitPolicy
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm = pytest.importorskip("litellm")
+    sdk_calls = []
+    http_calls = []
+
+    async def sdk_transport(**kwargs):
+        sdk_calls.append(kwargs["model"])
+        return litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "sdk"}}])
+
+    async def http_transport(self, *args, **kwargs):
+        http_calls.append(self.name)
+        return AdapterResult(text="http")
+
+    monkeypatch.setattr(litellm, "acompletion", sdk_transport)
+    monkeypatch.setattr(GeminiHttpAdapter, "execute", http_transport)
+    settings = Settings(
+        _env_file=None,
+        NEXUS_OLLAMA_MODEL="",
+        GROQ_API_KEY=None,
+        GEMINI_API_KEY="synthetic-not-a-real-key",
+        OPENROUTER_API_KEY=None,
+        NEXUS_MODEL_PATH="/nonexistent/model.gguf",
+    )
+    gateway = registry.build_gateway_from_settings(
+        settings,
+        policy_overrides={
+            "rate_limit": RateLimitPolicy(
+                per_provider={"gemini": ProviderRateLimit(requests_per_day=1)}
+            )
+        },
+    )
+    try:
+        response = await gateway.execute(request(allow_fallback=False))
+        assert response.provider == "gemini"
+        with pytest.raises(LLMError) as caught:
+            await gateway.execute(request(provider="gemini", allow_fallback=False))
+        assert caught.value.kind is LLMErrorKind.QUOTA_EXHAUSTED
+        assert sdk_calls == []
+        assert http_calls == ["gemini"]
+        assert len([r for r in gateway.policy.routes if r.provider == "gemini"]) == 1
+        from nexus_ai_agent.llm.gateway.contract import LLMOperation
+
+        embedded = await gateway.execute(request(operation=LLMOperation.EMBEDDINGS))
+        assert embedded.provider == "routing-embedding"
+        assert len(embedded.embedding) == 384
+        assert http_calls == ["gemini"]
+    finally:
+        await gateway.aclose()
+
+
+@pytest.mark.parametrize("provider", ["groq", "openrouter"])
+async def test_canonical_sdk_http_failure_is_one_physical_attempt(monkeypatch, provider):
+    import httpx
+
+    from nexus_ai_agent.config.settings import Settings
+    from nexus_ai_agent.llm import litellm_provider
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    pytest.importorskip("litellm")
+    monkeypatch.setattr(litellm_provider, "_LITELLM_KINDS", None)
+    calls = []
+
+    async def send(self, request, **kwargs):
+        calls.append(request.url.host)
+        return httpx.Response(
+            503,
+            json={"error": {"message": "synthetic", "type": "server_error"}},
+            request=request,
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "send", send)
+    settings = Settings(
+        _env_file=None,
+        NEXUS_OLLAMA_MODEL="",
+        GROQ_API_KEY="synthetic-key" if provider == "groq" else None,
+        GEMINI_API_KEY=None,
+        OPENROUTER_API_KEY="synthetic-key" if provider == "openrouter" else None,
+        NEXUS_LLM_STRICT_PRIVACY=False,
+        NEXUS_MODEL_PATH="/nonexistent/model.gguf",
+    )
+    gateway = registry.build_gateway_from_settings(settings)
+    try:
+        with pytest.raises(LLMError) as caught:
+            await gateway.execute(request(allow_fallback=False))
+        assert caught.value.kind is LLMErrorKind.TRANSIENT_PROVIDER
+        assert calls == ["api.groq.com" if provider == "groq" else "openrouter.ai"]
+    finally:
+        await gateway.aclose()
+
+
+@pytest.mark.parametrize("failure", ["blocked", "context", "unknown", "rate-limit"])
+async def test_single_sdk_deployment_classification_is_not_chain_exhaustion(monkeypatch, failure):
+    import httpx
+
+    from nexus_ai_agent.llm import litellm_provider
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm = pytest.importorskip("litellm")
+    monkeypatch.setattr(litellm_provider, "_LITELLM_KINDS", None)
+    if failure == "unknown":
+        error = ValueError("synthetic-secret")
+        kind = LLMErrorKind.GATEWAY_INTERNAL
+    elif failure == "rate-limit":
+        error = litellm.RateLimitError(
+            message="synthetic",
+            llm_provider="groq",
+            model="m",
+            response=httpx.Response(429, headers={"Retry-After": "123"}),
+        )
+        kind = LLMErrorKind.RATE_LIMITED
+    else:
+        error_type = (
+            litellm.ContentPolicyViolationError
+            if failure == "blocked"
+            else litellm.ContextWindowExceededError
+        )
+        error = error_type(message="synthetic", llm_provider="groq", model="m")
+        kind = LLMErrorKind.CONTENT_BLOCKED if failure == "blocked" else LLMErrorKind.CONTEXT_LIMIT
+    typed = litellm_provider.classify_router_failure(error, single_deployment=True)
+    assert typed.kind is kind
+    assert "synthetic-secret" not in str(typed)
+    if failure == "rate-limit":
+        assert typed.retry_after == 123
+
+
+@pytest.mark.parametrize("strict", [False, True])
+async def test_canonical_sdk_model_identity_preserves_privacy_filter(monkeypatch, strict):
+    from nexus_ai_agent.config.settings import Settings
+    from nexus_ai_agent.llm.gateway.policy import PrivacyPolicy
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm = pytest.importorskip("litellm")
+    calls = []
+
+    async def transport(**kwargs):
+        calls.append(kwargs["model"])
+        return litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "ok"}}])
+
+    monkeypatch.setattr(litellm, "acompletion", transport)
+    settings = Settings(
+        _env_file=None,
+        NEXUS_OLLAMA_MODEL="",
+        GROQ_API_KEY=None,
+        GEMINI_API_KEY=None,
+        OPENROUTER_API_KEY="synthetic-key",
+        NEXUS_LLM_STRICT_PRIVACY=False,
+        NEXUS_MODEL_PATH="/nonexistent/model.gguf",
+    )
+    gateway = registry.build_gateway_from_settings(
+        settings, policy_overrides={"privacy": PrivacyPolicy(strict=strict)}
+    )
+    try:
+        req = request(provider="openrouter", allow_fallback=False)
+        if strict:
+            with pytest.raises(LLMError) as caught:
+                await gateway.execute(req)
+            assert caught.value.kind is LLMErrorKind.POLICY_REFUSAL
+            assert calls == []
+        else:
+            response = await gateway.execute(req)
+            assert response.text == "ok"
+            assert response.model.endswith(":free")
+            assert len(calls) == 1
+    finally:
+        await gateway.aclose()

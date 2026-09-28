@@ -8,8 +8,8 @@
 
 - Repository: `bot523h/nexus-ai-agent`.
 - Session branch: `arena/01a0e846-nexus-ai-agent`; no other branch was checked out or pushed by this session.
-- Previous frozen proof HEAD: **`25c1d2d3d89de5694d952e360521e2d49f1d4f4d`**. Native-worker ownership and cold-initialization corrections have since been added; the new exact-head campaign is pending. This draft does not attribute earlier results to those corrections.
-- Main, freshly rechecked from the remote at 2026-09-28T16:30Z: **`e5b326b2eaf691a638d030ad57acf1ce60016ef0`**.
+- Previous frozen/pushed proof HEAD: **`7bd6e700fbc9f0dcfe3485d87cbbd5559df55fe3`**. SDK ownership/quota corrections have since been added; their new exact-head campaign is pending. Earlier results are not attributed to these corrections.
+- Main, freshly rechecked from the remote at 2026-09-28T17:07Z: **`e5b326b2eaf691a638d030ad57acf1ce60016ef0`**.
 - Owner-authorized predecessor: PR [#116](https://github.com/bot523h/nexus-ai-agent/pull/116), HEAD **`9e795318fa7651ed35f3dfa373bb0ce49d21fcc7`**. Its exact history was retained, not rewritten or merged on GitHub.
 - Successor: draft PR [#118](https://github.com/bot523h/nexus-ai-agent/pull/118).
 - A subsequent report-only publication commit is distinct from the implementation revision above. Its hash cannot be embedded in its own content. Execution evidence remains bound to the explicit implementation SHA and source fingerprint; publication CI is separately checked.
@@ -50,7 +50,7 @@ Separate non-deployment credential/model scopes and an explicitly constructed le
 | `llm/gemini_provider.py` / Gemini engine compatibility | Exposes and executes through the gateway. |
 | `features/ai_memory.py`, `agents/store/base_agent.py`, downstream knowledge callers | Gateway-capable provider when composed canonically; plain injected provider protocol remains an explicit embedding/test seam. |
 | `llm/local_server_provider.py`, `llm/local_llama_cpp.py` | Provider implementations wrapped by a gateway adapter, not newly installed authorities. |
-| Raw LiteLLM Router adapter | Canonical composition disables SDK retries/fallbacks so gateway policy is not bypassed. |
+| Raw LiteLLM Router adapter | Corrected after the `7bd6` audit: individual SDK deployments, explicit retry/fallback veto, no SDK cooldown policy; each hop is admitted and recorded by gateway. Earlier draft incorrectly claimed this was already disabled. |
 | Explicit `LiteLLMRoutingProvider(...)` | Legacy bridge retains a private gateway and SDK routing chain; not the canonical factory and not proof of shared deployment policy. |
 | `FallbackProvider` | Typed compatibility shim. Deprecated keyword argument is now inert; backup cancellation propagates. It is not the canonical authority/factory. |
 | `creative/image_gen/gemini_adapter.py` | **Real pinned egress exception:** binary image output, paid-tier guard and separate image resilience/accounting. |
@@ -60,6 +60,34 @@ Separate non-deployment credential/model scopes and an explicitly constructed le
 `tests/architecture/test_llm_gateway_authority.py` discovers endpoint literals, provider wire paths, SDK imports and construction aliases; checks roles and construction inventory; ratchets the two pinned egress exceptions; and tests detector liveness. A new explicit guard forbids membership-based classification in the legacy fallback module, including variable needles that escaped the original literal detector.
 
 These AST guards cover known source patterns, **not arbitrary dynamic Python or all transitive SDK internals**. Provider implementations may own transport I/O; callers must not independently own execution policy. “Wrapped somewhere” alone is not evidence that every possible direct invocation is canonical.
+
+### Canonical SDK defect: Problem → Evidence → Design → Proof
+
+**Problem/evidence:** `sdk-fallback-red.log` ran the real installed Router with only
+its final completion transport replaced. With caller `allow_fallback=False`, calls
+were `ollama/synthetic` then `groq/llama-3.3-70b-versatile`; response said provider
+`routing`, model `nexus-ollama`, attempts=1, `fallback_used=False`, `degraded=False`.
+Three permanent tests were RED: caller veto, truthful hop reporting and canonical/
+direct Gemini quota sharing (`sdk-permanent-red.log`). This is a reproduced policy
+bypass, not speculative physical-provider identity analysis. The previous draft's
+claim that SDK fallback was disabled was false; its fake Router only tested success.
+
+**Design/fix:** reuse existing adapters, route policy and scheduler; expose each
+configured SDK deployment as a gateway route. Disable Router retries/fallbacks and
+cooldowns; override per-call fallback/retry defaults as well. Use the existing
+Gemini REST adapter once for both entry paths, removing the SDK alias. Preserve
+local hash embeddings with an operation-specific route rule. Classify unknown
+single-deployment failures as internal, preserve blocked/context specificity and
+Retry-After. No new queue, broker, breaker or telemetry system.
+
+**Proof so far:** 60 golden tests GREEN; combined gateway/architecture/legacy routing
+selection **756 passed / 1 skipped** (`sdk-all-targeted.log`). Tests use the real SDK
+with controlled I/O, cover veto/allowed fallback, blocked/unknown failure, SDK
+configuration drift, one physical HTTP attempt on Groq/OpenRouter 503, and one
+Gemini daily-quota window. Ten additional mutants were killed (9/9 plus the targeted privacy-alias mutant), with green initial/restored baselines. SDK
+normalization of an empty fallback list to `None` was verified in its constructor;
+the assertion checks no configured fallback, rather than requiring a list object.
+These tests do not establish live provider behavior or all SDK transitive internals.
 
 ## 5. Authority lifecycle, workers and import order
 
@@ -139,7 +167,7 @@ Further independent probes against the real local-provider methods found a physi
 
 A cold embedding initialization probe blocked the authority loop for **0.502 seconds** with a **0.01-second** request budget. Three permanent regressions then failed for cold initialization on the loop and concurrent native model access. The provider path was checked against local and fresh remote leases, claimed and pushed before editing. Cold import/construction now runs inside the existing worker; a backend mutex protects native model access and first-use cache initialization, not a second policy scheduler. Deterministic thread-identity and parked-worker assertions preserve positive controls and avoid simply loosening timing thresholds.
 
-The new golden matrix covers native task cancellation, typed withdrawal and timeout for chat and embedding; restored capacity; cold initialization; and native serialization. It uses controlled model doubles, not live SDK downloads or actual GGUF inference. The full mutation inventory is now **88**; targeted native ownership and cold-path mutants are killed, and the complete battery awaits the new freeze.
+The new golden matrix covers native task cancellation, typed withdrawal and timeout for chat and embedding; restored capacity; cold initialization; and native serialization. It uses controlled model doubles, not live SDK downloads or actual GGUF inference. The native-corrected `7bd6` battery killed **88/88** with green initial/restored baselines. Its independent no-bytecode cross-check was deliberately stopped after the SDK defect was reproduced; it is not claimed complete. The SDK-corrected inventory is **98**, awaiting its new frozen campaign.
 
 ## 11. Composed execution policy and retry
 
@@ -252,27 +280,32 @@ The runner varies `PYTHONHASHSEED`, uses fresh processes, records exit status, e
 | Prior independent clean full suites | `84e9a3f` | **3 green / 1 failed**, stopped after first batch; requested 20 not achieved |
 
 | Transitional proof | `103401c` | Full 4 green before stop; race 11 green then wrong-phase oracle failure in run 12 (§9); mutation 82/82 green. |
-| Final race / engine / transport / load | `25c1d2d` | **PENDING** (40 / 40 / 20 / 40 requested) |
-| Final clean full suites | `25c1d2d` | **PENDING** (20 requested) |
+| Prior race / engine / transport / load | `25c1d2d` | **40 / 40 / 20 / 40 GREEN** |
+| Prior clean full suites | `25c1d2d` | **8 completed GREEN**, deliberately stopped before native corrections. |
+| Native-corrected race / engine / transport / load | `7bd6e70` | **40 / 40 / 20 / 30 completed GREEN**; stopped before SDK corrections. |
+| Native-corrected clean full suites | `7bd6e70` | **8 completed GREEN**, not 20; stopped after SDK defect reproduction. |
+| SDK-corrected final campaigns | New freeze pending | No completed final repetition result claimed. |
 
 Load scenarios include 200-caller bursts, global/provider/tenant limits, saturation rejection, sustained contention and priority, 429/local quota pressure, transient failures, fallback behavior in engine tests, cancellation/timeout/mixed storms, 1000-request record bounds, idempotency flooding, repeated close/open and task-count stability. These are deterministic/local adapter workloads, not a live provider or distributed load test.
 
 ## 22. Mutation proof and blind spots resolved
 
-Final inventory: **82 mutants**, each applied to a scratch source copy; only an actual pytest test failure counts as a kill. Harness requires a green baseline and green restored baseline. Timeout/import/harness errors do not count as killed mutations.
+Current inventory: **97 mutants**, each applied to a scratch source copy; only an actual pytest test failure counts as a kill. Harness requires a green baseline and green restored baseline. Timeout/import/harness errors do not count as killed mutations.
 
-**Final implementation battery: 82/82 killed**, baseline and restored baseline GREEN on `25c1d2d` (`mutations-25c1.log`). The `84e9a3f` and `103401c` repetitions also killed 82/82. The earlier `9415153` battery was **71/71 killed**, baseline and restoration green. A prior 69/70 run is preserved as a real survivor, not relabeled green: the original retry-loop cancellation mutation survived because an earlier entry guard masked the missing loop guard. A new event schedule sets withdrawal between entry and admission, demands zero provider calls, and killed the unchanged mutation (targeted 1/1, baseline/restoration green).
+**Historical implementation battery: 82/82 killed**, baseline and restored baseline GREEN on `25c1d2d` (`mutations-25c1.log`). The `84e9a3f` and `103401c` repetitions also killed 82/82. The earlier `9415153` battery was **71/71 killed**, baseline and restoration green. A prior 69/70 run is preserved as a real survivor, not relabeled green: the original retry-loop cancellation mutation survived because an earlier entry guard masked the missing loop guard. A new event schedule sets withdrawal between entry and admission, demands zero provider calls, and killed the unchanged mutation (targeted 1/1, baseline/restoration green).
 
 Coverage includes singleton/second installation, stale authority, probe double release/generation, nonretryable classification, cancellation swallowing, deadlines, global/provider/queue bounds, breaker/gateway bypass, raw errors/secrets/request IDs, fallback and Retry-After. New accounting mutants cover inferred free pricing, invalid pins, aggregate unknown cost, earlier retry spend and malformed SDK counts. New legacy mutants cover variable-keyword classification, typed cancellation and secret labels.
+
+The `7bd6` native-corrected battery killed **88/88** with initial/restored baselines GREEN. The new 98-mutant battery is pending. The harness now excludes copied bytecode and disables bytecode writes, preventing stale equal-size mutation imports. No incorrect kill was demonstrated in the earlier battery.
 
 Separate T11 synchronization mutant: removing the join fails the deterministic companion test (`t11-mutant-killed.log`). This is reported separately, not added to the gateway 82 count.
 
 ## 23. Exact-head GitHub CI and main reconciliation
 
-Implementation/test SHA: `25c1d2d3d89de5694d952e360521e2d49f1d4f4d`.
+Previous implementation/test SHA: `7bd6e700fbc9f0dcfe3485d87cbbd5559df55fe3`; SDK-corrected freeze pending.
 
 - **Exact-head CI: NOT VERIFIED.** A push failed and `gh api user` returned 401 at `2026-09-28T16:01:58Z`; independent local work continued. Repository access and push were re-established at 16:30Z (through `6e705a6`). GET `/user` then returned 403 because this integration token lacks that endpoint, while repository queries and push succeed; this is not a current repository-authentication blocker.
-- Last successful push: `103401c4c8938a28fc26cfe49d6321daa774ecc9`. Its PR run [36446373517](https://github.com/bot523h/nexus-ai-agent/actions/runs/36446373517) was in progress and push run [36446366130](https://github.com/bot523h/nexus-ai-agent/actions/runs/36446366130) queued at the last successful check. Neither establishes current HEAD CI.
+- Last successful push: `7bd6e700fbc9f0dcfe3485d87cbbd5559df55fe3`. At the latest 17:07Z read, 29 of 32 checks had completed successfully and 3 were still in progress, with no completed failures. This is not a final CI verdict and does not cover later SDK corrections.
 - `84e9a3f` push/PR workflows [36443911061](https://github.com/bot523h/nexus-ai-agent/actions/runs/36443911061) / [36443916439](https://github.com/bot523h/nexus-ai-agent/actions/runs/36443916439) are historical, not substitutes. Superseded successor workflows were cancelled by concurrency; cancellations are not passes.
 - Last independently checked main run [36339890292](https://github.com/bot523h/nexus-ai-agent/actions/runs/36339890292) succeeded on `e5b326b2eaf691a638d030ad57acf1ce60016ef0`.
 - Main, open related PR heads and PR113/115/117 Boards were freshly rechecked at 16:30Z before claiming the native-provider implementation path. Later CI remains pending; old rollups retain their temporal scope.
@@ -286,11 +319,12 @@ No merge to main was performed. Independent local diagnostics and a candidate's 
 | Historical Python 3.12 full-suite failure | Same-tree push success / PR failure, test-step exit 1; failed test log unavailable through TLS redirect | **No** | Obtain artifact and minimize exact failure. Fresh green tests cannot supply missing historical identity. |
 | Two real provider egress exceptions | Image generation and synchronous hosted vision execute outside gateway | **No** | Binary-output/sync-entry integration and ownership coordination are separate scoped work; shared credential quota is not globally centralized. |
 | Non-deployment scopes and explicit legacy Router | Separate policy objects are reachable by deliberate construction | **Partially** | Canonical factory no longer enters a private/nested path; explicit bridges/scopes remain separate. Do not claim one scheduler for every credential/model/object. |
+| Hidden canonical SDK policy | Real Router ignored caller fallback veto and hid provider/attempt count; Gemini alias split quota | **Locally corrected** | Final 98-mutant/repetition/exact-head CI campaign pending; explicit legacy bridge remains outside deployment scope. |
 | Runtime lifecycle composition | Revocation is not asynchronous transport cleanup | **Locally hardened, not integrated globally** | W1 composition-root integration/merge needs the owner and its lifecycle proof. This PR does not rewrite leased roots. |
 | External services and fleet behavior | Local skips; process-local coordination; cancellation-resistant remote work | **Not claimed** | Requires actual service/deployment proof. No fleet quota or remote exactly-once guarantee. |
 | Arbitrary secret/payload/custom-code behavior | Pattern redaction and bounded owned collections are not universal semantic/byte-level isolation | **Known limits** | Do not turn tested local invariants into an unlimited security or memory guarantee. |
-| Exact-head CI | New native corrections require fresh proof | **Pending** | Repository authentication is restored; inspect completed checks on the new frozen head. |
-| Final repetitions | Pending at draft time; 82/82 final mutants already killed | **Pending** | Replace only with completed, SHA-bound evidence. |
+| Exact-head CI | New SDK corrections require fresh proof | **Pending** | Repository authentication is restored; inspect completed checks on the new frozen head. |
+| Final repetitions | Pending for SDK-corrected code; 88/88 belongs to predecessor `7bd6` | **Pending** | Replace only with completed, SHA-bound evidence. |
 
 **Verdict: W2 NOT VERIFIED.** Concrete authority/resource/accounting defects were reproduced and hardened, but the missing historical failure identity and explicitly remaining authority/egress boundaries prevent the unqualified final W2 claim.
 

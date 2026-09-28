@@ -1088,10 +1088,112 @@ MUTATIONS += (
 )
 
 
+# Canonical SDK boundaries: the real Router is exercised with controlled I/O.
+MUTATIONS += (
+    Mutation(
+        "sdk_reenables_hidden_fallback",
+        GATEWAY / "adapters.py",
+        '{"disable_fallbacks": True, "num_retries": 0}',
+        '{"disable_fallbacks": False, "num_retries": 0}',
+        GOLDEN,
+        "test_canonical_sdk_hops_are_owned_and_reported_by_gateway",
+        "SDK defaults cannot override the caller fallback veto",
+    ),
+    Mutation(
+        "sdk_reenables_hidden_retry",
+        GATEWAY / "adapters.py",
+        '{"disable_fallbacks": True, "num_retries": 0}',
+        '{"disable_fallbacks": True, "num_retries": 2}',
+        GOLDEN,
+        "test_canonical_sdk_hops_are_owned_and_reported_by_gateway",
+        "one gateway attempt cannot hide several SDK attempts",
+    ),
+    Mutation(
+        "sdk_retains_a_second_cooldown_policy",
+        Path("llm/litellm_provider.py"),
+        "disable_cooldowns=gateway_managed,",
+        "disable_cooldowns=False,",
+        GOLDEN,
+        "test_canonical_sdk_hops_are_owned_and_reported_by_gateway",
+        "only the gateway owns canonical route health",
+    ),
+    Mutation(
+        "canonical_router_keeps_legacy_chain_configuration",
+        GATEWAY / "registry.py",
+        "LiteLLMRoutingProvider(settings, gateway_managed=True)",
+        "LiteLLMRoutingProvider(settings, gateway_managed=False)",
+        GOLDEN,
+        "test_canonical_sdk_hops_are_owned_and_reported_by_gateway",
+        "the canonical factory must select the single-deployment SDK mode",
+    ),
+    Mutation(
+        "canonical_gemini_uses_an_sdk_quota_alias",
+        GATEWAY / "registry.py",
+        'if name == "gemini":',
+        "if False:",
+        GOLDEN,
+        "test_canonical_gemini_has_one_route_and_one_quota_window",
+        "canonical and direct Gemini must share one transport and quota identity",
+    ),
+    Mutation(
+        "single_sdk_error_is_laundered_as_chain_exhaustion",
+        GATEWAY / "registry.py",
+        "partial(classify_router_failure, single_deployment=True)",
+        "partial(classify_router_failure, single_deployment=False)",
+        GOLDEN,
+        "test_canonical_sdk_hops_are_owned_and_reported_by_gateway",
+        "a programming error cannot become fallback-eligible exhausted quota",
+    ),
+    Mutation(
+        "sdk_content_block_becomes_retryable",
+        Path("llm/litellm_provider.py"),
+        '("ContentPolicyViolationError", LLMErrorKind.CONTENT_BLOCKED)',
+        '("ContentPolicyViolationError", LLMErrorKind.TRANSIENT_PROVIDER)',
+        GOLDEN,
+        "test_canonical_sdk_hops_are_owned_and_reported_by_gateway",
+        "moderation refusal must not be laundered through a backup provider",
+    ),
+    Mutation(
+        "sdk_drops_retry_after",
+        Path("llm/litellm_provider.py"),
+        "retry_after=_retry_after_from(headers)",
+        "retry_after=None",
+        GOLDEN,
+        "test_single_sdk_deployment_classification_is_not_chain_exhaustion",
+        "typed SDK rate failures retain Retry-After",
+    ),
+    Mutation(
+        "sdk_context_failure_loses_its_specific_kind",
+        Path("llm/litellm_provider.py"),
+        '("ContextWindowExceededError", LLMErrorKind.CONTEXT_LIMIT),',
+        "",
+        GOLDEN,
+        "test_single_sdk_deployment_classification_is_not_chain_exhaustion",
+        "specific SDK failures must precede broad BadRequestError classification",
+    ),
+)
+
+
+MUTATIONS += (
+    Mutation(
+        "sdk_model_alias_hides_privacy_suffix",
+        GATEWAY / "registry.py",
+        "provider=adapter.name,\n                model=model,",
+        "provider=adapter.name,\n                model=deployment.name,",
+        GOLDEN,
+        "test_canonical_sdk_model_identity_preserves_privacy_filter",
+        "an opaque SDK model alias cannot hide the free-tier privacy suffix",
+    ),
+)
+
+
 def _run_pytest(
     package_root: Path, targets: tuple[str, ...] | str, timeout: int
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
+    # The scratch package contains no bytecode; do not create any between
+    # equal-size, same-timestamp mutations. Each subprocess reads source.
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
     python_paths = [str(package_root), str(ROOT / "src")]
     if env.get("PYTHONPATH"):
         python_paths.append(env["PYTHONPATH"])
@@ -1153,7 +1255,11 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="nexus-llm-gateway-mutations-") as temporary:
         package_root = Path(temporary) / "src"
-        shutil.copytree(PACKAGE, package_root / "nexus_ai_agent")
+        shutil.copytree(
+            PACKAGE,
+            package_root / "nexus_ai_agent",
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
         mutated_root = package_root / "nexus_ai_agent"
 
         print(f"baseline ({len(ALL_TESTS)} gateway test files) ... ", end="", flush=True)

@@ -1052,25 +1052,12 @@ def _flatten(request: LLMRequest) -> tuple[str, str]:
 
 
 class LitellmRouterAdapter:
-    """Adapter for a ``litellm.Router`` fallback chain.
+    """SDK transport adapter, or an explicitly constructed legacy Router bridge.
 
-    The Router is itself a deployment selector: given ``model_name`` it picks a
-    healthy deployment and walks its configured ``fallbacks`` list, parking a
-    deployment on cooldown after a 429. That is *provider-internal* routing, and
-    it is why this adapter is registered with ``RetryPolicy(max_attempts=1)``:
-    retrying a Router call from the gateway would nest a second retry loop over
-    the first and multiply the attempts against every free-tier quota in the
-    chain (LAW 7 — a retry must have a purpose; here the Router already owns
-    deployment selection).
-
-    What the gateway still owns for this route, and what the Router cannot do:
-    the caller's timeout budget, concurrency bounds, the local provider quota
-    gate, circuit breaking, typed error classification, correlation ids and the
-    observability record.
-
-    Failure classification is supplied by the caller as ``classify`` — a function
-    of the *exception type* — so litellm's own exception hierarchy stays inside
-    ``llm/litellm_provider.py`` and nothing here inspects a message string.
+    Canonical composition sets ``single_deployment``: one SDK invocation targets
+    one deployment, with SDK retries/fallbacks disabled. The gateway owns each
+    hop, quota, breaker, admission and outcome. The default preserves the explicit
+    non-deployment legacy bridge; it is not the canonical factory configuration.
     """
 
     def __init__(
@@ -1078,12 +1065,16 @@ class LitellmRouterAdapter:
         router: Any,
         *,
         primary_name: str,
+        name: str = "routing",
+        single_deployment: bool = False,
         chain_names: Sequence[str] = (),
         model: str | None = None,
         classify: Callable[[Exception], LLMError] | None = None,
         on_response: Callable[[Any], None] | None = None,
     ) -> None:
         self._router = router
+        self._name = name
+        self._single_deployment = single_deployment
         self._primary_name = primary_name
         self._chain_names = tuple(chain_names)
         self._model = model or primary_name
@@ -1092,7 +1083,7 @@ class LitellmRouterAdapter:
 
     @property
     def name(self) -> str:
-        return "routing"
+        return self._name
 
     @property
     def model(self) -> str:
@@ -1164,10 +1155,14 @@ class LitellmRouterAdapter:
             )
         messages = self.build_messages(request)
         _ = budget  # the Router owns its per-deployment timeout (settings.llm_request_timeout)
+        sdk_policy = (
+            {"disable_fallbacks": True, "num_retries": 0} if self._single_deployment else {}
+        )
         try:
             response = await self._router.acompletion(
                 model=self._primary_name,
                 messages=messages,
+                **sdk_policy,
             )
         except Exception as exc:  # noqa: BLE001 — classified by type below, never re-raised raw
             if self._classify is not None:

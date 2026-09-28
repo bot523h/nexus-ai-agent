@@ -259,7 +259,8 @@ async def test_factory_builds_a_canonical_gateway_facade() -> None:
 
     assert isinstance(llm, GatewayLLMProvider)
     assert llm.authority() is get_llm_gateway()
-    assert llm.authority().adapter("routing") is not None
+    assert llm.authority().adapter("ollama") is not None
+    assert llm.authority().adapter("routing") is None  # no opaque multi-provider hop
     assert "nexus-ollama" in label
 
 

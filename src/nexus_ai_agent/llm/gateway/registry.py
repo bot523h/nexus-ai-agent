@@ -26,13 +26,13 @@ gateway does not change which provider answers:
 ===========================  =========================================
 settings                     routes registered (rank order)
 ===========================  =========================================
-``llm_routing_enabled`` +    ``routing/<primary>`` (litellm chain, rank 10)
+``llm_routing_enabled`` +    one route per deployment (ranks 10–13)
   a buildable chain          ``+ local-degraded/fake`` (rank 900) — this is
                              today's ``FallbackProvider → FakeLLM`` outer layer
 ``gemini_api_key``           ``gemini/<gemini_model>`` (rank 10)
-``llama_server_base_url``    ``llama-server/<model>`` (rank 20)
-``model_path`` exists        ``llama-cpp/<model>`` (rank 30)
-nothing configured           ``local-degraded/fake`` (rank 900)
+``llama_server_base_url``    ``llama-server/<model>`` (rank 40)
+``model_path`` exists        ``llama-cpp/<model>`` (rank 50)
+nothing configured           no model route (factory may return FakeLLM)
 ===========================  =========================================
 
 The degraded local route is registered **only** where the legacy composition
@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import threading
 from collections import OrderedDict
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -196,17 +197,25 @@ def build_gateway_from_settings(
     if settings.llm_routing_enabled:
         chain = _build_routing_adapter(settings)
         if chain is not None:
-            adapter, route, embedding_adapter = chain
-            adapters.extend((adapter, embedding_adapter))
-            routes.extend((route, embedding_adapter.route(rank=10)))
-            rules.append(RouteRule(provider=route.provider, model=route.model, purpose=None))
+            chain_adapters, chain_routes, embedding_adapter = chain
+            adapters.extend((*chain_adapters, embedding_adapter))
+            routes.extend((*chain_routes, embedding_adapter.route(rank=10)))
+            rules.append(
+                RouteRule(
+                    provider=embedding_adapter.name,
+                    model="local-hash-384",
+                    operation=LLMOperation.EMBEDDINGS,
+                )
+            )
+            primary = chain_routes[0]
+            rules.append(RouteRule(provider=primary.provider, model=primary.model, purpose=None))
             # This is exactly where the legacy composition wrapped the chain in
             # FallbackProvider(primary=chain, fallback=FakeLLMProvider()), so the
             # degraded route is registered here and only here.
             degraded_allowed = True
 
     # 2. Direct Gemini (the bot chat / summarize / vision / code path).
-    if settings.gemini_api_key:
+    if settings.gemini_api_key and not any(a.name == "gemini" for a in adapters):
         gemini = GeminiHttpAdapter(
             api_key=settings.gemini_api_key,
             default_model=settings.gemini_model,
@@ -277,7 +286,7 @@ def build_gateway_from_settings(
         routes=routes,
         rules=tuple(rules),
         timeout=timeout,
-        # The Router already walks deployments. Never retry its entire chain.
+        # Preserve one attempt per deployment; gateway policy alone owns hops.
         retry=RetryPolicy(max_attempts=1 if degraded_allowed else 3),
         concurrency=ConcurrencyPolicy(
             max_inflight_global=4,
@@ -326,8 +335,8 @@ def build_gateway_from_settings(
 # ── adapter construction (import-guarded: optional dependencies) ────────
 
 
-def _build_routing_adapter(settings: Settings) -> tuple[Any, Route, Any] | None:
-    """Wrap the litellm routing chain as one gateway route."""
+def _build_routing_adapter(settings: Settings) -> tuple[list[Any], list[Route], Any] | None:
+    """Expose each configured deployment as a gateway-owned route."""
 
     try:
         from nexus_ai_agent.llm.litellm_provider import (
@@ -338,23 +347,48 @@ def _build_routing_adapter(settings: Settings) -> tuple[Any, Route, Any] | None:
         log.warning("litellm_not_installed", hint="pip install 'litellm>=1.74,<2'")
         return None
     try:
-        provider = LiteLLMRoutingProvider(settings)
+        provider = LiteLLMRoutingProvider(settings, gateway_managed=True)
     except ImportError:  # pragma: no cover — guarded above, kept explicit
         return None
     except ValueError:
         log.info("no_providers_configured_for_routing_chain")
         return None
 
-    # Do not wrap provider.generate(): that method is a compatibility facade
-    # which would enter its own private gateway and duplicate all policy state.
-    adapter = LitellmRouterAdapter(
-        provider._router,
-        primary_name=provider.chain_names[0],
-        chain_names=provider.chain_names,
-        model=provider.chain_names[0],
-        classify=classify_router_failure,
-        on_response=provider._record,
-    )
+    # The real SDK used to hide multiple providers behind a successful single
+    # "routing" attempt, even when the request vetoed fallback. Expose each hop.
+    adapters: list[Any] = []
+    routes: list[Route] = []
+    for index, deployment in enumerate(provider._chain):
+        name, _, model = deployment.litellm_model.partition("/")
+        if name == "gemini":
+            # One transport/identity for the canonical CLI and direct bot path.
+            # A second SDK alias would split the configured Gemini quota window.
+            adapter: Any = GeminiHttpAdapter(
+                api_key=settings.gemini_api_key or "",
+                default_model=settings.gemini_model,
+            )
+        else:
+            adapter = LitellmRouterAdapter(
+                provider._router,
+                name=name,
+                single_deployment=True,
+                primary_name=deployment.name,
+                chain_names=(deployment.name,),
+                model=model,
+                classify=partial(classify_router_failure, single_deployment=True),
+                on_response=provider._record,
+            )
+        adapters.append(adapter)
+        routes.append(
+            Route(
+                provider=adapter.name,
+                model=model,
+                operations=adapter.operations,
+                modalities=adapter.modalities,
+                rank=10 + index,
+                label=deployment.name,
+            )
+        )
     # Preserve the historical deterministic 384-dimensional local embeddings.
     # This adapter exposes embed ONLY, never the provider's generate method.
     embedding_adapter = LegacyProviderAdapter(
@@ -363,15 +397,7 @@ def _build_routing_adapter(settings: Settings) -> tuple[Any, Route, Any] | None:
         model="local-hash-384",
         operations=frozenset({LLMOperation.EMBEDDINGS}),
     )
-    route = Route(
-        provider=adapter.name,
-        model=adapter.model,
-        operations=adapter.operations,
-        modalities=adapter.modalities,
-        rank=10,
-        label="litellm-chain:" + ">".join(provider.chain_names),
-    )
-    return adapter, route, embedding_adapter
+    return adapters, routes, embedding_adapter
 
 
 def _build_llama_server_adapter(settings: Settings) -> Any | None:
