@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-28T11:05:28Z",
+  "updated_at": "2026-09-28T11:46:12Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -752,6 +752,79 @@
         "src/nexus_ai_agent/features/referral.py",
         "tests/unit/test_slideshow_render.py",
         "tests/unit/test_imagine_command.py"
+      ]
+    },
+    {
+      "id": "llm-gateway-authority",
+      "description": "W2 — Global LLM Gateway: single authority for every canonical LLM execution (contract, typed errors, policy, retry/backoff, bounded concurrency, rate limit, circuit, fallback, observability, usage truth, cancellation) plus migration of the callers that own a raw provider path.",
+      "paths": [
+        "src/nexus_ai_agent/llm/errors.py",
+        "src/nexus_ai_agent/llm/gateway/",
+        "src/nexus_ai_agent/llm/__init__.py",
+        "src/nexus_ai_agent/llm/provider.py",
+        "src/nexus_ai_agent/llm/fallback_provider.py",
+        "src/nexus_ai_agent/llm/gemini_provider.py",
+        "src/nexus_ai_agent/llm/litellm_provider.py",
+        "src/nexus_ai_agent/features/ai_chat.py",
+        "src/nexus_ai_agent/features/summarizer.py",
+        "src/nexus_ai_agent/features/ai_memory.py",
+        "src/nexus_ai_agent/agents/store/base_agent.py",
+        "src/nexus_ai_agent/creative/video_director.py",
+        "tests/unit/test_llm_gateway_contract.py",
+        "tests/unit/test_llm_gateway_errors.py",
+        "tests/unit/test_llm_gateway_policy.py",
+        "tests/unit/test_llm_gateway_scheduler.py",
+        "tests/unit/test_llm_gateway_retry.py",
+        "tests/unit/test_llm_gateway_ratelimit.py",
+        "tests/unit/test_llm_gateway_circuit.py",
+        "tests/unit/test_llm_gateway_observability.py",
+        "tests/unit/test_llm_gateway_adapters.py",
+        "tests/unit/test_llm_gateway_adversarial.py",
+        "tests/unit/test_llm_gateway_cancellation.py",
+        "tests/unit/test_llm_gateway_load.py",
+        "tests/unit/test_llm_gateway_compat.py",
+        "tests/unit/test_llm_gateway_security.py",
+        "tests/architecture/test_llm_gateway_authority.py",
+        "scripts/llm_gateway_mutations.py",
+        "docs/architecture/LLM_GATEWAY.md",
+        "docs/architecture/adr/0012-global-llm-gateway-authority.md",
+        "W2_LLM_GATEWAY_TRUTH_REPORT_2026-09-27.md"
+      ],
+      "note": "Deliberately EXCLUDED (documented, not forgotten): features/request_queue.py + its tests + scripts/llm_queue_mutations.py + MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md (active lease task-195-salvage, gates_owner); knowledge/ and integrations/ (active lease task-185); creative/image_gen/ and creative/slideshow/analysis.py (own hardened ports, sync-only transport injection pinned by tests) — recorded as explicit architectural exceptions with residual-risk entries in the W2 report."
+    },
+    {
+      "id": "runtime-composition-w1",
+      "description": "W1 canonical runtime composition: one runtime owner for settings snapshot, database identity, LLM engine/provider, request queue, conversation store, and lifecycle shutdown. Constructor-ownership ratchet + database-identity contract + shutdown wiring proof. Recovery (arena/01a0e432) extends the original W1 fence with DB-lifecycle regression, shutdown-cancellation regression, and test-isolation hardening (conftest + migrate fixtures). Explicitly NOT the W2 typed gateway and NOT touching knowledge/, integrations/, .github/, request_queue.py (active/residual claims honored; task-185 expired at GC).",
+      "paths": [
+        "src/nexus_ai_agent/application/runtime.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/bot/feature_handlers.py",
+        "src/nexus_ai_agent/bot/knowledge_handlers.py",
+        "src/nexus_ai_agent/agents/store/agent_manager.py",
+        "src/nexus_ai_agent/llm/gemini_provider.py",
+        "src/nexus_ai_agent/storage/db.py",
+        "tests/unit/test_runtime_composition.py",
+        "tests/architecture/test_constructor_ownership.py",
+        "tests/unit/test_db_lifecycle_regression.py",
+        "tests/unit/test_runtime_shutdown_regression.py",
+        "tests/conftest.py"
+      ]
+    },
+    {
+      "id": "production-dr-deploy",
+      "description": "Production/DR/deploy truth (mission-2): maintenance DR lane (backup/restore/failure taxonomy), readiness+identity API surface, maintenance workflow hardening, deploy smoke/version-identity gate, DR runbooks and DR tests",
+      "paths": [
+        "src/nexus_ai_agent/maintenance/",
+        "src/nexus_ai_agent/api/app.py",
+        "scripts/deploy_smoke.py",
+        "Dockerfile",
+        ".github/workflows/maintenance.yml",
+        "docs/ops/",
+        "tests/unit/test_restore_drill.py",
+        "tests/unit/test_backup_dr_truth.py",
+        "tests/unit/test_readyz_identity.py",
+        "tests/unit/test_deploy_smoke_readyz.py"
       ]
     }
   ],
@@ -2086,7 +2159,7 @@
       "title_fa": "بکاپ شبانهٔ دیتابیس هرگز موفق نشده (۳ از ۳ سرخ) — مسیر بکاپ Production واقعاً کار کند",
       "zone": "ci-quality",
       "priority": "P1",
-      "status": "queued",
+      "status": "active",
       "scope": "maintenance.yml backup-db fails 3/3 scheduled runs (35580701817, 35705502209, 35838057275 — the 'Run nexus maintenance backup' step exits 1; the 2026-09-21 'success' 35586584833 was housekeeping-only with backup-db skipped, verified via the job API). backup.py/r2.py unchanged across those runs, so the failure is environmental (R2 secrets missing => by-design red, or R2+Neon misconfiguration). Read the job log, record the exact root cause, fix configuration (owner secrets per docs/ops/r2-storage.md §4) and/or the workflow preflight, then prove a real upload under backups/db/<stamp>/ via workflow_dispatch.",
       "scope_fa": "backup-db در سه اجرا پیاپی سرخ است؛ کد backup.py/r2.py در بازهٔ آن اجراها دست‌نخورده مانده، پس شکست محیطی است (R2 secrets / پیکربندی Neon). لوق جاب باید خوانده، ریشه ثبت و با یک اجرای دستی موفق (آپلود واقع‌زیر backups/db/<stamp>/) اثبات شود.",
       "prerequisites": [],
@@ -2099,15 +2172,14 @@
         "job log excerpt of one failed run naming the exact error",
         "green workflow_dispatch run id + the uploaded R2 key"
       ],
-      "exclusive_paths": [
-        ".github/workflows/maintenance.yml"
-      ],
+      "exclusive_paths": [],
       "owner_hint": "owner action for the secrets; any free agent for the forensics/preflight",
-      "agent_branch": "",
-      "claimed_at": null,
-      "ttl_hours": 24,
+      "agent_branch": "arena/01a0dee1-nexus-ai-agent",
+      "claimed_at": "2026-09-26T19:15:19Z",
+      "ttl_hours": 48,
       "gates_owner": false,
-      "note": "Forensics recorded 2026-09-23. Repo-side verifiability absorbed by task-167-backup-verifiability (P0-C, 2026-09-24). This task keeps ONLY the owner-action part: set R2/Neon secrets (docs/ops/r2-storage.md §4) and prove one green workflow_dispatch run with upload under backups/db/<stamp>/."
+      "note": "",
+      "handoff_note": "File lease for .github/workflows/maintenance.yml released to task-192-production-dr-truth (superset scope: workflow hardening incl. restore-drill job + evidence steps). task-164 remaining scope is OWNER-SIDE: R2 secrets + a real green dispatch of backup-db; it holds no file lease."
     },
     {
       "priority": "P0",
@@ -2873,7 +2945,7 @@
       "task": "production-wave-01a0e742",
       "zone": "production-wave-01a0e742",
       "priority": "P0",
-      "status": "active",
+      "status": "deferred",
       "title": "Owner-authorized ten-step production reliability wave",
       "scope": "Research-led contracts for cloud, ownership, typed failures, auth, bounded jobs, cancellation, erasure scope, durable delivery, locked dependencies and restore/readiness",
       "acceptance_criteria": [
@@ -2949,10 +3021,254 @@
         "tests/unit/test_imagine_command.py"
       ],
       "agent_branch": "arena/01a0e742-nexus-ai-agent",
-      "claimed_at": "2026-09-28T11:05:28Z",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": ""
+      "note": "",
+      "evidence": {
+        "selected": "676 passed, 1 PostgreSQL skip, 3 warnings; 46 files; 75.53s",
+        "new_contracts": 46,
+        "installed_wheel": "74 passed in 11.63s; --no-deps isolated target, reduced diagnostic dependencies",
+        "types": "28 changed source files clean",
+        "lint": "38 changed/new Python files clean",
+        "audit": "245 locked package resolutions; 184 audited Python 3.11 dependencies; 8 advisory records/6 unique IDs/3 packages; release blocked",
+        "restore": "real isolated SQLite primary drill passed, elapsed 0.017589s; not production RTO/RPO",
+        "coordination": "Local check was stale. Remote boards imported before source publication; W1/W2/DR overlap means source MUST NOT be pushed until explicit handoff/expiry and fresh check. Source retained as local atomic commit. Comments PR116#5869185755, PR113#5869186010, PR96#5869186221."
+      }
+    },
+    {
+      "task": "task-197-w2-global-llm-gateway",
+      "title": "W2 — Global LLM Gateway: one authority, typed errors, central policy, bounded concurrency, proven cancellation, truthful usage",
+      "title_fa": "W2 — دروازهٔ جهانی LLM: مرجع یگانه، خطاهای تایپ‌شده، سیاست متمرکز، همروندی کرانه‌دار، لغو اثبات‌شده و مصرف صادقانه",
+      "zone": "llm-gateway-authority",
+      "priority": "P0",
+      "status": "active_in_review",
+      "scope": "Build the canonical LLM execution authority (llm/gateway/) and migrate every raw provider path that this zone owns onto it: GeminiEngine, SummarizerEngine, GeminiProvider, FallbackProvider, LiteLLMRoutingProvider, StoreAgent/AIMemoryEngine provider construction, and creative/video_director. Typed error taxonomy replaces all substring-based failure detection; retry/backoff, timeout budget, rate limit, circuit, fallback and concurrency are owned by one deterministic policy layer; every request is observable without leaking prompt/secret; usage is truthful (UNKNOWN, never invented).",
+      "scope_fa": "ساخت مرجع یگانهٔ اجرای LLM (llm/gateway/) و مهاجرت همهٔ مسیرهای خام provider در مالکیت این ناحیه: GeminiEngine، SummarizerEngine، GeminiProvider، FallbackProvider، LiteLLMRoutingProvider، ساخت provider در StoreAgent/AIMemoryEngine و creative/video_director. طبقه‌بندی تایپ‌شدهٔ خطا جای همهٔ تشخیص‌های رشته‌ای را می‌گیرد؛ retry/backoff، بودجهٔ timeout، محدودیت نرخ، circuit، fallback و همروندی در یک لایهٔ سیاست قطعی متمرکز می‌شوند؛ هر درخواست بدون نشت prompt/secret قابل رصد است و usage صادقانه ثبت می‌شود (UNKNOWN، نه عدد جعلی).",
+      "prerequisites": [
+        "task-195-llm-queue-lifecycle"
+      ],
+      "acceptance_criteria": [
+        "One canonical path: no module in this zone reaches a provider except through LLMGateway (AST architecture guard green)",
+        "Typed error taxonomy covers all 13 mission kinds + content-blocked/deadline/overload; zero substring-based classification remains in llm/",
+        "Retry is policy-driven, deadline-clamped, jittered, Retry-After aware, and stops instantly on cancellation",
+        "Concurrency is bounded globally and per provider; queue depth is bounded; saturation rejects with a typed OVERLOADED error instead of growing memory",
+        "Cancellation proven separately before-queue, in-queue and during-provider-request, with no orphan task",
+        "Fallback is policy-evaluated and always recorded (degraded=True) — never silent, never laundering a content block or a cancellation",
+        "Observability record per request (id, caller, provider, model, queue wait, execution, retries, outcome, error class, usage) with no prompt/secret/token content",
+        "Usage/cost is truthful: provider-reported or UNKNOWN, never estimated-silent",
+        "Mutation battery kills every critical regression (retry classification, timeout bypass, queue bypass, direct construction, cancellation propagation, concurrency bound, fallback swallow, provider mapping, secret logging, correlation id)",
+        "Full existing suite stays green (zero regression) and CI is green on the exact head SHA"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_llm_gateway_*.py tests/architecture/test_llm_gateway_authority.py",
+        "python scripts/llm_gateway_mutations.py  (all mutants killed)",
+        "pytest -q -m 'not slow'  (zero regression against the 2915-passed baseline on e5b326b)",
+        "make lint && make types",
+        "CI green on the exact PR head SHA"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/llm/errors.py",
+        "src/nexus_ai_agent/llm/gateway/",
+        "src/nexus_ai_agent/llm/__init__.py",
+        "src/nexus_ai_agent/llm/provider.py",
+        "src/nexus_ai_agent/llm/fallback_provider.py",
+        "src/nexus_ai_agent/llm/gemini_provider.py",
+        "src/nexus_ai_agent/llm/litellm_provider.py",
+        "src/nexus_ai_agent/features/ai_chat.py",
+        "src/nexus_ai_agent/features/summarizer.py",
+        "src/nexus_ai_agent/features/ai_memory.py",
+        "src/nexus_ai_agent/agents/store/base_agent.py",
+        "src/nexus_ai_agent/creative/video_director.py",
+        "tests/unit/test_llm_gateway_contract.py",
+        "tests/unit/test_llm_gateway_errors.py",
+        "tests/unit/test_llm_gateway_policy.py",
+        "tests/unit/test_llm_gateway_scheduler.py",
+        "tests/unit/test_llm_gateway_retry.py",
+        "tests/unit/test_llm_gateway_ratelimit.py",
+        "tests/unit/test_llm_gateway_circuit.py",
+        "tests/unit/test_llm_gateway_observability.py",
+        "tests/unit/test_llm_gateway_adapters.py",
+        "tests/unit/test_llm_gateway_adversarial.py",
+        "tests/unit/test_llm_gateway_cancellation.py",
+        "tests/unit/test_llm_gateway_load.py",
+        "tests/unit/test_llm_gateway_compat.py",
+        "tests/unit/test_llm_gateway_security.py",
+        "tests/architecture/test_llm_gateway_authority.py",
+        "scripts/llm_gateway_mutations.py",
+        "docs/architecture/LLM_GATEWAY.md",
+        "docs/architecture/adr/0012-global-llm-gateway-authority.md",
+        "W2_LLM_GATEWAY_TRUTH_REPORT_2026-09-27.md"
+      ],
+      "owner_hint": "W2 engineering owner (this session)",
+      "agent_branch": "arena/01a0e4f6-nexus-ai-agent",
+      "claimed_at": "2026-09-27T22:39:01Z",
+      "ttl_hours": 48,
+      "gates_owner": false,
+      "note": "gates_owner deliberately NOT taken over: task-195-salvage (arena/01a0e3b7) holds the active gates lease until 2026-09-28T16:54Z. This claim runs its own lint/types/tests inside an isolated sandbox (no shared runner contention) and defers the authoritative main-bound gate verdict to its own PR CI on the exact head SHA, per the board gates_rule. | FORWARD WORK (recorded here because next_work is pinned at exactly ten entries by tests/unit/test_agent_board.py::test_next_work_network_is_structured): unify the shared Gemini quota of creative/image_gen/gemini_adapter.py and creative/slideshow/analysis.py under the gateway. Both spend the same API key/quota but keep their own hardened resilience layers (image validation + prompt-hash cache + paid-tier guard; sync MockTransport injection pinned by test_gemini_key_transport / test_creative_studio). They are explicit, documented W2 architectural exceptions, so RPM/RPD accounting is still split — a bytes-out capability in the gateway contract is needed first (LAW 13: evidence of real need before complexity). | W2 DELIVERED 2026-09-28 → PR #116 (head 55c008e). GATES (repo venv, Py3.11.2, full deps): architecture guard 12 passed; `pytest tests/unit -k llm_gateway` 637 passed / 1 skipped (13 files); `python scripts/llm_gateway_mutations.py` 49/49 mutants killed, baseline GREEN before and restored copy GREEN after; `pytest -q -rs -m 'not slow'` 3564 passed / 31 skipped / 0 failed vs the 2915/30 baseline on e5b326b (+650 = 638 gateway + 12 architecture tests → zero regression); ruff check + ruff format --check clean; mypy clean on 259 source files. CI on the exact head SHA: test, lint, python-parity 3.10/3.11/3.12, extras-matrix core/pdf/speech/translate, trust-mutations, migrate-postgres, release-lineage, lint-fast all success. Pinned bypasses remain 2 (creative/image_gen/gemini_adapter.py image generation; creative/slideshow/analysis.py synchronous vision scoring), ratcheted by MAX_PINNED_BYPASSES=2 and forbidden from growing; substring classifications in src/ = 0 (structural AST guard with a liveness test). Full evidence record: W2_LLM_GATEWAY_TRUTH_REPORT_2026-09-28.md. Status moved to active_in_review per the board convention (coding stopped, PR open, this branch still owns its exclusive paths)."
+    },
+    {
+      "task": "task-196-w1-runtime-composition",
+      "title": "W1 canonical runtime composition: one owner for DB/LLM/queue/lifecycle + constructor-ownership ratchet + shutdown wiring (RECOVERY)",
+      "title_fa": "ترکیب runtime یکپارچه W1 + بازیابی و سخت‌سازی: رفع pendingapproval، cancellation در shutdown، و bypass در ratchet",
+      "zone": "runtime-composition-w1",
+      "priority": "P0",
+      "status": "completed_released",
+      "scope": "RECOVERY of W1 (326f72f, branch arena/01a0e356, CI run 36336910453: 12/16, 1 failed pendingapproval in test_approval). Transplant the W1 feat verbatim onto main e5b326b (W2 merged), then harden: (1) DB lifecycle — absolute-path normalization for _initialized_paths/_engine_path (relative-key collision across CWDs) + settings-cache isolation in test fixtures; (2) RuntimeContext.aclose cancellation — progress-preserving, idempotent, re-raise semantics; (3) constructor ratchet alias resolution + adversarial tests. All W1 acceptance criteria preserved, plus regression suites for each defect class.",
+      "scope_fa": "",
+      "prerequisites": [
+        "task-195-salvage"
+      ],
+      "acceptance_criteria": [
+        "Gateway identity: the engine instance handlers, feature engines, knowledge handlers and agent paths resolve IS the runtime's single shared engine (behavioral identity assertions, not type checks).",
+        "Database identity: with NEXUS_DATABASE_URL unset and settings.db_path customised (env NEXUS_DB_PATH), get_session(None) opens THAT path, never the hardcoded 'data/app.sqlite' literal; regression proves the default remains 'data/app.sqlite'.",
+        "Constructor ownership: AST guard enumerates every GeminiEngine/GeminiProvider/ConversationStore/GeminiRequestQueue construction site INCLUDING import aliases; all sites are in the approved set; any new site fails the suite.",
+        "Shutdown ownership: invoking the Application post_shutdown hook ACTUALLY closes the request queue (pending waiters settled, closed status), shuts the job queue down and disposes DB connections, in a recorded order; cancellation cannot strand resources; double-close is a no-op.",
+        "Zero regression: full non-slow suite, ruff/format/mypy, board structural tests and the llm_queue mutation harness stay green; W2 timeout contract preserved on 3.10/3.11/3.12; no production-readiness claim is made.",
+        "Negative + mutation proof for each new invariant AND each recovered defect (DB relative-path collision -> RED; shutdown cancellation strand -> RED; ratchet alias bypass -> RED).",
+        "knowledge/, integrations/, .github/, request_queue.py untouched (residual/active claims honored); overlap with stale open PRs recorded in overlap_ack."
+      ],
+      "evidence_required": [
+        "Deterministic reproducer for the pendingapproval failure (migrate_cli + agent_store + ai_memory + approval) RED on W1 tree, GREEN after fix.",
+        "Constructor-site inventory before/after with exact line references.",
+        "pytest counts for tests/unit/test_runtime_composition.py + tests/architecture/test_constructor_ownership.py + new regression suites.",
+        "Mutation/transplant probes for the three recovered defects.",
+        "Exact-head CI 16/16 GREEN on the recovery head, including python-parity 3.10/3.11/3.12."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/application/runtime.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/bot/feature_handlers.py",
+        "src/nexus_ai_agent/bot/knowledge_handlers.py",
+        "src/nexus_ai_agent/agents/store/agent_manager.py",
+        "src/nexus_ai_agent/llm/gemini_provider.py",
+        "src/nexus_ai_agent/storage/db.py",
+        "tests/unit/test_runtime_composition.py",
+        "tests/architecture/test_constructor_ownership.py",
+        "tests/unit/test_db_lifecycle_regression.py",
+        "tests/unit/test_runtime_shutdown_regression.py",
+        "tests/conftest.py"
+      ],
+      "owner_hint": "Arena agent on arena/01a0e432-nexus-ai-agent (W1 recovery mission)",
+      "agent_branch": "arena/01a0e432-nexus-ai-agent",
+      "claimed_at": "2026-09-27T19:05:00Z",
+      "ttl_hours": 48,
+      "gates_owner": true,
+      "overlap_ack": {
+        "stale_open_prs_touching_same_files": {
+          "src/nexus_ai_agent/bot/app.py": [
+            "#33 (assigned_to_E_pr33, ancient)",
+            "#60",
+            "#63",
+            "#66"
+          ],
+          "src/nexus_ai_agent/bot/handlers.py": [
+            "#33",
+            "#89",
+            "#99"
+          ],
+          "src/nexus_ai_agent/storage/db.py": [
+            "#33",
+            "#92"
+          ],
+          "src/nexus_ai_agent/agents/store/agent_manager.py": [
+            "#99"
+          ]
+        },
+        "why": "All overlapping open PRs are 30+ commits behind main with expired/no active board claims; the recovery mission orders W1 next. Seams are minimal and merge-compatible.",
+        "excluded_active": {
+          "src/nexus_ai_agent/features/request_queue.py + tests/unit/test_request_queue.py + scripts/llm_queue_mutations.py + MASTER report": "task-195-salvage (arena/01a0e3b7) active — W2 merged at e5b326b, queue contract preserved verbatim, no touch.",
+          ".github/ + continuum paths": "task-154/task-184 (arena/01a0e2bb) active — no touch.",
+          "src/nexus_ai_agent/knowledge/ + src/nexus_ai_agent/integrations/": "task-185 expired at GC (2026-09-27T19:05Z) but still excluded by design — knowledge call sites receive provider through bot/knowledge_handlers.py."
+        }
+      },
+      "note": "RECOVERY CONTINUATION: W1 head 326f72f (arena/01a0e356) is CI-RED (run 36336910453, 12/16, test_approval pendingapproval). Session is branch-bound to arena/01a0e432 and cannot push to arena/01a0e356 (salvage precedent PR102->PR107, PR108->PR110). This claim transplants W1 verbatim onto main e5b326b + hardens the three defect classes. Original W1 lease (arena/01a0e356, until 2026-09-29) is acknowledged in takeover_log; no history rewritten, no work dropped. Fence tightened 19:10Z: integration migrate fixtures need no direct touch (conftest autouse _isolate_settings_cache covers all settings pollution); removed from exclusive_paths to keep the lease minimal. | CONTINUATION HAND-OVER 2026-09-27T21:10Z: fence released to arena/01a0e442-nexus-ai-agent (owner-directed W1 Final Close-Out): the recovery head adc86cd is CI-green on BOTH cycles (push 36345622271, pull_request 36345625323 — 16/16, verified live by gh) and is merged VERBATIM into the continuation; the only open defect found by close-out forensics (E2/E2b schema fast-path outliving its engine) is fixed there. Nothing rewritten; adc86cd ancestry intact."
+    },
+    {
+      "task": "task-196-closeout-w1",
+      "title": "W1 final close-out: E2/E2b engine-owned schema fast-path + adversarial proof + exact-head CI",
+      "title_fa": "بستن نهایی W1: گارد schema متعلق به engine (E2/E2b) + اثبات adversarial + CI روی exact head",
+      "zone": "runtime-composition-w1",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Owner-directed GOLDEN close-out. Carries PR #112 (09cfe54 + adc86cd) VERBATIM as ancestors. Adds: engine-object-owned schema readiness (weak set) so external file replacement after engine disposal re-initialises instead of permanent 'no such table' (E2/E3a/E4); regression contracts J/K/L in test_db_lifecycle_regression.py; WAL-sidecar restore protocol documented; full mutation battery + full gates + exact-head CI evidence.",
+      "scope_fa": "",
+      "prerequisites": [
+        "task-196-w1-runtime-composition"
+      ],
+      "acceptance_criteria": [
+        "E-matrix E1..E9 green on the final tree (E2/E3a/E3b/E4 heal after engine disposal; E5 CWD aliasing stays fixed).",
+        "test_db_lifecycle_regression.py a..l green (12 tests), J/L kill the path-set-gate mutation RED when reverted.",
+        "Full non-slow suite + ruff/format/mypy green on the final head.",
+        "CI 16/16 terminal-green on BOTH cycles (push + pull_request) for the exact final head SHA.",
+        "Fence identical to the superseded claim; no overlap with active claims (task-195-salvage queue files untouched)."
+      ],
+      "evidence_required": [
+        "Mutation matrix log (each revert -> which test goes RED).",
+        "pytest counts for the lifecycle/shutdown/composition/ratchet suites.",
+        "gh run ids + job conclusions for the exact final head."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/application/runtime.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/bot/feature_handlers.py",
+        "src/nexus_ai_agent/bot/knowledge_handlers.py",
+        "src/nexus_ai_agent/agents/store/agent_manager.py",
+        "src/nexus_ai_agent/llm/gemini_provider.py",
+        "src/nexus_ai_agent/storage/db.py",
+        "tests/unit/test_runtime_composition.py",
+        "tests/architecture/test_constructor_ownership.py",
+        "tests/unit/test_db_lifecycle_regression.py",
+        "tests/unit/test_runtime_shutdown_regression.py",
+        "tests/conftest.py"
+      ],
+      "owner_hint": "Arena agent on arena/01a0e442-nexus-ai-agent (W1 close-out mission)",
+      "agent_branch": "arena/01a0e442-nexus-ai-agent",
+      "claimed_at": "2026-09-27T21:10:00Z",
+      "ttl_hours": 24,
+      "gates_owner": true,
+      "note": "Session-bound continuation: cannot push to arena/01a0e432 (precedent PR#102->#107, PR#109->#110). adc86cd merged verbatim (merge commit carries full ancestry). takeover_log has the hand-over evidence."
+    },
+    {
+      "task": "task-192-production-dr-truth",
+      "priority": "P1",
+      "zone": "production-dr-deploy",
+      "title": "Production readiness + DR + deployment truth: executable local restore drill, typed R2/backup failure taxonomy, deployment identity+smoke validation, rollback semantics documentation",
+      "acceptance_criteria": [
+        "local restore drill is executable: backup -> isolated target -> restore -> integrity -> schema/table validation -> app-readable state, with regression tests (sqlite leg real, postgres leg structural without live credentials)",
+        "backup failure taxonomy is operator-actionable: every failure names what/where/why/retryable/operator-action for missing config, wrong creds/bucket/endpoint, upload/readback/checksum errors, corrupt/empty/truncated artifact, timeout",
+        "deployment identity chain verifiable: git SHA/app version surface at runtime and are pinned by tests; deploy_smoke validated",
+        "Dockerfile production gap from board: ffmpeg presence decision ratcheted by contract test",
+        "rollback semantics documented + whatever is executable is tested; no fake provider/success"
+      ],
+      "evidence_required": [
+        "pytest targeted ops suites green + full non-slow suite green",
+        "kill-mutations: remove checksum validation / skip readback / accept empty artifact / mark failed restore healthy -> tests go RED and are restored",
+        "no change to storage/providers/r2.py core (task-137/138/139 zone) except operator-facing taxonomy if board-clean at edit time"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/maintenance/restore.py",
+        "src/nexus_ai_agent/maintenance/failures.py",
+        "src/nexus_ai_agent/maintenance/backup.py",
+        "src/nexus_ai_agent/api/app.py",
+        "scripts/deploy_smoke.py",
+        ".github/workflows/maintenance.yml",
+        "Dockerfile",
+        "tests/unit/test_restore_drill.py",
+        "tests/unit/test_backup_dr_truth.py",
+        "tests/unit/test_readyz_identity.py",
+        "tests/unit/test_deploy_smoke_readyz.py",
+        "docs/ops/DISASTER_RECOVERY_RUNBOOK.md",
+        "docs/ops/DEPLOY_RUNBOOK.md"
+      ],
+      "status": "active",
+      "owner": "arena/01a0dee1-nexus-ai-agent",
+      "claimed_at": "2026-09-26T19:30:00Z",
+      "ttl_hours": 48,
+      "status_note": "cli.py deferred: active lease held by task-181-gate5-closure (ZERO COLLISION). Restore drill exposed via python -m nexus_ai_agent.maintenance.restore instead.",
+      "agent_branch": "arena/01a0dee1-nexus-ai-agent"
     }
   ],
   "deferred_log": [
@@ -2989,6 +3305,14 @@
       "reason_fa": "چون عامل task-179 مالک TESTING.md و docs/README.md است، به‌روزرسانی جدول گیت‌ها و ایندکس را defer کردم؛ مستندات CI موقتاً در .github/DEPENDENCY_MATRIX.md و CHANGELOG ثبت می‌شود.",
       "reason_en": "task-132 (CI extras matrix) must update TESTING.md gate table and docs/README.md index, but those files are exclusively claimed by task-179. Documentation update deferred; CI docs live in .github/DEPENDENCY_MATRIX.md + CHANGELOG entry meanwhile.",
       "resume_when": "task-179 lands (TESTING.md/docs/README.md free) — then port the gate-table rows + docs index line"
+    },
+    {
+      "task": "production-wave-01a0e742",
+      "deferred_by_branch": "arena/01a0e742-nexus-ai-agent",
+      "at": "2026-09-28T11:46:12Z",
+      "reason_fa": "پیاده‌سازی ده محور و آزمون‌های محلی انجام شد؛ انتشار کد به دلیل اجاره‌های فعال W1/W2/DR متوقف است. کنترل محلی اولیه کافی نبود؛ وضعیت شاخه‌های remote وارد board شد و درخواست handoff در PRها ثبت شد.",
+      "reason_en": "Fresh remote-board inspection found active W1/W2/DR leases absent from local board; overlapping source withheld, locally verified work preserved.",
+      "resume_when": "Explicit handoff/release or verified expiry of task-197-w2-global-llm-gateway, task-196-closeout-w1 and task-192-production-dr-truth; renew claim, reconcile PR115/116/96, then recheck all changed paths before source push."
     }
   ],
   "next_work": [
@@ -3007,7 +3331,7 @@
         "src/nexus_ai_agent/storage/unified_cloud.py",
         "src/nexus_ai_agent/bot/handlers.py"
       ],
-      "status_note": "Proposed handoff only; no lease. Inspect open PRs and claim before implementation."
+      "status_note": "Implemented/scoped and locally tested in production-wave-01a0e742; NOT source-pushed: live remote W1/W2/DR leases require handoff. See docs/audits/2026-09-28-production-wave.fa.md; no production readiness claim."
     },
     {
       "id": "audit-next-runtime-ownership",
@@ -3024,7 +3348,7 @@
         "src/nexus_ai_agent/bot/app.py",
         "src/nexus_ai_agent/bot/handlers.py"
       ],
-      "status_note": "Proposed handoff only; no lease. Inspect open PRs and claim before implementation."
+      "status_note": "Implemented/scoped and locally tested in production-wave-01a0e742; NOT source-pushed: live remote W1/W2/DR leases require handoff. See docs/audits/2026-09-28-production-wave.fa.md; no production readiness claim."
     },
     {
       "id": "audit-next-typed-llm-failure",
@@ -3041,7 +3365,7 @@
         "src/nexus_ai_agent/llm/",
         "src/nexus_ai_agent/features/ai_chat.py"
       ],
-      "status_note": "Proposed handoff only; no lease. Inspect open PRs and claim before implementation."
+      "status_note": "Implemented/scoped and locally tested in production-wave-01a0e742; NOT source-pushed: live remote W1/W2/DR leases require handoff. See docs/audits/2026-09-28-production-wave.fa.md; no production readiness claim."
     },
     {
       "id": "audit-next-dashboard-default",
@@ -3057,7 +3381,7 @@
       "exclusive_paths": [
         "src/nexus_ai_agent/api/dashboard.py"
       ],
-      "status_note": "Proposed handoff only; no lease. Inspect open PRs and claim before implementation."
+      "status_note": "Implemented/scoped and locally tested in production-wave-01a0e742; NOT source-pushed: live remote W1/W2/DR leases require handoff. See docs/audits/2026-09-28-production-wave.fa.md; no production readiness claim."
     },
     {
       "id": "audit-next-bounded-work",
@@ -3073,7 +3397,7 @@
       "exclusive_paths": [
         "src/nexus_ai_agent/adapters/in_process_job_queue.py"
       ],
-      "status_note": "Proposed handoff only; no lease. Inspect open PRs and claim before implementation."
+      "status_note": "Implemented/scoped and locally tested in production-wave-01a0e742; NOT source-pushed: live remote W1/W2/DR leases require handoff. See docs/audits/2026-09-28-production-wave.fa.md; no production readiness claim."
     },
     {
       "id": "audit-next-render-cancellation",
@@ -3090,7 +3414,7 @@
         "src/nexus_ai_agent/creative/slideshow/worker_adapter.py",
         "src/nexus_ai_agent/creative/slideshow/ffmpeg.py"
       ],
-      "status_note": "Proposed handoff only; no lease. Inspect open PRs and claim before implementation."
+      "status_note": "Implemented/scoped and locally tested in production-wave-01a0e742; NOT source-pushed: live remote W1/W2/DR leases require handoff. See docs/audits/2026-09-28-production-wave.fa.md; no production readiness claim."
     },
     {
       "id": "audit-next-data-erasure",
@@ -3107,7 +3431,7 @@
         "src/nexus_ai_agent/features/ai_memory.py",
         "src/nexus_ai_agent/memory/"
       ],
-      "status_note": "Proposed handoff only; no lease. Inspect open PRs and claim before implementation."
+      "status_note": "Implemented/scoped and locally tested in production-wave-01a0e742; NOT source-pushed: live remote W1/W2/DR leases require handoff. See docs/audits/2026-09-28-production-wave.fa.md; no production readiness claim."
     },
     {
       "id": "audit-next-scheduled-delivery",
@@ -3124,7 +3448,7 @@
         "src/nexus_ai_agent/features/channel_manager.py",
         "src/nexus_ai_agent/features/ads.py"
       ],
-      "status_note": "Proposed handoff only; no lease. Inspect open PRs and claim before implementation."
+      "status_note": "Implemented/scoped and locally tested in production-wave-01a0e742; NOT source-pushed: live remote W1/W2/DR leases require handoff. See docs/audits/2026-09-28-production-wave.fa.md; no production readiness claim."
     },
     {
       "id": "audit-next-production-lock",
@@ -3141,7 +3465,7 @@
         "pyproject.toml",
         ".github/workflows/"
       ],
-      "status_note": "Proposed handoff only; no lease. Inspect open PRs and claim before implementation."
+      "status_note": "Implemented/scoped and locally tested in production-wave-01a0e742; NOT source-pushed: live remote W1/W2/DR leases require handoff. See docs/audits/2026-09-28-production-wave.fa.md; no production readiness claim."
     },
     {
       "id": "audit-next-restore-readiness",
@@ -3158,7 +3482,7 @@
         "docs/ops/",
         ".github/workflows/maintenance.yml"
       ],
-      "status_note": "Proposed handoff only; no lease. Inspect open PRs and claim before implementation."
+      "status_note": "Implemented/scoped and locally tested in production-wave-01a0e742; NOT source-pushed: live remote W1/W2/DR leases require handoff. See docs/audits/2026-09-28-production-wave.fa.md; no production readiness claim."
     }
   ],
   "history": {
