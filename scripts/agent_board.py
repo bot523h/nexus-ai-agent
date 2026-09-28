@@ -18,14 +18,17 @@ Commands
   check --files a,b,c --branch BRANCH
                                 Exit 1 if any file overlaps another branch's
                                 active or active-in-review exclusive paths
-                                (pre-push / CI referee)
+                                (local advisory only; NOT publication approval)
   praudit [--pr-json F | --repo owner/name] [--fail-on-invisible] [--json]
                                 Read-only audit: compare open GitHub PR changed
                                 files against board exclusive_paths and report
                                 PRs whose scope is invisible (no claim for the
                                 head branch, or files outside every fence).
 
-All state lives in .agents/board.json (schema 1). Pure stdlib.
+  preflight --branch BRANCH [--remote origin]
+                                Live remote lease + outgoing ancestry check; JSON evidence.
+
+All state lives in .agents/board.json (schema 2). Pure stdlib.
 
 Typical loop for an arriving agent:
     python scripts/agent_board.py show
@@ -321,7 +324,7 @@ def cmd_check(args: argparse.Namespace) -> int:
             print(f"  {path}  ← claimed by {task}")
         print(STOP_BANNER)
         return 1
-    print("no overlap — safe to proceed.")
+    print("no local overlap — advisory only; run preflight before publication.")
     return 0
 
 
@@ -482,6 +485,17 @@ def cmd_praudit(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_preflight(args: argparse.Namespace) -> int:
+    if __package__:
+        from .agent_board_remote import inspect_publication
+    else:
+        from agent_board_remote import inspect_publication
+
+    result = inspect_publication(ROOT, args.branch, args.remote)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return {"SUCCESS": 0, "REJECTED": 1, "NOT_VERIFIED": 2}[result["outcome"]]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="NEXUS multi-agent claim board")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -516,6 +530,11 @@ def main() -> int:
     p.add_argument("--files", required=True, help="comma-separated changed file paths")
     p.add_argument("--branch", default="")
     p.set_defaults(func=cmd_check)
+
+    p = sub.add_parser("preflight", help="live remote ownership + outgoing commit range")
+    p.add_argument("--branch", required=True)
+    p.add_argument("--remote", default="origin", help="configured remote name, not a URL")
+    p.set_defaults(func=cmd_preflight)
 
     p = sub.add_parser("praudit")
     p.add_argument(
