@@ -22,6 +22,6 @@ class QwenAgent(BaseAgent):
             + self._pe.style_hint(),
             state.get("memory_context", ""),
         )
-        conv = "\n".join(f"{m['role']}: {m['content']}" for m in msgs[-10:])
+        conv = self.render_conversation(state)
         resp = await self.llm.generate(conv + "\nassistant:", system=system)
         return {**state, "response": resp, "active_persona": "qwen"}
