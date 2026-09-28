@@ -40,6 +40,7 @@ placeholder text.
 | [architecture/adr/0004-board-schema-2.md](architecture/adr/0004-board-schema-2.md) | Coordination board schema 2: prerequisites, acceptance criteria, history split. |
 | [architecture/adr/0005-canonical-command-capability-contract.md](architecture/adr/0005-canonical-command-capability-contract.md) | Canonical command and capability contract: versioning, location, and reconciliation. |
 | [architecture/adr/0006-capability-pack-trust-root.md](architecture/adr/0006-capability-pack-trust-root.md) | Capability packs get an explicit trust root (Ed25519, offline, fail-closed). |
+| [architecture/adr/0007-restricted-shell-flag-grammar.md](architecture/adr/0007-restricted-shell-flag-grammar.md) | The restricted shell validates a declared argument *grammar*; an undeclared flag is refused. |
 | [architecture/TRUST_CONTROL_PLANE.md](architecture/TRUST_CONTROL_PLANE.md) | Trust/truth domains A–E: interfaces, authorities, non-bypass guards, honest status. |
 
 ## Authoritative records
@@ -94,6 +95,9 @@ placeholder text.
 | [audits/CONTINUUM_CLOSURE_2026-09-27.md](audits/CONTINUUM_CLOSURE_2026-09-27.md) | Continuum evidence-foundation closure (task-184 / task-154): 95%-per-pack coverage gate, fail-closed snapshot, replayable mutation campaign, exact-SHA CI — with the recorded lost-lineage recovery. |
 | [audits/MASTER_ARCHITECTURAL_ASSESSMENT_2026-09-27.md](audits/MASTER_ARCHITECTURAL_ASSESSMENT_2026-09-27.md) | Exact-SHA Phase Zero assessment: actual runtime, trust boundaries, Continuum/GitHub truth, five-angle research decisions, gaps, and risk register. |
 | [audits/EXECUTION_PLAN_2026-09-27.md](audits/EXECUTION_PLAN_2026-09-27.md) | Phased implementation plan with dependencies, verification/CI strategy, operational gates, and Definition of Done. |
+| [audits/2026-09-28-master-forensic-hardening.md](audits/2026-09-28-master-forensic-hardening.md) | Master forensic hardening (task-201/202): live Git/GitHub/lease truth on `e5b326b`, the proven restricted-shell host-file-read escape and its root-cause repair, the never-succeeded `backup-db` record, the authority graph, defect register, and readiness matrix. Superseded by the v2 report for defect status and CI evidence. |
+| [audits/2026-09-28-system-architecture-map.md](audits/2026-09-28-system-architecture-map.md) | System architecture map read from `e5b326b` itself: subsystem-by-subsystem entrypoints, authority, resource ownership and failure paths; the external-egress map; why the absent `llm/gateway/` is the central architectural gap; and a proven-versus-merely-present table. |
+| [audits/2026-09-28-master-forensic-hardening-v2.md](audits/2026-09-28-master-forensic-hardening-v2.md) | Master forensic hardening v2 (task-201…204): retractions of two wrong v1 classifications, the full defect register D-001…D-009 with root cause and broken invariant, RED-to-GREEN proofs, mutation results, exact-SHA CI evidence, the evidence ledger, the second forensic pass, the handoff register, and the readiness matrix. |
 
 ## History (archived — read-only, never a source of truth)
 

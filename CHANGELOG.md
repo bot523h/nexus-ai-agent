@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Conversation memory observability (task-202, session `arena/01a0e907-nexus-ai-agent`)
+
+- **A failed durable-memory write is no longer invisible.**
+  `orchestration/graph.py::_memory_writer` swallowed every exception from
+  `LongTermMemory.store()` with a bare `except Exception: pass`. The fail-safe
+  itself is correct and is preserved — a memory write must never abort a
+  conversation the user is actively having — but the silence meant a dead
+  embedding backend or an unreadable sqlite file degraded recall for every
+  later turn while every turn still reported success, with no log line, no
+  metric and no state marker to observe it from. It now emits exactly one
+  structured warning (`long_term_memory_write_failed`) naming the thread and
+  the exception *type*.
+- `str(exc)` is deliberately **not** logged: a backend can echo the prompt back
+  inside its own error text, which would make the "no conversation content in
+  logs" property depend on what a third party put in a message. Typing the
+  failure is enough to alert and correlate with the turn.
+- **Evidence.** `tests/unit/test_graph_memory.py` — 2 failed / 4 passed before
+  the fix, 6 passed after. The new tests pin both halves: the failure must be
+  recorded exactly once, and it must still never set `state["error"]` or carry
+  the prompt.
+
+### Shell trust plane (task-201, session `arena/01a0e907-nexus-ai-agent`; salvages the shell sandbox from PR #105)
+
+- **P0 security: an allowlisted shell command could read any file on the host.**
+  `tools/system_shell.py` promised that "any argument that is (or resolves to) a
+  path outside the workspace is rejected", but implemented that promise as an
+  *enumeration of dangerous spellings*: positional path arguments were checked
+  only for `ls`/`cat`/`find`, and only two literal flag spellings (`find -newer`
+  and friends, `grep -f`) were inspected. Every other file-reading flag on an
+  allowlisted binary reached the host filesystem unchecked. Measured on
+  `e5b326b`: `date -f <outside>` was executed and GNU `date` echoed the file's
+  lines back inside its own diagnostic; `date -f` over three parseable lines
+  returned `success=True` with one output line per input line; `date -r <outside>`
+  returned the file's mtime; `grep --file=`, `grep -f<file>` and
+  `grep --exclude-from=` were never inspected at all; `grep -R` followed an
+  in-workspace symlink out and printed the outside secret. `cat` on the same path
+  was correctly refused, which is what makes this a boundary defect.
+- **Root cause fixed, not the symptom list extended.** The forbidden-list model
+  is replaced by a per-command *declared flag grammar* in which an undeclared
+  flag is refused, so an option added by a future coreutils release cannot
+  silently widen the sandbox; plus an independent path-shaped-argument net, and
+  refusal of the symlink-following options (`ls -L/-H/--dereference`, `grep -R`,
+  `find -L/-H/-follow`) that no amount of path validation can contain. Both
+  mechanisms route through `WorkspaceFilesystem`. See
+  [`docs/architecture/adr/0007-restricted-shell-flag-grammar.md`](docs/architecture/adr/0007-restricted-shell-flag-grammar.md).
+- **Evidence.** `tests/unit/test_shell_workspace_escape.py` imports nothing from
+  the fixed implementation, so it is the before/after oracle: **14 failed / 9
+  passed against the unfixed `e5b326b` validator, 23 passed after.** Its oracle
+  is a `subprocess.run` tripwire rather than `success is False`, because several
+  of these commands exit non-zero on their own and would otherwise pass for the
+  wrong reason. `scripts/shell_sandbox_mutations.py` kills 11/11 mutants with a
+  GREEN baseline before and after, and now runs as the blocking `shell-mutations`
+  CI job and under `make mutations`.
+- **Governance.** PR #105 (head `80013e3`) already contained this fix but is
+  OPEN, CONFLICTING and carries no live lease — every active claim on its board
+  expired by 2026-09-28T00:00:00Z. Only the shell trust plane is transplanted
+  here, per the PR#102→#107 and PR#108→#109 salvage precedent already in
+  `.agents/board.json`; PR #105 is not closed, merged, rebased or force-pushed.
+  Its `docs/architecture/MODULE_MAP.md` edit is deliberately excluded because
+  that path is under a live lease.
+
 ### Continuum evidence foundation (task-184, session `arena/01a0e1e0-nexus-ai-agent`; supersedes PR #95 / PR #98)
 
 - **Pack coverage is a real 95% gate (DECISION_LOG D-0023, option A).** A report is
