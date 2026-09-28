@@ -271,6 +271,65 @@ Manual mutation campaign against `tests/unit/test_unified_cloud.py`:
 - `log_key`: restored raw `key=key` logging → killed.
 - Restoration run: `5 passed in 0.34s`.
 
+
+---
+
+## Continuation — task-139 R2 smoke/fail-closed storage slice
+
+VERIFIED on continuation start (2026-09-28T21:31:59Z UTC):
+
+- Local branch: `arena/01a0e9b7-nexus-ai-agent`; continuation starting SHA `e64f91127bb11f1a82b59a001b264d30f4db40b2`.
+- `origin/main`: `e5b326b2eaf691a638d030ad57acf1ce60016ef0`.
+- GitHub auth: `gh auth status` succeeded as `arena-ai-coding-agent[bot]`.
+- Current PR #120 head before continuation: `e64f91127bb11f1a82b59a001b264d30f4db40b2`; CI had one duplicate `python-parity (3.12)` failure on run `36483227598` while the later duplicate run was green, making PR state `UNSTABLE` rather than production-complete.
+- Parsed board without GC showed no `active` / `active_in_review` claims; `agent_board.py check` returned `no overlap` for `src/nexus_ai_agent/storage/providers/r2.py`, `tests/unit/test_r2_provider.py`, this report, `docs/README.md`, and `.agents/board.json`.
+- Baseline after recreating local `.venv`: `.venv/bin/python -m ruff check .` → `All checks passed!`; `.venv/bin/python -m ruff format --check .` → `534 files already formatted`; `.venv/bin/python -m pytest -q -m 'not slow'` → `2920 passed, 30 skipped, 16 warnings in 146.52s`.
+- Governance: claimed `task-139-storage-resilience-r2-smoke` at commit `f74616740a6cbfe2d344caa33343b766169c1bf9` and pushed immediately; released it as `done` after local quality gates passed.
+
+### Additional fixed defects
+
+#### NEXUS-R2-001 — truncated R2 list page could return partial success
+
+- Status: VERIFIED_DEFECT
+- Category: Data integrity / fail-closed storage listing
+- Path: `src/nexus_ai_agent/storage/providers/r2.py`
+- Owner/Lease: OWNED_BY_SELF under `task-139-storage-resilience-r2-smoke`.
+- Severity: Medium
+- Reproduction: `tests/unit/test_r2_provider.py::test_list_files_fails_closed_when_truncated_page_has_no_token` failed RED because a provider response with `IsTruncated=True` and no `NextContinuationToken` silently broke the pagination loop and returned only the first page.
+- Root Cause: pagination treated a missing continuation token as normal loop termination.
+- Why Existing Protection Failed: existing pagination test only covered well-formed continuation tokens.
+- Impact: retention, backup inventory, or restore-selection code could believe an incomplete object population was complete.
+- Fix: fail closed with `StorageError` when R2 reports truncation without the required continuation token.
+- Regression Test: `test_list_files_fails_closed_when_truncated_page_has_no_token`.
+- Mutation/Adversarial Proof: replacing the new `StorageError` with the old `break` killed the test.
+
+#### NEXUS-R2-002 — delete_objects ignored provider partial failures
+
+- Status: VERIFIED_DEFECT
+- Category: Data integrity / observability
+- Path: `src/nexus_ai_agent/storage/providers/r2.py`
+- Owner/Lease: OWNED_BY_SELF under `task-139-storage-resilience-r2-smoke`.
+- Severity: Medium
+- Reproduction: `tests/unit/test_r2_provider.py::test_delete_objects_reports_partial_provider_errors_without_fake_success` failed RED because an S3/R2 `Errors` array in the delete response was ignored and the operation returned a success-shaped deleted count.
+- Root Cause: delete accounting only counted the `Deleted` field and never interpreted `Errors`.
+- Why Existing Protection Failed: existing delete test used a fully successful fake response only.
+- Impact: cleanup/retention could leave undeleted backup artifacts while reporting success.
+- Fix: detect `Errors`, raise a typed `StorageError` with count and provider error code summary, and deliberately omit object keys from the exception message.
+- Regression Test: `test_delete_objects_reports_partial_provider_errors_without_fake_success`.
+- Mutation/Adversarial Proof: deleting the new `Errors` check killed the test; the assertion also guards against leaking `backups/db/old/1.sql` into the error string.
+
+### Continuation evidence
+
+- RED proof before fix: both new tests failed (`2 failed in 0.34s`).
+- Targeted GREEN after fix: `.venv/bin/python -m pytest -q tests/unit/test_r2_provider.py` → `24 passed in 0.50s`.
+- Targeted quality/doc gates after formatting and typing: `.venv/bin/python -m ruff check src/nexus_ai_agent/storage/providers/r2.py tests/unit/test_r2_provider.py` → `All checks passed!`; `.venv/bin/python -m ruff format --check src/nexus_ai_agent/storage/providers/r2.py tests/unit/test_r2_provider.py` → `2 files already formatted`; `.venv/bin/python -m mypy src/nexus_ai_agent/storage/providers/r2.py tests/unit/test_r2_provider.py` → `Success: no issues found in 2 source files`; `.venv/bin/python -m pytest -q tests/unit/test_r2_provider.py tests/unit/test_docs_integrity.py` → `81 passed in 0.50s`.
+- Full post-fix local gate: `.venv/bin/python -m pytest -q -m 'not slow'` → `2922 passed, 30 skipped, 16 warnings in 128.06s`.
+- Mutation proof after fix:
+  - list-token mutant (`raise StorageError` → old `break`) → killed by `test_list_files_fails_closed_when_truncated_page_has_no_token`.
+  - delete-errors mutant (remove `Errors` handling) → killed by `test_delete_objects_reports_partial_provider_errors_without_fake_success`.
+  - restored focused run → `2 passed in 0.31s`.
+
+
 ## 21. CI Evidence
 
 Local quality gates after fix:
