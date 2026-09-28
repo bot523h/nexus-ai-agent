@@ -971,7 +971,11 @@ MUTATIONS += (
         "legacy_fallback_reclassifies_model_text",
         Path("llm/fallback_provider.py"),
         "        return result\n\n    async def _do_fallback",
-        '        if any(keyword in result.lower() for keyword in ("quota",)):\n            return await self._do_fallback(prompt, system)\n        return result\n\n    async def _do_fallback',
+        (
+            '        if any(keyword in result.lower() for keyword in ("quota",)):\n'
+            "            return await self._do_fallback(prompt, system)\n"
+            "        return result\n\n    async def _do_fallback"
+        ),
         GOLDEN,
         "test_legacy_keyword_argument_cannot_reclassify_success",
         "successful model prose cannot select fallback",
@@ -979,7 +983,10 @@ MUTATIONS += (
     Mutation(
         "legacy_backup_swallows_typed_cancellation",
         Path("llm/fallback_provider.py"),
-        "            if isinstance(fallback_exc, LLMError) and fallback_exc.kind is LLMErrorKind.CANCELLED:\n                raise",
+        (
+            "            if isinstance(fallback_exc, LLMError) "
+            "and fallback_exc.kind is LLMErrorKind.CANCELLED:\n                raise"
+        ),
         "            if False:\n                raise",
         GOLDEN,
         "test_cancellation_in_legacy_backup_propagates",
