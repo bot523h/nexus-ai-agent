@@ -40,6 +40,7 @@ placeholder text.
 | [architecture/adr/0004-board-schema-2.md](architecture/adr/0004-board-schema-2.md) | Coordination board schema 2: prerequisites, acceptance criteria, history split. |
 | [architecture/adr/0005-canonical-command-capability-contract.md](architecture/adr/0005-canonical-command-capability-contract.md) | Canonical command and capability contract: versioning, location, and reconciliation. |
 | [architecture/adr/0006-capability-pack-trust-root.md](architecture/adr/0006-capability-pack-trust-root.md) | Capability packs get an explicit trust root (Ed25519, offline, fail-closed). |
+| [architecture/adr/0007-remote-publication-frontier.md](architecture/adr/0007-remote-publication-frontier.md) | Publication approval = observed remote frontier + full outgoing commit range (owner-head lease precedence). |
 | [architecture/TRUST_CONTROL_PLANE.md](architecture/TRUST_CONTROL_PLANE.md) | Trust/truth domains A–E: interfaces, authorities, non-bypass guards, honest status. |
 
 ## Authoritative records
@@ -71,6 +72,7 @@ placeholder text.
 | [ops/COLOR_LANE.md](ops/COLOR_LANE.md) | Color/exposure lane runbook: EV→filter mapping, hard contracts, FFmpeg-free validation, troubleshooting. |
 | [ops/PACK_RUNTIME.md](ops/PACK_RUNTIME.md) | Unified pack runtime (wave 5): composition, activation gate, op-gap ledger, composition checklist for new packs. |
 | [ops/RUNBOOK_HARDENING.md](ops/RUNBOOK_HARDENING.md) | Runbook hardening pass (wave-4 step 8): boundary conditions, failure modes, operator knobs. |
+| [ops/INTEGRATION_PREFLIGHT.md](ops/INTEGRATION_PREFLIGHT.md) | Publication preflight (ADR-0007): preflight command, failure classes, observed runs, quarantined candidate procedure. |
 
 ## Audits (dated, immutable records)
 
@@ -80,6 +82,8 @@ placeholder text.
 | [audits/2026-09-28-engineering-evidence.md](audits/2026-09-28-engineering-evidence.md) | Audit measurements, execution scope, dependencies and ORM inventory. |
 | [audits/2026-09-28-architecture.md](audits/2026-09-28-architecture.md) | Static module adjacency, cycles and recursive inventory at the audited commit. |
 | [audits/2026-09-28-command-ledger.md](audits/2026-09-28-command-ledger.md) | Scoped command-status classification at the audited commit. |
+| [audits/2026-09-28-autonomous-mission.fa.md](audits/2026-09-28-autonomous-mission.fa.md) | Autonomous production/creative mission: publication frontier guard, quarantined ten-axis candidate, consent-race reproduction, A–J status. |
+| [audits/2026-09-28-dependency-triage.json](audits/2026-09-28-dependency-triage.json) | Primary-source dependency triage: per-finding reachability evidence and honest statuses (no suppression). |
 | [audits/2026-09-28-contract-repair-report.fa.md](audits/2026-09-28-contract-repair-report.fa.md) | Implementation/evidence report for session, media and installed-artifact repairs. |
 | [audits/AUDIT_REPORT_2026-09-21.md](audits/AUDIT_REPORT_2026-09-21.md) | Full architecture audit (P0 findings + command honesty matrix). |
 | [audits/HANDOFF_ANALYSIS_2026-09-21.md](audits/HANDOFF_ANALYSIS_2026-09-21.md) | Board GC + engineered handoff analysis (agent D session). |

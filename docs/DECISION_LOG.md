@@ -1697,3 +1697,46 @@ policy, global erasure and distributed queue ownership remain separate work.
 **Evidence:** `tests/integration/test_runtime_contracts.py`,
 `tests/unit/test_media_result.py`, `tests/unit/test_wheel_install.py`;
 [implementation report](audits/2026-09-28-contract-repair-report.fa.md).
+
+
+## 2026-09-28 — Publication frontier guard; quarantined ten-axis candidate; consent-race evidence
+
+**Decision:** Publication approval is now computed from the *observed remote frontier*
+(`git ls-remote` over `main` + `arena/*`) and the **full outgoing commit range**
+(`rev-list` + `diff-tree -m --no-renames`), with owner-head lease precedence and a
+`NOT_VERIFIED` outcome for every unprovable premise. The previous approval signal — the
+local-board `check --files` over a developer-supplied list — is reclassified as advisory:
+it cannot see content hidden by reverts inside the outgoing range, and it trusts inherited
+stale board copies over the owner's actual head. Both blind spots were demonstrated live
+before the decision (revert concealment on a disposable repository; the 2026-09-28
+PR #112/#113 "local safe, remote owner" incident). Full rationale and rejected alternatives:
+[ADR-0007](architecture/adr/0007-remote-publication-frontier.md); operating procedure and
+observed runs: [INTEGRATION_PREFLIGHT](ops/INTEGRATION_PREFLIGHT.md).
+Boundary law **R14** in `docs/architecture/MODULE_MAP.md` §3 names the enforcing tests.
+
+**Consequence for the ten-axis candidate:** commit `ac2b7d5…` was removed from the publish
+ancestry (live leases W2/W1/DR on shared files) and preserved out-of-history as local tag
+`preserved-production-ac2b7d5`, a named stash, and a hashed patch
+(`ci-artifacts/mission-20260928/preserved-ac2b7d5.patch`, sha256 `10485146…`). It is a
+candidate, not delivered work: a new executable probe
+(`scripts/probes/consent_generation_race.py`) **reproduces a privacy invariant violation**
+in it — an AI extraction started before `forget_user` re-persists the erased profile even
+when consent is `denied` (both probe cases FAILURE; the engine under W2 lease serializes
+per-user operations but nothing invalidates the in-flight `_save_memory`). Probe exit 0
+against the reconciled union is now an explicit board acceptance criterion before any
+`ai_memory` integration.
+
+**Dependency findings:** all six unique advisory IDs re-derived from primary sources with
+per-finding reachability evidence and honest statuses (chromadb×4 NOT_REACHABLE_WITH_EVIDENCE,
+click BLOCKED by the gTTS `click<8.2` pin, diskcache NOT_REACHABLE_WITH_EVIDENCE):
+[2026-09-28-dependency-triage.json](audits/2026-09-28-dependency-triage.json). Nothing suppressed.
+
+**Rejected:** approving publication from the working-tree diff; deriving ownership from the
+GitHub PR API (derived metadata, lags pushes, not reproducible offline); force-push
+resolution; silently fixing the leased `ai_memory.py` in this session.
+
+**Evidence:** `tests/unit/test_agent_board_remote.py` (13 cases, disposable real
+repositories), `tests/unit/test_agent_board.py` (40 passed together in 1.58s),
+live preflight runs recorded in the runbook, probe output
+`ci-artifacts/mission-20260928/consent-race.json`. Remote CI execution of the new
+`publication-frontier` workflow: UNVERIFIED at time of writing.

@@ -23,9 +23,13 @@ The board is `.agents/board.json` (**schema 2**: `protocol`, `zones`, `claims`, 
    → `... claim <task> --branch <your-branch>`. Commit **and push the board change immediately**:
    an unpushed claim does not exist for the other sandbox. Finish → `release`; blocked → `defer`
    (the Persian note template is built into the CLI).
-2. **ONE OWNER PER FILE-ZONE.** Claims carry `exclusive_paths`. Before pushing, run
-   `python scripts/agent_board.py check --files <changed,files> --branch <you>`; exit 1 means overlap
-   with another agent's live lease — do not push that work, pick another task or defer.
+2. **ONE OWNER PER FILE-ZONE.** Claims carry `exclusive_paths`. While *working*,
+   `python scripts/agent_board.py check --files <changed,files> --branch <you>` is an advisory
+   overlap aid. Before **any** push, run
+   `python scripts/agent_board.py preflight --branch <you>` (ADR-0007): it observes the live
+   remote frontier, evaluates the **entire outgoing commit range** (reverted content and merge
+   parents included) with owner-head lease precedence, and exits `1` REJECTED / `2` NOT_VERIFIED —
+   neither exit is permission to push. See `docs/ops/INTEGRATION_PREFLIGHT.md`.
 3. **BRANCH NAME IS THE CANONICAL IDENTITY.** Letters (A/B/C/…) are convenience labels only.
    A newcomer must state its identity as *its branch*, after checking `git ls-remote origin "arena/*"`,
    the open PRs, and this board. (The rule exists because three sessions once declared "agent E".)

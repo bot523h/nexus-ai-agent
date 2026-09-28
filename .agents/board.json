@@ -3314,7 +3314,8 @@
         "All unpublished commits, including reverted changes and merge parents, are inspected",
         "Malformed active lease, failed refresh or moving ref snapshot is NOT_VERIFIED, never success",
         "No foreign runtime/LLM/API lease edits; ac2 retained by immutable local tag and named stash",
-        "A-J report distinguishes candidate, published, main and production evidence"
+        "A-J report distinguishes candidate, published, main and production evidence",
+        "Before any future ai_memory integration, scripts/probes/consent_generation_race.py must exit 0 against the reconciled source union (candidate ac2b7d5 currently FAILS both cases)"
       ],
       "evidence_required": [
         "Deterministic model tests and real disposable Git repository tests",
@@ -3326,7 +3327,7 @@
       "claimed_at": "2026-09-28T12:00:30Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": ""
+      "note": " Probe evidence: ci-artifacts/mission-20260928/consent-race.json (source sha256 8ac6aa7a..., FAILURE x2). Live preflight calibrated and SUCCESS at 0d1ec8d."
     }
   ],
   "deferred_log": [
