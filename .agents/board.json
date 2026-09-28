@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-28T20:48:23Z",
+  "updated_at": "2026-09-28T20:59:48Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -609,9 +609,12 @@
       "id": "storage-observability",
       "paths": [
         "src/nexus_ai_agent/storage/",
-        "docs/ops/"
+        "docs/ops/",
+        "tests/unit/test_unified_cloud.py",
+        "docs/audits/",
+        "docs/README.md"
       ],
-      "note": "storage observability (queued)"
+      "note": "storage observability: storage code, focused regression tests, and audit evidence documents."
     },
     {
       "id": "storage-r2-integration",
@@ -1404,18 +1407,19 @@
     {
       "task": "task-138-storage-resilience-observability",
       "zone": "storage-observability",
-      "agent_branch": "arena/01a0e9b7-nexus-ai-agent",
-      "claimed_at": "2026-09-28T20:48:23Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
-      "status": "active",
+      "status": "done",
       "gates_owner": false,
       "exclusive_paths": [
         "src/nexus_ai_agent/storage/unified_cloud.py",
         "tests/unit/test_unified_cloud.py",
-        "docs/audits/2026-09-28-master-forensic-evolution.md"
+        "docs/audits/2026-09-28-master-forensic-evolution.md",
+        "docs/README.md"
       ],
       "scope": "Add low-cardinality metrics/counters for retry attempts, exhaustion and cancellation without leaking object keys or credentials.",
-      "note": "Arena 01a0e9b7 scope: storage observability/security in UnifiedCloudStorage only; W2/task-197/PR#118, backup-db/task-192/PR#96, memory, request_queue, and open PR paths remain untouched.",
+      "note": "Arena 01a0e9b7 scope: storage observability/security in UnifiedCloudStorage only; W2/task-197/PR#118, backup-db/task-192/PR#96, memory, request_queue, and open PR paths remain untouched. docs/README.md touched only to satisfy docs-integrity for the required final audit deliverable.",
       "acceptance_criteria": [
         "observability surface for storage retries (structured, redacted) with tests"
       ]
