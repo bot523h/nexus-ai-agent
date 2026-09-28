@@ -966,6 +966,55 @@ MUTATIONS += (
 )
 
 
+MUTATIONS += (
+    Mutation(
+        "legacy_fallback_reclassifies_model_text",
+        Path("llm/fallback_provider.py"),
+        "        return result\n\n    async def _do_fallback",
+        '        if any(keyword in result.lower() for keyword in ("quota",)):\n            return await self._do_fallback(prompt, system)\n        return result\n\n    async def _do_fallback',
+        GOLDEN,
+        "test_legacy_keyword_argument_cannot_reclassify_success",
+        "successful model prose cannot select fallback",
+    ),
+    Mutation(
+        "legacy_backup_swallows_typed_cancellation",
+        Path("llm/fallback_provider.py"),
+        "            if isinstance(fallback_exc, LLMError) and fallback_exc.kind is LLMErrorKind.CANCELLED:\n                raise",
+        "            if False:\n                raise",
+        GOLDEN,
+        "test_cancellation_in_legacy_backup_propagates",
+        "backup withdrawal propagates rather than becoming unavailable text",
+    ),
+    Mutation(
+        "legacy_keyword_warning_logs_secret_values",
+        Path("llm/fallback_provider.py"),
+        "keyword_count=len(error_keywords),",
+        "keywords=error_keywords,",
+        GOLDEN,
+        "test_legacy_fallback_never_logs_keywords_answers_or_raw_error_labels",
+        "deprecation diagnostics cannot leak supplied keywords",
+    ),
+    Mutation(
+        "legacy_fallback_logs_raw_provider_label",
+        Path("llm/fallback_provider.py"),
+        'provider=redact_secrets(exc.provider or "")[:128] or None,',
+        "provider=exc.provider,",
+        GOLDEN,
+        "test_legacy_fallback_never_logs_keywords_answers_or_raw_error_labels",
+        "legacy typed failure labels still require redaction",
+    ),
+    Mutation(
+        "legacy_fallback_logs_raw_correlation_label",
+        Path("llm/fallback_provider.py"),
+        'request_id=redact_secrets(exc.request_id or "")[:128] or None,',
+        "request_id=exc.request_id,",
+        GOLDEN,
+        "test_legacy_fallback_never_logs_keywords_answers_or_raw_error_labels",
+        "legacy correlation labels cannot leak credential patterns",
+    ),
+)
+
+
 def _run_pytest(
     package_root: Path, targets: tuple[str, ...] | str, timeout: int
 ) -> subprocess.CompletedProcess[str]:

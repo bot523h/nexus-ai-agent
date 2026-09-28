@@ -30,9 +30,9 @@ layer asks it two questions that were already answered upstream, from evidence:
 * ``exc.kind`` — recorded, so an operator can see *why* we degraded.
 
 Nothing here reads a message. ``error_keywords`` survives as a constructor
-parameter for compatibility, but it defaults to **empty**: scanning a returned
-answer for error words is opt-in, logged as deprecated when it fires, and only
-exists for a legacy primary that cannot raise typed errors.
+parameter for call-signature compatibility, but is inert. A nonempty value emits
+a deprecation warning without logging the keywords. It can never reinterpret
+successful model text as an execution failure.
 """
 
 from __future__ import annotations
@@ -41,9 +41,10 @@ from typing import Any
 
 import structlog
 
-from nexus_ai_agent.llm.errors import LLMError
+from nexus_ai_agent.llm.errors import LLMError, LLMErrorKind
 from nexus_ai_agent.llm.fake_llm import FakeLLMProvider
 from nexus_ai_agent.llm.provider import LLMProvider
+from nexus_ai_agent.observability.logging import redact_secrets
 
 logger = structlog.get_logger(__name__)
 
@@ -66,8 +67,8 @@ class FallbackProvider(LLMProvider):
     - primary raises a fallback-eligible :class:`LLMError` → the fallback answers
       and the disclaimer is appended, so a degraded answer is never silent
       (LAW 8);
-    - primary raises anything else → it propagates. An ``AUTHENTICATION`` failure
-      or a programming error must not be dressed up as "the service is busy";
+    - primary raises anything else → it propagates. A content block, cancellation
+      or programming error must not be dressed up as "the service is busy";
     - the fallback also fails → one honest "both unavailable" message.
     """
 
@@ -83,21 +84,18 @@ class FallbackProvider(LLMProvider):
         self._primary = primary
         self._fallback = fallback or FakeLLMProvider()
         self._disclaimer = disclaimer
-        #: Deprecated opt-in. Empty by default: a modern primary raises typed
-        #: errors, so there is nothing to scan. See the module docstring.
-        self._error_keywords = tuple(error_keywords)
         #: Set ``False`` to make this a pass-through (no degradation at all).
         self._allow_degraded = allow_degraded
         self._fallback_count: int = 0
         self._primary_count: int = 0
         self._keyword_hits: int = 0
         self._last_kind: str | None = None
-        if self._error_keywords:
+        if error_keywords:
             logger.warning(
-                "fallback_provider_keyword_scanning_enabled",
-                keywords=list(self._error_keywords),
+                "fallback_provider_keyword_argument_ignored",
+                keyword_count=len(error_keywords),
                 hint=(
-                    "substring-based error detection is deprecated; make the primary "
+                    "substring-based error detection is disabled; make the primary "
                     "raise nexus_ai_agent.llm.errors.LLMError instead"
                 ),
             )
@@ -135,17 +133,17 @@ class FallbackProvider(LLMProvider):
                     "primary_failed_degrading",
                     error_kind=exc.kind.value,
                     status=exc.status_code,
-                    provider=exc.provider,
-                    request_id=exc.request_id,
+                    provider=redact_secrets(exc.provider or "")[:128] or None,
+                    request_id=redact_secrets(exc.request_id or "")[:128] or None,
                 )
                 return await self._do_fallback(prompt, system)
-            # Not eligible (blocked content, authentication, a caller bug, a
+            # Not eligible (blocked content, a caller bug, a
             # cancellation): propagate the typed truth to whoever can act on it.
             logger.error(
                 "primary_failed_not_eligible",
                 error_kind=exc.kind.value,
                 status=exc.status_code,
-                provider=exc.provider,
+                provider=redact_secrets(exc.provider or "")[:128] or None,
             )
             raise
         except Exception:
@@ -155,17 +153,6 @@ class FallbackProvider(LLMProvider):
             raise
 
         self._primary_count += 1
-        if self._error_keywords and result and self._allow_degraded:
-            lowered = result.lower()
-            if any(keyword in lowered for keyword in self._error_keywords):
-                self._keyword_hits += 1
-                self._last_kind = "legacy_keyword_match"
-                logger.warning(
-                    "primary_returned_error_shaped_string",
-                    result_preview=result[:100],
-                    hint="deprecated substring detection fired; make the primary typed",
-                )
-                return await self._do_fallback(prompt, system)
         return result
 
     async def _do_fallback(self, prompt: str, system: str) -> str:
@@ -176,6 +163,8 @@ class FallbackProvider(LLMProvider):
         try:
             result = await self._fallback.generate(prompt, system)
         except Exception as fallback_exc:
+            if isinstance(fallback_exc, LLMError) and fallback_exc.kind is LLMErrorKind.CANCELLED:
+                raise
             logger.error(
                 "fallback_also_failed",
                 error_type=type(fallback_exc).__name__,

@@ -128,10 +128,10 @@ the kind: `retryable` and `fallback_eligible`.
 
 | Kind | Retryable | Fallback-eligible | Raised when |
 |---|---|---|---|
-| `rate_limited` | yes | no | provider 429, or the local window is full and policy will not wait that long |
-| `transient_provider_failure` | yes | no | provider 5xx / declared transient status |
-| `upstream_timeout` | yes | no | one attempt exceeded its transport or per-attempt cap |
-| `network_failure` | yes | no | connect/read/transport error |
+| `rate_limited` | yes | yes | provider 429, or the local window is full and policy will not wait that long |
+| `transient_provider_failure` | yes | yes | provider 5xx / declared transient status |
+| `upstream_timeout` | yes | yes | one attempt exceeded its transport or per-attempt cap |
+| `network_failure` | yes | yes | connect/read/transport error |
 | `authentication_failure` | no | yes | 401/403 — a different route may hold a valid credential |
 | `quota_exhausted` | no | yes | daily budget gone (provider or local) |
 | `unsupported_capability` | no | yes | declared `UNIMPLEMENTED`/unsupported model or operation |
@@ -316,8 +316,9 @@ surface. `embed` raises a typed `internal_gateway_failure` rather than returning
 `None` or an invented vector, and `json_object_validator` / `pydantic_validator`
 turn "the model almost returned JSON" into `structured_output_invalid`.
 `llm/fallback_provider.py` keeps its API but decides on `exc.fallback_eligible`;
-its `error_keywords` substring matching survives only as a deprecated constructor
-opt-in, empty by default, and logs a deprecation warning when used.
+its `error_keywords` parameter is retained but inert (warning by count only).
+Successful model text is never reclassified by substring, even in this legacy
+shim; native and typed cancellation from the backup both propagate.
 
 ## 12. Caller inventory (the real call graph)
 
@@ -334,7 +335,7 @@ fails if it drifts from this table in either direction.
 | `agents/store/base_agent.py` | gateway | duck-typed `gemini.gateway` → `execute` with gateway `Message` turns; otherwise the legacy provider contract |
 | `creative/video_director.py` | gateway | `gateway_for_credentials(api_key, model)` → `execute` |
 | `llm/gemini_provider.py` | gateway | `GeminiProvider.execute` runs through the ChatEngine's gateway and exposes it as `.gateway` |
-| `llm/litellm_provider.py` | gateway | builds a lazily-owned `LLMGateway` around `LitellmRouterAdapter`, registered with `max_attempts=1` so no retry nests inside the Router's own chain |
+| `llm/litellm_provider.py` | adapter / explicit legacy bridge | canonical registry uses `build_raw_routing_adapter` with Router retries/fallbacks disabled; explicitly constructed legacy `LiteLLMRoutingProvider` retains a private gateway and SDK routing chain, outside the deployment-authority guarantee |
 | `llm/local_server_provider.py` | gateway | wrapped by `LegacyProviderAdapter` in `registry._build_llama_server_adapter` |
 | `llm/local_llama_cpp.py` | gateway | wrapped by `LegacyProviderAdapter` in `registry._build_llama_cpp_adapter` |
 | `llm/fallback_provider.py` | gateway-typed | provider-level compatibility wrapper; decisions from typed `fallback_eligible` |

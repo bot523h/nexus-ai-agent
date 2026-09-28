@@ -692,3 +692,66 @@ async def test_cancellation_during_timeout_cleanup_preserves_task_ownership():
         release.set()
         await asyncio.sleep(0)
         await gateway.aclose()
+
+
+async def test_legacy_keyword_argument_cannot_reclassify_success():
+    from unittest.mock import AsyncMock
+
+    from nexus_ai_agent.llm.fallback_provider import FallbackProvider
+
+    primary = AsyncMock()
+    primary.generate.return_value = "A successful article about quota policies."
+    fallback = AsyncMock()
+    fallback.generate.return_value = "replacement"
+    llm = FallbackProvider(primary, fallback, error_keywords=("quota",))
+    assert await llm.generate("x") == primary.generate.return_value
+    fallback.generate.assert_not_awaited()
+    assert llm.stats["keyword_hits"] == 0
+
+
+@pytest.mark.parametrize(
+    "withdrawal", [CancelledByCallerError("withdrawn"), asyncio.CancelledError()]
+)
+async def test_cancellation_in_legacy_backup_propagates(withdrawal):
+    from unittest.mock import AsyncMock
+
+    from nexus_ai_agent.llm.errors import QuotaExhaustedError
+    from nexus_ai_agent.llm.fallback_provider import FallbackProvider
+
+    primary = AsyncMock()
+    primary.generate.side_effect = QuotaExhaustedError("quota")
+    fallback = AsyncMock()
+    fallback.generate.side_effect = withdrawal
+    llm = FallbackProvider(primary, fallback)
+    with pytest.raises(type(withdrawal)):
+        await llm.generate("x")
+    assert fallback.generate.await_count == 1
+
+
+async def test_legacy_fallback_never_logs_keywords_answers_or_raw_error_labels(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from nexus_ai_agent.llm import fallback_provider
+    from nexus_ai_agent.llm.errors import QuotaExhaustedError
+
+    events = []
+
+    class Sink:
+        def __getattr__(self, name):
+            return lambda event, **fields: events.append((event, fields))
+
+    monkeypatch.setattr(fallback_provider, "logger", Sink())
+    secret = "sk-THIS_IS_A_SECRET_1234567890"
+    primary, backup = AsyncMock(), AsyncMock()
+    primary.generate.return_value = secret
+    backup.generate.return_value = "backup"
+    llm = fallback_provider.FallbackProvider(primary, backup, error_keywords=(secret,))
+    assert await llm.generate("private prompt") == secret
+    primary.generate.side_effect = QuotaExhaustedError(
+        "private raw error", provider=f"Bearer {secret}", request_id=f"api_key={secret}"
+    )
+    await llm.generate("private prompt")
+    assert events
+    assert secret not in repr(events)
+    assert "private raw error" not in repr(events)
+    assert "private prompt" not in repr(events)

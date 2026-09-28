@@ -816,3 +816,15 @@ def test_gateway_constructor_detector_is_live():
     }
     assert _gateway_constructors("def bypass():\n return engine.LLMGateway()") == {"bypass"}
     assert not _gateway_constructors("def pure():\n return 'LLMGateway()'")
+
+
+def test_legacy_fallback_cannot_reenable_dynamic_keyword_classification() -> None:
+    """Variable needles evaded the literal-error-keyword detector; ban this lane."""
+    source = (SRC / "llm/fallback_provider.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    assert not [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Compare)
+        and any(isinstance(op, (ast.In, ast.NotIn)) for op in node.ops)
+    ], "legacy fallback must classify typed errors, never substring membership"
