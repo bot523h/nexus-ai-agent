@@ -33,10 +33,11 @@ before any bytes are sent. An honest coarse answer beats a fabricated precise on
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -805,10 +806,14 @@ class LegacyProviderAdapter:
         modalities: frozenset[Modality] | None = None,
         degraded: bool = False,
         error_kinds: Mapping[type[BaseException], LLMErrorKind] | None = None,
+        non_interruptible: bool = False,
     ) -> None:
         if not hasattr(provider, "generate"):
             raise TypeError(f"{type(provider).__name__} does not implement generate()")
         self._provider = provider
+        # asyncio.to_thread cancellation does not stop native inference. Keep
+        # its coroutine owned so the engine can quarantine the live operation.
+        self._non_interruptible = non_interruptible
         self._name = name
         self._model = model
         self._operations = operations or frozenset(
@@ -890,7 +895,7 @@ class LegacyProviderAdapter:
                         request_id=request_id,
                         attempt=attempt,
                     )
-                vector = await embed(text)
+                vector = await self._await_provider(embed(text))
                 if not isinstance(vector, (list, tuple)) or not vector:
                     raise MalformedResponseError(
                         f"{self._name} returned an empty embedding",
@@ -914,7 +919,7 @@ class LegacyProviderAdapter:
                 )
 
             prompt, system = _flatten(request)
-            text = await self._provider.generate(prompt, system=system)
+            text = await self._await_provider(self._provider.generate(prompt, system=system))
         except Exception as exc:  # noqa: BLE001 — classified below, never re-raised raw
             raise self._classify(exc, route, request_id, attempt) from exc
 
@@ -927,6 +932,29 @@ class LegacyProviderAdapter:
                 attempt=attempt,
             )
         return AdapterResult(text=text, finish_reason=FinishReason.STOP, usage=UNKNOWN_USAGE)
+
+    async def _await_provider(self, call: Awaitable[Any]) -> Any:
+        if not self._non_interruptible:
+            return await call
+        work = asyncio.ensure_future(call)
+        interrupted = False
+        while True:
+            try:
+                result = await asyncio.shield(work)
+            except asyncio.CancelledError:
+                if work.cancelled():
+                    raise
+                interrupted = True
+                # The caller's gateway task already propagates cancellation.
+                # This adapter task remains owned until native work really ends.
+            except Exception:
+                if interrupted:
+                    raise asyncio.CancelledError from None
+                raise
+            else:
+                if interrupted:
+                    raise asyncio.CancelledError
+                return result
 
     def _classify(self, exc: Exception, route: Route, request_id: str, attempt: int) -> LLMError:
         """Map by exception *type*; fall back to transport mapping for httpx errors."""

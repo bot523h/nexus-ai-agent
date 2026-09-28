@@ -411,7 +411,9 @@ def _build_llama_cpp_adapter(settings: Settings) -> Any | None:
     except (FileNotFoundError, OSError, ValueError) as exc:
         log.warning("llama_cpp_model_unavailable", error=type(exc).__name__)
         return None
-    return LegacyProviderAdapter(provider, name="llama-cpp", model="local-gguf")
+    return LegacyProviderAdapter(
+        provider, name="llama-cpp", model="local-gguf", non_interruptible=True
+    )
 
 
 def _build_fake_adapter() -> Any | None:

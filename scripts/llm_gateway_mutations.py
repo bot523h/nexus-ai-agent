@@ -1022,6 +1022,72 @@ MUTATIONS += (
 )
 
 
+MUTATIONS += (
+    Mutation(
+        "native_backend_is_not_marked_non_interruptible",
+        GATEWAY / "registry.py",
+        'model="local-gguf", non_interruptible=True',
+        'model="local-gguf", non_interruptible=False',
+        GOLDEN,
+        "test_native_thread_stays_owned_after_async_waiter_cancel",
+        "native backend cancellation must retain worker ownership",
+    ),
+    Mutation(
+        "native_worker_waiter_is_not_shielded",
+        GATEWAY / "adapters.py",
+        "result = await asyncio.shield(work)",
+        "result = await work",
+        GOLDEN,
+        "test_native_thread_stays_owned_after_async_waiter_cancel",
+        "cancelling a to_thread waiter cannot release physical capacity",
+    ),
+    Mutation(
+        "native_adapter_abandons_inner_work_on_cancel",
+        GATEWAY / "adapters.py",
+        "                interrupted = True",
+        "                raise",
+        GOLDEN,
+        "test_native_thread_stays_owned_after_async_waiter_cancel",
+        "the outer adapter task cannot finish while native work is still alive",
+    ),
+)
+
+
+MUTATIONS += (
+    Mutation(
+        "native_embedding_cold_path_runs_on_authority_loop",
+        Path("llm/local_llama_cpp.py"),
+        "return await asyncio.to_thread(_embed)",
+        "return _embed()",
+        GOLDEN,
+        "test_cold_native_embedding_initializes_off_the_authority_loop",
+        "cold SDK initialization must not block the authority event loop",
+    ),
+    Mutation(
+        "native_model_mutex_is_bypassed",
+        Path("llm/local_llama_cpp.py"),
+        "with self._native_lock:",
+        "if True:",
+        GOLDEN,
+        "test_native_model_access_is_serialized_inside_admitted_work",
+        "already-admitted workers cannot concurrently mutate one native model",
+    ),
+)
+
+
+MUTATIONS += (
+    Mutation(
+        "native_embedding_mutex_is_bypassed",
+        Path("llm/local_llama_cpp.py"),
+        'with self._native_lock:\n                if not hasattr(self, "_st"):',
+        'if True:\n                if not hasattr(self, "_st"):',
+        GOLDEN,
+        "test_native_model_access_is_serialized_inside_admitted_work",
+        "embedding cache and encode share the native model mutex",
+    ),
+)
+
+
 def _run_pytest(
     package_root: Path, targets: tuple[str, ...] | str, timeout: int
 ) -> subprocess.CompletedProcess[str]:

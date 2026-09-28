@@ -252,6 +252,21 @@ provenance, including earlier failed attempts in a retry/fallback chain. Logical
 idempotency reuse and proven pre-execution refusals add no provider spend. This
 is not an invoice or full infrastructure cost accounting.
 
+### Native worker ownership
+
+The canonical llama.cpp legacy adapter is marked `non_interruptible`: cancellation
+of `asyncio.to_thread` only cancels an async waiter, not native inference. Its
+inner coroutine is shielded and its adapter task remains alive/owned until the
+worker finishes. The caller still receives cancellation/deadline promptly through
+the engine; abandoned-work quarantine prevents replacement execution. This is not
+forcible native-thread termination. HTTP legacy adapters remain normally cancellable.
+Cold embedding import/model initialization also runs in the existing worker. A
+backend mutex serializes access to its native models and first-use embedding cache;
+it is not a second admission policy. Ownership, cold initialization and serialization
+regressions use real provider methods with controlled model doubles, not a live
+GGUF/SentenceTransformer download. Synchronous deployment construction still belongs
+to startup composition, outside an admitted request's timeout budget.
+
 ## 9. Adapters: where the wire lives
 
 `ProviderAdapter` is the whole extension surface: `name`, `operations`,

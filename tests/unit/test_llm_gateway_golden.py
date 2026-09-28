@@ -785,3 +785,219 @@ async def test_legacy_fallback_never_logs_keywords_answers_or_raw_error_labels(m
     assert secret not in repr(events)
     assert "private raw error" not in repr(events)
     assert "private prompt" not in repr(events)
+
+
+@pytest.mark.parametrize("operation", ["chat", "embeddings"])
+@pytest.mark.parametrize("stop", ["task", "token", "timeout"])
+async def test_native_thread_stays_owned_after_async_waiter_cancel(monkeypatch, operation, stop):
+    import threading
+    from types import SimpleNamespace
+
+    from nexus_ai_agent.llm import local_llama_cpp
+    from nexus_ai_agent.llm.gateway.contract import LLMOperation
+    from nexus_ai_agent.llm.gateway.policy import ConcurrencyPolicy
+
+    operation = LLMOperation(operation)
+    from nexus_ai_agent.llm.errors import DeadlineExceededError, UpstreamTimeoutError
+
+    token = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    entered, finished = asyncio.Event(), asyncio.Event()
+    release = threading.Event()
+    calls = []
+
+    def block(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            loop.call_soon_threadsafe(entered.set)
+            try:
+                assert release.wait(5)
+            finally:
+                loop.call_soon_threadsafe(finished.set)
+        return {"choices": [{"text": "answer"}]}
+
+    provider = object.__new__(local_llama_cpp.LocalLlamaCppProvider)
+    provider._model = block
+    provider._native_lock = threading.Lock()
+
+    class Embed:
+        def encode(self, text):
+            block()
+            return SimpleNamespace(tolist=lambda: [0.1, 0.2])
+
+    provider._st = Embed()
+    monkeypatch.setattr(local_llama_cpp, "LocalLlamaCppProvider", lambda *a, **k: provider)
+    adapter = registry._build_llama_cpp_adapter(
+        SimpleNamespace(model_path="unused", n_ctx=16, n_gpu_layers=0)
+    )
+    gateway = _gateway(
+        [adapter],
+        routes=[adapter.route()],
+        retry=NO_RETRY,
+        clock=VirtualClock(),
+        concurrency=ConcurrencyPolicy(
+            max_inflight_global=1,
+            max_inflight_per_provider=1,
+            max_inflight_per_tenant=1,
+            max_queued=0,
+        ),
+    )
+    owner = asyncio.create_task(
+        gateway.execute(
+            request(
+                operation=operation,
+                cancellation=token,
+                deadline_seconds=0.01 if stop == "timeout" else None,
+            )
+        )
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        if stop == "task":
+            owner.cancel()
+        elif stop == "token":
+            token.set()
+        result = await asyncio.wait_for(asyncio.gather(owner, return_exceptions=True), 2)
+        expected = {
+            "task": (asyncio.CancelledError,),
+            "token": (CancelledByCallerError,),
+            "timeout": (DeadlineExceededError, UpstreamTimeoutError, TransientProviderError),
+        }
+        assert isinstance(result[0], expected[stop])
+        if stop == "timeout":
+            assert result[0].kind in (LLMErrorKind.DEADLINE_EXCEEDED, LLMErrorKind.UPSTREAM_TIMEOUT)
+        await asyncio.sleep(0)
+        assert not finished.is_set()
+        with pytest.raises(OverloadedError):
+            await asyncio.wait_for(gateway.execute(request(operation=operation)), 2)
+        assert len(calls) == 1
+        pending = tuple(gateway._abandoned)
+        assert len(pending) == 1
+        release.set()
+        await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), 2)
+        assert finished.is_set()
+        assert not gateway._abandoned
+        response = await gateway.execute(request(operation=operation))
+        assert len(calls) == 2
+        if operation is LLMOperation.CHAT:
+            assert response.text == "answer"
+        else:
+            assert response.embedding == (0.1, 0.2)
+    finally:
+        release.set()
+        if not owner.done():
+            owner.cancel()
+        await asyncio.gather(owner, return_exceptions=True)
+        if entered.is_set():
+            await asyncio.wait_for(finished.wait(), 2)
+        await gateway.aclose()
+
+
+def _native_adapter(tmp_path, monkeypatch, model):
+    import sys
+    from types import SimpleNamespace
+
+    monkeypatch.setitem(sys.modules, "llama_cpp", SimpleNamespace(Llama=lambda **kwargs: model))
+    model_path = tmp_path / "controlled.gguf"
+    model_path.write_bytes(b"controlled test double, not a model")
+    return registry._build_llama_cpp_adapter(
+        SimpleNamespace(model_path=str(model_path), n_ctx=16, n_gpu_layers=0)
+    )
+
+
+async def test_cold_native_embedding_initializes_off_the_authority_loop(tmp_path, monkeypatch):
+    import sys
+    import threading
+    from types import SimpleNamespace
+
+    from nexus_ai_agent.llm.gateway.contract import LLMOperation
+
+    initialized, encoded = [], []
+    loop_thread = threading.get_ident()
+
+    class ColdModel:
+        def __init__(self, *args):
+            initialized.append(threading.get_ident())
+
+        def encode(self, text):
+            encoded.append(threading.get_ident())
+            return SimpleNamespace(tolist=lambda: [0.1, 0.2])
+
+    monkeypatch.setitem(
+        sys.modules, "sentence_transformers", SimpleNamespace(SentenceTransformer=ColdModel)
+    )
+    adapter = _native_adapter(tmp_path, monkeypatch, lambda *a, **k: None)
+    gateway = _gateway([adapter], routes=[adapter.route()], retry=NO_RETRY)
+    try:
+        responses = await asyncio.gather(
+            *(gateway.execute(request(operation=LLMOperation.EMBEDDINGS)) for _ in range(2))
+        )
+        assert all(r.embedding == (0.1, 0.2) for r in responses)
+        assert len(initialized) == 1
+        assert initialized[0] != loop_thread
+        assert len(encoded) == 2 and all(t != loop_thread for t in encoded)
+    finally:
+        await gateway.aclose()
+
+
+@pytest.mark.parametrize("operation", ["chat", "embeddings"])
+async def test_native_model_access_is_serialized_inside_admitted_work(
+    tmp_path, monkeypatch, operation
+):
+    import threading
+    from types import SimpleNamespace
+
+    from nexus_ai_agent.llm.gateway.contract import LLMOperation
+
+    loop = asyncio.get_running_loop()
+    entered, second_progress = asyncio.Event(), asyncio.Event()
+    release, mutex = threading.Event(), threading.Lock()
+    calls, lock_attempts = [], []
+
+    class AuditedLock:
+        def __enter__(self):
+            lock_attempts.append(1)
+            if len(lock_attempts) == 2:
+                loop.call_soon_threadsafe(second_progress.set)
+            mutex.acquire()
+
+        def __exit__(self, *args):
+            mutex.release()
+
+    def infer(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(5)
+        else:
+            loop.call_soon_threadsafe(second_progress.set)
+        return {"choices": [{"text": "answer"}]}
+
+    class Embed:
+        def encode(self, text):
+            infer()
+            return SimpleNamespace(tolist=lambda: [0.1, 0.2])
+
+    adapter = _native_adapter(tmp_path, monkeypatch, infer)
+    adapter.inner._native_lock = AuditedLock()
+    adapter.inner._st = Embed()
+    gateway = _gateway([adapter], routes=[adapter.route()], retry=NO_RETRY)
+    owners = [asyncio.create_task(gateway.execute(request(operation=LLMOperation(operation))))]
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        owners.append(
+            asyncio.create_task(gateway.execute(request(operation=LLMOperation(operation))))
+        )
+        await asyncio.wait_for(second_progress.wait(), 2)
+        # Either the second worker reached the mutex or bypassed it and entered
+        # the model. Both publish progress, so a missing mutex fails an assertion,
+        # not a probabilistic sleep or a timeout pretending to be a mutation kill.
+        assert len(calls) == 1
+        assert len(lock_attempts) == 2
+        release.set()
+        await asyncio.wait_for(asyncio.gather(*owners), 2)
+        assert len(calls) == 2
+    finally:
+        release.set()
+        await asyncio.gather(*owners, return_exceptions=True)
+        await gateway.aclose()

@@ -8,8 +8,8 @@
 
 - Repository: `bot523h/nexus-ai-agent`.
 - Session branch: `arena/01a0e846-nexus-ai-agent`; no other branch was checked out or pushed by this session.
-- Implementation HEAD being evaluated: **`84e9a3f37cec9b91810c7b37e14777df7feff76d`**.
-- Main, independently read from the remote: **`e5b326b2eaf691a638d030ad57acf1ce60016ef0`**.
+- Previous frozen proof HEAD: **`25c1d2d3d89de5694d952e360521e2d49f1d4f4d`**. Native-worker ownership and cold-initialization corrections have since been added; the new exact-head campaign is pending. This draft does not attribute earlier results to those corrections.
+- Main, freshly rechecked from the remote at 2026-09-28T16:30Z: **`e5b326b2eaf691a638d030ad57acf1ce60016ef0`**.
 - Owner-authorized predecessor: PR [#116](https://github.com/bot523h/nexus-ai-agent/pull/116), HEAD **`9e795318fa7651ed35f3dfa373bb0ce49d21fcc7`**. Its exact history was retained, not rewritten or merged on GitHub.
 - Successor: draft PR [#118](https://github.com/bot523h/nexus-ai-agent/pull/118).
 - A subsequent report-only publication commit is distinct from the implementation revision above. Its hash cannot be embedded in its own content. Execution evidence remains bound to the explicit implementation SHA and source fingerprint; publication CI is separately checked.
@@ -110,7 +110,9 @@ Therefore no claim of “flaky”, “environmental”, “already fixed”, or 
 | Three clean-clone runner failures | Runner placed `--basetemp` **inside** the source/Git root. Pack coverage projected fixture paths relative to that root; Git discovery saw the enclosing clone. | Exact three tests: **3 RED inside / 3 GREEN outside** (`runner-tmp-{red,green}.log`). Temporary roots moved outside each clone. No production/test assertions relaxed. |
 | PDF recovery T11 residue assertion | One of the first three isolated full suites saw `.prev` after durable `COMPLETED`. Queue contract deliberately finalizes backup **after** durable commit. | Barrier probe proves status is observable before finalization. Test now joins the actual task before asserting residue absence. Deterministic companion test rejects omission of that join; scratch mutant fails. No production queue edit. |
 
-**Further final-head finding:** `84e9a3f` run 04 failed `test_delivers_to_originating_chat_not_user_id`: a sent-message observation preceded the async database status commit. A paused `_mark_status` reproducer proves the ordering (`reminder-deterministic-red.log`). The test-only task-join correction and negative oracle are being prepared; this is not attributed to the unknown historical CI failure.
+**Further final-head finding:** `84e9a3f` run 04 failed `test_delivers_to_originating_chat_not_user_id`: a sent-message observation preceded the async database status commit. A paused `_mark_status` reproducer proves the ordering (`reminder-deterministic-red.log`). The test-only task-join correction landed in `103401c`; its deterministic companion fails when the join is removed, and all 10 reminder tests pass; this is not attributed to the unknown historical CI failure.
+
+**Proof-oracle correction:** `103401c` race repetition 12 failed because the cleanup test's 10ms real deadline expired before provider entry (zero provider calls), not because cleanup ownership failed. A virtual-clock entry delay reproduces that exact wrong-phase failure. `25c1d2d` forces provider-timeout and settlement boundaries with events, preserves the overload/one-call assertions, additionally asserts native cancellation propagation, and owns teardown even on setup failure. The original cleanup-ownership mutant is still killed (baseline/restoration green). Earlier passing repetitions do not erase this false-negative oracle defect.
 
 The failed `9415153` clean-clone batch is preserved: one run had four failures, two had three. It was stopped, not counted as clean proof. Four subsequent `5a4e8fc` clean runs passed; that campaign was then stopped to restart on the final implementation SHA. Incomplete runs are not passes.
 
@@ -130,6 +132,14 @@ Every extension followed a concrete defect → oracle → minimal change, rather
 - Legacy opt-in keyword fallback still reclassified success and logged answer/keyword text; typed backup cancellation was swallowed (§16).
 
 Relevant RED logs are preserved in `ci-artifacts/w2/`; named permanent tests are in the golden, observability, adapters, engine and architecture suites.
+
+### Native worker and cold-model defects
+
+Further independent probes against the real local-provider methods found a physical ownership gap: cancelling `asyncio.to_thread` cancelled its waiter, not its running thread. Two RED cases (chat and embedding) admitted replacement work while the first native call was still active. The canonical legacy adapter now marks this backend non-interruptible, shields its inner work, and stays alive until native execution ends; the gateway still propagates cancellation/deadline to the caller and quarantines replacement work. Tests also prove capacity returns after completion.
+
+A cold embedding initialization probe blocked the authority loop for **0.502 seconds** with a **0.01-second** request budget. Three permanent regressions then failed for cold initialization on the loop and concurrent native model access. The provider path was checked against local and fresh remote leases, claimed and pushed before editing. Cold import/construction now runs inside the existing worker; a backend mutex protects native model access and first-use cache initialization, not a second policy scheduler. Deterministic thread-identity and parked-worker assertions preserve positive controls and avoid simply loosening timing thresholds.
+
+The new golden matrix covers native task cancellation, typed withdrawal and timeout for chat and embedding; restored capacity; cold initialization; and native serialization. It uses controlled model doubles, not live SDK downloads or actual GGUF inference. The full mutation inventory is now **88**; targeted native ownership and cold-path mutants are killed, and the complete battery awaits the new freeze.
 
 ## 11. Composed execution policy and retry
 
@@ -215,11 +225,11 @@ Redaction recognizes bounded patterns; it does **not** recognize every possible 
 
 | Diagnostic on final implementation | Result |
 |---|---|
-| Test collection | **3666 tests collected** (`inventory-84e9.log`). Collection is not execution. |
+| Test collection | **3667 tests collected** (`inventory-1034.log`; test count unchanged by the scheduling-only `25c1d2d` correction). Collection is not execution. |
 | Ruff check | **PASS** (`final-lint.log`). |
-| Ruff format | **564 files already formatted**. |
+| Ruff format | **565 files already formatted**. |
 | Mypy | **259 source files clean** (`final-types.log`). |
-| Architecture + Gemini key transport + LiteLLM + local-server compatibility selection | **52 passed** (`final-compat.log`). |
+| Architecture + Gemini key transport + LiteLLM + local-server compatibility selection | **52 passed** (`final-compat-1034.log`; source and selected tests unchanged since that run). |
 | Final full-suite execution | `84e9a3f`: three runs **3635 passed / 31 skipped**; one **1 failed / 3634 passed / 31 skipped**, reminder status race. |
 
 Earlier intermediate proofs are retained but not promoted: broad preproof 688 passed / 1 skipped; cost/completion diagnostic 321 passed including scratch probes; legacy focused diagnostic 72 passed including scratch probes. A style error in intermediate `071652d` was corrected by `84e9a3f`; final lint was rerun.
@@ -235,11 +245,15 @@ The runner varies `PYTHONHASHSEED`, uses fresh processes, records exit status, e
 | Historical race / engine / transport / load | `70bdc7d` | 40 / 40 / 20 / 40 green; full 3 green then deliberately stopped for a real cleanup bug. |
 | Historical race / engine / transport / load | `9415153` | 40 / 40 / 20 / 40 green; isolated full batch failed as diagnosed in §9. |
 | Transitional clean full | `5a4e8fc` | 4 green, then deliberately stopped to move proof to final code. Partial later runs not counted. |
-| Final race | `84e9a3f` | **40/40 green** |
-| Final engine | `84e9a3f` | **40/40 green** |
-| Final transport | `84e9a3f` | **20/20 green** |
-| Final load | `84e9a3f` | **40/40 green** |
-| Final independent clean full suites | `84e9a3f` | **3 green / 1 failed**, stopped after first batch; requested 20 not achieved |
+| Prior race | `84e9a3f` | **40/40 green** |
+| Prior engine | `84e9a3f` | **40/40 green** |
+| Prior transport | `84e9a3f` | **20/20 green** |
+| Prior load | `84e9a3f` | **40/40 green** |
+| Prior independent clean full suites | `84e9a3f` | **3 green / 1 failed**, stopped after first batch; requested 20 not achieved |
+
+| Transitional proof | `103401c` | Full 4 green before stop; race 11 green then wrong-phase oracle failure in run 12 (§9); mutation 82/82 green. |
+| Final race / engine / transport / load | `25c1d2d` | **PENDING** (40 / 40 / 20 / 40 requested) |
+| Final clean full suites | `25c1d2d` | **PENDING** (20 requested) |
 
 Load scenarios include 200-caller bursts, global/provider/tenant limits, saturation rejection, sustained contention and priority, 429/local quota pressure, transient failures, fallback behavior in engine tests, cancellation/timeout/mixed storms, 1000-request record bounds, idempotency flooding, repeated close/open and task-count stability. These are deterministic/local adapter workloads, not a live provider or distributed load test.
 
@@ -247,7 +261,7 @@ Load scenarios include 200-caller bursts, global/provider/tenant limits, saturat
 
 Final inventory: **82 mutants**, each applied to a scratch source copy; only an actual pytest test failure counts as a kill. Harness requires a green baseline and green restored baseline. Timeout/import/harness errors do not count as killed mutations.
 
-**Final implementation battery: 82/82 killed**, baseline and restored baseline GREEN (`mutations-84e9.log`). The earlier `9415153` battery was **71/71 killed**, baseline and restoration green. A prior 69/70 run is preserved as a real survivor, not relabeled green: the original retry-loop cancellation mutation survived because an earlier entry guard masked the missing loop guard. A new event schedule sets withdrawal between entry and admission, demands zero provider calls, and killed the unchanged mutation (targeted 1/1, baseline/restoration green).
+**Final implementation battery: 82/82 killed**, baseline and restored baseline GREEN on `25c1d2d` (`mutations-25c1.log`). The `84e9a3f` and `103401c` repetitions also killed 82/82. The earlier `9415153` battery was **71/71 killed**, baseline and restoration green. A prior 69/70 run is preserved as a real survivor, not relabeled green: the original retry-loop cancellation mutation survived because an earlier entry guard masked the missing loop guard. A new event schedule sets withdrawal between entry and admission, demands zero provider calls, and killed the unchanged mutation (targeted 1/1, baseline/restoration green).
 
 Coverage includes singleton/second installation, stale authority, probe double release/generation, nonretryable classification, cancellation swallowing, deadlines, global/provider/queue bounds, breaker/gateway bypass, raw errors/secrets/request IDs, fallback and Retry-After. New accounting mutants cover inferred free pricing, invalid pins, aggregate unknown cost, earlier retry spend and malformed SDK counts. New legacy mutants cover variable-keyword classification, typed cancellation and secret labels.
 
@@ -255,13 +269,13 @@ Separate T11 synchronization mutant: removing the join fails the deterministic c
 
 ## 23. Exact-head GitHub CI and main reconciliation
 
-Implementation SHA: `84e9a3f37cec9b91810c7b37e14777df7feff76d`.
+Implementation/test SHA: `25c1d2d3d89de5694d952e360521e2d49f1d4f4d`.
 
-- Push workflow: [36443911061](https://github.com/bot523h/nexus-ai-agent/actions/runs/36443911061).
-- PR workflow: [36443916439](https://github.com/bot523h/nexus-ai-agent/actions/runs/36443916439).
-- **Current final status: PENDING.** Absence of failed checks is not completed green CI.
-- Superseded successor workflows were cancelled by workflow concurrency; cancelled runs are not passes. Historical predecessor success does not establish this SHA's result.
-- Fresh rollups/jobs and remote refs are preserved in `ci-artifacts/w2/`. Final publication checks must be bound to their own head, not substituted for implementation execution evidence.
+- **Exact-head CI: NOT VERIFIED.** A push failed and `gh api user` returned 401 at `2026-09-28T16:01:58Z`; independent local work continued. Repository access and push were re-established at 16:30Z (through `6e705a6`). GET `/user` then returned 403 because this integration token lacks that endpoint, while repository queries and push succeed; this is not a current repository-authentication blocker.
+- Last successful push: `103401c4c8938a28fc26cfe49d6321daa774ecc9`. Its PR run [36446373517](https://github.com/bot523h/nexus-ai-agent/actions/runs/36446373517) was in progress and push run [36446366130](https://github.com/bot523h/nexus-ai-agent/actions/runs/36446366130) queued at the last successful check. Neither establishes current HEAD CI.
+- `84e9a3f` push/PR workflows [36443911061](https://github.com/bot523h/nexus-ai-agent/actions/runs/36443911061) / [36443916439](https://github.com/bot523h/nexus-ai-agent/actions/runs/36443916439) are historical, not substitutes. Superseded successor workflows were cancelled by concurrency; cancellations are not passes.
+- Last independently checked main run [36339890292](https://github.com/bot523h/nexus-ai-agent/actions/runs/36339890292) succeeded on `e5b326b2eaf691a638d030ad57acf1ce60016ef0`.
+- Main, open related PR heads and PR113/115/117 Boards were freshly rechecked at 16:30Z before claiming the native-provider implementation path. Later CI remains pending; old rollups retain their temporal scope.
 
 No merge to main was performed. Independent local diagnostics and a candidate's CI do not authorize release, override another agent's gates lease, or prove behavior after a future W1/W2 merge.
 
@@ -275,7 +289,8 @@ No merge to main was performed. Independent local diagnostics and a candidate's 
 | Runtime lifecycle composition | Revocation is not asynchronous transport cleanup | **Locally hardened, not integrated globally** | W1 composition-root integration/merge needs the owner and its lifecycle proof. This PR does not rewrite leased roots. |
 | External services and fleet behavior | Local skips; process-local coordination; cancellation-resistant remote work | **Not claimed** | Requires actual service/deployment proof. No fleet quota or remote exactly-once guarantee. |
 | Arbitrary secret/payload/custom-code behavior | Pattern redaction and bounded owned collections are not universal semantic/byte-level isolation | **Known limits** | Do not turn tested local invariants into an unlimited security or memory guarantee. |
-| Final repetitions / mutation / exact-head CI | Pending at draft time | **Pending** | Replace only with completed, SHA-bound evidence. |
+| Exact-head CI | New native corrections require fresh proof | **Pending** | Repository authentication is restored; inspect completed checks on the new frozen head. |
+| Final repetitions | Pending at draft time; 82/82 final mutants already killed | **Pending** | Replace only with completed, SHA-bound evidence. |
 
 **Verdict: W2 NOT VERIFIED.** Concrete authority/resource/accounting defects were reproduced and hardened, but the missing historical failure identity and explicitly remaining authority/egress boundaries prevent the unqualified final W2 claim.
 
