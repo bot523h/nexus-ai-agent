@@ -10,9 +10,11 @@ import pytest
 from test_llm_gateway_engine import NO_RETRY, ScriptedAdapter, VirtualClock, _gateway
 
 from nexus_ai_agent.llm.errors import (
+    CancelledByCallerError,
     GatewayClosedError,
     LLMError,
     LLMErrorKind,
+    OverloadedError,
     TransientProviderError,
 )
 from nexus_ai_agent.llm.gateway import registry
@@ -637,3 +639,56 @@ def test_error_classification_sets_offline_pricing_before_sdk_import(monkeypatch
     monkeypatch.setattr(builtins, "__import__", importing)
     litellm_provider._litellm_error_types()
     assert seen == ["True"]
+
+
+async def test_withdrawal_after_initial_gate_before_admission(monkeypatch):
+    token = asyncio.Event()
+    adapter = ScriptedAdapter("p", ["must not run"])
+    gateway = _gateway([adapter])
+    original = gateway._context_gate
+
+    def gate(*args):
+        result = original(*args)
+        token.set()
+        return result
+
+    monkeypatch.setattr(gateway, "_context_gate", gate)
+    try:
+        with pytest.raises(CancelledByCallerError):
+            await gateway.execute(request(cancellation=token))
+        assert adapter.calls == 0
+    finally:
+        await gateway.aclose()
+
+
+async def test_cancellation_during_timeout_cleanup_preserves_task_ownership():
+    entered, cancelled, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    class Stubborn(ScriptedAdapter):
+        async def execute(self, *args, **kwargs):
+            self.calls += 1
+            if self.calls > 1:
+                return AdapterResult(text="unexpected second execution")
+            entered.set()
+            while not release.is_set():
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    cancelled.set()
+            return AdapterResult(text="late")
+
+    adapter = Stubborn("p", ["ok"])
+    gateway = _gateway([adapter], retry=NO_RETRY)
+    owner = asyncio.create_task(gateway.execute(request(deadline_seconds=0.01)))
+    await asyncio.wait_for(entered.wait(), 2)
+    await asyncio.wait_for(cancelled.wait(), 2)
+    owner.cancel()
+    await asyncio.gather(owner, return_exceptions=True)
+    try:
+        with pytest.raises(OverloadedError):
+            await gateway.execute(request())
+        assert adapter.calls == 1
+    finally:
+        release.set()
+        await asyncio.sleep(0)
+        await gateway.aclose()

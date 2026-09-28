@@ -180,9 +180,9 @@ MUTATIONS: tuple[Mutation, ...] = (
             if self._closed:""",
         """            now = self._clock()
             if self._closed:""",
-        CANCELLATION,
-        "test_a_withdrawal_token_set_before_execution_never_reaches_a_provider",
-        "a withdrawn request must never reach a provider",
+        GOLDEN,
+        "test_withdrawal_after_initial_gate_before_admission",
+        "withdrawal after the entry guard still costs zero provider attempts",
     ),
     Mutation(
         "engine_ignores_a_withdrawal_during_backoff",
@@ -891,6 +891,19 @@ MUTATIONS += (
         GOLDEN,
         "test_error_classification_sets_offline_pricing_before_sdk_import",
         "the error-type classifier must not fetch mutable remote pricing at import",
+    ),
+)
+
+
+MUTATIONS += (
+    Mutation(
+        "cleanup_cancellation_forgets_owned_tasks",
+        GATEWAY / "engine.py",
+        "self._abandon(tuple(live), adapter=adapter, request_id=request_id)\n            raise",
+        "raise",
+        GOLDEN,
+        "test_cancellation_during_timeout_cleanup_preserves_task_ownership",
+        "cancelling timeout cleanup cannot orphan an uncancellable provider task",
     ),
 )
 

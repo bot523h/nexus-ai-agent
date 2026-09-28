@@ -1235,7 +1235,13 @@ class LLMGateway:
         if grace <= 0:
             self._abandon(tuple(live), adapter=adapter, request_id=request_id)
             return
-        _, still_pending = await asyncio.wait(live, timeout=grace)
+        try:
+            _, still_pending = await asyncio.wait(live, timeout=grace)
+        except asyncio.CancelledError:
+            # Cancellation can arrive *during* timeout cleanup, not just the
+            # provider race. Keep ownership before propagating it unchanged.
+            self._abandon(tuple(live), adapter=adapter, request_id=request_id)
+            raise
         if still_pending:
             self._abandon(tuple(still_pending), adapter=adapter, request_id=request_id)
 
