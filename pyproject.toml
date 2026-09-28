@@ -12,6 +12,7 @@ license = { file = "LICENSE" }
 authors = [{ name = "NEXUS AI" }]
 dependencies = [
   "python-telegram-bot>=21.0",
+  "gTTS>=2.5,<3",  # /tts uses the lightweight client; local ASR stays in [speech]
   "langgraph>=0.2",
   "langgraph-checkpoint-sqlite>=1.0",
   "langchain-community>=0.2",
@@ -59,6 +60,7 @@ translate = [
   "argostranslate>=1.9,<2",  # Wave 9: fully-offline neural translation (incl. Persian)
 ]
 dev = [
+  "build>=1.2,<2",  # offline wheel/sdist contract tests
   "pytest>=8.0",
   "pytest-asyncio>=0.23",
   "ruff>=0.4",
@@ -73,6 +75,10 @@ package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# Include resources in their owning namespace packages (locales/golden included).
+"*" = ["*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

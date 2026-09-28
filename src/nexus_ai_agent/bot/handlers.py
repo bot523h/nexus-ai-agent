@@ -4,12 +4,14 @@ import asyncio
 import json
 import os
 from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
 import structlog
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import desc, select
 from telegram import (
     Audio,
@@ -101,6 +103,7 @@ from nexus_ai_agent.features.analytics import AnalyticsEngine
 from nexus_ai_agent.features.engagement import EngagementEngine
 from nexus_ai_agent.features.force_join import ForceJoinManager
 from nexus_ai_agent.features.image_gen import ImageGenEngine
+from nexus_ai_agent.features.media_result import MediaContractError, media_path
 from nexus_ai_agent.features.moderation import ModerationEngine
 from nexus_ai_agent.features.owner_control import OwnerControl, is_owner
 from nexus_ai_agent.features.personality import PersonalityEngine
@@ -121,17 +124,17 @@ from nexus_ai_agent.storage.unified_cloud import UnifiedCloudStorage
 from .middleware import AuthMiddleware
 
 logger = get_logger(__name__)
-SessionFactory = Callable[[], Any]
+SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 
 
 async def _upsert_user(db_session_factory: SessionFactory, tg_user: Any) -> User:
     async with db_session_factory() as session:
         stmt = select(User).where(User.telegram_id == int(tg_user.id))
-        existing = (await session.exec(stmt)).first()
+        existing = (await session.execute(stmt)).scalars().first()
         if existing:
             existing.username = tg_user.username or existing.username or ""
             await session.commit()
-            return cast(User, existing)
+            return existing
         user = User(telegram_id=int(tg_user.id), username=tg_user.username or "", is_allowed=True)
         session.add(user)
         await session.commit()
@@ -142,11 +145,11 @@ async def _upsert_user(db_session_factory: SessionFactory, tg_user: Any) -> User
 async def _upsert_chat(db_session_factory: SessionFactory, chat_id: int, thread_id: str) -> Chat:
     async with db_session_factory() as session:
         stmt = select(Chat).where(Chat.chat_id == chat_id)
-        existing = (await session.exec(stmt)).first()
+        existing = (await session.execute(stmt)).scalars().first()
         if existing:
             existing.thread_id = thread_id
             await session.commit()
-            return cast(Chat, existing)
+            return existing
         chat = Chat(chat_id=chat_id, thread_id=thread_id)
         session.add(chat)
         await session.commit()
@@ -410,15 +413,19 @@ def build_handlers(
         result = await image_engine.generate(prompt, style=style, user_id=user_id)
         if result.get("error"):
             await _reply(update, f"❌ {result['error']}")
-        elif result.get("file_path"):
-            msg = _message(update)
-            if msg is not None:
-                await msg.reply_photo(
-                    photo=open(result["file_path"], "rb"),
-                    caption=f"🎨 {prompt[:100]}",
-                )
-        else:
+            return
+        msg = _message(update)
+        if msg is None:
+            return
+        try:
+            photo = media_path(result).open("rb")
+        except (MediaContractError, OSError):
             await _reply(update, "❌ Image generation failed.")
+            return
+        # Keep ownership until Telegram consumes the stream. Delivery errors
+        # propagate; they must not be relabelled as generation failures.
+        with photo:
+            await msg.reply_photo(photo=photo, caption=f"🎨 {prompt[:100]}")
 
     async def imagine_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message = _message(update)
@@ -471,12 +478,17 @@ def build_handlers(
         result = await speech_engine.text_to_speech(tts_text, lang=lang)
         if result.get("error"):
             await _reply(update, f"❌ {result['error']}")
-        elif result.get("file_path"):
-            msg = _message(update)
-            if msg is not None:
-                await msg.reply_voice(voice=open(result["file_path"], "rb"))
-        else:
+            return
+        msg = _message(update)
+        if msg is None:
+            return
+        try:
+            voice = media_path(result).open("rb")
+        except (MediaContractError, OSError):
             await _reply(update, "❌ TTS failed.")
+            return
+        with voice:
+            await msg.reply_voice(voice=voice)
 
     # ── v2.0.0: /stt — Speech to Text ──
     async def stt_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -640,7 +652,7 @@ def build_handlers(
                 .where(CloudFile.user_id == user_id)
                 .order_by(desc(CloudFile.created_at))
             )
-            files = (await session.exec(stmt)).all()
+            files = (await session.execute(stmt)).scalars().all()
         if not files:
             await _reply(update, "📁 No files. Reply to file → /cloud to upload.")
             return
@@ -664,7 +676,7 @@ def build_handlers(
             stmt = select(CloudFile).where(
                 CloudFile.user_id == user_id, CloudFile.file_name == filename
             )
-            cloud_file = (await session.exec(stmt)).first()
+            cloud_file = (await session.execute(stmt)).scalars().first()
         if cloud_file is None:
             await _reply(update, f"❌ File '{filename}' not found.")
             return
@@ -749,7 +761,7 @@ def build_handlers(
                 keyboard.append(row)
             async with db_session_factory() as session:
                 stmt = select(UserLanguage).where(UserLanguage.user_id == user_id)
-                ul = (await session.exec(stmt)).first()
+                ul = (await session.execute(stmt)).scalars().first()
             current = ul.language if ul else "en"
             await _reply(
                 update,
@@ -769,7 +781,7 @@ def build_handlers(
             return
         async with db_session_factory() as session:
             stmt = select(UserLanguage).where(UserLanguage.user_id == user_id)
-            ul = (await session.exec(stmt)).first()
+            ul = (await session.execute(stmt)).scalars().first()
             if ul:
                 ul.language = lang
                 ul.updated_at = datetime.now(timezone.utc)

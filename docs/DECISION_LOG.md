@@ -1651,3 +1651,49 @@ stated goal is a nominal gate).
 coverage ACCEPTED and byte-identical across two runs; gate control accepted and
 27/27 attacks rejected; mutation campaign with every applicable mutation killed and
 restored.
+
+
+## 2026-09-28 — Audit repair: executable session, media and distribution contracts
+
+**Scope:** `arena/01a0e742-nexus-ai-agent`, `audit-contract-repair-01a0e742`.
+This is a narrow repair, not the parallel W1 runtime-ownership or W2 LLM-gateway
+rewrite. The source audit is frozen at `e5b326b`; changed behavior is recorded here.
+
+**Decisions**
+
+1. Retain SQLAlchemy `AsyncSession` as the runtime database contract. Correct all
+   seven async `.exec()` consumers (six in handlers, one in onboarding); do not
+   monkey-patch `.exec` onto the real session or weaken test doubles to hide it.
+   Model reads explicitly unwrap scalar results. No-argument SQLite selection
+   honors `Settings.db_path`, and connection/cache keys use canonical file paths.
+2. Preserve public image/TTS dictionary compatibility while introducing shared
+   `MediaResult`/`ImageResult`/`SpeechResult` TypedDicts. A consumer validates the
+   canonical `success=True, path, error=None` contract before opening a file.
+   Stream lifetime spans the awaited Telegram send; all exit paths close it,
+   without deleting engine-owned cached media. Delivery errors propagate rather
+   than being reclassified as generation success/failure.
+3. Declare gTTS as a lightweight core dependency because `/tts` is a core command;
+   the `[speech]` extra still means optional local Whisper ASR. Do not reorganize
+   unrelated heavyweight dependencies during this bug fix.
+4. Ship package JSON explicitly. Keep Alembic revisions authored only under root
+   `migrations/`; a small build-only hook copies them and `alembic.ini` into
+   `storage/_alembic`. Include the inputs in sdists. Installed and editable
+   discovery are explicit and independent of cwd; incomplete packages fail closed.
+5. Prove the distribution, not only editable source: add wheel/sdist isolation
+   tests and a clean wheel-install CI matrix. Existing editable CI remains useful
+   for development but is no longer the sole packaging test.
+
+**Rejected:** switching the whole application to a different session class;
+hand-maintained duplicate migrations; placing runtime files at an installation-
+prefix-dependent data-files path; changing all legacy media consumers to an
+incompatible new object in the same patch; a broad runtime rewrite mixed with
+these contract fixes.
+
+**Operational consequence:** backup and inspect both the configured SQLite file
+and legacy `data/app.sqlite` before rollout where a custom path was configured.
+There is no automatic data merge. Cloud provider receipts/tenant keys, FakeLLM
+policy, global erasure and distributed queue ownership remain separate work.
+
+**Evidence:** `tests/integration/test_runtime_contracts.py`,
+`tests/unit/test_media_result.py`, `tests/unit/test_wheel_install.py`;
+[implementation report](audits/2026-09-28-contract-repair-report.fa.md).

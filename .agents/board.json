@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-28T10:34:24Z",
+  "updated_at": "2026-09-28T10:55:59Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -679,9 +679,13 @@
         "docs/DECISION_LOG.md",
         "docs/architecture/DATA_AND_STORAGE.md",
         "docs/architecture/TESTING.md",
-        "docs/audits/2026-09-28-",
         "src/nexus_ai_agent/features/onboarding.py",
-        "src/nexus_ai_agent/storage/db.py"
+        "src/nexus_ai_agent/storage/db.py",
+        "docs/audits/2026-09-28-architecture.md",
+        "docs/audits/2026-09-28-command-ledger.md",
+        "docs/audits/2026-09-28-contract-repair-report.fa.md",
+        "docs/audits/2026-09-28-engineering-audit.md",
+        "docs/audits/2026-09-28-engineering-evidence.md"
       ]
     }
   ],
@@ -2746,7 +2750,7 @@
       "title": "Repair audited runtime contracts and prove installed artifact",
       "zone": "audit-contract-repair",
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "scope": "Fix the three reproduced audit boundary defects, not the W1/W2 runtime ownership or LLM gateway rewrite.",
       "acceptance_criteria": [
         "Real SQLAlchemy sessions execute bot reads/upserts without .exec",
@@ -2776,15 +2780,28 @@
         "docs/DECISION_LOG.md",
         "docs/architecture/DATA_AND_STORAGE.md",
         "docs/architecture/TESTING.md",
-        "docs/audits/2026-09-28-",
         "src/nexus_ai_agent/features/onboarding.py",
-        "src/nexus_ai_agent/storage/db.py"
+        "src/nexus_ai_agent/storage/db.py",
+        "docs/audits/2026-09-28-architecture.md",
+        "docs/audits/2026-09-28-command-ledger.md",
+        "docs/audits/2026-09-28-contract-repair-report.fa.md",
+        "docs/audits/2026-09-28-engineering-audit.md",
+        "docs/audits/2026-09-28-engineering-evidence.md"
       ],
-      "agent_branch": "arena/01a0e742-nexus-ai-agent",
-      "claimed_at": "2026-09-28T10:34:24Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": " Adjacent identical AsyncSession.exec defect found in onboarding; include narrowly with a persisted-language regression. Real integration uncovered get_session(None) ignoring NEXUS_DB_PATH. Include default resolution and canonical file-path cache identity; PR92 overlap explicitly noted, no broad W1 lifecycle rewrite."
+      "note": " Adjacent identical AsyncSession.exec defect found in onboarding; include narrowly with a persisted-language regression. Real integration uncovered get_session(None) ignoring NEXUS_DB_PATH. Include default resolution and canonical file-path cache identity; PR92 overlap explicitly noted, no broad W1 lifecycle rewrite. Initial regression: 22 failed/8 passed. Adjacent path regressions: 2 failed before fix. Installed-wheel contract suite: 51 passed. Other targeted diagnostics: 173 passed, 232 passed/1 optional PostgreSQL skip, docs/board 75 passed. Full gates deferred to gates owner. Final selected diagnostic: 531 passed, 1 skipped, 3 warnings in 73.21s. Ruff check/format and targeted mypy pass. Lease released after delivery; full release gates deferred to gates owner. Previous ten-item forward network archived unchanged under history.forward_networks.",
+      "delivered": [
+        "Typed SQLAlchemy session consumers + onboarding fix",
+        "Configured/default and canonical SQLite path selection",
+        "Typed media-result boundary + stream lifetime + declared gTTS",
+        "Package JSON and canonical migrations in wheel/sdist; cwd-independent discovery",
+        "Installed artifact CI matrix (remote result not claimed)",
+        "51 installed-wheel contract passes; final 34-file diagnostic: 531 passed, 1 PostgreSQL skip, 3 existing deprecation warnings",
+        "Implementation report docs/audits/2026-09-28-contract-repair-report.fa.md"
+      ]
     }
   ],
   "deferred_log": [
@@ -2825,196 +2842,172 @@
   ],
   "next_work": [
     {
-      "id": "task-164",
-      "priority": "P1",
-      "zone": "ci-quality",
-      "title": "Nightly DB backup has never succeeded (3/3 red) — make the production backup pipeline actually work",
-      "title_fa": "بکاپ شبانهٔ دیتابیس هرگز موفق نشده (۳ از ۳ سرخ) — مسیر بکاپ Production واقعاً کار کند",
-      "why_fa": "تنها مکانیسم DR برای دیتابیس Production (R2 blob tier) سه اجرا پیاپی شکست خورده و هیچ بکاپی تولید نشده؛ ریشهٔ دقیق بدون لوق جاب نامشخص است (R2 secrets؟ پیکربندی Neon؟).",
+      "id": "audit-next-cloud-receipts",
+      "priority": "P0",
+      "zone": "storage-resilience",
+      "title_fa": "رسید معتبر upload و جداسازی کلید کاربران",
       "acceptance_criteria": [
-        "a manual workflow_dispatch run of maintenance/backup-db completes SUCCESS with a visible object under backups/ in R2 including sha256/verified/timestamp in the step log",
-        "NEXUS_R2_* secrets are configured in GitHub Actions (owner-side)",
-        "the scheduled (cron) run after that also completes SUCCESS"
+        "Two users upload same filename; restart and retrieve their own bytes; provider errors cannot become success."
       ],
-      "prerequisites": [],
+      "evidence_required": [
+        "Regression reproduction and explicit command/result in implementation report"
+      ],
       "exclusive_paths": [
-        ".github/workflows/maintenance.yml"
+        "src/nexus_ai_agent/storage/unified_cloud.py",
+        "src/nexus_ai_agent/bot/handlers.py"
       ],
-      "status_note": "repo-side verifiability delivered by task-167 (verified backup contract, round-trip byte identity, restore-into-temp-SQLite verification); what remains is owner-secrets configuration + one real green dispatch"
+      "status_note": "Proposed handoff only; no lease. Inspect open PRs and claim before implementation."
     },
     {
-      "id": "task-124",
+      "id": "audit-next-runtime-ownership",
       "priority": "P0",
       "zone": "audit-remainder",
-      "title": "P0-8 single wiring + P0-9 graph memory write path",
-      "title_fa": "بستن P0-8 و P0-9",
-      "why_fa": "دو یافتهٔ باز ممیزی امنیتی/کارکردی با معیار پذیرش روشن.",
+      "title_fa": "یک مالک ساخت موتورهای runtime",
       "acceptance_criteria": [
-        "تست ONE-OWNER سبز",
-        "write→read گراف با round-trip",
-        "صفر رگرسیون"
+        "Handlers use application-owned configured engines; reconcile existing W1 PR115 before new implementation."
       ],
-      "prerequisites": [
-        "task-122",
-        "task-123"
+      "evidence_required": [
+        "Regression reproduction and explicit command/result in implementation report"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/memory/",
-        "src/nexus_ai_agent/features/rag.py",
-        "tests/unit/test_audit_remainder.py"
-      ]
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/bot/handlers.py"
+      ],
+      "status_note": "Proposed handoff only; no lease. Inspect open PRs and claim before implementation."
     },
     {
-      "id": "task-122",
+      "id": "audit-next-typed-llm-failure",
       "priority": "P0",
+      "zone": "llm-local",
+      "title_fa": "خطای typed و FakeLLM فقط با فعال‌سازی توسعه",
+      "acceptance_criteria": [
+        "Quota/timeout do not create normal successful history; reconcile existing PR93/116."
+      ],
+      "evidence_required": [
+        "Regression reproduction and explicit command/result in implementation report"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/llm/",
+        "src/nexus_ai_agent/features/ai_chat.py"
+      ],
+      "status_note": "Proposed handoff only; no lease. Inspect open PRs and claim before implementation."
+    },
+    {
+      "id": "audit-next-dashboard-default",
+      "priority": "P0",
+      "zone": "core-security",
+      "title_fa": "بستن پیش‌فرض داشبورد عمومی",
+      "acceptance_criteria": [
+        "Absent token refuses requests outside explicit development mode; configured token remains constant-time."
+      ],
+      "evidence_required": [
+        "Regression reproduction and explicit command/result in implementation report"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/api/dashboard.py"
+      ],
+      "status_note": "Proposed handoff only; no lease. Inspect open PRs and claim before implementation."
+    },
+    {
+      "id": "audit-next-bounded-work",
+      "priority": "P1",
+      "zone": "job-lifecycle",
+      "title_fa": "سقف backlog و concurrency",
+      "acceptance_criteria": [
+        "Overload is refused predictably; measured bounds on active render and LLM work."
+      ],
+      "evidence_required": [
+        "Regression reproduction and explicit command/result in implementation report"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py"
+      ],
+      "status_note": "Proposed handoff only; no lease. Inspect open PRs and claim before implementation."
+    },
+    {
+      "id": "audit-next-render-cancellation",
+      "priority": "P1",
+      "zone": "nagar-render-lane",
+      "title_fa": "مالکیت process و cleanup رندر",
+      "acceptance_criteria": [
+        "Cancelled jobs terminate/reap subprocess before cleanup; probe succeeds before publication."
+      ],
+      "evidence_required": [
+        "Regression reproduction and explicit command/result in implementation report"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/slideshow/worker_adapter.py",
+        "src/nexus_ai_agent/creative/slideshow/ffmpeg.py"
+      ],
+      "status_note": "Proposed handoff only; no lease. Inspect open PRs and claim before implementation."
+    },
+    {
+      "id": "audit-next-data-erasure",
+      "priority": "P1",
+      "zone": "core-security",
+      "title_fa": "محدوده روشن رضایت و حذف داده",
+      "acceptance_criteria": [
+        "Erase all stores promised by UX; preserve revocation and enumerate exceptions."
+      ],
+      "evidence_required": [
+        "Regression reproduction and explicit command/result in implementation report"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/features/ai_memory.py",
+        "src/nexus_ai_agent/memory/"
+      ],
+      "status_note": "Proposed handoff only; no lease. Inspect open PRs and claim before implementation."
+    },
+    {
+      "id": "audit-next-scheduled-delivery",
+      "priority": "P1",
       "zone": "feature-wiring",
-      "title": "PR#32 rebase + dedupe",
-      "title_fa": "ریبیس و رفع دوگانگی PR#32",
-      "why_fa": "بزرگ‌ترین PR باز روی بیس باستانی؛ ریسک دو سیم‌کشی موازی.",
+      "title_fa": "بازیابی زمان‌بندی و تحویل کمپین",
       "acceptance_criteria": [
-        "دیف یکتا",
-        "تست‌های feature_* سبز",
-        "CI سبز روی main تازه"
+        "Restart does not lose registered work; uncertain sends cannot silently duplicate."
       ],
-      "prerequisites": [],
+      "evidence_required": [
+        "Regression reproduction and explicit command/result in implementation report"
+      ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/bot/surface/",
-        "src/nexus_ai_agent/features/"
+        "src/nexus_ai_agent/features/channel_manager.py",
+        "src/nexus_ai_agent/features/ads.py"
       ],
-      "status_note": "delivered via PR#47 (forensic triage docs/audits/PR32_TRIAGE_2026-09-21.md + port-forward)"
+      "status_note": "Proposed handoff only; no lease. Inspect open PRs and claim before implementation."
     },
     {
-      "id": "task-123",
-      "priority": "P0",
-      "zone": "packaging+interop",
-      "title": "PR#33 slim-down",
-      "title_fa": "کوچک‌سازی PR#33",
-      "why_fa": "برای باز شدن مسیر بسته‌بندی/داک و آزادسازی cli.py.",
-      "acceptance_criteria": [
-        "دیف فقط یکتاها",
-        "CI سبز"
-      ],
-      "prerequisites": [],
-      "exclusive_paths": []
-    },
-    {
-      "id": "task-121",
+      "id": "audit-next-production-lock",
       "priority": "P1",
-      "zone": "delivery-interop-markers",
-      "title": "OTIO marker round-trip",
-      "title_fa": "مارکرهای OTIO",
-      "why_fa": "تنها شکاف باقی‌ماندهٔ تسک ۱۱۰؛ include_markers فعلاً بی‌اثر است.",
+      "zone": "core-packaging",
+      "title_fa": "lock نصب production و اسکن آسیب‌پذیری",
       "acceptance_criteria": [
-        "include_markers مؤثر",
-        "۲ تست round-trip با OTIO واقعی"
+        "Resolved production environment installs reproducibly and passes dependency audit; scope advisories accurately."
       ],
-      "prerequisites": [
-        "task-123"
+      "evidence_required": [
+        "Regression reproduction and explicit command/result in implementation report"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/creative/packs/delivery/",
-        "tests/unit/test_otio_interop.py"
-      ]
+        "pyproject.toml",
+        ".github/workflows/"
+      ],
+      "status_note": "Proposed handoff only; no lease. Inspect open PRs and claim before implementation."
     },
     {
-      "id": "task-128",
+      "id": "audit-next-restore-readiness",
       "priority": "P1",
-      "zone": "core-database",
-      "title": "Async DB phase 1",
-      "title_fa": "فاز ۱ دیتابیس ناهمگام",
-      "why_fa": "حذف create_engine سینک از features با آزمون نگهبان معماری.",
+      "zone": "e2e-deploy",
+      "title_fa": "تمرین restore و readiness قابل سنجش",
       "acceptance_criteria": [
-        "انجین مرکزی + ۲ پایلوت",
-        "گارد معماری سبز"
+        "Restore a real backup into an isolated environment; verify data and readiness; reconcile existing task164/PR96."
       ],
-      "prerequisites": [
-        "task-122"
+      "evidence_required": [
+        "Regression reproduction and explicit command/result in implementation report"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/core/async_db.py",
-        "src/nexus_ai_agent/features/"
-      ]
-    },
-    {
-      "id": "task-132",
-      "priority": "P1",
-      "zone": "ci-quality",
-      "title": "Extras smoke matrix",
-      "title_fa": "ماتریس دود اختیاری‌ها",
-      "why_fa": "مسیرهای اختیاری خارج از CI پیش‌فرض می‌توانند بی‌صدا بشکنند (شکاف مستند در TESTING §7).",
-      "acceptance_criteria": [
-        "job ماتریسی per-extra",
-        "شکست نصب = شکست CI"
+        "docs/ops/",
+        ".github/workflows/maintenance.yml"
       ],
-      "prerequisites": [],
-      "exclusive_paths": [
-        "tests/unit/test_optional_extras.py",
-        ".github/"
-      ]
-    },
-    {
-      "acceptance_criteria": [
-        "routes + creative/job_registry.py + video_director.py + ffmpeg_executor.py removed; creative/__init__ exports cleaned",
-        "importer-ratchet test updated to assert ABSENCE; GET HMAC tests removed with the routes",
-        "grep proves zero remaining callers; full suite green; release note added"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/api/app.py",
-        "src/nexus_ai_agent/creative/job_registry.py",
-        "src/nexus_ai_agent/creative/video_director.py",
-        "src/nexus_ai_agent/creative/ffmpeg_executor.py",
-        "tests/architecture/test_legacy_creative_boundary.py",
-        "tests/unit/test_security_hardening.py"
-      ],
-      "prerequisites": [
-        "PR#58 merged"
-      ],
-      "status_note": "evidence: D-0010 in DECISION_LOG; removal only after PR#58 merges",
-      "id": "task-173",
-      "priority": "P1",
-      "zone": "p0-stabilization",
-      "title": "Remove the legacy /creative/* HTTP lane (D-0010 reopen clause) after PR#58 lands",
-      "title_fa": "حذف مسیر قدیمی /creative/* بعد از ادغام PR#58",
-      "why_fa": "AD-0010: مسیر legacy فقط برای عدم برخورد با رفع SSRF درحال انجام (PR#58) نگه داشته شده؛ بعد از مرج باید حذف شود تا یک مسیر اجرایی Creative یگانه بماند."
-    },
-    {
-      "acceptance_criteria": [
-        "lane op(s) with golden argv tests + a decision on shipping reference .cube assets",
-        "worker map + surface ALLOWED updated in the same PR; real-render regression tests",
-        "no silent degradation: unavailable inputs stay typed failures"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/rendering/ir.py",
-        "src/nexus_ai_agent/creative/rendering/compiler.py",
-        "src/nexus_ai_agent/creative/render_jobs.py",
-        "src/nexus_ai_agent/bot/creative_surface.py"
-      ],
-      "prerequisites": [],
-      "status_note": "owned by the creative-runtime agent; surface/worker files change atomically with the lane instrument",
-      "id": "task-174",
-      "priority": "P2",
-      "zone": "creative-runtime",
-      "title": "Lane instruments for LUT (color.apply_lut) and subtitles (caption.burn_in) so the refused surface ops can enter the matrix",
-      "title_fa": "ابزارهای lane برای LUT و subtitles تا دو عمل ردشدهٔ surface وارد ماتریس واقعی شوند",
-      "why_fa": "D-0011: lut/burnin به دلیل نبود مسیر اجرای صادقانه (بدون .cube shipped و بدون subtitles op در lane IR) typed refuse می‌شوند؛ با ابزار واقعی lane قابل برگشت‌اند."
-    },
-    {
-      "acceptance_criteria": [
-        "real user sends /edit trim on staging and receives translated queued + video artifact",
-        "caption transcribe on default install returns the typed unavailable message (localized)",
-        "job rows show durable COMPLETED/not FAILED for the typed paths"
-      ],
-      "exclusive_paths": [],
-      "prerequisites": [
-        "staging bot token + a test chat"
-      ],
-      "status_note": "owner/staging action; evidence = staging screenshots + job row dump",
-      "id": "task-175",
-      "priority": "P2",
-      "zone": "p0-stabilization",
-      "title": "Staging smoke of /edit /caption /grade against the live bot (PTB runtime)",
-      "title_fa": "اسموک استیجینگ سه فرمان creative روی ربات زنده",
-      "why_fa": "زنجیره در سطح unit/integration با artifact واقعی اثبات شده؛ اثبات نهایی کاربر-واقعی به کانتکست PTB زنده و توکن استیجینگ نیاز دارد (external dependency)."
+      "status_note": "Proposed handoff only; no lease. Inspect open PRs and claim before implementation."
     }
   ],
   "history": {
@@ -3314,6 +3307,207 @@
         "rev": 2,
         "date": "2026-09-21",
         "note": "schema 2: protocol block, structured next_work with acceptance criteria, history split, structural tests (ADR 0004)."
+      }
+    ],
+    "forward_networks": [
+      {
+        "recorded_at": "2026-09-28",
+        "replaced_by": "audit-contract-repair-01a0e742",
+        "entries": [
+          {
+            "id": "task-164",
+            "priority": "P1",
+            "zone": "ci-quality",
+            "title": "Nightly DB backup has never succeeded (3/3 red) — make the production backup pipeline actually work",
+            "title_fa": "بکاپ شبانهٔ دیتابیس هرگز موفق نشده (۳ از ۳ سرخ) — مسیر بکاپ Production واقعاً کار کند",
+            "why_fa": "تنها مکانیسم DR برای دیتابیس Production (R2 blob tier) سه اجرا پیاپی شکست خورده و هیچ بکاپی تولید نشده؛ ریشهٔ دقیق بدون لوق جاب نامشخص است (R2 secrets؟ پیکربندی Neon؟).",
+            "acceptance_criteria": [
+              "a manual workflow_dispatch run of maintenance/backup-db completes SUCCESS with a visible object under backups/ in R2 including sha256/verified/timestamp in the step log",
+              "NEXUS_R2_* secrets are configured in GitHub Actions (owner-side)",
+              "the scheduled (cron) run after that also completes SUCCESS"
+            ],
+            "prerequisites": [],
+            "exclusive_paths": [
+              ".github/workflows/maintenance.yml"
+            ],
+            "status_note": "repo-side verifiability delivered by task-167 (verified backup contract, round-trip byte identity, restore-into-temp-SQLite verification); what remains is owner-secrets configuration + one real green dispatch"
+          },
+          {
+            "id": "task-124",
+            "priority": "P0",
+            "zone": "audit-remainder",
+            "title": "P0-8 single wiring + P0-9 graph memory write path",
+            "title_fa": "بستن P0-8 و P0-9",
+            "why_fa": "دو یافتهٔ باز ممیزی امنیتی/کارکردی با معیار پذیرش روشن.",
+            "acceptance_criteria": [
+              "تست ONE-OWNER سبز",
+              "write→read گراف با round-trip",
+              "صفر رگرسیون"
+            ],
+            "prerequisites": [
+              "task-122",
+              "task-123"
+            ],
+            "exclusive_paths": [
+              "src/nexus_ai_agent/memory/",
+              "src/nexus_ai_agent/features/rag.py",
+              "tests/unit/test_audit_remainder.py"
+            ]
+          },
+          {
+            "id": "task-122",
+            "priority": "P0",
+            "zone": "feature-wiring",
+            "title": "PR#32 rebase + dedupe",
+            "title_fa": "ریبیس و رفع دوگانگی PR#32",
+            "why_fa": "بزرگ‌ترین PR باز روی بیس باستانی؛ ریسک دو سیم‌کشی موازی.",
+            "acceptance_criteria": [
+              "دیف یکتا",
+              "تست‌های feature_* سبز",
+              "CI سبز روی main تازه"
+            ],
+            "prerequisites": [],
+            "exclusive_paths": [
+              "src/nexus_ai_agent/bot/surface/",
+              "src/nexus_ai_agent/features/"
+            ],
+            "status_note": "delivered via PR#47 (forensic triage docs/audits/PR32_TRIAGE_2026-09-21.md + port-forward)"
+          },
+          {
+            "id": "task-123",
+            "priority": "P0",
+            "zone": "packaging+interop",
+            "title": "PR#33 slim-down",
+            "title_fa": "کوچک‌سازی PR#33",
+            "why_fa": "برای باز شدن مسیر بسته‌بندی/داک و آزادسازی cli.py.",
+            "acceptance_criteria": [
+              "دیف فقط یکتاها",
+              "CI سبز"
+            ],
+            "prerequisites": [],
+            "exclusive_paths": []
+          },
+          {
+            "id": "task-121",
+            "priority": "P1",
+            "zone": "delivery-interop-markers",
+            "title": "OTIO marker round-trip",
+            "title_fa": "مارکرهای OTIO",
+            "why_fa": "تنها شکاف باقی‌ماندهٔ تسک ۱۱۰؛ include_markers فعلاً بی‌اثر است.",
+            "acceptance_criteria": [
+              "include_markers مؤثر",
+              "۲ تست round-trip با OTIO واقعی"
+            ],
+            "prerequisites": [
+              "task-123"
+            ],
+            "exclusive_paths": [
+              "src/nexus_ai_agent/creative/packs/delivery/",
+              "tests/unit/test_otio_interop.py"
+            ]
+          },
+          {
+            "id": "task-128",
+            "priority": "P1",
+            "zone": "core-database",
+            "title": "Async DB phase 1",
+            "title_fa": "فاز ۱ دیتابیس ناهمگام",
+            "why_fa": "حذف create_engine سینک از features با آزمون نگهبان معماری.",
+            "acceptance_criteria": [
+              "انجین مرکزی + ۲ پایلوت",
+              "گارد معماری سبز"
+            ],
+            "prerequisites": [
+              "task-122"
+            ],
+            "exclusive_paths": [
+              "src/nexus_ai_agent/core/async_db.py",
+              "src/nexus_ai_agent/features/"
+            ]
+          },
+          {
+            "id": "task-132",
+            "priority": "P1",
+            "zone": "ci-quality",
+            "title": "Extras smoke matrix",
+            "title_fa": "ماتریس دود اختیاری‌ها",
+            "why_fa": "مسیرهای اختیاری خارج از CI پیش‌فرض می‌توانند بی‌صدا بشکنند (شکاف مستند در TESTING §7).",
+            "acceptance_criteria": [
+              "job ماتریسی per-extra",
+              "شکست نصب = شکست CI"
+            ],
+            "prerequisites": [],
+            "exclusive_paths": [
+              "tests/unit/test_optional_extras.py",
+              ".github/"
+            ]
+          },
+          {
+            "acceptance_criteria": [
+              "routes + creative/job_registry.py + video_director.py + ffmpeg_executor.py removed; creative/__init__ exports cleaned",
+              "importer-ratchet test updated to assert ABSENCE; GET HMAC tests removed with the routes",
+              "grep proves zero remaining callers; full suite green; release note added"
+            ],
+            "exclusive_paths": [
+              "src/nexus_ai_agent/api/app.py",
+              "src/nexus_ai_agent/creative/job_registry.py",
+              "src/nexus_ai_agent/creative/video_director.py",
+              "src/nexus_ai_agent/creative/ffmpeg_executor.py",
+              "tests/architecture/test_legacy_creative_boundary.py",
+              "tests/unit/test_security_hardening.py"
+            ],
+            "prerequisites": [
+              "PR#58 merged"
+            ],
+            "status_note": "evidence: D-0010 in DECISION_LOG; removal only after PR#58 merges",
+            "id": "task-173",
+            "priority": "P1",
+            "zone": "p0-stabilization",
+            "title": "Remove the legacy /creative/* HTTP lane (D-0010 reopen clause) after PR#58 lands",
+            "title_fa": "حذف مسیر قدیمی /creative/* بعد از ادغام PR#58",
+            "why_fa": "AD-0010: مسیر legacy فقط برای عدم برخورد با رفع SSRF درحال انجام (PR#58) نگه داشته شده؛ بعد از مرج باید حذف شود تا یک مسیر اجرایی Creative یگانه بماند."
+          },
+          {
+            "acceptance_criteria": [
+              "lane op(s) with golden argv tests + a decision on shipping reference .cube assets",
+              "worker map + surface ALLOWED updated in the same PR; real-render regression tests",
+              "no silent degradation: unavailable inputs stay typed failures"
+            ],
+            "exclusive_paths": [
+              "src/nexus_ai_agent/creative/rendering/ir.py",
+              "src/nexus_ai_agent/creative/rendering/compiler.py",
+              "src/nexus_ai_agent/creative/render_jobs.py",
+              "src/nexus_ai_agent/bot/creative_surface.py"
+            ],
+            "prerequisites": [],
+            "status_note": "owned by the creative-runtime agent; surface/worker files change atomically with the lane instrument",
+            "id": "task-174",
+            "priority": "P2",
+            "zone": "creative-runtime",
+            "title": "Lane instruments for LUT (color.apply_lut) and subtitles (caption.burn_in) so the refused surface ops can enter the matrix",
+            "title_fa": "ابزارهای lane برای LUT و subtitles تا دو عمل ردشدهٔ surface وارد ماتریس واقعی شوند",
+            "why_fa": "D-0011: lut/burnin به دلیل نبود مسیر اجرای صادقانه (بدون .cube shipped و بدون subtitles op در lane IR) typed refuse می‌شوند؛ با ابزار واقعی lane قابل برگشت‌اند."
+          },
+          {
+            "acceptance_criteria": [
+              "real user sends /edit trim on staging and receives translated queued + video artifact",
+              "caption transcribe on default install returns the typed unavailable message (localized)",
+              "job rows show durable COMPLETED/not FAILED for the typed paths"
+            ],
+            "exclusive_paths": [],
+            "prerequisites": [
+              "staging bot token + a test chat"
+            ],
+            "status_note": "owner/staging action; evidence = staging screenshots + job row dump",
+            "id": "task-175",
+            "priority": "P2",
+            "zone": "p0-stabilization",
+            "title": "Staging smoke of /edit /caption /grade against the live bot (PTB runtime)",
+            "title_fa": "اسموک استیجینگ سه فرمان creative روی ربات زنده",
+            "why_fa": "زنجیره در سطح unit/integration با artifact واقعی اثبات شده؛ اثبات نهایی کاربر-واقعی به کانتکست PTB زنده و توکن استیجینگ نیاز دارد (external dependency)."
+          }
+        ],
+        "note": "Preserved previous forward network verbatim; no existing claims are taken over."
       }
     ]
   },

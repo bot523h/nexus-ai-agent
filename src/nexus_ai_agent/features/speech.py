@@ -7,6 +7,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
+from nexus_ai_agent.features.media_result import SpeechResult
 from nexus_ai_agent.observability.logging import get_logger
 
 log = get_logger(__name__)
@@ -49,7 +50,7 @@ class SpeechEngine:
         *,
         lang: str = "fa",
         slow: bool = False,
-    ) -> dict[str, Any]:
+    ) -> SpeechResult:
         """Convert text to speech audio file using gTTS.
 
         Returns dict with: success, path, lang, error.

@@ -1,0 +1,6 @@
+include alembic.ini
+include VERSION
+recursive-include migrations *.py *.mako
+recursive-include src/nexus_ai_agent *.json
+global-exclude *.py[cod]
+global-exclude __pycache__

@@ -76,6 +76,11 @@ placeholder text.
 
 | Document | What it is |
 |---|---|
+| [audits/2026-09-28-engineering-audit.md](audits/2026-09-28-engineering-audit.md) | Source/engineering audit frozen at e5b326b; findings are historical, not a live repair status. |
+| [audits/2026-09-28-engineering-evidence.md](audits/2026-09-28-engineering-evidence.md) | Audit measurements, execution scope, dependencies and ORM inventory. |
+| [audits/2026-09-28-architecture.md](audits/2026-09-28-architecture.md) | Static module adjacency, cycles and recursive inventory at the audited commit. |
+| [audits/2026-09-28-command-ledger.md](audits/2026-09-28-command-ledger.md) | Scoped command-status classification at the audited commit. |
+| [audits/2026-09-28-contract-repair-report.fa.md](audits/2026-09-28-contract-repair-report.fa.md) | Implementation/evidence report for session, media and installed-artifact repairs. |
 | [audits/AUDIT_REPORT_2026-09-21.md](audits/AUDIT_REPORT_2026-09-21.md) | Full architecture audit (P0 findings + command honesty matrix). |
 | [audits/HANDOFF_ANALYSIS_2026-09-21.md](audits/HANDOFF_ANALYSIS_2026-09-21.md) | Board GC + engineered handoff analysis (agent D session). |
 | [audits/REPO_HYGIENE_REPORT_2026-09-21.md](audits/REPO_HYGIENE_REPORT_2026-09-21.md) | Repository hygiene pass: docs reorganisation, release alignment, branch janitorial work. |

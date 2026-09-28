@@ -21,6 +21,29 @@
 
 `make lint && make types && make test` is the local equivalent. **One agent owns the gates at a time** (`.agents/board.json` → `gates_owner`); everyone else may run read-only diagnostics but must not race the same CI job deliberately.
 
+### Installed-artifact contract (2026-09-28)
+
+Editable tests are not a packaging proof. The separate
+`.github/workflows/wheel-contract.yml` installs the actual wheel (not `-e`) in a
+clean venv on Python 3.10/3.11/3.12, runs `pip check`, then runs:
+
+```bash
+pytest -q tests/integration/test_runtime_contracts.py \
+  tests/unit/test_media_result.py tests/unit/test_wheel_install.py
+```
+
+The distribution tests build a direct wheel **and** sdist-to-wheel offline with
+the test toolchain, install to isolated targets, delete the build source, and run
+Python `-I` from another directory. Every imported application module must belong
+to the installed target. JSON contents and migration scripts are compared to their
+canonical sources; migrations upgrade twice, check drift, downgrade and re-upgrade.
+Runtime integration retains real sessions/engines/dispatch and replaces external
+network boundaries, not internal result dictionaries on the success path.
+
+This workflow is a failing CI check on errors; whether it is a **required merge
+check** is a repository-settings decision, not guaranteed by the workflow file.
+Local targeted runs are diagnostic; full release gates remain with the gates owner.
+
 ## 2. Taxonomy
 
 ```mermaid
