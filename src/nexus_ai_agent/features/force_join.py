@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-from functools import lru_cache
 from typing import Any
 
 from sqlmodel import Session, col, select

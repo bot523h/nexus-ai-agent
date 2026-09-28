@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from nexus_ai_agent.config.settings import get_settings
 
@@ -27,7 +27,7 @@ class StoreAgent:
 
     def __init__(
         self,
-        gemini_provider: "GeminiProvider | None" = None,
+        gemini_provider: GeminiProvider | None = None,
         *,
         allow_legacy_fallback: bool = False,
     ) -> None:

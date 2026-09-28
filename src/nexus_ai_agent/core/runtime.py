@@ -27,8 +27,9 @@ Concurrency / cancellation:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Awaitable
+from typing import Any
 
 from nexus_ai_agent.observability.logging import get_logger
 
@@ -183,7 +184,7 @@ def shutdown_module_sync_engines() -> None:
     engine.  Called from a worker thread during shutdown.
     """
     try:
-        from nexus_ai_agent.features import force_join, anonymous_chat
+        from nexus_ai_agent.features import anonymous_chat, force_join
 
         for mod in (force_join, anonymous_chat):
             closer = getattr(mod, "_shutdown_engines", None)
