@@ -124,6 +124,7 @@ class ReferralEngine:
                 self._engine.dispose()
             except Exception:  # noqa: BLE001
                 import logging as _logging
+
                 _logging.getLogger(__name__).warning(
                     "referral_engine_dispose_failed", exc_info=True
                 )

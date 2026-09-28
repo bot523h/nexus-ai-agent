@@ -964,9 +964,7 @@ def build_handlers(
 
         # W1 Law 8: inject the runtime-owned GeminiProvider so the agent
         # never creates a private provider (no hidden bypass).
-        active_agent = await AgentManager.get_active(
-            user_id, provider=_gemini_provider(context)
-        )
+        active_agent = await AgentManager.get_active(user_id, provider=_gemini_provider(context))
         if active_agent:
             user_context = await memory_engine.get_context(user_id)
             response = await active_agent.respond(

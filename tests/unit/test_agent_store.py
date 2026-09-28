@@ -19,6 +19,7 @@ async def test_activate_agent():
     # always passes the runtime-owned provider; isolated tests pass
     # their own stub).
     from unittest.mock import MagicMock
+
     fake_provider = MagicMock()
 
     user_id = 12345

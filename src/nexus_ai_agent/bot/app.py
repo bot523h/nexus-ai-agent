@@ -258,9 +258,7 @@ def _init_v2_engines(settings: Settings, runtime: Runtime) -> dict[str, Any]:
     # Persistent conversation store (sync SQLite engine)
     conv_store = ConversationStore(db_path=settings.db_path)
     engines["conversation_store"] = conv_store
-    runtime.add_cleanup(
-        lambda rt: asyncio.to_thread(rt.engines["conversation_store"].close)
-    )
+    runtime.add_cleanup(lambda rt: asyncio.to_thread(rt.engines["conversation_store"].close))
 
     # Request queue for fair Gemini API access
     request_queue = GeminiRequestQueue(
@@ -311,9 +309,7 @@ def _init_v2_engines(settings: Settings, runtime: Runtime) -> dict[str, Any]:
     # Referral — owns a sync SQLite engine.
     referral = ReferralEngine(db_path=settings.db_path)
     engines["referral_engine"] = referral
-    runtime.add_cleanup(
-        lambda rt: asyncio.to_thread(rt.engines["referral_engine"].close)
-    )
+    runtime.add_cleanup(lambda rt: asyncio.to_thread(rt.engines["referral_engine"].close))
 
     # Unified Cloud Storage
     engines["unified_cloud"] = UnifiedCloudStorage(
@@ -333,9 +329,7 @@ def _init_v2_engines(settings: Settings, runtime: Runtime) -> dict[str, Any]:
 
     # ReminderSystem has its own sync engine and scheduled tasks (its
     # close() method cancels tasks and disposes the engine).
-    runtime.add_cleanup(
-        lambda rt: asyncio.to_thread(rt.engines["feature_engines"].reminders.close)
-    )
+    runtime.add_cleanup(lambda rt: asyncio.to_thread(rt.engines["feature_engines"].reminders.close))
     # Feature sync engines (force_join, anonymous_chat) — lru_cache-style
     # caches that need deterministic disposal.
     runtime.add_cleanup(lambda rt: asyncio.to_thread(shutdown_module_sync_engines))
