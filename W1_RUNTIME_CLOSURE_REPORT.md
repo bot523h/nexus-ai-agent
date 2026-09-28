@@ -38,9 +38,14 @@ tests/unit/test_agent_store.py           ...             3  passed
 tests/unit/test_auth_middleware.py       ....            4  passed
 tests/unit/test_gemini_key_transport.py  .....           5  passed
 tests/unit/test_pack_runtime_composition.py ........... 18  passed
-tests/unit/test_creative_*.py + slideshow ............. 88  passed
+tests/unit/test_creative_studio.py       ....            4  passed
+tests/unit/test_creative_notify.py       .....           5  passed
+tests/unit/test_creative_render_jobs.py  .............  21 passed
+tests/unit/test_creative_surface.py      ............  28 passed
+tests/unit/test_bot_slideshow_notify.py  .......         7 passed
+tests/unit/test_bot_slideshow_surface.py ........................... 31 passed
 -----------------------------------------------------------------
-W1-relevant green TOTAL                                161 passed
+W1-relevant green TOTAL                               169 passed
 ```
 
 Full `tests/unit/` sweep (excluding tests requiring unavailable optional system
