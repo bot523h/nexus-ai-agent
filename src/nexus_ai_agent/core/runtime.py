@@ -81,7 +81,9 @@ class Runtime:
             # the in-flight shutdown to finish instead of racing it.
             for _ in range(50):
                 await asyncio.sleep(0.05)
-                if self._shutdown_completed:
+                # ``bool()`` defeats the earlier narrowing: another task may
+                # have completed shutdown while this one was suspended.
+                if bool(self._shutdown_completed):
                     return
             logger.warning("runtime_shutdown_reentrant_timeout")
             return
