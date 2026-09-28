@@ -504,7 +504,8 @@ assert len(built) == 1
 
 
 async def test_canonical_routing_factory_never_enters_a_nested_gateway(monkeypatch):
-    import litellm
+    import sys
+    from types import SimpleNamespace
 
     from nexus_ai_agent.config.settings import Settings
     from nexus_ai_agent.llm.litellm_provider import build_llm_provider
@@ -517,7 +518,9 @@ async def test_canonical_routing_factory_never_enters_a_nested_gateway(monkeypat
             self.calls += 1
             return {"choices": [{"message": {"content": "canonical"}}]}
 
-    monkeypatch.setattr(litellm, "Router", Router)
+    # Importing the real SDK before its offline switch triggers a price-map
+    # download and retry jitter. This is a composition test, not an SDK smoke.
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(Router=Router))
     monkeypatch.setattr(registry, "_gateway", None)
     settings = Settings(
         _env_file=None,
