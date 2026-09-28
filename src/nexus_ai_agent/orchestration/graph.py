@@ -9,9 +9,12 @@ from nexus_ai_agent.agents.phi_agent import PhiAgent
 from nexus_ai_agent.agents.qwen_agent import QwenAgent
 from nexus_ai_agent.llm.provider import LLMProvider
 from nexus_ai_agent.memory.long_term import LongTermMemory
+from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.orchestration.router import classify_intent, select_persona
 from nexus_ai_agent.orchestration.state import NexusState
 from nexus_ai_agent.tools.registry import ToolRegistry
+
+log = get_logger(__name__)
 
 
 async def _router_node(state: NexusState) -> NexusState:
@@ -162,8 +165,26 @@ async def _memory_writer(
             try:
                 turn_text = f"User: {last_user}\nAssistant: {response}"
                 await long_term_memory.store(thread_id, turn_text)
-            except Exception:
-                pass  # Fail-safe: memory write failures never abort the conversation
+            except Exception as exc:
+                # Fail-safe, and deliberately so: a durable-memory write must
+                # never abort a conversation the user is actively having.  The
+                # silence was the defect, not the fail-safe — an unreadable
+                # memory backend used to degrade recall for every later turn
+                # while every turn still reported success.
+                #
+                # The record names the thread and the exception *type* only.
+                # `str(exc)` is deliberately not logged: a backend can echo the
+                # prompt back inside its own error text (an LLM embedder
+                # quoting the input it choked on, for instance), and then the
+                # "no conversation content in logs" property would depend on
+                # what a third party put in a message.  Typing the failure is
+                # enough to alert and to correlate with the turn; reproducing
+                # the text is not worth trading the boundary for.
+                log.warning(
+                    "long_term_memory_write_failed",
+                    thread_id=thread_id,
+                    error_type=type(exc).__name__,
+                )
     return state
 
 

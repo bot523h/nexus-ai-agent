@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T16:54:20Z",
+  "updated_at": "2026-09-28T17:51:40Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -657,6 +657,25 @@
         "tests/unit/test_request_queue.py",
         "scripts/llm_queue_mutations.py",
         "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
+      ]
+    },
+    {
+      "id": "shell-trust-plane",
+      "description": "Trust plane of the allowlisted ShellTool: the declared argument grammar that decides which tokens an allowlisted binary may receive, and the workspace containment proof for every path-shaped token. Owns the fail-closed flag tables, their adversarial suite and their mutation harness. Deliberately excludes tools/files.py, tools/registry.py and tools/filesystem_policy.py (no active lease, but untouched here to keep the blast radius of this security fix minimal and reviewable).",
+      "paths": [
+        "src/nexus_ai_agent/tools/system_shell.py",
+        "tests/unit/test_shell_sandbox.py",
+        "scripts/shell_sandbox_mutations.py",
+        "docs/architecture/adr/0007-restricted-shell-flag-grammar.md",
+        "docs/architecture/adr/README.md"
+      ]
+    },
+    {
+      "id": "conversation-memory-observability",
+      "description": "Observability of the conversation graph's durable-memory write: the fail-safe that keeps a LongTermMemory.store() failure from aborting a conversation, and the record of that failure. Confined to orchestration/graph.py and its existing memory test. Deliberately excludes src/nexus_ai_agent/memory/ (live lease task-200-w3-memory-trust-boundary) and features/ai_memory.py (live lease task-197 W2).",
+      "paths": [
+        "src/nexus_ai_agent/orchestration/graph.py",
+        "tests/unit/test_graph_memory.py"
       ]
     }
   ],
@@ -1787,7 +1806,7 @@
       "title_fa": "",
       "zone": "ci-quality",
       "priority": "P1",
-      "status": "active",
+      "status": "expired",
       "scope": "non-blocking bootstrap job first, then blocking; sequenced after PR#33 lands",
       "scope_fa": "non-blocking bootstrap job first, then blocking; sequenced after PR#33 lands",
       "prerequisites": [],
@@ -1795,7 +1814,7 @@
         "CI job runs scripts/pack_coverage.py and reports per-pack coverage",
         "non-blocking (continue-on-error) at bootstrap, flip to blocking with evidence"
       ],
-      "note": "Claimed by the Continuum closure session together with task-184. Goes straight to a BLOCKING job (owner directive: no continue-on-error bootstrap); evidence recorded on release.",
+      "note": "auto-released by gc at 2026-09-28T17:34:36Z (stale active lease)",
       "agent_branch": "arena/01a0e2bb-nexus-ai-agent",
       "claimed_at": "2026-09-27T12:27:18Z",
       "ttl_hours": 24,
@@ -2557,7 +2576,7 @@
       "title_fa": "سخت‌سازی فورنزیک سامانهٔ شواهد Continuum",
       "zone": "continuum-evidence-measurement",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "agent_branch": "arena/01a0e2bb-nexus-ai-agent",
       "claimed_at": "2026-09-27T12:27:18Z",
       "ttl_hours": 24,
@@ -2593,7 +2612,7 @@
         "Targeted negative tests and mutation RED-to-GREEN restoration for every confirmed consumer defect.",
         "Two-run reproducibility comparison and exact PR #95/head/main/CI evidence."
       ],
-      "note": "Audit result: two P1 snapshot false-greens were reproduced in isolated Git fixtures and fixed through e924a65: a valid snapshot survived an uncommitted source edit, and a clean later commit could reuse it after src/tests/scripts/migration/dependency drift. Regressions cover clean control, dirty/stale rejection, empty revision rejection, and unavailable git-status fail-closed behaviour in tests/unit/test_continuum_hardening.py. P2 integration gap remains: CoverageReport JSON has no downstream reader and CI/release-lineage invokes neither pack coverage nor snapshot verification; task-154 remains queued rather than claiming a release gate it does not implement. Current committed snapshot correctly blocks CLI verification (unreachable recorded SHA and test-count drift). No non-Continuum domain edits without a proven direct false-evidence consumer. | 2026-09-27 arena/01a0e1e0 continuation (supersedes PR #95/#98): the P2 gap is closed — pack coverage is a canonical 95%-per-pack gate (D-0023, option A), the snapshot verifier fails closed on a 27-attack executable threat model (scripts/continuum_gate.py), a 73-mutation replayable campaign (scripts/continuum_mutations.py) fails on any survivor, and the CI job continuum-evidence runs all three on 3.10/3.11/3.12 against the exact SHA. HISTORICAL EVIDENCE LOST — CONTENT RECONSTRUCTED: the first local lineage (c44bf2c…7bda42c) was never pushed and was lost in a sandbox re-provisioning; its surviving working tree (tree ddc76334) was reconstructed on top of 48db056 and every piece of evidence was regenerated on the new lineage — see docs/audits/CONTINUUM_CLOSURE_2026-09-27.md for the exact SHAs, local runs and CI run IDs. | 2026-09-27 arena/01a0e2bb continuation (same mission owner, new session branch; a session is bound to exactly one branch and cannot push to arena/01a0e1e0): the previous session's final local commit 6198510f0a06a803ba445e03bba1e44306eaf0f9 was never pushed and is unrecoverable (git fetch origin <sha> -> 'not our ref'), so its content fix was re-derived from the failing PR #102 head eb6551b instead of copied. PR #102 was red on `test` and `python-parity` 3.10/3.11/3.12 (runs 36315364432 / 36315366459) because docs/audits/CONTINUUM_CLOSURE_2026-09-27.md was not listed in docs/README.md, which tests/unit/test_docs_integrity.py enforces; reproduced locally as '1 failed, 2893 passed, 30 skipped'. Fixed by indexing the document -- the invariant, the threshold and the measurement are untouched.",
+      "note": "auto-released by gc at 2026-09-28T17:34:36Z (stale active lease)",
       "previous_agent_branch": "arena/01a0e1e0-nexus-ai-agent"
     },
     {
@@ -2602,7 +2621,7 @@
       "title_fa": "سخت‌سازی هوش خارجی: خطای تایپ‌شده، منشأ داده، IO غیرمسدودکننده، انتقال امن کلید، ورودی خصمانه",
       "zone": "external-intelligence",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "gates_owner": false,
       "prerequisites": [],
       "scope": "knowledge/{knowledge_manager,web_trainer,wikipedia_trainer}.py and integrations/free_tools.py have ZERO tests on main and convert every external failure into a success-shaped value: get_text()/get_json() erase HTTP status and network errors ('' / {}), Wikipedia scrapes a 404 'article does not exist' page into user-visible 'knowledge', CurrencyTool returns 0.0 for a missing rate, every search path returns [] for both 'no results' and 'provider exploded', the NewsAPI key travels in the URL query string (and is logged by core/http_client on failure), the synchronous DDGS SDK is called directly inside async functions (event-loop block), BeautifulSoup parses unbounded attacker-controlled HTML on the loop, user input is interpolated raw into URL paths, and KnowledgeManager caches an LLM summary built from zero real sources for 24h using scalar_one_or_none() against a table it can populate with duplicates. Deliverable: a typed SourceResult/ExternalSourceError + Provenance contract, honest failure propagation, header-based secret transport, percent-encoded URL construction, to_thread offloading, bounded responses, query normalisation + stampede guard, and regression/adversarial/mutation tests.",
@@ -2631,7 +2650,7 @@
         "mutation probes: deliberately wrong implementations injected, guard tests observed RED, then restored GREEN",
         "reproduction transcript for each finding against the pre-fix code"
       ],
-      "note": "",
+      "note": "auto-released by gc at 2026-09-28T17:34:36Z (stale active lease)",
       "agent_branch": "arena/01a0df05-nexus-ai-agent",
       "claimed_at": "2026-09-26T18:46:40Z",
       "ttl_hours": 24
@@ -2682,7 +2701,7 @@
       "title_fa": "نجات چرخهٔ عمر صف W2: نشاندن PR #108 با حفظ کامل commitها روی خط main + رفع نقص cancellation پایتون ۳.۱۰",
       "zone": "llm-request-queue-lifecycle",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "scope": "Successor to PR #108 (supersedes it; original head 5a4cb23 preserved commit-for-commit). Scope identical to task-195-llm-queue-lifecycle plus the reconciliation: (a) semantic board merge — main's claim statuses/gc notes are canonical, PR108's zone+claim are appended; (b) version-independent worker-cancellation semantics; (c) exact-head CI against main 05dec617 lineage.",
       "scope_fa": "",
       "prerequisites": [],
@@ -2714,7 +2733,81 @@
       "claimed_at": "2026-09-27T16:54:20Z",
       "ttl_hours": 24,
       "gates_owner": true,
-      "note": "Continues task-195-llm-queue-lifecycle (original branch arena/01a0e2f0, claim released via takeover). MODULE_MAP.md/docs-architecture excluded exactly as the original claim scoped itself. | SESSION-BOUND CONTINUATION 2026-09-27T16:54:20Z: arena/01a0e3b7 fast-forwarded cd79bfe (PR #109 head) and continues the same exclusive paths. This session cannot push to arena/01a0e356. PR #109 python-parity (3.10) is RED on run 36329794486 (asyncio.wait_for raises asyncio.TimeoutError, not builtin TimeoutError)."
+      "note": "auto-released by gc at 2026-09-28T17:34:36Z (stale active lease)"
+    },
+    {
+      "task": "task-201-shell-trust-plane-grammar",
+      "title": "Shell trust plane: fail-closed flag grammar closes the date -f / grep --file= workspace escape",
+      "title_fa": "صفحهٔ اعتماد شل: دستور زبان fail-closed پرچم‌ها، فرار از workspace از راه date -f و grep --file= را می‌بندد",
+      "zone": "shell-trust-plane",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Root-cause repair of a proven arbitrary-file-read escape in the allowlisted ShellTool. The validator on main enumerates file-taking flags it happens to know about (find -newer/-fprint*, grep -f) and path-checks positional arguments only for ls/cat/find. Every other allowlisted command's file-reading flag therefore reaches the host filesystem unchecked. Reproduced on e5b326b: `date -f <outside file>` is accepted and GNU date reads the file line by line, echoing each line inside its own diagnostic (`date -f /tmp/wsx/outside_secret.txt` -> output \"date: invalid date 'SECRET-TOKEN-abc123'\"); `date -r FILE` stats any host file; `grep --file=FILE` and the attached spelling `grep -fFILE` are never inspected at all. Fix: replace the deny-list with a per-command declared flag grammar where an undeclared flag is REFUSED, plus an independent path-shaped-argument net, both routed through WorkspaceFilesystem. Salvages the proven implementation already written for PR #105 (head 80013e3, CONFLICTING, lease expired 2026-09-28T00:00Z) onto the current main lineage and re-proves it here.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "RED proof on the unfixed e5b326b validator: `date -f <outside>`, `date -r <outside>`, `grep --file=<outside>`, `grep -f<outside>` and `grep --exclude-from=<outside>` all cross the workspace boundary; each is recorded with its observed output",
+        "After the fix every one of those invocations is refused before any subprocess is spawned, with an error that names the refused flag or the offending path",
+        "An undeclared flag on any allowlisted command is refused (fail-closed), including flags that did not exist when the table was written",
+        "Legitimate in-workspace usage keeps working: ls -l, echo, cat/grep/find on contained paths, find -printf/-fprintf with a contained file",
+        "Symlink-following options (ls -L/-H/--dereference, grep -R, find -L/-H/-follow) are refused, because no path validation can contain them",
+        "The mutation harness kills every mutant, including a mutant that re-opens the date -f hole",
+        "Zero regression against the measured 2915 passed / 30 skipped baseline on e5b326b (Python 3.11.2)",
+        "ruff check, ruff format --check and mypy src stay clean"
+      ],
+      "evidence_required": [
+        "Exact-SHA before/after reproducer transcript for all five bypasses",
+        "pytest -q tests/unit/test_shell_sandbox.py exact counts",
+        "python scripts/shell_sandbox_mutations.py kill count",
+        "Full `pytest -q -rs -m 'not slow'` count vs the 2915/30 baseline",
+        "ruff + ruff format --check + mypy src output"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/tools/system_shell.py",
+        "tests/unit/test_shell_sandbox.py",
+        "scripts/shell_sandbox_mutations.py",
+        "docs/architecture/adr/0007-restricted-shell-flag-grammar.md",
+        "docs/architecture/adr/README.md"
+      ],
+      "owner_hint": "Arena agent on arena/01a0e907-nexus-ai-agent",
+      "agent_branch": "arena/01a0e907-nexus-ai-agent",
+      "claimed_at": "2026-09-28T17:34:36Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": ""
+    },
+    {
+      "task": "task-202-memory-write-observability",
+      "title": "A failed durable-memory write must not be invisible",
+      "title_fa": "شکست نوشتن حافظهٔ پایدار نباید نامرئی بماند",
+      "zone": "conversation-memory-observability",
+      "priority": "P1",
+      "status": "active",
+      "scope": "orchestration/graph.py::_memory_writer swallows every exception from LongTermMemory.store() with a bare `except Exception: pass`. The non-abort decision is correct and stays; the silence is the defect. store() can fail on an LLM embed error, a sqlite error or struct.pack over a non-finite embedding, and today the turn is reported as a success with no log line, no metric and no state marker, so durable recall silently degrades with nothing to observe. Fix: keep the fail-safe, emit a structured warning through the repository's own observability logger.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "A store() failure still never aborts the conversation or mutates state['error'] (existing fail-safe preserved)",
+        "The same failure produces exactly one structured warning naming the thread and the exception type",
+        "The warning carries no message content, prompt text or embedding bytes",
+        "A successful store() produces no warning",
+        "Zero regression against the measured 3004 passed / 30 skipped baseline on this branch"
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_graph_memory.py exact counts, before and after",
+        "Full `pytest -q -rs -m 'not slow'` count vs the 3004/30 baseline",
+        "ruff check / ruff format --check / mypy src clean"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/orchestration/graph.py",
+        "tests/unit/test_graph_memory.py"
+      ],
+      "owner_hint": "Arena agent on arena/01a0e907-nexus-ai-agent",
+      "agent_branch": "arena/01a0e907-nexus-ai-agent",
+      "claimed_at": "2026-09-28T17:51:40Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": ""
     }
   ],
   "deferred_log": [
@@ -3357,6 +3450,14 @@
       "action": "session-bound-continuation",
       "task": "task-195-salvage (PR #109)",
       "reason": "This Arena session is bound to arena/01a0e3b7-nexus-ai-agent and cannot push to arena/01a0e356-nexus-ai-agent. PR #109 head cd79bfe3b8e42b1943ad8ff0d352646fc54df548 is MERGEABLE but UNSTABLE: python-parity (3.10) FAILURE on run 36329794486 (job 108649421192) and the duplicate run 36329718482. Local reproduction on CPython 3.10.16 against that exact tree: 3 failed (test_same_user_timeout_releases_exactly_one_pending_slot, test_withdrawn_queued_requests_never_run_after_backlog_clears, test_timeout_during_rate_wait_wakes_worker_without_provider_invocation), 14 passed. Root cause: asyncio.wait_for raises asyncio.TimeoutError on 3.10, which is not a subclass of builtin TimeoutError (docs.python.org/3.10/library/asyncio-exceptions.html) and is an Exception, so the worker generic handler records queue_processor_error. 3.11+ aliases the names (Changed in version 3.11). History was fast-forwarded onto this branch (cd79bfe remains an ancestor); no rewrite, no force-push. Exclusive paths unchanged. gates_owner stays with this continuation."
+    },
+    {
+      "at": "2026-09-28T17:34:36Z",
+      "by_branch": "arena/01a0e907-nexus-ai-agent",
+      "action": "salvage-continuation",
+      "task": "task-201-shell-trust-plane-grammar (salvages the shell trust plane from PR #105)",
+      "reason": "Master forensic hardening directive. LIVE TRUTH: PR #105 (arena/01a0e28b-nexus-ai-agent, head 80013e3225c3fd713c86e9d4800cde6032e8f2e7, last commit 2026-09-27T11:45:14Z) is OPEN, not a draft, mergeStateStatus=DIRTY / mergeable=CONFLICTING, and carries NO live lease — every active claim on its board (task-183-pr67-lifecycle-integration, sec-boundary-salvage-01a0d563, task-181-gate5-closure, task-194-pack-trust-root) expired at 2026-09-28T00:00:00Z or earlier. Its own ADR 0011 documents the exact escape that is still live on main e5b326b. Per the PR#102->PR#107 and PR#108->PR#109 salvage precedent already in this log, only the shell trust plane is transplanted here (system_shell.py + its suite + its mutation harness + the ADR, renumbered 0011->0007 for this lineage, which stops at 0006). PR #105's other files are deliberately NOT taken: docs/architecture/MODULE_MAP.md is under a live lease (task-192/task-196) and the pack-trust and deployment-exposure work is out of scope for a P0 security repair. PR #105 is NOT closed, merged, rebased or force-pushed by this session.",
+      "evidence": "gh pr view 105 --json state,isDraft,mergeable,updatedAt => OPEN/false/CONFLICTING/2026-09-27T23:15:17Z; PR105 board active-claim expiry max = 2026-09-28T00:00:00Z vs now 2026-09-28T17:20:43Z; RED reproducer on e5b326b: ShellTool('date -f /tmp/wsx/outside_secret.txt') returned success=False output=\"date: invalid date ‘SECRET-TOKEN-abc123’\" (outside file read) while 'cat' of the same path returned 'Path is outside the workspace'; python scripts/agent_board.py check --files <this change> --branch arena/01a0e907 => exit 0 'no overlap'."
     }
   ],
   "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins."

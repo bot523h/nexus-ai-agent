@@ -25,6 +25,7 @@ test:
 # mutation of the trust boundary must turn the trust suite red.
 mutations:
 	python scripts/pack_trust_mutations.py
+	python scripts/shell_sandbox_mutations.py
 
 migrate:
 	python -m nexus_ai_agent.cli migrate
