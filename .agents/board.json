@@ -745,7 +745,9 @@
         "docs/architecture/SECURITY.md",
         "docs/architecture/DATA_LIFECYCLE.md",
         "docs/architecture/DATA_AND_STORAGE.md",
-        "docs/architecture/TESTING.md"
+        "docs/architecture/TESTING.md",
+        "tests/integration/test_runtime_contracts.py",
+        "tests/architecture/test_slideshow_adapter_boundary.py"
       ]
     }
   ],
@@ -2934,7 +2936,9 @@
         "docs/architecture/SECURITY.md",
         "docs/architecture/DATA_LIFECYCLE.md",
         "docs/architecture/DATA_AND_STORAGE.md",
-        "docs/architecture/TESTING.md"
+        "docs/architecture/TESTING.md",
+        "tests/integration/test_runtime_contracts.py",
+        "tests/architecture/test_slideshow_adapter_boundary.py"
       ],
       "agent_branch": "arena/01a0e742-nexus-ai-agent",
       "claimed_at": "2026-09-28T11:05:28Z",
