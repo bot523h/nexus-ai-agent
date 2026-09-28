@@ -859,7 +859,8 @@
         "docs/DECISION_LOG.md",
         "docs/architecture/MODULE_MAP.md",
         "AGENTS.md",
-        ".agents/board.json"
+        ".agents/board.json",
+        "pyproject.toml"
       ]
     }
   ],
@@ -3351,7 +3352,7 @@
       "zone": "hardening-proof-01a0e742",
       "priority": "P0",
       "status": "active",
-      "scope": "Hardening proof round: live forensics after sandbox restore (quarantine artifacts lost), guard CI job repair (pytest9/conftest), full-suite red reproduction and scoped fixes limited to this branch own files, 8-case privacy invariant probe against main source and W2 tip, adversarial remote-guard tests, exact-SHA CI verification.",
+      "scope": "Hardening proof round: live forensics after sandbox restore (quarantine artifacts lost), guard CI job repair (pytest9/conftest), full-suite red reproduction and scoped fixes limited to this branch own files, 8-case privacy invariant probe against main source and W2 tip, adversarial remote-guard tests, exact-SHA CI verification. Plus: add the wheel build backend requirement to the dev extra so the sdist/wheel contract tests pass in the full suite (root cause of the CI full-suite red).",
       "exclusive_paths": [
         ".github/workflows/publication-frontier.yml",
         "scripts/agent_board_remote.py",
@@ -3364,7 +3365,8 @@
         "docs/DECISION_LOG.md",
         "docs/architecture/MODULE_MAP.md",
         "AGENTS.md",
-        ".agents/board.json"
+        ".agents/board.json",
+        "pyproject.toml"
       ],
       "acceptance_criteria": [
         "Quarantine loss recorded with live evidence; ac2b7d5 unreachable from any remote ref",
@@ -3385,7 +3387,7 @@
       "claimed_at": "2026-09-28T13:23:07Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": ""
+      "note": " Phase2 probe (deterministic, 8 cases): invariant VIOLATED on both the branch/main source (sha 13cea73cf8e8) and the live W2 tip 9e795318 (sha 31edb93f1389) in forget_before_completion, stale_writer_replay, concurrent_extraction_dual_writer; cancellation, denied-replay and double-forget are safe. Controls green. Evidence: ci-artifacts/hardening/probe-*.json. Sandbox restore lost the ac2b7d5 quarantine artifacts (tag/stash/patch); object absent from every remote ref; recovery impossible from git."
     }
   ],
   "deferred_log": [
