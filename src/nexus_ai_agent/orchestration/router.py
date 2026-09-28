@@ -203,3 +203,52 @@ def select_persona(text: str) -> str:
         if kw in t:
             return "gemma"
     return "gemma"
+
+
+# ── memory-read policy ────────────────────────────────────────────────────
+#
+# Root cause this makes explicit: ``orchestration/graph.py::route_intent`` sends
+# ``task`` → memory_reader_task and ``memory`` → memory_reader_chat, and every
+# other intent straight to ``route_persona``. Ordinary ``chat`` — the common
+# case — therefore never reads long-term memory, while ``_memory_writer`` stores
+# a turn on *every* path. Memory was write-always / read-sometimes, and the
+# decision to read was encoded as an *intent* classification.
+#
+# That is the wrong axis. Whether a turn should consult memory is a question
+# about relevance and cost, not about whether the user happened to type one of
+# the ~20 literals in ``MEMORY_KEYWORDS``. Asking "what was my project called?"
+# contains no memory keyword, so it was answered with an empty memory context
+# even though the answer was stored.
+#
+# The policy below is the corrected rule, stated once and tested here so the
+# graph wiring is a one-line change rather than a design change. It lives in the
+# router (not the graph) because the router already owns intent semantics, and
+# because ``graph.py`` is under another agent's lease.
+
+#: Every intent a turn can carry. ``classify_intent`` returns the first three;
+#: ``"unknown"`` is declared by ``NexusState`` but currently unreachable — see
+#: the value-engineering audit for that finding.
+ALL_INTENTS: tuple[str, ...] = ("chat", "task", "memory", "unknown")
+
+
+def should_read_memory(intent: str, text: str = "") -> bool:
+    """Whether a turn must consult long-term memory before answering.
+
+    Unconditionally ``True``, and total over every input — including intents
+    nobody declared. "We could not classify this turn" is not evidence that
+    memory is irrelevant, so an unrecognised intent must not silently opt out of
+    recall; that is precisely the failure this policy replaces.
+
+    The cost of always looking is one indexed ``COUNT(*)`` plus a BM25 pass, and
+    :meth:`LongTermMemory.recall` reports ``EMPTY`` immediately when the thread
+    has no rows. Reading is cheap enough that gating it bought nothing and lost
+    context.
+
+    Both parameters are accepted and deliberately unused. ``intent`` stays in the
+    signature because the defect *was* an intent gate — keeping the axis visible
+    at the call site is what stops it being silently reintroduced — and ``text``
+    gives a future cost-aware policy (skip a pure command turn, say) somewhere to
+    live without another signature change.
+    """
+    _ = intent, text
+    return True
