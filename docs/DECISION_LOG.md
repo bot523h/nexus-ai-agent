@@ -1651,3 +1651,113 @@ stated goal is a nominal gate).
 coverage ACCEPTED and byte-identical across two runs; gate control accepted and
 27/27 attacks rejected; mutation campaign with every applicable mutation killed and
 restored.
+
+## 2026-09-28 — W2 Global LLM Gateway Authority: one path to a model, typed truth, policy in one place (D-0024)
+
+### D-0024 — Every LLM call goes through one authority (`llm/gateway/`); classification is typed; retry, budget, concurrency, rate and fallback are decided once; the two remaining bypasses are pinned and ratcheted
+
+*Problem.* Five decisions were re-implemented per caller — whether to retry, how long
+to wait, when to give up, which provider to try next, and what a failure meant — and
+each copy differed. Two symptoms made the cost concrete. Classification ran on
+prose (`if "429" in str(error)`), so retryability depended on a provider's English
+and broke silently when the wording changed. Fallback ran on `except Exception: try
+provider B`, so a moderation decision, a bad request or a caller's own bug could be
+laundered into "the other model answered", with no record of why. Retries had no
+relationship to the caller's deadline (a chain could sleep past the moment the
+caller stopped caring, holding a slot the whole time), usage was sometimes reported
+as `0` when the provider had reported nothing, and there was no single place to
+answer "what did the fleet spend, throttle, shed and fail in the last hour?".
+
+*Decision.*
+1. **One authority, one contract.** `llm/gateway/engine.LLMGateway.execute(LLMRequest)
+   -> LLMResponse | raise LLMError`. Callers never receive an error-shaped string, so
+   a failure cannot be mistaken for an answer. `GatewayLLMProvider` keeps the pre-W2
+   `generate/complete/embed` surface byte-for-byte (including the user-facing failure
+   strings, which are product copy) so migration is per-caller, not big-bang (LAW 12).
+2. **Typed truth (LAW 3).** `llm/errors.py` defines 18 kinds; `retryable` and
+   `fallback_eligible` are *derived from the kind*, and adapters classify from the
+   HTTP status plus the provider's declared machine-readable `error.status` — never
+   from a message. A 400 whose message mentions a rate limit stays `invalid_request`.
+   `content_blocked` and `cancelled` are never fallback-eligible, and the engine
+   enforces that even when a deployment misconfigures `FallbackPolicy.eligible_kinds`
+   to allow it: a typed fact outranks configuration.
+3. **Policy in one place (LAW 4, 7, 8).** `policy.plan()` is the only function that
+   turns knobs + a request into routes, a budget scaled to the caller's deadline, a
+   retry policy and a fallback policy. Backoff is full-jitter, clamped by
+   `max_delay_seconds` and `TimeoutBudget.max_backoff_seconds`; a provider's
+   `Retry-After` is honoured up to its own ceiling and is never shortened by the
+   jitter cap; a backoff that cannot fit in the remaining budget is **declined**, so
+   the chain stops and reports `deadline_exceeded` instead of overrunning the caller.
+4. **Bounded everything (LAW 6).** Global / per-provider / per-tenant bulkheads, a
+   bounded queue (`REJECT` sheds typed, `WAIT` blocks for a slot and re-checks it in
+   a loop so a thundering-herd wakeup cannot overfill the bound), a bounded
+   idempotency cache keyed by a fingerprint of tenant + operation + pin + payload, a
+   bounded abandoned-task deque, a bounded record buffer (256) and bounded metadata
+   (8 fields × 128 chars). Joining the queue itself pumps for a grant, so a waiter
+   can never strand beside idle capacity.
+5. **Cancellation is sacred (LAW 5).** Three signals, three outcomes: a cancelled
+   task propagates `asyncio.CancelledError` untouched; a withdrawal token yields
+   typed `cancelled` (the caller's task stays alive so it can report it); shutdown
+   yields typed `gateway_closed`, wakes every waiter instead of hanging it, and stops
+   an in-flight retry chain at its next boundary. Every sleep is cancellation-aware,
+   so a withdrawal during a backoff lands in milliseconds. `KeyboardInterrupt` /
+   `SystemExit` / `GeneratorExit` are re-raised verbatim. A late answer that arrives
+   after the budget expired is reported as `deadline_exceeded`, not handed back as a
+   kept promise.
+6. **Observable by default, truthful about usage (LAW 10, 11, 14).** Exactly one
+   `RequestRecord` per request — id, caller, purpose, operation, outcome, provider,
+   model, kind, status, retryable, usage, finish reason, five timings, policy
+   outcome, per-attempt records, `prompt_chars`, `payload_bytes`, sanitized metadata.
+   Never recorded: prompt, system, messages, parts, the answer, credentials, and
+   `str(error)` (a provider message can echo a prompt fragment or a key).
+   `Usage.source` is `provider` only when the provider reported counts, otherwise
+   `unknown` with `None` — never `0`, never an estimate. Cost is attached only when
+   usage is provider-reported *and* the model has a pinned price; an unpriced model
+   means "no pinned price", not "free".
+7. **Provider is an adapter (LAW 9).** `ProviderAdapter` translates and nothing else:
+   no retry, no fallback, no metrics inside. `GeminiHttpAdapter` (REST),
+   `LitellmRouterAdapter` (the existing Router stays a *deployment selector* inside
+   one route, registered `max_attempts=1` so no retry nests), `LegacyProviderAdapter`
+   (wraps the pre-W2 providers with an explicit `{ExceptionType: kind}` map).
+8. **Structural enforcement (LAW 1, 2).** `tests/architecture/test_llm_gateway_authority.py`
+   discovers the LLM call graph mechanically (endpoint literal, provider wire path, or
+   provider SDK import), requires every discovered file to appear in a pinned inventory
+   with a *verified* role, and proves that only the gateway, its wrapped provider
+   implementations and exactly two pinned bypasses put a request on the wire. The
+   inventory is a ratchet in both directions: an undocumented path fails, and a stale
+   permission fails too. A substring-classification scan covers all of `src/`, gateway
+   included, with liveness tests so a broken detector cannot pass silently.
+9. **The two bypasses are named, not hidden.** `creative/image_gen/gemini_adapter.py`
+   (Gemini image *generation*: binary output parts, aspect-ratio validation, paid-tier
+   guard, per-image cost) and `creative/slideshow/analysis.py` (synchronous httpx
+   vision scoring; default provider is local and offline; the hosted leg is fail-closed
+   behind `NEXUS_SLIDESHOW_ALLOW_IMAGE_UPLOAD`). Both raise their own typed errors and
+   neither classifies by substring, so LAW 3 holds everywhere even where LAW 1 does not
+   yet. `MAX_PINNED_BYPASSES = 2` may only fall.
+
+*Rejected.* A big-bang rewrite of every caller onto a new API (compatibility first:
+the facade keeps the old surface and callers migrate one at a time). A heavyweight
+queue, broker or second telemetry stack (the bounds are in-process data structures;
+a fleet-wide limit needs a shared store no current deployment requires). Making
+`litellm.Router` the authority (it selects deployments and owns cooldowns; it cannot
+carry caller identity, purpose, cancellation, per-tenant bulkheads or one record per
+request). Keeping per-caller policy behind a lint rule (a rule that says "don't" is
+not an authority). Migrating image generation and slideshow analysis in the same
+change (each needs a contract the gateway does not have yet — binary output, and a
+sync entry into an async engine — and pretending otherwise would have produced a
+worse bypass). Substring classification behind a feature flag (it survives in
+`llm/fallback_provider.py` only as a deprecated constructor opt-in, empty by default,
+logging a deprecation warning when used).
+
+*Evidence.* `docs/architecture/LLM_GATEWAY.md` (contract, architecture, caller
+inventory, limits); `tests/architecture/test_llm_gateway_authority.py` (structure,
+11 gates incl. 3 detector-liveness gates); 13 behaviour files
+`tests/unit/test_llm_gateway_*.py` (contract, errors, policy, resilience, scheduler,
+adapters, engine, observability, cancellation, facade, adversarial, security, load);
+`scripts/llm_gateway_mutations.py` — 49 mutations, each weakening exactly one law,
+each killed by a named test, run against a temporary copy of the package with a
+green baseline required before and after. The adversarial and mutation programmes
+found and fixed 22 real defects in the authority itself; the last (a waiter stranded
+beside idle capacity because `_pump` only ran on release) was found by the mutation
+harness, not by review. Full-suite and gate numbers are recorded in
+`W2_LLM_GATEWAY_TRUTH_REPORT_2026-09-28.md`.

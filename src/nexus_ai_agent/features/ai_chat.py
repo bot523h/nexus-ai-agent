@@ -2,8 +2,34 @@
 
 v2.1 improvements:
   - Persistent conversation history via ConversationStore (survives restarts)
-  - Smart request queue integration (GeminiRequestQueue) for fair 15 RPM sharing
-  - Fallback response when rate-limited or API unavailable
+  - Fair per-user request throttling
+  - Localised response when the API is rate-limited or unavailable
+
+W2 (Global LLM Gateway): this engine no longer owns an HTTP client, a retry
+loop, a provider quota counter or an admission queue. Every call goes through
+:class:`~nexus_ai_agent.llm.gateway.engine.LLMGateway`, which is the single LLM
+authority for the process:
+
+* transport, timeouts and connection pooling → ``GeminiHttpAdapter``
+* retry classification (typed, never substring-based) → ``llm/errors.py``
+* provider RPM/RPD quota, concurrency bounds, circuit breaking → gateway policy
+* request ids, timings, attempts, usage → gateway observability
+
+What stays here, deliberately:
+
+* ``_RateLimiter`` — a **per-user** fairness gate. The gateway's rate policy is
+  **per-provider**. Different axes, both needed: one user must not consume the
+  whole free-tier minute, and the process must not exceed the provider's minute.
+* the localised Persian strings — rendering a failure for a human is a surface
+  concern. The gateway classifies it (typed ``LLMError``); this module only
+  renders it, and it renders from ``kind``/``status_code``, never by scanning a
+  message for a substring.
+* ``request_queue`` — still accepted and still reported by :meth:`get_status`
+  for compatibility, but it is **no longer in the execution path**. Submitting
+  through it would nest a second admission gate and a second retry loop around
+  the gateway's own (retries multiply, quota is charged twice), which is exactly
+  the two-authorities split this wave removes. See
+  ``docs/architecture/LLM_GATEWAY.md`` §"Relationship to GeminiRequestQueue".
 """
 
 from __future__ import annotations
@@ -12,8 +38,17 @@ import time
 from collections import defaultdict
 from typing import Any
 
-import httpx
-
+from nexus_ai_agent.llm.errors import InvalidRequestError, LLMError, LLMErrorKind
+from nexus_ai_agent.llm.gateway.contract import (
+    Caller,
+    CallerCategory,
+    ContentPart,
+    GenerationParams,
+    LLMOperation,
+    LLMRequest,
+    Message,
+)
+from nexus_ai_agent.llm.gateway.registry import gateway_for_credentials
 from nexus_ai_agent.observability.logging import get_logger
 
 log = get_logger(__name__)
@@ -43,6 +78,53 @@ _SYSTEM_PROMPTS: dict[str, str] = {
         "Describe what you see, answer questions about the image. Respond in the user's language."
     ),
 }
+
+
+#: Wire-identical to the pre-W2 ``generationConfig`` this engine always sent, so
+#: migrating onto the gateway does not change a single sampling knob.
+_CHAT_GENERATION = GenerationParams(
+    temperature=0.9,
+    top_p=0.95,
+    top_k=40,
+    max_output_tokens=4096,
+)
+
+
+def _contents_to_messages(contents: list[dict[str, Any]]) -> tuple[Message, ...]:
+    """Convert Gemini wire ``contents`` into gateway :class:`Message` turns.
+
+    Lossless: a turn's text parts become ``Message.content`` and any non-text
+    part (``inline_data``) becomes a :class:`ContentPart` on that same turn, so
+    a vision turn keeps its image instead of being flattened to text.
+    """
+
+    messages: list[Message] = []
+    for entry in contents:
+        role = str(entry.get("role") or "user")
+        if role not in {"system", "user", "model", "assistant", "tool"}:
+            role = "user"
+        text_chunks: list[str] = []
+        parts: list[ContentPart] = []
+        for part in entry.get("parts") or []:
+            if not isinstance(part, dict):
+                continue
+            if isinstance(part.get("text"), str):
+                text_chunks.append(part["text"])
+                continue
+            inline = part.get("inline_data") or part.get("inlineData")
+            if isinstance(inline, dict) and isinstance(inline.get("data"), str):
+                import base64
+
+                parts.append(
+                    ContentPart(
+                        mime_type=str(
+                            inline.get("mime_type") or inline.get("mimeType") or "image/jpeg"
+                        ),
+                        data=base64.b64decode(inline["data"]),
+                    )
+                )
+        messages.append(Message(role=role, content="".join(text_chunks), parts=tuple(parts)))
+    return tuple(messages)
 
 
 class _RateLimiter:
@@ -107,6 +189,7 @@ class GeminiEngine:
         max_history: int = 20,
         conversation_store: Any | None = None,
         request_queue: Any | None = None,
+        gateway: Any | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
@@ -116,8 +199,28 @@ class GeminiEngine:
         self._history: dict[str, list[dict[str, Any]]] = {}
         # v2.1: persistent store (optional)
         self._store = conversation_store
-        # v2.1: request queue (optional)
+        # v2.1: request queue — retained for compatibility and status reporting,
+        # but no longer in the execution path (see module docstring).
         self._queue = request_queue
+        # W2: the single LLM authority. Injected in tests / by a composition
+        # root; otherwise resolved from the credentials this engine was given.
+        self._gateway = (
+            gateway
+            if gateway is not None
+            else gateway_for_credentials(
+                api_key,
+                model,
+                requests_per_minute=max_rpm,
+                requests_per_day=max_daily,
+                base_url=self.BASE_URL,
+            )
+        )
+
+    @property
+    def gateway(self) -> Any:
+        """The authority every call from this engine goes through (W2, LAW 1)."""
+
+        return self._gateway
 
     @property
     def is_configured(self) -> bool:
@@ -162,34 +265,91 @@ class GeminiEngine:
         contents: list[dict[str, Any]],
         *,
         system_instruction: str | None = None,
+        purpose: str = "chat",
     ) -> str:
-        """Make a request to the Gemini API."""
-        # API key rides in the x-goog-api-key header, never in the URL:
-        # query parameters end up in httpx INFO log lines, proxy logs and
-        # exception reprs (the redaction layer is defence-in-depth, not
-        # the primary control).
-        url = f"{self.BASE_URL}/models/{self._model}:generateContent"
-        payload: dict[str, Any] = {"contents": contents}
-        if system_instruction:
-            payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
-        payload["generationConfig"] = {
-            "temperature": 0.9,
-            "topP": 0.95,
-            "topK": 40,
-            "maxOutputTokens": 4096,
-        }
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(url, json=payload, headers={"x-goog-api-key": self._api_key})
-            if resp.status_code != 200:
-                error_text = resp.text[:500]
-                log.error("gemini_api_error", status=resp.status_code, body=error_text)
-                return f"❌ خطای API ({resp.status_code}): لطفاً بعداً تلاش کنید."
-            data = resp.json()
-            try:
-                return data["candidates"][0]["content"]["parts"][0]["text"]
-            except (KeyError, IndexError):
-                log.error("gemini_unexpected_response", data=str(data)[:500])
-                return "❌ پاسخ نامعتبر از API."
+        """Send *contents* to Gemini **through the gateway** and return text.
+
+        Signature and return contract are unchanged from pre-W2 (a string, never
+        an exception, for provider-side failures) so every caller — and every
+        pinned transport test — keeps working. What changed is *who decides*:
+
+        * the API key rides in the ``x-goog-api-key`` header (unchanged; now
+          enforced once, in ``GeminiHttpAdapter``, instead of at each call site)
+        * a non-200 is classified by **status code**, not by scanning the body
+        * retry, backoff, quota, concurrency, circuit breaking and observability
+          are the gateway's, not this method's
+
+        Failure rendering is the last step and is driven by the typed error's
+        ``kind``/``status_code`` only.
+        """
+
+        if not contents:
+            # An empty turn list is a caller bug, not a provider condition.
+            # Typed and loud beats a 400 from Google or a silent empty answer.
+            raise InvalidRequestError(
+                "GeminiEngine._call_gemini needs at least one content turn",
+                provider="gemini",
+                model=self._model,
+                detail="empty_contents",
+            )
+        request = LLMRequest(
+            caller=Caller(category=CallerCategory.SURFACE, name="features.ai_chat"),
+            purpose=purpose,
+            operation=LLMOperation.CHAT,
+            messages=_contents_to_messages(contents),
+            system=system_instruction,
+            provider="gemini",
+            model=self._model,
+            # Pinned hard: the bot's chat surface must never silently receive a
+            # different provider's (or a locally faked) answer. On exhaustion the
+            # caller gets the typed failure and renders it (LAW 8).
+            allow_fallback=False,
+            generation=_CHAT_GENERATION,
+        )
+        try:
+            response = await self._gateway.execute(request)
+        except LLMError as exc:
+            return self._render_llm_error(exc)
+        return response.text
+
+    @staticmethod
+    def _render_llm_error(exc: LLMError) -> str:
+        """Render an already-classified failure into the user's language.
+
+        This is presentation, not detection: the ``kind`` and ``status_code``
+        were decided by the gateway from typed evidence. Nothing here inspects
+        message text.
+        """
+
+        kind = exc.kind
+        if (
+            kind is LLMErrorKind.MALFORMED_RESPONSE
+            or kind is LLMErrorKind.STRUCTURED_OUTPUT_INVALID
+        ):
+            log.error(
+                "gemini_unexpected_response", error_kind=kind.value, request_id=exc.request_id
+            )
+            return "❌ پاسخ نامعتبر از API."
+        if kind is LLMErrorKind.CONTENT_BLOCKED:
+            # Pre-W2 a safety block surfaced as "invalid response" because the
+            # 200 carried no candidates. Naming it is more truthful and lets the
+            # user fix the prompt instead of retrying forever.
+            log.warning("gemini_content_blocked", detail=exc.detail, request_id=exc.request_id)
+            return "❌ پاسخ به دلیل محدودیت محتوایی مسدود شد."
+        if kind is LLMErrorKind.CANCELLED:
+            return "❌ درخواست لغو شد."
+        status = exc.status_code
+        log.error(
+            "gemini_api_error",
+            status=status,
+            error_kind=kind.value,
+            detail=exc.detail,
+            request_id=exc.request_id,
+        )
+        if status is not None:
+            # Byte-identical to the pre-W2 rendering for HTTP failures.
+            return f"❌ خطای API ({status}): لطفاً بعداً تلاش کنید."
+        return "❌ خطای سرویس: لطفاً بعداً تلاش کنید."
 
     async def chat(
         self,
@@ -208,17 +368,11 @@ class GeminiEngine:
                 f"باقیمانده روزانه: {rem['daily_remaining']}"
             )
 
-        # If a request queue is configured, use it for fair scheduling
-        if self._queue is not None:
-            from nexus_ai_agent.features.request_queue import Priority
-
-            result = await self._queue.submit(
-                lambda: self._do_chat(text, conv_id=conv_id, user_id=user_id, mode=mode),
-                user_id=user_id,
-                priority=Priority.NORMAL,
-            )
-            return result
-
+        # W2: admission, provider quota, retry and cancellation are the
+        # gateway's. Submitting through ``self._queue`` on top of that would
+        # nest a second admission gate and a second retry loop around the first
+        # (retries multiply, quota is charged twice) — two authorities for one
+        # call. The per-user fairness check above stays: it is a different axis.
         return await self._do_chat(text, conv_id=conv_id, user_id=user_id, mode=mode)
 
     async def _do_chat(
@@ -235,7 +389,7 @@ class GeminiEngine:
         user_part: dict[str, Any] = {"role": "user", "parts": [{"text": text}]}
         history.append(user_part)
         system_prompt = _SYSTEM_PROMPTS.get(mode, _SYSTEM_PROMPTS["chat"])
-        response = await self._call_gemini(history, system_instruction=system_prompt)
+        response = await self._call_gemini(history, system_instruction=system_prompt, purpose=mode)
         # Save to history
         self._append_to_history(conv_id, user_part)
         assistant_part = {"role": "model", "parts": [{"text": response}]}
@@ -248,22 +402,12 @@ class GeminiEngine:
         if not self._limiter.is_allowed(user_id):
             return "⏳ محدودیت درخواست. لطفاً کمی صبر کنید."
 
-        if self._queue is not None:
-            from nexus_ai_agent.features.request_queue import Priority
-
-            return await self._queue.submit(
-                lambda: self._do_one_shot(text, system=_SYSTEM_PROMPTS["chat"]),
-                user_id=user_id,
-                priority=Priority.NORMAL,
-            )
-
         return await self._do_one_shot(text, system=_SYSTEM_PROMPTS["chat"])
 
     async def _do_one_shot(self, text: str, *, system: str) -> str:
         """Internal: one-shot Gemini call."""
         contents = [{"role": "user", "parts": [{"text": text}]}]
-        response = await self._call_gemini(contents, system_instruction=system)
-        return response
+        return await self._call_gemini(contents, system_instruction=system, purpose="one_shot")
 
     async def translate(self, text: str, *, target_lang: str, user_id: int) -> str:
         """Translate text to target language."""
@@ -272,7 +416,7 @@ class GeminiEngine:
         prompt = f"Translate the following text to {target_lang}:\n\n{text}"
         contents = [{"role": "user", "parts": [{"text": prompt}]}]
         response = await self._call_gemini(
-            contents, system_instruction=_SYSTEM_PROMPTS["translate"]
+            contents, system_instruction=_SYSTEM_PROMPTS["translate"], purpose="translate"
         )
         self._limiter.record(user_id)
         return response
@@ -284,7 +428,7 @@ class GeminiEngine:
         prompt = f"Summarize the following text:\n\n{text}"
         contents = [{"role": "user", "parts": [{"text": prompt}]}]
         response = await self._call_gemini(
-            contents, system_instruction=_SYSTEM_PROMPTS["summarize"]
+            contents, system_instruction=_SYSTEM_PROMPTS["summarize"], purpose="summarize"
         )
         self._limiter.record(user_id)
         return response
@@ -294,7 +438,9 @@ class GeminiEngine:
         if not self._limiter.is_allowed(user_id):
             return "⏳ محدودیت درخواست."
         contents = [{"role": "user", "parts": [{"text": prompt}]}]
-        response = await self._call_gemini(contents, system_instruction=_SYSTEM_PROMPTS["code"])
+        response = await self._call_gemini(
+            contents, system_instruction=_SYSTEM_PROMPTS["code"], purpose="code"
+        )
         self._limiter.record(user_id)
         return response
 
@@ -326,7 +472,9 @@ class GeminiEngine:
                 ],
             }
         ]
-        response = await self._call_gemini(contents, system_instruction=_SYSTEM_PROMPTS["vision"])
+        response = await self._call_gemini(
+            contents, system_instruction=_SYSTEM_PROMPTS["vision"], purpose="vision"
+        )
         self._limiter.record(user_id)
         return response
 
@@ -339,6 +487,16 @@ class GeminiEngine:
         if self._queue is not None:
             qs = self._queue.get_status()
             queue_info = f"\n📋 صف درخواست: {qs['queue_size']} در انتظار"
+        gateway_info = ""
+        try:
+            status = self._gateway.status()
+            scheduler = status.get("scheduler") or {}
+            gateway_info = (
+                f"\n🌐 دروازه LLM: {status.get('executed', 0)} درخواست / "
+                f"{scheduler.get('inflight_global', 0)} در حال اجرا"
+            )
+        except Exception:  # noqa: BLE001 — status rendering must never break /status
+            gateway_info = ""
         return (
             f"🤖 Gemini AI Engine\n"
             f"━━━━━━━━━━━━━━━━━━\n"
@@ -348,4 +506,5 @@ class GeminiEngine:
             f"💬 مکالمات فعال: {active_convos}"
             + ("\n💾 ذخیره‌سازی: دائمی (SQLite)" if self._store else "\n💾 ذخیره‌سازی: حافظه موقت")
             + f"{queue_info}"
+            + f"{gateway_info}"
         )
