@@ -34,22 +34,43 @@ _CACHE_TTL = 300.0  # 5 minutes
 _PUBLIC_COMMANDS = frozenset({"start", "help", "forcejoin_status"})
 
 
-@lru_cache(maxsize=8)
+_sync_engines: dict[str, Any] = {}
+_sync_engines_lock = asyncio.Lock()
+
+
 def _sync_engine(db_path: str) -> Any:
     """Return a (cached) synchronous SQLAlchemy engine for feature CRUD.
 
     P1-2: the gate's DB read runs in worker threads (``asyncio.to_thread``),
     so the engine is created with ``check_same_thread=False``; caching it
     per path also removes the per-message engine churn of the old
-    create-per-call behaviour.
+    create-per-call behaviour.  Dict-based (not lru_cache) so W1 shutdown
+    can dispose and clear the cache deterministically.
     """
     from sqlalchemy import create_engine as _ce
 
-    return _ce(
-        f"sqlite:///{db_path}",
-        echo=False,
-        connect_args={"check_same_thread": False},
-    )
+    engine = _sync_engines.get(db_path)
+    if engine is None:
+        engine = _ce(
+            f"sqlite:///{db_path}",
+            echo=False,
+            connect_args={"check_same_thread": False},
+        )
+        _sync_engines[db_path] = engine
+    return engine
+
+
+def _shutdown_engines() -> None:
+    """Dispose every cached engine and clear the cache (W1 runtime ownership).
+
+    Called from the synchronous shutdown path.  Must not raise.
+    """
+    for engine in list(_sync_engines.values()):
+        try:
+            engine.dispose()
+        except Exception:  # noqa: BLE001
+            logger.warning("force_join_engine_dispose_failed", exc_info=True)
+    _sync_engines.clear()
 
 
 class ForceJoinManager:

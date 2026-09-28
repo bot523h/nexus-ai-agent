@@ -2,6 +2,12 @@
 
 v2.1: All engines (Gemini, Image, Speech, Referral, Cloud, Queue)
 are initialized here and passed to handlers via bot_data.
+
+W1 (True Runtime Closure): every resource constructed here is registered
+with a canonical :class:`Runtime` container whose shutdown hook runs ALL
+cleanup steps in LIFO order, fail-safe.  There is exactly ONE startup
+authority (``post_init``) and ONE shutdown authority (``post_shutdown``);
+webhook mode must not duplicate lifecycle steps.
 """
 
 from __future__ import annotations
@@ -16,6 +22,7 @@ from telegram.ext import Application, ApplicationBuilder
 
 from nexus_ai_agent.application.ports.job_queue import JobStatus
 from nexus_ai_agent.config.settings import Settings
+from nexus_ai_agent.core.runtime import Runtime, shutdown_module_sync_engines
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.presence import PresenceStore
 from nexus_ai_agent.storage.ai_storage import AIStorageManager, ProviderConfig
@@ -199,10 +206,13 @@ def _build_job_completion_notifier(token: str) -> Any:
     return _notify
 
 
-def _init_v2_engines(settings: Settings) -> dict[str, Any]:
-    """Initialize all v2.0.0+ feature engines.
+def _init_v2_engines(settings: Settings, runtime: Runtime) -> dict[str, Any]:
+    """Initialize all v2.0.0+ feature engines and register cleanup.
 
-    Returns a dict suitable for storing in application.bot_data.
+    Every engine that creates resources (DB connections, HTTP clients,
+    background tasks) is registered with *runtime* so shutdown disposes
+    them in a deterministic, fail-safe order.  Own-what-you-create (W1
+    Law 5): if we construct it here, we are responsible for closing it.
     """
     from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
     from nexus_ai_agent.features.ai_chat import GeminiEngine
@@ -243,10 +253,14 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
         job_queue.register_handler(job_type, handler)
     engines["job_queue"] = job_queue
     engines["causal_journal"] = causal_journal
+    runtime.add_cleanup(lambda rt: rt.engines["job_queue"].shutdown())
 
-    # Persistent conversation store
+    # Persistent conversation store (sync SQLite engine)
     conv_store = ConversationStore(db_path=settings.db_path)
     engines["conversation_store"] = conv_store
+    runtime.add_cleanup(
+        lambda rt: asyncio.to_thread(rt.engines["conversation_store"].close)
+    )
 
     # Request queue for fair Gemini API access
     request_queue = GeminiRequestQueue(
@@ -254,9 +268,13 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
         max_daily=settings.gemini_max_daily,
     )
     engines["request_queue"] = request_queue
+    runtime.add_cleanup(lambda rt: rt.engines["request_queue"].close())
 
     # Gemini AI Engine
+    from nexus_ai_agent.llm.gemini_provider import GeminiProvider
+
     gemini_engine: GeminiEngine | None = None
+    gemini_provider: GeminiProvider | None = None
     if settings.gemini_api_key:
         gemini_engine = GeminiEngine(
             api_key=settings.gemini_api_key,
@@ -266,15 +284,17 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
             conversation_store=conv_store,
             request_queue=request_queue,
         )
+        gemini_provider = GeminiProvider(engine=gemini_engine)
     engines["gemini_engine"] = gemini_engine
+    engines["gemini_provider"] = gemini_provider
 
-    # Image Generation
+    # Image Generation (no long-lived resources)
     engines["image_engine"] = ImageGenEngine()
 
     # Speech (TTS/STT)
     engines["speech_engine"] = SpeechEngine(output_dir="data/audio")
 
-    # Summarizer
+    # Summarizer — owns a long-lived httpx.AsyncClient with SSRF transport.
     summarizer_engine: SummarizerEngine | None = None
     if settings.gemini_api_key:
         summarizer_engine = SummarizerEngine(
@@ -282,9 +302,18 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
             model=settings.gemini_model,
         )
     engines["summarizer_engine"] = summarizer_engine
+    if summarizer_engine is not None:
+        # SummarizerEngine owns a long-lived httpx.AsyncClient at ._http.
+        runtime.add_cleanup(
+            lambda rt: _safe_aclose(getattr(rt.engines["summarizer_engine"], "_http", None))
+        )
 
-    # Referral
-    engines["referral_engine"] = ReferralEngine(db_path=settings.db_path)
+    # Referral — owns a sync SQLite engine.
+    referral = ReferralEngine(db_path=settings.db_path)
+    engines["referral_engine"] = referral
+    runtime.add_cleanup(
+        lambda rt: asyncio.to_thread(rt.engines["referral_engine"].close)
+    )
 
     # Unified Cloud Storage
     engines["unified_cloud"] = UnifiedCloudStorage(
@@ -302,7 +331,29 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
         settings, referral=engines["referral_engine"]
     )
 
+    # ReminderSystem has its own sync engine and scheduled tasks (its
+    # close() method cancels tasks and disposes the engine).
+    runtime.add_cleanup(
+        lambda rt: asyncio.to_thread(rt.engines["feature_engines"].reminders.close)
+    )
+    # Feature sync engines (force_join, anonymous_chat) — lru_cache-style
+    # caches that need deterministic disposal.
+    runtime.add_cleanup(lambda rt: asyncio.to_thread(shutdown_module_sync_engines))
+
     return engines
+
+
+async def _safe_aclose(obj: Any) -> None:
+    """Await obj.aclose() / obj.close(), never raising."""
+    closer = getattr(obj, "aclose", None) or getattr(obj, "close", None)
+    if closer is None:
+        return
+    try:
+        result = closer()
+        if hasattr(result, "__await__"):
+            await result
+    except Exception:  # noqa: BLE001
+        logger.warning("runtime_resource_close_failed", exc_info=True)
 
 
 def build_application(
@@ -320,15 +371,24 @@ def build_application(
     presence_store = presence or PresenceStore()
     storage_manager = storage or _build_default_storage(settings)
 
-    # Initialize all v2.0.0+ engines
-    engines = _init_v2_engines(settings)
+    # W1 canonical runtime: single authority for construction + shutdown.
+    runtime = Runtime(settings=settings)
+
+    # Initialize all v2.0.0+ engines; every long-lived resource registers
+    # its cleanup with the runtime before the application is built.
+    engines = _init_v2_engines(settings, runtime)
+    runtime.engines = engines
     job_queue = engines["job_queue"]
     feature_engines = engines["feature_engines"]
 
     async def _post_init(application: Any) -> None:
-        # Bind the runtime bot to the bindable engines (reminders,
-        # force-join, anonymous chat) and restore pending reminders so
-        # a restart does not silently drop them.
+        """ONE canonical startup hook (W1 Law 4).
+
+        Binds the runtime bot to bindable engines, restores pending
+        reminders, then resumes durable jobs.  Webhook mode must NOT
+        duplicate ``resume_pending`` — PTB invokes post_init exactly once
+        after initialize(), regardless of run mode.
+        """
         try:
             feature_engines.reminders.bind(application.bot)
             feature_engines.force_join.bind(application.bot)
@@ -351,13 +411,26 @@ def build_application(
                 )
             except Exception:  # noqa: BLE001 — ledger recovery must not kill the bot
                 logger.exception("causal_journal_backfill_failed")
-        await job_queue.resume_pending()
+        # Job resume runs even if feature startup partially failed, so a
+        # half-initialized process still drains durable work.
+        try:
+            await job_queue.resume_pending()
+        except Exception:  # noqa: BLE001
+            logger.exception("job_queue_resume_pending_failed")
 
     async def _post_shutdown(application: Any) -> None:
+        """ONE canonical shutdown hook (W1 Law 4).
+
+        Delegates ALL cleanup to the runtime so every resource — job
+        queue, summarizer HTTP client, conversation-store engine,
+        referral engine, reminders, feature sync engines, and the
+        global async DB engines — is disposed in deterministic LIFO
+        order.  One failure never strands later resources.
+        """
         try:
-            feature_engines.reminders.close()
+            await runtime.shutdown()
         except Exception:  # noqa: BLE001
-            pass
+            logger.exception("runtime_shutdown_failed")
 
     application = (
         ApplicationBuilder()
@@ -369,6 +442,7 @@ def build_application(
     application.bot_data["graph"] = graph
     application.bot_data["presence"] = presence_store
     application.bot_data["storage"] = storage_manager
+    application.bot_data["runtime"] = runtime
     application.bot_data.setdefault("heartbeat_user_ids", set())
 
     # Store engines in bot_data for handler access
