@@ -141,6 +141,19 @@ class ConversationStore:
             row = result.fetchone()
             return row[0] if row else 0
 
+    def close(self) -> None:
+        """Dispose the underlying SQLAlchemy engine (W1 runtime ownership).
+
+        Idempotent: a second call is a no-op.  Must not raise.
+        """
+        engine = getattr(self, "_engine", None)
+        if engine is not None:
+            try:
+                engine.dispose()
+            except Exception:  # noqa: BLE001
+                log.warning("conv_store_engine_dispose_failed", exc_info=True)
+            self._engine = None  # type: ignore[assignment]
+
     def trim_to_limit(self, conv_id: str, limit: int = 20) -> None:
         """Keep only the most recent *limit* messages for *conv_id*.
 

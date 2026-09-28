@@ -1,11 +1,23 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 from nexus_ai_agent.config.settings import get_settings
-from nexus_ai_agent.llm.gemini_provider import GeminiProvider
+
+if TYPE_CHECKING:
+    from nexus_ai_agent.llm.gemini_provider import GeminiProvider
 
 
 class StoreAgent:
-    """Base class for all specialized agents in the Store."""
+    """Base class for all specialized agents in the Store.
+
+    W1 (Law 8 — NO HIDDEN BYPASS): agents MUST be constructed with the
+    runtime-owned LLM provider.  A legacy fallback exists but is
+    *explicit opt-in* via ``allow_legacy_fallback=True`` so tests and
+    non-runtime callers can still instantiate agents in isolation —
+    production code paths go through AgentManager.get_active(user_id,
+    provider=...) which always injects the canonical provider.
+    """
 
     name: str
     emoji: str
@@ -13,9 +25,27 @@ class StoreAgent:
     system_prompt: str
     category: str
 
-    def __init__(self, gemini_provider: GeminiProvider | None = None) -> None:
-        settings = get_settings()
-        self.gemini = gemini_provider or GeminiProvider(api_key=settings.gemini_api_key or "")
+    def __init__(
+        self,
+        gemini_provider: "GeminiProvider | None" = None,
+        *,
+        allow_legacy_fallback: bool = False,
+    ) -> None:
+        if gemini_provider is None:
+            if not allow_legacy_fallback:
+                # Fail fast: in production runtime code a missing
+                # provider means someone bypassed the canonical
+                # construction path.
+                raise RuntimeError(
+                    "StoreAgent requires a runtime-owned GeminiProvider; "
+                    "pass allow_legacy_fallback=True only for isolated "
+                    "tests."
+                )
+            from nexus_ai_agent.llm.gemini_provider import GeminiProvider
+
+            settings = get_settings()
+            gemini_provider = GeminiProvider(api_key=settings.gemini_api_key or "")
+        self.gemini = gemini_provider
 
     async def respond(
         self, user_id: int, message: str, history: list[dict[str, str]], context: str = ""

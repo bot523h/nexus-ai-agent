@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
 from sqlmodel import select
 
@@ -10,11 +11,19 @@ from nexus_ai_agent.storage.models import UserActiveAgent
 
 from .specialized_agents import AGENTS, StoreAgent
 
+if TYPE_CHECKING:
+    from nexus_ai_agent.llm.gemini_provider import GeminiProvider
+
 logger = logging.getLogger(__name__)
 
 
 class AgentManager:
-    """Manager for activating and retrieving specialized agents."""
+    """Manager for activating and retrieving specialized agents.
+
+    W1 (Law 8): :meth:`get_active` MUST receive the runtime-owned
+    ``GeminiProvider``; constructing a private provider is a legacy
+    escape hatch reserved for tests (``allow_legacy_fallback=True``).
+    """
 
     @staticmethod
     def list_agents() -> list[dict[str, str]]:
@@ -62,13 +71,28 @@ class AgentManager:
                 await session.commit()
 
     @staticmethod
-    async def get_active(user_id: int) -> StoreAgent | None:
-        """Get the currently active agent for a user."""
+    async def get_active(
+        user_id: int,
+        *,
+        provider: "GeminiProvider | None" = None,
+        allow_legacy_fallback: bool = False,
+    ) -> StoreAgent | None:
+        """Get the currently active agent for a user.
+
+        *provider* is the runtime-owned canonical Gemini provider
+        (W1 Law 8 — one provider owned by the runtime, never a
+        per-agent private instance).  When no agent is active, returns
+        ``None`` so the caller routes through the standard graph
+        instead.
+        """
         async with get_session() as session:
             stmt = select(UserActiveAgent).where(UserActiveAgent.user_id == user_id)
             active_record = (await session.execute(stmt)).scalar_one_or_none()
 
             if active_record and active_record.agent_name in AGENTS:
                 agent_class = AGENTS[active_record.agent_name]
-                return agent_class()
+                return agent_class(
+                    gemini_provider=provider,
+                    allow_legacy_fallback=allow_legacy_fallback,
+                )
         return None

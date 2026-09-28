@@ -14,9 +14,16 @@ async def test_list_agents():
 
 @pytest.mark.asyncio
 async def test_activate_agent():
+    # Isolated unit test with no runtime bootstrap.  Pass an injected
+    # provider (W1 Law 10: no accidental bypass — production wiring
+    # always passes the runtime-owned provider; isolated tests pass
+    # their own stub).
+    from unittest.mock import MagicMock
+    fake_provider = MagicMock()
+
     user_id = 12345
     await AgentManager.activate(user_id, "coding")
-    active = await AgentManager.get_active(user_id)
+    active = await AgentManager.get_active(user_id, provider=fake_provider)
     assert active is not None
     assert "Coding" in active.name
 
