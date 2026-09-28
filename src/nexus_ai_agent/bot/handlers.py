@@ -514,7 +514,8 @@ def build_handlers(
 
     # ── v2.0.0: /stt — Speech to Text ──
     async def stt_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if gemini_engine is None:
+        _ge = _gemini(context)
+        if _ge is None:
             await _reply(update, "❌ Gemini AI not configured.")
             return
         user_id = _user_id(update)
@@ -555,7 +556,7 @@ def build_handlers(
             result = await se.speech_to_text(
                 tmp_path,
                 lang="fa",
-                gemini_engine=gemini_engine,
+                gemini_engine=_ge,
             )
             import os
 
@@ -569,7 +570,8 @@ def build_handlers(
 
     # ── v2.0.0: /summarize — Smart Summarizer ──
     async def summarize_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if summarizer_engine is None:
+        _se = _summarizer(context)
+        if _se is None:
             await _reply(update, "❌ Summarizer not configured (requires GEMINI_API_KEY).")
             return
         user_id = _user_id(update)
@@ -593,17 +595,9 @@ def build_handlers(
                 mode = parts[0].split(":")[1].lower()
                 content_text = parts[1]
         if content_text.startswith("http://") or content_text.startswith("https://"):
-            su = _summarizer(context)
-            if su is None:
-                await _reply(update, "❌ Summarizer not configured.")
-                return
-            result = await su.summarize_url(content_text, mode=mode)
+            result = await _se.summarize_url(content_text, mode=mode)
         else:
-            su = _summarizer(context)
-            if su is None:
-                await _reply(update, "❌ Summarizer not configured.")
-                return
-            result = await su.summarize_text(content_text, mode=mode)
+            result = await _se.summarize_text(content_text, mode=mode)
         await _reply(update, SummarizerEngine.format_result(result))
 
     # ── v2.0.0: /cloud — Upload file to unified cloud ──

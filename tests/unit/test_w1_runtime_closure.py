@@ -23,10 +23,9 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
-
 
 # ── Helpers / fixtures ────────────────────────────────────────────────
 
@@ -245,8 +244,6 @@ def test_store_agent_requires_injected_provider() -> None:
 
 def test_store_agent_accepts_injected_provider() -> None:
     provider = MagicMock()
-    agent = MagicMock()
-    # Return value of our choosing:
     from nexus_ai_agent.agents.store.specialized_agents import CodingAgent
 
     a = CodingAgent(gemini_provider=provider)
@@ -331,6 +328,7 @@ def test_webhook_lifecycle_no_duplicate_resume() -> None:
     the docstring) so the invariant can't be bypassed by renaming.
     """
     import inspect
+
     from nexus_ai_agent.bot import webhook as webhook_mod
 
     source = inspect.getsource(webhook_mod._serve_webhook)
@@ -404,7 +402,7 @@ async def test_webhook_shutdown_ordering(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_force_join_and_anon_chat_expose_shutdown() -> None:
-    from nexus_ai_agent.features import force_join, anonymous_chat
+    from nexus_ai_agent.features import anonymous_chat, force_join
     assert callable(force_join._shutdown_engines)
     assert callable(anonymous_chat._shutdown_engines)
 
@@ -420,7 +418,7 @@ async def test_shutdown_module_sync_engines_is_safe(
     monkeypatch.setattr(sm, "get_settings", lambda: fake)
 
     from nexus_ai_agent.core.runtime import shutdown_module_sync_engines
-    from nexus_ai_agent.features import force_join, anonymous_chat
+    from nexus_ai_agent.features import anonymous_chat, force_join
 
     # Trigger engine creation by touching the caches.
     force_join._sync_engine(fake.db_path)
@@ -470,10 +468,20 @@ def test_build_application_registers_runtime(
             async def set_webhook(*a, **kw): pass
 
     class _FakeBuilder:
-        def __init__(self): self._post_init = None; self._post_shutdown = None
-        def token(self, t): return self
-        def post_init(self, fn): self._post_init = fn; return self
-        def post_shutdown(self, fn): self._post_shutdown = fn; return self
+        def __init__(self):
+            self._post_init = None
+            self._post_shutdown = None
+
+        def token(self, t):
+            return self
+
+        def post_init(self, fn):
+            self._post_init = fn
+            return self
+
+        def post_shutdown(self, fn):
+            self._post_shutdown = fn
+            return self
         def build(self):
             app = _FakeApp()
             app._post_init = self._post_init

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from sqlmodel import select
 
@@ -74,7 +74,7 @@ class AgentManager:
     async def get_active(
         user_id: int,
         *,
-        provider: "GeminiProvider | None" = None,
+        provider: GeminiProvider | None = None,
         allow_legacy_fallback: bool = False,
     ) -> StoreAgent | None:
         """Get the currently active agent for a user.
