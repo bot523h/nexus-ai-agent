@@ -59,6 +59,8 @@ CLAIM: DR نه merge شده و نه قابل ادغام. EVIDENCE: `e5b326b:src/
 | `d1a7423` (push): test ✓، parity 3.11 ✓، 3.12 ✓، 3.10 ✗؛ (PR، همان درخت): 3.10 ✓ | check-runs API | high | — |
 | `029b394` (push): test ✓، parity 3.10 ✓، 3.11 ✓، 3.12 ✗؛ (PR، همان درخت): 3.12 ✓؛ wheel-contract ×۳ ✓؛ guard ✓ | همان | high | — |
 | `4a5e47e`: ران push **cancelled** (جایگزین با push بعدی) | همان | high | data point از دست؛ نمونهٔ بعدی روی SHA اسلایس W3 |
+| `3c6a1dc`/`5178f58`: guard-model ✗ و test ✗ — **نقص واقعیِ claim من** (ارجاع zone به `roadmap-backlog` که در board این شاخه اعلام نشده بود؛ سپس خودِ zone هم اضافه نشده بود)؛ توسط آزمون‌های schema شکار شد، محلی بازتولید و در دو کامیت رفع شد | `pytest tests/unit/test_agent_board.py` محلی (2 failed → 49 passed)؛ check-runs | high | governance tests کار می‌کنند |
+| **`c13a137` (push): guard-model ✓، pushed-range ✓، lint ✓، lint-fast ✓، test ✓، parity 3.10 ✓، 3.11 ✓، 3.12 ✓ — همهٔ لِین‌های کامل‌شده سبز، هر سه پاریتی در یک ران** | check-runs API | high | ران pull-event همان SHA هنگام گزارش هنوز در جریان بود؛ علت flake قبلی همچنان UNVERIFIED |
 | guard دو job روی هر دو SHA سبز (پس از تعمیر pytest-9) | همان | high | — |
 
 ## 9. W4 READINESS — **NOT_READY**
@@ -100,5 +102,5 @@ PROOF = ۴۸ آزمون (TDD: قرمزِ collection قبل از ماژول ثب�
 - ریشهٔ flake پاریتی (۳.۱۰/۳.۱۲ متناوب) — لاگ/آرتیفکت blob از این sandbox دریافت نشد؛ rerun API = 403.
 - تیپ جدید W2 (`01a0e846`) — کدی منتشر نکرده؛ کاوشگر حریم خصوصی روی آن اجرا نشده.
 - آیتم‌های audit قدیمی (بخش 7-ردیف آخر) — بازتولید زندهٔ امروز ندارند.
-- CI روی SHA نهایی اسلایس W3 — پس از push پایش می‌شود؛ نتیجه در کامنت PR ثبت خواهد شد.
+- ~~CI روی SHA نهایی اسلایس W3~~ → روی `c13a137` تمام لِین‌های کامل‌شده سبز شدند (شامل هر سه پاریتی)؛ ران pull-event در جریان بود. علت flake تاریخی پاریتی همچنان UNVERIFIED.
 - W1/W2/DR CI امروز — فقط وضعیت PR/mergeability زنده سنجیده شد، نه اجرای تازهٔ CI آن‌ها.
