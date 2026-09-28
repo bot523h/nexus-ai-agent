@@ -3028,7 +3028,7 @@
       "evidence": {
         "selected": "676 passed, 1 PostgreSQL skip, 3 warnings; 46 files; 75.53s",
         "new_contracts": 46,
-        "installed_wheel": "74 passed in 11.63s; --no-deps isolated target, reduced diagnostic dependencies",
+        "installed_wheel": "74 passed in 12.18s with python -I; all 159 loaded project module origins verified inside installed wheel target; reduced diagnostic dependencies",
         "types": "28 changed source files clean",
         "lint": "38 changed/new Python files clean",
         "audit": "245 locked package resolutions; 184 audited Python 3.11 dependencies; 8 advisory records/6 unique IDs/3 packages; release blocked",
