@@ -750,7 +750,8 @@
         "tests/architecture/test_slideshow_adapter_boundary.py",
         "tests/integration/test_production_recovery.py",
         "src/nexus_ai_agent/features/referral.py",
-        "tests/unit/test_slideshow_render.py"
+        "tests/unit/test_slideshow_render.py",
+        "tests/unit/test_imagine_command.py"
       ]
     }
   ],
@@ -2944,7 +2945,8 @@
         "tests/architecture/test_slideshow_adapter_boundary.py",
         "tests/integration/test_production_recovery.py",
         "src/nexus_ai_agent/features/referral.py",
-        "tests/unit/test_slideshow_render.py"
+        "tests/unit/test_slideshow_render.py",
+        "tests/unit/test_imagine_command.py"
       ],
       "agent_branch": "arena/01a0e742-nexus-ai-agent",
       "claimed_at": "2026-09-28T11:05:28Z",
