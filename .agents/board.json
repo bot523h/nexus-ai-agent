@@ -841,7 +841,8 @@
         "docs/architecture/adr/README.md",
         "docs/README.md",
         "docs/architecture/MODULE_MAP.md",
-        "AGENTS.md"
+        "AGENTS.md",
+        ".github/workflows/publication-frontier.yml"
       ]
     }
   ],
@@ -3305,7 +3306,8 @@
         "docs/architecture/adr/README.md",
         "docs/README.md",
         "docs/architecture/MODULE_MAP.md",
-        "AGENTS.md"
+        "AGENTS.md",
+        ".github/workflows/publication-frontier.yml"
       ],
       "acceptance_criteria": [
         "A stale local board cannot declare a remotely leased outgoing change safe",
