@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T16:54:20Z",
+  "updated_at": "2026-09-28T10:34:24Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -657,6 +657,29 @@
         "tests/unit/test_request_queue.py",
         "scripts/llm_queue_mutations.py",
         "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
+      ]
+    },
+    {
+      "id": "audit-contract-repair",
+      "description": "Narrow audit repairs: real async session consumers, media result boundary, wheel-installed resources and migrations",
+      "paths": [
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/features/media_result.py",
+        "src/nexus_ai_agent/features/image_gen.py",
+        "src/nexus_ai_agent/features/speech.py",
+        "src/nexus_ai_agent/storage/migrations.py",
+        "pyproject.toml",
+        "setup.py",
+        "MANIFEST.in",
+        "tests/integration/test_runtime_contracts.py",
+        "tests/unit/test_media_result.py",
+        "tests/unit/test_wheel_install.py",
+        ".github/workflows/wheel-contract.yml",
+        "docs/README.md",
+        "docs/DECISION_LOG.md",
+        "docs/architecture/DATA_AND_STORAGE.md",
+        "docs/architecture/TESTING.md",
+        "docs/audits/2026-09-28-"
       ]
     }
   ],
@@ -2602,7 +2625,7 @@
       "title_fa": "سخت‌سازی هوش خارجی: خطای تایپ‌شده، منشأ داده، IO غیرمسدودکننده، انتقال امن کلید، ورودی خصمانه",
       "zone": "external-intelligence",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "gates_owner": false,
       "prerequisites": [],
       "scope": "knowledge/{knowledge_manager,web_trainer,wikipedia_trainer}.py and integrations/free_tools.py have ZERO tests on main and convert every external failure into a success-shaped value: get_text()/get_json() erase HTTP status and network errors ('' / {}), Wikipedia scrapes a 404 'article does not exist' page into user-visible 'knowledge', CurrencyTool returns 0.0 for a missing rate, every search path returns [] for both 'no results' and 'provider exploded', the NewsAPI key travels in the URL query string (and is logged by core/http_client on failure), the synchronous DDGS SDK is called directly inside async functions (event-loop block), BeautifulSoup parses unbounded attacker-controlled HTML on the loop, user input is interpolated raw into URL paths, and KnowledgeManager caches an LLM summary built from zero real sources for 24h using scalar_one_or_none() against a table it can populate with duplicates. Deliverable: a typed SourceResult/ExternalSourceError + Provenance contract, honest failure propagation, header-based secret transport, percent-encoded URL construction, to_thread offloading, bounded responses, query normalisation + stampede guard, and regression/adversarial/mutation tests.",
@@ -2631,7 +2654,7 @@
         "mutation probes: deliberately wrong implementations injected, guard tests observed RED, then restored GREEN",
         "reproduction transcript for each finding against the pre-fix code"
       ],
-      "note": "",
+      "note": "auto-released by gc at 2026-09-28T10:33:29Z (stale active lease)",
       "agent_branch": "arena/01a0df05-nexus-ai-agent",
       "claimed_at": "2026-09-26T18:46:40Z",
       "ttl_hours": 24
@@ -2715,6 +2738,49 @@
       "ttl_hours": 24,
       "gates_owner": true,
       "note": "Continues task-195-llm-queue-lifecycle (original branch arena/01a0e2f0, claim released via takeover). MODULE_MAP.md/docs-architecture excluded exactly as the original claim scoped itself. | SESSION-BOUND CONTINUATION 2026-09-27T16:54:20Z: arena/01a0e3b7 fast-forwarded cd79bfe (PR #109 head) and continues the same exclusive paths. This session cannot push to arena/01a0e356. PR #109 python-parity (3.10) is RED on run 36329794486 (asyncio.wait_for raises asyncio.TimeoutError, not builtin TimeoutError)."
+    },
+    {
+      "task": "audit-contract-repair-01a0e742",
+      "title": "Repair audited runtime contracts and prove installed artifact",
+      "zone": "audit-contract-repair",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Fix the three reproduced audit boundary defects, not the W1/W2 runtime ownership or LLM gateway rewrite.",
+      "acceptance_criteria": [
+        "Real SQLAlchemy sessions execute bot reads/upserts without .exec",
+        "Image/TTS successful engine results are sent and files closed",
+        "Built wheel includes JSON and canonical Alembic resources and migrates outside checkout",
+        "Regression tests fail before repairs and pass after"
+      ],
+      "evidence_required": [
+        "Targeted pytest, Ruff, mypy diagnostics",
+        "Wheel and sdist-to-wheel isolation smoke",
+        "docs/audits implementation report"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/features/media_result.py",
+        "src/nexus_ai_agent/features/image_gen.py",
+        "src/nexus_ai_agent/features/speech.py",
+        "src/nexus_ai_agent/storage/migrations.py",
+        "pyproject.toml",
+        "setup.py",
+        "MANIFEST.in",
+        "tests/integration/test_runtime_contracts.py",
+        "tests/unit/test_media_result.py",
+        "tests/unit/test_wheel_install.py",
+        ".github/workflows/wheel-contract.yml",
+        "docs/README.md",
+        "docs/DECISION_LOG.md",
+        "docs/architecture/DATA_AND_STORAGE.md",
+        "docs/architecture/TESTING.md",
+        "docs/audits/2026-09-28-"
+      ],
+      "agent_branch": "arena/01a0e742-nexus-ai-agent",
+      "claimed_at": "2026-09-28T10:34:24Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": ""
     }
   ],
   "deferred_log": [
