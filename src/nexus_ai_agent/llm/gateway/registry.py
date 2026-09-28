@@ -9,10 +9,11 @@ Two jobs:
 2. :func:`get_llm_gateway` — the process-wide accessor. Same shape as the
    repository's existing ``get_settings()`` / ``get_http_client()`` singletons, so
    the convention is familiar and there is exactly one authority per process —
-   including when two threads reach first use at the same instant, which is why
-   the lazy build is double-checked under a lock (this codebase calls the LLM from
-   ``asyncio.to_thread`` workers, so "one authority" has to survive real threads,
-   not just a single caller asking twice).
+   including when two callers reach first use at the same instant, which is why
+   the lazy build is double-checked under a lock: the accessor is a process global
+   that synchronous constructors call, and this repository runs synchronous work in
+   ``asyncio.to_thread`` workers, so "one authority" has to survive real threads
+   and not just a single caller asking twice.
    A composition root (W1's ``RuntimeContext``) may install its own instance
    with :func:`set_llm_gateway`; whoever installs first wins, and a second,
    *different* installation is logged rather than silently replacing the
@@ -86,11 +87,14 @@ DEGRADED_PROVIDER = "local-degraded"
 _gateway: LLMGateway | None = None
 
 #: "Exactly one authority per process" is a promise about *concurrent* first use
-#: too, and this repository reaches the LLM from threads (``asyncio.to_thread`` in
-#: the job queue, in whisper, in the render pipeline). A lock-free check-then-build
-#: lets two threads that arrive together each construct an authority: one wins the
-#: global, the other keeps serving its caller — a silent split brain with two sets
-#: of concurrency bounds, rate windows, breaker state and metrics, plus an adapter
+#: too. This accessor is a process global that **synchronous** constructors call
+#: (``SummarizerEngine.__init__`` resolves its gateway inline), and this repository
+#: runs plenty of synchronous work in threads (``asyncio.to_thread`` in the job
+#: queue, in whisper, in the ffmpeg/render pipeline, in RAG) and starts fresh loops
+#: with ``asyncio.run`` (CLI, maintenance). A lock-free check-then-build lets two
+#: threads that arrive together each construct an authority: one wins the global,
+#: the other keeps serving its caller — a silent split brain with two sets of
+#: concurrency bounds, rate windows, breaker state and metrics, plus an adapter
 #: whose HTTP pool nobody owns and therefore nobody closes. Both locks are held
 #: only around in-memory construction, and neither is ever held while calling the
 #: other accessor, so they cannot deadlock each other.

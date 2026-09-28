@@ -269,12 +269,14 @@ policy:
   borrow another's routes); an empty key gets a typed refusal instead of a silent
   anonymous call;
 * both accessors build under a lock (`_AUTHORITY_LOCK`, `_CREDENTIAL_LOCK`) with a
-  double-checked read, because this codebase calls the LLM from
-  `asyncio.to_thread` workers: "one authority per process" has to survive two
-  threads reaching *first use* at the same instant. Without the lock each thread
-  builds its own gateway — two sets of concurrency bounds, rate windows, breaker
-  state and metrics — and the loser keeps serving its caller while nobody owns its
-  adapter's HTTP pool any more
+  double-checked read. They are process globals that **synchronous** constructors
+  call (`SummarizerEngine.__init__` resolves its gateway inline), and this codebase
+  runs synchronous work in `asyncio.to_thread` workers (job queue, whisper,
+  ffmpeg/render, RAG) and starts fresh loops with `asyncio.run` (CLI, maintenance),
+  so "one authority per process" has to survive two threads reaching *first use* at
+  the same instant. Without the lock each thread builds its own gateway — two sets
+  of concurrency bounds, rate windows, breaker state and metrics — and the loser
+  keeps serving its caller while nobody owns its adapter's HTTP pool any more
   (`tests/unit/test_llm_gateway_registry_race.py`, including a deadlock test for
   the locks themselves);
 * `DEGRADED_PROVIDER = "local-degraded"` — the marker for local/fake routes that

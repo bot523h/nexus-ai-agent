@@ -276,13 +276,19 @@ call.
 
 "One authority per process" is enforced under real threads, not only for a single
 caller asking twice: both accessors build under a lock (`_AUTHORITY_LOCK`,
-`_CREDENTIAL_LOCK`) with a double-checked read, because this codebase calls the LLM
-from `asyncio.to_thread` workers (job queue, whisper, render pipeline). Defect #23,
-found after the first delivery: with a lock-free check-then-build, eight threads
-reaching first use together produced **eight authorities in one process** — the
-captured log printed `llm_gateway_installed` once per thread — which means eight
-sets of concurrency bounds, rate windows, breaker state and metrics, and seven
-losers whose adapter HTTP pools nobody owns or closes. `tests/unit/test_llm_gateway_registry_race.py`
+`_CREDENTIAL_LOCK`) with a double-checked read. They are process globals that
+*synchronous* constructors call (`SummarizerEngine.__init__` resolves its gateway
+inline) in a repository that runs synchronous work in `asyncio.to_thread` workers
+(job queue, whisper, ffmpeg/render, RAG) and starts fresh loops with `asyncio.run`
+(CLI, maintenance). To be exact about the exposure: no LLM request executes inside a
+worker thread today — every `execute` is awaited on the application loop — so this
+was a latent split-brain in a shared global, not a live production fault. Defect
+#23, found after the first delivery by re-reading the registry against its own
+documented promise: with a lock-free check-then-build, eight threads reaching first
+use together produced **eight authorities in one process** — the captured log
+printed `llm_gateway_installed` once per thread — which means eight sets of
+concurrency bounds, rate windows, breaker state and metrics, and seven losers whose
+adapter HTTP pools nobody owns or closes. `tests/unit/test_llm_gateway_registry_race.py`
 (7 tests) pins it: one build under a concurrent burst, the rebuild-after-close path
 raced too, the credential cache raced too, a mixed burst of both accessors must
 complete rather than deadlock, the warm path must never acquire the lock

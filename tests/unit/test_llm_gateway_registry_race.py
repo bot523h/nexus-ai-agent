@@ -1,10 +1,14 @@
 """W2 — the registry's singleton promise under concurrency (LAW 1, LAW 6).
 
 :mod:`registry` documents "exactly one authority per process" and "a split brain
-must be visible, not hidden". This repository does real work in threads
-(``asyncio.to_thread`` in the job queue, in whisper, in the render pipeline), so
-that promise has to hold when two threads reach *first use* at the same moment —
-not only when one caller asks twice in a row.
+must be visible, not hidden". The accessors are process globals that *synchronous*
+constructors call (``SummarizerEngine.__init__`` resolves its gateway inline), and
+this repository runs synchronous work in threads (``asyncio.to_thread`` in the job
+queue, in whisper, in the ffmpeg/render pipeline, in RAG) and starts fresh loops
+with ``asyncio.run`` (CLI, maintenance), so that promise has to hold when two
+threads reach *first use* at the same moment — not only when one caller asks twice
+in a row. No LLM request is executed inside a worker thread today; the hazard is
+the shared global, and the invariant is unconditional either way.
 
 Every test here widens the check-then-build window with a deliberately slow
 build and releases all threads from a barrier at once. Against a lock-free
