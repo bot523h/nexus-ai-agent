@@ -85,7 +85,10 @@ async def test_delivers_to_originating_chat_not_user_id(reminder_sys: ReminderSy
     reminder_sys.bind(bot)
     # user_id and chat_id deliberately differ and chat is a *group* id.
     await reminder_sys.set_reminder(user_id=111, chat_id=-1001234567, time_str="1s", text="آب بنوش")
-    await _sleep_until(lambda: bool(bot.sent), seconds=3.0)
+    # FakeBot.sent is visible before the asynchronous database commit. Join the
+    # delivery owner before asserting both the message and its durable status.
+    task = next(iter(reminder_sys._tasks.values()))
+    await asyncio.wait_for(asyncio.shield(task), timeout=3.0)
     assert len(bot.sent) == 1
     chat_id, text = bot.sent[0]
     assert chat_id == -1001234567  # the originating chat, NOT user 111
@@ -205,3 +208,39 @@ async def _sleep_until(predicate, seconds: float, expect: bool = True) -> None:
         await asyncio.sleep(0.05)
     if expect:
         pytest.fail(f"condition not met within {seconds}s")
+
+
+async def test_delivery_assertion_waits_for_durable_status(
+    reminder_sys: ReminderSystem, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Force the API-send / DB-commit window without a probabilistic delay."""
+    mark = reminder_sys._mark_status
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def paused_mark(rid: int, status: str) -> None:
+        entered.set()
+        await release.wait()
+        await mark(rid, status)
+
+    async def sent_is_visible(predicate: Any, **kwargs: Any) -> None:
+        await entered.wait()
+        assert predicate()
+
+    monkeypatch.setattr(reminder_sys, "_mark_status", paused_mark)
+    monkeypatch.setitem(globals(), "_sleep_until", sent_is_visible)
+    check = asyncio.create_task(test_delivers_to_originating_chat_not_user_id(reminder_sys))
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        # Let an old send-only oracle resume from the same event. No wall-clock
+        # sleep chooses the race; the DB writer remains explicitly parked.
+        await asyncio.sleep(0)
+        assert not check.done(), "durability was asserted while its owner was still parked"
+        assert rows(reminder_sys._db_path)[0].status == "pending"  # type: ignore[arg-type]
+        release.set()
+        await asyncio.wait_for(check, 3)
+    finally:
+        release.set()
+        await asyncio.wait_for(
+            asyncio.gather(check, *tuple(reminder_sys._tasks.values()), return_exceptions=True), 3
+        )
+    assert rows(reminder_sys._db_path)[0].status == "sent"  # type: ignore[arg-type]

@@ -39,7 +39,7 @@ Dependencies point **downward**. A lower layer may never import a higher one, an
 | `continuum/`, `maintenance/`, `integrations/` | L3 | project-state snapshot + evidence contracts (pack coverage, provenance, threat-model gate, mutation campaign), housekeeping/backup, external integrations | `snapshot`, `pack_coverage`, `provenance`, `gate`, `mutations`, `housekeeping` |
 | `storage/` | L4 | SQLModel tables, Alembic bootstrap, checkpoint adapters, lifecycle store, reconciler, R2 | `get_session`, `get_checkpointer`, `CheckpointReconciler` |
 | `adapters/` | L4 | port implementations: in-process job queue, Whisper caption engine, LangGraph lifecycle hooks | `InProcessJobQueue`, `WhisperLocalCaptionEngine` |
-| `llm/` | L4 | provider chain (litellm router), local llama.cpp server provider, fake provider for tests | `build_router`, `LocalServerProvider`, `FakeLLMProvider` |
+| `llm/` | L4 | **`gateway/` — the single LLM authority (contract, policy, scheduler, resilience, adapters, observability, usage, registry, facade)**; provider chain (litellm router), local llama.cpp server provider, fake provider for tests | `LLMGateway`, `gateway_for_credentials`, `GatewayLLMProvider`, `build_router`, `LocalServerProvider`, `FakeLLMProvider` |
 | `orchestration/` | L4 | LangGraph state machine + intent router + persona selection | `compile_graph`, `classify_intent` |
 | `features/` | L4 | 26 product engines (chat, memory, gamification, RAG, moderation, …) | per-module services |
 | `creative/rendering/` | L4 | the **only** media process lane: `LaneIR → filtergraph → argv → one FFmpeg` | `compile_lane`, `render_lane`, `probe_video` |
@@ -68,6 +68,7 @@ Dependencies point **downward**. A lower layer may never import a higher one, an
 | R11 | The domain glossary and retention constants stay live (a deleted guarantee is a failing test) | `test_glossary_liveness.py` |
 | R12 | `bot/surface/` is importable without `telegram`: no module in the package imports PTB directly, **and** no top-level import pulls an engine that does (such engines are imported lazily inside the function). Every stub-replaced command resolves to a surface symbol | `test_surface_onboarding.py::test_the_surface_package_imports_without_telegram` (subprocess probe), `test_surface_ptb.py::test_the_surface_package_imports_no_telegram`, `test_surface_registration.py` (20-command `EXPECTED` map, callback map, forbidden stub strings) |
 | R13 | One canonical command contract: AI modules cannot import Nagar executors/pack handlers, in the creative tree only `CommandBus` calls an operation handler, the studio authorization seam points inward only, `TypedCommand` is the single envelope with protocol `nagar.command.v1` (a `v2` protocol id is banned from `src/`), and the studio core cannot invoke shell/media/UI tooling | `test_command_capability_boundary.py` (structural), `test_command_capability_contract.py` (versioning, ordered denial before handler, replay/conflict, behavioural). This does **not** assert generic non-Nagar tools cannot run a shell, nor fence the runtime-owned call sites (board task-181). |
+| R14 | **One LLM authority**: outside `llm/gateway/` no file may put a request on the wire to a model provider; every file that names a provider endpoint, wire path or SDK import appears in a pinned inventory with a *verified* role (gateway-bound, provider-implementation, config-default, or one of exactly 2 pinned bypasses); and no file anywhere in `src/` classifies an error by substring (`"429" in str(error)`) | `tests/architecture/test_llm_gateway_authority.py` (all tests, incl. detector-liveness gates so a broken scanner cannot pass silently) |
 
 **Legacy baseline.** `tests/architecture/legacy_baseline.json` freezes the pre-existing `langgraph`/`sqlmodel`/`telegram` import set with an explicit `approval: ARCH_BASELINE_APPROVED`. New violations fail; removing a baseline entry is allowed (and should be celebrated, not blocked).
 
@@ -83,6 +84,7 @@ The repository follows the evolutionary-architecture practice of turning structu
 | forbidden edge present | R1–R4, R7, R9, R10 | every push (`pytest -m "not slow"`) |
 | required edge/API missing | R5, R6, R8 | every push |
 | frozen contract drift | R2, R11 | every push |
+| authority bypass present | R14 | every push |
 | manifest/data-only purity | R7, R8 | every push |
 
 Honest limits: the gates verify **structure**, not behaviour; they cannot prove that a declared capability does what its name says (behavioural proof lives in `tests/unit/`), and AST checks ignore dynamically constructed imports unless a test explicitly bans the dynamic escape hatch (R10 does).

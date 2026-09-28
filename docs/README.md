@@ -32,6 +32,7 @@ placeholder text.
 | [architecture/DATA_LIFECYCLE.md](architecture/DATA_LIFECYCLE.md) | Data lifecycle contract: stages, retention, checkpoint schemas, the forbidden operation journal. |
 | [architecture/RETENTION_DECISION.md](architecture/RETENTION_DECISION.md) | Retention policy decision record (30-day resumability window, circuit breaker). |
 | [architecture/LLM_PROVIDERS.md](architecture/LLM_PROVIDERS.md) | Provider chain, cooldowns, anti-retry-storm rule, strict-privacy flag. |
+| [architecture/LLM_GATEWAY.md](architecture/LLM_GATEWAY.md) | The W2 LLM authority: contract, typed errors, one policy surface, bounds, cancellation, observability, caller inventory, pinned bypasses. |
 | [architecture/adr/README.md](architecture/adr/README.md) | Doc-layer decision index + rules. |
 | [architecture/adr/template.md](architecture/adr/template.md) | MADR 4.0-lite template (Confirmation section mandatory). |
 | [architecture/adr/0001-docs-as-code-layout.md](architecture/adr/0001-docs-as-code-layout.md) | Documentation layout: living views + one index + language policy. |

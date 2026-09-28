@@ -18,11 +18,20 @@ Design notes
 * ``NEXUS_LLM_STRICT_PRIVACY=true`` removes OpenRouter ``:free`` deployments
   from the chain — free endpoints may train on user prompts. Ollama, Groq
   and Gemini do not train on prompts and stay in the chain.
+* W2 (Global LLM Gateway): ``generate()`` executes through
+  :class:`~nexus_ai_agent.llm.gateway.engine.LLMGateway`. The Router stays the
+  *deployment* selector inside one provider route; the gateway owns the caller's
+  timeout budget, concurrency bound, local quota gate, circuit breaking, typed
+  error classification, correlation id and observability record. The route is
+  registered with ``max_attempts=1`` so the gateway never nests a second retry
+  loop over the Router's own fallback walk.
 * The existing :class:`~nexus_ai_agent.llm.fallback_provider.FallbackProvider`
-  remains the *outer* layer: when the router has exhausted every deployment
-  this provider raises :class:`RouterExhaustedError`, whose message carries
-  the rate-limit keywords the outer layer matches on, degrading to
-  ``FakeLLMProvider`` instead of crashing the graph.
+  remains the *outer* degradation layer: when the router has exhausted every
+  deployment this provider raises :class:`RouterExhaustedError` — which is now a
+  typed :class:`~nexus_ai_agent.llm.errors.QuotaExhaustedError`, so the outer
+  layer decides by error *kind*, not by matching keywords in a message. The
+  message still carries the historical wording (a pinned test asserts it) but
+  nothing reads it to make a decision any more.
 * ``embed()`` keeps the deterministic hash-based vector (byte-for-byte parity
   with ``GeminiProvider.embed``) so stored vectors remain compatible. Real
   embedding models are out of scope for this phase.
@@ -36,12 +45,37 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from nexus_ai_agent.config.settings import Settings
+from nexus_ai_agent.llm.errors import (
+    AuthenticationError,
+    LLMError,
+    LLMErrorKind,
+    NetworkError,
+    QuotaExhaustedError,
+    TransientProviderError,
+    UpstreamTimeoutError,
+)
 from nexus_ai_agent.llm.fake_llm import FakeLLMProvider
-from nexus_ai_agent.llm.fallback_provider import FallbackProvider
+from nexus_ai_agent.llm.gateway.adapters import LegacyProviderAdapter, LitellmRouterAdapter
+from nexus_ai_agent.llm.gateway.contract import (
+    Caller,
+    CallerCategory,
+    LLMOperation,
+    LLMRequest,
+    Message,
+)
+from nexus_ai_agent.llm.gateway.engine import LLMGateway
+from nexus_ai_agent.llm.gateway.policy import (
+    ConcurrencyPolicy,
+    FallbackPolicy,
+    RateLimitPolicy,
+    RetryPolicy,
+    Route,
+    TimeoutBudget,
+    default_policy,
+)
 from nexus_ai_agent.llm.provider import LLMProvider
 from nexus_ai_agent.observability.logging import get_logger
 
@@ -52,13 +86,130 @@ OLLAMA_COOLDOWN_TIME = 300
 OLLAMA_ALLOWED_FAILS = 2
 
 
-class RouterExhaustedError(RuntimeError):
+class RouterExhaustedError(QuotaExhaustedError):
     """Every deployment in the routing chain failed or is cooling down.
 
-    The message deliberately contains the rate-limit keywords matched by
-    ``FallbackProvider`` ("429", "rate limit", "quota", "daily limit") so a
-    drained router degrades to the FakeLLM fallback instead of propagating.
+    Typed as :class:`~nexus_ai_agent.llm.errors.QuotaExhaustedError`
+    (``kind=QUOTA_EXHAUSTED``): not retryable on the same route — hammering a
+    drained chain makes the outage worse — but *fallback-eligible*, so the outer
+    degradation layer (or the gateway's own :class:`FallbackPolicy`) may serve
+    the caller from another route. ``FallbackProvider`` reads that kind; it no
+    longer scans a message.
+
+    The message keeps the historical wording ("429 rate limit / quota / daily
+    limit") because a pinned test asserts it and because it is genuinely
+    informative for an operator. It is *documentation*, not a control signal.
     """
+
+    def __init__(self, message: str, **kwargs: Any) -> None:
+        kwargs.setdefault("kind", LLMErrorKind.QUOTA_EXHAUSTED)
+        kwargs.setdefault("provider", "routing")
+        kwargs.setdefault("detail", "router_exhausted")
+        super().__init__(message, **kwargs)
+
+
+#: litellm exception *types* → typed gateway kinds. Matched by class identity
+#: (``isinstance``), never by message text: a provider that changes its wording
+#: must not silently change our retry behaviour. Populated lazily because
+#: litellm is an optional dependency.
+_LITELLM_KINDS: list[tuple[type[BaseException], LLMErrorKind]] | None = None
+
+
+def _litellm_error_types() -> list[tuple[type[BaseException], LLMErrorKind]]:
+    global _LITELLM_KINDS
+    if _LITELLM_KINDS is not None:
+        return _LITELLM_KINDS
+    table: list[tuple[type[BaseException], LLMErrorKind]] = []
+    # Classification can be the first SDK import, before Router construction.
+    # It must not perform a network fetch or introduce retry jitter into tests.
+    os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    try:
+        import litellm
+    except ImportError:
+        _LITELLM_KINDS = table
+        return table
+    # Order matters: the most specific class first.
+    for name, kind in (
+        ("RateLimitError", LLMErrorKind.RATE_LIMITED),
+        ("BudgetExceededError", LLMErrorKind.QUOTA_EXHAUSTED),
+        ("AuthenticationError", LLMErrorKind.AUTHENTICATION),
+        ("PermissionDeniedError", LLMErrorKind.AUTHENTICATION),
+        ("ContentPolicyViolationError", LLMErrorKind.CONTENT_BLOCKED),
+        ("ContextWindowExceededError", LLMErrorKind.CONTEXT_LIMIT),
+        ("NotFoundError", LLMErrorKind.INVALID_REQUEST),
+        ("BadRequestError", LLMErrorKind.INVALID_REQUEST),
+        ("Timeout", LLMErrorKind.UPSTREAM_TIMEOUT),
+        ("APITimeoutError", LLMErrorKind.UPSTREAM_TIMEOUT),
+        ("ServiceUnavailableError", LLMErrorKind.TRANSIENT_PROVIDER),
+        ("InternalServerError", LLMErrorKind.TRANSIENT_PROVIDER),
+        ("APIConnectionError", LLMErrorKind.NETWORK),
+    ):
+        candidate = getattr(litellm, name, None) or getattr(litellm.exceptions, name, None)
+        if isinstance(candidate, type) and issubclass(candidate, BaseException):
+            table.append((candidate, kind))
+    _LITELLM_KINDS = table
+    return table
+
+
+def classify_router_failure(exc: BaseException, *, single_deployment: bool = False) -> LLMError:
+    """Map a Router failure onto the typed taxonomy by exception *class*.
+
+    Canonical single-deployment mode preserves unknown failures as internal
+    errors, never fallback-eligible quota exhaustion. Specific content/context
+    kinds precede their SDK superclass, and rate failures retain Retry-After.
+    The default retains the explicitly constructed legacy chain's historical
+    RouterExhaustedError behavior; it is outside canonical deployment policy.
+    """
+
+    if not isinstance(exc, Exception):
+        raise exc
+    for error_type, kind in _litellm_error_types():
+        if isinstance(exc, error_type):
+            status = getattr(exc, "status_code", None)
+            message = f"routed LLM provider failed ({type(exc).__name__})"
+            if kind is LLMErrorKind.RATE_LIMITED:
+                from nexus_ai_agent.llm.errors import RateLimitedError
+                from nexus_ai_agent.llm.gateway.adapters import _retry_after_from
+
+                headers = getattr(getattr(exc, "response", None), "headers", None)
+                return RateLimitedError(
+                    message,
+                    provider="routing",
+                    status_code=status,
+                    detail=type(exc).__name__,
+                    retry_after=_retry_after_from(headers),
+                )
+            if kind is LLMErrorKind.AUTHENTICATION:
+                return AuthenticationError(
+                    message, provider="routing", status_code=status, detail=type(exc).__name__
+                )
+            if kind is LLMErrorKind.UPSTREAM_TIMEOUT:
+                return UpstreamTimeoutError(
+                    message, provider="routing", status_code=status, detail=type(exc).__name__
+                )
+            if kind is LLMErrorKind.NETWORK:
+                return NetworkError(
+                    message, provider="routing", status_code=status, detail=type(exc).__name__
+                )
+            if kind is LLMErrorKind.TRANSIENT_PROVIDER:
+                return TransientProviderError(
+                    message, provider="routing", status_code=status, detail=type(exc).__name__
+                )
+            return LLMError(
+                message,
+                kind=kind,
+                provider="routing",
+                status_code=status,
+                detail=type(exc).__name__,
+            )
+    if single_deployment:
+        from nexus_ai_agent.llm.gateway.adapters import map_transport_error
+
+        return map_transport_error(exc, provider="routing", model="")
+    return RouterExhaustedError(
+        "All routed LLM providers are rate-limited or quota-exhausted "
+        f"(429 rate limit / quota / daily limit). Last error: {str(exc)[:200]}"
+    )
 
 
 @dataclass(frozen=True)
@@ -145,6 +296,7 @@ class LiteLLMRoutingProvider(LLMProvider):
         *,
         router: Any | None = None,
         chain: list[Deployment] | None = None,
+        gateway_managed: bool = False,
     ) -> None:
         self._chain: list[Deployment] = (
             list(chain) if chain is not None else build_routing_chain(settings)
@@ -165,16 +317,19 @@ class LiteLLMRoutingProvider(LLMProvider):
 
             router = Router(
                 model_list=[self._deployment_to_model(d) for d in self._chain],
-                fallbacks=self._fallback_rules(self._chain),
+                fallbacks=[] if gateway_managed else self._fallback_rules(self._chain),
                 num_retries=0,  # never retry the same deployment — move down the chain
                 timeout=settings.llm_request_timeout,
                 cooldown_time=settings.llm_cloud_cooldown,
                 allowed_fails=1,
+                disable_cooldowns=gateway_managed,
                 routing_strategy="simple-shuffle",
             )
         self._router: Any = router
         self._primary_name = self._chain[0].name
         self._calls: dict[str, int] = {}
+        self._timeout_seconds = float(getattr(settings, "llm_request_timeout", 60) or 60)
+        self._gateway: LLMGateway | None = None
 
     # ── introspection ──────────────────────────────────────────────────
     @property
@@ -193,29 +348,85 @@ class LiteLLMRoutingProvider(LLMProvider):
             "routed_calls": dict(sorted(self._calls.items())),
         }
 
+    # ── W2: the authority this provider executes through ───────────────
+    @property
+    def gateway(self) -> LLMGateway:
+        """The gateway that owns policy for this routing chain (built lazily).
+
+        Lazy on purpose: constructing a provider must not build a gateway, read
+        credentials again or emit telemetry. Tests that inject a ``FakeRouter``
+        get a gateway scoped to that router, so the injected double is the one
+        actually called.
+        """
+
+        if self._gateway is None:
+            adapter = LitellmRouterAdapter(
+                self._router,
+                primary_name=self._primary_name,
+                chain_names=self.chain_names,
+                model=self._primary_name,
+                classify=classify_router_failure,
+                on_response=self._record,
+            )
+            route = Route(
+                provider=adapter.name,
+                model=self._primary_name,
+                operations=adapter.operations,
+                modalities=adapter.modalities,
+                rank=10,
+                label="litellm-chain:" + ">".join(self.chain_names),
+            )
+            self._gateway = LLMGateway(
+                policy=default_policy(
+                    routes=(route,),
+                    timeout=TimeoutBudget(
+                        total_seconds=float(self._timeout_seconds),
+                        queue_wait_seconds=min(30.0, float(self._timeout_seconds)),
+                        connect_seconds=5.0,
+                        read_seconds=max(5.0, float(self._timeout_seconds) - 10.0),
+                        per_attempt_seconds=max(10.0, float(self._timeout_seconds) - 5.0),
+                    ).validate(),
+                    # ONE attempt: the Router already walks its own fallback list
+                    # and parks deployments on cooldown. Retrying here would
+                    # multiply attempts across every free-tier quota in the chain.
+                    retry=RetryPolicy(max_attempts=1),
+                    concurrency=ConcurrencyPolicy(
+                        max_inflight_global=4,
+                        max_inflight_per_provider=4,
+                        max_inflight_per_tenant=2,
+                        max_queued=32,
+                    ),
+                    rate_limit=RateLimitPolicy(),
+                    fallback=FallbackPolicy(enabled=False, max_hops=0, allow_degraded_routes=False),
+                )
+            )
+            self._gateway.register(adapter, (route,))
+        return self._gateway
+
     # ── LLMProvider ────────────────────────────────────────────────────
     async def generate(self, prompt: str, system: str = "") -> str:
-        """Route *prompt* through the chain; first healthy deployment wins."""
-        messages: list[dict[str, str]] = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
+        """Route *prompt* through the chain; first healthy deployment wins.
 
-        try:
-            response = await self._router.acompletion(
-                model=self._primary_name,
-                messages=messages,
-            )
-        except Exception as exc:
-            log.error("routing_chain_exhausted", error=str(exc)[:200])
-            raise RouterExhaustedError(
-                "All routed LLM providers are rate-limited or quota-exhausted "
-                f"(429 rate limit / quota / daily limit). Last error: {str(exc)[:200]}"
-            ) from exc
+        Executes through the gateway (W2). Failures surface as typed
+        :class:`~nexus_ai_agent.llm.errors.LLMError` subclasses — this method
+        never returns an error-shaped string, so no caller downstream has to
+        guess whether a reply is an answer or a failure.
+        """
 
-        content = self._extract_content(response)
-        self._record(response)
-        return content.strip()
+        request = LLMRequest(
+            caller=Caller(category=CallerCategory.AGENT, name="llm.litellm_provider"),
+            purpose="routing",
+            operation=LLMOperation.CHAT,
+            messages=(Message(role="user", content=prompt),),
+            system=system or None,
+            provider="routing",
+            model=self._primary_name,
+            # The Router owns deployment selection; a second hop at the gateway
+            # level would be a hidden fallback (LAW 8).
+            allow_fallback=False,
+        )
+        response = await self.gateway.execute(request)
+        return response.text.strip()
 
     async def embed(self, text: str) -> list[float]:
         """Deterministic pseudo-embedding — parity with ``GeminiProvider.embed``."""
@@ -295,51 +506,30 @@ class LiteLLMRoutingProvider(LLMProvider):
 
 
 def build_llm_provider(settings: Settings) -> tuple[LLMProvider, str]:
-    """Compose the default LLM engine for ``nexus run-bot``.
+    """Canonical CLI composition: model execution goes through the registry.
 
-    Priority:
-      1. litellm routing chain (when enabled and ≥1 provider configured),
-         wrapped in the existing ``FallbackProvider`` (outer layer → FakeLLM).
-      2. llama.cpp server (when ``llama_server_base_url`` is set).
-      3. Legacy local GGUF path (unchanged behaviour).
-      4. ``FakeLLMProvider`` when nothing is available.
-
-    Returns ``(provider, human-readable label)``.
+    Local provider classes and the injected Router facade remain explicit legacy
+    adapter/test APIs. This production factory must never return those raw APIs.
+    The no-model FakeLLM stub performs no model execution and stays compatible.
     """
-    if settings.llm_routing_enabled:
-        try:
-            routing = LiteLLMRoutingProvider(settings)
-        except ImportError:
-            log.warning("litellm_not_installed", hint="pip install 'litellm>=1.74,<2'")
-        except ValueError:
-            log.info("no_providers_configured_for_routing_chain")
-        else:
-            outer = FallbackProvider(primary=routing, fallback=FakeLLMProvider())
-            label = f"litellm routing chain ({' → '.join(routing.chain_names)}) + FakeLLM outer"
-            return outer, label
+    from nexus_ai_agent.llm.gateway.facade import GatewayLLMProvider
+    from nexus_ai_agent.llm.gateway.registry import get_llm_gateway
 
-    if settings.llama_server_base_url:
-        from nexus_ai_agent.llm.local_server_provider import (
-            LocalLlamaServerProvider,
+    gateway = get_llm_gateway(settings)
+    caller = Caller(category=CallerCategory.AGENT, name="cli.default-provider")
+    routing = gateway.adapter("routing-embedding")
+    if settings.llm_routing_enabled and isinstance(routing, LegacyProviderAdapter):
+        names = routing.inner.chain_names
+        label = f"litellm routing chain ({' → '.join(names)}) + gateway fallback"
+        return GatewayLLMProvider(caller=caller, gateway=gateway), label
+    if settings.llama_server_base_url and gateway.adapter("llama-server") is not None:
+        return (
+            GatewayLLMProvider(caller=caller, gateway=gateway, provider="llama-server"),
+            f"llama.cpp server ({settings.llama_server_base_url})",
         )
-
-        server = LocalLlamaServerProvider(
-            settings.llama_server_base_url,
-            model=settings.llama_server_model,
-            timeout=float(settings.llama_server_timeout),
-            max_tokens=settings.llama_server_max_tokens,
+    if gateway.adapter("llama-cpp") is not None:
+        return (
+            GatewayLLMProvider(caller=caller, gateway=gateway, provider="llama-cpp"),
+            f"local GGUF ({settings.model_path})",
         )
-        return server, f"llama.cpp server ({settings.llama_server_base_url})"
-
-    model_path = Path(settings.model_path)
-    if model_path.exists():
-        from nexus_ai_agent.llm.local_llama_cpp import LocalLlamaCppProvider
-
-        local = LocalLlamaCppProvider(
-            settings.model_path,
-            n_ctx=settings.n_ctx,
-            n_gpu_layers=settings.n_gpu_layers,
-        )
-        return local, f"local GGUF ({settings.model_path})"
-
     return FakeLLMProvider(), "FakeLLM (no providers configured, no GGUF model found)"

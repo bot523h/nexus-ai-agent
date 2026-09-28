@@ -1,0 +1,1258 @@
+"""Golden hardening: deterministic schedules, not probabilistic sleep races."""
+
+from __future__ import annotations
+
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
+import pytest
+from test_llm_gateway_engine import NO_RETRY, ScriptedAdapter, VirtualClock, _gateway
+
+from nexus_ai_agent.llm.errors import (
+    CancelledByCallerError,
+    GatewayClosedError,
+    LLMError,
+    LLMErrorKind,
+    OverloadedError,
+    TransientProviderError,
+)
+from nexus_ai_agent.llm.gateway import registry
+from nexus_ai_agent.llm.gateway.adapters import AdapterResult
+from nexus_ai_agent.llm.gateway.contract import Caller, CallerCategory, LLMRequest
+from nexus_ai_agent.llm.gateway.engine import LLMGateway
+from nexus_ai_agent.llm.gateway.policy import CircuitPolicy, RetryPolicy, default_policy
+
+CALLER = Caller(category=CallerCategory.AGENT, name="golden")
+
+
+def request(prompt="hello", **kwargs):
+    return LLMRequest(caller=CALLER, prompt=prompt, **kwargs)
+
+
+@pytest.mark.parametrize("outcome", ["success", "failure", "cancel", "raw", "invalid", "timeout"])
+async def test_probe_a_never_releases_probe_b(outcome):
+    clock = VirtualClock()
+    entered = {name: asyncio.Event() for name in ("a", "b")}
+    release = {name: asyncio.Event() for name in ("a", "b")}
+
+    class Controlled(ScriptedAdapter):
+        async def execute(self, req, *args, **kwargs):
+            entered[req.prompt].set()
+            await release[req.prompt].wait()
+            if req.prompt == "a":
+                if outcome == "failure":
+                    raise TransientProviderError("synthetic")
+                if outcome == "raw":
+                    raise ValueError("synthetic")
+                if outcome == "invalid":
+                    return object()
+                if outcome == "timeout":
+                    raise asyncio.TimeoutError()
+            return AdapterResult(text="ok")
+
+    gateway = _gateway(
+        [Controlled("p", ["ok"])],
+        clock=clock,
+        retry=NO_RETRY,
+        circuit=CircuitPolicy(
+            failure_threshold=1, recovery_seconds=1, half_open_max_probes=2, success_threshold=2
+        ),
+    )
+    breaker = gateway._breaker("p/m")
+    breaker.record_failure(LLMErrorKind.NETWORK)
+    clock.advance(2)
+    a = asyncio.create_task(gateway.execute(request("a")))
+    b = asyncio.create_task(gateway.execute(request("b")))
+    try:
+        await asyncio.wait_for(asyncio.gather(*(e.wait() for e in entered.values())), 2)
+        assert breaker.snapshot()["probes_in_flight"] == 2
+        if outcome == "cancel":
+            a.cancel()
+        else:
+            release["a"].set()
+        await asyncio.gather(a, return_exceptions=True)
+        assert not b.done()
+        assert breaker.snapshot()["probes_in_flight"] == 1
+    finally:
+        release["b"].set()
+        await asyncio.gather(a, b, return_exceptions=True)
+        await gateway.aclose()
+    assert breaker.snapshot()["probes_in_flight"] == 0
+
+
+async def test_retry_must_reacquire_breaker_permission():
+    adapter = ScriptedAdapter("p", [TransientProviderError("synthetic")])
+    gateway = _gateway(
+        [adapter],
+        retry=RetryPolicy(max_attempts=5, base_delay_seconds=0, max_delay_seconds=0),
+        circuit=CircuitPolicy(failure_threshold=1, recovery_seconds=60),
+    )
+    try:
+        with pytest.raises(LLMError):
+            await gateway.execute(request())
+        assert adapter.calls == 1, "retry bypassed an OPEN breaker"
+    finally:
+        await gateway.aclose()
+
+
+async def test_concurrent_installers_cannot_replace_live_authority(monkeypatch):
+    monkeypatch.setattr(registry, "_gateway", None)
+    gateways = [LLMGateway(policy=default_policy(routes=())) for _ in range(8)]
+    barrier = Barrier(len(gateways))
+
+    def install(gateway):
+        barrier.wait(timeout=3)
+        try:
+            registry.install_llm_gateway(gateway)
+            return gateway
+        except LLMError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(install, gateways))
+    try:
+        winners = [g for g in results if g is not None]
+        assert len(winners) == 1
+        assert registry.get_llm_gateway() is winners[0]
+    finally:
+        for gateway in gateways:
+            await gateway.aclose()
+
+
+async def test_reset_revokes_stale_reference(monkeypatch):
+    old = _gateway([ScriptedAdapter("p", ["ok"])])
+    monkeypatch.setattr(registry, "_gateway", old)
+    registry.reset_llm_gateway()
+    try:
+        with pytest.raises(GatewayClosedError):
+            await old.execute(request())
+    finally:
+        await old.aclose()
+
+
+async def test_closed_attempt_does_not_release_later_probe():
+    clock = VirtualClock()
+    gateway = _gateway(
+        [ScriptedAdapter("p", ["ok"])],
+        clock=clock,
+        circuit=CircuitPolicy(failure_threshold=1, recovery_seconds=1),
+    )
+    breaker = gateway._breaker("p/m")
+    # Permit ownership must survive a CLOSED -> OPEN -> HALF_OPEN transition.
+    closed = breaker.acquire()
+    breaker.record_failure(LLMErrorKind.NETWORK)
+    clock.advance(2)
+    probe = breaker.acquire()
+    assert closed is not None and probe is not None
+    closed.release()
+    closed.release()  # repeated cleanup is not another release
+    assert breaker.snapshot()["probes_in_flight"] == 1
+    probe.release()
+    probe.release()
+    assert breaker.snapshot()["probes_in_flight"] == 0
+    await gateway.aclose()
+
+
+async def test_reset_refuses_active_work_then_restart_revokes_old(monkeypatch):
+    from nexus_ai_agent.llm.errors import GatewayInternalError
+
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class Held(ScriptedAdapter):
+        async def execute(self, *args, **kwargs):
+            entered.set()
+            await release.wait()
+            return AdapterResult(text="ok")
+
+    old = _gateway([Held("p", ["ok"])])
+    monkeypatch.setattr(registry, "_gateway", old)
+    task = asyncio.create_task(old.execute(request()))
+    await asyncio.wait_for(entered.wait(), 2)
+    try:
+        with pytest.raises(GatewayInternalError):
+            registry.reset_llm_gateway()
+        assert registry.get_llm_gateway() is old
+    finally:
+        release.set()
+        await task
+    await old.aclose()
+    fresh = _gateway([ScriptedAdapter("p", ["new"])])
+    registry.install_llm_gateway(fresh)
+    assert (await registry.get_llm_gateway().execute(request())).text == "new"
+    with pytest.raises(GatewayClosedError):
+        await old.execute(request())
+    await fresh.aclose()
+
+
+def test_execution_cannot_cross_event_loops():
+    from nexus_ai_agent.llm.errors import GatewayInternalError
+
+    gateway = _gateway([ScriptedAdapter("p", ["ok"])])
+    asyncio.run(gateway.execute(request()))
+    try:
+        with pytest.raises(GatewayInternalError, match="event loop"):
+            asyncio.run(gateway.execute(request()))
+    finally:
+        asyncio.run(gateway.aclose())
+
+
+async def test_worker_must_not_execute_inherited_authority(monkeypatch):
+    import nexus_ai_agent.llm.gateway.engine as engine
+    from nexus_ai_agent.llm.errors import GatewayInternalError
+
+    gateway = _gateway([ScriptedAdapter("p", ["ok"])])
+    monkeypatch.setattr(engine.os, "getpid", lambda: gateway._owner_pid + 1)
+    with pytest.raises(GatewayInternalError, match="worker process"):
+        await gateway.execute(request())
+    await gateway.aclose()
+
+
+async def test_late_success_cannot_heal_new_breaker_generation():
+    gateway = _gateway([ScriptedAdapter("p", ["ok"])], circuit=CircuitPolicy(failure_threshold=1))
+    breaker = gateway._breaker("p/m")
+    old = breaker.acquire()
+    assert old is not None
+    breaker.record_failure(LLMErrorKind.NETWORK)
+    old.success(0)
+    assert breaker.is_open()
+    await gateway.aclose()
+
+
+async def test_failed_scheduler_cleanup_does_not_release_another_probe(monkeypatch):
+    gateway = _gateway(
+        [ScriptedAdapter("p", ["ok"])],
+        retry=NO_RETRY,
+        circuit=CircuitPolicy(
+            failure_threshold=1, recovery_seconds=1, half_open_max_probes=2, success_threshold=3
+        ),
+        clock=VirtualClock(),
+    )
+    breaker = gateway._breaker("p/m")
+    breaker.record_failure(LLMErrorKind.NETWORK)
+    gateway._clock.advance(2)
+    other = breaker.acquire()
+    original_release = gateway._scheduler.release
+
+    def fail_after_release(admission):
+        original_release(admission)
+        raise RuntimeError("synthetic cleanup failure")
+
+    monkeypatch.setattr(gateway._scheduler, "release", fail_after_release)
+    from nexus_ai_agent.llm.errors import GatewayInternalError
+
+    with pytest.raises(GatewayInternalError, match="scheduler cleanup failed"):
+        await gateway.execute(request())
+    assert gateway.metrics.requests == 1
+    assert gateway.metrics.outcomes["error"] == 1
+    assert breaker.snapshot()["probes_in_flight"] == 1
+    other.release()
+    assert breaker.snapshot()["probes_in_flight"] == 0
+    await gateway.aclose()
+
+
+async def test_idempotent_waiter_has_its_own_deadline():
+    from nexus_ai_agent.llm.errors import DeadlineExceededError
+
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class Held(ScriptedAdapter):
+        async def execute(self, *args, **kwargs):
+            entered.set()
+            await release.wait()
+            return AdapterResult(text="ok")
+
+    gateway = _gateway([Held("p", ["ok"])])
+    owner = asyncio.create_task(gateway.execute(request(idempotency_key="same")))
+    await asyncio.wait_for(entered.wait(), 2)
+    try:
+        with pytest.raises(DeadlineExceededError):
+            await asyncio.wait_for(
+                gateway.execute(request(idempotency_key="same", deadline_seconds=0.01)), 0.3
+            )
+        assert not owner.done()
+    finally:
+        release.set()
+        await owner
+        await gateway.aclose()
+
+
+def test_idempotency_hash_distinguishes_equal_length_binary_payloads():
+    from nexus_ai_agent.llm.gateway.contract import ContentPart, Message
+    from nexus_ai_agent.llm.gateway.engine import _scoped_idempotency_key
+
+    for location in ("parts", "messages"):
+
+        def key(data, location=location):
+            part = ContentPart(mime_type="image/png", data=data)
+            payload = (part,) if location == "parts" else (Message("user", parts=(part,)),)
+            return _scoped_idempotency_key(request(idempotency_key="same", **{location: payload}))
+
+        assert key(b"image-a") != key(b"image-b")
+
+
+def test_internal_error_logging_never_serializes_exception_chain():
+    from nexus_ai_agent.llm.errors import GatewayInternalError
+    from nexus_ai_agent.llm.gateway.contract import LLMOperation
+    from nexus_ai_agent.llm.gateway.observability import StructlogSink, build_error_record
+
+    class Logger:
+        def error(self, event, **fields):
+            self.fields = fields
+            self.called = True
+
+    logger = Logger()
+    logger.called = False
+    try:
+        raise ValueError("prompt-secret credential-secret")
+    except ValueError:
+        record = build_error_record(
+            request_id="test",
+            caller=CALLER,
+            purpose="chat",
+            operation=LLMOperation.CHAT,
+            outcome="error",
+            error=GatewayInternalError("safe category"),
+        )
+        StructlogSink(logger).emit(record)
+    assert logger.called
+    assert not logger.fields.get("exc_info"), "traceback can leak a raw provider secret"
+
+
+async def test_abandoned_provider_blocks_new_execution_until_it_settles():
+    from nexus_ai_agent.llm.errors import OverloadedError
+
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class Stubborn(ScriptedAdapter):
+        async def execute(self, *args, **kwargs):
+            self.calls += 1
+            if self.calls > 1:
+                return AdapterResult(text="unexpected second execution")
+            entered.set()
+            while not release.is_set():
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    pass
+            return AdapterResult(text="ok")
+
+    adapter = Stubborn("p", ["ok"])
+    gateway = _gateway([adapter], retry=NO_RETRY)
+    task = asyncio.create_task(gateway.execute(request()))
+    await asyncio.wait_for(entered.wait(), 2)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    try:
+        for _ in range(40):
+            with pytest.raises(OverloadedError):
+                await gateway.execute(request())
+        assert adapter.calls == 1
+    finally:
+        release.set()
+        await asyncio.gather(*tuple(gateway._abandoned), return_exceptions=True)
+        await gateway.aclose()
+
+
+def test_idempotency_token_is_not_plaintext_telemetry():
+    from nexus_ai_agent.llm.gateway.contract import LLMOperation
+    from nexus_ai_agent.llm.gateway.observability import RequestRecord
+
+    secret = "private-personal-data-not-a-known-key-pattern"
+    record = RequestRecord(
+        request_id="test",
+        caller=CALLER,
+        purpose="chat",
+        operation=LLMOperation.CHAT,
+        outcome="success",
+        idempotency_key=secret,
+    )
+    assert secret not in repr(record.as_dict())
+
+
+async def test_cancellation_immediately_after_retry_decision_stops_execution(monkeypatch):
+    from nexus_ai_agent.llm.errors import CancelledByCallerError
+
+    token = asyncio.Event()
+    adapter = ScriptedAdapter("p", [TransientProviderError("synthetic"), "wrong retry"])
+    gateway = _gateway([adapter])
+    original = gateway._next_delay
+
+    def decision(*args, **kwargs):
+        delay = original(*args, **kwargs)
+        token.set()
+        return delay
+
+    monkeypatch.setattr(gateway, "_next_delay", decision)
+    with pytest.raises(CancelledByCallerError):
+        await gateway.execute(request(cancellation=token))
+    assert adapter.calls == 1
+    assert gateway.status()["scheduler"]["inflight_global"] == 0
+    await gateway.aclose()
+
+
+async def test_idempotent_waiter_cancellation_does_not_cancel_owner():
+    from nexus_ai_agent.llm.errors import CancelledByCallerError
+
+    entered, release, token = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    class Held(ScriptedAdapter):
+        async def execute(self, *args, **kwargs):
+            entered.set()
+            await release.wait()
+            return AdapterResult(text="ok")
+
+    gateway = _gateway([Held("p", ["ok"])])
+    owner = asyncio.create_task(gateway.execute(request(idempotency_key="same")))
+    await asyncio.wait_for(entered.wait(), 2)
+    waiter = asyncio.create_task(
+        gateway.execute(request(idempotency_key="same", cancellation=token))
+    )
+    await asyncio.sleep(0)  # waiter reaches its first suspension, no elapsed-time assumption
+    token.set()
+    try:
+        with pytest.raises(CancelledByCallerError):
+            await asyncio.wait_for(waiter, 1)
+        assert not owner.done()
+    finally:
+        release.set()
+        await owner
+        await gateway.aclose()
+
+
+async def test_total_pending_requests_are_bounded_even_when_wait_policy_is_enabled():
+    from nexus_ai_agent.llm.errors import OverloadedError
+    from nexus_ai_agent.llm.gateway.policy import ConcurrencyPolicy, OverloadBehavior
+
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class Held(ScriptedAdapter):
+        async def execute(self, *args, **kwargs):
+            self.calls += 1
+            entered.set()
+            await release.wait()
+            return AdapterResult(text="ok")
+
+    adapter = Held("p", ["ok"])
+    gateway = _gateway(
+        [adapter],
+        concurrency=ConcurrencyPolicy(
+            max_inflight_global=2,
+            max_inflight_per_provider=2,
+            max_inflight_per_tenant=2,
+            max_queued=2,
+            overload_behavior=OverloadBehavior.WAIT,
+        ),
+    )
+    # Coalesced waiters do not occupy scheduler slots; the ingress cap must
+    # still count them. The same schedule proves no live idempotency eviction.
+    tasks = [
+        asyncio.create_task(gateway.execute(request(idempotency_key="same"))) for _ in range(50)
+    ]
+    await asyncio.wait_for(entered.wait(), 2)
+    try:
+        assert gateway._active_calls == 4
+        assert adapter.calls == 1
+    finally:
+        release.set()
+        outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+        await gateway.aclose()
+    assert sum(isinstance(o, OverloadedError) for o in outcomes) == 46
+
+
+def test_observer_registration_has_a_finite_bound():
+    from nexus_ai_agent.llm.gateway.engine import _MAX_SINKS
+
+    class Sink:
+        def emit(self, record):
+            pass
+
+    gateway = LLMGateway(policy=default_policy(routes=()), attach_default_sink=False)
+    for _ in range(_MAX_SINKS):
+        gateway.add_sink(Sink())
+    with pytest.raises(ValueError, match="sinks"):
+        gateway.add_sink(Sink())
+    assert len(gateway._sinks) == _MAX_SINKS
+
+
+@pytest.mark.parametrize(
+    "order", [("registry", "facade", "engine"), ("engine", "facade", "registry")]
+)
+def test_fresh_worker_import_order_does_not_install_an_authority(order):
+    import subprocess
+    import sys
+
+    script = f"""
+import importlib
+for name in {order!r}:
+    importlib.import_module('nexus_ai_agent.llm.gateway.' + name)
+from nexus_ai_agent.llm.gateway import registry
+from nexus_ai_agent.llm.gateway.engine import LLMGateway
+from nexus_ai_agent.llm.gateway.policy import default_policy
+assert registry._gateway is None
+built = []
+def factory(settings):
+    gateway = LLMGateway(policy=default_policy(routes=()), attach_default_sink=False)
+    built.append(gateway)
+    return gateway
+registry.build_gateway_from_settings = factory
+assert registry.get_llm_gateway() is registry.get_llm_gateway()
+assert len(built) == 1
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=10
+    )
+    assert result.returncode == 0, result.stderr
+
+
+async def test_canonical_routing_factory_never_enters_a_nested_gateway(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from nexus_ai_agent.config.settings import Settings
+    from nexus_ai_agent.llm.litellm_provider import build_llm_provider
+
+    class Router:
+        def __init__(self, **kwargs):
+            self.calls = 0
+
+        async def acompletion(self, **kwargs):
+            self.calls += 1
+            return {"choices": [{"message": {"content": "canonical"}}]}
+
+    # Importing the real SDK before its offline switch triggers a price-map
+    # download and retry jitter. This is a composition test, not an SDK smoke.
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(Router=Router))
+    monkeypatch.setattr(registry, "_gateway", None)
+    settings = Settings(
+        _env_file=None,
+        NEXUS_OLLAMA_MODEL="synthetic",
+        GEMINI_API_KEY=None,
+        GROQ_API_KEY=None,
+        OPENROUTER_API_KEY=None,
+        NEXUS_MODEL_PATH="/nonexistent/model.gguf",
+    )
+    first, _ = build_llm_provider(settings)
+    second, _ = build_llm_provider(settings)
+    authority = registry.get_llm_gateway()
+    try:
+        assert first.authority() is second.authority() is authority
+        assert await first.generate("hello") == "canonical"
+        assert authority.metrics.requests == 1
+        legacy = authority.adapter("routing-embedding").inner
+        assert legacy._gateway is None  # no inner authority was constructed
+        assert await first.embed("same") == await legacy.embed("same")
+        assert authority.policy.retry.max_attempts == 1
+    finally:
+        await authority.aclose()
+
+
+async def test_retry_after_above_backoff_budget_is_refused_never_shortened():
+    from nexus_ai_agent.llm.errors import RateLimitedError
+
+    adapter = ScriptedAdapter("p", [RateLimitedError("synthetic", retry_after=9), "too early"])
+    gateway = _gateway([adapter], clock=VirtualClock())
+    sleeps = []
+
+    async def sleep(delay, cancellation=None):
+        sleeps.append(delay)
+        gateway._clock.advance(delay)
+        return delay
+
+    gateway._sleep = sleep
+    try:
+        with pytest.raises(RateLimitedError):
+            await gateway.execute(request())
+        assert adapter.calls == 1
+        assert sleeps == []
+    finally:
+        await gateway.aclose()
+
+
+async def test_idempotent_callers_each_have_a_record_without_duplicate_usage():
+    from nexus_ai_agent.llm.gateway.contract import Usage, UsageSource
+
+    adapter = ScriptedAdapter(
+        "p",
+        ["ok"],
+        delay=0.01,
+        usage=Usage(source=UsageSource.PROVIDER, input_tokens=3, output_tokens=2, total_tokens=5),
+    )
+    gateway = _gateway([adapter])
+    try:
+        a, b = await asyncio.gather(
+            *(gateway.execute(request(idempotency_key="same")) for _ in range(2))
+        )
+        c = await gateway.execute(request(idempotency_key="same"))
+        assert len({a.request_id, b.request_id, c.request_id}) == 3
+        assert gateway.metrics.requests == 3
+        assert gateway.metrics.attempts == 1
+        assert gateway.metrics.usage_input_tokens == 3
+        assert adapter.calls == 1
+    finally:
+        await gateway.aclose()
+
+
+async def test_invalid_structured_output_has_one_failure_record():
+    gateway = _gateway([ScriptedAdapter("p", ["not json"])])
+
+    def invalid(text):
+        raise ValueError("synthetic")
+
+    try:
+        with pytest.raises(LLMError):
+            await gateway.execute(request(output_validator=invalid))
+        assert gateway.metrics.requests == 1
+    finally:
+        await gateway.aclose()
+
+
+async def test_hostile_provider_labels_do_not_create_unbounded_metric_keys():
+    gateway = _gateway([ScriptedAdapter("p", ["ok"])])
+    try:
+        for index in range(300):
+            with pytest.raises(LLMError):
+                await gateway.execute(request(provider=f"unregistered-{index}"))
+        assert len(gateway.metrics.provider_errors) <= 129
+    finally:
+        await gateway.aclose()
+
+
+def test_error_classification_sets_offline_pricing_before_sdk_import(monkeypatch):
+    import builtins
+    import os
+    from types import SimpleNamespace
+
+    from nexus_ai_agent.llm import litellm_provider
+
+    monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
+    monkeypatch.setattr(litellm_provider, "_LITELLM_KINDS", None)
+    real_import = builtins.__import__
+    seen = []
+
+    def importing(name, *args, **kwargs):
+        if name == "litellm":
+            seen.append(os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP"))
+            return SimpleNamespace(exceptions=SimpleNamespace())
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", importing)
+    litellm_provider._litellm_error_types()
+    assert seen == ["True"]
+
+
+async def test_withdrawal_after_initial_gate_before_admission(monkeypatch):
+    token = asyncio.Event()
+    adapter = ScriptedAdapter("p", ["must not run"])
+    gateway = _gateway([adapter])
+    original = gateway._context_gate
+
+    def gate(*args):
+        result = original(*args)
+        token.set()
+        return result
+
+    monkeypatch.setattr(gateway, "_context_gate", gate)
+    try:
+        with pytest.raises(CancelledByCallerError):
+            await gateway.execute(request(cancellation=token))
+        assert adapter.calls == 0
+    finally:
+        await gateway.aclose()
+
+
+async def test_cancellation_during_timeout_cleanup_preserves_task_ownership(monkeypatch):
+    entered, cancelled, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    class Stubborn(ScriptedAdapter):
+        async def execute(self, *args, **kwargs):
+            self.calls += 1
+            if self.calls > 1:
+                return AdapterResult(text="unexpected second execution")
+            entered.set()
+            while not release.is_set():
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    cancelled.set()
+            return AdapterResult(text="late")
+
+    # Force the timeout result only after adapter entry, then hold settlement
+    # until the caller cancels it. A 10ms real deadline could expire during
+    # admission under load and never exercise the cleanup ownership boundary.
+    import nexus_ai_agent.llm.gateway.engine as engine
+
+    cleanup_entered, cleanup_release = asyncio.Event(), asyncio.Event()
+
+    class ControlledAsyncio:
+        provider_waits = 0
+
+        def __getattr__(self, name):
+            return getattr(asyncio, name)
+
+        async def wait(self, tasks, *, timeout=None, **kwargs):
+            if "return_when" in kwargs:
+                self.provider_waits += 1
+                if self.provider_waits == 1:
+                    await entered.wait()
+                    return set(), set(tasks)  # deterministic provider timeout
+            else:
+                cleanup_entered.set()
+                await cleanup_release.wait()
+            return await asyncio.wait(tasks, timeout=timeout, **kwargs)
+
+    monkeypatch.setattr(engine, "asyncio", ControlledAsyncio())
+    adapter = Stubborn("p", ["ok"])
+    gateway = _gateway([adapter], retry=NO_RETRY, clock=VirtualClock())
+    owner = asyncio.create_task(gateway.execute(request()))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        await asyncio.wait_for(cancelled.wait(), 2)
+        await asyncio.wait_for(cleanup_entered.wait(), 2)
+        owner.cancel()
+        result = await asyncio.gather(owner, return_exceptions=True)
+        assert isinstance(result[0], asyncio.CancelledError)
+        with pytest.raises(OverloadedError):
+            await gateway.execute(request())
+        assert adapter.calls == 1
+    finally:
+        release.set()
+        cleanup_release.set()
+        if not owner.done():
+            owner.cancel()
+        await asyncio.gather(owner, return_exceptions=True)
+        await gateway.aclose()
+
+
+async def test_legacy_keyword_argument_cannot_reclassify_success():
+    from unittest.mock import AsyncMock
+
+    from nexus_ai_agent.llm.fallback_provider import FallbackProvider
+
+    primary = AsyncMock()
+    primary.generate.return_value = "A successful article about quota policies."
+    fallback = AsyncMock()
+    fallback.generate.return_value = "replacement"
+    llm = FallbackProvider(primary, fallback, error_keywords=("quota",))
+    assert await llm.generate("x") == primary.generate.return_value
+    fallback.generate.assert_not_awaited()
+    assert llm.stats["keyword_hits"] == 0
+
+
+@pytest.mark.parametrize(
+    "withdrawal", [CancelledByCallerError("withdrawn"), asyncio.CancelledError()]
+)
+async def test_cancellation_in_legacy_backup_propagates(withdrawal):
+    from unittest.mock import AsyncMock
+
+    from nexus_ai_agent.llm.errors import QuotaExhaustedError
+    from nexus_ai_agent.llm.fallback_provider import FallbackProvider
+
+    primary = AsyncMock()
+    primary.generate.side_effect = QuotaExhaustedError("quota")
+    fallback = AsyncMock()
+    fallback.generate.side_effect = withdrawal
+    llm = FallbackProvider(primary, fallback)
+    with pytest.raises(type(withdrawal)):
+        await llm.generate("x")
+    assert fallback.generate.await_count == 1
+
+
+async def test_legacy_fallback_never_logs_keywords_answers_or_raw_error_labels(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from nexus_ai_agent.llm import fallback_provider
+    from nexus_ai_agent.llm.errors import QuotaExhaustedError
+
+    events = []
+
+    class Sink:
+        def __getattr__(self, name):
+            return lambda event, **fields: events.append((event, fields))
+
+    monkeypatch.setattr(fallback_provider, "logger", Sink())
+    secret = "sk-THIS_IS_A_SECRET_1234567890"
+    primary, backup = AsyncMock(), AsyncMock()
+    primary.generate.return_value = secret
+    backup.generate.return_value = "backup"
+    llm = fallback_provider.FallbackProvider(primary, backup, error_keywords=(secret,))
+    assert await llm.generate("private prompt") == secret
+    primary.generate.side_effect = QuotaExhaustedError(
+        "private raw error", provider=f"Bearer {secret}", request_id=f"api_key={secret}"
+    )
+    await llm.generate("private prompt")
+    assert events
+    assert secret not in repr(events)
+    assert "private raw error" not in repr(events)
+    assert "private prompt" not in repr(events)
+
+
+@pytest.mark.parametrize("operation", ["chat", "embeddings"])
+@pytest.mark.parametrize("stop", ["task", "token", "timeout"])
+async def test_native_thread_stays_owned_after_async_waiter_cancel(monkeypatch, operation, stop):
+    import threading
+    from types import SimpleNamespace
+
+    from nexus_ai_agent.llm import local_llama_cpp
+    from nexus_ai_agent.llm.gateway.contract import LLMOperation
+    from nexus_ai_agent.llm.gateway.policy import ConcurrencyPolicy
+
+    operation = LLMOperation(operation)
+    from nexus_ai_agent.llm.errors import DeadlineExceededError, UpstreamTimeoutError
+
+    token = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    entered, finished = asyncio.Event(), asyncio.Event()
+    release = threading.Event()
+    calls = []
+
+    def block(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            loop.call_soon_threadsafe(entered.set)
+            try:
+                assert release.wait(5)
+            finally:
+                loop.call_soon_threadsafe(finished.set)
+        return {"choices": [{"text": "answer"}]}
+
+    provider = object.__new__(local_llama_cpp.LocalLlamaCppProvider)
+    provider._model = block
+    provider._native_lock = threading.Lock()
+
+    class Embed:
+        def encode(self, text):
+            block()
+            return SimpleNamespace(tolist=lambda: [0.1, 0.2])
+
+    provider._st = Embed()
+    monkeypatch.setattr(local_llama_cpp, "LocalLlamaCppProvider", lambda *a, **k: provider)
+    adapter = registry._build_llama_cpp_adapter(
+        SimpleNamespace(model_path="unused", n_ctx=16, n_gpu_layers=0)
+    )
+    gateway = _gateway(
+        [adapter],
+        routes=[adapter.route()],
+        retry=NO_RETRY,
+        clock=VirtualClock(),
+        concurrency=ConcurrencyPolicy(
+            max_inflight_global=1,
+            max_inflight_per_provider=1,
+            max_inflight_per_tenant=1,
+            max_queued=0,
+        ),
+    )
+    owner = asyncio.create_task(
+        gateway.execute(
+            request(
+                operation=operation,
+                cancellation=token,
+                deadline_seconds=0.01 if stop == "timeout" else None,
+            )
+        )
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        if stop == "task":
+            owner.cancel()
+        elif stop == "token":
+            token.set()
+        result = await asyncio.wait_for(asyncio.gather(owner, return_exceptions=True), 2)
+        expected = {
+            "task": (asyncio.CancelledError,),
+            "token": (CancelledByCallerError,),
+            "timeout": (DeadlineExceededError, UpstreamTimeoutError, TransientProviderError),
+        }
+        assert isinstance(result[0], expected[stop])
+        if stop == "timeout":
+            assert result[0].kind in (LLMErrorKind.DEADLINE_EXCEEDED, LLMErrorKind.UPSTREAM_TIMEOUT)
+        await asyncio.sleep(0)
+        assert not finished.is_set()
+        with pytest.raises(OverloadedError):
+            await asyncio.wait_for(gateway.execute(request(operation=operation)), 2)
+        assert len(calls) == 1
+        pending = tuple(gateway._abandoned)
+        assert len(pending) == 1
+        release.set()
+        await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), 2)
+        assert finished.is_set()
+        assert not gateway._abandoned
+        response = await gateway.execute(request(operation=operation))
+        assert len(calls) == 2
+        if operation is LLMOperation.CHAT:
+            assert response.text == "answer"
+        else:
+            assert response.embedding == (0.1, 0.2)
+    finally:
+        release.set()
+        if not owner.done():
+            owner.cancel()
+        await asyncio.gather(owner, return_exceptions=True)
+        if entered.is_set():
+            await asyncio.wait_for(finished.wait(), 2)
+        await gateway.aclose()
+
+
+def _native_adapter(tmp_path, monkeypatch, model):
+    import sys
+    from types import SimpleNamespace
+
+    monkeypatch.setitem(sys.modules, "llama_cpp", SimpleNamespace(Llama=lambda **kwargs: model))
+    model_path = tmp_path / "controlled.gguf"
+    model_path.write_bytes(b"controlled test double, not a model")
+    return registry._build_llama_cpp_adapter(
+        SimpleNamespace(model_path=str(model_path), n_ctx=16, n_gpu_layers=0)
+    )
+
+
+async def test_cold_native_embedding_initializes_off_the_authority_loop(tmp_path, monkeypatch):
+    import sys
+    import threading
+    from types import SimpleNamespace
+
+    from nexus_ai_agent.llm.gateway.contract import LLMOperation
+
+    initialized, encoded = [], []
+    loop_thread = threading.get_ident()
+
+    class ColdModel:
+        def __init__(self, *args):
+            initialized.append(threading.get_ident())
+
+        def encode(self, text):
+            encoded.append(threading.get_ident())
+            return SimpleNamespace(tolist=lambda: [0.1, 0.2])
+
+    monkeypatch.setitem(
+        sys.modules, "sentence_transformers", SimpleNamespace(SentenceTransformer=ColdModel)
+    )
+    adapter = _native_adapter(tmp_path, monkeypatch, lambda *a, **k: None)
+    gateway = _gateway([adapter], routes=[adapter.route()], retry=NO_RETRY)
+    try:
+        responses = await asyncio.gather(
+            *(gateway.execute(request(operation=LLMOperation.EMBEDDINGS)) for _ in range(2))
+        )
+        assert all(r.embedding == (0.1, 0.2) for r in responses)
+        assert len(initialized) == 1
+        assert initialized[0] != loop_thread
+        assert len(encoded) == 2 and all(t != loop_thread for t in encoded)
+    finally:
+        await gateway.aclose()
+
+
+@pytest.mark.parametrize("operation", ["chat", "embeddings"])
+async def test_native_model_access_is_serialized_inside_admitted_work(
+    tmp_path, monkeypatch, operation
+):
+    import threading
+    from types import SimpleNamespace
+
+    from nexus_ai_agent.llm.gateway.contract import LLMOperation
+
+    loop = asyncio.get_running_loop()
+    entered, second_progress = asyncio.Event(), asyncio.Event()
+    release, mutex = threading.Event(), threading.Lock()
+    calls, lock_attempts = [], []
+
+    class AuditedLock:
+        def __enter__(self):
+            lock_attempts.append(1)
+            if len(lock_attempts) == 2:
+                loop.call_soon_threadsafe(second_progress.set)
+            mutex.acquire()
+
+        def __exit__(self, *args):
+            mutex.release()
+
+    def infer(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(5)
+        else:
+            loop.call_soon_threadsafe(second_progress.set)
+        return {"choices": [{"text": "answer"}]}
+
+    class Embed:
+        def encode(self, text):
+            infer()
+            return SimpleNamespace(tolist=lambda: [0.1, 0.2])
+
+    adapter = _native_adapter(tmp_path, monkeypatch, infer)
+    adapter.inner._native_lock = AuditedLock()
+    adapter.inner._st = Embed()
+    gateway = _gateway([adapter], routes=[adapter.route()], retry=NO_RETRY)
+    owners = [asyncio.create_task(gateway.execute(request(operation=LLMOperation(operation))))]
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        owners.append(
+            asyncio.create_task(gateway.execute(request(operation=LLMOperation(operation))))
+        )
+        await asyncio.wait_for(second_progress.wait(), 2)
+        # Either the second worker reached the mutex or bypassed it and entered
+        # the model. Both publish progress, so a missing mutex fails an assertion,
+        # not a probabilistic sleep or a timeout pretending to be a mutation kill.
+        assert len(calls) == 1
+        assert len(lock_attempts) == 2
+        release.set()
+        await asyncio.wait_for(asyncio.gather(*owners), 2)
+        assert len(calls) == 2
+    finally:
+        release.set()
+        await asyncio.gather(*owners, return_exceptions=True)
+        await gateway.aclose()
+
+
+@pytest.mark.parametrize(
+    ("allow_fallback", "failure"),
+    [(False, "transient"), (True, "transient"), (True, "blocked"), (True, "unknown")],
+)
+async def test_canonical_sdk_hops_are_owned_and_reported_by_gateway(
+    monkeypatch, allow_fallback, failure, capsys, caplog
+):
+    # Exercise the real SDK Router, replacing only the final transport. A fake
+    # Router that always succeeds missed the hidden fallback in the old factory.
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm = pytest.importorskip("litellm")
+    from nexus_ai_agent.config.settings import Settings
+    from nexus_ai_agent.llm import litellm_provider
+
+    monkeypatch.setattr(litellm_provider, "_LITELLM_KINDS", None)
+    calls = []
+
+    async def transport(**kwargs):
+        calls.append(kwargs["model"])
+        if kwargs["model"].startswith("ollama/"):
+            if failure == "unknown":
+                raise ValueError("synthetic-secret")
+            error_type = (
+                litellm.ContentPolicyViolationError
+                if failure == "blocked"
+                else litellm.ServiceUnavailableError
+            )
+            raise error_type(message="synthetic", llm_provider="ollama", model=kwargs["model"])
+        return litellm.ModelResponse(
+            model=kwargs["model"],
+            choices=[{"message": {"role": "assistant", "content": "backup"}}],
+        )
+
+    monkeypatch.setattr(litellm, "acompletion", transport)
+    settings = Settings(
+        _env_file=None,
+        NEXUS_OLLAMA_MODEL="synthetic",
+        GROQ_API_KEY="synthetic-not-a-real-key",
+        GEMINI_API_KEY=None,
+        OPENROUTER_API_KEY=None,
+        NEXUS_MODEL_PATH="/nonexistent/model.gguf",
+    )
+    gateway = registry.build_gateway_from_settings(settings)
+    try:
+        if allow_fallback and failure == "transient":
+            response = await gateway.execute(request(allow_fallback=True))
+            assert response.text == "backup"
+            assert response.provider == "groq"
+            assert response.policy.fallback_used
+            assert response.policy.attempts == 2
+            assert [a.provider for a in response.attempts] == ["ollama", "groq"]
+            assert calls == ["ollama/synthetic", "groq/llama-3.3-70b-versatile"]
+        else:
+            with pytest.raises(LLMError) as caught:
+                await gateway.execute(request(allow_fallback=allow_fallback))
+            assert (
+                caught.value.kind
+                is {
+                    "transient": LLMErrorKind.TRANSIENT_PROVIDER,
+                    "blocked": LLMErrorKind.CONTENT_BLOCKED,
+                    "unknown": LLMErrorKind.GATEWAY_INTERNAL,
+                }[failure]
+            )
+            assert "synthetic-secret" not in str(caught.value)
+            assert calls == ["ollama/synthetic"]
+        router = gateway.adapter("routing-embedding").inner._router
+        assert not router.fallbacks  # SDK normalizes [] to its None default
+        assert router.num_retries == 0
+        assert router.disable_cooldowns is True
+        # SDK global/default configuration cannot re-enable hidden policy.
+        router.fallbacks = [{"nexus-ollama": ["nexus-groq"]}]
+        router.num_retries = 2
+        calls.clear()
+        with pytest.raises(LLMError):
+            await gateway.execute(request(allow_fallback=False))
+        assert calls == ["ollama/synthetic"]
+        if failure == "unknown":
+            captured = capsys.readouterr()
+            assert "synthetic-secret" not in captured.out + captured.err + caplog.text
+    finally:
+        await gateway.aclose()
+
+
+async def test_canonical_gemini_has_one_route_and_one_quota_window(monkeypatch):
+    from nexus_ai_agent.config.settings import Settings
+    from nexus_ai_agent.llm.gateway.adapters import GeminiHttpAdapter
+    from nexus_ai_agent.llm.gateway.policy import ProviderRateLimit, RateLimitPolicy
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm = pytest.importorskip("litellm")
+    sdk_calls = []
+    http_calls = []
+
+    async def sdk_transport(**kwargs):
+        sdk_calls.append(kwargs["model"])
+        return litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "sdk"}}])
+
+    async def http_transport(self, *args, **kwargs):
+        http_calls.append(self.name)
+        return AdapterResult(text="http")
+
+    monkeypatch.setattr(litellm, "acompletion", sdk_transport)
+    monkeypatch.setattr(GeminiHttpAdapter, "execute", http_transport)
+    settings = Settings(
+        _env_file=None,
+        NEXUS_OLLAMA_MODEL="",
+        GROQ_API_KEY=None,
+        GEMINI_API_KEY="synthetic-not-a-real-key",
+        OPENROUTER_API_KEY=None,
+        NEXUS_MODEL_PATH="/nonexistent/model.gguf",
+    )
+    gateway = registry.build_gateway_from_settings(
+        settings,
+        policy_overrides={
+            "rate_limit": RateLimitPolicy(
+                per_provider={"gemini": ProviderRateLimit(requests_per_day=1)}
+            )
+        },
+    )
+    try:
+        response = await gateway.execute(request(allow_fallback=False))
+        assert response.provider == "gemini"
+        with pytest.raises(LLMError) as caught:
+            await gateway.execute(request(provider="gemini", allow_fallback=False))
+        assert caught.value.kind is LLMErrorKind.QUOTA_EXHAUSTED
+        assert sdk_calls == []
+        assert http_calls == ["gemini"]
+        assert len([r for r in gateway.policy.routes if r.provider == "gemini"]) == 1
+        from nexus_ai_agent.llm.gateway.contract import LLMOperation
+
+        embedded = await gateway.execute(request(operation=LLMOperation.EMBEDDINGS))
+        assert embedded.provider == "routing-embedding"
+        assert len(embedded.embedding) == 384
+        assert http_calls == ["gemini"]
+    finally:
+        await gateway.aclose()
+
+
+@pytest.mark.parametrize("provider", ["groq", "openrouter"])
+async def test_canonical_sdk_http_failure_is_one_physical_attempt(monkeypatch, provider):
+    import httpx
+
+    from nexus_ai_agent.config.settings import Settings
+    from nexus_ai_agent.llm import litellm_provider
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    pytest.importorskip("litellm")
+    monkeypatch.setattr(litellm_provider, "_LITELLM_KINDS", None)
+    calls = []
+
+    async def send(self, request, **kwargs):
+        calls.append(request.url.host)
+        return httpx.Response(
+            503,
+            json={"error": {"message": "synthetic", "type": "server_error"}},
+            request=request,
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "send", send)
+    settings = Settings(
+        _env_file=None,
+        NEXUS_OLLAMA_MODEL="",
+        GROQ_API_KEY="synthetic-key" if provider == "groq" else None,
+        GEMINI_API_KEY=None,
+        OPENROUTER_API_KEY="synthetic-key" if provider == "openrouter" else None,
+        NEXUS_LLM_STRICT_PRIVACY=False,
+        NEXUS_MODEL_PATH="/nonexistent/model.gguf",
+    )
+    gateway = registry.build_gateway_from_settings(settings)
+    try:
+        with pytest.raises(LLMError) as caught:
+            await gateway.execute(request(allow_fallback=False))
+        assert caught.value.kind is LLMErrorKind.TRANSIENT_PROVIDER
+        assert calls == ["api.groq.com" if provider == "groq" else "openrouter.ai"]
+    finally:
+        await gateway.aclose()
+
+
+@pytest.mark.parametrize("failure", ["blocked", "context", "unknown", "rate-limit"])
+async def test_single_sdk_deployment_classification_is_not_chain_exhaustion(monkeypatch, failure):
+    import httpx
+
+    from nexus_ai_agent.llm import litellm_provider
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm = pytest.importorskip("litellm")
+    monkeypatch.setattr(litellm_provider, "_LITELLM_KINDS", None)
+    if failure == "unknown":
+        error = ValueError("synthetic-secret")
+        kind = LLMErrorKind.GATEWAY_INTERNAL
+    elif failure == "rate-limit":
+        error = litellm.RateLimitError(
+            message="synthetic",
+            llm_provider="groq",
+            model="m",
+            response=httpx.Response(429, headers={"Retry-After": "123"}),
+        )
+        kind = LLMErrorKind.RATE_LIMITED
+    else:
+        error_type = (
+            litellm.ContentPolicyViolationError
+            if failure == "blocked"
+            else litellm.ContextWindowExceededError
+        )
+        error = error_type(message="synthetic", llm_provider="groq", model="m")
+        kind = LLMErrorKind.CONTENT_BLOCKED if failure == "blocked" else LLMErrorKind.CONTEXT_LIMIT
+    typed = litellm_provider.classify_router_failure(error, single_deployment=True)
+    assert typed.kind is kind
+    assert "synthetic-secret" not in str(typed)
+    if failure == "rate-limit":
+        assert typed.retry_after == 123
+
+
+@pytest.mark.parametrize("strict", [False, True])
+async def test_canonical_sdk_model_identity_preserves_privacy_filter(monkeypatch, strict):
+    from nexus_ai_agent.config.settings import Settings
+    from nexus_ai_agent.llm.gateway.policy import PrivacyPolicy
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm = pytest.importorskip("litellm")
+    calls = []
+
+    async def transport(**kwargs):
+        calls.append(kwargs["model"])
+        return litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "ok"}}])
+
+    monkeypatch.setattr(litellm, "acompletion", transport)
+    settings = Settings(
+        _env_file=None,
+        NEXUS_OLLAMA_MODEL="",
+        GROQ_API_KEY=None,
+        GEMINI_API_KEY=None,
+        OPENROUTER_API_KEY="synthetic-key",
+        NEXUS_LLM_STRICT_PRIVACY=False,
+        NEXUS_MODEL_PATH="/nonexistent/model.gguf",
+    )
+    gateway = registry.build_gateway_from_settings(
+        settings, policy_overrides={"privacy": PrivacyPolicy(strict=strict)}
+    )
+    try:
+        req = request(provider="openrouter", allow_fallback=False)
+        if strict:
+            with pytest.raises(LLMError) as caught:
+                await gateway.execute(req)
+            assert caught.value.kind is LLMErrorKind.POLICY_REFUSAL
+            assert calls == []
+        else:
+            response = await gateway.execute(req)
+            assert response.text == "ok"
+            assert response.model.endswith(":free")
+            assert len(calls) == 1
+    finally:
+        await gateway.aclose()

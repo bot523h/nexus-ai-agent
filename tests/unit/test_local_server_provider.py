@@ -23,6 +23,17 @@ from nexus_ai_agent.llm.local_server_provider import (
 )
 
 
+@pytest.fixture(autouse=True)
+async def _factory_authority_lifecycle(monkeypatch):
+    from nexus_ai_agent.llm.gateway import registry
+
+    monkeypatch.setattr(registry, "_gateway", None)
+    yield
+    authority = registry.reset_llm_gateway()
+    if authority is not None:
+        await authority.aclose()
+
+
 class _StubLlamaServer(BaseHTTPRequestHandler):
     mode: str = "healthy"
     requests: list[dict[str, Any]] = []
@@ -215,7 +226,13 @@ def test_factory_selects_llama_server_when_configured(
         NEXUS_LLAMA_SERVER_MODEL="qwen-test",
     )
     llm, label = build_llm_provider(settings)
-    assert isinstance(llm, LocalLlamaServerProvider)
+    from nexus_ai_agent.llm.gateway.facade import GatewayLLMProvider
+    from nexus_ai_agent.llm.gateway.registry import get_llm_gateway
+
+    assert isinstance(llm, GatewayLLMProvider)
+    assert llm.authority() is get_llm_gateway()
+    assert llm.provider == "llama-server"
+    assert isinstance(llm.authority().adapter("llama-server").inner, LocalLlamaServerProvider)
     assert "llama.cpp server" in label
     assert "127.0.0.1:8080" in label
 

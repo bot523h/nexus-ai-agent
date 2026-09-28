@@ -1,4 +1,19 @@
-"""Smart Summarizer — URL / text / file summarization via Gemini AI."""
+"""Smart Summarizer — URL / text / file summarization via Gemini AI.
+
+W2 (Global LLM Gateway): the Gemini call in :meth:`SummarizerEngine.summarize_text`
+now goes through :class:`~nexus_ai_agent.llm.gateway.engine.LLMGateway` instead of
+a private ``httpx`` POST. Retry, timeouts, provider quota, circuit breaking,
+typed error classification and request-level observability are the gateway's.
+
+``self._http`` is deliberately **kept**: it is the SSRF-guarded client used to
+fetch a *user-supplied* URL in :meth:`summarize_url`, which is a different
+concern from calling an LLM. ``tests/unit/test_summarizer_ssrf.py`` pins
+``engine._http._transport is SafeAsyncTransport`` and that stays true.
+
+The Gemini endpoint itself is a build-time constant with no user-controlled host,
+so SSRF is structurally impossible on that leg; the guard stays exactly where
+untrusted input enters.
+"""
 
 from __future__ import annotations
 
@@ -9,9 +24,23 @@ from dataclasses import dataclass
 import httpx
 
 from nexus_ai_agent.core.ssrf_guard import SafeAsyncTransport, SSRFBlockError, validate_url
+from nexus_ai_agent.llm.errors import LLMError
+from nexus_ai_agent.llm.gateway.contract import (
+    Caller,
+    CallerCategory,
+    GenerationParams,
+    LLMOperation,
+    LLMRequest,
+    Message,
+)
+from nexus_ai_agent.llm.gateway.engine import LLMGateway
+from nexus_ai_agent.llm.gateway.registry import gateway_for_credentials
 from nexus_ai_agent.observability.logging import get_logger
 
 logger = get_logger(__name__)
+
+#: Wire-identical to the pre-W2 ``generationConfig`` for summaries.
+_SUMMARY_GENERATION = GenerationParams(temperature=0.3, max_output_tokens=2048)
 
 # ── Default summarization prompts ──────────────────────────────────────
 
@@ -65,11 +94,19 @@ class SummarizerEngine:
         gemini_api_key: str,
         model: str = "gemini-2.0-flash",
         base_url: str = "https://generativelanguage.googleapis.com/v1beta",
+        gateway: LLMGateway | None = None,
     ) -> None:
         self._api_key = gemini_api_key
         self._model = model
         self._base_url = base_url
+        # SSRF-guarded client for user-supplied URLs (see module docstring).
         self._http = httpx.AsyncClient(timeout=60.0, transport=SafeAsyncTransport())
+        # W2: the single LLM authority for the Gemini leg.
+        self._gateway = (
+            gateway
+            if gateway is not None
+            else gateway_for_credentials(gemini_api_key, model, base_url=base_url)
+        )
 
     async def summarize_text(
         self,
@@ -87,49 +124,57 @@ class SummarizerEngine:
         if language:
             system_instruction += f" Write the summary in {language}."
 
-        payload = {
-            "contents": [{"role": "user", "parts": [{"text": text}]}],
-            "systemInstruction": {"parts": [{"text": system_instruction}]},
-            "generationConfig": {
-                "temperature": 0.3,
-                "maxOutputTokens": 2048,
-            },
-        }
+        request = LLMRequest(
+            caller=Caller(category=CallerCategory.SUMMARIZER, name="features.summarizer"),
+            purpose=f"summarize:{mode}",
+            operation=LLMOperation.CHAT,
+            messages=(Message(role="user", content=text),),
+            system=system_instruction,
+            provider="gemini",
+            model=self._model,
+            # A summary must come from the real model. Silently substituting
+            # another provider's answer would be a fabricated summary (LAW 8).
+            allow_fallback=False,
+            generation=_SUMMARY_GENERATION,
+        )
 
         try:
-            # API key in the x-goog-api-key header, never in the URL
-            # (query params leak to httpx INFO lines / proxy logs).
-            resp = await self._http.post(
-                f"{self._base_url}/models/{self._model}:generateContent",
-                json=payload,
-                headers={"x-goog-api-key": self._api_key},
+            response = await self._gateway.execute(request)
+        except LLMError as exc:
+            # Classification already happened, from typed evidence: the status
+            # code and the semantic kind. Nothing here parses a message.
+            if exc.status_code is not None:
+                logger.error(
+                    "summarize_http_error",
+                    status=exc.status_code,
+                    error_kind=exc.kind.value,
+                    request_id=exc.request_id,
+                )
+                return SummaryResult(error=f"API error: {exc.status_code}")
+            logger.error(
+                "summarize_error",
+                error_kind=exc.kind.value,
+                detail=exc.detail,
+                request_id=exc.request_id,
             )
-            resp.raise_for_status()
-            data = resp.json()
-            summary = (
-                data.get("candidates", [{}])[0]
-                .get("content", {})
-                .get("parts", [{}])[0]
-                .get("text", "")
-            )
-            if not summary:
-                return SummaryResult(error="Empty response from AI.")
+            return SummaryResult(error=f"Error: {exc.kind.value}")
+        except Exception as exc:  # noqa: BLE001 — a summarizer never crashes its caller
+            logger.error("summarize_error", error=type(exc).__name__)
+            return SummaryResult(error=f"Error: {type(exc).__name__}")
 
-            orig_len = len(text)
-            summ_len = len(summary)
-            return SummaryResult(
-                text=summary,
-                mode=mode,
-                original_length=orig_len,
-                summary_length=summ_len,
-                compression_ratio=round(1 - (summ_len / max(orig_len, 1)), 2),
-            )
-        except httpx.HTTPStatusError as exc:
-            logger.error("summarize_http_error", status=exc.response.status_code)
-            return SummaryResult(error=f"API error: {exc.response.status_code}")
-        except Exception as exc:  # noqa: BLE001
-            logger.error("summarize_error", error=str(exc))
-            return SummaryResult(error=f"Error: {exc}")
+        summary = response.text
+        if not summary:
+            return SummaryResult(error="Empty response from AI.")
+
+        orig_len = len(text)
+        summ_len = len(summary)
+        return SummaryResult(
+            text=summary,
+            mode=mode,
+            original_length=orig_len,
+            summary_length=summ_len,
+            compression_ratio=round(1 - (summ_len / max(orig_len, 1)), 2),
+        )
 
     async def summarize_url(
         self,
@@ -193,6 +238,13 @@ class SummarizerEngine:
         return "\n".join(lines)
 
     async def close(self) -> None:
+        """Release the SSRF-guarded fetch client.
+
+        The gateway is *not* closed here: it is a process-wide authority shared
+        with every other caller, and one feature closing it would break the
+        others. Its lifecycle belongs to the composition root (``aclose()``).
+        """
+
         await self._http.aclose()
 
 

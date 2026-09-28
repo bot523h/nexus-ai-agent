@@ -694,6 +694,11 @@ async def test_t11_crash_between_publish_and_reprobe_recovers(
     recovered.register_handler("pdf_extract", process_pdf_job)
     assert await recovered.resume_pending() == [job_id]
     assert await _drain(recovered, job_id) is JobStatus.COMPLETED
+    # COMPLETED is the durable commit, not a join of post-commit finalization.
+    # Wait for the actual owner before asserting that its backup was removed.
+    task = recovered._tasks.get(job_id)
+    if task is not None:
+        await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
     assert "survives a crash" in final.read_text(encoding="utf-8")
     assert sorted(p.name for p in pdf_dir.iterdir()) == ["doc.extracted.txt", "doc.pdf"]
     assert _row(db, job_id)["attempt"] == 2
@@ -804,3 +809,42 @@ async def test_t8b_publication_is_fenced_immediately_before_the_rename(
     assert hook.events == []
     row = _row(db, job_id)
     assert row["status"] == JobStatus.PROCESSING.value and row["attempt"] == 2
+
+
+@pytest.mark.asyncio
+async def test_t11_waits_for_post_commit_finalization(
+    tmp_path: Path, fake_rag: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The residue oracle must join cleanup, not race its durable commit."""
+    finalize = InProcessJobQueue._finalize_safely
+    drain = _drain
+    entered, release, drained = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    finalizers: list[asyncio.Task[Any]] = []
+
+    async def paused_finalize(self: Any, *args: Any) -> None:
+        task = asyncio.current_task()
+        assert task is not None
+        finalizers.append(task)
+        entered.set()
+        await release.wait()
+        await finalize(self, *args)
+
+    async def observed_drain(queue: InProcessJobQueue, job_id: str) -> JobStatus:
+        status = await drain(queue, job_id)
+        drained.set()
+        return status
+
+    monkeypatch.setattr(InProcessJobQueue, "_finalize_safely", paused_finalize)
+    monkeypatch.setitem(globals(), "_drain", observed_drain)
+    check = asyncio.create_task(
+        test_t11_crash_between_publish_and_reprobe_recovers(tmp_path, fake_rag, monkeypatch)
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        await asyncio.wait_for(drained.wait(), 2)
+        assert not check.done(), "residue assertion ran before the cleanup owner finished"
+        release.set()
+        await asyncio.wait_for(check, 2)
+    finally:
+        release.set()
+        await asyncio.wait_for(asyncio.gather(check, *finalizers, return_exceptions=True), 2)
