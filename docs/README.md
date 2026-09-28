@@ -82,6 +82,7 @@ placeholder text.
 | [audits/2026-09-28-engineering-evidence.md](audits/2026-09-28-engineering-evidence.md) | Audit measurements, execution scope, dependencies and ORM inventory. |
 | [audits/2026-09-28-architecture.md](audits/2026-09-28-architecture.md) | Static module adjacency, cycles and recursive inventory at the audited commit. |
 | [audits/2026-09-28-command-ledger.md](audits/2026-09-28-command-ledger.md) | Scoped command-status classification at the audited commit. |
+| [audits/2026-09-28-hardening-proof.fa.md](audits/2026-09-28-hardening-proof.fa.md) | Hardening proof: sandbox-restore forensics, quarantine loss record, 8-case privacy probe (main + W2 tip), adversarial guard tests, full-suite CI root cause. |
 | [audits/2026-09-28-autonomous-mission.fa.md](audits/2026-09-28-autonomous-mission.fa.md) | Autonomous production/creative mission: publication frontier guard, quarantined ten-axis candidate, consent-race reproduction, A–J status. |
 | [audits/2026-09-28-dependency-triage.json](audits/2026-09-28-dependency-triage.json) | Primary-source dependency triage: per-finding reachability evidence and honest statuses (no suppression). |
 | [audits/2026-09-28-contract-repair-report.fa.md](audits/2026-09-28-contract-repair-report.fa.md) | Implementation/evidence report for session, media and installed-artifact repairs. |

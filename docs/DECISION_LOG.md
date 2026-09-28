@@ -1740,3 +1740,35 @@ repositories), `tests/unit/test_agent_board.py` (40 passed together in 1.58s),
 live preflight runs recorded in the runbook, probe output
 `ci-artifacts/mission-20260928/consent-race.json`. Remote CI execution of the new
 `publication-frontier` workflow: UNVERIFIED at time of writing.
+
+## 2026-09-28 — Hardening proof: quarantine loss recorded; dev extra gains the wheel backend; privacy invariant handed to W2
+
+**Incident (truth correction):** the sandbox was rebuilt from a fresh shallow clone of
+`main`; the previous session's worktree files survived, and the local branch was re-synced
+to the remote tip with zero drift. The ten-axis candidate quarantine recorded earlier on
+this date (local tag, named stash, git-ignored patch) did **not** survive: the candidate
+commit object exists on no ref anywhere. The candidate `ac2b7d5…` is unrecoverable and
+must be rebuilt by its owners after the W1/W2/DR handoffs — passing
+`scripts/probes/consent_generation_race.py` (exit 0) and a fresh publication preflight.
+
+**Privacy invariant (executable, handed to the owner):** the 8-case deterministic probe
+reproduces, on BOTH the main/branch source and the live W2 tip (`9e795318`), that an
+extraction started before `forget_user`, a replayed writer, and dual concurrent
+extractions all re-persist the erased profile; cancellation, denied-consent replay and
+idempotent forget are safe. The fix belongs to the W2-leased `features/ai_memory.py`
+(invalidation for in-flight writes); this session deliberately did not edit leased code.
+
+**Dependency of tests on the build backend:** the full-suite red on this branch
+(`test`/`python-parity` jobs) was reproduced locally: the sdist/wheel contract tests build
+with `--no-isolation`, which requires the `wheel` package; the `[dev]` extra now carries
+`wheel>=0.43` (the standalone wheel-contract job stayed green only because it installs
+`wheel` itself). Guard CI job now installs `pytest-asyncio` (repo pytest config sets
+`asyncio_mode`) and runs the self-contained board modules with `--noconftest`.
+
+**Rejected:** fixing the leased `ai_memory.py` in this session; rewriting history to hide
+the quarantine loss; treating the standalone wheel-contract green as proof of the full
+suite.
+
+**Evidence:** `docs/audits/2026-09-28-hardening-proof.fa.md`;
+`ci-artifacts/hardening/` probe JSONs and suite logs (workspace evidence).
+

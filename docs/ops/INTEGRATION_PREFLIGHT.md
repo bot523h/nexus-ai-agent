@@ -50,20 +50,47 @@ about the remote frontier or history depth.
      `scripts/agent_board_remote.py` instead of permissive parsing;
   3. after calibration → `SUCCESS` with the observed frontier bound to `frontier_sha256`.
   Evidence: `ci-artifacts/mission-20260928/preflight-initial.json` (workspace, git-ignored).
+- **2026-09-28 later (sandbox restore incident)** — the sandbox was rebuilt as a fresh
+  shallow clone of `main` with the previous worktree files laid on top. Consequences,
+  verified live: the local branch was re-synced to the remote tip with **zero** worktree
+  drift; the quarantine artifacts of the ten-axis candidate (local tag
+  `preserved-production-ac2b7d5`, named stash, and the git-ignored patch) were **lost**,
+  and the candidate commit object exists on **no** ref anywhere (`git cat-file` fails
+  after a full unshallow fetch). The candidate is unrecoverable from git; see
+  `docs/audits/2026-09-28-hardening-proof.fa.md` §A/§E.
+- **2026-09-28 (guard CI repair)** — the guard's own CI job failed on pytest 9.1.1 with
+  exit 4: it installed only `pytest`, while `tests/conftest.py` imports the application
+  package and the repo's pytest config sets `asyncio_mode` (needs `pytest-asyncio`).
+  Fixed by installing `pytest-asyncio` and running the two self-contained board modules
+  with `--noconftest`; reproduced locally in a clean venv before publishing
+  (`40 passed` → `49 passed` with the adversarial round).
 
-## Quarantined candidate (do not re-apply blindly)
+## Adversarial coverage (hardening-proof round, all executable)
 
-The ten-axis production candidate `ac2b7d501a565da16f62bebc0dad0f2a3957fdf8` was removed
-from the publish ancestry because PR #116 (W2), PR #113 (W1) and PR #96 (DR) held live
-leases over shared files. It is preserved **outside** the branch history:
+`tests/unit/test_agent_board_remote.py` now pins, on disposable real Git repositories:
 
-- tag `preserved-production-ac2b7d5` (local),
-- stash `stash@{...} "preserved ac2b7d5 production candidate awaiting W1 W2 DR handoff"`,
-- `ci-artifacts/mission-20260928/preserved-ac2b7d5.patch`
-  (sha256 `10485146bbebb7601affcf3d68b81e37fece27de35feb081326b4692c3b5535c`).
+| Scenario | Verdict pinned |
+|---|---|
+| file changed then reverted inside the outgoing range | REJECTED |
+| old commit touched a forbidden file (kept) | REJECTED |
+| local board declares the peer released; remote owner still fences | REJECTED |
+| local remote-tracking refs deleted; lease lives remotely | REJECTED |
+| remote unreachable / fetch fails | NOT_VERIFIED |
+| shallow (incomplete) history | NOT_VERIFIED |
+| rewritten local history against the published tip (force-push shape) | NOT_VERIFIED |
+| file introduced through a merge commit | REJECTED |
+| cherry-picked forbidden change | REJECTED |
+| local quarantine tag on an unpushed commit | SUCCESS (tags are never published by a branch push) |
+| post-push state (empty outgoing range) | SUCCESS |
+| remote frontier moves during observation | NOT_VERIFIED |
+| fetch URL ≠ push URL, detached HEAD, foreign/absent branch | NOT_VERIFIED |
 
-Re-integration requires, in order: lease release/expiry → semantic reconciliation with the
-W1/W2 owners → `scripts/probes/consent_generation_race.py --source-root <union>` must
-exit **0** (the probe currently **fails** against the raw candidate: an extraction started
-before `forget_user` re-persists the erased profile, source sha256 `8ac6aa7a…`) → fresh
-preflight SUCCESS → push.
+## Quarantined candidate — SUPERSEDED RECORD
+
+The earlier claim that `ac2b7d5…` was preserved as a local tag, a named stash and a
+hashed patch **no longer holds** (sandbox restore; artifacts lost; object never pushed).
+The candidate cannot be merged because it no longer exists. If the ten-axis work is
+redone, it must be rebuilt by its owners after the W1/W2/DR handoffs, must incorporate
+the privacy-invalidation fix (see the consent probe), and must pass
+`scripts/probes/consent_generation_race.py --source-root <union>` with exit 0 plus a
+fresh preflight SUCCESS before publication.
