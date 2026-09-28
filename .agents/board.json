@@ -679,7 +679,8 @@
         "docs/DECISION_LOG.md",
         "docs/architecture/DATA_AND_STORAGE.md",
         "docs/architecture/TESTING.md",
-        "docs/audits/2026-09-28-"
+        "docs/audits/2026-09-28-",
+        "src/nexus_ai_agent/features/onboarding.py"
       ]
     }
   ],
@@ -2774,13 +2775,14 @@
         "docs/DECISION_LOG.md",
         "docs/architecture/DATA_AND_STORAGE.md",
         "docs/architecture/TESTING.md",
-        "docs/audits/2026-09-28-"
+        "docs/audits/2026-09-28-",
+        "src/nexus_ai_agent/features/onboarding.py"
       ],
       "agent_branch": "arena/01a0e742-nexus-ai-agent",
       "claimed_at": "2026-09-28T10:34:24Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": ""
+      "note": " Adjacent identical AsyncSession.exec defect found in onboarding; include narrowly with a persisted-language regression."
     }
   ],
   "deferred_log": [
