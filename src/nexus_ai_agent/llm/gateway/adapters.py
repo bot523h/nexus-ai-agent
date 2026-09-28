@@ -1236,14 +1236,21 @@ def _litellm_usage(response: Any) -> Usage:
     usage = _litellm_field(response, "usage")
     if usage is None:
         return UNKNOWN_USAGE
-    prompt_tokens = _litellm_field(usage, "prompt_tokens")
-    completion_tokens = _litellm_field(usage, "completion_tokens")
-    total_tokens = _litellm_field(usage, "total_tokens")
+
+    def read(key: str) -> int | None:
+        value = _litellm_field(usage, key)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        return value
+
+    prompt_tokens = read("prompt_tokens")
+    completion_tokens = read("completion_tokens")
+    total_tokens = read("total_tokens")
     if prompt_tokens is None and completion_tokens is None and total_tokens is None:
         return UNKNOWN_USAGE
     return Usage(
         source=UsageSource.PROVIDER,
-        input_tokens=int(prompt_tokens) if prompt_tokens is not None else None,
-        output_tokens=int(completion_tokens) if completion_tokens is not None else None,
-        total_tokens=int(total_tokens) if total_tokens is not None else None,
+        input_tokens=prompt_tokens,
+        output_tokens=completion_tokens,
+        total_tokens=total_tokens,
     )

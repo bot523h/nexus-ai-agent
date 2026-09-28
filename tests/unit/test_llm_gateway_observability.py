@@ -710,17 +710,17 @@ def test_metrics_are_json_serialisable() -> None:
 
 
 def test_the_price_table_is_versioned_so_a_cost_can_be_attributed() -> None:
-    assert PRICE_TABLE_VERSION == "2026-09-27"
+    assert PRICE_TABLE_VERSION == "2026-09-28"
 
 
-def test_a_free_tier_model_costs_exactly_zero() -> None:
+def test_an_explicitly_free_endpoint_costs_exactly_zero() -> None:
     usage = Usage(
         source=UsageSource.PROVIDER,
         input_tokens=1_000_000,
         output_tokens=500_000,
         total_tokens=1_500_000,
     )
-    priced = apply_cost(usage, model="gemini-2.0-flash")
+    priced = apply_cost(usage, model="meta-llama/llama-3.3-70b-instruct:free")
     assert priced.estimated_cost_usd == 0.0
     assert priced.source is UsageSource.PROVIDER
 
@@ -756,12 +756,22 @@ def test_usage_the_provider_did_not_report_is_never_costed() -> None:
 
     assert {member.value for member in UsageSource} == {"provider", "unknown"}
     usage = Usage(source=UsageSource.UNKNOWN, input_tokens=1000, output_tokens=10)
-    assert apply_cost(usage, model="gemini-2.0-flash") is usage
+    assert (
+        apply_cost(
+            usage, model="gemini-2.0-flash", table={"gemini-2.0-flash": ModelPrice(2.0, 8.0)}
+        )
+        is usage
+    )
 
 
 def test_reported_tokens_without_a_count_are_not_costed() -> None:
     usage = Usage(source=UsageSource.PROVIDER, input_tokens=None, output_tokens=None)
-    assert apply_cost(usage, model="gemini-2.0-flash").estimated_cost_usd is None
+    assert (
+        apply_cost(
+            usage, model="gemini-2.0-flash", table={"gemini-2.0-flash": ModelPrice(2.0, 8.0)}
+        ).estimated_cost_usd
+        is None
+    )
 
 
 def test_costing_preserves_the_reported_model_and_token_counts() -> None:
@@ -798,3 +808,97 @@ def test_a_negative_cost_is_never_produced() -> None:
     table = {"weird": ModelPrice(input_usd_per_million=0.0, output_usd_per_million=0.0)}
     usage = Usage(source=UsageSource.PROVIDER, input_tokens=0, output_tokens=0)
     assert apply_cost(usage, model="weird", table=table).estimated_cost_usd == 0.0
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gemini-2.0-flash",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-image",
+        "llama-3.3-70b-versatile",
+        "local-model",
+    ],
+)
+def test_model_identity_does_not_identify_billing_contract(model: str) -> None:
+    usage = Usage(source=UsageSource.PROVIDER, input_tokens=1000, output_tokens=500)
+    assert apply_cost(usage, model=model).estimated_cost_usd is None
+
+
+@pytest.mark.parametrize(
+    "input_price,output_price",
+    [
+        (-1, 0),
+        (0, -1),
+        (float("nan"), 0),
+        (0, float("inf")),
+        (float("-inf"), None),
+    ],
+)
+def test_pinned_prices_are_finite_and_nonnegative(input_price: Any, output_price: Any) -> None:
+    with pytest.raises(ValueError, match="finite and nonnegative"):
+        ModelPrice(input_price, output_price)
+
+
+@pytest.mark.parametrize("price,expected", [(0.0, 0.0), (2.0, 3.0)])
+def test_operator_can_pin_a_verified_billing_contract(price: float, expected: float) -> None:
+    usage = Usage(source=UsageSource.PROVIDER, input_tokens=1_000_000, output_tokens=500_000)
+    result = apply_cost(
+        usage, model="gemini-2.0-flash", table={"gemini-2.0-flash": ModelPrice(price, price)}
+    )
+    assert result.estimated_cost_usd == expected
+
+
+def test_aggregate_does_not_present_unknown_spend_as_free() -> None:
+    metrics = GatewayMetrics()
+    metrics.observe(
+        _record(usage=Usage(source=UsageSource.PROVIDER, input_tokens=1000, output_tokens=500))
+    )
+    assert metrics.estimated_cost_usd is None
+    assert metrics.as_dict()["estimated_cost_usd"] is None
+    assert metrics.as_dict()["cost_unknown_requests"] == 1
+    metrics.observe(
+        _record(
+            usage=Usage(
+                source=UsageSource.PROVIDER,
+                input_tokens=1000,
+                output_tokens=500,
+                estimated_cost_usd=2.0,
+            )
+        )
+    )
+    assert metrics.as_dict()["estimated_cost_usd"] is None
+    assert metrics.as_dict()["known_cost_subtotal_usd"] == 2.0
+
+
+def test_reuse_and_pre_execution_refusal_do_not_invent_unknown_provider_spend() -> None:
+    metrics = GatewayMetrics()
+    for hit in (True, False):
+        metrics.observe(
+            _record(
+                policy=PolicyOutcome(
+                    route_provider="p", route_model="m", attempts=0, idempotency_hit=hit
+                )
+            )
+        )
+    assert metrics.estimated_cost_usd == 0.0
+    assert metrics.cost_unknown_requests == 0
+
+
+def test_retry_cost_subtotal_does_not_claim_knowledge_of_failed_attempt_spend() -> None:
+    metrics = GatewayMetrics()
+    metrics.observe(
+        _record(
+            attempts=(
+                AttemptRecord(1, "p", "m", 0, 0.1, "error"),
+                AttemptRecord(2, "p", "m", 0.1, 0.1, "success"),
+            ),
+            policy=PolicyOutcome(route_provider="p", route_model="m", attempts=2, retries=1),
+            usage=Usage(
+                source=UsageSource.PROVIDER, input_tokens=1, output_tokens=1, estimated_cost_usd=1.0
+            ),
+        )
+    )
+    assert metrics.estimated_cost_usd is None
+    assert metrics.as_dict()["known_cost_subtotal_usd"] == 1.0
+    assert metrics.cost_unknown_requests == 1

@@ -908,6 +908,64 @@ MUTATIONS += (
 )
 
 
+MUTATIONS += (
+    Mutation(
+        "model_identity_invents_free_billing",
+        GATEWAY / "usage.py",
+        '"gemini-2.0-flash": ModelPrice(None, None)',
+        '"gemini-2.0-flash": ModelPrice(0.0, 0.0)',
+        OBSERVABILITY,
+        "test_model_identity_does_not_identify_billing_contract",
+        "model identity alone does not prove free billing",
+    ),
+    Mutation(
+        "pinned_price_accepts_negative_or_nonfinite",
+        GATEWAY / "usage.py",
+        "(not isfinite(value) or value < 0)",
+        "False",
+        OBSERVABILITY,
+        "test_pinned_prices_are_finite_and_nonnegative",
+        "pinned prices must be finite and nonnegative",
+    ),
+    Mutation(
+        "metrics_property_invents_complete_cost",
+        GATEWAY / "observability.py",
+        "return None if self.cost_unknown_requests else self.known_cost_subtotal_usd",
+        "return self.known_cost_subtotal_usd",
+        OBSERVABILITY,
+        "test_aggregate_does_not_present_unknown_spend_as_free",
+        "unknown physical spend cannot become a complete zero total",
+    ),
+    Mutation(
+        "metrics_projection_invents_complete_cost",
+        GATEWAY / "observability.py",
+        "round(self.known_cost_subtotal_usd, 6) if not self.cost_unknown_requests else None",
+        "round(self.known_cost_subtotal_usd, 6)",
+        OBSERVABILITY,
+        "test_aggregate_does_not_present_unknown_spend_as_free",
+        "JSON metrics preserve unknown spend",
+    ),
+    Mutation(
+        "metrics_forgets_unmeasured_retry_spend",
+        GATEWAY / "observability.py",
+        "            or record.attempts_count > 1\n",
+        "",
+        OBSERVABILITY,
+        "test_retry_cost_subtotal_does_not_claim_knowledge_of_failed_attempt_spend",
+        "last success cost is not the price of all attempts",
+    ),
+    Mutation(
+        "sdk_counts_accept_invalid_measurements",
+        GATEWAY / "adapters.py",
+        "if isinstance(value, bool) or not isinstance(value, int) or value < 0:",
+        "if False:",
+        ADAPTERS,
+        "test_malformed_sdk_counts_are_not_invented",
+        "SDK counts must be actual nonnegative integer measurements",
+    ),
+)
+
+
 def _run_pytest(
     package_root: Path, targets: tuple[str, ...] | str, timeout: int
 ) -> subprocess.CompletedProcess[str]:

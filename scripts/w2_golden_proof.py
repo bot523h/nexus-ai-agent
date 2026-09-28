@@ -104,7 +104,7 @@ def clean_full_runs(args: argparse.Namespace) -> int:
                 "-p",
                 "no:cacheprovider",
                 "--basetemp",
-                str(work / ".pytest-tmp"),
+                str(Path(temporary) / f"pytest-tmp-{index:02d}"),
                 "-m",
                 "not slow",
             ]

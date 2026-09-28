@@ -158,8 +158,8 @@ limit on a 400 stays `invalid_request`.
 ## 5. Policy lives in exactly one place
 
 `llm/gateway/policy.py` holds the knobs; `plan()` is the only function that turns
-them plus a request into a `Plan`. Nothing else in the repository decides whether
-to retry, wait, hop or refuse.
+them plus a request into a `Plan`. Migrated canonical callers do not own a second retry or fallback policy;
+the explicit image/vision exceptions in §12 still own their own resilience.
 
 | Policy | Defaults | What it bounds |
 |---|---|---|
@@ -238,11 +238,19 @@ otherwise it is `unknown` with `None` fields — never `0`, never an estimate fr
 prompt length. `is_known` is derived from the source, so a consumer cannot mistake
 an absent report for a free call. `apply_cost` attaches `estimated_cost_usd` only
 when the usage is provider-reported **and** the model has a pinned price in
-`DEFAULT_PRICE_TABLE` (`PRICE_TABLE_VERSION = "2026-09-27"`); an unpriced model
-stays `None`, which means "no pinned price", not "free". The table holds the models
-this repository actually configures (Gemini free tier, Groq free tier, one
-OpenRouter `:free` endpoint, local inference) — all priced at zero because that is
-what they cost, with quota rather than money as the real limit.
+`DEFAULT_PRICE_TABLE` (`PRICE_TABLE_VERSION = "2026-09-28"`); an unpriced model
+stays `None`, which means "no pinned price", not "free". Gemini/Groq model names
+and local-model aliases do not identify a billing contract: their default prices
+are UNKNOWN. Only the explicit OpenRouter `:free` endpoint is pinned to zero;
+operators can inject their own finite, nonnegative price table, including zero.
+Malformed SDK token counts (booleans, negatives, strings, fractions, NaN/Infinity)
+remain unknown rather than being coerced into invented measurements.
+
+Metrics expose `known_cost_subtotal_usd` and `cost_unknown_requests` separately.
+The aggregate `estimated_cost_usd` is null if any physical request lacks cost
+provenance, including earlier failed attempts in a retry/fallback chain. Logical
+idempotency reuse and proven pre-execution refusals add no provider spend. This
+is not an invoice or full infrastructure cost accounting.
 
 ## 9. Adapters: where the wire lives
 

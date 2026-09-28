@@ -364,12 +364,18 @@ class GatewayMetrics:
     usage_output_tokens: int = 0
     usage_reported: int = 0
     usage_unknown: int = 0
-    estimated_cost_usd: float = 0.0
+    known_cost_subtotal_usd: float = 0.0
+    cost_unknown_requests: int = 0
     total_execution_seconds: float = 0.0
     total_queue_wait_seconds: float = 0.0
     buffer: deque[RequestRecord] = field(
         default_factory=lambda: deque(maxlen=DEFAULT_RECORD_BUFFER)
     )
+
+    @property
+    def estimated_cost_usd(self) -> float | None:
+        """Complete total only when every physical request has a known cost."""
+        return None if self.cost_unknown_requests else self.known_cost_subtotal_usd
 
     def observe(self, record: RequestRecord) -> None:
         self.requests += 1
@@ -397,9 +403,20 @@ class GatewayMetrics:
             self.usage_input_tokens += record.usage.input_tokens or 0
             self.usage_output_tokens += record.usage.output_tokens or 0
             if record.usage.estimated_cost_usd is not None:
-                self.estimated_cost_usd += record.usage.estimated_cost_usd
+                self.known_cost_subtotal_usd += record.usage.estimated_cost_usd
         else:
             self.usage_unknown += 1
+        no_execution = record.policy is not None and (
+            record.policy.idempotency_hit or record.policy.attempts == 0
+        )
+        # Only the final answering attempt carries usage. Earlier failed
+        # attempts may have spent tokens too; the subtotal is not an invoice.
+        if not no_execution and (
+            not record.usage.is_known
+            or record.usage.estimated_cost_usd is None
+            or record.attempts_count > 1
+        ):
+            self.cost_unknown_requests += 1
         self.buffer.append(record)
 
     def as_dict(self) -> dict[str, Any]:
@@ -417,7 +434,11 @@ class GatewayMetrics:
             "usage_unknown": self.usage_unknown,
             "usage_input_tokens": self.usage_input_tokens,
             "usage_output_tokens": self.usage_output_tokens,
-            "estimated_cost_usd": round(self.estimated_cost_usd, 6),
+            "estimated_cost_usd": (
+                round(self.known_cost_subtotal_usd, 6) if not self.cost_unknown_requests else None
+            ),
+            "known_cost_subtotal_usd": round(self.known_cost_subtotal_usd, 6),
+            "cost_unknown_requests": self.cost_unknown_requests,
             "avg_execution_seconds": (
                 round(self.total_execution_seconds / self.attempts, 4) if self.attempts else 0.0
             ),

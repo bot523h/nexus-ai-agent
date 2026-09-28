@@ -296,13 +296,13 @@ async def test_provider_reported_usage_reaches_the_caller() -> None:
     assert response.usage.output_tokens == 4
 
 
-async def test_a_free_tier_model_costs_exactly_zero_and_says_so() -> None:
+async def test_an_explicitly_free_endpoint_costs_exactly_zero_and_says_so() -> None:
     """LAW 11: a real price of zero is a fact; a missing price is not a zero."""
 
     usage = Usage(source=UsageSource.PROVIDER, input_tokens=1000, output_tokens=500)
     gateway = _gateway(
-        [ScriptedAdapter("gemini", ["answer"], usage=usage)],
-        routes=[_route("gemini", model="gemini-2.0-flash")],
+        [ScriptedAdapter("openrouter", ["answer"], usage=usage)],
+        routes=[_route("openrouter", model="meta-llama/llama-3.3-70b-instruct:free")],
     )
     response = await gateway.execute(_request())
     assert response.usage.estimated_cost_usd == 0.0

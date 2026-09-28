@@ -1193,3 +1193,12 @@ def test_the_same_budget_reuses_the_pooled_client() -> None:
     first = adapter._client_for(BUDGET)  # noqa: SLF001
     second = adapter._client_for(BUDGET)  # noqa: SLF001
     assert first is second
+
+
+@pytest.mark.parametrize("count", [-1, True, 1.5, "4", "bad", float("nan"), float("inf")])
+def test_malformed_sdk_counts_are_not_invented(count: Any) -> None:
+    from nexus_ai_agent.llm.gateway.adapters import _litellm_usage
+
+    usage = _litellm_usage({"usage": {"prompt_tokens": count, "completion_tokens": count}})
+    assert usage.source is UsageSource.UNKNOWN
+    assert usage.input_tokens is None and usage.output_tokens is None

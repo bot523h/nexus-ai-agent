@@ -13,9 +13,9 @@ Why the price table is tiny and explicit rather than comprehensive: a stale
 price is a fabricated number with extra confidence attached. Prices are pinned
 per model, the table carries a version string, and any model not listed yields
 ``None`` (rendered as ``usage: unknown`` in observability) instead of a
-plausible-looking guess. Free-tier models are priced at ``0.0``, which is true
-rather than unknown — that distinction matters when an operator reads a cost
-dashboard.
+plausible-looking guess. Only an explicitly free endpoint or an operator-pinned
+zero price means free.
+A model name alone does not identify the billing contract or local hosting cost.
 
 Token-per-minute rate limiting is *not* implemented here on purpose: it needs
 provider-reported usage for the request that is about to be sent, which no
@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from math import isfinite
 
 from nexus_ai_agent.llm.gateway.contract import Usage, UsageSource
 
@@ -40,7 +41,7 @@ __all__ = [
 ]
 
 #: Bump whenever a price changes, so a cost figure can be tied to a table.
-PRICE_TABLE_VERSION = "2026-09-27"
+PRICE_TABLE_VERSION = "2026-09-28"
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,11 @@ class ModelPrice:
     input_usd_per_million: float | None
     output_usd_per_million: float | None
 
+    def __post_init__(self) -> None:
+        for value in (self.input_usd_per_million, self.output_usd_per_million):
+            if value is not None and (not isfinite(value) or value < 0):
+                raise ValueError("pinned prices must be finite and nonnegative")
+
     @property
     def is_known(self) -> bool:
         return self.input_usd_per_million is not None and self.output_usd_per_million is not None
@@ -58,16 +64,16 @@ class ModelPrice:
 #: Models this repository actually configures (config/settings.py). Anything
 #: absent is UNKNOWN — deliberately, and honestly.
 DEFAULT_PRICE_TABLE: Mapping[str, ModelPrice] = {
-    # Google AI free tier: no charge, and the daily quota is the real limit.
-    "gemini-2.0-flash": ModelPrice(0.0, 0.0),
-    "gemini-2.5-flash": ModelPrice(0.0, 0.0),
-    "gemini-2.5-flash-image": ModelPrice(0.0, 0.0),
-    # Groq free tier.
-    "llama-3.3-70b-versatile": ModelPrice(0.0, 0.0),
+    # Model identity does not prove which billing tier the credential uses.
+    "gemini-2.0-flash": ModelPrice(None, None),
+    "gemini-2.5-flash": ModelPrice(None, None),
+    "gemini-2.5-flash-image": ModelPrice(None, None),
+    # The same applies to Groq.
+    "llama-3.3-70b-versatile": ModelPrice(None, None),
     # OpenRouter ":free" endpoints are priced at zero by definition.
     "meta-llama/llama-3.3-70b-instruct:free": ModelPrice(0.0, 0.0),
-    # Local inference has no per-token price; the cost is hardware we already own.
-    "local-model": ModelPrice(0.0, 0.0),
+    # A local-model alias does not establish a hosting/billing contract.
+    "local-model": ModelPrice(None, None),
 }
 
 
