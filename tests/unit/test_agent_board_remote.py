@@ -189,3 +189,106 @@ def test_remote_movement_during_observation_is_not_safe(guard, repository, monke
 
     monkeypatch.setattr(guard.Git, "remote_heads", moving)
     assert guard.inspect_publication(repo, "arena/mine", now=NOW)["outcome"] == "NOT_VERIFIED"
+
+
+# ── adversarial round (hardening-proof-01a0e742) ─────────────────────────────
+
+
+def test_local_board_free_cannot_release_remote_lease(guard, repository):
+    repo, _ = repository
+    # The local history actively declares the peer released; the remote owner
+    # head still fences the zone, and only that head is authoritative.
+    released = json.dumps({"claims": [dict(lease(), status="done")]})
+    (repo / ".agents/board.json").write_text(released)
+    git(repo, "add", ".agents/board.json")
+    git(repo, "commit", "-m", "local board says the peer released")
+    commit(repo, "src/private/local-change.py", "data")
+    result = guard.inspect_publication(repo, "arena/mine", now=NOW)
+    assert result["outcome"] == "REJECTED"
+
+
+def test_deleted_local_tracking_ref_cannot_release_remote_owner(guard, repository):
+    repo, _ = repository
+    commit(repo, "src/private/x.py", "data")
+    git(repo, "branch", "-dr", "origin/arena/peer")
+    result = guard.inspect_publication(repo, "arena/mine", now=NOW)
+    assert result["outcome"] == "REJECTED"
+
+
+def test_shallow_history_cannot_be_judged(guard, repository):
+    repo, _ = repository
+    commit(repo, "safe.py", "safe")
+    subprocess.run(
+        ["git", "-C", str(repo), "fetch", "--depth=1", "origin"],
+        check=True,
+        capture_output=True,
+    )
+    result = guard.inspect_publication(repo, "arena/mine", now=NOW)
+    assert result["outcome"] == "NOT_VERIFIED"
+    assert any("shallow" in error for error in result["errors"])
+
+
+def test_rewritten_local_history_is_not_verifiable(guard, repository):
+    repo, _ = repository
+    commit(repo, "published.py", "published state")
+    git(repo, "push", "origin", "arena/mine")
+    git(repo, "reset", "--hard", "origin/main")
+    commit(repo, "different.py", "rebased away from the published tip")
+    result = guard.inspect_publication(repo, "arena/mine", now=NOW)
+    assert result["outcome"] == "NOT_VERIFIED"
+    assert result["errors"]
+
+
+def test_merge_commit_introduced_file_is_caught(guard, repository):
+    repo, _ = repository
+    git(repo, "checkout", "-b", "side")
+    commit(repo, "src/private/merged.py", "via merge")
+    git(repo, "checkout", "arena/mine")
+    git(repo, "merge", "--no-ff", "-m", "merge side", "side")
+    result = guard.inspect_publication(repo, "arena/mine", now=NOW)
+    assert result["outcome"] == "REJECTED"
+    assert "src/private/merged.py" in result["outgoing_files"]
+
+
+def test_cherry_pick_and_force_push_divergence_are_caught(guard, repository):
+    repo, _ = repository
+    git(repo, "checkout", "-b", "source", "origin/arena/peer")
+    bad = commit(repo, "src/private/picked.py", "picked")
+    git(repo, "checkout", "arena/mine")
+    git(repo, "cherry-pick", bad)
+    result = guard.inspect_publication(repo, "arena/mine", now=NOW)
+    assert result["outcome"] == "REJECTED"
+    assert "src/private/picked.py" in result["outgoing_files"]
+
+
+def test_force_push_style_rewrite_abandons_the_claim(guard, repository):
+    repo, _ = repository
+    commit(repo, "published.py", "published state")
+    git(repo, "push", "origin", "arena/mine")
+    git(repo, "reset", "--hard", "origin/main")
+    commit(repo, "rewritten.py", "force-push style divergence")
+    result = guard.inspect_publication(repo, "arena/mine", now=NOW)
+    assert result["outcome"] == "NOT_VERIFIED"
+    assert result["errors"]
+
+
+def test_local_quarantine_tag_is_not_published(guard, repository):
+    repo, _ = repository
+    git(repo, "checkout", "-b", "quarantine")
+    bad = commit(repo, "src/private/candidate.py", "candidate content")
+    git(repo, "tag", "preserved-candidate", bad)
+    git(repo, "checkout", "arena/mine")
+    commit(repo, "safe.py", "safe")
+    result = guard.inspect_publication(repo, "arena/mine", now=NOW)
+    assert result["outcome"] == "SUCCESS"
+    assert "src/private/candidate.py" not in result["outgoing_files"]
+    assert "preserved-candidate" not in git(repo, "ls-remote", "--heads", "origin")
+
+
+def test_post_push_empty_range_is_success(guard, repository):
+    repo, _ = repository
+    git(repo, "push", "origin", "arena/mine")
+    result = guard.inspect_publication(repo, "arena/mine", now=NOW)
+    assert result["outcome"] == "SUCCESS"
+    assert result["outgoing_commits"] == []
+    assert result["outgoing_files"] == []

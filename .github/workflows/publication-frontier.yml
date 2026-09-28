@@ -22,13 +22,28 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.11'
-      - name: Install test harness only
-        run: python -m pip install 'pytest>=8'
+      - name: Install the test harness only (no project install)
+        # pytest-asyncio is required because the repo's pyproject sets
+        # `asyncio_mode`; without the plugin pytest >= 9 exits with a usage
+        # error before collecting anything.
+        run: python -m pip install 'pytest>=8' pytest-asyncio
       - name: Board CLI + publication guard semantics
+        # --noconftest: tests/conftest.py imports the full application package,
+        # which this deliberately dependency-free job does not install. Both
+        # board test modules are self-contained (stdlib + pytest fixtures).
         run: |
-          python -m pytest -q \
+          python -m pytest -q --noconftest \
             tests/unit/test_agent_board.py \
             tests/unit/test_agent_board_remote.py
+      - name: Guard refuses a detached HEAD instead of guessing the branch
+        run: |
+          git checkout --detach HEAD
+          if python scripts/agent_board.py preflight \
+              --branch "${{ github.ref_name }}" --remote origin; then
+            echo "preflight accepted a detached HEAD"; exit 1
+          else
+            echo "guard correctly refused (non-zero exit)"
+          fi
 
   pushed-range:
     name: pushed range vs remote leases (post-push alarm)
@@ -45,9 +60,12 @@ jobs:
       - name: Verify the entire pushed range against the live frontier
         # Full history is required: a shallow checkout cannot enumerate the
         # outgoing range, and the guard must refuse, not approximate.
+        # actions/checkout leaves a detached HEAD on push events; the guard
+        # must know the exact branch identity, so materialize it first.
         run: |
+          BRANCH="${{ github.ref_name }}"
           git fetch --no-tags origin \
             main:refs/remotes/origin/main \
             'refs/heads/arena/*:refs/remotes/origin/arena/*'
-          python scripts/agent_board.py preflight \
-            --branch "${{ github.ref_name }}" --remote origin
+          git checkout -B "$BRANCH" "origin/$BRANCH"
+          python scripts/agent_board.py preflight --branch "$BRANCH" --remote origin

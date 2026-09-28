@@ -61,6 +61,7 @@ translate = [
 ]
 dev = [
   "build>=1.2,<2",  # offline wheel/sdist contract tests
+  "wheel>=0.43",  # build --no-isolation backend; full-suite wheel/sdist contract tests need it installed
   "pytest>=8.0",
   "pytest-asyncio>=0.23",
   "ruff>=0.4",
