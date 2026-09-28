@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-28T12:10:43Z",
+  "updated_at": "2026-09-28T13:23:07Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -843,6 +843,23 @@
         "docs/architecture/MODULE_MAP.md",
         "AGENTS.md",
         ".github/workflows/publication-frontier.yml"
+      ]
+    },
+    {
+      "id": "hardening-proof-01a0e742",
+      "paths": [
+        ".github/workflows/publication-frontier.yml",
+        "scripts/agent_board_remote.py",
+        "scripts/agent_board.py",
+        "scripts/probes/consent_generation_race.py",
+        "tests/unit/test_agent_board_remote.py",
+        "docs/ops/INTEGRATION_PREFLIGHT.md",
+        "docs/audits/2026-09-28-hardening-proof.fa.md",
+        "docs/README.md",
+        "docs/DECISION_LOG.md",
+        "docs/architecture/MODULE_MAP.md",
+        "AGENTS.md",
+        ".agents/board.json"
       ]
     }
   ],
@@ -1973,7 +1990,7 @@
       "title_fa": "",
       "zone": "ci-quality",
       "priority": "P1",
-      "status": "active",
+      "status": "expired",
       "scope": "non-blocking bootstrap job first, then blocking; sequenced after PR#33 lands",
       "scope_fa": "non-blocking bootstrap job first, then blocking; sequenced after PR#33 lands",
       "prerequisites": [],
@@ -1981,7 +1998,7 @@
         "CI job runs scripts/pack_coverage.py and reports per-pack coverage",
         "non-blocking (continue-on-error) at bootstrap, flip to blocking with evidence"
       ],
-      "note": "Claimed by the Continuum closure session together with task-184. Goes straight to a BLOCKING job (owner directive: no continue-on-error bootstrap); evidence recorded on release.",
+      "note": "auto-released by gc at 2026-09-28T13:23:07Z (stale active lease)",
       "agent_branch": "arena/01a0e2bb-nexus-ai-agent",
       "claimed_at": "2026-09-27T12:27:18Z",
       "ttl_hours": 24,
@@ -2742,7 +2759,7 @@
       "title_fa": "سخت‌سازی فورنزیک سامانهٔ شواهد Continuum",
       "zone": "continuum-evidence-measurement",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "agent_branch": "arena/01a0e2bb-nexus-ai-agent",
       "claimed_at": "2026-09-27T12:27:18Z",
       "ttl_hours": 24,
@@ -2778,7 +2795,7 @@
         "Targeted negative tests and mutation RED-to-GREEN restoration for every confirmed consumer defect.",
         "Two-run reproducibility comparison and exact PR #95/head/main/CI evidence."
       ],
-      "note": "Audit result: two P1 snapshot false-greens were reproduced in isolated Git fixtures and fixed through e924a65: a valid snapshot survived an uncommitted source edit, and a clean later commit could reuse it after src/tests/scripts/migration/dependency drift. Regressions cover clean control, dirty/stale rejection, empty revision rejection, and unavailable git-status fail-closed behaviour in tests/unit/test_continuum_hardening.py. P2 integration gap remains: CoverageReport JSON has no downstream reader and CI/release-lineage invokes neither pack coverage nor snapshot verification; task-154 remains queued rather than claiming a release gate it does not implement. Current committed snapshot correctly blocks CLI verification (unreachable recorded SHA and test-count drift). No non-Continuum domain edits without a proven direct false-evidence consumer. | 2026-09-27 arena/01a0e1e0 continuation (supersedes PR #95/#98): the P2 gap is closed — pack coverage is a canonical 95%-per-pack gate (D-0023, option A), the snapshot verifier fails closed on a 27-attack executable threat model (scripts/continuum_gate.py), a 73-mutation replayable campaign (scripts/continuum_mutations.py) fails on any survivor, and the CI job continuum-evidence runs all three on 3.10/3.11/3.12 against the exact SHA. HISTORICAL EVIDENCE LOST — CONTENT RECONSTRUCTED: the first local lineage (c44bf2c…7bda42c) was never pushed and was lost in a sandbox re-provisioning; its surviving working tree (tree ddc76334) was reconstructed on top of 48db056 and every piece of evidence was regenerated on the new lineage — see docs/audits/CONTINUUM_CLOSURE_2026-09-27.md for the exact SHAs, local runs and CI run IDs. | 2026-09-27 arena/01a0e2bb continuation (same mission owner, new session branch; a session is bound to exactly one branch and cannot push to arena/01a0e1e0): the previous session's final local commit 6198510f0a06a803ba445e03bba1e44306eaf0f9 was never pushed and is unrecoverable (git fetch origin <sha> -> 'not our ref'), so its content fix was re-derived from the failing PR #102 head eb6551b instead of copied. PR #102 was red on `test` and `python-parity` 3.10/3.11/3.12 (runs 36315364432 / 36315366459) because docs/audits/CONTINUUM_CLOSURE_2026-09-27.md was not listed in docs/README.md, which tests/unit/test_docs_integrity.py enforces; reproduced locally as '1 failed, 2893 passed, 30 skipped'. Fixed by indexing the document -- the invariant, the threshold and the measurement are untouched.",
+      "note": "auto-released by gc at 2026-09-28T13:23:07Z (stale active lease)",
       "previous_agent_branch": "arena/01a0e1e0-nexus-ai-agent"
     },
     {
@@ -3328,6 +3345,47 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "note": " Probe evidence: ci-artifacts/mission-20260928/consent-race.json (source sha256 8ac6aa7a..., FAILURE x2). Live preflight calibrated and SUCCESS at 0d1ec8d."
+    },
+    {
+      "task": "hardening-proof-01a0e742",
+      "zone": "hardening-proof-01a0e742",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Hardening proof round: live forensics after sandbox restore (quarantine artifacts lost), guard CI job repair (pytest9/conftest), full-suite red reproduction and scoped fixes limited to this branch own files, 8-case privacy invariant probe against main source and W2 tip, adversarial remote-guard tests, exact-SHA CI verification.",
+      "exclusive_paths": [
+        ".github/workflows/publication-frontier.yml",
+        "scripts/agent_board_remote.py",
+        "scripts/agent_board.py",
+        "scripts/probes/consent_generation_race.py",
+        "tests/unit/test_agent_board_remote.py",
+        "docs/ops/INTEGRATION_PREFLIGHT.md",
+        "docs/audits/2026-09-28-hardening-proof.fa.md",
+        "docs/README.md",
+        "docs/DECISION_LOG.md",
+        "docs/architecture/MODULE_MAP.md",
+        "AGENTS.md",
+        ".agents/board.json"
+      ],
+      "acceptance_criteria": [
+        "Quarantine loss recorded with live evidence; ac2b7d5 unreachable from any remote ref",
+        "Guard CI job reproduces exit 4 locally and passes after fix with pytest 9 and no project install",
+        "Full not-slow suite reproduced locally; every fix limited to files not covered by live W1/W2/DR leases",
+        "Probe covers 8 mandated race cases with deterministic outcomes; evidence against main source and W2 tip source",
+        "Adversarial guard scenarios added as tests; ambiguous evidence paths remain NOT_VERIFIED",
+        "CI on the exact published SHA verified live via check-runs API",
+        "No production claims without production evidence"
+      ],
+      "evidence_required": [
+        "Local reproduction logs for every red path",
+        "Probe JSON outputs for both sources",
+        "check-runs API evidence bound to the release SHA",
+        "Preflight SUCCESS bound to outgoing range"
+      ],
+      "agent_branch": "arena/01a0e742-nexus-ai-agent",
+      "claimed_at": "2026-09-28T13:23:07Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": ""
     }
   ],
   "deferred_log": [
