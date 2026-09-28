@@ -75,6 +75,7 @@ Conclusion: اینوریانت «پس از `forget_user` هیچ مسیری نب�
 - **پیش از این سشن، روی `2bddbbb`:** test/parity قرمز (ریشه: `wheel`) و guard قرمز (ریشه: pytest9/conftest) — هر دو محلی بازتولید و رفع شد؛ wheel-contract سبز بود چون خودش `wheel` نصب می‌کند (این ناسازگاری، سرنخ ریشه بود).
 - **بعد از تغییرات:** سوئیت کامل محلی (fulenv، پایتون ۳.۱۱، `-m "not slow"`): **۲۹۹۱ passed / ۰ error** (پیش از fix: ۲۹۹۱ passed + ۸ error). کاوشگر: FAILURE×۲ هدفمند. آزمون‌های داور+board: ۴۹ passed. docs-integrity: green (اجرای محلی). CI دقیق روی SHA انتشار: پس از push زنده کنترل می‌شود و در گام F نهایی ثبت می‌گردد؛ محدودیت: لاگ‌های blob گیت‌هاب در این محیط دریافت نشد (EOF) — قضاوت فقط از check-runs API/annotations.
 - production evidence: **هیچ**؛ `production_verified=false` در همهٔ خروجی‌های کاوشگر.
+- **CI زنده روی SHA دقیق `d1a7423` (check-runs API):** `lease model` ✓ success، `pushed range` ✓ success، `lint-fast` ✓، `test (not slow)` ✓ success، `python-parity 3.11` ✓، `3.12` ✓؛ `python-parity 3.10` در رانِ push-event **failure** و در رانِ pull-event روی **همان درخت** success → ناسازگار = flake در ۳٫۱۰؛ علت UNVERIFIED (لاگ/آرتیفکت blob از این sandbox دریافت نشد — EOF تکرارشونده؛ rerun نیز ۴۰۳). wheel-contract 3.10/3.11/3.12 همگی success. مسیر قرمز پنهان نشد؛ پایش ران بعدی در ادامهٔ همین بخش ثبت می‌شود.
 
 ## G — PR / Board Coordination
 
