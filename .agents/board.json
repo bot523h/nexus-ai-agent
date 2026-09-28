@@ -3391,7 +3391,7 @@
     },
     {
       "task": "task-200-w3-memory-trust-boundary",
-      "zone": "roadmap-backlog",
+      "zone": "task-200-w3-memory-trust-boundary",
       "priority": "P1",
       "status": "active",
       "scope": "W3 slice 1 (lease-safe): memory record trust metadata + no-implicit-authority rendering + capability-grant rejection + adversarial injection corpus, confined to src/nexus_ai_agent/memory/ and new tests; ai_memory.py integration deferred behind the live W2 fence.",
@@ -3421,7 +3421,7 @@
       "claimed_at": "2026-09-28T14:32:38Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": ""
+      "note": " CI root-caused 2026-09-28: claim originally referenced zone id roadmap-backlog (from the backlog board) which is not declared in this branch board; board schema tests (test_agent_board.py) correctly failed on CI. Fixed by pointing the claim at the declared zone id."
     }
   ],
   "deferred_log": [
