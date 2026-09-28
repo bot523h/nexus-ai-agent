@@ -680,7 +680,8 @@
         "docs/architecture/DATA_AND_STORAGE.md",
         "docs/architecture/TESTING.md",
         "docs/audits/2026-09-28-",
-        "src/nexus_ai_agent/features/onboarding.py"
+        "src/nexus_ai_agent/features/onboarding.py",
+        "src/nexus_ai_agent/storage/db.py"
       ]
     }
   ],
@@ -2776,13 +2777,14 @@
         "docs/architecture/DATA_AND_STORAGE.md",
         "docs/architecture/TESTING.md",
         "docs/audits/2026-09-28-",
-        "src/nexus_ai_agent/features/onboarding.py"
+        "src/nexus_ai_agent/features/onboarding.py",
+        "src/nexus_ai_agent/storage/db.py"
       ],
       "agent_branch": "arena/01a0e742-nexus-ai-agent",
       "claimed_at": "2026-09-28T10:34:24Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": " Adjacent identical AsyncSession.exec defect found in onboarding; include narrowly with a persisted-language regression."
+      "note": " Adjacent identical AsyncSession.exec defect found in onboarding; include narrowly with a persisted-language regression. Real integration uncovered get_session(None) ignoring NEXUS_DB_PATH. Include default resolution and canonical file-path cache identity; PR92 overlap explicitly noted, no broad W1 lifecycle rewrite."
     }
   ],
   "deferred_log": [
