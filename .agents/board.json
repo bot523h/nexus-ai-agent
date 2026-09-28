@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-28T11:46:12Z",
+  "updated_at": "2026-09-28T12:00:30Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -825,6 +825,23 @@
         "tests/unit/test_backup_dr_truth.py",
         "tests/unit/test_readyz_identity.py",
         "tests/unit/test_deploy_smoke_readyz.py"
+      ]
+    },
+    {
+      "id": "mission-publication-frontier-01a0e742",
+      "paths": [
+        "scripts/agent_board.py",
+        "scripts/agent_board_remote.py",
+        "scripts/probes/consent_generation_race.py",
+        "tests/unit/test_agent_board_remote.py",
+        "docs/ops/INTEGRATION_PREFLIGHT.md",
+        "docs/audits/2026-09-28-autonomous-mission.fa.md",
+        "docs/audits/2026-09-28-dependency-triage.json",
+        "docs/architecture/adr/0007-remote-publication-frontier.md",
+        "docs/architecture/adr/README.md",
+        "docs/README.md",
+        "docs/architecture/MODULE_MAP.md",
+        "AGENTS.md"
       ]
     }
   ],
@@ -3269,6 +3286,45 @@
       "ttl_hours": 48,
       "status_note": "cli.py deferred: active lease held by task-181-gate5-closure (ZERO COLLISION). Restore drill exposed via python -m nexus_ai_agent.maintenance.restore instead.",
       "agent_branch": "arena/01a0dee1-nexus-ai-agent"
+    },
+    {
+      "task": "mission-publication-frontier-01a0e742",
+      "zone": "mission-publication-frontier-01a0e742",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Repair existing coordination authority with live remote publication frontier; exact outbound commit scope, fail-closed metadata and race checks; preserve ac2 separately; characterize consent-generation race and triage advisories without editing leased runtime code.",
+      "exclusive_paths": [
+        "scripts/agent_board.py",
+        "scripts/agent_board_remote.py",
+        "scripts/probes/consent_generation_race.py",
+        "tests/unit/test_agent_board_remote.py",
+        "docs/ops/INTEGRATION_PREFLIGHT.md",
+        "docs/audits/2026-09-28-autonomous-mission.fa.md",
+        "docs/audits/2026-09-28-dependency-triage.json",
+        "docs/architecture/adr/0007-remote-publication-frontier.md",
+        "docs/architecture/adr/README.md",
+        "docs/README.md",
+        "docs/architecture/MODULE_MAP.md",
+        "AGENTS.md"
+      ],
+      "acceptance_criteria": [
+        "A stale local board cannot declare a remotely leased outgoing change safe",
+        "All unpublished commits, including reverted changes and merge parents, are inspected",
+        "Malformed active lease, failed refresh or moving ref snapshot is NOT_VERIFIED, never success",
+        "No foreign runtime/LLM/API lease edits; ac2 retained by immutable local tag and named stash",
+        "A-J report distinguishes candidate, published, main and production evidence"
+      ],
+      "evidence_required": [
+        "Deterministic model tests and real disposable Git repository tests",
+        "Live preflight JSON bound to observed remote and local OIDs",
+        "Primary-advisory triage and isolated memory-race reproduction",
+        "Focused CI check for publication guard"
+      ],
+      "agent_branch": "arena/01a0e742-nexus-ai-agent",
+      "claimed_at": "2026-09-28T12:00:30Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": ""
     }
   ],
   "deferred_log": [
