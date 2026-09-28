@@ -21,9 +21,10 @@ Reason: one free-zone storage-observability slice was reproduced, fixed, tested,
 
 ## 3. Exact Ending SHA
 
-- Ending HEAD: `78f0e571cdc905648b273efb3f543478b0775c67`
+- Ending implementation HEAD at PR creation: `82843e837db3f10b92762c2df1ad2fde499e60e1`
+- Note: the exact final pushed branch SHA is reported in the final response / PR #120 head because a commit cannot accurately embed its own hash in its contents.
 - Remote branch: `origin/arena/01a0e9b7-nexus-ai-agent`
-- PR: `TO_BE_FILLED_AFTER_PR`
+- PR: `#120` — https://github.com/bot523h/nexus-ai-agent/pull/120
 
 ## 4. GitHub/Auth State
 
@@ -280,7 +281,7 @@ Local quality gates after fix:
 - `python -m pytest -q tests/unit/test_unified_cloud.py` → `5 passed`
 - Full non-slow gate initially failed because my claimed test/doc paths were outside the declared `storage-observability` zone. I fixed the board zone declaration and reran the board test green.
 - Final full non-slow rerun: `python -m pytest -q -m 'not slow'` → `2920 passed, 30 skipped, 16 warnings in 149.68s` on 2026-09-28T20:57:09Z..20:59:43Z; targeted post-release board/docs/storage run `80 passed in 0.73s`.
-- Remote CI: `TO_BE_FILLED_AFTER_PR_CI`
+- Remote CI: PR #120 run `36483165998` started on head `82843e837db3f10b92762c2df1ad2fde499e60e1`; checks were pending when first queried. Final response records the latest status after the last push.
 
 ## 22. Documentation Evidence
 
