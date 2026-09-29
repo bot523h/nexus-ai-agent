@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-29T20:32:00Z",
+  "updated_at": "2026-09-29T21:07:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -702,9 +702,12 @@
     },
     {
       "id": "telegram-e2e-verification",
-      "description": "End-to-end proof through the REAL Telegram entry point (bot/handlers.py::on_message), not a hand-built state. handlers.py itself stays read-only: seven open PRs contest it.",
+      "description": "End-to-end proof through the REAL Telegram entry point (bot/handlers.py::on_message), not a hand-built state, plus the mutation harness that attacks that span. handlers.py and graph.py are touched ONLY by scripts/telegram_e2e_mutations.py, which edits them temporarily and restores them byte-for-byte (verified with `git status --porcelain` after every run). Both files' real leases (task-196, task-202) have expired. memory/ is deliberately excluded: PR #121 (task-203) holds a LIVE lease on it until 2026-09-29T21:39:02Z.",
       "paths": [
-        "tests/unit/test_telegram_memory_e2e.py"
+        "tests/unit/test_telegram_memory_e2e.py",
+        "scripts/telegram_e2e_mutations.py",
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/orchestration/graph.py"
       ]
     }
   ],
@@ -2862,7 +2865,10 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "exclusive_paths": [
-        "tests/unit/test_telegram_memory_e2e.py"
+        "tests/unit/test_telegram_memory_e2e.py",
+        "scripts/telegram_e2e_mutations.py",
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/orchestration/graph.py"
       ],
       "scope": "Every test in task-205 builds its state by hand. The real entry point is bot/handlers.py::on_message → _base_state, which hardcodes memory_context: ''. A regression there is invisible to the current suite.",
       "acceptance_criteria": [
@@ -2878,7 +2884,9 @@
         "the killed-mutant report from the new end-to-end mutation",
         "ruff check and ruff format --check clean"
       ],
-      "prerequisites": []
+      "prerequisites": [],
+      "mutation_scope_note": "handlers.py and graph.py are in exclusive_paths ONLY so the mutation harness may attack them and restore them; no delivered change to either file is part of task-214.",
+      "evidence": "pytest tests/unit/test_telegram_memory_e2e.py -q -> 7 passed. python scripts/telegram_e2e_mutations.py -> 4/4 killed (E1 thread_id from user, E2 _base_state bypassed, E3 H1 reverted, E4 reply replaced by a constant); baseline GREEN -> restored GREEN. A fifth mutant (wipe memory_context) SURVIVED and was DROPPED as a false premise: _memory_reader overwrites that key unconditionally, so the guard would have been fake."
     }
   ],
   "deferred_log": [
