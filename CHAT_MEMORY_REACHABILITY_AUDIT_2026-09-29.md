@@ -692,3 +692,92 @@ python -m pytest tests/unit tests/architecture -q -> 25 failed, 2758 passed
 
 2751 → 2758 is this file's seven tests. The 25 failures are the unchanged
 pre-existing sandbox baseline. **Zero regressions.**
+
+---
+
+## 15. task-211 — THE READER QUERIED THE ASSISTANT (reproduced, then fixed)
+
+The hypothesis was that `_memory_reader` queries `state["messages"][-1]`, which
+can be the assistant's own last turn. It was tested on the real compiled graph
+with a real checkpointer **before** any code changed.
+
+```
+case A  on_message's own flow (a fresh one-message state)
+        -> queried the user's words.                       OK
+case B  the caller replays the previous RESULT state
+        -> queried 'ASSISTANT-ANSWER'.                     DEFECT
+case C  a state whose last message is the assistant's
+        -> queried 'Noted, Sara.'                          DEFECT
+case D  no messages at all
+        -> queried ''.                                     no recall, no crash
+```
+
+Case A is the only one production exercises, which is why this was latent rather
+than loud. But **case B is the graph's own output state** — the most natural thing
+for any caller to hand back — and the reader and writer disagreed about what "this
+turn" means: `_memory_writer` walks backwards for the last **user** message,
+`_memory_reader` took whatever was last.
+
+The fix is six lines and mirrors the writer exactly. No new dependency, no
+signature change, no new abstraction.
+
+**A mutant the first version of the suite could not kill.** `M2` rewrites the fix
+to take the *first* user message. It **survived**, because every state those tests
+used held exactly one user turn, so first and last are the same string. A reviewer
+who "fixed" this by reading the first user message would ship a query that goes
+staler every turn. The new multi-turn guard kills it.
+
+```
+tests/unit/test_memory_reader_query.py            7 passed
+scripts/memory_reader_query_mutations.py         3/3 killed
+scripts/chat_memory_mutations.py                 6/6 killed
+scripts/telegram_e2e_mutations.py                4/4 killed
+python -m pytest tests/unit tests/architecture   25 failed, 2765 passed
+```
+
+The 25 are the unchanged sandbox baseline; 2758 → 2765 is this file's seven tests.
+**Zero regressions.**
+
+A side effect worth recording: the task-211 edit renamed `last` to `last_user`,
+which **broke an anchor in `chat_memory_mutations.py`**. That harness refused to
+run and demanded a re-base instead of guessing — the behaviour that keeps a stale
+harness honest, and the reason a green run is meaningful.
+
+## 16. task-218 (NEW, P0) — THE CHECKPOINTER PERSISTS NO CONVERSATION HISTORY
+
+Found while reproducing task-211, and it is larger than the symptom.
+
+```
+two turns on one thread_id ->
+  state messages : [('user','What is my name?'), ('assistant','ACK')]
+  turn_count     : 1        (after TWO turns)
+  turn-1 text present in the turn-2 state?  No
+```
+
+**Root cause:** `NexusState` is a plain `TypedDict` and `messages: list[dict]`
+carries no `Annotated(..., add_messages)` reducer, so it is a **LastValue**
+channel. `_base_state` hands the graph a fresh one-message state every turn, which
+*replaces* the checkpointed history; the same replacement zeroes `turn_count`
+before `_router_node` increments it straight back to 1.
+
+**Consequence:** the agent has no short-term conversational memory at all. Long-term
+recall is therefore the **only** continuity mechanism — so a recall failure is not
+degraded UX, it is amnesia for that turn. That raises the stakes on H1 and on
+task-215, and it was on no board.
+
+**Not fixed here.** Choosing between an `add_messages` reducer, an explicit history
+merge, and *deliberately stateless* is an architecture decision with repo-wide state
+semantics. It belongs in an ADR before code.
+
+### Merge re-verified with task-211 in place
+
+```
+conflicts                      : 1  (.agents/board.json only)
+graph.py                       : auto-merges, zero conflicts
+union of #119 + #122 suites    : 207 passed, 2 xfailed
+chat_memory_mutations.py       : 6/6 killed
+memory_reader_query_mutations  : 3/3 killed
+telegram_e2e_mutations.py      : 4/4 killed
+```
+
+Both fixes still present, neither discarded, no force-push, no history rewritten.
