@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-29T21:25:00Z",
+  "updated_at": "2026-09-29T21:37:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -694,10 +694,12 @@
     },
     {
       "id": "orchestration-routing",
-      "description": "Routing decisions in the LangGraph orchestration. Taken over from the task-202 lease, which lapsed 2026-09-29T17:51:40Z with no renewal and no PR activity since 2026-09-28T19:22Z.",
+      "description": "orchestration/graph.py routing and the memory reader/writer nodes, plus the tests and mutation harnesses that guard them. task-202 (PR #119) held graph.py until 2026-09-29T17:51:40Z; it expired and was never renewed, and a re-scan of all 42 open-PR boards on 2026-09-29T21:34Z found no live claim on this file.",
       "paths": [
         "src/nexus_ai_agent/orchestration/graph.py",
-        "tests/unit/test_graph_memory.py"
+        "tests/unit/test_graph_memory.py",
+        "tests/unit/test_memory_reader_query.py",
+        "scripts/memory_reader_query_mutations.py"
       ]
     },
     {
@@ -2889,6 +2891,40 @@
       "evidence": "pytest tests/unit/test_telegram_memory_e2e.py -q -> 7 passed. python scripts/telegram_e2e_mutations.py -> 4/4 killed (E1 thread_id from user, E2 _base_state bypassed, E3 H1 reverted, E4 reply replaced by a constant); baseline GREEN -> restored GREEN. A fifth mutant (wipe memory_context) SURVIVED and was DROPPED as a false premise: _memory_reader overwrites that key unconditionally, so the guard would have been fake.",
       "released_at": "2026-09-29T21:25:00Z",
       "result": "7 tests in tests/unit/test_telegram_memory_e2e.py; scripts/telegram_e2e_mutations.py 4/4 killed. Found two things no board had: on_message's intent='unknown' is harmless only by node ordering, and its active-agent branch never reads memory at all (now task-217)."
+    },
+    {
+      "task": "task-211-memory-reader-queries-the-assistants-own-last-turn",
+      "title": "_memory_reader queries with messages[-1], which can be the assistant's own last turn",
+      "title_fa": "_memory_reader با messages[-1] جست‌وجو می‌کند که ممکن است پیام دستیار باشد",
+      "zone": "orchestration-routing",
+      "priority": "P1",
+      "status": "active",
+      "agent_branch": "arena/01a0eade-nexus-ai-agent",
+      "claimed_at": "2026-09-29T21:35:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/orchestration/graph.py",
+        "tests/unit/test_graph_memory.py",
+        "tests/unit/test_memory_reader_query.py",
+        "scripts/memory_reader_query_mutations.py"
+      ],
+      "scope": "graph.py::_memory_reader uses state['messages'][-1]['content'] with no role filter, while _memory_writer walks backwards for the last USER message. If a resumed turn ever presents the assistant's own text at [-1], recall silently queries the wrong text. REPRODUCE FIRST on a real checkpointered two-turn conversation; fix only if the defect is demonstrated.",
+      "acceptance_criteria": [
+        "a real two-turn conversation is driven through the compiled graph with a checkpointer, and the query text used on turn 2 is OBSERVED, not assumed",
+        "if the defect is real: the query is built from the last user message, matching what the writer stores",
+        "a multi-turn test proves turn N+1 queries with the user's words",
+        "a mutant that reintroduces messages[-1] is killed",
+        "if the defect is NOT real: the hypothesis is rejected in writing and no production code changes",
+        "zero regressions"
+      ],
+      "evidence_required": [
+        "the observed query on turn 1 and turn 2, verbatim",
+        "red->green, or an explicit rejection with the observation that refutes it",
+        "the killed-mutant report",
+        "ruff check and ruff format --check clean"
+      ],
+      "prerequisites": []
     }
   ],
   "deferred_log": [
