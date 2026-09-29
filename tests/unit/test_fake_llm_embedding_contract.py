@@ -6,6 +6,7 @@ import asyncio
 import json
 import math
 import os
+import struct
 import subprocess
 import sys
 import time
@@ -152,6 +153,27 @@ def test_fake_embedding_is_stable_across_process_hash_seeds() -> None:
         f"independent of PYTHONHASHSEED; got {first[:3]!r} vs {second[:3]!r}"
     )
     assert first != different, "the embedding must remain content-derived, not constant"
+
+
+def test_fake_vector_bytes_match_geminis_documented_synthetic_embedding() -> None:
+    """The offline fallback shares Gemini's current pseudo-vector contract."""
+    from nexus_ai_agent.llm.fake_llm import FakeLLMProvider
+    from nexus_ai_agent.llm.gemini_provider import GeminiProvider
+
+    fake = FakeLLMProvider()
+    gemini = GeminiProvider(api_key="")
+
+    async def compare_vectors() -> None:
+        for text in ("", "same text", "same persisted memory 🔒 café"):
+            fake_vector = await fake.embed(text)
+            gemini_vector = await gemini.embed(text)
+            assert len(fake_vector) == len(gemini_vector) == 384
+            assert fake_vector == gemini_vector
+            assert struct.pack(f"{len(fake_vector)}f", *fake_vector) == struct.pack(
+                f"{len(gemini_vector)}f", *gemini_vector
+            )
+
+    asyncio.run(compare_vectors())
 
 
 def test_fake_embedding_calls_are_thread_independent() -> None:
