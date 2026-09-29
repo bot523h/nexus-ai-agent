@@ -213,9 +213,10 @@ def compile_graph(
         intent = state.get("intent", "chat")
         if intent == "task":
             return "memory_reader_task"
-        if intent == "memory":
-            return "memory_reader_chat"
-        return "route_persona"
+        # H1: every remaining intent is a conversational turn, and a
+        # conversational turn is exactly the one that asks "what did I tell
+        # you?".  Route it through the reader before the persona agent.
+        return "memory_reader_chat"
 
     def route_persona(state: NexusState) -> str:
         p = state.get("active_persona", "gemma")

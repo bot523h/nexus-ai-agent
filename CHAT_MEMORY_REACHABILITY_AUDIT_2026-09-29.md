@@ -1,12 +1,15 @@
 # Chat→Memory Reachability Audit — task-205
 
-> **One-line verdict:** a memory stored by this repository **cannot** be reached by a
-> user on the chat path. The one-line fix exists and is verified here, but it lives in a
-> file another agent currently leases, so it is **deferred, not delivered**.
+> **One-line verdict:** a memory stored by this repository could **not** be reached by a
+> user on the chat path — 4 of 5 real recall phrasings were answered with an empty memory
+> context. The fix is **delivered** in this branch: it was deferred for 13 hours while the
+> target file was leased, verified out of tree during that window, and landed the moment
+> the lease lapsed.
 
 | | |
 |---|---|
 | **Task** | `task-205-chat-memory-reachability-contract` (zone `chat-memory-reachability`) |
+| **H1** | `task-206` (zone `orchestration-routing`) — **delivered**, see §5.2 |
 | **Branch** | `arena/01a0eade-nexus-ai-agent` |
 | **Base** | `main` @ `e5b326b2eaf691a638d030ad57acf1ce60016ef0` |
 | **Board claim** | `8113996`, pushed before any code was written |
@@ -148,7 +151,7 @@ that works does so only because it happens to contain the word "remember".
 
 ---
 
-## 5. WHY H1 WAS NOT APPLIED
+## 5. WHY H1 WAS DEFERRED FIRST — AND HOW IT LANDED
 
 `src/nexus_ai_agent/orchestration/graph.py` is the file the fix belongs in, and it is
 under a **live lease**:
@@ -181,11 +184,63 @@ them. Any agent starting from `main` gets a green check on files that are active
 Live truth outranks the tool. The lease was honoured regardless of the exit code, and
 **no governance file, test, or rule was modified to make H1 executable.**
 Recommendation: `cmd_check` should union the local board with the boards of open PR head
-branches (the same traversal `scripts/agent_board.py praudit` already performs).
+branches (the same traversal `scripts/agent_board.py praudit` already performs) — filed as
+`task-207`.
+
+### 5.2 The lease lapsed, and the fix landed
+
+At `2026-09-29T17:51:40Z` the 24 h TTL elapsed. Before touching the file, live state was
+re-checked rather than assumed:
+
+```
+PR #119              state=OPEN draft=true  updated=2026-09-28T19:22:53Z  (22 h idle)
+task-202 claim       status=active  claimed_at=2026-09-28T17:51:40Z  ttl=24h
+                     → expires 2026-09-29T17:51:40Z   ← elapsed
+                     released_at=null                            ← never renewed
+origin/main          e5b326b2  (unchanged; already in this branch history)
+cross-PR scan        41 open-PR boards → no live foreign lease on graph.py
+```
+
+`AGENTS.md` §1.5: *leases expire (24 h TTL); `show`/`next`/`gc` auto-release stale leases.*
+The claim was never renewed and its PR had been idle for 22 hours, so the scope was
+released by the protocol's own rule — not taken by force.
+
+The sequence was therefore: **claim first** (`task-206`, zone `orchestration-routing`,
+commit `13a33b9`, pushed), `check` → exit 0, cross-PR scan → CLEAR, *then* edit.
+
+**Collision risk with PR #119 was measured, not hoped away.** A read-only three-way merge
+of this branch against PR #119's head:
+
+```
+$ git merge-tree --write-tree HEAD origin/arena/01a0e907-nexus-ai-agent
+Auto-merging .agents/board.json
+CONFLICT (content): Merge conflict in .agents/board.json
+```
+
+`graph.py` merges **cleanly** — PR #119's hunks are at lines 9 and 165, this one at 212.
+The only conflict is the coordination file, which `AGENTS.md` §6 resolves as *newest state
+wins*.
+
+### 5.3 The guards got stronger after the fix landed
+
+While the fix was pending, the reachability tripwires were `xfail(strict=False)` so the
+suite was green in both worlds. Now that the fix is **in**, that is the wrong shape: an
+XPASS can be overlooked. Ten tripwires were promoted to **hard assertions**, so a
+regression now turns CI red:
+
+```
+before the fix:  13 passed, 12 xfailed, 2 xpassed
+after  the fix:  25 passed,  2 xfailed
+```
+
+The two remaining `xfail`s are honest and each names a *decision*, not a lease: `task-215`
+(LAW 11) and `task-210` (group scope). The mutation harness confirms the promotion did not
+weaken anything — the same six mutants now die as **hard failures** (15–17 `failed` where
+they previously produced `xfailed`).
 
 ---
 
-## 6. THE FIX — verified out of tree, ready to apply
+## 6. THE FIX — verified out of tree, then landed
 
 The patch is four lines of diff in `graph.py::route_intent`:
 
@@ -355,14 +410,17 @@ dependencies and are not installed here.
 
 ## 9. WHAT CHANGED
 
-| path | kind | lines |
+| path | kind | what |
 |---|---|---|
-| `tests/unit/test_chat_memory_reachability.py` | new | 27 tests |
+| `src/nexus_ai_agent/orchestration/graph.py` | **modified** | **H1 — the 4-line `route_intent` fix (§6)** |
+| `tests/unit/test_chat_memory_reachability.py` | new | 27 tests, 10 promoted to hard assertions |
 | `scripts/chat_memory_mutations.py` | new | mutation + U1 harness |
-| `.agents/board.json` | modified | zone, claim, deferral |
+| `.agents/board.json` | modified | zones, `task-205`/`task-206` claims, next work |
 
-**No file under `src/` was modified.** No existing test was modified. No governance rule,
-board test, or threshold was changed. `scripts/h1_repro.py` was written during PHASE 2 and
+**Exactly one file under `src/` was modified**, and it is the file the board fences for
+`task-206`. No existing test was modified — `tests/unit/test_graph_memory.py` was read,
+not touched, and its assertions (memory *write* and executor behaviour) do not cover
+routing. No governance rule, board test, or threshold was changed. `scripts/h1_repro.py` was written during PHASE 2 and
 then **deleted** once the test suite made it redundant — a second implementation of the
 same proof is debt, not evidence.
 
@@ -405,15 +463,17 @@ $ python -m pytest tests/integration/test_graph.py tests/integration/test_agents
 63 passed in 1.52s
 
 $ python -m pytest tests/unit tests/architecture -q
-25 failed, 2739 passed, 19 skipped, 12 xfailed, 2 xpassed in 120.98s
+25 failed, 2751 passed, 19 skipped,  2 xfailed, 16 warnings in 98.90s
 
 $ python -m pytest tests/unit tests/architecture -q --ignore=tests/unit/test_chat_memory_reachability.py
-25 failed, 2726 passed, 19 skipped, 16 warnings in 118.16s
+25 failed, 2726 passed, 19 skipped, 16 warnings in 96.68s
+  # baseline run with H1 stashed and the reachability suite deselected
 ```
 
 **The 25 failures are identical with and without this change** — creative render, ffmpeg,
 litellm and postgres-engine tests that need binaries and packages absent from this
-sandbox. Net effect of this PR: **+13 passed, +12 declared xfail, +2 xpass, 0 regressions.**
+sandbox. Net effect of this PR, including the fix itself: **+25 passed, 2 declared xfail,
+0 regressions.**  The 25 failures are byte-identical across both runs.
 
 Full release gates are **deferred to the gates owner** (`AGENTS.md` §1.4). Nothing in this
 document is a production or `main` capability claim.
@@ -437,20 +497,23 @@ Postgres.
 
 ## 11. KNOWN LIMITATIONS
 
-1. **H1 is not delivered.** The user-visible symptom is unchanged on this branch. Any
-   capability described here is a **branch-local, guarded, not-yet-wired** state.
-2. **The suite is green because the failures are declared.** A reviewer who only reads
-   "11 passed" is misreading it; the RED state is in the `xfail` count and in the M0 row of
-   the mutation report.
-3. **No production verification.** No Telegram run, no real LLM, no real embedder, no
+1. **H1 is delivered on this branch, not on `main`.** The user-visible symptom is still
+   present in production. This is a **branch capability**, not a released one.
+2. **Two invariants remain open by decision, not by accident:** `task-215` (a dead backend
+   is still reported as a successful empty recall) and `task-210` (a Telegram group shares
+   one memory scope across its members). Both are stated as `xfail` with a task id.
+3. **The suite is green, and two tests are green *by declaration*.** 25 pass; the 2
+   `xfail`s are the open decisions above. A reviewer who reads only the pass count is
+   misreading it.
+4. **No production verification.** No Telegram run, no real LLM, no real embedder, no
    Neon/Postgres, no sqlite-vec load in CI. `FakeLLMProvider` is the only provider exercised.
-4. **Isolation tests 1–2 are probabilistic detectors** (see §7). Test 4 is the
+5. **Isolation tests 1–2 are probabilistic detectors** (see §7). Test 4 is the
    authoritative one.
-5. **U1 measures `main`**, not PR #121's retriever. A real dense lane needs a deterministic
+6. **U1 measures `main`**, not PR #121's retriever. A real dense lane needs a deterministic
    embedder and a model this sandbox cannot load.
-6. **`agent_board.py check` gave a false green** (§5.1). Every agent working from `main` is
+7. **`agent_board.py check` gave a false green** (§5.1). Every agent working from `main` is
    currently blind to leases held on unmerged PR branches.
-7. **No observability was added.** After the H1 wiring a chat turn still emits no
+8. **No observability was added.** After the H1 wiring a chat turn still emits no
    structured record of *whether* it read memory, *how many* hits it got, or *which lane*
    answered. `NexusState` carries no retrieval outcome. Tracked as `task-215`.
 8. **PR #121 unmerged** means this branch measures pre-W2 retrieval throughout. The two
@@ -458,26 +521,23 @@ Postgres.
 
 ---
 
-## 12. THE NEXT AGENT'S FIRST MOVE
+## 12. WHAT THE NEXT AGENT OWES
+
+**Merge this before anything else in the memory area.** `main` still has the gap.
+
+1. Merge PR #122. `graph.py` merges cleanly with PR #119 (measured in §5.2); the only
+   conflict is `.agents/board.json`, resolved by *newest state wins* (`AGENTS.md` §6).
+2. After merge, the two `xfail`s are the honest backlog: `task-215` then `task-210`. Both
+   are decisions, not accidents, and both carry an assertion that turns green when settled.
+3. `scripts/chat_memory_mutations.py` now runs on the **fixed** branch and is the permanent
+   regression harness — six mutants, all of which must keep dying. It is idempotent-aware:
+   it recognises its own patch instead of erroring on a stale anchor.
 
 ```bash
-# 1. confirm the lease is gone
-git fetch origin && python -c "
-import json,subprocess
-for pr in json.loads(subprocess.run(['gh','pr','list','--state','open','--json','number,headRefName'],capture_output=True,text=True).stdout):
-    b=json.loads(subprocess.run(['git','show',f\"origin/{pr['headRefName']}:.agents/board.json\"],capture_output=True,text=True).stdout or '{}')
-    for c in b.get('claims',[]):
-        if c.get('status')=='active' and any('graph.py' in p for p in c.get('exclusive_paths') or []):
-            print('LEASED BY', c['task'], c['claimed_at'], c.get('ttl_hours'))
-"
-
-# 2. apply the patch from §6, then
-python scripts/chat_memory_mutations.py     # M1 must go green, M0 must go quiet
-python -m pytest tests/unit/test_chat_memory_reachability.py -rxX
+python scripts/chat_memory_mutations.py              # regression harness
+python -m pytest tests/unit/test_chat_memory_reachability.py -q
+# expect: 25 passed, 2 xfailed
 ```
-
-Expected after the patch: **0 xfailed except the typed-failure one**, which needs the
-second change described in `task-215`.
 
 ---
 
