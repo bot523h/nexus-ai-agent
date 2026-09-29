@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-29T21:37:00Z",
+  "updated_at": "2026-09-29T21:56:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2924,7 +2924,8 @@
         "the killed-mutant report",
         "ruff check and ruff format --check clean"
       ],
-      "prerequisites": []
+      "prerequisites": [],
+      "evidence": "REPRODUCED then FIXED. Pre-fix, real checkpointered graph: case A (on_message's fresh one-message state) queried the user's words and was fine; case B (caller replays the previous RESULT state) queried 'ASSISTANT-ANSWER'; case C (state ending on the assistant) queried 'Noted, Sara.'; case D (no messages) queried ''. Post-fix: 7 passed, 3/3 mutants killed. Regression: 25 failed / 2765 passed vs a 25-failure baseline, zero regressions."
     }
   ],
   "deferred_log": [
@@ -3076,28 +3077,6 @@
       "prerequisites": [
         "task-206"
       ]
-    },
-    {
-      "id": "task-211",
-      "priority": "P1",
-      "zone": "chat-memory-reachability",
-      "title": "_memory_reader queries with messages[-1], which can be the assistant's own last turn",
-      "title_fa": "_memory_reader با messages[-1] جست‌وجو می‌کند که ممکن است پیام دستیار باشد",
-      "why_fa": "روی گفت‌وگوی چندنوبتی، پرسش از پاسخ مدل ساخته می‌شود نه از پیام کاربر.",
-      "why": "graph.py:31 uses state['messages'][-1]['content'] with no role filter, while _memory_writer correctly walks backwards for the last *user* message. On a resumed turn the query can be the assistant's own text.",
-      "acceptance_criteria": [
-        "the memory query is built from the last user message, matching what the writer stores",
-        "a multi-turn test proves turn N+1 queries with the user's words, not the assistant's",
-        "a mutant that reintroduces messages[-1] is killed"
-      ],
-      "evidence_required": [
-        "a multi-turn red→green test and its killed mutant"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/orchestration/graph.py"
-      ],
-      "prerequisites": [],
-      "status_note": "graph.py was leased by task-206 and is now free again (task-206 released 2026-09-29T18:05Z)"
     },
     {
       "id": "task-212",
@@ -3832,5 +3811,6 @@
       }
     ]
   },
-  "next_work_archive_2026_09_29b": []
+  "next_work_archive_2026_09_29b": [],
+  "next_work_archive_2026_09_29c": []
 }
