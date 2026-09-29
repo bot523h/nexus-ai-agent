@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-29T02:02:20Z",
+  "updated_at": "2026-09-29T17:53:37Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -690,6 +690,14 @@
       "paths": [
         "src/nexus_ai_agent/llm/",
         "tests/unit/test_embedding_honesty.py"
+      ]
+    },
+    {
+      "id": "orchestration-routing",
+      "description": "Routing decisions in the LangGraph orchestration. Taken over from the task-202 lease, which lapsed 2026-09-29T17:51:40Z with no renewal and no PR activity since 2026-09-28T19:22Z.",
+      "paths": [
+        "src/nexus_ai_agent/orchestration/graph.py",
+        "tests/unit/test_graph_memory.py"
       ]
     }
   ],
@@ -2781,6 +2789,41 @@
       "owner_hint": "",
       "agent_branch": "arena/01a0eade-nexus-ai-agent",
       "claimed_at": "2026-09-29T02:02:20Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": ""
+    },
+    {
+      "task": "task-206",
+      "title": "Apply the H1 wiring: route chat/unknown through memory_reader_chat",
+      "title_fa": "اعمال سیم‌کشی H1: هدایت chat/unknown به memory_reader_chat",
+      "zone": "orchestration-routing",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Deliver the one-line Chat→Memory wiring that task-205 proved necessary and verified out of tree. Taken over after the task-202 lease lapsed; the patch is documented and mutation-verified in CHAT_MEMORY_REACHABILITY_AUDIT_2026-09-29.md §6.",
+      "scope_fa": "سیم‌کشی یک‌خطی H1 پس از انقضای lease تسک ۲۰۲.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "graph.py::route_intent sends every non-task intent to memory_reader_chat",
+        "reachability tripwires XPASS: pytest tests/unit/test_chat_memory_reachability.py shows 2 xfailed (task-210, task-215) and 0 other xfails",
+        "python scripts/chat_memory_mutations.py reports H1 patch verified and 6/6 mutants killed on the now-fixed branch",
+        "all four isolation tests stay green — the fix must not widen the thread fence",
+        "graph.py merges cleanly with PR #119 (verified by read-only git merge-tree: board.json is the only conflict)",
+        "zero regressions across tests/unit and tests/architecture"
+      ],
+      "evidence_required": [
+        "before/after xfail counts of the reachability suite",
+        "mutation harness report before and after",
+        "git merge-tree output showing no graph.py conflict",
+        "python scripts/agent_board.py check exit 0"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/orchestration/graph.py",
+        "tests/unit/test_graph_memory.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0eade-nexus-ai-agent",
+      "claimed_at": "2026-09-29T17:53:37Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "note": ""
