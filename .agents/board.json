@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-29T17:53:37Z",
+  "updated_at": "2026-09-29T20:32:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -698,6 +698,13 @@
       "paths": [
         "src/nexus_ai_agent/orchestration/graph.py",
         "tests/unit/test_graph_memory.py"
+      ]
+    },
+    {
+      "id": "telegram-e2e-verification",
+      "description": "End-to-end proof through the REAL Telegram entry point (bot/handlers.py::on_message), not a hand-built state. handlers.py itself stays read-only: seven open PRs contest it.",
+      "paths": [
+        "tests/unit/test_telegram_memory_e2e.py"
       ]
     }
   ],
@@ -2763,7 +2770,7 @@
       "title_fa": "بستن شکاف سیم‌کشی Chat→Memory: قرارداد دسترس‌پذیری، جداسازیخصومی، و پچ H1 اثبات‌شده با جهش‌سنج",
       "zone": "chat-memory-reachability",
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "scope": "Reproduce and then permanently guard the defect that a memory stored by LongTermMemory never reaches the LLM when classify_intent() returns 'chat': graph.py::route_intent sends chat/unknown straight to route_persona, bypassing both memory readers. H1 itself (the one-line edit to orchestration/graph.py) is DEFERRED — that file is under a live lease held by task-202 (PR #119, arena/01a0e907, claimed 2026-09-28T17:51:40Z, 24h TTL). This claim takes only new paths: an end-to-end reachability/isolation contract suite, a shadow-tree mutation harness that verifies the candidate H1 patch without ever writing the leased file, and a dated audit.",
       "scope_fa": "بازتولید و سپس نگهبانی دائمی عیبی که حافظهٔ ذخیره‌شده هرگز به LLM نمی‌رسد وقتی classify_intent مقدار 'chat' برمی‌گرداند. خود H1 (ویرایش یک‌خطی در graph.py) به‌علت lease فعال task-202 در PR #119 معوق شده است؛ این کار فقط مسیرهای جدید می‌گیرد.",
       "prerequisites": [],
@@ -2791,7 +2798,9 @@
       "claimed_at": "2026-09-29T02:02:20Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": ""
+      "note": "",
+      "released_at": "2026-09-29T19:25:20Z",
+      "evidence": "PR #122 @ cbec307. Replay at exact SHA 2026-09-29: pytest tests/unit/test_chat_memory_reachability.py -q -> 25 passed, 2 xfailed. python scripts/chat_memory_mutations.py -> H1 patch verified: True, mutants killed 6/6. CI 16/16 pass, 0 failures."
     },
     {
       "task": "task-206",
@@ -2840,6 +2849,36 @@
         "git merge-tree --write-tree HEAD origin/arena/01a0e907-nexus-ai-agent → graph.py clean; only .agents/board.json conflicts",
         "ruff check . + ruff format --check . clean repo-wide"
       ]
+    },
+    {
+      "task": "task-214-telegram-on-message-e2e",
+      "title": "End-to-end Telegram proof: drive on_message itself, not a hand-built state",
+      "title_fa": "اثبات انتها‌به‌انتها از درگاه واقعی تلگرام: خودِ on_message، نه state دست‌ساز",
+      "zone": "telegram-e2e-verification",
+      "priority": "P1",
+      "status": "active",
+      "agent_branch": "arena/01a0eade-nexus-ai-agent",
+      "claimed_at": "2026-09-29T20:30:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "tests/unit/test_telegram_memory_e2e.py"
+      ],
+      "scope": "Every test in task-205 builds its state by hand. The real entry point is bot/handlers.py::on_message → _base_state, which hardcodes memory_context: ''. A regression there is invisible to the current suite.",
+      "acceptance_criteria": [
+        "a test drives the real on_message with a fake Update and the real compiled graph, and asserts a stored fact reaches the reply",
+        "the same drive proves the thread_id the graph is invoked with is the one _base_state derived",
+        "a mutant that makes on_message skip _base_state or overwrite thread_id is killed",
+        "the intent='unknown' overwrite at handlers.py:909 is pinned as harmless-by-order, not left as folklore",
+        "bot/handlers.py is NOT edited (read-only: seven open PRs contest it)",
+        "zero regressions"
+      ],
+      "evidence_required": [
+        "exact pytest command and counts for the new file",
+        "the killed-mutant report from the new end-to-end mutation",
+        "ruff check and ruff format --check clean"
+      ],
+      "prerequisites": []
     }
   ],
   "deferred_log": [
@@ -3118,14 +3157,16 @@
       "id": "task-216",
       "priority": "P0",
       "zone": "orchestration-routing",
-      "title": "Merge PR #122 — main still routes chat around the memory reader",
-      "title_fa": "ادغام PR #122 — main هنوز chat را از خوانندهٔ حافظه دور می‌برد",
+      "title": "Merge PR #119 + PR #122 together - main still has neither the P0 shell escape nor chat->memory reachability",
+      "title_fa": "ادغام هم‌زمان PR #119 و PR #122 — main هنوز نه فرار شل P0 را دارد نه دسترسی chat به حافظه",
       "why_fa": "H1 روی شاخه اثبات شده اما روی main کاربر هنوز حافظه‌اش را نمی‌بیند.",
-      "why": "The wiring is proven and green but unmerged: production still answers 4 of 5 recall phrasings with no memory. graph.py merges cleanly with PR #119 (only board.json conflicts).",
+      "why": "Both PRs are green and PROVEN COMPATIBLE: a real three-way merge of cbec307 + e78e8c4 auto-merges graph.py with zero conflicts (only .agents/board.json conflicts, resolved newest-state-wins), the merged tree contains BOTH the memory-write observability warning AND the H1 route_intent wiring, the union of both suites is 193 passed / 2 xfailed, and both mutation harnesses still pass in the merged tree (6/6 and 11/11). PR #119 is a DRAFT, idle since 2026-09-28T19:22:53Z, with all five of its leases (task-201/202/203/204) expired - its owner is gone and main is still exposed to `date -f <outside file>` arbitrary file read.",
       "acceptance_criteria": [
-        "main contains the route_intent wiring",
-        "pytest tests/unit/test_chat_memory_reachability.py on main: 25 passed, 2 xfailed",
-        "no new conflict in graph.py against PR #119"
+        "main contains the route_intent wiring AND the _memory_writer structured warning",
+        "the union suite (193 tests) is green on the merge commit",
+        "both mutation harnesses report 0 survivors on the merge commit",
+        "CI green on the merge commit",
+        "run by the gates owner - not by the branch that authored either fix"
       ],
       "evidence_required": [
         "CI green on the merge commit",
@@ -3133,6 +3174,7 @@
       ],
       "exclusive_paths": [],
       "prerequisites": [
+        "PR#119",
         "PR#122"
       ]
     }
