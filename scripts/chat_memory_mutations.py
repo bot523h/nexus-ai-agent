@@ -181,8 +181,26 @@ def run_suite(tree: Path) -> Outcome:
 
 
 # ── mutants ──────────────────────────────────────────────────────────────── #
-def apply_h1(tree: Path) -> None:
-    _edit(tree, GRAPH, H1_BEFORE, H1_AFTER)
+def apply_h1(tree: Path) -> str:
+    """Apply the H1 patch to the shadow tree.  Idempotent-aware.
+
+    Once H1 is merged this script keeps running as a *regression* harness, and
+    the original anchor will no longer be there.  Refusing to guess is right;
+    refusing to recognise its own work would be a bug.  Returns
+    ``"applied"`` or ``"already-present"``.
+    """
+    path = tree / "src" / GRAPH
+    text = path.read_text(encoding="utf-8")
+    if H1_AFTER in text:
+        return "already-present"
+    if H1_BEFORE not in text:
+        raise SystemExit(
+            f"ANCHOR DRIFT: {GRAPH} contains neither the pre-H1 nor the post-H1\n"
+            "form of route_intent. The harness must be re-based on the current\n"
+            "source; it will not guess."
+        )
+    path.write_text(text.replace(H1_BEFORE, H1_AFTER, 1), encoding="utf-8")
+    return "applied"
 
 
 MUTANTS: list[dict] = [
@@ -476,20 +494,35 @@ def main() -> int:
     results: list[dict] = []
     failures = 0
 
+    # ── M1 first: is H1 already on this branch? ───────────────────────────── #
+    # Order matters.  M0's expectation depends on whether the fix has landed, so
+    # the branch's actual state is established before M0 is judged.
+    probe = _shade()
+    try:
+        h1_state = apply_h1(probe)
+    finally:
+        shutil.rmtree(probe, ignore_errors=True)
+    landed = h1_state == "already-present"
+
     # ── baseline: the repository as it is ─────────────────────────────────── #
     tree = _shade()
     try:
         base = run_suite(tree)
     finally:
         shutil.rmtree(tree, ignore_errors=True)
+    reachability_red = [t for t in base.detected if t not in EXPECTED_STILL_RED]
     results.append(
         {
             "id": "M0",
-            "name": "baseline (unmodified main)",
-            "expectation": "reachability tripwires must be RED",
+            "name": "baseline (this branch, unpatched by the harness)",
+            "expectation": (
+                "reachability tripwires are RED"
+                if not landed
+                else "H1 already on this branch, so reachability tripwires must be GREEN"
+            ),
             "outcome": base.summary(),
             "detected": sorted(base.detected),
-            "ok": len(base.xfailed) >= 5,
+            "ok": (len(reachability_red) == 0) if landed else (len(reachability_red) >= 5),
         }
     )
     if not results[-1]["ok"]:
@@ -498,14 +531,14 @@ def main() -> int:
     # ── the H1 patch ──────────────────────────────────────────────────────── #
     tree = _shade()
     try:
-        apply_h1(tree)
+        applied = apply_h1(tree)
         fixed = run_suite(tree)
     finally:
         shutil.rmtree(tree, ignore_errors=True)
     results.append(
         {
             "id": "M1",
-            "name": "H1 patch: chat/unknown route through memory_reader_chat",
+            "name": f"H1 patch ({applied})",
             "expectation": (
                 "every REACHABILITY tripwire turns green. Two invariants are "
                 "excluded on purpose: the one-line wiring cannot satisfy them, "
