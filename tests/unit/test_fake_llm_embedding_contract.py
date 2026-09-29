@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -183,6 +185,54 @@ print(json.dumps(results))
     assert digests_by_text[first_text] != digests_by_text[second_text]
 
 
+_CONCURRENT_WRITER_SCRIPT = r"""
+import asyncio
+import json
+import sys
+import time
+from pathlib import Path
+
+from nexus_ai_agent.config.settings import Settings
+from nexus_ai_agent.llm.fake_llm import FakeLLMProvider
+from nexus_ai_agent.llm.litellm_provider import build_llm_provider
+from nexus_ai_agent.memory.long_term import LongTermMemory
+
+db_path, thread_id, ready_path, start_path = sys.argv[1:]
+settings = Settings(
+    _env_file=None,
+    llm_routing_enabled=True,
+    ollama_model="",
+    groq_api_key=None,
+    gemini_api_key=None,
+    openrouter_api_key=None,
+    llama_server_base_url="",
+    model_path=str(Path(db_path).with_name("missing-model.gguf")),
+)
+provider, label = build_llm_provider(settings)
+assert isinstance(provider, FakeLLMProvider), label
+memory = LongTermMemory(db_path, provider)
+Path(ready_path).write_text("ready", encoding="utf-8")
+deadline = time.monotonic() + 15
+while not Path(start_path).exists():
+    if time.monotonic() >= deadline:
+        raise TimeoutError("concurrent writer start barrier timed out")
+    time.sleep(0.005)
+
+async def write_rows():
+    for index in range(20):
+        await memory.store(thread_id, f"{thread_id}-memory-{index:02d}")
+
+asyncio.run(write_rows())
+assert memory._use_vec, "the declared sqlite-vec runtime must be active"
+print(json.dumps({
+    "provider": type(provider).__name__,
+    "thread": thread_id,
+    "rows": 20,
+    "sqlite_vec": memory._use_vec,
+}))
+"""
+
+
 def test_default_provider_persists_and_reloads_fake_vectors_across_processes(
     tmp_path: Path,
 ) -> None:
@@ -215,3 +265,89 @@ def test_default_provider_persists_and_reloads_fake_vectors_across_processes(
     assert "target-0" not in reader["thread_b_cannot_read_a"]
     assert reader["thread_a_vector_matches"] is True
     assert reader["thread_b_vector_matches"] is True
+
+
+def test_concurrent_factory_processes_preserve_sqlite_vectors_and_thread_scope(
+    tmp_path: Path,
+) -> None:
+    """Two real factory processes concurrently write and reload one SQLite store."""
+    db_path = tmp_path / "concurrent-vector.sqlite"
+    start_path = tmp_path / "start"
+    threads = ("thread-A", "thread-B")
+    workers: list[tuple[str, Path, subprocess.Popen[str]]] = []
+
+    try:
+        for index, thread_id in enumerate(threads, start=1):
+            ready_path = tmp_path / f"ready-{index}"
+            env = os.environ.copy()
+            env["PYTHONHASHSEED"] = str(index)
+            env["PYTHONPATH"] = os.pathsep.join(
+                part for part in (str(ROOT / "src"), env.get("PYTHONPATH", "")) if part
+            )
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    _CONCURRENT_WRITER_SCRIPT,
+                    str(db_path),
+                    thread_id,
+                    str(ready_path),
+                    str(start_path),
+                ],
+                cwd=ROOT,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            workers.append((thread_id, ready_path, process))
+
+        deadline = time.monotonic() + 20
+        while not all(ready_path.is_file() for _, ready_path, _ in workers):
+            for thread_id, ready_path, process in workers:
+                if process.poll() is not None and not ready_path.is_file():
+                    stdout, stderr = process.communicate()
+                    raise AssertionError(
+                        f"{thread_id} writer exited before the barrier: {stdout}\n{stderr}"
+                    )
+            if time.monotonic() >= deadline:
+                raise AssertionError("concurrent writers did not reach the start barrier")
+            time.sleep(0.01)
+
+        start_path.touch()
+        worker_payloads = []
+        for thread_id, _, process in workers:
+            stdout, stderr = process.communicate(timeout=30)
+            assert process.returncode == 0, f"{thread_id} writer failed: {stderr}"
+            worker_payloads.append(_printed_payload(stdout, "thread"))
+    finally:
+        for _, _, process in workers:
+            if process.poll() is None:
+                process.kill()
+            process.communicate()
+
+    assert {payload["thread"] for payload in worker_payloads} == set(threads)
+    assert all(payload["provider"] == "FakeLLMProvider" for payload in worker_payloads)
+    assert all(
+        payload["rows"] == 20 and payload["sqlite_vec"] is True for payload in worker_payloads
+    )
+
+    from nexus_ai_agent.llm.fake_llm import FakeLLMProvider
+    from nexus_ai_agent.memory.long_term import LongTermMemory
+
+    memory = LongTermMemory(str(db_path), FakeLLMProvider())
+
+    async def read_rows() -> tuple[list[str], list[str]]:
+        thread_a = await memory.search("thread-A", "thread-A-memory-00", top_k=100)
+        thread_b = await memory.search("thread-B", "thread-B-memory-00", top_k=100)
+        return thread_a, thread_b
+
+    thread_a, thread_b = asyncio.run(read_rows())
+    expected_a = {f"thread-A-memory-{index:02d}" for index in range(20)}
+    expected_b = {f"thread-B-memory-{index:02d}" for index in range(20)}
+
+    assert memory._use_vec is True
+    assert set(thread_a) == expected_a
+    assert set(thread_b) == expected_b
+    assert not any(item.startswith("thread-B-") for item in thread_a)
+    assert not any(item.startswith("thread-A-") for item in thread_b)
