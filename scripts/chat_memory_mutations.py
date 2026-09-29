@@ -261,13 +261,13 @@ MUTANTS: list[dict] = [
             t,
             GRAPH,
             """    try:
-        results = await long_term_memory.search(state["thread_id"], last, top_k=3)
+        results = await long_term_memory.search(state["thread_id"], last_user, top_k=3)
         state["memory_context"] = await long_term_memory.format_context(results)
     except Exception:
         state.setdefault("memory_context", "")
     return state
 """,
-            """    results = await long_term_memory.search(state["thread_id"], last, top_k=3)
+            """    results = await long_term_memory.search(state["thread_id"], last_user, top_k=3)
     state["memory_context"] = await long_term_memory.format_context(results)
     return state
 """,
