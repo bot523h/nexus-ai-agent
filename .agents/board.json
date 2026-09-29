@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T16:54:20Z",
+  "updated_at": "2026-09-29T02:02:20Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -657,6 +657,15 @@
         "tests/unit/test_request_queue.py",
         "scripts/llm_queue_mutations.py",
         "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
+      ]
+    },
+    {
+      "id": "chat-memory-reachability",
+      "description": "End-to-end chat→memory reachability contract: a stored memory must provably reach the LLM on the chat path, with adversarial thread/user isolation. New files only — no src/ path, because orchestration/graph.py is leased by task-202.",
+      "paths": [
+        "tests/unit/test_chat_memory_reachability.py",
+        "scripts/chat_memory_mutations.py",
+        "CHAT_MEMORY_REACHABILITY_AUDIT_2026-09-29.md"
       ]
     }
   ],
@@ -1787,7 +1796,7 @@
       "title_fa": "",
       "zone": "ci-quality",
       "priority": "P1",
-      "status": "active",
+      "status": "expired",
       "scope": "non-blocking bootstrap job first, then blocking; sequenced after PR#33 lands",
       "scope_fa": "non-blocking bootstrap job first, then blocking; sequenced after PR#33 lands",
       "prerequisites": [],
@@ -1795,7 +1804,7 @@
         "CI job runs scripts/pack_coverage.py and reports per-pack coverage",
         "non-blocking (continue-on-error) at bootstrap, flip to blocking with evidence"
       ],
-      "note": "Claimed by the Continuum closure session together with task-184. Goes straight to a BLOCKING job (owner directive: no continue-on-error bootstrap); evidence recorded on release.",
+      "note": "auto-released by gc at 2026-09-29T01:54:49Z (stale active lease)",
       "agent_branch": "arena/01a0e2bb-nexus-ai-agent",
       "claimed_at": "2026-09-27T12:27:18Z",
       "ttl_hours": 24,
@@ -2557,7 +2566,7 @@
       "title_fa": "سخت‌سازی فورنزیک سامانهٔ شواهد Continuum",
       "zone": "continuum-evidence-measurement",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "agent_branch": "arena/01a0e2bb-nexus-ai-agent",
       "claimed_at": "2026-09-27T12:27:18Z",
       "ttl_hours": 24,
@@ -2593,7 +2602,7 @@
         "Targeted negative tests and mutation RED-to-GREEN restoration for every confirmed consumer defect.",
         "Two-run reproducibility comparison and exact PR #95/head/main/CI evidence."
       ],
-      "note": "Audit result: two P1 snapshot false-greens were reproduced in isolated Git fixtures and fixed through e924a65: a valid snapshot survived an uncommitted source edit, and a clean later commit could reuse it after src/tests/scripts/migration/dependency drift. Regressions cover clean control, dirty/stale rejection, empty revision rejection, and unavailable git-status fail-closed behaviour in tests/unit/test_continuum_hardening.py. P2 integration gap remains: CoverageReport JSON has no downstream reader and CI/release-lineage invokes neither pack coverage nor snapshot verification; task-154 remains queued rather than claiming a release gate it does not implement. Current committed snapshot correctly blocks CLI verification (unreachable recorded SHA and test-count drift). No non-Continuum domain edits without a proven direct false-evidence consumer. | 2026-09-27 arena/01a0e1e0 continuation (supersedes PR #95/#98): the P2 gap is closed — pack coverage is a canonical 95%-per-pack gate (D-0023, option A), the snapshot verifier fails closed on a 27-attack executable threat model (scripts/continuum_gate.py), a 73-mutation replayable campaign (scripts/continuum_mutations.py) fails on any survivor, and the CI job continuum-evidence runs all three on 3.10/3.11/3.12 against the exact SHA. HISTORICAL EVIDENCE LOST — CONTENT RECONSTRUCTED: the first local lineage (c44bf2c…7bda42c) was never pushed and was lost in a sandbox re-provisioning; its surviving working tree (tree ddc76334) was reconstructed on top of 48db056 and every piece of evidence was regenerated on the new lineage — see docs/audits/CONTINUUM_CLOSURE_2026-09-27.md for the exact SHAs, local runs and CI run IDs. | 2026-09-27 arena/01a0e2bb continuation (same mission owner, new session branch; a session is bound to exactly one branch and cannot push to arena/01a0e1e0): the previous session's final local commit 6198510f0a06a803ba445e03bba1e44306eaf0f9 was never pushed and is unrecoverable (git fetch origin <sha> -> 'not our ref'), so its content fix was re-derived from the failing PR #102 head eb6551b instead of copied. PR #102 was red on `test` and `python-parity` 3.10/3.11/3.12 (runs 36315364432 / 36315366459) because docs/audits/CONTINUUM_CLOSURE_2026-09-27.md was not listed in docs/README.md, which tests/unit/test_docs_integrity.py enforces; reproduced locally as '1 failed, 2893 passed, 30 skipped'. Fixed by indexing the document -- the invariant, the threshold and the measurement are untouched.",
+      "note": "auto-released by gc at 2026-09-29T01:54:49Z (stale active lease)",
       "previous_agent_branch": "arena/01a0e1e0-nexus-ai-agent"
     },
     {
@@ -2602,7 +2611,7 @@
       "title_fa": "سخت‌سازی هوش خارجی: خطای تایپ‌شده، منشأ داده، IO غیرمسدودکننده، انتقال امن کلید، ورودی خصمانه",
       "zone": "external-intelligence",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "gates_owner": false,
       "prerequisites": [],
       "scope": "knowledge/{knowledge_manager,web_trainer,wikipedia_trainer}.py and integrations/free_tools.py have ZERO tests on main and convert every external failure into a success-shaped value: get_text()/get_json() erase HTTP status and network errors ('' / {}), Wikipedia scrapes a 404 'article does not exist' page into user-visible 'knowledge', CurrencyTool returns 0.0 for a missing rate, every search path returns [] for both 'no results' and 'provider exploded', the NewsAPI key travels in the URL query string (and is logged by core/http_client on failure), the synchronous DDGS SDK is called directly inside async functions (event-loop block), BeautifulSoup parses unbounded attacker-controlled HTML on the loop, user input is interpolated raw into URL paths, and KnowledgeManager caches an LLM summary built from zero real sources for 24h using scalar_one_or_none() against a table it can populate with duplicates. Deliverable: a typed SourceResult/ExternalSourceError + Provenance contract, honest failure propagation, header-based secret transport, percent-encoded URL construction, to_thread offloading, bounded responses, query normalisation + stampede guard, and regression/adversarial/mutation tests.",
@@ -2631,7 +2640,7 @@
         "mutation probes: deliberately wrong implementations injected, guard tests observed RED, then restored GREEN",
         "reproduction transcript for each finding against the pre-fix code"
       ],
-      "note": "",
+      "note": "auto-released by gc at 2026-09-29T01:54:49Z (stale active lease)",
       "agent_branch": "arena/01a0df05-nexus-ai-agent",
       "claimed_at": "2026-09-26T18:46:40Z",
       "ttl_hours": 24
@@ -2682,7 +2691,7 @@
       "title_fa": "نجات چرخهٔ عمر صف W2: نشاندن PR #108 با حفظ کامل commitها روی خط main + رفع نقص cancellation پایتون ۳.۱۰",
       "zone": "llm-request-queue-lifecycle",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "scope": "Successor to PR #108 (supersedes it; original head 5a4cb23 preserved commit-for-commit). Scope identical to task-195-llm-queue-lifecycle plus the reconciliation: (a) semantic board merge — main's claim statuses/gc notes are canonical, PR108's zone+claim are appended; (b) version-independent worker-cancellation semantics; (c) exact-head CI against main 05dec617 lineage.",
       "scope_fa": "",
       "prerequisites": [],
@@ -2714,7 +2723,43 @@
       "claimed_at": "2026-09-27T16:54:20Z",
       "ttl_hours": 24,
       "gates_owner": true,
-      "note": "Continues task-195-llm-queue-lifecycle (original branch arena/01a0e2f0, claim released via takeover). MODULE_MAP.md/docs-architecture excluded exactly as the original claim scoped itself. | SESSION-BOUND CONTINUATION 2026-09-27T16:54:20Z: arena/01a0e3b7 fast-forwarded cd79bfe (PR #109 head) and continues the same exclusive paths. This session cannot push to arena/01a0e356. PR #109 python-parity (3.10) is RED on run 36329794486 (asyncio.wait_for raises asyncio.TimeoutError, not builtin TimeoutError)."
+      "note": "auto-released by gc at 2026-09-29T01:54:49Z (stale active lease)"
+    },
+    {
+      "task": "task-205-chat-memory-reachability-contract",
+      "title": "Close the Chat→Memory Wiring Gap: reachability contract, adversarial isolation, and a mutation-verified H1 patch",
+      "title_fa": "بستن شکاف سیم‌کشی Chat→Memory: قرارداد دسترس‌پذیری، جداسازیخصومی، و پچ H1 اثبات‌شده با جهش‌سنج",
+      "zone": "chat-memory-reachability",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Reproduce and then permanently guard the defect that a memory stored by LongTermMemory never reaches the LLM when classify_intent() returns 'chat': graph.py::route_intent sends chat/unknown straight to route_persona, bypassing both memory readers. H1 itself (the one-line edit to orchestration/graph.py) is DEFERRED — that file is under a live lease held by task-202 (PR #119, arena/01a0e907, claimed 2026-09-28T17:51:40Z, 24h TTL). This claim takes only new paths: an end-to-end reachability/isolation contract suite, a shadow-tree mutation harness that verifies the candidate H1 patch without ever writing the leased file, and a dated audit.",
+      "scope_fa": "بازتولید و سپس نگهبانی دائمی عیبی که حافظهٔ ذخیره‌شده هرگز به LLM نمی‌رسد وقتی classify_intent مقدار 'chat' برمی‌گرداند. خود H1 (ویرایش یک‌خطی در graph.py) به‌علت lease فعال task-202 در PR #119 معوق شده است؛ این کار فقط مسیرهای جدید می‌گیرد.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "A real end-to-end repro shows memory stored for thread T does NOT reach the LLM for recall questions classified 'chat' (RED, measured, not assumed).",
+        "The same suite proves the control case GREEN (an intent that DOES read memory delivers the fact), so the tripwire cannot pass vacuously.",
+        "Adversarial: no memory from thread A ever appears in thread B's prompts or answer; every search() call carries the caller's own thread_id.",
+        "A shadow-tree mutation harness applies the candidate H1 patch to a temp copy of src/ (never the leased file) and proves the tripwire goes GREEN, then proves 4 named mutants (read removed, thread filter bypassed, failure→empty-success, context not rendered) are killed.",
+        "H1 is recorded as a documented deferral naming the lease holder, the expiry, and the exact one-line patch — governance is not modified to unblock it.",
+        "ruff check / ruff format --check / targeted pytest green on the new files; full gates deferred to the gates owner."
+      ],
+      "evidence_required": [
+        "python scripts/h1_repro.py output showing 4/5 recall questions lose their memory",
+        "pytest -q tests/unit/test_chat_memory_reachability.py with per-test outcomes",
+        "python scripts/chat_memory_mutations.py with the killed-mutant table",
+        "python scripts/agent_board.py check --files <changed> --branch arena/01a0eade-nexus-ai-agent → exit 0"
+      ],
+      "exclusive_paths": [
+        "tests/unit/test_chat_memory_reachability.py",
+        "scripts/chat_memory_mutations.py",
+        "CHAT_MEMORY_REACHABILITY_AUDIT_2026-09-29.md"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0eade-nexus-ai-agent",
+      "claimed_at": "2026-09-29T02:02:20Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": ""
     }
   ],
   "deferred_log": [
@@ -2751,6 +2796,18 @@
       "reason_fa": "چون عامل task-179 مالک TESTING.md و docs/README.md است، به‌روزرسانی جدول گیت‌ها و ایندکس را defer کردم؛ مستندات CI موقتاً در .github/DEPENDENCY_MATRIX.md و CHANGELOG ثبت می‌شود.",
       "reason_en": "task-132 (CI extras matrix) must update TESTING.md gate table and docs/README.md index, but those files are exclusively claimed by task-179. Documentation update deferred; CI docs live in .github/DEPENDENCY_MATRIX.md + CHANGELOG entry meanwhile.",
       "resume_when": "task-179 lands (TESTING.md/docs/README.md free) — then port the gate-table rows + docs index line"
+    },
+    {
+      "task": "task-205-chat-memory-reachability-contract",
+      "deferred_by_branch": "arena/01a0eade-nexus-ai-agent",
+      "at": "2026-09-29T02:05:00Z",
+      "reason_fa": "H1 (سیم‌کشی Chat→Memory در graph.py::route_intent) معوق شد: فایل src/nexus_ai_agent/orchestration/graph.py تحت lease فعال task-202 در شاخه arena/01a0e907 (PR #119) است، تا 2026-09-29T17:51:40Z. lease دور زده نشد و governance دستکاری نشد. اثبات و نگهبانی بدون تغییر فایل lease‌شده انجام شد.",
+      "reason_en": "H1 (the Chat->Memory wiring in graph.py::route_intent) is deferred: src/nexus_ai_agent/orchestration/graph.py is under the LIVE lease of task-202 on branch arena/01a0e907 (PR #119), claimed 2026-09-28T17:51:40Z with a 24h TTL (expires 2026-09-29T17:51:40Z). The lease was not bypassed and governance was not modified. Note that agent_board.py check returns a FALSE 'no overlap' on a main-based branch, because it reads the local .agents/board.json and the live task-202/task-203 claims only exist on the unmerged PR #119/#121 branches. Live truth outranks the tool. The fix is instead verified in a shadow tree and shipped as a ready-to-apply one-line patch.",
+      "handoff": "CHAT_MEMORY_REACHABILITY_AUDIT_2026-09-29.md",
+      "blocked_by_task": "task-202-memory-write-observability",
+      "blocked_by_branch": "arena/01a0e907-nexus-ai-agent",
+      "blocked_path": "src/nexus_ai_agent/orchestration/graph.py",
+      "lease_expires": "2026-09-29T17:51:40Z"
     }
   ],
   "next_work": [
