@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-29T02:38:37Z",
+  "updated_at": "2026-09-29T02:39:43Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2842,7 +2842,7 @@
       "title_fa": "پایداری embedding مصنوعی FakeLLM میان اجرای مجدد فرایند؛ اسلایس محدود H5",
       "zone": "fake-embedding-persistence",
       "priority": "P1",
-      "status": "active",
+      "status": "active_in_review",
       "scope": "On main, `run_bot` passes `build_llm_provider(settings)` into `LongTermMemory(settings.vector_path, llm)`; with no routed provider/server/GGUF the factory selects FakeLLMProvider. LongTermMemory stores and re-embeds vectors in its persistent SQLite table when sqlite-vec is active. Its Fake seed used process-salted hash(text), so same-text query vectors changed across restart and dense recall could rank a distractor. Replace only this synthetic seed with a stable content digest; preserve 384 floats, explicitly disclaim semantic similarity, and do not edit leased provider/memory/graph/settings/docs-index paths. No migration of pre-change rows, real-provider quality claim, or live deployment claim is in scope.",
       "scope_fa": "مسیر واقعی run_bot در نبود ارائه‌دهنده، FakeLLM را به LongTermMemory و SQLite برداری می‌رساند؛ هش saltشدهٔ پایتون پس از راه‌اندازی مجدد بردار همان متن را عوض می‌کرد. فقط seed مصنوعی پایدار شود؛ ردیف‌های قدیمی، معنای واقعی embedding و استقرار زنده خارج از دامنه‌اند.",
       "prerequisites": [],
@@ -2871,7 +2871,7 @@
       ],
       "owner_hint": "Arena agent on arena/01a0eae1-nexus-ai-agent",
       "gates_owner": false,
-      "note": "Reachability reproduced through the real factory and LongTermMemory in a disposable SQLite/sqlite-vec store; no live deployment configuration or owner secrets used. PR #121 is OPEN/MERGEABLE at b4a5965320b2e17c8d93cf670c64bdb514f378cb with CI green; its retrieval changes were not tested here—the regression ran against the current e5b326b-based checkout. PR #122 is OPEN/MERGEABLE at f4d082acf51476ea0e0cd2e336b0fa202e4d95c9 and changes board/test/script/audit files, not these implementation paths; its task-208 deterministic test-embedder idea is partly addressed only if this H5 PR lands, while its paraphrase/semantic-quality work remains separate. User-authorization and cache isolation were not modeled; the current board keeps this session’s ten-task roadmap and records PR #122’s separate review claim.",
+      "note": "End-to-end reachability reproduced through the real no-provider factory and LongTermMemory in a disposable SQLite/sqlite-vec store; no live deployment configuration or owner secrets used. PR #123 is OPEN/MERGEABLE on initial head 7856c1920172fe07ab8c94e26b9c01ed7fab1c6d; its checks were pending at the 2026-09-29T02:39Z query and a board-status follow-up will supersede that head. PR #121 is OPEN/MERGEABLE at b4a5965320b2e17c8d93cf670c64bdb514f378cb with CI green; its retrieval changes were not tested here—the regression ran against the current e5b326b-based checkout. PR #122 is a separate OPEN/MERGEABLE chat-memory task with no overlap in the H5 implementation paths; its task-208 deterministic test-embedder idea is partly addressed only if this PR lands, while its paraphrase/semantic-quality work remains separate. Only thread/SQL isolation and shared-instance concurrent calls were exercised; user authorization and application-level cache isolation are not claimed.",
       "agent_branch": "arena/01a0eae1-nexus-ai-agent",
       "claimed_at": "2026-09-29T02:08:55Z",
       "ttl_hours": 24
