@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-29T21:56:00Z",
+  "updated_at": "2026-09-29T22:02:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3197,6 +3197,28 @@
       "prerequisites": [
         "PR#122"
       ]
+    },
+    {
+      "id": "task-218",
+      "priority": "P0",
+      "zone": "orchestration-routing",
+      "title": "Conversation history and turn_count do not survive a turn — the checkpointer persists nothing that matters",
+      "title_fa": "تاریخچهٔ گفتگو و turn_count از یک نوبت جان سالم به در نمی‌برند — checkpointer چیزی را نگه نمی‌دارد",
+      "why": "Measured 2026-09-29 on the real compiled graph with a real checkpointer. Two consecutive turns on one thread_id end with state messages [('user','What is my name?'),('assistant','ACK')] — turn 1's text is gone — and turn_count is 1 after two turns. Root cause: NexusState is a plain TypedDict and `messages: list[dict]` has no Annotated(..., add_messages) reducer, so it is a LastValue channel. _base_state supplies a fresh one-message state every turn, which REPLACES the checkpointed history; the same replacement zeroes turn_count before _router_node increments it. Consequence: the agent has no short-term conversational memory at all, which makes long-term recall the ONLY continuity mechanism — so a recall failure is not degraded UX, it is total amnesia for that turn. This also raises the stakes on H1 and on task-215.",
+      "acceptance_criteria": [
+        "a two-turn test on one thread_id proves the second turn's state carries the first turn's messages",
+        "turn_count reaches 2 after two turns",
+        "the chosen design (add_messages reducer vs. explicit history merge vs. deliberately stateless) is written down before code",
+        "if the answer is 'deliberately stateless', the consequence for recall is stated in the ADR rather than left implied",
+        "no existing reachability test regresses"
+      ],
+      "evidence_required": [
+        "the before/after state of messages and turn_count across two turns",
+        "a decision recorded on the board and in an ADR",
+        "the full regression count"
+      ],
+      "exclusive_paths": [],
+      "prerequisites": []
     }
   ],
   "history": {
