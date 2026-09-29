@@ -418,6 +418,21 @@ sandbox. Net effect of this PR: **+13 passed, +12 declared xfail, +2 xpass, 0 re
 Full release gates are **deferred to the gates owner** (`AGENTS.md` §1.4). Nothing in this
 document is a production or `main` capability claim.
 
+### 10.1 Remote CI on this branch — 16/16 green
+
+`e24e203`, run `36513615404` (PR #122): `lint`, `lint-fast`, `test (pytest -m "not slow")`,
+`python-parity` 3.10/3.11/3.12, `continuum-evidence` 3.10/3.11/3.12, `extras-matrix`
+core/pdf/speech/translate, `trust-mutations`, `migrate-postgres`, `release-lineage` — all
+**pass**, zero failures.
+
+An earlier push (`1d92797`) had red lint because `ruff format` also formats Python fences
+inside Markdown; fixed in `f4d082a`. Recorded rather than hidden, because it is the reason
+a Markdown-only diff in this repository is not automatically safe.
+
+**A green branch is not a main capability.** H1 is not merged, the leases stand, and
+nothing in this document has run against Telegram, a real LLM, a real embedder, Neon or
+Postgres.
+
 ---
 
 ## 11. KNOWN LIMITATIONS
