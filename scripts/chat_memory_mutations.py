@@ -58,6 +58,7 @@ SUITE = "tests/unit/test_chat_memory_reachability.py"
 GRAPH = "nexus_ai_agent/orchestration/graph.py"
 LONG_TERM = "nexus_ai_agent/memory/long_term.py"
 PERSONALITY = "nexus_ai_agent/personality/engine.py"
+HANDLERS = "nexus_ai_agent/bot/handlers.py"
 
 # ── the H1 patch itself ───────────────────────────────────────────────────── #
 # ``route_intent`` currently forwards every non-task, non-memory intent
@@ -133,12 +134,18 @@ def _edit(tree: Path, rel: str, before: str, after: str, count: int = 1) -> None
 
 _LINE = re.compile(r"^(XFAIL|XPASS|PASSED|FAILED)\s+(tests/\S.*?)(?:\s+-\s+.*)?$")
 
-#: Tripwires the one-line H1 wiring is *not* expected to satisfy.  Reachability
-#: and typed failure are two separate changes; naming the exception here keeps
-#: the M1 verdict honest instead of quietly redefining "done".
-EXPECTED_STILL_RED = frozenset(
-    {"test_an_unavailable_backend_is_not_reported_as_a_successful_empty_recall"}
-)
+#: Tripwires the one-line H1 wiring is *not* expected to satisfy.  Reachability,
+#: typed failure and group scoping are three separate changes; naming the
+#: exceptions here keeps the M1 verdict honest instead of quietly redefining
+#: "done", and keeps the report honest about what H1 alone does not buy.
+EXPECTED_STILL_RED = {
+    "test_an_unavailable_backend_is_not_reported_as_a_successful_empty_recall": (
+        "LAW 11 — needs a typed retrieval outcome, a second change (task-215)"
+    ),
+    "test_a_group_member_cannot_recall_another_members_memory": (
+        "task-210 — needs a product decision on group vs per-user scoping"
+    ),
+}
 
 
 def run_suite(tree: Path) -> Outcome:
@@ -246,6 +253,30 @@ MUTANTS: list[dict] = [
     state["memory_context"] = await long_term_memory.format_context(results)
     return state
 """,
+        ),
+    },
+    {
+        "id": "M6",
+        "name": "every user collapsed into one thread",
+        "why": "the Telegram entry point stops deriving thread_id from the chat",
+        "must_detect": ["test_the_real_entry_point_threads_the_callers_identity"],
+        "patch": lambda t: _edit(
+            t,
+            HANDLERS,
+            '"thread_id": f"tg:{_chat_id(update)}",',
+            '"thread_id": "tg:everyone",',
+        ),
+    },
+    {
+        "id": "M7",
+        "name": "group scoping silently switched to per-user",
+        "why": "thread_id derived from user_id — the plausible wrong fix for task-210",
+        "must_detect": ["test_thread_id_is_derived_from_the_chat_alone_not_the_user"],
+        "patch": lambda t: _edit(
+            t,
+            HANDLERS,
+            '"thread_id": f"tg:{_chat_id(update)}",',
+            '"thread_id": f"tg:{_user_id(update)}",',
         ),
     },
     {
@@ -476,9 +507,9 @@ def main() -> int:
             "id": "M1",
             "name": "H1 patch: chat/unknown route through memory_reader_chat",
             "expectation": (
-                "every REACHABILITY tripwire turns green. The typed-failure "
-                "tripwire is excluded on purpose: the one-line wiring cannot "
-                "satisfy it, which is the finding, not a harness failure."
+                "every REACHABILITY tripwire turns green. Two invariants are "
+                "excluded on purpose: the one-line wiring cannot satisfy them, "
+                "and that is the finding, not a harness failure."
             ),
             "outcome": fixed.summary(),
             "still_detected": sorted(fixed.detected),
@@ -539,7 +570,9 @@ def main() -> int:
                 print(f"         detected: {t}")
         if "still_detected" in r:
             for t in r["still_detected"]:
+                why = EXPECTED_STILL_RED.get(t, "UNEXPECTED — the fix should have moved this")
                 print(f"         STILL RED after the fix: {t}")
+                print(f"           → {why}")
         if "survivors" in r and r["survivors"]:
             for t in r["survivors"]:
                 print(f"         SURVIVED (guard is too weak): {t}")

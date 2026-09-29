@@ -524,3 +524,116 @@ async def test_retrieval_applies_no_relevance_floor(settings_override) -> None:
         f"the paraphrase missed the only related memory; lane used: "
         f"vector={'on' if memory._use_vec else 'off (recency)'}"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════ #
+# 7. THE REAL ENTRY POINT — everything above hand-builds NexusState
+# ═══════════════════════════════════════════════════════════════════════════ #
+# The tests above construct the state dict themselves, which is a real weakness:
+# the production entry point is ``bot/handlers.py::on_message`` → ``_base_state`` →
+# ``graph.ainvoke``, and nothing here would notice if that path stopped threading
+# the caller's identity.  ``bot/handlers.py`` is under no live lease, but seven open
+# PRs rewrite it, so it is READ here, never edited — the test lives in this file,
+# which is the path task-205 owns.
+from types import SimpleNamespace  # noqa: E402
+
+from nexus_ai_agent.bot import handlers as bot_handlers  # noqa: E402
+
+
+def _telegram_update(chat_id: int, user_id: int, text: str) -> SimpleNamespace:
+    """The minimum surface ``_base_state`` actually reads from an Update."""
+    return SimpleNamespace(
+        effective_chat=SimpleNamespace(id=chat_id),
+        effective_user=SimpleNamespace(id=user_id),
+        message=SimpleNamespace(text=text),
+    )
+
+
+def test_the_real_entry_point_threads_the_callers_identity() -> None:
+    """``_base_state`` is the production constructor of the state; pin its contract.
+
+    The graph scopes every read by ``state["thread_id"]``.  If the entry point
+    stopped deriving it, or derived it from something that collides, the whole
+    isolation argument would rest on a value nobody asserts.
+    """
+    update = _telegram_update(chat_id=-1001, user_id=777, text="hello")
+    state = bot_handlers._base_state(update, "hello")
+
+    assert state["thread_id"] == "tg:-1001"
+    assert state["chat_id"] == -1001
+    assert state["user_id"] == 777
+    assert state["messages"] == [{"role": "user", "content": "hello"}]
+
+
+def test_thread_id_is_derived_from_the_chat_alone_not_the_user() -> None:
+    """Characterisation: the memory scope is the *chat*, and that has a cost.
+
+    Two members of one group chat therefore share a single memory scope — one
+    member's stored turn is recallable in the next member's turn.  That is the
+    measured basis of ``task-210``; the invariant people usually assume ("user A
+    ≠ user B") is only true for private chats.
+
+    This is a characterisation, not an endorsement: it pins the *derivation rule*
+    so that changing the scope is a deliberate, visible act rather than an
+    accident.  The desired per-user behaviour is asserted separately, below.
+    """
+    first = bot_handlers._base_state(_telegram_update(-1001, 111, "a"), "a")
+    second = bot_handlers._base_state(_telegram_update(-1001, 222, "b"), "b")
+
+    assert first["thread_id"] == second["thread_id"], (
+        "group scoping changed — if this is intentional, update task-210 and the "
+        "isolation tests above before changing anything else"
+    )
+    assert first["user_id"] != second["user_id"]
+
+
+@pytest.mark.xfail(reason="task-210: the memory scope is the chat, not the user", strict=False)
+async def test_a_group_member_cannot_recall_another_members_memory(settings_override) -> None:
+    """The desired invariant, RED today.  Filed as a decision, not a fix.
+
+    Unlike the H1 tripwires this one is not blocked by a lease — it is blocked by
+    a *product* decision nobody has made yet: should a Telegram group have one
+    shared memory, or one per member?  Answering it wrongly in either direction
+    leaks or forgets, so it is stated, not guessed.
+    """
+    llm, memory, graph = _harness()
+    group = -1001
+    await memory.store(f"tg:{group}", AURORA)
+
+    outsider = await _turn(
+        graph,
+        llm,
+        f"tg:{group}",
+        CONTROL_QUESTION,
+        chat_id=group,
+        user_id=999,
+    )
+
+    assert not _saw(outsider, AURORA), (
+        "a different member of the same group recalled another member's memory"
+    )
+
+
+@pytest.mark.xfail(reason=H1_BLOCKING_LEASE, strict=False)
+async def test_a_recall_sent_through_the_real_entry_point_reaches_the_model(
+    settings_override,
+) -> None:
+    """North star, driven from the production constructor.
+
+    A fact is stored for this user's thread, the user asks a real recall question
+    through ``_base_state`` — the exact dict ``on_message`` hands the graph — and
+    the fact must arrive at the model.  Nothing here mocks the code under test.
+    """
+    llm, memory, graph = _harness()
+    update = _telegram_update(chat_id=-4242, user_id=31337, text=RECALL_QUESTIONS[0])
+    state = bot_handlers._base_state(update, RECALL_QUESTIONS[0])
+    await memory.store(state["thread_id"], AURORA)
+
+    start = len(llm.calls)
+    result = await graph.ainvoke(state, config={"configurable": {"thread_id": state["thread_id"]}})
+    prompts = llm.calls[start:]
+
+    assert memory.reads, "the real entry point produced a turn that read no memory"
+    assert any(AURORA in c["system"] for c in prompts) or AURORA in (
+        result.get("response") or ""
+    ), "a recall sent through the production entry point never delivered the memory"
