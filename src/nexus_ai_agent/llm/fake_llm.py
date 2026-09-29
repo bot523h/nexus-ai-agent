@@ -17,9 +17,11 @@ class FakeLLMProvider(LLMProvider):
         """Return a stable 384-float pseudo-vector, not a semantic embedding.
 
         The digest avoids Python's process-salted ``hash()`` so persisted vectors
-        for the same exact text are reproducible after restart. Different texts
-        still receive unrelated pseudo-random vectors; similarity between
-        paraphrases or related meanings is explicitly not guaranteed.
+        for the same exact text are reproducible after restart in the same
+        Python/runtime platform. Different texts still receive unrelated
+        pseudo-random vectors; similarity between paraphrases or related
+        meanings is explicitly not guaranteed. Cross-version/platform byte
+        compatibility of the PRNG or serialized float blobs is not promised.
         """
         digest = hashlib.sha512(text.encode("utf-8")).digest()
         seed = int.from_bytes(digest[:8], "little")
