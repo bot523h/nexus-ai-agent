@@ -480,18 +480,26 @@ document is a production or `main` capability claim.
 
 ### 10.1 Remote CI on this branch — 16/16 green
 
-`e24e203`, run `36513615404` (PR #122): `lint`, `lint-fast`, `test (pytest -m "not slow")`,
-`python-parity` 3.10/3.11/3.12, `continuum-evidence` 3.10/3.11/3.12, `extras-matrix`
-core/pdf/speech/translate, `trust-mutations`, `migrate-postgres`, `release-lineage` — all
-**pass**, zero failures.
+Final run, on the commit that carries H1 (`065ec63`, PR #122): `lint (ruff + mypy +
+version lockstep)`, `lint-fast`, `test (pytest -m "not slow")`, `python-parity`
+3.10/3.11/3.12, `continuum-evidence` 3.10/3.11/3.12, `extras-matrix` core/pdf/speech/
+translate, `trust-mutations`, `migrate-postgres`, `release-lineage` — **all pass, zero
+failures**.
 
-An earlier push (`1d92797`) had red lint because `ruff format` also formats Python fences
-inside Markdown; fixed in `f4d082a`. Recorded rather than hidden, because it is the reason
-a Markdown-only diff in this repository is not automatically safe.
+The two earlier runs on this branch were also green once fixed, and the red one is
+recorded rather than hidden, because it is the reason a Markdown-only diff here is not
+automatically safe:
 
-**A green branch is not a main capability.** H1 is not merged, the leases stand, and
-nothing in this document has run against Telegram, a real LLM, a real embedder, Neon or
-Postgres.
+| commit | outcome |
+|---|---|
+| `1d92797` | **lint red** — `ruff format` also formats Python fences inside Markdown; two hand-aligned comments in this audit did not match |
+| `f4d082a` … `ed53898` | 15/15 → 16/16 green (contract only; H1 not yet landed) |
+| `b42effd`, `13a33b9` | green (harness idempotence; board claim) |
+| `065ec63` | **16/16 green, carries H1** |
+
+**A green branch is not a main capability.** H1 is merged into *this* branch only;
+`main` still routes chat around the memory reader, and nothing in this document has run
+against Telegram, a real LLM, a real embedder, Neon or Postgres.
 
 ---
 
