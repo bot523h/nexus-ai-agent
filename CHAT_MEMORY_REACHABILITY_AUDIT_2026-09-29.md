@@ -105,7 +105,7 @@ def route_intent(state: NexusState) -> str:
         return "memory_reader_task"
     if intent == "memory":
         return "memory_reader_chat"
-    return "route_persona"          # ◄── chat and unknown land here
+    return "route_persona"  # ◄── chat and unknown land here
 ```
 
 `classify_intent` returns `"memory"` only when the text contains a literal from
