@@ -227,16 +227,29 @@ copy shadows the installed package. The real `src/` is never written.
 
 ```
 $ python scripts/chat_memory_mutations.py
-[OK  ] M0  baseline (unmodified main)              passed=11 xfailed=10 xpassed=2 failed=0
+[OK  ] M0  baseline (unmodified main)              passed=13 xfailed=12 xpassed=2 failed=0
 [OK  ] M1  H1 patch: chat/unknown → memory_reader_chat
-                                                  passed=11 xfailed=1  xpassed=11 failed=0
-[OK  ] M2  read dropped                           passed=6  xfailed=12 xpassed=0  failed=5
-[OK  ] M3  thread filter bypassed                 passed=7  xfailed=11 xpassed=1  failed=4
-[OK  ] M4  failure no longer contained            passed=10 xfailed=1  xpassed=11 failed=1
-[OK  ] M5  context fetched but never rendered     passed=6  xfailed=11 xpassed=1  failed=5
+                                                  passed=13 xfailed=2  xpassed=12 failed=0
+         STILL RED after the fix: test_a_group_member_cannot_recall_another_members_memory
+           → task-210 — needs a product decision on group vs per-user scoping
+         STILL RED after the fix: test_an_unavailable_backend_is_not_reported_as_a_successful_empty_recall
+           → LAW 11 — needs a typed retrieval outcome, a second change (task-215)
+[OK  ] M2  read dropped                           passed=8  xfailed=13 xpassed=1 failed=5
+[OK  ] M3  thread filter bypassed                 passed=9  xfailed=12 xpassed=2 failed=4
+[OK  ] M4  failure no longer contained            passed=12 xfailed=2  xpassed=12 failed=1
+[OK  ] M6  every user collapsed into one thread    passed=12 xfailed=2  xpassed=12 failed=1
+[OK  ] M7  group scoping switched to per-user      passed=11 xfailed=2  xpassed=12 failed=2
+[OK  ] M5  context fetched but never rendered     passed=8  xfailed=12 xpassed=2 failed=5
 
-H1 patch verified: True   mutants killed: 4/4
+H1 patch verified: True   mutants killed: 6/6
 ```
+
+**M1 leaves two tripwires red, and both are findings rather than harness noise.** The
+one-line wiring buys *reachability only*. It does not type the failure (LAW 11,
+`task-215`) and it does not change the memory *scope* (`task-210`). Listing them
+explicitly in `EXPECTED_STILL_RED` is what keeps the M1 verdict honest: if a future
+patch satisfies them, the harness says so, and if it satisfies neither while claiming
+to close the gap, the table shows it.
 
 `git status --porcelain src/` is empty after every run. **The lease was not touched.**
 
@@ -253,6 +266,8 @@ invariants, none of which mocks the code under test:
 | 2 | the Telegram identity triple (`chat_id` + `user_id`) does not widen the fence | `test_user_a_memory_never_reaches_user_b` | end-to-end |
 | 3 | every `search()` the runtime issues carries the caller's own `thread_id` | `test_every_memory_read_is_scoped_to_the_calling_thread` | API boundary |
 | 4 | **a read never returns another thread's rows** | `test_a_read_never_returns_another_threads_memories` | **yes — `top_k=64` over a 24-row corpus** |
+| 5 | the **production entry point** threads the caller's identity into the state | `test_the_real_entry_point_threads_the_callers_identity` | real `_base_state` from `bot/handlers.py` |
+| 6 | a recall sent through the real entry point reaches the model | `test_a_recall_sent_through_the_real_entry_point_reaches_the_model` (tripwire) | real `_base_state` → real graph |
 
 Test 4 exists because of an honest correction. Tests 1–3 all *survived* mutant M3 (the
 `WHERE thread_id = ?` clause deleted from both SQL lanes). Two reasons, both worth
@@ -269,6 +284,30 @@ from. It killed M3 deterministically. A guard that cannot fail is not a guard.
 
 **Result: no cross-thread or cross-user leak was observed, before or after the H1 patch,
 and the mutant that removes the fence is caught.**
+
+### 7.1 A second finding, found only by looking at the real entry point
+
+Tests 1–3 all build their `NexusState` by hand, which is a weakness: the production
+constructor is `bot/handlers.py::_base_state`, and nothing above would notice if that
+path changed. Adding invariants 5–6 exposed a genuine scoping decision that the earlier
+tests had silently assumed away:
+
+```python
+"thread_id": f"tg:{_chat_id(update)}",     # bot/handlers.py:180
+```
+
+`thread_id` is a function of **`chat_id` alone**. So "user A ≠ user B" is true only for
+private chats: **two members of one Telegram group share a single memory scope**, and one
+member's stored turn is recallable in the next member's turn. This is pinned as a
+characterisation (`test_thread_id_is_derived_from_the_chat_alone_not_the_user`, green) so
+that changing the scope is a deliberate act, and asserted as a desired invariant
+(`test_a_group_member_cannot_recall_another_members_memory`, **red**, `task-210`) so the gap
+is not forgotten. Mutant M7 — the plausible *wrong* fix, deriving `thread_id` from
+`user_id` — is killed by the characterisation, which is precisely why the characterisation
+exists.
+
+`bot/handlers.py` is under no live lease, but **seven open PRs rewrite it** (including
+#117). It is therefore read here and never edited; the tests live in this PR's own path.
 
 ---
 
@@ -318,7 +357,7 @@ dependencies and are not installed here.
 
 | path | kind | lines |
 |---|---|---|
-| `tests/unit/test_chat_memory_reachability.py` | new | 21 tests |
+| `tests/unit/test_chat_memory_reachability.py` | new | 27 tests |
 | `scripts/chat_memory_mutations.py` | new | mutation + U1 harness |
 | `.agents/board.json` | modified | zone, claim, deferral |
 
@@ -366,15 +405,15 @@ $ python -m pytest tests/integration/test_graph.py tests/integration/test_agents
 63 passed in 1.52s
 
 $ python -m pytest tests/unit tests/architecture -q
-25 failed, 2737 passed, 19 skipped, 10 xfailed, 2 xpassed in 110.97s
+25 failed, 2739 passed, 19 skipped, 12 xfailed, 2 xpassed in 120.98s
 
 $ python -m pytest tests/unit tests/architecture -q --ignore=tests/unit/test_chat_memory_reachability.py
-25 failed, 2726 passed, 19 skipped, 16 warnings in 113.42s
+25 failed, 2726 passed, 19 skipped, 16 warnings in 118.16s
 ```
 
 **The 25 failures are identical with and without this change** — creative render, ffmpeg,
 litellm and postgres-engine tests that need binaries and packages absent from this
-sandbox. Net effect of this PR: **+11 passed, +10 declared xfail, +2 xpass, 0 regressions.**
+sandbox. Net effect of this PR: **+13 passed, +12 declared xfail, +2 xpass, 0 regressions.**
 
 Full release gates are **deferred to the gates owner** (`AGENTS.md` §1.4). Nothing in this
 document is a production or `main` capability claim.

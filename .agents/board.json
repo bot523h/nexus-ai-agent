@@ -2946,8 +2946,9 @@
       "why_fa": "در گروه، همهٔ اعضا یک thread دارند؛ یعنی حافظهٔ خصوصی یک کاربر می‌تواند وارد پاسخ کاربر دیگر شود.",
       "why": "bot/handlers.py::_base_state sets thread_id = f'tg:{chat_id}'. Two members of one group therefore share a memory scope. Nothing in the current tests exercises a multi-user group.",
       "acceptance_criteria": [
+        "MEASURED by task-205: thread_id = f'tg:{chat_id}', so two members of one group share a memory scope; test_thread_id_is_derived_from_the_chat_alone_not_the_user pins the rule and test_a_group_member_cannot_recall_another_members_memory is RED",
         "the intended scoping is written down: per-user, per-chat, or per-group — and the code matches it",
-        "an adversarial test seeds two users in one chat and proves the chosen scope holds",
+        "M7 (deriving thread_id from user_id) is killed by the characterisation test — the plausible wrong fix is guarded",
         "if the scope must change, a migration/dual-read story is documented before code",
         "thread_id stays the only scoping key (no second, divergent one)"
       ],
@@ -3039,14 +3040,15 @@
       "id": "task-214",
       "priority": "P2",
       "zone": "chat-memory-reachability",
-      "title": "End-to-end Telegram proof: the guard suite drives the graph, not the real bot surface",
+      "title": "Finish the Telegram end-to-end proof: task-205 covers _base_state, not on_message itself",
       "title_fa": "اثبات انتها‌به‌انتها از طریق تلگرام: گارد فعلی گراف را می‌راند، نه سطح واقعی بات",
       "why_fa": "اگر روزی _base_state مسیر حافظه را دور بزند، هیچ‌یک از تست‌های فعلی متوجه نمی‌شود.",
       "why": "Every test in task-205 builds its state by hand. The real entry point is bot/handlers.py::on_message → _base_state, which hardcodes memory_context: ''. A regression there is invisible to the current suite.",
       "acceptance_criteria": [
-        "a test drives on_message (or _base_state) with a fake Update and a real graph",
-        "the stored memory is proven to reach the reply through the real handler",
-        "the test fails if _base_state stops threading thread_id correctly"
+        "the state produced by _base_state is proven to reach the model with memory (DELIVERED in task-205: test_a_recall_sent_through_the_real_entry_point_reaches_the_model)",
+        "the remaining gap: drive on_message itself (agent branch, consent prompt, force-join, AIMemoryEngine) with a fake Update and a real graph",
+        "the test fails if _base_state stops threading thread_id correctly (DELIVERED: M6 kills the collapse mutant)",
+        "bot/handlers.py must not be edited while seven open PRs rewrite it — tests live in the caller's own path, or the PRs land first"
       ],
       "evidence_required": [
         "the handler-level test, red before and green after"
@@ -3058,7 +3060,8 @@
       "prerequisites": [
         "task-206",
         "task-210"
-      ]
+      ],
+      "status_note": "partially delivered by task-205 (entry-point state + 2 mutants); the full on_message path remains"
     },
     {
       "id": "task-215",
