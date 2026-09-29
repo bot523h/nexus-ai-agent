@@ -47,6 +47,11 @@ from nexus_ai_agent.observability.logging import get_logger
 logger = get_logger(__name__)
 
 CREATIVE_RENDER_JOB_TYPE = "creative_render"
+
+#: The surface identity used by the proof-carrying execution spine (task-215).
+#: Closed vocabulary: ``ExecutionTrace`` refuses an unknown surface rather than
+#: silently forking the trace namespace.
+CREATIVE_SURFACE = "telegram.creative"
 WORKSPACE_PREFIX = "creative_"
 SOURCE_ASSET_ID = "src"
 
@@ -124,6 +129,12 @@ class CreativeRenderPayload(BaseModel):
     chat_id: int
     lang: str = "en"
     idempotency_key: str = Field(min_length=1)
+    # Proof-carrying execution spine (task-215): the trace identity the surface
+    # minted for this request. ``None`` means the row predates the spine; the
+    # worker then derives the canonical identity from the row's own durable key
+    # instead of inventing one. A row that DOES carry one must carry the
+    # identity its own key implies -- see ``_bound_trace_id``.
+    trace_id: str | None = Field(default=None, min_length=1, max_length=128)
     # Deliberately no lifecycle opt-in field: the EXPERIMENTAL-pack opt-in is
     # server policy (``EXPERIMENTAL_OPT_IN_OPERATIONS``), and ``extra="forbid"``
     # rejects a row that tries to carry one (task-183 trust boundary).
@@ -207,22 +218,55 @@ def _build_project(*, payload: CreativeRenderPayload, duration_us: int, sha256: 
     return project.model_copy(update={"assets": [src]})
 
 
+def _bound_trace_id(payload: CreativeRenderPayload) -> str:
+    """Return the trace identity for this row, refusing a forged one.
+
+    A queue row is an untrusted structure -- the same trust boundary this
+    module already documents for workspaces and lifecycle opt-ins. So a
+    ``trace_id`` arriving from a row is only trusted once it is proven to be
+    the identity ``CREATIVE_SURFACE`` derives from that row's own durable
+    ``idempotency_key``. A row written before the spine existed carries
+    ``None``; its identity is *derived*, never invented, so an old row stays
+    explainable without pretending it carried a link it never had.
+    """
+    from nexus_ai_agent.application.execution_trace import trace_id_for, verify_bound_trace_id
+
+    try:
+        if payload.trace_id is None:
+            return trace_id_for(CREATIVE_SURFACE, payload.idempotency_key)
+        return verify_bound_trace_id(
+            surface=CREATIVE_SURFACE,
+            idempotency_key=payload.idempotency_key,
+            trace_id=payload.trace_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - a forged identity is a typed refusal
+        raise CreativeRenderError(
+            "invalid_request", f"unbound execution trace: {type(exc).__name__}"
+        ) from exc
+
+
 def _dispatch(
     project: Any,  # noqa: ANN401
     *,
     operation: str,
     input_data: dict[str, Any],
     idempotency_key: str,
+    trace_id: str | None = None,
 ) -> dict[str, Any]:
     """Registry lookup → bus dispatch. Bad args become typed
     ``invalid_request`` (a retry with the same payload fails identically).
 
     The bus's EXPERIMENTAL opt-in is derived from the canonical operation via
     the server-controlled ``EXPERIMENTAL_OPT_IN_OPERATIONS``; no caller (and no
-    queue row) can pass it in."""
+    queue row) can pass it in.
+
+    ``trace_id`` rides along on the typed command (task-215). It is excluded
+    from the bus's idempotency fingerprint by design, so attaching it cannot
+    change which logical command a redelivery collapses into; it is carried,
+    not authoritative."""
     from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
     from nexus_ai_agent.creative.studio.bus import CommandBus
-    from nexus_ai_agent.creative.studio.models import TargetRef, TypedCommand
+    from nexus_ai_agent.creative.studio.models import RequestContext, TargetRef, TypedCommand
 
     bus = CommandBus(
         state=project,
@@ -235,6 +279,8 @@ def _dispatch(
         input=input_data,
         target=TargetRef(project_id=project.project_id, track_id="main"),
         idempotency_key=idempotency_key,
+        trace_id=trace_id,
+        request_context=RequestContext(channel="telegram", request_id=trace_id),
     )
     try:
         result = bus.dispatch(command)
@@ -352,6 +398,7 @@ async def _run_render_branch(
     workspace: Path,
     canonical_id: str,
 ) -> dict[str, Any]:
+    trace_id = _bound_trace_id(payload)
     from nexus_ai_agent.creative.rendering.executor import render_lane
     from nexus_ai_agent.creative.rendering.ir import lane_ir_from_project
     from nexus_ai_agent.creative.slideshow.ffmpeg import (
@@ -382,6 +429,7 @@ async def _run_render_branch(
         operation=canonical_id,
         input_data=_operation_inputs(payload, duration_us),
         idempotency_key=payload.idempotency_key,
+        trace_id=trace_id,
     )
     render_project = project  # lane instrumentation below mirrors the SAME op
 
@@ -422,6 +470,7 @@ async def _run_render_branch(
 
 
 async def _run_otio_branch(payload: CreativeRenderPayload, workspace: Path) -> dict[str, Any]:
+    trace_id = _bound_trace_id(payload)
     input_path = _guarded_input(payload, workspace) if payload.input_path else None
     duration_us = payload.media_duration_us or 0
     if input_path is not None:
@@ -436,6 +485,7 @@ async def _run_otio_branch(payload: CreativeRenderPayload, workspace: Path) -> d
         operation="delivery.export_otio",
         input_data=_operation_inputs(payload, duration_us),
         idempotency_key=payload.idempotency_key,
+        trace_id=trace_id,
     )
     otio_text = output.get("otio_json")
     if not isinstance(otio_text, str) or not otio_text.strip():
@@ -460,6 +510,7 @@ async def _run_caption_branch(
     workspace: Path,
     canonical_id: str,
 ) -> dict[str, Any]:
+    trace_id = _bound_trace_id(payload)
     from nexus_ai_agent.creative.packs.caption.formatters import format_srt
 
     input_path = _guarded_input(payload, workspace)
@@ -488,6 +539,7 @@ async def _run_caption_branch(
             "transcript": transcript.model_dump(mode="json"),
         },
         idempotency_key=payload.idempotency_key,
+        trace_id=trace_id,
     )
 
     out_path = workspace / "captions.srt"
@@ -548,6 +600,10 @@ async def creative_render_job(payload: dict[str, Any]) -> dict[str, Any]:
         idempotency_key=data.idempotency_key,
     )
     try:
+        # Proof-carrying execution spine (task-215): the trace identity is
+        # resolved BEFORE any engine is touched, so a row that cannot prove its
+        # own causal identity never reaches a provider.
+        trace_id = _bound_trace_id(data)
         if canonical_id == "delivery.export_otio":
             result = await _run_otio_branch(data, workspace)
         elif canonical_id == "caption.transcribe":
@@ -557,8 +613,16 @@ async def creative_render_job(payload: dict[str, Any]) -> dict[str, Any]:
     except CreativeRenderError as exc:
         logger.warning("creative_render_typed_failure", code=exc.code, detail=exc.detail)
         return {"success": False, "error_code": exc.code, "error_detail": exc.detail}
-    logger.info("creative_render_done", operation=data.operation, sha256=result["sha256"][:26])
+    logger.info(
+        "creative_render_done",
+        operation=data.operation,
+        sha256=result["sha256"][:26],
+        trace_id=trace_id,
+    )
     result.pop("_artifact_probe", None)
+    # The trace identity rides in the durable result so the job row and the
+    # studio command that produced it share one inspectable identity.
+    result["trace_id"] = trace_id
     return result
 
 
