@@ -2799,7 +2799,7 @@
       "title_fa": "اعمال سیم‌کشی H1: هدایت chat/unknown به memory_reader_chat",
       "zone": "orchestration-routing",
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "scope": "Deliver the one-line Chat→Memory wiring that task-205 proved necessary and verified out of tree. Taken over after the task-202 lease lapsed; the patch is documented and mutation-verified in CHAT_MEMORY_REACHABILITY_AUDIT_2026-09-29.md §6.",
       "scope_fa": "سیم‌کشی یک‌خطی H1 پس از انقضای lease تسک ۲۰۲.",
       "prerequisites": [],
@@ -2826,7 +2826,20 @@
       "claimed_at": "2026-09-29T17:53:37Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": ""
+      "note": "Took over the task-202 scope after its 24h lease lapsed 2026-09-29T17:51:40Z with no renewal and 22h of PR #119 inactivity. Claimed before editing (commit 13a33b9).",
+      "released_at": "2026-09-29T18:05:00Z",
+      "delivered": [
+        "src/nexus_ai_agent/orchestration/graph.py::route_intent — chat/unknown now route through memory_reader_chat",
+        "10 reachability tripwires promoted from xfail to hard assertions",
+        "audit §5.2/§5.3: delivery timeline, merge-safety measurement, guard promotion"
+      ],
+      "evidence": [
+        "pytest tests/unit/test_chat_memory_reachability.py -q → 25 passed, 2 xfailed (was 13 passed, 12 xfailed, 2 xpassed)",
+        "python scripts/chat_memory_mutations.py → H1 patch verified: True, mutants killed 6/6 (all now as hard failures)",
+        "baseline with H1 stashed and the suite deselected: 25 failed / 2726 passed — identical 25 pre-existing failures",
+        "git merge-tree --write-tree HEAD origin/arena/01a0e907-nexus-ai-agent → graph.py clean; only .agents/board.json conflicts",
+        "ruff check . + ruff format --check . clean repo-wide"
+      ]
     }
   ],
   "deferred_log": [
@@ -2878,34 +2891,6 @@
     }
   ],
   "next_work": [
-    {
-      "id": "task-206",
-      "priority": "P0",
-      "zone": "orchestration-routing",
-      "title": "Apply the verified H1 wiring: route chat/unknown through memory_reader_chat",
-      "title_fa": "اعمال سیم‌کشی H1 اثبات‌شده: هدایت chat/unknown به memory_reader_chat",
-      "why_fa": "تنها تغییری که رفتار کاربر را درست می‌کند؛ ۴ از ۵ پرسش یادآوریِ واقعی به حافظه نمی‌رسند.",
-      "why": "4 of 5 real recall phrasings reach the model with no memory at all (measured). The patch is four lines and is already verified out of tree by scripts/chat_memory_mutations.py (M1 green, M0 red).",
-      "acceptance_criteria": [
-        "graph.py::route_intent sends every non-task intent to memory_reader_chat (patch in CHAT_MEMORY_REACHABILITY_AUDIT_2026-09-29.md §6)",
-        "python scripts/chat_memory_mutations.py reports M0 quiet and M1 green with 0 unexpected xfails",
-        "pytest tests/unit/test_chat_memory_reachability.py -rxX shows 0 xfailed except the typed-failure one",
-        "all four isolation tests stay green — the fix must not widen the thread fence",
-        "tests/integration/test_graph.py, test_agents.py and test_router*.py stay green"
-      ],
-      "evidence_required": [
-        "mutation harness output before and after the patch",
-        "the xfail/xpass counts of the reachability suite before and after",
-        "python scripts/agent_board.py check --files src/nexus_ai_agent/orchestration/graph.py --branch <owner> → exit 0"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/orchestration/graph.py",
-        "tests/unit/test_graph_memory.py"
-      ],
-      "prerequisites": [
-        "task-202"
-      ]
-    },
     {
       "id": "task-207",
       "priority": "P0",
@@ -3026,9 +3011,8 @@
       "exclusive_paths": [
         "src/nexus_ai_agent/orchestration/graph.py"
       ],
-      "prerequisites": [
-        "task-206"
-      ]
+      "prerequisites": [],
+      "status_note": "graph.py was leased by task-206 and is now free again (task-206 released 2026-09-29T18:05Z)"
     },
     {
       "id": "task-212",
@@ -3051,9 +3035,8 @@
       "exclusive_paths": [
         "src/nexus_ai_agent/orchestration/graph.py"
       ],
-      "prerequisites": [
-        "task-206"
-      ]
+      "prerequisites": [],
+      "status_note": "graph.py was leased by task-206 and is now free again (task-206 released 2026-09-29T18:05Z)"
     },
     {
       "id": "task-213",
@@ -3074,10 +3057,8 @@
       "exclusive_paths": [
         "src/nexus_ai_agent/orchestration/graph.py"
       ],
-      "prerequisites": [
-        "task-206",
-        "task-211"
-      ]
+      "prerequisites": [],
+      "status_note": "graph.py was leased by task-206 and is now free again (task-206 released 2026-09-29T18:05Z)"
     },
     {
       "id": "task-214",
@@ -3130,8 +3111,29 @@
         "src/nexus_ai_agent/orchestration/state.py",
         "tests/unit/test_chat_memory_reachability.py"
       ],
+      "prerequisites": [],
+      "status_note": "graph.py was leased by task-206 and is now free again (task-206 released 2026-09-29T18:05Z)"
+    },
+    {
+      "id": "task-216",
+      "priority": "P0",
+      "zone": "orchestration-routing",
+      "title": "Merge PR #122 — main still routes chat around the memory reader",
+      "title_fa": "ادغام PR #122 — main هنوز chat را از خوانندهٔ حافظه دور می‌برد",
+      "why_fa": "H1 روی شاخه اثبات شده اما روی main کاربر هنوز حافظه‌اش را نمی‌بیند.",
+      "why": "The wiring is proven and green but unmerged: production still answers 4 of 5 recall phrasings with no memory. graph.py merges cleanly with PR #119 (only board.json conflicts).",
+      "acceptance_criteria": [
+        "main contains the route_intent wiring",
+        "pytest tests/unit/test_chat_memory_reachability.py on main: 25 passed, 2 xfailed",
+        "no new conflict in graph.py against PR #119"
+      ],
+      "evidence_required": [
+        "CI green on the merge commit",
+        "the post-merge suite counts"
+      ],
+      "exclusive_paths": [],
       "prerequisites": [
-        "task-206"
+        "PR#122"
       ]
     }
   ],

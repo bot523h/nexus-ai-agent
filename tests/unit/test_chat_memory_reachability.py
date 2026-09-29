@@ -26,26 +26,30 @@ messages with an empty ``memory_context``, while ``_memory_writer`` has been
 storing that same user's turns for the whole conversation.  The store grows;
 the reader never runs.
 
-WHY SOME TESTS ARE MARKED ``xfail``
------------------------------------
+WHY TWO TESTS ARE STILL ``xfail``
+---------------------------------
 The fix for the above is a one-line change to
-``src/nexus_ai_agent/orchestration/graph.py``.  **That file is under a live
-lease** held by ``task-202-memory-write-observability`` (branch
-``arena/01a0e907-nexus-ai-agent``, PR #119, claimed 2026-09-28T17:51:40Z,
-24 h TTL).  A lease is not bypassed here.
+``src/nexus_ai_agent/orchestration/graph.py``.  It was **not** applied while
+that file was leased by ``task-202-memory-write-observability`` (branch
+``arena/01a0e907``, PR #119): the invariants were declared and measured as
+``xfail`` instead, each carrying the lease that blocked it, and the patch was
+verified out of tree against a shadow copy of ``src/``.
 
-So the invariant is declared, measured, and marked ``xfail`` instead of
-being silently deleted or quietly marked ``skip``.  Each xfail carries the
-lease that blocks it.  The suite is green today *because the failures are
-declared*, not because the behaviour is correct — see
-``CHAT_MEMORY_REACHABILITY_AUDIT_2026-09-29.md``.
+The lease lapsed at 2026-09-29T17:51:40Z without renewal, and ``task-206``
+landed the wiring.  **The reachability guards below are now hard assertions**:
+a regression turns CI red rather than an XPASS.
 
-These guards are not decorative: ``scripts/chat_memory_mutations.py`` applies
-the candidate H1 patch to a **shadow copy of ``src/``** (never to the leased
-file), proves this suite goes fully green, and then proves each guard kills a
-named mutant.  ``xfail`` is non-strict on purpose: when H1 lands the tests
-XPASS, which pytest reports as passed, so the fix can never leave a stale
-red behind.
+Two invariants are still red, and neither is a lease — each needs a decision
+nobody has made yet:
+
+* ``task-215`` — a dead backend is still reported as a successful empty recall
+  (LAW 11). The one-line wiring does not type the failure.
+* ``task-210`` — the memory scope is the chat, not the user, so two members of
+  one Telegram group share a memory scope.
+
+The guards are not decorative: ``scripts/chat_memory_mutations.py`` proves each
+one kills a named mutant, and now runs against the fixed branch as a
+regression harness.
 """
 
 from __future__ import annotations
@@ -65,11 +69,20 @@ from nexus_ai_agent.orchestration.state import NexusState
 from nexus_ai_agent.storage.langgraph_checkpoint import get_checkpointer
 from nexus_ai_agent.tools.registry import ToolRegistry
 
-# ── the lease that blocks the fix ────────────────────────────────────────── #
-H1_BLOCKING_LEASE = (
-    "H1 is blocked: src/nexus_ai_agent/orchestration/graph.py is under the live "
-    "lease of task-202 (branch arena/01a0e907, PR #119, expires 2026-09-29T17:51:40Z)"
-)
+# ── why two tripwires are still red ───────────────────────────────────────── #
+# H1 itself is no longer blocked: task-206 landed the wiring in
+# ``graph.py::route_intent`` after the task-202 lease lapsed
+# (2026-09-29T17:51:40Z, never renewed, PR #119 untouched since
+# 2026-09-28T19:22Z).  The reachability tripwires below are therefore hard
+# assertions now, not xfail: the fix is in, so a regression must turn CI red,
+# not merely an XPASS.
+#
+# Two invariants remain red, and neither is a lease — each is a separate
+# decision that has not been made yet:
+#   * task-215 — a dead backend is still reported as a successful empty recall
+#   * task-210 — the memory scope is the chat, not the user
+TYPED_FAILURE_PENDING = "task-215: LAW 11 — a dead backend is still reported as an empty recall"
+GROUP_SCOPE_PENDING = "task-210: the memory scope is the chat, not the user — undecided"
 
 #: A fact that exists ONLY in the store — it was never in the visible messages,
 #: so it can only appear in a prompt if the memory reader actually ran.
@@ -218,7 +231,6 @@ async def test_control_an_intent_that_reads_memory_really_delivers_it(settings_o
 # 2. THE GAP — real recall questions that lose their memory
 # ═══════════════════════════════════════════════════════════════════════════ #
 @pytest.mark.parametrize("question", RECALL_QUESTIONS)
-@pytest.mark.xfail(reason=H1_BLOCKING_LEASE, strict=False)
 async def test_a_recall_question_delivers_stored_memory_to_the_model(
     question: str, settings_override
 ) -> None:
@@ -237,7 +249,6 @@ async def test_a_recall_question_delivers_stored_memory_to_the_model(
 
 
 @pytest.mark.parametrize("question", RECALL_QUESTIONS)
-@pytest.mark.xfail(reason=H1_BLOCKING_LEASE, strict=False)
 async def test_a_stored_turn_is_recallable_on_the_next_turn(
     question: str, settings_override
 ) -> None:
@@ -262,7 +273,6 @@ async def test_a_stored_turn_is_recallable_on_the_next_turn(
     )
 
 
-@pytest.mark.xfail(reason=H1_BLOCKING_LEASE, strict=False)
 async def test_the_writer_and_the_reader_cover_the_same_intents(settings_override) -> None:
     """Write symmetry: the runtime must not store what it can never read back.
 
@@ -443,9 +453,7 @@ async def test_an_unavailable_backend_never_aborts_the_conversation(settings_ove
     assert memory.reads, "the fixture never actually attempted a read"
 
 
-@pytest.mark.xfail(
-    reason=H1_BLOCKING_LEASE + " (the one-line fix does not type the failure)", strict=False
-)
+@pytest.mark.xfail(reason=TYPED_FAILURE_PENDING, strict=False)
 async def test_an_unavailable_backend_is_not_reported_as_a_successful_empty_recall(
     settings_override,
 ) -> None:
@@ -587,7 +595,9 @@ def test_thread_id_is_derived_from_the_chat_alone_not_the_user() -> None:
     assert first["user_id"] != second["user_id"]
 
 
-@pytest.mark.xfail(reason="task-210: the memory scope is the chat, not the user", strict=False)
+@pytest.mark.xfail(
+    reason="task-210: the memory scope is the chat, not the user — undecided", strict=False
+)
 async def test_a_group_member_cannot_recall_another_members_memory(settings_override) -> None:
     """The desired invariant, RED today.  Filed as a decision, not a fix.
 
@@ -614,7 +624,6 @@ async def test_a_group_member_cannot_recall_another_members_memory(settings_over
     )
 
 
-@pytest.mark.xfail(reason=H1_BLOCKING_LEASE, strict=False)
 async def test_a_recall_sent_through_the_real_entry_point_reaches_the_model(
     settings_override,
 ) -> None:
