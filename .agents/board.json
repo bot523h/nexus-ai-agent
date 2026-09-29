@@ -667,6 +667,30 @@
         "scripts/chat_memory_mutations.py",
         "CHAT_MEMORY_REACHABILITY_AUDIT_2026-09-29.md"
       ]
+    },
+    {
+      "id": "coordination-check-truth",
+      "description": "Make the pre-push overlap check see leases that live on unmerged PR branches.",
+      "paths": [
+        "scripts/agent_board.py",
+        "tests/unit/test_agent_board.py"
+      ]
+    },
+    {
+      "id": "retrieval-determinism",
+      "description": "Deterministic test embedder + a paraphrase benchmark that can actually be pinned.",
+      "paths": [
+        "tests/unit/test_memory_retrieval_truth.py",
+        "scripts/memory_retrieval_mutations.py"
+      ]
+    },
+    {
+      "id": "embedding-honesty",
+      "description": "The embedding contract the providers claim vs. the one they implement.",
+      "paths": [
+        "src/nexus_ai_agent/llm/",
+        "tests/unit/test_embedding_honesty.py"
+      ]
     }
   ],
   "claims": [
@@ -2812,196 +2836,257 @@
   ],
   "next_work": [
     {
-      "id": "task-164",
-      "priority": "P1",
-      "zone": "ci-quality",
-      "title": "Nightly DB backup has never succeeded (3/3 red) — make the production backup pipeline actually work",
-      "title_fa": "بکاپ شبانهٔ دیتابیس هرگز موفق نشده (۳ از ۳ سرخ) — مسیر بکاپ Production واقعاً کار کند",
-      "why_fa": "تنها مکانیسم DR برای دیتابیس Production (R2 blob tier) سه اجرا پیاپی شکست خورده و هیچ بکاپی تولید نشده؛ ریشهٔ دقیق بدون لوق جاب نامشخص است (R2 secrets؟ پیکربندی Neon؟).",
-      "acceptance_criteria": [
-        "a manual workflow_dispatch run of maintenance/backup-db completes SUCCESS with a visible object under backups/ in R2 including sha256/verified/timestamp in the step log",
-        "NEXUS_R2_* secrets are configured in GitHub Actions (owner-side)",
-        "the scheduled (cron) run after that also completes SUCCESS"
-      ],
-      "prerequisites": [],
-      "exclusive_paths": [
-        ".github/workflows/maintenance.yml"
-      ],
-      "status_note": "repo-side verifiability delivered by task-167 (verified backup contract, round-trip byte identity, restore-into-temp-SQLite verification); what remains is owner-secrets configuration + one real green dispatch"
-    },
-    {
-      "id": "task-124",
+      "id": "task-206",
       "priority": "P0",
-      "zone": "audit-remainder",
-      "title": "P0-8 single wiring + P0-9 graph memory write path",
-      "title_fa": "بستن P0-8 و P0-9",
-      "why_fa": "دو یافتهٔ باز ممیزی امنیتی/کارکردی با معیار پذیرش روشن.",
+      "zone": "orchestration-routing",
+      "title": "Apply the verified H1 wiring: route chat/unknown through memory_reader_chat",
+      "title_fa": "اعمال سیم‌کشی H1 اثبات‌شده: هدایت chat/unknown به memory_reader_chat",
+      "why_fa": "تنها تغییری که رفتار کاربر را درست می‌کند؛ ۴ از ۵ پرسش یادآوریِ واقعی به حافظه نمی‌رسند.",
+      "why": "4 of 5 real recall phrasings reach the model with no memory at all (measured). The patch is four lines and is already verified out of tree by scripts/chat_memory_mutations.py (M1 green, M0 red).",
       "acceptance_criteria": [
-        "تست ONE-OWNER سبز",
-        "write→read گراف با round-trip",
-        "صفر رگرسیون"
+        "graph.py::route_intent sends every non-task intent to memory_reader_chat (patch in CHAT_MEMORY_REACHABILITY_AUDIT_2026-09-29.md §6)",
+        "python scripts/chat_memory_mutations.py reports M0 quiet and M1 green with 0 unexpected xfails",
+        "pytest tests/unit/test_chat_memory_reachability.py -rxX shows 0 xfailed except the typed-failure one",
+        "all four isolation tests stay green — the fix must not widen the thread fence",
+        "tests/integration/test_graph.py, test_agents.py and test_router*.py stay green"
       ],
-      "prerequisites": [
-        "task-122",
-        "task-123"
+      "evidence_required": [
+        "mutation harness output before and after the patch",
+        "the xfail/xpass counts of the reachability suite before and after",
+        "python scripts/agent_board.py check --files src/nexus_ai_agent/orchestration/graph.py --branch <owner> → exit 0"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/memory/",
-        "src/nexus_ai_agent/features/rag.py",
-        "tests/unit/test_audit_remainder.py"
+        "src/nexus_ai_agent/orchestration/graph.py",
+        "tests/unit/test_graph_memory.py"
+      ],
+      "prerequisites": [
+        "task-202"
       ]
     },
     {
-      "id": "task-122",
+      "id": "task-207",
       "priority": "P0",
-      "zone": "feature-wiring",
-      "title": "PR#32 rebase + dedupe",
-      "title_fa": "ریبیس و رفع دوگانگی PR#32",
-      "why_fa": "بزرگ‌ترین PR باز روی بیس باستانی؛ ریسک دو سیم‌کشی موازی.",
+      "zone": "coordination-check-truth",
+      "title": "agent_board.py check returns 'no overlap' for a file that IS leased — make it see unmerged PR boards",
+      "title_fa": "check روی فایل lease‌شده سبز می‌دهد؛ تخته‌های PRهای merge‌نشده را هم ببیند",
+      "why_fa": "ابزار هماهنگی به عاملی که از main شروع می‌کند اجازهٔ کار روی فایلی را می‌دهد که lease فعال دارد.",
+      "why": "cmd_check reads .agents/board.json from the local tree, so claims that exist only on unmerged PR branches (#119 task-202, #121 task-203) are invisible. Measured false green on the exact H1 file.",
       "acceptance_criteria": [
-        "دیف یکتا",
-        "تست‌های feature_* سبز",
-        "CI سبز روی main تازه"
+        "check --files against a path leased by an unmerged PR's active claim exits 1 and names the holding task",
+        "a disjoint path on the same branch still exits 0",
+        "the board's own test suite is extended with this cross-PR case and stays green",
+        "behaviour is documented in AGENTS.md §1.2 without weakening the exit-code contract"
       ],
-      "prerequisites": [],
+      "evidence_required": [
+        "the false-green command from CHAT_MEMORY_REACHABILITY_AUDIT_2026-09-29.md §5.1 shown red after the fix",
+        "pytest tests/unit/test_agent_board.py green"
+      ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/bot/surface/",
-        "src/nexus_ai_agent/features/"
+        "scripts/agent_board.py",
+        "tests/unit/test_agent_board.py"
       ],
-      "status_note": "delivered via PR#47 (forensic triage docs/audits/PR32_TRIAGE_2026-09-21.md + port-forward)"
+      "prerequisites": []
     },
     {
-      "id": "task-123",
+      "id": "task-208",
       "priority": "P0",
-      "zone": "packaging+interop",
-      "title": "PR#33 slim-down",
-      "title_fa": "کوچک‌سازی PR#33",
-      "why_fa": "برای باز شدن مسیر بسته‌بندی/داک و آزادسازی cli.py.",
+      "zone": "llm-test-determinism",
+      "title": "The test embedder is salted by PYTHONHASHSEED — retrieval scores are a random variable",
+      "title_fa": "امبدر تست با PYTHONHASHSEED نمک‌زده می‌شود؛ امتیاز بازیابی متغیر تصادفی است",
+      "why_fa": "hit@3 روی ۸ اجرای یکسان بین ۰.۰۰۰ و ۰.۲۵۰ نوسان کرد؛ هر baseline روی این lane یعنی سنجش نویز.",
+      "why": "FakeLLMProvider.embed seeds random.Random(hash(text)); str.__hash__ is salted per process. Measured: dense-lane hit@3 range [0.000, 0.250] over 8 identical runs. Any retrieval regression baseline pinned on the current embedder is pinned on noise.",
       "acceptance_criteria": [
-        "دیف فقط یکتاها",
-        "CI سبز"
+        "a deterministic test embedder exists and is the default in retrieval evaluation (seeded RNG, never hash())",
+        "running the U1 evaluation twice in separate processes yields byte-identical scores",
+        "a mutant that re-introduces hash()-seeding is killed by a test",
+        "FakeLLMProvider's public behaviour is unchanged for existing callers, or the break is documented"
       ],
-      "prerequisites": [],
-      "exclusive_paths": []
-    },
-    {
-      "id": "task-121",
-      "priority": "P1",
-      "zone": "delivery-interop-markers",
-      "title": "OTIO marker round-trip",
-      "title_fa": "مارکرهای OTIO",
-      "why_fa": "تنها شکاف باقی‌ماندهٔ تسک ۱۱۰؛ include_markers فعلاً بی‌اثر است.",
-      "acceptance_criteria": [
-        "include_markers مؤثر",
-        "۲ تست round-trip با OTIO واقعی"
-      ],
-      "prerequisites": [
-        "task-123"
+      "evidence_required": [
+        "python scripts/chat_memory_mutations.py --u1 --repeat 8 before and after",
+        "the killed-mutant table"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/creative/packs/delivery/",
-        "tests/unit/test_otio_interop.py"
+        "src/nexus_ai_agent/llm/fake_llm.py",
+        "scripts/chat_memory_mutations.py"
+      ],
+      "prerequisites": []
+    },
+    {
+      "id": "task-209",
+      "priority": "P1",
+      "zone": "retrieval-determinism",
+      "title": "Paraphrase benchmark against the merged hybrid retriever (U1, answered for main only)",
+      "title_fa": "بنچمارک paraphrase روی رتریور هیبریدِ merge‌شده (U1)",
+      "why_fa": "U1 برای main پاسخ داده شد (hit@3 = 0.125 در برابر شانس 0.125)؛ باید برای رتریوری که واقعاً منتشر می‌شود پاسخ داده شود.",
+      "why": "U1 was measured on main's pre-W2 LongTermMemory only. PR #121's hybrid retriever is unmerged, so its paraphrase quality is still an unmeasured claim.",
+      "acceptance_criteria": [
+        "the 8 paraphrase pairs + 16 distractors from task-205 are the fixed fixture (mean lexical overlap 0.081 recorded)",
+        "hit@3, MRR@3 and the lane actually used are reported for lexical, dense and fused retrieval",
+        "the score is reproducible across processes (depends on task-208)",
+        "a real embedder is used, or the absence of one is stated as a limitation, not glossed"
+      ],
+      "evidence_required": [
+        "the benchmark command and its output",
+        "a statement of which lane produced each hit"
+      ],
+      "exclusive_paths": [
+        "tests/unit/test_memory_retrieval_truth.py",
+        "scripts/memory_retrieval_mutations.py"
+      ],
+      "prerequisites": [
+        "task-208"
       ]
     },
     {
-      "id": "task-128",
+      "id": "task-210",
       "priority": "P1",
-      "zone": "core-database",
-      "title": "Async DB phase 1",
-      "title_fa": "فاز ۱ دیتابیس ناهمگام",
-      "why_fa": "حذف create_engine سینک از features با آزمون نگهبان معماری.",
+      "zone": "chat-memory-reachability",
+      "title": "Second Telegram identity fence: thread_id is derived from chat_id alone, so a group shares one memory scope",
+      "title_fa": "حصار دوم هویت تلگرام: thread_id فقط از chat_id ساخته می‌شود، پس گروه یک حافظهٔ مشترک دارد",
+      "why_fa": "در گروه، همهٔ اعضا یک thread دارند؛ یعنی حافظهٔ خصوصی یک کاربر می‌تواند وارد پاسخ کاربر دیگر شود.",
+      "why": "bot/handlers.py::_base_state sets thread_id = f'tg:{chat_id}'. Two members of one group therefore share a memory scope. Nothing in the current tests exercises a multi-user group.",
       "acceptance_criteria": [
-        "انجین مرکزی + ۲ پایلوت",
-        "گارد معماری سبز"
+        "the intended scoping is written down: per-user, per-chat, or per-group — and the code matches it",
+        "an adversarial test seeds two users in one chat and proves the chosen scope holds",
+        "if the scope must change, a migration/dual-read story is documented before code",
+        "thread_id stays the only scoping key (no second, divergent one)"
       ],
-      "prerequisites": [
-        "task-122"
+      "evidence_required": [
+        "the adversarial test, red before and green after (or a recorded decision not to change it)",
+        "a statement of the product decision, not only the code"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/core/async_db.py",
-        "src/nexus_ai_agent/features/"
+        "src/nexus_ai_agent/bot/handlers.py",
+        "tests/unit/test_handlers.py"
+      ],
+      "prerequisites": [
+        "task-206"
       ]
     },
     {
-      "id": "task-132",
+      "id": "task-211",
       "priority": "P1",
-      "zone": "ci-quality",
-      "title": "Extras smoke matrix",
-      "title_fa": "ماتریس دود اختیاری‌ها",
-      "why_fa": "مسیرهای اختیاری خارج از CI پیش‌فرض می‌توانند بی‌صدا بشکنند (شکاف مستند در TESTING §7).",
+      "zone": "chat-memory-reachability",
+      "title": "_memory_reader queries with messages[-1], which can be the assistant's own last turn",
+      "title_fa": "_memory_reader با messages[-1] جست‌وجو می‌کند که ممکن است پیام دستیار باشد",
+      "why_fa": "روی گفت‌وگوی چندنوبتی، پرسش از پاسخ مدل ساخته می‌شود نه از پیام کاربر.",
+      "why": "graph.py:31 uses state['messages'][-1]['content'] with no role filter, while _memory_writer correctly walks backwards for the last *user* message. On a resumed turn the query can be the assistant's own text.",
       "acceptance_criteria": [
-        "job ماتریسی per-extra",
-        "شکست نصب = شکست CI"
+        "the memory query is built from the last user message, matching what the writer stores",
+        "a multi-turn test proves turn N+1 queries with the user's words, not the assistant's",
+        "a mutant that reintroduces messages[-1] is killed"
       ],
-      "prerequisites": [],
+      "evidence_required": [
+        "a multi-turn red→green test and its killed mutant"
+      ],
       "exclusive_paths": [
-        "tests/unit/test_optional_extras.py",
-        ".github/"
+        "src/nexus_ai_agent/orchestration/graph.py"
+      ],
+      "prerequisites": [
+        "task-206"
       ]
     },
     {
+      "id": "task-212",
+      "priority": "P1",
+      "zone": "chat-memory-reachability",
+      "title": "Delete the dead _chat_agent, or wire it — it duplicates agents/chat_agent.py and nothing reaches it",
+      "title_fa": "حذف یا سیم‌کشی _chat_agent مرده؛ تکراری از agents/chat_agent.py است",
+      "why_fa": "دو پیاده‌سازی از یک مسیر چت؛ هیچ‌کدام هم مالک روشنی برای نگه‌داشتن نیست.",
+      "why": "graph.py:39 defines _chat_agent, which is never added as a node. It is a second implementation of agents/chat_agent.py with a hardcoded [-10:] window — exactly the inconsistency W2 fixed in the wired one.",
       "acceptance_criteria": [
-        "routes + creative/job_registry.py + video_director.py + ffmpeg_executor.py removed; creative/__init__ exports cleaned",
-        "importer-ratchet test updated to assert ABSENCE; GET HMAC tests removed with the routes",
-        "grep proves zero remaining callers; full suite green; release note added"
+        "exactly one chat agent implementation remains (an importer-ratchet test asserts the other is ABSENT)",
+        "no path that used to work changes behaviour",
+        "grep proves zero remaining references"
+      ],
+      "evidence_required": [
+        "ruff clean",
+        "the ratchet test",
+        "grep output"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/api/app.py",
-        "src/nexus_ai_agent/creative/job_registry.py",
-        "src/nexus_ai_agent/creative/video_director.py",
-        "src/nexus_ai_agent/creative/ffmpeg_executor.py",
-        "tests/architecture/test_legacy_creative_boundary.py",
-        "tests/unit/test_security_hardening.py"
+        "src/nexus_ai_agent/orchestration/graph.py"
       ],
       "prerequisites": [
-        "PR#58 merged"
-      ],
-      "status_note": "evidence: D-0010 in DECISION_LOG; removal only after PR#58 merges",
-      "id": "task-173",
-      "priority": "P1",
-      "zone": "p0-stabilization",
-      "title": "Remove the legacy /creative/* HTTP lane (D-0010 reopen clause) after PR#58 lands",
-      "title_fa": "حذف مسیر قدیمی /creative/* بعد از ادغام PR#58",
-      "why_fa": "AD-0010: مسیر legacy فقط برای عدم برخورد با رفع SSRF درحال انجام (PR#58) نگه داشته شده؛ بعد از مرج باید حذف شود تا یک مسیر اجرایی Creative یگانه بماند."
+        "task-206"
+      ]
     },
     {
-      "acceptance_criteria": [
-        "lane op(s) with golden argv tests + a decision on shipping reference .cube assets",
-        "worker map + surface ALLOWED updated in the same PR; real-render regression tests",
-        "no silent degradation: unavailable inputs stay typed failures"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/rendering/ir.py",
-        "src/nexus_ai_agent/creative/rendering/compiler.py",
-        "src/nexus_ai_agent/creative/render_jobs.py",
-        "src/nexus_ai_agent/bot/creative_surface.py"
-      ],
-      "prerequisites": [],
-      "status_note": "owned by the creative-runtime agent; surface/worker files change atomically with the lane instrument",
-      "id": "task-174",
+      "id": "task-213",
       "priority": "P2",
-      "zone": "creative-runtime",
-      "title": "Lane instruments for LUT (color.apply_lut) and subtitles (caption.burn_in) so the refused surface ops can enter the matrix",
-      "title_fa": "ابزارهای lane برای LUT و subtitles تا دو عمل ردشدهٔ surface وارد ماتریس واقعی شوند",
-      "why_fa": "D-0011: lut/burnin به دلیل نبود مسیر اجرای صادقانه (بدون .cube shipped و بدون subtitles op در lane IR) typed refuse می‌شوند؛ با ابزار واقعی lane قابل برگشت‌اند."
+      "zone": "chat-memory-reachability",
+      "title": "Close the write/read asymmetry at the storage layer: chat turns are written and never read",
+      "title_fa": "بستن نامتقارنی نوشتن/خواندن در لایهٔ ذخیره‌سازی",
+      "why_fa": "حافظه رشد می‌کند و هیچ‌وقت خوانده نمی‌شود؛ رشد بدون بازده برای کاربر واقعی هزینه است.",
+      "why": "test_the_writer_and_the_reader_cover_the_same_intents measures it. Even after H1, the writer stores the full turn including the assistant's own answer, which grows the corpus with non-user content and degrades every later recall.",
+      "acceptance_criteria": [
+        "the stored representation is decided and written down (user turn only? user+assistant? extracted facts?)",
+        "the writer's payload stops growing with content no reader benefits from",
+        "corpus growth per turn is measured before and after"
+      ],
+      "evidence_required": [
+        "a measurement of stored rows per turn, before and after"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/orchestration/graph.py"
+      ],
+      "prerequisites": [
+        "task-206",
+        "task-211"
+      ]
     },
     {
-      "acceptance_criteria": [
-        "real user sends /edit trim on staging and receives translated queued + video artifact",
-        "caption transcribe on default install returns the typed unavailable message (localized)",
-        "job rows show durable COMPLETED/not FAILED for the typed paths"
-      ],
-      "exclusive_paths": [],
-      "prerequisites": [
-        "staging bot token + a test chat"
-      ],
-      "status_note": "owner/staging action; evidence = staging screenshots + job row dump",
-      "id": "task-175",
+      "id": "task-214",
       "priority": "P2",
-      "zone": "p0-stabilization",
-      "title": "Staging smoke of /edit /caption /grade against the live bot (PTB runtime)",
-      "title_fa": "اسموک استیجینگ سه فرمان creative روی ربات زنده",
-      "why_fa": "زنجیره در سطح unit/integration با artifact واقعی اثبات شده؛ اثبات نهایی کاربر-واقعی به کانتکست PTB زنده و توکن استیجینگ نیاز دارد (external dependency)."
+      "zone": "chat-memory-reachability",
+      "title": "End-to-end Telegram proof: the guard suite drives the graph, not the real bot surface",
+      "title_fa": "اثبات انتها‌به‌انتها از طریق تلگرام: گارد فعلی گراف را می‌راند، نه سطح واقعی بات",
+      "why_fa": "اگر روزی _base_state مسیر حافظه را دور بزند، هیچ‌یک از تست‌های فعلی متوجه نمی‌شود.",
+      "why": "Every test in task-205 builds its state by hand. The real entry point is bot/handlers.py::on_message → _base_state, which hardcodes memory_context: ''. A regression there is invisible to the current suite.",
+      "acceptance_criteria": [
+        "a test drives on_message (or _base_state) with a fake Update and a real graph",
+        "the stored memory is proven to reach the reply through the real handler",
+        "the test fails if _base_state stops threading thread_id correctly"
+      ],
+      "evidence_required": [
+        "the handler-level test, red before and green after"
+      ],
+      "exclusive_paths": [
+        "tests/unit/test_chat_memory_reachability.py",
+        "tests/unit/test_handlers.py"
+      ],
+      "prerequisites": [
+        "task-206",
+        "task-210"
+      ]
+    },
+    {
+      "id": "task-215",
+      "priority": "P0",
+      "zone": "chat-memory-reachability",
+      "title": "Typed retrieval outcome — a dead backend is currently reported as a successful empty recall",
+      "title_fa": "نتیجهٔ تایپ‌دار بازیابی — بک‌اند مرده اکنون به‌عنوان بازیابی خالیِ موفق گزارش می‌شود",
+      "why_fa": "تنها تریپ‌وایری که پچ یک‌خطی H1 اثباتاً برطرف نمی‌کند؛ «هیچ حافظه‌ای» و «حافظه خراب است» یکی‌اند.",
+      "why": "_memory_reader does `except Exception: state.setdefault('memory_context','')` on a key that is always already present, so UNAVAILABLE and SUCCESS-with-no-hits are the same ''. M1 in the mutation harness proves the one-line wiring leaves this red. The repo's typed taxonomy (jobs/failure_semantics.py) belongs to the job lifecycle and must not be imported into the memory/ leaf, so the shape is an open design decision.",
+      "acceptance_criteria": [
+        "a failed retrieval and a successful empty retrieval are distinguishable in the returned state",
+        "NexusState.error (or an agreed equivalent) is set on failure and NOT set on an empty success",
+        "the failure contains no user content (the same rule PR #119 applies to the write path)",
+        "test_an_unavailable_backend_is_not_reported_as_a_successful_empty_recall XPASSes and test_a_successful_empty_recall_is_not_reported_as_an_error stays green",
+        "a mutant that sets the error unconditionally is killed"
+      ],
+      "evidence_required": [
+        "the mutation harness M1 row going from 'STILL RED' to clean",
+        "a redaction test proving no memory content reaches the log"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/orchestration/graph.py",
+        "src/nexus_ai_agent/orchestration/state.py",
+        "tests/unit/test_chat_memory_reachability.py"
+      ],
+      "prerequisites": [
+        "task-206"
+      ]
     }
   ],
   "history": {
@@ -3416,5 +3501,204 @@
       "reason": "This Arena session is bound to arena/01a0e3b7-nexus-ai-agent and cannot push to arena/01a0e356-nexus-ai-agent. PR #109 head cd79bfe3b8e42b1943ad8ff0d352646fc54df548 is MERGEABLE but UNSTABLE: python-parity (3.10) FAILURE on run 36329794486 (job 108649421192) and the duplicate run 36329718482. Local reproduction on CPython 3.10.16 against that exact tree: 3 failed (test_same_user_timeout_releases_exactly_one_pending_slot, test_withdrawn_queued_requests_never_run_after_backlog_clears, test_timeout_during_rate_wait_wakes_worker_without_provider_invocation), 14 passed. Root cause: asyncio.wait_for raises asyncio.TimeoutError on 3.10, which is not a subclass of builtin TimeoutError (docs.python.org/3.10/library/asyncio-exceptions.html) and is an Exception, so the worker generic handler records queue_processor_error. 3.11+ aliases the names (Changed in version 3.11). History was fast-forwarded onto this branch (cd79bfe remains an ancestor); no rewrite, no force-push. Exclusive paths unchanged. gates_owner stays with this continuation."
     }
   ],
-  "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins."
+  "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins.",
+  "next_work_archive_2026_09_29": {
+    "note": "The ten entries that were in next_work before task-205, kept verbatim so nothing is lost when a newer agent publishes a new forward network (AGENTS.md: newest state wins, but never at the cost of a record).",
+    "superseded_by": "arena/01a0eade-nexus-ai-agent",
+    "at": "2026-09-29T02:30:00Z",
+    "entries": [
+      {
+        "id": "task-164",
+        "priority": "P1",
+        "zone": "ci-quality",
+        "title": "Nightly DB backup has never succeeded (3/3 red) — make the production backup pipeline actually work",
+        "title_fa": "بکاپ شبانهٔ دیتابیس هرگز موفق نشده (۳ از ۳ سرخ) — مسیر بکاپ Production واقعاً کار کند",
+        "why_fa": "تنها مکانیسم DR برای دیتابیس Production (R2 blob tier) سه اجرا پیاپی شکست خورده و هیچ بکاپی تولید نشده؛ ریشهٔ دقیق بدون لوق جاب نامشخص است (R2 secrets؟ پیکربندی Neon؟).",
+        "acceptance_criteria": [
+          "a manual workflow_dispatch run of maintenance/backup-db completes SUCCESS with a visible object under backups/ in R2 including sha256/verified/timestamp in the step log",
+          "NEXUS_R2_* secrets are configured in GitHub Actions (owner-side)",
+          "the scheduled (cron) run after that also completes SUCCESS"
+        ],
+        "prerequisites": [],
+        "exclusive_paths": [
+          ".github/workflows/maintenance.yml"
+        ],
+        "status_note": "repo-side verifiability delivered by task-167 (verified backup contract, round-trip byte identity, restore-into-temp-SQLite verification); what remains is owner-secrets configuration + one real green dispatch"
+      },
+      {
+        "id": "task-124",
+        "priority": "P0",
+        "zone": "audit-remainder",
+        "title": "P0-8 single wiring + P0-9 graph memory write path",
+        "title_fa": "بستن P0-8 و P0-9",
+        "why_fa": "دو یافتهٔ باز ممیزی امنیتی/کارکردی با معیار پذیرش روشن.",
+        "acceptance_criteria": [
+          "تست ONE-OWNER سبز",
+          "write→read گراف با round-trip",
+          "صفر رگرسیون"
+        ],
+        "prerequisites": [
+          "task-122",
+          "task-123"
+        ],
+        "exclusive_paths": [
+          "src/nexus_ai_agent/memory/",
+          "src/nexus_ai_agent/features/rag.py",
+          "tests/unit/test_audit_remainder.py"
+        ]
+      },
+      {
+        "id": "task-122",
+        "priority": "P0",
+        "zone": "feature-wiring",
+        "title": "PR#32 rebase + dedupe",
+        "title_fa": "ریبیس و رفع دوگانگی PR#32",
+        "why_fa": "بزرگ‌ترین PR باز روی بیس باستانی؛ ریسک دو سیم‌کشی موازی.",
+        "acceptance_criteria": [
+          "دیف یکتا",
+          "تست‌های feature_* سبز",
+          "CI سبز روی main تازه"
+        ],
+        "prerequisites": [],
+        "exclusive_paths": [
+          "src/nexus_ai_agent/bot/surface/",
+          "src/nexus_ai_agent/features/"
+        ],
+        "status_note": "delivered via PR#47 (forensic triage docs/audits/PR32_TRIAGE_2026-09-21.md + port-forward)"
+      },
+      {
+        "id": "task-123",
+        "priority": "P0",
+        "zone": "packaging+interop",
+        "title": "PR#33 slim-down",
+        "title_fa": "کوچک‌سازی PR#33",
+        "why_fa": "برای باز شدن مسیر بسته‌بندی/داک و آزادسازی cli.py.",
+        "acceptance_criteria": [
+          "دیف فقط یکتاها",
+          "CI سبز"
+        ],
+        "prerequisites": [],
+        "exclusive_paths": []
+      },
+      {
+        "id": "task-121",
+        "priority": "P1",
+        "zone": "delivery-interop-markers",
+        "title": "OTIO marker round-trip",
+        "title_fa": "مارکرهای OTIO",
+        "why_fa": "تنها شکاف باقی‌ماندهٔ تسک ۱۱۰؛ include_markers فعلاً بی‌اثر است.",
+        "acceptance_criteria": [
+          "include_markers مؤثر",
+          "۲ تست round-trip با OTIO واقعی"
+        ],
+        "prerequisites": [
+          "task-123"
+        ],
+        "exclusive_paths": [
+          "src/nexus_ai_agent/creative/packs/delivery/",
+          "tests/unit/test_otio_interop.py"
+        ]
+      },
+      {
+        "id": "task-128",
+        "priority": "P1",
+        "zone": "core-database",
+        "title": "Async DB phase 1",
+        "title_fa": "فاز ۱ دیتابیس ناهمگام",
+        "why_fa": "حذف create_engine سینک از features با آزمون نگهبان معماری.",
+        "acceptance_criteria": [
+          "انجین مرکزی + ۲ پایلوت",
+          "گارد معماری سبز"
+        ],
+        "prerequisites": [
+          "task-122"
+        ],
+        "exclusive_paths": [
+          "src/nexus_ai_agent/core/async_db.py",
+          "src/nexus_ai_agent/features/"
+        ]
+      },
+      {
+        "id": "task-132",
+        "priority": "P1",
+        "zone": "ci-quality",
+        "title": "Extras smoke matrix",
+        "title_fa": "ماتریس دود اختیاری‌ها",
+        "why_fa": "مسیرهای اختیاری خارج از CI پیش‌فرض می‌توانند بی‌صدا بشکنند (شکاف مستند در TESTING §7).",
+        "acceptance_criteria": [
+          "job ماتریسی per-extra",
+          "شکست نصب = شکست CI"
+        ],
+        "prerequisites": [],
+        "exclusive_paths": [
+          "tests/unit/test_optional_extras.py",
+          ".github/"
+        ]
+      },
+      {
+        "acceptance_criteria": [
+          "routes + creative/job_registry.py + video_director.py + ffmpeg_executor.py removed; creative/__init__ exports cleaned",
+          "importer-ratchet test updated to assert ABSENCE; GET HMAC tests removed with the routes",
+          "grep proves zero remaining callers; full suite green; release note added"
+        ],
+        "exclusive_paths": [
+          "src/nexus_ai_agent/api/app.py",
+          "src/nexus_ai_agent/creative/job_registry.py",
+          "src/nexus_ai_agent/creative/video_director.py",
+          "src/nexus_ai_agent/creative/ffmpeg_executor.py",
+          "tests/architecture/test_legacy_creative_boundary.py",
+          "tests/unit/test_security_hardening.py"
+        ],
+        "prerequisites": [
+          "PR#58 merged"
+        ],
+        "status_note": "evidence: D-0010 in DECISION_LOG; removal only after PR#58 merges",
+        "id": "task-173",
+        "priority": "P1",
+        "zone": "p0-stabilization",
+        "title": "Remove the legacy /creative/* HTTP lane (D-0010 reopen clause) after PR#58 lands",
+        "title_fa": "حذف مسیر قدیمی /creative/* بعد از ادغام PR#58",
+        "why_fa": "AD-0010: مسیر legacy فقط برای عدم برخورد با رفع SSRF درحال انجام (PR#58) نگه داشته شده؛ بعد از مرج باید حذف شود تا یک مسیر اجرایی Creative یگانه بماند."
+      },
+      {
+        "acceptance_criteria": [
+          "lane op(s) with golden argv tests + a decision on shipping reference .cube assets",
+          "worker map + surface ALLOWED updated in the same PR; real-render regression tests",
+          "no silent degradation: unavailable inputs stay typed failures"
+        ],
+        "exclusive_paths": [
+          "src/nexus_ai_agent/creative/rendering/ir.py",
+          "src/nexus_ai_agent/creative/rendering/compiler.py",
+          "src/nexus_ai_agent/creative/render_jobs.py",
+          "src/nexus_ai_agent/bot/creative_surface.py"
+        ],
+        "prerequisites": [],
+        "status_note": "owned by the creative-runtime agent; surface/worker files change atomically with the lane instrument",
+        "id": "task-174",
+        "priority": "P2",
+        "zone": "creative-runtime",
+        "title": "Lane instruments for LUT (color.apply_lut) and subtitles (caption.burn_in) so the refused surface ops can enter the matrix",
+        "title_fa": "ابزارهای lane برای LUT و subtitles تا دو عمل ردشدهٔ surface وارد ماتریس واقعی شوند",
+        "why_fa": "D-0011: lut/burnin به دلیل نبود مسیر اجرای صادقانه (بدون .cube shipped و بدون subtitles op در lane IR) typed refuse می‌شوند؛ با ابزار واقعی lane قابل برگشت‌اند."
+      },
+      {
+        "acceptance_criteria": [
+          "real user sends /edit trim on staging and receives translated queued + video artifact",
+          "caption transcribe on default install returns the typed unavailable message (localized)",
+          "job rows show durable COMPLETED/not FAILED for the typed paths"
+        ],
+        "exclusive_paths": [],
+        "prerequisites": [
+          "staging bot token + a test chat"
+        ],
+        "status_note": "owner/staging action; evidence = staging screenshots + job row dump",
+        "id": "task-175",
+        "priority": "P2",
+        "zone": "p0-stabilization",
+        "title": "Staging smoke of /edit /caption /grade against the live bot (PTB runtime)",
+        "title_fa": "اسموک استیجینگ سه فرمان creative روی ربات زنده",
+        "why_fa": "زنجیره در سطح unit/integration با artifact واقعی اثبات شده؛ اثبات نهایی کاربر-واقعی به کانتکست PTB زنده و توکن استیجینگ نیاز دارد (external dependency)."
+      }
+    ]
+  }
 }
