@@ -47,11 +47,11 @@ import pytest
 
 from nexus_ai_agent.bot import handlers as bot_handlers
 from nexus_ai_agent.config.settings import Settings
-from tests.unit.test_chat_memory_reachability import (
-    AuditedMemory,
-    RecordingLLM,
-    _build,
-)
+from nexus_ai_agent.llm.fake_llm import FakeLLMProvider
+from nexus_ai_agent.memory.long_term import LongTermMemory
+from nexus_ai_agent.orchestration.graph import compile_graph
+from nexus_ai_agent.storage.langgraph_checkpoint import get_checkpointer
+from nexus_ai_agent.tools.registry import ToolRegistry
 
 pytestmark = pytest.mark.anyio
 
@@ -60,6 +60,68 @@ USER_B = 222
 CHAT_A = -1001
 CHAT_B = -1002
 FACT = "Falcon"
+
+
+# ── instrumentation ──────────────────────────────────────────────────────── #
+# These mirror the doubles in test_chat_memory_reachability.py.  They are
+# REPEATED rather than imported on purpose: `tests/` is not an importable
+# package, and a `from tests.unit... import` here passed under `python -m pytest`
+# while breaking the bare `pytest` entry point CI uses (incident 91fbaff, guarded
+# by tests/architecture/test_test_suite_hygiene.py).  Shared helpers belong in a
+# conftest fixture or in the module itself; duplication of thirty lines is
+# cheaper than a collection error in CI.
+
+
+class RecordingLLM(FakeLLMProvider):
+    """A real provider that remembers every prompt it was handed.
+
+    The system prompt is the only place ``memory_context`` can be observed from
+    the outside, so it is the only honest witness to "the model saw it".
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[dict[str, str]] = []
+
+    async def generate(self, prompt: str, system: str = "") -> str:  # type: ignore[override]
+        self.calls.append({"prompt": prompt, "system": system})
+        return await super().generate(prompt=prompt, system=system)
+
+
+class AuditedMemory(LongTermMemory):
+    """Real sqlite store that records every read and write.
+
+    ``thread_id`` is the only thing scoping a read, so recording each call turns
+    the cross-user claim from an assertion about SQL into an observation.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.reads: list[dict[str, Any]] = []
+        self.writes: list[dict[str, Any]] = []
+
+    async def search(  # type: ignore[override]
+        self,
+        thread_id: str,
+        query: str,
+        top_k: int = 3,
+    ) -> list[str]:
+        self.reads.append({"thread_id": thread_id, "query": query, "top_k": top_k})
+        return await super().search(thread_id, query, top_k=top_k)
+
+    async def store(  # type: ignore[override]
+        self,
+        thread_id: str,
+        text: str,
+        metadata: dict | None = None,
+    ) -> None:
+        self.writes.append({"thread_id": thread_id, "text": text})
+        await super().store(thread_id, text, metadata=metadata)
+
+
+def _build(memory: AuditedMemory, llm: RecordingLLM) -> Any:
+    registry = ToolRegistry(enable_shell=False, workspace_root=".")
+    return compile_graph(llm, get_checkpointer(":memory:"), memory, registry)
 
 
 # ── doubles for everything that is not the memory path ────────────────────── #
