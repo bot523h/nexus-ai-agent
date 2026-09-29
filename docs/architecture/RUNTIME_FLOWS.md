@@ -51,6 +51,7 @@ sequenceDiagram
 - Provider failure → the chain moves down (Ollama → Groq → Gemini → OpenRouter); a drained free tier is cooled down, never retried in place ([`LLM_PROVIDERS.md`](LLM_PROVIDERS.md)).
 - Checkpoint write failure → the answer still returns; the lifecycle hook logs a redacted structured event and mirrors a metric ([`OBSERVABILITY.md`](OBSERVABILITY.md) §2).
 - Memory write failure → swallowed by design (`orchestration/graph.py::_memory_writer`); a memory outage must not become a chat outage.
+- Offline fake embeddings → `run_bot` passes the provider selected by `build_llm_provider` to durable `LongTermMemory`; when no routed provider, llama.cpp server, or GGUF model is available, the factory selects `FakeLLMProvider`. It produces a stable, 384-float SHA-512-seeded pseudo-vector for the same exact text (`tests/unit/test_fake_llm_embedding_contract.py`). Stability preserves identity across process restarts; it is **not semantic similarity** and says nothing about paraphrase recall. Real-provider semantics remain unverified by this contract.
 
 ## 2. Slideshow: uploads → durable job → one FFmpeg encode → delivery
 
