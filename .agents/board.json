@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-29T21:07:00Z",
+  "updated_at": "2026-09-29T21:20:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3183,6 +3183,28 @@
       "exclusive_paths": [],
       "prerequisites": [
         "PR#119",
+        "PR#122"
+      ]
+    },
+    {
+      "id": "task-217",
+      "priority": "P0",
+      "zone": "chat-memory-reachability",
+      "title": "The active-agent branch answers without ever reading memory — H1 cannot reach it",
+      "title_fa": "شاخهٔ agent فعال بدون خواندن حافظه پاسخ می‌دهد — H1 به آن نمی‌رسد",
+      "why": "bot/handlers.py::on_message branches on AgentManager.get_active(user_id). When an agent is active it answers via active_agent.respond(...) and never builds a graph state at all, so that user gets no durable-memory read on any turn. The memory reader lives inside the branch that is not taken, so H1 cannot fix it. Measured and pinned 2026-09-29 by test_an_active_agent_bypasses_the_memory_path_entirely.",
+      "acceptance_criteria": [
+        "decide whether an active agent is meant to have durable memory at all",
+        "if yes: route the agent's turn through the reader, or pass memory_context into respond()",
+        "if no: state the exclusion in ADR 0007 and keep the pinning test as the guard",
+        "the pinning test must survive the decision (it asserts the CURRENT behaviour)"
+      ],
+      "evidence_required": [
+        "a decision recorded on the board",
+        "a red->green test if the answer is yes"
+      ],
+      "exclusive_paths": [],
+      "prerequisites": [
         "PR#122"
       ]
     }

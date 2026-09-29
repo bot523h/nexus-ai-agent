@@ -561,3 +561,134 @@ above. The five that unblock the rest, in order:
 | `task-215` | Typed retrieval outcome — stop reporting a dead backend as an empty recall | LAW 11; the one tripwire the one-line fix provably cannot satisfy |
 | `task-208` | Deterministic test embedder — `hash()`-seeded vectors make the dense lane unmeasurable | every retrieval baseline pinned on the current embedder is pinned on noise |
 | `task-209` | Paraphrase benchmark on the merged hybrid retriever | U1 was answered for `main` only; it must be re-answered for the retriever that actually ships |
+
+---
+
+## 14. POST-H1 CONSOLIDATION MISSION (2026-09-29, 19:45Z – 21:20Z)
+
+A second mission was run after H1 landed: verify the #119/#122 relationship, prove
+merge safety, and pick the next P0 by a priority gate rather than by convenience.
+H1 was **not** redone and no second memory-routing implementation was written.
+
+### 14.1 A CORRECTION TO MY OWN EARLIER LEASE SCAN
+
+The "41-board scan returned CLEAR" reported in §5 was produced by a parser that
+looked for a `tasks` array. The board schema is **`claims` + `zones[].paths`**;
+the correct parse finds **seven** overlapping claims, not zero:
+
+```
+PR    task                              zone                                lease      files
+119   task-202-memory-write-observability conversation-memory-observability EXPIRED  graph.py
+119   task-201-shell-trust-plane-grammar shell-trust-plane                 EXPIRED  system_shell.py
+121   task-203-memory-retrieval-truth    memory-retrieval-truth            LIVE     memory/, router.py
+117   task-200-w3-memory-trust-boundary  task-200-w3-…                      EXPIRED  memory/
+112   task-196-w1-runtime-composition    runtime-composition-w1             EXPIRED  handlers.py
+113   task-196-closeout-w1               runtime-composition-w1             EXPIRED  handlers.py
+99    task-193-owner-audit-command-truth command-truth-and-runtime-hardening EXPIRED  handlers.py
+```
+
+The **conclusion happened to be right** for `graph.py` — task-202's lease is
+`claimed_at=2026-09-28T17:51:40Z + ttl_hours=24 = 2026-09-29T17:51:40Z`, and the
+edit landed at ~17:55Z, three and a half minutes after the protocol's own TTL
+expired — but it was reached with a parser that proved nothing. The method was
+wrong, not merely verbose. The schema mismatch is filed as `task-207`.
+
+### 14.2 ONE LIVE LEASE, AND WHAT IT BLOCKS
+
+`memory/` and `orchestration/router.py` are held by **PR #121 `task-203`**, live
+until `2026-09-29T21:39:02Z`. That is why `task-215` (typed retrieval outcome) is
+**not** the next task: its honest design may need the store to raise a typed
+error, and the store is being rewritten by someone else right now. Everything
+else in the P0 remainder is free.
+
+### 14.3 #119 IS MERGE-READY, COMPLETE, AND ABANDONED
+
+Re-derived at `e78e8c4`, not read from the PR body:
+
+| | evidence |
+|---|---|
+| CI | **17/17 pass**, 0 failures (includes `shell-mutations`) |
+| shell sandbox | `scripts/shell_sandbox_mutations.py` → **11/11 killed**, baseline GREEN → restored GREEN |
+| its P0 suites | 87 passed (`test_shell_workspace_escape`, `test_redaction_boundary`, `test_conversation_store_schema`, `test_graph_memory`) |
+| the actual escape, main vs #119 | `date -f <outside>` on main returns `date: invalid date 'WSX-SECRET-abc123'` — **the file is echoed back**; on #119 all five probes are `safe` |
+| redaction, main vs #119 | 4/4 leaks on main (bad-port userinfo, invalid-IPv6 userinfo, `?key=%…`, `?access_key=%…`); 4/4 `safe` or `[REDACTED]` on #119 |
+| memory-write observability | main: dead `store()` → **0 warnings**. #119: emits `long_term_memory_write_failed error_type=RuntimeError thread_id=tg:1`, leaks no prompt text, `state["error"]` stays `None` |
+
+**But all five of #119's leases (task-201/202/203/204) have expired**, the last at
+`2026-09-29T19:15:01Z`, and the PR has been a **draft**, untouched, since
+`2026-09-28T19:22:53Z`. Nobody will merge it. `main` is still exposed to
+`date -f <outside file>`.
+
+### 14.4 MERGE PROOF — BOTH FIXES, BUILT AND TESTED, NOT JUST MERGE-TEXTED
+
+`graph.py` auto-merges (exit 0, no conflict). The only conflict in the whole
+tree is `.agents/board.json`, resolved newest-state-wins (`AGENTS.md` §6). A
+throwaway merge of `cbec307 + e78e8c4` was actually committed and run:
+
+```
+merged graph.py  A memory-write observability : True   (log.warning at :184)
+                 B chat->memory_reader_chat   : True   (route_intent at :233)
+                 parses as python             : True
+
+pytest (union of #119 + #122 suites)   -> 200 passed, 2 xfailed
+scripts/chat_memory_mutations.py      -> 6/6 killed
+scripts/shell_sandbox_mutations.py    -> 11/11 killed
+scripts/telegram_e2e_mutations.py     -> 4/4 killed
+```
+
+Neither fix was discarded to make the other merge. Nothing was force-pushed and
+no history was rewritten; the probe lived in a detached worktree.
+
+### 14.5 task-214 — THE LAST UNTESTED SPAN, NOW CLOSED
+
+`task-205` drove `_base_state` and invoked the graph itself. That left everything
+`on_message` does *around* the graph untested: presence, auth, rate limiting, the
+force-join gate, document-chat routing, the consent prompt, the user/chat upsert,
+and the `AgentManager` lookup. A gate that started returning early would have
+left the entire suite green while the bot answered from nothing.
+
+`tests/unit/test_telegram_memory_e2e.py` — **7 passed**, `telegram_e2e_mutations.py`
+— **4/4 killed**, each mutant by a named test.
+
+**Two findings worth more than the tests that produced them:**
+
+1. **`on_message` sets `state["intent"] = "unknown"` in two places** — inside
+   `_base_state` and again just before `graph.ainvoke`. It is correct today *only*
+   because `_router_node` recomputes the intent with `classify_intent` before
+   `route_intent` reads it (the log line for that very call ends `intent=chat`).
+   That is an ordering accident, not a guarantee. Pinned by
+   `test_intent_unknown_is_overwritten_by_the_router`.
+
+2. **The active-agent branch never reads memory at all.** When
+   `AgentManager.get_active` returns an agent, `on_message` answers through
+   `active_agent.respond(...)` and never builds a graph state. That user gets no
+   durable-memory read on **any** turn, and **H1 cannot fix it** — the reader is
+   inside the branch that is not taken. Pinned by
+   `test_an_active_agent_bypasses_the_memory_path_entirely`. This is a third P0
+   gap and it was not on any board.
+
+**A mutant that correctly did not survive.** `E4_memory_context_wiped_before_the_graph`
+set `state["memory_context"] = ""` after `_base_state` and **stayed green** — not
+a hole, but a false premise: `_memory_reader` assigns that key unconditionally, so
+the pre-seed is overwritten before anything reads it. The original task-214 record
+claimed this was "the live defect"; it is not. The mutant was **dropped and
+replaced** with a load-bearing one, because a guard asserting a non-invariant is a
+fake guard.
+
+### 14.6 A SELF-INFLICTED REGRESSION, CAUGHT AND FIXED
+
+The first cut of the e2e file imported its doubles with
+`from tests.unit.test_chat_memory_reachability import …`. That is the exact shape
+of incident **91fbaff**: it resolves under `python -m pytest` and breaks under the
+bare `pytest` entry point CI uses. `test_test_suite_hygiene.py` went red — 26
+failures against a 25 baseline. The rule's own docstring names the two legal
+answers; thirty lines were repeated into the module and
+`test_chat_memory_reachability.py` was left untouched.
+
+```
+pytest (bare)  … -> 32 passed, 2 xfailed
+python -m pytest tests/unit tests/architecture -q -> 25 failed, 2758 passed
+```
+
+2751 → 2758 is this file's seven tests. The 25 failures are the unchanged
+pre-existing sandbox baseline. **Zero regressions.**
