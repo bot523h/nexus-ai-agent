@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-30T06:32:00Z",
+  "updated_at": "2026-09-30T07:12:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2963,7 +2963,8 @@
         "the killed-mutant report",
         "ruff check and ruff format --check clean"
       ],
-      "prerequisites": []
+      "prerequisites": [],
+      "evidence": "REPRODUCED then FIXED. Pre-fix (scripts/task207_repro.py): foreign PR board holds a live 7-day lease on orchestration/graph.py, local board holds nothing, check exits 0 with 'no overlap - safe to proceed'. Post-fix: exit 1 naming the task AND the board it was seen in. Live proof: checking bot/handlers.py against the real repository now exits 1 and names pr33-in-review on PR#63 (claimed 2026-09-24, ttl 168h, still live) - a 7-day lease the old tool could never see. Clear verdict now reports how many boards it consulted: 'no overlap - safe to proceed (local + 41 open-PR board(s))'. 25 failed / 2772 passed vs a 25-failure baseline, zero regressions. 4/4 mutants killed."
     }
   ],
   "deferred_log": [
@@ -3015,30 +3016,6 @@
     }
   ],
   "next_work": [
-    {
-      "id": "task-207",
-      "priority": "P0",
-      "zone": "coordination-check-truth",
-      "title": "agent_board.py check returns 'no overlap' for a file that IS leased — make it see unmerged PR boards",
-      "title_fa": "check روی فایل lease‌شده سبز می‌دهد؛ تخته‌های PRهای merge‌نشده را هم ببیند",
-      "why_fa": "ابزار هماهنگی به عاملی که از main شروع می‌کند اجازهٔ کار روی فایلی را می‌دهد که lease فعال دارد.",
-      "why": "cmd_check reads .agents/board.json from the local tree, so claims that exist only on unmerged PR branches (#119 task-202, #121 task-203) are invisible. Measured false green on the exact H1 file.",
-      "acceptance_criteria": [
-        "check --files against a path leased by an unmerged PR's active claim exits 1 and names the holding task",
-        "a disjoint path on the same branch still exits 0",
-        "the board's own test suite is extended with this cross-PR case and stays green",
-        "behaviour is documented in AGENTS.md §1.2 without weakening the exit-code contract"
-      ],
-      "evidence_required": [
-        "the false-green command from CHAT_MEMORY_REACHABILITY_AUDIT_2026-09-29.md §5.1 shown red after the fix",
-        "pytest tests/unit/test_agent_board.py green"
-      ],
-      "exclusive_paths": [
-        "scripts/agent_board.py",
-        "tests/unit/test_agent_board.py"
-      ],
-      "prerequisites": []
-    },
     {
       "id": "task-208",
       "priority": "P0",
@@ -3254,6 +3231,27 @@
         "the before/after state of messages and turn_count across two turns",
         "a decision recorded on the board and in an ADR",
         "the full regression count"
+      ],
+      "exclusive_paths": [],
+      "prerequisites": []
+    },
+    {
+      "id": "task-219",
+      "priority": "P1",
+      "zone": "coordination-check-truth",
+      "title": "A 168h lease fences bot/handlers.py for a week with no renewal and no heartbeat",
+      "title_fa": "lease 168 ساعته هفت روز bot/handlers.py را بدون تمدید قفل می‌کند",
+      "why": "Found 2026-09-30 by the task-207 fix, which finally made `check` able to see it. The claim `pr33-in-review` on PR#63's board carries ttl_hours=168 (seven days), claimed_at 2026-09-24T05:26:14Z, status=active_in_review, released_at=null, and exclusive_paths covering 50 files including src/nexus_ai_agent/bot/handlers.py - the most contested file in the repository. Still live with ~22h remaining while PR#63 itself was last updated 2026-09-28. A week-long lease with no heartbeat means one session can silence a hot file for the rest of the week, and `gc` cannot release it because the TTL has not elapsed. The 24h default exists precisely to bound this; 168h is the outlier.",
+      "acceptance_criteria": [
+        "the maximum permitted ttl_hours is bounded by the protocol (24 is the documented default)",
+        "a claim whose ttl_hours exceeds the bound is rejected or flagged by check/show",
+        "an active_in_review lease on a hot path with no PR activity for N days is surfaced by praudit",
+        "the rule is written into AGENTS.md, not only into the board"
+      ],
+      "evidence_required": [
+        "the set of ttl_hours values in use across open PR boards, with counts",
+        "the chosen bound and the code that enforces it",
+        "a test that a 168h claim is rejected or flagged"
       ],
       "exclusive_paths": [],
       "prerequisites": []

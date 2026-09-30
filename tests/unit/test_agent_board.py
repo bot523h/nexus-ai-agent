@@ -315,6 +315,21 @@ def _synthetic_directory_claim_board() -> dict:
     }
 
 
+def _check_args(**kw):
+    """A check invocation with every cross-PR option explicitly pinned.
+
+    task-207 made ``check`` consult the boards of every open PR, and made it exit
+    2 rather than 0 when that view could not be established.  Tests must therefore
+    SAY which view they are testing: ``board_json=[]`` means "consult an empty,
+    successfully-established foreign set" and ``no_remote=True`` means "local only,
+    operator accepted the gap".  Neither is the default any more, and that is the
+    point: the default is now the strict one.
+    """
+    base = {"repo": "", "token": "", "board_json": [], "no_remote": False}
+    base.update(kw)
+    return type("A", (), base)()
+
+
 def test_check_detects_overlap_and_allows_disjoint_work(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -323,17 +338,15 @@ def test_check_detects_overlap_and_allows_disjoint_work(
     _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
     assert (
         board_module.cmd_check(
-            type(
-                "A", (), {"files": "src/synthetic/intruder.py", "branch": "arena/999-other-agent"}
-            )()
+            _check_args(files="src/synthetic/intruder.py", branch="arena/999-other-agent")
         )
-        == 1
+        == board_module.CHECK_OVERLAP
     )
     assert (
         board_module.cmd_check(
-            type("A", (), {"files": "docs/not-owned-by-anyone.md", "branch": "arena/999-other"})()
+            _check_args(files="docs/not-owned-by-anyone.md", branch="arena/999-other")
         )
-        == 0
+        == board_module.CHECK_CLEAR
     )
 
 
@@ -436,3 +449,174 @@ def test_show_garbage_collects_an_expired_lease(board_module: ModuleType) -> Non
     reloaded = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
     freed = next(c for c in reloaded["claims"] if c["task"] == stale["task"])
     assert freed["status"] == "expired"
+
+
+# ── task-207: `check` must not fail open ──────────────────────────────────
+#
+# The defect, reproduced before it was fixed (scripts/task207_repro.py): `check`
+# read ONE board — the local working tree's — so a claim living only on an
+# unmerged PR branch was invisible and the tool answered
+#
+#     no overlap — safe to proceed.        (exit 0)
+#
+# for a file somebody else had leased. That is the enforcement mechanism failing
+# open, in the most reassuring wording it owns. It happened live: task-202
+# (graph.py, PR #119) and task-203 (memory/, PR #121) were both leased while
+# check reported no overlap.
+#
+# Visibility alone is not the fix — the same false negative returns the moment
+# GitHub is unreachable — so these tests pin BOTH halves: the foreign lease is
+# seen, and an unobtainable cross-PR view is never reported as clearance.
+
+_TARGET = "src/nexus_ai_agent/orchestration/graph.py"
+_FOREIGN = "arena/01a0e907-nexus-ai-agent"
+_MINE = "arena/01a0eade-nexus-ai-agent"
+
+
+def _foreign_lease_board(board_module: ModuleType, task: str = "task-202") -> dict:
+    """A board on another branch holding a live lease on ``_TARGET``.
+
+    A 7-day TTL is used deliberately, because the real ``pr33-in-review`` claim
+    that fences bot/handlers.py on PR#63 is exactly that long.
+    """
+    board = _synthetic_directory_claim_board()
+    claim = board["claims"][0]
+    claim.update(
+        {
+            "task": task,
+            "status": "active",
+            "agent_branch": _FOREIGN,
+            "exclusive_paths": [_TARGET],
+            "ttl_hours": 168,
+        }
+    )
+    board["zones"] = [{"id": "synthetic", "paths": [_TARGET]}]
+    return board
+
+
+def _pin(board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, board: dict) -> None:
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+
+
+def test_check_sees_a_lease_that_exists_only_on_another_prs_board(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """THE DEFECT. The local board is empty; the foreign one is not."""
+    local = _synthetic_directory_claim_board()
+    local["claims"] = []
+    board_module.BOARD.write_text(json.dumps(local), encoding="utf-8")
+
+    foreign = _foreign_lease_board(board_module)
+    _pin(board_module, monkeypatch, foreign)
+    foreign_path = tmp_path / "foreign.json"
+    foreign_path.write_text(json.dumps(foreign), encoding="utf-8")
+
+    args = _check_args(files=_TARGET, branch=_MINE, board_json=[str(foreign_path)])
+    assert board_module.cmd_check(args) == board_module.CHECK_OVERLAP, (
+        "a live lease held on an unmerged PR branch did not stop the check — "
+        "this is the task-207 defect returning"
+    )
+
+
+def test_the_offline_opt_out_is_loud_about_what_it_did_not_see(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """`--no-remote` may pass, but it must never pass SILENTLY."""
+    board = _synthetic_directory_claim_board()
+    board["claims"] = []
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+
+    code = board_module.cmd_check(_check_args(files="docs/x.md", branch=_MINE, no_remote=True))
+    out = capsys.readouterr()
+    assert code == board_module.CHECK_CLEAR
+    assert "NOT CONSULTED" in out.err, (
+        "--no-remote exited 0 without saying that foreign PR boards were never read"
+    )
+
+
+def test_an_unobtainable_cross_pr_view_is_never_reported_as_clear(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys, tmp_path
+) -> None:
+    """The fail-closed half: 'could not verify' must not share exit 0 with 'clear'."""
+    board = _synthetic_directory_claim_board()
+    board["claims"] = []
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+
+    missing = tmp_path / "not-there.json"
+    code = board_module.cmd_check(
+        _check_args(files="docs/x.md", branch=_MINE, board_json=[str(missing)])
+    )
+    out = capsys.readouterr()
+    assert code == board_module.CHECK_UNVERIFIED, (
+        "an unreadable foreign board produced a PASS; that is the fail-open bug"
+    )
+    assert code != board_module.CHECK_CLEAR
+    assert "safe to proceed" not in out.out
+    assert "NOT a pass" in out.err
+
+
+def test_check_exit_codes_are_three_distinct_values(board_module: ModuleType) -> None:
+    codes = {
+        board_module.CHECK_CLEAR,
+        board_module.CHECK_OVERLAP,
+        board_module.CHECK_UNVERIFIED,
+    }
+    assert len(codes) == 3, f"exit codes collide: {codes}"
+
+
+def test_the_local_board_is_consulted_even_when_foreign_boards_are_named(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """A regression found by this suite: `--board-json` suppressed the local board.
+
+    The foreign boards are ADDITIONAL views of the same repository. Treating them
+    as a replacement silently dropped every lease recorded on the working tree,
+    which is the more dangerous of the two mistakes.
+    """
+    local = _synthetic_directory_claim_board()  # holds src/synthetic/
+    board_module.BOARD.write_text(json.dumps(local), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, local["claims"][0])
+
+    empty = tmp_path / "none.json"
+    empty.write_text(json.dumps(_synthetic_directory_claim_board()), encoding="utf-8")
+
+    code = board_module.cmd_check(
+        _check_args(
+            files="src/synthetic/intruder.py",
+            branch="arena/999-other",
+            board_json=[str(empty)],
+        )
+    )
+    assert code == board_module.CHECK_OVERLAP, (
+        "the local board was skipped when foreign boards were supplied"
+    )
+
+
+def test_conflicting_paths_across_is_pure_and_deduplicates(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rule is exercised without a network, a git remote, or a real claim."""
+    board = _foreign_lease_board(board_module)
+    _pin(board_module, monkeypatch, board)
+    target = [_TARGET]
+    hits = board_module.conflicting_paths_across(
+        [("a", board), ("a", board), ("b", board)], _MINE, target
+    )
+    # Dedup is per (task, file, source): the same claim seen twice in ONE board
+    # is one collision, but the same claim in TWO different PRs is two collisions
+    # and worth showing separately - it means two agents hold the same path.
+    assert hits == [("task-202", _TARGET, "a"), ("task-202", _TARGET, "b")], (
+        f"unexpected dedup/source behaviour: {hits!r}"
+    )
+
+
+def test_an_expired_foreign_lease_does_not_block(board_module: ModuleType, monkeypatch) -> None:
+    """Fail-closed must not become 'blocked forever by a ghost'."""
+    board = _foreign_lease_board(board_module)
+    claim = board["claims"][0]
+    claim["claimed_at"] = "2020-01-01T00:00:00Z"
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    assert (
+        board_module.cmd_check(_check_args(files=_TARGET, branch=_MINE, board_json=[]))
+        == board_module.CHECK_CLEAR
+    )
