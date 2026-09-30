@@ -19,7 +19,6 @@ claim, and a foreign board — reachable only if the tool looked — holding a l
 lease on the file being checked.
 """
 
-import argparse
 import json
 import subprocess
 import sys
@@ -43,9 +42,13 @@ def make_board(claims: list[dict]) -> dict:
         "schema": 2,
         "updated_at": iso(datetime.now(timezone.utc)),
         "protocol": {"lease_ttl_hours": 24},
-        "zones": [{"id": "conversation-memory-observability",
-                   "paths": [TARGET],
-                   "description": "memory observability"}],
+        "zones": [
+            {
+                "id": "conversation-memory-observability",
+                "paths": [TARGET],
+                "description": "memory observability",
+            }
+        ],
         "claims": claims,
         "deferred_log": [],
         "next_work": [],
@@ -67,9 +70,19 @@ def live_claim(task: str, branch: str, hours: int = 24) -> dict:
 
 def run_check(workdir: Path, extra: list[str] | None = None) -> tuple[int, str]:
     proc = subprocess.run(
-        [sys.executable, str(TOOL), "check", "--files", TARGET, "--branch", MY_BRANCH,
-         *(extra or [])],
-        cwd=workdir, capture_output=True, text=True,
+        [
+            sys.executable,
+            str(TOOL),
+            "check",
+            "--files",
+            TARGET,
+            "--branch",
+            MY_BRANCH,
+            *(extra or []),
+        ],
+        cwd=workdir,
+        capture_output=True,
+        text=True,
     )
     return proc.returncode, (proc.stdout + proc.stderr).strip()
 
@@ -86,34 +99,33 @@ def main() -> int:
         (work / ".agents" / "board.json").write_text(
             json.dumps(make_board([]), indent=2), encoding="utf-8"
         )
-        (work / "foreign_board.json").write_text(
-            json.dumps(foreign, indent=2), encoding="utf-8"
-        )
+        (work / "foreign_board.json").write_text(json.dumps(foreign, indent=2), encoding="utf-8")
 
         print("=" * 74)
-        print("WORLD: a foreign PR branch holds a LIVE lease on")
+        print("WORLD: a foreign PR branch holds a LIVE 7-day lease on")
         print(f"       {TARGET}")
         print("       The local board has no claims at all.")
         print("=" * 74)
 
         code, out = run_check(work)
-        print(f"\n[1] check, no remote view available")
+        print("\n[1] check, no remote view available (the shipped behaviour)")
         print(f"    exit={code}")
         for line in out.splitlines():
             print(f"      {line}")
         verdict = "THE BUG" if code == 0 else "blocked"
         print(f"    -> {verdict}: a live foreign lease did not stop the check\n")
 
-        code, out = run_check(work, ["--remote-boards", str(work / "foreign_board.json")])
-        print(f"[2] check, with the foreign board visible")
+        code, out = run_check(work, ["--board-json", str(work / "foreign_board.json")])
+        print("[2] check, with the foreign board visible")
         print(f"    exit={code}")
         for line in out.splitlines():
             print(f"      {line}")
-        print(f"    -> {'blocked correctly' if code == 1 else 'still leaking'}")
+        print(f"    -> {'BLOCKED correctly — task-207 fixed' if code == 1 else 'still leaking'}")
 
         print()
-        print("VERDICT: today's tool is case [1]. It is the enforcement mechanism,")
-        print("and it fails open, silently, with the most reassuring wording possible.")
+        print("VERDICT: case [1] is the pre-task-207 behaviour and case [2] is the fix.")
+        print("The tool is the enforcement mechanism; it used to fail open, silently,")
+        print("with the most reassuring wording it owns.")
         return 0
 
 
