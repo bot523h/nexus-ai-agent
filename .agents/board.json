@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-30T16:49:46Z",
+  "updated_at": "2026-09-30T17:01:41Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2889,7 +2889,7 @@
       "title_fa": "برنامهٔ چندمرحله‌ای ستون فقرات باید همه-یا-هیچ باشد (بدون کامیت جزئی)",
       "zone": "nagar-spine-atomicity",
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "scope": "CreativeExecutionSpine.execute_intent dispatches planned operations one at a time and commits each through the bus. When a later step is refused, the earlier steps are already committed (revision advances, artifact nodes written), contradicting the spine docstring and CREATIVE_DIRECTION.md §5.4 ('a command the bus refuses fails the run and leaves no artifact'). Reproduce: a two-step plan whose second command is invalid leaves the first step committed. Fix: make the run transactional -- on any step failure, undo the steps already applied via the bus's own system.undo path (no bypass, no fabricated rollback), so the run leaves state and revision exactly as it began.",
       "scope_fa": "",
       "prerequisites": [],
@@ -2911,12 +2911,12 @@
         "tests/unit/test_creative_spine.py"
       ],
       "owner_hint": "arena/hardening-task207-foreign-check",
-      "agent_branch": "arena/hardening-task207-foreign-check",
-      "claimed_at": "2026-09-30T16:49:46Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
-      "generation": 1,
+      "generation": 2,
       "gates_owner": false,
-      "note": ""
+      "note": "DONE on arena/hardening-task207-foreign-check @ 3324ce6. Reproduced the defect on main e5b326b (two-step plan, second step refused -> state_revision 0->1 + one artifact node). Fix: transactional execute_intent (rollback via bus system.undo + graph artifact retraction). Evidence: pytest -q tests/unit/test_creative_spine.py tests/unit/test_spine_mutations.py tests/architecture/test_spine_boundary.py -> 21 passed (7/7 mutants killed); full tests/unit+tests/architecture -> 2816 passed, 11 skipped; mypy src -> clean; ruff check+format -> clean; docs integrity 61 passed; referee check with repo+token -> no overlap across 27 sources."
     }
   ],
   "deferred_log": [
