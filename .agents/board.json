@@ -123,9 +123,13 @@
       "id": "coordination-referee",
       "paths": [
         "scripts/agent_board.py",
-        "tests/unit/test_agent_board_active_in_review.py"
+        "tests/unit/test_agent_board_active_in_review.py",
+        "scripts/board_referee_mutations.py",
+        "tests/unit/test_agent_board.py",
+        "docs/MULTI_AGENT_PROTOCOL.md",
+        "AGENTS.md"
       ],
-      "note": "historical referee work"
+      "note": "referee CLI + its schema/mutation tests + protocol doc"
     },
     {
       "id": "coordination-schema2",
@@ -3026,6 +3030,71 @@
       "gates_owner": false,
       "delivered": false,
       "note": ""
+    },
+    {
+      "task": "task-207-multisource-check",
+      "title": "Multi-source check referee: honest 0/1/2 exit codes over local + worktrees + origin/main",
+      "title_fa": "داور چندمنبعی check: کدهای خروج صادق ۰/۱/۲ روی برد محلی + ورک‌تری‌ها + origin/main",
+      "zone": "coordination-referee",
+      "priority": "P0",
+      "status": "active",
+      "scope": "cmd_check consults the local board, every sibling git worktree board and origin/main; exit 2 when any source is unreadable; --no-remote narrows loudly to a local verdict; a proven overlap stays exit 1 even if another source is unreadable. Mutation harness kills the referee guards.",
+      "scope_fa": "cmd_check برد محلی، برد همهٔ ورک‌تری‌های همسایه و origin/main را می‌خواند؛ اگر منبعی خوانده نشود خروج ۲؛ --no-remote با صدای بلند به حکم محلی محدود می‌کند؛ برخورد اثبات‌شده حتی با منبع ناخوانا خروج ۱ می‌ماند.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "check exits 2 when any consulted source (local board, worktree enumeration, origin/main) cannot be read — never a silent 0",
+        "check exits 1 on a proven overlap, even when another source is unreadable",
+        "check exits 0 only when every consulted source was readable and no overlap exists",
+        "--no-remote narrows to the local board and prints an explicit 'NOT a global pass' scope line",
+        "a foreign lease living only in a sibling worktree is detected",
+        "scripts/board_referee_mutations.py kills every catalogued referee mutation and restores the script byte-for-byte",
+        "zero regression on the existing board schema/CLI suite"
+      ],
+      "evidence_required": [
+        "pytest --noconftest -q tests/unit/test_agent_board.py",
+        "python scripts/board_referee_mutations.py  # N/N killed",
+        "ruff check + ruff format --check on scripts/agent_board.py, scripts/board_referee_mutations.py, tests/unit/test_agent_board.py"
+      ],
+      "exclusive_paths": [
+        "scripts/agent_board.py",
+        "scripts/board_referee_mutations.py",
+        "tests/unit/test_agent_board.py",
+        "docs/MULTI_AGENT_PROTOCOL.md",
+        "AGENTS.md"
+      ],
+      "owner_hint": "arena/hardening-task207-foreign-check",
+      "agent_branch": "arena/hardening-task207-foreign-check",
+      "claimed_at": "2026-09-30T08:32:48Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "implements the task-207 design (0/1/2 multi-source referee). D-0024 direction page is separate (docs-architecture)."
+    },
+    {
+      "task": "task-219-lease-fencing",
+      "title": "Incremental lease fencing: generation/epoch + heartbeat vs staleness (design locked)",
+      "title_fa": "حصارگذاری افزایشی اجاره: نسل/دوران + ضربان در برابر کهنگی (طرح قفل‌شده)",
+      "zone": "coordination-referee",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "Add generation/epoch fencing and a last_heartbeat field alongside claimed_at+ttl_hours; distinguish abandoned vs stale leases; tie PR activity to the lease. Schema-additive only (no hard break).",
+      "scope_fa": "افزودن حصار نسل/دوران و فیلد last_heartbeat در کنار claimed_at+ttl_hours؛ تفکیک اجارهٔ رهاشده از کهنه؛ اتصال فعالیت PR به اجاره. فقط افزایشی در طرح‌واره (بدون شکست سخت).",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "board schema stays backward compatible: existing boards load without new fields",
+        "a stale lease (heartbeat older than TTL) is distinguishable from an abandoned one (no heartbeat, owner gone)",
+        "generation/epoch increments on takeover so a resurrected old owner cannot silently re-fence",
+        "gc/show report which rule released a lease"
+      ],
+      "evidence_required": [
+        "pytest --noconftest -q tests/unit/test_agent_board.py"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "free after task-207 lands",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "design locked per the hardening report; deferred until task-207 merges (same zone)."
     }
   ],
   "deferred_log": [

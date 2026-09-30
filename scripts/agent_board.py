@@ -15,10 +15,15 @@ Commands
                                 Record a deferral note ("I stopped because
                                 another agent was working; resume later")
   next --branch BRANCH          Suggest the first claimable task
-  check --files a,b,c --branch BRANCH
-                                Exit 1 if any file overlaps another branch's
-                                active or active-in-review exclusive paths
-                                (pre-push / CI referee)
+  check --files a,b,c --branch BRANCH [--no-remote]
+                                Multi-source referee over the claim board and
+                                every *other* live git worktree's board. Exit 0
+                                when the tree is readable and there is no
+                                overlap, 1 on a proven overlap, 2 when a source
+                                (this board, or a remote/other worktree) could
+                                not be read — never 0 on unverified data.
+                                --no-remote loudly narrows the claim to the
+                                local board (scope=local, not a global pass).
   praudit [--pr-json F | --repo owner/name] [--fail-on-invisible] [--json]
                                 Read-only audit: compare open GitHub PR changed
                                 files against board exclusive_paths and report
@@ -39,6 +44,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -311,17 +317,157 @@ def cmd_next(args: argparse.Namespace) -> int:
     return 0
 
 
+def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str] | None:
+    """Run a git command; ``None`` when git is missing or the call cannot start.
+
+    Callers treat ``None`` as "unverifiable", never as "clean".
+    """
+    try:
+        return subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _worktree_boards(exclude: Path) -> tuple[list[Path], bool]:
+    """Sibling worktree board paths, and whether enumeration was reliable.
+
+    ``git worktree list --porcelain`` is the only reliable way to see other
+    checkouts sharing this repository. A non-zero exit (not a repo, git absent)
+    is *unverifiable*, so the caller must not claim a global pass.
+    """
+    result = _git(["worktree", "list", "--porcelain"], ROOT)
+    if result is None or result.returncode != 0:
+        return [], False
+    boards: list[Path] = []
+    for line in result.stdout.splitlines():
+        if not line.startswith("worktree "):
+            continue
+        try:
+            root = Path(line[len("worktree ") :].strip()).resolve()
+        except OSError:
+            continue
+        if root == exclude.resolve():
+            continue
+        candidate = root / ".agents" / "board.json"
+        if candidate.exists():
+            boards.append(candidate)
+    return boards, True
+
+
+def _load_board_from(path: Path) -> dict:
+    """Load and shape-check a board file. Raises ``OSError``/``ValueError``."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get("claims", []), list):
+        raise ValueError(f"not a claim board: {path}")
+    return data
+
+
+def _read_remote_board() -> tuple[dict | None, str]:
+    """Best-effort read of ``origin/main``'s board without mutating the tree.
+
+    Returns ``(board_or_None, reason)``. ``None`` always carries a reason the
+    caller prints before exiting 2 — a remote we cannot read is never a pass.
+    """
+    remotes = _git(["remote"], ROOT)
+    if remotes is None:
+        return None, "git is unavailable"
+    if "origin" not in remotes.stdout.split():
+        return None, "no 'origin' remote is configured"
+    fetched = _git(["fetch", "--quiet", "origin", "main"], ROOT)
+    if fetched is None or fetched.returncode != 0:
+        return None, "git fetch origin main failed (network or remote unavailable)"
+    show = _git(["show", "origin/main:.agents/board.json"], ROOT)
+    if show is None or show.returncode != 0:
+        return None, "origin/main has no readable .agents/board.json"
+    try:
+        data = json.loads(show.stdout)
+    except json.JSONDecodeError:
+        return None, "origin/main board is not valid JSON"
+    if not isinstance(data, dict):
+        return None, "origin/main board is not a JSON object"
+    return data, ""
+
+
 def cmd_check(args: argparse.Namespace) -> int:
-    board = load_board()
+    """Multi-source referee: exit 0 clean, 1 overlap, 2 unverifiable.
+
+    The local board is always the first source. Unless ``--no-remote`` is set,
+    every *other* live git worktree's board and ``origin/main``'s board are
+    also consulted, because a claim is only real once pushed — a local-only
+    check can silently miss a foreign lease. A source that cannot be read is a
+    loud exit 2: "no overlap" is only honest when every consulted source was
+    actually read.
+    """
     files = [f for f in args.files.split(",") if f.strip()]
-    hits = _conflicting_paths(board, args.branch or "", files)
-    if hits:
+    sources: list[tuple[str, dict]] = []
+    unreadable: list[str] = []
+    no_remote = bool(getattr(args, "no_remote", False))
+
+    # 1. local board (mandatory)
+    if not BOARD.exists():
+        print(f"UNVERIFIABLE: board not found: {BOARD}")
+        return 2
+    try:
+        sources.append(("local", _load_board_from(BOARD)))
+    except (OSError, ValueError) as exc:
+        print(f"UNVERIFIABLE: local board cannot be read: {exc}")
+        return 2
+
+    # 2. sibling worktree boards + origin/main (unless narrowed)
+    if no_remote:
+        scope = "local (--no-remote: local board only; NOT a global pass)"
+    else:
+        scope = "local + sibling worktrees + origin/main"
+        worktree_boards, reliable = _worktree_boards(exclude=ROOT)
+        if not reliable:
+            unreadable.append("git worktree enumeration (git unavailable or not a repository)")
+        for board_path in worktree_boards:
+            try:
+                sources.append((str(board_path), _load_board_from(board_path)))
+            except (OSError, ValueError) as exc:
+                unreadable.append(f"{board_path}: {exc}")
+        remote_board, reason = _read_remote_board()
+        if remote_board is None:
+            unreadable.append(f"origin/main: {reason}")
+        else:
+            sources.append(("origin/main", remote_board))
+
+    if unreadable:
+        print("UNVERIFIABLE sources (will only matter if no conflict is proven):")
+        for reason in unreadable:
+            print(f"  - {reason}")
+
+    # 3. overlap across every readable source (deduped by task+path, sources merged).
+    #    A *proven* conflict is exit 1 even when another source is unreadable:
+    #    the conflict is confirmed, and hiding it behind exit 2 would be worse.
+    aggregate: dict[tuple[str, str], set[str]] = {}
+    for source, board in sources:
+        for task, path in _conflicting_paths(board, args.branch or "", files):
+            aggregate.setdefault((task, path), set()).add(source)
+
+    print(f"check scope: {scope} — {len(sources)} source(s) read")
+    if aggregate:
         print("OVERLAP with another agent's active or active-in-review exclusive paths:")
-        for task, path in hits:
-            print(f"  {path}  ← claimed by {task}")
+        for (task, path), srcs in sorted(aggregate.items()):
+            print(f"  {path}  ← claimed by {task} (seen in: {', '.join(sorted(srcs))})")
         print(STOP_BANNER)
         return 1
-    print("no overlap — safe to proceed.")
+
+    if unreadable:
+        print("UNVERIFIABLE: cannot establish the absence of overlap — source(s) unreadable:")
+        for reason in unreadable:
+            print(f"  - {reason}")
+        print("  (exit 2 — do NOT treat this as a pass; rerun once the source is reachable)")
+        return 2
+
+    print("no overlap — safe to proceed (every consulted source was readable).")
     return 0
 
 
@@ -515,6 +661,12 @@ def main() -> int:
     p = sub.add_parser("check")
     p.add_argument("--files", required=True, help="comma-separated changed file paths")
     p.add_argument("--branch", default="")
+    p.add_argument(
+        "--no-remote",
+        dest="no_remote",
+        action="store_true",
+        help="narrow to the local board only (exit 0 is then a LOCAL verdict, not a global pass)",
+    )
     p.set_defaults(func=cmd_check)
 
     p = sub.add_parser("praudit")
