@@ -1828,3 +1828,22 @@ original failure. Guarded by `test_a_failed_multi_step_run_leaves_no_committed_s
 `test_rollback_goes_through_the_bus_and_can_be_refused`, and two new mutants
 (`failed_plan_keeps_the_steps_it_already_committed`,
 `rolled_back_run_keeps_its_artifact_nodes`).
+
+**Amendment — transaction-scoped rollback (task-222, 2026-09-30).** task-221 made the rollback
+"undo the most recent editable transaction", once per applied step. That is only sound if no other
+actor commits in between; under a concurrent interleaving it rewinds a **foreign** actor's committed
+edit and leaves the spine's own half-applied step in place — silent cross-actor corruption (failure
+mode D). The spine now records the transaction id the bus returns for each of its own steps and
+undoes only while the newest editable transaction is one it owns; if a foreign edit is newest, the
+rollback **fails closed** with `SpineRollbackError` instead of touching foreign work. Artifact/evidence
+nodes the failed run wrote are still retracted on every failure path, so a partial rollback leaves no
+orphan node. Two more reliability gaps are closed in the same slice: a duplicate delivery of a
+*successful* intent is replayed from an in-process exactly-once cache (an intent_id reused with
+different content is refused, never re-applied), and step command ids carry the step index so a plan
+that repeats an operation cannot collide on the bus idempotency fingerprint. `studio/` was not
+modified — the fix stays inside the spine's own zone. Guarded by
+`test_failed_run_never_rolls_back_a_foreign_edit`,
+`test_duplicate_delivery_of_an_intent_is_idempotent`,
+`test_duplicate_intent_id_with_different_content_is_refused`,
+`test_a_crash_between_commit_and_graph_write_is_bounded`, and two new mutants
+(`rollback_ignores_transaction_identity`, `duplicate_delivery_reapplies_the_plan`), 9/9 killed.
