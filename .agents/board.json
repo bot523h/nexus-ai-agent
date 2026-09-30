@@ -752,6 +752,16 @@
         "src/nexus_ai_agent/creative/render_jobs.py",
         "src/nexus_ai_agent/bot/creative_surface.py"
       ]
+    },
+    {
+      "id": "nagar-creative-graph",
+      "description": "Nagar intent-first creative execution spine: typed intent, creative graph, artifact lineage (CREATIVE_DIRECTION.md)",
+      "paths": [
+        "src/nexus_ai_agent/creative/spine/",
+        "tests/unit/test_creative_spine.py",
+        "tests/unit/test_spine_mutations.py",
+        "tests/architecture/test_spine_boundary.py"
+      ]
     }
   ],
   "claims": [
@@ -3067,7 +3077,7 @@
       "claimed_at": "2026-09-30T08:32:48Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "implements the task-207 design (0/1/2 multi-source referee). D-0024 direction page is separate (docs-architecture)."
+      "note": "implements the task-207 design (0/1/2 multi-source referee). D-0024 direction page is separate (docs-architecture). | 2026-09-30: lease-fencing continuation (task-219) landed on the same branch; board tests 34 passed, referee mutations 8/8 killed."
     },
     {
       "task": "task-219-lease-fencing",
@@ -3075,7 +3085,7 @@
       "title_fa": "حصارگذاری افزایشی اجاره: نسل/دوران + ضربان در برابر کهنگی (طرح قفل‌شده)",
       "zone": "coordination-referee",
       "priority": "P1",
-      "status": "queued",
+      "status": "done",
       "scope": "Add generation/epoch fencing and a last_heartbeat field alongside claimed_at+ttl_hours; distinguish abandoned vs stale leases; tie PR activity to the lease. Schema-additive only (no hard break).",
       "scope_fa": "افزودن حصار نسل/دوران و فیلد last_heartbeat در کنار claimed_at+ttl_hours؛ تفکیک اجارهٔ رهاشده از کهنه؛ اتصال فعالیت PR به اجاره. فقط افزایشی در طرح‌واره (بدون شکست سخت).",
       "prerequisites": [],
@@ -3088,13 +3098,55 @@
       "evidence_required": [
         "pytest --noconftest -q tests/unit/test_agent_board.py"
       ],
-      "exclusive_paths": [],
+      "exclusive_paths": [
+        "scripts/agent_board.py",
+        "scripts/board_referee_mutations.py",
+        "tests/unit/test_agent_board.py"
+      ],
       "owner_hint": "free after task-207 lands",
-      "agent_branch": "",
+      "agent_branch": "arena/hardening-task207-foreign-check",
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "design locked per the hardening report; deferred until task-207 merges (same zone)."
+      "note": "implemented on arena/hardening-task207-foreign-check: generation/epoch fencing (_generation/_stale_generation), claim renewal = heartbeat (epoch stable), takeover/release/defer advance the epoch, --expected-generation refuses a stale owner with exit 2. Evidence: pytest --noconftest -q tests/unit/test_agent_board.py -> 34 passed; python scripts/board_referee_mutations.py -> 8/8 killed.",
+      "generation": 0
+    },
+    {
+      "task": "task-186-nagar-intent-spine",
+      "title": "Nagar creative execution spine: intent-first loop over the existing command surface",
+      "title_fa": "ستون فقرات اجرای خلاق نگر: حلقهٔ نیت‌محور روی سطح فرمان موجود",
+      "zone": "nagar-creative-graph",
+      "priority": "P0",
+      "status": "done",
+      "scope": "Intent -> creative graph -> capability compiler -> CommandBus -> artifact + evidence, in-memory, in creative/spine/. First capability: reference -> CreativeRecipe -> Intent (heuristic). No new media operation, no new pack, no second dispatch path.",
+      "scope_fa": "نیت -> گراف خلاق -> کامپایلر قابلیت -> CommandBus -> مصنوع + شواهد، در حافظه، در creative/spine/. اولین قابلیت: ارجاع -> دستور پخت خلاقانه -> نیت (اکتشافی). بدون عملیات رسانه‌ای جدید، بدون پک جدید، بدون مسیر ارسال دوم.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "typed Intent round-trips; empty/foreign-project request refused typed before any handler",
+        "intent compiles to registry-checked operations; unknown operation refused before dispatch",
+        "execution enters through CommandBus only (test_only_the_bus_invokes_an_operation_handler)",
+        "artifact node binds transaction + state_hash + EvidenceRecord; a refused command produces no artifact",
+        "reference -> recipe carries a low confidence and a no-copy constraint",
+        "no regression on the existing command-contract and studio-isolation suites"
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_creative_spine.py tests/unit/test_spine_mutations.py tests/architecture/test_spine_boundary.py",
+        "pytest -q tests/architecture/test_command_capability_boundary.py tests/architecture/test_nagar_studio_isolation.py",
+        "ruff check + mypy clean on creative/spine/"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/spine/",
+        "tests/unit/test_creative_spine.py",
+        "tests/unit/test_spine_mutations.py",
+        "tests/architecture/test_spine_boundary.py"
+      ],
+      "owner_hint": "any free agent after a board claim",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "generation": 0,
+      "gates_owner": false,
+      "note": "direction authorized by D-0024 / docs/architecture/CREATIVE_DIRECTION.md; durability (persisted graph + lineage) is the next trigger in that page's section 6"
     }
   ],
   "deferred_log": [
@@ -3309,22 +3361,26 @@
       "why_fa": "D-0011: lut/burnin به دلیل نبود مسیر اجرای صادقانه (بدون .cube shipped و بدون subtitles op در lane IR) typed refuse می‌شوند؛ با ابزار واقعی lane قابل برگشت‌اند."
     },
     {
+      "id": "task-187-nagar-graph-durability",
+      "priority": "P1",
+      "zone": "nagar-creative-graph",
+      "title": "Persist the creative graph and artifact lineage (make the spine durable)",
+      "title_fa": "پایدارسازی گراف خلاق و تبار مصنوع (پایدار کردن ستون فقرات)",
+      "why_fa": "اسلایس D-0024 فقط در حافظه است؛ تا گراف و تبار پایدار نشوند، چندجهانی و بازخورد اجتماعی چیزی برای شاخه‌گرفتن و ابطال ندارند.",
       "acceptance_criteria": [
-        "real user sends /edit trim on staging and receives translated queued + video artifact",
-        "caption transcribe on default install returns the typed unavailable message (localized)",
-        "job rows show durable COMPLETED/not FAILED for the typed paths"
+        "graph nodes and artifact lineage persist and round-trip by (intent_id, project_id, state_revision)",
+        "a stale revision is refused untouched, reusing the bus state_revision/state_hash preconditions",
+        "the persistence adapter lives outside the pure creative/spine module (boundary stays stdlib+pydantic)",
+        "no regression on tests/unit/test_creative_spine.py and the command-contract suite"
       ],
-      "exclusive_paths": [],
       "prerequisites": [
-        "staging bot token + a test chat"
+        "task-186-nagar-intent-spine"
       ],
-      "status_note": "owner/staging action; evidence = staging screenshots + job row dump",
-      "id": "task-175",
-      "priority": "P2",
-      "zone": "p0-stabilization",
-      "title": "Staging smoke of /edit /caption /grade against the live bot (PTB runtime)",
-      "title_fa": "اسموک استیجینگ سه فرمان creative روی ربات زنده",
-      "why_fa": "زنجیره در سطح unit/integration با artifact واقعی اثبات شده؛ اثبات نهایی کاربر-واقعی به کانتکست PTB زنده و توکن استیجینگ نیاز دارد (external dependency)."
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/graph/",
+        "tests/unit/test_creative_graph.py"
+      ],
+      "status_note": "sequenced after task-186 (spine in-memory slice, done); trigger recorded in docs/architecture/CREATIVE_DIRECTION.md section 6"
     }
   ],
   "history": {

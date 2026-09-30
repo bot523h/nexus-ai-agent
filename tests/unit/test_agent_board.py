@@ -497,6 +497,272 @@ def test_claim_refuses_a_foreign_active_lease(
     assert code == 2
 
 
+def test_check_local_board_unreadable_is_exit_2_not_a_crash(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A malformed local board must be exit 2 — never a traceback, never a pass."""
+    board_module.BOARD.write_text("{ this is not json", encoding="utf-8")
+
+    def _explode(*_a: object, **_k: object) -> None:
+        raise AssertionError("an unreadable local board must short-circuit before git")
+
+    monkeypatch.setattr(board_module, "_git", _explode)
+    code = board_module.cmd_check(
+        type(
+            "A",
+            (),
+            {"files": "docs/anything.md", "branch": "arena/999-me", "no_remote": False},
+        )()
+    )
+    assert code == 2, "an unparseable local board must be UNVERIFIABLE (2), not a crash"
+
+
+def test_check_local_board_missing_is_exit_2(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(board_module, "BOARD", tmp_path / "does-not-exist.json")
+    code = board_module.cmd_check(
+        type(
+            "A",
+            (),
+            {"files": "docs/anything.md", "branch": "arena/999-me", "no_remote": True},
+        )()
+    )
+    assert code == 2
+
+
+def test_check_malformed_claim_ttl_does_not_crash_the_referee(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A poison claim (non-numeric ttl) must degrade to exit 2, never raise."""
+    board = _synthetic_directory_claim_board()
+    board["claims"].append(
+        {
+            "task": "poison-claim",
+            "status": "active",
+            "zone": "synthetic",
+            "agent_branch": "arena/poison",
+            "claimed_at": "2026-01-01T00:00:00Z",
+            "ttl_hours": "not-a-number",
+            "gates_owner": False,
+            "exclusive_paths": ["docs/poison.md"],
+        }
+    )
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+    code = board_module.cmd_check(
+        type(
+            "A",
+            (),
+            {"files": "docs/poison.md", "branch": "arena/999-me", "no_remote": True},
+        )()
+    )
+    assert code == 2, "a malformed claim must be UNVERIFIABLE, never a silent 0 or a crash"
+
+
+# --------------------------------------------------------------------------- #
+# lease fencing (task-219): a superseded owner cannot mutate the lease
+# --------------------------------------------------------------------------- #
+def _generation_of(board_module: ModuleType, task: str) -> int:
+    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    return next(c for c in board["claims"] if c["task"] == task).get("generation", 0)
+
+
+def test_claim_takeover_advances_generation(board_module: ModuleType) -> None:
+    """Taking a lease over bumps its fencing epoch."""
+    task = _first_claimable(board_module.BOARD)
+    before = _generation_of(board_module, task)
+    board_module.cmd_claim(
+        type("A", (), {"task": task, "branch": "arena/999-new", "ttl": 24, "gates": False})()
+    )
+    assert _generation_of(board_module, task) == before + 1
+
+
+def test_heartbeat_keeps_generation_stable(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A same-owner renewal is not a transfer — the epoch must not move."""
+    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    active = _first_active_claim(board)
+    _pin_clock_inside_lease(monkeypatch, board_module, active)
+    before = _generation_of(board_module, active["task"])
+    code = board_module.cmd_claim(
+        type(
+            "A",
+            (),
+            {
+                "task": active["task"],
+                "branch": active["agent_branch"],
+                "ttl": 24,
+                "gates": False,
+                "expected_generation": before,
+            },
+        )()
+    )
+    assert code == 0
+    assert _generation_of(board_module, active["task"]) == before
+
+
+def test_stale_owner_renewal_is_fenced_out(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """A resumed stale owner (wrong generation) must be refused, not warned."""
+    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    active = _first_active_claim(board)
+    _pin_clock_inside_lease(monkeypatch, board_module, active)
+    current = _generation_of(board_module, active["task"])
+    code = board_module.cmd_claim(
+        type(
+            "A",
+            (),
+            {
+                "task": active["task"],
+                "branch": active["agent_branch"],
+                "ttl": 24,
+                "gates": False,
+                "expected_generation": current - 1,  # stale: zone changed hands
+            },
+        )()
+    )
+    assert code == 2
+    assert "stale lease generation" in capsys.readouterr().out
+
+
+def test_stale_owner_release_is_fenced_out(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    active = _first_active_claim(board)
+    _pin_clock_inside_lease(monkeypatch, board_module, active)
+    code = board_module.cmd_release(
+        type(
+            "A",
+            (),
+            {
+                "task": active["task"],
+                "branch": active["agent_branch"],
+                "expected_generation": 999,
+            },
+        )()
+    )
+    assert code == 2
+    # and the lease is untouched by the refused mutation
+    assert _generation_of(board_module, active["task"]) != 999
+
+
+def test_release_advances_generation(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Release transfers the zone and must advance the fencing epoch."""
+    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    active = _first_active_claim(board)
+    _pin_clock_inside_lease(monkeypatch, board_module, active)
+    task, owner = active["task"], active["agent_branch"]
+    gen_before = _generation_of(board_module, task)
+    assert (
+        board_module.cmd_release(
+            type("A", (), {"task": task, "branch": owner, "expected_generation": gen_before})()
+        )
+        == 0
+    )
+    assert _generation_of(board_module, task) == gen_before + 1
+
+
+def test_generation_guard_fences_a_reused_branch_identity(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """The load-bearing case: two sessions sharing one branch name.
+
+    Branch identity alone cannot separate two sessions that both call
+    themselves ``arena/x`` (the documented "three sessions declared agent E"
+    incident).  Generation fencing can: the second session re-took the lease and
+    advanced the epoch, so the first session's recorded expectation is stale and
+    its renewal is refused — deterministically, not as a warning.
+    """
+    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    active = _first_active_claim(board)
+    _pin_clock_inside_lease(monkeypatch, board_module, active)
+    task, owner = active["task"], active["agent_branch"]
+    session_one_expectation = _generation_of(board_module, task)
+
+    # Session two (same branch name) took the lease over: owner unchanged, epoch bumped.
+    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    claim = next(c for c in board["claims"] if c["task"] == task)
+    claim["generation"] = session_one_expectation + 1
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+
+    # Session one resumes with its stale expectation → fenced out.
+    code = board_module.cmd_claim(
+        type(
+            "A",
+            (),
+            {
+                "task": task,
+                "branch": owner,
+                "ttl": 24,
+                "gates": False,
+                "expected_generation": session_one_expectation,
+            },
+        )()
+    )
+    assert code == 2
+    assert "stale lease generation" in capsys.readouterr().out
+    # The lease was not mutated by the refused attempt.
+    assert _generation_of(board_module, task) == session_one_expectation + 1
+
+
+def test_defer_is_fenced_for_a_stale_generation(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    active = _first_active_claim(board)
+    _pin_clock_inside_lease(monkeypatch, board_module, active)
+    code = board_module.cmd_defer(
+        type(
+            "A",
+            (),
+            {
+                "task": active["task"],
+                "branch": active["agent_branch"],
+                "reason": "",
+                "fa": "",
+                "resume_when": "",
+                "expected_generation": 4242,
+            },
+        )()
+    )
+    assert code == 2
+
+
+def test_legacy_claim_without_generation_is_fenced_as_zero(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Backward compatibility: a claim lacking ``generation`` reads as 0."""
+    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    active = _first_active_claim(board)
+    active.pop("generation", None)  # simulate a pre-task-219 board
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, active)
+    assert _generation_of(board_module, active["task"]) == 0
+    # a caller that expects generation 0 (the legacy default) is allowed to renew
+    assert (
+        board_module.cmd_claim(
+            type(
+                "A",
+                (),
+                {
+                    "task": active["task"],
+                    "branch": active["agent_branch"],
+                    "ttl": 24,
+                    "gates": False,
+                    "expected_generation": 0,
+                },
+            )()
+        )
+        == 0
+    )
+
+
 def test_claim_renews_its_own_lease(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
