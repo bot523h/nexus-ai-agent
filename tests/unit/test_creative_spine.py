@@ -40,6 +40,7 @@ from nexus_ai_agent.creative.studio import (
     CommandValidationError,
     ProjectAccess,
     Timeline,
+    TypedCommand,
     build_wave1_registry,
     new_project,
 )
@@ -314,3 +315,141 @@ def test_rollback_goes_through_the_bus_and_can_be_refused() -> None:
 
     with pytest.raises(SpineRollbackError):
         spine.execute_intent(Intent(project_id="proj1", goal="probe"))
+
+
+# --------------------------------------------------------------------------- #
+# task-222: a rollback is scoped to the run's OWN transactions
+# --------------------------------------------------------------------------- #
+class _TwoMarkCompiler:
+    """Step 1 = a valid mark "OURS"; step 2 = a mark the bus refuses."""
+
+    def compile(self, intent: Intent, registry: object) -> CompiledIntent:
+        return CompiledIntent(
+            intent_id=intent.intent_id,
+            operations=("timeline.mark", "timeline.mark"),
+            plan=(
+                PlannedOperation(operation="timeline.mark", input={"at": "اینجا", "label": "OURS"}),
+                PlannedOperation(operation="timeline.mark", input={"at": 999999, "label": "BAD"}),
+            ),
+            rationale="probe: the second step is invalid",
+        )
+
+
+def _foreign_mark(bus: CommandBus, label: str = "FOREIGN"):
+    """A fully valid edit dispatched as another actor would dispatch it."""
+    return bus.dispatch(
+        TypedCommand(
+            command_id=f"foreign-{label}",
+            operation="timeline.mark",
+            target={"project_id": bus.project.project_id},
+            input={"at": {"kind": "absolute", "timecode_us": 5_000_000}, "label": label},
+        )
+    )
+
+
+def test_failed_run_never_rolls_back_a_foreign_edit(monkeypatch) -> None:
+    """Failure mode D: a concurrent edit between two steps must survive.
+
+    The spine's step 1 commits, then another actor commits a valid edit, then the
+    spine's step 2 is refused. A naive "undo the most recent transaction" rollback
+    would destroy the foreign edit and leave the spine's own half-applied step.
+    The transaction-scoped rollback must instead leave the foreign edit and fail
+    closed (the run cannot sheathe its own step without touching foreign work).
+    """
+    bus = _bus()
+    graph = CreativeGraph("proj1")
+    spine = CreativeExecutionSpine(bus, graph, compiler=_TwoMarkCompiler())
+
+    real_dispatch = bus.dispatch
+    state = {"n": 0}
+
+    def dispatch_then_interleave(command):
+        result = real_dispatch(command)
+        state["n"] += 1
+        if state["n"] == 1:
+            _foreign_mark(bus)
+        return result
+
+    monkeypatch.setattr(bus, "dispatch", dispatch_then_interleave)
+
+    with pytest.raises(SpineRollbackError):
+        spine.execute_intent(Intent(project_id="proj1", goal="probe"))
+
+    labels = [marker.label for marker in bus.project.timeline.markers]
+    # the foreign edit survives; only the run's own work is a candidate to undo
+    assert "FOREIGN" in labels
+    # no artifact/evidence node is left for a run that did not complete
+    assert not any(node.kind == "artifact" for node in graph.nodes())
+    assert not any(node.kind == "evidence" for node in graph.nodes())
+
+
+def test_duplicate_delivery_of_an_intent_is_idempotent() -> None:
+    """Failure mode F: a redelivered intent must not mutate the project twice."""
+    bus = _bus()
+    graph = CreativeGraph("proj1")
+    spine = CreativeExecutionSpine(bus, graph)
+    intent = Intent(project_id="proj1", goal="این ویدیو را پخش کن و یک علامت بگذار")
+
+    first = spine.execute_intent(intent)
+    hash_after_first = bus.state_hash
+    markers_after_first = len(bus.project.timeline.markers)
+
+    second = spine.execute_intent(intent)
+
+    assert second is first or second.result == first.result
+    assert bus.state_hash == hash_after_first
+    assert len(bus.project.timeline.markers) == markers_after_first == 1
+
+
+def test_duplicate_intent_id_with_different_content_is_refused() -> None:
+    """Reusing an intent_id for different work is a conflict, not a replay."""
+    bus = _bus()
+    graph = CreativeGraph("proj1")
+    spine = CreativeExecutionSpine(bus, graph)
+    first = Intent(project_id="proj1", goal="mark this moment")
+    spine.execute_intent(first)
+
+    conflicting = Intent(
+        intent_id=first.intent_id, project_id="proj1", goal="mark a different moment"
+    )
+    with pytest.raises(ValueError):
+        spine.execute_intent(conflicting)
+
+
+def test_a_crash_between_commit_and_graph_write_is_bounded(monkeypatch) -> None:
+    """Failure mode J: a hard crash after the bus commit must not corrupt state.
+
+    A real process death cannot run the ``except`` handler, so we simulate it with
+    a BaseException (not ``Exception``) raised exactly after the first commit. The
+    honest contract: the bus transaction is real and the graph node is absent --
+    a *bounded, detectable* divergence, not silent corruption. The committed
+    content is a normal transaction the bus can undo, and no orphan artifact node
+    exists.
+    """
+    bus = _bus()
+    graph = CreativeGraph("proj1")
+    spine = CreativeExecutionSpine(bus, graph, compiler=_TwoMarkCompiler())
+
+    real_add = graph.add_node
+    calls = {"n": 0}
+
+    def crash_on_first_artifact(*args, **kwargs):
+        if kwargs.get("label", "").startswith("timeline.mark@") or args[:1] == ("artifact",):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise KeyboardInterrupt("simulated process death after commit")
+        return real_add(*args, **kwargs)
+
+    monkeypatch.setattr(graph, "add_node", crash_on_first_artifact)
+
+    with pytest.raises(KeyboardInterrupt):
+        spine.execute_intent(Intent(project_id="proj1", goal="probe"))
+
+    # The commit happened (one editable transaction), the artifact node did not.
+    assert bus.state_revision == 1
+    assert [t.operation for t in bus.history] == ["timeline.mark"]
+    assert not any(node.kind == "artifact" for node in graph.nodes())
+    # The divergence is a normal bus transaction, so a later undo still works.
+    undo = bus.dispatch(TypedCommand(command_id="u1", operation="system.undo", input={}))
+    assert undo.status == "applied"
+    assert bus.project.timeline.markers == []

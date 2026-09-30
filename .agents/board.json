@@ -2922,7 +2922,7 @@
       "task": "task-222-spine-transaction-identity",
       "title": "A spine rollback must target its OWN transactions, never a foreign actor's edit",
       "title_fa": "بازگردانی ستون فقرات باید فقط تراکنش‌های خودش را هدف بگیرد، نه ویرایش بازیگر دیگر",
-      "zone": "nagar-spine-transaction-identity",
+      "zone": "nagar-creative-graph",
       "priority": "P0",
       "status": "active",
       "scope": "task-221 made execute_intent roll back a failed multi-step plan with one system.undo per applied step. That undo is unconditional ('rewind the most recent editable transaction'), so under a concurrent interleaving it rewinds a FOREIGN actor's committed edit and leaves the spine's own half-applied step in place: silent data corruption. Also unaddressed: duplicate delivery re-applies the plan (forward commands carry no idempotency key), a rollback that cannot complete still leaves artifact nodes in the graph, and a crash between the bus commit and the graph node write leaves an unreachable artifact. Fix (spine-only, no bus change; studio/ is not owned): bind each step to its committed transaction_id, on rollback only undo while the most-recent transaction is one the run owns (else refuse with a typed error), retract artifact nodes even on a partial rollback, bind an idempotency key per (intent, step) so a duplicate delivery returns the original result.",
@@ -2954,7 +2954,7 @@
       "ttl_hours": 24,
       "generation": 1,
       "gates_owner": false,
-      "note": ""
+      "note": "successor to task-221. Reproduction of failure mode D on PR#126 head 3324ce6/1fc4938 before any code change: step1 commits OURS, a valid foreign mark commits, step2 refused -> the compensating undo rewinds the FOREIGN mark and leaves OURS (silent corruption). Fix: transaction-scoped rollback + exactly-once replay. Evidence: pytest -q tests/unit/test_creative_spine.py tests/unit/test_spine_mutations.py tests/architecture/test_spine_boundary.py -> 25 passed (9/9 mutants killed)."
     }
   ],
   "deferred_log": [
@@ -3189,13 +3189,6 @@
         "tests/unit/test_creative_graph.py"
       ],
       "status_note": "sequenced after task-186 (spine in-memory slice, done); trigger recorded in docs/architecture/CREATIVE_DIRECTION.md section 6"
-    },
-    {
-      "id": "task-222-spine-transaction-identity",
-      "priority": "P0",
-      "title": "Bind spine rollback to its own transactions (no foreign-edit undo)",
-      "title_fa": "پیوند بازگردانی ستون فقرات به تراکنش‌های خودش",
-      "status": "queued"
     }
   ],
   "history": {
