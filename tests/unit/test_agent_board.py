@@ -841,8 +841,13 @@ def test_show_garbage_collects_an_expired_lease(board_module: ModuleType) -> Non
     stale = next(c for c in board["claims"] if c["status"] == "active")
     stale["claimed_at"] = _iso(datetime.now(timezone.utc) - timedelta(hours=48))
     stale["ttl_hours"] = 1
+    handoff = "unpushed evidence from the departing session — must survive gc"
+    stale["note"] = handoff
     board_module.BOARD.write_text(json.dumps(board, indent=2, ensure_ascii=False), encoding="utf-8")
     assert board_module.cmd_show(type("A", (), {})()) == 0
     reloaded = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
     freed = next(c for c in reloaded["claims"] if c["task"] == stale["task"])
     assert freed["status"] == "expired"
+    # gc records *why* it released the lease, and never clobbers the owner's note.
+    assert "stale active lease" in freed["release_reason"]
+    assert freed["note"] == handoff

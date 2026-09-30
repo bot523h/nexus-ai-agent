@@ -71,9 +71,12 @@ mistaken for a global one.
 - `tests/unit/test_agent_board.py::test_check_consults_sibling_worktree_boards`
 - `tests/unit/test_agent_board.py::test_check_no_remote_narrows_the_claim_loudly`
 - `tests/unit/test_agent_board.py::test_check_proven_conflict_wins_over_unreadable_remote`
-- `scripts/board_referee_mutations.py` — kills the four referee mutations
-  (unreadable-source-as-pass, ignored `--no-remote`, skipped worktree boards,
-  downgraded conflict) and restores `scripts/agent_board.py` byte-for-byte
+- `scripts/board_referee_mutations.py` — kills all nine mutations (the four
+  referee invariants — unreadable-source-as-pass, ignored `--no-remote`, skipped
+  worktree boards, downgraded conflict — plus five lease/governance guards added
+  by task-219/220: unreadable local board as pass, ignored fencing guard,
+  non-advancing takeover/release epochs, and a `gc` that clobbers the owner's
+  evidence note) and restores `scripts/agent_board.py` byte-for-byte
   (sha256 checked).
 
 ## Pros and Cons of the Options
