@@ -2736,7 +2736,7 @@
       "title_fa": "داور چندمنبعی check: کدهای خروج صادق ۰/۱/۲ روی برد محلی + ورک‌تری‌ها + origin/main",
       "zone": "coordination-referee",
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "scope": "cmd_check consults the local board, every sibling git worktree board and origin/main; exit 2 when any source is unreadable; --no-remote narrows loudly to a local verdict; a proven overlap stays exit 1 even if another source is unreadable. Mutation harness kills the referee guards.",
       "scope_fa": "cmd_check برد محلی، برد همهٔ ورک‌تری‌های همسایه و origin/main را می‌خواند؛ اگر منبعی خوانده نشود خروج ۲؛ --no-remote با صدای بلند به حکم محلی محدود می‌کند؛ برخورد اثبات‌شده حتی با منبع ناخوانا خروج ۱ می‌ماند.",
       "prerequisites": [],
@@ -2766,7 +2766,9 @@
       "claimed_at": "2026-09-30T08:32:48Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "implements the task-207 design (0/1/2 multi-source referee). D-0024 direction page is separate (docs-architecture). | 2026-09-30: lease-fencing continuation (task-219) landed on the same branch; board tests 34 passed, referee mutations 8/8 killed."
+      "note": "implements the task-207 design (0/1/2 multi-source referee). D-0024 direction page is separate (docs-architecture). | 2026-09-30: lease-fencing continuation (task-219) landed on the same branch; board tests 34 passed, referee mutations 8/8 killed. | CLOSED 2026-09-30: referee + lease fencing (task-219) + gc note-preservation (task-220) all merged on this branch; evidence: test_agent_board.py 40 passed, board_referee_mutations.py 9/9 killed.",
+      "release_reason": "completed on arena/hardening-task207-foreign-check (multi-source referee + task-219 fencing + task-220 gc-note fix)",
+      "generation": 0
     },
     {
       "task": "task-219-lease-fencing",
@@ -2836,6 +2838,38 @@
       "generation": 0,
       "gates_owner": false,
       "note": "direction authorized by D-0024 / docs/architecture/CREATIVE_DIRECTION.md; durability (persisted graph + lineage) is the next trigger in that page's section 6"
+    },
+    {
+      "task": "task-220-gc-note-preservation",
+      "title": "gc must not destroy a departed owner's evidence note (schema-additive release_reason)",
+      "title_fa": "gc نباید یادداشت شواهد مالکِ رفته را نابود کند (release_reason افزایشی)",
+      "zone": "coordination-referee",
+      "priority": "P0",
+      "status": "done",
+      "scope": "gc_expired overwrote claim['note'] (the departing session's unpushed evidence/handoff) with a generic release line. Record the release reason additively in release_reason, leave note untouched, and surface it in `show`. Schema-additive only.",
+      "scope_fa": "gc_expired یادداشت مالک را با یک خط عمومی بازنویسی می‌کرد و شواهد push‌نشده را نابود می‌ساخت. دلیل آزادسازی به‌صورت افزایشی در release_reason ثبت شود، یادداشت دست‌نخورده بماند و در `show` نمایش داده شود.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "gc records release_reason and never mutates the owner's note",
+        "`show` surfaces the release reason for a gc-released lease",
+        "the mutation harness kills a note-clobbering mutation"
+      ],
+      "evidence_required": [
+        "pytest --noconftest -q tests/unit/test_agent_board.py tests/unit/test_agent_board_active_in_review.py",
+        "python scripts/board_referee_mutations.py"
+      ],
+      "exclusive_paths": [
+        "scripts/agent_board.py",
+        "scripts/board_referee_mutations.py",
+        "tests/unit/test_agent_board.py"
+      ],
+      "owner_hint": "coordination-referee owner",
+      "agent_branch": "arena/hardening-task207-foreign-check",
+      "claimed_at": "2026-09-30T08:32:48Z",
+      "ttl_hours": 24,
+      "generation": 0,
+      "gates_owner": false,
+      "note": "Implemented on arena/hardening-task207-foreign-check. Evidence: pytest --noconftest -q tests/unit/test_agent_board.py tests/unit/test_agent_board_active_in_review.py -> 40 passed; python scripts/board_referee_mutations.py -> 9/9 killed. Reproduced first: running `show` on the shared board replaced four agents' notes (task-154/184/185/195) with 'auto-released by gc'; the fix keeps those notes."
     }
   ],
   "deferred_log": [

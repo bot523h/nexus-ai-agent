@@ -93,6 +93,12 @@ MUTATIONS: tuple[Mutation, ...] = (
         '    claim["generation"] = _generation(claim)  # mutation: release must advance the epoch\n    save_board(board)\n    print(\n        f"RELEASED',
         "releasing a lease must advance its fencing epoch",
     ),
+    Mutation(
+        "gc_overwrites_the_owners_note",
+        '                claim["release_reason"] = (\n                    f"auto-released by gc at {_iso(_now())} (stale {previous_status} lease)"\n                )',
+        '                claim["note"] = (\n                    f"auto-released by gc at {_iso(_now())} (stale {previous_status} lease)"\n                )',
+        "gc must record the release reason without clobbering the owner's evidence note",
+    ),
 )
 
 

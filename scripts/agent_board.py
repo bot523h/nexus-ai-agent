@@ -132,7 +132,14 @@ def save_board(board: dict) -> None:
 
 
 def gc_expired(board: dict) -> list[str]:
-    """Auto-release expired leases. Returns list of freed task names."""
+    """Auto-release expired leases. Returns list of freed task names.
+
+    The release is recorded in ``release_reason`` and the owner's ``note`` is
+    left untouched: the note holds that session's unpushed evidence and handoff,
+    so overwriting it here would silently destroy work (a real regression the
+    previous hardening session had to work around). ``gc`` only ever adds the
+    structured release reason.
+    """
     freed: list[str] = []
     for claim in board.get("claims", []):
         claimed = _parse(claim.get("claimed_at"))
@@ -141,7 +148,7 @@ def gc_expired(board: dict) -> list[str]:
             if _now() > expires:
                 previous_status = claim.get("status")
                 claim["status"] = "expired"
-                claim["note"] = (
+                claim["release_reason"] = (
                     f"auto-released by gc at {_iso(_now())} (stale {previous_status} lease)"
                 )
                 freed.append(claim["task"])
@@ -242,6 +249,8 @@ def cmd_show(_args: argparse.Namespace) -> int:
             f"  generation: {_generation(claim)} (fencing epoch)\n"
             f"  scope: {claim.get('scope', '')}"
         )
+        if claim.get("release_reason"):
+            print(f"  released: {claim['release_reason']}")
     for entry in board.get("deferred_log", []):
         print(f"\n⏸ DEFERRED {entry['task']} by {entry.get('deferred_by_branch')}")
         print(f"   fa: {entry.get('reason_fa', '')}")
