@@ -98,6 +98,31 @@ async def _executor_agent(
         tool_inputs = first_pending.get("inputs", {})
         try:
             res = await tool_registry.run(tool_name, tool_inputs)
+            if res.get("needs_confirmation"):
+                # A GUARDED tool was refused pending confirmation. The registry's
+                # result carries no "success" key, so the generic branch below
+                # would report a false "Tool <name> executed." while marking the
+                # step failed. Surface a typed refusal instead; never claim an
+                # execution that did not happen (the guard stays authoritative).
+                error_code = "confirmation_required"
+                message = (
+                    f"Confirmation required to run tool '{tool_name}'. Reply 'confirm' to proceed."
+                )
+                first_pending["status"] = "failed"
+                state["tool_results"] = state.get("tool_results", []) + [
+                    {
+                        "step_id": first_pending.get("id"),
+                        "tool": tool_name,
+                        "success": False,
+                        "error_code": error_code,
+                        "output": message,
+                    }
+                ]
+                state["error"] = f"{error_code}: {message}"
+                state["response"] = message
+                state["current_task"] = task
+                return state
+
             is_success = res.get("success", False)
             first_pending["status"] = "done" if is_success else "failed"
             output_text = res.get("output", "") or res.get("error", "")
