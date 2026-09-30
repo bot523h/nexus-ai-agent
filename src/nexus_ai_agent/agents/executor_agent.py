@@ -28,10 +28,26 @@ class ExecutorAgent(BaseAgent):
         if tool_name and self.registry is not None:
             result = await self.registry.run(tool_name, inputs, policy={})
             if result.get("needs_confirmation"):
-                state["response"] = (
+                # The registry refused a GUARDED tool pending confirmation: the
+                # tool did not run, so the step is a typed refusal — not a
+                # success and not an empty-output "executed" claim.
+                error_code = "confirmation_required"
+                message = (
                     f"Confirmation required to run tool '{tool_name}'. "
                     f"Reply 'confirm' to proceed.\nInputs: {inputs}"
                 )
+                step["status"] = "failed"
+                state["current_task"] = task
+                state["tool_results"] = state.get("tool_results", []) + [
+                    {
+                        "success": False,
+                        "error_code": error_code,
+                        "output": message,
+                        "error": message,
+                    }
+                ]
+                state["error"] = f"{error_code}: {message}"
+                state["response"] = message
                 return state
 
             if result.get("success"):

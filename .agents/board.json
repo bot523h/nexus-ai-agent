@@ -664,7 +664,8 @@
       "description": "Graph tool-execution truth: typed refusal for guarded (confirmation-gated) tools in orchestration/graph.py",
       "paths": [
         "src/nexus_ai_agent/orchestration/graph.py",
-        "tests/unit/test_execution_truth.py"
+        "tests/unit/test_execution_truth.py",
+        "src/nexus_ai_agent/agents/executor_agent.py"
       ]
     }
   ],
@@ -2745,7 +2746,8 @@
       ],
       "exclusive_paths": [
         "src/nexus_ai_agent/orchestration/graph.py",
-        "tests/unit/test_execution_truth.py"
+        "tests/unit/test_execution_truth.py",
+        "src/nexus_ai_agent/agents/executor_agent.py"
       ],
       "prerequisites": [],
       "owner_hint": "",
@@ -2753,7 +2755,7 @@
       "claimed_at": "2026-09-30T06:37:27Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": ""
+      "note": "FIXED + locally proven: _executor_agent and ExecutorAgent now surface a typed 'confirmation_required' refusal for GUARDED tools instead of the false \"Tool <name> executed.\" claim. Evidence: new failing tests first (KeyError error_code / status 'pending'), then green. pytest -q -m 'not slow' => 2918 passed, 30 skipped, 0 failed; ruff check + format clean; mypy src success (247 files). DELIVERY BLOCKED: the sandbox GitHub credential is a read-only integration token — git push 403, API refs/contents/pulls all return 'Resource not accessible by integration'. Commit is local only; needs a push-capable credential to publish the branch/PR."
     }
   ],
   "deferred_log": [
