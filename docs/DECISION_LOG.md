@@ -1703,8 +1703,24 @@ for the spine — it reuses `CommandBus`, so Policy and Authority stay authorita
 *Evidence / confirmation.* The slice's own guards are named and runnable:
 `pytest -q tests/unit/test_creative_spine.py tests/unit/test_spine_mutations.py
 tests/architecture/test_spine_boundary.py` — the loop, lineage, policy-refusal and no-copy cases; the
-spine-is-not-a-second-write-path boundary; and 5/5 mutants killed. The
+spine-is-not-a-second-write-path boundary; and 7/7 mutants killed. The
 `docs/architecture/CREATIVE_DIRECTION.md` §2 table is reproducible from the tree. Honest limits: the
 graph and lineage are **in-memory** (durability is the next trigger in §6), the reference analyzer is
 **heuristic**, and the compiler's rules table is deliberately small. `Intent != Authority`: the spine
 proposes, the bus disposes.
+
+**Amendment — plan atomicity (task-221, 2026-09-30).** The slice's first iteration dispatched a plan
+step by step and committed each step through the bus, so a plan whose *later* step was refused left
+the earlier steps committed (revision advanced, artifact nodes written) — contradicting the
+"refused command produces no artifact" invariant above. A plan is only meaningful as a whole, so the
+run is now **transactional**: on any step failure the spine undoes the steps already applied through
+the bus's own `system.undo` path (never a private write path) and retracts their artifact nodes. A
+failed run leaves the project content unchanged (`state_hash` restored) and no artifact/evidence in
+the graph; the bus's `state_revision` remains monotonic by design, so rollback restores *content
+identity*, not the revision counter. If the rollback itself is refused (e.g. an actor authorized to
+apply but not to undo), the spine raises `SpineRollbackError` loudly rather than masking the
+original failure. Guarded by `test_a_failed_multi_step_run_leaves_no_committed_step`,
+`test_a_successful_multi_step_run_still_commits_every_step`,
+`test_rollback_goes_through_the_bus_and_can_be_refused`, and two new mutants
+(`failed_plan_keeps_the_steps_it_already_committed`,
+`rolled_back_run_keeps_its_artifact_nodes`).

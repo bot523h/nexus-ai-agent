@@ -46,6 +46,7 @@ from nexus_ai_agent.creative.spine.models import (
     PlannedOperation,
     RulesIntentResolver,
     SpineError,
+    SpineRollbackError,
 )
 from nexus_ai_agent.creative.spine.reference import (
     CreativeRecipe,
@@ -81,6 +82,7 @@ __all__ = [
     "RulesIntentResolver",
     "RulesRecipeAnalyzer",
     "SpineError",
+    "SpineRollbackError",
     "SpineRun",
     "abstract_recipe",
     "recipe_to_intent",
