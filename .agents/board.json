@@ -3261,11 +3261,11 @@
       ],
       "owner_hint": "any free agent after a board claim",
       "agent_branch": "arena/01a0181931-nexus-ai-agent",
-      "claimed_at": "2026-09-30T18:35:50Z",
+      "claimed_at": "2026-09-30T19:06:59Z",
       "ttl_hours": 24,
       "generation": 1,
       "gates_owner": false,
-      "note": "successor to task-221. Reproduction of failure mode D on PR#126 head 3324ce6/1fc4938 before any code change: step1 commits OURS, a valid foreign mark commits, step2 refused -> the compensating undo rewinds the FOREIGN mark and leaves OURS (silent corruption). Fix: transaction-scoped rollback + exactly-once replay. Evidence: pytest -q tests/unit/test_creative_spine.py tests/unit/test_spine_mutations.py tests/architecture/test_spine_boundary.py -> 25 passed (9/9 mutants killed)."
+      "note": "successor to task-221. Reproduced failure mode D on PR#126 head 1fc4938 before any code change: step-1 commits OURS, a VALID foreign mark commits, step-2 refused -> the old unconditional compensating undo rewinds FOREIGN and leaves OURS (silent cross-actor corruption). Fix (spine zone only; studio/ untouched): record each step's committed transaction_id, undo only while the newest editable transaction is the run's own, else fail closed with SpineRollbackError; retract artifact/evidence nodes on every failure path; exactly-once replay for a redelivered successful intent; unique per-step command ids. Evidence: pytest -q tests/unit/test_creative_spine.py tests/unit/test_spine_mutations.py tests/architecture/test_spine_boundary.py -> 25 passed (9/9 mutants killed); tests/unit + tests/architecture -> 2820 passed, 11 skipped; mypy src/nexus_ai_agent/creative/spine -> clean; ruff check+format -> clean. Referee: agent_board.py check --files <changed> --repo bot523h/nexus-ai-agent -> exit 0 (27 sources, no overlap). Docs: DECISION_LOG.md task-222 amendment. Branch pushed; PR open against main."
     }
   ],
   "deferred_log": [
