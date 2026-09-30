@@ -1,6 +1,7 @@
 # NEXUS AI — Architecture Decision Log
 
-**Status:** Canonical historical record; revision 11 effective 2026-09-25  
+**Status:** Canonical historical record; revision 12 effective 2026-09-30  
+**r12 scope:** product-direction decision (D-0024): the Nagar creative backbone is an intent-first loop (Intent → Creative Graph → Capability Compiler → CommandBus → render lane → verification → artifact + lineage), not a feature. The first vertical slice — the in-memory, single-project intent loop over the existing operation matrix — is implemented in `creative/spine/` with its own boundary and mutation guards; reference reverse engineering ships as the first *capability* over it (heuristic port, low confidence, never a copy). Direction record: `docs/architecture/CREATIVE_DIRECTION.md`.  
 **r11 scope:** S3/S5 adversarial closure of the security-boundary salvage (D-0016; session `arena/01a0d563-nexus-ai-agent`, PR#79): 5 proven defects closed, 12/12 mutation-killed.  
 **r10 scope:** security-boundary truth salvage (D-0015; PR#76 head `5b17a70` carried into PR#79): S1–S5 real deltas fixed, 9/9 mutation-killed.  
 **r9 scope:** Gate 2 canonical command + capability reconciliation, board task-179 (session `arena/01a0d43c-nexus-ai-agent`): the v1/v2 contract conflict resolved to one canonical contract (D-0013); see `architecture/COMMAND_CAPABILITY_CONTRACT.md` and `architecture/adr/0005-canonical-command-capability-contract.md` for evidence, scoring, and limits.  
@@ -21,6 +22,7 @@
 - **r6 (2026-09-20, v3.11.0 housekeeping PR):** moved the release baseline to `v3.11.0`; recorded two owner decisions — *image generation behind an adapter (Pollinations by default, Gemini opt-in)*, which resolves the open question left by Wave 2 item 7, and *Wave 2.5 (Telegram surface for the slideshow pack) precedes Wave 3*; corrected the Phase 6 status text to Waves 1–2c merged; updated the PR snapshot (PR#23 merged as `ebe995a`, PR#1/PR#2 closed); noted that the lifecycle PR1/PR2/PR3 line has been on `main` since PR#7 (`acdbcb7`, v3.6.0) — the roadmap file had still called it unmerged.
 - **r10 (2026-09-24, security-boundary truth salvage):** PR#58's S1–S5 claims re-verified against main `035a896` — real deltas fixed on a fresh branch (dispatcher-true access guard incl. sync `check_update` + `ApplicationHandlerStop`, force-join SQL predicate + fail-closed-unbound, boundary redaction in both pipelines, Gemini `x-goog-api-key` everywhere, SSRF-safe legacy `video_url` download + `SafeAsyncTransport` stream fix), 9/9 mutation-killed; PR#58 stays unmerged evidence (D-0015).
 - **r11 (2026-09-24, S3/S5 adversarial closure):** PR#76's own S3/S5 surfaces independently re-verified and 5 proven defects closed (stdlib traceback redaction, mapping/non-string arg redaction, Basic-scheme credentials, CGNAT 100.64.0.0/10, https-only scheme gate on redirect hops) — 12/12 mutation-killed; D-0016.
+- **r12 (2026-09-30, creative direction):** recorded the product frame (intent, not tools) and the backbone loop above the proven execution chain, then *built the first vertical slice* — the in-memory, single-project intent loop (typed intent → creative graph → capability compiler → CommandBus → artifact + evidence) in `creative/spine/`, with its own boundary and mutation guards. Reverse engineering, multiverse, social feedback, pack marketplace and style DNA stay deferred behind evidence-based triggers. Direction page: `docs/architecture/CREATIVE_DIRECTION.md`; D-0024.  
 - **r8 (2026-09-24, P0 stabilization day):** D-0010 legacy `/creative/*` HTTP lane = keep+harden (strictly harden-edged) on a deprecation track gated on open PR#58's SSRF scope, never a competitor pipeline; D-0011 `/edit` `/caption` `/grade` wired through the canonical chain with message-anchored idempotency, the bogus `mapper` handler key removed, honest op matrix (`lut`/`burnin` refused, not faked), all replies through the i18n catalog; D-0012 backup success must be measured and round-trip-verified, never asserted — plus the r8 coordination facts (task-106 superseded into task-166, task-164 narrowed to owner-secrets, docs number-resync against measured values: 57 registered ops).
 
 This document is the single reference point for architectural decisions in this repository. A new decision must be appended here with its date, status, rationale, rejected alternatives, and repository evidence. Existing historical documents remain useful as detailed records, but this log is authoritative when summaries differ.
@@ -1651,3 +1653,58 @@ stated goal is a nominal gate).
 coverage ACCEPTED and byte-identical across two runs; gate control accepted and
 27/27 attacks rejected; mutation campaign with every applicable mutation killed and
 restored.
+
+### D-0024 — The Nagar backbone is an intent-first loop; the first vertical slice is the single-project intent loop, and reverse engineering is the first capability over it
+
+*Problem.* A creative-direction proposal argued that reverse engineering a trending reference into
+an editing recipe should be Nagar's first big capability. Measured against the merged tree, that is
+the wrong first slice: the attractive capabilities (reference → recipe, parallel variants, social
+feedback, pack marketplace) are all *projections* of one backbone that did not exist. The merged
+execution chain is proven — `CommandBus`, capability packs, the single FFmpeg lane, measured
+verification, the six-state job lifecycle — but the studio `Project` is pure and in-memory
+(`creative/studio/models.py` recomputes a derived `state_hash` on every construction), the render
+worker builds a throwaway project per job (`creative/render_jobs.py`:
+`project_id=f"shot-{payload.idempotency_key}"`), and nothing bound a measured artifact to an intent
+or a durable project revision. There was no typed intent anywhere in `src/`.
+
+*Decision.*
+1. **The backbone is the loop, not a feature.** `Intent → Creative Graph → Capability Compiler →
+   Policy/Authority → CommandBus → render lane → Verification → Artifact + Lineage → back to the
+   graph`. A proposed capability that is not an entry or exit point of this loop is not ready.
+2. **The first vertical slice is the smallest full loop** — *one asset, one intent, one verified
+   artifact* — over the **already-executing** operation matrix. The slice adds the three missing
+   seams (a typed intent; a creative graph; artifact lineage) and **no new media operation and no
+   new pack**. It is implemented in `src/nexus_ai_agent/creative/spine/`: `Intent` +
+   `RulesIntentResolver`, `RulesCapabilityCompiler` (resolves every operation through the
+   `CapabilityRegistry`, refusing an unknown one *before* dispatch), `GraphIntentPlanner`,
+   `CreativeExecutionSpine` (dispatches through `CommandBus` only, schema-2 actor+provenance when an
+   actor is configured), and the append-only `CreativeGraph` with `ArtifactRecord`/`EvidenceRecord`.
+3. **Reverse engineering is the first capability over the backbone, not the backbone.** It ships as
+   `reference → CreativeRecipe → Intent` behind a `RecipeAnalyzer` port. The only implementation is
+   the deterministic `RulesRecipeAnalyzer`, which derives a recipe from supplied structural hints and
+   abstracts a *strategy* (never a copy); it carries an explicit low confidence and a "do not copy
+   the reference" constraint. Real perceptual analysis is a recorded gap, not a claim.
+4. **Multiverse, closed-loop social feedback, physics/atmosphere packs, the pack marketplace, and
+   creative-intelligence/style-DNA are deferred** with evidence-based triggers, recorded in
+   `docs/architecture/CREATIVE_DIRECTION.md` §6. Each enters as a compiler input, a graph projection,
+   an exit point, or a pack — never as the backbone.
+5. **Evidence-first extends to the graph.** Any statement about *why* an artifact looks the way it
+   does carries a confidence and the evidence it rests on; the D-0017 invariant ("job success is a
+   verified state, not a handler's word") is extended so an artifact node binds its transaction,
+   resulting `state_hash` and evidence, and a refused command produces no artifact at all.
+
+*Rejected.* (a) Reverse engineering first — it had nowhere to attach an extracted recipe and becomes
+a one-shot trick. (b) A new "AI editor" tool surface — the frame is intent and constraints, and a
+tool palette is the thing the frame replaces. (c) Building the graph *and* a new capability in the
+same slice — a slice that changes two things cannot tell you which one broke. (d) Asserting style
+DNA as fact — an unlabeled pattern claim violates the evidence-first rule. (e) A second dispatch path
+for the spine — it reuses `CommandBus`, so Policy and Authority stay authoritative.
+
+*Evidence / confirmation.* The slice's own guards are named and runnable:
+`pytest -q tests/unit/test_creative_spine.py tests/unit/test_spine_mutations.py
+tests/architecture/test_spine_boundary.py` — the loop, lineage, policy-refusal and no-copy cases; the
+spine-is-not-a-second-write-path boundary; and 5/5 mutants killed. The
+`docs/architecture/CREATIVE_DIRECTION.md` §2 table is reproducible from the tree. Honest limits: the
+graph and lineage are **in-memory** (durability is the next trigger in §6), the reference analyzer is
+**heuristic**, and the compiler's rules table is deliberately small. `Intent != Authority`: the spine
+proposes, the bus disposes.

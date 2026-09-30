@@ -77,6 +77,7 @@ Verified at `2026-09-21T16:45Z`, `main` @ `7573249` (v3.13.0).
 | `task-123` PR#33 slim-down | `packaging+interop` | شاخه 3aa | `assigned_to_E_pr33` |
 | `task-121` OTIO markers · `task-128` async DB · `task-106` studio surface · `task-127` real RAG | — | free / B | sequenced (prerequisites in the board) |
 | `task-132` extras CI matrix · `task-134` portrait slice | `ci-quality` / `nagar-portrait` | free | `queued` |
+| `task-186` Nagar creative execution spine (intent-first loop, in-memory) | `nagar-creative-graph` | done (this session) | `done` — direction D-0024; durability is `task-187` in `next_work` |
 
 Closed waves, merged PRs (#19–#38) and the four recorded incidents live in
 `history` inside `.agents/board.json`; the durable narrative is
