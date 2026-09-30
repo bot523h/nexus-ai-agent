@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-30T14:31:37Z",
+  "updated_at": "2026-09-30T16:49:46Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -671,6 +671,14 @@
         "tests/unit/test_creative_spine.py",
         "tests/unit/test_spine_mutations.py",
         "tests/architecture/test_spine_boundary.py"
+      ]
+    },
+    {
+      "id": "nagar-spine-atomicity",
+      "description": "Creative-execution spine plan atomicity (D-0024): a multi-step plan is all-or-nothing.",
+      "paths": [
+        "src/nexus_ai_agent/creative/spine/",
+        "tests/unit/test_creative_spine.py"
       ]
     }
   ],
@@ -2874,6 +2882,41 @@
       "generation": 0,
       "gates_owner": false,
       "note": "Implemented on arena/hardening-task207-foreign-check. Evidence: pytest --noconftest -q tests/unit/test_agent_board.py tests/unit/test_agent_board_active_in_review.py -> 40 passed; python scripts/board_referee_mutations.py -> 9/9 killed. Reproduced first: running `show` on the shared board replaced four agents' notes (task-154/184/185/195) with 'auto-released by gc'; the fix keeps those notes."
+    },
+    {
+      "task": "task-221-spine-plan-atomicity",
+      "title": "A multi-step spine plan must be all-or-nothing (no partial commit)",
+      "title_fa": "برنامهٔ چندمرحله‌ای ستون فقرات باید همه-یا-هیچ باشد (بدون کامیت جزئی)",
+      "zone": "nagar-spine-atomicity",
+      "priority": "P0",
+      "status": "active",
+      "scope": "CreativeExecutionSpine.execute_intent dispatches planned operations one at a time and commits each through the bus. When a later step is refused, the earlier steps are already committed (revision advances, artifact nodes written), contradicting the spine docstring and CREATIVE_DIRECTION.md §5.4 ('a command the bus refuses fails the run and leaves no artifact'). Reproduce: a two-step plan whose second command is invalid leaves the first step committed. Fix: make the run transactional -- on any step failure, undo the steps already applied via the bus's own system.undo path (no bypass, no fabricated rollback), so the run leaves state and revision exactly as it began.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "a two-step plan whose second command is refused leaves state_revision and state_hash exactly as before the run",
+        "no artifact or evidence node is written to the graph for a failed run",
+        "a successful multi-step run still commits every step (no regression)",
+        "the bus remains the only write path; the spine does not bypass authority to roll back",
+        "a mutation that disables the rollback turns the regression RED"
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_creative_spine.py",
+        "pytest -q tests/unit/test_spine_mutations.py",
+        "pytest -q tests/architecture/test_spine_boundary.py",
+        "python scripts/agent_board.py check --files src/nexus_ai_agent/creative/spine/execution.py,tests/unit/test_creative_spine.py --branch arena/hardening-task207-foreign-check"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/spine/",
+        "tests/unit/test_creative_spine.py"
+      ],
+      "owner_hint": "arena/hardening-task207-foreign-check",
+      "agent_branch": "arena/hardening-task207-foreign-check",
+      "claimed_at": "2026-09-30T16:49:46Z",
+      "ttl_hours": 24,
+      "generation": 1,
+      "gates_owner": false,
+      "note": ""
     }
   ],
   "deferred_log": [
