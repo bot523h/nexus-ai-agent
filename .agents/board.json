@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-30T17:01:41Z",
+  "updated_at": "2026-09-30T18:35:50Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2917,6 +2917,44 @@
       "generation": 2,
       "gates_owner": false,
       "note": "DONE on arena/hardening-task207-foreign-check @ 3324ce6. Reproduced the defect on main e5b326b (two-step plan, second step refused -> state_revision 0->1 + one artifact node). Fix: transactional execute_intent (rollback via bus system.undo + graph artifact retraction). Evidence: pytest -q tests/unit/test_creative_spine.py tests/unit/test_spine_mutations.py tests/architecture/test_spine_boundary.py -> 21 passed (7/7 mutants killed); full tests/unit+tests/architecture -> 2816 passed, 11 skipped; mypy src -> clean; ruff check+format -> clean; docs integrity 61 passed; referee check with repo+token -> no overlap across 27 sources."
+    },
+    {
+      "task": "task-222-spine-transaction-identity",
+      "title": "A spine rollback must target its OWN transactions, never a foreign actor's edit",
+      "title_fa": "بازگردانی ستون فقرات باید فقط تراکنش‌های خودش را هدف بگیرد، نه ویرایش بازیگر دیگر",
+      "zone": "nagar-spine-transaction-identity",
+      "priority": "P0",
+      "status": "active",
+      "scope": "task-221 made execute_intent roll back a failed multi-step plan with one system.undo per applied step. That undo is unconditional ('rewind the most recent editable transaction'), so under a concurrent interleaving it rewinds a FOREIGN actor's committed edit and leaves the spine's own half-applied step in place: silent data corruption. Also unaddressed: duplicate delivery re-applies the plan (forward commands carry no idempotency key), a rollback that cannot complete still leaves artifact nodes in the graph, and a crash between the bus commit and the graph node write leaves an unreachable artifact. Fix (spine-only, no bus change; studio/ is not owned): bind each step to its committed transaction_id, on rollback only undo while the most-recent transaction is one the run owns (else refuse with a typed error), retract artifact nodes even on a partial rollback, bind an idempotency key per (intent, step) so a duplicate delivery returns the original result.",
+      "scope_fa": "",
+      "prerequisites": [
+        "task-221-spine-plan-atomicity"
+      ],
+      "acceptance_criteria": [
+        "a concurrent foreign edit interleaved between a step commit and a later step failure survives the rollback (only the run's own step is undone)",
+        "if the run cannot undo its own step because a foreign transaction is latest, the rollback fails closed with SpineRollbackError rather than editing foreign work",
+        "a duplicate delivery of the same intent is idempotent: identical state_hash and no second marker",
+        "a partial rollback failure still retracts every artifact node the failed run wrote (no orphan artifact/evidence node)",
+        "a successful multi-step run is unchanged (no regression)",
+        "mutations that (a) drop the transaction-identity check, (b) drop the per-step idempotency key turn the suite RED"
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_creative_spine.py",
+        "pytest -q tests/unit/test_spine_mutations.py",
+        "pytest -q tests/architecture/test_spine_boundary.py"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/spine/",
+        "tests/unit/test_creative_spine.py",
+        "tests/unit/test_spine_mutations.py"
+      ],
+      "owner_hint": "any free agent after a board claim",
+      "agent_branch": "arena/01a0181931-nexus-ai-agent",
+      "claimed_at": "2026-09-30T18:35:50Z",
+      "ttl_hours": 24,
+      "generation": 1,
+      "gates_owner": false,
+      "note": ""
     }
   ],
   "deferred_log": [
@@ -3151,6 +3189,13 @@
         "tests/unit/test_creative_graph.py"
       ],
       "status_note": "sequenced after task-186 (spine in-memory slice, done); trigger recorded in docs/architecture/CREATIVE_DIRECTION.md section 6"
+    },
+    {
+      "id": "task-222-spine-transaction-identity",
+      "priority": "P0",
+      "title": "Bind spine rollback to its own transactions (no foreign-edit undo)",
+      "title_fa": "پیوند بازگردانی ستون فقرات به تراکنش‌های خودش",
+      "status": "queued"
     }
   ],
   "history": {
