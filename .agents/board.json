@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-30T19:07:25Z",
+  "updated_at": "2026-09-30T19:07:50Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2955,6 +2955,26 @@
       "generation": 1,
       "gates_owner": false,
       "note": "successor to task-221 (PR#126). Reproduced failure mode D on base head 1fc4938 before any code change: step-1 commits OURS, a VALID foreign mark commits, step-2 refused -> the old unconditional compensating undo rewinds FOREIGN and leaves OURS (silent cross-actor corruption). Fix (spine zone only; studio/ untouched): record each step's committed transaction_id, undo only while the newest editable transaction is the run's own, else fail closed with SpineRollbackError; retract artifact/evidence nodes on every failure path; exactly-once replay for a redelivered successful intent; unique per-step command ids. Evidence: pytest -q tests/unit/test_creative_spine.py tests/unit/test_spine_mutations.py tests/architecture/test_spine_boundary.py -> 25 passed (9/9 mutants killed); tests/unit + tests/architecture -> 2820 passed, 11 skipped; mypy clean; ruff check+format clean. Referee: check --files <changed> --repo bot523h/nexus-ai-agent -> exit 0 (27 sources, no overlap). Docs: DECISION_LOG.md task-222 amendment. Delivery: PR#127 (head 0f98d59) stacked on #126; base #126 pending merge, so merge order is #126 -> #127."
+    },
+    {
+      "task": "task-223-bus-transaction-scoped-undo",
+      "title": "system.undo must be addressable by transaction identity, not just 'the newest'",
+      "title_fa": "system.undo باید با هویت تراکنش آدرس‌پذیر باشد، نه فقط «آخرین»",
+      "zone": "nagar-contract-gate",
+      "priority": "P1",
+      "status": "deferred",
+      "scope": "task-221/task-222 finding. ROOT CAUSE: _system_undo in src/nexus_ai_agent/creative/studio/capabilities.py selects the most recent editable transaction globally and restores its full-state snapshot; it has no transaction-identity parameter. task-222 made the SPINE rollback fail closed rather than corrupt a foreign edit, but the bus primitive itself is still globally unsafe for concurrent actors. Because snapshots are full project state, rewinding a non-newest transaction while newer ones stand is not sound, so a correct root fix is a design choice: (A) add an optional transaction_id to system.undo that only rewinds when it is the newest (spine then addresses its own txn, no behavior change when absent); (B) staged command DAG + single commit (no rollback needed); (C) explicit compensating saga per capability. Evaluate with the evidence rules; do NOT pick the smallest diff if it leaves the race.",
+      "acceptance_criteria": [
+        "a design note (Option A/B/C) with concurrency, crash, authorization and replay semantics recorded in docs/DECISION_LOG.md",
+        "system.undo either accepts a transaction identity or the spine stops relying on undo for rollback (issue B/C), proven by an interleaving test with two actors",
+        "no regression to the NLE 'undo the most recent edit' behavior when no identity is supplied",
+        "an adversarial test proves a foreign actor's newest edit is never rewound"
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_command_capability_contract.py",
+        "pytest -q tests/architecture/test_command_capability_boundary.py"
+      ],
+      "owner_hint": "any free agent with the nagar-contract-gate zone (touches creative/studio/)"
     }
   ],
   "deferred_log": [
@@ -2991,6 +3011,14 @@
       "reason_fa": "چون عامل task-179 مالک TESTING.md و docs/README.md است، به‌روزرسانی جدول گیت‌ها و ایندکس را defer کردم؛ مستندات CI موقتاً در .github/DEPENDENCY_MATRIX.md و CHANGELOG ثبت می‌شود.",
       "reason_en": "task-132 (CI extras matrix) must update TESTING.md gate table and docs/README.md index, but those files are exclusively claimed by task-179. Documentation update deferred; CI docs live in .github/DEPENDENCY_MATRIX.md + CHANGELOG entry meanwhile.",
       "resume_when": "task-179 lands (TESTING.md/docs/README.md free) — then port the gate-table rows + docs index line"
+    },
+    {
+      "task": "task-223-bus-transaction-scoped-undo",
+      "deferred_by_branch": "arena/01a0181931-nexus-ai-agent",
+      "at": "2026-09-30T19:07:50Z",
+      "reason_fa": "ریشهٔ ناامنیِ undo در ناحیهٔ studio/ است (خارج از قفلِ ستون فقرات)؛ task-222 فقط در ستون فقرات fail-closed کرد تا خرابی خاموش حذف شود.",
+      "reason_en": "The unsafe primitive lives in creative/studio/ (owned by nagar-contract-gate), outside the spine's exclusive lease. task-222 delivered the safe spine-side guard; the bus-level transaction-identity fix is recorded here so it is not forgotten.",
+      "resume_when": "a session holds the nagar-contract-gate zone and a design decision (Option A/B/C) is recorded"
     }
   ],
   "next_work": [
