@@ -70,6 +70,20 @@ MUTATIONS: tuple[Mutation, ...] = (
         "        constraints=(),",
         "a recipe-derived intent must carry the no-copy constraint",
     ),
+    Mutation(
+        "failed_plan_keeps_the_steps_it_already_committed",
+        SPINE / "execution.py",
+        "            self._rollback(intent, len(results), artifact_nodes)\n            raise",
+        "            raise  # mutation: no rollback, the half-applied plan stands",
+        "a refused later step must roll back the steps already committed",
+    ),
+    Mutation(
+        "rolled_back_run_keeps_its_artifact_nodes",
+        SPINE / "execution.py",
+        "        for node_id in reversed(artifact_nodes):\n            self._graph.remove_node(node_id)",
+        "        for node_id in []:\n            self._graph.remove_node(node_id)",
+        "a rolled-back run must not leave artifact nodes in the graph",
+    ),
 )
 
 

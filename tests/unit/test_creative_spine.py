@@ -18,15 +18,18 @@ import pytest
 from nexus_ai_agent.creative.spine import (
     ArtifactRecord,
     CompilationError,
+    CompiledIntent,
     CreativeExecutionSpine,
     CreativeGraph,
     EvidenceRecord,
     GraphError,
     Intent,
     IntentError,
+    PlannedOperation,
     RulesCapabilityCompiler,
     RulesIntentResolver,
     RulesRecipeAnalyzer,
+    SpineRollbackError,
     abstract_recipe,
     recipe_to_intent,
 )
@@ -34,6 +37,7 @@ from nexus_ai_agent.creative.studio import (
     ActorIdentity,
     AuthorizationError,
     CommandBus,
+    CommandValidationError,
     ProjectAccess,
     Timeline,
     build_wave1_registry,
@@ -228,3 +232,85 @@ def test_recipe_is_content_addressed_and_deterministic() -> None:
     first = abstract_recipe(analyzer.analyze_hints("ref", {"pacing": "fast"}))
     second = abstract_recipe(analyzer.analyze_hints("ref", {"pacing": "fast"}))
     assert first.recipe_hash == second.recipe_hash
+
+
+# --------------------------------------------------------------------------- #
+# plan atomicity (task-221): a multi-step plan is all-or-nothing
+# --------------------------------------------------------------------------- #
+class _TwoStepCompiler:
+    """A compiler whose second operation is always refused by the bus."""
+
+    def compile(self, intent: Intent, registry: object) -> CompiledIntent:
+        return CompiledIntent(
+            intent_id=intent.intent_id,
+            operations=("media.play", "timeline.mark"),
+            plan=(
+                PlannedOperation(operation="media.play"),
+                # a raw int is not a resolvable reference -> the bus refuses it
+                PlannedOperation(operation="timeline.mark", input={"at": 999999, "label": "x"}),
+            ),
+            rationale="probe: the second step is invalid",
+        )
+
+
+def test_a_failed_multi_step_run_leaves_no_committed_step() -> None:
+    """All-or-nothing: a refused second step must not leave the first committed.
+
+    Regression for a false-green: the earlier suite only exercised
+    single-operation intents, so a plan that failed halfway silently committed
+    its first half (revision advanced, an artifact node was written).
+    """
+    bus = _bus()
+    graph = CreativeGraph("proj1")
+    spine = CreativeExecutionSpine(bus, graph, compiler=_TwoStepCompiler())
+    before_hash = bus.state_hash
+    before_revision = bus.state_revision
+
+    with pytest.raises(CommandValidationError):
+        spine.execute_intent(Intent(project_id="proj1", goal="probe"))
+
+    # content is restored exactly, and no artifact/evidence survives
+    assert bus.state_hash == before_hash
+    assert bus.project.timeline.markers == []
+    assert not any(n.kind == "artifact" for n in graph.nodes())
+    assert not any(n.kind == "evidence" for n in graph.nodes())
+    # the bus's revision is monotonic by design; the rollback is not a rewound
+    # revision but a restored content identity (state_hash above).
+    assert bus.state_revision > before_revision
+
+
+def test_a_successful_multi_step_run_still_commits_every_step() -> None:
+    """The atomicity guard must not turn a good plan into a no-op."""
+    bus = _bus()
+    graph = CreativeGraph("proj1")
+    spine = CreativeExecutionSpine(bus, graph)
+
+    run = spine.run("این ویدیو را پخش کن و یک علامت بگذار")
+
+    assert run.compiled.operations == ("media.play", "timeline.mark")
+    assert run.result.state_revision == 2
+    assert len(bus.project.timeline.markers) == 1
+    assert sum(1 for n in graph.nodes() if n.kind == "artifact") == 2
+
+
+def test_rollback_goes_through_the_bus_and_can_be_refused() -> None:
+    """A run only rolls back what it is authorized to undo (no private write path).
+
+    A read-only actor may apply ``media.play`` (A: project:read) but may not
+    ``system.undo`` (needs project:write). The rollback is therefore refused, and
+    the spine must raise it loudly instead of masking the original failure.
+    """
+    actor = ActorIdentity(kind="agent", actor_id="planner")
+
+    class _ReadOnly:
+        def authorize(self, actor_claim: ActorIdentity, project_id: str) -> ProjectAccess:
+            return ProjectAccess(
+                actor=actor_claim, project_id=project_id, permissions=frozenset({"project:read"})
+            )
+
+    bus = _bus(authorizer=_ReadOnly())
+    graph = CreativeGraph("proj1")
+    spine = CreativeExecutionSpine(bus, graph, actor=actor, compiler=_TwoStepCompiler())
+
+    with pytest.raises(SpineRollbackError):
+        spine.execute_intent(Intent(project_id="proj1", goal="probe"))

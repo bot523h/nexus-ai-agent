@@ -43,6 +43,16 @@ class GraphError(SpineError):
     """The creative graph was asked for a node it does not contain."""
 
 
+class SpineRollbackError(SpineError):
+    """A failed multi-step run could not be rolled back through the bus.
+
+    The spine is transactional: when a later step of a plan is refused it undoes
+    the steps already applied *through the bus's own* ``system.undo`` path. If
+    that undo itself fails, the state may be partially applied, so the failure is
+    raised loudly rather than masked by the original error.
+    """
+
+
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
@@ -225,6 +235,23 @@ class CreativeGraph:
             return self._nodes[node_id]
         except KeyError:
             raise GraphError(f"unknown node: {node_id!r}") from None
+
+    def remove_node(self, node_id: str) -> None:
+        """Retract a leaf node that was never committed.
+
+        Used by the spine to retract artifact nodes written during a run whose
+        commands the bus then rolled back, so a failed run leaves no artifact in
+        the graph. Only a childless node may be removed; the caller removes
+        newest-first, which keeps every removal a leaf removal.
+        """
+        node = self.node(node_id)
+        if self._children.get(node_id):
+            raise GraphError(f"cannot remove a node that still has children: {node_id!r}")
+        for parent in node.parents:
+            siblings = self._children.get(parent)
+            if siblings is not None:
+                self._children[parent] = [child for child in siblings if child != node_id]
+        del self._nodes[node_id]
 
     def nodes(self) -> tuple[GraphNode, ...]:
         return tuple(self._nodes.values())

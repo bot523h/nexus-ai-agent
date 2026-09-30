@@ -123,7 +123,10 @@ flowchart LR
   intent;
 * `CreativeExecutionSpine`, which dispatches every step through `CommandBus` (schema-2 commands with
   actor + provenance when an actor is configured) and records an artifact node + an `EvidenceRecord`
-  per run;
+  per run. The run is **transactional**: a plan is all-or-nothing, so when a later step is refused
+  the steps already applied are undone *through the bus's own* `system.undo` path and their artifact
+  nodes are retracted — a failed run leaves the project content unchanged (`state_hash` restored) and
+  no artifact in the graph, and the bus stays the only write path even for rollback;
 * the first capability of §6, `reference → CreativeRecipe → Intent`, as a heuristic analyzer behind
   a `RecipeAnalyzer` port that abstracts a *strategy*, never a copy.
 
@@ -152,8 +155,11 @@ A slice is complete only when each of these is proven by a named test. Status is
    `tests/architecture/test_spine_boundary.py::test_only_the_bus_invokes_an_operation_handler`
    (the spine is not a second write path).
 4. **Lineage is a fact, not a claim.** Each artifact node binds the transaction, the resulting
-   `state_hash`, and an `EvidenceRecord`. A command the bus refuses produces no artifact. **Proven** —
-   `test_artifact_lineage_is_traceable_to_its_intent`, `test_bus_refusal_produces_no_artifact`.
+   `state_hash`, and an `EvidenceRecord`. A command the bus refuses produces no artifact, and a
+   *multi-step* plan is all-or-nothing: a refused later step rolls back the steps already applied.
+   **Proven** — `test_artifact_lineage_is_traceable_to_its_intent`,
+   `test_bus_refusal_produces_no_artifact`, `test_a_failed_multi_step_run_leaves_no_committed_step`
+   (task-221).
 5. **Stale-safe.** The spine refuses an intent for a foreign project and reuses the bus's existing
    `state_revision`/`state_hash` preconditions, so a stale plan is refused untouched. **Proven for
    the foreign-project case**; revision-precondition wiring is the bus's existing behaviour, exercised
