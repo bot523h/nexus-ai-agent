@@ -9,8 +9,11 @@ Commands
 --------
   show                          Print the board (auto-releases expired leases)
   claim TASK --branch BRANCH    Claim a queued/expired task (refuses if actively
-                                claimed by another branch)
-  release TASK --branch BRANCH  Mark a finished claim done (free the zone)
+                                claimed by another branch). A same-owner call is a
+                                heartbeat renewal; taking a lease over advances the
+                                lease's fencing generation.
+  release TASK --branch BRANCH  Mark a finished claim done (free the zone) and
+                                advance its generation.
   defer TASK --branch BRANCH --reason "..." [--fa "..."]
                                 Record a deferral note ("I stopped because
                                 another agent was working; resume later")
@@ -29,6 +32,16 @@ Commands
                                 files against board exclusive_paths and report
                                 PRs whose scope is invisible (no claim for the
                                 head branch, or files outside every fence).
+
+Lease fencing (task-219)
+------------------------
+Every claim carries a ``generation`` epoch. It advances whenever ownership
+*transfers* (a new branch takes the lease, or the holder releases/defers it)
+and stays stable across a same-owner heartbeat renewal. Mutation commands
+(``claim`` renewal, ``release``, ``defer``) accept ``--expected-generation N``
+and refuse with exit 2 when the live generation differs: a stale owner that
+resumes after the zone changed hands cannot mutate it. The check is
+deterministic — a refusal, never a warning or a best-effort log.
 
 All state lives in .agents/board.json (schema 1). Pure stdlib.
 
@@ -156,19 +169,45 @@ def _claim_live(claim: dict) -> bool:
     return _now() <= claimed + timedelta(hours=int(claim.get("ttl_hours", 24)))
 
 
+def _generation(claim: dict) -> int:
+    """Fencing epoch of a lease. Legacy boards without the field read as 0.
+
+    The epoch increments on every *transfer of ownership* (a new branch taking
+    the lease, or the holder releasing/deferring it) and stays stable across a
+    same-owner heartbeat renewal. A superseded owner that resumes after its
+    lease changed hands therefore holds a stale epoch, which
+    ``_stale_generation`` uses to refuse its mutation (task-219).
+    """
+    raw = claim.get("generation", 0)
+    return raw if isinstance(raw, int) and raw >= 0 else 0
+
+
+def _stale_generation(args: argparse.Namespace, claim: dict) -> str | None:
+    """Refusal message when the caller's ``--expected-generation`` no longer matches.
+
+    A fencing check, not a warning: a resumed stale owner must be rejected
+    deterministically, never best-effort.
+    """
+    expected = getattr(args, "expected_generation", None)
+    if expected is None:
+        return None
+    current = _generation(claim)
+    if int(expected) == current:
+        return None
+    return (
+        f"REFUSED: stale lease generation for {claim['task']} — you hold gen {expected}, "
+        f"the live lease is gen {current}. Another holder took or released this zone after "
+        "you started; your mutation is fenced out (task-219)."
+    )
+
+
 def _conflicting_paths(board: dict, branch: str, files: list[str]) -> list[tuple[str, str]]:
     """Return overlaps between *files* and other branches' live exclusive paths."""
     hits: list[tuple[str, str]] = []
     for claim in board.get("claims", []):
-        if not _is_active_claim(claim):
+        if not _claim_live(claim):
             continue
         if branch and claim.get("agent_branch") == branch:
-            continue
-        claimed = _parse(claim.get("claimed_at"))
-        if claimed is None:
-            continue
-        expires = claimed + timedelta(hours=int(claim.get("ttl_hours", 24)))
-        if _now() > expires:
             continue
         for excl in claim.get("exclusive_paths", []):
             for f in files:
@@ -200,6 +239,7 @@ def cmd_show(_args: argparse.Namespace) -> int:
             f"\n● {claim['task']}  [{claim['status']}]\n"
             f"  zone: {claim.get('zone')} · owner: {owner}\n"
             f"  claimed: {claim.get('claimed_at') or '—'} · expires: {expires}\n"
+            f"  generation: {_generation(claim)} (fencing epoch)\n"
             f"  scope: {claim.get('scope', '')}"
         )
     for entry in board.get("deferred_log", []):
@@ -224,9 +264,16 @@ def cmd_claim(args: argparse.Namespace) -> int:
             _iso(claimed + timedelta(hours=int(claim.get("ttl_hours", 24)))) if claimed else "?"
         )
         if claim.get("agent_branch") == args.branch:
+            refusal = _stale_generation(args, claim)
+            if refusal:
+                print(refusal)
+                return 2
             claim["claimed_at"] = _iso(_now())  # renewal (heartbeat)
             save_board(board)
-            print(f"renewed lease for {args.task} (owner: {args.branch})")
+            print(
+                f"renewed lease for {args.task} (owner: {args.branch}, "
+                f"generation {_generation(claim)} — heartbeat keeps the epoch)"
+            )
             return 0
         print(
             f"task {args.task} is ACTIVELY claimed by"
@@ -242,12 +289,20 @@ def cmd_claim(args: argparse.Namespace) -> int:
         gates_owner=bool(args.gates),
         note="",
     )
+    # Fencing epoch: strictly monotonic across every (re)claim. A brand-new or
+    # legacy claim (generation 0) becomes 1; a takeover or re-claim advances it
+    # so any superseded holder's recorded expectation is invalidated — including
+    # a second session sharing the same branch name.
+    claim["generation"] = _generation(claim) + 1
     if args.gates:
         for other in board["claims"]:
             if other["task"] != args.task and other.get("gates_owner"):
                 other["gates_owner"] = False
     save_board(board)
-    print(f"CLAIMED {args.task} for {args.branch} (ttl {args.ttl}h, gates_owner={args.gates})")
+    print(
+        f"CLAIMED {args.task} for {args.branch} (ttl {args.ttl}h, gates_owner={args.gates}, "
+        f"generation {claim['generation']})"
+    )
     print("NOW: git add .agents/board.json && git commit && git push IMMEDIATELY —")
     print("an unpushed claim does not exist for the other sandbox.")
     return 0
@@ -262,15 +317,30 @@ def cmd_release(args: argparse.Namespace) -> int:
     if claim.get("agent_branch") != args.branch:
         print(f"refusing: {args.task} belongs to {claim.get('agent_branch')}, not {args.branch}")
         return 2
+    refusal = _stale_generation(args, claim)
+    if refusal:
+        print(refusal)
+        return 2
     claim.update(status="done", agent_branch="", claimed_at=None, gates_owner=False)
+    # Releasing transfers the zone: advance the epoch so a stale holder cannot
+    # act as if it still owns the lease.
+    claim["generation"] = _generation(claim) + 1
     save_board(board)
-    print(f"RELEASED {args.task}. Zone free — the next agent can claim it.")
+    print(
+        f"RELEASED {args.task} (generation {claim['generation']}). "
+        "Zone free — next agent can claim."
+    )
     return 0
 
 
 def cmd_defer(args: argparse.Namespace) -> int:
     board = load_board()
     claim = _find(board, args.task)
+    if claim is not None and claim.get("agent_branch") == args.branch and _is_active_claim(claim):
+        refusal = _stale_generation(args, claim)
+        if refusal:
+            print(refusal)
+            return 2
     board.setdefault("deferred_log", []).append(
         {
             "task": args.task,
@@ -284,6 +354,7 @@ def cmd_defer(args: argparse.Namespace) -> int:
     )
     if claim is not None and claim.get("agent_branch") == args.branch and _is_active_claim(claim):
         claim.update(status="deferred", claimed_at=None, gates_owner=False)
+        claim["generation"] = _generation(claim) + 1
     save_board(board)
     print(f"DEFERRED {args.task} by {args.branch} — note recorded so nothing is forgotten.")
     return 0
@@ -410,15 +481,18 @@ def cmd_check(args: argparse.Namespace) -> int:
     unreadable: list[str] = []
     no_remote = bool(getattr(args, "no_remote", False))
 
-    # 1. local board (mandatory)
+    # 1. local board (mandatory). A missing or unparseable local board is
+    #    UNVERIFIABLE (exit 2), never a crash and never a silent pass: the whole
+    #    point of the referee is that "no overlap" is a claim about read data.
     if not BOARD.exists():
         print(f"UNVERIFIABLE: board not found: {BOARD}")
         return 2
     try:
-        sources.append(("local", _load_board_from(BOARD)))
+        local_board = _load_board_from(BOARD)
     except (OSError, ValueError) as exc:
         print(f"UNVERIFIABLE: local board cannot be read: {exc}")
         return 2
+    sources.append(("local", local_board))
 
     # 2. sibling worktree boards + origin/main (unless narrowed)
     if no_remote:
@@ -449,10 +523,19 @@ def cmd_check(args: argparse.Namespace) -> int:
     #    the conflict is confirmed, and hiding it behind exit 2 would be worse.
     aggregate: dict[tuple[str, str], set[str]] = {}
     for source, board in sources:
-        for task, path in _conflicting_paths(board, args.branch or "", files):
+        try:
+            hits = _conflicting_paths(board, args.branch or "", files)
+        except (TypeError, ValueError) as exc:
+            # A malformed board must not crash the referee: it degrades to
+            # "this source is unverifiable" (exit 2), never to a pass.
+            unreadable.append(f"{source}: malformed claim data ({exc})")
+            continue
+        for task, path in hits:
             aggregate.setdefault((task, path), set()).add(source)
 
     print(f"check scope: {scope} — {len(sources)} source(s) read")
+    if no_remote:
+        print("  NOTE: --no-remote is a LOCAL verdict (this board only); it is NOT a global pass.")
     if aggregate:
         print("OVERLAP with another agent's active or active-in-review exclusive paths:")
         for (task, path), srcs in sorted(aggregate.items()):
@@ -639,11 +722,25 @@ def main() -> int:
     p.add_argument("--branch", required=True)
     p.add_argument("--ttl", type=int, default=24)
     p.add_argument("--gates", action="store_true", help="this agent owns CI gates while active")
+    p.add_argument(
+        "--expected-generation",
+        dest="expected_generation",
+        type=int,
+        default=None,
+        help="fencing guard: refuse unless the lease's generation matches (task-219)",
+    )
     p.set_defaults(func=cmd_claim)
 
     p = sub.add_parser("release")
     p.add_argument("task")
     p.add_argument("--branch", required=True)
+    p.add_argument(
+        "--expected-generation",
+        dest="expected_generation",
+        type=int,
+        default=None,
+        help="fencing guard: refuse unless the lease's generation matches (task-219)",
+    )
     p.set_defaults(func=cmd_release)
 
     p = sub.add_parser("defer")
@@ -652,6 +749,13 @@ def main() -> int:
     p.add_argument("--reason", default="")
     p.add_argument("--fa", default="")
     p.add_argument("--resume-when", dest="resume_when", default="")
+    p.add_argument(
+        "--expected-generation",
+        dest="expected_generation",
+        type=int,
+        default=None,
+        help="fencing guard: refuse unless the lease's generation matches (task-219)",
+    )
     p.set_defaults(func=cmd_defer)
 
     p = sub.add_parser("next")

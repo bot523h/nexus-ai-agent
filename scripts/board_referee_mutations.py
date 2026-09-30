@@ -69,6 +69,30 @@ MUTATIONS: tuple[Mutation, ...] = (
         "        print(STOP_BANNER)\n        return 2  # mutation: a proven overlap becomes 'unverifiable'",
         "a proven conflict must be exit 1, not hidden behind exit 2",
     ),
+    Mutation(
+        "unreadable_local_board_becomes_empty_pass",
+        '    except (OSError, ValueError) as exc:\n        print(f"UNVERIFIABLE: local board cannot be read: {exc}")\n        return 2',
+        '    except (OSError, ValueError):\n        local_board = {"claims": []}  # mutation: unreadable local board becomes an empty pass',
+        "an unreadable local board must be exit 2, never a fail-open empty board",
+    ),
+    Mutation(
+        "generation_fencing_guard_ignored",
+        '    expected = getattr(args, "expected_generation", None)\n    if expected is None:\n        return None',
+        '    return None  # mutation: ignore the fencing guard\n    expected = getattr(args, "expected_generation", None)\n    if expected is None:\n        return None',
+        "a stale generation must be refused, never ignored (task-219)",
+    ),
+    Mutation(
+        "claim_takeover_does_not_advance_generation",
+        '    claim["generation"] = _generation(claim) + 1\n    if args.gates:',
+        '    claim["generation"] = _generation(claim)  # mutation: takeover must advance the epoch\n    if args.gates:',
+        "taking a lease over must advance its fencing epoch",
+    ),
+    Mutation(
+        "release_does_not_advance_generation",
+        '    claim["generation"] = _generation(claim) + 1\n    save_board(board)\n    print(\n        f"RELEASED',
+        '    claim["generation"] = _generation(claim)  # mutation: release must advance the epoch\n    save_board(board)\n    print(\n        f"RELEASED',
+        "releasing a lease must advance its fencing epoch",
+    ),
 )
 
 
