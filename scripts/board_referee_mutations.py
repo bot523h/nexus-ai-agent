@@ -77,9 +77,15 @@ MUTATIONS: tuple[Mutation, ...] = (
     ),
     Mutation(
         "generation_fencing_guard_ignored",
-        '    expected = getattr(args, "expected_generation", None)\n    if expected is None:\n        return None',
-        '    return None  # mutation: ignore the fencing guard\n    expected = getattr(args, "expected_generation", None)\n    if expected is None:\n        return None',
+        '    expected = getattr(args, "expected_generation", None)\n    if expected is None:',
+        '    return None  # mutation: ignore the fencing guard\n    expected = getattr(args, "expected_generation", None)\n    if expected is None:',
         "a stale generation must be refused, never ignored (task-219)",
+    ),
+    Mutation(
+        "mandatory_token_guard_removed",
+        "        if required:\n            return (\n                f\"REFUSED: mutating the live lease for {claim['task']} requires \"",
+        "        if False:  # mutation: do not require a token on existing-lease mutations\n            return (\n                f\"REFUSED: mutating the live lease for {claim['task']} requires \"",
+        "mutating an existing lease without a fencing token must be refused (task-219)",
     ),
     Mutation(
         "claim_takeover_does_not_advance_generation",
@@ -94,10 +100,34 @@ MUTATIONS: tuple[Mutation, ...] = (
         "releasing a lease must advance its fencing epoch",
     ),
     Mutation(
+        "expired_lease_keeps_the_gate",
+        '                claim["gates_owner"] = False\n                claim["release_reason"] = (',
+        '                claim["release_reason"] = (  # mutation: an expired holder keeps the gate',
+        "an expired lease must lose gates_owner (exactly one live gate holder)",
+    ),
+    Mutation(
         "gc_overwrites_the_owners_note",
         '                claim["release_reason"] = (\n                    f"auto-released by gc at {_iso(_now())} (stale {previous_status} lease)"\n                )',
         '                claim["note"] = (\n                    f"auto-released by gc at {_iso(_now())} (stale {previous_status} lease)"\n                )',
         "gc must record the release reason without clobbering the owner's evidence note",
+    ),
+    Mutation(
+        "pr_only_lease_source_skipped",
+        "        pr_branches, pr_reason = _open_pr_branches(repo, token)",
+        '        pr_branches, pr_reason = [], ""  # mutation: skip the pushed open-PR branch source',
+        "a lease living only on a pushed PR branch must be seen, not skipped",
+    ),
+    Mutation(
+        "pr_branch_self_exclusion_removed",
+        "        if branch and branch != exclude_branch and branch not in targets:",
+        "        if branch and branch not in targets:  # mutation: no self-exclusion",
+        "a branch must not conflict with its own pushed lease",
+    ),
+    Mutation(
+        "stale_pr_branch_ref_read_as_fresh",
+        "        if branch not in fresh:\n            continue",
+        "        if False:  # mutation: read stale tracking refs as fresh\n            continue",
+        "a tracking ref not fetched in this run must never be read as a live lease",
     ),
 )
 

@@ -18,13 +18,15 @@ Commands
                                 Record a deferral note ("I stopped because
                                 another agent was working; resume later")
   next --branch BRANCH          Suggest the first claimable task
-  check --files a,b,c --branch BRANCH [--no-remote]
-                                Multi-source referee over the claim board and
-                                every *other* live git worktree's board. Exit 0
-                                when the tree is readable and there is no
-                                overlap, 1 on a proven overlap, 2 when a source
-                                (this board, or a remote/other worktree) could
-                                not be read — never 0 on unverified data.
+  check --files a,b,c --branch BRANCH [--no-remote] [--repo owner/name]
+                                Multi-source referee over the claim board, every
+                                *other* live git worktree's board, origin/main's
+                                board, and every open-PR branch's pushed board.
+                                Exit 0 when every source is readable and there
+                                is no overlap, 1 on a proven overlap, 2 when a
+                                source (this board, a worktree, origin/main, or
+                                an open-PR branch) could not be read — never 0
+                                on unverified data.
                                 --no-remote loudly narrows the claim to the
                                 local board (scope=local, not a global pass).
   praudit [--pr-json F | --repo owner/name] [--fail-on-invisible] [--json]
@@ -37,11 +39,14 @@ Lease fencing (task-219)
 ------------------------
 Every claim carries a ``generation`` epoch. It advances whenever ownership
 *transfers* (a new branch takes the lease, or the holder releases/defers it)
-and stays stable across a same-owner heartbeat renewal. Mutation commands
-(``claim`` renewal, ``release``, ``defer``) accept ``--expected-generation N``
-and refuse with exit 2 when the live generation differs: a stale owner that
-resumes after the zone changed hands cannot mutate it. The check is
-deterministic — a refusal, never a warning or a best-effort log.
+and stays stable across a same-owner heartbeat renewal. Mutating an *existing*
+lease (``claim`` renewal, takeover of an expired lease, ``release``, ``defer``)
+**requires** ``--expected-generation N`` and refuses with exit 2 when it is
+absent or differs from the live generation: a stale owner that resumes after
+the zone changed hands cannot mutate it. Taking a *free* lease (a fresh task, or
+a legacy record at generation 0) needs no token — there is nothing to fence
+against. The check is deterministic — a refusal, never a warning or a
+best-effort log.
 
 All state lives in .agents/board.json (schema 1). Pure stdlib.
 
@@ -55,12 +60,14 @@ Typical loop for an arriving agent:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import subprocess
 import sys
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -131,6 +138,43 @@ def save_board(board: dict) -> None:
     BOARD.write_text(json.dumps(board, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+class BoardLockedError(RuntimeError):
+    """Another agent holds the board lock; the caller must retry, not proceed."""
+
+
+@contextlib.contextmanager
+def board_lock() -> Iterator[None]:
+    """Hold the inter-process board lock for the duration of one mutation.
+
+    Read-validate-write on a JSON file is a TOCTOU race: two agents can read the
+    same generation, both validate, and both write — the second silently undoing
+    the first (and defeating fencing, since the loser's token was valid when it
+    read). This exclusive ``flock`` (the same primitive ``storage/migrations.py``
+    uses) serialises board mutations across processes on one host. It does *not*
+    span hosts: two sandboxes mutate separate clones and reconcile through git,
+    where the fencing generation is the guard (a stale epoch is refused on push).
+    Non-POSIX degrades to best-effort, exactly like the migration lock.
+    """
+    BOARD.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = BOARD.with_suffix(".lock")
+    try:
+        import fcntl  # POSIX only
+    except ImportError:  # pragma: no cover - non-POSIX best-effort
+        yield
+        return
+    with lock_path.open("a+") as fh:
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise BoardLockedError(
+                "the board is locked by another agent; retry in a moment"
+            ) from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
 def gc_expired(board: dict) -> list[str]:
     """Auto-release expired leases. Returns list of freed task names.
 
@@ -148,6 +192,10 @@ def gc_expired(board: dict) -> list[str]:
             if _now() > expires:
                 previous_status = claim.get("status")
                 claim["status"] = "expired"
+                # A departed lease holder also loses the gates: an expired
+                # gates owner must not keep the single-gate role. Provenance
+                # (agent_branch, claimed_at) is kept — the record stays honest.
+                claim["gates_owner"] = False
                 claim["release_reason"] = (
                     f"auto-released by gc at {_iso(_now())} (stale {previous_status} lease)"
                 )
@@ -189,14 +237,25 @@ def _generation(claim: dict) -> int:
     return raw if isinstance(raw, int) and raw >= 0 else 0
 
 
-def _stale_generation(args: argparse.Namespace, claim: dict) -> str | None:
+def _stale_generation(
+    args: argparse.Namespace, claim: dict, *, required: bool = False
+) -> str | None:
     """Refusal message when the caller's ``--expected-generation`` no longer matches.
 
     A fencing check, not a warning: a resumed stale owner must be rejected
-    deterministically, never best-effort.
+    deterministically, never best-effort. When ``required`` is set (any mutation
+    of an *existing* live lease) an absent ``--expected-generation`` is itself a
+    refusal: without a token to compare, a stale owner that never recorded the
+    epoch it held could still mutate a zone that changed hands (task-219).
     """
     expected = getattr(args, "expected_generation", None)
     if expected is None:
+        if required:
+            return (
+                f"REFUSED: mutating the live lease for {claim['task']} requires "
+                "--expected-generation N (a fencing token). Read the current generation with "
+                "`show` and pass it; taking a *free* lease needs no token (task-219)."
+            )
         return None
     current = _generation(claim)
     if int(expected) == current:
@@ -261,6 +320,11 @@ def cmd_show(_args: argparse.Namespace) -> int:
 
 
 def cmd_claim(args: argparse.Namespace) -> int:
+    with board_lock():
+        return _claim_locked(args)
+
+
+def _claim_locked(args: argparse.Namespace) -> int:
     board = load_board()
     gc_expired(board)
     claim = _find(board, args.task)
@@ -273,7 +337,7 @@ def cmd_claim(args: argparse.Namespace) -> int:
             _iso(claimed + timedelta(hours=int(claim.get("ttl_hours", 24)))) if claimed else "?"
         )
         if claim.get("agent_branch") == args.branch:
-            refusal = _stale_generation(args, claim)
+            refusal = _stale_generation(args, claim, required=True)
             if refusal:
                 print(refusal)
                 return 2
@@ -290,6 +354,17 @@ def cmd_claim(args: argparse.Namespace) -> int:
         )
         print(STOP_BANNER)
         return 2
+    # Not currently active: this is a brand-new claim, a takeover of an expired
+    # lease, or a re-claim of a deferred/done one. A takeover/re-claim rewrites
+    # an *existing* lease record, so it must carry the fencing token too —
+    # otherwise a resumed stale owner could re-claim (and effectively seize) a
+    # zone that changed hands while it was away. A truly fresh task (no record,
+    # or generation 0) needs no token: there is nothing to fence against.
+    if _generation(claim) > 0:
+        refusal = _stale_generation(args, claim, required=True)
+        if refusal:
+            print(refusal)
+            return 2
     claim.update(
         status="active",
         agent_branch=args.branch,
@@ -318,6 +393,11 @@ def cmd_claim(args: argparse.Namespace) -> int:
 
 
 def cmd_release(args: argparse.Namespace) -> int:
+    with board_lock():
+        return _release_locked(args)
+
+
+def _release_locked(args: argparse.Namespace) -> int:
     board = load_board()
     claim = _find(board, args.task)
     if claim is None:
@@ -326,7 +406,7 @@ def cmd_release(args: argparse.Namespace) -> int:
     if claim.get("agent_branch") != args.branch:
         print(f"refusing: {args.task} belongs to {claim.get('agent_branch')}, not {args.branch}")
         return 2
-    refusal = _stale_generation(args, claim)
+    refusal = _stale_generation(args, claim, required=True)
     if refusal:
         print(refusal)
         return 2
@@ -343,10 +423,15 @@ def cmd_release(args: argparse.Namespace) -> int:
 
 
 def cmd_defer(args: argparse.Namespace) -> int:
+    with board_lock():
+        return _defer_locked(args)
+
+
+def _defer_locked(args: argparse.Namespace) -> int:
     board = load_board()
     claim = _find(board, args.task)
     if claim is not None and claim.get("agent_branch") == args.branch and _is_active_claim(claim):
-        refusal = _stale_generation(args, claim)
+        refusal = _stale_generation(args, claim, required=True)
         if refusal:
             print(refusal)
             return 2
@@ -475,13 +560,118 @@ def _read_remote_board() -> tuple[dict | None, str]:
     return data, ""
 
 
+_REMOTE_BRANCH_FETCH_LIMIT = 25
+
+
+def _open_pr_branches(repo: str, token: str | None) -> tuple[list[str], str]:
+    """Head branch names of every open PR. ``([], reason)`` when unavailable.
+
+    A claim is real once pushed, so a lease that lives *only* on a pushed branch
+    with an open PR is a real lease — yet such a branch is invisible to every
+    other source: it is not in the local tree, not a sibling worktree, and not
+    ``origin/main``. The open-PR list is how the referee learns those branch
+    names. It is a *required* source: an unreadable list degrades to exit 2,
+    never to a clean pass.
+    """
+    if "/" not in repo:
+        return [], "GITHUB_REPOSITORY unset and --repo not given (cannot enumerate PR branches)"
+    if not token:
+        return [], "no GitHub token in the environment (cannot enumerate open-PR branches)"
+    try:
+        pulls = _gh_get(f"https://api.github.com/repos/{repo}/pulls?state=open&per_page=100", token)
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return [], f"open-PR API unavailable ({exc})"
+    if not isinstance(pulls, list):
+        return [], "open-PR API returned an unexpected payload"
+    branches: list[str] = []
+    for pr in pulls:
+        head = (pr.get("head") or {}).get("ref") if isinstance(pr, dict) else None
+        if isinstance(head, str) and head:
+            branches.append(head)
+    return branches, ""
+
+
+def _remote_branch_boards(
+    branches: list[str], exclude_branch: str = ""
+) -> tuple[list[tuple[str, dict]], list[str]]:
+    """Read the board of each *pushed* branch (read-only).
+
+    Each branch is fetched with an explicit refspec into its own
+    ``refs/remotes/origin/<branch>`` tracking ref (a ref write that never
+    touches the working tree) and its board is read with ``git show``. A board
+    is read **only** when that branch's fetch succeeded in this invocation, so a
+    stale ref left by an earlier run can never masquerade as fresh. A branch
+    that cannot be fetched, or whose board cannot be parsed, is *unverifiable*,
+    never skipped.
+    """
+    targets: list[str] = []
+    for branch in branches:
+        if branch and branch != exclude_branch and branch not in targets:
+            targets.append(branch)
+    targets = targets[:_REMOTE_BRANCH_FETCH_LIMIT]
+    if not targets:
+        return [], []
+
+    unreadable: list[str] = []
+    # One batched round trip is the fast path; a single dead ref (e.g. a branch
+    # deleted between the PR list and the fetch) fails the whole batch, so fall
+    # back to per-branch fetches rather than losing every other branch.
+    batch = _git(
+        [
+            "fetch",
+            "--quiet",
+            "origin",
+            *[f"+refs/heads/{b}:refs/remotes/origin/{b}" for b in targets],
+        ],
+        ROOT,
+    )
+    if batch is not None and batch.returncode == 0:
+        fresh = set(targets)
+    else:
+        fresh = set()
+        for branch in targets:
+            fetched = _git(
+                [
+                    "fetch",
+                    "--quiet",
+                    "origin",
+                    f"+refs/heads/{branch}:refs/remotes/origin/{branch}",
+                ],
+                ROOT,
+            )
+            if fetched is not None and fetched.returncode == 0:
+                fresh.add(branch)
+            else:
+                unreadable.append(f"pushed branch {branch}: git fetch failed (unreachable?)")
+
+    boards: list[tuple[str, dict]] = []
+    for branch in targets:
+        if branch not in fresh:
+            continue
+        show = _git(["show", f"refs/remotes/origin/{branch}:.agents/board.json"], ROOT)
+        if show is None or show.returncode != 0:
+            unreadable.append(f"pushed branch {branch}: no readable .agents/board.json")
+            continue
+        try:
+            data = json.loads(show.stdout)
+        except json.JSONDecodeError:
+            unreadable.append(f"pushed branch {branch}: board is not valid JSON")
+            continue
+        if not isinstance(data, dict) or not isinstance(data.get("claims", []), list):
+            unreadable.append(f"pushed branch {branch}: board is not a claim board")
+            continue
+        boards.append((f"branch:{branch}", data))
+    return boards, unreadable
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     """Multi-source referee: exit 0 clean, 1 overlap, 2 unverifiable.
 
     The local board is always the first source. Unless ``--no-remote`` is set,
-    every *other* live git worktree's board and ``origin/main``'s board are
-    also consulted, because a claim is only real once pushed — a local-only
-    check can silently miss a foreign lease. A source that cannot be read is a
+    every *other* live git worktree's board, ``origin/main``'s board, and every
+    open-PR branch's pushed board are also consulted — a claim is only real once
+    pushed, and a lease can live only on a pushed branch (open PR, not yet in
+    ``origin/main``, not checked out locally). A source that cannot be read is a
     loud exit 2: "no overlap" is only honest when every consulted source was
     actually read.
     """
@@ -503,11 +693,12 @@ def cmd_check(args: argparse.Namespace) -> int:
         return 2
     sources.append(("local", local_board))
 
-    # 2. sibling worktree boards + origin/main (unless narrowed)
+    # 2. sibling worktree boards + origin/main + pushed open-PR branches
+    #    (unless narrowed)
     if no_remote:
         scope = "local (--no-remote: local board only; NOT a global pass)"
     else:
-        scope = "local + sibling worktrees + origin/main"
+        scope = "local + sibling worktrees + origin/main + pushed open-PR branches"
         worktree_boards, reliable = _worktree_boards(exclude=ROOT)
         if not reliable:
             unreadable.append("git worktree enumeration (git unavailable or not a repository)")
@@ -521,6 +712,21 @@ def cmd_check(args: argparse.Namespace) -> int:
             unreadable.append(f"origin/main: {reason}")
         else:
             sources.append(("origin/main", remote_board))
+
+        # A lease can live *only* on a pushed branch with an open PR (not in
+        # main, not a worktree). That source is required: if the open-PR list or
+        # any branch board cannot be read, exit 2 — never a false clear.
+        repo = getattr(args, "repo", "") or os.environ.get("GITHUB_REPOSITORY", "")
+        token = getattr(args, "token", "") or os.environ.get("GITHUB_TOKEN", "")
+        pr_branches, pr_reason = _open_pr_branches(repo, token)
+        if pr_reason:
+            unreadable.append(f"open-PR branches: {pr_reason}")
+        else:
+            branch_boards, branch_unreadable = _remote_branch_boards(
+                pr_branches, exclude_branch=args.branch or ""
+            )
+            sources.extend(branch_boards)
+            unreadable.extend(branch_unreadable)
 
     if unreadable:
         print("UNVERIFIABLE sources (will only matter if no conflict is proven):")
@@ -780,6 +986,12 @@ def main() -> int:
         action="store_true",
         help="narrow to the local board only (exit 0 is then a LOCAL verdict, not a global pass)",
     )
+    p.add_argument(
+        "--repo",
+        default="",
+        help="GitHub repo owner/name for the open-PR branch source (else GITHUB_REPOSITORY)",
+    )
+    p.add_argument("--token", default="", help="GitHub token (else GITHUB_TOKEN env)")
     p.set_defaults(func=cmd_check)
 
     p = sub.add_parser("praudit")
@@ -800,7 +1012,11 @@ def main() -> int:
     p.set_defaults(func=cmd_praudit)
 
     args = parser.parse_args()
-    return int(args.func(args))
+    try:
+        return int(args.func(args))
+    except BoardLockedError as exc:
+        print(f"UNVERIFIABLE: {exc}")
+        return 2
 
 
 if __name__ == "__main__":
