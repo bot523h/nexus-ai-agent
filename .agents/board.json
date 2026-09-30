@@ -1904,7 +1904,8 @@
       "claimed_at": "2026-09-27T12:27:18Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "exclusive_paths": []
+      "exclusive_paths": [],
+      "release_reason": "auto-released by gc at 2026-09-30T13:55:33Z (stale active lease)"
     },
     {
       "task": "task-155-packs-doctor",
@@ -2698,7 +2699,8 @@
         "Two-run reproducibility comparison and exact PR #95/head/main/CI evidence."
       ],
       "note": "auto-released by gc at 2026-10-04T20:19:53Z (stale active lease)",
-      "previous_agent_branch": "arena/01a0e1e0-nexus-ai-agent"
+      "previous_agent_branch": "arena/01a0e1e0-nexus-ai-agent",
+      "release_reason": "auto-released by gc at 2026-09-30T13:55:33Z (stale active lease)"
     },
     {
       "task": "task-185-external-intelligence-hardening",
@@ -2738,7 +2740,8 @@
       "note": "auto-released by gc at 2026-10-04T20:19:53Z (stale active lease)",
       "agent_branch": "arena/01a0df05-nexus-ai-agent",
       "claimed_at": "2026-09-26T18:46:40Z",
-      "ttl_hours": 24
+      "ttl_hours": 24,
+      "release_reason": "auto-released by gc at 2026-09-30T13:55:33Z (stale active lease)"
     },
     {
       "task": "task-195-llm-queue-lifecycle",
@@ -2818,7 +2821,8 @@
       "claimed_at": "2026-09-27T16:54:20Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "auto-released by gc at 2026-10-04T20:19:53Z (stale active lease)"
+      "note": "auto-released by gc at 2026-10-04T20:19:53Z (stale active lease)",
+      "release_reason": "auto-released by gc at 2026-09-30T13:55:33Z (stale active lease)"
     },
     {
       "task": "task-231-provenance-ledger",
