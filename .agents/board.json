@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-29T22:02:00Z",
+  "updated_at": "2026-09-30T06:32:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -670,10 +670,12 @@
     },
     {
       "id": "coordination-check-truth",
-      "description": "Make the pre-push overlap check see leases that live on unmerged PR branches.",
+      "description": "The pre-push enforcement mechanism: agent_board.py check. Its verdict must never read 'safe' when it could not actually see every live lease. Widened by task-207 to carry the reproduction, the regression tests and the mutation harness.",
       "paths": [
         "scripts/agent_board.py",
-        "tests/unit/test_agent_board.py"
+        "tests/unit/test_agent_board.py",
+        "scripts/task207_repro.py",
+        "scripts/agent_board_check_mutations.py"
       ]
     },
     {
@@ -2926,6 +2928,42 @@
       ],
       "prerequisites": [],
       "evidence": "REPRODUCED then FIXED. Pre-fix, real checkpointered graph: case A (on_message's fresh one-message state) queried the user's words and was fine; case B (caller replays the previous RESULT state) queried 'ASSISTANT-ANSWER'; case C (state ending on the assistant) queried 'Noted, Sara.'; case D (no messages) queried ''. Post-fix: 7 passed, 3/3 mutants killed. Regression: 25 failed / 2765 passed vs a 25-failure baseline, zero regressions."
+    },
+    {
+      "task": "task-207-agent-board-check-fails-open",
+      "title": "agent_board.py check says 'no overlap — safe to proceed' for a file that IS under a live foreign lease",
+      "title_fa": "‏agent_board.py check برای فایلی که واقعاً تحت lease زندهٔ دیگری است «تداخلی نیست» اعلام می‌کند",
+      "zone": "coordination-check-truth",
+      "priority": "P0",
+      "status": "active",
+      "agent_branch": "arena/01a0eade-nexus-ai-agent",
+      "claimed_at": "2026-09-30T06:30:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "scripts/agent_board.py",
+        "tests/unit/test_agent_board.py",
+        "scripts/task207_repro.py",
+        "scripts/agent_board_check_mutations.py"
+      ],
+      "scope": "cmd_check reads only the LOCAL .agents/board.json. A claim that exists solely on an unmerged PR branch is invisible, so the tool prints 'no overlap — safe to proceed' and exits 0 for a file under somebody else's live lease. Observed twice in one session: task-202 (graph.py, PR #119) and task-203 (memory/, PR #121) were live while check reported no overlap; and a scan whose input list had been wiped reported 'no lease found' from ZERO boards and looked like a clean result. Reproduced deterministically in scripts/task207_repro.py. Fix in two parts, because visibility alone re-creates the bug whenever GitHub is unreachable: (1) make check consult every open PR's board, not just the local one; (2) make it FAIL CLOSED when the cross-PR view cannot be established, instead of reporting a reassuring false negative.",
+      "acceptance_criteria": [
+        "check sees a live lease that exists only on another PR's board and exits 1",
+        "check exits NON-zero and says the verdict is INCOMPLETE when the cross-PR view cannot be established (offline, no token, API error)",
+        "the old wording 'no overlap — safe to proceed' is never printed when the remote view was not actually consulted",
+        "an explicit opt-out exists for environments with no GitHub access, and it is loud",
+        "the exit codes are documented: 0 = verified clear, 1 = overlap, 2 = could not verify",
+        "a mutation that restores the local-only behaviour is killed",
+        "zero regressions; no board schema change"
+      ],
+      "evidence_required": [
+        "the reproduction before the fix, exit code and output",
+        "the same reproduction after the fix, exit 1",
+        "a simulated network failure producing exit 2, not 0",
+        "the killed-mutant report",
+        "ruff check and ruff format --check clean"
+      ],
+      "prerequisites": []
     }
   ],
   "deferred_log": [
