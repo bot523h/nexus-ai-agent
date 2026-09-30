@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T16:54:20Z",
+  "updated_at": "2026-09-30T07:12:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -657,6 +657,61 @@
         "tests/unit/test_request_queue.py",
         "scripts/llm_queue_mutations.py",
         "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
+      ]
+    },
+    {
+      "id": "chat-memory-reachability",
+      "description": "End-to-end chat→memory reachability contract: a stored memory must provably reach the LLM on the chat path, with adversarial thread/user isolation. New files only — no src/ path, because orchestration/graph.py is leased by task-202.",
+      "paths": [
+        "tests/unit/test_chat_memory_reachability.py",
+        "scripts/chat_memory_mutations.py",
+        "CHAT_MEMORY_REACHABILITY_AUDIT_2026-09-29.md"
+      ]
+    },
+    {
+      "id": "coordination-check-truth",
+      "description": "The pre-push enforcement mechanism: agent_board.py check. Its verdict must never read 'safe' when it could not actually see every live lease. Widened by task-207 to carry the reproduction, the regression tests and the mutation harness.",
+      "paths": [
+        "scripts/agent_board.py",
+        "tests/unit/test_agent_board.py",
+        "scripts/task207_repro.py",
+        "scripts/agent_board_check_mutations.py"
+      ]
+    },
+    {
+      "id": "retrieval-determinism",
+      "description": "Deterministic test embedder + a paraphrase benchmark that can actually be pinned.",
+      "paths": [
+        "tests/unit/test_memory_retrieval_truth.py",
+        "scripts/memory_retrieval_mutations.py"
+      ]
+    },
+    {
+      "id": "embedding-honesty",
+      "description": "The embedding contract the providers claim vs. the one they implement.",
+      "paths": [
+        "src/nexus_ai_agent/llm/",
+        "tests/unit/test_embedding_honesty.py"
+      ]
+    },
+    {
+      "id": "orchestration-routing",
+      "description": "orchestration/graph.py routing and the memory reader/writer nodes, plus the tests and mutation harnesses that guard them. task-202 (PR #119) held graph.py until 2026-09-29T17:51:40Z; it expired and was never renewed, and a re-scan of all 42 open-PR boards on 2026-09-29T21:34Z found no live claim on this file.",
+      "paths": [
+        "src/nexus_ai_agent/orchestration/graph.py",
+        "tests/unit/test_graph_memory.py",
+        "tests/unit/test_memory_reader_query.py",
+        "scripts/memory_reader_query_mutations.py"
+      ]
+    },
+    {
+      "id": "telegram-e2e-verification",
+      "description": "End-to-end proof through the REAL Telegram entry point (bot/handlers.py::on_message), not a hand-built state, plus the mutation harness that attacks that span. handlers.py and graph.py are touched ONLY by scripts/telegram_e2e_mutations.py, which edits them temporarily and restores them byte-for-byte (verified with `git status --porcelain` after every run). Both files' real leases (task-196, task-202) have expired. memory/ is deliberately excluded: PR #121 (task-203) holds a LIVE lease on it until 2026-09-29T21:39:02Z.",
+      "paths": [
+        "tests/unit/test_telegram_memory_e2e.py",
+        "scripts/telegram_e2e_mutations.py",
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/orchestration/graph.py"
       ]
     }
   ],
@@ -1787,7 +1842,7 @@
       "title_fa": "",
       "zone": "ci-quality",
       "priority": "P1",
-      "status": "active",
+      "status": "expired",
       "scope": "non-blocking bootstrap job first, then blocking; sequenced after PR#33 lands",
       "scope_fa": "non-blocking bootstrap job first, then blocking; sequenced after PR#33 lands",
       "prerequisites": [],
@@ -1795,7 +1850,7 @@
         "CI job runs scripts/pack_coverage.py and reports per-pack coverage",
         "non-blocking (continue-on-error) at bootstrap, flip to blocking with evidence"
       ],
-      "note": "Claimed by the Continuum closure session together with task-184. Goes straight to a BLOCKING job (owner directive: no continue-on-error bootstrap); evidence recorded on release.",
+      "note": "auto-released by gc at 2026-09-29T01:54:49Z (stale active lease)",
       "agent_branch": "arena/01a0e2bb-nexus-ai-agent",
       "claimed_at": "2026-09-27T12:27:18Z",
       "ttl_hours": 24,
@@ -2557,7 +2612,7 @@
       "title_fa": "سخت‌سازی فورنزیک سامانهٔ شواهد Continuum",
       "zone": "continuum-evidence-measurement",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "agent_branch": "arena/01a0e2bb-nexus-ai-agent",
       "claimed_at": "2026-09-27T12:27:18Z",
       "ttl_hours": 24,
@@ -2593,7 +2648,7 @@
         "Targeted negative tests and mutation RED-to-GREEN restoration for every confirmed consumer defect.",
         "Two-run reproducibility comparison and exact PR #95/head/main/CI evidence."
       ],
-      "note": "Audit result: two P1 snapshot false-greens were reproduced in isolated Git fixtures and fixed through e924a65: a valid snapshot survived an uncommitted source edit, and a clean later commit could reuse it after src/tests/scripts/migration/dependency drift. Regressions cover clean control, dirty/stale rejection, empty revision rejection, and unavailable git-status fail-closed behaviour in tests/unit/test_continuum_hardening.py. P2 integration gap remains: CoverageReport JSON has no downstream reader and CI/release-lineage invokes neither pack coverage nor snapshot verification; task-154 remains queued rather than claiming a release gate it does not implement. Current committed snapshot correctly blocks CLI verification (unreachable recorded SHA and test-count drift). No non-Continuum domain edits without a proven direct false-evidence consumer. | 2026-09-27 arena/01a0e1e0 continuation (supersedes PR #95/#98): the P2 gap is closed — pack coverage is a canonical 95%-per-pack gate (D-0023, option A), the snapshot verifier fails closed on a 27-attack executable threat model (scripts/continuum_gate.py), a 73-mutation replayable campaign (scripts/continuum_mutations.py) fails on any survivor, and the CI job continuum-evidence runs all three on 3.10/3.11/3.12 against the exact SHA. HISTORICAL EVIDENCE LOST — CONTENT RECONSTRUCTED: the first local lineage (c44bf2c…7bda42c) was never pushed and was lost in a sandbox re-provisioning; its surviving working tree (tree ddc76334) was reconstructed on top of 48db056 and every piece of evidence was regenerated on the new lineage — see docs/audits/CONTINUUM_CLOSURE_2026-09-27.md for the exact SHAs, local runs and CI run IDs. | 2026-09-27 arena/01a0e2bb continuation (same mission owner, new session branch; a session is bound to exactly one branch and cannot push to arena/01a0e1e0): the previous session's final local commit 6198510f0a06a803ba445e03bba1e44306eaf0f9 was never pushed and is unrecoverable (git fetch origin <sha> -> 'not our ref'), so its content fix was re-derived from the failing PR #102 head eb6551b instead of copied. PR #102 was red on `test` and `python-parity` 3.10/3.11/3.12 (runs 36315364432 / 36315366459) because docs/audits/CONTINUUM_CLOSURE_2026-09-27.md was not listed in docs/README.md, which tests/unit/test_docs_integrity.py enforces; reproduced locally as '1 failed, 2893 passed, 30 skipped'. Fixed by indexing the document -- the invariant, the threshold and the measurement are untouched.",
+      "note": "auto-released by gc at 2026-09-29T01:54:49Z (stale active lease)",
       "previous_agent_branch": "arena/01a0e1e0-nexus-ai-agent"
     },
     {
@@ -2602,7 +2657,7 @@
       "title_fa": "سخت‌سازی هوش خارجی: خطای تایپ‌شده، منشأ داده، IO غیرمسدودکننده، انتقال امن کلید، ورودی خصمانه",
       "zone": "external-intelligence",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "gates_owner": false,
       "prerequisites": [],
       "scope": "knowledge/{knowledge_manager,web_trainer,wikipedia_trainer}.py and integrations/free_tools.py have ZERO tests on main and convert every external failure into a success-shaped value: get_text()/get_json() erase HTTP status and network errors ('' / {}), Wikipedia scrapes a 404 'article does not exist' page into user-visible 'knowledge', CurrencyTool returns 0.0 for a missing rate, every search path returns [] for both 'no results' and 'provider exploded', the NewsAPI key travels in the URL query string (and is logged by core/http_client on failure), the synchronous DDGS SDK is called directly inside async functions (event-loop block), BeautifulSoup parses unbounded attacker-controlled HTML on the loop, user input is interpolated raw into URL paths, and KnowledgeManager caches an LLM summary built from zero real sources for 24h using scalar_one_or_none() against a table it can populate with duplicates. Deliverable: a typed SourceResult/ExternalSourceError + Provenance contract, honest failure propagation, header-based secret transport, percent-encoded URL construction, to_thread offloading, bounded responses, query normalisation + stampede guard, and regression/adversarial/mutation tests.",
@@ -2631,7 +2686,7 @@
         "mutation probes: deliberately wrong implementations injected, guard tests observed RED, then restored GREEN",
         "reproduction transcript for each finding against the pre-fix code"
       ],
-      "note": "",
+      "note": "auto-released by gc at 2026-09-29T01:54:49Z (stale active lease)",
       "agent_branch": "arena/01a0df05-nexus-ai-agent",
       "claimed_at": "2026-09-26T18:46:40Z",
       "ttl_hours": 24
@@ -2682,7 +2737,7 @@
       "title_fa": "نجات چرخهٔ عمر صف W2: نشاندن PR #108 با حفظ کامل commitها روی خط main + رفع نقص cancellation پایتون ۳.۱۰",
       "zone": "llm-request-queue-lifecycle",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "scope": "Successor to PR #108 (supersedes it; original head 5a4cb23 preserved commit-for-commit). Scope identical to task-195-llm-queue-lifecycle plus the reconciliation: (a) semantic board merge — main's claim statuses/gc notes are canonical, PR108's zone+claim are appended; (b) version-independent worker-cancellation semantics; (c) exact-head CI against main 05dec617 lineage.",
       "scope_fa": "",
       "prerequisites": [],
@@ -2714,7 +2769,202 @@
       "claimed_at": "2026-09-27T16:54:20Z",
       "ttl_hours": 24,
       "gates_owner": true,
-      "note": "Continues task-195-llm-queue-lifecycle (original branch arena/01a0e2f0, claim released via takeover). MODULE_MAP.md/docs-architecture excluded exactly as the original claim scoped itself. | SESSION-BOUND CONTINUATION 2026-09-27T16:54:20Z: arena/01a0e3b7 fast-forwarded cd79bfe (PR #109 head) and continues the same exclusive paths. This session cannot push to arena/01a0e356. PR #109 python-parity (3.10) is RED on run 36329794486 (asyncio.wait_for raises asyncio.TimeoutError, not builtin TimeoutError)."
+      "note": "auto-released by gc at 2026-09-29T01:54:49Z (stale active lease)"
+    },
+    {
+      "task": "task-205-chat-memory-reachability-contract",
+      "title": "Close the Chat→Memory Wiring Gap: reachability contract, adversarial isolation, and a mutation-verified H1 patch",
+      "title_fa": "بستن شکاف سیم‌کشی Chat→Memory: قرارداد دسترس‌پذیری، جداسازیخصومی، و پچ H1 اثبات‌شده با جهش‌سنج",
+      "zone": "chat-memory-reachability",
+      "priority": "P0",
+      "status": "done",
+      "scope": "Reproduce and then permanently guard the defect that a memory stored by LongTermMemory never reaches the LLM when classify_intent() returns 'chat': graph.py::route_intent sends chat/unknown straight to route_persona, bypassing both memory readers. H1 itself (the one-line edit to orchestration/graph.py) is DEFERRED — that file is under a live lease held by task-202 (PR #119, arena/01a0e907, claimed 2026-09-28T17:51:40Z, 24h TTL). This claim takes only new paths: an end-to-end reachability/isolation contract suite, a shadow-tree mutation harness that verifies the candidate H1 patch without ever writing the leased file, and a dated audit.",
+      "scope_fa": "بازتولید و سپس نگهبانی دائمی عیبی که حافظهٔ ذخیره‌شده هرگز به LLM نمی‌رسد وقتی classify_intent مقدار 'chat' برمی‌گرداند. خود H1 (ویرایش یک‌خطی در graph.py) به‌علت lease فعال task-202 در PR #119 معوق شده است؛ این کار فقط مسیرهای جدید می‌گیرد.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "A real end-to-end repro shows memory stored for thread T does NOT reach the LLM for recall questions classified 'chat' (RED, measured, not assumed).",
+        "The same suite proves the control case GREEN (an intent that DOES read memory delivers the fact), so the tripwire cannot pass vacuously.",
+        "Adversarial: no memory from thread A ever appears in thread B's prompts or answer; every search() call carries the caller's own thread_id.",
+        "A shadow-tree mutation harness applies the candidate H1 patch to a temp copy of src/ (never the leased file) and proves the tripwire goes GREEN, then proves 4 named mutants (read removed, thread filter bypassed, failure→empty-success, context not rendered) are killed.",
+        "H1 is recorded as a documented deferral naming the lease holder, the expiry, and the exact one-line patch — governance is not modified to unblock it.",
+        "ruff check / ruff format --check / targeted pytest green on the new files; full gates deferred to the gates owner."
+      ],
+      "evidence_required": [
+        "python scripts/h1_repro.py output showing 4/5 recall questions lose their memory",
+        "pytest -q tests/unit/test_chat_memory_reachability.py with per-test outcomes",
+        "python scripts/chat_memory_mutations.py with the killed-mutant table",
+        "python scripts/agent_board.py check --files <changed> --branch arena/01a0eade-nexus-ai-agent → exit 0"
+      ],
+      "exclusive_paths": [
+        "tests/unit/test_chat_memory_reachability.py",
+        "scripts/chat_memory_mutations.py",
+        "CHAT_MEMORY_REACHABILITY_AUDIT_2026-09-29.md"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0eade-nexus-ai-agent",
+      "claimed_at": "2026-09-29T02:02:20Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "released_at": "2026-09-29T19:25:20Z",
+      "evidence": "PR #122 @ cbec307. Replay at exact SHA 2026-09-29: pytest tests/unit/test_chat_memory_reachability.py -q -> 25 passed, 2 xfailed. python scripts/chat_memory_mutations.py -> H1 patch verified: True, mutants killed 6/6. CI 16/16 pass, 0 failures."
+    },
+    {
+      "task": "task-206",
+      "title": "Apply the H1 wiring: route chat/unknown through memory_reader_chat",
+      "title_fa": "اعمال سیم‌کشی H1: هدایت chat/unknown به memory_reader_chat",
+      "zone": "orchestration-routing",
+      "priority": "P0",
+      "status": "done",
+      "scope": "Deliver the one-line Chat→Memory wiring that task-205 proved necessary and verified out of tree. Taken over after the task-202 lease lapsed; the patch is documented and mutation-verified in CHAT_MEMORY_REACHABILITY_AUDIT_2026-09-29.md §6.",
+      "scope_fa": "سیم‌کشی یک‌خطی H1 پس از انقضای lease تسک ۲۰۲.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "graph.py::route_intent sends every non-task intent to memory_reader_chat",
+        "reachability tripwires XPASS: pytest tests/unit/test_chat_memory_reachability.py shows 2 xfailed (task-210, task-215) and 0 other xfails",
+        "python scripts/chat_memory_mutations.py reports H1 patch verified and 6/6 mutants killed on the now-fixed branch",
+        "all four isolation tests stay green — the fix must not widen the thread fence",
+        "graph.py merges cleanly with PR #119 (verified by read-only git merge-tree: board.json is the only conflict)",
+        "zero regressions across tests/unit and tests/architecture"
+      ],
+      "evidence_required": [
+        "before/after xfail counts of the reachability suite",
+        "mutation harness report before and after",
+        "git merge-tree output showing no graph.py conflict",
+        "python scripts/agent_board.py check exit 0"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/orchestration/graph.py",
+        "tests/unit/test_graph_memory.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0eade-nexus-ai-agent",
+      "claimed_at": "2026-09-29T17:53:37Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Took over the task-202 scope after its 24h lease lapsed 2026-09-29T17:51:40Z with no renewal and 22h of PR #119 inactivity. Claimed before editing (commit 13a33b9).",
+      "released_at": "2026-09-29T18:05:00Z",
+      "delivered": [
+        "src/nexus_ai_agent/orchestration/graph.py::route_intent — chat/unknown now route through memory_reader_chat",
+        "10 reachability tripwires promoted from xfail to hard assertions",
+        "audit §5.2/§5.3: delivery timeline, merge-safety measurement, guard promotion"
+      ],
+      "evidence": [
+        "pytest tests/unit/test_chat_memory_reachability.py -q → 25 passed, 2 xfailed (was 13 passed, 12 xfailed, 2 xpassed)",
+        "python scripts/chat_memory_mutations.py → H1 patch verified: True, mutants killed 6/6 (all now as hard failures)",
+        "baseline with H1 stashed and the suite deselected: 25 failed / 2726 passed — identical 25 pre-existing failures",
+        "git merge-tree --write-tree HEAD origin/arena/01a0e907-nexus-ai-agent → graph.py clean; only .agents/board.json conflicts",
+        "ruff check . + ruff format --check . clean repo-wide"
+      ]
+    },
+    {
+      "task": "task-214-telegram-on-message-e2e",
+      "title": "End-to-end Telegram proof: drive on_message itself, not a hand-built state",
+      "title_fa": "اثبات انتها‌به‌انتها از درگاه واقعی تلگرام: خودِ on_message، نه state دست‌ساز",
+      "zone": "telegram-e2e-verification",
+      "priority": "P1",
+      "status": "done",
+      "agent_branch": "arena/01a0eade-nexus-ai-agent",
+      "claimed_at": "2026-09-29T20:30:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "tests/unit/test_telegram_memory_e2e.py",
+        "scripts/telegram_e2e_mutations.py",
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/orchestration/graph.py"
+      ],
+      "scope": "Every test in task-205 builds its state by hand. The real entry point is bot/handlers.py::on_message → _base_state, which hardcodes memory_context: ''. A regression there is invisible to the current suite.",
+      "acceptance_criteria": [
+        "a test drives the real on_message with a fake Update and the real compiled graph, and asserts a stored fact reaches the reply",
+        "the same drive proves the thread_id the graph is invoked with is the one _base_state derived",
+        "a mutant that makes on_message skip _base_state or overwrite thread_id is killed",
+        "the intent='unknown' overwrite at handlers.py:909 is pinned as harmless-by-order, not left as folklore",
+        "bot/handlers.py is NOT edited (read-only: seven open PRs contest it)",
+        "zero regressions"
+      ],
+      "evidence_required": [
+        "exact pytest command and counts for the new file",
+        "the killed-mutant report from the new end-to-end mutation",
+        "ruff check and ruff format --check clean"
+      ],
+      "prerequisites": [],
+      "mutation_scope_note": "handlers.py and graph.py are in exclusive_paths ONLY so the mutation harness may attack them and restore them; no delivered change to either file is part of task-214.",
+      "evidence": "pytest tests/unit/test_telegram_memory_e2e.py -q -> 7 passed. python scripts/telegram_e2e_mutations.py -> 4/4 killed (E1 thread_id from user, E2 _base_state bypassed, E3 H1 reverted, E4 reply replaced by a constant); baseline GREEN -> restored GREEN. A fifth mutant (wipe memory_context) SURVIVED and was DROPPED as a false premise: _memory_reader overwrites that key unconditionally, so the guard would have been fake.",
+      "released_at": "2026-09-29T21:25:00Z",
+      "result": "7 tests in tests/unit/test_telegram_memory_e2e.py; scripts/telegram_e2e_mutations.py 4/4 killed. Found two things no board had: on_message's intent='unknown' is harmless only by node ordering, and its active-agent branch never reads memory at all (now task-217)."
+    },
+    {
+      "task": "task-211-memory-reader-queries-the-assistants-own-last-turn",
+      "title": "_memory_reader queries with messages[-1], which can be the assistant's own last turn",
+      "title_fa": "_memory_reader با messages[-1] جست‌وجو می‌کند که ممکن است پیام دستیار باشد",
+      "zone": "orchestration-routing",
+      "priority": "P1",
+      "status": "active",
+      "agent_branch": "arena/01a0eade-nexus-ai-agent",
+      "claimed_at": "2026-09-29T21:35:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/orchestration/graph.py",
+        "tests/unit/test_graph_memory.py",
+        "tests/unit/test_memory_reader_query.py",
+        "scripts/memory_reader_query_mutations.py"
+      ],
+      "scope": "graph.py::_memory_reader uses state['messages'][-1]['content'] with no role filter, while _memory_writer walks backwards for the last USER message. If a resumed turn ever presents the assistant's own text at [-1], recall silently queries the wrong text. REPRODUCE FIRST on a real checkpointered two-turn conversation; fix only if the defect is demonstrated.",
+      "acceptance_criteria": [
+        "a real two-turn conversation is driven through the compiled graph with a checkpointer, and the query text used on turn 2 is OBSERVED, not assumed",
+        "if the defect is real: the query is built from the last user message, matching what the writer stores",
+        "a multi-turn test proves turn N+1 queries with the user's words",
+        "a mutant that reintroduces messages[-1] is killed",
+        "if the defect is NOT real: the hypothesis is rejected in writing and no production code changes",
+        "zero regressions"
+      ],
+      "evidence_required": [
+        "the observed query on turn 1 and turn 2, verbatim",
+        "red->green, or an explicit rejection with the observation that refutes it",
+        "the killed-mutant report",
+        "ruff check and ruff format --check clean"
+      ],
+      "prerequisites": [],
+      "evidence": "REPRODUCED then FIXED. Pre-fix, real checkpointered graph: case A (on_message's fresh one-message state) queried the user's words and was fine; case B (caller replays the previous RESULT state) queried 'ASSISTANT-ANSWER'; case C (state ending on the assistant) queried 'Noted, Sara.'; case D (no messages) queried ''. Post-fix: 7 passed, 3/3 mutants killed. Regression: 25 failed / 2765 passed vs a 25-failure baseline, zero regressions."
+    },
+    {
+      "task": "task-207-agent-board-check-fails-open",
+      "title": "agent_board.py check says 'no overlap — safe to proceed' for a file that IS under a live foreign lease",
+      "title_fa": "‏agent_board.py check برای فایلی که واقعاً تحت lease زندهٔ دیگری است «تداخلی نیست» اعلام می‌کند",
+      "zone": "coordination-check-truth",
+      "priority": "P0",
+      "status": "active",
+      "agent_branch": "arena/01a0eade-nexus-ai-agent",
+      "claimed_at": "2026-09-30T06:30:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "scripts/agent_board.py",
+        "tests/unit/test_agent_board.py",
+        "scripts/task207_repro.py",
+        "scripts/agent_board_check_mutations.py"
+      ],
+      "scope": "cmd_check reads only the LOCAL .agents/board.json. A claim that exists solely on an unmerged PR branch is invisible, so the tool prints 'no overlap — safe to proceed' and exits 0 for a file under somebody else's live lease. Observed twice in one session: task-202 (graph.py, PR #119) and task-203 (memory/, PR #121) were live while check reported no overlap; and a scan whose input list had been wiped reported 'no lease found' from ZERO boards and looked like a clean result. Reproduced deterministically in scripts/task207_repro.py. Fix in two parts, because visibility alone re-creates the bug whenever GitHub is unreachable: (1) make check consult every open PR's board, not just the local one; (2) make it FAIL CLOSED when the cross-PR view cannot be established, instead of reporting a reassuring false negative.",
+      "acceptance_criteria": [
+        "check sees a live lease that exists only on another PR's board and exits 1",
+        "check exits NON-zero and says the verdict is INCOMPLETE when the cross-PR view cannot be established (offline, no token, API error)",
+        "the old wording 'no overlap — safe to proceed' is never printed when the remote view was not actually consulted",
+        "an explicit opt-out exists for environments with no GitHub access, and it is loud",
+        "the exit codes are documented: 0 = verified clear, 1 = overlap, 2 = could not verify",
+        "a mutation that restores the local-only behaviour is killed",
+        "zero regressions; no board schema change"
+      ],
+      "evidence_required": [
+        "the reproduction before the fix, exit code and output",
+        "the same reproduction after the fix, exit 1",
+        "a simulated network failure producing exit 2, not 0",
+        "the killed-mutant report",
+        "ruff check and ruff format --check clean"
+      ],
+      "prerequisites": [],
+      "evidence": "REPRODUCED then FIXED. Pre-fix (scripts/task207_repro.py): foreign PR board holds a live 7-day lease on orchestration/graph.py, local board holds nothing, check exits 0 with 'no overlap - safe to proceed'. Post-fix: exit 1 naming the task AND the board it was seen in. Live proof: checking bot/handlers.py against the real repository now exits 1 and names pr33-in-review on PR#63 (claimed 2026-09-24, ttl 168h, still live) - a 7-day lease the old tool could never see. Clear verdict now reports how many boards it consulted: 'no overlap - safe to proceed (local + 41 open-PR board(s))'. 25 failed / 2772 passed vs a 25-failure baseline, zero regressions. 4/4 mutants killed."
     }
   ],
   "deferred_log": [
@@ -2751,200 +3001,260 @@
       "reason_fa": "چون عامل task-179 مالک TESTING.md و docs/README.md است، به‌روزرسانی جدول گیت‌ها و ایندکس را defer کردم؛ مستندات CI موقتاً در .github/DEPENDENCY_MATRIX.md و CHANGELOG ثبت می‌شود.",
       "reason_en": "task-132 (CI extras matrix) must update TESTING.md gate table and docs/README.md index, but those files are exclusively claimed by task-179. Documentation update deferred; CI docs live in .github/DEPENDENCY_MATRIX.md + CHANGELOG entry meanwhile.",
       "resume_when": "task-179 lands (TESTING.md/docs/README.md free) — then port the gate-table rows + docs index line"
+    },
+    {
+      "task": "task-205-chat-memory-reachability-contract",
+      "deferred_by_branch": "arena/01a0eade-nexus-ai-agent",
+      "at": "2026-09-29T02:05:00Z",
+      "reason_fa": "H1 (سیم‌کشی Chat→Memory در graph.py::route_intent) معوق شد: فایل src/nexus_ai_agent/orchestration/graph.py تحت lease فعال task-202 در شاخه arena/01a0e907 (PR #119) است، تا 2026-09-29T17:51:40Z. lease دور زده نشد و governance دستکاری نشد. اثبات و نگهبانی بدون تغییر فایل lease‌شده انجام شد.",
+      "reason_en": "H1 (the Chat->Memory wiring in graph.py::route_intent) is deferred: src/nexus_ai_agent/orchestration/graph.py is under the LIVE lease of task-202 on branch arena/01a0e907 (PR #119), claimed 2026-09-28T17:51:40Z with a 24h TTL (expires 2026-09-29T17:51:40Z). The lease was not bypassed and governance was not modified. Note that agent_board.py check returns a FALSE 'no overlap' on a main-based branch, because it reads the local .agents/board.json and the live task-202/task-203 claims only exist on the unmerged PR #119/#121 branches. Live truth outranks the tool. The fix is instead verified in a shadow tree and shipped as a ready-to-apply one-line patch.",
+      "handoff": "CHAT_MEMORY_REACHABILITY_AUDIT_2026-09-29.md",
+      "blocked_by_task": "task-202-memory-write-observability",
+      "blocked_by_branch": "arena/01a0e907-nexus-ai-agent",
+      "blocked_path": "src/nexus_ai_agent/orchestration/graph.py",
+      "lease_expires": "2026-09-29T17:51:40Z"
     }
   ],
   "next_work": [
     {
-      "id": "task-164",
-      "priority": "P1",
-      "zone": "ci-quality",
-      "title": "Nightly DB backup has never succeeded (3/3 red) — make the production backup pipeline actually work",
-      "title_fa": "بکاپ شبانهٔ دیتابیس هرگز موفق نشده (۳ از ۳ سرخ) — مسیر بکاپ Production واقعاً کار کند",
-      "why_fa": "تنها مکانیسم DR برای دیتابیس Production (R2 blob tier) سه اجرا پیاپی شکست خورده و هیچ بکاپی تولید نشده؛ ریشهٔ دقیق بدون لوق جاب نامشخص است (R2 secrets؟ پیکربندی Neon؟).",
-      "acceptance_criteria": [
-        "a manual workflow_dispatch run of maintenance/backup-db completes SUCCESS with a visible object under backups/ in R2 including sha256/verified/timestamp in the step log",
-        "NEXUS_R2_* secrets are configured in GitHub Actions (owner-side)",
-        "the scheduled (cron) run after that also completes SUCCESS"
-      ],
-      "prerequisites": [],
-      "exclusive_paths": [
-        ".github/workflows/maintenance.yml"
-      ],
-      "status_note": "repo-side verifiability delivered by task-167 (verified backup contract, round-trip byte identity, restore-into-temp-SQLite verification); what remains is owner-secrets configuration + one real green dispatch"
-    },
-    {
-      "id": "task-124",
+      "id": "task-208",
       "priority": "P0",
-      "zone": "audit-remainder",
-      "title": "P0-8 single wiring + P0-9 graph memory write path",
-      "title_fa": "بستن P0-8 و P0-9",
-      "why_fa": "دو یافتهٔ باز ممیزی امنیتی/کارکردی با معیار پذیرش روشن.",
+      "zone": "llm-test-determinism",
+      "title": "The test embedder is salted by PYTHONHASHSEED — retrieval scores are a random variable",
+      "title_fa": "امبدر تست با PYTHONHASHSEED نمک‌زده می‌شود؛ امتیاز بازیابی متغیر تصادفی است",
+      "why_fa": "hit@3 روی ۸ اجرای یکسان بین ۰.۰۰۰ و ۰.۲۵۰ نوسان کرد؛ هر baseline روی این lane یعنی سنجش نویز.",
+      "why": "FakeLLMProvider.embed seeds random.Random(hash(text)); str.__hash__ is salted per process. Measured: dense-lane hit@3 range [0.000, 0.250] over 8 identical runs. Any retrieval regression baseline pinned on the current embedder is pinned on noise.",
       "acceptance_criteria": [
-        "تست ONE-OWNER سبز",
-        "write→read گراف با round-trip",
-        "صفر رگرسیون"
+        "a deterministic test embedder exists and is the default in retrieval evaluation (seeded RNG, never hash())",
+        "running the U1 evaluation twice in separate processes yields byte-identical scores",
+        "a mutant that re-introduces hash()-seeding is killed by a test",
+        "FakeLLMProvider's public behaviour is unchanged for existing callers, or the break is documented"
       ],
-      "prerequisites": [
-        "task-122",
-        "task-123"
+      "evidence_required": [
+        "python scripts/chat_memory_mutations.py --u1 --repeat 8 before and after",
+        "the killed-mutant table"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/memory/",
-        "src/nexus_ai_agent/features/rag.py",
-        "tests/unit/test_audit_remainder.py"
+        "src/nexus_ai_agent/llm/fake_llm.py",
+        "scripts/chat_memory_mutations.py"
+      ],
+      "prerequisites": []
+    },
+    {
+      "id": "task-209",
+      "priority": "P1",
+      "zone": "retrieval-determinism",
+      "title": "Paraphrase benchmark against the merged hybrid retriever (U1, answered for main only)",
+      "title_fa": "بنچمارک paraphrase روی رتریور هیبریدِ merge‌شده (U1)",
+      "why_fa": "U1 برای main پاسخ داده شد (hit@3 = 0.125 در برابر شانس 0.125)؛ باید برای رتریوری که واقعاً منتشر می‌شود پاسخ داده شود.",
+      "why": "U1 was measured on main's pre-W2 LongTermMemory only. PR #121's hybrid retriever is unmerged, so its paraphrase quality is still an unmeasured claim.",
+      "acceptance_criteria": [
+        "the 8 paraphrase pairs + 16 distractors from task-205 are the fixed fixture (mean lexical overlap 0.081 recorded)",
+        "hit@3, MRR@3 and the lane actually used are reported for lexical, dense and fused retrieval",
+        "the score is reproducible across processes (depends on task-208)",
+        "a real embedder is used, or the absence of one is stated as a limitation, not glossed"
+      ],
+      "evidence_required": [
+        "the benchmark command and its output",
+        "a statement of which lane produced each hit"
+      ],
+      "exclusive_paths": [
+        "tests/unit/test_memory_retrieval_truth.py",
+        "scripts/memory_retrieval_mutations.py"
+      ],
+      "prerequisites": [
+        "task-208"
       ]
     },
     {
-      "id": "task-122",
-      "priority": "P0",
-      "zone": "feature-wiring",
-      "title": "PR#32 rebase + dedupe",
-      "title_fa": "ریبیس و رفع دوگانگی PR#32",
-      "why_fa": "بزرگ‌ترین PR باز روی بیس باستانی؛ ریسک دو سیم‌کشی موازی.",
-      "acceptance_criteria": [
-        "دیف یکتا",
-        "تست‌های feature_* سبز",
-        "CI سبز روی main تازه"
-      ],
-      "prerequisites": [],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/bot/surface/",
-        "src/nexus_ai_agent/features/"
-      ],
-      "status_note": "delivered via PR#47 (forensic triage docs/audits/PR32_TRIAGE_2026-09-21.md + port-forward)"
-    },
-    {
-      "id": "task-123",
-      "priority": "P0",
-      "zone": "packaging+interop",
-      "title": "PR#33 slim-down",
-      "title_fa": "کوچک‌سازی PR#33",
-      "why_fa": "برای باز شدن مسیر بسته‌بندی/داک و آزادسازی cli.py.",
-      "acceptance_criteria": [
-        "دیف فقط یکتاها",
-        "CI سبز"
-      ],
-      "prerequisites": [],
-      "exclusive_paths": []
-    },
-    {
-      "id": "task-121",
+      "id": "task-210",
       "priority": "P1",
-      "zone": "delivery-interop-markers",
-      "title": "OTIO marker round-trip",
-      "title_fa": "مارکرهای OTIO",
-      "why_fa": "تنها شکاف باقی‌ماندهٔ تسک ۱۱۰؛ include_markers فعلاً بی‌اثر است.",
+      "zone": "chat-memory-reachability",
+      "title": "Second Telegram identity fence: thread_id is derived from chat_id alone, so a group shares one memory scope",
+      "title_fa": "حصار دوم هویت تلگرام: thread_id فقط از chat_id ساخته می‌شود، پس گروه یک حافظهٔ مشترک دارد",
+      "why_fa": "در گروه، همهٔ اعضا یک thread دارند؛ یعنی حافظهٔ خصوصی یک کاربر می‌تواند وارد پاسخ کاربر دیگر شود.",
+      "why": "bot/handlers.py::_base_state sets thread_id = f'tg:{chat_id}'. Two members of one group therefore share a memory scope. Nothing in the current tests exercises a multi-user group.",
       "acceptance_criteria": [
-        "include_markers مؤثر",
-        "۲ تست round-trip با OTIO واقعی"
+        "MEASURED by task-205: thread_id = f'tg:{chat_id}', so two members of one group share a memory scope; test_thread_id_is_derived_from_the_chat_alone_not_the_user pins the rule and test_a_group_member_cannot_recall_another_members_memory is RED",
+        "the intended scoping is written down: per-user, per-chat, or per-group — and the code matches it",
+        "M7 (deriving thread_id from user_id) is killed by the characterisation test — the plausible wrong fix is guarded",
+        "if the scope must change, a migration/dual-read story is documented before code",
+        "thread_id stays the only scoping key (no second, divergent one)"
+      ],
+      "evidence_required": [
+        "the adversarial test, red before and green after (or a recorded decision not to change it)",
+        "a statement of the product decision, not only the code"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/handlers.py",
+        "tests/unit/test_handlers.py"
       ],
       "prerequisites": [
-        "task-123"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/packs/delivery/",
-        "tests/unit/test_otio_interop.py"
+        "task-206"
       ]
     },
     {
-      "id": "task-128",
+      "id": "task-212",
       "priority": "P1",
-      "zone": "core-database",
-      "title": "Async DB phase 1",
-      "title_fa": "فاز ۱ دیتابیس ناهمگام",
-      "why_fa": "حذف create_engine سینک از features با آزمون نگهبان معماری.",
+      "zone": "chat-memory-reachability",
+      "title": "Delete the dead _chat_agent, or wire it — it duplicates agents/chat_agent.py and nothing reaches it",
+      "title_fa": "حذف یا سیم‌کشی _chat_agent مرده؛ تکراری از agents/chat_agent.py است",
+      "why_fa": "دو پیاده‌سازی از یک مسیر چت؛ هیچ‌کدام هم مالک روشنی برای نگه‌داشتن نیست.",
+      "why": "graph.py:39 defines _chat_agent, which is never added as a node. It is a second implementation of agents/chat_agent.py with a hardcoded [-10:] window — exactly the inconsistency W2 fixed in the wired one.",
       "acceptance_criteria": [
-        "انجین مرکزی + ۲ پایلوت",
-        "گارد معماری سبز"
+        "exactly one chat agent implementation remains (an importer-ratchet test asserts the other is ABSENT)",
+        "no path that used to work changes behaviour",
+        "grep proves zero remaining references"
       ],
-      "prerequisites": [
-        "task-122"
+      "evidence_required": [
+        "ruff clean",
+        "the ratchet test",
+        "grep output"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/core/async_db.py",
-        "src/nexus_ai_agent/features/"
-      ]
-    },
-    {
-      "id": "task-132",
-      "priority": "P1",
-      "zone": "ci-quality",
-      "title": "Extras smoke matrix",
-      "title_fa": "ماتریس دود اختیاری‌ها",
-      "why_fa": "مسیرهای اختیاری خارج از CI پیش‌فرض می‌توانند بی‌صدا بشکنند (شکاف مستند در TESTING §7).",
-      "acceptance_criteria": [
-        "job ماتریسی per-extra",
-        "شکست نصب = شکست CI"
+        "src/nexus_ai_agent/orchestration/graph.py"
       ],
       "prerequisites": [],
-      "exclusive_paths": [
-        "tests/unit/test_optional_extras.py",
-        ".github/"
-      ]
+      "status_note": "graph.py was leased by task-206 and is now free again (task-206 released 2026-09-29T18:05Z)"
     },
     {
-      "acceptance_criteria": [
-        "routes + creative/job_registry.py + video_director.py + ffmpeg_executor.py removed; creative/__init__ exports cleaned",
-        "importer-ratchet test updated to assert ABSENCE; GET HMAC tests removed with the routes",
-        "grep proves zero remaining callers; full suite green; release note added"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/api/app.py",
-        "src/nexus_ai_agent/creative/job_registry.py",
-        "src/nexus_ai_agent/creative/video_director.py",
-        "src/nexus_ai_agent/creative/ffmpeg_executor.py",
-        "tests/architecture/test_legacy_creative_boundary.py",
-        "tests/unit/test_security_hardening.py"
-      ],
-      "prerequisites": [
-        "PR#58 merged"
-      ],
-      "status_note": "evidence: D-0010 in DECISION_LOG; removal only after PR#58 merges",
-      "id": "task-173",
-      "priority": "P1",
-      "zone": "p0-stabilization",
-      "title": "Remove the legacy /creative/* HTTP lane (D-0010 reopen clause) after PR#58 lands",
-      "title_fa": "حذف مسیر قدیمی /creative/* بعد از ادغام PR#58",
-      "why_fa": "AD-0010: مسیر legacy فقط برای عدم برخورد با رفع SSRF درحال انجام (PR#58) نگه داشته شده؛ بعد از مرج باید حذف شود تا یک مسیر اجرایی Creative یگانه بماند."
-    },
-    {
-      "acceptance_criteria": [
-        "lane op(s) with golden argv tests + a decision on shipping reference .cube assets",
-        "worker map + surface ALLOWED updated in the same PR; real-render regression tests",
-        "no silent degradation: unavailable inputs stay typed failures"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/rendering/ir.py",
-        "src/nexus_ai_agent/creative/rendering/compiler.py",
-        "src/nexus_ai_agent/creative/render_jobs.py",
-        "src/nexus_ai_agent/bot/creative_surface.py"
-      ],
-      "prerequisites": [],
-      "status_note": "owned by the creative-runtime agent; surface/worker files change atomically with the lane instrument",
-      "id": "task-174",
+      "id": "task-213",
       "priority": "P2",
-      "zone": "creative-runtime",
-      "title": "Lane instruments for LUT (color.apply_lut) and subtitles (caption.burn_in) so the refused surface ops can enter the matrix",
-      "title_fa": "ابزارهای lane برای LUT و subtitles تا دو عمل ردشدهٔ surface وارد ماتریس واقعی شوند",
-      "why_fa": "D-0011: lut/burnin به دلیل نبود مسیر اجرای صادقانه (بدون .cube shipped و بدون subtitles op در lane IR) typed refuse می‌شوند؛ با ابزار واقعی lane قابل برگشت‌اند."
+      "zone": "chat-memory-reachability",
+      "title": "Close the write/read asymmetry at the storage layer: chat turns are written and never read",
+      "title_fa": "بستن نامتقارنی نوشتن/خواندن در لایهٔ ذخیره‌سازی",
+      "why_fa": "حافظه رشد می‌کند و هیچ‌وقت خوانده نمی‌شود؛ رشد بدون بازده برای کاربر واقعی هزینه است.",
+      "why": "test_the_writer_and_the_reader_cover_the_same_intents measures it. Even after H1, the writer stores the full turn including the assistant's own answer, which grows the corpus with non-user content and degrades every later recall.",
+      "acceptance_criteria": [
+        "the stored representation is decided and written down (user turn only? user+assistant? extracted facts?)",
+        "the writer's payload stops growing with content no reader benefits from",
+        "corpus growth per turn is measured before and after"
+      ],
+      "evidence_required": [
+        "a measurement of stored rows per turn, before and after"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/orchestration/graph.py"
+      ],
+      "prerequisites": [],
+      "status_note": "graph.py was leased by task-206 and is now free again (task-206 released 2026-09-29T18:05Z)"
     },
     {
+      "id": "task-215",
+      "priority": "P0",
+      "zone": "chat-memory-reachability",
+      "title": "Typed retrieval outcome — a dead backend is currently reported as a successful empty recall",
+      "title_fa": "نتیجهٔ تایپ‌دار بازیابی — بک‌اند مرده اکنون به‌عنوان بازیابی خالیِ موفق گزارش می‌شود",
+      "why_fa": "تنها تریپ‌وایری که پچ یک‌خطی H1 اثباتاً برطرف نمی‌کند؛ «هیچ حافظه‌ای» و «حافظه خراب است» یکی‌اند.",
+      "why": "_memory_reader does `except Exception: state.setdefault('memory_context','')` on a key that is always already present, so UNAVAILABLE and SUCCESS-with-no-hits are the same ''. M1 in the mutation harness proves the one-line wiring leaves this red. The repo's typed taxonomy (jobs/failure_semantics.py) belongs to the job lifecycle and must not be imported into the memory/ leaf, so the shape is an open design decision.",
       "acceptance_criteria": [
-        "real user sends /edit trim on staging and receives translated queued + video artifact",
-        "caption transcribe on default install returns the typed unavailable message (localized)",
-        "job rows show durable COMPLETED/not FAILED for the typed paths"
+        "a failed retrieval and a successful empty retrieval are distinguishable in the returned state",
+        "NexusState.error (or an agreed equivalent) is set on failure and NOT set on an empty success",
+        "the failure contains no user content (the same rule PR #119 applies to the write path)",
+        "test_an_unavailable_backend_is_not_reported_as_a_successful_empty_recall XPASSes and test_a_successful_empty_recall_is_not_reported_as_an_error stays green",
+        "a mutant that sets the error unconditionally is killed"
+      ],
+      "evidence_required": [
+        "the mutation harness M1 row going from 'STILL RED' to clean",
+        "a redaction test proving no memory content reaches the log"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/orchestration/graph.py",
+        "src/nexus_ai_agent/orchestration/state.py",
+        "tests/unit/test_chat_memory_reachability.py"
+      ],
+      "prerequisites": [],
+      "status_note": "graph.py was leased by task-206 and is now free again (task-206 released 2026-09-29T18:05Z)"
+    },
+    {
+      "id": "task-216",
+      "priority": "P0",
+      "zone": "orchestration-routing",
+      "title": "Merge PR #119 + PR #122 together - main still has neither the P0 shell escape nor chat->memory reachability",
+      "title_fa": "ادغام هم‌زمان PR #119 و PR #122 — main هنوز نه فرار شل P0 را دارد نه دسترسی chat به حافظه",
+      "why_fa": "H1 روی شاخه اثبات شده اما روی main کاربر هنوز حافظه‌اش را نمی‌بیند.",
+      "why": "Both PRs are green and PROVEN COMPATIBLE: a real three-way merge of cbec307 + e78e8c4 auto-merges graph.py with zero conflicts (only .agents/board.json conflicts, resolved newest-state-wins), the merged tree contains BOTH the memory-write observability warning AND the H1 route_intent wiring, the union of both suites is 193 passed / 2 xfailed, and both mutation harnesses still pass in the merged tree (6/6 and 11/11). PR #119 is a DRAFT, idle since 2026-09-28T19:22:53Z, with all five of its leases (task-201/202/203/204) expired - its owner is gone and main is still exposed to `date -f <outside file>` arbitrary file read.",
+      "acceptance_criteria": [
+        "main contains the route_intent wiring AND the _memory_writer structured warning",
+        "the union suite (193 tests) is green on the merge commit",
+        "both mutation harnesses report 0 survivors on the merge commit",
+        "CI green on the merge commit",
+        "run by the gates owner - not by the branch that authored either fix"
+      ],
+      "evidence_required": [
+        "CI green on the merge commit",
+        "the post-merge suite counts"
       ],
       "exclusive_paths": [],
       "prerequisites": [
-        "staging bot token + a test chat"
+        "PR#119",
+        "PR#122"
+      ]
+    },
+    {
+      "id": "task-217",
+      "priority": "P0",
+      "zone": "chat-memory-reachability",
+      "title": "The active-agent branch answers without ever reading memory — H1 cannot reach it",
+      "title_fa": "شاخهٔ agent فعال بدون خواندن حافظه پاسخ می‌دهد — H1 به آن نمی‌رسد",
+      "why": "bot/handlers.py::on_message branches on AgentManager.get_active(user_id). When an agent is active it answers via active_agent.respond(...) and never builds a graph state at all, so that user gets no durable-memory read on any turn. The memory reader lives inside the branch that is not taken, so H1 cannot fix it. Measured and pinned 2026-09-29 by test_an_active_agent_bypasses_the_memory_path_entirely.",
+      "acceptance_criteria": [
+        "decide whether an active agent is meant to have durable memory at all",
+        "if yes: route the agent's turn through the reader, or pass memory_context into respond()",
+        "if no: state the exclusion in ADR 0007 and keep the pinning test as the guard",
+        "the pinning test must survive the decision (it asserts the CURRENT behaviour)"
       ],
-      "status_note": "owner/staging action; evidence = staging screenshots + job row dump",
-      "id": "task-175",
-      "priority": "P2",
-      "zone": "p0-stabilization",
-      "title": "Staging smoke of /edit /caption /grade against the live bot (PTB runtime)",
-      "title_fa": "اسموک استیجینگ سه فرمان creative روی ربات زنده",
-      "why_fa": "زنجیره در سطح unit/integration با artifact واقعی اثبات شده؛ اثبات نهایی کاربر-واقعی به کانتکست PTB زنده و توکن استیجینگ نیاز دارد (external dependency)."
+      "evidence_required": [
+        "a decision recorded on the board",
+        "a red->green test if the answer is yes"
+      ],
+      "exclusive_paths": [],
+      "prerequisites": [
+        "PR#122"
+      ]
+    },
+    {
+      "id": "task-218",
+      "priority": "P0",
+      "zone": "orchestration-routing",
+      "title": "Conversation history and turn_count do not survive a turn — the checkpointer persists nothing that matters",
+      "title_fa": "تاریخچهٔ گفتگو و turn_count از یک نوبت جان سالم به در نمی‌برند — checkpointer چیزی را نگه نمی‌دارد",
+      "why": "Measured 2026-09-29 on the real compiled graph with a real checkpointer. Two consecutive turns on one thread_id end with state messages [('user','What is my name?'),('assistant','ACK')] — turn 1's text is gone — and turn_count is 1 after two turns. Root cause: NexusState is a plain TypedDict and `messages: list[dict]` has no Annotated(..., add_messages) reducer, so it is a LastValue channel. _base_state supplies a fresh one-message state every turn, which REPLACES the checkpointed history; the same replacement zeroes turn_count before _router_node increments it. Consequence: the agent has no short-term conversational memory at all, which makes long-term recall the ONLY continuity mechanism — so a recall failure is not degraded UX, it is total amnesia for that turn. This also raises the stakes on H1 and on task-215.",
+      "acceptance_criteria": [
+        "a two-turn test on one thread_id proves the second turn's state carries the first turn's messages",
+        "turn_count reaches 2 after two turns",
+        "the chosen design (add_messages reducer vs. explicit history merge vs. deliberately stateless) is written down before code",
+        "if the answer is 'deliberately stateless', the consequence for recall is stated in the ADR rather than left implied",
+        "no existing reachability test regresses"
+      ],
+      "evidence_required": [
+        "the before/after state of messages and turn_count across two turns",
+        "a decision recorded on the board and in an ADR",
+        "the full regression count"
+      ],
+      "exclusive_paths": [],
+      "prerequisites": []
+    },
+    {
+      "id": "task-219",
+      "priority": "P1",
+      "zone": "coordination-check-truth",
+      "title": "A 168h lease fences bot/handlers.py for a week with no renewal and no heartbeat",
+      "title_fa": "lease 168 ساعته هفت روز bot/handlers.py را بدون تمدید قفل می‌کند",
+      "why": "Found 2026-09-30 by the task-207 fix, which finally made `check` able to see it. The claim `pr33-in-review` on PR#63's board carries ttl_hours=168 (seven days), claimed_at 2026-09-24T05:26:14Z, status=active_in_review, released_at=null, and exclusive_paths covering 50 files including src/nexus_ai_agent/bot/handlers.py - the most contested file in the repository. Still live with ~22h remaining while PR#63 itself was last updated 2026-09-28. A week-long lease with no heartbeat means one session can silence a hot file for the rest of the week, and `gc` cannot release it because the TTL has not elapsed. The 24h default exists precisely to bound this; 168h is the outlier.",
+      "acceptance_criteria": [
+        "the maximum permitted ttl_hours is bounded by the protocol (24 is the documented default)",
+        "a claim whose ttl_hours exceeds the bound is rejected or flagged by check/show",
+        "an active_in_review lease on a hot path with no PR activity for N days is surfaced by praudit",
+        "the rule is written into AGENTS.md, not only into the board"
+      ],
+      "evidence_required": [
+        "the set of ttl_hours values in use across open PR boards, with counts",
+        "the chosen bound and the code that enforces it",
+        "a test that a 168h claim is rejected or flagged"
+      ],
+      "exclusive_paths": [],
+      "prerequisites": []
     }
   ],
   "history": {
@@ -3359,5 +3669,206 @@
       "reason": "This Arena session is bound to arena/01a0e3b7-nexus-ai-agent and cannot push to arena/01a0e356-nexus-ai-agent. PR #109 head cd79bfe3b8e42b1943ad8ff0d352646fc54df548 is MERGEABLE but UNSTABLE: python-parity (3.10) FAILURE on run 36329794486 (job 108649421192) and the duplicate run 36329718482. Local reproduction on CPython 3.10.16 against that exact tree: 3 failed (test_same_user_timeout_releases_exactly_one_pending_slot, test_withdrawn_queued_requests_never_run_after_backlog_clears, test_timeout_during_rate_wait_wakes_worker_without_provider_invocation), 14 passed. Root cause: asyncio.wait_for raises asyncio.TimeoutError on 3.10, which is not a subclass of builtin TimeoutError (docs.python.org/3.10/library/asyncio-exceptions.html) and is an Exception, so the worker generic handler records queue_processor_error. 3.11+ aliases the names (Changed in version 3.11). History was fast-forwarded onto this branch (cd79bfe remains an ancestor); no rewrite, no force-push. Exclusive paths unchanged. gates_owner stays with this continuation."
     }
   ],
-  "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins."
+  "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins.",
+  "next_work_archive_2026_09_29": {
+    "note": "The ten entries that were in next_work before task-205, kept verbatim so nothing is lost when a newer agent publishes a new forward network (AGENTS.md: newest state wins, but never at the cost of a record).",
+    "superseded_by": "arena/01a0eade-nexus-ai-agent",
+    "at": "2026-09-29T02:30:00Z",
+    "entries": [
+      {
+        "id": "task-164",
+        "priority": "P1",
+        "zone": "ci-quality",
+        "title": "Nightly DB backup has never succeeded (3/3 red) — make the production backup pipeline actually work",
+        "title_fa": "بکاپ شبانهٔ دیتابیس هرگز موفق نشده (۳ از ۳ سرخ) — مسیر بکاپ Production واقعاً کار کند",
+        "why_fa": "تنها مکانیسم DR برای دیتابیس Production (R2 blob tier) سه اجرا پیاپی شکست خورده و هیچ بکاپی تولید نشده؛ ریشهٔ دقیق بدون لوق جاب نامشخص است (R2 secrets؟ پیکربندی Neon؟).",
+        "acceptance_criteria": [
+          "a manual workflow_dispatch run of maintenance/backup-db completes SUCCESS with a visible object under backups/ in R2 including sha256/verified/timestamp in the step log",
+          "NEXUS_R2_* secrets are configured in GitHub Actions (owner-side)",
+          "the scheduled (cron) run after that also completes SUCCESS"
+        ],
+        "prerequisites": [],
+        "exclusive_paths": [
+          ".github/workflows/maintenance.yml"
+        ],
+        "status_note": "repo-side verifiability delivered by task-167 (verified backup contract, round-trip byte identity, restore-into-temp-SQLite verification); what remains is owner-secrets configuration + one real green dispatch"
+      },
+      {
+        "id": "task-124",
+        "priority": "P0",
+        "zone": "audit-remainder",
+        "title": "P0-8 single wiring + P0-9 graph memory write path",
+        "title_fa": "بستن P0-8 و P0-9",
+        "why_fa": "دو یافتهٔ باز ممیزی امنیتی/کارکردی با معیار پذیرش روشن.",
+        "acceptance_criteria": [
+          "تست ONE-OWNER سبز",
+          "write→read گراف با round-trip",
+          "صفر رگرسیون"
+        ],
+        "prerequisites": [
+          "task-122",
+          "task-123"
+        ],
+        "exclusive_paths": [
+          "src/nexus_ai_agent/memory/",
+          "src/nexus_ai_agent/features/rag.py",
+          "tests/unit/test_audit_remainder.py"
+        ]
+      },
+      {
+        "id": "task-122",
+        "priority": "P0",
+        "zone": "feature-wiring",
+        "title": "PR#32 rebase + dedupe",
+        "title_fa": "ریبیس و رفع دوگانگی PR#32",
+        "why_fa": "بزرگ‌ترین PR باز روی بیس باستانی؛ ریسک دو سیم‌کشی موازی.",
+        "acceptance_criteria": [
+          "دیف یکتا",
+          "تست‌های feature_* سبز",
+          "CI سبز روی main تازه"
+        ],
+        "prerequisites": [],
+        "exclusive_paths": [
+          "src/nexus_ai_agent/bot/surface/",
+          "src/nexus_ai_agent/features/"
+        ],
+        "status_note": "delivered via PR#47 (forensic triage docs/audits/PR32_TRIAGE_2026-09-21.md + port-forward)"
+      },
+      {
+        "id": "task-123",
+        "priority": "P0",
+        "zone": "packaging+interop",
+        "title": "PR#33 slim-down",
+        "title_fa": "کوچک‌سازی PR#33",
+        "why_fa": "برای باز شدن مسیر بسته‌بندی/داک و آزادسازی cli.py.",
+        "acceptance_criteria": [
+          "دیف فقط یکتاها",
+          "CI سبز"
+        ],
+        "prerequisites": [],
+        "exclusive_paths": []
+      },
+      {
+        "id": "task-121",
+        "priority": "P1",
+        "zone": "delivery-interop-markers",
+        "title": "OTIO marker round-trip",
+        "title_fa": "مارکرهای OTIO",
+        "why_fa": "تنها شکاف باقی‌ماندهٔ تسک ۱۱۰؛ include_markers فعلاً بی‌اثر است.",
+        "acceptance_criteria": [
+          "include_markers مؤثر",
+          "۲ تست round-trip با OTIO واقعی"
+        ],
+        "prerequisites": [
+          "task-123"
+        ],
+        "exclusive_paths": [
+          "src/nexus_ai_agent/creative/packs/delivery/",
+          "tests/unit/test_otio_interop.py"
+        ]
+      },
+      {
+        "id": "task-128",
+        "priority": "P1",
+        "zone": "core-database",
+        "title": "Async DB phase 1",
+        "title_fa": "فاز ۱ دیتابیس ناهمگام",
+        "why_fa": "حذف create_engine سینک از features با آزمون نگهبان معماری.",
+        "acceptance_criteria": [
+          "انجین مرکزی + ۲ پایلوت",
+          "گارد معماری سبز"
+        ],
+        "prerequisites": [
+          "task-122"
+        ],
+        "exclusive_paths": [
+          "src/nexus_ai_agent/core/async_db.py",
+          "src/nexus_ai_agent/features/"
+        ]
+      },
+      {
+        "id": "task-132",
+        "priority": "P1",
+        "zone": "ci-quality",
+        "title": "Extras smoke matrix",
+        "title_fa": "ماتریس دود اختیاری‌ها",
+        "why_fa": "مسیرهای اختیاری خارج از CI پیش‌فرض می‌توانند بی‌صدا بشکنند (شکاف مستند در TESTING §7).",
+        "acceptance_criteria": [
+          "job ماتریسی per-extra",
+          "شکست نصب = شکست CI"
+        ],
+        "prerequisites": [],
+        "exclusive_paths": [
+          "tests/unit/test_optional_extras.py",
+          ".github/"
+        ]
+      },
+      {
+        "acceptance_criteria": [
+          "routes + creative/job_registry.py + video_director.py + ffmpeg_executor.py removed; creative/__init__ exports cleaned",
+          "importer-ratchet test updated to assert ABSENCE; GET HMAC tests removed with the routes",
+          "grep proves zero remaining callers; full suite green; release note added"
+        ],
+        "exclusive_paths": [
+          "src/nexus_ai_agent/api/app.py",
+          "src/nexus_ai_agent/creative/job_registry.py",
+          "src/nexus_ai_agent/creative/video_director.py",
+          "src/nexus_ai_agent/creative/ffmpeg_executor.py",
+          "tests/architecture/test_legacy_creative_boundary.py",
+          "tests/unit/test_security_hardening.py"
+        ],
+        "prerequisites": [
+          "PR#58 merged"
+        ],
+        "status_note": "evidence: D-0010 in DECISION_LOG; removal only after PR#58 merges",
+        "id": "task-173",
+        "priority": "P1",
+        "zone": "p0-stabilization",
+        "title": "Remove the legacy /creative/* HTTP lane (D-0010 reopen clause) after PR#58 lands",
+        "title_fa": "حذف مسیر قدیمی /creative/* بعد از ادغام PR#58",
+        "why_fa": "AD-0010: مسیر legacy فقط برای عدم برخورد با رفع SSRF درحال انجام (PR#58) نگه داشته شده؛ بعد از مرج باید حذف شود تا یک مسیر اجرایی Creative یگانه بماند."
+      },
+      {
+        "acceptance_criteria": [
+          "lane op(s) with golden argv tests + a decision on shipping reference .cube assets",
+          "worker map + surface ALLOWED updated in the same PR; real-render regression tests",
+          "no silent degradation: unavailable inputs stay typed failures"
+        ],
+        "exclusive_paths": [
+          "src/nexus_ai_agent/creative/rendering/ir.py",
+          "src/nexus_ai_agent/creative/rendering/compiler.py",
+          "src/nexus_ai_agent/creative/render_jobs.py",
+          "src/nexus_ai_agent/bot/creative_surface.py"
+        ],
+        "prerequisites": [],
+        "status_note": "owned by the creative-runtime agent; surface/worker files change atomically with the lane instrument",
+        "id": "task-174",
+        "priority": "P2",
+        "zone": "creative-runtime",
+        "title": "Lane instruments for LUT (color.apply_lut) and subtitles (caption.burn_in) so the refused surface ops can enter the matrix",
+        "title_fa": "ابزارهای lane برای LUT و subtitles تا دو عمل ردشدهٔ surface وارد ماتریس واقعی شوند",
+        "why_fa": "D-0011: lut/burnin به دلیل نبود مسیر اجرای صادقانه (بدون .cube shipped و بدون subtitles op در lane IR) typed refuse می‌شوند؛ با ابزار واقعی lane قابل برگشت‌اند."
+      },
+      {
+        "acceptance_criteria": [
+          "real user sends /edit trim on staging and receives translated queued + video artifact",
+          "caption transcribe on default install returns the typed unavailable message (localized)",
+          "job rows show durable COMPLETED/not FAILED for the typed paths"
+        ],
+        "exclusive_paths": [],
+        "prerequisites": [
+          "staging bot token + a test chat"
+        ],
+        "status_note": "owner/staging action; evidence = staging screenshots + job row dump",
+        "id": "task-175",
+        "priority": "P2",
+        "zone": "p0-stabilization",
+        "title": "Staging smoke of /edit /caption /grade against the live bot (PTB runtime)",
+        "title_fa": "اسموک استیجینگ سه فرمان creative روی ربات زنده",
+        "why_fa": "زنجیره در سطح unit/integration با artifact واقعی اثبات شده؛ اثبات نهایی کاربر-واقعی به کانتکست PTB زنده و توکن استیجینگ نیاز دارد (external dependency)."
+      }
+    ]
+  },
+  "next_work_archive_2026_09_29b": [],
+  "next_work_archive_2026_09_29c": []
 }

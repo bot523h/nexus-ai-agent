@@ -150,6 +150,109 @@ def _claim_live(claim: dict) -> bool:
     return _now() <= claimed + timedelta(hours=int(claim.get("ttl_hours", 24)))
 
 
+# ── cross-PR board visibility (task-207) ─────────────────────────────────
+#
+# `cmd_check` used to read ONE board: the local working tree's.  A claim that
+# lives only on an unmerged PR branch was therefore invisible, and the tool
+# printed "no overlap — safe to proceed" for a file somebody else had leased.
+# That is the enforcement mechanism failing OPEN, in the most reassuring
+# wording it owns.  It was observed live: task-202 (graph.py, PR #119) and
+# task-203 (memory/, PR #121) were both leased while check reported no overlap.
+#
+# Visibility alone is not the fix.  The moment GitHub is unreachable the same
+# false negative returns, so `check` now also reports WHETHER it managed to
+# consult every open PR, and exits 2 when it did not.  "Could not verify" and
+# "verified clear" are different answers and must not share an exit code.
+
+#: Exit codes, documented in AGENTS.md and in `--help`.
+CHECK_CLEAR = 0  # every open PR consulted; no live lease touches these files
+CHECK_OVERLAP = 1  # a live foreign lease does touch them
+CHECK_UNVERIFIED = 2  # the cross-PR view could not be established — NOT a pass
+
+
+def _board_from_ref(ref: str) -> dict | None:
+    """Read ``.agents/board.json`` from a local remote-tracking ref, if fetched."""
+    import subprocess
+
+    proc = subprocess.run(  # noqa: S603 (fixed argv, no shell)
+        ["git", "show", f"{ref}:.agents/board.json"],
+        cwd=BOARD.parent,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        return None
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None
+
+
+def _board_from_github(repo: str, branch: str, token: str | None) -> dict | None:
+    """Read a PR branch's board through the contents API."""
+    import base64
+
+    try:
+        payload = _gh_get(  # type: ignore[arg-type]
+            f"https://api.github.com/repos/{repo}/contents/.agents/board.json?ref={branch}",
+            token,
+        )
+        return json.loads(base64.b64decode(payload["content"]).decode("utf-8"))  # type: ignore[index]
+    except Exception:  # noqa: BLE001 - any failure means "could not consult"
+        return None
+
+
+def collect_open_pr_boards(
+    repo: str, token: str | None = None, my_branch: str = ""
+) -> tuple[list[tuple[str, dict]], list[str]]:
+    """Every open PR's board, plus the branches that could not be consulted.
+
+    Git is tried before the network: the branches are usually already fetched,
+    which keeps the common case fast and rate-limit-free.  GitHub is the
+    fallback so correctness does not depend on somebody having fetched first.
+    """
+    boards: list[tuple[str, dict]] = []
+    unconsulted: list[str] = []
+    try:
+        prs = fetch_open_prs(repo, token)
+    except Exception as exc:  # noqa: BLE001
+        return [], [f"<open-PR list unavailable: {type(exc).__name__}>"]
+
+    for pr in prs:
+        head = pr.get("head_branch") or ""
+        if not head or (my_branch and head == my_branch):
+            continue
+        board = _board_from_ref(f"origin/{head}")
+        source = f"origin/{head}"
+        if board is None:
+            board = _board_from_github(repo, head, token)
+            source = f"PR#{pr.get('number')} ({head})"
+        if board is None:
+            unconsulted.append(head)
+        else:
+            boards.append((source, board))
+    return boards, unconsulted
+
+
+def conflicting_paths_across(
+    boards: list[tuple[str, dict]], branch: str, files: list[str]
+) -> list[tuple[str, str, str]]:
+    """Live-lease conflicts for *files* across many boards.
+
+    Pure and side-effect free, so the whole rule can be tested without a
+    network, a git remote, or a real claim.  Returns ``(task, file, source)``.
+    """
+    seen: set[tuple[str, str, str]] = set()
+    hits: list[tuple[str, str, str]] = []
+    for source, board in boards:
+        for task, path in _conflicting_paths(board, branch, files):
+            key = (task, path, source)
+            if key not in seen:
+                seen.add(key)
+                hits.append(key)
+    return hits
+
+
 def _conflicting_paths(board: dict, branch: str, files: list[str]) -> list[tuple[str, str]]:
     """Return overlaps between *files* and other branches' live exclusive paths."""
     hits: list[tuple[str, str]] = []
@@ -312,17 +415,96 @@ def cmd_next(args: argparse.Namespace) -> int:
 
 
 def cmd_check(args: argparse.Namespace) -> int:
-    board = load_board()
-    files = [f for f in args.files.split(",") if f.strip()]
-    hits = _conflicting_paths(board, args.branch or "", files)
+    files = [f.strip() for f in args.files.split(",") if f.strip()]
+    branch = args.branch or ""
+    # getattr: `cmd_check` is called programmatically by the board tests with a
+    # hand-built namespace, and an AttributeError here would read as a crash
+    # rather than as "this caller predates the cross-PR options".
+    # None means "the operator did not name any boards"; [] means "consult an
+    # empty set, successfully". Collapsing the two would make it impossible to
+    # test the clean case hermetically, and would silently fall back to a network
+    # call the caller thought they had disabled.
+    _raw_boards = getattr(args, "board_json", None)
+    explicit_boards: list[str] | None = None if _raw_boards is None else list(_raw_boards)
+    no_remote: bool = bool(getattr(args, "no_remote", False))
+    repo_arg: str = getattr(args, "repo", "") or ""
+    token_arg: str = getattr(args, "token", "") or ""
+    boards: list[tuple[str, dict]] = []
+    unconsulted: list[str] = []
+
+    # The local board is ALWAYS consulted. Explicit/remote boards are additional
+    # views of the same repository, never a replacement for the one on disk —
+    # an earlier draft let `--board-json` suppress the local board entirely, and
+    # the regression suite caught it immediately.
+    boards.append(("local board", load_board()))
+
+    if explicit_boards is not None:
+        # Hermetic path: these boards are named explicitly. Used by the regression
+        # tests, and by an operator who has already snapshotted them.
+        for path in explicit_boards:
+            try:
+                boards.append((path, json.loads(Path(path).read_text(encoding="utf-8"))))
+            except (OSError, json.JSONDecodeError) as exc:
+                print(f"could not read board {path}: {exc}", file=sys.stderr)
+                unconsulted.append(path)
+    elif not no_remote:
+        repo = repo_arg or os.environ.get("GITHUB_REPOSITORY", "")
+        token = token_arg or os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+        if "/" not in repo:
+            print(
+                "check: no repository known, so foreign PR boards were NOT consulted.\n"
+                "       Pass --repo owner/name (or set GITHUB_REPOSITORY), or --no-remote\n"
+                "       to accept a local-only check explicitly.",
+                file=sys.stderr,
+            )
+            unconsulted.append("<no repository>")
+        else:
+            remote, missed = collect_open_pr_boards(repo, token, my_branch=branch)
+            boards.extend(remote)
+            unconsulted.extend(missed)
+
+    hits = conflicting_paths_across(boards, branch, files)
+
     if hits:
-        print("OVERLAP with another agent's active or active-in-review exclusive paths:")
-        for task, path in hits:
-            print(f"  {path}  ← claimed by {task}")
+        print("OVERLAP with another agent's live exclusive paths:")
+        for task, path, source in hits:
+            print(f"  {path}  <- claimed by {task}  [seen in {source}]")
         print(STOP_BANNER)
-        return 1
-    print("no overlap — safe to proceed.")
-    return 0
+        return CHECK_OVERLAP
+
+    if unconsulted:
+        # The critical branch. `check` exists to stop a collision; a verdict it
+        # could not actually earn must never be phrased as permission.
+        print(
+            f"INCOMPLETE — {len(unconsulted)} open-PR board(s) could NOT be consulted:",
+            file=sys.stderr,
+        )
+        for head in unconsulted[:10]:
+            print(f"  {head}", file=sys.stderr)
+        if len(unconsulted) > 10:
+            print(f"  ... and {len(unconsulted) - 10} more", file=sys.stderr)
+        print(
+            "\nThis is NOT a pass. A lease held on an unmerged PR branch is exactly the\n"
+            "case this check exists to catch, and it is invisible from the local board.\n"
+            "Retry with --repo owner/name, or run\n"
+            "  python scripts/praudit --repo owner/name --fail-on-invisible\n"
+            "and treat a network failure as a blocker, not as clearance.",
+            file=sys.stderr,
+        )
+        return CHECK_CLEAR if no_remote else CHECK_UNVERIFIED
+
+    consulted = len(boards) - 1  # the local board is not a PR
+    suffix = f" (local + {consulted} open-PR board(s))" if consulted else ""
+    if no_remote:
+        print(
+            "\n!!  --no-remote: FOREIGN PR BOARDS WERE NOT CONSULTED.\n"
+            "!!  A lease held only on an unmerged PR branch is invisible from here, and\n"
+            "!!  that is the exact case this check exists to catch. This exit 0 means\n"
+            "!!  'no overlap in the LOCAL board', not 'no overlap on the repository'.",
+            file=sys.stderr,
+        )
+    print(f"no overlap — safe to proceed{suffix}.")
+    return CHECK_CLEAR
 
 
 # ── praudit: open-PR × board visibility (read-only) ───────────────────
@@ -515,6 +697,22 @@ def main() -> int:
     p = sub.add_parser("check")
     p.add_argument("--files", required=True, help="comma-separated changed file paths")
     p.add_argument("--branch", default="")
+    p.add_argument("--repo", default="", help="owner/name; defaults to $GITHUB_REPOSITORY")
+    p.add_argument("--token", default="", help="defaults to $GITHUB_TOKEN or $GH_TOKEN")
+    p.add_argument(
+        "--board-json",
+        action="append",
+        default=None,
+        help="consult this board file instead of GitHub (repeatable; hermetic). "
+        "Pass once with no value semantics: an empty list means 'consult none, "
+        "and that succeeded'.",
+    )
+    p.add_argument(
+        "--no-remote",
+        action="store_true",
+        help="local board ONLY. Accepts that foreign PR leases are invisible; "
+        "the exit-0 verdict is then a local-only statement, not clearance.",
+    )
     p.set_defaults(func=cmd_check)
 
     p = sub.add_parser("praudit")
