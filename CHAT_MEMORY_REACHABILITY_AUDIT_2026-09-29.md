@@ -781,3 +781,76 @@ telegram_e2e_mutations.py      : 4/4 killed
 ```
 
 Both fixes still present, neither discarded, no force-push, no history rewritten.
+
+---
+
+## 17. task-207 — THE ENFORCEMENT MECHANISM FAILED OPEN
+
+`scripts/agent_board.py check` is what every agent runs before pushing. It read
+**one** board: the local working tree's. A claim living only on an unmerged PR
+branch was invisible, so the tool answered:
+
+```
+no overlap — safe to proceed.        (exit 0)
+```
+
+for a file somebody else had leased. Reproduced deterministically in
+`scripts/task207_repro.py` — a foreign PR board holds a live 7-day lease on
+`orchestration/graph.py`, the local board holds nothing, and `check` still exits 0
+with the most reassuring wording the tool owns.
+
+**This was not theoretical.** `task-202` (graph.py, PR #119) and `task-203`
+(memory/, PR #121) were both leased while `check` reported clearance. Every push
+in that window was "authorized" by a tool that had not looked.
+
+### Two halves, because visibility alone is not a fix
+
+The same false negative returns the moment GitHub is unreachable, so:
+
+1. **Visibility** — `check` consults every open PR's board (git remote-tracking
+   first, GitHub contents API as fallback) and names the board a conflict was
+   seen in.
+2. **Fail closed** — `0` = verified clear, `1` = overlap, **`2` = could not
+   verify**. An unreadable foreign board is never reported as clearance.
+   `--no-remote` survives as an explicit opt-out that now *shouts* that its exit 0
+   means "no overlap in the LOCAL board", not clearance.
+
+### Live proof against the real repository
+
+```
+bot/handlers.py      -> exit 1   pr33-in-review on PR#63
+                                     claimed 2026-09-24, ttl 168h, still live
+memory/long_term.py  -> exit 0   no overlap — safe to proceed
+                                     (local + 41 open-PR board(s))
+```
+
+The clear verdict now reports **how many boards it actually read**, which is the
+whole point: a verdict you can audit is a verdict you can trust.
+
+### Two bugs this work introduced, both caught by its own tests
+
+- `--board-json` initially **suppressed the local board** — the more dangerous of
+  the two mistakes, since it silently drops every lease recorded on disk.
+- The first `C1` mutant only cleared the unconsulted list while still reading the
+  foreign board, and the whole suite stayed green. *A mutant that does not
+  reproduce the defect reports a green run that means nothing.*
+
+### task-219 (NEW) — a week-long lease on the hottest file
+
+The 168-hour TTL is itself the finding. `pr33-in-review` fences
+`bot/handlers.py` plus 49 other files until 2026-10-01, with no heartbeat, while
+PR #63 has not moved since 2026-09-28 — and `gc` cannot release it because the TTL
+has not elapsed. One session can silence the most contested file in the
+repository for a week. The 24-hour default exists precisely to bound this.
+
+```
+tests/unit/test_agent_board.py                 25 passed (7 new)
+scripts/agent_board_check_mutations.py         4/4 killed
+chat_memory_mutations.py                       6/6 killed
+memory_reader_query_mutations.py               3/3 killed
+telegram_e2e_mutations.py                      4/4 killed
+python -m pytest tests/unit tests/architecture  25 failed, 2772 passed
+```
+
+25 is the unchanged sandbox baseline; 2765 → 2772 is this work's seven tests.
+**Zero regressions.**
