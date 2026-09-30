@@ -3081,7 +3081,7 @@
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "implements the task-207 design (0/1/2 multi-source referee). D-0024 direction page is separate (docs-architecture). | 2026-09-30: lease-fencing continuation (task-219) landed on the same branch; board tests 34 passed, referee mutations 8/8 killed. | CLOSED 2026-09-30: referee + lease fencing (task-219) + gc note-preservation (task-220) all merged on this branch; evidence: test_agent_board.py 40 passed, board_referee_mutations.py 9/9 killed.",
+      "note": "implements the task-207 design (0/1/2 multi-source referee). D-0024 direction page is separate (docs-architecture). | 2026-09-30: lease-fencing continuation (task-219) landed on the same branch; board tests 34 passed, referee mutations 8/8 killed. | CLOSED 2026-09-30: referee + lease fencing (task-219) + gc note-preservation (task-220) all merged on this branch; evidence: test_agent_board.py 40 passed, board_referee_mutations.py 9/9 killed. | 2026-09-30 CLOSED via PR#126 (head 203cfb5): 32/32 CI checks green incl. lint+test+continuum; full unit suite 2685 passed/11 skipped; board mutation harness 14/14 killed; ruff check+format clean.",
       "release_reason": "completed on arena/hardening-task207-foreign-check (multi-source referee + task-219 fencing + task-220 gc-note fix)",
       "generation": 0
     },
@@ -3114,7 +3114,7 @@
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "implemented on arena/hardening-task207-foreign-check: generation/epoch fencing (_generation/_stale_generation), claim renewal = heartbeat (epoch stable), takeover/release/defer advance the epoch, --expected-generation refuses a stale owner with exit 2. Evidence: pytest --noconftest -q tests/unit/test_agent_board.py -> 34 passed; python scripts/board_referee_mutations.py -> 8/8 killed.",
+      "note": "implemented on arena/hardening-task207-foreign-check: generation/epoch fencing (_generation/_stale_generation), claim renewal = heartbeat (epoch stable), takeover/release/defer advance the epoch, --expected-generation refuses a stale owner with exit 2. Evidence: pytest --noconftest -q tests/unit/test_agent_board.py -> 34 passed; python scripts/board_referee_mutations.py -> 8/8 killed. | 2026-09-30 CLOSED via PR#126 (head 203cfb5): 32/32 CI checks green incl. lint+test+continuum; full unit suite 2685 passed/11 skipped; board mutation harness 14/14 killed; ruff check+format clean.",
       "generation": 0
     },
     {
