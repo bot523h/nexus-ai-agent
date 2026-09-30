@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -321,20 +322,163 @@ def test_check_detects_overlap_and_allows_disjoint_work(
     board = _synthetic_directory_claim_board()
     board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
     _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+    # Local-only mode: the overlap semantics are exercised without touching the
+    # network or other worktrees (multi-source behaviour is covered separately).
     assert (
         board_module.cmd_check(
             type(
-                "A", (), {"files": "src/synthetic/intruder.py", "branch": "arena/999-other-agent"}
+                "A",
+                (),
+                {
+                    "files": "src/synthetic/intruder.py",
+                    "branch": "arena/999-other-agent",
+                    "no_remote": True,
+                },
             )()
         )
         == 1
     )
     assert (
         board_module.cmd_check(
-            type("A", (), {"files": "docs/not-owned-by-anyone.md", "branch": "arena/999-other"})()
+            type(
+                "A",
+                (),
+                {
+                    "files": "docs/not-owned-by-anyone.md",
+                    "branch": "arena/999-other",
+                    "no_remote": True,
+                },
+            )()
         )
         == 0
     )
+
+
+def test_check_unreadable_source_is_exit_2_never_a_pass(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A source that cannot be read must be a loud exit 2, never a silent 0."""
+    board = _synthetic_directory_claim_board()
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+
+    def _no_git(*_a: object, **_k: object) -> None:
+        return None
+
+    monkeypatch.setattr(board_module, "_git", _no_git)
+    code = board_module.cmd_check(
+        type(
+            "A",
+            (),
+            {"files": "docs/not-owned.md", "branch": "arena/999-other", "no_remote": False},
+        )()
+    )
+    assert code == 2, "an unreadable remote/worktree must not be reported as 'no overlap'"
+
+
+def test_check_no_remote_narrows_the_claim_loudly(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """``--no-remote`` is a local verdict and must say so out loud."""
+    board = _synthetic_directory_claim_board()
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+
+    def _explode(*_a: object, **_k: object) -> None:
+        raise AssertionError("--no-remote must not consult git")
+
+    monkeypatch.setattr(board_module, "_git", _explode)
+    code = board_module.cmd_check(
+        type(
+            "A",
+            (),
+            {"files": "docs/not-owned.md", "branch": "arena/999-other", "no_remote": True},
+        )()
+    )
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "NOT a global pass" in out
+
+
+def test_check_consults_sibling_worktree_boards(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A foreign lease that exists only in another worktree must still be seen."""
+    board = _synthetic_directory_claim_board()
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+
+    # Another worktree holds a lease on docs/other-agent.md.
+    other_root = tmp_path / "other-worktree"
+    (other_root / ".agents").mkdir(parents=True)
+    other_board = _synthetic_directory_claim_board()
+    other_board["claims"][0]["exclusive_paths"] = ["docs/other-agent.md"]
+    other_board["claims"][0]["agent_branch"] = "arena/222-far-agent"
+    (other_root / ".agents" / "board.json").write_text(json.dumps(other_board), encoding="utf-8")
+
+    def _fake_git(args: list[str], cwd: Path) -> object:
+        if args[:2] == ["worktree", "list"]:
+            listing = f"worktree {board_module.BOARD.parents[1]}\nworktree {other_root}\n"
+            return subprocess.CompletedProcess(args, 0, stdout=listing, stderr="")
+        if args[:2] == ["fetch", "--quiet"]:
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _fake_git)
+    monkeypatch.setattr(board_module, "_read_remote_board", lambda: (None, "test: remote offline"))
+    code = board_module.cmd_check(
+        type(
+            "A",
+            (),
+            {"files": "docs/other-agent.md", "branch": "arena/999-me", "no_remote": False},
+        )()
+    )
+    # A proven conflict is exit 1 even though the remote was unreadable.
+    assert code == 1
+
+
+def test_check_unreliable_worktree_enumeration_is_exit_2(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If sibling worktrees cannot be enumerated, the absence of overlap is unproven."""
+    board = _synthetic_directory_claim_board()
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+
+    def _git_worktree_fails(args: list[str], cwd: Path) -> object:
+        if args[:2] == ["worktree", "list"]:
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="not a repo")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _git_worktree_fails)
+    # origin/main is readable and clean, but the worktree enumeration was not.
+    monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, ""))
+    code = board_module.cmd_check(
+        type(
+            "A",
+            (),
+            {"files": "docs/not-owned.md", "branch": "arena/999-me", "no_remote": False},
+        )()
+    )
+    assert code == 2, "unreliable worktree enumeration must not be a clean pass"
+
+
+def test_check_proven_conflict_wins_over_unreadable_remote(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The local board proves a conflict while origin/main is unreachable → exit 1."""
+    board = _synthetic_directory_claim_board()
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+    monkeypatch.setattr(board_module, "_git", lambda *a, **k: None)
+    code = board_module.cmd_check(
+        type(
+            "A",
+            (),
+            {"files": "src/synthetic/intruder.py", "branch": "arena/999-other", "no_remote": False},
+        )()
+    )
+    assert code == 1
 
 
 def test_claim_refuses_a_foreign_active_lease(
