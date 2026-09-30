@@ -43,6 +43,22 @@ REPO_ROOT = Path(__file__).parents[2]
 BOARD_PATH = REPO_ROOT / ".agents" / "board.json"
 SCRIPT = REPO_ROOT / "scripts" / "agent_board.py"
 
+
+@pytest.fixture(autouse=True)
+def _hermetic_pr_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Scrub CI's GitHub env so no unit test can reach the network.
+
+    GitHub Actions exports ``GITHUB_REPOSITORY``/``GITHUB_TOKEN`` on every
+    runner; without scrubbing them, ``cmd_check`` would try to enumerate open-PR
+    branches over the network inside a unit test (the same leak class that once
+    turned ``praudit`` red). The explicit ``--repo``/``--token`` arguments stay
+    available for the tests that exercise the new source directly.
+    """
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+
+
 LEGAL_STATUSES = {
     "queued",
     "active",
@@ -215,6 +231,38 @@ def test_no_two_active_claims_own_the_same_path(board: dict) -> None:
                     clashes.append(f"{owner} and {claim['task']} both own {path}")
             owned[path] = claim["task"]
     assert not clashes, "overlapping active leases:\n" + "\n".join(clashes)
+
+
+TERMINAL_STATUSES = frozenset(
+    {
+        "done",
+        "completed_released",
+        "completed_merged",
+        "completed_delivered_via_PR34",
+        "superseded_by_PR33",
+    }
+)
+
+
+def test_terminal_claims_release_owner_and_gate(board: dict) -> None:
+    """A finished claim must not keep a live-looking owner or the single gate.
+
+    ``done`` + ``agent_branch`` set (or ``done`` + ``gates_owner: true``) is a
+    governance bug, not cosmetics: the gate is supposed to have exactly one
+    holder, so a finished claim silently holding it misleads every reader. The
+    evidence (which branch did the work, when) lives in history, not in the live
+    owner field.
+    """
+    offenders: list[str] = []
+    for claim in board["claims"]:
+        if claim["status"] not in TERMINAL_STATUSES:
+            continue
+        if claim.get("agent_branch") or claim.get("claimed_at") or claim.get("gates_owner"):
+            offenders.append(
+                f"{claim['task']}: branch={claim.get('agent_branch')!r} "
+                f"claimed_at={claim.get('claimed_at')!r} gates_owner={claim.get('gates_owner')}"
+            )
+    assert not offenders, "terminal claims still hold owner/gate state:\n" + "\n".join(offenders)
 
 
 def test_prerequisites_reference_existing_tasks(board: dict) -> None:
@@ -426,6 +474,9 @@ def test_check_consults_sibling_worktree_boards(
 
     monkeypatch.setattr(board_module, "_git", _fake_git)
     monkeypatch.setattr(board_module, "_read_remote_board", lambda: (None, "test: remote offline"))
+    # Isolate the worktree source: the open-PR branch source is readable-and-empty
+    # so this test still proves the *worktree* conflict (not a blanket exit 2).
+    monkeypatch.setattr(board_module, "_open_pr_branches", lambda repo, token: ([], ""))
     code = board_module.cmd_check(
         type(
             "A",
@@ -453,6 +504,8 @@ def test_check_unreliable_worktree_enumeration_is_exit_2(
     monkeypatch.setattr(board_module, "_git", _git_worktree_fails)
     # origin/main is readable and clean, but the worktree enumeration was not.
     monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, ""))
+    # Isolate the worktree source from the open-PR branch source.
+    monkeypatch.setattr(board_module, "_open_pr_branches", lambda repo, token: ([], ""))
     code = board_module.cmd_check(
         type(
             "A",
@@ -558,6 +611,197 @@ def test_check_malformed_claim_ttl_does_not_crash_the_referee(
         )()
     )
     assert code == 2, "a malformed claim must be UNVERIFIABLE, never a silent 0 or a crash"
+
+
+# --------------------------------------------------------------------------- #
+# pushed open-PR branch source (task-207): a lease that lives only on a pushed
+# branch — open PR, not in origin/main, not checked out — must still be seen.
+# --------------------------------------------------------------------------- #
+def _no_git(*_a: object, **_k: object) -> None:
+    return None
+
+
+def test_check_fails_closed_when_the_open_pr_list_is_unavailable(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No repo/token => the pushed-branch source is unreadable => exit 2, never 0.
+
+    Everything else is readable and clean, so exit 2 can *only* come from the
+    open-PR branch source: this is the false-clear guard itself.
+    """
+    board = _synthetic_directory_claim_board()
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+
+    def _git_ok_worktree(args: list[str], cwd: Path) -> object:
+        if args[:2] == ["worktree", "list"]:
+            return subprocess.CompletedProcess(args, 0, stdout=f"worktree {REPO_ROOT}\n", stderr="")
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _git_ok_worktree)
+    monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, ""))
+    code = board_module.cmd_check(
+        type(
+            "A",
+            (),
+            {
+                "files": "docs/not-owned.md",
+                "branch": "arena/999-me",
+                "no_remote": False,
+                "repo": "",
+                "token": "",
+            },
+        )()
+    )
+    assert code == 2, "an unreadable open-PR list must never be a clean pass"
+
+
+def test_check_sees_a_lease_that_lives_only_on_a_pushed_branch(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The PR-only lease is the false-clear this source exists to close."""
+    board = _synthetic_directory_claim_board()
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+
+    foreign_board = _synthetic_directory_claim_board()
+    foreign_board["claims"][0]["exclusive_paths"] = ["src/pr_only_zone/"]
+    foreign_board["claims"][0]["agent_branch"] = "arena/999-pr-only"
+
+    def _fake_git(args: list[str], cwd: Path) -> object:
+        if args[:2] == ["worktree", "list"]:
+            return subprocess.CompletedProcess(args, 0, stdout=f"worktree {REPO_ROOT}\n", stderr="")
+        if args[0] == "fetch":
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        if args[0] == "show" and "refs/remotes/origin/arena/999-pr-only" in args[1]:
+            return subprocess.CompletedProcess(args, 0, stdout=json.dumps(foreign_board), stderr="")
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _fake_git)
+    monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, ""))
+    monkeypatch.setattr(
+        board_module, "_open_pr_branches", lambda repo, token: (["arena/999-pr-only"], "")
+    )
+    code = board_module.cmd_check(
+        type(
+            "A",
+            (),
+            {
+                "files": "src/pr_only_zone/engine.py",
+                "branch": "arena/999-me",
+                "no_remote": False,
+                "repo": "o/r",
+                "token": "t",
+            },
+        )()
+    )
+    # Exit 1 (not 2): every other source is readable, so the conflict is proven
+    # *from the pushed branch alone* — exactly the lease the local referee missed.
+    assert code == 1, "a lease that lives only on a pushed PR branch must be seen"
+
+
+def test_check_excludes_its_own_branch_from_the_pr_source(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A branch never conflicts with its own pushed lease (self-exclusion)."""
+    board = _synthetic_directory_claim_board()
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+
+    seen_branches: list[list[str]] = []
+
+    def _spy(branches: list[str], exclude_branch: str = "") -> object:
+        seen_branches.append(list(branches))
+        return [], []
+
+    monkeypatch.setattr(board_module, "_git", _no_git)
+    monkeypatch.setattr(board_module, "_read_remote_board", lambda: (None, "test: offline"))
+    monkeypatch.setattr(board_module, "_open_pr_branches", lambda repo, token: (["arena/mine"], ""))
+    monkeypatch.setattr(board_module, "_remote_branch_boards", _spy)
+    board_module.cmd_check(
+        type(
+            "A",
+            (),
+            {
+                "files": "docs/x.md",
+                "branch": "arena/mine",
+                "no_remote": False,
+                "repo": "o/r",
+                "token": "t",
+            },
+        )()
+    )
+    assert seen_branches == [["arena/mine"]]
+
+
+def test_remote_branch_boards_reads_only_freshly_fetched_branches(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale tracking ref must not be read as a live lease."""
+    good_board = _synthetic_directory_claim_board()
+
+    def _fake_git(args: list[str], cwd: Path) -> object:
+        refspecs = args[3:] if args[0] == "fetch" else []
+        if len(refspecs) > 1:  # batched fetch: one dead ref fails the batch
+            return subprocess.CompletedProcess(args, 128, stdout="", stderr="dead ref")
+        if refspecs:  # per-branch fallback
+            if "arena/good" in refspecs[0]:
+                return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+            return subprocess.CompletedProcess(args, 128, stdout="", stderr="dead")
+        if args[0] == "show":
+            return subprocess.CompletedProcess(args, 0, stdout=json.dumps(good_board), stderr="")
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _fake_git)
+    boards, unreadable = board_module._remote_branch_boards(
+        ["arena/good", "arena/dead"], exclude_branch=""
+    )
+    assert [name for name, _ in boards] == ["branch:arena/good"]
+    assert any("arena/dead" in reason for reason in unreadable)
+
+
+def test_remote_branch_boards_excludes_the_callers_own_branch(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A branch must not be fetched or read as a foreign lease of itself."""
+    fetched: list[str] = []
+
+    def _fake_git(args: list[str], cwd: Path) -> object:
+        if args[0] == "fetch":
+            fetched.append(" ".join(args))
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        if args[0] == "show":
+            return subprocess.CompletedProcess(
+                args, 0, stdout=json.dumps(_synthetic_directory_claim_board()), stderr=""
+            )
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _fake_git)
+    boards, _unreadable = board_module._remote_branch_boards(
+        ["arena/mine", "arena/other"], exclude_branch="arena/mine"
+    )
+    assert [name for name, _ in boards] == ["branch:arena/other"]
+    assert all("arena/mine" not in cmd for cmd in fetched)
+
+
+def test_open_pr_branches_requires_repo_and_token(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    branches, reason = board_module._open_pr_branches("", "")
+    assert branches == [] and reason
+    branches, reason = board_module._open_pr_branches("o/r", "")
+    assert branches == [] and reason
+
+
+def test_open_pr_branches_degrades_on_api_error(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _boom(url: str, token: object) -> object:
+        raise OSError("connection reset")
+
+    monkeypatch.setattr(board_module, "_gh_get", _boom)
+    branches, reason = board_module._open_pr_branches("o/r", "t")
+    assert branches == [] and "unavailable" in reason
 
 
 # --------------------------------------------------------------------------- #
@@ -773,7 +1017,13 @@ def test_claim_renews_its_own_lease(
         type(
             "A",
             (),
-            {"task": active["task"], "branch": active["agent_branch"], "ttl": 10, "gates": False},
+            {
+                "task": active["task"],
+                "branch": active["agent_branch"],
+                "ttl": 10,
+                "gates": False,
+                "expected_generation": _generation_of(board_module, active["task"]),
+            },
         )()
     )
     assert code == 0
@@ -787,6 +1037,208 @@ def test_claim_renews_its_own_lease(
     assert renewed["ttl_hours"] == active["ttl_hours"]
 
 
+def test_mutating_an_existing_lease_without_a_token_is_refused(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Fencing is mandatory: a mutation of a live lease with no token is refused.
+
+    Optional fencing was a gap — a stale owner that never recorded its epoch
+    could still renew. The token is now required for every existing-lease
+    mutation, while taking a *free* lease needs none.
+    """
+    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    active = _first_active_claim(board)
+    _pin_clock_inside_lease(monkeypatch, board_module, active)
+    task, owner = active["task"], active["agent_branch"]
+
+    assert (
+        board_module.cmd_claim(
+            type("A", (), {"task": task, "branch": owner, "ttl": 24, "gates": False})()
+        )
+        == 2
+    )
+    assert "requires --expected-generation" in capsys.readouterr().out
+
+    assert board_module.cmd_release(type("A", (), {"task": task, "branch": owner})()) == 2
+    assert (
+        board_module.cmd_defer(
+            type(
+                "A",
+                (),
+                {"task": task, "branch": owner, "reason": "", "fa": "", "resume_when": ""},
+            )()
+        )
+        == 2
+    )
+    # The lease is untouched by any refused mutation.
+    assert _generation_of(board_module, task) == _generation_of(board_module, task)
+
+
+def test_stale_owner_attack_matrix(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """A superseded owner is refused on every mutation path, board untouched.
+
+    Session A holds gen 1; session B takes over (gen 2). A wakes up and tries
+    heartbeat / release / defer / re-claim with its stale token — every path
+    must be a deterministic refusal, and the board must be byte-identical.
+    """
+    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    active = _first_active_claim(board)
+    _pin_clock_inside_lease(monkeypatch, board_module, active)
+    task, owner = active["task"], active["agent_branch"]
+
+    # B takes the lease over: epoch advances (simulated as a same-name takeover).
+    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    claim = next(c for c in board["claims"] if c["task"] == task)
+    claim["generation"] = _generation_of(board_module, task) + 1
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    snapshot = board_module.BOARD.read_text(encoding="utf-8")
+    stale = claim["generation"] - 1
+
+    heartbeat = board_module.cmd_claim(
+        type(
+            "A",
+            (),
+            {
+                "task": task,
+                "branch": owner,
+                "ttl": 24,
+                "gates": False,
+                "expected_generation": stale,
+            },
+        )()
+    )
+    release = board_module.cmd_release(
+        type("A", (), {"task": task, "branch": owner, "expected_generation": stale})()
+    )
+    defer = board_module.cmd_defer(
+        type(
+            "A",
+            (),
+            {
+                "task": task,
+                "branch": owner,
+                "reason": "",
+                "fa": "",
+                "resume_when": "",
+                "expected_generation": stale,
+            },
+        )()
+    )
+    reclaim = board_module.cmd_claim(
+        type(
+            "A",
+            (),
+            {
+                "task": task,
+                "branch": "arena/attacker",
+                "ttl": 24,
+                "gates": False,
+                "expected_generation": stale,
+            },
+        )()
+    )
+    assert (heartbeat, release, defer, reclaim) == (2, 2, 2, 2)
+    assert "stale lease generation" in capsys.readouterr().out
+    assert board_module.BOARD.read_text(encoding="utf-8") == snapshot, "board must be untouched"
+
+
+def test_takeover_of_an_expired_lease_requires_a_token(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-claiming an expired (but once-live) lease is a mutation and is fenced."""
+    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    claim = next(c for c in board["claims"] if c["status"] in ("queued", "expired"))
+    claim["generation"] = 3
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    # No token: refused (this is an existing lease record, not a fresh task).
+    assert (
+        board_module.cmd_claim(
+            type("A", (), {"task": claim["task"], "branch": "arena/x", "ttl": 24, "gates": False})()
+        )
+        == 2
+    )
+    # With the matching token: allowed, and the epoch advances.
+    assert (
+        board_module.cmd_claim(
+            type(
+                "A",
+                (),
+                {
+                    "task": claim["task"],
+                    "branch": "arena/x",
+                    "ttl": 24,
+                    "gates": False,
+                    "expected_generation": 3,
+                },
+            )()
+        )
+        == 0
+    )
+    assert _generation_of(board_module, claim["task"]) == 4
+
+
+def test_taking_a_fresh_lease_needs_no_token(board_module: ModuleType) -> None:
+    """A brand-new task (generation 0) is not fenced — there is nothing to fence."""
+    task = _first_claimable(board_module.BOARD)
+    assert (
+        board_module.cmd_claim(
+            type("A", (), {"task": task, "branch": "arena/fresh", "ttl": 24, "gates": False})()
+        )
+        == 0
+    )
+
+
+def test_board_mutation_is_locked_against_a_concurrent_writer(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A held board lock makes a concurrent mutation fail closed, not race.
+
+    Read-validate-write is a TOCTOU window; ``board_lock`` serialises it. While
+    the lock is held, a mutation must raise ``BoardLockedError`` (main maps it to
+    exit 2) rather than read a stale generation and overwrite.
+    """
+    import fcntl
+
+    lock_path = board_module.BOARD.with_suffix(".lock")
+    with lock_path.open("a+") as holder:
+        fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            with pytest.raises(board_module.BoardLockedError):
+                board_module.cmd_claim(
+                    type(
+                        "A",
+                        (),
+                        {"task": "anything", "branch": "arena/x", "ttl": 24, "gates": False},
+                    )()
+                )
+        finally:
+            fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
+    # Once released, the same call no longer raises the lock error.
+    task = _first_claimable(board_module.BOARD)
+    assert (
+        board_module.cmd_claim(
+            type("A", (), {"task": task, "branch": "arena/after", "ttl": 24, "gates": False})()
+        )
+        == 0
+    )
+
+
+def test_main_maps_a_locked_board_to_exit_2(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """A busy board must surface as a clean exit 2, never a traceback."""
+    monkeypatch.setattr(
+        board_module,
+        "cmd_claim",
+        lambda _a: (_ for _ in ()).throw(board_module.BoardLockedError("locked")),
+    )
+    monkeypatch.setattr(board_module.sys, "argv", ["agent_board.py", "claim", "t", "--branch", "b"])
+    assert board_module.main() == 2
+    assert "UNVERIFIABLE" in capsys.readouterr().out
+
+
 def test_claim_takes_a_free_task_and_check_enforces_the_new_lease(board_module: ModuleType) -> None:
     task = _first_claimable(board_module.BOARD)
     args = type("A", (), {"task": task, "branch": "arena/999-new", "ttl": 24, "gates": False})()
@@ -795,7 +1247,8 @@ def test_claim_takes_a_free_task_and_check_enforces_the_new_lease(board_module: 
     claimed = next(c for c in board["claims"] if c["task"] == task)
     assert claimed["status"] == "active" and claimed["agent_branch"] == "arena/999-new"
     assert claimed["exclusive_paths"], "a claimed task must own at least one path"
-    # and it can be released again by the same branch
+    # and it can be released again by the same branch, carrying its fencing token
+    args.expected_generation = _generation_of(board_module, task)
     assert board_module.cmd_release(args) == 0
     board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
     assert next(c for c in board["claims"] if c["task"] == task)["status"] == "done"
@@ -825,6 +1278,7 @@ def test_defer_records_the_bilingual_note(board_module: ModuleType) -> None:
                 "reason": "another agent holds the zone",
                 "fa": "چون عامل دیگری روی این محدوده کار می‌کرد متوقف شدم.",
                 "resume_when": f"claim {task} is free",
+                "expected_generation": _generation_of(board_module, task),
             },
         )()
     )
@@ -834,6 +1288,26 @@ def test_defer_records_the_bilingual_note(board_module: ModuleType) -> None:
     assert entry["task"] == task and entry["reason_fa"].startswith("چون عامل دیگری")
     claim = next(c for c in board["claims"] if c["task"] == task)
     assert claim["status"] == "deferred" and claim["claimed_at"] is None
+
+
+def test_gc_strips_the_gate_from_an_expired_gates_owner(board_module: ModuleType) -> None:
+    """An expired gates owner must not keep the single-gate role.
+
+    The rule is exactly one live gate holder. A departed holder that gc expires
+    while ``gates_owner`` is still true would leave the role falsely occupied,
+    so gc clears it (provenance fields stay).
+    """
+    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    stale = next(c for c in board["claims"] if c["status"] == "active")
+    stale["claimed_at"] = _iso(datetime.now(timezone.utc) - timedelta(hours=48))
+    stale["ttl_hours"] = 1
+    stale["gates_owner"] = True
+    board_module.BOARD.write_text(json.dumps(board, indent=2, ensure_ascii=False), encoding="utf-8")
+    assert board_module.cmd_show(type("A", (), {})()) == 0
+    reloaded = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    freed = next(c for c in reloaded["claims"] if c["task"] == stale["task"])
+    assert freed["status"] == "expired"
+    assert freed["gates_owner"] is False, "an expired holder must release the gate"
 
 
 def test_show_garbage_collects_an_expired_lease(board_module: ModuleType) -> None:

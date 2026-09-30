@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T16:54:20Z",
+  "updated_at": "2026-09-30T13:01:53Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -705,8 +705,8 @@
         "tests/unit/test_agent_board.py"
       ],
       "owner_hint": "",
-      "agent_branch": "arena/01a0c4c1-nexus-ai-agent",
-      "claimed_at": "2026-09-21T16:21:42Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": [
@@ -739,8 +739,8 @@
       ],
       "exclusive_paths": [],
       "owner_hint": "",
-      "agent_branch": "arena/01a0c4c1-nexus-ai-agent",
-      "claimed_at": "2026-09-21T16:21:42Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": [
@@ -765,8 +765,8 @@
       "evidence_required": [],
       "exclusive_paths": [],
       "owner_hint": "",
-      "agent_branch": "arena/01a0c460-nexus-ai-agent",
-      "claimed_at": "2026-09-21T15:21:39Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "lease expired 2026-09-22T15:21:39Z without renewal; stewardship transferred via task-145 claim (arena/01a0c992) with full handoff note"
@@ -1068,8 +1068,8 @@
       ],
       "exclusive_paths": [],
       "owner_hint": "",
-      "agent_branch": "arena/01a0d709-nexus-ai-agent",
-      "claimed_at": "2026-09-25T05:50:21Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "DELIVERED 2026-09-25 on arena/01a0d709-nexus-ai-agent (PR82): extras-matrix legs core/pdf/speech/translate + python-parity 3.10/3.11/3.12 (all blocking, 3.10 exception removed after the runtime was made truly 3.10-compatible) + release-lineage. Final head 0f2f8f8: CI 12/12 SUCCESS on both runs 36168073743 (pull_request) and 36168067276 (push). Skip-audit mutant-proofed (M1 pinned+killed, M2 killed, intentional skips allowed). Old 3.11-only failure (run 36101703012) proven non-reproducible (flake-or-fixed, no product bug); line-0 test synced. Gates released."
@@ -1112,8 +1112,8 @@
       "evidence_required": [],
       "exclusive_paths": [],
       "owner_hint": "",
-      "agent_branch": "arena/01a0c3a0-nexus-ai-agent",
-      "claimed_at": "2026-09-21T13:05:00Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "evidence": "PR#34 state=MERGED; main @93cee5e; CI 35613892356 SUCCESS"
@@ -1134,7 +1134,7 @@
       "evidence_required": [],
       "exclusive_paths": [],
       "owner_hint": "",
-      "agent_branch": "arena/01a0c460-nexus-ai-agent",
+      "agent_branch": "",
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
@@ -1177,8 +1177,8 @@
     {
       "task": "nagar-wave3-timeline-edit-delivery",
       "zone": "nagar-creative-edit",
-      "agent_branch": "arena/01a0c36f-nexus-ai-agent",
-      "claimed_at": "2026-09-21T11:00:00Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "released_at": "2026-09-21T11:54:00Z",
       "ttl_hours": 24,
       "status": "completed_released",
@@ -1190,8 +1190,8 @@
     {
       "task": "board-gc-engineered-handoff",
       "zone": "coordination",
-      "agent_branch": "arena/01a0c3ca-nexus-ai-agent",
-      "claimed_at": "2026-09-21T11:48:00Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "released_at": "2026-09-21T11:54:00Z",
       "ttl_hours": 24,
       "status": "completed_released",
@@ -1203,8 +1203,8 @@
     {
       "task": "task-101",
       "zone": "ci-quality",
-      "agent_branch": "arena/01a0c3ca-nexus-ai-agent",
-      "claimed_at": "2026-09-21T12:10:00Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "status": "completed_released",
       "gates_owner": false,
@@ -1217,7 +1217,7 @@
     {
       "task": "task-104",
       "zone": "nagar-render-lane",
-      "agent_branch": "arena/01a0c460-nexus-ai-agent",
+      "agent_branch": "",
       "claimed_at": null,
       "ttl_hours": 24,
       "status": "done",
@@ -1234,7 +1234,7 @@
     {
       "task": "task-105",
       "zone": "nagar-caption-engine",
-      "agent_branch": "arena/01a0c460-nexus-ai-agent",
+      "agent_branch": "",
       "claimed_at": null,
       "ttl_hours": 24,
       "status": "done",
@@ -1300,8 +1300,8 @@
     {
       "task": "task-113-ci-lint-rail",
       "zone": "ci-quality-2",
-      "agent_branch": "arena/01a0c54f-nexus-ai-agent",
-      "claimed_at": "2026-09-21T18:56:20Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "status": "done",
       "gates_owner": false,
@@ -1346,8 +1346,8 @@
     {
       "task": "pr39-in-review-docs",
       "zone": "docs-architecture",
-      "agent_branch": "arena/01a0c4c1-nexus-ai-agent",
-      "claimed_at": "2026-09-21T16:33:37Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "status": "done",
       "gates_owner": false,
@@ -1723,8 +1723,8 @@
     {
       "task": "task-142-delivery-signing-coverage-95",
       "zone": "quality-packs",
-      "agent_branch": "arena/01a0c920-nexus-ai-agent",
-      "claimed_at": "2026-09-22T13:10:53Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "status": "done",
       "gates_owner": false,
@@ -1735,8 +1735,8 @@
     {
       "task": "task-151-board-test-clock-time-bomb",
       "zone": "ci-quality",
-      "agent_branch": "arena/01a0c920-nexus-ai-agent",
-      "claimed_at": "2026-09-22T13:27:26Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "status": "done",
       "gates_owner": false,
@@ -1853,8 +1853,8 @@
       "zone": "pr51-ci-repair",
       "priority": "P0",
       "status": "done",
-      "agent_branch": "arena/01a0ca9c-nexus-ai-agent",
-      "claimed_at": "2026-09-22T19:50:02Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "exclusive_paths": [
@@ -2051,8 +2051,8 @@
         "pytest tests/unit/test_security_hardening.py tests/architecture/test_legacy_creative_boundary.py"
       ],
       "exclusive_paths": [],
-      "agent_branch": "arena/01a0d23e-nexus-ai-agent",
-      "claimed_at": "2026-09-24T07:36:43Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "released_at": "2026-09-24T16:32:01Z",
       "evidence": "PR#65 MERGED -> main 035a896 (035a896dd2ed1293de6accf2ef4309da2fd64c89) at 2026-09-24T09:44:16Z (verified with gh pr view 65 --json state,mergedAt). Reconciled by arena/01a0d43c-nexus-ai-agent: a merged PR must not keep a live lease (PR#51 integration + PR#47 stewardship precedent)."
     },
@@ -2080,8 +2080,8 @@
         "pytest tests/unit/test_creative_surface.py tests/unit/test_creative_render_jobs.py tests/unit/test_i18n_parity.py"
       ],
       "exclusive_paths": [],
-      "agent_branch": "arena/01a0d23e-nexus-ai-agent",
-      "claimed_at": "2026-09-24T07:36:43Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "released_at": "2026-09-24T16:32:01Z",
       "evidence": "PR#65 MERGED -> main 035a896 (035a896dd2ed1293de6accf2ef4309da2fd64c89) at 2026-09-24T09:44:16Z (verified with gh pr view 65 --json state,mergedAt). Reconciled by arena/01a0d43c-nexus-ai-agent: a merged PR must not keep a live lease (PR#51 integration + PR#47 stewardship precedent)."
     },
@@ -2108,8 +2108,8 @@
         "pytest tests/unit/test_maintenance_backup.py"
       ],
       "exclusive_paths": [],
-      "agent_branch": "arena/01a0d23e-nexus-ai-agent",
-      "claimed_at": "2026-09-24T07:36:43Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "released_at": "2026-09-24T16:32:01Z",
       "evidence": "PR#65 MERGED -> main 035a896 (035a896dd2ed1293de6accf2ef4309da2fd64c89) at 2026-09-24T09:44:16Z (verified with gh pr view 65 --json state,mergedAt). Reconciled by arena/01a0d43c-nexus-ai-agent: a merged PR must not keep a live lease (PR#51 integration + PR#47 stewardship precedent)."
     },
@@ -2141,10 +2141,10 @@
         "CI green on the PR"
       ],
       "exclusive_paths": [],
-      "agent_branch": "arena/01a0d43c-nexus-ai-agent",
-      "claimed_at": "2026-09-24T16:32:01Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 48,
-      "gates_owner": true,
+      "gates_owner": false,
       "note": "PR#72 https://github.com/bot523h/nexus-ai-agent/pull/72 (commit 5f955ce) — awaiting merge; merge-order disclosures in PR body (PR#68 supersede, PR#67/PR#70/PR#71 collisions). | STEWARDSHIP-RELEASED 2026-09-24T23:06:38Z by arena/01a0d5a1-nexus-ai-agent: delivery vehicle PR#72 is MERGED; a merged PR must not keep a live lease (PR#51/#47/#65 precedent). exclusive_paths released.",
       "evidence": [
         "contract 80 + boundary 16 + wave1 22: all pass (local)",
@@ -2360,8 +2360,8 @@
         "docs/DECISION_LOG.md",
         "docs/README.md"
       ],
-      "agent_branch": "arena/01a0d43e-nexus-ai-agent",
-      "claimed_at": "2026-09-24T16:45:20Z"
+      "agent_branch": "",
+      "claimed_at": null
     },
     {
       "task": "task-180-verification-gap-closure",
@@ -2370,8 +2370,8 @@
       "zone": "job-verification-gap-closure",
       "priority": "P0",
       "status": "done",
-      "agent_branch": "arena/01a0d475-nexus-ai-agent",
-      "claimed_at": "2026-09-24T17:45:24Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 48,
       "gates_owner": false,
       "prerequisites": [
@@ -2684,8 +2684,8 @@
         "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
       ],
       "owner_hint": "Arena agent on arena/01a0e2f0-nexus-ai-agent",
-      "agent_branch": "arena/01a0e2f0-nexus-ai-agent",
-      "claimed_at": "2026-09-27T13:02:33Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "MODULE_MAP.md and docs/architecture paths are excluded from this claim: current open PRs #105/#107/#102/#87/#69/#68 overlap that documentation zone. Add/refresh the architecture rule only after those owners reconcile; this slice uses behavioral regression and mutation proof. | SALVAGE-RELEASED 2026-09-27T15:12:52Z by arena/01a0e356-nexus-ai-agent: PR #108 (head 5a4cb23b, merge-base 93c7809, 4 ahead / 30 behind main 05dec617) is CONFLICTING on .agents/board.json and RED on python-parity (3.10) in both check runs on its head — root cause: asyncio.Task.cancelling() (Python 3.11+) called on the worker cancellation path, undefined on 3.10. A session is bound to exactly one branch and cannot push to arena/01a0e2f0; per the PR#102->PR#107 precedent the four commits 565c429..5a4cb23 are merged into the successor branch VERBATIM (git merge, no rebase/force-push, authorship preserved) and the 3.10 defect is fixed under claim task-195-salvage; takeovers in takeover_log. This claim must not keep a live lease. | gates_owner cleared 2026-09-27T16:54:20Z when task-195-salvage continued on arena/01a0e3b7 (sole gates owner)."
@@ -2762,8 +2762,8 @@
         "AGENTS.md"
       ],
       "owner_hint": "arena/hardening-task207-foreign-check",
-      "agent_branch": "arena/hardening-task207-foreign-check",
-      "claimed_at": "2026-09-30T08:32:48Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "implements the task-207 design (0/1/2 multi-source referee). D-0024 direction page is separate (docs-architecture). | 2026-09-30: lease-fencing continuation (task-219) landed on the same branch; board tests 34 passed, referee mutations 8/8 killed. | CLOSED 2026-09-30: referee + lease fencing (task-219) + gc note-preservation (task-220) all merged on this branch; evidence: test_agent_board.py 40 passed, board_referee_mutations.py 9/9 killed.",
@@ -2795,7 +2795,7 @@
         "tests/unit/test_agent_board.py"
       ],
       "owner_hint": "free after task-207 lands",
-      "agent_branch": "arena/hardening-task207-foreign-check",
+      "agent_branch": "",
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
@@ -2864,8 +2864,8 @@
         "tests/unit/test_agent_board.py"
       ],
       "owner_hint": "coordination-referee owner",
-      "agent_branch": "arena/hardening-task207-foreign-check",
-      "claimed_at": "2026-09-30T08:32:48Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "generation": 0,
       "gates_owner": false,
