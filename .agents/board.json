@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-30T13:01:53Z",
+  "updated_at": "2026-09-30T13:12:26Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3391,6 +3391,12 @@
         "id": "nightly-backup-never-succeeded",
         "what": "The maintenance workflow's backup-db job (nightly 03:17 UTC, the production DB backup to the R2 blob tier) has failed EVERY run since it was introduced: runs 35580701817 (2026-09-21, 04d8820), 35705502209 (2026-09-22, 40327bc) and 35838057275 (2026-09-23, main @a997aab) — all with the 'Run nexus maintenance backup' step exiting 1. The one 'success' in the series (35586584833, 2026-09-21 10:02Z) was the Monday housekeeping job with backup-db SKIPPED (job-level API verified). Since 09-21 the backup path code (maintenance/backup.py, storage/providers/r2.py) is unchanged, so the failure is environmental: either the R2 secrets are not configured (by-design red, 'fail loudly'), or the R2+Neon combination is misconfigured. The exact error text is UNVERIFIED from this sandbox (Actions log download EOFs here). Consequence: no production database backup has ever been produced by this pipeline.",
         "resolution": "Owner action required: read the failed job log (any of the three runs), set/verify the R2_* and NEXUS_DATABASE_URL repo secrets per docs/ops/r2-storage.md §4, then trigger a manual run (workflow_dispatch) and confirm an upload under backups/db/<stamp>/. Tracked as task-164 (next_work). NOTE: if NEXUS_DATABASE_URL is unset in CI the job can never back up real data — the runner has no local SQLite file (settings default data/app.sqlite does not exist there), so the documented 'local SQLite fallback' is only meaningful on a host that actually runs the bot."
+      },
+      {
+        "date": "2026-09-30",
+        "id": "duplicate-fail-open-fix",
+        "what": "دو شاخه هم‌زمان «check باید fail-closed شود» (task-207) را در scripts/agent_board.py و tests/unit/test_agent_board.py پیاده کردند: arena/01a0eade (PR#122، لیز فعال task-207-agent-board-check-fails-open، انقضا 2026-10-01T06:30Z) و arena/hardening-task207-foreign-check (PR#126). دو طراحی متفاوت: جمع‌آوری «تختهٔ PRهای باز» در برابر منبع «شاخه‌های push‌شدهٔ PR باز».",
+        "resolution": "چک چندمنبعیِ همین سخت‌سازی، تصادم را پیش از push نشان داد (exit 1؛ فایل‌های scripts/agent_board.py و tests/unit/test_agent_board.py در branch:arena/01a0eade-nexus-ai-agent). قانون: «کار تازه‌تر و کامل‌تر برنده است» پس از مقایسهٔ دو diff؛ بازنده کارش را به برنده ارجاع می‌دهد. درس: پیش از شروع کار روی ناحیهٔ پرتصادم، `check` با منبع PRهای باز اجرا شود نه فقط تختهٔ محلی."
       }
     ],
     "board_revisions": [
