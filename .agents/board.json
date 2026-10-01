@@ -613,7 +613,8 @@
       "id": "storage-observability",
       "paths": [
         "src/nexus_ai_agent/storage/",
-        "docs/ops/"
+        "docs/ops/",
+        "tests/unit/test_storage_wal_init_race.py"
       ],
       "note": "storage observability (queued)"
     },
@@ -3039,9 +3040,10 @@
       ],
       "prerequisites": [],
       "exclusive_paths": [
-        "src/nexus_ai_agent/storage/db.py"
+        "src/nexus_ai_agent/storage/db.py",
+        "tests/unit/test_storage_wal_init_race.py"
       ],
-      "note": "",
+      "note": "RED reproduced deterministically (both pre-fix tests fail in ~1.3s): a raw sqlite3 connection holding BEGIN IMMEDIATE makes a bare PRAGMA journal_mode=WAL raise 'database is locked'. Fix: bounded retry around the one-time WAL transition (_set_wal_mode + _is_locked) plus a 30s busy timeout on the engine. Mutation evidence (PYTHONPATH forced to the mutant): M1 = bare pragma, timeout kept -> 3 failed (busy timeout alone does NOT cover the WAL transition); M2 = retry kept, timeout removed -> 3 passed (the retry is load-bearing). Commands: pytest tests/unit/test_storage_wal_init_race.py -> 3 passed; storage suite (test_db/test_storage_resilience/test_storage_resilience_boundaries/test_database_url/test_migrations) -> 119 passed; full suite -> 2991 passed, 30 skipped; ruff check+format clean; mypy clean. Board claim updated in the same commit.",
       "agent_branch": "arena/01a0181931-task190-wal-init-race",
       "claimed_at": "2026-10-01T20:10:56Z",
       "ttl_hours": 24,
