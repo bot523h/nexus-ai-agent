@@ -16,6 +16,12 @@ from nexus_ai_agent.product.studio_experience import (
     present_lineage,
     present_plan,
 )
+from nexus_ai_agent.product.studio_read import (
+    ProjectJobReadPort,
+    ProjectReadDenied,
+    StudioProjectView,
+    StudioReadService,
+)
 
 __all__ = [
     "ArtifactPassport",
@@ -23,7 +29,11 @@ __all__ = [
     "IntentDraft",
     "LineageView",
     "PlanPreview",
+    "ProjectJobReadPort",
+    "ProjectReadDenied",
     "SceneView",
+    "StudioProjectView",
+    "StudioReadService",
     "present_artifact",
     "present_execution",
     "present_lineage",
