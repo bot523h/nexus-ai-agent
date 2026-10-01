@@ -45,8 +45,8 @@ from nexus_ai_agent.creative.studio.models import (
     ActorIdentity,
     CommandProvenance,
     CommandResult,
-    EditTransaction,
     TypedCommand,
+    UndoConflictError,
 )
 
 
@@ -109,12 +109,14 @@ class CreativeExecutionSpine:
 
         The run is transactional: the plan is dispatched step by step, and if a
         later step is refused the steps already applied are undone through the
-        bus's own ``system.undo`` path before the error propagates. Each step is
-        recorded with the transaction id the bus returned for it; the rollback
-        undoes only while the newest editable transaction is one the run owns, so
-        a concurrent edit by another actor is never rewound. A failed run
-        therefore leaves the central state exactly as it began -- no half-applied
-        plan and no artifact node for work that did not complete.
+        bus's own ``system.undo`` path before the error propagates. Each undo
+        names the transaction id the bus returned for that step, and the bus's
+        stage-9 identity gate refuses unless the named transaction is still the
+        newest editable one -- a check that is atomic with the state swap, so a
+        concurrent edit by another actor is never rewound (the run fails closed
+        with :class:`SpineRollbackError`). A failed run therefore leaves the
+        central state exactly as it began -- no half-applied plan and no artifact
+        node for work that did not complete.
         """
         if intent.project_id != self._bus.project.project_id:
             raise ValueError("intent targets a different project than the bus")
@@ -222,14 +224,15 @@ class CreativeExecutionSpine:
     ) -> None:
         """Undo the run's OWN committed steps through the bus, newest first.
 
-        ``system.undo`` rewinds the most recent editable transaction, but only if
-        that transaction is one this run committed. Before every undo the spine
-        checks the bus history's newest editable transaction id against the run's
-        recorded ids: if a concurrent actor committed an edit in between, the
-        undo would hit *their* work, so the rollback stops and fails closed with a
-        :class:`SpineRollbackError` rather than silently destroying a foreign
-        transaction. This is what makes a failed run leave another actor's edits
-        intact.
+        The authoritative guard is now the *bus contract*: each undo names the
+        transaction it means to rewind (``system.undo(transaction_id=...)``), and
+        the identity gate runs inside the stage-9 handler under the same lock as
+        the state swap. If a concurrent actor committed an edit in between, the
+        named transaction is no longer the newest editable one, the bus refuses
+        with :class:`UndoConflictError`, and the rollback fails closed with a
+        :class:`SpineRollbackError` -- the foreign edit is never rewound. This is
+        stronger than a caller-side check, which cannot be atomic (the lock is
+        released between the read and the dispatch).
 
         Artifact nodes the failed run wrote are retracted even when the rollback
         cannot complete (newest first, so every removal is a leaf removal), so a
@@ -243,20 +246,18 @@ class CreativeExecutionSpine:
         """
         try:
             while committed_transactions:
-                expected = committed_transactions[-1]
-                newest = self._newest_editable_transaction_id()
-                if newest != expected:
-                    raise SpineRollbackError(
-                        "refusing to roll back: the newest editable transaction "
-                        f"{newest!r} is not the run's own {expected!r} "
-                        "(a concurrent edit interleaved with the failed run)"
-                    )
-                self._bus.dispatch(self._undo_command(intent, len(committed_transactions) - 1))
+                index = len(committed_transactions) - 1
+                self._bus.dispatch(self._undo_command(intent, index, committed_transactions[-1]))
                 committed_transactions.pop()
         except Exception as exc:
             self._retract_artifacts(artifact_nodes)
             if isinstance(exc, SpineRollbackError):
                 raise
+            if isinstance(exc, UndoConflictError):
+                raise SpineRollbackError(
+                    "refusing to roll back: the newest editable transaction is not "
+                    "the run's own (a concurrent edit interleaved with the failed run)"
+                ) from exc
             raise SpineRollbackError(f"failed to roll back the plan: {exc}") from exc
         self._retract_artifacts(artifact_nodes)
 
@@ -265,18 +266,6 @@ class CreativeExecutionSpine:
         for node_id in reversed(artifact_nodes):
             self._graph.remove_node(node_id)
 
-    def _newest_editable_transaction_id(self) -> str | None:
-        """The transaction id ``system.undo`` would rewind right now (or None).
-
-        Mirrors ``_system_undo``: it skips the undo records themselves, so the
-        answer is the most recent *editable* transaction still on the bus stack.
-        """
-        ts: EditTransaction | None = None
-        for candidate in self._bus.history:
-            if candidate.operation != "system.undo":
-                ts = candidate
-        return ts.transaction_id if ts is not None else None
-
     @staticmethod
     def _command_id(step: PlannedOperation, intent: Intent, step_index: int) -> str:
         # The step index keeps ids unique even when a plan repeats an operation
@@ -284,12 +273,14 @@ class CreativeExecutionSpine:
         # never confuse two distinct steps of one plan.
         return f"cmd_{intent.intent_id}_{step_index}_{step.operation.replace('.', '_')}"
 
-    def _undo_command(self, intent: Intent, index: int) -> TypedCommand:
+    def _undo_command(self, intent: Intent, index: int, transaction_id: str) -> TypedCommand:
         fields: dict[str, object] = {
             "command_id": f"cmd_{intent.intent_id}_undo_{index}",
             "operation": "system.undo",
             "target": {"project_id": intent.project_id},
-            "input": {},
+            # Name the transaction this undo is for; the bus refuses unless it is
+            # still the newest editable one, so a foreign edit is never rewound.
+            "input": {"transaction_id": transaction_id},
             "trace_id": intent.intent_id,
         }
         if self._actor is not None:

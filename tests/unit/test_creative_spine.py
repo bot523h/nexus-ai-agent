@@ -44,7 +44,7 @@ from nexus_ai_agent.creative.studio import (
     build_wave1_registry,
     new_project,
 )
-from nexus_ai_agent.creative.studio.models import UnknownOperationError
+from nexus_ai_agent.creative.studio.models import UndoConflictError, UnknownOperationError
 
 
 def _bus(project_id: str = "proj1", *, authorizer: object | None = None) -> CommandBus:
@@ -372,8 +372,13 @@ def test_failed_run_never_rolls_back_a_foreign_edit(monkeypatch) -> None:
 
     monkeypatch.setattr(bus, "dispatch", dispatch_then_interleave)
 
-    with pytest.raises(SpineRollbackError):
+    with pytest.raises(SpineRollbackError) as excinfo:
         spine.execute_intent(Intent(project_id="proj1", goal="probe"))
+
+    # The refusal is the bus contract (task-223), not a caller-side pre-check:
+    # the undo named the run's own transaction, the identity gate saw a foreign
+    # newest, and the spine translated UndoConflictError into SpineRollbackError.
+    assert isinstance(excinfo.value.__cause__, UndoConflictError)
 
     labels = [marker.label for marker in bus.project.timeline.markers]
     # the foreign edit survives; only the run's own work is a candidate to undo

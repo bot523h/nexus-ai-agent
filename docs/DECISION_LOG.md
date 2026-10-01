@@ -1847,3 +1847,42 @@ modified — the fix stays inside the spine's own zone. Guarded by
 `test_duplicate_intent_id_with_different_content_is_refused`,
 `test_a_crash_between_commit_and_graph_write_is_bounded`, and two new mutants
 (`rollback_ignores_transaction_identity`, `duplicate_delivery_reapplies_the_plan`), 9/9 killed.
+
+
+**Amendment — bus-level, transaction-scoped undo (task-223, 2026-10-01).** task-222 moved the
+foreign-edit guard into the *spine*: before each undo it read the bus history and compared the newest
+editable transaction id to its own. That check cannot be atomic — `bus.history` is read under the
+lock, the lock is released, and only then is `system.undo` dispatched, so a foreign actor can commit
+in the gap (classic TOCTOU). Worse, the bus's `system.undo` accepted no transaction identity at all,
+so *any* caller that dispatched it (the spine, a pack, a runtime call site) rewound whatever
+transaction was newest — a foreign edit included. The defect lived in the bus primitive, so the fix
+belongs there.
+
+Decision: **Option A — the identity gate is enforced inside the `system.undo` stage-9 handler**, which
+runs under the same bus lock as the state swap. `UndoCommandInput` gains an optional
+`transaction_id`; when supplied, the handler refuses unless it equals the newest editable
+transaction's id, raising `UndoConflictError` (a `CommandExecutionError`, so no state change is
+committed). Because the check and the snapshot restore are one linearizable critical section, a
+concurrent foreign commit between a caller's read and its dispatch is *seen* by the gate and refused —
+the foreign edit is never rewound. When `transaction_id` is absent the operation is unchanged
+(classic NLE "undo the most recent edit"), so existing runtime/pack call sites that dispatch
+`system.undo` with empty input are unaffected. The spine now passes its recorded transaction id and
+translates `UndoConflictError` into `SpineRollbackError`; its caller-side pre-check is **removed**
+(superseding the task-222 mechanism, which this decision replaces).
+
+Rejected. (b) *Spine stops relying on `system.undo`* — a private spine-side inverse/compensation path
+would become a second write path and bypass the bus's policy/authority checks. (c) *Staged command
+DAG with one final commit* — the largest change; it needs a staging layer, a commit protocol and a
+crash-recovery story, and is justified only once multi-step plans need crash-atomic commit, not for
+undo-scoping. `system.undo` remains a newest-only rewind by design: the full-state snapshot model
+(one `state_before` per transaction) makes an arbitrary-index rewind unsound, so identity is a
+*guard*, not a random-access pointer.
+
+Guarded by `tests/unit/test_command_capability_contract.py::TestUndoIdentity` (matching identity
+rewinds; stale/unknown identity refused with the foreign edit intact; absent identity still undoes
+the newest; identity on an empty stack is refused; the two-thread
+`test_race_b_identity_closes_the_check_then_act_window`), the spine test
+`test_failed_run_never_rolls_back_a_foreign_edit` (now asserting `__cause__ is UndoConflictError`),
+and `tests/unit/test_undo_contract_mutations.py` — 4 tests, 3 mutants killed (gate disabled; wrong
+field compared; comparison inverted). `docs/architecture/COMMAND_CAPABILITY_CONTRACT.md` §`system.undo`
+records the contract.
