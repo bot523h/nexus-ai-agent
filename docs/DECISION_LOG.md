@@ -1651,3 +1651,271 @@ stated goal is a nominal gate).
 coverage ACCEPTED and byte-identical across two runs; gate control accepted and
 27/27 attacks rejected; mutation campaign with every applicable mutation killed and
 restored.
+
+### D-0025 — The Creative Intelligence Plane gets its own typed intermediate representation, content-addressed like a compiler IR, and is forbidden from executing
+
+*Problem.* Verified on `main` @ `e5b326b`: `creative/` has no `Strategy`
+abstraction (the only `strategy` hit in `src/` is provider routing in
+`llm/litellm_provider.py`), no `Recipe` type, no semantic diff, and no
+authoring-level creative IR. `creative/rendering/ir.py` is shaped like an FFmpeg
+lane (`LaneOp` → filtergraph); `creative/studio/models.py` `Project`/`Timeline`
+is execution state the bus mutates. Neither can express "a hook, a subject, a
+call to action, fast paced, premium". On the unmerged spine lineage (PR #126) a
+keyword table maps five phrases onto five registry operations, and nothing models
+the piece itself. The consequence is structural, not cosmetic: with no typed
+representation of a creative work there is nothing for a strategy to produce,
+nothing for a compiler to consume, nothing for a semantic revision to edit, and
+nothing for a diff to compare — so every one of those capabilities would have to
+be rebuilt from free text on every request.
+
+*Decision.*
+1. **A new package, `creative/intelligence/`, owns `INTENT → UNDERSTANDING →
+   STRATEGY → TYPED CREATIVE IR → COMPILATION → EXECUTABLE PLAN` and stops
+   there.** It never executes. No `subprocess`, no file or network I/O, no
+   database, no event loop, and no `CommandBus`/`PlanTransaction`/`undo` symbol
+   anywhere in the package. Each rule is an AST-level architecture test, not a
+   comment. This keeps execution authority with the Canonical Creative Execution
+   Substrate and makes a second transaction engine unbuildable here by accident.
+2. **`CreativeWork` is the one exchange type, and every concept in it is
+   justified by an existing capability operation** (52 operations across the six
+   pack manifests). Two concepts have no precedent and are the reason the slice
+   exists: `SemanticRole` (why an element is present, which is what makes "keep
+   the rhythm but change the feeling" addressable) and `Constraint` (a user
+   requirement that survives compilation and can be *checked*). All five
+   constraint kinds are decidable against the IR itself, so a constraint is a
+   predicate rather than a comment.
+3. **Identity is content-addressed.** Every id is the SHA-256 of the element's
+   semantic payload plus the identities it refers to, so a document is a Merkle
+   tree. This buys four properties at once: byte-identical ids for the same
+   input (no `uuid4` in the identity path, asserted at AST level), subtree-local
+   diffs, subtree-local revisions, and self-verification through
+   `verify_identity()`. Rejected: UUID identities (they churn on every rebuild,
+   so no diff or cache downstream survives a recompile) and whole-document
+   hashing (it would make "what changed" a text diff again).
+4. **No floats in the IR.** Time is integer microseconds; normalised quantities
+   are integer per-mille; signed continuous parameters are integer milli-units
+   (`+1.5` EV is `1500`). Rejected: floats, because IEEE-754 repr drift is the
+   easiest way to make a "deterministic" hash platform-dependent.
+5. **Tracks are layout, not authoring.** An authored document carries
+   `layout=()`; the normaliser allocates tracks and the result must then be
+   complete, single-assigned and non-overlapping. Rejected: authoring tracks
+   directly, which would bake one NLE's structure into creative intent and
+   freeze every future backend to it.
+6. **Two gates, deliberately different.** `assert_valid()` reports *every*
+   structural problem at once and runs on unsealed documents; `seal()` resolves
+   references while assigning identity and fails fast on a dangling one. The
+   method is not called `validate` because pydantic's `BaseModel.validate` is a
+   classmethod and shadowing it would break Liskov substitution — a defect mypy
+   caught during this slice and a test now pins.
+
+*Rejected alternatives.* Extending `creative/studio/models.py` `Project` into an
+authoring IR (it is the bus's mutable execution state, owned by another
+substrate; merging the two would couple creative intent to execution state and
+cross an exclusive zone). Reusing `creative/rendering/ir.py` as the authoring
+surface (it is FFmpeg-lane shaped; authoring against it would push filtergraph
+concerns upstream). Writing the IR on the spine lineage (that zone is
+exclusively claimed by the open PR #126 / #127 lineage; this slice is disjoint
+from it by construction and imports nothing from it). Shipping the compiler in
+the same slice (rejected as scope: an IR with no consumer is unproven, but a
+mega-PR that lands IR + compiler + semantics cannot be audited — an
+honest-scope architecture test records the compiler's absence so its arrival is
+a deliberate, visible change).
+
+*Evidence.* 101 new tests green (`tests/unit/test_creative_ir.py` 54,
+`tests/unit/test_creative_ir_determinism.py` 20,
+`tests/architecture/test_creative_intelligence_boundary.py` 27); full
+architecture suite 125 → 152 with zero regression; creative unit selection
+603 → 677 passed with the same 24 pre-existing environmental failures
+(`imageio_ffmpeg` / `ffmpeg` absent in the sandbox). `ruff check` and
+`ruff format --check` clean; `mypy src/nexus_ai_agent/creative/intelligence`
+clean under the repository's strict config. Determinism verified across three
+`PYTHONHASHSEED` values in fresh interpreters.
+
+*Honest limits.* Nothing outside the plane constructs a `CreativeWork` yet: this
+slice is a foundation and is **not reachable from any user command**. The
+semantic layer, the deterministic compiler, semantic revision, creative diff and
+reference → recipe are all unbuilt. `CreativeBrief.semantic_intents` is the
+declared input for the semantic layer; `unresolved_intents` exists so an
+instruction nothing could honour is a recorded gap rather than a silent
+disappearance.
+
+### D-0026 — Creative semantics turns phrases into bounds and refuses to resolve a collision; the compiler is deferred on a measured capability gap
+
+*Problem.* D-0025 gave the plane a typed IR whose `Constraint` values are
+checkable, but nothing produced them. `CreativeBrief.semantic_intents` held the
+words a user actually said — "cinematic", "fast paced", "premium", "dramatic
+reveal" — as strings, and a string requirement is unfalsifiable: a plan can
+ignore it and nothing notices. Separately, the obvious next slice (the
+deterministic compiler) had to be assessed before being started.
+
+*Decision.*
+1. **A recognised phrase becomes a typed constraint with a number in it.**
+   "Fast paced" becomes `PacingConstraint(max_scene_duration_us=3_000_000)`.
+   `PacingConstraint` is added to the IR as the sixth constraint kind because
+   pacing had no shape at all: `TimingConstraint` binds one named scene, and
+   "no scene longer than X" is a different statement. Like the other five kinds
+   it is decidable against the IR itself.
+2. **The lexicon is built through the normaliser, not written against it.**
+   `_SURFACE_FORMS` holds phrases as a person types them; `LEXICON` is produced
+   by running every key through `normalize_phrase` (NFKC, case fold, ZWNJ
+   removed, Persian and Arabic digits mapped, punctuation dropped, whitespace
+   collapsed). Two keys that normalise onto the same key with different meanings
+   raise at import time. This is not tidiness: two lexicon entries in this
+   package were written with a ZWNJ and with Persian digits, which the normaliser
+   strips, making both entries **silently unreachable** — invisible in review,
+   caught only by a test that asserts every key equals its own normalisation.
+3. **Collisions are arithmetic, not a catalogue of known bad pairs.** Duration
+   bands on one target whose strongest floor exceeds their weakest ceiling are
+   unsatisfiable; emphasis shares are permille of one total, so distinct roles
+   demanding more than 1000 permille between them are unsatisfiable whatever the
+   document looks like. Both are decided on the numbers, so a new phrase that
+   contradicts an old one is caught without being taught the pair. The resolver
+   reports and raises; it never picks a winner, because choosing silently is the
+   failure this plane exists to prevent.
+4. **Style targets are declared, not applied.** A directive states where the
+   style axes should move; the resolution returns them for the strategy layer to
+   place. `apply_semantics` never changes a layer identity, and a test asserts
+   that. A lexicon has no basis for deciding *which* layers a look lands on.
+5. **`apply_semantics` is idempotent by construction.** Derived constraints are
+   content-addressed, so re-deriving them from an unchanged brief reproduces the
+   same identities and de-duplication removes them. A revision loop calls this on
+   every pass, so doubling the requirements was not an acceptable risk.
+6. **The compiler is deferred on evidence, not caution.** Verified on `main` @
+   `e5b326b`: no capability assembles a general timeline. `slideshow.compose`
+   rejects non-image assets ("'assets' must contain image evidence only") and the
+   bus registry exposes exactly five operations — `media.play`, `media.pause`,
+   `timeline.mark`, `timeline.split_at_playhead`, `system.undo` — none of which
+   places a clip. Lowering an arbitrary `CreativeWork` today would require
+   inventing operation ids the registry does not expose, producing a plan the bus
+   could not run: a false green. Unblocked by a timeline-assembly capability, or
+   by scoping the first lowering to the image-only subset that really does
+   compile to `slideshow.compose`. Recorded as `deferred_by_this_wave` on the
+   `task-225` board claim.
+
+*Rejected alternatives.* A per-phrase conditional chain in the resolver (the
+vocabulary would stop being reviewable data). Silently preferring the stricter
+of two conflicting bands (the system would then do something other than what was
+asked and report success). Rewriting layer styles during resolution (creative
+placement is a strategy decision). Shipping the compiler against invented
+operations (a plan the bus cannot execute is worse than no plan).
+
+*Defects the gates caught in this slice, all fixed here.* Two unreachable lexicon
+entries (ZWNJ and Persian digits, decision 2). `TimingConstraint` could not
+express a floor alone — `max_us` was required — so "at least a minute" was
+inexpressible; both bounds are now optional with a validator requiring at least
+one, and `_evaluate_timing` and `detect_collisions` treat `0` as unbounded.
+`_evaluate_pacing` returned only its first violation, contradicting the plane's
+own "report every problem" contract. The public-surface gate excluded submodules
+by hardcoded list, which broke when `semantics` arrived; it now excludes them by
+rule. The board correctly refused two active claims on
+`src/nexus_ai_agent/creative/intelligence/`, so `task-224` was released to
+`task-225`, which now carries both PRs' scope.
+
+*Evidence.* 147 plane tests green (54 IR, 20 determinism, 41 semantics, 32
+architecture boundary). Full `tests/architecture` 152 → 157 with zero regression
+(the five parametrized boundary rules each gained the new module). `tests/unit/test_agent_board.py` 18 passed and
+`tests/unit/test_docs_integrity.py` 59 passed. `ruff check`,
+`ruff format --check` and `mypy src/nexus_ai_agent/creative/intelligence` clean.
+The falsifiability test asserts the reference document violates three of the four
+intents it declares, and a second test shows that fixing the named scene clears
+that specific violation.
+
+*Honest limits.* The lexicon covers 51 surface forms across 10 meanings; anything
+outside it is declared unresolved, which is the designed behaviour and not a
+silent failure. No LLM resolver exists — the port for one is the phrase list
+itself. Nothing outside the plane constructs a `CreativeWork`, so the plane
+remains unreachable from any user command.
+
+### D-0027 — Semantic diff and semantic revision are compiler-style transforms over sealed creative nodes, never free mutation
+
+*Problem.* After D-0025 and D-0026 the plane could model and constrain a
+`CreativeWork`, but it still could not answer two core questions deterministically:
+(1) *what changed, semantically, between version A and version B?* and (2) *how
+do we apply a requested edit without falling back to ad-hoc dict mutation,
+string replacement or array-position guessing?* Without a typed diff, review of a
+creative edit collapses back to changed fields. Without a typed revision
+contract, the first caller to "shorten the reveal" or "change the CTA text"
+would be forced to mutate opaque JSON and infer identity from positions — the
+opposite of the plane's Merkle design.
+
+*Decision.*
+1. **Diff and revision are first-class plane contracts, not helper utilities.**
+   `diff_works(before, after)` emits a `WorkDiff` containing an IR delta and a
+   semantic diff. `apply_revision(work, intent)` emits a `RevisionResult`
+   containing the new sealed work, affected nodes, the same IR delta structure
+   and the semantic diff between source and result.
+2. **Diff matches by explicit lineage and stable semantic signatures, never by
+   array position.** A caller may provide `DiffLineage` pairs when a node is
+   expected to keep meaning while receiving a new content-addressed id. Absent an
+   explicit pair, the diff matches by stable semantic signatures inside a node
+   kind and reports additions/removals/modifications explicitly. Unchanged
+   subtrees are pruned at the root-id or child-id level in O(1).
+3. **Revision targets are explicit addresses or explicit role contracts; if that
+   is not enough, fail closed.** `NodeTarget` addresses a live node id directly.
+   `SceneRoleTarget` may use a narrative role plus an optional label
+   disambiguator. If multiple scenes still match, `RevisionAmbiguityError` is
+   raised; the plane never guesses from ordering, string similarity or timing.
+4. **Revisions are typed transforms over typed nodes.** The accepted edits are
+   only those the IR can actually express: scene timing, scene metadata,
+   constraint timing/pacing/quality, layer text, transition intent, audio intent
+   and effect intent. Each transform rebuilds the containing structure, reseals
+   it and then re-runs the plane's own validators. Rejected: free dict mutation,
+   arbitrary JSON patches and textual replacement across canonical JSON.
+5. **Merkle locality is a hard invariant, not a hopeful property.** Sealing now
+   preserves authored order while excluding layout-only `track_id` assignment
+   from layer semantic identity. That keeps track allocation out of authored
+   meaning while still letting actual effect-order changes rewrite identity. The
+   result is the locality revision needs: unrelated subtrees keep byte-identical
+   ids after an edit.
+6. **Semantic reapplication must replace stale resolution, not accumulate it.**
+   `apply_semantics()` now overwrites `brief.unresolved_intents` with the current
+   resolution result. A revision pass therefore does not carry old unresolved
+   phrases forward after the brief changed.
+7. **Structural validation and quality requirements are separate gates.**
+   `QualityConstraint.max_duration_us` is treated as a checkable requirement, not
+   as a structural IR-shape error, so revision and diff can preserve and compare
+   the authored intent before constraint evaluation decides whether it is met.
+
+*Rejected alternatives.* String-replacing in canonical JSON (not typed, not
+local, impossible to authorise correctly). Editing free dicts in place (breaks
+validation, makes identity churn invisible and crosses the model boundary).
+Silently picking the first role match on ambiguity (creates hidden, unauditable
+scene swaps). Treating array index, timestamp or track number as semantic
+identity (breaks Merkle locality the moment layout changes). Emitting only field
+names from diff (reviewers need meaning, not implementation trivia).
+
+*Defects the gates caught in this slice, all fixed here.* `Layer.semantics`
+carried `track_id`, so layout reassignment rewrote authored identity; it is now
+excluded from the sealed semantic payload and a determinism test pins that.
+Scene/layer/track resealing originally sorted children, which weakens locality
+for authored order; sealing now preserves order and a regression pins effect
+stack order as semantic. `apply_semantics()` used to union unresolved phrases,
+which preserved stale failures after a later successful pass. `QualityConstraint`
+`max_duration_us` was being treated as a structural validation error instead of a
+constraint violation. The creative-intelligence boundary test also hardcoded its
+submodule allowlist and was updated to resolve fully-qualified imports by rule.
+
+*Evidence.* 177 plane tests green: `tests/unit/test_creative_ir.py` 55,
+`tests/unit/test_creative_ir_determinism.py` 21,
+`tests/unit/test_creative_semantics.py` 42,
+`tests/unit/test_creative_diff.py` 4,
+`tests/unit/test_creative_revision.py` 11,
+`tests/architecture/test_creative_intelligence_boundary.py` 44. Full
+`tests/architecture` 169 passed. `tests/unit/test_agent_board.py` 18 passed and
+`tests/unit/test_docs_integrity.py` 59 passed. `ruff check`,
+`ruff format --check` and `mypy src/nexus_ai_agent/creative/intelligence`
+clean. Determinism is proven in fresh interpreters under
+`PYTHONHASHSEED=0,1,12345,999` for resulting work id, revision id, canonical JSON
+and diff digest. Three temporary mutation probes were killed by the targeted
+regression tests and then reverted: removing transition lineage normalisation
+breaks `test_an_edited_scene_does_not_report_adjacent_transitions_as_modified`,
+silently resolving an ambiguous role target breaks
+`test_ambiguous_role_target_fails_closed`, and making layer retiming a no-op
+breaks `test_scene_duration_revision_is_typed_and_deterministic`.
+
+*Honest limits.* The plane can now diff and revise only the typed concepts it
+already models. It still does not compile to an executable plan, does not decide
+where a style target should land, does not infer ambiguous intent with an LLM,
+and remains unreachable from any user command because nothing outside the plane
+constructs a `CreativeWork` yet.
+

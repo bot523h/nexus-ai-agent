@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T16:54:20Z",
+  "updated_at": "2026-10-01T22:24:46Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -658,6 +658,24 @@
         "scripts/llm_queue_mutations.py",
         "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
       ]
+    },
+    {
+      "id": "creative-intelligence-plane",
+      "description": "Creative Intelligence Plane (arena/01a0f906): intent semantics, creative strategy, Typed Creative IR, semantic constraints, deterministic compilation to an executable plan. Produces plans; never executes them and never owns the CommandBus, transactions, undo, or storage.",
+      "paths": [
+        "src/nexus_ai_agent/creative/intelligence/",
+        "tests/unit/creative_ir_testkit.py",
+        "tests/unit/test_creative_ir.py",
+        "tests/unit/test_creative_ir_determinism.py",
+        "tests/architecture/test_creative_intelligence_boundary.py",
+        "docs/architecture/CREATIVE_INTELLIGENCE.md",
+        "tests/unit/test_creative_semantics.py",
+        "tests/unit/test_creative_diff.py",
+        "src/nexus_ai_agent/creative/intelligence/diff.py",
+        "src/nexus_ai_agent/creative/intelligence/revision.py",
+        "tests/unit/test_creative_revision.py"
+      ],
+      "note": "2026-10-01 arena/01a0f906-nexus-ai-agent: declared from main @ e5b326b. Deliberately disjoint from creative/spine/ (exclusive zone of the open PR #126 / PR #127 lineage), creative/studio/bus.py (Jules, PR #129), creative/rendering/ (nagar-render-lane) and storage/ (recovery owner). | 2026-10-01 zone extended to the shared IR testkit module (same flat-helper convention as tests/unit/ed25519_testkit.py and tests/unit/surface_fakes.py) so the three IR test modules build documents through one code path instead of three. | 2026-10-01 zone extended to the semantic layer (semantics.py) and its test module; still disjoint from spine/, studio/bus.py, rendering/, storage/. | 2026-10-01 arena/01a0f97f-nexus-ai-agent: zone extended to the diff/revision modules and their focused test so slice 3 and task-227 stay fenced inside the same plane boundary."
     }
   ],
   "claims": [
@@ -1787,7 +1805,7 @@
       "title_fa": "",
       "zone": "ci-quality",
       "priority": "P1",
-      "status": "active",
+      "status": "expired",
       "scope": "non-blocking bootstrap job first, then blocking; sequenced after PR#33 lands",
       "scope_fa": "non-blocking bootstrap job first, then blocking; sequenced after PR#33 lands",
       "prerequisites": [],
@@ -1795,7 +1813,7 @@
         "CI job runs scripts/pack_coverage.py and reports per-pack coverage",
         "non-blocking (continue-on-error) at bootstrap, flip to blocking with evidence"
       ],
-      "note": "Claimed by the Continuum closure session together with task-184. Goes straight to a BLOCKING job (owner directive: no continue-on-error bootstrap); evidence recorded on release.",
+      "note": "auto-released by gc at 2026-10-01T19:59:48Z (stale active lease)",
       "agent_branch": "arena/01a0e2bb-nexus-ai-agent",
       "claimed_at": "2026-09-27T12:27:18Z",
       "ttl_hours": 24,
@@ -2557,7 +2575,7 @@
       "title_fa": "سخت‌سازی فورنزیک سامانهٔ شواهد Continuum",
       "zone": "continuum-evidence-measurement",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "agent_branch": "arena/01a0e2bb-nexus-ai-agent",
       "claimed_at": "2026-09-27T12:27:18Z",
       "ttl_hours": 24,
@@ -2593,7 +2611,7 @@
         "Targeted negative tests and mutation RED-to-GREEN restoration for every confirmed consumer defect.",
         "Two-run reproducibility comparison and exact PR #95/head/main/CI evidence."
       ],
-      "note": "Audit result: two P1 snapshot false-greens were reproduced in isolated Git fixtures and fixed through e924a65: a valid snapshot survived an uncommitted source edit, and a clean later commit could reuse it after src/tests/scripts/migration/dependency drift. Regressions cover clean control, dirty/stale rejection, empty revision rejection, and unavailable git-status fail-closed behaviour in tests/unit/test_continuum_hardening.py. P2 integration gap remains: CoverageReport JSON has no downstream reader and CI/release-lineage invokes neither pack coverage nor snapshot verification; task-154 remains queued rather than claiming a release gate it does not implement. Current committed snapshot correctly blocks CLI verification (unreachable recorded SHA and test-count drift). No non-Continuum domain edits without a proven direct false-evidence consumer. | 2026-09-27 arena/01a0e1e0 continuation (supersedes PR #95/#98): the P2 gap is closed — pack coverage is a canonical 95%-per-pack gate (D-0023, option A), the snapshot verifier fails closed on a 27-attack executable threat model (scripts/continuum_gate.py), a 73-mutation replayable campaign (scripts/continuum_mutations.py) fails on any survivor, and the CI job continuum-evidence runs all three on 3.10/3.11/3.12 against the exact SHA. HISTORICAL EVIDENCE LOST — CONTENT RECONSTRUCTED: the first local lineage (c44bf2c…7bda42c) was never pushed and was lost in a sandbox re-provisioning; its surviving working tree (tree ddc76334) was reconstructed on top of 48db056 and every piece of evidence was regenerated on the new lineage — see docs/audits/CONTINUUM_CLOSURE_2026-09-27.md for the exact SHAs, local runs and CI run IDs. | 2026-09-27 arena/01a0e2bb continuation (same mission owner, new session branch; a session is bound to exactly one branch and cannot push to arena/01a0e1e0): the previous session's final local commit 6198510f0a06a803ba445e03bba1e44306eaf0f9 was never pushed and is unrecoverable (git fetch origin <sha> -> 'not our ref'), so its content fix was re-derived from the failing PR #102 head eb6551b instead of copied. PR #102 was red on `test` and `python-parity` 3.10/3.11/3.12 (runs 36315364432 / 36315366459) because docs/audits/CONTINUUM_CLOSURE_2026-09-27.md was not listed in docs/README.md, which tests/unit/test_docs_integrity.py enforces; reproduced locally as '1 failed, 2893 passed, 30 skipped'. Fixed by indexing the document -- the invariant, the threshold and the measurement are untouched.",
+      "note": "auto-released by gc at 2026-10-01T19:59:48Z (stale active lease)",
       "previous_agent_branch": "arena/01a0e1e0-nexus-ai-agent"
     },
     {
@@ -2602,7 +2620,7 @@
       "title_fa": "سخت‌سازی هوش خارجی: خطای تایپ‌شده، منشأ داده، IO غیرمسدودکننده، انتقال امن کلید، ورودی خصمانه",
       "zone": "external-intelligence",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "gates_owner": false,
       "prerequisites": [],
       "scope": "knowledge/{knowledge_manager,web_trainer,wikipedia_trainer}.py and integrations/free_tools.py have ZERO tests on main and convert every external failure into a success-shaped value: get_text()/get_json() erase HTTP status and network errors ('' / {}), Wikipedia scrapes a 404 'article does not exist' page into user-visible 'knowledge', CurrencyTool returns 0.0 for a missing rate, every search path returns [] for both 'no results' and 'provider exploded', the NewsAPI key travels in the URL query string (and is logged by core/http_client on failure), the synchronous DDGS SDK is called directly inside async functions (event-loop block), BeautifulSoup parses unbounded attacker-controlled HTML on the loop, user input is interpolated raw into URL paths, and KnowledgeManager caches an LLM summary built from zero real sources for 24h using scalar_one_or_none() against a table it can populate with duplicates. Deliverable: a typed SourceResult/ExternalSourceError + Provenance contract, honest failure propagation, header-based secret transport, percent-encoded URL construction, to_thread offloading, bounded responses, query normalisation + stampede guard, and regression/adversarial/mutation tests.",
@@ -2631,7 +2649,7 @@
         "mutation probes: deliberately wrong implementations injected, guard tests observed RED, then restored GREEN",
         "reproduction transcript for each finding against the pre-fix code"
       ],
-      "note": "",
+      "note": "auto-released by gc at 2026-10-01T19:59:48Z (stale active lease)",
       "agent_branch": "arena/01a0df05-nexus-ai-agent",
       "claimed_at": "2026-09-26T18:46:40Z",
       "ttl_hours": 24
@@ -2682,7 +2700,7 @@
       "title_fa": "نجات چرخهٔ عمر صف W2: نشاندن PR #108 با حفظ کامل commitها روی خط main + رفع نقص cancellation پایتون ۳.۱۰",
       "zone": "llm-request-queue-lifecycle",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "scope": "Successor to PR #108 (supersedes it; original head 5a4cb23 preserved commit-for-commit). Scope identical to task-195-llm-queue-lifecycle plus the reconciliation: (a) semantic board merge — main's claim statuses/gc notes are canonical, PR108's zone+claim are appended; (b) version-independent worker-cancellation semantics; (c) exact-head CI against main 05dec617 lineage.",
       "scope_fa": "",
       "prerequisites": [],
@@ -2714,7 +2732,230 @@
       "claimed_at": "2026-09-27T16:54:20Z",
       "ttl_hours": 24,
       "gates_owner": true,
-      "note": "Continues task-195-llm-queue-lifecycle (original branch arena/01a0e2f0, claim released via takeover). MODULE_MAP.md/docs-architecture excluded exactly as the original claim scoped itself. | SESSION-BOUND CONTINUATION 2026-09-27T16:54:20Z: arena/01a0e3b7 fast-forwarded cd79bfe (PR #109 head) and continues the same exclusive paths. This session cannot push to arena/01a0e356. PR #109 python-parity (3.10) is RED on run 36329794486 (asyncio.wait_for raises asyncio.TimeoutError, not builtin TimeoutError)."
+      "note": "auto-released by gc at 2026-10-01T19:59:48Z (stale active lease)"
+    },
+    {
+      "task": "task-224-creative-ir-foundation",
+      "title": "Typed Creative IR foundation: a content-addressed, versionable creative document that nothing else in the plane can be built without",
+      "title_fa": "زیربنای IR خلاقانهٔ تایپ‌شده: یک سند خلاقانهٔ content-addressed و نسخه‌پذیر که بدون آن هیچ لایهٔ دیگری در Creative Intelligence Plane قابل ساخت نیست",
+      "zone": "creative-intelligence-plane",
+      "priority": "P0",
+      "status": "done",
+      "scope": "PR-1 of the Creative Intelligence Plane. Truth on main @ e5b326b: there is no Strategy abstraction anywhere in creative/ (grep 'Strategy' hits only llm/litellm_provider.py), no Recipe type at all, no semantic diff, and no authoring-level creative IR - rendering/ir.py is FFmpeg-lane shaped and studio/models.py Project/Timeline is execution state. This slice creates the typed IR everything downstream (strategy, compiler, semantic revision, creative diff) is defined against: Asset/Scene/Layer/Segment/Timing/Transition/Effect/Audio/Text/SemanticRole/Constraint/OutputRequirement, with Merkle content-addressed identity, canonical serialization, structural validation that rejects invalid states, and IR-checkable constraints.",
+      "scope_fa": "PR-۱ از Creative Intelligence Plane. حقیقت روی main @ e5b326b: هیچ انتزاع Strategy در creative/ وجود ندارد، هیچ Recipe‌ای وجود ندارد، هیچ semantic diff‌ای وجود ندارد و IR خلاقانهٔ سطح authoring هم وجود ندارد. این اسلایس IR تایپ‌شده‌ای می‌سازد که لایه‌های بعدی نسبت به آن تعریف می‌شوند.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "src/nexus_ai_agent/creative/intelligence/ is a new package that imports nothing from creative/studio/, creative/spine/, creative/rendering/, storage/, or llm/ - enforced by an architecture test, not a comment",
+        "The IR models Asset, Scene, Layer, Segment, Timing, Transition, Effect, Audio cue, Text, semantic role, constraint and output requirement as strongly typed, extra='forbid', frozen models",
+        "Identity is content-addressed (Merkle, sha256) and deterministic: building the same IR twice yields byte-identical ids; no uuid4 anywhere in the identity path",
+        "Canonical serialization round-trips: to_canonical_json -> from_canonical_json reproduces an equal document and an identical root id",
+        "Structural validation rejects invalid states with typed errors: dangling asset/scene/layer references, duplicate ids, non-monotonic or zero-length timing, layers outside their scene, unknown semantic roles",
+        "At least one constraint kind is checkable against the IR itself (not decorative): a timing constraint that a valid document satisfies and an invalid one violates",
+        "Integer-only time and per-mille-only continuous quantities in the hashed payload, so canonical form has no float nondeterminism",
+        "Serialization round-trip, determinism, invalid-input and architecture-boundary tests are all present and green",
+        "No execution path: the package contains no subprocess, no I/O, no CommandBus and no PlanTransaction usage",
+        "python scripts/agent_board.py check --files <changed> --branch arena/01a0f906-nexus-ai-agent exits 0"
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_creative_ir.py tests/unit/test_creative_ir_determinism.py tests/architecture/test_creative_intelligence_boundary.py",
+        "pytest -q tests/architecture (full architecture suite, zero regression from the 125-test baseline)",
+        "ruff check . && ruff format --check . on the new files",
+        "mypy src on the new package",
+        "python scripts/agent_board.py check --files ... --branch arena/01a0f906-nexus-ai-agent"
+      ],
+      "evidence": [
+        "pytest -q tests/unit/test_creative_ir.py -> 54 passed",
+        "pytest -q tests/unit/test_creative_ir_determinism.py -> 20 passed",
+        "pytest -q tests/architecture/test_creative_intelligence_boundary.py -> 27 passed",
+        "all three together -> 101 passed",
+        "pytest -q tests/architecture -> 152 passed (baseline before this slice: 125; +27 new, 0 regression)",
+        "pytest -q tests/unit -k 'creative or studio or rendering or pack or otio or slideshow or caption or motion or audio or delivery or edit' --continue-on-collection-errors -> 677 passed (baseline 603), same 24 pre-existing environmental failures (ModuleNotFoundError: imageio_ffmpeg / no ffmpeg binary in sandbox), 0 regression",
+        "pytest -q tests/unit/test_agent_board.py -> 18 passed (board schema 2 still valid)",
+        "pytest -q tests/unit/test_docs_integrity.py -> 59 passed (new doc indexed, links resolve, mermaid balanced)",
+        "ruff check + ruff format --clean on every new file -> clean",
+        "mypy src/nexus_ai_agent/creative/intelligence -> Success: no issues found in 4 source files",
+        "determinism re-verified in fresh interpreters under PYTHONHASHSEED=0,1,12345 -> one identical (work_id, canonical JSON) result",
+        "python scripts/agent_board.py check --files <all changed> --branch arena/01a0f906-nexus-ai-agent -> exit 0"
+      ],
+      "note": "Delivered. The plane proposes; it does not execute. Two gates with different contracts: assert_valid() reports every structural problem on an unsealed document, seal() resolves references while assigning content-addressed identity, verify_identity() proves the document matches its own content. Not named validate() because pydantic BaseModel.validate is a classmethod - mypy caught the shadow and a test now pins it. Honest limit: nothing outside the plane constructs a CreativeWork yet, so this slice is a foundation and is not reachable from any user command.",
+      "ttl_hours": 24,
+      "agent_branch": "",
+      "claimed_at": null,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/intelligence/",
+        "tests/unit/test_creative_ir.py",
+        "tests/unit/test_creative_ir_determinism.py",
+        "tests/unit/creative_ir_testkit.py",
+        "tests/architecture/test_creative_intelligence_boundary.py",
+        "docs/architecture/CREATIVE_INTELLIGENCE.md"
+      ],
+      "next_tasks": [
+        "task-225: semantic layer - resolve CreativeBrief.semantic_intents into Constraint values (cinematic / fast paced / premium / dramatic reveal), with unresolved_intents recorded rather than dropped",
+        "task-226: deterministic compiler - IR -> validated -> normalized (track allocation) -> CompiledPlan, re-checking every constraint against the plan; must update test_the_plane_produces_no_plan_or_command_type_yet deliberately",
+        "task-227: semantic revision - RevisionIntent -> affected semantics -> IR delta -> recompilation, proven by the Merkle locality property already tested",
+        "task-228: creative diff - v1 -> v2 as semantic statements derived from Merkle subtree comparison",
+        "task-229: reference -> observed structure -> concepts -> Creative Recipe -> Typed Creative IR (Origin.source='recipe' is reserved for it)"
+      ],
+      "delivered": "PR #131 (open) — released so task-225 can hold the plane path; two active claims cannot own one path, which the board schema test correctly refused."
+    },
+    {
+      "task": "task-225-creative-semantics",
+      "title": "Creative semantics: turn the phrases a user actually said into checkable constraints, and report the ones nothing can honour",
+      "title_fa": "معناشناسی خلاقانه: تبدیل عبارت‌هایی که کاربر واقعاً گفته به قیدهای قابل‌بررسی، و گزارش صادقانهٔ مواردی که هیچ‌چیز نمی‌تواند اجرا کند",
+      "zone": "creative-intelligence-plane",
+      "priority": "P0",
+      "status": "done",
+      "scope": "PR-2 of the Creative Intelligence Plane. Turns CreativeBrief.semantic_intents (surface phrases in English and Persian) into typed Constraint values on the document, so meaning becomes machine-checkable instead of staying a string. Adds the one constraint kind the IR genuinely lacked for this (PacingConstraint: max scene duration / min scene count), resolves narrative roles to real scene identities at resolution time, detects semantic collisions arithmetically rather than silently picking a winner, and records every phrase it could not resolve in brief.unresolved_intents.",
+      "scope_fa": "PR-۲ از Creative Intelligence Plane. عبارت‌های سطحی را به قیدهای تایپ‌شده تبدیل می‌کند تا معنا به‌جای رشتهٔ متنی، ماشین‌خوان و قابل‌بررسی شود.",
+      "prerequisites": [
+        "task-224-creative-ir-foundation"
+      ],
+      "acceptance_criteria": [
+        "A surface phrase never becomes a bare string in the IR: every recognised phrase resolves to a typed SemanticMeaning and then to typed Constraint values",
+        "Multiple surface forms (English and Persian) normalise onto one meaning, and the mapping is data, not scattered conditionals",
+        "Every constraint the layer emits carries Origin(source='user', detail=<the phrase>) so provenance survives resolution",
+        "An unrecognised phrase lands in brief.unresolved_intents and is never silently dropped",
+        "Semantic collisions are detected arithmetically (incompatible duration bands on one target; emphasis shares summing past 1000 permille) and reported, not silently resolved",
+        "Resolution is deterministic: the same brief yields byte-identical constraints and the same sealed work identity, in any order the phrases were given",
+        "The layer stays inside the plane boundary: no new imports outside the closed surface, and the architecture suite still passes",
+        "PacingConstraint is checkable against the IR itself, like the other five kinds",
+        "ruff check / ruff format / mypy clean on every changed file",
+        "python scripts/agent_board.py check --files <changed> --branch arena/01a0f906-nexus-ai-agent exits 0"
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_creative_semantics.py",
+        "pytest -q tests/unit/test_creative_ir.py tests/unit/test_creative_ir_determinism.py (zero regression)",
+        "pytest -q tests/architecture (zero regression from 152)",
+        "ruff check / ruff format --check / mypy on the changed files",
+        "agent_board.py check exit 0"
+      ],
+      "evidence": [
+        "pytest -q tests/unit/test_creative_semantics.py -> 41 passed",
+        "plane suite (ir 54 + determinism 20 + semantics 41 + boundary 32) -> 147 passed",
+        "pytest -q tests/architecture -> 157 passed (152 before this slice; +5, the parametrized boundary rules each gained semantics.py; 0 regression)",
+        "pytest -q tests/unit/test_agent_board.py -> 18 passed; tests/unit/test_docs_integrity.py -> 59 passed",
+        "ruff check / ruff format --check clean; mypy src/nexus_ai_agent/creative/intelligence -> Success: no issues found in 5 source files",
+        "python scripts/agent_board.py check --files <all changed> --branch arena/01a0f906-nexus-ai-agent -> exit 0",
+        "falsifiability: the reference document declares 4 intents and the layer reports it violates 3 of them (exclusion, pacing, emphasis)"
+      ],
+      "note": "Delivered. Stacks on PR #131 (task-224, released). Three source defects found and fixed by this slice's own gates: two lexicon entries were unreachable because they were written with a ZWNJ and Persian digits that normalize_phrase strips (the lexicon is now built through the normaliser, so the class cannot recur); TimingConstraint could not express a floor alone because max_us was required; _evaluate_pacing returned only its first violation, contradicting the plane's own report-every-problem contract. Compiler deferred on measured evidence, see deferred_by_this_wave. | SESSION-BOUND CONTINUATION 2026-10-01: cherry-picked onto arena/01a0f97f-nexus-ai-agent because this sandbox is branch-bound; slice 2 was re-verified locally and released so slice 3 can hold the plane path truthfully.",
+      "ttl_hours": 24,
+      "deferred_by_this_wave": {
+        "what": "the deterministic compiler (IR -> CompiledPlan)",
+        "why": "Blocked by a real capability gap, verified on main @ e5b326b: no capability assembles a general timeline from assets. slideshow.compose rejects non-image assets ('assets must contain image evidence only'), and the bus registry exposes exactly five operations (media.play, media.pause, timeline.mark, timeline.split_at_playhead, system.undo), none of which places a clip. A compiler that lowered an arbitrary CreativeWork today would have to invent operation ids the registry does not expose - a plan the bus could not run, which is a false green. Unblocked by either (a) a timeline-assembly capability, or (b) scoping the first lowering to the image-only subset that really does compile to slideshow.compose."
+      },
+      "agent_branch": "",
+      "claimed_at": null,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/intelligence/",
+        "tests/unit/test_creative_semantics.py"
+      ]
+    },
+    {
+      "task": "task-226-creative-diff",
+      "title": "Creative diff: state the difference between two creative versions in meaning, not in changed fields",
+      "title_fa": "دیف خلاقانه: بیان تفاوت دو نسخهٔ خلاقانه به زبان معنا، نه فیلدهای تغییرکرده",
+      "zone": "creative-intelligence-plane",
+      "priority": "P1",
+      "status": "done",
+      "scope": "PR-3 of the Creative Intelligence Plane. Takes the slot the deferred compiler would have taken. diff_works(before, after) walks the Merkle tree, prunes every subtree whose identity is unchanged in O(1), matches elements across versions by stable structural keys, and emits semantic statements ('pacing increased', 'the reveal got shorter', 'the subject lost attention share') rather than 'field X changed'. This is the substrate semantic revision needs in order to report what it did.",
+      "scope_fa": "PR-۳ از Creative Intelligence Plane. تفاوت دو نسخه را به زبان معنا بیان می‌کند.",
+      "prerequisites": [
+        "task-225-creative-semantics"
+      ],
+      "acceptance_criteria": [
+        "Identical documents diff to nothing, in O(1) via the root identity",
+        "An unchanged subtree is pruned by identity, never walked element by element",
+        "A change confined to one scene reports that scene and nothing else",
+        "Elements are matched across versions by stable structural keys, so a modified scene reads as MODIFIED rather than as one removal plus one addition",
+        "The diff states meaning: duration, pacing, emphasis share, resolution, constraints - not only field names",
+        "Additions, removals and modifications are all distinguishable and each carries the identity it refers to",
+        "diff is deterministic and symmetric in the sense that swapping arguments inverts additions and removals",
+        "The module stays inside the plane boundary; the architecture suite still passes",
+        "ruff / mypy clean on every changed file",
+        "agent_board.py check exits 0"
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_creative_diff.py",
+        "pytest -q on the whole plane suite (zero regression from 147)",
+        "pytest -q tests/architecture (zero regression from 157)",
+        "ruff / mypy clean",
+        "agent_board.py check exit 0"
+      ],
+      "evidence": [
+        "PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_creative_diff.py -> 4 passed",
+        "PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_creative_ir.py tests/unit/test_creative_ir_determinism.py tests/unit/test_creative_semantics.py tests/unit/test_creative_diff.py tests/unit/test_creative_revision.py tests/architecture/test_creative_intelligence_boundary.py -> 177 passed",
+        "PYTHONPATH=src .venv/bin/pytest -q tests/architecture -> 169 passed",
+        "PYTHONPATH=src .venv/bin/ruff check src/nexus_ai_agent/creative/intelligence ... && PYTHONPATH=src .venv/bin/python -m mypy src/nexus_ai_agent/creative/intelligence tests/unit/test_creative_diff.py tests/unit/test_creative_revision.py -> clean",
+        "python scripts/agent_board.py check --files .agents/board.json,src/nexus_ai_agent/creative/intelligence/__init__.py,src/nexus_ai_agent/creative/intelligence/errors.py,src/nexus_ai_agent/creative/intelligence/identity.py,src/nexus_ai_agent/creative/intelligence/ir.py,src/nexus_ai_agent/creative/intelligence/semantics.py,src/nexus_ai_agent/creative/intelligence/diff.py,src/nexus_ai_agent/creative/intelligence/revision.py,tests/architecture/test_creative_intelligence_boundary.py,tests/unit/test_creative_ir.py,tests/unit/test_creative_ir_determinism.py,tests/unit/test_creative_semantics.py,tests/unit/test_creative_diff.py,tests/unit/test_creative_revision.py,docs/architecture/CREATIVE_INTELLIGENCE.md,docs/DECISION_LOG.md --branch arena/01a0f97f-nexus-ai-agent -> no overlap — safe to proceed."
+      ],
+      "note": "Delivered on arena/01a0f97f-nexus-ai-agent. PR #131 head still lives on arena/01a0f906-nexus-ai-agent, while this Arena session is branch-bound; the reported SHA 5da4d81 remained unavailable both locally and on GitHub, so slice 3 was reconstructed from the live contract and landed here as commit add0508. Diff is lineage-aware, prunes unchanged subtrees by sealed identity, and reports semantic changes instead of raw field names. Released so task-227 can close the same plane path truthfully.",
+      "ttl_hours": 24,
+      "agent_branch": "",
+      "claimed_at": null,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/intelligence/",
+        "tests/unit/test_creative_diff.py",
+        "tests/unit/test_creative_ir_determinism.py",
+        "tests/architecture/test_creative_intelligence_boundary.py",
+        "docs/architecture/CREATIVE_INTELLIGENCE.md"
+      ]
+    },
+    {
+      "task": "task-227-creative-revision",
+      "title": "Creative revision: make semantic edits first-class, typed and deterministic rather than free mutation",
+      "title_fa": "بازبینی خلاقانه: تبدیل ویرایش معنایی به عملیات درجه‌اول، تایپ‌شده و قطعی به‌جای mutation آزاد",
+      "zone": "creative-intelligence-plane",
+      "priority": "P0",
+      "status": "done",
+      "scope": "PR-4 of the Creative Intelligence Plane. Introduce a typed RevisionIntent and deterministic apply_revision() contract: explicit target -> affected semantics -> CreativeWork transformation -> IR delta -> semantic diff. Revision fails closed on ambiguity, reuses the plane's Merkle identity machinery, and proves locality: changing one subtree keeps unrelated identities byte-identical. No execution authority, no CommandBus, no storage, no network.",
+      "scope_fa": "PR-۴ از Creative Intelligence Plane. قرارداد RevisionIntent و apply_revision() قطعی و تایپ‌شده: هدف صریح -> معناهای متاثر -> تبدیل CreativeWork -> IR delta -> semantic diff. در ابهام fail-closed می‌کند و هیچ authority اجرایی اضافه نمی‌کند.",
+      "prerequisites": [
+        "task-226-creative-diff"
+      ],
+      "acceptance_criteria": [
+        "RevisionIntent identity is deterministic (no random UUIDs): same source work + same target + same requested change -> same revision_id",
+        "Targets are explicit addresses or explicit role+disambiguator contracts; ambiguous targets fail closed with a typed error",
+        "apply_revision() performs typed transformations only (scene timing / constraint / text / transition / effect / audio intent that the IR can really express) and re-seals the resulting work",
+        "The revision result reports affected nodes, resulting work identity, IR delta and semantic diff in one contract",
+        "Merkle locality is proven: untouched subtrees retain identical identities byte-for-byte, including under repeated identical revisions",
+        "False positives pinned by slice 3 do not regress: untouched transitions stay unchanged, relevant constraints change only when semantically changed, duplicate constraints never collapse, role-based scene swaps never happen",
+        "Determinism holds across fresh interpreters with PYTHONHASHSEED=0,1,12345,999 for work_id, revision_id, canonical representation and diff digest",
+        "No new authority: the plane still imports nothing from studio/bus, spine, rendering, storage, CommandBus, jobs or network clients",
+        "Focused revision tests, diff tests, determinism tests, architecture boundary tests, agent-board tests, docs integrity, ruff and mypy are green (or classified honestly if blocked by environment)"
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_creative_revision.py tests/unit/test_creative_diff.py tests/unit/test_creative_ir.py tests/unit/test_creative_ir_determinism.py tests/unit/test_creative_semantics.py tests/architecture/test_creative_intelligence_boundary.py",
+        "PYTHONHASHSEED=0,1,12345,999 subprocess proofs for revision determinism",
+        "ruff check + mypy on the plane package",
+        "python scripts/agent_board.py check --files <all changed> --branch arena/01a0f97f-nexus-ai-agent"
+      ],
+      "evidence": [
+        "PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_creative_revision.py tests/unit/test_creative_diff.py -> 15 passed",
+        "PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_creative_ir.py tests/unit/test_creative_ir_determinism.py tests/unit/test_creative_semantics.py tests/unit/test_creative_diff.py tests/unit/test_creative_revision.py tests/architecture/test_creative_intelligence_boundary.py -> 177 passed",
+        "PYTHONPATH=src .venv/bin/pytest -q tests/architecture -> 169 passed",
+        "PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_agent_board.py -> 18 passed; PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_docs_integrity.py -> 59 passed",
+        "PYTHONPATH=src .venv/bin/ruff check src/nexus_ai_agent/creative/intelligence ... -> All checks passed; PYTHONPATH=src .venv/bin/ruff format --check src/nexus_ai_agent/creative/intelligence ... -> already formatted; PYTHONPATH=src .venv/bin/python -m mypy src/nexus_ai_agent/creative/intelligence tests/unit/test_creative_diff.py tests/unit/test_creative_revision.py -> Success: no issues found in 9 source files",
+        "Determinism proof: tests/unit/test_creative_revision.py::test_revision_ids_are_stable_across_hash_seeds (PYTHONHASHSEED=0,1,12345,999) passed",
+        "Mutation probes killed and reverted: transition-lineage removal -> test_creative_diff failure; ambiguous role auto-pick -> test_ambiguous_role_target_fails_closed failure; layer-retime no-op -> test_scene_duration_revision_is_typed_and_deterministic failure",
+        "python scripts/agent_board.py check --files .agents/board.json,src/nexus_ai_agent/creative/intelligence/__init__.py,src/nexus_ai_agent/creative/intelligence/errors.py,src/nexus_ai_agent/creative/intelligence/identity.py,src/nexus_ai_agent/creative/intelligence/ir.py,src/nexus_ai_agent/creative/intelligence/semantics.py,src/nexus_ai_agent/creative/intelligence/diff.py,src/nexus_ai_agent/creative/intelligence/revision.py,tests/architecture/test_creative_intelligence_boundary.py,tests/unit/test_creative_ir.py,tests/unit/test_creative_ir_determinism.py,tests/unit/test_creative_semantics.py,tests/unit/test_creative_diff.py,tests/unit/test_creative_revision.py,docs/architecture/CREATIVE_INTELLIGENCE.md,docs/DECISION_LOG.md --branch arena/01a0f97f-nexus-ai-agent -> no overlap — safe to proceed."
+      ],
+      "note": "Delivered after task-226 release on the same session branch. apply_revision() is now a typed, deterministic contract from explicit target to sealed CreativeWork transformation, affected-node list, IR delta and semantic diff. Ambiguous role targets fail closed; locality is pinned by regression tests; no new authority crosses into spine, studio/bus, rendering, storage, jobs or network. Landed directly on top of add0508 in this continuation.",
+      "ttl_hours": 24,
+      "agent_branch": "",
+      "claimed_at": null,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/intelligence/",
+        "tests/unit/test_creative_revision.py",
+        "tests/unit/test_creative_diff.py",
+        "tests/unit/test_creative_ir_determinism.py",
+        "tests/architecture/test_creative_intelligence_boundary.py",
+        "docs/architecture/CREATIVE_INTELLIGENCE.md"
+      ]
     }
   ],
   "deferred_log": [
