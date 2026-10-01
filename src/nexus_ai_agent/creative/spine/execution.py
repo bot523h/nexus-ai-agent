@@ -113,10 +113,17 @@ class CreativeExecutionSpine:
         names the transaction id the bus returned for that step, and the bus's
         stage-9 identity gate refuses unless the named transaction is still the
         newest editable one -- a check that is atomic with the state swap, so a
-        concurrent edit by another actor is never rewound (the run fails closed
-        with :class:`SpineRollbackError`). A failed run therefore leaves the
-        central state exactly as it began -- no half-applied plan and no artifact
-        node for work that did not complete.
+        concurrent edit by another actor is never rewound.
+
+        When nothing interleaves, the rollback restores the content identity
+        (``state_hash``) the run began with and retracts every artifact node, so
+        a failed run leaves the project content unchanged. When a foreign actor
+        commits between two steps the run *cannot* undo its own step without
+        rewinding that foreign work, so the rollback fails closed with
+        :class:`SpineRollbackError` and the run's own already-applied step
+        remains in the project -- loudly, never silently, and the foreign edit is
+        untouched (the surviving content is last-writer-wins). No artifact node
+        is ever left for work that did not complete.
         """
         if intent.project_id != self._bus.project.project_id:
             raise ValueError("intent targets a different project than the bus")
