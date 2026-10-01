@@ -3290,7 +3290,7 @@
       "claimed_at": "2026-10-01T04:22:57Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Option A delivered by arena/01a0181931-task223-undo-contract (from PR#127 head a78644b): identity-aware system.undo enforced INSIDE the stage-9 handler under the bus lock (UndoConflictError). Spine adoption is tracked as a second claim, task-223-spine-undo-identity-adoption (zone nagar-creative-graph), because a claim carries one zone; task-222 was released to free the spine.",
+      "note": "DELIVERED on arena/01a0181931-task223-undo-contract @ 3ba9aac, PR#128 (stacked on #127). Option A: identity-aware system.undo enforced INSIDE the stage-9 handler under the bus lock. Evidence: TestUndoIdentity 126 passed; two-thread race test (test_race_b_identity_closes_the_check_then_act_window); test_undo_contract_mutations.py 4 passed / 3 mutants killed; tests/unit+tests/architecture 2832 passed, 11 skipped; mypy+ruff clean; referee exit 0 (27 sources). Docs: DECISION_LOG task-223 amendment + COMMAND_CAPABILITY_CONTRACT 7.1 / stage-9 / open-gaps.",
       "generation": 1,
       "exclusive_paths": [
         "src/nexus_ai_agent/creative/studio/",
@@ -3332,7 +3332,7 @@
       "ttl_hours": 24,
       "generation": 1,
       "gates_owner": false,
-      "note": "Part 2 of task-223. Adopts the bus identity contract in CreativeExecutionSpine._rollback; supersedes task-222's caller-side check (task-222 released)."
+      "note": "DELIVERED in PR#128: _rollback names the run's own transaction id and translates UndoConflictError -> SpineRollbackError; task-222's caller-side check removed. Evidence: test_creative_spine.py + test_spine_mutations.py + test_spine_boundary.py pass; the spine foreign-edit test now asserts __cause__ is UndoConflictError; spine mutation retargeted and green. Merge order #126 -> #127 -> #128."
     }
   ],
   "deferred_log": [
