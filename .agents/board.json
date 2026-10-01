@@ -2104,7 +2104,7 @@
       "title_fa": "بکاپ شبانهٔ دیتابیس هرگز موفق نشده (۳ از ۳ سرخ) — مسیر بکاپ Production واقعاً کار کند",
       "zone": "ci-quality",
       "priority": "P1",
-      "status": "queued",
+      "status": "deferred",
       "scope": "maintenance.yml backup-db fails 3/3 scheduled runs (35580701817, 35705502209, 35838057275 — the 'Run nexus maintenance backup' step exits 1; the 2026-09-21 'success' 35586584833 was housekeeping-only with backup-db skipped, verified via the job API). backup.py/r2.py unchanged across those runs, so the failure is environmental (R2 secrets missing => by-design red, or R2+Neon misconfiguration). Read the job log, record the exact root cause, fix configuration (owner secrets per docs/ops/r2-storage.md §4) and/or the workflow preflight, then prove a real upload under backups/db/<stamp>/ via workflow_dispatch.",
       "scope_fa": "backup-db در سه اجرا پیاپی سرخ است؛ کد backup.py/r2.py در بازهٔ آن اجراها دست‌نخورده مانده، پس شکست محیطی است (R2 secrets / پیکربندی Neon). لوق جاب باید خوانده، ریشه ثبت و با یک اجرای دستی موفق (آپلود واقع‌زیر backups/db/<stamp>/) اثبات شود.",
       "prerequisites": [],
@@ -2125,7 +2125,8 @@
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Forensics recorded 2026-09-23. Repo-side verifiability absorbed by task-167-backup-verifiability (P0-C, 2026-09-24). This task keeps ONLY the owner-action part: set R2/Neon secrets (docs/ops/r2-storage.md §4) and prove one green workflow_dispatch run with upload under backups/db/<stamp>/."
+      "note": "Forensics recorded 2026-09-23. Repo-side verifiability absorbed by task-167-backup-verifiability (P0-C, 2026-09-24). This task keeps ONLY the owner-action part: set R2/Neon secrets (docs/ops/r2-storage.md §4) and prove one green workflow_dispatch run with upload under backups/db/<stamp>/.",
+      "release_reason": "owner-blocked: repo-side verifiability already delivered by task-167; only the owner-side R2/Neon secret configuration remains (see deferred_log)."
     },
     {
       "priority": "P0",
@@ -3333,6 +3334,25 @@
       "generation": 1,
       "gates_owner": false,
       "note": "DELIVERED in PR#128: _rollback names the run's own transaction id and translates UndoConflictError -> SpineRollbackError; task-222's caller-side check removed. Evidence: test_creative_spine.py + test_spine_mutations.py + test_spine_boundary.py pass; the spine foreign-edit test now asserts __cause__ is UndoConflictError; spine mutation retargeted and green. Merge order #126 -> #127 -> #128."
+    },
+    {
+      "task": "task-190-sqlite-wal-init-race",
+      "zone": "storage-observability",
+      "status": "available",
+      "title": "SQLite first-use WAL init races under concurrent first use (CI flake: 'database is locked' on PRAGMA journal_mode=WAL)",
+      "title_fa": "مسابقهٔ مقداردهی WAL در اولین استفادهٔ هم‌زمان SQLite (فلیک CI: database is locked روی PRAGMA journal_mode=WAL)",
+      "why_fa": "create_all_tables یک بار به ازای هر مسیر محافظت می‌شود (_initialized_paths) اما خودِ مقداردهی از چند تسک/process هم‌زمان بی‌محافظت است؛ دو مقداردهی هم‌زمان WAL یک‌دیگر را قفل می‌کنند و یکی با sqlite3.OperationalError: database is locked شکست می‌خورد.",
+      "scope": "Found by task-223 while auditing the final PR#128 CI head: python-parity (3.12) failed with sqlite3.OperationalError: database is locked on PRAGMA journal_mode=WAL (run 36816623063 job 110223040499) in test_r_f28_concurrent_identical_learns_collapse_into_one; the 3.10/3.11 legs and the local full suite (2988 passed) were green, so it is intermittent and contention-dependent. Owner: storage-observability zone (unclaimed).",
+      "acceptance_criteria": [
+        "PRAGMA journal_mode=WAL under concurrent first use never raises 'database is locked' (busy_timeout + bounded retry on the one-time pragma)",
+        "a deterministic concurrent-first-use regression test (threads or processes) proves no OperationalError and WAL is actually set",
+        "the initialize/create_all path stays idempotent per path and no regression on the storage suite"
+      ],
+      "prerequisites": [],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/db.py"
+      ],
+      "note": "Filed by task-223 from live CI forensics; unclaimed, owner zone storage-observability."
     }
   ],
   "deferred_log": [
@@ -3377,27 +3397,25 @@
       "reason_fa": "ریشهٔ ناامنیِ undo در ناحیهٔ studio/ است (خارج از قفلِ ستون فقرات)؛ task-222 فقط در ستون فقرات fail-closed کرد تا خرابی خاموش حذف شود.",
       "reason_en": "The unsafe primitive lives in creative/studio/ (owned by nagar-contract-gate), outside the spine's exclusive lease. task-222 delivered the safe spine-side guard; the bus-level transaction-identity fix is recorded here so it is not forgotten.",
       "resume_when": "a session holds the nagar-contract-gate zone and a design decision (Option A/B/C) is recorded"
+    },
+    {
+      "task": "task-164",
+      "deferred_by_branch": "arena/01a0181931-task223-undo-contract",
+      "at": "2026-10-01T05:11:48Z",
+      "reason_fa": "بخش repo-side با task-167 تحویل شده؛ آنچه مانده فقط تنظیم سکرت‌های R2/Neon توسط مالک است، پس در لیست کار agent مسدود است.",
+      "reason_en": "Owner-blocked: repo-side verifiability already delivered by task-167; the remaining work is the owner setting NEXUS_R2_* / Neon secrets and one green workflow_dispatch. Not agent-actionable.",
+      "resume_when": "owner sets docs/ops/r2-storage.md §4 secrets and runs workflow_dispatch backup-db"
+    },
+    {
+      "task": "task-190-sqlite-wal-init-race",
+      "deferred_by_branch": "arena/01a0181931-task223-undo-contract",
+      "at": "2026-10-01T05:11:48Z",
+      "reason_fa": "در حلقهٔ task-223 کشف شد اما خارج از ناحیهٔ claim من است و رفع آن یک PR چهارم پشت سه PR باز می‌سازد؛ به‌جای گسترش دامنه، با شواهد ثبت شد.",
+      "reason_en": "Found during the task-223 loop but out of my claim's zone; fixing it would open a 4th PR stacked behind three open PRs. Recorded with reproduction instead of widening scope.",
+      "resume_when": "next storage-observability window (after #126/#127/#128 merge)"
     }
   ],
   "next_work": [
-    {
-      "id": "task-164",
-      "priority": "P1",
-      "zone": "ci-quality",
-      "title": "Nightly DB backup has never succeeded (3/3 red) — make the production backup pipeline actually work",
-      "title_fa": "بکاپ شبانهٔ دیتابیس هرگز موفق نشده (۳ از ۳ سرخ) — مسیر بکاپ Production واقعاً کار کند",
-      "why_fa": "تنها مکانیسم DR برای دیتابیس Production (R2 blob tier) سه اجرا پیاپی شکست خورده و هیچ بکاپی تولید نشده؛ ریشهٔ دقیق بدون لوق جاب نامشخص است (R2 secrets؟ پیکربندی Neon؟).",
-      "acceptance_criteria": [
-        "a manual workflow_dispatch run of maintenance/backup-db completes SUCCESS with a visible object under backups/ in R2 including sha256/verified/timestamp in the step log",
-        "NEXUS_R2_* secrets are configured in GitHub Actions (owner-side)",
-        "the scheduled (cron) run after that also completes SUCCESS"
-      ],
-      "prerequisites": [],
-      "exclusive_paths": [
-        ".github/workflows/maintenance.yml"
-      ],
-      "status_note": "repo-side verifiability delivered by task-167 (verified backup contract, round-trip byte identity, restore-into-temp-SQLite verification); what remains is owner-secrets configuration + one real green dispatch"
-    },
     {
       "id": "task-124",
       "priority": "P0",
@@ -3575,6 +3593,24 @@
         "tests/unit/test_creative_graph.py"
       ],
       "status_note": "sequenced after task-186 (spine in-memory slice, done); trigger recorded in docs/architecture/CREATIVE_DIRECTION.md section 6"
+    },
+    {
+      "id": "task-190-sqlite-wal-init-race",
+      "priority": "P1",
+      "zone": "storage-observability",
+      "title": "SQLite first-use WAL init races under concurrent first use (CI flake: 'database is locked' on PRAGMA journal_mode=WAL)",
+      "title_fa": "مسابقهٔ مقداردهی WAL در اولین استفادهٔ هم‌زمان SQLite (فلیک CI: database is locked روی PRAGMA journal_mode=WAL)",
+      "why_fa": "create_all_tables یک بار به ازای هر مسیر محافظت می‌شود (_initialized_paths) اما خودِ مقداردهی از چند تسک/process هم‌زمان بی‌محافظت است؛ دو مقداردهی هم‌زمان WAL یک‌دیگر را قفل می‌کنند و یکی با sqlite3.OperationalError: database is locked شکست می‌خورد.",
+      "acceptance_criteria": [
+        "PRAGMA journal_mode=WAL under concurrent first use never raises 'database is locked' (busy_timeout + bounded retry on the one-time pragma)",
+        "a deterministic concurrent-first-use regression test (threads or processes) proves no OperationalError and WAL is actually set",
+        "the initialize/create_all path stays idempotent per path and no regression on the storage suite"
+      ],
+      "prerequisites": [],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/db.py"
+      ],
+      "status_note": "Found by task-223 while auditing the final PR#128 CI head: python-parity (3.12) failed with sqlite3.OperationalError: database is locked on PRAGMA journal_mode=WAL (run 36816623063 job 110223040499) in test_r_f28_concurrent_identical_learns_collapse_into_one; the 3.10/3.11 legs and the local full suite (2988 passed) were green, so it is intermittent and contention-dependent. Owner: storage-observability zone (unclaimed)."
     }
   ],
   "history": {
