@@ -1878,6 +1878,15 @@ undo-scoping. `system.undo` remains a newest-only rewind by design: the full-sta
 (one `state_before` per transaction) makes an arbitrary-index rewind unsound, so identity is a
 *guard*, not a random-access pointer.
 
+Scope of the guarantee (no overclaiming): the check and the snapshot swap are **atomic within
+one handler run** and **linearizable across threads sharing one `CommandBus` instance** — that
+is the race this closes. Multiple agents are safe only when they share that one instance;
+separate bus instances have separate in-memory history and project, and **no cross-instance
+undo is claimed**. Multiple processes and restart are **NOT VERIFIED**: the bus, its history
+and its snapshots are in-memory and per-instance, so durable/identity-addressed undo across
+processes is a future trigger. No new durable state is added, so the task-222 bounded crash
+divergence (commit present, graph node absent) is unchanged.
+
 Guarded by `tests/unit/test_command_capability_contract.py::TestUndoIdentity` (matching identity
 rewinds; stale/unknown identity refused with the foreign edit intact; absent identity still undoes
 the newest; identity on an empty stack is refused; the two-thread
