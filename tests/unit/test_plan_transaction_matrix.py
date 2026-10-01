@@ -12,20 +12,17 @@ Covers the 28-point failure matrix and invariant checks:
 from __future__ import annotations
 
 import pytest
+from tests.unit.test_plan_transaction import make_command, make_project
 
 from nexus_ai_agent.creative.studio import (
     CommandBus,
     CommandExecutionError,
     CommandValidationError,
-    IdempotencyConflictError,
-    PlanExecutionResult,
     PlanTransaction,
     PreconditionError,
     Project,
-    TypedCommand,
 )
 from nexus_ai_agent.creative.studio.models import Preconditions
-from tests.unit.test_plan_transaction import make_command, make_project
 
 
 @pytest.fixture()
@@ -39,8 +36,10 @@ def bus(project: Project) -> CommandBus:
 
 
 class TestPlanFailureMatrix:
-    def test_same_plan_different_transport_ids_yields_same_fingerprint(self, bus: CommandBus) -> None:
-        """Finding A verification: changing command_id/trace_id does not change logical plan fingerprint."""
+    def test_same_plan_different_transport_ids_yields_same_fingerprint(
+        self, bus: CommandBus
+    ) -> None:
+        """Finding A verification: transport ID changes do not alter logical fingerprint."""
         cmd1 = make_command("timeline.mark", "cmd_trans_1", input={"at": "اینجا", "label": "M1"})
         plan1 = PlanTransaction(
             plan_id="plan_trans_01",
@@ -67,8 +66,10 @@ class TestPlanFailureMatrix:
         assert res2.transaction_id == res1.transaction_id
         assert bus.state_revision == 1
 
-    def test_preexisting_idempotency_reservation_preserved_on_failed_plan(self, bus: CommandBus) -> None:
-        """Finding B verification: pre-existing idempotency reservations remain active if a subsequent plan fails."""
+    def test_preexisting_idempotency_reservation_preserved_on_failed_plan(
+        self, bus: CommandBus
+    ) -> None:
+        """Finding B verification: pre-existing idempotency reservations remain active."""
         # Pre-reserve command idempotency key
         cmd_pre = make_command(
             "timeline.mark",
@@ -114,7 +115,7 @@ class TestPlanFailureMatrix:
         assert bus.state_revision == 1
 
     def test_intervening_foreign_transaction_blocks_plan_undo(self, bus: CommandBus) -> None:
-        """Finding C verification: foreign transaction intervening between plan and undo blocks non-top undo."""
+        """Finding C verification: foreign intervening transactions block non-top plan undo."""
         # Step 1: Execute Plan 1
         cmd_p1 = make_command("timeline.mark", "c_p1", input={"at": "اینجا", "label": "P1 Mark"})
         plan1 = PlanTransaction(plan_id="plan_intervene_1", commands=(cmd_p1,))
@@ -141,7 +142,9 @@ class TestPlanFailureMatrix:
         stale_plan = PlanTransaction(
             plan_id="plan_stale_hash",
             commands=(make_command("media.play", "c_play"),),
-            preconditions=Preconditions(state_hash="sha256:0000000000000000000000000000000000000000000000000000000000000000"),
+            preconditions=Preconditions(
+                state_hash="sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            ),
         )
         with pytest.raises(PreconditionError, match="stale state_hash"):
             bus.dispatch_plan(stale_plan)

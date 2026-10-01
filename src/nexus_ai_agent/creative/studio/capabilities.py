@@ -556,7 +556,11 @@ def _system_undo(project: Project, context: OperationContext) -> OperationOutcom
                     project,
                     OperationContext(
                         command=context.command,
-                        input_data={**context.input_data, "plan_id": last.plan_id, "transaction_id": None},
+                        input_data={
+                            **context.input_data,
+                            "plan_id": last.plan_id,
+                            "transaction_id": None,
+                        },
                         history=history,
                     ),
                 )

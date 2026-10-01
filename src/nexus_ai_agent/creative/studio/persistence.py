@@ -11,7 +11,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from nexus_ai_agent.creative.studio.models import EditTransaction, Project, compute_state_hash
+from nexus_ai_agent.creative.studio.models import EditTransaction, Project
 
 
 class DurableStore:
@@ -73,7 +73,9 @@ class DurableStore:
         with self._conn:
             self._conn.execute(
                 """
-                INSERT INTO projects (project_id, name, state_revision, state_hash, json_data, updated_at)
+                INSERT INTO projects (
+                    project_id, name, state_revision, state_hash, json_data, updated_at
+                )
                 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(project_id) DO UPDATE SET
                     name = excluded.name,
@@ -154,13 +156,20 @@ class DurableStore:
         return txs
 
     def register_graph_node(
-        self, node_id: str, project_id: str, node_type: str, transaction_id: str | None, payload: dict[str, Any]
+        self,
+        node_id: str,
+        project_id: str,
+        node_type: str,
+        transaction_id: str | None,
+        payload: dict[str, Any],
     ) -> None:
         payload_json = json.dumps(payload, ensure_ascii=False)
         with self._conn:
             self._conn.execute(
                 """
-                INSERT INTO creative_graph_nodes (node_id, project_id, node_type, transaction_id, payload_json)
+                INSERT INTO creative_graph_nodes (
+                    node_id, project_id, node_type, transaction_id, payload_json
+                )
                 VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(node_id) DO UPDATE SET payload_json = excluded.payload_json
                 """,

@@ -5,12 +5,9 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-import pytest
-
 from nexus_ai_agent.creative.studio import (
     CommandBus,
     PlanTransaction,
-    Project,
 )
 from nexus_ai_agent.creative.studio.persistence import DurableStore
 from tests.unit.test_plan_transaction import make_command, make_project
