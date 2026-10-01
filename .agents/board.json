@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-01T04:38:32Z",
+  "updated_at": "2026-10-01T04:36:38Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2952,10 +2952,9 @@
       "agent_branch": "",
       "claimed_at": null,
       "ttl_hours": 24,
-      "generation": 1,
+      "generation": 2,
       "gates_owner": false,
-      "note": "successor to task-221 (PR#126). Reproduced failure mode D on base head 1fc4938 before any code change: step-1 commits OURS, a VALID foreign mark commits, step-2 refused -> the old unconditional compensating undo rewinds FOREIGN and leaves OURS (silent cross-actor corruption). Fix (spine zone only; studio/ untouched): record each step's committed transaction_id, undo only while the newest editable transaction is the run's own, else fail closed with SpineRollbackError; retract artifact/evidence nodes on every failure path; exactly-once replay for a redelivered successful intent; unique per-step command ids. Evidence: pytest -q tests/unit/test_creative_spine.py tests/unit/test_spine_mutations.py tests/architecture/test_spine_boundary.py -> 25 passed (9/9 mutants killed); tests/unit + tests/architecture -> 2820 passed, 11 skipped; mypy clean; ruff check+format clean. Referee: check --files <changed> --repo bot523h/nexus-ai-agent -> exit 0 (27 sources, no overlap). Docs: DECISION_LOG.md task-222 amendment. Delivery: PR#127 (head 0f98d59) stacked on #126; base #126 pending merge, so merge order is #126 -> #127. Released 2026-10-01: the bus now owns the identity contract (task-223), so the caller-side guard is superseded; the spine adoption is tracked as task-223-spine-undo-identity-adoption.",
-      "release_reason": "delivered in PR#127; released so the spine zone is free for the task-223 adoption follow-up"
+      "note": "successor to task-221 (PR#126). Reproduced failure mode D on base head 1fc4938 before any code change: step-1 commits OURS, a VALID foreign mark commits, step-2 refused -> the old unconditional compensating undo rewinds FOREIGN and leaves OURS (silent cross-actor corruption). Fix (spine zone only; studio/ untouched): record each step's committed transaction_id, undo only while the newest editable transaction is the run's own, else fail closed with SpineRollbackError; retract artifact/evidence nodes on every failure path; exactly-once replay for a redelivered successful intent; unique per-step command ids. Evidence: pytest -q tests/unit/test_creative_spine.py tests/unit/test_spine_mutations.py tests/architecture/test_spine_boundary.py -> 25 passed (9/9 mutants killed); tests/unit + tests/architecture -> 2820 passed, 11 skipped; mypy clean; ruff check+format clean. Referee: check --files <changed> --repo bot523h/nexus-ai-agent -> exit 0 (27 sources, no overlap). Docs: DECISION_LOG.md task-222 amendment. Delivery: PR#127 (head 0f98d59) stacked on #126; base #126 pending merge, so merge order is #126 -> #127."
     },
     {
       "task": "task-223-bus-transaction-scoped-undo",
@@ -2963,7 +2962,7 @@
       "title_fa": "system.undo باید با هویت تراکنش آدرس‌پذیر باشد، نه فقط «آخرین»",
       "zone": "nagar-contract-gate",
       "priority": "P1",
-      "status": "deferred",
+      "status": "active",
       "scope": "task-221/task-222 finding. ROOT CAUSE: _system_undo in src/nexus_ai_agent/creative/studio/capabilities.py selects the most recent editable transaction globally and restores its full-state snapshot; it has no transaction-identity parameter. task-222 made the SPINE rollback fail closed rather than corrupt a foreign edit, but the bus primitive itself is still globally unsafe for concurrent actors. Because snapshots are full project state, rewinding a non-newest transaction while newer ones stand is not sound, so a correct root fix is a design choice: (A) add an optional transaction_id to system.undo that only rewinds when it is the newest (spine then addresses its own txn, no behavior change when absent); (B) staged command DAG + single commit (no rollback needed); (C) explicit compensating saga per capability. Evaluate with the evidence rules; do NOT pick the smallest diff if it leaves the race.",
       "acceptance_criteria": [
         "a design note (Option A/B/C) with concurrency, crash, authorization and replay semantics recorded in docs/DECISION_LOG.md",
@@ -2975,7 +2974,54 @@
         "pytest -q tests/unit/test_command_capability_contract.py",
         "pytest -q tests/architecture/test_command_capability_boundary.py"
       ],
-      "owner_hint": "any free agent with the nagar-contract-gate zone (touches creative/studio/)"
+      "owner_hint": "any free agent with the nagar-contract-gate zone (touches creative/studio/)",
+      "agent_branch": "arena/01a0181931-task223-undo-contract",
+      "claimed_at": "2026-10-01T04:22:57Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Option A delivered by arena/01a0181931-task223-undo-contract (from PR#127 head a78644b): identity-aware system.undo enforced INSIDE the stage-9 handler under the bus lock (UndoConflictError). Spine adoption is tracked as a second claim, task-223-spine-undo-identity-adoption (zone nagar-creative-graph), because a claim carries one zone; task-222 was released to free the spine.",
+      "generation": 1,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/studio/",
+        "tests/unit/test_command_capability_contract.py",
+        "tests/architecture/test_command_capability_boundary.py",
+        "docs/DECISION_LOG.md",
+        "docs/architecture/COMMAND_CAPABILITY_CONTRACT.md",
+        "docs/architecture/CREATIVE_STUDIO.md"
+      ]
+    },
+    {
+      "task": "task-223-spine-undo-identity-adoption",
+      "title": "Spine rollback adopts the bus identity-aware system.undo (task-223 part 2)",
+      "zone": "nagar-creative-graph",
+      "priority": "P1",
+      "status": "active",
+      "scope": "task-222 guarded the spine rollback with a caller-side read-then-dispatch check, which cannot be atomic: the bus lock is released between reading the newest transaction and dispatching system.undo. With the bus now exposing transaction identity (task-223), the spine names its recorded per-step transaction id and lets the stage-9 gate be authoritative; the caller-side pre-check is removed.",
+      "prerequisites": [
+        "task-221-spine-plan-atomicity"
+      ],
+      "acceptance_criteria": [
+        "the spine rollback names the transaction it undoes and no longer pre-checks bus history",
+        "a foreign edit interleaved between a step commit and a failure survives; the run fails closed with SpineRollbackError",
+        "a mutation that drops the transaction identity turns the spine suite RED"
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_creative_spine.py",
+        "pytest -q tests/unit/test_spine_mutations.py",
+        "pytest -q tests/architecture/test_spine_boundary.py"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/spine/",
+        "tests/unit/test_creative_spine.py",
+        "tests/unit/test_spine_mutations.py"
+      ],
+      "owner_hint": "any free agent with the nagar-creative-graph zone",
+      "agent_branch": "arena/01a0181931-task223-undo-contract",
+      "claimed_at": "2026-10-01T04:36:38Z",
+      "ttl_hours": 24,
+      "generation": 1,
+      "gates_owner": false,
+      "note": "Part 2 of task-223. Adopts the bus identity contract in CreativeExecutionSpine._rollback; supersedes task-222's caller-side check (task-222 released)."
     }
   ],
   "deferred_log": [
