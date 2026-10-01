@@ -3235,7 +3235,7 @@
       "title_fa": "بازگردانی ستون فقرات باید فقط تراکنش‌های خودش را هدف بگیرد، نه ویرایش بازیگر دیگر",
       "zone": "nagar-creative-graph",
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "scope": "task-221 made execute_intent roll back a failed multi-step plan with one system.undo per applied step. That undo is unconditional ('rewind the most recent editable transaction'), so under a concurrent interleaving it rewinds a FOREIGN actor's committed edit and leaves the spine's own half-applied step in place: silent data corruption. Also unaddressed: duplicate delivery re-applies the plan (forward commands carry no idempotency key), a rollback that cannot complete still leaves artifact nodes in the graph, and a crash between the bus commit and the graph node write leaves an unreachable artifact. Fix (spine-only, no bus change; studio/ is not owned): bind each step to its committed transaction_id, on rollback only undo while the most-recent transaction is one the run owns (else refuse with a typed error), retract artifact nodes even on a partial rollback, bind an idempotency key per (intent, step) so a duplicate delivery returns the original result.",
       "scope_fa": "",
       "prerequisites": [
@@ -3260,12 +3260,13 @@
         "tests/unit/test_spine_mutations.py"
       ],
       "owner_hint": "any free agent after a board claim",
-      "agent_branch": "arena/01a0181931-nexus-ai-agent",
-      "claimed_at": "2026-09-30T19:07:25Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "generation": 1,
       "gates_owner": false,
-      "note": "successor to task-221 (PR#126). Reproduced failure mode D on base head 1fc4938 before any code change: step-1 commits OURS, a VALID foreign mark commits, step-2 refused -> the old unconditional compensating undo rewinds FOREIGN and leaves OURS (silent cross-actor corruption). Fix (spine zone only; studio/ untouched): record each step's committed transaction_id, undo only while the newest editable transaction is the run's own, else fail closed with SpineRollbackError; retract artifact/evidence nodes on every failure path; exactly-once replay for a redelivered successful intent; unique per-step command ids. Evidence: pytest -q tests/unit/test_creative_spine.py tests/unit/test_spine_mutations.py tests/architecture/test_spine_boundary.py -> 25 passed (9/9 mutants killed); tests/unit + tests/architecture -> 2820 passed, 11 skipped; mypy clean; ruff check+format clean. Referee: check --files <changed> --repo bot523h/nexus-ai-agent -> exit 0 (27 sources, no overlap). Docs: DECISION_LOG.md task-222 amendment. Delivery: PR#127 (head 0f98d59) stacked on #126; base #126 pending merge, so merge order is #126 -> #127."
+      "note": "successor to task-221 (PR#126). Reproduced failure mode D on base head 1fc4938 before any code change: step-1 commits OURS, a VALID foreign mark commits, step-2 refused -> the old unconditional compensating undo rewinds FOREIGN and leaves OURS (silent cross-actor corruption). Fix (spine zone only; studio/ untouched): record each step's committed transaction_id, undo only while the newest editable transaction is the run's own, else fail closed with SpineRollbackError; retract artifact/evidence nodes on every failure path; exactly-once replay for a redelivered successful intent; unique per-step command ids. Evidence: pytest -q tests/unit/test_creative_spine.py tests/unit/test_spine_mutations.py tests/architecture/test_spine_boundary.py -> 25 passed (9/9 mutants killed); tests/unit + tests/architecture -> 2820 passed, 11 skipped; mypy clean; ruff check+format clean. Referee: check --files <changed> --repo bot523h/nexus-ai-agent -> exit 0 (27 sources, no overlap). Docs: DECISION_LOG.md task-222 amendment. Delivery: PR#127 (head 0f98d59) stacked on #126; base #126 pending merge, so merge order is #126 -> #127. Released 2026-10-01: the bus now owns the identity contract (task-223), so the caller-side guard is superseded; the spine adoption is tracked as task-223-spine-undo-identity-adoption.",
+      "release_reason": "delivered in PR#127; released so the spine zone is free for the task-223 adoption follow-up"
     },
     {
       "task": "task-223-bus-transaction-scoped-undo",
