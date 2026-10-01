@@ -272,6 +272,7 @@ class CommandBus:
             allow_experimental=self._allow_experimental,
         )
         staged_bus._history = list(self._history)
+        staged_bus._idempotency = dict(self._idempotency)
 
         command_results: list[CommandResult] = []
         new_transactions: list[EditTransaction] = []
