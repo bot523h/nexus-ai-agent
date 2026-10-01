@@ -658,6 +658,20 @@
         "scripts/llm_queue_mutations.py",
         "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
       ]
+    },
+    {
+      "id": "collision-preflight",
+      "paths": [
+        "scripts/agent_board.py",
+        "tests/unit/test_agent_board_collision.py"
+      ]
+    },
+    {
+      "id": "board-governance",
+      "paths": [
+        "scripts/agent_board.py",
+        "tests/unit/test_agent_board_governance.py"
+      ]
     }
   ],
   "claims": [
@@ -2715,6 +2729,63 @@
       "ttl_hours": 24,
       "gates_owner": true,
       "note": "Continues task-195-llm-queue-lifecycle (original branch arena/01a0e2f0, claim released via takeover). MODULE_MAP.md/docs-architecture excluded exactly as the original claim scoped itself. | SESSION-BOUND CONTINUATION 2026-09-27T16:54:20Z: arena/01a0e3b7 fast-forwarded cd79bfe (PR #109 head) and continues the same exclusive paths. This session cannot push to arena/01a0e356. PR #109 python-parity (3.10) is RED on run 36329794486 (asyncio.wait_for raises asyncio.TimeoutError, not builtin TimeoutError)."
+    },
+    {
+      "task": "task-227-collision-preflight",
+      "title": "Pre-push collision preflight: two correct stacked PRs must not silently become one unsafe merge",
+      "title_fa": "پیش‌پرواز تصادم: دو PR درست نباید بی‌سروصدا به یک ادغام ناامن تبدیل شوند",
+      "zone": "collision-preflight",
+      "priority": "P0",
+      "status": "active",
+      "agent_branch": "arena/01a0181931-collision-governance",
+      "claimed_at": "2026-10-01T22:15:13Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "scripts/agent_board.py",
+        "tests/unit/test_agent_board_collision.py"
+      ],
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "`agent_board collision` reports overlapping files and security-sensitive-symbol overlap for two or more PR heads (or refs) with a deterministic, sorted output",
+        "a test proves two disjoint PRs are SAFE and two PRs rewriting the same security-sensitive handler are flagged HIGH-RISK",
+        "no merge/conflict-resolution is performed by the tool (detect + warn/fail only)"
+      ],
+      "evidence_required": [
+        "exact command + exit code for a SAFE pair and a HIGH-RISK pair",
+        "pytest -q tests/unit/test_agent_board_collision.py exact counts"
+      ],
+      "scope": "Independent of task-223/129 feature code. Reads git objects + a curated board-derived security-sensitive path list; never resolves conflicts.",
+      "note": ""
+    },
+    {
+      "task": "task-228-governance-invariants",
+      "title": "Executable board governance invariants: evidence_required enforcement + gates_owner cardinality",
+      "title_fa": "ناورداهای اجرایی حاکمیت تخته: اجرای evidence_required + کاردینالیتی gates_owner",
+      "zone": "board-governance",
+      "priority": "P1",
+      "status": "active",
+      "agent_branch": "arena/01a0181931-collision-governance",
+      "claimed_at": "2026-10-01T22:15:13Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "scripts/agent_board.py",
+        "tests/unit/test_agent_board_governance.py"
+      ],
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "a newly created claim/task without evidence_required is rejected (ERROR) by board validation, while legacy board entries are WARN only",
+        "exactly one gates_owner invariant is enforced: 0 or >1 active gates owners fail the check",
+        "AGENTS.md prose == executed rule (documented rule is executable)"
+      ],
+      "evidence_required": [
+        "exact command + exit code showing a missing-evidence_required new task fails and a legacy one warns",
+        "exact command + exit code showing 0-owner and 2-owner gates states fail",
+        "pytest -q tests/unit/test_agent_board_governance.py exact counts"
+      ],
+      "scope": "Board tooling only (scripts/agent_board.py + its tests). No feature-zone edits.",
+      "note": ""
     }
   ],
   "deferred_log": [
