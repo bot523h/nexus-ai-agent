@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-01T20:11:57Z",
+  "updated_at": "2026-10-01T20:15:23Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -664,7 +664,9 @@
       "description": "Per-instance serialization of SQLite checkpoint lifecycle-index connection operations",
       "paths": [
         "src/nexus_ai_agent/storage/checkpoint_lifecycle_store.py",
-        "tests/unit/test_checkpoint_lifecycle_store.py"
+        "tests/unit/test_checkpoint_lifecycle_store.py",
+        "docs/architecture/DATA_LIFECYCLE.md",
+        "docs/ops/NEON_LIFECYCLE_RUNBOOK.md"
       ],
       "note": "Separate local lifecycle-index connection ownership; PostgreSQL implementation already serializes its shared connection and is out of scope."
     }
@@ -2741,23 +2743,27 @@
         "The current table schema, record fields, public methods, and best-effort lifecycle integration remain compatible; no migration or Postgres change is introduced.",
         "A pre-fix reproduction is RED on the current main tree and the regression passes repeatedly after the fix; errors are not swallowed and no sleeps are used as production stabilization.",
         "Changed-file overlap is checked against the live board and open PRs; main SQLModel initialization, migrations, checkpoint saver, and Creative studio transaction semantics remain untouched.",
-        "Targeted lifecycle store and adapter tests pass; full gates are deferred to the live gates owner and are not claimed locally."
+        "Targeted lifecycle store and adapter tests pass; full gates are deferred to the live gates owner and are not claimed locally.",
+        "Update the lifecycle architecture/runbook with the per-instance, process-local serialization boundary and explicitly state that lifecycle metadata is not checkpoint truth or cross-process locking."
       ],
       "evidence_required": [
         "Baseline transcript: 20 fresh-DB trials x 500 real adapter writes per trial, with exception counts, missing-row counts, Python/SQLite versions, and failing operation.",
         "pytest tests/unit/test_checkpoint_lifecycle_store.py exact result, including persisted row count after closing and reopening the SQLite file.",
         "A concurrent read/write/close regression that proves serialized connection access and does not use the production DB as a mock.",
-        "python scripts/agent_board.py check --files src/nexus_ai_agent/storage/checkpoint_lifecycle_store.py,tests/unit/test_checkpoint_lifecycle_store.py --branch arena/01a0f902-nexus-ai-agent exits 0."
+        "python scripts/agent_board.py check --files src/nexus_ai_agent/storage/checkpoint_lifecycle_store.py,tests/unit/test_checkpoint_lifecycle_store.py --branch arena/01a0f902-nexus-ai-agent exits 0.",
+        "Documentation diff accurately distinguishes the process-local lifecycle-index lock from cross-process SQLite file locking, main checkpoint/WAL initialization, and PostgreSQL migration coordination."
       ],
       "exclusive_paths": [
         "src/nexus_ai_agent/storage/checkpoint_lifecycle_store.py",
-        "tests/unit/test_checkpoint_lifecycle_store.py"
+        "tests/unit/test_checkpoint_lifecycle_store.py",
+        "docs/architecture/DATA_LIFECYCLE.md",
+        "docs/ops/NEON_LIFECYCLE_RUNBOOK.md"
       ],
       "agent_branch": "arena/01a0f902-nexus-ai-agent",
-      "claimed_at": "2026-10-01T20:11:57Z",
+      "claimed_at": "2026-10-01T20:15:23Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "LIVE RED, verified before fix on CPython 3.11.2 / SQLite 3.40.1 with SQLAlchemy 2.0.54, aiosqlite 0.22.1, SQLModel 0.0.42: 20 independent fresh SQLite files × 500 concurrent SQLiteCheckpointLifecycleAdapter.record_checkpoint calls on one store each (10,000 calls) => all 20 trials had failures; 1,268 total exceptions (OperationalError/SystemError/DatabaseError), 2,223 missing rows. Real sqlite3, no mock. Other PRs checked: none touches either fenced file. Do not touch the competing storage/db.py lane (PR #113)."
+      "note": "LIVE RED, verified before fix on CPython 3.11.2 / SQLite 3.40.1 with SQLAlchemy 2.0.54, aiosqlite 0.22.1, SQLModel 0.0.42: 20 independent fresh SQLite files × 500 concurrent SQLiteCheckpointLifecycleAdapter.record_checkpoint calls on one store each (10,000 calls) => all 20 trials had failures; 1,268 total exceptions (OperationalError/SystemError/DatabaseError), 2,223 missing rows. Real sqlite3, no mock. Other PRs checked: none touches either fenced file. Do not touch the competing storage/db.py lane (PR #113). Scope expanded to the two documentation paths after live open-PR overlap checks; neither is changed by an open PR."
     }
   ],
   "deferred_log": [
