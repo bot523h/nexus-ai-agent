@@ -14,6 +14,7 @@ from math import isfinite
 from typing import Any
 
 from nexus_ai_agent.application.ports.job_queue import JobStatus
+from nexus_ai_agent.jobs.lifecycle import parse_job_status
 
 
 @dataclass(frozen=True)
@@ -177,7 +178,7 @@ def present_plan(intent_id: str, raw_plan: Mapping[str, Any]) -> PlanPreview:
 
 
 def present_execution(job_id: str, raw: Mapping[str, Any]) -> ExecutionView:
-    """Project a durable job row/result; reject unknown statuses."""
+    """Project a durable job row/result without raising on legacy statuses."""
     if not isinstance(job_id, str) or not job_id.strip():
         raise ValueError("job_id must be a non-empty string")
     if not isinstance(raw, Mapping):
@@ -186,10 +187,11 @@ def present_execution(job_id: str, raw: Mapping[str, Any]) -> ExecutionView:
     if isinstance(raw_status, JobStatus):
         status = raw_status.value
     else:
-        status = str(raw_status or "")
-        allowed = {item.value for item in JobStatus}
-        if status not in allowed:
-            raise ValueError(f"unknown durable job status: {status!r}")
+        status_text = str(raw_status or "")
+        try:
+            status = parse_job_status(status_text).value
+        except (TypeError, ValueError):
+            status = status_text or "unknown"
     return ExecutionView(
         job_id=job_id,
         status=status,

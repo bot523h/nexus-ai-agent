@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException
 
 from nexus_ai_agent.api.dashboard import require_dashboard_token
+from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.product.studio_read import ProjectReadDenied, StudioReadService
 
 _PROJECT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
@@ -35,6 +36,8 @@ def require_studio_project(
 ) -> None:
     """Authenticate the existing dashboard principal and enforce project scope."""
     # Reuse the existing caller authentication; do not create a second token system.
+    if not get_settings().api_dashboard_token:
+        raise HTTPException(status_code=503, detail="Security configuration incomplete")
     require_dashboard_token(authorization)
     if not _PROJECT_ID.fullmatch(project_id):
         raise HTTPException(status_code=400, detail="invalid project id")

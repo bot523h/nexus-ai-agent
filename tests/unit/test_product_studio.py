@@ -54,14 +54,14 @@ def test_plan_preview_rejects_malformed_scene_instead_of_inventing_metadata() ->
     assert empty.contract_gap == "plan_empty"
 
 
-def test_execution_view_accepts_only_canonical_durable_statuses() -> None:
+def test_execution_view_normalizes_legacy_and_preserves_unknown_statuses() -> None:
     view = present_execution(
         "job-1", {"status": JobStatus.VERIFYING, "operation": "slideshow.render"}
     )
     assert view.status == "verifying"
     assert view.operation_id == "slideshow.render"
-    with pytest.raises(ValueError, match="unknown durable job status"):
-        present_execution("job-2", {"status": "running-ish"})
+    assert present_execution("job-2", {"status": "running"}).status == "processing"
+    assert present_execution("job-3", {"status": "running-ish"}).status == "running-ish"
 
 
 def test_artifact_passport_does_not_claim_verification_when_evidence_is_missing() -> None:

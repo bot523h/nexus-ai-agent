@@ -62,11 +62,28 @@ async def test_project_b_cannot_read_project_a() -> None:
 
 
 @pytest.mark.asyncio
-async def test_missing_job_returns_valid_empty_state_without_fake_completion() -> None:
-    view = await StudioReadService(FakeJobs({})).read_job(project_id="project-a", job_id="missing")
-    assert view.execution is None
-    assert view.artifact is None
-    assert view.contract_gaps[0] == "job_not_found"
+async def test_missing_job_is_a_non_oracular_denial() -> None:
+    with pytest.raises(ProjectReadDenied):
+        await StudioReadService(FakeJobs({})).read_job(project_id="project-a", job_id="missing")
+
+
+@pytest.mark.asyncio
+async def test_unknown_status_is_preserved_with_an_explicit_gap() -> None:
+    view = await StudioReadService(
+        FakeJobs(
+            {
+                "job-a": {
+                    "id": "job-a",
+                    "status": "future_status",
+                    "input_data": {"project_id": "project-a"},
+                    "result": {},
+                }
+            }
+        )
+    ).read_job(project_id="project-a", job_id="job-a")
+    assert view.execution is not None
+    assert view.execution.status == "future_status"
+    assert "execution_status_unknown" in view.contract_gaps
 
 
 def test_http_surface_authenticates_and_enforces_configured_project_scope(
@@ -113,4 +130,19 @@ def test_http_surface_authenticates_and_enforces_configured_project_scope(
             headers={"Authorization": "Bearer dashboard-secret"},
         ).text
     )
+    settings_module.get_settings.cache_clear()
+
+
+def test_http_surface_fails_closed_without_dashboard_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("NEXUS_DASHBOARD_TOKEN", raising=False)
+    monkeypatch.setenv("NEXUS_STUDIO_PROJECT_IDS", "project-a")
+    from nexus_ai_agent.config import settings as settings_module
+
+    settings_module.get_settings.cache_clear()
+    from nexus_ai_agent.api import app as app_module
+
+    response = TestClient(app_module.app).get("/api/studio/projects/project-a/jobs/job-1/state")
+    assert response.status_code == 503
     settings_module.get_settings.cache_clear()
