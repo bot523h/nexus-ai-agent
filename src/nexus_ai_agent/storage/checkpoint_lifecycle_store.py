@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -16,7 +17,13 @@ _TABLE = "nexus_checkpoint_lifecycle"
 
 
 class SQLiteCheckpointLifecycleStore:
-    """Small independent index; it never deletes LangGraph rows by itself."""
+    """Small independent index; it never deletes LangGraph rows by itself.
+
+    The async adapter dispatches operations with ``asyncio.to_thread``.  All
+    methods therefore serialize the full SQLite operation (including commit)
+    on this instance's connection; ``check_same_thread=False`` alone does not
+    make interleaved transaction scopes safe.
+    """
 
     #: Local store anchor (file path); ``str | Path`` for LifecycleStore
     #: invariance.
@@ -26,42 +33,61 @@ class SQLiteCheckpointLifecycleStore:
         self.path = path
         if path != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
-        # Cross-thread access is required: the async adapter runs store
-        # operations in worker threads (same pattern as the LangGraph saver).
+        # The async adapter calls these methods from asyncio.to_thread.  The
+        # lock must cover execute + commit as one operation: sqlite3's
+        # check_same_thread=False only permits cross-thread calls and does not
+        # isolate concurrent transaction state on one shared connection.
+        self._lock = threading.Lock()
         self._connection = sqlite3.connect(path, check_same_thread=False)
-        self._connection.execute(
-            f"""CREATE TABLE IF NOT EXISTS {_TABLE} (
-                thread_id TEXT NOT NULL,
-                checkpoint_id TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                last_accessed_at TEXT,
-                active_until TEXT,
-                PRIMARY KEY (thread_id, checkpoint_id)
-            )"""
-        )
-        self._connection.commit()
+        with self._write_transaction() as connection:
+            connection.execute(
+                f"""CREATE TABLE IF NOT EXISTS {_TABLE} (
+                    thread_id TEXT NOT NULL,
+                    checkpoint_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    last_accessed_at TEXT,
+                    active_until TEXT,
+                    PRIMARY KEY (thread_id, checkpoint_id)
+                )"""
+            )
+
+    @contextmanager
+    def _write_transaction(self) -> Iterator[sqlite3.Connection]:
+        """Serialize one write transaction and roll it back if it fails."""
+        with self._lock:
+            try:
+                yield self._connection
+                self._connection.commit()
+            except BaseException as operation_error:
+                try:
+                    self._connection.rollback()
+                except sqlite3.Error as rollback_error:
+                    raise operation_error from rollback_error
+                raise
 
     def close(self) -> None:
-        self._connection.close()
+        with self._lock:
+            self._connection.close()
 
     def upsert(self, record: CheckpointRecord) -> None:
         values = (_key(record.created_at), _key(record.last_accessed_at), _key(record.active_until))
-        self._connection.execute(
-            f"""INSERT INTO {_TABLE}
-            (thread_id, checkpoint_id, created_at, last_accessed_at, active_until)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(thread_id, checkpoint_id) DO UPDATE SET
-              last_accessed_at=excluded.last_accessed_at,
-              active_until=excluded.active_until""",
-            (record.thread_id, record.checkpoint_id, *values),
-        )
-        self._connection.commit()
+        with self._write_transaction() as connection:
+            connection.execute(
+                f"""INSERT INTO {_TABLE}
+                (thread_id, checkpoint_id, created_at, last_accessed_at, active_until)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(thread_id, checkpoint_id) DO UPDATE SET
+                  last_accessed_at=excluded.last_accessed_at,
+                  active_until=excluded.active_until""",
+                (record.thread_id, record.checkpoint_id, *values),
+            )
 
     def records(self) -> list[CheckpointRecord]:
-        rows = self._connection.execute(
-            f"SELECT thread_id, checkpoint_id, created_at, last_accessed_at, "
-            f"active_until FROM {_TABLE}"
-        ).fetchall()
+        with self._lock:
+            rows = self._connection.execute(
+                f"SELECT thread_id, checkpoint_id, created_at, last_accessed_at, "
+                f"active_until FROM {_TABLE}"
+            ).fetchall()
         return [
             CheckpointRecord(
                 thread_id=row[0],
@@ -80,27 +106,29 @@ class SQLiteCheckpointLifecycleStore:
         never creates a record: unknown checkpoints are backfilled by the
         reconciler only, with an explicitly estimated age.
         """
-        cursor = self._connection.execute(
-            f"UPDATE {_TABLE} SET last_accessed_at = ? WHERE thread_id = ?",
-            (_key(accessed_at), thread_id),
-        )
-        self._connection.commit()
-        return cursor.rowcount > 0
+        with self._write_transaction() as connection:
+            cursor = connection.execute(
+                f"UPDATE {_TABLE} SET last_accessed_at = ? WHERE thread_id = ?",
+                (_key(accessed_at), thread_id),
+            )
+            updated = cursor.rowcount > 0
+        return updated
 
     def delete_index(self, record: CheckpointRecord) -> None:
         """Remove only the lifecycle row, after an adapter deletes checkpoint data."""
-        self._connection.execute(
-            f"DELETE FROM {_TABLE} WHERE thread_id = ? AND checkpoint_id = ?",
-            (record.thread_id, record.checkpoint_id),
-        )
-        self._connection.commit()
+        with self._write_transaction() as connection:
+            connection.execute(
+                f"DELETE FROM {_TABLE} WHERE thread_id = ? AND checkpoint_id = ?",
+                (record.thread_id, record.checkpoint_id),
+            )
 
     def schema_fingerprint(self) -> str:
         """Return a deterministic fingerprint of the lifecycle schema only."""
-        tables = self._connection.execute(
-            "SELECT name, sql FROM sqlite_master WHERE type IN ('table', 'index') "
-            "AND name NOT LIKE 'sqlite_%' ORDER BY name"
-        ).fetchall()
+        with self._lock:
+            tables = self._connection.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type IN ('table', 'index') "
+                "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            ).fetchall()
         payload = json.dumps(tables, separators=(",", ":"), ensure_ascii=True)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
