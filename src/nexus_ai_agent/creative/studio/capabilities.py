@@ -36,6 +36,7 @@ from nexus_ai_agent.creative.studio.models import (
     CapabilitySnapshot,
     CapabilityVersionError,
     Clip,
+    CommandExecutionError,
     CommandValidationError,
     EditTransaction,
     Marker,
@@ -334,6 +335,9 @@ class SplitCommandInput(BaseModel):
 class UndoCommandInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    transaction_id: str | None = None
+    plan_id: str | None = None
+
 
 # ---------------------------------------------------------------------------
 # Wave 1 pure handlers
@@ -472,16 +476,136 @@ def _timeline_split_at_playhead(project: Project, context: OperationContext) -> 
 
 def _system_undo(project: Project, context: OperationContext) -> OperationOutcome:
     history = context.history
+    if not history:
+        raise UndoStackEmptyError("nothing to undo: transaction history is empty")
+
+    target_tx_id = context.input_data.get("transaction_id")
+    target_plan_id = context.input_data.get("plan_id")
+
+    if target_plan_id is not None:
+        plan_indices = [i for i, tx in enumerate(history) if tx.plan_id == target_plan_id]
+        if not plan_indices:
+            raise UndoStackEmptyError(
+                f"nothing to undo: no transaction for plan {target_plan_id!r} found in history"
+            )
+        max_idx = max(plan_indices)
+        min_idx = min(plan_indices)
+        for idx in range(max_idx + 1, len(history)):
+            if history[idx].operation != "system.undo" and history[idx].plan_id != target_plan_id:
+                other_id = history[idx].plan_id or history[idx].transaction_id
+                raise CommandExecutionError(
+                    f"cannot undo plan {target_plan_id!r}: subsequent transactions "
+                    f"from {other_id!r} exist on history stack"
+                )
+
+        earliest_tx = history[min_idx]
+        restored = Project.model_validate(earliest_tx.state_before)
+        remaining = tuple(tx for i, tx in enumerate(history) if i not in plan_indices)
+        return OperationOutcome(
+            restored,
+            remaining,
+            {
+                "undone_plan_id": target_plan_id,
+                "undone_transaction_count": len(plan_indices),
+                "restored_state_hash": earliest_tx.previous_state_hash,
+            },
+        )
+
+    if target_tx_id is not None:
+        # Check if target_tx_id refers to a plan transaction or a specific transaction_id
+        matching_plan_ids = {
+            tx.plan_id
+            for tx in history
+            if tx.plan_id is not None
+            and (
+                target_tx_id == f"plan_tx_{tx.plan_id}"
+                or target_tx_id.startswith(f"plan_tx_{tx.plan_id}_")
+            )
+        }
+        if matching_plan_ids:
+            p_id = next(iter(matching_plan_ids))
+            plan_indices = [i for i, tx in enumerate(history) if tx.plan_id == p_id]
+            max_idx = max(plan_indices)
+            min_idx = min(plan_indices)
+            for idx in range(max_idx + 1, len(history)):
+                if history[idx].operation != "system.undo" and history[idx].plan_id != p_id:
+                    other_id = history[idx].plan_id or history[idx].transaction_id
+                    raise CommandExecutionError(
+                        f"cannot undo plan {p_id!r}: subsequent transactions "
+                        f"from {other_id!r} exist on history stack"
+                    )
+
+            earliest_tx = history[min_idx]
+            restored = Project.model_validate(earliest_tx.state_before)
+            remaining = tuple(tx for i, tx in enumerate(history) if i not in plan_indices)
+            return OperationOutcome(
+                restored,
+                remaining,
+                {
+                    "undone_plan_id": p_id,
+                    "undone_transaction_count": len(plan_indices),
+                    "restored_state_hash": earliest_tx.previous_state_hash,
+                },
+            )
+
+        tx_idx = None
+        for i in range(len(history) - 1, -1, -1):
+            if history[i].transaction_id == target_tx_id:
+                tx_idx = i
+                break
+        if tx_idx is None:
+            raise UndoStackEmptyError(
+                f"nothing to undo: transaction {target_tx_id!r} not found in history"
+            )
+        for idx in range(tx_idx + 1, len(history)):
+            if history[idx].operation != "system.undo":
+                raise CommandExecutionError(
+                    f"cannot undo transaction {target_tx_id!r}: subsequent transaction "
+                    f"{history[idx].transaction_id!r} exists on history stack"
+                )
+        tx = history[tx_idx]
+        restored = Project.model_validate(tx.state_before)
+        remaining = history[:tx_idx] + history[tx_idx + 1 :]
+        return OperationOutcome(
+            restored,
+            remaining,
+            {
+                "undone_operation": tx.operation,
+                "undone_transaction_id": tx.transaction_id,
+                "undone_plan_id": tx.plan_id,
+                "restored_state_hash": tx.previous_state_hash,
+            },
+        )
+
     target_index: int | None = None
     for index in range(len(history) - 1, -1, -1):
         if history[index].operation != "system.undo":
             target_index = index
             break
+
     if target_index is None:
         raise UndoStackEmptyError(
             "nothing to undo: no editable transaction remains on the history stack"
         )
+
     last = history[target_index]
+    if last.plan_id is not None:
+        p_id = last.plan_id
+        plan_indices = [i for i, tx in enumerate(history) if tx.plan_id == p_id]
+        min_idx = min(plan_indices)
+        earliest_tx = history[min_idx]
+        restored = Project.model_validate(earliest_tx.state_before)
+        remaining = tuple(tx for i, tx in enumerate(history) if i not in plan_indices)
+        return OperationOutcome(
+            restored,
+            remaining,
+            {
+                "undone_plan_id": p_id,
+                "undone_transaction_count": len(plan_indices),
+                "restored_state_hash": earliest_tx.previous_state_hash,
+            },
+        )
+
     restored = Project.model_validate(last.state_before)
     remaining = history[:target_index] + history[target_index + 1 :]
     return OperationOutcome(
@@ -490,6 +614,7 @@ def _system_undo(project: Project, context: OperationContext) -> OperationOutcom
         {
             "undone_operation": last.operation,
             "undone_transaction_id": last.transaction_id,
+            "undone_plan_id": last.plan_id,
             "restored_state_hash": last.previous_state_hash,
         },
     )
