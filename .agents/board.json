@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-01T20:26:52Z",
+  "updated_at": "2026-10-01T20:35:02Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2736,7 +2736,7 @@
       "title_fa": "زیربنای IR خلاقانهٔ تایپ‌شده: یک سند خلاقانهٔ content-addressed و نسخه‌پذیر که بدون آن هیچ لایهٔ دیگری در Creative Intelligence Plane قابل ساخت نیست",
       "zone": "creative-intelligence-plane",
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "scope": "PR-1 of the Creative Intelligence Plane. Truth on main @ e5b326b: there is no Strategy abstraction anywhere in creative/ (grep 'Strategy' hits only llm/litellm_provider.py), no Recipe type at all, no semantic diff, and no authoring-level creative IR - rendering/ir.py is FFmpeg-lane shaped and studio/models.py Project/Timeline is execution state. This slice creates the typed IR everything downstream (strategy, compiler, semantic revision, creative diff) is defined against: Asset/Scene/Layer/Segment/Timing/Transition/Effect/Audio/Text/SemanticRole/Constraint/OutputRequirement, with Merkle content-addressed identity, canonical serialization, structural validation that rejects invalid states, and IR-checkable constraints.",
       "scope_fa": "PR-۱ از Creative Intelligence Plane. حقیقت روی main @ e5b326b: هیچ انتزاع Strategy در creative/ وجود ندارد، هیچ Recipe‌ای وجود ندارد، هیچ semantic diff‌ای وجود ندارد و IR خلاقانهٔ سطح authoring هم وجود ندارد. این اسلایس IR تایپ‌شده‌ای می‌سازد که لایه‌های بعدی نسبت به آن تعریف می‌شوند.",
       "prerequisites": [],
@@ -2775,8 +2775,8 @@
       ],
       "note": "Delivered. The plane proposes; it does not execute. Two gates with different contracts: assert_valid() reports every structural problem on an unsealed document, seal() resolves references while assigning content-addressed identity, verify_identity() proves the document matches its own content. Not named validate() because pydantic BaseModel.validate is a classmethod - mypy caught the shadow and a test now pins it. Honest limit: nothing outside the plane constructs a CreativeWork yet, so this slice is a foundation and is not reachable from any user command.",
       "ttl_hours": 24,
-      "agent_branch": "arena/01a0f906-nexus-ai-agent",
-      "claimed_at": "2026-10-01T19:59:48Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "gates_owner": false,
       "exclusive_paths": [
         "src/nexus_ai_agent/creative/intelligence/",
@@ -2792,7 +2792,8 @@
         "task-227: semantic revision - RevisionIntent -> affected semantics -> IR delta -> recompilation, proven by the Merkle locality property already tested",
         "task-228: creative diff - v1 -> v2 as semantic statements derived from Merkle subtree comparison",
         "task-229: reference -> observed structure -> concepts -> Creative Recipe -> Typed Creative IR (Origin.source='recipe' is reserved for it)"
-      ]
+      ],
+      "delivered": "PR #131 (open) — released so task-225 can hold the plane path; two active claims cannot own one path, which the board schema test correctly refused."
     },
     {
       "task": "task-225-creative-semantics",
@@ -2825,8 +2826,16 @@
         "ruff check / ruff format --check / mypy on the changed files",
         "agent_board.py check exit 0"
       ],
-      "evidence": [],
-      "note": "",
+      "evidence": [
+        "pytest -q tests/unit/test_creative_semantics.py -> 41 passed",
+        "plane suite (ir 54 + determinism 20 + semantics 41 + boundary 32) -> 147 passed",
+        "pytest -q tests/architecture -> 157 passed (152 before this slice; +5, the parametrized boundary rules each gained semantics.py; 0 regression)",
+        "pytest -q tests/unit/test_agent_board.py -> 18 passed; tests/unit/test_docs_integrity.py -> 59 passed",
+        "ruff check / ruff format --check clean; mypy src/nexus_ai_agent/creative/intelligence -> Success: no issues found in 5 source files",
+        "python scripts/agent_board.py check --files <all changed> --branch arena/01a0f906-nexus-ai-agent -> exit 0",
+        "falsifiability: the reference document declares 4 intents and the layer reports it violates 3 of them (exclusion, pacing, emphasis)"
+      ],
+      "note": "Delivered. Stacks on PR #131 (task-224, released). Three source defects found and fixed by this slice's own gates: two lexicon entries were unreachable because they were written with a ZWNJ and Persian digits that normalize_phrase strips (the lexicon is now built through the normaliser, so the class cannot recur); TimingConstraint could not express a floor alone because max_us was required; _evaluate_pacing returned only its first violation, contradicting the plane's own report-every-problem contract. Compiler deferred on measured evidence, see deferred_by_this_wave.",
       "ttl_hours": 24,
       "deferred_by_this_wave": {
         "what": "the deterministic compiler (IR -> CompiledPlan)",
@@ -2834,7 +2843,11 @@
       },
       "agent_branch": "arena/01a0f906-nexus-ai-agent",
       "claimed_at": "2026-10-01T20:26:52Z",
-      "gates_owner": false
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/intelligence/",
+        "tests/unit/test_creative_semantics.py"
+      ]
     }
   ],
   "deferred_log": [
