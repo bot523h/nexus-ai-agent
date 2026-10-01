@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-01T20:42:11Z",
+  "updated_at": "2026-10-01T21:52:35Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -658,6 +658,19 @@
         "scripts/llm_queue_mutations.py",
         "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
       ]
+    },
+    {
+      "id": "product-studio-read-surface",
+      "description": "Read-only product Studio composition and project-scoped API presentation; no execution authority.",
+      "paths": [
+        "src/nexus_ai_agent/product/",
+        "src/nexus_ai_agent/api/studio.py",
+        "src/nexus_ai_agent/api/app.py",
+        "tests/unit/test_product_studio.py",
+        "tests/unit/test_studio_read_api.py",
+        "tests/architecture/test_studio_read_boundary.py"
+      ],
+      "note": "task-196 read-only Studio integration (active)"
     }
   ],
   "claims": [
