@@ -3600,6 +3600,12 @@
         "id": "duplicate-fail-open-fix",
         "what": "دو شاخه هم‌زمان «check باید fail-closed شود» (task-207) را در scripts/agent_board.py و tests/unit/test_agent_board.py پیاده کردند: arena/01a0eade (PR#122، لیز فعال task-207-agent-board-check-fails-open، انقضا 2026-10-01T06:30Z) و arena/hardening-task207-foreign-check (PR#126). دو طراحی متفاوت: جمع‌آوری «تختهٔ PRهای باز» در برابر منبع «شاخه‌های push‌شدهٔ PR باز».",
         "resolution": "چک چندمنبعیِ همین سخت‌سازی، تصادم را پیش از push نشان داد (exit 1؛ فایل‌های scripts/agent_board.py و tests/unit/test_agent_board.py در branch:arena/01a0eade-nexus-ai-agent). قانون: «کار تازه‌تر و کامل‌تر برنده است» پس از مقایسهٔ دو diff؛ بازنده کارش را به برنده ارجاع می‌دهد. درس: پیش از شروع کار روی ناحیهٔ پرتصادم، `check` با منبع PRهای باز اجرا شود نه فقط تختهٔ محلی."
+      },
+      {
+        "date": "2026-10-01",
+        "id": "undo-contract-plan-collision",
+        "what": "PR#128 (task-223 identity-addressable system.undo, arena/01a0181931-task223-undo-contract) and PR#129 (task-221 staged plan atomicity, jules-...) both rewrite the same system.undo handler in src/nexus_ai_agent/creative/studio/capabilities.py. An independent 3-way merge (main + #129 diff + #128 diff) shows three conflicting hunks inside that one handler: UndoCommandInput.transaction_id (plain field vs validated Field+validator), the identity-guard vs plan-selection branch, and the OperationOutcome keys (undone_plan_id vs requested_transaction_id). #128 has no UndoConflictError and #129 has no identity guard (grep: absent in both directions).",
+        "resolution": "Recorded for the merge order (AGENTS.md §6). #128 is green and merges first; #129 must be rebased onto it and its undo handler reconciled so the identity gate and plan selection coexist -- a wholesale 'ours/theirs' resolution silently drops either the TOCTOU guard (re-opening the check-then-act window) or plan-undo atomicity. #129 is additionally red independently: test_command_idempotency_inside_plan_does_not_index_error fails (idempotency dedupe not applied inside dispatch_plan)."
       }
     ],
     "board_revisions": [
