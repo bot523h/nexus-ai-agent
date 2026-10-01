@@ -664,12 +664,13 @@
       "description": "Creative Intelligence Plane (arena/01a0f906): intent semantics, creative strategy, Typed Creative IR, semantic constraints, deterministic compilation to an executable plan. Produces plans; never executes them and never owns the CommandBus, transactions, undo, or storage.",
       "paths": [
         "src/nexus_ai_agent/creative/intelligence/",
+        "tests/unit/creative_ir_testkit.py",
         "tests/unit/test_creative_ir.py",
         "tests/unit/test_creative_ir_determinism.py",
         "tests/architecture/test_creative_intelligence_boundary.py",
         "docs/architecture/CREATIVE_INTELLIGENCE.md"
       ],
-      "note": "2026-10-01 arena/01a0f906-nexus-ai-agent: declared from main @ e5b326b. Deliberately disjoint from creative/spine/ (exclusive zone of the open PR #126 / PR #127 lineage), creative/studio/bus.py (Jules, PR #129), creative/rendering/ (nagar-render-lane) and storage/ (recovery owner)."
+      "note": "2026-10-01 arena/01a0f906-nexus-ai-agent: declared from main @ e5b326b. Deliberately disjoint from creative/spine/ (exclusive zone of the open PR #126 / PR #127 lineage), creative/studio/bus.py (Jules, PR #129), creative/rendering/ (nagar-render-lane) and storage/ (recovery owner). | 2026-10-01 zone extended to the shared IR testkit module (same flat-helper convention as tests/unit/ed25519_testkit.py and tests/unit/surface_fakes.py) so the three IR test modules build documents through one code path instead of three."
     }
   ],
   "claims": [
@@ -2757,12 +2758,40 @@
         "mypy src on the new package",
         "python scripts/agent_board.py check --files ... --branch arena/01a0f906-nexus-ai-agent"
       ],
-      "evidence": [],
-      "note": "",
+      "evidence": [
+        "pytest -q tests/unit/test_creative_ir.py -> 54 passed",
+        "pytest -q tests/unit/test_creative_ir_determinism.py -> 20 passed",
+        "pytest -q tests/architecture/test_creative_intelligence_boundary.py -> 27 passed",
+        "all three together -> 101 passed",
+        "pytest -q tests/architecture -> 152 passed (baseline before this slice: 125; +27 new, 0 regression)",
+        "pytest -q tests/unit -k 'creative or studio or rendering or pack or otio or slideshow or caption or motion or audio or delivery or edit' --continue-on-collection-errors -> 677 passed (baseline 603), same 24 pre-existing environmental failures (ModuleNotFoundError: imageio_ffmpeg / no ffmpeg binary in sandbox), 0 regression",
+        "pytest -q tests/unit/test_agent_board.py -> 18 passed (board schema 2 still valid)",
+        "pytest -q tests/unit/test_docs_integrity.py -> 59 passed (new doc indexed, links resolve, mermaid balanced)",
+        "ruff check + ruff format --clean on every new file -> clean",
+        "mypy src/nexus_ai_agent/creative/intelligence -> Success: no issues found in 4 source files",
+        "determinism re-verified in fresh interpreters under PYTHONHASHSEED=0,1,12345 -> one identical (work_id, canonical JSON) result",
+        "python scripts/agent_board.py check --files <all changed> --branch arena/01a0f906-nexus-ai-agent -> exit 0"
+      ],
+      "note": "Delivered. The plane proposes; it does not execute. Two gates with different contracts: assert_valid() reports every structural problem on an unsealed document, seal() resolves references while assigning content-addressed identity, verify_identity() proves the document matches its own content. Not named validate() because pydantic BaseModel.validate is a classmethod - mypy caught the shadow and a test now pins it. Honest limit: nothing outside the plane constructs a CreativeWork yet, so this slice is a foundation and is not reachable from any user command.",
       "ttl_hours": 24,
       "agent_branch": "arena/01a0f906-nexus-ai-agent",
       "claimed_at": "2026-10-01T19:59:48Z",
-      "gates_owner": false
+      "gates_owner": false,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/intelligence/",
+        "tests/unit/test_creative_ir.py",
+        "tests/unit/test_creative_ir_determinism.py",
+        "tests/unit/creative_ir_testkit.py",
+        "tests/architecture/test_creative_intelligence_boundary.py",
+        "docs/architecture/CREATIVE_INTELLIGENCE.md"
+      ],
+      "next_tasks": [
+        "task-225: semantic layer - resolve CreativeBrief.semantic_intents into Constraint values (cinematic / fast paced / premium / dramatic reveal), with unresolved_intents recorded rather than dropped",
+        "task-226: deterministic compiler - IR -> validated -> normalized (track allocation) -> CompiledPlan, re-checking every constraint against the plan; must update test_the_plane_produces_no_plan_or_command_type_yet deliberately",
+        "task-227: semantic revision - RevisionIntent -> affected semantics -> IR delta -> recompilation, proven by the Merkle locality property already tested",
+        "task-228: creative diff - v1 -> v2 as semantic statements derived from Merkle subtree comparison",
+        "task-229: reference -> observed structure -> concepts -> Creative Recipe -> Typed Creative IR (Origin.source='recipe' is reserved for it)"
+      ]
     }
   ],
   "deferred_log": [
