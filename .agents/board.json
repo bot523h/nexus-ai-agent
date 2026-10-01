@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-01T04:41:56Z",
+  "updated_at": "2026-10-01T04:45:40Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2962,7 +2962,7 @@
       "title_fa": "system.undo باید با هویت تراکنش آدرس‌پذیر باشد، نه فقط «آخرین»",
       "zone": "nagar-contract-gate",
       "priority": "P1",
-      "status": "active",
+      "status": "active_in_review",
       "scope": "task-221/task-222 finding. ROOT CAUSE: _system_undo in src/nexus_ai_agent/creative/studio/capabilities.py selects the most recent editable transaction globally and restores its full-state snapshot; it has no transaction-identity parameter. task-222 made the SPINE rollback fail closed rather than corrupt a foreign edit, but the bus primitive itself is still globally unsafe for concurrent actors. Because snapshots are full project state, rewinding a non-newest transaction while newer ones stand is not sound, so a correct root fix is a design choice: (A) add an optional transaction_id to system.undo that only rewinds when it is the newest (spine then addresses its own txn, no behavior change when absent); (B) staged command DAG + single commit (no rollback needed); (C) explicit compensating saga per capability. Evaluate with the evidence rules; do NOT pick the smallest diff if it leaves the race.",
       "acceptance_criteria": [
         "a design note (Option A/B/C) with concurrency, crash, authorization and replay semantics recorded in docs/DECISION_LOG.md",
@@ -2976,7 +2976,7 @@
       ],
       "owner_hint": "any free agent with the nagar-contract-gate zone (touches creative/studio/)",
       "agent_branch": "arena/01a0181931-task223-undo-contract",
-      "claimed_at": "2026-10-01T04:22:57Z",
+      "claimed_at": "2026-10-01T04:45:40Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "DELIVERED on arena/01a0181931-task223-undo-contract @ 3ba9aac, PR#128 (stacked on #127). Option A: identity-aware system.undo enforced INSIDE the stage-9 handler under the bus lock. Evidence: TestUndoIdentity 126 passed; two-thread race test (test_race_b_identity_closes_the_check_then_act_window); test_undo_contract_mutations.py 4 passed / 3 mutants killed; tests/unit+tests/architecture 2832 passed, 11 skipped; mypy+ruff clean; referee exit 0 (27 sources). Docs: DECISION_LOG task-223 amendment + COMMAND_CAPABILITY_CONTRACT 7.1 / stage-9 / open-gaps.",
@@ -2995,7 +2995,7 @@
       "title": "Spine rollback adopts the bus identity-aware system.undo (task-223 part 2)",
       "zone": "nagar-creative-graph",
       "priority": "P1",
-      "status": "active",
+      "status": "active_in_review",
       "scope": "task-222 guarded the spine rollback with a caller-side read-then-dispatch check, which cannot be atomic: the bus lock is released between reading the newest transaction and dispatching system.undo. With the bus now exposing transaction identity (task-223), the spine names its recorded per-step transaction id and lets the stage-9 gate be authoritative; the caller-side pre-check is removed.",
       "prerequisites": [
         "task-221-spine-plan-atomicity"
@@ -3017,7 +3017,7 @@
       ],
       "owner_hint": "any free agent with the nagar-creative-graph zone",
       "agent_branch": "arena/01a0181931-task223-undo-contract",
-      "claimed_at": "2026-10-01T04:36:38Z",
+      "claimed_at": "2026-10-01T04:45:40Z",
       "ttl_hours": 24,
       "generation": 1,
       "gates_owner": false,
