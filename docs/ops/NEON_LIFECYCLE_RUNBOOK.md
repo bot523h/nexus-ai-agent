@@ -100,6 +100,17 @@ nexus checkpoints golden update --backend postgres --yes
   index). It is not ephemeral in the Neon sense — it lives with the
   checkpoint file — and it must not be committed, backed up, or shipped
   (per-host metadata).
+- The async adapter dispatches index operations with `asyncio.to_thread`.
+  A single `SQLiteCheckpointLifecycleStore` serializes complete operations
+  (including execute/commit and close) on its shared connection with an
+  in-process, per-instance lock. `check_same_thread=False` permits worker
+  threads; it is not transaction isolation by itself.
+- This lock does not coordinate independent store instances/processes, the
+  main checkpoint database's WAL initialization, or multiple hosts. Separate
+  SQLite connections still rely on SQLite's database/file-lock behavior and
+  can report busy/locked errors; this local lock is not a distributed lock.
+  The lifecycle sidecar remains repairable metadata, never the checkpoint
+  source of truth.
 - Deleting it is safe: the next reconcile reports `missing_lifecycle:
   true` until rows are repopulated; the graph is unaffected.
 
