@@ -1739,3 +1739,90 @@ declared input for the semantic layer; `unresolved_intents` exists so an
 instruction nothing could honour is a recorded gap rather than a silent
 disappearance.
 
+### D-0026 — Creative semantics turns phrases into bounds and refuses to resolve a collision; the compiler is deferred on a measured capability gap
+
+*Problem.* D-0025 gave the plane a typed IR whose `Constraint` values are
+checkable, but nothing produced them. `CreativeBrief.semantic_intents` held the
+words a user actually said — "cinematic", "fast paced", "premium", "dramatic
+reveal" — as strings, and a string requirement is unfalsifiable: a plan can
+ignore it and nothing notices. Separately, the obvious next slice (the
+deterministic compiler) had to be assessed before being started.
+
+*Decision.*
+1. **A recognised phrase becomes a typed constraint with a number in it.**
+   "Fast paced" becomes `PacingConstraint(max_scene_duration_us=3_000_000)`.
+   `PacingConstraint` is added to the IR as the sixth constraint kind because
+   pacing had no shape at all: `TimingConstraint` binds one named scene, and
+   "no scene longer than X" is a different statement. Like the other five kinds
+   it is decidable against the IR itself.
+2. **The lexicon is built through the normaliser, not written against it.**
+   `_SURFACE_FORMS` holds phrases as a person types them; `LEXICON` is produced
+   by running every key through `normalize_phrase` (NFKC, case fold, ZWNJ
+   removed, Persian and Arabic digits mapped, punctuation dropped, whitespace
+   collapsed). Two keys that normalise onto the same key with different meanings
+   raise at import time. This is not tidiness: two lexicon entries in this
+   package were written with a ZWNJ and with Persian digits, which the normaliser
+   strips, making both entries **silently unreachable** — invisible in review,
+   caught only by a test that asserts every key equals its own normalisation.
+3. **Collisions are arithmetic, not a catalogue of known bad pairs.** Duration
+   bands on one target whose strongest floor exceeds their weakest ceiling are
+   unsatisfiable; emphasis shares are permille of one total, so distinct roles
+   demanding more than 1000 permille between them are unsatisfiable whatever the
+   document looks like. Both are decided on the numbers, so a new phrase that
+   contradicts an old one is caught without being taught the pair. The resolver
+   reports and raises; it never picks a winner, because choosing silently is the
+   failure this plane exists to prevent.
+4. **Style targets are declared, not applied.** A directive states where the
+   style axes should move; the resolution returns them for the strategy layer to
+   place. `apply_semantics` never changes a layer identity, and a test asserts
+   that. A lexicon has no basis for deciding *which* layers a look lands on.
+5. **`apply_semantics` is idempotent by construction.** Derived constraints are
+   content-addressed, so re-deriving them from an unchanged brief reproduces the
+   same identities and de-duplication removes them. A revision loop calls this on
+   every pass, so doubling the requirements was not an acceptable risk.
+6. **The compiler is deferred on evidence, not caution.** Verified on `main` @
+   `e5b326b`: no capability assembles a general timeline. `slideshow.compose`
+   rejects non-image assets ("'assets' must contain image evidence only") and the
+   bus registry exposes exactly five operations — `media.play`, `media.pause`,
+   `timeline.mark`, `timeline.split_at_playhead`, `system.undo` — none of which
+   places a clip. Lowering an arbitrary `CreativeWork` today would require
+   inventing operation ids the registry does not expose, producing a plan the bus
+   could not run: a false green. Unblocked by a timeline-assembly capability, or
+   by scoping the first lowering to the image-only subset that really does
+   compile to `slideshow.compose`. Recorded as `deferred_by_this_wave` on the
+   `task-225` board claim.
+
+*Rejected alternatives.* A per-phrase conditional chain in the resolver (the
+vocabulary would stop being reviewable data). Silently preferring the stricter
+of two conflicting bands (the system would then do something other than what was
+asked and report success). Rewriting layer styles during resolution (creative
+placement is a strategy decision). Shipping the compiler against invented
+operations (a plan the bus cannot execute is worse than no plan).
+
+*Defects the gates caught in this slice, all fixed here.* Two unreachable lexicon
+entries (ZWNJ and Persian digits, decision 2). `TimingConstraint` could not
+express a floor alone — `max_us` was required — so "at least a minute" was
+inexpressible; both bounds are now optional with a validator requiring at least
+one, and `_evaluate_timing` and `detect_collisions` treat `0` as unbounded.
+`_evaluate_pacing` returned only its first violation, contradicting the plane's
+own "report every problem" contract. The public-surface gate excluded submodules
+by hardcoded list, which broke when `semantics` arrived; it now excludes them by
+rule. The board correctly refused two active claims on
+`src/nexus_ai_agent/creative/intelligence/`, so `task-224` was released to
+`task-225`, which now carries both PRs' scope.
+
+*Evidence.* 147 plane tests green (54 IR, 20 determinism, 41 semantics, 32
+architecture boundary). Full `tests/architecture` 152 → 157 with zero regression
+(the five parametrized boundary rules each gained the new module). `tests/unit/test_agent_board.py` 18 passed and
+`tests/unit/test_docs_integrity.py` 59 passed. `ruff check`,
+`ruff format --check` and `mypy src/nexus_ai_agent/creative/intelligence` clean.
+The falsifiability test asserts the reference document violates three of the four
+intents it declares, and a second test shows that fixing the named scene clears
+that specific violation.
+
+*Honest limits.* The lexicon covers 51 surface forms across 10 meanings; anything
+outside it is declared unresolved, which is the designed behaviour and not a
+silent failure. No LLM resolver exists — the port for one is the phrase list
+itself. Nothing outside the plane constructs a `CreativeWork`, so the plane
+remains unreachable from any user command.
+

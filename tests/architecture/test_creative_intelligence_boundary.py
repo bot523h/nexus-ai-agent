@@ -42,7 +42,9 @@ ALLOWED_TOP_LEVEL = {
     "enum",
     "hashlib",
     "json",
+    "re",
     "typing",
+    "unicodedata",
     "pydantic",
     "nexus_ai_agent",
 }
@@ -253,8 +255,12 @@ def test_the_public_surface_matches_the_declared_surface() -> None:
     exported = {
         name for name in vars(plane) if not name.startswith("_") and name not in {"annotations"}
     }
-    # modules are implementation detail; only re-exported symbols are contract
-    exported -= {"errors", "identity", "ir"}
+    # Submodules are implementation detail that importing the package happens to
+    # bind as attributes; only re-exported *symbols* are contract. Excluding them
+    # by rule (is it one of this package's modules?) rather than by a hardcoded
+    # list is what keeps the gate honest when the plane grows a module.
+    submodules = {path.stem for path in PLANE.glob("*.py") if path.name != "__init__.py"}
+    exported -= submodules
     assert exported <= declared, f"exported but undeclared: {sorted(exported - declared)}"
 
 

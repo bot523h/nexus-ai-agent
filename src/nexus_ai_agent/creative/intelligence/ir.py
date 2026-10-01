@@ -120,6 +120,7 @@ __all__ = [
     "NarrativeRole",
     "OrderConstraint",
     "Origin",
+    "PacingConstraint",
     "OutputRequirement",
     "Priority",
     "QualityConstraint",
@@ -214,9 +215,10 @@ class TransitionKind(str, Enum):
 
 
 class ConstraintKind(str, Enum):
-    """The six requirement shapes the IR can carry and check."""
+    """The requirement shapes the IR can carry and check."""
 
     TIMING = "timing"
+    PACING = "pacing"
     ORDER = "order"
     EXCLUSION = "exclusion"
     EMPHASIS = "emphasis"
@@ -745,17 +747,23 @@ class ConstraintTarget(BaseModel):
 
 
 class TimingConstraint(BaseModel):
-    """A duration band on the work or on one scene."""
+    """A duration band on the work or on one scene.
+
+    Either bound may stand alone: "under fifteen seconds" states a ceiling and
+    "at least a minute" states a floor, and both are real requirements people
+    make. ``0`` means "that side is unbounded", which is why a band of
+    ``min_us=0, max_us=0`` is rejected as stating nothing at all.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     kind: Literal["timing"] = "timing"
     target: ConstraintTarget
     min_us: int = Field(default=0, ge=0)
-    max_us: int = Field(gt=0)
+    max_us: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
-    def _band_is_scoped_and_not_empty(self) -> TimingConstraint:
+    def _band_is_scoped_and_states_something(self) -> TimingConstraint:
         """A duration band needs something with a duration: the work or a scene.
 
         Rejecting a role scope at construction (rather than reporting a
@@ -765,7 +773,9 @@ class TimingConstraint(BaseModel):
         """
         if self.target.kind == "role":
             raise ValueError("a timing constraint must be scoped to the work or to a scene")
-        if self.max_us < self.min_us:
+        if self.min_us == 0 and self.max_us == 0:
+            raise ValueError("a timing constraint needs at least one bound to state")
+        if self.max_us and self.max_us < self.min_us:
             raise ValueError(f"max_us ({self.max_us}) must be >= min_us ({self.min_us})")
         return self
 
@@ -775,6 +785,38 @@ class TimingConstraint(BaseModel):
             "target": self.target.semantic_payload(),
             "min_us": self.min_us,
             "max_us": self.max_us,
+        }
+
+
+class PacingConstraint(BaseModel):
+    """How fast the piece moves, expressed as structure rather than as an adverb.
+
+    "Fast paced" is not compilable; "no scene longer than three seconds" is. This
+    is the whole job of the semantic layer -- turning a word a person says into a
+    bound a compiler can satisfy and a test can check -- and pacing had no shape
+    in the IR until it existed.
+
+    Work-scoped only: pacing is a property of the cut, not of one beat.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["pacing"] = "pacing"
+    #: 0 means "unset"; a bound of 0 would forbid every scene.
+    max_scene_duration_us: int = Field(default=0, ge=0)
+    min_scene_count: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def _at_least_one_bound(self) -> PacingConstraint:
+        if self.max_scene_duration_us == 0 and self.min_scene_count == 0:
+            raise ValueError("a pacing constraint needs at least one bound to state")
+        return self
+
+    def semantic_payload(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "max_scene_duration_us": self.max_scene_duration_us,
+            "min_scene_count": self.min_scene_count,
         }
 
 
@@ -874,6 +916,7 @@ class QualityConstraint(BaseModel):
 
 ConstraintSpec = Annotated[
     TimingConstraint
+    | PacingConstraint
     | OrderConstraint
     | ExclusionConstraint
     | EmphasisConstraint
@@ -904,7 +947,8 @@ class Constraint(BaseModel):
             return (*self.spec.before.child_identities(), *self.spec.after.child_identities())
         if isinstance(self.spec, (TimingConstraint, ExclusionConstraint, EmphasisConstraint)):
             return self.spec.target.child_identities()
-        return ()
+        return ()  # OrderConstraint handled above; PacingConstraint / QualityConstraint
+        # are work-scoped and commit to no identity
 
 
 class Violation(BaseModel):
@@ -1397,7 +1441,7 @@ def _remap_constraint_spec(
         return spec.model_copy(
             update={"target": _remap_target(spec.target, scene_ids, constraint_id)}
         )
-    return spec
+    return spec  # PacingConstraint and QualityConstraint carry no scene reference
 
 
 def _remap_target(
@@ -1624,6 +1668,8 @@ def _evaluate(work: CreativeWork, constraint: Constraint) -> str | None:
     spec = constraint.spec
     if isinstance(spec, TimingConstraint):
         return _evaluate_timing(work, spec)
+    if isinstance(spec, PacingConstraint):
+        return _evaluate_pacing(work, spec)
     if isinstance(spec, OrderConstraint):
         return _evaluate_order(work, spec)
     if isinstance(spec, ExclusionConstraint):
@@ -1648,9 +1694,25 @@ def _evaluate_timing(work: CreativeWork, spec: TimingConstraint) -> str | None:
         return None
     if actual < spec.min_us:
         return f"{label} is {actual}us, below the {spec.min_us}us minimum"
-    if actual > spec.max_us:
+    if spec.max_us and actual > spec.max_us:
         return f"{label} is {actual}us, above the {spec.max_us}us maximum"
     return None
+
+
+def _evaluate_pacing(work: CreativeWork, spec: PacingConstraint) -> str | None:
+    problems: list[str] = []
+    if spec.max_scene_duration_us:
+        slowest = max(work.scenes, key=lambda scene: scene.timing.duration_us)
+        if slowest.timing.duration_us > spec.max_scene_duration_us:
+            problems.append(
+                f"scene {slowest.label} runs {slowest.timing.duration_us}us, above the "
+                f"{spec.max_scene_duration_us}us pacing ceiling"
+            )
+    if spec.min_scene_count and len(work.scenes) < spec.min_scene_count:
+        problems.append(
+            f"the piece has {len(work.scenes)} scene(s), below the required {spec.min_scene_count}"
+        )
+    return "; ".join(problems) or None
 
 
 def _evaluate_order(work: CreativeWork, spec: OrderConstraint) -> str | None:

@@ -1,6 +1,6 @@
 # Creative Intelligence Plane
 
-**Status:** living view · **Owner zone:** `creative-intelligence-plane` · **First slice:** task-224 (Typed Creative IR) · **Enforcing tests:** [`test_creative_intelligence_boundary.py`](../../tests/architecture/test_creative_intelligence_boundary.py), [`test_creative_ir.py`](../../tests/unit/test_creative_ir.py), [`test_creative_ir_determinism.py`](../../tests/unit/test_creative_ir_determinism.py)
+**Status:** living view · **Owner zone:** `creative-intelligence-plane` · **Slices:** task-224 (Typed Creative IR), task-225 (creative semantics) · **Enforcing tests:** [`test_creative_intelligence_boundary.py`](../../tests/architecture/test_creative_intelligence_boundary.py), [`test_creative_ir.py`](../../tests/unit/test_creative_ir.py), [`test_creative_ir_determinism.py`](../../tests/unit/test_creative_ir_determinism.py), [`test_creative_semantics.py`](../../tests/unit/test_creative_semantics.py)
 
 The Creative Intelligence Plane is the part of NEXUS that turns *what a person
 meant* into *what should be built*. It sits upstream of execution and stops
@@ -31,7 +31,7 @@ flowchart LR
 The plane **proposes**; it never executes. It contains no `subprocess`, no file
 or network I/O, no database access, no event loop, and no reference to the
 CommandBus or to transactions. That is enforced structurally, not by
-convention — see [§6](#6-boundaries-and-their-enforcers).
+convention — see [§7](#7-boundaries-and-their-enforcers).
 
 ## 1. Why this layer exists
 
@@ -181,7 +181,65 @@ any other way:
 `seal()` is a pure function of content: it ignores whatever provisional ids a
 builder used, and `seal(seal(w)) == seal(w)`.
 
-## 5. Provenance is data
+## 5. Creative semantics
+
+[`semantics.py`](../../src/nexus_ai_agent/creative/intelligence/semantics.py)
+turns the words people actually say into bounds a compiler can meet.
+
+`"cinematic"`, `"fast paced"`, `"minimal"`, `"premium"` are not compilable. Left
+as strings they are worse than useless: they read like requirements while being
+unfalsifiable, so a plan can ignore them and nothing notices. Here a recognised
+phrase becomes a typed `Constraint` with a number in it — *fast paced* becomes
+*no scene longer than three seconds* — which the IR checks, a compiler can
+satisfy, and a test can falsify.
+
+```mermaid
+flowchart LR
+    P["surface phrase<br/>fast paced / ریتم تند"] --> N[normalize_phrase]
+    N --> M[SemanticMeaning]
+    M --> D[SemanticDirective]
+    D --> C[typed Constraint]
+    P2["unrecognised phrase"] --> U["brief.unresolved_intents"]
+```
+
+Three boundaries are deliberate:
+
+**The lexicon is data, and it is built, not written.** `_SURFACE_FORMS` maps
+phrases as a person types them onto meanings; `LEXICON` is produced by running
+every key through `normalize_phrase`, so a surface form can never be stored in a
+spelling the normaliser would never produce. That defect class is invisible in
+review and makes the entry silently unreachable — it was found in this package
+during review of this slice, and the builder is what prevents it recurring. Two
+forms that normalise onto the same key with *different* meanings raise at import
+time.
+
+**Collisions are arithmetic, not a list of known bad pairs.** When duration
+bands on one target leave an empty interval, or emphasis shares sum past 1000
+permille, `detect_collisions` reports it on the numbers. A brand-new phrase that
+contradicts an old one is therefore caught without teaching the detector about
+the pair. The resolver refuses to pick a winner: choosing silently is the exact
+failure this plane exists to prevent.
+
+**Style targets are declared, not applied.** A directive states that *premium*
+means warmer and less dense; the resolution reports those axis targets. Which
+layers they land on is a strategy decision, and a lexicon that rewrote layer
+styles would be making creative choices it has no basis for — so
+`apply_semantics` provably never changes a layer identity.
+
+`apply_semantics` is idempotent, and provably so: derived constraints are
+content-addressed, so re-deriving them from an unchanged brief reproduces the
+same identities and de-duplication removes them.
+
+### 5.1 The layer is falsifiable
+
+The reference test document asks for *"cinematic, premium, fast paced, dramatic
+reveal"* and the semantic layer correctly reports that it violates three of them:
+the climax applies the glow *premium* forbids, one scene runs five seconds
+against the three-second pacing ceiling, and the subject's attention share falls
+just under what a dramatic reveal requires. A semantic layer that always agrees
+with the document is not measuring anything.
+
+## 6. Provenance is data
 
 Every element carries an `Origin` — `source` (`user`, `reference`, `strategy`,
 `recipe`, `system`), a `detail` string, and an optional `reference_id`.
@@ -196,7 +254,7 @@ invented one.
 never declared. An instruction that could not be honoured is a **declared gap**,
 never a silent disappearance.
 
-## 6. Boundaries and their enforcers
+## 7. Boundaries and their enforcers
 
 Every rule below is a build failure, not a comment. Enforced by
 [`tests/architecture/test_creative_intelligence_boundary.py`](../../tests/architecture/test_creative_intelligence_boundary.py).
@@ -212,7 +270,7 @@ Every rule below is a build failure, not a comment. Enforced by
 | `__all__` equals the exported surface | The plane's contract with its consumers stays legible | `test_the_public_surface_matches_the_declared_surface` |
 | No `CompiledPlan` / `CreativeCompiler` symbol yet | Honest scope: this slice is the IR, and the compiler slice must update this test deliberately | `test_the_plane_produces_no_plan_or_command_type_yet` |
 
-### 6.1 Relationship to the other substrates
+### 7.1 Relationship to the other substrates
 
 * **Canonical Creative Execution Substrate** (`creative/studio/bus.py`,
   transactions, undo, idempotency): the plane produces plans *for* it and
@@ -226,21 +284,38 @@ Every rule below is a build failure, not a comment. Enforced by
   serialisable to canonical JSON, which is all the plane contributes. It never
   opens a store.
 
-## 7. Honest status
+## 8. Honest status
 
 | Capability | Status |
 |---|---|
-| Typed Creative IR, validation, identity, canonical serialization | **Implemented and tested** (101 tests) |
-| Semantic layer (phrases → constraints) | Not built. `CreativeBrief.semantic_intents` is the declared input for it. |
-| Deterministic compiler (IR → plan) | Not built. Deliberately: the gate in §6 makes its absence visible. |
+| Typed Creative IR, validation, identity, canonical serialization | **Implemented and tested** |
+| Semantic layer: phrases → typed constraints, collision detection, declared gaps | **Implemented and tested** (147 plane tests in total: 54 IR, 20 determinism, 41 semantics, 32 boundary) |
+| Deterministic compiler (IR → plan) | **Deliberately deferred** — see the capability gap below. The gate in §7 keeps its absence visible. |
 | Semantic revision | Not built. The Merkle property it needs is implemented and tested. |
 | Creative diff | Not built. Same dependency, same readiness. |
 | Reference → Creative Recipe | Not built. `Origin.source="recipe"` is reserved for it. |
-| Reachable from a user command | **No.** Nothing outside the plane constructs a `CreativeWork` yet. This slice is a foundation, not a feature. |
+| Reachable from a user command | **No.** Nothing outside the plane constructs a `CreativeWork` yet. These slices are a foundation, not a feature. |
 
-## 8. Decision record
+### 8.1 Why the compiler is deferred
 
-See `D-0025` in [`DECISION_LOG.md`](../DECISION_LOG.md) for the accepted
+Not caution — a measured gap. Verified on `main` @ `e5b326b`: **no capability
+assembles a general timeline from assets.** `slideshow.compose` rejects non-image
+assets outright ("'assets' must contain image evidence only"), and the bus
+registry exposes exactly five operations — `media.play`, `media.pause`,
+`timeline.mark`, `timeline.split_at_playhead`, `system.undo` — none of which
+places a clip. A compiler that lowered an arbitrary `CreativeWork` today would
+have to invent operation ids the registry does not expose, producing a plan the
+bus could not run. That is a false green, and it is exactly what the assurance
+pass exists to catch.
+
+Unblocked by either (a) a timeline-assembly capability, or (b) scoping the first
+lowering to the image-only subset that genuinely does compile to
+`slideshow.compose`. Recorded as `deferred_by_this_wave` on the `task-225` board
+claim.
+
+## 9. Decision record
+
+See `D-0025` and `D-0026` in [`DECISION_LOG.md`](../DECISION_LOG.md) for the accepted
 decision, the rejected alternatives (a scene-graph over the studio `Project`,
 reusing `rendering/ir.py` as the authoring surface, UUID identities, float
 quantities) and the evidence.
