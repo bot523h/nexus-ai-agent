@@ -641,7 +641,9 @@ class Layer(BaseModel):
             "content": self.content.semantic_payload(),
             "style": self.style.semantic_payload(),
             "emphasis": self.emphasis,
-            "track_id": self.track_id,
+            # track_id is layout, not authored meaning. The compiler may remap it
+            # to a sealed track identity later without changing the layer's own
+            # semantics, so it is excluded from the identity payload.
             "origin": self.origin.semantic_payload(),
         }
 
@@ -1325,12 +1327,20 @@ def seal_work(work: CreativeWork) -> CreativeWork:
                 }
             )
             new_id = sealed_id(
-                PREFIX_LAYER, remapped.semantic_payload(), remapped.child_identities()
+                PREFIX_LAYER,
+                remapped.semantic_payload(),
+                remapped.child_identities(),
+                preserve_order=True,
             )
             layer_ids[layer.layer_id] = new_id
             sealed_layers.append(remapped.model_copy(update={"layer_id": new_id}))
         rebuilt = scene.model_copy(update={"layers": tuple(sealed_layers)})
-        new_id = sealed_id(PREFIX_SCENE, rebuilt.semantic_payload(), rebuilt.child_identities())
+        new_id = sealed_id(
+            PREFIX_SCENE,
+            rebuilt.semantic_payload(),
+            rebuilt.child_identities(),
+            preserve_order=True,
+        )
         sealed_scenes.append(rebuilt.model_copy(update={"scene_id": new_id}))
 
     scene_ids = {
@@ -1387,16 +1397,38 @@ def seal_work(work: CreativeWork) -> CreativeWork:
             }
         )
         new_id = sealed_id(
-            PREFIX_TRACK, remapped_track.semantic_payload(), remapped_track.child_identities()
+            PREFIX_TRACK,
+            remapped_track.semantic_payload(),
+            remapped_track.child_identities(),
+            preserve_order=True,
         )
         sealed_tracks.append(remapped_track.model_copy(update={"track_id": new_id}))
+
+    track_ids = {
+        old.track_id: new.track_id
+        for old, new in zip(work.layout, sealed_tracks, strict=True)
+        if old.track_id
+    }
+    remapped_track_scenes: list[Scene] = []
+    for scene in sealed_scenes:
+        rewritten_layers: list[Layer] = []
+        for layer in scene.layers:
+            if layer.track_id and layer.track_id in track_ids:
+                rewritten_layers.append(
+                    layer.model_copy(update={"track_id": track_ids[layer.track_id]})
+                )
+            else:
+                # Unknown track claims are preserved verbatim so assert_valid can
+                # reject them later instead of the sealer guessing a repair.
+                rewritten_layers.append(layer)
+        remapped_track_scenes.append(scene.model_copy(update={"layers": tuple(rewritten_layers)}))
 
     # 7. the root commits everything
     rebuilt_work = work.model_copy(
         update={
             "assets": tuple(sealed_assets),
             "effects": tuple(sealed_effects),
-            "scenes": tuple(sealed_scenes),
+            "scenes": tuple(remapped_track_scenes),
             "transitions": tuple(sealed_transitions),
             "constraints": tuple(sealed_constraints),
             "layout": tuple(sealed_tracks),
@@ -1600,21 +1632,13 @@ def _check_segment_bounds(work: CreativeWork) -> list[str]:
 
 
 def _check_output_bounds(work: CreativeWork) -> list[str]:
-    """The piece must fit the duration ceiling it declares for itself."""
+    """The piece must fit the structural duration ceiling it declares for itself."""
     problems: list[str] = []
     ceiling = work.output.max_duration_us
     if ceiling and work.duration_us > ceiling:
         problems.append(
             f"piece is {work.duration_us}us long but output.max_duration_us is {ceiling}us"
         )
-    for constraint in work.constraints:
-        spec = constraint.spec
-        if isinstance(spec, QualityConstraint) and spec.max_duration_us:
-            if work.duration_us > spec.max_duration_us:
-                problems.append(
-                    f"piece is {work.duration_us}us long but quality constraint "
-                    f"{constraint.constraint_id} caps it at {spec.max_duration_us}us"
-                )
     return problems
 
 

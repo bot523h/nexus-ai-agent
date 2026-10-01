@@ -117,7 +117,9 @@ def content_id(prefix: str, payload: Any) -> str:
     return f"{prefix}_{digest[:DIGEST_HEX_LENGTH]}"
 
 
-def sealed_id(prefix: str, payload: Any, children: tuple[str, ...]) -> str:
+def sealed_id(
+    prefix: str, payload: Any, children: tuple[str, ...], *, preserve_order: bool = False
+) -> str:
     """Content address of an element *plus* the identities it commits to.
 
     ``children`` must already be sealed identities. Including them is what makes
@@ -125,10 +127,15 @@ def sealed_id(prefix: str, payload: Any, children: tuple[str, ...]) -> str:
     anywhere below an element changes that element's identity, and therefore
     every identity above it, all the way to the root.
 
-    Children are hashed as a sorted tuple so that a caller which enumerates
-    references in a different (but equivalent) order still produces the same
-    identity -- identity must depend on *what* is referenced, never on the
-    accident of iteration order.
+    Most collections in the IR are semantic *sets*: assets, constraints and
+    transitions keep their identity regardless of the order a caller happened to
+    enumerate them in, so their children are normalized by sorting. A few are
+    semantic *sequences*: layer stacking inside a scene, effect ordering inside a
+    layer, and layer ordering on a render track. Those call sites pass
+    ``preserve_order=True`` so a re-ordered sequence changes identity.
     """
-    material = {"payload": payload, "children": sorted(children)}
+    material = {
+        "payload": payload,
+        "children": list(children) if preserve_order else sorted(children),
+    }
     return content_id(prefix, material)

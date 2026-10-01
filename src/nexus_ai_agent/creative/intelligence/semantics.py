@@ -633,9 +633,9 @@ def apply_semantics(work: CreativeWork) -> CreativeWork:
             "constraints": merged,
             "brief": brief.model_copy(
                 update={
-                    "unresolved_intents": tuple(
-                        dict.fromkeys((*brief.unresolved_intents, *resolution.unresolved))
-                    )
+                    # unresolved_intents reflects the *current* resolution, not a
+                    # growing historical union across passes.
+                    "unresolved_intents": tuple(resolution.unresolved)
                 }
             ),
         }

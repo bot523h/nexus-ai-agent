@@ -376,6 +376,26 @@ def test_a_piece_longer_than_its_own_ceiling_is_reported() -> None:
         ).assert_valid()
 
 
+def test_a_quality_duration_cap_is_checked_as_a_constraint_not_a_structural_error() -> None:
+    work = product_teaser()
+    capped = work.model_copy(
+        update={
+            "constraints": (
+                *work.constraints,
+                Constraint(
+                    constraint_id="c-quality-cap",
+                    priority=Priority.HARD,
+                    spec=QualityConstraint(max_duration_us=10_000_000),
+                    origin=Origin(source="user", detail="under ten seconds if possible"),
+                ),
+            )
+        }
+    ).seal()
+    capped.assert_valid()
+    violations = capped.check_constraints()
+    assert any(v.constraint_id == capped.constraints[-1].constraint_id for v in violations)
+
+
 def test_an_incomplete_layout_is_reported() -> None:
     """A layout is all-or-nothing: partial track assignment is a defect."""
     work = product_teaser()

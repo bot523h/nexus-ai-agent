@@ -220,6 +220,21 @@ def test_an_unrecognised_phrase_is_recorded_on_the_document() -> None:
     assert "cinematic" not in applied.brief.unresolved_intents
 
 
+def test_a_second_pass_replaces_unresolved_intents_with_the_current_resolution() -> None:
+    work = product_teaser().model_copy(
+        update={
+            "brief": product_teaser().brief.model_copy(
+                update={
+                    "semantic_intents": ("cinematic",),
+                    "unresolved_intents": ("stale unresolved",),
+                }
+            )
+        }
+    )
+    applied = apply_semantics(work)
+    assert applied.brief.unresolved_intents == ()
+
+
 def test_an_unresolved_phrase_never_silently_becomes_a_constraint() -> None:
     """The failure mode this exists to prevent: nodding along to words."""
     work = _with_intents(product_teaser(), "absolutely breathtaking")

@@ -120,6 +120,31 @@ def _plane_files() -> list[Path]:
     return files
 
 
+def _module_name(path: Path) -> str:
+    relative = path.relative_to(REPO_ROOT / "src")
+    parts = list(relative.with_suffix("").parts)
+    if parts[-1] == "__init__":
+        parts.pop()
+    return ".".join(parts)
+
+
+def _resolve_import_from(path: Path, node: ast.ImportFrom) -> str | None:
+    if node.level == 0:
+        return node.module
+    module_parts = _module_name(path).split(".")
+    package_parts = module_parts if path.name == "__init__.py" else module_parts[:-1]
+    if node.level == 1:
+        base = package_parts
+    else:
+        drop = node.level - 1
+        if drop > len(package_parts):
+            return None
+        base = package_parts[:-drop]
+    suffix = [] if node.module is None else node.module.split(".")
+    resolved = ".".join((*base, *suffix))
+    return resolved or None
+
+
 def _imports(path: Path) -> set[str]:
     """Top-level module names a file imports (stdlib-style boundary reading)."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -127,8 +152,10 @@ def _imports(path: Path) -> set[str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             names.update(alias.name.split(".")[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            names.add(node.module.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            resolved = _resolve_import_from(path, node)
+            if resolved:
+                names.add(resolved.split(".")[0])
     return names
 
 
@@ -139,8 +166,10 @@ def _full_imports(path: Path) -> set[str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             names.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            names.add(node.module)
+        elif isinstance(node, ast.ImportFrom):
+            resolved = _resolve_import_from(path, node)
+            if resolved:
+                names.add(resolved)
     return names
 
 
@@ -149,6 +178,22 @@ def test_the_plane_package_exists_and_is_not_empty() -> None:
     assert (PLANE / "ir.py").is_file()
     assert (PLANE / "identity.py").is_file()
     assert (PLANE / "errors.py").is_file()
+
+
+def test_relative_plane_imports_resolve_inside_the_plane() -> None:
+    node = ast.parse("from .ir import CreativeWork").body[0]
+    assert isinstance(node, ast.ImportFrom)
+    assert (
+        _resolve_import_from(PLANE / "probe.py", node) == "nexus_ai_agent.creative.intelligence.ir"
+    )
+
+
+def test_relative_imports_crossing_into_forbidden_packages_are_visible_to_the_gate() -> None:
+    node = ast.parse("from ...studio import models").body[0]
+    assert isinstance(node, ast.ImportFrom)
+    resolved = _resolve_import_from(PLANE / "nested" / "probe.py", node)
+    assert resolved == "nexus_ai_agent.creative.studio"
+    assert resolved.startswith(FORBIDDEN_NEXUS_PREFIXES)
 
 
 @pytest.mark.parametrize("path", _plane_files(), ids=lambda p: p.name)

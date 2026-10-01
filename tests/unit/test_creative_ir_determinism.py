@@ -98,7 +98,7 @@ def test_identity_does_not_depend_on_python_hash_randomization() -> None:
         "print(w.to_canonical_json())"
     )
     results: set[str] = set()
-    for seed in ("0", "1", "12345"):
+    for seed in ("0", "1", "12345", "999"):
         env = {**os.environ, "PYTHONHASHSEED": seed}
         proc = subprocess.run(
             [sys.executable, "-c", program],
@@ -417,8 +417,8 @@ def test_a_revision_preserves_the_constraints_it_was_told_to_preserve() -> None:
 # ── Order independence ───────────────────────────────────────────────────────
 
 
-def test_child_order_does_not_change_a_leaf_identity() -> None:
-    """``sealed_id`` sorts children: identity depends on *what*, not on order."""
+def test_effect_order_changes_a_layer_identity() -> None:
+    """Effect order is semantic: reordering the stack must change identity."""
     asset = Asset(asset_id="a", kind=AssetKind.IMAGE, uri="asset:still", role=SemanticRole.SUBJECT)
     layer_a = Layer(
         layer_id="l",
@@ -436,8 +436,31 @@ def test_child_order_does_not_change_a_leaf_identity() -> None:
     layer_b = layer_a.model_copy(update={"effects": ("e2", "e1")})
     assert (
         seal_work(_minimal(asset, layer_a)).scenes[0].layers[0].layer_id
-        == seal_work(_minimal(asset, layer_b)).scenes[0].layers[0].layer_id
+        != seal_work(_minimal(asset, layer_b)).scenes[0].layers[0].layer_id
     )
+
+
+def test_track_assignment_does_not_change_a_layer_identity() -> None:
+    """track_id is layout: remapping it after sealing must not churn the layer id."""
+    work = product_teaser()
+    layer = work.scenes[0].layers[0]
+    assert layer.track_id is None
+    reassigned = work.model_copy(
+        update={
+            "scenes": (
+                work.scenes[0].model_copy(
+                    update={
+                        "layers": (
+                            layer.model_copy(update={"track_id": "track-a"}),
+                            *work.scenes[0].layers[1:],
+                        )
+                    }
+                ),
+                *work.scenes[1:],
+            )
+        }
+    ).seal()
+    assert reassigned.scenes[0].layers[0].layer_id == layer.layer_id
 
 
 def test_effect_parameter_order_is_normalised_at_construction() -> None:
