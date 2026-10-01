@@ -1783,6 +1783,13 @@ and its snapshots are in-memory and per-instance, so durable/identity-addressed 
 processes is a future trigger. No new durable state is added, so the task-222 bounded crash
 divergence (commit present, graph node absent) is unchanged.
 
+Correction to the task-221 amendment's wording: "a failed run leaves the project content
+unchanged" holds only when nothing interleaves. In the concurrent case the run **cannot** undo
+its own already-applied step without rewinding the foreign newest edit, so it fails closed with
+`SpineRollbackError` and that step **remains** in the project (last-writer-wins) — loudly, never
+silently, and the foreign edit is untouched. No artifact node is ever left for work that did not
+complete. `test_failed_run_never_rolls_back_a_foreign_edit` pins both surviving markers.
+
 Guarded by `tests/unit/test_command_capability_contract.py::TestUndoIdentity` (matching identity
 rewinds; stale/unknown identity refused with the foreign edit intact; absent identity still undoes
 the newest; identity on an empty stack is refused; the two-thread

@@ -381,8 +381,12 @@ def test_failed_run_never_rolls_back_a_foreign_edit(monkeypatch) -> None:
     assert isinstance(excinfo.value.__cause__, UndoConflictError)
 
     labels = [marker.label for marker in bus.project.timeline.markers]
-    # the foreign edit survives; only the run's own work is a candidate to undo
+    # the foreign edit survives, and the run's own step-1 legitimately remains
+    # too: with a foreign newest the run cannot undo its own step without
+    # rewinding foreign work, so it fails closed (loudly) rather than silently
+    # corrupting the foreign actor. The surviving content is last-writer-wins.
     assert "FOREIGN" in labels
+    assert "OURS" in labels
     # no artifact/evidence node is left for a run that did not complete
     assert not any(node.kind == "artifact" for node in graph.nodes())
     assert not any(node.kind == "evidence" for node in graph.nodes())
