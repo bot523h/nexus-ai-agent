@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-01T22:10:32Z",
+  "updated_at": "2026-10-01T22:24:46Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2859,7 +2859,7 @@
       "title_fa": "دیف خلاقانه: بیان تفاوت دو نسخهٔ خلاقانه به زبان معنا، نه فیلدهای تغییرکرده",
       "zone": "creative-intelligence-plane",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "PR-3 of the Creative Intelligence Plane. Takes the slot the deferred compiler would have taken. diff_works(before, after) walks the Merkle tree, prunes every subtree whose identity is unchanged in O(1), matches elements across versions by stable structural keys, and emits semantic statements ('pacing increased', 'the reveal got shorter', 'the subject lost attention share') rather than 'field X changed'. This is the substrate semantic revision needs in order to report what it did.",
       "scope_fa": "PR-۳ از Creative Intelligence Plane. تفاوت دو نسخه را به زبان معنا بیان می‌کند.",
       "prerequisites": [
@@ -2884,11 +2884,17 @@
         "ruff / mypy clean",
         "agent_board.py check exit 0"
       ],
-      "evidence": [],
-      "note": "SESSION-BOUND CONTINUATION 2026-10-01: PR #131 head e61b909 lives on branch arena/01a0f906-nexus-ai-agent, but this Arena session is fixed to arena/01a0f97f-nexus-ai-agent. Slice 1/2 were cherry-picked here and re-verified; slice 3 continues on this branch. The reported local-only SHA 5da4d81 is unavailable both locally and on GitHub (gh api commit lookup 422 / git ls-remote empty), so the diff slice must be reconstructed from the live task contract rather than copied.",
+      "evidence": [
+        "PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_creative_diff.py -> 4 passed",
+        "PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_creative_ir.py tests/unit/test_creative_ir_determinism.py tests/unit/test_creative_semantics.py tests/unit/test_creative_diff.py tests/unit/test_creative_revision.py tests/architecture/test_creative_intelligence_boundary.py -> 177 passed",
+        "PYTHONPATH=src .venv/bin/pytest -q tests/architecture -> 169 passed",
+        "PYTHONPATH=src .venv/bin/ruff check src/nexus_ai_agent/creative/intelligence ... && PYTHONPATH=src .venv/bin/python -m mypy src/nexus_ai_agent/creative/intelligence tests/unit/test_creative_diff.py tests/unit/test_creative_revision.py -> clean",
+        "python scripts/agent_board.py check --files .agents/board.json,src/nexus_ai_agent/creative/intelligence/__init__.py,src/nexus_ai_agent/creative/intelligence/errors.py,src/nexus_ai_agent/creative/intelligence/identity.py,src/nexus_ai_agent/creative/intelligence/ir.py,src/nexus_ai_agent/creative/intelligence/semantics.py,src/nexus_ai_agent/creative/intelligence/diff.py,src/nexus_ai_agent/creative/intelligence/revision.py,tests/architecture/test_creative_intelligence_boundary.py,tests/unit/test_creative_ir.py,tests/unit/test_creative_ir_determinism.py,tests/unit/test_creative_semantics.py,tests/unit/test_creative_diff.py,tests/unit/test_creative_revision.py,docs/architecture/CREATIVE_INTELLIGENCE.md,docs/DECISION_LOG.md --branch arena/01a0f97f-nexus-ai-agent -> no overlap — safe to proceed."
+      ],
+      "note": "Delivered on arena/01a0f97f-nexus-ai-agent. PR #131 head still lives on arena/01a0f906-nexus-ai-agent, while this Arena session is branch-bound; the reported SHA 5da4d81 remained unavailable both locally and on GitHub, so slice 3 was reconstructed from the live contract and landed here as commit add0508. Diff is lineage-aware, prunes unchanged subtrees by sealed identity, and reports semantic changes instead of raw field names. Released so task-227 can close the same plane path truthfully.",
       "ttl_hours": 24,
-      "agent_branch": "arena/01a0f97f-nexus-ai-agent",
-      "claimed_at": "2026-10-01T22:10:32Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "gates_owner": false,
       "exclusive_paths": [
         "src/nexus_ai_agent/creative/intelligence/",
@@ -2904,7 +2910,7 @@
       "title_fa": "بازبینی خلاقانه: تبدیل ویرایش معنایی به عملیات درجه‌اول، تایپ‌شده و قطعی به‌جای mutation آزاد",
       "zone": "creative-intelligence-plane",
       "priority": "P0",
-      "status": "queued",
+      "status": "done",
       "scope": "PR-4 of the Creative Intelligence Plane. Introduce a typed RevisionIntent and deterministic apply_revision() contract: explicit target -> affected semantics -> CreativeWork transformation -> IR delta -> semantic diff. Revision fails closed on ambiguity, reuses the plane's Merkle identity machinery, and proves locality: changing one subtree keeps unrelated identities byte-identical. No execution authority, no CommandBus, no storage, no network.",
       "scope_fa": "PR-۴ از Creative Intelligence Plane. قرارداد RevisionIntent و apply_revision() قطعی و تایپ‌شده: هدف صریح -> معناهای متاثر -> تبدیل CreativeWork -> IR delta -> semantic diff. در ابهام fail-closed می‌کند و هیچ authority اجرایی اضافه نمی‌کند.",
       "prerequisites": [
@@ -2927,8 +2933,17 @@
         "ruff check + mypy on the plane package",
         "python scripts/agent_board.py check --files <all changed> --branch arena/01a0f97f-nexus-ai-agent"
       ],
-      "evidence": [],
-      "note": "Queued behind the slice-3 diff continuation on this session branch. Activated only after task-226 is released so one plane path has exactly one active owner.",
+      "evidence": [
+        "PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_creative_revision.py tests/unit/test_creative_diff.py -> 15 passed",
+        "PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_creative_ir.py tests/unit/test_creative_ir_determinism.py tests/unit/test_creative_semantics.py tests/unit/test_creative_diff.py tests/unit/test_creative_revision.py tests/architecture/test_creative_intelligence_boundary.py -> 177 passed",
+        "PYTHONPATH=src .venv/bin/pytest -q tests/architecture -> 169 passed",
+        "PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_agent_board.py -> 18 passed; PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_docs_integrity.py -> 59 passed",
+        "PYTHONPATH=src .venv/bin/ruff check src/nexus_ai_agent/creative/intelligence ... -> All checks passed; PYTHONPATH=src .venv/bin/ruff format --check src/nexus_ai_agent/creative/intelligence ... -> already formatted; PYTHONPATH=src .venv/bin/python -m mypy src/nexus_ai_agent/creative/intelligence tests/unit/test_creative_diff.py tests/unit/test_creative_revision.py -> Success: no issues found in 9 source files",
+        "Determinism proof: tests/unit/test_creative_revision.py::test_revision_ids_are_stable_across_hash_seeds (PYTHONHASHSEED=0,1,12345,999) passed",
+        "Mutation probes killed and reverted: transition-lineage removal -> test_creative_diff failure; ambiguous role auto-pick -> test_ambiguous_role_target_fails_closed failure; layer-retime no-op -> test_scene_duration_revision_is_typed_and_deterministic failure",
+        "python scripts/agent_board.py check --files .agents/board.json,src/nexus_ai_agent/creative/intelligence/__init__.py,src/nexus_ai_agent/creative/intelligence/errors.py,src/nexus_ai_agent/creative/intelligence/identity.py,src/nexus_ai_agent/creative/intelligence/ir.py,src/nexus_ai_agent/creative/intelligence/semantics.py,src/nexus_ai_agent/creative/intelligence/diff.py,src/nexus_ai_agent/creative/intelligence/revision.py,tests/architecture/test_creative_intelligence_boundary.py,tests/unit/test_creative_ir.py,tests/unit/test_creative_ir_determinism.py,tests/unit/test_creative_semantics.py,tests/unit/test_creative_diff.py,tests/unit/test_creative_revision.py,docs/architecture/CREATIVE_INTELLIGENCE.md,docs/DECISION_LOG.md --branch arena/01a0f97f-nexus-ai-agent -> no overlap — safe to proceed."
+      ],
+      "note": "Delivered after task-226 release on the same session branch. apply_revision() is now a typed, deterministic contract from explicit target to sealed CreativeWork transformation, affected-node list, IR delta and semantic diff. Ambiguous role targets fail closed; locality is pinned by regression tests; no new authority crosses into spine, studio/bus, rendering, storage, jobs or network. Landed directly on top of add0508 in this continuation.",
       "ttl_hours": 24,
       "agent_branch": "",
       "claimed_at": null,

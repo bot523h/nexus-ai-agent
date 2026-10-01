@@ -80,3 +80,23 @@ class ConstraintViolationError(CreativeIRError):
 
 class SerializationError(CreativeIRError):
     """A creative document could not be round-tripped through its canonical form."""
+
+
+class SemanticDiffError(CreativeIRError):
+    """A semantic diff could not be constructed honestly from the supplied data."""
+
+
+class RevisionError(CreativeIRError):
+    """A requested revision cannot be represented as a safe plane transformation."""
+
+
+class RevisionTargetError(RevisionError):
+    """The requested revision target does not exist on the named source work."""
+
+
+class RevisionAmbiguityError(RevisionError):
+    """The requested revision target names more than one possible node."""
+
+
+class UnsupportedRevisionError(RevisionError):
+    """The requested revision operation is outside the typed contract of this slice."""

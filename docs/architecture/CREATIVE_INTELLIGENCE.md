@@ -239,6 +239,29 @@ against the three-second pacing ceiling, and the subject's attention share falls
 just under what a dramatic reveal requires. A semantic layer that always agrees
 with the document is not measuring anything.
 
+### 5.2 Diff and revision stay typed, explicit and local
+
+[`diff.py`](../../src/nexus_ai_agent/creative/intelligence/diff.py) and
+[`revision.py`](../../src/nexus_ai_agent/creative/intelligence/revision.py)
+consume the same sealed identities as the IR itself.
+
+* `diff_works(before, after)` is not a field comparer. It first checks the root
+  identity, prunes any unchanged subtree in O(1), then reports only the semantic
+  edits that remain: scene timing, constraint changes, text/audio/effect intent,
+  attention-share edits and explicit additions/removals.
+* `apply_revision(work, intent)` is not free mutation. A revision carries an
+  explicit typed target (`NodeTarget` or `SceneRoleTarget`) plus a typed change.
+  Ambiguous role targets fail closed with a typed error instead of guessing.
+* Revision and diff are connected by contract: a successful revision yields a
+  new sealed `CreativeWork`, an IR delta, the affected-node list and the
+  semantic diff between the old and new versions.
+* Merkle locality remains the invariant. Unchanged branches keep byte-identical
+  ids, layout-only `track_id` churn does not rewrite authored meaning, and role
+  or constraint matching never falls back to array position or string similarity.
+
+These contracts deliberately stop at the plane boundary: they do no execution,
+no storage, no queueing, no bus calls and no network I/O.
+
 ## 6. Provenance is data
 
 Every element carries an `Origin` — `source` (`user`, `reference`, `strategy`,
@@ -289,12 +312,19 @@ Every rule below is a build failure, not a comment. Enforced by
 | Capability | Status |
 |---|---|
 | Typed Creative IR, validation, identity, canonical serialization | **Implemented and tested** |
-| Semantic layer: phrases → typed constraints, collision detection, declared gaps | **Implemented and tested** (147 plane tests in total: 54 IR, 20 determinism, 41 semantics, 32 boundary) |
+| Semantic layer: phrases → typed constraints, collision detection, declared gaps | **Implemented and tested** |
+| Creative diff | **Implemented and tested** — semantic, lineage-aware, subtree-pruning diff over sealed IR identities |
+| Semantic revision | **Implemented and tested** — typed explicit targets, fail-closed ambiguity, deterministic `revision_id`, IR delta + semantic diff in one contract |
 | Deterministic compiler (IR → plan) | **Deliberately deferred** — see the capability gap below. The gate in §7 keeps its absence visible. |
-| Semantic revision | Not built. The Merkle property it needs is implemented and tested. |
-| Creative diff | Not built. Same dependency, same readiness. |
 | Reference → Creative Recipe | Not built. `Origin.source="recipe"` is reserved for it. |
 | Reachable from a user command | **No.** Nothing outside the plane constructs a `CreativeWork` yet. These slices are a foundation, not a feature. |
+
+Current plane evidence: **177 plane tests green** (`test_creative_ir.py` 55,
+`test_creative_ir_determinism.py` 21, `test_creative_semantics.py` 42,
+`test_creative_diff.py` 4, `test_creative_revision.py` 11,
+`test_creative_intelligence_boundary.py` 44), plus full
+`tests/architecture` **169 passed**, `test_agent_board.py` **18 passed** and
+`test_docs_integrity.py` **59 passed**.
 
 ### 8.1 Why the compiler is deferred
 
@@ -315,7 +345,8 @@ claim.
 
 ## 9. Decision record
 
-See `D-0025` and `D-0026` in [`DECISION_LOG.md`](../DECISION_LOG.md) for the accepted
-decision, the rejected alternatives (a scene-graph over the studio `Project`,
-reusing `rendering/ir.py` as the authoring surface, UUID identities, float
-quantities) and the evidence.
+See `D-0025`, `D-0026` and `D-0027` in [`DECISION_LOG.md`](../DECISION_LOG.md)
+for the accepted decisions, the rejected alternatives (a scene-graph over the
+studio `Project`, reusing `rendering/ir.py` as the authoring surface, UUID
+identities, float quantities, free dict mutation and ambiguity-by-guessing) and
+the evidence.

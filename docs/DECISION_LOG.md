@@ -1826,3 +1826,96 @@ silent failure. No LLM resolver exists — the port for one is the phrase list
 itself. Nothing outside the plane constructs a `CreativeWork`, so the plane
 remains unreachable from any user command.
 
+### D-0027 — Semantic diff and semantic revision are compiler-style transforms over sealed creative nodes, never free mutation
+
+*Problem.* After D-0025 and D-0026 the plane could model and constrain a
+`CreativeWork`, but it still could not answer two core questions deterministically:
+(1) *what changed, semantically, between version A and version B?* and (2) *how
+do we apply a requested edit without falling back to ad-hoc dict mutation,
+string replacement or array-position guessing?* Without a typed diff, review of a
+creative edit collapses back to changed fields. Without a typed revision
+contract, the first caller to "shorten the reveal" or "change the CTA text"
+would be forced to mutate opaque JSON and infer identity from positions — the
+opposite of the plane's Merkle design.
+
+*Decision.*
+1. **Diff and revision are first-class plane contracts, not helper utilities.**
+   `diff_works(before, after)` emits a `WorkDiff` containing an IR delta and a
+   semantic diff. `apply_revision(work, intent)` emits a `RevisionResult`
+   containing the new sealed work, affected nodes, the same IR delta structure
+   and the semantic diff between source and result.
+2. **Diff matches by explicit lineage and stable semantic signatures, never by
+   array position.** A caller may provide `DiffLineage` pairs when a node is
+   expected to keep meaning while receiving a new content-addressed id. Absent an
+   explicit pair, the diff matches by stable semantic signatures inside a node
+   kind and reports additions/removals/modifications explicitly. Unchanged
+   subtrees are pruned at the root-id or child-id level in O(1).
+3. **Revision targets are explicit addresses or explicit role contracts; if that
+   is not enough, fail closed.** `NodeTarget` addresses a live node id directly.
+   `SceneRoleTarget` may use a narrative role plus an optional label
+   disambiguator. If multiple scenes still match, `RevisionAmbiguityError` is
+   raised; the plane never guesses from ordering, string similarity or timing.
+4. **Revisions are typed transforms over typed nodes.** The accepted edits are
+   only those the IR can actually express: scene timing, scene metadata,
+   constraint timing/pacing/quality, layer text, transition intent, audio intent
+   and effect intent. Each transform rebuilds the containing structure, reseals
+   it and then re-runs the plane's own validators. Rejected: free dict mutation,
+   arbitrary JSON patches and textual replacement across canonical JSON.
+5. **Merkle locality is a hard invariant, not a hopeful property.** Sealing now
+   preserves authored order while excluding layout-only `track_id` assignment
+   from layer semantic identity. That keeps track allocation out of authored
+   meaning while still letting actual effect-order changes rewrite identity. The
+   result is the locality revision needs: unrelated subtrees keep byte-identical
+   ids after an edit.
+6. **Semantic reapplication must replace stale resolution, not accumulate it.**
+   `apply_semantics()` now overwrites `brief.unresolved_intents` with the current
+   resolution result. A revision pass therefore does not carry old unresolved
+   phrases forward after the brief changed.
+7. **Structural validation and quality requirements are separate gates.**
+   `QualityConstraint.max_duration_us` is treated as a checkable requirement, not
+   as a structural IR-shape error, so revision and diff can preserve and compare
+   the authored intent before constraint evaluation decides whether it is met.
+
+*Rejected alternatives.* String-replacing in canonical JSON (not typed, not
+local, impossible to authorise correctly). Editing free dicts in place (breaks
+validation, makes identity churn invisible and crosses the model boundary).
+Silently picking the first role match on ambiguity (creates hidden, unauditable
+scene swaps). Treating array index, timestamp or track number as semantic
+identity (breaks Merkle locality the moment layout changes). Emitting only field
+names from diff (reviewers need meaning, not implementation trivia).
+
+*Defects the gates caught in this slice, all fixed here.* `Layer.semantics`
+carried `track_id`, so layout reassignment rewrote authored identity; it is now
+excluded from the sealed semantic payload and a determinism test pins that.
+Scene/layer/track resealing originally sorted children, which weakens locality
+for authored order; sealing now preserves order and a regression pins effect
+stack order as semantic. `apply_semantics()` used to union unresolved phrases,
+which preserved stale failures after a later successful pass. `QualityConstraint`
+`max_duration_us` was being treated as a structural validation error instead of a
+constraint violation. The creative-intelligence boundary test also hardcoded its
+submodule allowlist and was updated to resolve fully-qualified imports by rule.
+
+*Evidence.* 177 plane tests green: `tests/unit/test_creative_ir.py` 55,
+`tests/unit/test_creative_ir_determinism.py` 21,
+`tests/unit/test_creative_semantics.py` 42,
+`tests/unit/test_creative_diff.py` 4,
+`tests/unit/test_creative_revision.py` 11,
+`tests/architecture/test_creative_intelligence_boundary.py` 44. Full
+`tests/architecture` 169 passed. `tests/unit/test_agent_board.py` 18 passed and
+`tests/unit/test_docs_integrity.py` 59 passed. `ruff check`,
+`ruff format --check` and `mypy src/nexus_ai_agent/creative/intelligence`
+clean. Determinism is proven in fresh interpreters under
+`PYTHONHASHSEED=0,1,12345,999` for resulting work id, revision id, canonical JSON
+and diff digest. Three temporary mutation probes were killed by the targeted
+regression tests and then reverted: removing transition lineage normalisation
+breaks `test_an_edited_scene_does_not_report_adjacent_transitions_as_modified`,
+silently resolving an ambiguous role target breaks
+`test_ambiguous_role_target_fails_closed`, and making layer retiming a no-op
+breaks `test_scene_duration_revision_is_typed_and_deterministic`.
+
+*Honest limits.* The plane can now diff and revise only the typed concepts it
+already models. It still does not compile to an executable plan, does not decide
+where a style target should land, does not infer ambiguous intent with an LLM,
+and remains unreachable from any user command because nothing outside the plane
+constructs a `CreativeWork` yet.
+
