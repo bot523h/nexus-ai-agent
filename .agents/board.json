@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-01T20:35:02Z",
+  "updated_at": "2026-10-01T20:39:03Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -669,7 +669,8 @@
         "tests/unit/test_creative_ir_determinism.py",
         "tests/architecture/test_creative_intelligence_boundary.py",
         "docs/architecture/CREATIVE_INTELLIGENCE.md",
-        "tests/unit/test_creative_semantics.py"
+        "tests/unit/test_creative_semantics.py",
+        "tests/unit/test_creative_diff.py"
       ],
       "note": "2026-10-01 arena/01a0f906-nexus-ai-agent: declared from main @ e5b326b. Deliberately disjoint from creative/spine/ (exclusive zone of the open PR #126 / PR #127 lineage), creative/studio/bus.py (Jules, PR #129), creative/rendering/ (nagar-render-lane) and storage/ (recovery owner). | 2026-10-01 zone extended to the shared IR testkit module (same flat-helper convention as tests/unit/ed25519_testkit.py and tests/unit/surface_fakes.py) so the three IR test modules build documents through one code path instead of three. | 2026-10-01 zone extended to the semantic layer (semantics.py) and its test module; still disjoint from spine/, studio/bus.py, rendering/, storage/."
     }
@@ -2848,6 +2849,44 @@
         "src/nexus_ai_agent/creative/intelligence/",
         "tests/unit/test_creative_semantics.py"
       ]
+    },
+    {
+      "task": "task-226-creative-diff",
+      "title": "Creative diff: state the difference between two creative versions in meaning, not in changed fields",
+      "title_fa": "دیف خلاقانه: بیان تفاوت دو نسخهٔ خلاقانه به زبان معنا، نه فیلدهای تغییرکرده",
+      "zone": "creative-intelligence-plane",
+      "priority": "P1",
+      "status": "active",
+      "scope": "PR-3 of the Creative Intelligence Plane. Takes the slot the deferred compiler would have taken. diff_works(before, after) walks the Merkle tree, prunes every subtree whose identity is unchanged in O(1), matches elements across versions by stable structural keys, and emits semantic statements ('pacing increased', 'the reveal got shorter', 'the subject lost attention share') rather than 'field X changed'. This is the substrate semantic revision needs in order to report what it did.",
+      "scope_fa": "PR-۳ از Creative Intelligence Plane. تفاوت دو نسخه را به زبان معنا بیان می‌کند.",
+      "prerequisites": [
+        "task-225-creative-semantics"
+      ],
+      "acceptance_criteria": [
+        "Identical documents diff to nothing, in O(1) via the root identity",
+        "An unchanged subtree is pruned by identity, never walked element by element",
+        "A change confined to one scene reports that scene and nothing else",
+        "Elements are matched across versions by stable structural keys, so a modified scene reads as MODIFIED rather than as one removal plus one addition",
+        "The diff states meaning: duration, pacing, emphasis share, resolution, constraints - not only field names",
+        "Additions, removals and modifications are all distinguishable and each carries the identity it refers to",
+        "diff is deterministic and symmetric in the sense that swapping arguments inverts additions and removals",
+        "The module stays inside the plane boundary; the architecture suite still passes",
+        "ruff / mypy clean on every changed file",
+        "agent_board.py check exits 0"
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_creative_diff.py",
+        "pytest -q on the whole plane suite (zero regression from 147)",
+        "pytest -q tests/architecture (zero regression from 157)",
+        "ruff / mypy clean",
+        "agent_board.py check exit 0"
+      ],
+      "evidence": [],
+      "note": "",
+      "ttl_hours": 24,
+      "agent_branch": "arena/01a0f906-nexus-ai-agent",
+      "claimed_at": "2026-10-01T20:39:03Z",
+      "gates_owner": false
     }
   ],
   "deferred_log": [
