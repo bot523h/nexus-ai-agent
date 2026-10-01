@@ -73,7 +73,7 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "failed_plan_keeps_the_steps_it_already_committed",
         SPINE / "execution.py",
-        "            self._rollback(intent, len(results), artifact_nodes)\n            raise",
+        "            self._rollback(intent, committed_transactions, artifact_nodes)\n            raise",
         "            raise  # mutation: no rollback, the half-applied plan stands",
         "a refused later step must roll back the steps already committed",
     ),
@@ -83,6 +83,20 @@ MUTATIONS: tuple[Mutation, ...] = (
         "        for node_id in reversed(artifact_nodes):\n            self._graph.remove_node(node_id)",
         "        for node_id in []:\n            self._graph.remove_node(node_id)",
         "a rolled-back run must not leave artifact nodes in the graph",
+    ),
+    Mutation(
+        "rollback_ignores_transaction_identity",
+        SPINE / "execution.py",
+        "                newest = self._newest_editable_transaction_id()\n                if newest != expected:",
+        "                newest = expected  # mutation: always assume the newest is ours\n                if newest != expected:",
+        "a rollback must refuse when the newest transaction is a foreign edit",
+    ),
+    Mutation(
+        "duplicate_delivery_reapplies_the_plan",
+        SPINE / "execution.py",
+        "        cached = self._completed.get(intent.intent_id)\n        if cached is not None:",
+        "        cached = None  # mutation: no exactly-once replay\n        if cached is not None:",
+        "a duplicate delivery of an intent must not mutate the project twice",
     ),
 )
 
