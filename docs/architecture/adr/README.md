@@ -18,6 +18,7 @@ This directory holds **decisions about how the architecture documentation and it
 | [0004](0004-board-schema-2.md) | Coordination board schema 2: declared prerequisites and acceptance criteria | accepted | 2026-09-21 |
 | [0005](0005-canonical-command-capability-contract.md) | Canonical command and capability contract: versioning, location, and reconciliation | accepted | 2026-09-24 |
 | [0006](0006-capability-pack-trust-root.md) | Capability packs get an explicit trust root, not a self-asserted one | accepted | 2026-09-27 |
+| [0012](0012-board-composition-and-evidence-governance.md) | Board composition preflight, cited-evidence resolver, executable governance invariants | accepted | 2026-10-01 |
 
 ## Rules
 
@@ -26,3 +27,4 @@ This directory holds **decisions about how the architecture documentation and it
 3. An ADR here must not restate a `DECISION_LOG.md` decision; it links to it.
 4. `tests/unit/test_docs_integrity.py` fails if an ADR file exists that is not in the index above, or if an index entry points at a missing file.
 5. Statuses: `proposed` → `accepted` → (`deprecated` | `superseded by ADR-XXXX`).
+6. **Number allocation is by highest-visible, not next-in-file.** Before adding an ADR, take the highest number visible on *any* open branch (`git ls-tree` over `refs/remotes/origin`), not merely the highest on `main`. On 2026-10-01 four parallel branches each independently created a `0007-*` file; a number reused by two live branches is a merge-time collision the index test cannot see (it only checks the merged tree).

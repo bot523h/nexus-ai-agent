@@ -79,11 +79,36 @@ python scripts/agent_board.py claim TASK --branch BR [--ttl 24] [--gates]
 python scripts/agent_board.py release TASK --branch BR
 python scripts/agent_board.py defer TASK --branch BR --fa "…" --resume-when "…"
 python scripts/agent_board.py check --files "src/a.py,src/b.py" --branch BR   # referee
+python scripts/agent_board.py validate [--strict-new] [--json]               # governance invariants
+python scripts/agent_board.py collision --refs A,B[,C…] [--base BRANCH] [--fail-on-collision]
+python scripts/agent_board.py evidence --ref SHA --names test_a,test_b [--fail-on-missing]
 ```
 
 `check` exits `1` when any listed file overlaps another branch's **active**
 `exclusive_paths` — wire it into a pre-push hook or a CI job; either way it is the
 mechanical answer to "may I push this?"
+
+`collision` is the *composition* preflight. `check` answers "may I push this
+file?", which is not enough: two independently correct PRs can still merge into
+one broken file. Given two or more refs, it computes each pair's merge base and
+classifies the overlap from git objects only (it never merges or resolves):
+
+| Classification | Meaning |
+|---|---|
+| `SAFE_INDEPENDENT` | no shared file beyond the coordination file (`.agents/board.json`, `AGENTS.md`) |
+| `SAFE_OVERLAP` | a shared file merges cleanly (`git merge-file` finds no conflict hunk) |
+| `REQUIRES_MANUAL_RECONCILIATION` | a shared file has ≥1 conflict hunk |
+| `SECURITY_SENSITIVE_COLLISION` | any of the above, but the file belongs to a security-sensitive board zone (`security`/`gate`/`contract`/`trust`/`auth`) |
+
+`stacked` is reported per pair but is informational: two PRs on the same lineage
+still need to merge cleanly, so stacking does not lower the classification. The
+report is deterministic (no set-iteration order leaks) and the command exits `1`
+under `--fail-on-collision` when any pair is dangerous.
+
+`evidence` closes the "prose cites a test that never existed" gap: a claimed test
+name is either present in the tree at `--ref` (as `tests/**/NAME.py` or
+`def NAME(`) or it is not, so a PR body can be checked mechanically instead of
+trusted.
 
 ## 5. Failure modes and how the protocol absorbs them
 
@@ -93,6 +118,10 @@ mechanical answer to "may I push this?"
 | Agent dies mid-task without releasing | Lease expires after TTL → `gc` frees the zone; the `deferred_log` and `scope` fields preserve intent. |
 | Agent works from a stale clone | `check` against a fresh `pull` of `main`/board before push; CI overlap check is the backstop. |
 | Someone ignores the board | The PR referee (`check`) and code review reject the overlap; the board is also the first thing `AGENTS.md` orders every agent to read. |
+| Two correct PRs merge into one broken file | `collision` preflight classifies the pair and exits `1` on a security-sensitive or conflict-hunk overlap. |
+| A PR body cites a test that does not exist | `evidence --ref <head> --names …` resolves every cited name against the tree. |
+| A claimable task has no `evidence_required` | `claim` refuses it, and `validate` reports it (ERROR for `next_work`/active claims, WARN for grandfathered legacy). |
+| Zero or many `gates_owner` holders | `validate` fails the `gates_owner` cardinality invariant unless exactly one active claim holds it. |
 
 ## 6. Extending
 

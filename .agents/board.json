@@ -1814,7 +1814,11 @@
       "claimed_at": "2026-09-27T12:27:18Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "exclusive_paths": []
+      "exclusive_paths": [],
+      "evidence_required": [
+        "CI run URL where scripts/pack_coverage.py reports per-pack coverage",
+        "the exact pack_coverage.py command + output showing pending counts per pack"
+      ]
     },
     {
       "task": "task-155-packs-doctor",
@@ -2770,7 +2774,6 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "exclusive_paths": [
-        "scripts/agent_board.py",
         "tests/unit/test_agent_board_governance.py"
       ],
       "prerequisites": [],
@@ -2841,7 +2844,12 @@
       "exclusive_paths": [
         ".github/workflows/maintenance.yml"
       ],
-      "status_note": "repo-side verifiability delivered by task-167 (verified backup contract, round-trip byte identity, restore-into-temp-SQLite verification); what remains is owner-secrets configuration + one real green dispatch"
+      "status_note": "repo-side verifiability delivered by task-167 (verified backup contract, round-trip byte identity, restore-into-temp-SQLite verification); what remains is owner-secrets configuration + one real green dispatch",
+      "evidence_required": [
+        "manual workflow_dispatch run of maintenance/backup-db → SUCCESS with an object under backups/ in R2 (sha256/verified/timestamp in the step log)",
+        "NEXUS_R2_* secrets configured in GitHub Actions (owner-side)",
+        "the next scheduled cron run → SUCCESS"
+      ]
     },
     {
       "id": "task-124",
@@ -2863,6 +2871,11 @@
         "src/nexus_ai_agent/memory/",
         "src/nexus_ai_agent/features/rag.py",
         "tests/unit/test_audit_remainder.py"
+      ],
+      "evidence_required": [
+        "ONE-OWNER test: engines wired through the single bus owner (exact pytest -q count)",
+        "graph-memory write path round-trip test with exact counts",
+        "ruff check + mypy on the touched modules"
       ]
     },
     {
@@ -2882,7 +2895,12 @@
         "src/nexus_ai_agent/bot/surface/",
         "src/nexus_ai_agent/features/"
       ],
-      "status_note": "delivered via PR#47 (forensic triage docs/audits/PR32_TRIAGE_2026-09-21.md + port-forward)"
+      "status_note": "delivered via PR#47 (forensic triage docs/audits/PR32_TRIAGE_2026-09-21.md + port-forward)",
+      "evidence_required": [
+        "git merge-base/ancestry transcript proving PR#32 rebased onto current main",
+        "pytest -q for the deduped files (exact counts)",
+        "`agent_board collision --refs <PR32 head>,<main>` → SAFE_INDEPENDENT"
+      ]
     },
     {
       "id": "task-123",
@@ -2896,7 +2914,12 @@
         "CI سبز"
       ],
       "prerequisites": [],
-      "exclusive_paths": []
+      "exclusive_paths": [],
+      "evidence_required": [
+        "PR#33 diff shows only the intended files (no cli.py lock held)",
+        "pytest -q on the touched files (exact counts)",
+        "`agent_board check --files ... --branch <pr33 branch>` exit 0"
+      ]
     },
     {
       "id": "task-121",
@@ -2915,6 +2938,10 @@
       "exclusive_paths": [
         "src/nexus_ai_agent/creative/packs/delivery/",
         "tests/unit/test_otio_interop.py"
+      ],
+      "evidence_required": [
+        "OTIO marker round-trip test with exact pytest -q counts",
+        "ruff check + mypy on the touched modules"
       ]
     },
     {
@@ -2934,6 +2961,10 @@
       "exclusive_paths": [
         "src/nexus_ai_agent/core/async_db.py",
         "src/nexus_ai_agent/features/"
+      ],
+      "evidence_required": [
+        "async DB engine + 2 pilots + architecture guard tests (exact pytest -q counts)",
+        "ruff check + mypy on the touched modules"
       ]
     },
     {
@@ -2951,6 +2982,10 @@
       "exclusive_paths": [
         "tests/unit/test_optional_extras.py",
         ".github/"
+      ],
+      "evidence_required": [
+        "CI job matrix for [speech]/[translate]/[pdf]/[local-llm] extras with the run URLs",
+        "the extras_matrix harness output"
       ]
     },
     {
@@ -2976,7 +3011,11 @@
       "zone": "p0-stabilization",
       "title": "Remove the legacy /creative/* HTTP lane (D-0010 reopen clause) after PR#58 lands",
       "title_fa": "حذف مسیر قدیمی /creative/* بعد از ادغام PR#58",
-      "why_fa": "AD-0010: مسیر legacy فقط برای عدم برخورد با رفع SSRF درحال انجام (PR#58) نگه داشته شده؛ بعد از مرج باید حذف شود تا یک مسیر اجرایی Creative یگانه بماند."
+      "why_fa": "AD-0010: مسیر legacy فقط برای عدم برخورد با رفع SSRF درحال انجام (PR#58) نگه داشته شده؛ بعد از مرج باید حذف شود تا یک مسیر اجرایی Creative یگانه بماند.",
+      "evidence_required": [
+        "PR head SHA + main SHA + CI check-run URLs",
+        "pytest -q on the touched files (exact counts)"
+      ]
     },
     {
       "acceptance_criteria": [
@@ -2997,7 +3036,11 @@
       "zone": "creative-runtime",
       "title": "Lane instruments for LUT (color.apply_lut) and subtitles (caption.burn_in) so the refused surface ops can enter the matrix",
       "title_fa": "ابزارهای lane برای LUT و subtitles تا دو عمل ردشدهٔ surface وارد ماتریس واقعی شوند",
-      "why_fa": "D-0011: lut/burnin به دلیل نبود مسیر اجرای صادقانه (بدون .cube shipped و بدون subtitles op در lane IR) typed refuse می‌شوند؛ با ابزار واقعی lane قابل برگشت‌اند."
+      "why_fa": "D-0011: lut/burnin به دلیل نبود مسیر اجرای صادقانه (بدون .cube shipped و بدون subtitles op در lane IR) typed refuse می‌شوند؛ با ابزار واقعی lane قابل برگشت‌اند.",
+      "evidence_required": [
+        "PR head SHA + main SHA + CI check-run URLs",
+        "pytest -q on the touched files (exact counts)"
+      ]
     },
     {
       "acceptance_criteria": [
@@ -3015,7 +3058,11 @@
       "zone": "p0-stabilization",
       "title": "Staging smoke of /edit /caption /grade against the live bot (PTB runtime)",
       "title_fa": "اسموک استیجینگ سه فرمان creative روی ربات زنده",
-      "why_fa": "زنجیره در سطح unit/integration با artifact واقعی اثبات شده؛ اثبات نهایی کاربر-واقعی به کانتکست PTB زنده و توکن استیجینگ نیاز دارد (external dependency)."
+      "why_fa": "زنجیره در سطح unit/integration با artifact واقعی اثبات شده؛ اثبات نهایی کاربر-واقعی به کانتکست PTB زنده و توکن استیجینگ نیاز دارد (external dependency).",
+      "evidence_required": [
+        "PR head SHA + main SHA + CI check-run URLs",
+        "pytest -q on the touched files (exact counts)"
+      ]
     }
   ],
   "history": {
