@@ -1,0 +1,137 @@
+"""Creative Intelligence Plane -- the layer that turns meaning into a plan.
+
+This package owns one slice of the pipeline and nothing else:
+
+``INTENT -> UNDERSTANDING -> STRATEGY -> TYPED CREATIVE IR -> COMPILATION ->
+EXECUTABLE PLAN -> COMMAND BUS -> EXECUTION``
+
+It owns the four boxes from ``INTENT`` to ``EXECUTABLE PLAN``. It does **not**
+own the last two. Concretely, this package must never:
+
+* execute anything -- no ``subprocess``, no file or network I/O;
+* touch the CommandBus, ``PlanTransaction``, undo, locks or idempotency (owned
+  by the Canonical Creative Execution Substrate);
+* initialise storage, databases, backups or recovery (owned by the Persistent
+  Recovery Substrate).
+
+The plane *proposes*; authority to execute belongs elsewhere. The boundary is
+enforced by ``tests/architecture/test_creative_intelligence_boundary.py``, which
+fails the build on a forbidden import rather than trusting this docstring.
+
+Current slice (task-224): :mod:`nexus_ai_agent.creative.intelligence.ir` -- the
+Typed Creative IR. Later slices (semantic layer, deterministic compiler,
+semantic revision, reference recipe) are defined against it, which is exactly
+why it lands first.
+"""
+
+from __future__ import annotations
+
+from nexus_ai_agent.creative.intelligence.errors import (
+    ConstraintViolationError,
+    CreativeIRError,
+    DanglingReferenceError,
+    IdentityError,
+    IRValidationError,
+    SerializationError,
+    TimingError,
+)
+from nexus_ai_agent.creative.intelligence.identity import (
+    IR_VERSION,
+    MICROSECONDS_PER_SECOND,
+    IRVersion,
+    canonical_json,
+    content_id,
+    sealed_id,
+)
+from nexus_ai_agent.creative.intelligence.ir import (
+    Asset,
+    AssetKind,
+    AudioIntent,
+    Constraint,
+    ConstraintKind,
+    ConstraintSpec,
+    ConstraintTarget,
+    CreativeBrief,
+    CreativeWork,
+    Effect,
+    EffectFamily,
+    EffectParam,
+    EmphasisConstraint,
+    ExclusionConstraint,
+    Layer,
+    LayerContent,
+    MediaContent,
+    NarrativeRole,
+    OrderConstraint,
+    Origin,
+    OutputRequirement,
+    Priority,
+    QualityConstraint,
+    Scene,
+    Segment,
+    SemanticRole,
+    StyleIntent,
+    TextContent,
+    TextSpec,
+    Timing,
+    TimingConstraint,
+    Track,
+    Transition,
+    TransitionKind,
+    TypographicStyle,
+    Violation,
+    seal_work,
+)
+
+__all__ = [
+    "IR_VERSION",
+    "IRVersion",
+    "MICROSECONDS_PER_SECOND",
+    "Asset",
+    "AssetKind",
+    "AudioIntent",
+    "Constraint",
+    "ConstraintKind",
+    "ConstraintSpec",
+    "ConstraintTarget",
+    "ConstraintViolationError",
+    "CreativeBrief",
+    "CreativeIRError",
+    "CreativeWork",
+    "DanglingReferenceError",
+    "Effect",
+    "EffectFamily",
+    "EffectParam",
+    "EmphasisConstraint",
+    "ExclusionConstraint",
+    "IRValidationError",
+    "IdentityError",
+    "Layer",
+    "LayerContent",
+    "MediaContent",
+    "NarrativeRole",
+    "OrderConstraint",
+    "Origin",
+    "OutputRequirement",
+    "Priority",
+    "QualityConstraint",
+    "Scene",
+    "Segment",
+    "SemanticRole",
+    "SerializationError",
+    "StyleIntent",
+    "TextContent",
+    "TextSpec",
+    "Timing",
+    "TimingConstraint",
+    "TimingError",
+    "Track",
+    "Transition",
+    "TransitionKind",
+    "TypographicStyle",
+    "Violation",
+    "canonical_json",
+    "content_id",
+    "sealed_id",
+    "seal_work",
+]
