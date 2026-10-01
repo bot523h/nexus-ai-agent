@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-01T05:12:03Z",
+  "updated_at": "2026-10-01T20:10:56Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3027,7 +3027,7 @@
     {
       "task": "task-190-sqlite-wal-init-race",
       "zone": "storage-observability",
-      "status": "available",
+      "status": "active",
       "title": "SQLite first-use WAL init races under concurrent first use (CI flake: 'database is locked' on PRAGMA journal_mode=WAL)",
       "title_fa": "مسابقهٔ مقداردهی WAL در اولین استفادهٔ هم‌زمان SQLite (فلیک CI: database is locked روی PRAGMA journal_mode=WAL)",
       "why_fa": "create_all_tables یک بار به ازای هر مسیر محافظت می‌شود (_initialized_paths) اما خودِ مقداردهی از چند تسک/process هم‌زمان بی‌محافظت است؛ دو مقداردهی هم‌زمان WAL یک‌دیگر را قفل می‌کنند و یکی با sqlite3.OperationalError: database is locked شکست می‌خورد.",
@@ -3041,7 +3041,12 @@
       "exclusive_paths": [
         "src/nexus_ai_agent/storage/db.py"
       ],
-      "note": "Filed by task-223 from live CI forensics; unclaimed, owner zone storage-observability."
+      "note": "",
+      "agent_branch": "arena/01a0181931-task190-wal-init-race",
+      "claimed_at": "2026-10-01T20:10:56Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1
     }
   ],
   "deferred_log": [
