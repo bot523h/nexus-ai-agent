@@ -226,6 +226,72 @@ class TestPlanTransactionSuite:
         assert undo_a_res.output["undone_transaction_count"] == 2
         assert bus.project.timeline.markers == []
 
+    def test_undo_plan_via_transaction_id(self, bus: CommandBus) -> None:
+        """system.undo using PlanExecutionResult.transaction_id rewinds all steps of the plan."""
+        cmd1 = make_command(
+            "timeline.mark", "cmd_tx_1", input={"at": "اینجا", "label": "Tx Mark 1"}
+        )
+        cmd2 = make_command(
+            "timeline.mark", "cmd_tx_2", input={"at": "اینجا", "label": "Tx Mark 2"}
+        )
+        plan = PlanTransaction(plan_id="plan_tx_id_test", commands=(cmd1, cmd2))
+
+        plan_res = bus.dispatch_plan(plan)
+        assert len(bus.project.timeline.markers) == 2
+
+        # Undo using plan_res.transaction_id
+        undo_cmd = make_command(
+            "system.undo", "cmd_undo_tx", input={"transaction_id": plan_res.transaction_id}
+        )
+        undo_res = bus.dispatch(undo_cmd)
+        assert undo_res.output["undone_plan_id"] == "plan_tx_id_test"
+        assert undo_res.output["undone_transaction_count"] == 2
+        assert bus.project.timeline.markers == []
+
+    def test_plain_system_undo_rewinds_top_plan_atomically(self, bus: CommandBus) -> None:
+        """Plain system.undo (no args) rewinds the entire top plan transaction, not just step 2."""
+        cmd1 = make_command("timeline.mark", "cmd_p1", input={"at": "اینجا", "label": "P1 Mark 1"})
+        cmd2 = make_command("timeline.mark", "cmd_p2", input={"at": "اینجا", "label": "P1 Mark 2"})
+        plan = PlanTransaction(plan_id="plan_plain_undo", commands=(cmd1, cmd2))
+
+        bus.dispatch_plan(plan)
+        assert len(bus.project.timeline.markers) == 2
+
+        # Plain system.undo
+        undo_cmd = make_command("system.undo", "cmd_undo_plain")
+        undo_res = bus.dispatch(undo_cmd)
+        assert undo_res.output["undone_plan_id"] == "plan_plain_undo"
+        assert undo_res.output["undone_transaction_count"] == 2
+        assert bus.project.timeline.markers == []
+
+    def test_command_idempotency_inside_plan_does_not_index_error(self, bus: CommandBus) -> None:
+        """Command idempotency hit inside plan returns cached result without index crash."""
+        cmd1 = make_command(
+            "timeline.mark",
+            "cmd_idem_1",
+            input={"at": "اینجا", "label": "Idem Mark"},
+            idempotency_key="inner-cmd-key",
+        )
+        # First plan executes cmd1 with idempotency key
+        plan1 = PlanTransaction(plan_id="plan_idem_1", commands=(cmd1,))
+        bus.dispatch_plan(plan1)
+
+        # Second plan includes cmd1 with SAME idempotency key + cmd2
+        cmd1_repeat = make_command(
+            "timeline.mark",
+            "cmd_idem_1_dup",
+            input={"at": "اینجا", "label": "Idem Mark"},
+            idempotency_key="inner-cmd-key",
+        )
+        cmd2 = make_command(
+            "timeline.mark", "cmd_idem_2", input={"at": "اینجا", "label": "New Mark"}
+        )
+        plan2 = PlanTransaction(plan_id="plan_idem_2", commands=(cmd1_repeat, cmd2))
+
+        res2 = bus.dispatch_plan(plan2)
+        assert len(res2.results) == 2
+        assert len(bus.project.timeline.markers) == 2
+
     def test_command_idempotency_propagation_from_plan(self, bus: CommandBus) -> None:
         """Command-level idempotency keys reserved during plan dispatch persist on bus."""
         cmd1 = make_command(

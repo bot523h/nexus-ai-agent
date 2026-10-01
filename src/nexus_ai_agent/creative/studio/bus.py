@@ -279,12 +279,14 @@ class CommandBus:
         self._executing = True
         try:
             for cmd in plan.commands:
+                before_len = len(staged_bus._history)
                 res = staged_bus._dispatch_locked(cmd)
                 command_results.append(res)
-                last_tx = staged_bus._history[-1]
-                bound_tx = last_tx.model_copy(update={"plan_id": plan.plan_id})
-                staged_bus._history[-1] = bound_tx
-                new_transactions.append(bound_tx)
+                after_len = len(staged_bus._history)
+                for i in range(before_len, after_len):
+                    bound_tx = staged_bus._history[i].model_copy(update={"plan_id": plan.plan_id})
+                    staged_bus._history[i] = bound_tx
+                    new_transactions.append(bound_tx)
         except Exception:
             if plan.idempotency_key is not None:
                 self._idempotency.pop(key, None)
@@ -292,7 +294,7 @@ class CommandBus:
         finally:
             self._executing = False
 
-        plan_tx_id = f"plan_tx_{uuid4().hex}"
+        plan_tx_id = f"plan_tx_{plan.plan_id}_{uuid4().hex[:8]}"
         final_project = staged_bus.project
 
         plan_result = PlanExecutionResult(

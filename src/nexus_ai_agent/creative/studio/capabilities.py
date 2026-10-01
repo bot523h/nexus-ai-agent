@@ -512,6 +512,42 @@ def _system_undo(project: Project, context: OperationContext) -> OperationOutcom
         )
 
     if target_tx_id is not None:
+        # Check if target_tx_id refers to a plan transaction or a specific transaction_id
+        matching_plan_ids = {
+            tx.plan_id
+            for tx in history
+            if tx.plan_id is not None
+            and (
+                target_tx_id == f"plan_tx_{tx.plan_id}"
+                or target_tx_id.startswith(f"plan_tx_{tx.plan_id}_")
+            )
+        }
+        if matching_plan_ids:
+            p_id = next(iter(matching_plan_ids))
+            plan_indices = [i for i, tx in enumerate(history) if tx.plan_id == p_id]
+            max_idx = max(plan_indices)
+            min_idx = min(plan_indices)
+            for idx in range(max_idx + 1, len(history)):
+                if history[idx].operation != "system.undo" and history[idx].plan_id != p_id:
+                    other_id = history[idx].plan_id or history[idx].transaction_id
+                    raise CommandExecutionError(
+                        f"cannot undo plan {p_id!r}: subsequent transactions "
+                        f"from {other_id!r} exist on history stack"
+                    )
+
+            earliest_tx = history[min_idx]
+            restored = Project.model_validate(earliest_tx.state_before)
+            remaining = tuple(tx for i, tx in enumerate(history) if i not in plan_indices)
+            return OperationOutcome(
+                restored,
+                remaining,
+                {
+                    "undone_plan_id": p_id,
+                    "undone_transaction_count": len(plan_indices),
+                    "restored_state_hash": earliest_tx.previous_state_hash,
+                },
+            )
+
         tx_idx = None
         for i in range(len(history) - 1, -1, -1):
             if history[i].transaction_id == target_tx_id:
@@ -553,6 +589,23 @@ def _system_undo(project: Project, context: OperationContext) -> OperationOutcom
         )
 
     last = history[target_index]
+    if last.plan_id is not None:
+        p_id = last.plan_id
+        plan_indices = [i for i, tx in enumerate(history) if tx.plan_id == p_id]
+        min_idx = min(plan_indices)
+        earliest_tx = history[min_idx]
+        restored = Project.model_validate(earliest_tx.state_before)
+        remaining = tuple(tx for i, tx in enumerate(history) if i not in plan_indices)
+        return OperationOutcome(
+            restored,
+            remaining,
+            {
+                "undone_plan_id": p_id,
+                "undone_transaction_count": len(plan_indices),
+                "restored_state_hash": earliest_tx.previous_state_hash,
+            },
+        )
+
     restored = Project.model_validate(last.state_before)
     remaining = history[:target_index] + history[target_index + 1 :]
     return OperationOutcome(

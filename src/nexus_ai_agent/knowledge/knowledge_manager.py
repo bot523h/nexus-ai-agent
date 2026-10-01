@@ -200,7 +200,7 @@ class KnowledgeManager:
                 select(KnowledgeCache)
                 .where(
                     col(KnowledgeCache.query) == key,
-                    col(KnowledgeCache.expires_at) > utcnow(),
+                    col(KnowledgeCache.expires_at) > naive_utcnow(),
                 )
                 .order_by(col(KnowledgeCache.expires_at).desc())
                 .limit(1)
@@ -223,7 +223,7 @@ class KnowledgeManager:
                 select(KnowledgeCache)
                 .where(
                     col(KnowledgeCache.query) == key,
-                    col(KnowledgeCache.expires_at) > utcnow(),
+                    col(KnowledgeCache.expires_at) > naive_utcnow(),
                 )
                 .order_by(col(KnowledgeCache.expires_at).desc())
                 .limit(1)
@@ -262,7 +262,7 @@ class KnowledgeManager:
                     query=key,
                     source=source_label,
                     content=content,
-                    expires_at=utcnow() + CACHE_TTL,
+                    expires_at=naive_utcnow() + CACHE_TTL,
                 )
             )
             await session.commit()
