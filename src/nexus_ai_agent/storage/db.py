@@ -22,6 +22,11 @@ _engine: Any | None = None
 _engine_path: str | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 _initialized_paths: set[str] = set()
+# Seconds a SQLite connection waits for a competing lock before raising
+# SQLITE_BUSY. The default (5s in the sqlite3 stdlib) is applied only to the
+# database lock; it does not cover the one-time ``PRAGMA journal_mode=WAL``
+# transition, which is retried explicitly below.
+_SQLITE_BUSY_TIMEOUT_SECONDS = 30.0
 # Engines retired when the SQLite path changes.  Disposing an engine requires
 # an event loop, while _get_engine is synchronous, so retired engines are
 # closed by the next async database operation (see _dispose_replaced_engines).
@@ -199,7 +204,14 @@ def _get_engine(db_path: str) -> Any:
             # that created them.
             _replaced_engines.append(_engine)
             _engine = None
-        _engine = create_async_engine(f"sqlite+aiosqlite:///{normalized_path}", echo=False)
+        _engine = create_async_engine(
+            f"sqlite+aiosqlite:///{normalized_path}",
+            echo=False,
+            # Wait out ordinary statement contention instead of surfacing
+            # SQLITE_BUSY.  This does *not* cover the one-time WAL transition,
+            # which is retried explicitly in _set_wal_mode.
+            connect_args={"timeout": _SQLITE_BUSY_TIMEOUT_SECONDS},
+        )
         _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
         _engine_path = normalized_path
     return _engine
@@ -262,6 +274,43 @@ async def create_all_metadata(engine: Any, metadata: MetaData) -> None:
     raise RuntimeError("unreachable: create_all_metadata retry loop exhausted")  # pragma: no cover
 
 
+def _is_locked(exc: Exception) -> bool:
+    """Whether ``exc`` is SQLite's transient ``database is locked`` (SQLITE_BUSY).
+
+    Switching a fresh database into WAL needs a brief exclusive lock; two
+    callers booting at once race for it and the loser sees SQLITE_BUSY. That is
+    benign contention -- the winner performed the transition -- so the pragma is
+    retried rather than surfaced.
+    """
+    return "locked" in str(getattr(exc, "orig", exc)).lower()
+
+
+async def _set_wal_mode(engine: Any) -> None:
+    """Set ``journal_mode=WAL`` on a fresh database, tolerating a concurrent setter.
+
+    The busy timeout on the connection covers ordinary statement contention but
+    not this transition, which can still raise SQLITE_BUSY while another caller
+    holds the exclusive lock.  A bounded retry absorbs that window; anything
+    that is not a lock conflict propagates on the first attempt.
+    """
+    for attempt in range(1, _CREATE_ALL_ATTEMPTS + 1):
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text("PRAGMA journal_mode=WAL"))
+            return
+        except OperationalError as exc:
+            if attempt >= _CREATE_ALL_ATTEMPTS or not _is_locked(exc):
+                raise
+            log.warning(
+                "WAL transition contended (%s); retry %d/%d",
+                str(getattr(exc, "orig", exc)).splitlines()[0],
+                attempt,
+                _CREATE_ALL_ATTEMPTS - 1,
+            )
+            await asyncio.sleep(0.1 * attempt)
+    raise RuntimeError("unreachable: WAL retry loop exhausted")  # pragma: no cover
+
+
 async def create_all_tables(db_path: str = "data/app.sqlite") -> None:
     """Create all SQLModel tables for the selected database, exactly once per path."""
     await _dispose_replaced_engines()
@@ -270,8 +319,7 @@ async def create_all_tables(db_path: str = "data/app.sqlite") -> None:
     if normalized_path in _initialized_paths:
         return
 
-    async with engine.begin() as conn:
-        await conn.execute(text("PRAGMA journal_mode=WAL"))
+    await _set_wal_mode(engine)
     await create_all_metadata(engine, SQLModel.metadata)
     _initialized_paths.add(normalized_path)
 
