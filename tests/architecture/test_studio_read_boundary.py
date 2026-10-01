@@ -26,7 +26,11 @@ def test_product_read_surface_has_no_storage_or_execution_imports() -> None:
         "nexus_ai_agent.creative.studio.bus",
         "nexus_ai_agent.creative.rendering.executor",
     }
-    assert not any(item in imports or item.startswith(f"{item}.") for item in forbidden)
+    assert not any(
+        imported == item or imported.startswith(f"{item}.")
+        for imported in imports
+        for item in forbidden
+    )
 
 
 def test_studio_api_exposes_only_get_route() -> None:

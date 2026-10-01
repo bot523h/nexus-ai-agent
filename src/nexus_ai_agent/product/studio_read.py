@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol
 
+from nexus_ai_agent.application.ports.job_queue import JobStatus
 from nexus_ai_agent.product.studio_experience import (
     ArtifactPassport,
     ExecutionView,
@@ -65,10 +66,10 @@ class StudioReadService:
             raise ValueError("project_id and job_id must be non-empty")
         row = await self._jobs.get_job(job_id)
         if row is None:
-            return self._empty(project_id, job_id, "job_not_found")
+            raise ProjectReadDenied("project read is not authorized")
         input_data = row.get("input_data")
         if not isinstance(input_data, Mapping):
-            return self._empty(project_id, job_id, "job_input_missing")
+            raise ProjectReadDenied("project read is not authorized")
         row_project = input_data.get("project_id")
         if row_project != project_id:
             # Do not reveal whether the job exists under another project.
@@ -102,6 +103,8 @@ class StudioReadService:
         }
         lineage = present_lineage(lineage_raw)
         gaps = list(lineage.missing_links)
+        if execution.status not in {item.value for item in JobStatus}:
+            gaps.append("execution_status_unknown")
         if plan is None:
             gaps.append("plan")
         if artifact.evidence_gap:
@@ -119,28 +122,6 @@ class StudioReadService:
             evidence=evidence_map,
             lineage=lineage,
             contract_gaps=tuple(dict.fromkeys(gaps)),
-        )
-
-    def _empty(self, project_id: str, job_id: str, gap: str) -> StudioProjectView:
-        return StudioProjectView(
-            project_id=project_id,
-            job_id=job_id,
-            project={"project_id": project_id},
-            intent={},
-            plan=None,
-            execution=None,
-            artifact=None,
-            evidence={},
-            lineage=present_lineage(
-                {
-                    "intent_id": None,
-                    "plan_reference": None,
-                    "job_id": job_id,
-                    "artifact_id": None,
-                    "revision": None,
-                }
-            ),
-            contract_gaps=(gap, "intent", "plan", "execution", "artifact", "evidence"),
         )
 
 
