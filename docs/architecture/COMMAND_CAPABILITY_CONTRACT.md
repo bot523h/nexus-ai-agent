@@ -111,7 +111,11 @@ flowchart LR
 9. **Apply.** The registered pure handler runs against an isolated copy; the
    new project, bumped revision, recomputed hash, `EditTransaction`, and the
    reservation result commit together. A handler that mutates-then-fails or
-   renames the project cannot corrupt central state.
+   renames the project cannot corrupt central state. `system.undo` additionally
+   enforces a transaction-identity gate *here*, inside the lock (§7.1): because
+   the handler runs in the same critical section as the state swap, "is the
+   named transaction still the newest editable one?" and "restore its snapshot"
+   are one atomic step — a concurrent foreign commit can never be rewound.
 
 ## 3. Capability contract
 
@@ -276,6 +280,7 @@ valid follow-ups for their lanes.
 | Gap | Status |
 |---|---|
 | Bus reservation across instances / processes / restart | NOT VERIFIED by design (in-memory); no claim |
+| Transaction-identity-addressed `system.undo` across processes / restart | NOT VERIFIED by design (history and snapshots are in-memory, per instance); identity-addressed undo is PROVEN only for threads sharing one bus instance (§7.1) |
 | Durable queue payload-conflict | GAP, lifecycle lane (task-182) |
 | Explicit service grants at the three runtime call sites | RUNTIME GAP, owner Agent 1 (task-181) |
 | Integration with PR#67's `required_packs`/lifecycle bus gate | INTEGRATED at stage 4b (task-183, stacked on PR#72; PR#67's lifecycle suite runs unchanged on this tree); `MERGED` only after PR#72 lands and CI re-runs. Merging PR#67 afterwards is a *semantic* resolution: keep stage 4b and drop PR#67's stage-3.5 call and its `CreativeRenderPayload.allow_experimental` / surface flag (the architecture guards fail otherwise), and add `color.apply_lut` to `EXPERIMENTAL_OPT_IN_OPERATIONS` |
