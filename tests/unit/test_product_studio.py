@@ -7,6 +7,7 @@ from nexus_ai_agent.product.studio_experience import (
     IntentDraft,
     present_artifact,
     present_execution,
+    present_lineage,
     present_plan,
 )
 
@@ -21,6 +22,10 @@ def test_intent_draft_is_user_facing_and_validates_goal() -> None:
     assert intent.goal.startswith("Create")
     with pytest.raises(ValueError, match="goal"):
         IntentDraft(goal=" ")
+    with pytest.raises(TypeError, match="tuple"):
+        IntentDraft(goal="ok", constraints=["mutable"])  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="finite"):
+        IntentDraft(goal="ok", duration_seconds=float("inf"))
 
 
 def test_plan_preview_consumes_compiler_facts_without_compiling() -> None:
@@ -40,6 +45,13 @@ def test_plan_preview_consumes_compiler_facts_without_compiling() -> None:
     assert preview.compiler_reference == "creative-plan-42"
     assert preview.scenes[0].start_seconds == 0.0
     assert preview.risks == ("Source image duration not measured",)
+
+
+def test_plan_preview_rejects_malformed_scene_instead_of_inventing_metadata() -> None:
+    with pytest.raises(ValueError, match="scene_id"):
+        present_plan("intent-1", {"scenes": [{"label": "Opening"}]})
+    empty = present_plan("intent-2", {})
+    assert empty.contract_gap == "plan_empty"
 
 
 def test_execution_view_accepts_only_canonical_durable_statuses() -> None:
@@ -74,6 +86,7 @@ def test_artifact_passport_preserves_measured_lineage_and_evidence() -> None:
             "artifact_verification": {
                 "status": "verified",
                 "logical_identity": {"project_id": "shot-key-1"},
+                "physical_identity": {"sha256": "sha256:abc", "size_bytes": 123},
                 "probe": {"duration_us": 2_000_000},
             },
         },
@@ -85,3 +98,25 @@ def test_artifact_passport_preserves_measured_lineage_and_evidence() -> None:
     assert passport.revision == 2
     assert passport.verification_evidence["probe"]["duration_us"] == 2_000_000
     assert passport.evidence_gap is None
+
+
+def test_status_only_verified_record_is_not_evidence_backed() -> None:
+    passport = present_artifact(
+        {"artifact_verification": {"status": "verified"}, "output_path": "/tmp/out.mp4"}
+    )
+    assert passport.verification_status == "unverified"
+    assert passport.evidence_gap == "verification_evidence_missing"
+
+
+def test_lineage_reports_only_explicit_links_and_missing_fields() -> None:
+    lineage = present_lineage({"intent_id": "intent-1", "artifact_id": "asset-1"})
+    assert lineage.intent_id == "intent-1"
+    assert lineage.artifact_id == "asset-1"
+    assert lineage.plan_reference is None
+    assert lineage.missing_links == ("plan_reference", "job_id", "revision")
+
+
+def test_lineage_does_not_infer_artifact_from_job_or_intent() -> None:
+    lineage = present_lineage({"intent_id": "intent-1", "job_id": "job-1"})
+    assert lineage.artifact_id is None
+    assert "artifact_id" in lineage.missing_links

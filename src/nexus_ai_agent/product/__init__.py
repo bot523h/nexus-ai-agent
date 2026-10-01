@@ -13,6 +13,7 @@ from nexus_ai_agent.product.studio_experience import (
     SceneView,
     present_artifact,
     present_execution,
+    present_lineage,
     present_plan,
 )
 
@@ -25,5 +26,6 @@ __all__ = [
     "SceneView",
     "present_artifact",
     "present_execution",
+    "present_lineage",
     "present_plan",
 ]

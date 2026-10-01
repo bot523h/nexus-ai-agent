@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from math import isfinite
 from typing import Any
 
 from nexus_ai_agent.application.ports.job_queue import JobStatus
@@ -29,10 +30,27 @@ class IntentDraft:
     aspect_ratio: str | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.goal, str):
+            raise TypeError("intent goal must be a string")
         if not self.goal.strip():
             raise ValueError("intent goal must not be empty")
-        if self.duration_seconds is not None and self.duration_seconds <= 0:
-            raise ValueError("duration_seconds must be positive")
+        if self.duration_seconds is not None and (
+            not isinstance(self.duration_seconds, (int, float))
+            or isinstance(self.duration_seconds, bool)
+            or not isfinite(self.duration_seconds)
+            or self.duration_seconds <= 0
+        ):
+            raise ValueError("duration_seconds must be a finite positive number")
+        for name in ("constraints", "assets", "output_requirements"):
+            values = getattr(self, name)
+            if not isinstance(values, tuple) or not all(
+                isinstance(value, str) and value.strip() for value in values
+            ):
+                raise TypeError(f"intent {name} must be a tuple of non-empty strings")
+        for name in ("style", "audience", "aspect_ratio"):
+            value = getattr(self, name)
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ValueError(f"intent {name} must be a non-empty string when provided")
 
 
 @dataclass(frozen=True)
@@ -60,6 +78,7 @@ class PlanPreview:
     estimated_work: str | None = None
     verification_points: tuple[str, ...] = ()
     compiler_reference: str | None = None
+    contract_gap: str | None = None
 
 
 @dataclass(frozen=True)
@@ -110,16 +129,26 @@ def _text_tuple(value: object) -> tuple[str, ...]:
 
 def present_plan(intent_id: str, raw_plan: Mapping[str, Any]) -> PlanPreview:
     """Adapt a compiler-produced plan without reimplementing compilation."""
+    if not isinstance(intent_id, str) or not intent_id.strip():
+        raise ValueError("intent_id must be a non-empty string")
+    if not isinstance(raw_plan, Mapping):
+        raise TypeError("raw_plan must be a mapping produced by the compiler")
     raw_scenes = raw_plan.get("scenes", ())
     scenes: list[SceneView] = []
     if isinstance(raw_scenes, (list, tuple)):
         for index, raw in enumerate(raw_scenes):
             if not isinstance(raw, Mapping):
-                continue
+                raise ValueError(f"scene {index} must be a mapping")
+            scene_id = raw.get("scene_id", raw.get("id"))
+            label = raw.get("label", raw.get("name"))
+            if not isinstance(scene_id, str) or not scene_id.strip():
+                raise ValueError(f"scene {index} is missing compiler scene_id")
+            if not isinstance(label, str) or not label.strip():
+                raise ValueError(f"scene {scene_id!r} is missing compiler label")
             scenes.append(
                 SceneView(
-                    scene_id=str(raw.get("scene_id") or raw.get("id") or f"scene-{index + 1}"),
-                    label=str(raw.get("label") or raw.get("name") or f"Scene {index + 1}"),
+                    scene_id=scene_id,
+                    label=label,
                     start_seconds=_number(raw.get("start_seconds", raw.get("start"))),
                     end_seconds=_number(raw.get("end_seconds", raw.get("end"))),
                     operations=_text_tuple(raw.get("operations")),
@@ -139,11 +168,20 @@ def present_plan(intent_id: str, raw_plan: Mapping[str, Any]) -> PlanPreview:
         compiler_reference=(
             str(raw_plan["compiler_reference"]) if raw_plan.get("compiler_reference") else None
         ),
+        contract_gap=(
+            "plan_empty"
+            if not scenes and not _text_tuple(raw_plan.get("operations")) and not output
+            else None
+        ),
     )
 
 
 def present_execution(job_id: str, raw: Mapping[str, Any]) -> ExecutionView:
     """Project a durable job row/result; reject unknown statuses."""
+    if not isinstance(job_id, str) or not job_id.strip():
+        raise ValueError("job_id must be a non-empty string")
+    if not isinstance(raw, Mapping):
+        raise TypeError("raw execution must be a mapping from the durable queue")
     raw_status = raw.get("status", raw.get("execution_status"))
     if isinstance(raw_status, JobStatus):
         status = raw_status.value
@@ -167,8 +205,29 @@ def present_artifact(
     """Present a verified artifact result; never infer verification success."""
     verification = raw.get("artifact_verification")
     evidence = dict(verification) if isinstance(verification, Mapping) else {}
-    status = str(evidence.get("status") or "not_available")
-    evidence_gap = None if evidence else "artifact_verification_missing"
+    requested_status = str(evidence.get("status") or "not_available")
+    physical = evidence.get("physical_identity")
+    has_measured_identity = (
+        isinstance(physical, Mapping)
+        and isinstance(physical.get("sha256"), str)
+        and isinstance(physical.get("size_bytes"), int)
+    )
+    status = (
+        "verified"
+        if requested_status == "verified" and has_measured_identity
+        else "unverified"
+        if requested_status == "verified"
+        else requested_status
+    )
+    evidence_gap = (
+        None
+        if status == "verified"
+        else "verification_evidence_missing"
+        if requested_status == "verified"
+        else "artifact_verification_missing"
+        if not evidence
+        else None
+    )
     return ArtifactPassport(
         artifact_id=_optional_text(raw.get("artifact_id", raw.get("output_asset_id"))),
         path=_optional_text(raw.get("artifact_path", raw.get("output_path"))),
@@ -198,6 +257,33 @@ def _number(value: object) -> float | None:
     return None
 
 
+def present_lineage(raw: Mapping[str, Any]) -> LineageView:
+    """Map explicit lineage links; never infer a missing relationship."""
+    if not isinstance(raw, Mapping):
+        raise TypeError("raw lineage must be a mapping from a durable result")
+    intent_id = _optional_text(raw.get("intent_id"))
+    plan_reference = _optional_text(raw.get("plan_reference"))
+    job_id = _optional_text(raw.get("job_id"))
+    artifact_id = _optional_text(raw.get("artifact_id"))
+    revision = raw.get("revision") if isinstance(raw.get("revision"), int) else None
+    values: tuple[tuple[str, object], ...] = (
+        ("intent_id", intent_id),
+        ("plan_reference", plan_reference),
+        ("job_id", job_id),
+        ("artifact_id", artifact_id),
+        ("revision", revision),
+    )
+    missing = tuple(name for name, value in values if value is None)
+    return LineageView(
+        intent_id=intent_id,
+        plan_reference=plan_reference,
+        job_id=job_id,
+        artifact_id=artifact_id,
+        revision=revision,
+        missing_links=missing,
+    )
+
+
 __all__ = [
     "ArtifactPassport",
     "ExecutionView",
@@ -207,5 +293,6 @@ __all__ = [
     "SceneView",
     "present_artifact",
     "present_execution",
+    "present_lineage",
     "present_plan",
 ]
