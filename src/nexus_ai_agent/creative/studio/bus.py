@@ -85,6 +85,8 @@ from nexus_ai_agent.creative.studio.models import (
     ExecutionPolicyError,
     IdempotencyConflictError,
     NagarError,
+    PlanExecutionResult,
+    PlanTransaction,
     Playhead,
     PreconditionError,
     Preconditions,
@@ -140,10 +142,36 @@ def _fingerprint(command: TypedCommand) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _fingerprint_plan(plan: PlanTransaction) -> str:
+    payload = plan.model_dump(mode="json")
+    canonical = json.dumps(
+        payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _parse_plan(plan: PlanTransaction | dict[str, Any] | str | bytes) -> PlanTransaction:
+    try:
+        if isinstance(plan, PlanTransaction):
+            raw: Any = plan.model_dump(mode="json")
+        elif isinstance(plan, (str, bytes)):
+            raw = json.loads(
+                plan, object_pairs_hook=_unique_json_pairs, parse_constant=_reject_constant
+            )
+        else:
+            raw = plan
+        if not isinstance(raw, dict):
+            raise ValueError("plan must be a JSON object")
+        return PlanTransaction.model_validate(raw)
+    except (ValidationError, ValueError, TypeError, UnicodeDecodeError) as exc:
+        raise CommandValidationError(f"invalid plan transaction envelope: {exc}") from exc
+
+
 @dataclass(frozen=True)
 class _Reservation:
     fingerprint: str
     result: CommandResult | None = None  # None means execution is in flight
+    plan_result: PlanExecutionResult | None = None
 
 
 class CommandBus:
@@ -201,6 +229,95 @@ class CommandBus:
             if self._executing:
                 raise CommandExecutionError("nested command dispatch during execution is forbidden")
             return self._dispatch_locked(parsed)
+
+    def dispatch_plan(
+        self, plan: PlanTransaction | dict[str, Any] | str | bytes
+    ) -> PlanExecutionResult:
+        """Run a multi-step plan transaction speculatively on an isolated snapshot.
+
+        Guarantees true plan transaction atomicity:
+        - If all commands in the plan succeed, state and transactions commit atomically.
+        - If any command fails, zero partial state or transactions commit.
+        """
+        parsed = _parse_plan(plan)
+        with self._lock:
+            if self._executing:
+                raise CommandExecutionError("nested plan dispatch during execution is forbidden")
+            return self._dispatch_plan_locked(parsed)
+
+    def _dispatch_plan_locked(self, plan: PlanTransaction) -> PlanExecutionResult:
+        self._check_preconditions(plan.preconditions)
+
+        project_id = self._project.project_id
+        if plan.idempotency_key is not None:
+            key = (project_id, f"plan.{plan.plan_id}", plan.idempotency_key)
+            fingerprint = _fingerprint_plan(plan)
+            prior = self._idempotency.get(key)
+            if prior is not None:
+                if prior.fingerprint != fingerprint:
+                    raise IdempotencyConflictError(
+                        "plan idempotency key reused with different payload"
+                    )
+                if prior.plan_result is None:
+                    raise CommandExecutionError("idempotent plan is already executing")
+                return prior.plan_result.model_copy(deep=True)
+            self._idempotency[key] = _Reservation(fingerprint=fingerprint)
+
+        workspace_project = self._project.model_copy(deep=True)
+        staged_bus = CommandBus(
+            state=workspace_project,
+            registry=self._registry,
+            resolver=self._resolver,
+            authorizer=self._authorizer,
+            allow_experimental=self._allow_experimental,
+        )
+        staged_bus._history = list(self._history)
+
+        command_results: list[CommandResult] = []
+        new_transactions: list[EditTransaction] = []
+
+        self._executing = True
+        try:
+            for cmd in plan.commands:
+                res = staged_bus._dispatch_locked(cmd)
+                command_results.append(res)
+                last_tx = staged_bus._history[-1]
+                bound_tx = last_tx.model_copy(update={"plan_id": plan.plan_id})
+                staged_bus._history[-1] = bound_tx
+                new_transactions.append(bound_tx)
+        except Exception:
+            if plan.idempotency_key is not None:
+                self._idempotency.pop(key, None)
+            raise
+        finally:
+            self._executing = False
+
+        plan_tx_id = f"plan_tx_{uuid4().hex}"
+        final_project = staged_bus.project
+
+        plan_result = PlanExecutionResult(
+            plan_id=plan.plan_id,
+            transaction_id=plan_tx_id,
+            state_revision=final_project.state_revision,
+            state_hash=final_project.state_hash,
+            results=tuple(command_results),
+            diagnostics={
+                "protocol_version": PROTOCOL_VERSION,
+                "command_count": len(plan.commands),
+            },
+            undo_available=True,
+        )
+
+        self._project = final_project
+        self._history = list(staged_bus._history)
+        self._idempotency.update(staged_bus._idempotency)
+
+        if plan.idempotency_key is not None:
+            self._idempotency[key] = _Reservation(
+                fingerprint, plan_result=plan_result.model_copy(deep=True)
+            )
+
+        return plan_result
 
     def _dispatch_locked(self, command: TypedCommand) -> CommandResult:
         if command.protocol_version != PROTOCOL_VERSION:
