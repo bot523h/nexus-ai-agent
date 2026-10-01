@@ -3031,7 +3031,7 @@
       "title": "SQLite first-use WAL init races under concurrent first use (CI flake: 'database is locked' on PRAGMA journal_mode=WAL)",
       "title_fa": "مسابقهٔ مقداردهی WAL در اولین استفادهٔ هم‌زمان SQLite (فلیک CI: database is locked روی PRAGMA journal_mode=WAL)",
       "why_fa": "create_all_tables یک بار به ازای هر مسیر محافظت می‌شود (_initialized_paths) اما خودِ مقداردهی از چند تسک/process هم‌زمان بی‌محافظت است؛ دو مقداردهی هم‌زمان WAL یک‌دیگر را قفل می‌کنند و یکی با sqlite3.OperationalError: database is locked شکست می‌خورد.",
-      "scope": "Found by task-223 while auditing the final PR#128 CI head: python-parity (3.12) failed with sqlite3.OperationalError: database is locked on PRAGMA journal_mode=WAL (run 36816623063 job 110223040499) in test_r_f28_concurrent_identical_learns_collapse_into_one; the 3.10/3.11 legs and the local full suite (2988 passed) were green, so it is intermittent and contention-dependent. Owner: storage-observability zone (unclaimed).",
+      "scope": "Found by task-223 while auditing the final PR#128 CI head: python-parity (3.12) failed with sqlite3.OperationalError: database is locked on PRAGMA journal_mode=WAL (run 36816623063 job 110223040499) in test_r_f28_concurrent_identical_learns_collapse_into_one; the 3.10/3.11 legs and the local full suite (2988 passed) were green, so it is intermittent and contention-dependent. Owner: storage-observability zone (unclaimed). Local repro attempt: 12 concurrent create_all_tables on a fresh path (single loop) did NOT reproduce the WAL lock (only the already-retried create_all race fired); the lock needs a concurrent writer holding a transaction at first-use init, which the CI test that failed supplies. No speculative fix attempted out of zone without a deterministic RED test.",
       "acceptance_criteria": [
         "PRAGMA journal_mode=WAL under concurrent first use never raises 'database is locked' (busy_timeout + bounded retry on the one-time pragma)",
         "a deterministic concurrent-first-use regression test (threads or processes) proves no OperationalError and WAL is actually set",
@@ -3121,7 +3121,7 @@
       "exclusive_paths": [
         "src/nexus_ai_agent/storage/db.py"
       ],
-      "status_note": "Found by task-223 while auditing the final PR#128 CI head: python-parity (3.12) failed with sqlite3.OperationalError: database is locked on PRAGMA journal_mode=WAL (run 36816623063 job 110223040499) in test_r_f28_concurrent_identical_learns_collapse_into_one; the 3.10/3.11 legs and the local full suite (2988 passed) were green, so it is intermittent and contention-dependent. Owner: storage-observability zone (unclaimed)."
+      "status_note": "Found by task-223 while auditing the final PR#128 CI head: python-parity (3.12) failed with sqlite3.OperationalError: database is locked on PRAGMA journal_mode=WAL (run 36816623063 job 110223040499) in test_r_f28_concurrent_identical_learns_collapse_into_one; the 3.10/3.11 legs and the local full suite (2988 passed) were green, so it is intermittent and contention-dependent. Owner: storage-observability zone (unclaimed). Local repro attempt: 12 concurrent create_all_tables on a fresh path (single loop) did NOT reproduce the WAL lock (only the already-retried create_all race fired); the lock needs a concurrent writer holding a transaction at first-use init, which the CI test that failed supplies. No speculative fix attempted out of zone without a deterministic RED test."
     },
     {
       "id": "task-124",
