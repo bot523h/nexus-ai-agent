@@ -820,9 +820,7 @@ def validate_board(board: dict, strict_new: bool = False) -> dict:
                 (errors if strict_new else warnings).append(message)
 
     active_gates = [
-        c["task"]
-        for c in board.get("claims", [])
-        if _is_active_claim(c) and c.get("gates_owner")
+        c["task"] for c in board.get("claims", []) if _is_active_claim(c) and c.get("gates_owner")
     ]
     if len(active_gates) != 1:
         errors.append(

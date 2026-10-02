@@ -218,9 +218,7 @@ def test_active_in_review_claim_without_evidence_required_is_an_error(
     claim = dict(_active_with_evidence(), status="active_in_review")
     del claim["evidence_required"]
     result = board_module.validate_board(_board([claim, STEWARD_ACTIVE]))
-    assert any(
-        "active claim" in e and "evidence_required" in e for e in result["errors"]
-    )
+    assert any("active claim" in e and "evidence_required" in e for e in result["errors"])
 
 
 # --------------------------------------------------------------------------- #

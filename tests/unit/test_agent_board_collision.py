@@ -246,25 +246,19 @@ def test_unknown_ref_is_unverifiable_not_safe(module: ModuleType, collision_repo
     assert result["collision_count"] == 1
 
 
-def test_no_merge_base_without_base_is_unverifiable(
-    module: ModuleType, collision_repo
-) -> None:
+def test_no_merge_base_without_base_is_unverifiable(module: ModuleType, collision_repo) -> None:
     repo, board = collision_repo
     pair = _pair(_detect(module, repo, board, ["a", "orphan"]))
     assert pair["classification"] == module.COLLISION_UNKNOWN
 
 
-def test_no_merge_base_with_base_uses_the_supplied_root(
-    module: ModuleType, collision_repo
-) -> None:
+def test_no_merge_base_with_base_uses_the_supplied_root(module: ModuleType, collision_repo) -> None:
     repo, board = collision_repo
     result = module.detect_collisions(board, ["a", "orphan"], base="base", repo=repo)
     assert result["pairs"][0]["classification"] != module.COLLISION_UNKNOWN
 
 
-def test_changed_files_returns_none_on_git_failure(
-    module: ModuleType, collision_repo
-) -> None:
+def test_changed_files_returns_none_on_git_failure(module: ModuleType, collision_repo) -> None:
     """The None-vs-[] contract is what makes the fail-closed path possible."""
     repo, _ = collision_repo
     assert module._changed_files("base", "no-such-ref", repo) is None
