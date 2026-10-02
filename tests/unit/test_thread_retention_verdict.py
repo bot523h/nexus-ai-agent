@@ -38,9 +38,11 @@ from itertools import permutations
 import pytest
 
 from nexus_ai_agent.domain.policies.retention import (
+    RetentionReason,
     RetentionRecord,
     deletable,
     pinned,
+    row_reason,
     thread_retention,
 )
 
@@ -200,7 +202,15 @@ def test_thread_retention_is_exported() -> None:
     """The primitive is part of the policy module's public surface."""
     from nexus_ai_agent.domain.policies import retention as module
 
-    for name in ("thread_retention", "ThreadRetention", "pinned", "deletable"):
+    for name in (
+        "thread_retention",
+        "ThreadRetention",
+        "RetentionReason",
+        "row_reason",
+        "POLICY_NAME",
+        "pinned",
+        "deletable",
+    ):
         assert name in module.__all__, name
 
 
@@ -226,6 +236,128 @@ def test_the_resumability_window_has_exactly_one_source() -> None:
     assert RESUMABILITY_WINDOW is product
     assert RetentionPolicy().max_age is product
     assert FORK_AFTER_RESUMABILITY == DEFAULT_RETENTION_DECISION.expired_resume_behavior
+
+
+# ── the reason behind a destructive verdict ───────────────────────────────
+#
+# ``would_delete: false`` on its own is not actionable: an operator cannot tell
+# an explicit pin from ordinary recency, or either of those from "we simply
+# have no evidence".  ``RetentionReason`` names the evidence, and the invariant
+# that binds it to the verdict is a strict biconditional:
+#
+#     reason is NONE  <=>  deletable is True
+#
+# ``no_evidence`` in particular is never a claim of safety.
+
+
+def test_reason_is_none_exactly_when_the_thread_is_deletable() -> None:
+    """The biconditional: no reason iff deletable, in both directions."""
+    deletable_cases = ([stale_row()], [stale_row(), stale_row()])
+    retained_cases = (
+        [live_row()],  # pinned + recent
+        [stale_row(), live_row()],  # one vetoing row
+        [unknown_row()],  # no evidence at all
+        [stale_row(), unknown_row()],
+        [],  # no rows at all
+    )
+
+    for rows in deletable_cases:
+        verdict = thread_retention(rows, now=NOW)
+        assert verdict.deletable is True
+        assert verdict.reason is RetentionReason.NONE
+
+    for rows in retained_cases:
+        verdict = thread_retention(rows, now=NOW)
+        assert verdict.deletable is False
+        assert verdict.reason is not RetentionReason.NONE
+
+
+def test_reason_distinguishes_pinned_from_recent_from_unknown() -> None:
+    """The three protection states that used to share one boolean are now named."""
+    pinned_only = RetentionRecord(
+        created_at=NOW - timedelta(days=40),
+        last_accessed_at=NOW - timedelta(days=40),
+        active_until=NOW + timedelta(days=7),
+    )
+    assert thread_retention([pinned_only], now=NOW).reason is RetentionReason.PINNED
+
+    recent_only = RetentionRecord(
+        created_at=NOW - timedelta(days=2),
+        last_accessed_at=NOW - timedelta(days=1),
+    )
+    assert thread_retention([recent_only], now=NOW).reason is RetentionReason.RECENT_ACCESS
+
+    assert thread_retention([unknown_row()], now=NOW).reason is RetentionReason.NO_EVIDENCE
+    assert thread_retention([], now=NOW).reason is RetentionReason.NO_EVIDENCE
+
+
+def test_an_explicit_pin_outranks_incidental_recency() -> None:
+    """Precedence reports the strongest affirmative protection, not the first row."""
+    recent = RetentionRecord(
+        created_at=NOW - timedelta(days=2), last_accessed_at=NOW - timedelta(days=1)
+    )
+    pin = RetentionRecord(
+        created_at=NOW - timedelta(days=40),
+        last_accessed_at=NOW - timedelta(days=40),
+        active_until=NOW + timedelta(days=7),
+    )
+
+    # Both orders: the pin wins, and the answer does not depend on position.
+    assert thread_retention([recent, pin], now=NOW).reason is RetentionReason.PINNED
+    assert thread_retention([pin, recent], now=NOW).reason is RetentionReason.PINNED
+
+
+def test_affirmative_evidence_outranks_absence_of_evidence() -> None:
+    """``no_evidence`` is the fallback, reported only when it is the whole story."""
+    recent = RetentionRecord(
+        created_at=NOW - timedelta(days=2), last_accessed_at=NOW - timedelta(days=1)
+    )
+
+    verdict = thread_retention([recent, unknown_row()], now=NOW)
+
+    assert verdict.deletable is False  # the unknown row still vetoes
+    assert verdict.reason is RetentionReason.RECENT_ACCESS
+
+
+def test_row_reason_can_explain_but_never_contradict_deletable() -> None:
+    """The reason is derived from the same predicates, over a full input sweep.
+
+    If ``row_reason`` ever drifts away from ``deletable`` — the "shadow
+    predicate" failure — this fails.  It is a property test, not a happy path.
+    """
+    ages: list[float | None] = [None, 0, 1, 29, 30, 31, 60]
+    pins: list[float | None] = [None, -10, -1, 0, 7]
+    checked = 0
+    for accessed in ages:
+        for pin in pins:
+            record = RetentionRecord(
+                created_at=NOW - timedelta(days=60),
+                last_accessed_at=None if accessed is None else NOW - timedelta(days=accessed),
+                active_until=None if pin is None else NOW + timedelta(days=pin),
+            )
+            explained = row_reason(record, now=NOW)
+            assert (explained is RetentionReason.NONE) is deletable(record, now=NOW), (
+                f"row_reason contradicts deletable: accessed={accessed} pin={pin}"
+            )
+            checked += 1
+    assert checked == len(ages) * len(pins)
+
+
+def test_reason_is_order_independent() -> None:
+    """The reason is a max over a total order, so permutations cannot change it."""
+    rows = [live_row(), stale_row(), unknown_row()]
+    reasons = {thread_retention(list(order), now=NOW).reason for order in permutations(rows)}
+
+    assert len(reasons) == 1, f"reason depends on row order: {reasons}"
+    assert reasons.pop() is RetentionReason.PINNED
+
+
+def test_reason_serialises_as_a_plain_string() -> None:
+    """It crosses a JSON boundary in the CLI, so its value must be the spelling."""
+    assert str(RetentionReason.NO_EVIDENCE) == "no_evidence"
+    assert f"{RetentionReason.PINNED}" == "pinned"
+    assert RetentionReason.RECENT_ACCESS.value == "recent_access"
+    assert RetentionReason.NONE.value == "none"
 
 
 if __name__ == "__main__":  # pragma: no cover - convenience entry point

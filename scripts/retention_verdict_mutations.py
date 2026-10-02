@@ -30,7 +30,19 @@ probe   mutation                                             killed by
 #6      primitive measures only the first row                 primitive tests
 #7      ``RESUMABILITY_WINDOW`` re-spelled as a literal       drift guard
 #8      ``RetentionPolicy.max_age`` re-spelled as a literal   drift guard
+#9      M1 missing access evidence becomes deletable         fail-closed tests
+#10     M2 the active pin is ignored                         quantifier tests
+#11     M3 recent access is ignored                          window tests
+#12     M6 resumable == not deletable (known guard dropped)  truth-preservation
+#13     M8 ``row_reason`` becomes a shadow predicate         biconditional test
+#14     M8 ``deletable`` silently re-based on ``created_at`` divergence sweep
+#15     reason loses its NO_EVIDENCE fallback                biconditional test
+#16     ``protection_reason`` hard-coded to ``none``         inspect-v1 contract
 ======  ===================================================  =====================
+
+Mandated-probe mapping: M1=#9, M2=#10, M3=#11, M4=#6 (a vetoing row is never
+measured), M5=#4, M6=#12, M7=#7+#8, M8=#13+#14.  #1/#2/#3/#5/#15/#16 are
+additional probes for the thread-scoped verdict and its reason.
 
 Protocol (same shape as ``scripts/gate5_mutation_probes.py``): baseline
 GREEN -> apply mutant -> expect RED -> restore bytes -> SHA restored -> GREEN
@@ -58,6 +70,7 @@ LIFECYCLE = REPO / "src/nexus_ai_agent/storage/checkpoint_lifecycle.py"
 
 V = "tests/unit/test_thread_retention_verdict.py::"
 INSP = "tests/unit/test_inspect_contract.py::"
+D = "tests/unit/test_retention_policy_divergence.py::"
 
 
 @dataclass(frozen=True)
@@ -189,6 +202,130 @@ PROBES: tuple[Probe, ...] = (
         anchor="    max_age: timedelta = RESUMABILITY_WINDOW\n",
         mutant="    max_age: timedelta = timedelta(days=30)  # MUTATION\n",
         tests=(V + "test_the_resumability_window_has_exactly_one_source",),
+    ),
+    # ── M1: missing access evidence becomes deletable ────────────────────
+    Probe(
+        name="#9 M1 missing access becomes deletable",
+        target=POLICY,
+        anchor=(
+            "    if record.last_accessed_at is None:\n"
+            "        return False\n"
+            "    current = _utc(now)\n"
+            "    if pinned(record, now=current):\n"
+        ),
+        mutant=(
+            "    if record.last_accessed_at is None:\n"
+            "        return True  # MUTATION: no evidence inferred as safe\n"
+            "    current = _utc(now)\n"
+            "    if pinned(record, now=current):\n"
+        ),
+        tests=(
+            V + "test_unknown_access_state_blocks_deletion_of_the_whole_thread",
+            V + "test_row_reason_can_explain_but_never_contradict_deletable",
+            D + "test_resumability_policy_is_fail_closed_on_missing_evidence",
+            INSP + "test_inspect_reports_absence_of_evidence_as_no_evidence",
+        ),
+    ),
+    # ── M2: the active pin is ignored ────────────────────────────────────
+    Probe(
+        name="#10 M2 active pin ignored",
+        target=POLICY,
+        anchor=(
+            "    return record.active_until is not None and current < _utc(record.active_until)\n"
+        ),
+        mutant="    return False  # MUTATION: an explicit pin no longer protects\n",
+        tests=(
+            V + "test_protection_is_existential_one_pinned_row_protects_the_thread",
+            V + "test_reason_distinguishes_pinned_from_recent_from_unknown",
+            D + "test_states_where_both_policies_agree",
+            INSP + "test_inspect_reports_a_pinned_thread_as_pinned",
+        ),
+    ),
+    # ── M3: recent access is ignored ─────────────────────────────────────
+    Probe(
+        name="#11 M3 recent access ignored",
+        target=POLICY,
+        anchor=("    return current - _utc(record.last_accessed_at) >= RESUMABILITY_WINDOW\n"),
+        mutant="    return True  # MUTATION: the resumability window is not consulted\n",
+        tests=(
+            V + "test_reason_distinguishes_pinned_from_recent_from_unknown",
+            D + "test_states_where_both_policies_agree",
+            INSP + "test_inspect_distinguishes_recency_from_an_explicit_pin",
+        ),
+    ),
+    # ── M6: resumable == not deletable, without semantic justification ───
+    Probe(
+        name="#12 M6 resumable == not deletable (drops the known guard)",
+        target=CLI,
+        anchor=(
+            '                "resumable_within_window": verdict.known and not verdict.deletable,\n'
+        ),
+        mutant=('                "resumable_within_window": not verdict.deletable,  # MUTATION\n'),
+        tests=(INSP + "test_inspect_does_not_claim_resumability_it_has_no_evidence_for",),
+    ),
+    # ── M8a: the reason becomes a shadow predicate ───────────────────────
+    Probe(
+        name="#13 M8 row_reason diverges from deletable (shadow predicate)",
+        target=POLICY,
+        anchor=(
+            "    current = _utc(now)\n"
+            "    if pinned(record, now=current):\n"
+            "        return RetentionReason.PINNED\n"
+            "    if record.last_accessed_at is None:\n"
+            "        return RetentionReason.NO_EVIDENCE\n"
+        ),
+        mutant=(
+            "    current = _utc(now)\n"
+            "    if record.last_accessed_at is None:\n"
+            "        return RetentionReason.NO_EVIDENCE\n"
+        ),
+        tests=(
+            V + "test_row_reason_can_explain_but_never_contradict_deletable",
+            V + "test_reason_distinguishes_pinned_from_recent_from_unknown",
+        ),
+    ),
+    # ── M8b: the resumability policy silently converges on the other one ──
+    Probe(
+        name="#14 M8 deletable re-based on created_at (silent policy merge)",
+        target=POLICY,
+        anchor=("    return current - _utc(record.last_accessed_at) >= RESUMABILITY_WINDOW\n"),
+        mutant=(
+            "    return current - _utc(record.created_at) >= RESUMABILITY_WINDOW  # MUTATION\n"
+        ),
+        tests=(
+            D + "test_axis2b_is_unreachable_in_production_and_is_documented_as_such",
+            D + "test_states_where_both_policies_agree",
+            D + "test_the_divergence_set_is_exactly_the_two_documented_axes",
+        ),
+    ),
+    # ── the reason loses its NO_EVIDENCE fallback ────────────────────────
+    Probe(
+        name="#15 reason loses its NO_EVIDENCE fallback (biconditional broken)",
+        target=POLICY,
+        anchor=(
+            "    RetentionReason.PINNED,\n"
+            "    RetentionReason.RECENT_ACCESS,\n"
+            "    RetentionReason.NO_EVIDENCE,\n"
+            ")\n"
+        ),
+        mutant=("    RetentionReason.PINNED,\n    RetentionReason.RECENT_ACCESS,\n)\n"),
+        tests=(
+            V + "test_reason_is_none_exactly_when_the_thread_is_deletable",
+            V + "test_reason_distinguishes_pinned_from_recent_from_unknown",
+            INSP + "test_inspect_reports_absence_of_evidence_as_no_evidence",
+        ),
+    ),
+    # ── protection_reason drops out of the CLI contract ──────────────────
+    Probe(
+        name="#16 protection_reason hard-coded to `none`",
+        target=CLI,
+        anchor='                "protection_reason": str(verdict.reason),\n',
+        mutant='                "protection_reason": "none",  # MUTATION\n',
+        tests=(
+            INSP + "test_inspect_reports_why_a_thread_is_retained",
+            INSP + "test_inspect_distinguishes_recency_from_an_explicit_pin",
+            INSP + "test_inspect_reports_absence_of_evidence_as_no_evidence",
+        ),
     ),
 )
 

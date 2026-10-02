@@ -336,6 +336,14 @@ def inspect_checkpoints(
                 "pinned": pinned_value,
                 "active": verdict.active,
                 "resumable_within_window": verdict.known and not verdict.deletable,
+                # Why the thread is being retained.  ``resumable_within_window``
+                # alone conflates three different situations — protected by an
+                # explicit pin, protected by ordinary recency, and retained
+                # because its age is unknown — and a destructive verdict with no
+                # reason is not actionable.  ``no_evidence`` is never a claim of
+                # safety.  This field is never the string "unknown", so the
+                # inspect-v1 ``unknown_fields`` list is unchanged.
+                "protection_reason": str(verdict.reason),
                 "would_delete": verdict.deletable,
                 "would_free_bytes_estimate": adapter.estimate_thread_bytes(thread_id),
                 "missing_lifecycle": not bool(metadata),

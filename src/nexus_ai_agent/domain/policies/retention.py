@@ -96,6 +96,56 @@ RESUMABILITY_WINDOW: Final[timedelta] = DEFAULT_RETENTION_DECISION.resumability_
 FORK_AFTER_RESUMABILITY: Final[str] = DEFAULT_RETENTION_DECISION.expired_resume_behavior
 RETRY_BACKOFF: Final[str] = "exponential_backoff_on_failed_to_retrying"
 
+#: Name of the policy implemented by :func:`deletable` / :func:`thread_retention`.
+#:
+#: There is a second, *different* retention policy in the repository:
+#: ``storage.checkpoint_lifecycle.eligible_for_deletion``
+#: (:data:`~nexus_ai_agent.storage.checkpoint_lifecycle.ELIGIBILITY_POLICY_NAME`).
+#: The two are deliberately NOT one concept and must not be merged; they
+#: diverge on two measured axes (post-pin grace, and which timestamp counts as
+#: age evidence).  ``tests/unit/test_retention_policy_divergence.py`` pins the
+#: whole truth table so the divergence stays a decision instead of drifting
+#: into a bug.  The names exist so a caller can never pick one by accident:
+#: two predicates called "deletable" and "eligible_for_deletion" are
+#: indistinguishable at a call site, and only one of them is fail-closed on
+#: missing access evidence.
+POLICY_NAME: Final[str] = "resumability-evidence-v1"
+
+
+class RetentionReason(str, Enum):
+    """Why a thread is being retained — the evidence behind ``deletable``.
+
+    A destructive verdict with no reason is not actionable: ``would_delete:
+    false`` tells an operator nothing about whether the protection is an
+    explicit pin, ordinary recency, or the absence of evidence.  These four
+    values are the complete set of ways :func:`deletable` can return
+    ``False``, and they are mutually distinguishable:
+
+    * ``NONE`` -- nothing protects the thread; it *is* deletable.  This is
+      the only value that co-occurs with ``deletable=True``.
+    * ``PINNED`` -- at least one row's ``active_until`` is still in the
+      future.  Explicit, intentional protection.
+    * ``RECENT_ACCESS`` -- at least one row was accessed inside the
+      resumability window.  Incidental protection.
+    * ``NO_EVIDENCE`` -- the thread has no lifecycle rows, or a row carries no
+      access stamp.  The thread is retained because its age is *unknown*, not
+      because anything is known about it.  Never a claim of safety.
+
+    Spelled with the ``(str, Enum)`` mixin so the value prints on every
+    supported interpreter (same recipe as :class:`JournalStatus`).
+    """
+
+    NONE = "none"
+    PINNED = "pinned"
+    RECENT_ACCESS = "recent_access"
+    NO_EVIDENCE = "no_evidence"
+
+    def __str__(self) -> str:
+        return str(self.value)
+
+    def __format__(self, spec: str) -> str:
+        return format(str(self.value), spec)
+
 
 def _utc(value: datetime) -> datetime:
     return (
@@ -138,6 +188,10 @@ class ThreadRetention:
     pinned: bool
     #: UNIVERSAL: at least one row exists and every row is deletable.
     deletable: bool
+    #: The evidence behind :attr:`deletable`.  ``NONE`` is the only value that
+    #: co-occurs with ``deletable=True``; that biconditional is the invariant
+    #: ``tests/unit/test_thread_retention_verdict.py`` pins.
+    reason: RetentionReason = RetentionReason.NONE
 
     @property
     def known(self) -> bool:
@@ -148,6 +202,38 @@ class ThreadRetention:
     def active(self) -> bool:
         """Alias of :attr:`pinned` — one concept, one implementation."""
         return self.pinned
+
+
+#: Precedence when several rows veto for different reasons.  An explicit pin
+#: outranks incidental recency, which outranks "we have no evidence": report
+#: the strongest *affirmative* protection available, and only fall back to
+#: ``NO_EVIDENCE`` when absence of evidence is the only reason the thread
+#: survived.  Order-independent — it is a max over a total order, not a scan.
+_REASON_PRECEDENCE: Final[tuple[RetentionReason, ...]] = (
+    RetentionReason.PINNED,
+    RetentionReason.RECENT_ACCESS,
+    RetentionReason.NO_EVIDENCE,
+)
+
+
+def row_reason(record: RetentionRecord, *, now: datetime) -> RetentionReason:
+    """Why ONE row vetoes deletion; :attr:`RetentionReason.NONE` when it does not.
+
+    Deliberately expressed through the *same* predicates :func:`deletable`
+    uses, so it can explain that decision but cannot contradict it:
+    ``row_reason(r) is NONE`` iff ``deletable(r)``.  The check order here is
+    the reporting precedence, not a second evaluation order — ``deletable``
+    returns False if *any* of its three conditions holds, so the boolean is
+    order-insensitive.
+    """
+    current = _utc(now)
+    if pinned(record, now=current):
+        return RetentionReason.PINNED
+    if record.last_accessed_at is None:
+        return RetentionReason.NO_EVIDENCE
+    if current - _utc(record.last_accessed_at) < RESUMABILITY_WINDOW:
+        return RetentionReason.RECENT_ACCESS
+    return RetentionReason.NONE
 
 
 def thread_retention(records: Iterable[RetentionRecord], *, now: datetime) -> ThreadRetention:
@@ -164,7 +250,7 @@ def thread_retention(records: Iterable[RetentionRecord], *, now: datetime) -> Th
 
     * no rows -> ``deletable=False`` (``all([])`` is ``True``, so the empty
       case is guarded explicitly; absence of metadata is never evidence
-      of age);
+      of age) and ``reason=NO_EVIDENCE``;
     * a row that was never accessed -> :func:`deletable` already retains it,
       which vetoes the thread through the universal quantifier;
     * naive timestamps are normalised to UTC by the row predicates before
@@ -175,22 +261,34 @@ def thread_retention(records: Iterable[RetentionRecord], *, now: datetime) -> Th
     """
     measured: Sequence[RetentionRecord] = tuple(records)
     current = _utc(now)
+    row_reasons = {row_reason(record, now=current) for record in measured}
+    if not measured:
+        reason = RetentionReason.NO_EVIDENCE
+    else:
+        reason = next(
+            (candidate for candidate in _REASON_PRECEDENCE if candidate in row_reasons),
+            RetentionReason.NONE,
+        )
     return ThreadRetention(
         rows=len(measured),
         pinned=any(pinned(record, now=current) for record in measured),
         deletable=bool(measured) and all(deletable(record, now=current) for record in measured),
+        reason=reason,
     )
 
 
 __all__ = [
     "ALLOWED_TRANSITIONS",
     "FORK_AFTER_RESUMABILITY",
+    "POLICY_NAME",
     "RESUMABILITY_WINDOW",
     "RETRY_BACKOFF",
     "JournalStatus",
+    "RetentionReason",
     "RetentionRecord",
     "ThreadRetention",
     "deletable",
     "pinned",
+    "row_reason",
     "thread_retention",
 ]

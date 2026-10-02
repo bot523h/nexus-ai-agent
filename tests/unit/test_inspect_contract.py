@@ -263,3 +263,104 @@ def test_inspect_never_accessed_row_blocks_deletion(cli_env: Path) -> None:
 
     assert entry["would_delete"] is False
     assert entry["resumable_within_window"] is True
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# inspect-v1 `protection_reason`: a destructive verdict must be actionable.
+#
+# `would_delete: false` alone does not tell an operator whether the thread is
+# protected by an explicit pin, by ordinary recency, or merely retained because
+# its age is unknown.  Those are three different situations and they used to
+# collapse into one boolean (`resumable_within_window`).  The reason field names
+# the evidence without changing the type of any existing field.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_inspect_reports_why_a_thread_is_retained(cli_env: Path) -> None:
+    """An explicit pin is reported as a pin, not as an anonymous 'not deletable'."""
+    _thread_with_rows(cli_env, [_live(), _stale()])
+
+    entry = _invoke()[0]
+
+    assert entry["would_delete"] is False
+    assert entry["protection_reason"] == "pinned"
+
+
+def test_inspect_distinguishes_recency_from_an_explicit_pin(cli_env: Path) -> None:
+    """Recent access protects too, and says so — a different reason, same verdict."""
+    recent = CheckpointRecord(
+        "t1",
+        "cp_recent",
+        RETENTION_NOW - timedelta(days=2),
+        last_accessed_at=RETENTION_NOW - timedelta(days=1),
+    )
+    _thread_with_rows(cli_env, [recent])
+
+    entry = _invoke()[0]
+
+    assert entry["would_delete"] is False
+    assert entry["pinned"] is False
+    assert entry["protection_reason"] == "recent_access"
+
+
+def test_inspect_reports_absence_of_evidence_as_no_evidence(cli_env: Path) -> None:
+    """`no_evidence` is a retention reason, and it is never a claim of safety."""
+    never_accessed = CheckpointRecord("t1", "cp_unknown", RETENTION_NOW - timedelta(days=40))
+    _thread_with_rows(cli_env, [never_accessed])
+
+    entry = _invoke()[0]
+
+    assert entry["would_delete"] is False
+    assert entry["protection_reason"] == "no_evidence"
+
+
+def test_inspect_reports_no_protection_for_a_deletable_thread(cli_env: Path) -> None:
+    """`none` is the only reason that co-occurs with `would_delete: true`."""
+    _thread_with_rows(cli_env, [_stale("cp_a"), _stale("cp_b")])
+
+    entry = _invoke()[0]
+
+    assert entry["would_delete"] is True
+    assert entry["protection_reason"] == "none"
+
+
+def test_inspect_reason_is_never_the_unknown_sentinel(cli_env: Path) -> None:
+    """The reason field must not enter `unknown_fields` — it always has a value.
+
+    Adding a key whose value can be the string "unknown" would silently change
+    the inspect-v1 `unknown_fields` contract; `no_evidence` is the explicit
+    spelling for "we do not know", so the list stays stable.
+    """
+    db = cli_env / "lg.sqlite"
+    _make_db(db, "t1", 1)  # checkpoints exist, but no lifecycle index at all
+
+    entry = _invoke()[0]
+
+    assert entry["missing_lifecycle"] is True
+    assert entry["protection_reason"] == "no_evidence"
+    assert "protection_reason" not in entry["unknown_fields"]
+    assert entry["unknown_fields"] == [
+        "last_accessed_at",
+        "newest_created_at",
+        "oldest_created_at",
+        "pinned",
+    ]
+
+
+def test_inspect_does_not_claim_resumability_it_has_no_evidence_for(cli_env: Path) -> None:
+    """`resumable_within_window` is a truth claim, not the negation of a verdict.
+
+    A thread with checkpoints but no lifecycle index at all is *retained*
+    (``would_delete: false``, fail-closed) — but nothing is known about it, so
+    it must not be reported as resumable.  ``known and not deletable`` keeps
+    those two facts apart; plain ``not deletable`` would conflate them.
+    """
+    db = cli_env / "lg.sqlite"
+    _make_db(db, "t1", 1)
+
+    entry = _invoke()[0]
+
+    assert entry["missing_lifecycle"] is True
+    assert entry["would_delete"] is False  # retained, fail-closed
+    assert entry["resumable_within_window"] is False  # but NOT claimed resumable
+    assert entry["pinned"] == "unknown"

@@ -669,7 +669,8 @@
         "src/nexus_ai_agent/cli.py",
         "tests/unit/test_thread_retention_verdict.py",
         "tests/unit/test_inspect_contract.py",
-        "scripts/retention_verdict_mutations.py"
+        "scripts/retention_verdict_mutations.py",
+        "tests/unit/test_retention_policy_divergence.py"
       ],
       "note": "Declared by arena/01a0fac1-nexus-ai-agent (task-229). cli.py is listed whole because the zone matcher is prefix-based, but the claim only touches the inspect_checkpoints body (~lines 270-345); open PRs #33/#60/#63/#96 touch cli.py at lines 884-990, so there is no hunk overlap."
     }
@@ -2746,7 +2747,11 @@
         "zero lifecycle rows is unknown and never deletable (all([]) == True guarded explicitly)",
         "checkpoints inspect reports pinned/active/would_delete identically for logically identical threads in either physical row order",
         "the resumability window has exactly one source (identity, not equality, is asserted)",
-        "mutation harness scripts/retention_verdict_mutations.py catches 8/8 and restores every SHA"
+        "mutation harness scripts/retention_verdict_mutations.py catches 8/8 and restores every SHA",
+        "the two row-level policies are named and their 33-cell divergence is pinned by an executable sweep, not prose",
+        "RetentionReason satisfies the biconditional reason==NONE <=> deletable, over a 35-input property sweep",
+        "inspect-v1 gains protection_reason without changing any existing field's type or the unknown_fields list",
+        "mutation harness extended to 16 probes covering M1-M8, all caught with SHA restore"
       ],
       "evidence_required": [
         "RED before the fix: would_delete=True / pinned=False for a thread pinned until +7d",
@@ -2762,14 +2767,15 @@
         "src/nexus_ai_agent/cli.py",
         "tests/unit/test_thread_retention_verdict.py",
         "tests/unit/test_inspect_contract.py",
-        "scripts/retention_verdict_mutations.py"
+        "scripts/retention_verdict_mutations.py",
+        "tests/unit/test_retention_policy_divergence.py"
       ],
       "agent_branch": "arena/01a0fac1-nexus-ai-agent",
       "claimed_at": "2026-10-02T04:18:37Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "owner_hint": "arena/01a0fac1-nexus-ai-agent",
-      "note": "Additive-only board edit: `agent_board.py claim` runs gc_expired(), which would have rewritten four other agents' stale-lease notes; that collateral damage was reverted and this claim was written directly instead. Main's claim statuses and gc notes stay canonical."
+      "note": "Additive-only board edit: `agent_board.py claim` runs gc_expired(), which would have rewritten four other agents' stale-lease notes; that collateral damage was reverted and this claim was written directly instead. Main's claim statuses and gc notes stay canonical. | 2026-10-02 continuation (same branch, second slice): retention semantic convergence. Audited the two row-level predicates over a 120-cell sweep; they disagree on 33 cells across exactly two deliberate axes (post-pin grace; which timestamp is authoritative for age). Decision: KEEP DISTINCT, name both policies (POLICY_NAME / ELIGIBILITY_POLICY_NAME) and pin the divergence in an executable truth table instead of merging them. Added RetentionReason (typed evidence behind a destructive verdict) surfaced as inspect-v1 `protection_reason`. Mutation harness extended 8 -> 16 probes, 16/16 caught. RETENTION PLANE CLOSED by this slice."
     }
   ],
   "deferred_log": [
