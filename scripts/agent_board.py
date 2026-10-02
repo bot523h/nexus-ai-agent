@@ -825,6 +825,11 @@ def validate_board(board: dict, strict_new: bool = False) -> dict:
             paths = claim.get("exclusive_paths")
             if paths is None:
                 errors.append(f"active claim {claim['task']}: exclusive_paths is None")
+            elif not isinstance(paths, list):
+                errors.append(
+                    f"active claim {claim['task']}: exclusive_paths is not a list"
+                    f" ({type(paths).__name__})"
+                )
             elif not paths:
                 warnings.append(f"active claim {claim['task']}: exclusive_paths is empty")
 

@@ -231,6 +231,17 @@ def test_active_claim_with_none_exclusive_paths_is_an_error(board_module: Module
     assert any("exclusive_paths is None" in e for e in result["errors"])
 
 
+def test_active_claim_with_non_list_exclusive_paths_is_an_error(
+    board_module: ModuleType,
+) -> None:
+    """A non-list fence (e.g. a bare string) is unparseable, not "empty": treat it
+    as an ERROR like ``None`` so a malformed lease cannot read as clean."""
+    claim = dict(_active_with_evidence(), exclusive_paths="src/z/")
+    result = board_module.validate_board(_board([claim, STEWARD_ACTIVE]))
+    assert result["ok"] is False
+    assert any("exclusive_paths is not a list" in e for e in result["errors"])
+
+
 def test_active_claim_with_empty_exclusive_paths_is_a_warning(board_module: ModuleType) -> None:
     claim = dict(_active_with_evidence(), exclusive_paths=[])
     result = board_module.validate_board(_board([claim, STEWARD_ACTIVE]))
