@@ -138,7 +138,8 @@ def test_delivery_pack_substrate_is_pure_stdlib_and_pydantic() -> None:
 
 
 def test_delivery_pack_does_not_cross_package_boundaries() -> None:
-    """Delivery pack files may only import from creative.packs, creative.studio, and creative.temporal."""
+    """Delivery pack files may only import from creative.packs, creative.studio,
+    and creative.temporal."""
     for file_path in DELIVERY_PACK.glob("*.py"):
         for module in _nexus_modules(file_path):
             assert module.startswith(
