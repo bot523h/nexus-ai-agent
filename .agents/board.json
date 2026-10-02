@@ -658,6 +658,27 @@
         "scripts/llm_queue_mutations.py",
         "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
       ]
+    },
+    {
+      "id": "collision-preflight",
+      "paths": [
+        "scripts/agent_board.py",
+        "tests/unit/test_agent_board_collision.py"
+      ]
+    },
+    {
+      "id": "board-governance",
+      "paths": [
+        "scripts/agent_board.py",
+        "tests/unit/test_agent_board_governance.py"
+      ]
+    },
+    {
+      "id": "adr-numbering",
+      "paths": [
+        "docs/architecture/adr/"
+      ],
+      "note": "ADR numbering / index enforcement (docs layer)"
     }
   ],
   "claims": [
@@ -1800,7 +1821,11 @@
       "claimed_at": "2026-09-27T12:27:18Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "exclusive_paths": []
+      "exclusive_paths": [],
+      "evidence_required": [
+        "CI run URL where scripts/pack_coverage.py reports per-pack coverage",
+        "the exact pack_coverage.py command + output showing pending counts per pack"
+      ]
     },
     {
       "task": "task-155-packs-doctor",
@@ -2715,6 +2740,90 @@
       "ttl_hours": 24,
       "gates_owner": true,
       "note": "Continues task-195-llm-queue-lifecycle (original branch arena/01a0e2f0, claim released via takeover). MODULE_MAP.md/docs-architecture excluded exactly as the original claim scoped itself. | SESSION-BOUND CONTINUATION 2026-09-27T16:54:20Z: arena/01a0e3b7 fast-forwarded cd79bfe (PR #109 head) and continues the same exclusive paths. This session cannot push to arena/01a0e356. PR #109 python-parity (3.10) is RED on run 36329794486 (asyncio.wait_for raises asyncio.TimeoutError, not builtin TimeoutError)."
+    },
+    {
+      "task": "task-227-collision-preflight",
+      "title": "Pre-push collision preflight: two correct stacked PRs must not silently become one unsafe merge",
+      "title_fa": "پیش‌پرواز تصادم: دو PR درست نباید بی‌سروصدا به یک ادغام ناامن تبدیل شوند",
+      "zone": "collision-preflight",
+      "priority": "P0",
+      "status": "active_in_review",
+      "agent_branch": "arena/01a0181931-collision-governance",
+      "claimed_at": "2026-10-01T22:15:13Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "scripts/agent_board.py",
+        "tests/unit/test_agent_board_collision.py"
+      ],
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "`agent_board collision` reports overlapping files and security-sensitive-symbol overlap for two or more PR heads (or refs) with a deterministic, sorted output",
+        "a test proves two disjoint PRs are SAFE and two PRs rewriting the same security-sensitive handler are flagged HIGH-RISK",
+        "no merge/conflict-resolution is performed by the tool (detect + warn/fail only)"
+      ],
+      "evidence_required": [
+        "exact command + exit code for a SAFE pair and a HIGH-RISK pair",
+        "pytest -q tests/unit/test_agent_board_collision.py exact counts"
+      ],
+      "scope": "Independent of task-223/129 feature code. Reads git objects + a curated board-derived security-sensitive path list; never resolves conflicts.",
+      "note": "",
+      "pr": 137
+    },
+    {
+      "task": "task-228-governance-invariants",
+      "title": "Executable board governance invariants: evidence_required enforcement + gates_owner cardinality",
+      "title_fa": "ناورداهای اجرایی حاکمیت تخته: اجرای evidence_required + کاردینالیتی gates_owner",
+      "zone": "board-governance",
+      "priority": "P1",
+      "status": "active_in_review",
+      "agent_branch": "arena/01a0181931-collision-governance",
+      "claimed_at": "2026-10-01T22:15:13Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "tests/unit/test_agent_board_governance.py"
+      ],
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "a newly created claim/task without evidence_required is rejected (ERROR) by board validation, while legacy board entries are WARN only",
+        "exactly one gates_owner invariant is enforced: 0 or >1 active gates owners fail the check",
+        "AGENTS.md prose == executed rule (documented rule is executable)"
+      ],
+      "evidence_required": [
+        "exact command + exit code showing a missing-evidence_required new task fails and a legacy one warns",
+        "exact command + exit code showing 0-owner and 2-owner gates states fail",
+        "pytest -q tests/unit/test_agent_board_governance.py exact counts"
+      ],
+      "scope": "Board tooling only (scripts/agent_board.py + its tests). No feature-zone edits.",
+      "note": "",
+      "pr": 137
+    },
+    {
+      "task": "task-229-adr-number-allocation-guard",
+      "title": "ADR number allocation guard (no two live branches share a number)",
+      "title_fa": "گارد تخصیص شمارهٔ ADR",
+      "zone": "adr-numbering",
+      "priority": "P2",
+      "status": "queued",
+      "scope": "Number allocation across parallel branches has no mechanism: on 2026-10-01 three live branches independently created an ADR numbered 0007 and a fourth renumbered its duplicate to 0011. README rule 4 only fails after merge. Add a pre-merge guard listing the highest ADR number visible on refs/remotes/origin and failing a branch that reuses a number already present on another live branch.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "a command reports the highest ADR number visible across origin refs",
+        "a branch reusing a number that exists on another live branch is reported (exit 1)",
+        "test_docs_integrity.py still passes on the merged tree"
+      ],
+      "evidence_required": [
+        "the exact command + output over origin refs showing the collision is detected",
+        "pytest -q tests/unit/test_docs_integrity.py (exact counts)",
+        "pytest -q tests/unit/test_agent_board*.py (exact counts)"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false
     }
   ],
   "deferred_log": [
@@ -2770,7 +2879,12 @@
       "exclusive_paths": [
         ".github/workflows/maintenance.yml"
       ],
-      "status_note": "repo-side verifiability delivered by task-167 (verified backup contract, round-trip byte identity, restore-into-temp-SQLite verification); what remains is owner-secrets configuration + one real green dispatch"
+      "status_note": "repo-side verifiability delivered by task-167 (verified backup contract, round-trip byte identity, restore-into-temp-SQLite verification); what remains is owner-secrets configuration + one real green dispatch",
+      "evidence_required": [
+        "manual workflow_dispatch run of maintenance/backup-db → SUCCESS with an object under backups/ in R2 (sha256/verified/timestamp in the step log)",
+        "NEXUS_R2_* secrets configured in GitHub Actions (owner-side)",
+        "the next scheduled cron run → SUCCESS"
+      ]
     },
     {
       "id": "task-124",
@@ -2792,6 +2906,11 @@
         "src/nexus_ai_agent/memory/",
         "src/nexus_ai_agent/features/rag.py",
         "tests/unit/test_audit_remainder.py"
+      ],
+      "evidence_required": [
+        "ONE-OWNER test: engines wired through the single bus owner (exact pytest -q count)",
+        "graph-memory write path round-trip test with exact counts",
+        "ruff check + mypy on the touched modules"
       ]
     },
     {
@@ -2811,7 +2930,12 @@
         "src/nexus_ai_agent/bot/surface/",
         "src/nexus_ai_agent/features/"
       ],
-      "status_note": "delivered via PR#47 (forensic triage docs/audits/PR32_TRIAGE_2026-09-21.md + port-forward)"
+      "status_note": "delivered via PR#47 (forensic triage docs/audits/PR32_TRIAGE_2026-09-21.md + port-forward)",
+      "evidence_required": [
+        "git merge-base/ancestry transcript proving PR#32 rebased onto current main",
+        "pytest -q for the deduped files (exact counts)",
+        "`agent_board collision --refs <PR32 head>,<main>` → SAFE_INDEPENDENT"
+      ]
     },
     {
       "id": "task-123",
@@ -2825,7 +2949,12 @@
         "CI سبز"
       ],
       "prerequisites": [],
-      "exclusive_paths": []
+      "exclusive_paths": [],
+      "evidence_required": [
+        "PR#33 diff shows only the intended files (no cli.py lock held)",
+        "pytest -q on the touched files (exact counts)",
+        "`agent_board check --files ... --branch <pr33 branch>` exit 0"
+      ]
     },
     {
       "id": "task-121",
@@ -2844,6 +2973,10 @@
       "exclusive_paths": [
         "src/nexus_ai_agent/creative/packs/delivery/",
         "tests/unit/test_otio_interop.py"
+      ],
+      "evidence_required": [
+        "OTIO marker round-trip test with exact pytest -q counts",
+        "ruff check + mypy on the touched modules"
       ]
     },
     {
@@ -2863,6 +2996,10 @@
       "exclusive_paths": [
         "src/nexus_ai_agent/core/async_db.py",
         "src/nexus_ai_agent/features/"
+      ],
+      "evidence_required": [
+        "async DB engine + 2 pilots + architecture guard tests (exact pytest -q counts)",
+        "ruff check + mypy on the touched modules"
       ]
     },
     {
@@ -2880,6 +3017,10 @@
       "exclusive_paths": [
         "tests/unit/test_optional_extras.py",
         ".github/"
+      ],
+      "evidence_required": [
+        "CI job matrix for [speech]/[translate]/[pdf]/[local-llm] extras with the run URLs",
+        "the extras_matrix harness output"
       ]
     },
     {
@@ -2905,7 +3046,11 @@
       "zone": "p0-stabilization",
       "title": "Remove the legacy /creative/* HTTP lane (D-0010 reopen clause) after PR#58 lands",
       "title_fa": "حذف مسیر قدیمی /creative/* بعد از ادغام PR#58",
-      "why_fa": "AD-0010: مسیر legacy فقط برای عدم برخورد با رفع SSRF درحال انجام (PR#58) نگه داشته شده؛ بعد از مرج باید حذف شود تا یک مسیر اجرایی Creative یگانه بماند."
+      "why_fa": "AD-0010: مسیر legacy فقط برای عدم برخورد با رفع SSRF درحال انجام (PR#58) نگه داشته شده؛ بعد از مرج باید حذف شود تا یک مسیر اجرایی Creative یگانه بماند.",
+      "evidence_required": [
+        "PR head SHA + main SHA + CI check-run URLs",
+        "pytest -q on the touched files (exact counts)"
+      ]
     },
     {
       "acceptance_criteria": [
@@ -2926,7 +3071,11 @@
       "zone": "creative-runtime",
       "title": "Lane instruments for LUT (color.apply_lut) and subtitles (caption.burn_in) so the refused surface ops can enter the matrix",
       "title_fa": "ابزارهای lane برای LUT و subtitles تا دو عمل ردشدهٔ surface وارد ماتریس واقعی شوند",
-      "why_fa": "D-0011: lut/burnin به دلیل نبود مسیر اجرای صادقانه (بدون .cube shipped و بدون subtitles op در lane IR) typed refuse می‌شوند؛ با ابزار واقعی lane قابل برگشت‌اند."
+      "why_fa": "D-0011: lut/burnin به دلیل نبود مسیر اجرای صادقانه (بدون .cube shipped و بدون subtitles op در lane IR) typed refuse می‌شوند؛ با ابزار واقعی lane قابل برگشت‌اند.",
+      "evidence_required": [
+        "PR head SHA + main SHA + CI check-run URLs",
+        "pytest -q on the touched files (exact counts)"
+      ]
     },
     {
       "acceptance_criteria": [
@@ -2944,7 +3093,11 @@
       "zone": "p0-stabilization",
       "title": "Staging smoke of /edit /caption /grade against the live bot (PTB runtime)",
       "title_fa": "اسموک استیجینگ سه فرمان creative روی ربات زنده",
-      "why_fa": "زنجیره در سطح unit/integration با artifact واقعی اثبات شده؛ اثبات نهایی کاربر-واقعی به کانتکست PTB زنده و توکن استیجینگ نیاز دارد (external dependency)."
+      "why_fa": "زنجیره در سطح unit/integration با artifact واقعی اثبات شده؛ اثبات نهایی کاربر-واقعی به کانتکست PTB زنده و توکن استیجینگ نیاز دارد (external dependency).",
+      "evidence_required": [
+        "PR head SHA + main SHA + CI check-run URLs",
+        "pytest -q on the touched files (exact counts)"
+      ]
     }
   ],
   "history": {
@@ -3232,6 +3385,19 @@
         "id": "nightly-backup-never-succeeded",
         "what": "The maintenance workflow's backup-db job (nightly 03:17 UTC, the production DB backup to the R2 blob tier) has failed EVERY run since it was introduced: runs 35580701817 (2026-09-21, 04d8820), 35705502209 (2026-09-22, 40327bc) and 35838057275 (2026-09-23, main @a997aab) — all with the 'Run nexus maintenance backup' step exiting 1. The one 'success' in the series (35586584833, 2026-09-21 10:02Z) was the Monday housekeeping job with backup-db SKIPPED (job-level API verified). Since 09-21 the backup path code (maintenance/backup.py, storage/providers/r2.py) is unchanged, so the failure is environmental: either the R2 secrets are not configured (by-design red, 'fail loudly'), or the R2+Neon combination is misconfigured. The exact error text is UNVERIFIED from this sandbox (Actions log download EOFs here). Consequence: no production database backup has ever been produced by this pipeline.",
         "resolution": "Owner action required: read the failed job log (any of the three runs), set/verify the R2_* and NEXUS_DATABASE_URL repo secrets per docs/ops/r2-storage.md §4, then trigger a manual run (workflow_dispatch) and confirm an upload under backups/db/<stamp>/. Tracked as task-164 (next_work). NOTE: if NEXUS_DATABASE_URL is unset in CI the job can never back up real data — the runner has no local SQLite file (settings default data/app.sqlite does not exist there), so the documented 'local SQLite fallback' is only meaningful on a host that actually runs the bot."
+      },
+      {
+        "date": "2026-10-01",
+        "id": "adr-number-0007-quadruple-collision",
+        "what": "Four live origin branches independently created an architecture-decision record numbered 0007 (one renumbered its duplicate to 0011), because ADR numbering had no cross-branch allocation rule and README rule 4 only fails on the merged tree.",
+        "evidence": [
+          "origin/arena/01a0181931-nexus-ai-agent docs/architecture/adr/0007-multisource-referee-exit-codes.md",
+          "origin/arena/01a0e742-nexus-ai-agent docs/architecture/adr/0007-remote-publication-frontier.md",
+          "origin/arena/01a0e907-nexus-ai-agent docs/architecture/adr/0007-restricted-shell-flag-grammar.md",
+          "origin/arena/01a0e28b-nexus-ai-agent docs/architecture/adr/0011-restricted-shell-flag-grammar.md"
+        ],
+        "impact": "Whichever branch merges second collides on the file or silently overwrites the other's record; the index test cannot catch it pre-merge.",
+        "fix": "Allocated ADR 0012 (highest visible across origin, not next-on-main), added README rule 6, queued task-229-adr-number-allocation-guard."
       }
     ],
     "board_revisions": [

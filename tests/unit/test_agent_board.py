@@ -275,11 +275,20 @@ def test_history_records_closed_work_without_claim_semantics(board: dict) -> Non
 # CLI behaviour
 # --------------------------------------------------------------------------- #
 def _first_claimable(board_path: Path) -> str:
+    """A claimable task the CLI will actually accept.
+
+    ``claim`` now refuses a task without ``evidence_required`` (AGENTS.md §2), so
+    the helper selects one that satisfies that precondition — otherwise the
+    claim-semantics tests would fail for a governance reason unrelated to the
+    behaviour they pin.
+    """
     data = json.loads(board_path.read_text(encoding="utf-8"))
     return next(
         claim["task"]
         for claim in data["claims"]
         if claim["status"] in {"queued", "available", "expired", "deferred"}
+        and claim.get("evidence_required")
+        and claim.get("exclusive_paths")
     )
 
 

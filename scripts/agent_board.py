@@ -24,6 +24,20 @@ Commands
                                 files against board exclusive_paths and report
                                 PRs whose scope is invisible (no claim for the
                                 head branch, or files outside every fence).
+  collision --refs A,B[,C...] [--fail-on-collision] [--json]
+                                Read-only pre-push preflight: for every pair of
+                                refs, list the files they both rewrite, the board
+                                zones those files belong to, and the three-way
+                                merge conflict-hunk count.  A pair is a
+                                SECURITY_SENSITIVE_COLLISION when a shared file
+                                is in a security-relevant zone; the tool detects
+                                and classifies only — it never merges or resolves.
+  validate [--strict-new] [--json]
+                                Mechanical governance invariants (exit 1 on error):
+                                every next_work entry and every active claim must
+                                carry evidence_required (legacy claimable gaps are
+                                WARN, errors under --strict-new); and exactly one
+                                active claim may hold gates_owner.
 
 All state lives in .agents/board.json (schema 1). Pure stdlib.
 
@@ -49,8 +63,10 @@ ROOT = Path(__file__).resolve().parents[1]
 BOARD = ROOT / ".agents" / "board.json"
 
 # Files every PR is expected to touch (coordination medium) — never counted as
-# "uncovered scope" by praudit, because no claim exclusively owns them.
-COORDINATION_FILES = frozenset({".agents/board.json"})
+# "uncovered scope" by praudit and never treated as a collision hazard, because
+# no claim exclusively owns them.  AGENTS.md is listed in the protocol's own
+# SAFE_INDEPENDENT rule, so it must be excluded here too (docs == executed rule).
+COORDINATION_FILES = frozenset({".agents/board.json", "AGENTS.md"})
 
 STOP_BANNER = """
 ╔══════════════════════════════════════════════════════════════════╗
@@ -227,6 +243,15 @@ def cmd_claim(args: argparse.Namespace) -> int:
             f" {claim.get('agent_branch')} (status {claim.get('status')}, expires {expires})"
         )
         print(STOP_BANNER)
+        return 2
+    # Documented rule (AGENTS.md §2 / protocol.verification_rule): a claimable task
+    # must carry evidence_required. Enforce it here so NEW work cannot be claimed
+    # without it; grandfathered legacy claims are surfaced by `validate` as WARN.
+    if not claim.get("evidence_required"):
+        print(
+            f"refusing: {args.task} has no evidence_required — add it to .agents/board.json "
+            "before claiming (AGENTS.md §2: a task without it cannot be claimed)."
+        )
         return 2
     claim.update(
         status="active",
@@ -482,6 +507,419 @@ def cmd_praudit(args: argparse.Namespace) -> int:
     return 0
 
 
+# ── collision preflight: two correct PRs must not become one unsafe merge ────
+#
+# Reads only git objects + board zone metadata; never merges and never resolves
+# a conflict.  A pair of refs is a *security-sensitive collision* when they
+# rewrite the same file that belongs to a security-relevant zone, or when a
+# three-way merge of that file produces conflict hunks (a naive "take ours /
+# take theirs" resolution would then silently drop one side's invariant).
+
+# Board-derived, minimal: a zone is security-relevant when its id names the
+# authority/boundary it enforces.  No hardcoded file list — the board already
+# declares which paths each zone owns (tested by test_agent_board_collision.py).
+SECURITY_ZONE_HINTS = ("security", "gate", "contract", "trust", "auth")
+
+COLLISION_SAFE = "SAFE_INDEPENDENT"
+COLLISION_SAFE_OVERLAP = "SAFE_OVERLAP"
+COLLISION_RECONCILE = "REQUIRES_MANUAL_RECONCILIATION"
+COLLISION_SECURITY = "SECURITY_SENSITIVE_COLLISION"
+COLLISION_UNKNOWN = "UNVERIFIABLE"
+# UNVERIFIABLE is dangerous on purpose: "could not inspect" must never be read as
+# "independent".  It is included in the bad set so --fail-on-collision exits 1.
+_COLLISION_BAD = frozenset({COLLISION_RECONCILE, COLLISION_SECURITY, COLLISION_UNKNOWN})
+
+
+def _run_git(*args: str, cwd: Path | None = None) -> tuple[int, str, str]:
+    import subprocess
+
+    proc = subprocess.run(["git", *args], cwd=cwd or ROOT, capture_output=True, text=True)
+    return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+
+
+def security_sensitive_zones(board: dict) -> list[str]:
+    """Zone ids that name the authority/boundary they enforce (sorted)."""
+    return sorted(
+        zone["id"]
+        for zone in board.get("zones", [])
+        if any(hint in zone["id"].lower() for hint in SECURITY_ZONE_HINTS)
+    )
+
+
+def zones_for_path(board: dict, path: str) -> list[str]:
+    """Every board zone whose declared paths contain *path* (sorted)."""
+    hits: list[str] = []
+    for zone in board.get("zones", []):
+        for zone_path in zone.get("paths", []):
+            if path == zone_path or path.startswith(zone_path) or zone_path.startswith(path):
+                hits.append(zone["id"])
+                break
+    return sorted(hits)
+
+
+def _changed_files(base: str, ref: str, cwd: Path | None = None) -> list[str] | None:
+    """Files changed between *base* and *ref*, or ``None`` when git failed.
+
+    ``None`` (not ``[]``) is load-bearing: an empty list means "no differences",
+    while ``None`` means "the ref could not be inspected".  Collapsing the two
+    into ``[]`` would let a typo'd or unfetched ref classify as SAFE.
+    """
+    code, out, _ = _run_git("diff", "--name-only", base, ref, cwd=cwd)
+    if code != 0:
+        return None
+    return [line for line in out.splitlines() if line.strip()]
+
+
+def _unknown_refs(refs: list[str], cwd: Path | None = None) -> list[str]:
+    """Refs git cannot resolve to a commit (sorted). Fail-closed input check."""
+    return sorted(
+        ref
+        for ref in refs
+        if _run_git("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", cwd=cwd)[0] != 0
+    )
+
+
+def _is_ancestor(older: str, newer: str, cwd: Path | None = None) -> bool:
+    """True when *older* is an ancestor of *newer* (stacked lineage)."""
+    code, _, _ = _run_git("merge-base", "--is-ancestor", older, newer, cwd=cwd)
+    return code == 0
+
+
+def _conflict_hunks(base: str, a: str, b: str, path: str, cwd: Path | None = None) -> int:
+    """Conflict-hunk count for a three-way merge of one file, or -1 if unknown."""
+    import tempfile
+    from pathlib import Path as _Path
+
+    def blob(ref: str) -> str | None:
+        code, out, _ = _run_git("show", f"{ref}:{path}", cwd=cwd)
+        return out if code == 0 else None
+
+    contents = {"base": blob(base), "a": blob(a), "b": blob(b)}
+    if any(value is None for value in contents.values()):
+        return -1
+    with tempfile.TemporaryDirectory() as tmp:
+        paths = {}
+        for key, value in contents.items():
+            paths[key] = _Path(tmp) / f"{key}.blob"
+            paths[key].write_text(value or "", encoding="utf-8")
+        proc = subprocess_run_merge(paths["a"], paths["base"], paths["b"])
+        if proc is None:
+            return -1
+        return (
+            sum(
+                1
+                for line in proc.splitlines()
+                if line.startswith("<<<<<<<") or line.startswith(">>>>>>>")
+            )
+            // 2
+        )
+
+
+def subprocess_run_merge(ours: Path, base: Path, theirs: Path) -> str | None:
+    import subprocess
+
+    proc = subprocess.run(
+        ["git", "merge-file", "-p", str(ours), str(base), str(theirs)],
+        capture_output=True,
+        text=True,
+    )
+    # git merge-file exits 0 (clean) or N (number of conflict hunks) on success,
+    # and 255 on error (e.g. a missing base blob).  Python reports a signal as a
+    # negative returncode.  Only 0..127 means "a merge was actually computed".
+    if proc.returncode < 0 or proc.returncode > 127:
+        return None
+    return proc.stdout
+
+
+def detect_collisions(
+    board: dict, refs: list[str], base: str = "", repo: Path | None = None
+) -> dict:
+    """Pairwise collision report for *refs* (git refs or SHAs). Read-only.
+
+    Deterministic: pairs and paths are sorted; no set/dict iteration order leaks
+    into the output.  Never merges and never resolves — detect + classify only.
+
+    Fail-closed: a ref git cannot resolve, a pair with no merge base and no
+    supplied ``base``, or a diff git refuses to run all yield ``UNVERIFIABLE``
+    (a bad classification) rather than ``SAFE_INDEPENDENT``.
+    """
+    security_zones = set(security_sensitive_zones(board))
+    unknown_refs = _unknown_refs(refs, repo)
+    pairs: list[dict] = []
+    for i in range(len(refs)):
+        for j in range(i + 1, len(refs)):
+            ref_a, ref_b = refs[i], refs[j]
+            if ref_a in unknown_refs or ref_b in unknown_refs:
+                pairs.append(
+                    {
+                        "ref_a": ref_a,
+                        "ref_b": ref_b,
+                        "stacked": False,
+                        "merge_base": None,
+                        "overlap_files": [],
+                        "files": [],
+                        "classification": COLLISION_UNKNOWN,
+                        "reason": "unknown ref (git could not resolve a commit)",
+                    }
+                )
+                continue
+            _, merge_base, _ = _run_git("merge-base", ref_a, ref_b, cwd=repo)
+            stacked = _is_ancestor(ref_a, ref_b, repo) or _is_ancestor(ref_b, ref_a, repo)
+            if not merge_base and base:
+                # Shallow clone / unrelated histories: fall back to the supplied
+                # base ref as the diff root (still detects shared rewritten files).
+                merge_base = base
+            diff_base = merge_base or base
+            if not diff_base:
+                pairs.append(
+                    {
+                        "ref_a": ref_a,
+                        "ref_b": ref_b,
+                        "stacked": stacked,
+                        "merge_base": None,
+                        "overlap_files": [],
+                        "files": [],
+                        "classification": COLLISION_UNKNOWN,
+                        "reason": "no merge base; pass --base to diff unrelated histories",
+                    }
+                )
+                continue
+            changed_a = _changed_files(diff_base, ref_a, repo)
+            changed_b = _changed_files(diff_base, ref_b, repo)
+            if changed_a is None or changed_b is None:
+                pairs.append(
+                    {
+                        "ref_a": ref_a,
+                        "ref_b": ref_b,
+                        "stacked": stacked,
+                        "merge_base": merge_base or None,
+                        "overlap_files": [],
+                        "files": [],
+                        "classification": COLLISION_UNKNOWN,
+                        "reason": f"git diff failed against {diff_base}",
+                    }
+                )
+                continue
+            files_a = set(changed_a)
+            files_b = set(changed_b)
+            overlap = sorted(files_a & files_b)
+
+            file_rows: list[dict] = []
+            for path in overlap:
+                if path in COORDINATION_FILES:
+                    continue  # board.json is the shared medium; its churn is never a hazard
+                zones = zones_for_path(board, path)
+                security = bool(set(zones) & security_zones)
+                hunks = _conflict_hunks(diff_base, ref_a, ref_b, path, repo) if diff_base else -1
+                file_rows.append(
+                    {
+                        "path": path,
+                        "zones": zones,
+                        "security_sensitive": security,
+                        "conflict_hunks": hunks,
+                    }
+                )
+
+            if not file_rows:
+                classification = COLLISION_SAFE
+            elif any(row["security_sensitive"] for row in file_rows):
+                classification = COLLISION_SECURITY
+            elif any(row["conflict_hunks"] > 0 for row in file_rows):
+                classification = COLLISION_RECONCILE
+            elif any(row["conflict_hunks"] < 0 for row in file_rows):
+                # Unknown hunk count (e.g. add/add or delete/modify: a blob is
+                # absent on one side) is an unproven merge, not a clean one.
+                # Fail closed so `--fail-on-collision` cannot exit 0 on it.
+                classification = COLLISION_UNKNOWN
+            else:
+                classification = COLLISION_SAFE_OVERLAP
+
+            pairs.append(
+                {
+                    "ref_a": ref_a,
+                    "ref_b": ref_b,
+                    "stacked": stacked,
+                    "merge_base": merge_base or None,
+                    "overlap_files": overlap,
+                    "files": file_rows,
+                    "classification": classification,
+                }
+            )
+    bad = [p for p in pairs if p["classification"] in _COLLISION_BAD]
+    return {
+        "refs": list(refs),
+        "security_sensitive_zones": sorted(security_zones),
+        "pairs": pairs,
+        "collision_count": len(bad),
+    }
+
+
+def cmd_collision(args: argparse.Namespace) -> int:
+    board = load_board()
+    refs = [r.strip() for r in args.refs.split(",") if r.strip()]
+    if len(refs) < 2:
+        print("collision: provide at least two refs, e.g. --refs SHA1,SHA2")
+        return 2
+    result = detect_collisions(
+        board, refs, base=args.base, repo=Path(args.repo) if args.repo else None
+    )
+    if args.as_json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        print(
+            f"collision preflight: {len(result['pairs'])} pair(s), "
+            f"{result['collision_count']} dangerous"
+        )
+        print(f"  security-sensitive zones: {', '.join(result['security_sensitive_zones'])}")
+        for pair in result["pairs"]:
+            print(f"  {pair['ref_a'][:10]} × {pair['ref_b'][:10]} → {pair['classification']}")
+            for row in pair["files"]:
+                flag = " [SECURITY]" if row["security_sensitive"] else ""
+                hunks = row["conflict_hunks"]
+                hunk_txt = f" ({hunks} conflict hunks)" if hunks > 0 else ""
+                print(f"      {row['path']}{flag}{hunk_txt}")
+    if args.fail_on_collision and result["collision_count"]:
+        return 1
+    return 0
+
+
+# ── validate: documented rule == executed rule ───────────────────────────────
+
+
+def _claimable_statuses() -> set[str]:
+    return {
+        "queued",
+        "available",
+        "expired",
+        "deferred",
+        "available_sequenced_post_33",
+        "available_sequenced_post_32",
+        "available_sequenced_post_32_33",
+        "assigned_to_B",
+        "assigned_to_B_next",
+        "assigned_to_E_pr33",
+    }
+
+
+def validate_board(board: dict, strict_new: bool = False) -> dict:
+    """Mechanical governance invariants. Returns {errors, warnings, ok}.
+
+    * ``evidence_required`` — required (ERROR) for the forward plan
+      (``next_work``) and for every *active* claim; grandfathered open/legacy
+      claims are WARN so historical board state is not rewritten.  New work
+      cannot be claimed without it (``cmd_claim`` enforces that).
+    * ``gates_owner`` — exactly one *active* claim may hold it.  0 or >1 is an
+      ERROR (the protocol says exactly one gates steward).
+    * ``exclusive_paths`` — an active claim must carry a path list (``None`` is an
+      ERROR, matching ``test_active_claims_carry_owner_timestamp_and_zone``); an
+      empty list fences nothing and is a WARN.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    for entry in board.get("next_work", []):
+        if not entry.get("evidence_required"):
+            errors.append(f"next_work {entry.get('id')}: missing evidence_required")
+
+    for claim in board.get("claims", []):
+        status = claim.get("status")
+        if not claim.get("evidence_required"):
+            if _is_active_claim(claim):
+                errors.append(f"active claim {claim['task']}: missing evidence_required")
+            elif status in _claimable_statuses():
+                message = f"legacy claimable {claim['task']}: missing evidence_required"
+                (errors if strict_new else warnings).append(message)
+        if _is_active_claim(claim):
+            paths = claim.get("exclusive_paths")
+            if paths is None:
+                errors.append(f"active claim {claim['task']}: exclusive_paths is None")
+            elif not isinstance(paths, list):
+                errors.append(
+                    f"active claim {claim['task']}: exclusive_paths is not a list"
+                    f" ({type(paths).__name__})"
+                )
+            elif not paths:
+                warnings.append(f"active claim {claim['task']}: exclusive_paths is empty")
+
+    active_gates = [
+        c["task"] for c in board.get("claims", []) if _is_active_claim(c) and c.get("gates_owner")
+    ]
+    if len(active_gates) != 1:
+        errors.append(
+            "gates_owner invariant: exactly one active gates owner required, found "
+            f"{len(active_gates)} ({', '.join(active_gates) or 'none'})"
+        )
+
+    return {"errors": sorted(errors), "warnings": sorted(warnings), "ok": not errors}
+
+
+def cmd_validate(args: argparse.Namespace) -> int:
+    board = load_board()
+    result = validate_board(board, strict_new=args.strict_new)
+    if args.as_json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        print(f"validate: {len(result['errors'])} error(s), {len(result['warnings'])} warning(s)")
+        for msg in result["errors"]:
+            print(f"  ERROR   {msg}")
+        for msg in result["warnings"]:
+            print(f"  WARN    {msg}")
+    return 0 if result["ok"] else 1
+
+
+# ── evidence: a claimed test name must be derivable from a command ───────────
+
+
+def resolve_evidence_names(ref: str, names: list[str], repo: Path | None = None) -> dict:
+    """Resolve cited test names against a ref: file (``tests/**/NAME.py``) or
+    ``def NAME(`` anywhere under ``tests/``. Read-only; deterministic output.
+
+    Guards the PR-body failure mode where prose cites a test that never existed:
+    the cited string is either present in the tree or it is not.
+    """
+    _, tree, _ = _run_git("ls-tree", "-r", "--name-only", ref, "tests/", cwd=repo)
+    files = {Path(p).name: p for p in tree.splitlines() if p.strip()}
+    results: list[dict] = []
+    for name in names:
+        file_path = files.get(f"{name}.py")
+        code, out, _ = _run_git("grep", "-l", "-E", rf"def {name}\(", ref, "--", "tests/", cwd=repo)
+        function_file = out.splitlines()[0] if code == 0 and out else None
+        results.append(
+            {
+                "name": name,
+                "file": file_path,
+                "function_file": function_file,
+                "found": bool(file_path or function_file),
+            }
+        )
+    return {
+        "ref": ref,
+        "names": results,
+        "missing": sorted(r["name"] for r in results if not r["found"]),
+    }
+
+
+def cmd_evidence(args: argparse.Namespace) -> int:
+    names = [n.strip() for n in args.names.split(",") if n.strip()]
+    if not names:
+        print("evidence: provide --names test_a,test_b")
+        return 2
+    result = resolve_evidence_names(args.ref, names, repo=Path(args.repo) if args.repo else None)
+    if args.as_json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        print(
+            f"evidence: {len(result['names'])} cited name(s), {len(result['missing'])} unresolved"
+        )
+        for row in result["names"]:
+            where = row["file"] or row["function_file"] or "—"
+            mark = "OK " if row["found"] else "MISSING"
+            print(f"  {mark} {row['name']}  ({where})")
+    if args.fail_on_missing and result["missing"]:
+        return 1
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="NEXUS multi-agent claim board")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -533,6 +971,45 @@ def main() -> int:
     )
     p.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
     p.set_defaults(func=cmd_praudit)
+
+    p = sub.add_parser(
+        "collision",
+        help="pre-push collision preflight: two correct PRs must not become one unsafe merge",
+    )
+    p.add_argument("--refs", required=True, help="comma-separated git refs/SHAs (>=2)")
+    p.add_argument("--base", default="", help="fallback base ref when two refs share no history")
+    p.add_argument("--repo", default="", help="repository path (default: the board repo)")
+    p.add_argument(
+        "--fail-on-collision",
+        action="store_true",
+        help="exit 1 when any pair is SECURITY_SENSITIVE or REQUIRES_MANUAL_RECONCILIATION",
+    )
+    p.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
+    p.set_defaults(func=cmd_collision)
+
+    p = sub.add_parser("validate", help="mechanical governance invariants (errors exit 1)")
+    p.add_argument(
+        "--strict-new",
+        action="store_true",
+        help="treat grandfathered legacy evidence_required gaps as errors too",
+    )
+    p.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
+    p.set_defaults(func=cmd_validate)
+
+    p = sub.add_parser(
+        "evidence",
+        help="resolve cited test names against a ref (a claimed name must exist)",
+    )
+    p.add_argument("--ref", required=True, help="git ref/SHA whose tree to search")
+    p.add_argument("--names", required=True, help="comma-separated test names")
+    p.add_argument("--repo", default="", help="repository path (default: the board repo)")
+    p.add_argument(
+        "--fail-on-missing",
+        action="store_true",
+        help="exit 1 when any cited name is not present in the tree",
+    )
+    p.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
+    p.set_defaults(func=cmd_evidence)
 
     args = parser.parse_args()
     return int(args.func(args))
