@@ -96,6 +96,7 @@ from nexus_ai_agent.creative.studio.models import (
     TypedCommand,
     compute_state_hash,
 )
+from nexus_ai_agent.creative.studio.persistence import DurableStudioStore
 from nexus_ai_agent.creative.studio.references import ReferenceResolver
 
 
@@ -181,21 +182,25 @@ class CommandBus:
         *,
         authorizer: ProjectAuthorizer | None = None,
         allow_experimental: bool = False,
+        store: DurableStudioStore | None = None,
+        history: tuple[EditTransaction, ...] | list[EditTransaction] | None = None,
     ) -> None:
         self._registry = registry if registry is not None else build_wave1_registry()
         self._resolver = resolver if resolver is not None else ReferenceResolver()
         self._authorizer = authorizer
-        # Trusted composition-root opt-in for EXPERIMENTAL packs. Deliberately
-        # not an envelope field: a command must never widen its own lifecycle.
         self._allow_experimental = allow_experimental
+        self._store = store
         self._lock = threading.RLock()
-        # model_copy(update=...) bypasses Pydantic's derived state_hash and
-        # validation (the worker uses it when registering its staged asset).
-        # Never let a stale/fabricated hash become an optimistic precondition.
         self._project = Project.model_validate(state.model_dump(mode="json"))
-        self._history: list[EditTransaction] = []
+        self._history: list[EditTransaction] = list(history) if history is not None else []
         self._idempotency: dict[tuple[str, str, str], _Reservation] = {}
         self._executing = False
+
+        if self._store is not None:
+            self._store.save_snapshot(self._project)
+            stored_res = self._store.load_idempotency(self._project.project_id)
+            for key, (fp, res_obj) in stored_res.items():
+                self._idempotency[key] = _Reservation(fingerprint=fp, result=res_obj)
 
     @property
     def project(self) -> Project:
@@ -324,6 +329,17 @@ class CommandBus:
 
                 self._project = new_project
                 self._history.append(composite_tx)
+                if self._store is not None:
+                    self._store.save_snapshot(new_project)
+                    self._store.record_transaction(new_project.project_id, composite_tx)
+                    if plan.idempotency_key is not None:
+                        self._store.record_idempotency(
+                            new_project.project_id,
+                            "plan",
+                            plan.idempotency_key,
+                            fingerprint,
+                            plan_result,
+                        )
                 if key is not None:
                     self._idempotency[key] = _Reservation(
                         fingerprint,
@@ -541,4 +557,19 @@ class CommandBus:
         # either central state or the reservation's result is committed.
         self._project = new_project
         self._history = [*outcome.history, transaction]
+        if self._store is not None:
+            self._store.save_snapshot(new_project)
+            self._store.record_transaction(new_project.project_id, transaction)
+            if command.idempotency_key is not None:
+                self._store.record_idempotency(
+                    new_project.project_id,
+                    command.operation,
+                    command.idempotency_key,
+                    _fingerprint(command),
+                    result,
+                )
+            if command.operation == "system.undo":
+                evict_set = {str(undone_tx_id)} if undone_tx_id is not None else set()
+                evict_set.update(current_tx_ids)
+                self._store.evict_idempotency(new_project.project_id, evict_set)
         return result
