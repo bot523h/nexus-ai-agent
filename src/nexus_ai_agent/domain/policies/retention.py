@@ -1,14 +1,18 @@
 """Pure retention predicates and the resumability product contract.
 
-Two levels of decision live here, and the second one is the safety-critical
-one:
+Three levels of decision live here, each built on the one below it, with no
+level re-implementing another:
 
-* **row level** -- :func:`pinned` / :func:`deletable` answer for a single
-  lifecycle row;
-* **thread level** -- :func:`thread_retention` answers for a whole thread by
-  quantifying over *every* row it owns.
+* **row level** -- :func:`row_reason` is the *single* implementation of the
+  row-level decision under :data:`POLICY_NAME`; it returns the evidence
+  (:class:`RetentionReason`).  :func:`deletable` is only its boolean
+  projection, and :func:`pinned` is the pin condition it consults.
+* **thread level** -- :func:`thread_retention` quantifies over *every* row a
+  thread owns.  This is the safety-critical level.
+* **product level** -- the window and the expired-resume behaviour are
+  re-exported from :mod:`nexus_ai_agent.domain.retention`, never re-spelled.
 
-The quantifier asymmetry between them **is** the safety property:
+The thread level's quantifier asymmetry **is** the safety property:
 
 ===================  ==================  =================================
 Concept              Quantifier         Why
@@ -26,6 +30,16 @@ the SQLite index is a rowid table, so "the last row" is insertion order -- a
 storage-engine artefact, not a fact about the thread.  Deriving a destructive
 recommendation from it made the answer depend on the order rows happened to
 be written in; see ``tests/unit/test_thread_retention_verdict.py``.
+
+A destructive verdict is never bare: :attr:`ThreadRetention.reason` carries
+the evidence, and ``reason is NONE`` is equivalent to ``deletable`` *by
+construction* rather than by coincidence.
+
+This module is one of **two** retention policies in the repository.  The other
+is :data:`~nexus_ai_agent.storage.checkpoint_lifecycle.ELIGIBILITY_POLICY_NAME`
+in :mod:`nexus_ai_agent.storage.checkpoint_lifecycle`; they are deliberately
+distinct and their divergence is pinned by
+``tests/unit/test_retention_policy_divergence.py``.
 """
 
 from __future__ import annotations
@@ -160,14 +174,44 @@ def pinned(record: RetentionRecord, *, now: datetime) -> bool:
     return record.active_until is not None and current < _utc(record.active_until)
 
 
-def deletable(record: RetentionRecord, *, now: datetime) -> bool:
-    """Pure fail-safe predicate; unknown access/active state is retained."""
-    if record.last_accessed_at is None:
-        return False
+def row_reason(record: RetentionRecord, *, now: datetime) -> RetentionReason:
+    """The row-level retention decision, with its evidence.
+
+    This is the *single* implementation of the row-level decision under
+    :data:`POLICY_NAME`; :func:`deletable` is only its boolean projection.
+    There is deliberately no second copy of these three conditions anywhere —
+    an explanation that could disagree with the decision it explains is a
+    shadow predicate, and a shadow predicate eventually wins.
+
+    The three ways a row can be retained, in reporting precedence:
+
+    * an ``active_until`` still in the future -> ``PINNED``;
+    * no access stamp at all -> ``NO_EVIDENCE`` (age unknown, so retained —
+      never inferred safe);
+    * accessed inside the resumability window -> ``RECENT_ACCESS``.
+
+    ``NONE`` means none of the three holds, i.e. the row is deletable.  The
+    precedence order is the *reporting* order only: the decision is "does any
+    condition hold", which is order-insensitive.
+    """
     current = _utc(now)
     if pinned(record, now=current):
-        return False
-    return current - _utc(record.last_accessed_at) >= RESUMABILITY_WINDOW
+        return RetentionReason.PINNED
+    if record.last_accessed_at is None:
+        return RetentionReason.NO_EVIDENCE
+    if current - _utc(record.last_accessed_at) < RESUMABILITY_WINDOW:
+        return RetentionReason.RECENT_ACCESS
+    return RetentionReason.NONE
+
+
+def deletable(record: RetentionRecord, *, now: datetime) -> bool:
+    """Pure fail-safe predicate; unknown access/active state is retained.
+
+    The boolean projection of :func:`row_reason` — the same decision, not a
+    parallel one, so ``deletable(r)`` is ``row_reason(r) is NONE`` *by
+    construction* rather than by a test that happens to pass today.
+    """
+    return row_reason(record, now=now) is RetentionReason.NONE
 
 
 @dataclass(frozen=True)
@@ -214,26 +258,6 @@ _REASON_PRECEDENCE: Final[tuple[RetentionReason, ...]] = (
     RetentionReason.RECENT_ACCESS,
     RetentionReason.NO_EVIDENCE,
 )
-
-
-def row_reason(record: RetentionRecord, *, now: datetime) -> RetentionReason:
-    """Why ONE row vetoes deletion; :attr:`RetentionReason.NONE` when it does not.
-
-    Deliberately expressed through the *same* predicates :func:`deletable`
-    uses, so it can explain that decision but cannot contradict it:
-    ``row_reason(r) is NONE`` iff ``deletable(r)``.  The check order here is
-    the reporting precedence, not a second evaluation order — ``deletable``
-    returns False if *any* of its three conditions holds, so the boolean is
-    order-insensitive.
-    """
-    current = _utc(now)
-    if pinned(record, now=current):
-        return RetentionReason.PINNED
-    if record.last_accessed_at is None:
-        return RetentionReason.NO_EVIDENCE
-    if current - _utc(record.last_accessed_at) < RESUMABILITY_WINDOW:
-        return RetentionReason.RECENT_ACCESS
-    return RetentionReason.NONE
 
 
 def thread_retention(records: Iterable[RetentionRecord], *, now: datetime) -> ThreadRetention:

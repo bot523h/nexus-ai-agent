@@ -38,6 +38,7 @@ probe   mutation                                             killed by
 #14     M8 ``deletable`` silently re-based on ``created_at`` divergence sweep
 #15     reason loses its NO_EVIDENCE fallback                biconditional test
 #16     ``protection_reason`` hard-coded to ``none``         inspect-v1 contract
+#17     ``deletable`` re-implemented in parallel             biconditional test
 ======  ===================================================  =====================
 
 Mandated-probe mapping: M1=#9, M2=#10, M3=#11, M4=#6 (a vetoing row is never
@@ -208,16 +209,11 @@ PROBES: tuple[Probe, ...] = (
         name="#9 M1 missing access becomes deletable",
         target=POLICY,
         anchor=(
-            "    if record.last_accessed_at is None:\n"
-            "        return False\n"
-            "    current = _utc(now)\n"
-            "    if pinned(record, now=current):\n"
+            "    if record.last_accessed_at is None:\n        return RetentionReason.NO_EVIDENCE\n"
         ),
         mutant=(
             "    if record.last_accessed_at is None:\n"
-            "        return True  # MUTATION: no evidence inferred as safe\n"
-            "    current = _utc(now)\n"
-            "    if pinned(record, now=current):\n"
+            "        return RetentionReason.NONE  # MUTATION: no evidence inferred as safe\n"
         ),
         tests=(
             V + "test_unknown_access_state_blocks_deletion_of_the_whole_thread",
@@ -245,8 +241,12 @@ PROBES: tuple[Probe, ...] = (
     Probe(
         name="#11 M3 recent access ignored",
         target=POLICY,
-        anchor=("    return current - _utc(record.last_accessed_at) >= RESUMABILITY_WINDOW\n"),
-        mutant="    return True  # MUTATION: the resumability window is not consulted\n",
+        anchor=(
+            "    if current - _utc(record.last_accessed_at) < RESUMABILITY_WINDOW:\n"
+            "        return RetentionReason.RECENT_ACCESS\n"
+            "    return RetentionReason.NONE\n"
+        ),
+        mutant="    return RetentionReason.NONE  # MUTATION: window not consulted\n",
         tests=(
             V + "test_reason_distinguishes_pinned_from_recent_from_unknown",
             D + "test_states_where_both_policies_agree",
@@ -288,10 +288,8 @@ PROBES: tuple[Probe, ...] = (
     Probe(
         name="#14 M8 deletable re-based on created_at (silent policy merge)",
         target=POLICY,
-        anchor=("    return current - _utc(record.last_accessed_at) >= RESUMABILITY_WINDOW\n"),
-        mutant=(
-            "    return current - _utc(record.created_at) >= RESUMABILITY_WINDOW  # MUTATION\n"
-        ),
+        anchor="    if current - _utc(record.last_accessed_at) < RESUMABILITY_WINDOW:\n",
+        mutant=("    if current - _utc(record.created_at) < RESUMABILITY_WINDOW:  # MUTATION\n"),
         tests=(
             D + "test_axis2b_is_unreachable_in_production_and_is_documented_as_such",
             D + "test_states_where_both_policies_agree",
@@ -316,6 +314,25 @@ PROBES: tuple[Probe, ...] = (
         ),
     ),
     # ── protection_reason drops out of the CLI contract ──────────────────
+    # ── deletable stops delegating and becomes a parallel copy ───────────
+    Probe(
+        name="#17 deletable re-implemented in parallel (drops the pin check)",
+        target=POLICY,
+        anchor="    return row_reason(record, now=now) is RetentionReason.NONE\n",
+        mutant=(
+            "    if record.last_accessed_at is None:\n"
+            "        return False\n"
+            "    return (\n"
+            "        _utc(now) - _utc(record.last_accessed_at) >= RESUMABILITY_WINDOW\n"
+            "    )  # MUTATION: parallel copy of the decision, pin check dropped\n"
+        ),
+        tests=(
+            V + "test_row_reason_can_explain_but_never_contradict_deletable",
+            V + "test_reason_is_none_exactly_when_the_thread_is_deletable",
+            INSP + "test_inspect_reports_a_pinned_thread_as_pinned",
+            D + "test_states_where_both_policies_agree",
+        ),
+    ),
     Probe(
         name="#16 protection_reason hard-coded to `none`",
         target=CLI,
