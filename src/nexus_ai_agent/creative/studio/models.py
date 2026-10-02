@@ -549,8 +549,6 @@ class EditTransaction(BaseModel):
     previous_state_hash: str
     new_state_hash: str
     state_before: dict[str, Any]
-    plan_id: str | None = None
-    actor_id: str | None = None
 
 
 class CommandResult(BaseModel):
@@ -562,36 +560,4 @@ class CommandResult(BaseModel):
     state_hash: str
     output: dict[str, Any] = Field(default_factory=dict)
     diagnostics: dict[str, Any] = Field(default_factory=dict)
-    undo_available: bool = True
-
-
-class PlanTransaction(BaseModel):
-    """An atomic multi-step plan proposed for execution.
-
-    Staged speculative execution verifies every command before commit;
-    any failure rolls back all commands in the plan atomically.
-    """
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    plan_id: str = Field(min_length=1, max_length=128)
-    actor: ActorIdentity
-    target: TargetRef
-    commands: tuple[TypedCommand, ...] = Field(min_length=1)
-    idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
-    preconditions: Preconditions = Field(default_factory=Preconditions)
-
-
-class PlanResult(BaseModel):
-    """Outcome of a successfully dispatched multi-step PlanTransaction."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    plan_id: str
-    transaction_id: str
-    status: Literal["applied"] = "applied"
-    state_revision: int = Field(ge=0)
-    state_hash: str
-    command_results: tuple[CommandResult, ...]
-    output: dict[str, Any] = Field(default_factory=dict)
     undo_available: bool = True
