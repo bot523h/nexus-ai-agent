@@ -312,7 +312,6 @@ def test_merge_file_error_exit_is_unknown(module: ModuleType, tmp_path: Path) ->
     assert module.subprocess_run_merge(ours, base, theirs) is not None
 
 
-
 def test_cli_fails_on_unknown_ref(
     module: ModuleType, collision_repo, monkeypatch: pytest.MonkeyPatch
 ) -> None:
