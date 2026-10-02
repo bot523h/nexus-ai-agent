@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from fractions import Fraction
 from typing import Any
 
 from nexus_ai_agent.creative.packs.delivery.models import (
@@ -52,6 +53,11 @@ from nexus_ai_agent.creative.studio.models import (
     CommandValidationError,
     PermissionLevel,
     Project,
+)
+from nexus_ai_agent.creative.temporal import (
+    RoundingPolicy,
+    TemporalPoint,
+    Timebase,
 )
 
 
@@ -293,21 +299,34 @@ def _export_otio(project: Project, context: OperationContext) -> OperationOutcom
     """Level B (REVERSIBLE) handler for delivery.export_otio.
 
     Serializes project timeline, layers, and color metadata into the canonical
-    OpenTimelineIO (OTIO v1) interchange format.
+    OpenTimelineIO (OTIO v1) interchange format. Uses exact canonical temporal
+    conversion to derive frame counts and record loss metadata.
     """
     payload = ExportOtioInput.model_validate(context.input_data)
     rate = payload.frame_rate
+    rate_frac = Fraction(rate).limit_denominator(10000)
+    target_tb = Timebase(numerator=rate_frac.numerator, denominator=rate_frac.denominator)
 
     video_clips: list[OtioClip] = []
     audio_clips: list[OtioClip] = []
 
     for asset in project.assets:
         duration_us = asset.duration_us or 1_000_000
-        duration_frames = max(1, int((duration_us / 1_000_000.0) * rate))
+        pt = TemporalPoint.from_us(duration_us)
+        conv = pt.to_ticks(target_tb, rounding=RoundingPolicy.NEAREST)
+        duration_frames = max(1, conv.value)
+
         time_range = TimeRange(
             start_time=RationalTime(value=0, rate=rate),
             duration=RationalTime(value=duration_frames, rate=rate),
         )
+        meta = {
+            "provenance": asset.provenance,
+            "temporal_conversion": {
+                "lossless": conv.lossless,
+                "remainder_seconds": str(conv.remainder_seconds),
+            },
+        }
 
         if asset.media_kind == "video":
             video_clips.append(
@@ -315,7 +334,7 @@ def _export_otio(project: Project, context: OperationContext) -> OperationOutcom
                     name=asset.asset_id,
                     source_range=time_range,
                     media_url=f"asset:{asset.asset_id}",
-                    metadata={"provenance": asset.provenance},
+                    metadata=meta,
                 )
             )
         elif asset.media_kind == "audio":
@@ -324,7 +343,7 @@ def _export_otio(project: Project, context: OperationContext) -> OperationOutcom
                     name=asset.asset_id,
                     source_range=time_range,
                     media_url=f"asset:{asset.asset_id}",
-                    metadata={"provenance": asset.provenance},
+                    metadata=meta,
                 )
             )
 
