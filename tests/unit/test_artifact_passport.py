@@ -104,3 +104,34 @@ class TestArtifactPassportAdversarialSuite:
         assert loaded.verify_integrity() is True
 
         store.close()
+
+    def test_bus_attached_durable_store_automatically_persists_passports(self) -> None:
+        from nexus_ai_agent.creative.studio import CommandBus
+        from tests.unit.test_plan_transaction import make_command
+
+        proj = make_project("proj_auto_passport")
+        bus = CommandBus(state=proj)
+        store = DurableStore(":memory:")
+        bus.attach_durable_store(store)
+
+        cmd = make_command(
+            "timeline.mark", "c_mark_auto", input={"at": "اینجا", "label": "AutoMark"}
+        )
+        res = bus.dispatch(cmd)
+        # Query persisted project
+        loaded_proj = store.load_project_state("proj_auto_passport")
+        assert loaded_proj is not None
+        assert loaded_proj.state_revision == 1
+
+        # Query auto-persisted passport
+        rows = store._conn.execute("SELECT passport_hash FROM artifact_passports").fetchall()
+        assert len(rows) == 1
+        passport_hash = rows[0]["passport_hash"]
+        loaded_passport = store.load_artifact_passport(passport_hash)
+
+        assert loaded_passport is not None
+        assert loaded_passport.causal_chain.transaction_id == res.transaction_id
+        assert loaded_passport.causal_chain.command_id == "c_mark_auto"
+        assert loaded_passport.verify_integrity() is True
+
+        store.close()

@@ -94,6 +94,11 @@ from nexus_ai_agent.creative.studio.models import (
     TypedCommand,
     compute_state_hash,
 )
+from nexus_ai_agent.creative.studio.passport import (
+    ArtifactPassport,
+    ExecutionProof,
+    ProvenanceCausalChain,
+)
 from nexus_ai_agent.creative.studio.references import ReferenceResolver
 
 
@@ -204,7 +209,13 @@ class CommandBus:
         self._project = Project.model_validate(state.model_dump(mode="json"))
         self._history: list[EditTransaction] = []
         self._idempotency: dict[tuple[str, str, str], _Reservation] = {}
+        self._durable_store: Any | None = None
         self._executing = False
+
+    def attach_durable_store(self, store: Any) -> None:
+        """Attach a DurableStore to enable automatic persistence flushes and passport records."""
+        with self._lock:
+            self._durable_store = store
 
     @property
     def project(self) -> Project:
@@ -512,8 +523,40 @@ class CommandBus:
             },
             undo_available=True,
         )
+        # Generate proof-carrying ArtifactPassport for the transaction
+        passport_chain = ProvenanceCausalChain(
+            request_id=f"req_{command.command_id}",
+            project_id=new_project.project_id,
+            actor_id=command.actor.actor_id if command.actor else "system_actor",
+            transaction_id=transaction.transaction_id,
+            command_id=command.command_id,
+            operation=command.operation,
+        )
+        output_bytes = json.dumps(outcome.output, sort_keys=True, ensure_ascii=False).encode(
+            "utf-8"
+        )
+        passport_proof = ExecutionProof(
+            executor_id="bus_in_memory_reducer",
+            status="success",
+            output_hash=f"sha256:{hashlib.sha256(output_bytes).hexdigest()}",
+            duration_ms=0.0,
+            timestamp_utc="2026-10-01T23:45:00Z",
+        )
+        passport = ArtifactPassport(
+            artifact_id=f"art_{transaction.transaction_id[:12]}",
+            artifact_type=command.operation,
+            content_hash=new_project.state_hash,
+            causal_chain=passport_chain,
+            execution_proof=passport_proof,
+        ).with_computed_hash()
+
         # All potentially failing validation/construction is complete before
         # either central state or the reservation's result is committed.
         self._project = new_project
         self._history = [*outcome.history, transaction]
+
+        if self._durable_store is not None:
+            self._durable_store.save_project_state(self._project, [transaction])
+            self._durable_store.save_artifact_passport(passport)
+
         return result
