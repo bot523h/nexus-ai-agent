@@ -164,5 +164,5 @@ def test_pack_substrate_does_not_cross_package_boundaries() -> None:
                 )
             ), (
                 f"{path.relative_to(REPO_ROOT)} crosses a package boundary via {module!r}; "
-                "packs may only use studio and temporal contracts (no storage/, llm/ or bot/ imports)"
+                "packs may only use studio/temporal contracts (no storage/llm/bot)"
             )
