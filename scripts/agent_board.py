@@ -623,7 +623,10 @@ def subprocess_run_merge(ours: Path, base: Path, theirs: Path) -> str | None:
         capture_output=True,
         text=True,
     )
-    if proc.returncode < 0:
+    # git merge-file exits 0 (clean) or N (number of conflict hunks) on success,
+    # and 255 on error (e.g. a missing base blob).  Python reports a signal as a
+    # negative returncode.  Only 0..127 means "a merge was actually computed".
+    if proc.returncode < 0 or proc.returncode > 127:
         return None
     return proc.stdout
 
@@ -723,6 +726,11 @@ def detect_collisions(
                 classification = COLLISION_SECURITY
             elif any(row["conflict_hunks"] > 0 for row in file_rows):
                 classification = COLLISION_RECONCILE
+            elif any(row["conflict_hunks"] < 0 for row in file_rows):
+                # Unknown hunk count (e.g. add/add or delete/modify: a blob is
+                # absent on one side) is an unproven merge, not a clean one.
+                # Fail closed so `--fail-on-collision` cannot exit 0 on it.
+                classification = COLLISION_UNKNOWN
             else:
                 classification = COLLISION_SAFE_OVERLAP
 

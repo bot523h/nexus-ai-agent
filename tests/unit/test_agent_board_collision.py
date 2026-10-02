@@ -265,6 +265,54 @@ def test_changed_files_returns_none_on_git_failure(module: ModuleType, collision
     assert module._changed_files("base", "a", repo) is not None
 
 
+def test_add_add_unknown_hunks_fail_closed(module: ModuleType, collision_repo) -> None:
+    """add/add: the file exists on neither side of the merge base, so no base blob
+    is available to merge. That is a genuine conflict, not a clean overlap."""
+    repo, _ = collision_repo
+    _git(repo, "checkout", "-q", "-b", "aa", "base")
+    _write(repo, "brand_new.py", "side = 'A'\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "aa")
+    _git(repo, "checkout", "-q", "-b", "ab", "base")
+    _write(repo, "brand_new.py", "side = 'B'\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "ab")
+    board = {"zones": [{"id": "misc", "paths": ["brand_new.py"]}]}
+    pair = _pair(_detect(module, repo, board, ["aa", "ab"]))
+    assert pair["files"][0]["conflict_hunks"] == -1
+    assert pair["classification"] == module.COLLISION_UNKNOWN
+    assert pair["classification"] in module._COLLISION_BAD
+
+
+def test_delete_modify_unknown_hunks_fail_closed(module: ModuleType, collision_repo) -> None:
+    """delete/modify: one side removes the file, the other edits it. git cannot
+    merge it without a base blob, so the count is unknown — never SAFE."""
+    repo, board = collision_repo
+    _git(repo, "checkout", "-q", "-b", "da", "base")
+    (repo / "conflict.py").unlink()
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "da")
+    _git(repo, "checkout", "-q", "-b", "db", "base")
+    _write(repo, "conflict.py", "changed = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "db")
+    pair = _pair(_detect(module, repo, board, ["da", "db"]))
+    assert pair["files"][0]["conflict_hunks"] == -1
+    assert pair["classification"] == module.COLLISION_UNKNOWN
+
+
+def test_merge_file_error_exit_is_unknown(module: ModuleType, tmp_path: Path) -> None:
+    """``git merge-file`` exits 255 on a missing base; that must be None (unknown),
+    not empty stdout (zero hunks). A real clean merge still returns text."""
+    ours, base, theirs = tmp_path / "o", tmp_path / "b", tmp_path / "t"
+    ours.write_text("a\n", encoding="utf-8")
+    theirs.write_text("b\n", encoding="utf-8")
+    assert module.subprocess_run_merge(ours, base, theirs) is None
+    base.write_text("a\n", encoding="utf-8")
+    assert module.subprocess_run_merge(ours, base, theirs) is not None
+
+
+
 def test_cli_fails_on_unknown_ref(
     module: ModuleType, collision_repo, monkeypatch: pytest.MonkeyPatch
 ) -> None:

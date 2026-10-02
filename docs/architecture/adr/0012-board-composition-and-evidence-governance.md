@@ -81,9 +81,12 @@ refuses a task that has no `evidence_required`.
 - `tests/unit/test_agent_board_collision.py` — every classification, the
   security-zone derivation from the board, the coordination-file exclusion
   (`.agents/board.json` *and* `AGENTS.md`), the fail-closed `UNVERIFIABLE` path
-  (unknown ref, no merge base, failed diff), the determinism of the report, and
+  (unknown ref, no merge base, failed diff, **and an uncomputable merge** —
+  add/add and delete/modify, where a base blob is absent and the hunk count is
+  unknown), the determinism of the report, and
   the CLI exit codes. Mutation proofs: neutering `SECURITY_ZONE_HINTS`, removing
-  `COORDINATION_FILES`, and reverting `_changed_files` to return `[]` on error
+  `COORDINATION_FILES`, reverting `_changed_files` to return `[]` on error, and
+  dropping the `conflict_hunks < 0` branch or the `returncode > 127` guard
   each turn it red.
 - `tests/unit/test_agent_board_governance.py` — `evidence_required` severity by
   claim state (including `active_in_review`), `gates_owner` cardinality (0/1/2,
