@@ -75,6 +75,11 @@ from nexus_ai_agent.creative.studio.models import (
     frame_number_for,
     new_project,
 )
+from nexus_ai_agent.creative.studio.passport import (
+    ArtifactPassport,
+    ExecutionProof,
+    ProvenanceCausalChain,
+)
 from nexus_ai_agent.creative.studio.references import (
     ReferenceExpr,
     ReferenceInput,
@@ -116,8 +121,11 @@ __all__ = [
     "OperationSpec",
     "PermissionDecision",
     "PermissionDeniedError",
+    "ArtifactPassport",
+    "ExecutionProof",
     "PermissionLevel",
     "Playhead",
+    "ProvenanceCausalChain",
     "PreconditionError",
     "Project",
     "ProjectAccess",

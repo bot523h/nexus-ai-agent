@@ -51,6 +51,17 @@ class DurableStore:
                     FOREIGN KEY(project_id) REFERENCES projects(project_id)
                 );
 
+                CREATE TABLE IF NOT EXISTS artifact_passports (
+                    passport_hash TEXT PRIMARY KEY,
+                    artifact_id TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    transaction_id TEXT NOT NULL,
+                    command_id TEXT NOT NULL,
+                    passport_json TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(project_id) REFERENCES projects(project_id)
+                );
+
                 CREATE TABLE IF NOT EXISTS creative_graph_nodes (
                     node_id TEXT PRIMARY KEY,
                     project_id TEXT NOT NULL,
@@ -154,6 +165,41 @@ class DurableStore:
                 )
             )
         return txs
+
+    def save_artifact_passport(self, passport: Any) -> None:
+        """Atomically persist a proof-carrying artifact passport."""
+        passport_json = json.dumps(passport.model_dump(mode="json"), ensure_ascii=False)
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO artifact_passports (
+                    passport_hash, artifact_id, project_id,
+                    transaction_id, command_id, passport_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(passport_hash) DO NOTHING
+                """,
+                (
+                    passport.passport_hash,
+                    passport.artifact_id,
+                    passport.causal_chain.project_id,
+                    passport.causal_chain.transaction_id,
+                    passport.causal_chain.command_id,
+                    passport_json,
+                ),
+            )
+
+    def load_artifact_passport(self, passport_hash: str) -> Any | None:
+        from nexus_ai_agent.creative.studio.passport import ArtifactPassport
+
+        row = self._conn.execute(
+            "SELECT passport_json FROM artifact_passports WHERE passport_hash = ?",
+            (passport_hash,),
+        ).fetchone()
+        if row is None:
+            return None
+        data = json.loads(row["passport_json"])
+        return ArtifactPassport.model_validate(data)
 
     def register_graph_node(
         self,

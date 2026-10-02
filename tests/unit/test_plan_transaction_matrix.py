@@ -12,7 +12,6 @@ Covers the 28-point failure matrix and invariant checks:
 from __future__ import annotations
 
 import pytest
-from tests.unit.test_plan_transaction import make_command, make_project
 
 from nexus_ai_agent.creative.studio import (
     CommandBus,
@@ -23,6 +22,7 @@ from nexus_ai_agent.creative.studio import (
     Project,
 )
 from nexus_ai_agent.creative.studio.models import Preconditions
+from tests.unit.test_plan_transaction import make_command, make_project
 
 
 @pytest.fixture()
