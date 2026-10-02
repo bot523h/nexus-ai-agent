@@ -1243,6 +1243,33 @@ proves missing actor/authorizer denials; and
 roots, their service identities, reachable operations, grants, and registry
 permissions. The focused command-capability, lifecycle-seam, mutation, and
 architecture run completed **115 passed** on the task-196 worktree.
+
+### D-0014 — contain remote keys at the local-cache filesystem boundary (2026-10-03, task-196 REMOTE-KEY)
+
+**Problem.** `LocalCacheProvider` previously joined an untrusted remote key
+straight onto the cache root. Traversal, absolute paths, NUL bytes, encoded
+traversal, and symlinked components could therefore turn a cache operation or
+list prefix into a path outside the intended cache. The Telegram `/cloud`
+handler also staged a sanitized basename locally but passed the original
+external filename to the remote provider.
+
+**Decision.** Telegram document filenames are reduced to a safe base name
+before both local staging and remote-key use. The local cache treats keys as
+relative POSIX paths, rejects empty/dot/parent components, absolute or
+Windows-drive spellings, backslashes, NUL, and overlong values, then checks
+repeated URL-decoding (up to 32 layers) for encoded unsafe forms while keeping
+the literal safe key unchanged. Every key-derived path is resolved beneath the
+canonical cache root; symlink components and cache-root substitution are
+refused. The same validation applies to upload, download, and list prefixes,
+and discovered list entries are checked before being returned. This does not
+change remote object-key formats or the separate R2 routing policy.
+
+*Evidence.* `tests/unit/test_local_cache_provider.py` exercises normal nested
+keys and adversarial traversal, absolute, NUL, encoded, prefix, and symlink
+cases; `tests/architecture/test_storage_key_boundary.py` pins Telegram's
+sanitization-to-remote-key edge. `docs/architecture/SECURITY.md` and the R14
+fitness function in `docs/architecture/MODULE_MAP.md` record the boundary.
+
 ## 2026-09-24 — Security-boundary truth salvage: PR#58 evidence reconciled onto current main (D-0015)
 
 *Problem.* PR#58 ("Security Boundary hardening — S1–S5") was drafted against base

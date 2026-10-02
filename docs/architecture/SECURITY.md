@@ -26,7 +26,7 @@ flowchart LR
 |---|---|---|
 | B1 | any Telegram user | `bot/access_guard.py` (group −1, blocks before all handlers), `bot/middleware.py` rate limiter, denial reply capped at 3/60 s |
 | B2 | user text/media | typed command envelopes, closed failure vocabularies, JobQueue payload re-validation inside the adapter |
-| B3 | filenames, uploads, remote keys | `bot/safe_paths.py` (`resolve()` + `is_relative_to`), allow-listed temp dirs, `.part` staging |
+| B3 | filenames, uploads, remote keys | `bot/safe_paths.py` sanitizes external names before remote-key use; `LocalCacheProvider` validates raw and repeatedly URL-decoded key components, resolves beneath its canonical root, and rejects symlinks (R14) |
 | B4 | any query built from input | SQLModel/SQLAlchemy parameterisation; no string-built SQL outside audit-grade DDL |
 | B5 | third-party APIs | SSRF guard, allow-listed providers, consent gates, strict-privacy flag |
 | B6 | internet | constant-time secret/token compares, 403 on mismatch, 503 on not-ready (so the sender retries instead of losing data) |
@@ -40,7 +40,7 @@ flowchart LR
 | T2 | **Spoofing** | forged webhook deliveries | `X-Telegram-Bot-Api-Secret-Token` compared with `secrets.compare_digest` | `tests/unit/test_webhook_mode.py` | closed |
 | T3 | **Spoofing** | dashboard scraping | bearer token required, constant-time compare, PII-free payloads | `tests/unit/test_dashboard_api.py`, `tests/unit/test_dashboard_privacy.py` | closed (P0-5) |
 | T4 | **Elevation** | bypassing force-join gates | real `get_chat_member` check with cache; confirmation button cannot self-approve | `tests/unit/test_force_join_gate.py` | closed (P0-3) |
-| T5 | **Tampering** | path traversal on `/cloud`, `/download`, uploads | `safe_paths.safe_join` + `sanitize_file_name` | `tests/unit/test_safe_paths.py`, `tests/unit/test_security_hardening.py` | closed (P0-6) |
+| T5 | **Tampering** | path traversal on `/cloud`, `/download`, uploads, or a local-cache key/prefix | `sanitize_file_name` before remote-key use; `LocalCacheProvider` rejects traversal, absolute paths, NUL, repeated URL-encoded traversal, and symlink escapes on upload/download/list | `tests/unit/test_safe_paths.py`, `tests/unit/test_local_cache_provider.py`, `tests/architecture/test_storage_key_boundary.py` | closed (P0-6; task-196 REMOTE-KEY) |
 | T6 | **Tampering** | prompt-injected tool execution / shell escape | shell tool off by default, allow-listed commands, path validation | `tests/unit/test_shell_sandbox.py`, `tests/unit/test_tools_sandbox.py` | closed |
 | T7 | **Information disclosure** | private prompts or transcripts sent to a third party | per-user consent gate (tri-state) + minimum-egress interval + strict-privacy provider removal | `tests/unit/test_ai_memory_consent.py` | closed (P0-7) |
 | T8 | **Information disclosure** | secrets in logs | redaction at the observability boundary in *both* pipelines (stdlib filter + structlog processor + wrapped rendered-line formatter, and the lifecycle `redact_fields` gate): bearer **and Basic-scheme** values, `token=`/`api_key=`/`password=` incl. single-quoted dict-repr keys, bare `?key=`/`?token=` query params, `x-goog-api-key` headers, bare and API-URL bot tokens, URL userinfo, secret-ish keys in nested structures, mapping-style (`%(password)s`) and non-string args, and `exc_info`/`stack_info` traceback text — asserted on captured rendered log output | `tests/unit/test_observability.py`, `tests/unit/test_structured_events.py` | closed (S3 closure, D-0016) |
