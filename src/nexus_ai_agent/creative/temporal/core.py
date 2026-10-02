@@ -133,35 +133,28 @@ class FrameRateResolver:
         23.976: Timebase.fps_23_976(),
         "24000/1001": Timebase.fps_23_976(),
         Fraction(24000, 1001): Timebase.fps_23_976(),
-
         "24": Timebase.fps_24(),
         "24fps": Timebase.fps_24(),
         24: Timebase.fps_24(),
-
         "25": Timebase.fps_25(),
         "25fps": Timebase.fps_25(),
         25: Timebase.fps_25(),
-
         "29.97": Timebase.fps_29_97(),
         "29.97fps": Timebase.fps_29_97(),
         29.97: Timebase.fps_29_97(),
         "30000/1001": Timebase.fps_29_97(),
         Fraction(30000, 1001): Timebase.fps_29_97(),
-
         "30": Timebase.fps_30(),
         "30fps": Timebase.fps_30(),
         30: Timebase.fps_30(),
-
         "50": Timebase.fps_50(),
         "50fps": Timebase.fps_50(),
         50: Timebase.fps_50(),
-
         "59.94": Timebase.fps_59_94(),
         "59.94fps": Timebase.fps_59_94(),
         59.94: Timebase.fps_59_94(),
         "60000/1001": Timebase.fps_59_94(),
         Fraction(60000, 1001): Timebase.fps_59_94(),
-
         "60": Timebase.fps_60(),
         "60fps": Timebase.fps_60(),
         60: Timebase.fps_60(),
