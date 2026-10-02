@@ -500,7 +500,9 @@ class TimePosition:
         exact_ticks = self._seconds * tb.rate
         return _round_exact_ticks(exact_ticks, rounding, tb)
 
-    def __add__(self, other: Duration) -> TimePosition:
+    def __add__(self, other: Duration | TimePosition) -> TimePosition:
+        if isinstance(other, TimePosition):
+            raise TypeError("Adding two TimePositions is mathematically undefined")
         if isinstance(other, Duration):
             return TimePosition(self._seconds + other.seconds)
         return NotImplemented
