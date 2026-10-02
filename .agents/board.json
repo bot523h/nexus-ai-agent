@@ -736,7 +736,8 @@
         "docs/audits/evidence/",
         "docs/audits/receipts/",
         "docs/DECISION_LOG.md",
-        "docs/architecture/MODULE_MAP.md"
+        "docs/architecture/MODULE_MAP.md",
+        "tests/unit/command_authority.py"
       ],
       "note": ""
     },
