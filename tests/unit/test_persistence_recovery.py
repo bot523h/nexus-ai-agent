@@ -10,7 +10,7 @@ from nexus_ai_agent.creative.studio import (
     PlanTransaction,
 )
 from nexus_ai_agent.creative.studio.persistence import DurableStore
-from tests.unit.test_plan_transaction import make_command, make_project
+from nexus_ai_agent.creative.studio.testing import make_command, make_project
 
 
 def test_durable_store_project_roundtrip() -> None:

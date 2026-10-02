@@ -18,7 +18,7 @@ from nexus_ai_agent.creative.studio.passport import (
     ProvenanceCausalChain,
 )
 from nexus_ai_agent.creative.studio.persistence import DurableStore
-from tests.unit.test_plan_transaction import make_project
+from nexus_ai_agent.creative.studio.testing import make_project
 
 
 def make_valid_passport() -> ArtifactPassport:
@@ -107,7 +107,7 @@ class TestArtifactPassportAdversarialSuite:
 
     def test_bus_attached_durable_store_automatically_persists_passports(self) -> None:
         from nexus_ai_agent.creative.studio import CommandBus
-        from tests.unit.test_plan_transaction import make_command
+        from nexus_ai_agent.creative.studio.testing import make_command
 
         proj = make_project("proj_auto_passport")
         bus = CommandBus(state=proj)
