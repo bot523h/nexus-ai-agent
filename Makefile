@@ -1,4 +1,4 @@
-.PHONY: setup lint types test migrate smoke run dev-bootstrap hooks version-check mutations
+.PHONY: setup lint types test migrate smoke run dev-bootstrap hooks version-check mutations mutations-packs mutations-temporal
 
 setup:
 	pip install -e ".[dev]"
@@ -21,10 +21,17 @@ types:
 test:
 	pytest -q -m "not slow"
 
-# Adversarial proof for the capability-pack trust plane (ADR 0006): every
-# mutation of the trust boundary must turn the trust suite red.
+# Adversarial proof for the capability-pack trust plane (ADR 0006) and for the
+# temporal authority: every mutation of a boundary must turn its suite red.
 mutations:
 	python scripts/pack_trust_mutations.py
+	python scripts/temporal_mutations.py
+
+mutations-packs:
+	python scripts/pack_trust_mutations.py
+
+mutations-temporal:
+	python scripts/temporal_mutations.py
 
 migrate:
 	python -m nexus_ai_agent.cli migrate
