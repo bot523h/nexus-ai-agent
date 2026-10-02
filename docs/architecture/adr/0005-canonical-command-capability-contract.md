@@ -92,8 +92,9 @@ and every page there must be indexed and linked.
   docs; the full suite stays green without touching runtime files.
 - (+) The v1-vs-v2 dispute is closed structurally: a `v2` protocol id is
   banned from `src/` by an architecture guard.
-- (−) The deprecated implicit-local-trust path survives until the runtime
-  owner lands explicit grants (board task-181).
+- (−) At the task-179 decision point, the deprecated implicit-local-trust
+  path survived pending runtime-owned grants; superseded by the task-196
+  amendment below.
 - (−) Expected textual conflicts with PR#68 (same studio/docs files) and
   PR#67 (`bus.py`, `CREATIVE_STUDIO.md`); merge order resolves them.
 - (+) **Amendment, task-183 (stacked integration, no new ADR):** PR#67's
@@ -108,6 +109,17 @@ and every page there must be indexed and linked.
   `tests/unit/test_gate2_lifecycle_seam.py` (A–H),
   `tests/unit/test_gate2_lifecycle_mutations.py` (M1–M5),
   `tests/architecture/test_lifecycle_gate_boundary.py`.
+- (+) **Amendment, task-196 STOP-C (2026-10-02):** the compatibility
+  exception for claim-less schema-1 dispatch is retired. Schema 1 remains
+  parseable, but both an actor claim and injected `ProjectAuthorizer` are
+  mandatory at dispatch. All three production roots now bind explicit
+  project-scoped `ProjectAccess` grants and schema-2 actor/target/provenance
+  claims; their operation-level grants are pinned against the registry by
+  `test_command_capability_boundary.py`. Evidence:
+  `tests/unit/test_authority_policy.py`,
+  `tests/unit/test_command_capability_contract.py`,
+  `tests/architecture/test_command_capability_boundary.py` (focused suite:
+  115 passed).
 - (~) Salvaged from Agent 2: advisory capability snapshots, fail-closed
   locality, the reserved `preview` mode, and the operation-matrix question
   answered from live builders.
@@ -131,7 +143,8 @@ and every page there must be indexed and linked.
 
 - (+) extends merged modules; enforced at the bus; runtime untouched
 - (+) additive versions with a documented sunset rule
-- (−) carries one deprecated legacy path until task-181 lands
+- (−) at the original task-179 decision point, carried a deprecated legacy
+  path; superseded by the task-196 STOP-C amendment above
 
 ### Option B — Agent 2's parallel v2 envelope
 

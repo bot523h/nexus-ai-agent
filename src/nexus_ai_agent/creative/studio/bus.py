@@ -9,12 +9,11 @@ canonical Gate 2 order (D-0013), each step failing closed:
 2. **Envelope + operation schema validation** -- protocol ``nagar.command.v1``
    with envelope schema 1|2, a registered operation, a matching operation
    schema version, and input validated against the operation's Pydantic model.
-3. **Actor / project authorization** -- ``target.project_id`` is only a
-   *claim*. An injected trusted authorizer must independently bind that
-   project and the real actor. A command that carries an actor claim without
-   an authorizer is refused; a claim-less legacy (schema 1) command without
-   an authorizer dispatches under implicit local trust (deprecated
-   compatibility path for in-process runtime call sites).
+3. **Actor / project authorization** -- both the command's explicit actor
+   claim and an injected trusted authorizer are mandatory for every dispatch.
+   ``target.project_id`` is only a *claim*: the authorizer must independently
+   bind that project and actor. Missing actor or authorizer fails closed; there
+   is no implicit local-trust or schema-1 compatibility path.
 4. **Capability authorization** -- the operation's capability must exist, be
    available, and version-match; a client capability snapshot is an advisory
    hint that is verified against the authoritative registry, never trusted.
@@ -222,32 +221,25 @@ class CommandBus:
         except ValidationError as exc:
             raise CommandValidationError(f"{command.operation}: invalid input: {exc}") from exc
 
-        # 3. Actor / project: target.project_id is only a *claim*. The injected
-        # authorizer must independently bind that project and the real actor.
-        # Claim-less legacy commands without an authorizer dispatch under
-        # implicit local trust (deprecated); an actor claim without an
-        # authorizer is refused -- identity must never be self-asserted.
+        # 3. Actor / project: neither identity nor authority may be inferred
+        # from an in-process call site. A claim-less schema-1 command is still
+        # parseable for wire compatibility, but it can never dispatch.
+        if self._authorizer is None:
+            raise AuthorizationError("no trusted project authorizer is configured")
+        if command.actor is None:
+            raise AuthorizationError("command carries no actor claim for authorization")
+
         project_id = self._project.project_id
         if command.target.project_id is not None and command.target.project_id != project_id:
             raise AuthorizationError("command targets a different project")
-        access: ProjectAccess | None = None
-        if self._authorizer is None:
-            if command.actor is not None:
-                raise AuthorizationError(
-                    "command carries an actor claim but no trusted project authorizer is configured"
-                )
-        else:
-            if command.actor is None:
-                raise AuthorizationError("command carries no actor claim for authorization")
-            access = self._authorizer.authorize(command.actor, project_id)
-            if access.actor != command.actor or access.project_id != project_id:
-                raise AuthorizationError("authorizer returned a grant for another actor or project")
+        access: ProjectAccess = self._authorizer.authorize(command.actor, project_id)
+        if access.actor != command.actor or access.project_id != project_id:
+            raise AuthorizationError("authorizer returned a grant for another actor or project")
 
         # 4. Registry/capability, version, installed availability and the
         # operation's *trusted* permissions (not client-supplied permissions).
         descriptor = self._registry.check_capability(command)
-        if access is not None:
-            access.require_permissions(descriptor.required_permissions)
+        access.require_permissions(descriptor.required_permissions)
 
         # 4b. Capability lifecycle / pack gate (PR#67 implementation, task-183
         # seam). The registry -- never the client -- names the required packs.

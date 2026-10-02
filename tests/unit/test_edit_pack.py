@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from command_authority import TEST_SERVICE_ACTOR, make_test_authorizer
 from pydantic import ValidationError
 
 from nexus_ai_agent.creative.packs.edit.models import (
@@ -49,7 +50,7 @@ def _setup_edit_bus() -> tuple[Project, CommandBus]:
     timeline = Timeline(timeline_id="tl_edit", duration_us=15_000_000)
     project = new_project("p_edit_01", "Timeline Edit Project", timeline)
     project = project.model_copy(update={"assets": [clip_1, b_roll, audio]})
-    bus = CommandBus(project, registry=registry)
+    bus = CommandBus(project, registry=registry, authorizer=make_test_authorizer(project))
     return project, bus
 
 
@@ -92,6 +93,7 @@ def test_trim_execution() -> None:
 
     cmd = TypedCommand(
         command_id="cmd_trim_01",
+        actor=TEST_SERVICE_ACTOR,
         operation="timeline.trim",
         input={
             "clip_asset_id": "clip_main_01",
@@ -115,6 +117,7 @@ def test_ripple_delete_execution() -> None:
     initial_duration = bus.project.timeline.duration_us
     cmd = TypedCommand(
         command_id="cmd_ripple_01",
+        actor=TEST_SERVICE_ACTOR,
         operation="timeline.ripple_delete",
         input={"track_id": "video_main", "start_us": 3_000_000, "duration_us": 2_000_000},
     )
@@ -129,6 +132,7 @@ def test_insert_gap_execution() -> None:
     initial_duration = bus.project.timeline.duration_us
     cmd = TypedCommand(
         command_id="cmd_gap_01",
+        actor=TEST_SERVICE_ACTOR,
         operation="timeline.insert_gap",
         input={"track_id": "video_main", "at_us": 5_000_000, "duration_us": 3_000_000},
     )
@@ -142,6 +146,7 @@ def test_speed_ramp_execution() -> None:
 
     cmd = TypedCommand(
         command_id="cmd_speed_01",
+        actor=TEST_SERVICE_ACTOR,
         operation="timeline.speed_ramp",
         input={"clip_asset_id": "clip_main_01", "speed_factor": 2.0, "maintain_pitch": True},
     )
@@ -159,6 +164,7 @@ def test_reverse_segment_execution() -> None:
 
     cmd = TypedCommand(
         command_id="cmd_rev_01",
+        actor=TEST_SERVICE_ACTOR,
         operation="timeline.reverse_segment",
         input={"clip_asset_id": "clip_main_01"},
     )
@@ -175,6 +181,7 @@ def test_freeze_frame_execution() -> None:
 
     cmd = TypedCommand(
         command_id="cmd_freeze_01",
+        actor=TEST_SERVICE_ACTOR,
         operation="timeline.freeze_frame",
         input={
             "clip_asset_id": "clip_main_01",
@@ -196,6 +203,7 @@ def test_attach_b_roll_execution() -> None:
 
     cmd = TypedCommand(
         command_id="cmd_broll_01",
+        actor=TEST_SERVICE_ACTOR,
         operation="timeline.attach_b_roll",
         input={
             "main_clip_id": "clip_main_01",
@@ -218,6 +226,7 @@ def test_retime_to_music_execution() -> None:
 
     cmd = TypedCommand(
         command_id="cmd_retime_01",
+        actor=TEST_SERVICE_ACTOR,
         operation="timeline.retime_to_music",
         input={
             "clip_asset_ids": ["clip_main_01", "clip_broll_01"],
@@ -239,6 +248,7 @@ def test_reversible_undo() -> None:
 
     cmd = TypedCommand(
         command_id="cmd_trim_undo",
+        actor=TEST_SERVICE_ACTOR,
         operation="timeline.trim",
         input={
             "clip_asset_id": "clip_main_01",
@@ -251,7 +261,9 @@ def test_reversible_undo() -> None:
     trimmed_id = res.output["asset_id"]
     assert trimmed_id in [a.asset_id for a in bus.project.assets]
 
-    undo_cmd = TypedCommand(command_id="cmd_undo", operation="system.undo", input={})
+    undo_cmd = TypedCommand(
+        command_id="cmd_undo", actor=TEST_SERVICE_ACTOR, operation="system.undo", input={}
+    )
     undo_res = bus.dispatch(undo_cmd)
     assert undo_res.status == "applied"
     assert trimmed_id not in [a.asset_id for a in bus.project.assets]

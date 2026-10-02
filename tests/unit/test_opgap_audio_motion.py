@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+from command_authority import TEST_SERVICE_ACTOR, make_test_authorizer
 from pydantic import ValidationError
 
 from nexus_ai_agent.creative.packs.audio.models import (
@@ -56,14 +57,22 @@ def _project_with_media() -> Project:
 
 
 def _audio_bus() -> CommandBus:
+    project = _project_with_media()
     return CommandBus(
-        _project_with_media(), registry=build_audio_registry(), allow_experimental=True
+        project,
+        registry=build_audio_registry(),
+        authorizer=make_test_authorizer(project),
+        allow_experimental=True,
     )
 
 
 def _motion_bus() -> CommandBus:
+    project = _project_with_media()
     return CommandBus(
-        _project_with_media(), registry=build_motion_registry(), allow_experimental=True
+        project,
+        registry=build_motion_registry(),
+        authorizer=make_test_authorizer(project),
+        allow_experimental=True,
     )
 
 
@@ -118,6 +127,7 @@ def test_remove_noise_execution() -> None:
     result = bus.dispatch(
         TypedCommand(
             command_id="cmd_denoise_01",
+            actor=TEST_SERVICE_ACTOR,
             operation="audio.remove_noise",
             input={
                 "audio_asset_id": "voice_01",
@@ -145,10 +155,20 @@ def test_remove_noise_is_deterministic() -> None:
         "output_asset_id": "voice_01_clean",
     }
     first = _audio_bus().dispatch(
-        TypedCommand(command_id="cmd_a", operation="audio.remove_noise", input=payload)
+        TypedCommand(
+            command_id="cmd_a",
+            actor=TEST_SERVICE_ACTOR,
+            operation="audio.remove_noise",
+            input=payload,
+        )
     )
     second = _audio_bus().dispatch(
-        TypedCommand(command_id="cmd_b", operation="audio.remove_noise", input=payload)
+        TypedCommand(
+            command_id="cmd_b",
+            actor=TEST_SERVICE_ACTOR,
+            operation="audio.remove_noise",
+            input=payload,
+        )
     )
     assert first.output["content_sha256"] == second.output["content_sha256"]
 
@@ -158,6 +178,7 @@ def test_deess_execution() -> None:
     result = bus.dispatch(
         TypedCommand(
             command_id="cmd_deess_01",
+            actor=TEST_SERVICE_ACTOR,
             operation="audio.deess",
             input={
                 "audio_asset_id": "voice_01",
@@ -180,6 +201,7 @@ def test_eq_voice_applies_preset_plus_master_gain() -> None:
     result = bus.dispatch(
         TypedCommand(
             command_id="cmd_eq_01",
+            actor=TEST_SERVICE_ACTOR,
             operation="audio.eq_voice",
             input={
                 "audio_asset_id": "voice_01",
@@ -208,6 +230,7 @@ def test_time_stretch_scales_duration() -> None:
     result = bus.dispatch(
         TypedCommand(
             command_id="cmd_stretch_01",
+            actor=TEST_SERVICE_ACTOR,
             operation="audio.time_stretch",
             input={
                 "audio_asset_id": "voice_01",
@@ -235,6 +258,7 @@ def test_audio_gap_ops_reject_unknown_and_wrong_kind_assets() -> None:
             _audio_bus().dispatch(
                 TypedCommand(
                     command_id=f"cmd_{operation}_missing",
+                    actor=TEST_SERVICE_ACTOR,
                     operation=operation,
                     input={"audio_asset_id": "ghost_track"},
                 )
@@ -243,6 +267,7 @@ def test_audio_gap_ops_reject_unknown_and_wrong_kind_assets() -> None:
             _audio_bus().dispatch(
                 TypedCommand(
                     command_id=f"cmd_{operation}_kind",
+                    actor=TEST_SERVICE_ACTOR,
                     operation=operation,
                     input={"audio_asset_id": "clip_01"},
                 )
@@ -254,6 +279,7 @@ def test_stabilize_execution() -> None:
     result = bus.dispatch(
         TypedCommand(
             command_id="cmd_stab_01",
+            actor=TEST_SERVICE_ACTOR,
             operation="motion.stabilize",
             input={
                 "clip_asset_id": "clip_01",
@@ -276,6 +302,7 @@ def test_add_parallax_layer_plan() -> None:
     result = bus.dispatch(
         TypedCommand(
             command_id="cmd_par_01",
+            actor=TEST_SERVICE_ACTOR,
             operation="motion.add_parallax",
             input={
                 "clip_asset_id": "clip_01",
@@ -304,6 +331,7 @@ def test_motion_gap_ops_reject_unknown_and_wrong_kind_assets() -> None:
             _motion_bus().dispatch(
                 TypedCommand(
                     command_id=f"cmd_{operation}_missing",
+                    actor=TEST_SERVICE_ACTOR,
                     operation=operation,
                     input={key: "ghost_clip"},
                 )
@@ -312,6 +340,7 @@ def test_motion_gap_ops_reject_unknown_and_wrong_kind_assets() -> None:
             _motion_bus().dispatch(
                 TypedCommand(
                     command_id=f"cmd_{operation}_kind",
+                    actor=TEST_SERVICE_ACTOR,
                     operation=operation,
                     input={key: "voice_01"},
                 )
