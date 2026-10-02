@@ -334,6 +334,9 @@ class SplitCommandInput(BaseModel):
 class UndoCommandInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    transaction_id: str | None = Field(default=None, max_length=128)
+    plan_id: str | None = Field(default=None, max_length=128)
+
 
 # ---------------------------------------------------------------------------
 # Wave 1 pure handlers
@@ -471,25 +474,83 @@ def _timeline_split_at_playhead(project: Project, context: OperationContext) -> 
 
 
 def _system_undo(project: Project, context: OperationContext) -> OperationOutcome:
+    from nexus_ai_agent.creative.studio.models import CommandExecutionError
+
     history = context.history
+    target_transaction_id: str | None = context.input_data.get("transaction_id")
+    target_plan_id: str | None = context.input_data.get("plan_id")
+
     target_index: int | None = None
-    for index in range(len(history) - 1, -1, -1):
-        if history[index].operation != "system.undo":
-            target_index = index
-            break
+    if target_transaction_id is not None:
+        for index in range(len(history) - 1, -1, -1):
+            if history[index].transaction_id == target_transaction_id:
+                target_index = index
+                break
+        if target_index is None:
+            raise CommandExecutionError(
+                f"target transaction_id not found: {target_transaction_id!r}"
+            )
+    elif target_plan_id is not None:
+        for index in range(len(history) - 1, -1, -1):
+            if history[index].plan_id == target_plan_id:
+                target_index = index
+                break
+        if target_index is None:
+            raise CommandExecutionError(f"target plan_id not found: {target_plan_id!r}")
+    else:
+        for index in range(len(history) - 1, -1, -1):
+            if history[index].operation != "system.undo":
+                target_index = index
+                break
+
     if target_index is None:
         raise UndoStackEmptyError(
             "nothing to undo: no editable transaction remains on the history stack"
         )
+
     last = history[target_index]
-    restored = Project.model_validate(last.state_before)
-    remaining = history[:target_index] + history[target_index + 1 :]
+    subsequent = [tx for tx in history[target_index + 1 :] if tx.operation != "system.undo"]
+
+    if not subsequent:
+        restored = Project.model_validate(last.state_before)
+    else:
+        # Non-top transaction targeted undo.
+        has_clip_structural_edit = any(
+            tx.operation in ("timeline.split_at_playhead", "clip.trim", "clip.delete")
+            or last.operation in ("timeline.split_at_playhead", "clip.trim", "clip.delete")
+            for tx in subsequent
+        )
+        if has_clip_structural_edit:
+            raise CommandExecutionError(
+                "cannot undo target transaction: interleaved foreign edits modified affected state"
+            )
+
+        restored = project.model_copy(deep=True)
+        if last.operation in ("timeline.mark", "plan.composite"):
+            before_proj = Project.model_validate(last.state_before)
+            before_marker_ids = {m.marker_id for m in before_proj.timeline.markers}
+            if target_index + 1 < len(history):
+                after_proj = Project.model_validate(history[target_index + 1].state_before)
+            else:
+                after_proj = project
+            after_marker_ids = {m.marker_id for m in after_proj.timeline.markers}
+            created_by_last_ids = after_marker_ids - before_marker_ids
+
+            if created_by_last_ids:
+                new_markers = [
+                    m for m in restored.timeline.markers if m.marker_id not in created_by_last_ids
+                ]
+                new_timeline = restored.timeline.model_copy(update={"markers": new_markers})
+                restored = restored.model_copy(update={"timeline": new_timeline})
+
+    remaining = tuple(tx for i, tx in enumerate(history) if i != target_index)
     return OperationOutcome(
         restored,
         remaining,
         {
             "undone_operation": last.operation,
             "undone_transaction_id": last.transaction_id,
+            "undone_plan_id": last.plan_id,
             "restored_state_hash": last.previous_state_hash,
         },
     )

@@ -85,10 +85,14 @@ from nexus_ai_agent.creative.studio.models import (
     ExecutionPolicyError,
     IdempotencyConflictError,
     NagarError,
+    PermissionLevel,
+    PlanResult,
+    PlanTransaction,
     Playhead,
     PreconditionError,
     Preconditions,
     Project,
+    TargetRef,
     TypedCommand,
     compute_state_hash,
 )
@@ -127,13 +131,33 @@ def _parse(command: TypedCommand | dict[str, Any] | str | bytes) -> TypedCommand
 
 
 def _fingerprint(command: TypedCommand) -> str:
-    # A redelivery may have a new transport command_id / trace_id. Every field
-    # that can change authority, policy, input or meaning is still fingerprinted.
-    # Snapshots are checked against the registry on EVERY attempt, but are not
-    # themselves execution authority or part of the logical payload.
+    # A redelivery may have a new transport command_id / trace_id / request_id / session_id.
+    # Every field that can change logical authority, policy, input or meaning is fingerprinted.
     payload = command.model_dump(
-        mode="json", exclude={"command_id", "trace_id", "capability_snapshot"}
+        mode="json",
+        exclude={
+            "command_id",
+            "trace_id",
+            "capability_snapshot",
+            "request_context",
+            "session_id",
+        },
     )
+    canonical = json.dumps(
+        payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _plan_fingerprint(plan: PlanTransaction) -> str:
+    payload = {
+        "plan_id": plan.plan_id,
+        "actor": plan.actor.model_dump(mode="json"),
+        "target": plan.target.model_dump(mode="json"),
+        "idempotency_key": plan.idempotency_key,
+        "preconditions": plan.preconditions.model_dump(mode="json"),
+        "commands": [_fingerprint(cmd) for cmd in plan.commands],
+    }
     canonical = json.dumps(
         payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False
     )
@@ -201,6 +225,117 @@ class CommandBus:
             if self._executing:
                 raise CommandExecutionError("nested command dispatch during execution is forbidden")
             return self._dispatch_locked(parsed)
+
+    def dispatch_plan(self, plan: PlanTransaction | dict[str, Any]) -> PlanResult:
+        """Execute a multi-step PlanTransaction with staged speculative execution."""
+        if isinstance(plan, dict):
+            parsed_plan = PlanTransaction.model_validate(plan)
+        else:
+            parsed_plan = PlanTransaction.model_validate(plan.model_dump(mode="json"))
+
+        with self._lock:
+            if self._executing:
+                raise CommandExecutionError("nested command dispatch during execution is forbidden")
+            return self._dispatch_plan_locked(parsed_plan)
+
+    def _dispatch_plan_locked(self, plan: PlanTransaction) -> PlanResult:
+        project_id = self._project.project_id
+        if plan.target.project_id is not None and plan.target.project_id != project_id:
+            raise AuthorizationError("plan targets a different project")
+
+        if self._authorizer is not None:
+            access = self._authorizer.authorize(plan.actor, project_id)
+            if access.actor != plan.actor or access.project_id != project_id:
+                raise AuthorizationError("authorizer returned a grant for another actor or project")
+
+        key = (project_id, "plan", plan.idempotency_key) if plan.idempotency_key else None
+        fingerprint = _plan_fingerprint(plan)
+        if key is not None:
+            prior = self._idempotency.get(key)
+            if prior is not None:
+                if prior.fingerprint != fingerprint:
+                    raise IdempotencyConflictError("idempotency key reused with different payload")
+                if prior.result is None:
+                    raise CommandExecutionError("idempotent plan is already executing")
+                return prior.result.model_copy(deep=True)  # type: ignore[return-value]
+            self._idempotency[key] = _Reservation(fingerprint=fingerprint)
+
+        try:
+            self._check_preconditions(plan.preconditions)
+            self._executing = True
+            try:
+                # Staged speculative execution against an isolated project copy
+                speculative_bus = CommandBus(
+                    state=self._project.model_copy(deep=True),
+                    registry=self._registry,
+                    resolver=self._resolver,
+                    authorizer=self._authorizer,
+                    allow_experimental=self._allow_experimental,
+                )
+                command_results: list[CommandResult] = []
+                try:
+                    for cmd in plan.commands:
+                        cmd_actor = plan.actor if self._authorizer is not None else None
+                        cmd_with_claims = cmd.model_copy(
+                            update={
+                                "actor": cmd_actor,
+                                "target": TargetRef(
+                                    project_id=project_id,
+                                    track_id=cmd.target.track_id,
+                                    clip_id=cmd.target.clip_id,
+                                ),
+                            }
+                        )
+                        res = speculative_bus._dispatch_locked(cmd_with_claims)
+                        command_results.append(res)
+                except Exception as exc:
+                    raise CommandExecutionError(
+                        f"plan {plan.plan_id!r} failed execution: {exc}"
+                    ) from exc
+
+                previous_hash = self._project.state_hash
+                previous_revision = self._project.state_revision
+                new_project = speculative_bus._project.model_copy(deep=True)
+                new_project.state_revision = previous_revision + 1
+                new_project.state_hash = compute_state_hash(new_project)
+
+                composite_tx = EditTransaction(
+                    transaction_id=f"tx_plan_{uuid4().hex}",
+                    command_id=f"plan_cmd_{plan.plan_id}",
+                    operation="plan.composite",
+                    permission_level=PermissionLevel.REVERSIBLE,
+                    parent_revision=previous_revision,
+                    previous_state_hash=previous_hash,
+                    new_state_hash=new_project.state_hash,
+                    state_before=self._project.model_dump(mode="json"),
+                    plan_id=plan.plan_id,
+                    actor_id=plan.actor.actor_id,
+                )
+
+                plan_result = PlanResult(
+                    plan_id=plan.plan_id,
+                    transaction_id=composite_tx.transaction_id,
+                    state_revision=new_project.state_revision,
+                    state_hash=new_project.state_hash,
+                    command_results=tuple(command_results),
+                    output={"commands_executed": len(command_results)},
+                    undo_available=True,
+                )
+
+                self._project = new_project
+                self._history.append(composite_tx)
+                if key is not None:
+                    self._idempotency[key] = _Reservation(
+                        fingerprint,
+                        plan_result.model_copy(deep=True),  # type: ignore[arg-type]
+                    )
+                return plan_result
+            finally:
+                self._executing = False
+        finally:
+            if key is not None:
+                if self._idempotency.get(key) == _Reservation(fingerprint):
+                    self._idempotency.pop(key)
 
     def _dispatch_locked(self, command: TypedCommand) -> CommandResult:
         if command.protocol_version != PROTOCOL_VERSION:
@@ -359,6 +494,7 @@ class CommandBus:
             raise CommandExecutionError("handler changed the authorized project identity")
         new_project.state_revision = previous_revision + 1
         new_project.state_hash = compute_state_hash(new_project)
+        actor_id = command.actor.actor_id if command.actor is not None else None
         transaction = EditTransaction(
             transaction_id=f"tx_{uuid4().hex}",
             command_id=command.command_id,
@@ -368,7 +504,26 @@ class CommandBus:
             previous_state_hash=previous_hash,
             new_state_hash=new_project.state_hash,
             state_before=self._project.model_dump(mode="json"),
+            plan_id=getattr(command, "plan_id", None),
+            actor_id=actor_id,
         )
+
+        if command.operation == "system.undo":
+            undone_tx_id = outcome.output.get("undone_transaction_id")
+            undone_plan_id = outcome.output.get("undone_plan_id")
+            current_tx_ids = {tx.transaction_id for tx in outcome.history}
+            keys_to_remove = [
+                k
+                for k, v in self._idempotency.items()
+                if v.result is not None
+                and (
+                    v.result.transaction_id == undone_tx_id
+                    or getattr(v.result, "plan_id", None) == undone_plan_id
+                    or v.result.transaction_id not in current_tx_ids
+                )
+            ]
+            for k in keys_to_remove:
+                self._idempotency.pop(k, None)
         result = CommandResult(
             transaction_id=transaction.transaction_id,
             state_revision=new_project.state_revision,
