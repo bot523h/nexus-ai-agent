@@ -14,9 +14,11 @@ from nexus_ai_agent.creative.packs.delivery.models import (
     RenderMaster4KInput,
 )
 from nexus_ai_agent.creative.packs.delivery.operations import (
+    _export_otio,
     build_delivery_registry,
 )
 from nexus_ai_agent.creative.studio.bus import CommandBus
+from nexus_ai_agent.creative.studio.capabilities import OperationContext
 from nexus_ai_agent.creative.studio.models import (
     AssetRecord,
     PermissionDeniedError,
@@ -213,6 +215,39 @@ def test_export_otio_execution() -> None:
     otio_asset = next(a for a in bus.project.assets if a.provenance.get("format") == "otio")
     assert otio_asset.provenance["format"] == "otio"
     assert otio_asset.provenance["frame_rate"] == 24.0
+
+
+def test_otio_export_boundary_and_emitted_evidence() -> None:
+    asset_zero = AssetRecord(
+        asset_id="v_zero",
+        media_kind="video",
+        content_sha256="sha256:" + "0" * 64,
+        duration_us=0,
+    )
+    timeline = Timeline(timeline_id="main", duration_us=1_000_000)
+    project = Project(project_id="p1", name="Test", timeline=timeline, assets=[asset_zero])
+
+    cmd = TypedCommand(command_id="cmd_1", operation="delivery.export_otio")
+    ctx = OperationContext(
+        command=cmd,
+        input_data={"frame_rate": 23.976},
+        history=(),
+    )
+
+    outcome = _export_otio(project, ctx)
+    otio_doc = json.loads(outcome.output["otio_json"])
+
+    clip = otio_doc["tracks"]["children"][0]["children"][0]
+    rate_emitted = clip["source_range"]["duration"]["rate"]
+
+    assert abs(rate_emitted - (24000 / 1001)) < 1e-6
+    assert clip["source_range"]["duration"]["value"] == 0
+
+    meta_conv = clip["metadata"]["temporal_conversion"]
+    assert meta_conv["raw_conv_frames"] == 0
+    assert meta_conv["emitted_frames"] == 0
+    assert meta_conv["lossless"] is True
+    assert meta_conv["residual_seconds"] == "0"
 
 
 def test_render_master_4k_requires_confirmation() -> None:

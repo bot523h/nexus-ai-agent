@@ -53,6 +53,7 @@ ALLOWED_PACK_TOP_LEVEL = {
     "collections",
     "dataclasses",
     "datetime",
+    "fractions",
     "hashlib",
     "importlib",
     "json",
@@ -137,14 +138,18 @@ def test_delivery_pack_substrate_is_pure_stdlib_and_pydantic() -> None:
 
 
 def test_delivery_pack_does_not_cross_package_boundaries() -> None:
-    """Delivery pack files may only import from creative.packs and creative.studio."""
+    """Delivery pack files may only import from packs, studio, and temporal."""
     for file_path in DELIVERY_PACK.glob("*.py"):
         for module in _nexus_modules(file_path):
             assert module.startswith(
-                ("nexus_ai_agent.creative.packs", "nexus_ai_agent.creative.studio")
+                (
+                    "nexus_ai_agent.creative.packs",
+                    "nexus_ai_agent.creative.studio",
+                    "nexus_ai_agent.creative.temporal",
+                )
             ), (
                 f"{file_path.relative_to(REPO_ROOT)} crosses boundary via {module!r}; "
-                "packs may only use studio contracts"
+                "packs may only use studio and temporal contracts"
             )
 
 
