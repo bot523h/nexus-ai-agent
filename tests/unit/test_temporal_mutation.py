@@ -5,6 +5,7 @@ verifies that EVERY mutant produces a test failure or exception.
 """
 
 from fractions import Fraction
+
 import pytest
 
 from nexus_ai_agent.creative.temporal import (

@@ -16,7 +16,6 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from fractions import Fraction
 from typing import Any
 
 from nexus_ai_agent.creative.packs.delivery.models import (
@@ -54,11 +53,12 @@ from nexus_ai_agent.creative.studio.models import (
     PermissionLevel,
     Project,
 )
-from nexus_ai_agent.creative.temporal import (
-    Duration,
-    FrameRateResolver,
-    RoundingPolicy,
-)
+
+
+def _gcd(a: int, b: int) -> int:
+    while b:
+        a, b = b, a % b
+    return abs(a)
 
 
 def _asset_index(project: Project) -> dict[str, AssetRecord]:
@@ -299,41 +299,61 @@ def _export_otio(project: Project, context: OperationContext) -> OperationOutcom
     """Level B (REVERSIBLE) handler for delivery.export_otio.
 
     Serializes project timeline, layers, and color metadata into the canonical
-    OpenTimelineIO (OTIO v1) interchange format. Uses exact canonical temporal
-    conversion to derive frame counts and record loss metadata.
+    OpenTimelineIO (OTIO v1) interchange format. Uses exact rational arithmetic to derive
+    frame counts and record loss metadata.
     """
     payload = ExportOtioInput.model_validate(context.input_data)
-    target_tb = FrameRateResolver.resolve(payload.frame_rate)
-    otio_rate = target_tb.numerator / target_tb.denominator
+
+    # Convert rate spec string or float/int to standard rate ratio
+    raw_rate = str(payload.frame_rate).lower().removesuffix("fps").removesuffix("hz")
+    if raw_rate in ("23.976", "23.976fps", "24000/1001"):
+        num, den = 24000, 1001
+    elif raw_rate in ("29.97", "29.97fps", "30000/1001"):
+        num, den = 30000, 1001
+    elif raw_rate in ("59.94", "59.94fps", "60000/1001"):
+        num, den = 60000, 1001
+    elif "/" in raw_rate:
+        parts = [p.strip() for p in raw_rate.split("/")]
+        num, den = int(parts[0]), int(parts[1])
+    else:
+        num, den = int(float(raw_rate)), 1
+
+    otio_rate = num / den
 
     video_clips: list[OtioClip] = []
     audio_clips: list[OtioClip] = []
 
     for asset in project.assets:
         duration_us = 1_000_000 if asset.duration_us is None else asset.duration_us
-        dur = Duration.from_us(duration_us)
-        conv = dur.to_ticks(target_tb, rounding=RoundingPolicy.NEAREST)
-        emitted_frames = max(1, conv.value)
+        exact_ticks = (duration_us * num) / (1_000_000 * den)
+        raw_conv_frames = round(exact_ticks)
+        emitted_frames = max(1, raw_conv_frames)
 
         time_range = TimeRange(
             start_time=RationalTime(value=0, rate=otio_rate),
             duration=RationalTime(value=emitted_frames, rate=otio_rate),
         )
 
-        emitted_seconds = Fraction(emitted_frames * target_tb.denominator, target_tb.numerator)
-        emitted_residual_seconds = dur.seconds - emitted_seconds
+        res_num = duration_us * num - emitted_frames * den * 1_000_000
+        res_den = 1_000_000 * num
+        g = _gcd(res_num, res_den)
+        simp_num = res_num // g
+        simp_den = res_den // g
+
+        residual_str = "0" if simp_num == 0 else f"{simp_num}/{simp_den}"
+        abs_err_str = "0" if simp_num == 0 else f"{abs(simp_num)}/{simp_den}"
 
         meta = {
             "provenance": asset.provenance,
             "temporal_conversion": {
-                "raw_conv_frames": conv.value,
+                "raw_conv_frames": raw_conv_frames,
                 "emitted_frames": emitted_frames,
-                "lossless": (emitted_residual_seconds == Fraction(0, 1)),
-                "residual_seconds": str(emitted_residual_seconds),
-                "absolute_error_seconds": str(abs(emitted_residual_seconds)),
+                "lossless": (simp_num == 0),
+                "residual_seconds": residual_str,
+                "absolute_error_seconds": abs_err_str,
                 "target_timebase": {
-                    "numerator": target_tb.numerator,
-                    "denominator": target_tb.denominator,
+                    "numerator": num,
+                    "denominator": den,
                 },
             },
         }

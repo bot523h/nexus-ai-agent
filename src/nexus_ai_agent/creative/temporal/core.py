@@ -45,10 +45,20 @@ class Timebase:
     denominator: int
 
     def __post_init__(self) -> None:
-        if not isinstance(self.numerator, int) or self.numerator <= 0:
+        if (
+            isinstance(self.numerator, bool)
+            or not isinstance(self.numerator, int)
+            or self.numerator <= 0
+        ):
             raise ValueError(f"Timebase numerator must be positive integer, got {self.numerator!r}")
-        if not isinstance(self.denominator, int) or self.denominator <= 0:
-            raise ValueError(f"Timebase denominator must be positive integer, got {self.denominator!r}")
+        if (
+            isinstance(self.denominator, bool)
+            or not isinstance(self.denominator, int)
+            or self.denominator <= 0
+        ):
+            raise ValueError(
+                f"Timebase denominator must be positive integer, got {self.denominator!r}"
+            )
 
         gcd = math.gcd(self.numerator, self.denominator)
         if gcd > 1:
@@ -127,12 +137,10 @@ class FrameRateResolver:
         "24": Timebase.fps_24(),
         "24fps": Timebase.fps_24(),
         24: Timebase.fps_24(),
-        24.0: Timebase.fps_24(),
 
         "25": Timebase.fps_25(),
         "25fps": Timebase.fps_25(),
         25: Timebase.fps_25(),
-        25.0: Timebase.fps_25(),
 
         "29.97": Timebase.fps_29_97(),
         "29.97fps": Timebase.fps_29_97(),
@@ -143,12 +151,10 @@ class FrameRateResolver:
         "30": Timebase.fps_30(),
         "30fps": Timebase.fps_30(),
         30: Timebase.fps_30(),
-        30.0: Timebase.fps_30(),
 
         "50": Timebase.fps_50(),
         "50fps": Timebase.fps_50(),
         50: Timebase.fps_50(),
-        50.0: Timebase.fps_50(),
 
         "59.94": Timebase.fps_59_94(),
         "59.94fps": Timebase.fps_59_94(),
@@ -159,7 +165,6 @@ class FrameRateResolver:
         "60": Timebase.fps_60(),
         "60fps": Timebase.fps_60(),
         60: Timebase.fps_60(),
-        60.0: Timebase.fps_60(),
     }
 
     @classmethod
@@ -167,6 +172,9 @@ class FrameRateResolver:
         """Resolve a rate specifier into a canonical Timebase."""
         if isinstance(value, Timebase):
             return value
+
+        if isinstance(value, bool):
+            raise TypeError("Boolean value is not a valid rate specifier")
 
         if value in cls._STANDARD_PROFILES:
             return cls._STANDARD_PROFILES[value]
@@ -182,8 +190,8 @@ class FrameRateResolver:
             return Timebase(value.numerator, value.denominator)
 
         if isinstance(value, float):
-            if value <= 0:
-                raise ValueError(f"Frame rate float must be positive, got {value}")
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"Frame rate float must be positive and finite, got {value}")
             frac = Fraction(value).limit_denominator(100000)
             return Timebase(frac.numerator, frac.denominator)
 
@@ -201,7 +209,7 @@ class FrameRateResolver:
             try:
                 if "." in clean:
                     flt = float(clean)
-                    if flt <= 0:
+                    if not math.isfinite(flt) or flt <= 0:
                         raise ValueError(f"Frame rate float must be positive, got {flt}")
                     if flt in cls._STANDARD_PROFILES:
                         return cls._STANDARD_PROFILES[flt]
@@ -299,12 +307,16 @@ class Duration:
             secs = seconds._seconds
         elif isinstance(seconds, Fraction):
             secs = seconds
+        elif isinstance(seconds, bool):
+            raise TypeError("Boolean value is not a valid Duration input")
         elif isinstance(seconds, int):
             secs = Fraction(seconds, 1)
         elif isinstance(seconds, str):
             secs = Fraction(seconds)
         else:
-            raise TypeError(f"Duration requires Fraction, int, str, or Duration, got {type(seconds)}")
+            raise TypeError(
+                f"Duration requires Fraction, int, str, or Duration, got {type(seconds)}"
+            )
 
         if secs < 0:
             raise ValueError(f"Duration must be nonnegative, got {secs}s")
@@ -325,6 +337,8 @@ class Duration:
 
     @classmethod
     def from_us(cls, us: int) -> Duration:
+        if isinstance(us, bool) or not isinstance(us, int):
+            raise TypeError(f"Microseconds duration must be integer, got {type(us)}")
         if us < 0:
             raise ValueError(f"Microseconds duration must be nonnegative, got {us}")
         return cls(Fraction(us, 1_000_000))
@@ -332,6 +346,8 @@ class Duration:
     @classmethod
     def from_ticks(cls, ticks: int, timebase: Timebase | str | float) -> Duration:
         tb = FrameRateResolver.resolve(timebase)
+        if isinstance(ticks, bool) or not isinstance(ticks, int):
+            raise TypeError(f"Ticks duration must be integer, got {type(ticks)}")
         if ticks < 0:
             raise ValueError(f"Ticks duration must be nonnegative, got {ticks}")
         secs = Fraction(ticks * tb.denominator, tb.numerator)
@@ -359,11 +375,16 @@ class Duration:
         if isinstance(other, Duration):
             diff = self._seconds - other._seconds
             if diff < 0:
-                raise ValueError(f"Duration subtraction result cannot be negative: {self._seconds}s - {other._seconds}s")
+                raise ValueError(
+                    f"Duration subtraction result cannot be negative: "
+                    f"{self._seconds}s - {other._seconds}s"
+                )
             return Duration(diff)
         return NotImplemented
 
     def __mul__(self, scalar: Fraction | int) -> Duration:
+        if isinstance(scalar, bool):
+            return NotImplemented
         if isinstance(scalar, (int, Fraction)):
             if scalar < 0:
                 raise ValueError(f"Duration multiplier must be nonnegative, got {scalar}")
@@ -378,6 +399,8 @@ class Duration:
             if other._seconds == 0:
                 raise ZeroDivisionError("Cannot divide Duration by zero Duration")
             return self._seconds / other._seconds
+        if isinstance(other, bool):
+            return NotImplemented
         if isinstance(other, (int, Fraction)):
             if other <= 0:
                 raise ValueError("Duration divisor scalar must be strictly positive")
@@ -426,12 +449,16 @@ class TimePosition:
             secs = seconds._seconds
         elif isinstance(seconds, Fraction):
             secs = seconds
+        elif isinstance(seconds, bool):
+            raise TypeError("Boolean value is not a valid TimePosition input")
         elif isinstance(seconds, int):
             secs = Fraction(seconds, 1)
         elif isinstance(seconds, str):
             secs = Fraction(seconds)
         else:
-            raise TypeError(f"TimePosition requires Fraction, int, str, or TimePosition, got {type(seconds)}")
+            raise TypeError(
+                f"TimePosition requires Fraction, int, str, or TimePosition, got {type(seconds)}"
+            )
 
         self._seconds = secs
 
@@ -449,11 +476,15 @@ class TimePosition:
 
     @classmethod
     def from_us(cls, us: int) -> TimePosition:
+        if isinstance(us, bool) or not isinstance(us, int):
+            raise TypeError(f"Microseconds position must be integer, got {type(us)}")
         return cls(Fraction(us, 1_000_000))
 
     @classmethod
     def from_ticks(cls, ticks: int, timebase: Timebase | str | float) -> TimePosition:
         tb = FrameRateResolver.resolve(timebase)
+        if isinstance(ticks, bool) or not isinstance(ticks, int):
+            raise TypeError(f"Ticks position must be integer, got {type(ticks)}")
         secs = Fraction(ticks * tb.denominator, tb.numerator)
         return cls(secs)
 
@@ -474,14 +505,19 @@ class TimePosition:
         if isinstance(other, Duration):
             return TimePosition(self._seconds + other.seconds)
         if isinstance(other, TimePosition):
-            raise TypeError("Adding two TimePositions is mathematically undefined. Add a Duration to a TimePosition instead.")
+            raise TypeError(
+                "Adding two TimePositions is mathematically undefined. "
+                "Add a Duration to a TimePosition instead."
+            )
         return NotImplemented
 
     def __sub__(self, other: TimePosition | Duration) -> TimePosition | Duration:
         if isinstance(other, TimePosition):
             diff = self._seconds - other._seconds
             if diff < 0:
-                raise ValueError(f"TimePosition diff {diff}s is negative. Duration requires non-negative span.")
+                raise ValueError(
+                    f"TimePosition diff {diff}s is negative. Duration requires non-negative span."
+                )
             return Duration(diff)
         if isinstance(other, Duration):
             return TimePosition(self._seconds - other.seconds)
@@ -531,7 +567,7 @@ class FrameIndex:
     timebase: Timebase
 
     def __post_init__(self) -> None:
-        if not isinstance(self.index, int) or self.index < 0:
+        if isinstance(self.index, bool) or not isinstance(self.index, int) or self.index < 0:
             raise ValueError(f"FrameIndex must be a nonnegative integer, got {self.index!r}")
 
     def to_position(self) -> TimePosition:
@@ -546,7 +582,7 @@ class SampleIndex:
     timebase: Timebase
 
     def __post_init__(self) -> None:
-        if not isinstance(self.index, int) or self.index < 0:
+        if isinstance(self.index, bool) or not isinstance(self.index, int) or self.index < 0:
             raise ValueError(f"SampleIndex must be a nonnegative integer, got {self.index!r}")
 
     def to_position(self) -> TimePosition:
@@ -595,11 +631,7 @@ class TemporalInterval:
         return self._start == self._end
 
     def contains(self, point: TimePosition) -> bool:
-        """Check if point falls within half-open interval [start, end).
-
-        Mathematically, [start, end) contains point if start <= point < end.
-        An empty interval [t, t) contains no points.
-        """
+        """Check if point falls within half-open interval [start, end)."""
         return self._start <= point < self._end
 
     def overlaps(self, other: TemporalInterval) -> bool:
@@ -609,7 +641,7 @@ class TemporalInterval:
         return max_start < min_end
 
     def split(self, at_point: TimePosition) -> tuple[TemporalInterval, TemporalInterval]:
-        """Split interval at given point into two adjacent intervals [start, at_point) and [at_point, end)."""
+        """Split interval at given point into two adjacent intervals."""
         if at_point < self._start or at_point > self._end:
             raise ValueError(
                 f"Split point {at_point} is outside interval [{self._start}, {self._end}]"
@@ -626,7 +658,8 @@ class TemporalInterval:
             return TemporalInterval(other._start, self._end)
         else:
             raise ValueError(
-                f"Cannot join non-adjacent intervals [{self._start}, {self._end}) and [{other._start}, {other._end})"
+                f"Cannot join non-adjacent intervals [{self._start}, {self._end}) "
+                f"and [{other._start}, {other._end})"
             )
 
     def __eq__(self, other: Any) -> bool:
@@ -647,6 +680,8 @@ class TemporalTransform:
     __slots__ = ("_speed_ratio",)
 
     def __init__(self, speed_ratio: Fraction | int | str) -> None:
+        if isinstance(speed_ratio, bool):
+            raise TypeError("Boolean speed_ratio is not allowed")
         if isinstance(speed_ratio, (int, str)):
             speed = Fraction(speed_ratio)
         elif isinstance(speed_ratio, Fraction):
@@ -691,7 +726,7 @@ class ClockRelation:
             v_tb = frame.timebase
             f_idx = frame.index
         else:
-            if not isinstance(frame, int) or frame < 0:
+            if isinstance(frame, bool) or not isinstance(frame, int) or frame < 0:
                 raise ValueError(f"Frame index must be a nonnegative integer, got {frame!r}")
             v_tb = FrameRateResolver.resolve(video_tb)
             f_idx = frame
@@ -712,7 +747,7 @@ class ClockRelation:
             a_tb = sample.timebase
             s_idx = sample.index
         else:
-            if not isinstance(sample, int) or sample < 0:
+            if isinstance(sample, bool) or not isinstance(sample, int) or sample < 0:
                 raise ValueError(f"Sample index must be a nonnegative integer, got {sample!r}")
             a_tb = FrameRateResolver.resolve(audio_tb)
             s_idx = sample

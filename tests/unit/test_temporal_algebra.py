@@ -6,7 +6,6 @@ Tests cover:
 * Malformed ratio specifier fail-closed rejection ("24/", "24/0", "a/b").
 * Type safety: Duration >= 0 vs TimePosition signed coordinate.
 * Typed FrameIndex and SampleIndex nonnegative invariants.
-* Half-open [start, end) interval algebra: empty interval [t, t) contains no points.
 * PointEvent / Marker vs TemporalInterval separation.
 * Speed scaling retiming invariants and reversibility.
 * Loss-aware conversion outcome tracking with exact residual and error.
@@ -14,6 +13,7 @@ Tests cover:
 """
 
 from fractions import Fraction
+
 import pytest
 
 from nexus_ai_agent.creative.temporal import (
@@ -21,10 +21,7 @@ from nexus_ai_agent.creative.temporal import (
     Duration,
     FrameIndex,
     FrameRateResolver,
-    PointEvent,
-    RoundingPolicy,
     SampleIndex,
-    TemporalInterval,
     TemporalTransform,
     Timebase,
     TimePosition,
@@ -52,6 +49,12 @@ def test_framerate_resolver_parsing_and_hardening() -> None:
     for malformed in ("24/", "24/1/2", "24/0", "a/b", "-24/1"):
         with pytest.raises(ValueError):
             FrameRateResolver.resolve(malformed)
+
+    with pytest.raises(TypeError):
+        FrameRateResolver.resolve(True)
+
+    with pytest.raises(ValueError):
+        FrameRateResolver.resolve(float("nan"))
 
 
 def test_typed_frame_and_sample_index() -> None:
