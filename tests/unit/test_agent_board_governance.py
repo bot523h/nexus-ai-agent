@@ -221,6 +221,23 @@ def test_active_in_review_claim_without_evidence_required_is_an_error(
     assert any("active claim" in e and "evidence_required" in e for e in result["errors"])
 
 
+def test_active_claim_with_none_exclusive_paths_is_an_error(board_module: ModuleType) -> None:
+    """An active claim whose exclusive_paths is None fences nothing and is exactly
+    what ``test_active_claims_carry_owner_timestamp_and_zone`` rejects — validate
+    must not report the board as clean while that repo test fails."""
+    claim = dict(_active_with_evidence(), exclusive_paths=None)
+    result = board_module.validate_board(_board([claim, STEWARD_ACTIVE]))
+    assert result["ok"] is False
+    assert any("exclusive_paths is None" in e for e in result["errors"])
+
+
+def test_active_claim_with_empty_exclusive_paths_is_a_warning(board_module: ModuleType) -> None:
+    claim = dict(_active_with_evidence(), exclusive_paths=[])
+    result = board_module.validate_board(_board([claim, STEWARD_ACTIVE]))
+    assert result["ok"] is True
+    assert any("exclusive_paths is empty" in w for w in result["warnings"])
+
+
 # --------------------------------------------------------------------------- #
 # claim-time enforcement: new work cannot be claimed without evidence_required
 # --------------------------------------------------------------------------- #

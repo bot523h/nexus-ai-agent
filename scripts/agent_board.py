@@ -802,6 +802,9 @@ def validate_board(board: dict, strict_new: bool = False) -> dict:
       cannot be claimed without it (``cmd_claim`` enforces that).
     * ``gates_owner`` — exactly one *active* claim may hold it.  0 or >1 is an
       ERROR (the protocol says exactly one gates steward).
+    * ``exclusive_paths`` — an active claim must carry a path list (``None`` is an
+      ERROR, matching ``test_active_claims_carry_owner_timestamp_and_zone``); an
+      empty list fences nothing and is a WARN.
     """
     errors: list[str] = []
     warnings: list[str] = []
@@ -818,6 +821,12 @@ def validate_board(board: dict, strict_new: bool = False) -> dict:
             elif status in _claimable_statuses():
                 message = f"legacy claimable {claim['task']}: missing evidence_required"
                 (errors if strict_new else warnings).append(message)
+        if _is_active_claim(claim):
+            paths = claim.get("exclusive_paths")
+            if paths is None:
+                errors.append(f"active claim {claim['task']}: exclusive_paths is None")
+            elif not paths:
+                warnings.append(f"active claim {claim['task']}: exclusive_paths is empty")
 
     active_gates = [
         c["task"] for c in board.get("claims", []) if _is_active_claim(c) and c.get("gates_owner")
