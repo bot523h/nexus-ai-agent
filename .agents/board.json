@@ -658,6 +658,20 @@
         "scripts/llm_queue_mutations.py",
         "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
       ]
+    },
+    {
+      "id": "retention-verdict-truth",
+      "description": "Thread-scoped checkpoint retention verdict: one canonical primitive (protection existential / destruction universal / no rows = unknown), replacing a per-row read of an unordered SELECT",
+      "paths": [
+        "src/nexus_ai_agent/domain/policies/retention.py",
+        "src/nexus_ai_agent/domain/retention.py",
+        "src/nexus_ai_agent/storage/checkpoint_lifecycle.py",
+        "src/nexus_ai_agent/cli.py",
+        "tests/unit/test_thread_retention_verdict.py",
+        "tests/unit/test_inspect_contract.py",
+        "scripts/retention_verdict_mutations.py"
+      ],
+      "note": "Declared by arena/01a0fac1-nexus-ai-agent (task-229). cli.py is listed whole because the zone matcher is prefix-based, but the claim only touches the inspect_checkpoints body (~lines 270-345); open PRs #33/#60/#63/#96 touch cli.py at lines 884-990, so there is no hunk overlap."
     }
   ],
   "claims": [
@@ -2715,6 +2729,47 @@
       "ttl_hours": 24,
       "gates_owner": true,
       "note": "Continues task-195-llm-queue-lifecycle (original branch arena/01a0e2f0, claim released via takeover). MODULE_MAP.md/docs-architecture excluded exactly as the original claim scoped itself. | SESSION-BOUND CONTINUATION 2026-09-27T16:54:20Z: arena/01a0e3b7 fast-forwarded cd79bfe (PR #109 head) and continues the same exclusive paths. This session cannot push to arena/01a0e356. PR #109 python-parity (3.10) is RED on run 36329794486 (asyncio.wait_for raises asyncio.TimeoutError, not builtin TimeoutError)."
+    },
+    {
+      "task": "task-229",
+      "title": "Retention verdict truth: a thread's destructive verdict must be quantified over all its lifecycle rows, not one arbitrary row",
+      "title_fa": "درستی حکم نگهداری: حکم مخرب یک thread باید روی همهٔ سطرهای lifecycle آن سنجیده شود، نه یک سطر دلخواه",
+      "zone": "retention-verdict-truth",
+      "priority": "P0",
+      "status": "active",
+      "scope": "`nexus checkpoints inspect` derived the thread-level retention verdict (pinned / active / resumable_within_window / would_delete) from `metadata[-1]` — one row of a SELECT with no ORDER BY. The lifecycle index is a rowid table, so that row is insertion order: two logically identical threads (one row pinned until +7d and accessed a day ago, one row 40 days stale) reported opposite destructive verdicts depending only on the order the rows were written in. Fix: a canonical thread-scoped primitive `thread_retention()` in domain/policies/retention.py with a quantifier asymmetry — protection EXISTENTIAL, destruction UNIVERSAL, zero rows UNKNOWN and retained. Also collapses three copies of the 30-day resumability window into the one product record.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "thread_retention() is order-independent: every permutation of the same rows yields one verdict (permutation test)",
+        "one pinned row protects the whole thread; one non-deletable row vetoes the whole thread",
+        "zero lifecycle rows is unknown and never deletable (all([]) == True guarded explicitly)",
+        "checkpoints inspect reports pinned/active/would_delete identically for logically identical threads in either physical row order",
+        "the resumability window has exactly one source (identity, not equality, is asserted)",
+        "mutation harness scripts/retention_verdict_mutations.py catches 8/8 and restores every SHA"
+      ],
+      "evidence_required": [
+        "RED before the fix: would_delete=True / pinned=False for a thread pinned until +7d",
+        "order-flip proof: same rows, opposite verdict before the fix; identical after",
+        "GREEN after: tests/unit/test_thread_retention_verdict.py + test_inspect_contract.py",
+        "8/8 mutants caught with SHA restore in scripts/retention_verdict_mutations.py",
+        "full-suite delta: only the two pre-existing missing-optional-dep failures remain"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/domain/policies/retention.py",
+        "src/nexus_ai_agent/domain/retention.py",
+        "src/nexus_ai_agent/storage/checkpoint_lifecycle.py",
+        "src/nexus_ai_agent/cli.py",
+        "tests/unit/test_thread_retention_verdict.py",
+        "tests/unit/test_inspect_contract.py",
+        "scripts/retention_verdict_mutations.py"
+      ],
+      "agent_branch": "arena/01a0fac1-nexus-ai-agent",
+      "claimed_at": "2026-10-02T04:18:37Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "owner_hint": "arena/01a0fac1-nexus-ai-agent",
+      "note": "Additive-only board edit: `agent_board.py claim` runs gc_expired(), which would have rewritten four other agents' stale-lease notes; that collateral damage was reverted and this claim was written directly instead. Main's claim statuses and gc notes stay canonical."
     }
   ],
   "deferred_log": [

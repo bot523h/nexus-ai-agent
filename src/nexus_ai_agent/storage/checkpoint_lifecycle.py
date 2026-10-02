@@ -13,6 +13,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Protocol
 
+from nexus_ai_agent.domain.policies.retention import RESUMABILITY_WINDOW
+
 #: The lifecycle index table name, shared by both backends.  On PostgreSQL
 #: it is created by the explicit, isolated Alembic revision
 #: ``f4a9c2e71b08`` (PR3 option A); on SQLite the store owns it via
@@ -58,7 +60,13 @@ class CheckpointRecord:
 
 @dataclass(frozen=True)
 class RetentionPolicy:
-    max_age: timedelta = timedelta(days=30)
+    #: Defaults to the single product decision
+    #: (:data:`~nexus_ai_agent.domain.retention.DEFAULT_RETENTION_DECISION`),
+    #: re-exported as
+    #: :data:`~nexus_ai_agent.domain.policies.retention.RESUMABILITY_WINDOW`.
+    #: It is deliberately not a second literal ``timedelta(days=30)``: one
+    #: product number, one place to change it.
+    max_age: timedelta = RESUMABILITY_WINDOW
     active_grace: timedelta = timedelta(days=7)
 
     def __post_init__(self) -> None:
@@ -88,6 +96,22 @@ def eligible_for_deletion(
     Active threads are protected until ``active_until`` and receive an
     additional grace period.  Callers must still enforce referential safety
     for blobs and descendants in their database adapter.
+
+    Scope warning — this is a **row-level** predicate and it is not the same
+    decision as the two in :mod:`nexus_ai_agent.domain.policies.retention`:
+
+    * it ages a record from ``created_at`` (always present, NOT NULL in both
+      stores) and treats an absent ``last_accessed_at`` as "never accessed,
+      therefore not recent";
+    * :func:`~nexus_ai_agent.domain.policies.retention.deletable` ages a
+      record from ``last_accessed_at`` only, so an absent access stamp is
+      *unknown* and the record is retained.
+
+    Both are defensible on their own evidence, but they are not
+    interchangeable.  A decision about a whole **thread** must go through
+    :func:`~nexus_ai_agent.domain.policies.retention.thread_retention`, which
+    quantifies over every row the thread owns — never through one row of
+    either predicate.
     """
     current = _utc(now)
     created = _utc(record.created_at)

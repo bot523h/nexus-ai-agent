@@ -7,6 +7,7 @@ created files, no writes of any kind (invariant I1 + "No hidden mutation").
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -15,6 +16,7 @@ import pytest
 from langgraph.checkpoint.sqlite import SqliteSaver
 from typer.testing import CliRunner
 
+from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.storage.checkpoint_lifecycle import CheckpointRecord
 from nexus_ai_agent.storage.checkpoint_lifecycle_store import SQLiteCheckpointLifecycleStore
 
@@ -37,8 +39,6 @@ def _make_db(path: Path, thread: str, checkpoints: int) -> None:
 
 @pytest.fixture()
 def cli_env(tmp_path: Path, monkeypatch) -> Path:
-    from nexus_ai_agent.config.settings import get_settings
-
     monkeypatch.setenv("NEXUS_CHECKPOINT_PATH", str(tmp_path / "lg.sqlite"))
     # Hermetic backend: pin the SQLite path even if a PG URL is present in
     # the environment (PR3 backend branching in the CLI).
@@ -144,3 +144,122 @@ def test_inspect_thread_filter(cli_env: Path) -> None:
     assert result.exit_code == 0, result.output
     output = json.loads(result.output)
     assert [item["thread_id"] for item in output] == ["tb"]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# inspect-v1 retention verdict: thread-scoped, never row-position-scoped.
+#
+# A thread owns many lifecycle rows.  The destructive fields
+# (``pinned`` / ``active`` / ``resumable_within_window`` / ``would_delete``)
+# used to be derived from ``metadata[-1]`` -- one arbitrary row of a
+# ``SELECT`` with no ``ORDER BY``.  The lifecycle index is a rowid table, so
+# "the last row" is *insertion order*, i.e. a storage-engine artefact.  Two
+# logically identical threads could therefore get opposite destructive
+# verdicts, and a thread pinned until +7d and accessed a day ago could be
+# reported as ``pinned: false, would_delete: true``.
+#
+# These tests pin the corrected contract: protection is existential,
+# destruction is universal, and the verdict is invariant under row order.
+# ─────────────────────────────────────────────────────────────────────────
+
+RETENTION_NOW = datetime.now(timezone.utc)
+
+
+def _live() -> CheckpointRecord:
+    """Accessed 1 day ago, pinned until +7d: protected on both counts."""
+    return CheckpointRecord(
+        "t1",
+        "cp_live",
+        RETENTION_NOW - timedelta(days=1),
+        last_accessed_at=RETENTION_NOW - timedelta(days=1),
+        active_until=RETENTION_NOW + timedelta(days=7),
+    )
+
+
+def _stale(checkpoint_id: str = "cp_old") -> CheckpointRecord:
+    """40 days old and untouched since: individually deletable."""
+    return CheckpointRecord(
+        "t1",
+        checkpoint_id,
+        RETENTION_NOW - timedelta(days=40),
+        last_accessed_at=RETENTION_NOW - timedelta(days=40),
+    )
+
+
+_SCENARIO = 0
+
+
+def _thread_with_rows(cli_env: Path, rows: list[CheckpointRecord]) -> None:
+    """Build one real thread on a FRESH checkpoint DB, rows written in order.
+
+    Each call gets its own database and re-points the CLI at it, so one test
+    can compare two logically identical threads that differ only in the
+    physical order their lifecycle rows were written in.
+    """
+    global _SCENARIO
+    _SCENARIO += 1
+    db = cli_env / f"scenario_{_SCENARIO}.sqlite"
+    _make_db(db, "t1", 2)
+    store = SQLiteCheckpointLifecycleStore(str(db) + ".lifecycle")
+    try:
+        for record in rows:
+            store.upsert(record)
+    finally:
+        store.close()
+
+    os.environ["NEXUS_CHECKPOINT_PATH"] = str(db)
+    get_settings.cache_clear()
+
+
+def test_inspect_reports_a_pinned_thread_as_pinned(cli_env: Path) -> None:
+    """One pinned row protects the thread, even when it is not the last row."""
+    _thread_with_rows(cli_env, [_live(), _stale()])
+
+    entry = _invoke()[0]
+
+    assert entry["pinned"] is True
+    assert entry["active"] is True
+    assert entry["resumable_within_window"] is True
+    # The safety-critical field: a live thread is never recommended for deletion.
+    assert entry["would_delete"] is False
+
+
+def test_inspect_verdict_is_invariant_under_lifecycle_row_order(cli_env: Path) -> None:
+    """Logically identical threads get identical verdicts.
+
+    This is the direct regression test for the ``metadata[-1]`` defect: the
+    same two rows in the opposite physical order must not flip a destructive
+    recommendation.
+    """
+    _thread_with_rows(cli_env, [_live(), _stale()])
+    live_first = _invoke()[0]
+
+    _thread_with_rows(cli_env, [_stale(), _live()])
+    stale_first = _invoke()[0]
+
+    fields = ("pinned", "active", "resumable_within_window", "would_delete")
+    assert {key: live_first[key] for key in fields} == {key: stale_first[key] for key in fields}, (
+        f"retention verdict depends on lifecycle row order: {live_first} != {stale_first}"
+    )
+    assert live_first["would_delete"] is False
+
+
+def test_inspect_would_delete_requires_every_row_to_be_deletable(cli_env: Path) -> None:
+    """``would_delete`` is universal over the thread's rows, not one of them."""
+    _thread_with_rows(cli_env, [_stale("cp_a"), _stale("cp_b")])
+    assert _invoke()[0]["would_delete"] is True
+
+    # A single recently-accessed sibling vetoes the whole thread.
+    _thread_with_rows(cli_env, [_stale("cp_a"), _live()])
+    assert _invoke()[0]["would_delete"] is False
+
+
+def test_inspect_never_accessed_row_blocks_deletion(cli_env: Path) -> None:
+    """Unknown age is retained: a row with no ``last_accessed_at`` vetoes."""
+    never_accessed = CheckpointRecord("t1", "cp_unknown", RETENTION_NOW - timedelta(days=40))
+    _thread_with_rows(cli_env, [_stale(), never_accessed])
+
+    entry = _invoke()[0]
+
+    assert entry["would_delete"] is False
+    assert entry["resumable_within_window"] is True
