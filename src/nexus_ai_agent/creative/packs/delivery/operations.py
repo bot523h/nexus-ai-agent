@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from fractions import Fraction
 from typing import Any
 
 from nexus_ai_agent.creative.packs.delivery.models import (
@@ -303,26 +304,33 @@ def _export_otio(project: Project, context: OperationContext) -> OperationOutcom
     """
     payload = ExportOtioInput.model_validate(context.input_data)
     target_tb = FrameRateResolver.resolve(payload.frame_rate)
+    otio_rate = target_tb.numerator / target_tb.denominator
 
     video_clips: list[OtioClip] = []
     audio_clips: list[OtioClip] = []
 
     for asset in project.assets:
-        duration_us = asset.duration_us or 1_000_000
+        duration_us = 1_000_000 if asset.duration_us is None else asset.duration_us
         dur = Duration.from_us(duration_us)
         conv = dur.to_ticks(target_tb, rounding=RoundingPolicy.NEAREST)
-        duration_frames = max(1, conv.value)
+        emitted_frames = max(1, conv.value)
 
         time_range = TimeRange(
-            start_time=RationalTime(value=0, rate=payload.frame_rate),
-            duration=RationalTime(value=duration_frames, rate=payload.frame_rate),
+            start_time=RationalTime(value=0, rate=otio_rate),
+            duration=RationalTime(value=emitted_frames, rate=otio_rate),
         )
+
+        emitted_seconds = Fraction(emitted_frames * target_tb.denominator, target_tb.numerator)
+        emitted_residual_seconds = dur.seconds - emitted_seconds
+
         meta = {
             "provenance": asset.provenance,
             "temporal_conversion": {
-                "lossless": conv.lossless,
-                "residual_seconds": str(conv.residual_seconds),
-                "absolute_error_seconds": str(conv.absolute_error_seconds),
+                "raw_conv_frames": conv.value,
+                "emitted_frames": emitted_frames,
+                "lossless": (emitted_residual_seconds == Fraction(0, 1)),
+                "residual_seconds": str(emitted_residual_seconds),
+                "absolute_error_seconds": str(abs(emitted_residual_seconds)),
                 "target_timebase": {
                     "numerator": target_tb.numerator,
                     "denominator": target_tb.denominator,
@@ -381,7 +389,7 @@ def _export_otio(project: Project, context: OperationContext) -> OperationOutcom
         parent_asset_ids=tuple(a.asset_id for a in project.assets),
         provenance={
             "format": "otio",
-            "frame_rate": payload.frame_rate,
+            "frame_rate": otio_rate,
             "video_clip_count": len(video_clips),
             "audio_clip_count": len(audio_clips),
             "generator": "nagar.delivery.otio.v1",
@@ -395,7 +403,7 @@ def _export_otio(project: Project, context: OperationContext) -> OperationOutcom
         {
             "asset_id": output_id,
             "format": "otio",
-            "frame_rate": payload.frame_rate,
+            "frame_rate": otio_rate,
             "total_video_clips": len(video_clips),
             "total_audio_clips": len(audio_clips),
             "otio_json": otio_json,

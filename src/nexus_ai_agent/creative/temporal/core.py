@@ -7,6 +7,8 @@ Zero-dependency, pure Python stdlib implementation:
 * :class:`ConversionOutcome` — Loss-aware result container tracking exact residuals and error.
 * :class:`Duration` — Nonnegative temporal span primitive (duration >= 0).
 * :class:`TimePosition` — Signed temporal coordinate primitive (e.g. pre-roll, playhead position).
+* :class:`FrameIndex` — Discrete nonnegative video frame address index.
+* :class:`SampleIndex` — Discrete nonnegative audio sample address index.
 * :class:`PointEvent` / :class:`Marker` — Point event without duration.
 * :class:`TemporalInterval` — Half-open [start, end) interval span with split/join algebra.
 * :class:`TemporalTransform` — Exact retiming and speed scaling transformation.
@@ -170,12 +172,18 @@ class FrameRateResolver:
             return cls._STANDARD_PROFILES[value]
 
         if isinstance(value, int):
+            if value <= 0:
+                raise ValueError(f"Frame rate integer must be positive, got {value}")
             return Timebase(value, 1)
 
         if isinstance(value, Fraction):
+            if value <= 0:
+                raise ValueError(f"Frame rate fraction must be positive, got {value}")
             return Timebase(value.numerator, value.denominator)
 
         if isinstance(value, float):
+            if value <= 0:
+                raise ValueError(f"Frame rate float must be positive, got {value}")
             frac = Fraction(value).limit_denominator(100000)
             return Timebase(frac.numerator, frac.denominator)
 
@@ -184,16 +192,25 @@ class FrameRateResolver:
             if clean in cls._STANDARD_PROFILES:
                 return cls._STANDARD_PROFILES[clean]
             if "/" in clean:
-                parts = clean.split("/")
-                return Timebase(int(parts[0]), int(parts[1]))
+                parts = [p.strip() for p in clean.split("/")]
+                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                    num, den = int(parts[0]), int(parts[1])
+                    if den > 0 and num > 0:
+                        return Timebase(num, den)
+                raise ValueError(f"Invalid timebase ratio specifier: {value!r}")
             try:
                 if "." in clean:
                     flt = float(clean)
+                    if flt <= 0:
+                        raise ValueError(f"Frame rate float must be positive, got {flt}")
                     if flt in cls._STANDARD_PROFILES:
                         return cls._STANDARD_PROFILES[flt]
                     frac = Fraction(flt).limit_denominator(100000)
                     return Timebase(frac.numerator, frac.denominator)
-                return Timebase(int(clean), 1)
+                ival = int(clean)
+                if ival <= 0:
+                    raise ValueError(f"Frame rate integer must be positive, got {ival}")
+                return Timebase(ival, 1)
             except ValueError as exc:
                 raise ValueError(f"Cannot resolve rate specifier {value!r} to Timebase") from exc
 
@@ -507,6 +524,36 @@ TemporalPoint = TimePosition
 
 
 @dataclass(frozen=True, slots=True)
+class FrameIndex:
+    """Discrete nonnegative frame address index (start of frame N)."""
+
+    index: int
+    timebase: Timebase
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.index, int) or self.index < 0:
+            raise ValueError(f"FrameIndex must be a nonnegative integer, got {self.index!r}")
+
+    def to_position(self) -> TimePosition:
+        return TimePosition.from_ticks(self.index, self.timebase)
+
+
+@dataclass(frozen=True, slots=True)
+class SampleIndex:
+    """Discrete nonnegative audio sample address index (start of sample N)."""
+
+    index: int
+    timebase: Timebase
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.index, int) or self.index < 0:
+            raise ValueError(f"SampleIndex must be a nonnegative integer, got {self.index!r}")
+
+    def to_position(self) -> TimePosition:
+        return TimePosition.from_ticks(self.index, self.timebase)
+
+
+@dataclass(frozen=True, slots=True)
 class PointEvent:
     """Point event or marker at a specific TimePosition (zero duration)."""
 
@@ -634,22 +681,42 @@ class ClockRelation:
 
     @staticmethod
     def frame_to_sample(
-        frame_idx: int,
+        frame: FrameIndex | int,
         video_tb: Timebase | str | float,
         audio_tb: Timebase | str | float,
         rounding: RoundingPolicy = RoundingPolicy.NEAREST,
     ) -> ConversionOutcome[int]:
         """Convert video frame index to audio sample index."""
-        pos = TimePosition.from_ticks(frame_idx, video_tb)
-        return pos.to_ticks(audio_tb, rounding)
+        if isinstance(frame, FrameIndex):
+            v_tb = frame.timebase
+            f_idx = frame.index
+        else:
+            if not isinstance(frame, int) or frame < 0:
+                raise ValueError(f"Frame index must be a nonnegative integer, got {frame!r}")
+            v_tb = FrameRateResolver.resolve(video_tb)
+            f_idx = frame
+
+        a_tb = FrameRateResolver.resolve(audio_tb)
+        pos = TimePosition.from_ticks(f_idx, v_tb)
+        return pos.to_ticks(a_tb, rounding)
 
     @staticmethod
     def sample_to_frame(
-        sample_idx: int,
+        sample: SampleIndex | int,
         audio_tb: Timebase | str | float,
         video_tb: Timebase | str | float,
         rounding: RoundingPolicy = RoundingPolicy.NEAREST,
     ) -> ConversionOutcome[int]:
         """Convert audio sample index to video frame index."""
-        pos = TimePosition.from_ticks(sample_idx, audio_tb)
-        return pos.to_ticks(video_tb, rounding)
+        if isinstance(sample, SampleIndex):
+            a_tb = sample.timebase
+            s_idx = sample.index
+        else:
+            if not isinstance(sample, int) or sample < 0:
+                raise ValueError(f"Sample index must be a nonnegative integer, got {sample!r}")
+            a_tb = FrameRateResolver.resolve(audio_tb)
+            s_idx = sample
+
+        v_tb = FrameRateResolver.resolve(video_tb)
+        pos = TimePosition.from_ticks(s_idx, a_tb)
+        return pos.to_ticks(v_tb, rounding)
