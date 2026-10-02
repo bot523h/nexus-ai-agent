@@ -95,10 +95,11 @@ classifies the overlap from git objects only (it never merges or resolves):
 
 | Classification | Meaning |
 |---|---|
-| `SAFE_INDEPENDENT` | no shared file beyond the coordination file (`.agents/board.json`, `AGENTS.md`) |
+| `SAFE_INDEPENDENT` | no shared file beyond the coordination files (`.agents/board.json`, `AGENTS.md`) |
 | `SAFE_OVERLAP` | a shared file merges cleanly (`git merge-file` finds no conflict hunk) |
 | `REQUIRES_MANUAL_RECONCILIATION` | a shared file has ≥1 conflict hunk |
 | `SECURITY_SENSITIVE_COLLISION` | any of the above, but the file belongs to a security-sensitive board zone (`security`/`gate`/`contract`/`trust`/`auth`) |
+| `UNVERIFIABLE` | git could not inspect a ref (unknown/typo'd ref, no merge base without `--base`, or a failed diff) — treated as dangerous, never as independent |
 
 `stacked` is reported per pair but is informational: two PRs on the same lineage
 still need to merge cleanly, so stacking does not lower the classification. The

@@ -51,13 +51,17 @@ both failure modes into *executable* checks rather than prose discipline.
 
 `collision` computes each pair's merge base from git objects and classifies the
 overlap as `SAFE_INDEPENDENT`, `SAFE_OVERLAP`, `REQUIRES_MANUAL_RECONCILIATION`,
-or `SECURITY_SENSITIVE_COLLISION` (a shared file in a security-sensitive zone —
-`security`/`gate`/`contract`/`trust`/`auth`). It never merges or resolves.
-`stacked` is reported but informational: stacked PRs still must merge cleanly, so
-stacking does not lower a classification. `evidence` resolves each cited test name
-against a ref (`tests/**/NAME.py` or `def NAME(`). `validate` fails on zero or
-multiple active `gates_owner` holders and on missing `evidence_required`
-(ERROR for `next_work` and active claims; WARN for grandfathered legacy); `claim`
+`SECURITY_SENSITIVE_COLLISION` (a shared file in a security-sensitive zone —
+`security`/`gate`/`contract`/`trust`/`auth`), or `UNVERIFIABLE` when git could not
+inspect a ref. It never merges or resolves, and it is fail-closed: a ref it cannot
+resolve, a pair with no merge base and no `--base`, or a failed diff is reported as
+`UNVERIFIABLE` (dangerous) — never as `SAFE_INDEPENDENT`. The coordination files
+`.agents/board.json` and `AGENTS.md` are excluded from overlap; `stacked` is
+reported but informational: stacked PRs still must merge cleanly, so stacking does
+not lower a classification. `evidence` resolves each cited test name against a ref
+(`tests/**/NAME.py` or `def NAME(`). `validate` fails on zero or multiple active
+`gates_owner` holders and on missing `evidence_required` (ERROR for `next_work` and
+active claims — including `active_in_review`; WARN for grandfathered legacy); `claim`
 refuses a task that has no `evidence_required`.
 
 ### Consequences
@@ -75,12 +79,16 @@ refuses a task that has no `evidence_required`.
 ## Confirmation
 
 - `tests/unit/test_agent_board_collision.py` — every classification, the
-  security-zone derivation from the board, the coordination-file exclusion, the
-  determinism of the report, and the CLI exit codes. Mutation proofs: neutering
-  `SECURITY_ZONE_HINTS` and removing `COORDINATION_FILES` each turn it red.
+  security-zone derivation from the board, the coordination-file exclusion
+  (`.agents/board.json` *and* `AGENTS.md`), the fail-closed `UNVERIFIABLE` path
+  (unknown ref, no merge base, failed diff), the determinism of the report, and
+  the CLI exit codes. Mutation proofs: neutering `SECURITY_ZONE_HINTS`, removing
+  `COORDINATION_FILES`, and reverting `_changed_files` to return `[]` on error
+  each turn it red.
 - `tests/unit/test_agent_board_governance.py` — `evidence_required` severity by
-  claim state, `gates_owner` cardinality (0/1/2, non-active holders excluded),
-  claim-time refusal, and the evidence resolver (real/phantom/deterministic).
+  claim state (including `active_in_review`), `gates_owner` cardinality (0/1/2,
+  non-active holders excluded, `active_in_review` holder counted), claim-time
+  refusal, and the evidence resolver (real/phantom/deterministic).
   Mutation proofs: removing the cardinality check or the claim-time refusal each
   turn it red.
 - `python scripts/agent_board.py validate` on the live board → 0 errors;

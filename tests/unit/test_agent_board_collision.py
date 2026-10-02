@@ -67,6 +67,7 @@ def collision_repo(tmp_path: Path) -> tuple[Path, dict]:
     _write(repo, "solo.py", "solo = 0\n")
     (repo / ".agents").mkdir()
     _write(repo, ".agents/board.json", "{}\n")
+    _write(repo, "AGENTS.md", "line_00\nline_01\nline_02\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "base")
     _git(repo, "tag", "base")
@@ -126,6 +127,20 @@ def collision_repo(tmp_path: Path) -> tuple[Path, dict]:
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "s2")
     _git(repo, "tag", "s2")
+
+    # j/k: only the coordination file AGENTS.md changes (must stay SAFE_INDEPENDENT)
+    branch("j", {"AGENTS.md": "line_00\nline_01-j\nline_02\n"}, "j")
+    _git(repo, "tag", "j")
+    branch("k", {"AGENTS.md": "line_00\nline_01-k\nline_02\n"}, "k")
+    _git(repo, "tag", "k")
+
+    # orphan: an unrelated root commit, no merge base with the base lineage
+    _git(repo, "checkout", "-q", "--orphan", "orphan")
+    _git(repo, "rm", "-q", "-rf", ".")
+    _write(repo, "orphan.py", "orphan = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "orphan")
+    _git(repo, "tag", "orphan")
 
     board = {
         "zones": [
@@ -209,6 +224,70 @@ def test_coordination_file_alone_is_never_a_hazard(module: ModuleType, collision
     pair = _pair(_detect(module, repo, board, ["h", "i"]))
     assert pair["classification"] == module.COLLISION_SAFE
     assert all(row["path"] != ".agents/board.json" for row in pair["files"])
+
+
+def test_agents_md_alone_is_never_a_hazard(module: ModuleType, collision_repo) -> None:
+    """AGENTS.md is a coordination file (protocol SAFE_INDEPENDENT rule): two refs
+    that only edit it must be SAFE, not REQUIRES_MANUAL_RECONCILIATION."""
+    repo, board = collision_repo
+    pair = _pair(_detect(module, repo, board, ["j", "k"]))
+    assert pair["classification"] == module.COLLISION_SAFE
+    assert pair["overlap_files"] == ["AGENTS.md"]
+    assert all(row["path"] != "AGENTS.md" for row in pair["files"])
+
+
+def test_unknown_ref_is_unverifiable_not_safe(module: ModuleType, collision_repo) -> None:
+    """A ref git cannot resolve must never be reported as independent."""
+    repo, board = collision_repo
+    result = _detect(module, repo, board, ["a", "no-such-ref"])
+    pair = _pair(result)
+    assert pair["classification"] == module.COLLISION_UNKNOWN
+    assert pair["classification"] in module._COLLISION_BAD
+    assert result["collision_count"] == 1
+
+
+def test_no_merge_base_without_base_is_unverifiable(
+    module: ModuleType, collision_repo
+) -> None:
+    repo, board = collision_repo
+    pair = _pair(_detect(module, repo, board, ["a", "orphan"]))
+    assert pair["classification"] == module.COLLISION_UNKNOWN
+
+
+def test_no_merge_base_with_base_uses_the_supplied_root(
+    module: ModuleType, collision_repo
+) -> None:
+    repo, board = collision_repo
+    result = module.detect_collisions(board, ["a", "orphan"], base="base", repo=repo)
+    assert result["pairs"][0]["classification"] != module.COLLISION_UNKNOWN
+
+
+def test_changed_files_returns_none_on_git_failure(
+    module: ModuleType, collision_repo
+) -> None:
+    """The None-vs-[] contract is what makes the fail-closed path possible."""
+    repo, _ = collision_repo
+    assert module._changed_files("base", "no-such-ref", repo) is None
+    assert module._changed_files("base", "a", repo) is not None
+
+
+def test_cli_fails_on_unknown_ref(
+    module: ModuleType, collision_repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, board = collision_repo
+    monkeypatch.setattr(module, "load_board", lambda: board)
+    args = type(
+        "A",
+        (),
+        {
+            "refs": "a,no-such-ref",
+            "base": "",
+            "repo": str(repo),
+            "fail_on_collision": True,
+            "as_json": False,
+        },
+    )()
+    assert module.cmd_collision(args) == 1
 
 
 def test_stacked_lineage_is_reported(module: ModuleType, collision_repo) -> None:

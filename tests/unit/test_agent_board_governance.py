@@ -205,6 +205,24 @@ def test_exactly_one_gates_owner_passes(board_module: ModuleType) -> None:
     assert result["ok"] is True
 
 
+def test_an_active_in_review_gates_owner_counts(board_module: ModuleType) -> None:
+    """active_in_review is an active lease: its gates_owner must satisfy the invariant."""
+    steward = dict(STEWARD_ACTIVE, status="active_in_review")
+    result = board_module.validate_board(_board([_active_with_evidence(), steward]))
+    assert result["ok"] is True
+
+
+def test_active_in_review_claim_without_evidence_required_is_an_error(
+    board_module: ModuleType,
+) -> None:
+    claim = dict(_active_with_evidence(), status="active_in_review")
+    del claim["evidence_required"]
+    result = board_module.validate_board(_board([claim, STEWARD_ACTIVE]))
+    assert any(
+        "active claim" in e and "evidence_required" in e for e in result["errors"]
+    )
+
+
 # --------------------------------------------------------------------------- #
 # claim-time enforcement: new work cannot be claimed without evidence_required
 # --------------------------------------------------------------------------- #

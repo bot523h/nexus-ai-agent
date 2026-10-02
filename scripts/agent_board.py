@@ -63,8 +63,10 @@ ROOT = Path(__file__).resolve().parents[1]
 BOARD = ROOT / ".agents" / "board.json"
 
 # Files every PR is expected to touch (coordination medium) — never counted as
-# "uncovered scope" by praudit, because no claim exclusively owns them.
-COORDINATION_FILES = frozenset({".agents/board.json"})
+# "uncovered scope" by praudit and never treated as a collision hazard, because
+# no claim exclusively owns them.  AGENTS.md is listed in the protocol's own
+# SAFE_INDEPENDENT rule, so it must be excluded here too (docs == executed rule).
+COORDINATION_FILES = frozenset({".agents/board.json", "AGENTS.md"})
 
 STOP_BANNER = """
 ╔══════════════════════════════════════════════════════════════════╗
@@ -522,7 +524,10 @@ COLLISION_SAFE = "SAFE_INDEPENDENT"
 COLLISION_SAFE_OVERLAP = "SAFE_OVERLAP"
 COLLISION_RECONCILE = "REQUIRES_MANUAL_RECONCILIATION"
 COLLISION_SECURITY = "SECURITY_SENSITIVE_COLLISION"
-_COLLISION_BAD = frozenset({COLLISION_RECONCILE, COLLISION_SECURITY})
+COLLISION_UNKNOWN = "UNVERIFIABLE"
+# UNVERIFIABLE is dangerous on purpose: "could not inspect" must never be read as
+# "independent".  It is included in the bad set so --fail-on-collision exits 1.
+_COLLISION_BAD = frozenset({COLLISION_RECONCILE, COLLISION_SECURITY, COLLISION_UNKNOWN})
 
 
 def _run_git(*args: str, cwd: Path | None = None) -> tuple[int, str, str]:
@@ -552,11 +557,26 @@ def zones_for_path(board: dict, path: str) -> list[str]:
     return sorted(hits)
 
 
-def _changed_files(base: str, ref: str, cwd: Path | None = None) -> list[str]:
+def _changed_files(base: str, ref: str, cwd: Path | None = None) -> list[str] | None:
+    """Files changed between *base* and *ref*, or ``None`` when git failed.
+
+    ``None`` (not ``[]``) is load-bearing: an empty list means "no differences",
+    while ``None`` means "the ref could not be inspected".  Collapsing the two
+    into ``[]`` would let a typo'd or unfetched ref classify as SAFE.
+    """
     code, out, _ = _run_git("diff", "--name-only", base, ref, cwd=cwd)
     if code != 0:
-        return []
+        return None
     return [line for line in out.splitlines() if line.strip()]
+
+
+def _unknown_refs(refs: list[str], cwd: Path | None = None) -> list[str]:
+    """Refs git cannot resolve to a commit (sorted). Fail-closed input check."""
+    return sorted(
+        ref
+        for ref in refs
+        if _run_git("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", cwd=cwd)[0] != 0
+    )
 
 
 def _is_ancestor(older: str, newer: str, cwd: Path | None = None) -> bool:
@@ -615,12 +635,31 @@ def detect_collisions(
 
     Deterministic: pairs and paths are sorted; no set/dict iteration order leaks
     into the output.  Never merges and never resolves — detect + classify only.
+
+    Fail-closed: a ref git cannot resolve, a pair with no merge base and no
+    supplied ``base``, or a diff git refuses to run all yield ``UNVERIFIABLE``
+    (a bad classification) rather than ``SAFE_INDEPENDENT``.
     """
     security_zones = set(security_sensitive_zones(board))
+    unknown_refs = _unknown_refs(refs, repo)
     pairs: list[dict] = []
     for i in range(len(refs)):
         for j in range(i + 1, len(refs)):
             ref_a, ref_b = refs[i], refs[j]
+            if ref_a in unknown_refs or ref_b in unknown_refs:
+                pairs.append(
+                    {
+                        "ref_a": ref_a,
+                        "ref_b": ref_b,
+                        "stacked": False,
+                        "merge_base": None,
+                        "overlap_files": [],
+                        "files": [],
+                        "classification": COLLISION_UNKNOWN,
+                        "reason": "unknown ref (git could not resolve a commit)",
+                    }
+                )
+                continue
             _, merge_base, _ = _run_git("merge-base", ref_a, ref_b, cwd=repo)
             stacked = _is_ancestor(ref_a, ref_b, repo) or _is_ancestor(ref_b, ref_a, repo)
             if not merge_base and base:
@@ -628,8 +667,38 @@ def detect_collisions(
                 # base ref as the diff root (still detects shared rewritten files).
                 merge_base = base
             diff_base = merge_base or base
-            files_a = set(_changed_files(diff_base, ref_a, repo)) if diff_base else set()
-            files_b = set(_changed_files(diff_base, ref_b, repo)) if diff_base else set()
+            if not diff_base:
+                pairs.append(
+                    {
+                        "ref_a": ref_a,
+                        "ref_b": ref_b,
+                        "stacked": stacked,
+                        "merge_base": None,
+                        "overlap_files": [],
+                        "files": [],
+                        "classification": COLLISION_UNKNOWN,
+                        "reason": "no merge base; pass --base to diff unrelated histories",
+                    }
+                )
+                continue
+            changed_a = _changed_files(diff_base, ref_a, repo)
+            changed_b = _changed_files(diff_base, ref_b, repo)
+            if changed_a is None or changed_b is None:
+                pairs.append(
+                    {
+                        "ref_a": ref_a,
+                        "ref_b": ref_b,
+                        "stacked": stacked,
+                        "merge_base": merge_base or None,
+                        "overlap_files": [],
+                        "files": [],
+                        "classification": COLLISION_UNKNOWN,
+                        "reason": f"git diff failed against {diff_base}",
+                    }
+                )
+                continue
+            files_a = set(changed_a)
+            files_b = set(changed_b)
             overlap = sorted(files_a & files_b)
 
             file_rows: list[dict] = []
@@ -744,7 +813,7 @@ def validate_board(board: dict, strict_new: bool = False) -> dict:
     for claim in board.get("claims", []):
         status = claim.get("status")
         if not claim.get("evidence_required"):
-            if status == "active":
+            if _is_active_claim(claim):
                 errors.append(f"active claim {claim['task']}: missing evidence_required")
             elif status in _claimable_statuses():
                 message = f"legacy claimable {claim['task']}: missing evidence_required"
@@ -753,7 +822,7 @@ def validate_board(board: dict, strict_new: bool = False) -> dict:
     active_gates = [
         c["task"]
         for c in board.get("claims", [])
-        if c.get("status") == "active" and c.get("gates_owner")
+        if _is_active_claim(c) and c.get("gates_owner")
     ]
     if len(active_gates) != 1:
         errors.append(
