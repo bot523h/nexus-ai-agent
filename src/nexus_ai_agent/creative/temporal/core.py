@@ -295,6 +295,8 @@ def _round_exact_ticks(
 class Duration:
     """Nonnegative temporal span primitive (duration >= 0)."""
 
+    _seconds: Fraction
+
     __slots__ = ("_seconds",)
 
     def __init__(self, seconds: Fraction | int | str | Duration) -> None:
@@ -437,6 +439,8 @@ class Duration:
 class TimePosition:
     """Signed time coordinate primitive (e.g. pre-roll offset, playhead position)."""
 
+    _seconds: Fraction
+
     __slots__ = ("_seconds",)
 
     def __init__(self, seconds: Fraction | int | str | TimePosition) -> None:
@@ -499,11 +503,6 @@ class TimePosition:
     def __add__(self, other: Duration) -> TimePosition:
         if isinstance(other, Duration):
             return TimePosition(self._seconds + other.seconds)
-        if isinstance(other, TimePosition):
-            raise TypeError(
-                "Adding two TimePositions is mathematically undefined. "
-                "Add a Duration to a TimePosition instead."
-            )
         return NotImplemented
 
     def __sub__(self, other: TimePosition | Duration) -> TimePosition | Duration:
@@ -615,7 +614,9 @@ class TemporalInterval:
 
     @property
     def duration(self) -> Duration:
-        return self._end - self._start
+        res = self._end - self._start
+        assert isinstance(res, Duration)
+        return res
 
     @classmethod
     def from_start_duration(cls, start: TimePosition, duration: Duration) -> TemporalInterval:
@@ -699,7 +700,9 @@ class TemporalTransform:
 
     def map_source_to_timeline_duration(self, source_duration: Duration) -> Duration:
         """Timeline duration = source duration / speed_ratio."""
-        return source_duration / self._speed_ratio
+        res = source_duration / self._speed_ratio
+        assert isinstance(res, Duration)
+        return res
 
     def map_timeline_to_source_duration(self, timeline_duration: Duration) -> Duration:
         """Source duration = timeline duration * speed_ratio."""
