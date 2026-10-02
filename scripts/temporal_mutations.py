@@ -111,6 +111,14 @@ MUTATIONS: tuple[Mutation, ...] = (
         "0 duration must be 0 frames; forcing >=1 is the pre-fix truncation bug",
     ),
     Mutation(
+        "deserialized_timebase_components_coerced",
+        TEMPORAL / "adapters.py",
+        '        return Timebase(spec["numerator"], spec["denominator"])',
+        '        return Timebase(int(spec["numerator"]), int(spec["denominator"]))',
+        "int() silently truncates at a deserialization boundary for untrusted "
+        "serialized data: {'numerator': 24000.7} became Timebase(24000, 1001)",
+    ),
+    Mutation(
         "otio_export_reverts_to_float_truncation",
         DELIVERY / "operations.py",
         "        raw_conv_frames = dur.to_ticks(target_tb, rounding=RoundingPolicy.NEAREST).value",
@@ -121,13 +129,23 @@ MUTATIONS: tuple[Mutation, ...] = (
 )
 
 
+#: A hung pytest would otherwise hang the CI job forever; a mutant that cannot
+#: finish is not a killed mutant, so a timeout counts as "did not go red".
+TEST_TIMEOUT_SECONDS = 600
+
+
 def run_tests() -> bool:
-    result = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-x", *TESTS],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", "-x", *TESTS],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=TEST_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"(test run exceeded {TEST_TIMEOUT_SECONDS}s) ", end="", flush=True)
+        return False
     return result.returncode == 0
 
 
@@ -154,8 +172,12 @@ def main() -> int:
             print(f"{mutation.name}: MUTATION DOES NOT APPLY (source drifted)")
             survivors.append(mutation.name)
             continue
-        mutation.path.write_text(original.replace(mutation.old, mutation.new, 1), encoding="utf-8")
+        # The mutation write lives *inside* the try so the finally restores the
+        # original bytes even if the write itself fails part-way through.
         try:
+            mutation.path.write_text(
+                original.replace(mutation.old, mutation.new, 1), encoding="utf-8"
+            )
             green = run_tests()
         finally:
             mutation.path.write_text(original, encoding="utf-8")

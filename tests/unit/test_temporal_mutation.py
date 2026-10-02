@@ -10,7 +10,7 @@ false green is what let PR #142 ship ``Fraction(value).limit_denominator(100000)
 both fully green.
 
 The real mutation testing for this subsystem lives in
-``scripts/temporal_mutations.py``, which rewrites the shipped core nine ways,
+``scripts/temporal_mutations.py``, which rewrites the shipped core ten ways,
 requires the suite to go RED each time, and restores every file afterwards
 (same harness shape as ``scripts/pack_trust_mutations.py``; wired into the
 ``temporal-mutations`` CI job and ``make mutations-temporal``).

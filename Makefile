@@ -1,4 +1,4 @@
-.PHONY: setup lint types test migrate smoke run dev-bootstrap hooks version-check mutations
+.PHONY: setup lint types test migrate smoke run dev-bootstrap hooks version-check mutations mutations-packs mutations-temporal
 
 setup:
 	pip install -e ".[dev]"

@@ -33,6 +33,10 @@ from nexus_ai_agent.creative.temporal import (
     RoundingPolicy,
     Timebase,
 )
+from nexus_ai_agent.creative.temporal.adapters import (
+    timebase_from_spec,
+    timebase_to_dict,
+)
 from nexus_ai_agent.creative.temporal.core import _round_exact_ticks
 
 # ---------------------------------------------------------------------------
@@ -255,3 +259,32 @@ def test_resolver_is_deterministic_across_repeated_calls() -> None:
     first = [FrameRateResolver.resolve(s) for s in specs]  # type: ignore[arg-type]
     for _ in range(3):
         assert [FrameRateResolver.resolve(s) for s in specs] == first  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# The deserialization boundary (adapters.timebase_from_spec).
+#
+# Its input is serialized data, i.e. untrusted.  ``int(...)`` used to coerce the
+# components, which silently truncates: timebase_from_spec({"numerator": 24000.7,
+# ...}) returned Timebase(24000, 1001) -- a plausible-looking rate built from a
+# value nobody wrote.  Raw pass-through lets Timebase.__post_init__ fail closed.
+# ---------------------------------------------------------------------------
+
+
+def test_timebase_from_spec_rejects_non_integer_components() -> None:
+    for bad in (24000.7, "24000", 24000.0, True):
+        with pytest.raises(ValueError):
+            timebase_from_spec({"numerator": bad, "denominator": 1001})
+        with pytest.raises(ValueError):
+            timebase_from_spec({"numerator": 24000, "denominator": bad})
+
+
+def test_timebase_from_spec_round_trips_a_canonical_dict() -> None:
+    canonical = (
+        Timebase.fps_23_976(),
+        Timebase.fps_29_97(),
+        Timebase.fps_59_94(),
+        Timebase.fps_24(),
+    )
+    for tb in canonical:
+        assert timebase_from_spec(timebase_to_dict(tb)) == tb
