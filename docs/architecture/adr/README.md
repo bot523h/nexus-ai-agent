@@ -18,7 +18,6 @@ This directory holds **decisions about how the architecture documentation and it
 | [0004](0004-board-schema-2.md) | Coordination board schema 2: declared prerequisites and acceptance criteria | accepted | 2026-09-21 |
 | [0005](0005-canonical-command-capability-contract.md) | Canonical command and capability contract: versioning, location, and reconciliation | accepted | 2026-09-24 |
 | [0006](0006-capability-pack-trust-root.md) | Capability packs get an explicit trust root, not a self-asserted one | accepted | 2026-09-27 |
-| [0007](0007-multisource-referee-exit-codes.md) | The overlap referee reports unverifiable data as exit 2, not as a pass | accepted | 2026-09-30 |
 
 ## Rules
 

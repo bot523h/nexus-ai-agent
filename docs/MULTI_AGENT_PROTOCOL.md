@@ -79,24 +79,11 @@ python scripts/agent_board.py claim TASK --branch BR [--ttl 24] [--gates]
 python scripts/agent_board.py release TASK --branch BR
 python scripts/agent_board.py defer TASK --branch BR --fa "…" --resume-when "…"
 python scripts/agent_board.py check --files "src/a.py,src/b.py" --branch BR   # referee
-python scripts/agent_board.py check --files "src/a.py" --branch BR --no-remote  # local only
 ```
 
-`check` is a **multi-source referee**. It reads the local board, every sibling
-git worktree's board, and `origin/main`'s board, then exits:
-
-| exit | meaning |
-|---|---|
-| `0` | no overlap **and** every consulted source was readable |
-| `1` | a proven overlap with another branch's active `exclusive_paths` |
-| `2` | a source could not be read (git/remote/worktree unavailable) — **not** a pass |
-
-Exit `2` is the honesty gate: "no overlap" is only claimed when the data was
-actually read. `--no-remote` narrows the check to the local board and says so
-loudly — its `0` is a *local* verdict, never a global pass. A proven overlap
-(`1`) is reported even when another source is unreadable, because the conflict
-is confirmed and hiding it would be worse. Wire it into a pre-push hook or a CI
-job; either way it is the mechanical answer to "may I push this?"
+`check` exits `1` when any listed file overlaps another branch's **active**
+`exclusive_paths` — wire it into a pre-push hook or a CI job; either way it is the
+mechanical answer to "may I push this?"
 
 ## 5. Failure modes and how the protocol absorbs them
 

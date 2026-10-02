@@ -16,6 +16,3 @@ dist/
 
 # CI audit artifacts (per-run evidence lives in GitHub Actions artifacts, not the tree)
 ci-artifacts/
-
-# Board mutation lock (inter-process flock; transient, never committed)
-.agents/board.lock

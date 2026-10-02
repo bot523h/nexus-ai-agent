@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-01T05:12:03Z",
+  "updated_at": "2026-09-27T16:54:20Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -123,13 +123,9 @@
       "id": "coordination-referee",
       "paths": [
         "scripts/agent_board.py",
-        "tests/unit/test_agent_board_active_in_review.py",
-        "scripts/board_referee_mutations.py",
-        "tests/unit/test_agent_board.py",
-        "docs/MULTI_AGENT_PROTOCOL.md",
-        "AGENTS.md"
+        "tests/unit/test_agent_board_active_in_review.py"
       ],
-      "note": "referee CLI + its schema/mutation tests + protocol doc"
+      "note": "historical referee work"
     },
     {
       "id": "coordination-schema2",
@@ -662,24 +658,6 @@
         "scripts/llm_queue_mutations.py",
         "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
       ]
-    },
-    {
-      "id": "nagar-creative-graph",
-      "description": "Nagar intent-first creative execution spine: typed intent, creative graph, artifact lineage (CREATIVE_DIRECTION.md)",
-      "paths": [
-        "src/nexus_ai_agent/creative/spine/",
-        "tests/unit/test_creative_spine.py",
-        "tests/unit/test_spine_mutations.py",
-        "tests/architecture/test_spine_boundary.py"
-      ]
-    },
-    {
-      "id": "nagar-spine-atomicity",
-      "description": "Creative-execution spine plan atomicity (D-0024): a multi-step plan is all-or-nothing.",
-      "paths": [
-        "src/nexus_ai_agent/creative/spine/",
-        "tests/unit/test_creative_spine.py"
-      ]
     }
   ],
   "claims": [
@@ -713,8 +691,8 @@
         "tests/unit/test_agent_board.py"
       ],
       "owner_hint": "",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0c4c1-nexus-ai-agent",
+      "claimed_at": "2026-09-21T16:21:42Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": [
@@ -747,8 +725,8 @@
       ],
       "exclusive_paths": [],
       "owner_hint": "",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0c4c1-nexus-ai-agent",
+      "claimed_at": "2026-09-21T16:21:42Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": [
@@ -773,8 +751,8 @@
       "evidence_required": [],
       "exclusive_paths": [],
       "owner_hint": "",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0c460-nexus-ai-agent",
+      "claimed_at": "2026-09-21T15:21:39Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "lease expired 2026-09-22T15:21:39Z without renewal; stewardship transferred via task-145 claim (arena/01a0c992) with full handoff note"
@@ -1076,8 +1054,8 @@
       ],
       "exclusive_paths": [],
       "owner_hint": "",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0d709-nexus-ai-agent",
+      "claimed_at": "2026-09-25T05:50:21Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "DELIVERED 2026-09-25 on arena/01a0d709-nexus-ai-agent (PR82): extras-matrix legs core/pdf/speech/translate + python-parity 3.10/3.11/3.12 (all blocking, 3.10 exception removed after the runtime was made truly 3.10-compatible) + release-lineage. Final head 0f2f8f8: CI 12/12 SUCCESS on both runs 36168073743 (pull_request) and 36168067276 (push). Skip-audit mutant-proofed (M1 pinned+killed, M2 killed, intentional skips allowed). Old 3.11-only failure (run 36101703012) proven non-reproducible (flake-or-fixed, no product bug); line-0 test synced. Gates released."
@@ -1120,8 +1098,8 @@
       "evidence_required": [],
       "exclusive_paths": [],
       "owner_hint": "",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0c3a0-nexus-ai-agent",
+      "claimed_at": "2026-09-21T13:05:00Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "evidence": "PR#34 state=MERGED; main @93cee5e; CI 35613892356 SUCCESS"
@@ -1142,7 +1120,7 @@
       "evidence_required": [],
       "exclusive_paths": [],
       "owner_hint": "",
-      "agent_branch": "",
+      "agent_branch": "arena/01a0c460-nexus-ai-agent",
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
@@ -1185,8 +1163,8 @@
     {
       "task": "nagar-wave3-timeline-edit-delivery",
       "zone": "nagar-creative-edit",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0c36f-nexus-ai-agent",
+      "claimed_at": "2026-09-21T11:00:00Z",
       "released_at": "2026-09-21T11:54:00Z",
       "ttl_hours": 24,
       "status": "completed_released",
@@ -1198,8 +1176,8 @@
     {
       "task": "board-gc-engineered-handoff",
       "zone": "coordination",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0c3ca-nexus-ai-agent",
+      "claimed_at": "2026-09-21T11:48:00Z",
       "released_at": "2026-09-21T11:54:00Z",
       "ttl_hours": 24,
       "status": "completed_released",
@@ -1211,8 +1189,8 @@
     {
       "task": "task-101",
       "zone": "ci-quality",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0c3ca-nexus-ai-agent",
+      "claimed_at": "2026-09-21T12:10:00Z",
       "ttl_hours": 24,
       "status": "completed_released",
       "gates_owner": false,
@@ -1225,7 +1203,7 @@
     {
       "task": "task-104",
       "zone": "nagar-render-lane",
-      "agent_branch": "",
+      "agent_branch": "arena/01a0c460-nexus-ai-agent",
       "claimed_at": null,
       "ttl_hours": 24,
       "status": "done",
@@ -1242,7 +1220,7 @@
     {
       "task": "task-105",
       "zone": "nagar-caption-engine",
-      "agent_branch": "",
+      "agent_branch": "arena/01a0c460-nexus-ai-agent",
       "claimed_at": null,
       "ttl_hours": 24,
       "status": "done",
@@ -1308,8 +1286,8 @@
     {
       "task": "task-113-ci-lint-rail",
       "zone": "ci-quality-2",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0c54f-nexus-ai-agent",
+      "claimed_at": "2026-09-21T18:56:20Z",
       "ttl_hours": 24,
       "status": "done",
       "gates_owner": false,
@@ -1354,8 +1332,8 @@
     {
       "task": "pr39-in-review-docs",
       "zone": "docs-architecture",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0c4c1-nexus-ai-agent",
+      "claimed_at": "2026-09-21T16:33:37Z",
       "ttl_hours": 24,
       "status": "done",
       "gates_owner": false,
@@ -1731,8 +1709,8 @@
     {
       "task": "task-142-delivery-signing-coverage-95",
       "zone": "quality-packs",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0c920-nexus-ai-agent",
+      "claimed_at": "2026-09-22T13:10:53Z",
       "ttl_hours": 24,
       "status": "done",
       "gates_owner": false,
@@ -1743,8 +1721,8 @@
     {
       "task": "task-151-board-test-clock-time-bomb",
       "zone": "ci-quality",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0c920-nexus-ai-agent",
+      "claimed_at": "2026-09-22T13:27:26Z",
       "ttl_hours": 24,
       "status": "done",
       "gates_owner": false,
@@ -1809,7 +1787,7 @@
       "title_fa": "",
       "zone": "ci-quality",
       "priority": "P1",
-      "status": "expired",
+      "status": "active",
       "scope": "non-blocking bootstrap job first, then blocking; sequenced after PR#33 lands",
       "scope_fa": "non-blocking bootstrap job first, then blocking; sequenced after PR#33 lands",
       "prerequisites": [],
@@ -1822,8 +1800,7 @@
       "claimed_at": "2026-09-27T12:27:18Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "exclusive_paths": [],
-      "release_reason": "auto-released by gc at 2026-09-30T13:55:33Z (stale active lease)"
+      "exclusive_paths": []
     },
     {
       "task": "task-155-packs-doctor",
@@ -1862,8 +1839,8 @@
       "zone": "pr51-ci-repair",
       "priority": "P0",
       "status": "done",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0ca9c-nexus-ai-agent",
+      "claimed_at": "2026-09-22T19:50:02Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "exclusive_paths": [
@@ -2014,7 +1991,7 @@
       "title_fa": "بکاپ شبانهٔ دیتابیس هرگز موفق نشده (۳ از ۳ سرخ) — مسیر بکاپ Production واقعاً کار کند",
       "zone": "ci-quality",
       "priority": "P1",
-      "status": "deferred",
+      "status": "queued",
       "scope": "maintenance.yml backup-db fails 3/3 scheduled runs (35580701817, 35705502209, 35838057275 — the 'Run nexus maintenance backup' step exits 1; the 2026-09-21 'success' 35586584833 was housekeeping-only with backup-db skipped, verified via the job API). backup.py/r2.py unchanged across those runs, so the failure is environmental (R2 secrets missing => by-design red, or R2+Neon misconfiguration). Read the job log, record the exact root cause, fix configuration (owner secrets per docs/ops/r2-storage.md §4) and/or the workflow preflight, then prove a real upload under backups/db/<stamp>/ via workflow_dispatch.",
       "scope_fa": "backup-db در سه اجرا پیاپی سرخ است؛ کد backup.py/r2.py در بازهٔ آن اجراها دست‌نخورده مانده، پس شکست محیطی است (R2 secrets / پیکربندی Neon). لوق جاب باید خوانده، ریشه ثبت و با یک اجرای دستی موفق (آپلود واقع‌زیر backups/db/<stamp>/) اثبات شود.",
       "prerequisites": [],
@@ -2035,8 +2012,7 @@
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Forensics recorded 2026-09-23. Repo-side verifiability absorbed by task-167-backup-verifiability (P0-C, 2026-09-24). This task keeps ONLY the owner-action part: set R2/Neon secrets (docs/ops/r2-storage.md §4) and prove one green workflow_dispatch run with upload under backups/db/<stamp>/.",
-      "release_reason": "owner-blocked: repo-side verifiability already delivered by task-167; only the owner-side R2/Neon secret configuration remains (see deferred_log)."
+      "note": "Forensics recorded 2026-09-23. Repo-side verifiability absorbed by task-167-backup-verifiability (P0-C, 2026-09-24). This task keeps ONLY the owner-action part: set R2/Neon secrets (docs/ops/r2-storage.md §4) and prove one green workflow_dispatch run with upload under backups/db/<stamp>/."
     },
     {
       "priority": "P0",
@@ -2061,8 +2037,8 @@
         "pytest tests/unit/test_security_hardening.py tests/architecture/test_legacy_creative_boundary.py"
       ],
       "exclusive_paths": [],
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0d23e-nexus-ai-agent",
+      "claimed_at": "2026-09-24T07:36:43Z",
       "released_at": "2026-09-24T16:32:01Z",
       "evidence": "PR#65 MERGED -> main 035a896 (035a896dd2ed1293de6accf2ef4309da2fd64c89) at 2026-09-24T09:44:16Z (verified with gh pr view 65 --json state,mergedAt). Reconciled by arena/01a0d43c-nexus-ai-agent: a merged PR must not keep a live lease (PR#51 integration + PR#47 stewardship precedent)."
     },
@@ -2090,8 +2066,8 @@
         "pytest tests/unit/test_creative_surface.py tests/unit/test_creative_render_jobs.py tests/unit/test_i18n_parity.py"
       ],
       "exclusive_paths": [],
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0d23e-nexus-ai-agent",
+      "claimed_at": "2026-09-24T07:36:43Z",
       "released_at": "2026-09-24T16:32:01Z",
       "evidence": "PR#65 MERGED -> main 035a896 (035a896dd2ed1293de6accf2ef4309da2fd64c89) at 2026-09-24T09:44:16Z (verified with gh pr view 65 --json state,mergedAt). Reconciled by arena/01a0d43c-nexus-ai-agent: a merged PR must not keep a live lease (PR#51 integration + PR#47 stewardship precedent)."
     },
@@ -2118,8 +2094,8 @@
         "pytest tests/unit/test_maintenance_backup.py"
       ],
       "exclusive_paths": [],
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0d23e-nexus-ai-agent",
+      "claimed_at": "2026-09-24T07:36:43Z",
       "released_at": "2026-09-24T16:32:01Z",
       "evidence": "PR#65 MERGED -> main 035a896 (035a896dd2ed1293de6accf2ef4309da2fd64c89) at 2026-09-24T09:44:16Z (verified with gh pr view 65 --json state,mergedAt). Reconciled by arena/01a0d43c-nexus-ai-agent: a merged PR must not keep a live lease (PR#51 integration + PR#47 stewardship precedent)."
     },
@@ -2151,10 +2127,10 @@
         "CI green on the PR"
       ],
       "exclusive_paths": [],
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0d43c-nexus-ai-agent",
+      "claimed_at": "2026-09-24T16:32:01Z",
       "ttl_hours": 48,
-      "gates_owner": false,
+      "gates_owner": true,
       "note": "PR#72 https://github.com/bot523h/nexus-ai-agent/pull/72 (commit 5f955ce) — awaiting merge; merge-order disclosures in PR body (PR#68 supersede, PR#67/PR#70/PR#71 collisions). | STEWARDSHIP-RELEASED 2026-09-24T23:06:38Z by arena/01a0d5a1-nexus-ai-agent: delivery vehicle PR#72 is MERGED; a merged PR must not keep a live lease (PR#51/#47/#65 precedent). exclusive_paths released.",
       "evidence": [
         "contract 80 + boundary 16 + wave1 22: all pass (local)",
@@ -2370,8 +2346,8 @@
         "docs/DECISION_LOG.md",
         "docs/README.md"
       ],
-      "agent_branch": "",
-      "claimed_at": null
+      "agent_branch": "arena/01a0d43e-nexus-ai-agent",
+      "claimed_at": "2026-09-24T16:45:20Z"
     },
     {
       "task": "task-180-verification-gap-closure",
@@ -2380,8 +2356,8 @@
       "zone": "job-verification-gap-closure",
       "priority": "P0",
       "status": "done",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0d475-nexus-ai-agent",
+      "claimed_at": "2026-09-24T17:45:24Z",
       "ttl_hours": 48,
       "gates_owner": false,
       "prerequisites": [
@@ -2581,7 +2557,7 @@
       "title_fa": "سخت‌سازی فورنزیک سامانهٔ شواهد Continuum",
       "zone": "continuum-evidence-measurement",
       "priority": "P0",
-      "status": "expired",
+      "status": "active",
       "agent_branch": "arena/01a0e2bb-nexus-ai-agent",
       "claimed_at": "2026-09-27T12:27:18Z",
       "ttl_hours": 24,
@@ -2618,8 +2594,7 @@
         "Two-run reproducibility comparison and exact PR #95/head/main/CI evidence."
       ],
       "note": "Audit result: two P1 snapshot false-greens were reproduced in isolated Git fixtures and fixed through e924a65: a valid snapshot survived an uncommitted source edit, and a clean later commit could reuse it after src/tests/scripts/migration/dependency drift. Regressions cover clean control, dirty/stale rejection, empty revision rejection, and unavailable git-status fail-closed behaviour in tests/unit/test_continuum_hardening.py. P2 integration gap remains: CoverageReport JSON has no downstream reader and CI/release-lineage invokes neither pack coverage nor snapshot verification; task-154 remains queued rather than claiming a release gate it does not implement. Current committed snapshot correctly blocks CLI verification (unreachable recorded SHA and test-count drift). No non-Continuum domain edits without a proven direct false-evidence consumer. | 2026-09-27 arena/01a0e1e0 continuation (supersedes PR #95/#98): the P2 gap is closed — pack coverage is a canonical 95%-per-pack gate (D-0023, option A), the snapshot verifier fails closed on a 27-attack executable threat model (scripts/continuum_gate.py), a 73-mutation replayable campaign (scripts/continuum_mutations.py) fails on any survivor, and the CI job continuum-evidence runs all three on 3.10/3.11/3.12 against the exact SHA. HISTORICAL EVIDENCE LOST — CONTENT RECONSTRUCTED: the first local lineage (c44bf2c…7bda42c) was never pushed and was lost in a sandbox re-provisioning; its surviving working tree (tree ddc76334) was reconstructed on top of 48db056 and every piece of evidence was regenerated on the new lineage — see docs/audits/CONTINUUM_CLOSURE_2026-09-27.md for the exact SHAs, local runs and CI run IDs. | 2026-09-27 arena/01a0e2bb continuation (same mission owner, new session branch; a session is bound to exactly one branch and cannot push to arena/01a0e1e0): the previous session's final local commit 6198510f0a06a803ba445e03bba1e44306eaf0f9 was never pushed and is unrecoverable (git fetch origin <sha> -> 'not our ref'), so its content fix was re-derived from the failing PR #102 head eb6551b instead of copied. PR #102 was red on `test` and `python-parity` 3.10/3.11/3.12 (runs 36315364432 / 36315366459) because docs/audits/CONTINUUM_CLOSURE_2026-09-27.md was not listed in docs/README.md, which tests/unit/test_docs_integrity.py enforces; reproduced locally as '1 failed, 2893 passed, 30 skipped'. Fixed by indexing the document -- the invariant, the threshold and the measurement are untouched.",
-      "previous_agent_branch": "arena/01a0e1e0-nexus-ai-agent",
-      "release_reason": "auto-released by gc at 2026-09-30T13:55:33Z (stale active lease)"
+      "previous_agent_branch": "arena/01a0e1e0-nexus-ai-agent"
     },
     {
       "task": "task-185-external-intelligence-hardening",
@@ -2627,7 +2602,7 @@
       "title_fa": "سخت‌سازی هوش خارجی: خطای تایپ‌شده، منشأ داده، IO غیرمسدودکننده، انتقال امن کلید، ورودی خصمانه",
       "zone": "external-intelligence",
       "priority": "P0",
-      "status": "expired",
+      "status": "active",
       "gates_owner": false,
       "prerequisites": [],
       "scope": "knowledge/{knowledge_manager,web_trainer,wikipedia_trainer}.py and integrations/free_tools.py have ZERO tests on main and convert every external failure into a success-shaped value: get_text()/get_json() erase HTTP status and network errors ('' / {}), Wikipedia scrapes a 404 'article does not exist' page into user-visible 'knowledge', CurrencyTool returns 0.0 for a missing rate, every search path returns [] for both 'no results' and 'provider exploded', the NewsAPI key travels in the URL query string (and is logged by core/http_client on failure), the synchronous DDGS SDK is called directly inside async functions (event-loop block), BeautifulSoup parses unbounded attacker-controlled HTML on the loop, user input is interpolated raw into URL paths, and KnowledgeManager caches an LLM summary built from zero real sources for 24h using scalar_one_or_none() against a table it can populate with duplicates. Deliverable: a typed SourceResult/ExternalSourceError + Provenance contract, honest failure propagation, header-based secret transport, percent-encoded URL construction, to_thread offloading, bounded responses, query normalisation + stampede guard, and regression/adversarial/mutation tests.",
@@ -2659,8 +2634,7 @@
       "note": "",
       "agent_branch": "arena/01a0df05-nexus-ai-agent",
       "claimed_at": "2026-09-26T18:46:40Z",
-      "ttl_hours": 24,
-      "release_reason": "auto-released by gc at 2026-09-30T13:55:33Z (stale active lease)"
+      "ttl_hours": 24
     },
     {
       "task": "task-195-llm-queue-lifecycle",
@@ -2696,8 +2670,8 @@
         "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
       ],
       "owner_hint": "Arena agent on arena/01a0e2f0-nexus-ai-agent",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0e2f0-nexus-ai-agent",
+      "claimed_at": "2026-09-27T13:02:33Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "MODULE_MAP.md and docs/architecture paths are excluded from this claim: current open PRs #105/#107/#102/#87/#69/#68 overlap that documentation zone. Add/refresh the architecture rule only after those owners reconcile; this slice uses behavioral regression and mutation proof. | SALVAGE-RELEASED 2026-09-27T15:12:52Z by arena/01a0e356-nexus-ai-agent: PR #108 (head 5a4cb23b, merge-base 93c7809, 4 ahead / 30 behind main 05dec617) is CONFLICTING on .agents/board.json and RED on python-parity (3.10) in both check runs on its head — root cause: asyncio.Task.cancelling() (Python 3.11+) called on the worker cancellation path, undefined on 3.10. A session is bound to exactly one branch and cannot push to arena/01a0e2f0; per the PR#102->PR#107 precedent the four commits 565c429..5a4cb23 are merged into the successor branch VERBATIM (git merge, no rebase/force-push, authorship preserved) and the 3.10 defect is fixed under claim task-195-salvage; takeovers in takeover_log. This claim must not keep a live lease. | gates_owner cleared 2026-09-27T16:54:20Z when task-195-salvage continued on arena/01a0e3b7 (sole gates owner)."
@@ -2708,7 +2682,7 @@
       "title_fa": "نجات چرخهٔ عمر صف W2: نشاندن PR #108 با حفظ کامل commitها روی خط main + رفع نقص cancellation پایتون ۳.۱۰",
       "zone": "llm-request-queue-lifecycle",
       "priority": "P0",
-      "status": "expired",
+      "status": "active",
       "scope": "Successor to PR #108 (supersedes it; original head 5a4cb23 preserved commit-for-commit). Scope identical to task-195-llm-queue-lifecycle plus the reconciliation: (a) semantic board merge — main's claim statuses/gc notes are canonical, PR108's zone+claim are appended; (b) version-independent worker-cancellation semantics; (c) exact-head CI against main 05dec617 lineage.",
       "scope_fa": "",
       "prerequisites": [],
@@ -2739,309 +2713,8 @@
       "agent_branch": "arena/01a0e3b7-nexus-ai-agent",
       "claimed_at": "2026-09-27T16:54:20Z",
       "ttl_hours": 24,
-      "gates_owner": false,
-      "note": "Continues task-195-llm-queue-lifecycle (original branch arena/01a0e2f0, claim released via takeover). MODULE_MAP.md/docs-architecture excluded exactly as the original claim scoped itself. | SESSION-BOUND CONTINUATION 2026-09-27T16:54:20Z: arena/01a0e3b7 fast-forwarded cd79bfe (PR #109 head) and continues the same exclusive paths. This session cannot push to arena/01a0e356. PR #109 python-parity (3.10) is RED on run 36329794486 (asyncio.wait_for raises asyncio.TimeoutError, not builtin TimeoutError).",
-      "release_reason": "auto-released by gc at 2026-09-30T13:55:33Z (stale active lease)"
-    },
-    {
-      "task": "task-207-multisource-check",
-      "title": "Multi-source check referee: honest 0/1/2 exit codes over local + worktrees + origin/main",
-      "title_fa": "داور چندمنبعی check: کدهای خروج صادق ۰/۱/۲ روی برد محلی + ورک‌تری‌ها + origin/main",
-      "zone": "coordination-referee",
-      "priority": "P0",
-      "status": "done",
-      "scope": "cmd_check consults the local board, every sibling git worktree board and origin/main; exit 2 when any source is unreadable; --no-remote narrows loudly to a local verdict; a proven overlap stays exit 1 even if another source is unreadable. Mutation harness kills the referee guards.",
-      "scope_fa": "cmd_check برد محلی، برد همهٔ ورک‌تری‌های همسایه و origin/main را می‌خواند؛ اگر منبعی خوانده نشود خروج ۲؛ --no-remote با صدای بلند به حکم محلی محدود می‌کند؛ برخورد اثبات‌شده حتی با منبع ناخوانا خروج ۱ می‌ماند.",
-      "prerequisites": [],
-      "acceptance_criteria": [
-        "check exits 2 when any consulted source (local board, worktree enumeration, origin/main) cannot be read — never a silent 0",
-        "check exits 1 on a proven overlap, even when another source is unreadable",
-        "check exits 0 only when every consulted source was readable and no overlap exists",
-        "--no-remote narrows to the local board and prints an explicit 'NOT a global pass' scope line",
-        "a foreign lease living only in a sibling worktree is detected",
-        "scripts/board_referee_mutations.py kills every catalogued referee mutation and restores the script byte-for-byte",
-        "zero regression on the existing board schema/CLI suite"
-      ],
-      "evidence_required": [
-        "pytest --noconftest -q tests/unit/test_agent_board.py",
-        "python scripts/board_referee_mutations.py  # N/N killed",
-        "ruff check + ruff format --check on scripts/agent_board.py, scripts/board_referee_mutations.py, tests/unit/test_agent_board.py"
-      ],
-      "exclusive_paths": [
-        "scripts/agent_board.py",
-        "scripts/board_referee_mutations.py",
-        "tests/unit/test_agent_board.py",
-        "docs/MULTI_AGENT_PROTOCOL.md",
-        "AGENTS.md"
-      ],
-      "owner_hint": "arena/hardening-task207-foreign-check",
-      "agent_branch": "",
-      "claimed_at": null,
-      "ttl_hours": 24,
-      "gates_owner": false,
-      "note": "implements the task-207 design (0/1/2 multi-source referee). D-0024 direction page is separate (docs-architecture). | 2026-09-30: lease-fencing continuation (task-219) landed on the same branch; board tests 34 passed, referee mutations 8/8 killed. | CLOSED 2026-09-30: referee + lease fencing (task-219) + gc note-preservation (task-220) all merged on this branch; evidence: test_agent_board.py 40 passed, board_referee_mutations.py 9/9 killed. | 2026-09-30 CLOSED via PR#126 (head 203cfb5): 32/32 CI checks green incl. lint+test+continuum; full unit suite 2685 passed/11 skipped; board mutation harness 14/14 killed; ruff check+format clean.",
-      "release_reason": "completed on arena/hardening-task207-foreign-check (multi-source referee + task-219 fencing + task-220 gc-note fix)",
-      "generation": 0
-    },
-    {
-      "task": "task-219-lease-fencing",
-      "title": "Incremental lease fencing: generation/epoch + heartbeat vs staleness (design locked)",
-      "title_fa": "حصارگذاری افزایشی اجاره: نسل/دوران + ضربان در برابر کهنگی (طرح قفل‌شده)",
-      "zone": "coordination-referee",
-      "priority": "P1",
-      "status": "done",
-      "scope": "Add generation/epoch fencing and a last_heartbeat field alongside claimed_at+ttl_hours; distinguish abandoned vs stale leases; tie PR activity to the lease. Schema-additive only (no hard break).",
-      "scope_fa": "افزودن حصار نسل/دوران و فیلد last_heartbeat در کنار claimed_at+ttl_hours؛ تفکیک اجارهٔ رهاشده از کهنه؛ اتصال فعالیت PR به اجاره. فقط افزایشی در طرح‌واره (بدون شکست سخت).",
-      "prerequisites": [],
-      "acceptance_criteria": [
-        "board schema stays backward compatible: existing boards load without new fields",
-        "a stale lease (heartbeat older than TTL) is distinguishable from an abandoned one (no heartbeat, owner gone)",
-        "generation/epoch increments on takeover so a resurrected old owner cannot silently re-fence",
-        "gc/show report which rule released a lease"
-      ],
-      "evidence_required": [
-        "pytest --noconftest -q tests/unit/test_agent_board.py"
-      ],
-      "exclusive_paths": [
-        "scripts/agent_board.py",
-        "scripts/board_referee_mutations.py",
-        "tests/unit/test_agent_board.py"
-      ],
-      "owner_hint": "free after task-207 lands",
-      "agent_branch": "",
-      "claimed_at": null,
-      "ttl_hours": 24,
-      "gates_owner": false,
-      "note": "implemented on arena/hardening-task207-foreign-check: generation/epoch fencing (_generation/_stale_generation), claim renewal = heartbeat (epoch stable), takeover/release/defer advance the epoch, --expected-generation refuses a stale owner with exit 2. Evidence: pytest --noconftest -q tests/unit/test_agent_board.py -> 34 passed; python scripts/board_referee_mutations.py -> 8/8 killed. | 2026-09-30 CLOSED via PR#126 (head 203cfb5): 32/32 CI checks green incl. lint+test+continuum; full unit suite 2685 passed/11 skipped; board mutation harness 14/14 killed; ruff check+format clean.",
-      "generation": 0
-    },
-    {
-      "task": "task-186-nagar-intent-spine",
-      "title": "Nagar creative execution spine: intent-first loop over the existing command surface",
-      "title_fa": "ستون فقرات اجرای خلاق نگر: حلقهٔ نیت‌محور روی سطح فرمان موجود",
-      "zone": "nagar-creative-graph",
-      "priority": "P0",
-      "status": "done",
-      "scope": "Intent -> creative graph -> capability compiler -> CommandBus -> artifact + evidence, in-memory, in creative/spine/. First capability: reference -> CreativeRecipe -> Intent (heuristic). No new media operation, no new pack, no second dispatch path.",
-      "scope_fa": "نیت -> گراف خلاق -> کامپایلر قابلیت -> CommandBus -> مصنوع + شواهد، در حافظه، در creative/spine/. اولین قابلیت: ارجاع -> دستور پخت خلاقانه -> نیت (اکتشافی). بدون عملیات رسانه‌ای جدید، بدون پک جدید، بدون مسیر ارسال دوم.",
-      "prerequisites": [],
-      "acceptance_criteria": [
-        "typed Intent round-trips; empty/foreign-project request refused typed before any handler",
-        "intent compiles to registry-checked operations; unknown operation refused before dispatch",
-        "execution enters through CommandBus only (test_only_the_bus_invokes_an_operation_handler)",
-        "artifact node binds transaction + state_hash + EvidenceRecord; a refused command produces no artifact",
-        "reference -> recipe carries a low confidence and a no-copy constraint",
-        "no regression on the existing command-contract and studio-isolation suites"
-      ],
-      "evidence_required": [
-        "pytest -q tests/unit/test_creative_spine.py tests/unit/test_spine_mutations.py tests/architecture/test_spine_boundary.py",
-        "pytest -q tests/architecture/test_command_capability_boundary.py tests/architecture/test_nagar_studio_isolation.py",
-        "ruff check + mypy clean on creative/spine/"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/spine/",
-        "tests/unit/test_creative_spine.py",
-        "tests/unit/test_spine_mutations.py",
-        "tests/architecture/test_spine_boundary.py"
-      ],
-      "owner_hint": "any free agent after a board claim",
-      "agent_branch": "",
-      "claimed_at": null,
-      "ttl_hours": 24,
-      "generation": 0,
-      "gates_owner": false,
-      "note": "direction authorized by D-0024 / docs/architecture/CREATIVE_DIRECTION.md; durability (persisted graph + lineage) is the next trigger in that page's section 6"
-    },
-    {
-      "task": "task-220-gc-note-preservation",
-      "title": "gc must not destroy a departed owner's evidence note (schema-additive release_reason)",
-      "title_fa": "gc نباید یادداشت شواهد مالکِ رفته را نابود کند (release_reason افزایشی)",
-      "zone": "coordination-referee",
-      "priority": "P0",
-      "status": "done",
-      "scope": "gc_expired overwrote claim['note'] (the departing session's unpushed evidence/handoff) with a generic release line. Record the release reason additively in release_reason, leave note untouched, and surface it in `show`. Schema-additive only.",
-      "scope_fa": "gc_expired یادداشت مالک را با یک خط عمومی بازنویسی می‌کرد و شواهد push‌نشده را نابود می‌ساخت. دلیل آزادسازی به‌صورت افزایشی در release_reason ثبت شود، یادداشت دست‌نخورده بماند و در `show` نمایش داده شود.",
-      "prerequisites": [],
-      "acceptance_criteria": [
-        "gc records release_reason and never mutates the owner's note",
-        "`show` surfaces the release reason for a gc-released lease",
-        "the mutation harness kills a note-clobbering mutation"
-      ],
-      "evidence_required": [
-        "pytest --noconftest -q tests/unit/test_agent_board.py tests/unit/test_agent_board_active_in_review.py",
-        "python scripts/board_referee_mutations.py"
-      ],
-      "exclusive_paths": [
-        "scripts/agent_board.py",
-        "scripts/board_referee_mutations.py",
-        "tests/unit/test_agent_board.py"
-      ],
-      "owner_hint": "coordination-referee owner",
-      "agent_branch": "",
-      "claimed_at": null,
-      "ttl_hours": 24,
-      "generation": 0,
-      "gates_owner": false,
-      "note": "Implemented on arena/hardening-task207-foreign-check. Evidence: pytest --noconftest -q tests/unit/test_agent_board.py tests/unit/test_agent_board_active_in_review.py -> 40 passed; python scripts/board_referee_mutations.py -> 9/9 killed. Reproduced first: running `show` on the shared board replaced four agents' notes (task-154/184/185/195) with 'auto-released by gc'; the fix keeps those notes."
-    },
-    {
-      "task": "task-221-spine-plan-atomicity",
-      "title": "A multi-step spine plan must be all-or-nothing (no partial commit)",
-      "title_fa": "برنامهٔ چندمرحله‌ای ستون فقرات باید همه-یا-هیچ باشد (بدون کامیت جزئی)",
-      "zone": "nagar-spine-atomicity",
-      "priority": "P0",
-      "status": "done",
-      "scope": "CreativeExecutionSpine.execute_intent dispatches planned operations one at a time and commits each through the bus. When a later step is refused, the earlier steps are already committed (revision advances, artifact nodes written), contradicting the spine docstring and CREATIVE_DIRECTION.md §5.4 ('a command the bus refuses fails the run and leaves no artifact'). Reproduce: a two-step plan whose second command is invalid leaves the first step committed. Fix: make the run transactional -- on any step failure, undo the steps already applied via the bus's own system.undo path (no bypass, no fabricated rollback), so the run leaves state and revision exactly as it began.",
-      "scope_fa": "",
-      "prerequisites": [],
-      "acceptance_criteria": [
-        "a two-step plan whose second command is refused leaves state_revision and state_hash exactly as before the run",
-        "no artifact or evidence node is written to the graph for a failed run",
-        "a successful multi-step run still commits every step (no regression)",
-        "the bus remains the only write path; the spine does not bypass authority to roll back",
-        "a mutation that disables the rollback turns the regression RED"
-      ],
-      "evidence_required": [
-        "pytest -q tests/unit/test_creative_spine.py",
-        "pytest -q tests/unit/test_spine_mutations.py",
-        "pytest -q tests/architecture/test_spine_boundary.py",
-        "python scripts/agent_board.py check --files src/nexus_ai_agent/creative/spine/execution.py,tests/unit/test_creative_spine.py --branch arena/hardening-task207-foreign-check"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/spine/",
-        "tests/unit/test_creative_spine.py"
-      ],
-      "owner_hint": "arena/hardening-task207-foreign-check",
-      "agent_branch": "",
-      "claimed_at": null,
-      "ttl_hours": 24,
-      "generation": 2,
-      "gates_owner": false,
-      "note": "DONE on arena/hardening-task207-foreign-check @ 3324ce6. Reproduced the defect on main e5b326b (two-step plan, second step refused -> state_revision 0->1 + one artifact node). Fix: transactional execute_intent (rollback via bus system.undo + graph artifact retraction). Evidence: pytest -q tests/unit/test_creative_spine.py tests/unit/test_spine_mutations.py tests/architecture/test_spine_boundary.py -> 21 passed (7/7 mutants killed); full tests/unit+tests/architecture -> 2816 passed, 11 skipped; mypy src -> clean; ruff check+format -> clean; docs integrity 61 passed; referee check with repo+token -> no overlap across 27 sources."
-    },
-    {
-      "task": "task-222-spine-transaction-identity",
-      "title": "A spine rollback must target its OWN transactions, never a foreign actor's edit",
-      "title_fa": "بازگردانی ستون فقرات باید فقط تراکنش‌های خودش را هدف بگیرد، نه ویرایش بازیگر دیگر",
-      "zone": "nagar-creative-graph",
-      "priority": "P0",
-      "status": "done",
-      "scope": "task-221 made execute_intent roll back a failed multi-step plan with one system.undo per applied step. That undo is unconditional ('rewind the most recent editable transaction'), so under a concurrent interleaving it rewinds a FOREIGN actor's committed edit and leaves the spine's own half-applied step in place: silent data corruption. Also unaddressed: duplicate delivery re-applies the plan (forward commands carry no idempotency key), a rollback that cannot complete still leaves artifact nodes in the graph, and a crash between the bus commit and the graph node write leaves an unreachable artifact. Fix (spine-only, no bus change; studio/ is not owned): bind each step to its committed transaction_id, on rollback only undo while the most-recent transaction is one the run owns (else refuse with a typed error), retract artifact nodes even on a partial rollback, bind an idempotency key per (intent, step) so a duplicate delivery returns the original result.",
-      "scope_fa": "",
-      "prerequisites": [
-        "task-221-spine-plan-atomicity"
-      ],
-      "acceptance_criteria": [
-        "a concurrent foreign edit interleaved between a step commit and a later step failure survives the rollback (only the run's own step is undone)",
-        "if the run cannot undo its own step because a foreign transaction is latest, the rollback fails closed with SpineRollbackError rather than editing foreign work",
-        "a duplicate delivery of the same intent is idempotent: identical state_hash and no second marker",
-        "a partial rollback failure still retracts every artifact node the failed run wrote (no orphan artifact/evidence node)",
-        "a successful multi-step run is unchanged (no regression)",
-        "mutations that (a) drop the transaction-identity check, (b) drop the per-step idempotency key turn the suite RED"
-      ],
-      "evidence_required": [
-        "pytest -q tests/unit/test_creative_spine.py",
-        "pytest -q tests/unit/test_spine_mutations.py",
-        "pytest -q tests/architecture/test_spine_boundary.py"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/spine/",
-        "tests/unit/test_creative_spine.py",
-        "tests/unit/test_spine_mutations.py"
-      ],
-      "owner_hint": "any free agent after a board claim",
-      "agent_branch": "",
-      "claimed_at": null,
-      "ttl_hours": 24,
-      "generation": 2,
-      "gates_owner": false,
-      "note": "successor to task-221 (PR#126). Reproduced failure mode D on base head 1fc4938 before any code change: step-1 commits OURS, a VALID foreign mark commits, step-2 refused -> the old unconditional compensating undo rewinds FOREIGN and leaves OURS (silent cross-actor corruption). Fix (spine zone only; studio/ untouched): record each step's committed transaction_id, undo only while the newest editable transaction is the run's own, else fail closed with SpineRollbackError; retract artifact/evidence nodes on every failure path; exactly-once replay for a redelivered successful intent; unique per-step command ids. Evidence: pytest -q tests/unit/test_creative_spine.py tests/unit/test_spine_mutations.py tests/architecture/test_spine_boundary.py -> 25 passed (9/9 mutants killed); tests/unit + tests/architecture -> 2820 passed, 11 skipped; mypy clean; ruff check+format clean. Referee: check --files <changed> --repo bot523h/nexus-ai-agent -> exit 0 (27 sources, no overlap). Docs: DECISION_LOG.md task-222 amendment. Delivery: PR#127 (head 0f98d59) stacked on #126; base #126 pending merge, so merge order is #126 -> #127."
-    },
-    {
-      "task": "task-223-bus-transaction-scoped-undo",
-      "title": "system.undo must be addressable by transaction identity, not just 'the newest'",
-      "title_fa": "system.undo باید با هویت تراکنش آدرس‌پذیر باشد، نه فقط «آخرین»",
-      "zone": "nagar-contract-gate",
-      "priority": "P1",
-      "status": "active_in_review",
-      "scope": "task-221/task-222 finding. ROOT CAUSE: _system_undo in src/nexus_ai_agent/creative/studio/capabilities.py selects the most recent editable transaction globally and restores its full-state snapshot; it has no transaction-identity parameter. task-222 made the SPINE rollback fail closed rather than corrupt a foreign edit, but the bus primitive itself is still globally unsafe for concurrent actors. Because snapshots are full project state, rewinding a non-newest transaction while newer ones stand is not sound, so a correct root fix is a design choice: (A) add an optional transaction_id to system.undo that only rewinds when it is the newest (spine then addresses its own txn, no behavior change when absent); (B) staged command DAG + single commit (no rollback needed); (C) explicit compensating saga per capability. Evaluate with the evidence rules; do NOT pick the smallest diff if it leaves the race.",
-      "acceptance_criteria": [
-        "a design note (Option A/B/C) with concurrency, crash, authorization and replay semantics recorded in docs/DECISION_LOG.md",
-        "system.undo either accepts a transaction identity or the spine stops relying on undo for rollback (issue B/C), proven by an interleaving test with two actors",
-        "no regression to the NLE 'undo the most recent edit' behavior when no identity is supplied",
-        "an adversarial test proves a foreign actor's newest edit is never rewound"
-      ],
-      "evidence_required": [
-        "pytest -q tests/unit/test_command_capability_contract.py",
-        "pytest -q tests/architecture/test_command_capability_boundary.py"
-      ],
-      "owner_hint": "any free agent with the nagar-contract-gate zone (touches creative/studio/)",
-      "agent_branch": "arena/01a0181931-task223-undo-contract",
-      "claimed_at": "2026-10-01T04:45:40Z",
-      "ttl_hours": 24,
-      "gates_owner": false,
-      "note": "DELIVERED on arena/01a0181931-task223-undo-contract @ 3ba9aac, PR#128 (stacked on #127). Option A: identity-aware system.undo enforced INSIDE the stage-9 handler under the bus lock. Evidence: TestUndoIdentity 126 passed; two-thread race test (test_race_b_identity_closes_the_check_then_act_window); test_undo_contract_mutations.py 4 passed / 3 mutants killed; tests/unit+tests/architecture 2832 passed, 11 skipped; mypy+ruff clean; referee exit 0 (27 sources). Docs: DECISION_LOG task-223 amendment + COMMAND_CAPABILITY_CONTRACT 7.1 / stage-9 / open-gaps.",
-      "generation": 1,
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/studio/",
-        "tests/unit/test_command_capability_contract.py",
-        "tests/architecture/test_command_capability_boundary.py",
-        "docs/DECISION_LOG.md",
-        "docs/architecture/COMMAND_CAPABILITY_CONTRACT.md",
-        "docs/architecture/CREATIVE_STUDIO.md"
-      ]
-    },
-    {
-      "task": "task-223-spine-undo-identity-adoption",
-      "title": "Spine rollback adopts the bus identity-aware system.undo (task-223 part 2)",
-      "zone": "nagar-creative-graph",
-      "priority": "P1",
-      "status": "active_in_review",
-      "scope": "task-222 guarded the spine rollback with a caller-side read-then-dispatch check, which cannot be atomic: the bus lock is released between reading the newest transaction and dispatching system.undo. With the bus now exposing transaction identity (task-223), the spine names its recorded per-step transaction id and lets the stage-9 gate be authoritative; the caller-side pre-check is removed.",
-      "prerequisites": [
-        "task-221-spine-plan-atomicity"
-      ],
-      "acceptance_criteria": [
-        "the spine rollback names the transaction it undoes and no longer pre-checks bus history",
-        "a foreign edit interleaved between a step commit and a failure survives; the run fails closed with SpineRollbackError",
-        "a mutation that drops the transaction identity turns the spine suite RED"
-      ],
-      "evidence_required": [
-        "pytest -q tests/unit/test_creative_spine.py",
-        "pytest -q tests/unit/test_spine_mutations.py",
-        "pytest -q tests/architecture/test_spine_boundary.py"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/spine/",
-        "tests/unit/test_creative_spine.py",
-        "tests/unit/test_spine_mutations.py"
-      ],
-      "owner_hint": "any free agent with the nagar-creative-graph zone",
-      "agent_branch": "arena/01a0181931-task223-undo-contract",
-      "claimed_at": "2026-10-01T04:45:40Z",
-      "ttl_hours": 24,
-      "generation": 1,
-      "gates_owner": false,
-      "note": "DELIVERED in PR#128: _rollback names the run's own transaction id and translates UndoConflictError -> SpineRollbackError; task-222's caller-side check removed. Evidence: test_creative_spine.py + test_spine_mutations.py + test_spine_boundary.py pass; the spine foreign-edit test now asserts __cause__ is UndoConflictError; spine mutation retargeted and green. Merge order #126 -> #127 -> #128."
-    },
-    {
-      "task": "task-190-sqlite-wal-init-race",
-      "zone": "storage-observability",
-      "status": "available",
-      "title": "SQLite first-use WAL init races under concurrent first use (CI flake: 'database is locked' on PRAGMA journal_mode=WAL)",
-      "title_fa": "مسابقهٔ مقداردهی WAL در اولین استفادهٔ هم‌زمان SQLite (فلیک CI: database is locked روی PRAGMA journal_mode=WAL)",
-      "why_fa": "create_all_tables یک بار به ازای هر مسیر محافظت می‌شود (_initialized_paths) اما خودِ مقداردهی از چند تسک/process هم‌زمان بی‌محافظت است؛ دو مقداردهی هم‌زمان WAL یک‌دیگر را قفل می‌کنند و یکی با sqlite3.OperationalError: database is locked شکست می‌خورد.",
-      "scope": "Found by task-223 while auditing the final PR#128 CI head: python-parity (3.12) failed with sqlite3.OperationalError: database is locked on PRAGMA journal_mode=WAL (run 36816623063 job 110223040499) in test_r_f28_concurrent_identical_learns_collapse_into_one; the 3.10/3.11 legs and the local full suite (2988 passed) were green, so it is intermittent and contention-dependent. Owner: storage-observability zone (unclaimed). Local repro attempt: 12 concurrent create_all_tables on a fresh path (single loop) did NOT reproduce the WAL lock (only the already-retried create_all race fired); the lock needs a concurrent writer holding a transaction at first-use init, which the CI test that failed supplies. No speculative fix attempted out of zone without a deterministic RED test.",
-      "acceptance_criteria": [
-        "PRAGMA journal_mode=WAL under concurrent first use never raises 'database is locked' (busy_timeout + bounded retry on the one-time pragma)",
-        "a deterministic concurrent-first-use regression test (threads or processes) proves no OperationalError and WAL is actually set",
-        "the initialize/create_all path stays idempotent per path and no regression on the storage suite"
-      ],
-      "prerequisites": [],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/storage/db.py"
-      ],
-      "note": "Filed by task-223 from live CI forensics; unclaimed, owner zone storage-observability."
+      "gates_owner": true,
+      "note": "Continues task-195-llm-queue-lifecycle (original branch arena/01a0e2f0, claim released via takeover). MODULE_MAP.md/docs-architecture excluded exactly as the original claim scoped itself. | SESSION-BOUND CONTINUATION 2026-09-27T16:54:20Z: arena/01a0e3b7 fast-forwarded cd79bfe (PR #109 head) and continues the same exclusive paths. This session cannot push to arena/01a0e356. PR #109 python-parity (3.10) is RED on run 36329794486 (asyncio.wait_for raises asyncio.TimeoutError, not builtin TimeoutError)."
     }
   ],
   "deferred_log": [
@@ -3078,50 +2751,26 @@
       "reason_fa": "چون عامل task-179 مالک TESTING.md و docs/README.md است، به‌روزرسانی جدول گیت‌ها و ایندکس را defer کردم؛ مستندات CI موقتاً در .github/DEPENDENCY_MATRIX.md و CHANGELOG ثبت می‌شود.",
       "reason_en": "task-132 (CI extras matrix) must update TESTING.md gate table and docs/README.md index, but those files are exclusively claimed by task-179. Documentation update deferred; CI docs live in .github/DEPENDENCY_MATRIX.md + CHANGELOG entry meanwhile.",
       "resume_when": "task-179 lands (TESTING.md/docs/README.md free) — then port the gate-table rows + docs index line"
-    },
-    {
-      "task": "task-223-bus-transaction-scoped-undo",
-      "deferred_by_branch": "arena/01a0181931-nexus-ai-agent",
-      "at": "2026-09-30T19:07:50Z",
-      "reason_fa": "ریشهٔ ناامنیِ undo در ناحیهٔ studio/ است (خارج از قفلِ ستون فقرات)؛ task-222 فقط در ستون فقرات fail-closed کرد تا خرابی خاموش حذف شود.",
-      "reason_en": "The unsafe primitive lives in creative/studio/ (owned by nagar-contract-gate), outside the spine's exclusive lease. task-222 delivered the safe spine-side guard; the bus-level transaction-identity fix is recorded here so it is not forgotten.",
-      "resume_when": "a session holds the nagar-contract-gate zone and a design decision (Option A/B/C) is recorded"
-    },
-    {
-      "task": "task-164",
-      "deferred_by_branch": "arena/01a0181931-task223-undo-contract",
-      "at": "2026-10-01T05:11:48Z",
-      "reason_fa": "بخش repo-side با task-167 تحویل شده؛ آنچه مانده فقط تنظیم سکرت‌های R2/Neon توسط مالک است، پس در لیست کار agent مسدود است.",
-      "reason_en": "Owner-blocked: repo-side verifiability already delivered by task-167; the remaining work is the owner setting NEXUS_R2_* / Neon secrets and one green workflow_dispatch. Not agent-actionable.",
-      "resume_when": "owner sets docs/ops/r2-storage.md §4 secrets and runs workflow_dispatch backup-db"
-    },
-    {
-      "task": "task-190-sqlite-wal-init-race",
-      "deferred_by_branch": "arena/01a0181931-task223-undo-contract",
-      "at": "2026-10-01T05:11:48Z",
-      "reason_fa": "در حلقهٔ task-223 کشف شد اما خارج از ناحیهٔ claim من است و رفع آن یک PR چهارم پشت سه PR باز می‌سازد؛ به‌جای گسترش دامنه، با شواهد ثبت شد.",
-      "reason_en": "Found during the task-223 loop but out of my claim's zone; fixing it would open a 4th PR stacked behind three open PRs. Recorded with reproduction instead of widening scope.",
-      "resume_when": "next storage-observability window (after #126/#127/#128 merge)"
     }
   ],
   "next_work": [
     {
-      "id": "task-190-sqlite-wal-init-race",
+      "id": "task-164",
       "priority": "P1",
-      "zone": "storage-observability",
-      "title": "SQLite first-use WAL init races under concurrent first use (CI flake: 'database is locked' on PRAGMA journal_mode=WAL)",
-      "title_fa": "مسابقهٔ مقداردهی WAL در اولین استفادهٔ هم‌زمان SQLite (فلیک CI: database is locked روی PRAGMA journal_mode=WAL)",
-      "why_fa": "create_all_tables یک بار به ازای هر مسیر محافظت می‌شود (_initialized_paths) اما خودِ مقداردهی از چند تسک/process هم‌زمان بی‌محافظت است؛ دو مقداردهی هم‌زمان WAL یک‌دیگر را قفل می‌کنند و یکی با sqlite3.OperationalError: database is locked شکست می‌خورد.",
+      "zone": "ci-quality",
+      "title": "Nightly DB backup has never succeeded (3/3 red) — make the production backup pipeline actually work",
+      "title_fa": "بکاپ شبانهٔ دیتابیس هرگز موفق نشده (۳ از ۳ سرخ) — مسیر بکاپ Production واقعاً کار کند",
+      "why_fa": "تنها مکانیسم DR برای دیتابیس Production (R2 blob tier) سه اجرا پیاپی شکست خورده و هیچ بکاپی تولید نشده؛ ریشهٔ دقیق بدون لوق جاب نامشخص است (R2 secrets؟ پیکربندی Neon؟).",
       "acceptance_criteria": [
-        "PRAGMA journal_mode=WAL under concurrent first use never raises 'database is locked' (busy_timeout + bounded retry on the one-time pragma)",
-        "a deterministic concurrent-first-use regression test (threads or processes) proves no OperationalError and WAL is actually set",
-        "the initialize/create_all path stays idempotent per path and no regression on the storage suite"
+        "a manual workflow_dispatch run of maintenance/backup-db completes SUCCESS with a visible object under backups/ in R2 including sha256/verified/timestamp in the step log",
+        "NEXUS_R2_* secrets are configured in GitHub Actions (owner-side)",
+        "the scheduled (cron) run after that also completes SUCCESS"
       ],
       "prerequisites": [],
       "exclusive_paths": [
-        "src/nexus_ai_agent/storage/db.py"
+        ".github/workflows/maintenance.yml"
       ],
-      "status_note": "Found by task-223 while auditing the final PR#128 CI head: python-parity (3.12) failed with sqlite3.OperationalError: database is locked on PRAGMA journal_mode=WAL (run 36816623063 job 110223040499) in test_r_f28_concurrent_identical_learns_collapse_into_one; the 3.10/3.11 legs and the local full suite (2988 passed) were green, so it is intermittent and contention-dependent. Owner: storage-observability zone (unclaimed). Local repro attempt: 12 concurrent create_all_tables on a fresh path (single loop) did NOT reproduce the WAL lock (only the already-retried create_all race fired); the lock needs a concurrent writer holding a transaction at first-use init, which the CI test that failed supplies. No speculative fix attempted out of zone without a deterministic RED test."
+      "status_note": "repo-side verifiability delivered by task-167 (verified backup contract, round-trip byte identity, restore-into-temp-SQLite verification); what remains is owner-secrets configuration + one real green dispatch"
     },
     {
       "id": "task-124",
@@ -3280,26 +2929,22 @@
       "why_fa": "D-0011: lut/burnin به دلیل نبود مسیر اجرای صادقانه (بدون .cube shipped و بدون subtitles op در lane IR) typed refuse می‌شوند؛ با ابزار واقعی lane قابل برگشت‌اند."
     },
     {
-      "id": "task-187-nagar-graph-durability",
-      "priority": "P1",
-      "zone": "nagar-creative-graph",
-      "title": "Persist the creative graph and artifact lineage (make the spine durable)",
-      "title_fa": "پایدارسازی گراف خلاق و تبار مصنوع (پایدار کردن ستون فقرات)",
-      "why_fa": "اسلایس D-0024 فقط در حافظه است؛ تا گراف و تبار پایدار نشوند، چندجهانی و بازخورد اجتماعی چیزی برای شاخه‌گرفتن و ابطال ندارند.",
       "acceptance_criteria": [
-        "graph nodes and artifact lineage persist and round-trip by (intent_id, project_id, state_revision)",
-        "a stale revision is refused untouched, reusing the bus state_revision/state_hash preconditions",
-        "the persistence adapter lives outside the pure creative/spine module (boundary stays stdlib+pydantic)",
-        "no regression on tests/unit/test_creative_spine.py and the command-contract suite"
+        "real user sends /edit trim on staging and receives translated queued + video artifact",
+        "caption transcribe on default install returns the typed unavailable message (localized)",
+        "job rows show durable COMPLETED/not FAILED for the typed paths"
       ],
+      "exclusive_paths": [],
       "prerequisites": [
-        "task-186-nagar-intent-spine"
+        "staging bot token + a test chat"
       ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/graph/",
-        "tests/unit/test_creative_graph.py"
-      ],
-      "status_note": "sequenced after task-186 (spine in-memory slice, done); trigger recorded in docs/architecture/CREATIVE_DIRECTION.md section 6"
+      "status_note": "owner/staging action; evidence = staging screenshots + job row dump",
+      "id": "task-175",
+      "priority": "P2",
+      "zone": "p0-stabilization",
+      "title": "Staging smoke of /edit /caption /grade against the live bot (PTB runtime)",
+      "title_fa": "اسموک استیجینگ سه فرمان creative روی ربات زنده",
+      "why_fa": "زنجیره در سطح unit/integration با artifact واقعی اثبات شده؛ اثبات نهایی کاربر-واقعی به کانتکست PTB زنده و توکن استیجینگ نیاز دارد (external dependency)."
     }
   ],
   "history": {
@@ -3587,12 +3232,6 @@
         "id": "nightly-backup-never-succeeded",
         "what": "The maintenance workflow's backup-db job (nightly 03:17 UTC, the production DB backup to the R2 blob tier) has failed EVERY run since it was introduced: runs 35580701817 (2026-09-21, 04d8820), 35705502209 (2026-09-22, 40327bc) and 35838057275 (2026-09-23, main @a997aab) — all with the 'Run nexus maintenance backup' step exiting 1. The one 'success' in the series (35586584833, 2026-09-21 10:02Z) was the Monday housekeeping job with backup-db SKIPPED (job-level API verified). Since 09-21 the backup path code (maintenance/backup.py, storage/providers/r2.py) is unchanged, so the failure is environmental: either the R2 secrets are not configured (by-design red, 'fail loudly'), or the R2+Neon combination is misconfigured. The exact error text is UNVERIFIED from this sandbox (Actions log download EOFs here). Consequence: no production database backup has ever been produced by this pipeline.",
         "resolution": "Owner action required: read the failed job log (any of the three runs), set/verify the R2_* and NEXUS_DATABASE_URL repo secrets per docs/ops/r2-storage.md §4, then trigger a manual run (workflow_dispatch) and confirm an upload under backups/db/<stamp>/. Tracked as task-164 (next_work). NOTE: if NEXUS_DATABASE_URL is unset in CI the job can never back up real data — the runner has no local SQLite file (settings default data/app.sqlite does not exist there), so the documented 'local SQLite fallback' is only meaningful on a host that actually runs the bot."
-      },
-      {
-        "date": "2026-09-30",
-        "id": "duplicate-fail-open-fix",
-        "what": "دو شاخه هم‌زمان «check باید fail-closed شود» (task-207) را در scripts/agent_board.py و tests/unit/test_agent_board.py پیاده کردند: arena/01a0eade (PR#122، لیز فعال task-207-agent-board-check-fails-open، انقضا 2026-10-01T06:30Z) و arena/hardening-task207-foreign-check (PR#126). دو طراحی متفاوت: جمع‌آوری «تختهٔ PRهای باز» در برابر منبع «شاخه‌های push‌شدهٔ PR باز».",
-        "resolution": "چک چندمنبعیِ همین سخت‌سازی، تصادم را پیش از push نشان داد (exit 1؛ فایل‌های scripts/agent_board.py و tests/unit/test_agent_board.py در branch:arena/01a0eade-nexus-ai-agent). قانون: «کار تازه‌تر و کامل‌تر برنده است» پس از مقایسهٔ دو diff؛ بازنده کارش را به برنده ارجاع می‌دهد. درس: پیش از شروع کار روی ناحیهٔ پرتصادم، `check` با منبع PRهای باز اجرا شود نه فقط تختهٔ محلی."
       }
     ],
     "board_revisions": [

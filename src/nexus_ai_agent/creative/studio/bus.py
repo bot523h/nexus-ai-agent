@@ -85,19 +85,12 @@ from nexus_ai_agent.creative.studio.models import (
     ExecutionPolicyError,
     IdempotencyConflictError,
     NagarError,
-    PlanExecutionResult,
-    PlanTransaction,
     Playhead,
     PreconditionError,
     Preconditions,
     Project,
     TypedCommand,
     compute_state_hash,
-)
-from nexus_ai_agent.creative.studio.passport import (
-    ArtifactPassport,
-    ExecutionProof,
-    ProvenanceCausalChain,
 )
 from nexus_ai_agent.creative.studio.references import ReferenceResolver
 
@@ -147,41 +140,10 @@ def _fingerprint(command: TypedCommand) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _fingerprint_plan(plan: PlanTransaction) -> str:
-    payload = plan.model_dump(mode="json")
-    for cmd in payload.get("commands", []):
-        if isinstance(cmd, dict):
-            cmd.pop("command_id", None)
-            cmd.pop("trace_id", None)
-            cmd.pop("capability_snapshot", None)
-    canonical = json.dumps(
-        payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-def _parse_plan(plan: PlanTransaction | dict[str, Any] | str | bytes) -> PlanTransaction:
-    try:
-        if isinstance(plan, PlanTransaction):
-            raw: Any = plan.model_dump(mode="json")
-        elif isinstance(plan, (str, bytes)):
-            raw = json.loads(
-                plan, object_pairs_hook=_unique_json_pairs, parse_constant=_reject_constant
-            )
-        else:
-            raw = plan
-        if not isinstance(raw, dict):
-            raise ValueError("plan must be a JSON object")
-        return PlanTransaction.model_validate(raw)
-    except (ValidationError, ValueError, TypeError, UnicodeDecodeError) as exc:
-        raise CommandValidationError(f"invalid plan transaction envelope: {exc}") from exc
-
-
 @dataclass(frozen=True)
 class _Reservation:
     fingerprint: str
     result: CommandResult | None = None  # None means execution is in flight
-    plan_result: PlanExecutionResult | None = None
 
 
 class CommandBus:
@@ -209,24 +171,13 @@ class CommandBus:
         self._project = Project.model_validate(state.model_dump(mode="json"))
         self._history: list[EditTransaction] = []
         self._idempotency: dict[tuple[str, str, str], _Reservation] = {}
-        self._durable_store: Any | None = None
         self._executing = False
-
-    def attach_durable_store(self, store: Any) -> None:
-        """Attach a DurableStore to enable automatic persistence flushes and passport records."""
-        with self._lock:
-            self._durable_store = store
 
     @property
     def project(self) -> Project:
         """A deep copy of the central state (safe to read without the lock)."""
         with self._lock:
             return self._project.model_copy(deep=True)
-
-    @property
-    def registry(self) -> CapabilityRegistry:
-        """The authoritative operation allow-list this bus enforces."""
-        return self._registry
 
     @property
     def history(self) -> tuple[EditTransaction, ...]:
@@ -250,98 +201,6 @@ class CommandBus:
             if self._executing:
                 raise CommandExecutionError("nested command dispatch during execution is forbidden")
             return self._dispatch_locked(parsed)
-
-    def dispatch_plan(
-        self, plan: PlanTransaction | dict[str, Any] | str | bytes
-    ) -> PlanExecutionResult:
-        """Run a multi-step plan transaction speculatively on an isolated snapshot.
-
-        Guarantees true plan transaction atomicity:
-        - If all commands in the plan succeed, state and transactions commit atomically.
-        - If any command fails, zero partial state or transactions commit.
-        """
-        parsed = _parse_plan(plan)
-        with self._lock:
-            if self._executing:
-                raise CommandExecutionError("nested plan dispatch during execution is forbidden")
-            return self._dispatch_plan_locked(parsed)
-
-    def _dispatch_plan_locked(self, plan: PlanTransaction) -> PlanExecutionResult:
-        self._check_preconditions(plan.preconditions)
-
-        project_id = self._project.project_id
-        if plan.idempotency_key is not None:
-            key = (project_id, f"plan.{plan.plan_id}", plan.idempotency_key)
-            fingerprint = _fingerprint_plan(plan)
-            prior = self._idempotency.get(key)
-            if prior is not None:
-                if prior.fingerprint != fingerprint:
-                    raise IdempotencyConflictError(
-                        "plan idempotency key reused with different payload"
-                    )
-                if prior.plan_result is None:
-                    raise CommandExecutionError("idempotent plan is already executing")
-                return prior.plan_result.model_copy(deep=True)
-            self._idempotency[key] = _Reservation(fingerprint=fingerprint)
-
-        workspace_project = self._project.model_copy(deep=True)
-        staged_bus = CommandBus(
-            state=workspace_project,
-            registry=self._registry,
-            resolver=self._resolver,
-            authorizer=self._authorizer,
-            allow_experimental=self._allow_experimental,
-        )
-        staged_bus._history = list(self._history)
-        staged_bus._idempotency = dict(self._idempotency)
-
-        command_results: list[CommandResult] = []
-        new_transactions: list[EditTransaction] = []
-
-        self._executing = True
-        try:
-            for cmd in plan.commands:
-                before_len = len(staged_bus._history)
-                res = staged_bus._dispatch_locked(cmd)
-                command_results.append(res)
-                after_len = len(staged_bus._history)
-                for i in range(before_len, after_len):
-                    bound_tx = staged_bus._history[i].model_copy(update={"plan_id": plan.plan_id})
-                    staged_bus._history[i] = bound_tx
-                    new_transactions.append(bound_tx)
-        except Exception:
-            if plan.idempotency_key is not None:
-                self._idempotency.pop(key, None)
-            raise
-        finally:
-            self._executing = False
-
-        plan_tx_id = f"plan_tx_{plan.plan_id}_{uuid4().hex[:8]}"
-        final_project = staged_bus.project
-
-        plan_result = PlanExecutionResult(
-            plan_id=plan.plan_id,
-            transaction_id=plan_tx_id,
-            state_revision=final_project.state_revision,
-            state_hash=final_project.state_hash,
-            results=tuple(command_results),
-            diagnostics={
-                "protocol_version": PROTOCOL_VERSION,
-                "command_count": len(plan.commands),
-            },
-            undo_available=True,
-        )
-
-        self._project = final_project
-        self._history = list(staged_bus._history)
-        self._idempotency.update(staged_bus._idempotency)
-
-        if plan.idempotency_key is not None:
-            self._idempotency[key] = _Reservation(
-                fingerprint, plan_result=plan_result.model_copy(deep=True)
-            )
-
-        return plan_result
 
     def _dispatch_locked(self, command: TypedCommand) -> CommandResult:
         if command.protocol_version != PROTOCOL_VERSION:
@@ -523,40 +382,8 @@ class CommandBus:
             },
             undo_available=True,
         )
-        # Generate proof-carrying ArtifactPassport for the transaction
-        passport_chain = ProvenanceCausalChain(
-            request_id=f"req_{command.command_id}",
-            project_id=new_project.project_id,
-            actor_id=command.actor.actor_id if command.actor else "system_actor",
-            transaction_id=transaction.transaction_id,
-            command_id=command.command_id,
-            operation=command.operation,
-        )
-        output_bytes = json.dumps(outcome.output, sort_keys=True, ensure_ascii=False).encode(
-            "utf-8"
-        )
-        passport_proof = ExecutionProof(
-            executor_id="bus_in_memory_reducer",
-            status="success",
-            output_hash=f"sha256:{hashlib.sha256(output_bytes).hexdigest()}",
-            duration_ms=0.0,
-            timestamp_utc="2026-10-01T23:45:00Z",
-        )
-        passport = ArtifactPassport(
-            artifact_id=f"art_{transaction.transaction_id[:12]}",
-            artifact_type=command.operation,
-            content_hash=new_project.state_hash,
-            causal_chain=passport_chain,
-            execution_proof=passport_proof,
-        ).with_computed_hash()
-
         # All potentially failing validation/construction is complete before
         # either central state or the reservation's result is committed.
         self._project = new_project
         self._history = [*outcome.history, transaction]
-
-        if self._durable_store is not None:
-            self._durable_store.save_project_state(self._project, [transaction])
-            self._durable_store.save_artifact_passport(passport)
-
         return result

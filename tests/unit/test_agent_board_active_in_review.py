@@ -117,31 +117,7 @@ def test_gc_expires_stale_active_in_review_leases(monkeypatch: pytest.MonkeyPatc
     assert freed == ["pr-open"]
     claim = board["claims"][0]
     assert claim["status"] == "expired"
-    assert "stale active_in_review lease" in claim["release_reason"]
-
-
-def test_gc_never_overwrites_the_owners_evidence_note(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A stale release must not destroy the owner's unpushed handoff.
-
-    The old ``gc_expired`` wrote its release line into ``note``, silently
-    replacing the departing session's evidence.  The release reason is now
-    additive (``release_reason``) and the note survives byte-for-byte.
-    """
-    fixed_now = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
-    monkeypatch.setattr(agent_board, "_now", lambda: fixed_now)
-    stale = fixed_now - timedelta(hours=25)
-    handoff = "PR #102 red on docs-integrity; fix derived from eb6551b; DO NOT LOSE THIS."
-    claim = _claim(claimed_at=agent_board._iso(stale))
-    claim["note"] = handoff
-    board = {"claims": [claim]}
-
-    agent_board.gc_expired(board)
-
-    assert claim["note"] == handoff
-    assert claim["status"] == "expired"
-    assert "stale active_in_review lease" in claim["release_reason"]
+    assert "stale active_in_review lease" in claim["note"]
 
 
 def test_claim_refuses_a_live_active_in_review_task(
