@@ -7,8 +7,8 @@
     "head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
     "base_sha": "e5b326b2eaf691a638d030ad57acf1ce60016ef0"
   },
-  "captured_at_utc": "2026-10-03T20:40:35Z",
-  "evidence_entry_count": 36,
+  "captured_at_utc": "2026-10-03T20:42:26Z",
+  "evidence_entry_count": 37,
   "entries": [
     {
       "id": "INV-001",
@@ -333,6 +333,15 @@
       "artifact_sha256": "dca8a3b804a7cd65b09bf23538fd050ef3c450aec3bbb7b89055de47e6e3529a",
       "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
       "captured_at_utc": "2026-10-03T20:37:39Z"
+    },
+    {
+      "id": "INV-037",
+      "fact": "Final post-receipt-push read-only GitHub queries confirm PR #148 remains open, approved, mergeable but unstable at head 5dbe96e111c896daa8e136eecc21f70b67515c76 on base e5b326b2eaf691a638d030ad57acf1ce60016ef0; the same-SHA pull_request python-parity (3.11) run is failed while the same-SHA push run is successful.",
+      "command": "gh pr view 148 --repo bot523h/nexus-ai-agent --json state,headRefName,headRefOid,baseRefName,isDraft,mergeStateStatus,mergeable,reviewDecision,url ; gh api repos/bot523h/nexus-ai-agent/pulls/148 --jq '{number,state,head:{ref:.head.ref,sha:.head.sha},base:{ref:.base.ref,sha:.base.sha},merged,mergeable,mergeable_state:.mergeable_state,updated_at}' ; gh api repos/bot523h/nexus-ai-agent/commits/5dbe96e111c896daa8e136eecc21f70b67515c76/check-runs --jq '[.check_runs[]|select(.name==\"python-parity (3.11)\")|{name,status,conclusion,head_sha,html_url}]'",
+      "artifact": "docs/audits/evidence/pr148-tribunal/live-truth-final-after-receipt-push.txt",
+      "artifact_sha256": "b052e290ca701a93547853d93581b4c461e9ab73a2d447e097fafd988d5e67f6",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:41:21Z"
     }
   ]
 }

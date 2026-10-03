@@ -3,7 +3,7 @@
   "task": "task-197-pr148-tribunal-hardening",
   "title": "PR #148 adversarial tribunal — mutation proof, workflow credentials, LocalCache TOCTOU",
   "status": "FAIL",
-  "captured_at_utc": "2026-10-03T20:40:35Z",
+  "captured_at_utc": "2026-10-03T20:42:26Z",
   "subject": {
     "repository": "bot523h/nexus-ai-agent",
     "pull_request": 148,
@@ -15,7 +15,7 @@
   "session_delivery": {
     "branch": "arena/01a10329-nexus-ai-agent",
     "remediation_commit": "7f1873033d968b2368a9a15abff7e8ecfab5338f",
-    "remote_session_head_at_receipt_capture": "7f1873033d968b2368a9a15abff7e8ecfab5338f",
+    "remote_session_head_at_receipt_capture": "404d62cf215af29773e55480458a755a80369b08",
     "pr_head_branch_modified": false,
     "main_modified": false,
     "commits": [
@@ -35,12 +35,12 @@
   },
   "investigator_ledger": {
     "path": "docs/audits/evidence/pr148-tribunal/investigator-ledger.json",
-    "sha256": "6e1b25f50f6eaf820ca6311a02cbaff0f7c1a9ced3a9b7808b7588ba1d649133",
-    "entry_count": 36
+    "sha256": "985efdcd7699c87d86f137f44d76bb7e943d2ee113edec21e380e585fad0c039",
+    "entry_count": 37
   },
   "judge_rubric": {
     "path": "docs/audits/evidence/pr148-tribunal/judge-rubric.json",
-    "sha256": "af6131270591d92a6b85de0445720e2b1fdb51bb8300b70f1480f5b6046275a4",
+    "sha256": "bc5d83845ca64b7fc0b52c955b5d0eaa25bcfe8ed1a97cef4d749c71c289bb22",
     "computed_status": "FAIL"
   },
   "role_reports": {
@@ -50,7 +50,7 @@
     },
     "defense-resolution.txt": {
       "path": "docs/audits/evidence/pr148-tribunal/defense-resolution.txt",
-      "sha256": "3cbf01a24bdca6059fb3edea9219799357a430dbb63110a62962ea50ff9560f3"
+      "sha256": "3c3cc331e8c485848daec3f397ee15e451688749bb310ccae85a976813c2d010"
     },
     "remediation-log.txt": {
       "path": "docs/audits/evidence/pr148-tribunal/remediation-log.txt",
@@ -58,11 +58,11 @@
     },
     "ci-disposition.txt": {
       "path": "docs/audits/evidence/pr148-tribunal/ci-disposition.txt",
-      "sha256": "0c51f9dfb472ad84995e5693c7549572226ad8a3647d336c413d864294c8cfce"
+      "sha256": "8fd18d3d6eaca0698c3102f3f17c688765cda84123398458a6be8cfd10ded7e5"
     },
     "toctou-verdict.txt": {
       "path": "docs/audits/evidence/pr148-tribunal/toctou-verdict.txt",
-      "sha256": "b4059f5940180cf977c6af0a11416c0851ee8c68e8f2e61dba9a769d02ca8a57"
+      "sha256": "41ecf944dc15357c585038eede4dde91758ebcee490a173b38f740d59b72e21e"
     },
     "phase1-substantive-judgment.txt": {
       "path": "docs/audits/evidence/pr148-tribunal/phase1-substantive-judgment.txt",
@@ -100,5 +100,11 @@
   "computed_status_formula": "PASS iff every required boolean gate is true AND the live-PR-head TOCTOU enum is PROVEN_WITH_LIMITATIONS; otherwise FAIL.",
   "required_boolean_gates_all_true": false,
   "subject_pr_board_visibility": false,
-  "both_integrity_booleans_true": true
+  "both_integrity_booleans_true": true,
+  "final_live_truth_check": {
+    "evidence_id": "INV-037",
+    "path": "docs/audits/evidence/pr148-tribunal/live-truth-final-after-receipt-push.txt",
+    "sha256": "b052e290ca701a93547853d93581b4c461e9ab73a2d447e097fafd988d5e67f6",
+    "captured_at_utc": "2026-10-03T20:41:21Z"
+  }
 }

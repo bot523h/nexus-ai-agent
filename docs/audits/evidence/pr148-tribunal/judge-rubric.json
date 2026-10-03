@@ -7,18 +7,18 @@
     "live_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
     "base_sha": "e5b326b2eaf691a638d030ad57acf1ce60016ef0"
   },
-  "computed_at_utc": "2026-10-03T20:40:35Z",
+  "computed_at_utc": "2026-10-03T20:42:26Z",
   "evidence_ledger": {
     "path": "docs/audits/evidence/pr148-tribunal/investigator-ledger.json",
-    "sha256": "6e1b25f50f6eaf820ca6311a02cbaff0f7c1a9ced3a9b7808b7588ba1d649133",
-    "entry_count": 36
+    "sha256": "985efdcd7699c87d86f137f44d76bb7e943d2ee113edec21e380e585fad0c039",
+    "entry_count": 37
   },
   "role_report_sha256": {
     "prosecutor-findings.txt": "800c7a9a8b301ce6e224bd6dfc1ac5752ecbfb9c069281a595a71711e4d87387",
-    "defense-resolution.txt": "3cbf01a24bdca6059fb3edea9219799357a430dbb63110a62962ea50ff9560f3",
+    "defense-resolution.txt": "3c3cc331e8c485848daec3f397ee15e451688749bb310ccae85a976813c2d010",
     "remediation-log.txt": "a9da7237440d25d8173b76ee9d42d6e32d1f69cbdb237a2cd284f5641321af3e",
-    "ci-disposition.txt": "0c51f9dfb472ad84995e5693c7549572226ad8a3647d336c413d864294c8cfce",
-    "toctou-verdict.txt": "b4059f5940180cf977c6af0a11416c0851ee8c68e8f2e61dba9a769d02ca8a57",
+    "ci-disposition.txt": "8fd18d3d6eaca0698c3102f3f17c688765cda84123398458a6be8cfd10ded7e5",
+    "toctou-verdict.txt": "41ecf944dc15357c585038eede4dde91758ebcee490a173b38f740d59b72e21e",
     "phase1-substantive-judgment.txt": "10a487c63be4f15e5f5d255e1d9e698b7f1e636744c3e4eff05b26289e55ff9d"
   },
   "findings": [
@@ -30,7 +30,8 @@
         "INV-002",
         "INV-008",
         "INV-009",
-        "INV-036"
+        "INV-036",
+        "INV-037"
       ],
       "resolved_on_live_pr_head": false,
       "session_remediation_evidence": [
@@ -45,7 +46,8 @@
       "ledger_evidence": [
         "INV-010",
         "INV-011",
-        "INV-036"
+        "INV-036",
+        "INV-037"
       ],
       "resolved_on_live_pr_head": false,
       "session_remediation_evidence": [
@@ -61,7 +63,8 @@
         "INV-002",
         "INV-006",
         "INV-007",
-        "INV-036"
+        "INV-036",
+        "INV-037"
       ],
       "resolved_on_live_pr_head": false,
       "session_remediation_evidence": [
@@ -95,7 +98,8 @@
       "INV-007",
       "INV-018",
       "INV-020",
-      "INV-036"
+      "INV-036",
+      "INV-037"
     ]
   },
   "boolean_gates": {
@@ -104,7 +108,8 @@
       "evidence": [
         "INV-001",
         "INV-002",
-        "INV-036"
+        "INV-036",
+        "INV-037"
       ]
     },
     "role_separation_and_cited_defense_complete": {
@@ -149,7 +154,8 @@
         "INV-012",
         "INV-013",
         "INV-016",
-        "INV-036"
+        "INV-036",
+        "INV-037"
       ]
     },
     "session_branch_remediations_targeted_full_mutations_and_lint_complete": {
@@ -225,7 +231,8 @@
         "INV-009",
         "INV-010",
         "INV-011",
-        "INV-036"
+        "INV-036",
+        "INV-037"
       ]
     },
     "live_pr_required_ci_check_green": {
@@ -233,7 +240,8 @@
       "evidence": [
         "INV-001",
         "INV-016",
-        "INV-036"
+        "INV-036",
+        "INV-037"
       ]
     },
     "pr148_visible_on_live_board": {

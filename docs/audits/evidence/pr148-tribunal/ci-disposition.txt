@@ -2,7 +2,7 @@ subject_pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
 CI_CLASSIFICATION=D — unattributed / inconclusive from available evidence.
 
 Evidence basis:
-- At the exact same PR head SHA, GitHub run 37097890060 (event=push) reports success, while run 37097893624 (event=pull_request) reports failure for `python-parity (3.11)`; both run records bind to 5dbe96e111c896daa8e136eecc21f70b67515c76. The PR remains open, approved, mergeable, and `mergeStateStatus=UNSTABLE`. See INV-001 and the final pre-computation recheck INV-036.
+- At the exact same PR head SHA, GitHub run 37097890060 (event=push) reports success, while run 37097893624 (event=pull_request) reports failure for `python-parity (3.11)`; both run records bind to 5dbe96e111c896daa8e136eecc21f70b67515c76. The PR remains open, approved, mergeable, and `mergeStateStatus=UNSTABLE`. See INV-001, the final pre-computation recheck INV-036, and the post-receipt final check INV-037.
 - The same relevant `pytest -q -rs -m "not slow" --tb=short` selection ran on the exact base e5b326b2eaf691a638d030ad57acf1ce60016ef0 and exact head 5dbe96e111c896daa8e136eecc21f70b67515c76 under Python 3.11.2: base 2,915 passed / 30 skipped; head 2,952 passed / 30 skipped. The focused KnowledgeManager suite passed 88 tests on each tree. See INV-012 through INV-015.
 - The remote failure annotation contains only `Process completed with exit code 1`; the Node.js and runner-image notices are warnings/notices, not a demonstrated cause. Failure-log and artifact retrieval returned EOF. The rerun request was explicitly denied with `run 37097893624 cannot be rerun; its workflow file may be broken`. These exact limits are in INV-016.
 
