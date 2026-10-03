@@ -1039,8 +1039,25 @@ incompatible with the typed-operation command bus; migration without a typed-op
 substitute is a rewrite, not a stabilization. (3) *Leave as-is with a docs warning* —
 the unsigned-GET data exposure is a live vulnerability, not a documentation issue.
 
-*Reopens when* PR#58 merges: removal PR (routes + three legacy modules + registry),
-evidence = ratchet suite + zero callers in `grep` + a release note.
+*Reopens when* the remaining legacy job-status GET and its support modules can
+be retired without breaking documented consumers. Task-196 closes only the
+video-edit POST; broader lane removal still requires a separate decision and
+ratchet evidence.
+
+### D-0010 amendment (2026-10-02, task-196 STOP-B): retire only the unsafe video-edit POST
+
+The task-196 STOP-B decision narrows the original keep+harden disposition for
+`POST /creative/video-edit`: the route remains registered only to return an
+unconditional HTTP 410, before upload parsing, authentication, background
+scheduling, job creation, or media processing. `creative/ffmpeg_executor.py`
+remains present as requested but has no production import or caller. The
+job-status GET remains separately HMAC-gated; no broader `/creative/*` removal
+or migration into the Nagar chain is implied by this route-specific change.
+
+*Evidence.* `tests/architecture/test_legacy_creative_boundary.py` pins the
+inert 410 and absence of processing edges, retained executor/no-caller state,
+and HMAC gating of the status route; the STOP-B-focused legacy-lane and API
+security tests are recorded in the task-196 S1 commit.
 
 ### D-0011 — `/edit` `/caption` `/grade`: the only Telegram face of the canonical chain
 
@@ -1197,6 +1214,62 @@ opt-in-completeness test go red on any other resolution.
 `tests/unit/test_capability_lifecycle.py`,
 `tests/architecture/test_lifecycle_gate_boundary.py`, and the task-183
 trust-boundary tests in `tests/unit/test_creative_render_jobs.py`.
+
+### D-0013 amendment (2026-10-03, task-196 STOP-C): retire implicit local dispatch trust
+
+The task-179 *Decision* and *Limits* paragraphs above record the original
+compatibility posture; their claim-less schema-1 dispatch exception and
+runtime-owner follow-up are superseded by this amendment. Schema-1 envelopes
+remain parseable, but **every dispatch** now requires both a claimed actor and
+an explicitly injected `ProjectAuthorizer`; absence of either fails closed
+before capability policy, references, reservation, or handlers. Schema 2
+continues to require explicit target-project and provenance claims.
+
+All three production Nagar roots are migrated: `render_jobs._dispatch`,
+`slideshow.service`, and `slideshow.upscale` use fixed service identities,
+project-scoped `ProjectAccess` grants, and schema-2 actor/target/provenance
+claims. Their closed operation-to-permission maps are pinned to live registry
+effective permissions, and the queue payload cannot choose an actor or widen a
+grant. This does not create an authenticated multi-user membership store; any
+future network root must inject an authorizer backed by its authenticated
+principal/project-membership boundary. The `preview` mode, in-memory
+cross-process idempotency limitation, and durable queue payload-conflict gap
+are unchanged.
+
+*Evidence.* `tests/unit/test_authority_policy.py` verifies slideshow, render
+worker, and upscale roots; `tests/unit/test_command_capability_contract.py`
+proves missing actor/authorizer denials; and
+`tests/architecture/test_command_capability_boundary.py` pins all production
+roots, their service identities, reachable operations, grants, and registry
+permissions. The focused command-capability, lifecycle-seam, mutation, and
+architecture run completed **115 passed** on the task-196 worktree.
+
+### D-0014 — contain remote keys at the local-cache filesystem boundary (2026-10-03, task-196 REMOTE-KEY)
+
+**Problem.** `LocalCacheProvider` previously joined an untrusted remote key
+straight onto the cache root. Traversal, absolute paths, NUL bytes, encoded
+traversal, and symlinked components could therefore turn a cache operation or
+list prefix into a path outside the intended cache. The Telegram `/cloud`
+handler also staged a sanitized basename locally but passed the original
+external filename to the remote provider.
+
+**Decision.** Telegram document filenames are reduced to a safe base name
+before both local staging and remote-key use. The local cache treats keys as
+relative POSIX paths, rejects empty/dot/parent components, absolute or
+Windows-drive spellings, backslashes, NUL, and overlong values, then checks
+repeated URL-decoding (up to 32 layers) for encoded unsafe forms while keeping
+the literal safe key unchanged. Every key-derived path is resolved beneath the
+canonical cache root; symlink components and cache-root substitution are
+refused. The same validation applies to upload, download, and list prefixes,
+and discovered list entries are checked before being returned. This does not
+change remote object-key formats or the separate R2 routing policy.
+
+*Evidence.* `tests/unit/test_local_cache_provider.py` exercises normal nested
+keys and adversarial traversal, absolute, NUL, encoded, prefix, and symlink
+cases; `tests/architecture/test_storage_key_boundary.py` pins Telegram's
+sanitization-to-remote-key edge. `docs/architecture/SECURITY.md` and the R14
+fitness function in `docs/architecture/MODULE_MAP.md` record the boundary.
+
 ## 2026-09-24 — Security-boundary truth salvage: PR#58 evidence reconciled onto current main (D-0015)
 
 *Problem.* PR#58 ("Security Boundary hardening — S1–S5") was drafted against base

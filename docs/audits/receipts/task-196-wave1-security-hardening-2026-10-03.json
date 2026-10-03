@@ -1,0 +1,117 @@
+{
+  "schema": 1,
+  "task": "task-196-wave1-security-hardening",
+  "status": "verified",
+  "verified_at_utc": "2026-10-03T04:50:36Z",
+  "branch": "arena/01a0fe18-nexus-ai-agent",
+  "main_base": "e5b326b2eaf691a638d030ad57acf1ce60016ef0",
+  "verified_source_head": "fc15c5e32d94e08346428994da94ca3e3b7894ef",
+  "board_status_after_verification": "done",
+  "commits": {
+    "seam_implementations": [
+      {
+        "sha": "396a758e76f8c3eba8c21560d96fb3467deaf0b7",
+        "message": "security: retire STOP-B video-edit route"
+      },
+      {
+        "sha": "ba2d98874079783ab3fba9bbfaf392b7de1153ea",
+        "message": "security: require explicit actors at command roots"
+      },
+      {
+        "sha": "3e816eb53099809ed25bf977e228393aa1c263e1",
+        "message": "security: contain local cache remote keys"
+      }
+    ],
+    "additional_branch_history": [
+      {
+        "sha": "b940a19f2a417ca1e49a7208516d3d6170b7151b",
+        "message": "test: classify command authority pack importers"
+      }
+    ],
+    "mutation_gate_commits": [
+      {
+        "sha": "85565a482af6cb36d99df143a5a1d4dd61855e81",
+        "message": "test(security): gate STOP-B retirement mutations"
+      },
+      {
+        "sha": "13116e5fe11afcb06e16c43c126330d6efceb373",
+        "message": "test(security): mutation-gate STOP-C authority"
+      },
+      {
+        "sha": "fc15c5e32d94e08346428994da94ca3e3b7894ef",
+        "message": "test(security): mutation-gate remote-key containment"
+      }
+    ]
+  },
+  "test_runs": [
+    {
+      "command": "PYTHONPATH=src .venv/bin/pytest -q",
+      "result": "2952 passed, 30 skipped, 16 warnings in 163.60s"
+    },
+    {
+      "command": "PYTHONPATH=src .venv/bin/pytest -q tests/integration",
+      "result": "153 passed, 19 skipped in 27.04s"
+    },
+    {
+      "command": "PYTHONPATH=src .venv/bin/pytest -q tests/architecture tests/unit/test_docs_integrity.py",
+      "result": "188 passed in 8.90s (rerun after board release)"
+    },
+    {
+      "command": "PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_agent_board.py",
+      "result": "18 passed in 0.47s (after task release)"
+    },
+    {
+      "command": "PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_api_ssrf_download.py tests/unit/test_creative_studio.py tests/unit/test_security_hardening.py tests/architecture/test_legacy_creative_boundary.py tests/architecture/test_legacy_lane_verification_gap.py",
+      "result": "66 passed, 14 warnings in 2.28s"
+    },
+    {
+      "command": "PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_local_cache_provider.py tests/unit/test_safe_paths.py tests/architecture/test_storage_key_boundary.py",
+      "result": "47 passed in 0.52s"
+    }
+  ],
+  "mutation_gates": [
+    {
+      "command": "PYTHONPATH=src .venv/bin/python scripts/security_mutations_stop_b.py",
+      "result": "3/3 mutants killed; mutated test suites and restored baseline both green"
+    },
+    {
+      "command": "PYTHONPATH=src .venv/bin/python scripts/security_mutations_stop_c.py",
+      "result": "4/4 mutants killed; mutated test suites and restored baseline both green"
+    },
+    {
+      "command": "PYTHONPATH=src .venv/bin/python scripts/security_mutations_remote_key.py",
+      "result": "3/3 mutants killed; mutated test suites and restored baseline both green"
+    }
+  ],
+  "quality_checks": [
+    {
+      "command": "./.venv/bin/ruff check . && ./.venv/bin/ruff format --check .",
+      "result": "passed; 540 files already formatted"
+    },
+    {
+      "command": "git diff --check && git diff --cached --check",
+      "result": "passed"
+    },
+    {
+      "command": "python -m json.tool .agents/board.json",
+      "result": "passed"
+    },
+    {
+      "command": "yaml.safe_load for .github/workflows/security_stop_b.yml, security_stop_c.yml, security_remote_key.yml",
+      "result": "all three workflow files parsed"
+    }
+  ],
+  "environment": {
+    "python": "3.11.2",
+    "nexus_database_url_configured": false,
+    "dependency_manifest_changed": false,
+    "note": "Test dependencies were installed only into the ignored local .venv. PostgreSQL-backed integration cases were skipped because no database service was configured."
+  },
+  "research": [
+    {
+      "source": "MITRE CWE-22: Path Traversal",
+      "url": "https://cwe.mitre.org/data/definitions/22.html",
+      "takeaway": "Treat path input as hostile; validate the accepted syntax, account for decoding/canonicalization, and enforce that the resolved path remains within the restricted parent."
+    }
+  ]
+}

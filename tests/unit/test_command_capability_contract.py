@@ -103,6 +103,9 @@ def make_actor(actor_id: str = "alice") -> ActorIdentity:
     return ActorIdentity(kind="user", actor_id=actor_id)
 
 
+DEFAULT_TEST_ACTOR = make_actor()
+
+
 def make_provenance() -> CommandProvenance:
     return CommandProvenance(source="local", source_id="contract-test")
 
@@ -113,7 +116,7 @@ def make_command(
     *,
     input: dict[str, Any] | None = None,  # noqa: A002 - envelope field name
     schema_version: int = 1,
-    actor: ActorIdentity | None = None,
+    actor: ActorIdentity | None = DEFAULT_TEST_ACTOR,
     project_id: str | None = None,
     provenance: CommandProvenance | None = None,
     idempotency_key: str | None = None,
@@ -193,7 +196,7 @@ def project() -> Project:
 
 @pytest.fixture()
 def bus(project: Project) -> CommandBus:
-    return CommandBus(state=project)
+    return CommandBus(state=project, authorizer=StaticAuthorizer(grant()))
 
 
 @pytest.fixture()
@@ -256,7 +259,12 @@ class TestVersioning:
 
     def test_schema2_requires_actor_claim(self) -> None:
         with pytest.raises(ValidationError, match="actor"):
-            make_command(schema_version=2, project_id="project_01", provenance=make_provenance())
+            make_command(
+                schema_version=2,
+                actor=None,
+                project_id="project_01",
+                provenance=make_provenance(),
+            )
 
     def test_schema2_requires_project_claim(self) -> None:
         with pytest.raises(ValidationError, match="target.project_id"):
@@ -289,19 +297,24 @@ class TestVersioning:
 
 
 class TestAuthorization:
-    def test_actor_claim_without_authorizer_is_refused(self, bus: CommandBus) -> None:
+    def test_actor_claim_without_authorizer_is_refused(self, project: Project) -> None:
+        untrusted = CommandBus(state=project)
         with pytest.raises(AuthorizationError, match="no trusted project authorizer"):
-            bus.dispatch(make_claimed_command())
-        assert bus.state_revision == 0
+            untrusted.dispatch(make_claimed_command())
+        assert untrusted.state_revision == 0
 
-    def test_claim_less_legacy_command_uses_implicit_local_trust(self, bus: CommandBus) -> None:
-        result = bus.dispatch(make_command())
-        assert result.state_revision == 1
+    def test_claim_less_legacy_command_is_refused_without_authorizer(
+        self, project: Project
+    ) -> None:
+        untrusted = CommandBus(state=project)
+        with pytest.raises(AuthorizationError, match="trusted project authorizer"):
+            untrusted.dispatch(make_command(actor=None))
+        assert untrusted.state_revision == 0
 
     def test_authorizer_requires_an_actor_claim(self, project: Project) -> None:
         authed = CommandBus(state=project, authorizer=StaticAuthorizer(grant()))
         with pytest.raises(AuthorizationError, match="no actor claim"):
-            authed.dispatch(make_command())
+            authed.dispatch(make_command(actor=None))
         assert authed.state_revision == 0
 
     def test_wrong_actor_is_denied(self, project: Project) -> None:
@@ -309,11 +322,6 @@ class TestAuthorization:
         with pytest.raises(AuthorizationError, match="not authorized"):
             authed.dispatch(make_claimed_command(actor=make_actor("mallory")))
         assert authed.state_revision == 0
-
-    def test_target_project_mismatch_is_denied_without_authorizer(self, bus: CommandBus) -> None:
-        with pytest.raises(AuthorizationError, match="different project"):
-            bus.dispatch(make_command(project_id="project_02"))
-        assert bus.state_revision == 0
 
     def test_target_project_mismatch_is_denied_with_authorizer(
         self, authed_bus: CommandBus
@@ -368,7 +376,7 @@ class TestCapability:
         registry = CapabilityRegistry()
         spec = build_wave1_registry().get_spec("media.play")
         registry.register_operation("media", "playback", spec, available=False)
-        bus = CommandBus(state=project, registry=registry)
+        bus = CommandBus(state=project, registry=registry, authorizer=StaticAuthorizer(grant()))
         with pytest.raises(CapabilityError, match="unavailable"):
             bus.dispatch(make_command())
         assert bus.state_revision == 0
@@ -524,7 +532,7 @@ class TestPolicy:
                 handler=_never,
             ),
         )
-        bus = CommandBus(state=project, registry=registry)
+        bus = CommandBus(state=project, registry=registry, authorizer=StaticAuthorizer(grant()))
         with pytest.raises(ExecutionPolicyError):
             bus.dispatch(make_command("system.shell_exec"))
         with pytest.raises(PermissionDeniedError):
@@ -544,7 +552,7 @@ class TestPolicy:
                 handler=lambda p, c: OperationOutcome(p, c.history, {"ok": True}),
             ),
         )
-        bus = CommandBus(state=project, registry=registry)
+        bus = CommandBus(state=project, registry=registry, authorizer=StaticAuthorizer(grant()))
         with pytest.raises(ExecutionPolicyError, match="confirmation"):
             bus.dispatch(make_command("timeline.export_master"))
         result = bus.dispatch(make_command("timeline.export_master", confirmed=True))
@@ -682,8 +690,16 @@ class TestIdempotency:
         assert result.state_revision == 2
 
     def test_key_scope_includes_project(self) -> None:
-        first = CommandBus(state=make_project("project_01"))
-        second = CommandBus(state=make_project("project_02"))
+        first_project = make_project("project_01")
+        second_project = make_project("project_02")
+        first = CommandBus(
+            state=first_project,
+            authorizer=StaticAuthorizer(grant(project_id=first_project.project_id)),
+        )
+        second = CommandBus(
+            state=second_project,
+            authorizer=StaticAuthorizer(grant(project_id=second_project.project_id)),
+        )
         first.dispatch(make_command(idempotency_key="key-1"))
         result = second.dispatch(make_command(idempotency_key="key-1"))
         assert result.state_revision == 1
@@ -774,7 +790,7 @@ class TestIdempotency:
                 handler=_flaky,
             ),
         )
-        bus = CommandBus(state=project, registry=registry)
+        bus = CommandBus(state=project, registry=registry, authorizer=StaticAuthorizer(grant()))
         with pytest.raises(CommandExecutionError):
             bus.dispatch(make_command("media.flaky", "cmd_a", idempotency_key="key-1"))
         assert bus.state_revision == 0
@@ -1002,7 +1018,7 @@ class TestPipelineOrder:
                 handler=_dirty,
             ),
         )
-        bus = CommandBus(state=project, registry=registry)
+        bus = CommandBus(state=project, registry=registry, authorizer=StaticAuthorizer(grant()))
         with pytest.raises(CommandExecutionError):
             bus.dispatch(make_command("media.dirty"))
         assert len(bus.project.timeline.markers) == before_markers
@@ -1026,7 +1042,7 @@ class TestPipelineOrder:
                 handler=_renaming,
             ),
         )
-        bus = CommandBus(state=project, registry=registry)
+        bus = CommandBus(state=project, registry=registry, authorizer=StaticAuthorizer(grant()))
         with pytest.raises(CommandExecutionError, match="project identity"):
             bus.dispatch(make_command("media.renaming"))
         assert bus.project.project_id == "project_01"
@@ -1040,7 +1056,7 @@ class TestPipelineOrder:
 
 class TestParsing:
     def test_json_text_dispatches(self, bus: CommandBus) -> None:
-        payload = json.dumps({"command_id": "c1", "operation": "media.play"})
+        payload = json.dumps(make_command(command_id="c1").model_dump(mode="json"))
         assert bus.dispatch(payload).state_revision == 1
         assert bus.dispatch(payload.encode("utf-8")).state_revision == 2
 
@@ -1085,7 +1101,7 @@ class TestParsing:
                 handler=_reentrant,
             ),
         )
-        bus = CommandBus(state=project, registry=registry)
+        bus = CommandBus(state=project, registry=registry, authorizer=StaticAuthorizer(grant()))
         holder["bus"] = bus
         with pytest.raises(CommandExecutionError, match="nested command dispatch"):
             bus.dispatch(make_command("media.reentrant"))
@@ -1111,9 +1127,14 @@ class TestTargetRefCompatibility:
         from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
 
         project = make_project()
-        bus = CommandBus(state=project, registry=build_runtime_registry())
+        bus = CommandBus(
+            state=project,
+            registry=build_runtime_registry(),
+            authorizer=StaticAuthorizer(grant()),
+        )
         command = TypedCommand(
             command_id="cmd-key-timeline.trim",
+            actor=DEFAULT_TEST_ACTOR,
             operation="timeline.mark",
             input={"at": "اینجا", "label": "render"},
             target=TargetRef(project_id=project.project_id, track_id="main"),

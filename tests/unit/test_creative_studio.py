@@ -149,29 +149,52 @@ async def test_job_registry_crud(tmp_path: Path) -> None:
     assert await registry.get_job(job_id) is None
 
 
-def test_background_task_flow(
+def test_video_edit_retirement_has_no_runtime_side_effects(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     import hashlib
     import hmac as hmac_module
+    import subprocess
     import time
 
+    from starlette.background import BackgroundTasks
+
+    monkeypatch.setenv("NEXUS_CREATIVE_TEMP_DIR", str(tmp_path))
     monkeypatch.setenv("NEXUS_CREATIVE_GEMINI_API_KEY", "creative-key")
-    monkeypatch.setenv("CREATIVE_TEMP_DIR", str(tmp_path / "creative"))
-    # The endpoint is fail-closed: without a signing key it answers 503.
     monkeypatch.setenv("NEXUS_API_HMAC_KEY", "test-signing-key")
     settings_module.get_settings.cache_clear()
-    monkeypatch.setattr(app_module, "_creative_registry", None)
 
-    async def fake_analyze(video_path_or_url: str, api_key: str) -> VideoEditPlan:
-        assert api_key == "creative-key"
-        assert Path(video_path_or_url).suffix == ".mp4"
+    job_creates: list[tuple[str, dict[str, Any]]] = []
+    job_updates: list[tuple[Any, ...]] = []
+    process_calls: list[tuple[Any, ...]] = []
+    analysis_calls: list[tuple[Any, ...]] = []
+    ffmpeg_calls: list[tuple[Any, ...]] = []
+    background_tasks: list[str] = []
+    subprocess_calls: list[list[str]] = []
+
+    class SpyRegistry:
+        async def create_job(self, job_type: str, input_data: dict[str, Any]) -> str:
+            job_creates.append((job_type, input_data))
+            return "job-1"
+
+        async def update_job_status(self, *args: Any, **kwargs: Any) -> None:
+            job_updates.append((*args, kwargs))
+
+    monkeypatch.setattr(app_module, "get_creative_registry", lambda: SpyRegistry())
+
+    async def fake_save_upload(upload: Any) -> str:
+        path = tmp_path / "uploaded.mp4"
+        path.write_bytes(b"video-bytes")
+        return str(path)
+
+    async def fake_analyze(video_path: str, api_key: str) -> VideoEditPlan:
+        analysis_calls.append((video_path, api_key))
         return VideoEditPlan(
             cuts=[Cut(start=0.0, end=1.0)],
             zooms=[],
             captions=[],
-            reasoning="Keep the opening beat.",
+            reasoning="test-only plan",
         )
 
     async def fake_execute(
@@ -179,9 +202,7 @@ def test_background_task_flow(
         input_path: str,
         output_path: str,
     ) -> FFmpegResult:
-        assert plan.reasoning == "Keep the opening beat."
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(output_path).write_bytes(b"output")
+        ffmpeg_calls.append((plan, input_path, output_path))
         return FFmpegResult(
             success=True,
             output_path=output_path,
@@ -189,18 +210,35 @@ def test_background_task_flow(
             duration=1.0,
         )
 
-    monkeypatch.setattr(app_module, "analyze_video_with_gemini", fake_analyze)
-    monkeypatch.setattr(app_module, "execute_ffmpeg_commands", fake_execute)
+    async def fake_process(*args: Any, **kwargs: Any) -> None:
+        process_calls.append((*args, kwargs))
+
+    monkeypatch.setattr(app_module, "_save_upload_to_temp", fake_save_upload, raising=False)
+    monkeypatch.setattr(app_module, "analyze_video_with_gemini", fake_analyze, raising=False)
+    monkeypatch.setattr(app_module, "execute_ffmpeg_commands", fake_execute, raising=False)
+    monkeypatch.setattr(app_module, "_process_video_edit_job", fake_process, raising=False)
+
+    original_add_task = BackgroundTasks.add_task
+
+    def record_background_task(self: BackgroundTasks, func: Any, *args: Any, **kwargs: Any) -> None:
+        background_tasks.append(getattr(func, "__name__", repr(func)))
+        original_add_task(self, func, *args, **kwargs)
+
+    monkeypatch.setattr(BackgroundTasks, "add_task", record_background_task)
+
+    def record_subprocess(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        subprocess_calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", record_subprocess)
 
     client = TestClient(app_module.app)
-    # Build the multipart body once so the HMAC signature covers exactly
-    # the raw bytes the server will receive.
     request = httpx.Request(
         "POST",
         "http://testserver/creative/video-edit",
         files={"file": ("clip.mp4", b"video-bytes", "video/mp4")},
     )
-    request.read()  # materialize the streaming multipart body
+    request.read()
     timestamp = str(int(time.time()))
     signature = hmac_module.new(
         b"test-signing-key",
@@ -217,27 +255,14 @@ def test_background_task_flow(
         },
     )
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["status"] == "pending"
-
-    # GET is the same HMAC gate as the POST (task-165): timestamp over an
-    # empty body, constant-time verified by the app.
-    read_timestamp = str(int(time.time()))
-    read_signature = hmac_module.new(
-        b"test-signing-key",
-        f"{read_timestamp}:".encode() + b"",
-        hashlib.sha256,
-    ).hexdigest()
-    job_response = client.get(
-        f"/creative/jobs/{payload['job_id']}",
-        headers={
-            "X-NEXUS-Timestamp": read_timestamp,
-            "X-NEXUS-Signature": read_signature,
-        },
-    )
-    assert job_response.status_code == 200
-    job = job_response.json()
-    assert job["status"] == "done"
-    assert job["result"]["output_path"].endswith(f"{payload['job_id']}.mp4")
-    assert not Path(job["input_data"]["path"]).exists()
+    assert response.status_code == 410
+    assert response.json()["detail"]
+    assert job_creates == []
+    assert job_updates == []
+    assert background_tasks == []
+    assert process_calls == []
+    assert analysis_calls == []
+    assert ffmpeg_calls == []
+    assert subprocess_calls == []
+    assert not (tmp_path / "creative_jobs.sqlite3").exists()
+    assert not (tmp_path / "uploaded.mp4").exists()
