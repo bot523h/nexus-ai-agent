@@ -57,12 +57,12 @@ CANONICAL_AUTHORITY_REGISTRY: dict[str, tuple[str, str]] = {
         "UndoConflictError",
     ),
     "11_job_queue_worker_leases_fencing_tokens": (
-        "nexus_ai_agent.application.ports.job_queue",
-        "JobQueuePort",
+        "nexus_ai_agent.creative.studio.persistence",
+        "JobAttemptLease",
     ),
     "12_idempotency_replay_suppression": (
-        "nexus_ai_agent.creative.studio.models",
-        "IdempotencyConflictError",
+        "nexus_ai_agent.creative.studio.persistence",
+        "DurableStudioStore",
     ),
     "13_checkpoint_lifecycle_persistence": (
         "nexus_ai_agent.storage.checkpoint_lifecycle_store",
@@ -77,8 +77,8 @@ CANONICAL_AUTHORITY_REGISTRY: dict[str, tuple[str, str]] = {
         "LaneArtifact",
     ),
     "16_artifact_passport_independent_media_verification": (
-        "nexus_ai_agent.creative.spine.models",
-        "ArtifactRecord",
+        "nexus_ai_agent.creative.studio.passport",
+        "ArtifactPassport",
     ),
     "17_execution_receipts_lineage_provenance_graph": (
         "nexus_ai_agent.creative.spine.models",

@@ -27,18 +27,18 @@ DEFAULT_STUDIO_ACTOR = ActorIdentity(kind="user", actor_id="alice")
 
 
 class _DefaultProjectAuthorizer:
-    def __init__(self, project_id: str) -> None:
+    def __init__(self, project_id: str | None = None) -> None:
         self._project_id = project_id
 
     def authorize(self, actor: ActorIdentity, project_id: str) -> ProjectAccess:
         return ProjectAccess(
             actor=actor,
-            project_id=self._project_id,
+            project_id=self._project_id if self._project_id is not None else project_id,
             permissions=frozenset({"project:read", "project:write"}),
         )
 
 
-def default_authorizer(project_id: str = "project_01") -> ProjectAuthorizer:
+def default_authorizer(project_id: str | None = None) -> ProjectAuthorizer:
     return _DefaultProjectAuthorizer(project_id)
 
 

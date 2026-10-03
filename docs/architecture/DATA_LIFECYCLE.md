@@ -20,6 +20,29 @@ visible history remains available and a continuation starts a new thread.
 - `inspect` is read-only and never updates access timestamps.
 - Reconciliation backfills an unknown checkpoint into protected metadata first; it never treats unknown age as old.
 
+## SQLite lifecycle sidecar and concurrency boundary
+
+The SQLite lifecycle index is disposable metadata beside the local checkpoint
+store; it is not the checkpoint source of truth. `SQLiteCheckpointLifecycleAdapter`
+dispatches operations through `asyncio.to_thread`, while one
+`SQLiteCheckpointLifecycleStore` owns and shares one `sqlite3.Connection`.
+Every operation on that connection (including write plus commit, reads, schema
+fingerprinting, and close) is serialized with a per-instance thread lock.
+`check_same_thread=False` permits worker-thread access but does not by itself
+isolate transaction state across concurrent calls. A busy timeout or bounded
+retry addresses `SQLITE_BUSY` from other connections; it cannot prevent workers
+from interleaving this connection's execute/commit sequence, so no retry is
+used as a substitute for serialization.
+
+That lock is process-local and scoped to one store instance. It does not
+coordinate separate store instances or processes, initialize WAL on the main
+checkpoint database, replace SQLite's file locking, or provide distributed
+coordination. Lifecycle rows remain repairable metadata: successful writes are
+committed locally, while lifecycle-recording failures are logged rather than
+raised into graph execution; reconciliation can backfill missing rows from the
+checkpoint store with a protected estimated age. None of this upgrades the
+sidecar into durable conversation history or an exactly-once record.
+
 ## Operation journal
 
 All externally observable operations use `nexus_operation_journal` with a unique

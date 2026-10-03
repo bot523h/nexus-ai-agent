@@ -280,7 +280,7 @@ def inspect_checkpoints(
 
     from nexus_ai_agent.adapters.langgraph.lifecycle_recording import nexus_access_context
     from nexus_ai_agent.config.settings import get_settings
-    from nexus_ai_agent.domain.policies.retention import RetentionRecord, deletable, pinned
+    from nexus_ai_agent.domain.policies.retention import RetentionRecord, thread_retention
     from nexus_ai_agent.storage.db import resolve_database_url
 
     settings = get_settings()
@@ -309,18 +309,23 @@ def inspect_checkpoints(
             last_accessed = max(
                 (item.last_accessed_at for item in metadata if item.last_accessed_at), default=None
             )
-            lifecycle_record = metadata[-1] if metadata else None
-            retention = (
-                RetentionRecord(
-                    lifecycle_record.created_at,
-                    lifecycle_record.last_accessed_at,
-                    lifecycle_record.active_until,
-                )
-                if lifecycle_record is not None
-                else None
+            # The retention verdict is a property of the THREAD, so it is
+            # quantified over every one of its lifecycle rows (protection
+            # existential, destruction universal, no rows = unknown).  It must
+            # never be read off a single row: ``records()`` has no ORDER BY and
+            # the SQLite index is a rowid table, so "the last row" is insertion
+            # order — a storage-engine artefact that made two logically
+            # identical threads report opposite ``would_delete`` verdicts.
+            verdict = thread_retention(
+                (
+                    RetentionRecord(item.created_at, item.last_accessed_at, item.active_until)
+                    for item in metadata
+                ),
+                now=now,
             )
-            pinned_value = pinned(retention, now=now) if retention is not None else "unknown"
-            deletable_value = deletable(retention, now=now) if retention is not None else False
+            # No lifecycle rows => the thread's retention state is unknown, and
+            # unknown stays visible as "unknown" (inspect-v1 contract, I10).
+            pinned_value: bool | str = verdict.pinned if verdict.known else "unknown"
             entry: dict[str, Any] = {
                 "schema": "inspect-v1",
                 "thread_id": thread_id,
@@ -329,13 +334,17 @@ def inspect_checkpoints(
                 "newest_created_at": newest.isoformat() if newest else "unknown",
                 "last_accessed_at": last_accessed.isoformat() if last_accessed else "unknown",
                 "pinned": pinned_value,
-                "active": bool(
-                    lifecycle_record
-                    and lifecycle_record.active_until
-                    and lifecycle_record.active_until > now
-                ),
-                "resumable_within_window": bool(retention and not deletable_value),
-                "would_delete": deletable_value,
+                "active": verdict.active,
+                "resumable_within_window": verdict.known and not verdict.deletable,
+                # Why the thread is being retained.  ``resumable_within_window``
+                # alone conflates three different situations — protected by an
+                # explicit pin, protected by ordinary recency, and retained
+                # because its age is unknown — and a destructive verdict with no
+                # reason is not actionable.  ``no_evidence`` is never a claim of
+                # safety.  This field is never the string "unknown", so the
+                # inspect-v1 ``unknown_fields`` list is unchanged.
+                "protection_reason": str(verdict.reason),
+                "would_delete": verdict.deletable,
                 "would_free_bytes_estimate": adapter.estimate_thread_bytes(thread_id),
                 "missing_lifecycle": not bool(metadata),
                 "orphan_candidate_count": max(0, len(metadata) - len(checkpoints)),

@@ -60,8 +60,10 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -94,7 +96,15 @@ from nexus_ai_agent.creative.studio.models import (
     TypedCommand,
     compute_state_hash,
 )
+from nexus_ai_agent.creative.studio.passport import (
+    ArtifactPassport,
+    ExecutionProof,
+    ProvenanceCausalChain,
+)
 from nexus_ai_agent.creative.studio.references import ReferenceResolver
+
+if TYPE_CHECKING:
+    from nexus_ai_agent.creative.studio.persistence import DurableStudioStore
 
 
 def _unique_json_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -199,6 +209,8 @@ class CommandBus:
         *,
         authorizer: ProjectAuthorizer | None = None,
         allow_experimental: bool = False,
+        history: Sequence[EditTransaction] | None = None,
+        store: DurableStudioStore | None = None,
     ) -> None:
         self._registry = registry if registry is not None else build_wave1_registry()
         self._resolver = resolver if resolver is not None else ReferenceResolver()
@@ -211,9 +223,26 @@ class CommandBus:
         # validation (the worker uses it when registering its staged asset).
         # Never let a stale/fabricated hash become an optimistic precondition.
         self._project = Project.model_validate(state.model_dump(mode="json"))
-        self._history: list[EditTransaction] = []
+        self._history: list[EditTransaction] = list(history) if history is not None else []
         self._idempotency: dict[tuple[str, str, str], _Reservation] = {}
         self._executing = False
+        self._store: DurableStudioStore | None = None
+        if store is not None:
+            self.attach_durable_store(store)
+
+    def attach_durable_store(self, store: DurableStudioStore) -> None:
+        """Bind a DurableStudioStore and hydrate persisted idempotency reservations."""
+        with self._lock:
+            self._store = store
+            persisted = store.load_idempotency(self._project.project_id)
+            for (op, idem_key), (fp, res) in persisted.items():
+                full_key = (self._project.project_id, op, idem_key)
+                if isinstance(res, PlanExecutionResult):
+                    self._idempotency[full_key] = _Reservation(fingerprint=fp, plan_result=res)
+                else:
+                    self._idempotency[full_key] = _Reservation(fingerprint=fp, result=res)
+            if store.load_project_state(self._project.project_id) is None:
+                store.save_project_state(self._project, self._history)
 
     @property
     def project(self) -> Project:
@@ -305,6 +334,7 @@ class CommandBus:
         staged_bus._history = list(self._history)
         staged_bus._idempotency = dict(self._idempotency)
 
+        prior_history_len = len(self._history)
         command_results: list[CommandResult] = []
         self._executing = True
         try:
@@ -329,15 +359,24 @@ class CommandBus:
                 for idx in range(before_len, after_len):
                     bound_tx = staged_bus._history[idx].model_copy(update={"plan_id": plan.plan_id})
                     staged_bus._history[idx] = bound_tx
-        except Exception:
+        except Exception as exc:
             if key is not None:
                 self._idempotency.pop(key, None)
+            if self._store is not None:
+                self._store.record_aborted_transaction(
+                    project_id,
+                    plan_id=plan.plan_id,
+                    reason=str(exc),
+                    state_revision=self._project.state_revision,
+                    state_hash=self._project.state_hash,
+                )
             raise
         finally:
             self._executing = False
 
         plan_tx_id = f"plan_tx_{plan.plan_id}_{uuid4().hex[:8]}"
         final_project = staged_bus.project
+        new_txs = staged_bus._history[prior_history_len:]
 
         plan_result = PlanExecutionResult(
             plan_id=plan.plan_id,
@@ -361,6 +400,18 @@ class CommandBus:
             self._idempotency[key] = _Reservation(
                 fingerprint, plan_result=plan_result.model_copy(deep=True)
             )
+        if self._store is not None:
+            self._store.save_project_state(final_project, new_txs)
+            if plan.idempotency_key is not None:
+                self._store.record_idempotency(
+                    project_id,
+                    f"plan.{plan.plan_id}",
+                    plan.idempotency_key,
+                    fingerprint,
+                    plan_result,
+                )
+            for cmd, tx in zip(plan.commands, new_txs, strict=False):
+                self._persist_auto_passport(cmd, tx, final_project, plan_id=plan.plan_id)
 
         return plan_result
 
@@ -459,6 +510,14 @@ class CommandBus:
             self._check_preconditions(command.preconditions)
             result = self._apply_guarded(command, spec, input_data)
             self._idempotency[key] = _Reservation(fingerprint, result.model_copy(deep=True))
+            if self._store is not None:
+                self._store.record_idempotency(
+                    project_id,
+                    command.operation,
+                    command.idempotency_key,
+                    fingerprint,
+                    result,
+                )
             return result
         finally:
             if self._idempotency.get(key) == _Reservation(fingerprint):
@@ -530,6 +589,14 @@ class CommandBus:
             undone_tx_id = outcome.output.get("undone_transaction_id")
             undone_plan_id = outcome.output.get("undone_plan_id")
             current_tx_ids = {tx.transaction_id for tx in outcome.history}
+            evicted_tx_ids = {
+                tx.transaction_id for tx in self._history if tx.transaction_id not in current_tx_ids
+            }
+            if isinstance(undone_tx_id, str):
+                evicted_tx_ids.add(undone_tx_id)
+            evicted_plan_ids: set[str] = set()
+            if isinstance(undone_plan_id, str):
+                evicted_plan_ids.add(undone_plan_id)
             keys_to_remove = [
                 k
                 for k, v in self._idempotency.items()
@@ -550,6 +617,12 @@ class CommandBus:
             ]
             for k in keys_to_remove:
                 self._idempotency.pop(k, None)
+            if self._store is not None:
+                self._store.evict_idempotency(
+                    self._project.project_id,
+                    evicted_tx_ids,
+                    evicted_plan_ids,
+                )
         result = CommandResult(
             transaction_id=transaction.transaction_id,
             state_revision=new_project.state_revision,
@@ -567,4 +640,77 @@ class CommandBus:
         # either central state or the reservation's result is committed.
         self._project = new_project
         self._history = [*outcome.history, transaction]
+        if self._store is not None:
+            self._store.save_project_state(new_project, [transaction])
+            self._persist_auto_passport(command, transaction, new_project)
         return result
+
+    def _persist_auto_passport(
+        self,
+        command: TypedCommand,
+        transaction: EditTransaction,
+        project: Project,
+        *,
+        plan_id: str | None = None,
+    ) -> None:
+        if self._store is None:
+            return
+        actor_id = command.actor.actor_id if command.actor is not None else "unknown"
+        request_id = command.trace_id or command.command_id
+        chain = ProvenanceCausalChain(
+            request_id=request_id,
+            project_id=project.project_id,
+            actor_id=actor_id,
+            plan_id=plan_id or transaction.plan_id,
+            transaction_id=transaction.transaction_id,
+            command_id=command.command_id,
+            operation=str(command.operation),
+        )
+        proof = ExecutionProof(
+            executor_id="in-memory-reducer",
+            status="success",
+            output_hash=project.state_hash,
+            duration_ms=0.0,
+            verification_metrics={"state_revision": project.state_revision},
+            timestamp_utc=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+        passport = ArtifactPassport(
+            artifact_id=f"art_{transaction.transaction_id}",
+            artifact_type="state_transition",
+            content_hash=project.state_hash,
+            causal_chain=chain,
+            execution_proof=proof,
+        ).with_computed_hash()
+        self._store.save_artifact_passport(passport)
+        self._store.record_execution_receipt(
+            receipt_id=f"rcpt_{transaction.transaction_id}",
+            project_id=project.project_id,
+            transaction_id=transaction.transaction_id,
+            command_id=command.command_id,
+            plan_id=plan_id or transaction.plan_id,
+            artifact_id=passport.artifact_id,
+            payload={
+                "receipt_id": f"rcpt_{transaction.transaction_id}",
+                "project_id": project.project_id,
+                "transaction_id": transaction.transaction_id,
+                "command_id": command.command_id,
+                "plan_id": plan_id or transaction.plan_id,
+                "state_revision": project.state_revision,
+                "state_hash": project.state_hash,
+                "passport_hash": passport.passport_hash,
+            },
+        )
+        self._store.record_lineage_edge(
+            project_id=project.project_id,
+            parent_id=command.command_id,
+            child_id=transaction.transaction_id,
+            edge_kind="command_to_transaction",
+            transaction_id=transaction.transaction_id,
+        )
+        self._store.record_lineage_edge(
+            project_id=project.project_id,
+            parent_id=transaction.transaction_id,
+            child_id=passport.artifact_id,
+            edge_kind="transaction_to_artifact",
+            transaction_id=transaction.transaction_id,
+        )
