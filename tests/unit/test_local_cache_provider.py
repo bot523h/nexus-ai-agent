@@ -240,6 +240,56 @@ def test_upload_atomically_replaces_a_key_symlink_without_writing_its_target(
     not local_cache_module._supports_descriptor_containment(),
     reason="POSIX descriptor-relative filesystem operations are unavailable",
 )
+def test_upload_stays_in_opened_directory_if_parent_is_replaced_with_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "cache"
+    nested = root / "nested"
+    nested.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    victim = outside / "payload.txt"
+    victim.write_text("keep these bytes", encoding="utf-8")
+    source = tmp_path / "upload.txt"
+    source.write_text("uploaded cache bytes", encoding="utf-8")
+    probe_link = tmp_path / "symlink-probe"
+    try:
+        probe_link.symlink_to(outside, target_is_directory=True)
+        probe_link.unlink()
+    except OSError as exc:  # pragma: no cover - platforms without symlink support
+        pytest.skip(f"symlinks unavailable: {exc}")
+
+    provider = LocalCacheProvider(root)
+    real_open = local_cache_module.os.open
+    moved = root / "nested-opened-before-race"
+    replacements: list[bool] = []
+
+    def replace_parent_before_stage_open(path, flags, mode=0o777, *, dir_fd=None):
+        if (
+            not replacements
+            and dir_fd is not None
+            and flags & os.O_CREAT
+            and str(path).startswith(".nexus-upload-")
+        ):
+            nested.rename(moved)
+            nested.symlink_to(outside, target_is_directory=True)
+            replacements.append(True)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(local_cache_module.os, "open", replace_parent_before_stage_open)
+    _run(provider.upload(local_path=source, remote_key="nested/payload.txt"))
+
+    assert replacements == [True]
+    assert nested.is_symlink()
+    assert victim.read_text(encoding="utf-8") == "keep these bytes"
+    assert (moved / "payload.txt").read_text(encoding="utf-8") == "uploaded cache bytes"
+
+
+@pytest.mark.skipif(
+    not local_cache_module._supports_descriptor_containment(),
+    reason="POSIX descriptor-relative filesystem operations are unavailable",
+)
 def test_download_rejects_a_hard_linked_cache_entry(tmp_path: Path) -> None:
     root = tmp_path / "cache"
     root.mkdir()
