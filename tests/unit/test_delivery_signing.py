@@ -26,6 +26,7 @@ import sys
 import types
 
 import pytest
+from command_authority import TEST_SERVICE_ACTOR, make_test_authorizer
 
 from nexus_ai_agent.creative.packs.delivery import signing as sut
 from nexus_ai_agent.creative.packs.delivery.operations import build_delivery_registry
@@ -331,13 +332,19 @@ def _delivery_bus() -> CommandBus:
     timeline = Timeline(timeline_id="tl_wave5", duration_us=4_000_000)
     project: Project = new_project("p_wave5_signing_cov", "Coverage Project", timeline)
     project = project.model_copy(update={"assets": [video, audio]})
-    return CommandBus(project, registry=registry, allow_experimental=True)
+    return CommandBus(
+        project,
+        registry=registry,
+        authorizer=make_test_authorizer(project),
+        allow_experimental=True,
+    )
 
 
 def test_apply_lut_unknown_asset_rejected() -> None:
     bus = _delivery_bus()
     cmd = TypedCommand(
         command_id="cmd_cov_lut_unknown",
+        actor=TEST_SERVICE_ACTOR,
         operation="color.apply_lut",
         input={"clip_asset_id": "clip_missing", "lut_name": "cinematic", "intensity": 0.5},
     )
@@ -349,6 +356,7 @@ def test_apply_lut_requires_video_asset() -> None:
     bus = _delivery_bus()
     cmd = TypedCommand(
         command_id="cmd_cov_lut_audio",
+        actor=TEST_SERVICE_ACTOR,
         operation="color.apply_lut",
         input={"clip_asset_id": "audio_a1", "lut_name": "cinematic", "intensity": 0.5},
     )
@@ -360,6 +368,7 @@ def test_adjust_exposure_unknown_clip_rejected() -> None:
     bus = _delivery_bus()
     cmd = TypedCommand(
         command_id="cmd_cov_exp_unknown",
+        actor=TEST_SERVICE_ACTOR,
         operation="color.adjust_exposure",
         input={"clip_asset_id": "clip_missing", "exposure_ev": 0.5, "temperature_k": 5600},
     )
@@ -371,6 +380,7 @@ def test_auto_balance_execution() -> None:
     bus = _delivery_bus()
     cmd = TypedCommand(
         command_id="cmd_cov_autobal",
+        actor=TEST_SERVICE_ACTOR,
         operation="color.auto_balance",
         input={"clip_asset_id": "clip_v1", "preserve_skin_tones": False},
     )
@@ -390,6 +400,7 @@ def test_auto_balance_unknown_clip_rejected() -> None:
     bus = _delivery_bus()
     cmd = TypedCommand(
         command_id="cmd_cov_autobal_unknown",
+        actor=TEST_SERVICE_ACTOR,
         operation="color.auto_balance",
         input={"clip_asset_id": "clip_missing"},
     )
@@ -401,6 +412,7 @@ def test_match_shot_unknown_source_rejected() -> None:
     bus = _delivery_bus()
     cmd = TypedCommand(
         command_id="cmd_cov_match_src",
+        actor=TEST_SERVICE_ACTOR,
         operation="color.match_shot",
         input={"source_clip_id": "clip_missing", "reference_clip_id": "clip_v1"},
     )
@@ -412,6 +424,7 @@ def test_match_shot_unknown_reference_rejected() -> None:
     bus = _delivery_bus()
     cmd = TypedCommand(
         command_id="cmd_cov_match_ref",
+        actor=TEST_SERVICE_ACTOR,
         operation="color.match_shot",
         input={"source_clip_id": "clip_v1", "reference_clip_id": "clip_missing"},
     )
@@ -423,6 +436,7 @@ def test_make_proxy_unknown_video_rejected() -> None:
     bus = _delivery_bus()
     cmd = TypedCommand(
         command_id="cmd_cov_proxy_unknown",
+        actor=TEST_SERVICE_ACTOR,
         operation="delivery.make_proxy_480p",
         input={"video_asset_id": "clip_missing"},
     )
@@ -436,6 +450,7 @@ def test_render_master_4k_handler_requires_confirmation_flag() -> None:
     bus = _delivery_bus()
     cmd = TypedCommand(
         command_id="cmd_cov_master_unconfirmed",
+        actor=TEST_SERVICE_ACTOR,
         operation="delivery.render_master_4k",
         confirmed=True,  # envelope-level confirmation (bus permission gate)
         input={"width": 3840, "height": 2160},  # payload confirmed defaults to False

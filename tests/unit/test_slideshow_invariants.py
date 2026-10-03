@@ -14,6 +14,7 @@ of the slideshow pack — never a line for its own sake:
 from __future__ import annotations
 
 import pytest
+from command_authority import TEST_SERVICE_ACTOR, make_test_authorizer
 from pydantic import ValidationError
 
 from nexus_ai_agent.creative.packs.slideshow import (
@@ -69,13 +70,19 @@ def _bus() -> CommandBus:
         "slideshow",
         Timeline(timeline_id="tl", duration_us=0, playhead=Playhead(timecode_us=0)),
     )
-    return CommandBus(project, registry=build_slideshow_registry())
+    return CommandBus(
+        project, registry=build_slideshow_registry(), authorizer=make_test_authorizer(project)
+    )
 
 
 def _command(operation: str, payload: dict[str, object]) -> dict[str, object]:
     return {
         "protocol_version": "nagar.command.v1",
+        "schema_version": 2,
         "command_id": f"cmd_{operation}",
+        "actor": TEST_SERVICE_ACTOR.model_dump(mode="json"),
+        "target": {"project_id": "proj"},
+        "provenance": {"source": "service", "source_id": TEST_SERVICE_ACTOR.actor_id},
         "session_id": "invariants",
         "operation": operation,
         "input": payload,
