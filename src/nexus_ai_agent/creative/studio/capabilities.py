@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from dataclasses import field as dc_field
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from nexus_ai_agent.creative.studio.models import (
     CapabilityError,
@@ -44,6 +44,7 @@ from nexus_ai_agent.creative.studio.models import (
     Project,
     TimeRangeUS,
     TypedCommand,
+    UndoConflictError,
     UndoStackEmptyError,
     UnknownCapabilityError,
     UnknownOperationError,
@@ -334,6 +335,19 @@ class SplitCommandInput(BaseModel):
 class UndoCommandInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # Optional transaction identity: a caller that means to undo a *specific*
+    # edit names it, and the gate below refuses unless it is still the newest
+    # editable transaction. Absent -> classic NLE "undo the most recent edit".
+    transaction_id: str | None = Field(default=None, min_length=1, max_length=128)
+    plan_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+    @field_validator("transaction_id", "plan_id")
+    @classmethod
+    def _non_blank_id(cls, value: str | None) -> str | None:
+        if value is not None and (value != value.strip() or any(c.isspace() for c in value)):
+            raise ValueError("id must not contain whitespace")
+        return value
+
 
 # ---------------------------------------------------------------------------
 # Wave 1 pure handlers
@@ -472,6 +486,38 @@ def _timeline_split_at_playhead(project: Project, context: OperationContext) -> 
 
 def _system_undo(project: Project, context: OperationContext) -> OperationOutcome:
     history = context.history
+    if not history:
+        raise UndoStackEmptyError("nothing to undo: transaction history is empty")
+
+    target_plan_id = context.input_data.get("plan_id")
+    if target_plan_id is not None:
+        plan_indices = [i for i, tx in enumerate(history) if tx.plan_id == target_plan_id]
+        if not plan_indices:
+            raise UndoStackEmptyError(
+                f"nothing to undo: no transaction for plan {target_plan_id!r} found in history"
+            )
+        max_idx = max(plan_indices)
+        min_idx = min(plan_indices)
+        for idx in range(max_idx + 1, len(history)):
+            if history[idx].operation != "system.undo" and history[idx].plan_id != target_plan_id:
+                other_id = history[idx].plan_id or history[idx].transaction_id
+                raise UndoConflictError(
+                    f"cannot undo plan {target_plan_id!r}: subsequent transactions "
+                    f"from {other_id!r} exist on history stack"
+                )
+        earliest_tx = history[min_idx]
+        restored = Project.model_validate(earliest_tx.state_before)
+        remaining = tuple(tx for i, tx in enumerate(history) if i not in plan_indices)
+        return OperationOutcome(
+            restored,
+            remaining,
+            {
+                "undone_plan_id": target_plan_id,
+                "undone_transaction_count": len(plan_indices),
+                "restored_state_hash": earliest_tx.previous_state_hash,
+            },
+        )
+
     target_index: int | None = None
     for index in range(len(history) - 1, -1, -1):
         if history[index].operation != "system.undo":
@@ -482,6 +528,33 @@ def _system_undo(project: Project, context: OperationContext) -> OperationOutcom
             "nothing to undo: no editable transaction remains on the history stack"
         )
     last = history[target_index]
+    raw_tx_id = context.input_data.get("transaction_id")
+    if last.plan_id is not None and (
+        raw_tx_id is None
+        or raw_tx_id == last.transaction_id
+        or raw_tx_id == last.plan_id
+        or raw_tx_id == f"plan_tx_{last.plan_id}"
+        or raw_tx_id.startswith(f"plan_tx_{last.plan_id}_")
+    ):
+        return _system_undo(
+            project,
+            OperationContext(
+                command=context.command,
+                input_data={
+                    **context.input_data,
+                    "plan_id": last.plan_id,
+                    "transaction_id": None,
+                },
+                history=history,
+            ),
+        )
+    requested = context.input_data.get("transaction_id")
+    if requested is not None and requested != last.transaction_id:
+        raise UndoConflictError(
+            "refusing to undo: requested transaction "
+            f"{requested!r} is not the newest editable transaction {last.transaction_id!r} "
+            "(a concurrent edit or a stale identity)"
+        )
     restored = Project.model_validate(last.state_before)
     remaining = history[:target_index] + history[target_index + 1 :]
     return OperationOutcome(
@@ -490,6 +563,8 @@ def _system_undo(project: Project, context: OperationContext) -> OperationOutcom
         {
             "undone_operation": last.operation,
             "undone_transaction_id": last.transaction_id,
+            "undone_plan_id": last.plan_id,
+            "requested_transaction_id": requested,
             "restored_state_hash": last.previous_state_hash,
         },
     )

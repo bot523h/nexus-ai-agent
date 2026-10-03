@@ -107,6 +107,18 @@ class UndoStackEmptyError(CommandExecutionError):
     """``system.undo`` was requested but the transaction history is empty."""
 
 
+class UndoConflictError(CommandExecutionError):
+    """``system.undo`` named a transaction that is not the newest editable one.
+
+    Undo restores a *full-state snapshot*, so rewinding a transaction while
+    newer edits still stand would clobber them. The identity argument is a
+    guard, not an arbitrary-index rewind: a caller may only confirm that the
+    newest editable transaction is the one it means to undo. A mismatch (a
+    concurrent foreign edit committed in between, or a stale/unknown identity)
+    is refused with this error and the state is left untouched.
+    """
+
+
 class PermissionLevel(str, Enum):
     """Permission ladder from the Nagar TDD (section 1.1).
 
@@ -550,6 +562,28 @@ class EditTransaction(BaseModel):
     previous_state_hash: str
     new_state_hash: str
     state_before: dict[str, Any]
+    plan_id: str | None = None
+    actor_id: str | None = None
+
+
+class PlanTransaction(BaseModel):
+    """An ordered multi-step sequence of commands executed as an atomic transaction."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    plan_id: str = Field(min_length=1, max_length=128)
+    commands: tuple[TypedCommand, ...] = Field(min_length=1)
+    actor: ActorIdentity | None = None
+    target: TargetRef | None = None
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
+    preconditions: Preconditions = Field(default_factory=Preconditions)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def _non_blank_key(cls, value: str | None) -> str | None:
+        if value is not None and (value != value.strip() or any(c.isspace() for c in value)):
+            raise ValueError("idempotency_key must not contain whitespace")
+        return value
 
 
 class CommandResult(BaseModel):
@@ -562,3 +596,26 @@ class CommandResult(BaseModel):
     output: dict[str, Any] = Field(default_factory=dict)
     diagnostics: dict[str, Any] = Field(default_factory=dict)
     undo_available: bool = True
+
+
+class PlanExecutionResult(BaseModel):
+    """Execution output envelope for a PlanTransaction."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    plan_id: str
+    transaction_id: str
+    status: Literal["applied"] = "applied"
+    state_revision: int = Field(ge=0)
+    state_hash: str
+    results: tuple[CommandResult, ...] = Field(default_factory=tuple)
+    output: dict[str, Any] = Field(default_factory=dict)
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+    undo_available: bool = True
+
+    @property
+    def command_results(self) -> tuple[CommandResult, ...]:
+        return self.results
+
+
+PlanResult = PlanExecutionResult
