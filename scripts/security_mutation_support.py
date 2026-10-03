@@ -5,18 +5,25 @@ corresponding behavioral/architecture assertions go red, restores every file
 byte-for-byte, and reruns its baseline tests green. The runner preserves any
 pre-existing local edits because restoration uses the source text captured at
 invocation time rather than a Git checkout.
+
+A mutant is counted as killed only when pytest exits with status 1 and its
+structured short-test-summary section names every exact expected node ID as
+FAILED. Collection errors, import errors, warnings, tracebacks and arbitrary
+output mentioning a test name do not count.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 @dataclass(frozen=True)
@@ -31,7 +38,7 @@ class Mutation:
     name: str
     edits: tuple[SourceEdit, ...]
     tests: tuple[str, ...]
-    expected_failures: tuple[str, ...]
+    expected_nodeids: tuple[str, ...]
     rationale: str
 
 
@@ -41,13 +48,54 @@ def _run_tests(tests: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
         part for part in (str(ROOT / "src"), env.get("PYTHONPATH", "")) if part
     )
     return subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", *tests],
+        [sys.executable, "-m", "pytest", "-q", "-rf", "--tb=short", *tests],
         cwd=ROOT,
         env=env,
         capture_output=True,
         text=True,
         check=False,
     )
+
+
+def _reported_expected_nodeids(output: str, expected_nodeids: tuple[str, ...]) -> set[str]:
+    """Return expected node IDs named by pytest's short-summary FAILED lines.
+
+    Only the final ``short test summary info`` section is authoritative. Pytest
+    includes test stdout/stderr, tracebacks, warnings, and collection messages
+    elsewhere in the captured output; a substring match over that material is
+    not evidence that the intended assertion failed.
+    """
+    clean_output = _ANSI_ESCAPE.sub("", output)
+    lines = clean_output.splitlines()
+    headers = [
+        index
+        for index, line in enumerate(lines)
+        if line.strip().startswith("=") and "short test summary info" in line
+    ]
+    if not headers:
+        return set()
+
+    summary_lines = lines[headers[-1] + 1 :]
+    reported: set[str] = set()
+    for line in summary_lines:
+        stripped = line.strip()
+        if not stripped.startswith("FAILED "):
+            continue
+        actual = stripped[len("FAILED ") :]
+        for expected in expected_nodeids:
+            if actual == expected or actual.startswith(expected + " - "):
+                reported.add(expected)
+    return reported
+
+
+def _is_killed_by_expected_nodeids(
+    result: subprocess.CompletedProcess[str], expected_nodeids: tuple[str, ...]
+) -> bool:
+    """Apply the mutation acceptance rule without prose or substring inference."""
+    if result.returncode != 1 or not expected_nodeids:
+        return False
+    output = result.stdout + result.stderr
+    return set(expected_nodeids).issubset(_reported_expected_nodeids(output, expected_nodeids))
 
 
 def _invalidate_bytecode(paths: set[Path]) -> None:
@@ -122,10 +170,13 @@ def run_mutation_suite(
             survivors.append(mutation.name)
             continue
 
-        output = result.stdout + result.stderr
-        if result.returncode and all(token in output for token in mutation.expected_failures):
+        if _is_killed_by_expected_nodeids(result, mutation.expected_nodeids):
             killed += 1
-            print(f"{mutation.name}: killed — {mutation.rationale}")
+            print(
+                f"{mutation.name}: killed — pytest reported FAILED for "
+                + ", ".join(mutation.expected_nodeids)
+                + f" — {mutation.rationale}"
+            )
         else:
             survivors.append(mutation.name)
             if result.returncode:

@@ -1270,6 +1270,47 @@ cases; `tests/architecture/test_storage_key_boundary.py` pins Telegram's
 sanitization-to-remote-key edge. `docs/architecture/SECURITY.md` and the R14
 fitness function in `docs/architecture/MODULE_MAP.md` record the boundary.
 
+### D-0014 amendment (2026-10-03, task-197 adversarial tribunal): close LocalCache directory-entry TOCTOU
+
+**Finding.** Deterministic adversarial interleavings replaced the validated
+cache leaf after path checks: a download copied bytes from an outside symlink
+(targeting an outside secret), and an upload followed a raced symlink and
+truncated an outside file. The prior path validation was correct for a static
+tree but was not race-safe.
+
+**Decision.** Keep D-0014's key syntax, Telegram sanitization, and remote-key
+compatibility, but use a pinned POSIX cache-root descriptor for I/O. Open each
+key directory relative to its already-open parent with `O_DIRECTORY | O_NOFOLLOW`;
+open download leaves once with `O_NOFOLLOW` and copy only from that file
+descriptor after checking it is a private regular file; stage uploads as
+exclusive files in the opened parent and publish with descriptor-relative
+`os.replace`. Listing also walks and opens entries by directory descriptor.
+The provider refuses to initialize where the required POSIX `dir_fd` and
+`O_NOFOLLOW` primitives are unavailable. The cache root must be owned by the
+effective UID and not group/world writable; ancestors must be owned by that
+UID or root and non-writable to other UIDs unless sticky; every traversed
+cache directory and readable file is checked for effective-UID ownership and
+no group/world write access. Download leaves must be regular, same-device,
+single-link files; FIFO opens are nonblocking and rejected. This contract
+protects against untrusted remote keys and other-UID local processes, not a
+malicious process running as the service UID, a privileged/root actor, or a
+privileged mount administrator. This closes the path-component and leaf-entry
+swap race within that enforced operating contract without changing the remote
+object-key format.
+
+*Evidence.* `tests/unit/test_local_cache_provider.py` deterministically replaces
+a download leaf with a symlink after the cache file has been opened and creates
+an upload leaf symlink after the staging directory is opened; the assertions
+prove the outside target is neither read nor modified. A hard-linked entry is
+also refused. `tests/unit/test_security_mutation_support.py` proves an unrelated
+pytest failure cannot satisfy a mutation's expected-node gate. Full test and
+mutation-runner results are recorded in the PR#148 tribunal evidence ledger.
+
+**Delivery boundary.** This amendment records the remediation on session branch
+`arena/01a10329-nexus-ai-agent`. It does not describe the unmodified PR#148 head
+as fixed; that PR remains subject to its live-head tribunal verdict until the
+maintainer integrates this remediation.
+
 ## 2026-09-24 — Security-boundary truth salvage: PR#58 evidence reconciled onto current main (D-0015)
 
 *Problem.* PR#58 ("Security Boundary hardening — S1–S5") was drafted against base

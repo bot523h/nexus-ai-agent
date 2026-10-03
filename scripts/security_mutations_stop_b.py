@@ -29,7 +29,9 @@ MUTATIONS = (
             ),
         ),
         (TESTS[0],),
-        ("test_valid_hmac_cannot_reactivate_retired_video_edit",),
+        (
+            "tests/unit/test_security_hardening.py::test_valid_hmac_cannot_reactivate_retired_video_edit",
+        ),
         "the route must remain HTTP 410 even with a valid HMAC",
     ),
     Mutation(
@@ -44,7 +46,9 @@ MUTATIONS = (
             ),
         ),
         (TESTS[1],),
-        ("test_video_edit_retirement_has_no_runtime_side_effects",),
+        (
+            "tests/unit/test_creative_studio.py::test_video_edit_retirement_has_no_runtime_side_effects",
+        ),
         "the retired route must create no registry job",
     ),
     Mutation(
@@ -59,7 +63,9 @@ MUTATIONS = (
             ),
         ),
         (TESTS[2],),
-        ("test_video_edit_post_is_a_410_without_processing_or_auth_gates",),
+        (
+            "tests/architecture/test_legacy_creative_boundary.py::test_video_edit_post_is_a_410_without_processing_or_auth_gates",
+        ),
         "the inert route must not accept or parse attacker-controlled request data",
     ),
 )

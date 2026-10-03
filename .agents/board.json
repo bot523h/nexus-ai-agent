@@ -659,7 +659,8 @@
         "docs/architecture/MODULE_MAP.md",
         "tests/unit/command_authority.py",
         "scripts/security_mutation_support.py",
-        "tests/unit/test_security_mutation_support.py"
+        "tests/unit/test_security_mutation_support.py",
+        "docs/architecture/SECURITY.md"
       ]
     },
     {
@@ -2895,7 +2896,10 @@
         "tests/unit/test_local_cache_provider.py",
         "tests/unit/test_security_mutation_support.py",
         "docs/audits/evidence/",
-        "docs/audits/receipts/"
+        "docs/audits/receipts/",
+        "docs/DECISION_LOG.md",
+        "docs/architecture/MODULE_MAP.md",
+        "docs/architecture/SECURITY.md"
       ],
       "note": ""
     }

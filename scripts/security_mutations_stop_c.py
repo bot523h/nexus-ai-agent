@@ -27,21 +27,27 @@ MUTATIONS = (
         "production_root_omits_authorizer",
         (SourceEdit(RENDER_ROOT, "        authorizer=authorizer,\n", ""),),
         (TESTS[0],),
-        ("test_every_production_command_bus_root_has_a_trusted_authorizer",),
+        (
+            "tests/architecture/test_command_capability_boundary.py::test_every_production_command_bus_root_has_a_trusted_authorizer",
+        ),
         "every reachable production bus root must bind a project-scoped trusted grant",
     ),
     Mutation(
         "missing_authorizer_no_longer_fails_closed",
         (SourceEdit(BUS, "        if self._authorizer is None:", "        if False:"),),
         (TESTS[4],),
-        ("test_actor_claim_without_authorizer_is_refused",),
+        (
+            "tests/unit/test_command_capability_contract.py::TestAuthorization::test_actor_claim_without_authorizer_is_refused",
+        ),
         "dispatch without a trusted authorizer must raise AuthorizationError",
     ),
     Mutation(
         "missing_actor_no_longer_fails_closed",
         (SourceEdit(BUS, "        if command.actor is None:", "        if False:"),),
         (TESTS[5],),
-        ("test_authorizer_requires_an_actor_claim",),
+        (
+            "tests/unit/test_command_capability_contract.py::TestAuthorization::test_authorizer_requires_an_actor_claim",
+        ),
         "dispatch without an actor claim must be denied before operation handling",
     ),
     Mutation(
@@ -54,7 +60,9 @@ MUTATIONS = (
             ),
         ),
         (TESTS[6],),
-        ("test_missing_permissions_are_denied",),
+        (
+            "tests/unit/test_command_capability_contract.py::TestAuthorization::test_missing_permissions_are_denied",
+        ),
         "service identity does not grant permissions absent from its project grant",
     ),
 )
