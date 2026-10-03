@@ -1,0 +1,14 @@
+captured_at_utc=2026-10-03T19:40:36Z
+pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+source_snapshot=/tmp/tribunal-head extracted from 5dbe96e111c896daa8e136eecc21f70b67515c76
+command=/home/user/nexus-ai-agent/.venv/bin/python /tmp/pr148-head/tribunal_ast_inventory.py (cwd=/tmp/pr148-head; PYTHONPATH=/tmp/tribunal-head/src)
+command_exit_code=0
+--- stdout ---
+STOP_B_AST_LEGACY_IMPORTS
+COUNT=0
+PRODUCTION_COMMANDBUS_CONSTRUCTOR_SITES
+creative/render_jobs.py	272	CommandBus
+creative/slideshow/service.py	203	CommandBus
+creative/slideshow/upscale.py	106	CommandBus
+COUNT=3
+--- stderr ---

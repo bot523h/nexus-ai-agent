@@ -1,0 +1,104 @@
+{
+  "schema": 1,
+  "task": "task-197-pr148-tribunal-hardening",
+  "title": "PR #148 adversarial tribunal — mutation proof, workflow credentials, LocalCache TOCTOU",
+  "status": "FAIL",
+  "captured_at_utc": "2026-10-03T20:40:35Z",
+  "subject": {
+    "repository": "bot523h/nexus-ai-agent",
+    "pull_request": 148,
+    "live_head_branch": "arena/01a0fe18-nexus-ai-agent",
+    "live_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+    "base_branch": "main",
+    "base_sha": "e5b326b2eaf691a638d030ad57acf1ce60016ef0"
+  },
+  "session_delivery": {
+    "branch": "arena/01a10329-nexus-ai-agent",
+    "remediation_commit": "7f1873033d968b2368a9a15abff7e8ecfab5338f",
+    "remote_session_head_at_receipt_capture": "7f1873033d968b2368a9a15abff7e8ecfab5338f",
+    "pr_head_branch_modified": false,
+    "main_modified": false,
+    "commits": [
+      {
+        "sha": "3df2ad941aeed6cc83d8d2e31d63aef833d6d444",
+        "message": "security: close tribunal-proven cache and gate defects"
+      },
+      {
+        "sha": "7f1873033d968b2368a9a15abff7e8ecfab5338f",
+        "message": "test: cover LocalCache parent-directory swap"
+      }
+    ]
+  },
+  "previous_receipt": {
+    "path": "docs/audits/receipts/task-196-wave1-security-hardening-2026-10-03.json",
+    "sha256": "fb97374ff2c7d464677aebd07260bfe57f2f87e6c322356bad8199616b9670ab"
+  },
+  "investigator_ledger": {
+    "path": "docs/audits/evidence/pr148-tribunal/investigator-ledger.json",
+    "sha256": "6e1b25f50f6eaf820ca6311a02cbaff0f7c1a9ced3a9b7808b7588ba1d649133",
+    "entry_count": 36
+  },
+  "judge_rubric": {
+    "path": "docs/audits/evidence/pr148-tribunal/judge-rubric.json",
+    "sha256": "af6131270591d92a6b85de0445720e2b1fdb51bb8300b70f1480f5b6046275a4",
+    "computed_status": "FAIL"
+  },
+  "role_reports": {
+    "prosecutor-findings.txt": {
+      "path": "docs/audits/evidence/pr148-tribunal/prosecutor-findings.txt",
+      "sha256": "800c7a9a8b301ce6e224bd6dfc1ac5752ecbfb9c069281a595a71711e4d87387"
+    },
+    "defense-resolution.txt": {
+      "path": "docs/audits/evidence/pr148-tribunal/defense-resolution.txt",
+      "sha256": "3cbf01a24bdca6059fb3edea9219799357a430dbb63110a62962ea50ff9560f3"
+    },
+    "remediation-log.txt": {
+      "path": "docs/audits/evidence/pr148-tribunal/remediation-log.txt",
+      "sha256": "a9da7237440d25d8173b76ee9d42d6e32d1f69cbdb237a2cd284f5641321af3e"
+    },
+    "ci-disposition.txt": {
+      "path": "docs/audits/evidence/pr148-tribunal/ci-disposition.txt",
+      "sha256": "0c51f9dfb472ad84995e5693c7549572226ad8a3647d336c413d864294c8cfce"
+    },
+    "toctou-verdict.txt": {
+      "path": "docs/audits/evidence/pr148-tribunal/toctou-verdict.txt",
+      "sha256": "b4059f5940180cf977c6af0a11416c0851ee8c68e8f2e61dba9a769d02ca8a57"
+    },
+    "phase1-substantive-judgment.txt": {
+      "path": "docs/audits/evidence/pr148-tribunal/phase1-substantive-judgment.txt",
+      "sha256": "10a487c63be4f15e5f5d255e1d9e698b7f1e636744c3e4eff05b26289e55ff9d"
+    }
+  },
+  "ci_disposition": {
+    "classification": "D",
+    "meaning": "unattributed/inconclusive from available evidence",
+    "live_python_parity_311": "failure",
+    "same_head_push_run": "success",
+    "remote_logs": "EOF",
+    "rerun": "denied by GitHub"
+  },
+  "toctou": {
+    "live_pr_head": "UNRESOLVED",
+    "session_remediation": "PROVEN_WITH_LIMITATIONS"
+  },
+  "board": {
+    "task_status_after_verification": "done",
+    "agent_branch": "",
+    "claimed_at": null,
+    "gates_owner": false,
+    "preclosure_overlap_check": "passed",
+    "postrelease_board_visibility_for_pr148": false
+  },
+  "integrity_booleans": {
+    "receipt_integrity": true,
+    "board_integrity": true
+  },
+  "integrity_definitions": {
+    "receipt_integrity": "investigator ledger artifact SHA256s, role-report SHA256s, previous receipt SHA256, and rubric-to-ledger SHA256 were recomputed and matched at capture",
+    "board_integrity": "repository release semantics were followed; task-197 is done with no lease, the preclosure overlap/scope check passed, and postrelease board tests passed; PR visibility is reported separately"
+  },
+  "computed_status_formula": "PASS iff every required boolean gate is true AND the live-PR-head TOCTOU enum is PROVEN_WITH_LIMITATIONS; otherwise FAIL.",
+  "required_boolean_gates_all_true": false,
+  "subject_pr_board_visibility": false,
+  "both_integrity_booleans_true": true
+}

@@ -1,0 +1,10 @@
+captured_at_utc=2026-10-03T20:34:34Z
+subject_pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+command=/home/user/nexus-ai-agent/.venv/bin/python -m pytest -q tests/unit/test_agent_board.py tests/unit/test_docs_integrity.py (cwd=/home/user/nexus-ai-agent; PYTHONPATH=src)
+exit_code=0
+board_task=task-197-pr148-tribunal-hardening status=done
+--- stdout ---
+........................................................................ [ 96%]
+...                                                                      [100%]
+75 passed in 0.49s
+--- stderr ---

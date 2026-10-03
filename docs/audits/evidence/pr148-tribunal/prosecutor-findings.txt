@@ -1,0 +1,45 @@
+ROLE=PROSECUTOR
+subject_pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+scope=STOP-B, STOP-C, REMOTE-KEY, LocalCache key-derived filesystem TOCTOU, mutation-proof integrity, the three security workflows, and exact-head CI disposition only.
+classification_taxonomy=REAL_DEFECT for substantiated defects. Attack sets that produced no adverse result are reported as no finding, not assigned an invented classification.
+
+ATTACK MATRIX — exact PR-head observations; each attack set includes a trust-boundary probe
+
+STOP-B — three attacks (INV-003):
+1. Unauthenticated JSON sent to the retired route.
+2. Valid-HMAC JSON sent to the same route (authentication-boundary probe).
+3. Stale-HMAC malformed body sent to the same route (parser/body-processing boundary).
+Observed: all three returned HTTP 410; registry_calls=0. No STOP-B finding is entered.
+
+STOP-C — three attacks (INV-004):
+1. Queue payload smuggled actor and permissions claims across the request trust boundary.
+2. Queue payload smuggled a victim project/target.
+3. Operation escalation attempted with "/edit system.undo".
+Observed: extra fields were rejected as invalid requests and the unsupported operation was rejected. No STOP-C finding is entered.
+
+REMOTE-KEY static boundary — four attacks (INV-005):
+1. Telegram filename traversal "../../outside.txt" at the external-name-to-remote-key boundary.
+2. Percent-encoded traversal supplied for cache download.
+3. Existing symlink used as a cache download entry.
+4. NUL-containing external filename.
+Observed: the traversal filename was reduced to "outside.txt" without escape; encoded traversal and symlink downloads were rejected without output; NUL was rejected. No static-key-validation finding is entered.
+
+LocalCache TOCTOU seam — three distinct path-substitution attacks (INV-006, INV-007):
+1. Replace the validated download leaf with an outside symlink after the path checks; the downloaded output contained the outside secret bytes.
+2. Replace the upload leaf with an outside symlink after validation; the outside target received attacker-controlled upload bytes.
+3. Replace the validated parent directory with an outside symlink after three path validations and before the copy; the outside target received attacker-controlled bytes.
+Finding F-03 — class=REAL_DEFECT. The PR-head implementation resolves/checks a pathname and later passes that pathname to copy2; the name can identify a different entry at use time. The PR-head source and outcomes are in INV-002, INV-006, and INV-007. The trust boundary is the mutable filesystem namespace; the head neither pins directory descriptors nor enforces the later session branch's ownership/mode contract.
+
+Mutation-proof seam — three executable attacks against the exact PR-head runner (INV-008, INV-009):
+1. An unrelated failing test put the expected node ID in its assertion message; the runner counted the mutant as killed.
+2. A collection-time exception mentioned the expected node ID; the nonzero collection exit was counted as a kill.
+3. An unrelated failing test mentioned every configured expected node ID; the runner counted the mutant as killed although no expected test failed.
+The original repository synthetic false-kill probe also reported 1/1 killed on the PR head. Finding F-01 — class=REAL_DEFECT. Root cause: any truthy pytest exit plus substring presence in all captured output was accepted; there was no exit-code-1 requirement or short-summary FAILED-node check. Source and probe evidence: INV-002, INV-008, INV-009.
+
+Security workflow credential seam — three workflow-specific trust-boundary attacks (INV-010, INV-011):
+1. A PR-supplied STOP-B test/mutation step can read the checkout's configured GitHub extraheader.
+2. A PR-supplied STOP-C test/mutation step can read the same persisted configuration.
+3. A PR-supplied REMOTE-KEY test/mutation step can read the same persisted configuration.
+A synthetic canary in a disposable local Git repository was readable, replaceable, and removable through git config; no real credential was used. The exact pinned checkout action declares persist-credentials default=true. Each head workflow omitted the opt-out and ran tests/mutations later; permissions were contents:read. Finding F-02 — class=REAL_DEFECT. No later git-auth consumer was observed, so disabling credential persistence is the smallest fix. Source and attack evidence: INV-002, INV-010, INV-011.
+
+Only F-01, F-02, and F-03 are prosecutor findings. STOP-B, STOP-C, and static REMOTE-KEY probes yielded no finding in the tested cases. This report does not treat local session-branch fixes as changes to the PR-head code.

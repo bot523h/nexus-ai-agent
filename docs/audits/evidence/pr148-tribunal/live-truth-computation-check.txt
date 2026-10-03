@@ -1,0 +1,11 @@
+captured_at_utc=2026-10-03T20:37:39Z
+subject_pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+purpose=fresh read-only PR-head check immediately before final rubric computation; no PR-head write performed
+[pull_request] command=gh pr view 148 --json state,isDraft,url,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,reviewDecision,updatedAt,reviews,statusCheckRollup --jq {state,isDraft,url,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,reviewDecision,updatedAt,reviews:[.reviews[]|{author:.author.login,state,submittedAt}],checks:[.statusCheckRollup[]|select(.name=="python-parity (3.11)")|{name,conclusion:(.conclusion // .state),detailsUrl}]}
+exit_code=0
+stdout={"baseRefName":"main","checks":[{"conclusion":"FAILURE","detailsUrl":"https://github.com/bot523h/nexus-ai-agent/actions/runs/37097893624/job/111131465632","name":"python-parity (3.11)"},{"conclusion":"SUCCESS","detailsUrl":"https://github.com/bot523h/nexus-ai-agent/actions/runs/37097890060/job/111131455195","name":"python-parity (3.11)"}],"headRefName":"arena/01a0fe18-nexus-ai-agent","headRefOid":"5dbe96e111c896daa8e136eecc21f70b67515c76","isDraft":false,"mergeStateStatus":"UNSTABLE","mergeable":"MERGEABLE","reviewDecision":"APPROVED","reviews":[{"author":"coderabbitai","state":"COMMENTED","submittedAt":"2026-10-02T21:48:04Z"},{"author":"coderabbitai","state":"APPROVED","submittedAt":"2026-10-02T21:52:03Z"},{"author":"coderabbitai","state":"COMMENTED","submittedAt":"2026-10-03T04:55:04Z"}],"state":"OPEN","updatedAt":"2026-10-03T05:15:14Z","url":"https://github.com/bot523h/nexus-ai-agent/pull/148"}
+stderr=
+[api_head] command=gh api repos/bot523h/nexus-ai-agent/pulls/148 --jq {head:{ref:.head.ref,sha:.head.sha},base:{ref:.base.ref,sha:.base.sha},state,draft,mergeable,mergeable_state}
+exit_code=0
+stdout={"base":{"ref":"main","sha":"e5b326b2eaf691a638d030ad57acf1ce60016ef0"},"draft":false,"head":{"ref":"arena/01a0fe18-nexus-ai-agent","sha":"5dbe96e111c896daa8e136eecc21f70b67515c76"},"mergeable":true,"mergeable_state":"unstable","state":"open"}
+stderr=

@@ -1,0 +1,14 @@
+captured_at_utc=2026-10-03T20:22:39Z
+subject_pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+tested_session_commit=7f1873033d968b2368a9a15abff7e8ecfab5338f
+tested_tree=local session branch arena/01a10329-nexus-ai-agent
+command=mypy src
+exit=1
+src/nexus_ai_agent/creative/slideshow/ffmpeg.py:474: error: Unused "type: ignore" comment  [unused-ignore]
+src/nexus_ai_agent/creative/slideshow/ffmpeg.py:474: error: Cannot find implementation or library stub for module named "imageio_ffmpeg"  [import-not-found]
+src/nexus_ai_agent/creative/slideshow/ffmpeg.py:474: note: Error code "import-not-found" not covered by "type: ignore[import-untyped]" comment
+Found 2 errors in 1 file (checked 247 source files)
+
+command=mypy --follow-imports=silent src/nexus_ai_agent/storage/providers/local_cache.py
+exit=0
+Success: no issues found in 1 source file

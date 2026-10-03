@@ -1,0 +1,7 @@
+captured_at_utc=2026-10-03T19:53:02Z
+subject_pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+tested_tree=local session branch arena/01a10329-nexus-ai-agent; 3.11.2 (not PR #148 source)
+command=PYTHONPATH=src .venv/bin/python -m pytest -q tests/unit/test_local_cache_provider.py tests/unit/test_security_mutation_support.py tests/unit/test_safe_paths.py tests/architecture/test_storage_key_boundary.py
+--- pytest output ---
+..........................................................               [100%]
+58 passed in 0.50s

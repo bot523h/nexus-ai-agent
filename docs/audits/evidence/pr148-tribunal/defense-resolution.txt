@@ -1,0 +1,13 @@
+ROLE=DEFENSE
+subject_pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+rule=Each response cites Investigator ledger entries only; where the head evidence proves a defect, the defense concedes rather than using session-branch evidence to claim the live PR is fixed.
+
+F-01 mutation-proof integrity — CONCEDED on the live PR head. INV-002 records the head predicate; INV-008 and INV-009 record false-kill outcomes under unrelated-failure, collection-error, and multi-token probes. INV-001 and the final pre-computation recheck INV-036 record that the live PR head remains 5dbe96e111c896daa8e136eecc21f70b67515c76. INV-017 and INV-027 show a session-branch fix and a synthetic false-kill surviving there; they do not change the PR head.
+
+F-02 workflow credentials — CONCEDED on the live PR head. INV-010 and INV-011 record the default-true input, omitted setting, post-checkout test steps, and canary attacks across all three workflows. INV-001 and INV-036 record the unchanged live PR head. INV-017 and INV-028 show the session-branch opt-out and validation only; they do not remediate the PR head.
+
+F-03 LocalCache TOCTOU — CONCEDED on the live PR head. INV-002, INV-006, and INV-007 record the path-based source behavior and three successful outside-read/write interleavings. INV-001 and INV-036 record the unchanged live PR head. INV-018 through INV-020 show descriptor-relative session-branch remediation and focused regressions; these are not evidence that PR #148 itself is fixed.
+
+STOP-B / STOP-C / static REMOTE-KEY: the defense relies only on INV-003 through INV-005. Those recorded probes returned the retired-route refusal, request/operation refusals, and static-key containment outcomes respectively; no broader claim is made beyond those attacks.
+
+CI: the defense does not attribute the failure to a code defect or dismiss it as flaky. INV-001, INV-012 through INV-016, and INV-036 show differing same-SHA push/PR outcomes, passing exact-base/head local test selections, and unavailable remote logs/rerun. The proper disposition remains the evidence-limited category recorded in the CI report.

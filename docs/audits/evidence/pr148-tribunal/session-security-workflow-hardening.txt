@@ -1,0 +1,8 @@
+captured_at_utc=2026-10-03T20:24:15Z
+subject_pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+tested_session_commit=7f1873033d968b2368a9a15abff7e8ecfab5338f
+tested_tree=local session branch arena/01a10329-nexus-ai-agent (not PR #148 source)
+command=PyYAML BaseLoader parse of .github/workflows/security_{stop_b,stop_c,remote_key}.yml; scan later steps for git-auth consumers
+security_stop_b.yml: checkout=actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683; exact_40_hex=True; contents_read=True; persist_credentials_false=True; later_run_steps=['pip install -e ".[dev]"', 'python scripts/security_mutations_stop_b.py']; later_git_auth_consumers=[]; pass=True
+security_stop_c.yml: checkout=actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683; exact_40_hex=True; contents_read=True; persist_credentials_false=True; later_run_steps=['pip install -e ".[dev]"', 'python scripts/security_mutations_stop_c.py']; later_git_auth_consumers=[]; pass=True
+security_remote_key.yml: checkout=actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683; exact_40_hex=True; contents_read=True; persist_credentials_false=True; later_run_steps=['pip install -e ".[dev]"', 'python scripts/security_mutations_remote_key.py']; later_git_auth_consumers=[]; pass=True

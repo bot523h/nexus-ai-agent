@@ -1,0 +1,117 @@
+captured_at_utc=2026-10-03T20:28:35Z
+subject_pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+tested_session_commit=7f1873033d968b2368a9a15abff7e8ecfab5338f
+tested_tree=local session branch arena/01a10329-nexus-ai-agent (not PR #148 source)
+command=sha256sum changed files; nl -ba helper/tests/workflows; inspect mutation constructors
+source=scripts/security_mutation_support.py sha256=8a1c6c67a33c3180dd19af3114ad059e2104c93f66a2d182ece0f63e8a12035c
+source=tests/unit/test_security_mutation_support.py sha256=1011e8da6b4dc7a7290d2897cade1983d7488ff6882b05229fad444a71fce634
+source=.github/workflows/security_stop_b.yml sha256=a825bd75e447a998e5a42b91d821a5a42154c6552084213c92065af841dc12eb
+source=.github/workflows/security_stop_c.yml sha256=720d99d958249a4d0234f0fb04837ee9dec8ac26c74ca93b9ce11d06c8dd1a66
+source=.github/workflows/security_remote_key.yml sha256=9b4043879471c3ca3d81c5a6b778983b1f4330624018fd8dc322e4864613c36f
+source=src/nexus_ai_agent/storage/providers/local_cache.py sha256=b51234dbc1f8a4df33683b291e4442a98f07e8e651e9b8260814d379271b9a62
+source=tests/unit/test_local_cache_provider.py sha256=8cc72c97131ea73c2d6f2545f4f3610f6887c644e3768345a3812e1a55f75607
+
+[security_mutation_support.py lines 9-12, 60-98]
+     9	A mutant is counted as killed only when pytest exits with status 1 and its
+    10	structured short-test-summary section names every exact expected node ID as
+    11	FAILED. Collection errors, import errors, warnings, tracebacks and arbitrary
+    12	output mentioning a test name do not count.
+    60	def _reported_expected_nodeids(output: str, expected_nodeids: tuple[str, ...]) -> set[str]:
+    61	    """Return expected node IDs named by pytest's short-summary FAILED lines.
+    62
+    63	    Only the final ``short test summary info`` section is authoritative. Pytest
+    64	    includes test stdout/stderr, tracebacks, warnings, and collection messages
+    65	    elsewhere in the captured output; a substring match over that material is
+    66	    not evidence that the intended assertion failed.
+    67	    """
+    68	    clean_output = _ANSI_ESCAPE.sub("", output)
+    69	    lines = clean_output.splitlines()
+    70	    headers = [
+    71	        index
+    72	        for index, line in enumerate(lines)
+    73	        if line.strip().startswith("=") and "short test summary info" in line
+    74	    ]
+    75	    if not headers:
+    76	        return set()
+    77
+    78	    summary_lines = lines[headers[-1] + 1 :]
+    79	    reported: set[str] = set()
+    80	    for line in summary_lines:
+    81	        stripped = line.strip()
+    82	        if not stripped.startswith("FAILED "):
+    83	            continue
+    84	        actual = stripped[len("FAILED ") :]
+    85	        for expected in expected_nodeids:
+    86	            if actual == expected or actual.startswith(expected + " - "):
+    87	                reported.add(expected)
+    88	    return reported
+    89
+    90
+    91	def _is_killed_by_expected_nodeids(
+    92	    result: subprocess.CompletedProcess[str], expected_nodeids: tuple[str, ...]
+    93	) -> bool:
+    94	    """Apply the mutation acceptance rule without prose or substring inference."""
+    95	    if result.returncode != 1 or not expected_nodeids:
+    96	        return False
+    97	    output = result.stdout + result.stderr
+    98	    return set(expected_nodeids).issubset(_reported_expected_nodeids(output, expected_nodeids))
+
+[mutation scripts use exact expected-nodeid tuples as fourth Mutation argument]
+--- scripts/security_mutations_stop_b.py ---
+from security_mutation_support import Mutation, SourceEdit, run_mutation_suite
+    "tests/unit/test_security_hardening.py::test_valid_hmac_cannot_reactivate_retired_video_edit",
+    "tests/unit/test_creative_studio.py::test_video_edit_retirement_has_no_runtime_side_effects",
+    "tests/architecture/test_legacy_creative_boundary.py::test_video_edit_post_is_a_410_without_processing_or_auth_gates",
+    Mutation(
+            "tests/unit/test_security_hardening.py::test_valid_hmac_cannot_reactivate_retired_video_edit",
+    Mutation(
+            "tests/unit/test_creative_studio.py::test_video_edit_retirement_has_no_runtime_side_effects",
+    Mutation(
+            "tests/architecture/test_legacy_creative_boundary.py::test_video_edit_post_is_a_410_without_processing_or_auth_gates",
+    raise SystemExit(run_mutation_suite("STOP-B", TESTS, MUTATIONS))
+--- scripts/security_mutations_stop_c.py ---
+from security_mutation_support import Mutation, SourceEdit, run_mutation_suite
+    "tests/architecture/test_command_capability_boundary.py::test_every_production_command_bus_root_has_a_trusted_authorizer",
+    "tests/architecture/test_command_capability_boundary.py::test_every_production_dispatch_envelope_has_a_service_identity",
+    "tests/architecture/test_command_capability_boundary.py::test_reachable_operation_authority_matrix_matches_dispatch_and_registry",
+    "tests/unit/test_authority_policy.py",
+    "tests/unit/test_command_capability_contract.py::TestAuthorization::test_actor_claim_without_authorizer_is_refused",
+    "tests/unit/test_command_capability_contract.py::TestAuthorization::test_authorizer_requires_an_actor_claim",
+    "tests/unit/test_command_capability_contract.py::TestAuthorization::test_missing_permissions_are_denied",
+    Mutation(
+            "tests/architecture/test_command_capability_boundary.py::test_every_production_command_bus_root_has_a_trusted_authorizer",
+    Mutation(
+            "tests/unit/test_command_capability_contract.py::TestAuthorization::test_actor_claim_without_authorizer_is_refused",
+    Mutation(
+            "tests/unit/test_command_capability_contract.py::TestAuthorization::test_authorizer_requires_an_actor_claim",
+    Mutation(
+            "tests/unit/test_command_capability_contract.py::TestAuthorization::test_missing_permissions_are_denied",
+    raise SystemExit(run_mutation_suite("STOP-C", TESTS, MUTATIONS))
+--- scripts/security_mutations_remote_key.py ---
+from security_mutation_support import Mutation, SourceEdit, run_mutation_suite
+    "tests/architecture/test_storage_key_boundary.py::test_cloud_upload_uses_the_sanitized_external_filename_as_its_remote_key",
+    "tests/unit/test_local_cache_provider.py::test_path_for_key_rejects_traversal_absolute_nul_and_encoded_keys",
+    "tests/unit/test_local_cache_provider.py::test_symlinked_key_components_cannot_escape_cache",
+    Mutation(
+            "tests/architecture/test_storage_key_boundary.py::test_cloud_upload_uses_the_sanitized_external_filename_as_its_remote_key",
+    Mutation(
+            "tests/unit/test_local_cache_provider.py::test_path_for_key_rejects_traversal_absolute_nul_and_encoded_keys[]",
+            "tests/unit/test_local_cache_provider.py::test_symlinked_key_components_cannot_escape_cache",
+    Mutation(
+            "tests/unit/test_local_cache_provider.py::test_path_for_key_rejects_traversal_absolute_nul_and_encoded_keys[%2e%2e%2foutside.txt]",
+            "tests/unit/test_local_cache_provider.py::test_path_for_key_rejects_traversal_absolute_nul_and_encoded_keys[%2e%2e%2foutside.txt]",
+    raise SystemExit(run_mutation_suite("REMOTE-KEY", TESTS, MUTATIONS))
+
+[workflow checkout hardening]
+.github/workflows/security_stop_b.yml:5: permissions:
+.github/workflows/security_stop_b.yml:6:   contents: read
+.github/workflows/security_stop_b.yml:14:       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+.github/workflows/security_stop_b.yml:16:           persist-credentials: false
+.github/workflows/security_stop_c.yml:5: permissions:
+.github/workflows/security_stop_c.yml:6:   contents: read
+.github/workflows/security_stop_c.yml:14:       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+.github/workflows/security_stop_c.yml:16:           persist-credentials: false
+.github/workflows/security_remote_key.yml:5: permissions:
+.github/workflows/security_remote_key.yml:6:   contents: read
+.github/workflows/security_remote_key.yml:14:       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+.github/workflows/security_remote_key.yml:16:           persist-credentials: false

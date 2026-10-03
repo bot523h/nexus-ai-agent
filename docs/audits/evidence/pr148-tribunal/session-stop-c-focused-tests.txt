@@ -1,0 +1,12 @@
+captured_at_utc=2026-10-03T20:21:58Z
+subject_pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+tested_session_commit=7f1873033d968b2368a9a15abff7e8ecfab5338f
+tested_tree=local session branch arena/01a10329-nexus-ai-agent (not PR #148 source)
+suite=STOP-C/authorization focused coverage
+command=/home/user/nexus-ai-agent/.venv/bin/python -m pytest -q tests/architecture/test_command_capability_boundary.py tests/unit/test_authority_policy.py tests/unit/test_command_capability_contract.py tests/unit/test_creative_studio.py (cwd=/home/user/nexus-ai-agent; PYTHONPATH=src)
+command_exit_code=0
+--- stdout ---
+........................................................................ [ 76%]
+......................                                                   [100%]
+94 passed in 1.80s
+--- stderr ---

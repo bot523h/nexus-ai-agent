@@ -1,0 +1,121 @@
+captured_at_utc=2026-10-03T19:51:17Z
+subject_pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+tested_commit=e5b326b2eaf691a638d030ad57acf1ce60016ef0
+checkout=/tmp/pr148-base-worktree (detached git worktree, exact commit)
+python=/home/user/nexus-ai-agent/.venv/bin/python (Python 3.11.2)
+command=PYTHONPATH=/tmp/pr148-base-worktree/src /home/user/nexus-ai-agent/.venv/bin/python -m pytest -q -rs -m "not slow" --tb=short
+local_environment=Python 3.11.2, partial dev dependencies installed in ignored .venv, no NEXUS_DATABASE_URL; same environment for base and head
+--- captured pytest output ---
+........................................................................ [  2%]
+........................................................................ [  4%]
+.......s.s.s.s.s.s.s.s.s.s.sssss.....ss................................. [  7%]
+..................................................s..................s.. [  9%]
+........................................................................ [ 12%]
+........................................................................ [ 14%]
+........................................................................ [ 17%]
+........................................................................ [ 19%]
+........................................................................ [ 22%]
+........................................................................ [ 24%]
+........................................................................ [ 26%]
+........................................................................ [ 29%]
+........................................................................ [ 31%]
+........................................................................ [ 34%]
+........................................................................ [ 36%]
+........................................................................ [ 39%]
+........................................................................ [ 41%]
+........................................................................ [ 44%]
+.....................s.................................................. [ 46%]
+........................................................................ [ 48%]
+........................................................................ [ 51%]
+........................................................................ [ 53%]
+........................................................................ [ 56%]
+........................................................................ [ 58%]
+........................................................................ [ 61%]
+........................................................................ [ 63%]
+...............................................sssssss.sss.............. [ 66%]
+........................................................................ [ 68%]
+........................................................................ [ 70%]
+........................................................................ [ 73%]
+........................................................................ [ 75%]
+........................................................................ [ 78%]
+........................................................................ [ 80%]
+........................................................................ [ 83%]
+........................................................................ [ 85%]
+........................................................................ [ 88%]
+........................................................................ [ 90%]
+........................................................................ [ 92%]
+........................................................................ [ 95%]
+........................................................................ [ 97%]
+.................................................................        [100%]
+=============================== warnings summary ===============================
+tests/unit/test_api_ssrf_download.py: 13 warnings
+  /home/user/nexus-ai-agent/.venv/lib/python3.11/site-packages/httpx2/_models.py:423: DeprecationWarning: Use 'content=<...>' to upload raw bytes/text content.
+    headers, stream = encode_request(
+
+tests/unit/test_feature_wiring.py::test_remind_persists_row_in_originating_chat
+  /tmp/pr148-base-worktree/tests/unit/test_feature_wiring.py:138: DeprecationWarning:
+          🚨 You probably want to use `session.exec()` instead of `session.query()`.
+
+          `session.exec()` is SQLModel's own short version with improved type
+          annotations.
+
+          Otherwise, you might want to use `session.execute()` instead of
+          `session.query()`.
+
+    rows = session.query(Reminder).all()
+
+tests/unit/test_feature_wiring.py::test_cancel_remind_command
+  /tmp/pr148-base-worktree/tests/unit/test_feature_wiring.py:152: DeprecationWarning:
+          🚨 You probably want to use `session.exec()` instead of `session.query()`.
+
+          `session.exec()` is SQLModel's own short version with improved type
+          annotations.
+
+          Otherwise, you might want to use `session.execute()` instead of
+          `session.query()`.
+
+    rid = session.query(Reminder).first().id
+
+tests/unit/test_feature_wiring.py::test_start_deep_link_records_referral
+  /tmp/pr148-base-worktree/tests/unit/test_feature_wiring.py:293: DeprecationWarning:
+          🚨 You probably want to use `session.exec()` instead of `session.query()`.
+
+          `session.exec()` is SQLModel's own short version with improved type
+          annotations.
+
+          Otherwise, you might want to use `session.execute()` instead of
+          `session.query()`.
+
+    ref = session.query(Referral).filter_by(referee_id=200).first()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+SKIPPED [1] tests/integration/test_checkpoint_adapter_contract.py:136: requires PostgreSQL (NEXUS_DATABASE_URL)
+SKIPPED [1] tests/integration/test_checkpoint_adapter_contract.py:140: requires PostgreSQL (NEXUS_DATABASE_URL)
+SKIPPED [1] tests/integration/test_checkpoint_adapter_contract.py:146: requires PostgreSQL (NEXUS_DATABASE_URL)
+SKIPPED [1] tests/integration/test_checkpoint_adapter_contract.py:159: requires PostgreSQL (NEXUS_DATABASE_URL)
+SKIPPED [1] tests/integration/test_checkpoint_adapter_contract.py:165: requires PostgreSQL (NEXUS_DATABASE_URL)
+SKIPPED [1] tests/integration/test_checkpoint_adapter_contract.py:174: requires PostgreSQL (NEXUS_DATABASE_URL)
+SKIPPED [1] tests/integration/test_checkpoint_adapter_contract.py:179: requires PostgreSQL (NEXUS_DATABASE_URL)
+SKIPPED [1] tests/integration/test_checkpoint_adapter_contract.py:186: requires PostgreSQL (NEXUS_DATABASE_URL)
+SKIPPED [1] tests/integration/test_checkpoint_adapter_contract.py:192: requires PostgreSQL (NEXUS_DATABASE_URL)
+SKIPPED [1] tests/integration/test_checkpoint_adapter_contract.py:223: requires PostgreSQL (NEXUS_DATABASE_URL)
+SKIPPED [1] tests/integration/test_checkpoint_adapter_contract.py:276: requires PostgreSQL
+SKIPPED [1] tests/integration/test_checkpoint_adapter_contract.py:291: requires PostgreSQL
+SKIPPED [1] tests/integration/test_checkpoint_adapter_contract.py:303: requires PostgreSQL
+SKIPPED [1] tests/integration/test_checkpoint_adapter_contract.py:320: requires PostgreSQL
+SKIPPED [1] tests/integration/test_checkpoint_adapter_contract.py:359: requires PostgreSQL
+SKIPPED [1] tests/integration/test_checkpoint_composition.py:154: requires PostgreSQL
+SKIPPED [1] tests/integration/test_checkpoint_composition.py:202: requires PostgreSQL
+SKIPPED [1] tests/integration/test_lifecycle_store_contract.py:103: requires PostgreSQL
+SKIPPED [1] tests/integration/test_postgres_create_all_race.py:16: requires PostgreSQL
+SKIPPED [1] tests/unit/test_golden_management.py:165: requires PostgreSQL
+SKIPPED [2] tests/unit/test_optional_extras.py:89: [speech] smoke is proven by the `extras-matrix` CI leg (NEXUS_EXTRA_LEG=speech); not installed in this environment
+SKIPPED [2] tests/unit/test_optional_extras.py:89: [translate] smoke is proven by the `extras-matrix` CI leg (NEXUS_EXTRA_LEG=translate); not installed in this environment
+SKIPPED [1] tests/unit/test_optional_extras.py:145: core-only contract (proven by the `core` CI leg): CLI help must work on a bare install
+SKIPPED [1] tests/unit/test_optional_extras.py:145: core-only contract (proven by the `core` CI leg): full import walk
+SKIPPED [1] tests/unit/test_optional_extras.py:145: core-only contract (proven by the `core` CI leg): pdf fail-closed error
+SKIPPED [1] tests/unit/test_optional_extras.py:145: core-only contract (proven by the `core` CI leg): speech fail-closed error
+SKIPPED [1] tests/unit/test_optional_extras.py:145: core-only contract (proven by the `core` CI leg): translate fail-closed error
+SKIPPED [1] tests/unit/test_optional_extras.py:302: no active leg (default jobs) — leg validation is inert here
+2915 passed, 30 skipped, 16 warnings in 127.18s (0:02:07)

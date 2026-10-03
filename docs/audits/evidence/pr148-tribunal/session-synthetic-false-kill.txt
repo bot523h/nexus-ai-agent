@@ -1,0 +1,38 @@
+captured_at_utc=2026-10-03T20:21:48Z
+subject_pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+tested_session_commit=7f1873033d968b2368a9a15abff7e8ecfab5338f
+tested_tree=local session branch arena/01a10329-nexus-ai-agent (not PR #148 source)
+command=/home/user/nexus-ai-agent/.venv/bin/python -c 'from pathlib import Path
+from security_mutation_support import Mutation, SourceEdit, run_mutation_suite
+path = Path("tests/unit/test_mutation_synthetic_false_kill.py")
+path.write_text("def test_actual_failure_mentions_expected_nodeid():\n    assert True\n", encoding="utf-8")
+try:
+    mutation = Mutation(
+        name="synthetic-unrelated-failure-mentions-expected-nodeid",
+        edits=(SourceEdit(str(path), "    assert True", '"'"'    assert False, "diagnostic contains tests/unit/test_mutation_synthetic_false_kill.py::test_intended"'"'"'),),
+        tests=("tests/unit/test_mutation_synthetic_false_kill.py::test_actual_failure_mentions_expected_nodeid",),
+        expected_nodeids=("tests/unit/test_mutation_synthetic_false_kill.py::test_intended",),
+        rationale="synthetic regression for the false-kill claim",
+    )
+    raise SystemExit(run_mutation_suite("SYNTHETIC-FALSE-KILL", ("tests/unit/test_mutation_synthetic_false_kill.py::test_actual_failure_mentions_expected_nodeid",), (mutation,)))
+finally:
+    path.unlink(missing_ok=True)
+' (cwd=/home/user/nexus-ai-agent; PYTHONPATH=src:scripts)
+runner_exit_code=1 (expected 1: unrelated failure must survive)
+--- stdout ---
+SYNTHETIC-FALSE-KILL: baseline ... GREEN
+synthetic-unrelated-failure-mentions-expected-nodeid: unexpected failure (not counted as killed)
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________________ test_actual_failure_mentions_expected_nodeid _________________
+tests/unit/test_mutation_synthetic_false_kill.py:2: in test_actual_failure_mentions_expected_nodeid
+    assert False, "diagnostic contains tests/unit/test_mutation_synthetic_false_kill.py::test_intended"
+E   AssertionError: diagnostic contains tests/unit/test_mutation_synthetic_false_kill.py::test_intended
+E   assert False
+=========================== short test summary info ============================
+FAILED tests/unit/test_mutation_synthetic_false_kill.py::test_actual_failure_mentions_expected_nodeid
+1 failed in 0.34s
+SYNTHETIC-FALSE-KILL: restored baseline ... GREEN
+SYNTHETIC-FALSE-KILL: 0/1 mutants killed
+survivors: synthetic-unrelated-failure-mentions-expected-nodeid
+--- stderr ---

@@ -1,0 +1,14 @@
+captured_at_utc=2026-10-03T20:21:12Z
+subject_pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+tested_session_commit=7f1873033d968b2368a9a15abff7e8ecfab5338f
+tested_tree=local session branch arena/01a10329-nexus-ai-agent (not PR #148 source)
+command=/home/user/nexus-ai-agent/.venv/bin/python scripts/security_mutations_stop_b.py (cwd=/home/user/nexus-ai-agent; PYTHONPATH=src)
+command_exit_code=0
+--- stdout ---
+STOP-B: baseline ... GREEN
+reactivate_retired_post: killed — pytest reported FAILED for tests/unit/test_security_hardening.py::test_valid_hmac_cannot_reactivate_retired_video_edit — the route must remain HTTP 410 even with a valid HMAC
+reintroduce_legacy_job_creation: killed — pytest reported FAILED for tests/unit/test_creative_studio.py::test_video_edit_retirement_has_no_runtime_side_effects — the retired route must create no registry job
+reintroduce_request_body_parsing: killed — pytest reported FAILED for tests/architecture/test_legacy_creative_boundary.py::test_video_edit_post_is_a_410_without_processing_or_auth_gates — the inert route must not accept or parse attacker-controlled request data
+STOP-B: restored baseline ... GREEN
+STOP-B: 3/3 mutants killed
+--- stderr ---

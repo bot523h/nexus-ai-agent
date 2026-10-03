@@ -1,0 +1,12 @@
+captured_at_utc=2026-10-03T19:40:40Z
+pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+source_snapshot=/tmp/tribunal-head extracted from 5dbe96e111c896daa8e136eecc21f70b67515c76
+command=/home/user/nexus-ai-agent/.venv/bin/python /tmp/pr148-head/tribunal_false_kill.py (cwd=/tmp/pr148-head; PYTHONPATH=/tmp/pr148-head/scripts)
+command_exit_code=0
+--- stdout ---
+SYNTHETIC-FALSE-KILL: baseline ... GREEN
+unrelated_failure_mentions_expected_nodeid: killed — synthetic false-kill: output token appears only in an unrelated assertion message
+SYNTHETIC-FALSE-KILL: restored baseline ... GREEN
+SYNTHETIC-FALSE-KILL: 1/1 mutants killed
+SYNTHETIC_RUNNER_EXIT=0
+--- stderr ---

@@ -1,0 +1,10 @@
+captured_at_utc=2026-10-03T19:40:36Z
+pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+source_snapshot=/tmp/tribunal-head extracted from 5dbe96e111c896daa8e136eecc21f70b67515c76
+command=/home/user/nexus-ai-agent/.venv/bin/python /tmp/pr148-head/tribunal_stop_c_queue.py (cwd=/tmp/pr148-head; PYTHONPATH=/tmp/tribunal-head/src)
+command_exit_code=0
+--- stdout ---
+queue-actor-and-permission-smuggling: {"error_code": "invalid_request", "error_detail": "2 validation errors for CreativeRenderPayload\nactor\n  Extra inputs are not permitted [type=extra_forbidden, input_value={'kind': 'service', 'acto...creative.render-worker'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\npermissions\n  Extra inputs are not permitted [type=extra_forbidden, input_value=['project:write'], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden", "success": false}
+queue-project-target-smuggling: {"error_code": "invalid_request", "error_detail": "2 validation errors for CreativeRenderPayload\ntarget\n  Extra inputs are not permitted [type=extra_forbidden, input_value={'project_id': 'victim-project'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nproject_id\n  Extra inputs are not permitted [type=extra_forbidden, input_value='victim-project', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden", "success": false}
+queue-operation-escalation-to-undo: {"error_code": "unsupported_operation", "error_detail": "/edit system.undo", "success": false}
+--- stderr ---

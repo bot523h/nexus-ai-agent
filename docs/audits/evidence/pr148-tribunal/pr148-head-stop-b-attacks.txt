@@ -1,0 +1,8 @@
+captured_at_utc=2026-10-03T19:40:19Z
+pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+command=env PYTHONPATH=/tmp/tribunal-head/src /home/user/nexus-ai-agent/.venv/bin/python /tmp/pr148-head/tribunal_stop_b.py
+unauthenticated-json: status=410 body={"detail":"This legacy video-edit endpoint has been retired.","canonical_execution_lane":"Telegram creative surface → durable job queue → packs runtime registry → render lane"}
+valid-hmac-json: status=410 body={"detail":"This legacy video-edit endpoint has been retired.","canonical_execution_lane":"Telegram creative surface → durable job queue → packs runtime registry → render lane"}
+stale-hmac-malformed-body: status=410 body={"detail":"This legacy video-edit endpoint has been retired.","canonical_execution_lane":"Telegram creative surface → durable job queue → packs runtime registry → render lane"}
+registry_calls=0
+command_exit_code=0

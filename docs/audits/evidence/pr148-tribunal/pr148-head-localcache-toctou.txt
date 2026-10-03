@@ -1,0 +1,13 @@
+captured_at_utc=2026-10-03T19:40:37Z
+pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+source_snapshot=/tmp/tribunal-head extracted from 5dbe96e111c896daa8e136eecc21f70b67515c76
+command=/home/user/nexus-ai-agent/.venv/bin/python /tmp/pr148-head/tribunal_toctou.py (cwd=/tmp/pr148-head; PYTHONPATH=/tmp/tribunal-head/src)
+command_exit_code=0
+--- stdout ---
+download_is_file_checks=2
+download_destination_contains_outside_bytes=SYNTHETIC-OUTSIDE-SECRET
+download_symlink_remains=True
+upload_target_resolutions=3
+upload_outside_target_contains=SYNTHETIC-ATTACKER-UPLOAD
+upload_cache_entry_is_symlink=True
+--- stderr ---

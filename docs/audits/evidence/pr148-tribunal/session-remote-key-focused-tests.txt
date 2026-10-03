@@ -1,0 +1,11 @@
+captured_at_utc=2026-10-03T20:21:59Z
+subject_pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+tested_session_commit=7f1873033d968b2368a9a15abff7e8ecfab5338f
+tested_tree=local session branch arena/01a10329-nexus-ai-agent (not PR #148 source)
+suite=REMOTE-KEY and race-regression focused coverage
+command=/home/user/nexus-ai-agent/.venv/bin/python -m pytest -q tests/unit/test_local_cache_provider.py tests/unit/test_security_mutation_support.py tests/unit/test_safe_paths.py tests/architecture/test_storage_key_boundary.py (cwd=/home/user/nexus-ai-agent; PYTHONPATH=src)
+command_exit_code=0
+--- stdout ---
+...........................................................              [100%]
+59 passed in 0.41s
+--- stderr ---

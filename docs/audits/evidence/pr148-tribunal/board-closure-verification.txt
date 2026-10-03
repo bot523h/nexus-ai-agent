@@ -1,0 +1,48 @@
+captured_at_utc=2026-10-03T20:34:47Z
+subject_pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+command=python scripts/agent_board.py release task-197-pr148-tribunal-hardening --branch arena/01a10329-nexus-ai-agent; python -m json.tool .agents/board.json; pytest tests/unit/test_agent_board.py tests/unit/test_docs_integrity.py
+release_stdout=RELEASED task-197-pr148-tribunal-hardening. Zone free — the next agent can claim it.
+board_record={"agent_branch": "", "claimed_at": null, "gates_owner": false, "note": "Phase 1 substantive judgment complete: computed PR #148 live-head status FAIL; F-01 mutation false-kill, F-02 checkout credential persistence, and F-03 LocalCache TOCTOU remain on unchanged head 5dbe96e111c896daa8e136eecc21f70b67515c76. Session remediation is pushed only to arena/01a10329-nexus-ai-agent; PR-head branch untouched. Phase 2 receipt path: docs/audits/receipts/task-197-pr148-tribunal-2026-10-03.json. Repository praudit reports PR #148 invisible on its distinct head branch (and 67/67 open PRs invisible); this is recorded, not masked.", "status": "done", "task": "task-197-pr148-tribunal-hardening"}
+board_updated_at=2026-10-03T20:33:46Z
+board_json_parse=passed
+preclosure_overlap_and_scope_coverage=see board-preclosure-overlap-check.txt; exit 0, no overlap, all 53 non-coordination paths within task exclusive_paths
+postrelease_board_tests=see board-postrelease-tests.txt; 75 passed
+postrelease_open_pr_visibility=see board-postrelease-praudit.txt; 67 total and 67 invisible; PR #148 has no live claim for head branch arena/01a0fe18-nexus-ai-agent and 50 files outside every exclusive_paths; no foreign fence after task release
+--- repository lifecycle semantics from scripts/agent_board.py ---
+[_is_active_claim]
+75: def _is_active_claim(claim: dict) -> bool:
+76:     """True when a claim owns its zone and exclusive paths right now.
+77:
+78:     ``active_in_review`` is intentionally treated as an active lease: an open PR
+79:     can still conflict even though the author has stopped coding.  Older boards
+80:     only checked the literal string ``active``, which made review-phase PRs
+81:     invisible to the referee.
+82:     """
+83:
+[cmd_release]
+250: def cmd_release(args: argparse.Namespace) -> int:
+251:     board = load_board()
+252:     claim = _find(board, args.task)
+253:     if claim is None:
+254:         print(f"task not found: {args.task}")
+255:         return 2
+256:     if claim.get("agent_branch") != args.branch:
+257:         print(f"refusing: {args.task} belongs to {claim.get('agent_branch')}, not {args.branch}")
+258:         return 2
+259:     claim.update(status="done", agent_branch="", claimed_at=None, gates_owner=False)
+260:     save_board(board)
+261:     print(f"RELEASED {args.task}. Zone free — the next agent can claim it.")
+262:     return 0
+[cmd_check]
+314: def cmd_check(args: argparse.Namespace) -> int:
+315:     board = load_board()
+316:     files = [f for f in args.files.split(",") if f.strip()]
+317:     hits = _conflicting_paths(board, args.branch or "", files)
+318:     if hits:
+319:         print("OVERLAP with another agent's active or active-in-review exclusive paths:")
+320:         for task, path in hits:
+321:             print(f"  {path}  ← claimed by {task}")
+322:         print(STOP_BANNER)
+323:         return 1
+324:     print("no overlap — safe to proceed.")
+325:     return 0

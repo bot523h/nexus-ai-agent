@@ -1,0 +1,23 @@
+captured_at_utc=2026-10-03T20:29:55Z
+pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+source_snapshot=/tmp/pr148-head extracted from 5dbe96e111c896daa8e136eecc21f70b67515c76
+source_helper_sha256=4b6dcd1603082f3ecaf29905de0065f27f1b0ce8ce80a2575d3b0ae642f0b507
+command=PYTHONPATH=/tmp/pr148-head/scripts /home/user/nexus-ai-agent/.venv/bin/python /tmp/pr148-head/tribunal_mutation_attack_suite.py (cwd=/tmp/pr148-head)
+command_exit_code=0
+--- stdout ---
+PR-HEAD-MUTATION-ATTACK: baseline ... GREEN
+unrelated_assertion_mentions_expected_nodeid: killed — synthetic false-kill attack against PR-head acceptance predicate
+PR-HEAD-MUTATION-ATTACK: restored baseline ... GREEN
+PR-HEAD-MUTATION-ATTACK: 1/1 mutants killed
+ATTACK_RESULT unrelated_assertion_mentions_expected_nodeid: legacy_runner_exit=0; falsely_classified_as_killed=True
+PR-HEAD-MUTATION-ATTACK: baseline ... GREEN
+collection_error_mentions_expected_nodeid: killed — synthetic false-kill attack against PR-head acceptance predicate
+PR-HEAD-MUTATION-ATTACK: restored baseline ... GREEN
+PR-HEAD-MUTATION-ATTACK: 1/1 mutants killed
+ATTACK_RESULT collection_error_mentions_expected_nodeid: legacy_runner_exit=0; falsely_classified_as_killed=True
+PR-HEAD-MUTATION-ATTACK: baseline ... GREEN
+unrelated_failure_mentions_all_expected_nodeids: killed — synthetic false-kill attack against PR-head acceptance predicate
+PR-HEAD-MUTATION-ATTACK: restored baseline ... GREEN
+PR-HEAD-MUTATION-ATTACK: 1/1 mutants killed
+ATTACK_RESULT unrelated_failure_mentions_all_expected_nodeids: legacy_runner_exit=0; falsely_classified_as_killed=True
+--- stderr ---

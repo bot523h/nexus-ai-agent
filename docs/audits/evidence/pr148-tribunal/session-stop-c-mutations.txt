@@ -1,0 +1,15 @@
+captured_at_utc=2026-10-03T20:21:21Z
+subject_pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+tested_session_commit=7f1873033d968b2368a9a15abff7e8ecfab5338f
+tested_tree=local session branch arena/01a10329-nexus-ai-agent (not PR #148 source)
+command=/home/user/nexus-ai-agent/.venv/bin/python scripts/security_mutations_stop_c.py (cwd=/home/user/nexus-ai-agent; PYTHONPATH=src)
+command_exit_code=0
+--- stdout ---
+STOP-C: baseline ... GREEN
+production_root_omits_authorizer: killed — pytest reported FAILED for tests/architecture/test_command_capability_boundary.py::test_every_production_command_bus_root_has_a_trusted_authorizer — every reachable production bus root must bind a project-scoped trusted grant
+missing_authorizer_no_longer_fails_closed: killed — pytest reported FAILED for tests/unit/test_command_capability_contract.py::TestAuthorization::test_actor_claim_without_authorizer_is_refused — dispatch without a trusted authorizer must raise AuthorizationError
+missing_actor_no_longer_fails_closed: killed — pytest reported FAILED for tests/unit/test_command_capability_contract.py::TestAuthorization::test_authorizer_requires_an_actor_claim — dispatch without an actor claim must be denied before operation handling
+operation_permission_check_removed: killed — pytest reported FAILED for tests/unit/test_command_capability_contract.py::TestAuthorization::test_missing_permissions_are_denied — service identity does not grant permissions absent from its project grant
+STOP-C: restored baseline ... GREEN
+STOP-C: 4/4 mutants killed
+--- stderr ---

@@ -1,0 +1,11 @@
+captured_at_utc=2026-10-03T19:40:36Z
+pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+source_snapshot=/tmp/tribunal-head extracted from 5dbe96e111c896daa8e136eecc21f70b67515c76
+command=/home/user/nexus-ai-agent/.venv/bin/python /tmp/pr148-head/tribunal_remote_key.py (cwd=/tmp/pr148-head; PYTHONPATH=/tmp/tribunal-head/src)
+command_exit_code=0
+--- stdout ---
+telegram_filename_traversal: raw='../../outside.txt' sanitized_remote_key='outside.txt' cached=True escaped=False
+encoded_traversal_download: rejected=StorageError output_exists=False
+existing_symlink_download: rejected=StorageError output_exists=False
+nul_filename: rejected=UnsafeFileNameError
+--- stderr ---

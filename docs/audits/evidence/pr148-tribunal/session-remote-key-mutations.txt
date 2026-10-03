@@ -1,0 +1,14 @@
+captured_at_utc=2026-10-03T20:21:27Z
+subject_pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+tested_session_commit=7f1873033d968b2368a9a15abff7e8ecfab5338f
+tested_tree=local session branch arena/01a10329-nexus-ai-agent (not PR #148 source)
+command=/home/user/nexus-ai-agent/.venv/bin/python scripts/security_mutations_remote_key.py (cwd=/home/user/nexus-ai-agent; PYTHONPATH=src)
+command_exit_code=0
+--- stdout ---
+REMOTE-KEY: baseline ... GREEN
+raw_telegram_filename_used_as_remote_key: killed — pytest reported FAILED for tests/architecture/test_storage_key_boundary.py::test_cloud_upload_uses_the_sanitized_external_filename_as_its_remote_key — external names must be sanitized before becoming provider object keys
+untrusted_key_join_bypasses_validation_and_containment: killed — pytest reported FAILED for tests/unit/test_local_cache_provider.py::test_path_for_key_rejects_traversal_absolute_nul_and_encoded_keys[], tests/unit/test_local_cache_provider.py::test_symlinked_key_components_cannot_escape_cache — remote keys must be validated and contained before filesystem use
+encoded_traversal_no_longer_checked_after_decoding: killed — pytest reported FAILED for tests/unit/test_local_cache_provider.py::test_path_for_key_rejects_traversal_absolute_nul_and_encoded_keys[%2e%2e%2foutside.txt] — percent-decoded traversal spellings must be rejected before reaching cache paths
+REMOTE-KEY: restored baseline ... GREEN
+REMOTE-KEY: 3/3 mutants killed
+--- stderr ---

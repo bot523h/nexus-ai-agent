@@ -1,0 +1,6 @@
+PHASE=1 — SUBSTANTIVE JUDGMENT COMPLETE; receipt/board closure not yet evaluated.
+subject_pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+
+Findings F-01 (mutation-proof false-kill), F-02 (checkout credential persistence), and F-03 (LocalCache TOCTOU) are each classified REAL_DEFECT and conceded by the defense on the exact live PR head. STOP-B, STOP-C, and static REMOTE-KEY attacks produced no finding in the tested cases. The live PR head remains unchanged after the session-branch remediation push and the final pre-computation recheck (INV-001, INV-036); therefore none of the three defects is closed on the subject PR head. CI disposition is D (unattributed/inconclusive), with the remote check still red. The PR-head TOCTOU enum is UNRESOLVED; the session-tree implementation separately meets PROVEN_WITH_LIMITATIONS under its documented local-actor contract.
+
+Substantive status=FAIL under the tribunal rule: PASS requires all required boolean gates true and the live-head TOCTOU enum to be PROVEN_WITH_LIMITATIONS. This result is independent of pending receipt/board integrity checks. Phase 2 must verify both integrity booleans before final closure.

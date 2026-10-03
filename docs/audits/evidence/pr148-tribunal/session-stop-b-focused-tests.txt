@@ -1,0 +1,17 @@
+captured_at_utc=2026-10-03T20:21:55Z
+subject_pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+tested_session_commit=7f1873033d968b2368a9a15abff7e8ecfab5338f
+tested_tree=local session branch arena/01a10329-nexus-ai-agent (not PR #148 source)
+suite=STOP-B/API focused coverage
+command=/home/user/nexus-ai-agent/.venv/bin/python -m pytest -q tests/unit/test_api_ssrf_download.py tests/unit/test_creative_studio.py tests/unit/test_security_hardening.py tests/architecture/test_legacy_creative_boundary.py tests/architecture/test_legacy_lane_verification_gap.py (cwd=/home/user/nexus-ai-agent; PYTHONPATH=src)
+command_exit_code=0
+--- stdout ---
+..................................................................       [100%]
+=============================== warnings summary ===============================
+tests/unit/test_api_ssrf_download.py: 13 warnings
+  /home/user/nexus-ai-agent/.venv/lib/python3.11/site-packages/httpx2/_models.py:423: DeprecationWarning: Use 'content=<...>' to upload raw bytes/text content.
+    headers, stream = encode_request(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+66 passed, 13 warnings in 1.59s
+--- stderr ---

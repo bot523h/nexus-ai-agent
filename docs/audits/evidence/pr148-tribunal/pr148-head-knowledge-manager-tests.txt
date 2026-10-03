@@ -1,0 +1,10 @@
+captured_at_utc=2026-10-03T19:51:29Z
+subject_pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+tested_commit=5dbe96e111c896daa8e136eecc21f70b67515c76
+command=PYTHONPATH=/tmp/pr148-head-worktree/src /home/user/nexus-ai-agent/.venv/bin/python -m pytest -q tests/unit/test_knowledge_hardening.py (cwd=/tmp/pr148-head-worktree)
+command_exit_code=0
+--- stdout ---
+........................................................................ [ 81%]
+................                                                         [100%]
+88 passed in 5.02s
+--- stderr ---

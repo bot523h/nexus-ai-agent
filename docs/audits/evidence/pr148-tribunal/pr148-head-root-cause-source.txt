@@ -1,0 +1,130 @@
+captured_at_utc=2026-10-03T20:28:20Z
+pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+source_snapshot=/tmp/pr148-head detached/extracted from exact PR head 5dbe96e111c896daa8e136eecc21f70b67515c76
+command=sha256sum source files; nl -ba relevant source ranges
+source=scripts/security_mutation_support.py sha256=4b6dcd1603082f3ecaf29905de0065f27f1b0ce8ce80a2575d3b0ae642f0b507
+source=src/nexus_ai_agent/storage/providers/local_cache.py sha256=443e1e4b62d34b998efa6e04b96183e4bbbeb45a30c761b1f4d5f08cf269d1c5
+source=.github/workflows/security_stop_b.yml sha256=43799c7c6b76e60f26b88c9e859f7f86fe6fd3566a9fecff005e64ac508d5066
+source=.github/workflows/security_stop_c.yml sha256=194e00c6acf7ad45173f5bd170639541a68e0b698c2122e273f53f9faf9572b4
+source=.github/workflows/security_remote_key.yml sha256=85363661178ecd784792b0c7ef0385ec8810d7e741b53814ad3a27cad250cfb2
+
+[mutation support lines 120-130]
+   120	            restoration_failed = True
+   121	            print(f"{mutation.name}: RESTORE FAILED")
+   122	            survivors.append(mutation.name)
+   123	            continue
+   124
+   125	        output = result.stdout + result.stderr
+   126	        if result.returncode and all(token in output for token in mutation.expected_failures):
+   127	            killed += 1
+   128	            print(f"{mutation.name}: killed — {mutation.rationale}")
+   129	        else:
+   130	            survivors.append(mutation.name)
+
+[LocalCache TOCTOU path operations lines 105-156]
+   105	    def _path_for_components(self, components: tuple[str, ...]) -> Path:
+   106	        root = self._root()
+   107	        candidate = root
+   108	        for component in components:
+   109	            candidate = candidate / component
+   110	            try:
+   111	                if candidate.is_symlink():
+   112	                    raise StorageError("Local-cache key traverses a symlink")
+   113	            except OSError as exc:
+   114	                raise StorageError("Unable to inspect local-cache path") from exc
+   115
+   116	        try:
+   117	            resolved = candidate.resolve(strict=False)
+   118	            resolved.relative_to(root)
+   119	        except (OSError, RuntimeError, ValueError) as exc:
+   120	            raise StorageError("Local-cache key escapes its root") from exc
+   121	        return resolved
+   122
+   123	    def path_for_key(self, remote_key: str) -> Path:
+   124	        components = self._validated_components(remote_key)
+   125	        return self._path_for_components(components)
+   126
+   127	    @staticmethod
+   128	    def _copy_into_cache(provider: LocalCacheProvider, local_path: Path, remote_key: str) -> None:
+   129	        dest = provider.path_for_key(remote_key)
+   130	        dest.parent.mkdir(parents=True, exist_ok=True)
+   131	        # Re-check after creating missing parents so a symlink introduced in
+   132	        # an existing component cannot redirect the copy outside the cache.
+   133	        dest = provider.path_for_key(remote_key)
+   134	        shutil.copy2(local_path, dest)
+   135
+   136	    async def upload(self, *, local_path: Path, remote_key: str) -> None:
+   137	        # Validate before dispatching to the worker thread or making directories.
+   138	        self.path_for_key(remote_key)
+   139	        await asyncio.to_thread(self._copy_into_cache, self, local_path, remote_key)
+   140
+   141	    @staticmethod
+   142	    def _copy_from_cache(provider: LocalCacheProvider, remote_key: str, local_path: Path) -> None:
+   143	        src = provider.path_for_key(remote_key)
+   144	        if not src.is_file():
+   145	            raise ProviderUnavailable(f"Cache miss for key '{remote_key}'")
+   146	        # Re-check immediately before opening the key-derived source path.
+   147	        src = provider.path_for_key(remote_key)
+   148	        if not src.is_file():
+   149	            raise ProviderUnavailable(f"Cache miss for key '{remote_key}'")
+   150	        local_path.parent.mkdir(parents=True, exist_ok=True)
+   151	        shutil.copy2(src, local_path)
+   152
+   153	    async def download(self, *, remote_key: str, local_path: Path) -> None:
+   154	        # Invalid keys fail closed; they are not treated as cache misses.
+   155	        self.path_for_key(remote_key)
+   156	        await asyncio.to_thread(self._copy_from_cache, self, remote_key, local_path)
+
+[.github/workflows/security_stop_b.yml lines 5-22]
+     5	permissions:
+     6	  contents: read
+     7
+     8	jobs:
+     9	  stop-b-mutations:
+    10	    name: STOP-B route retirement mutations
+    11	    runs-on: ubuntu-latest
+    12	    timeout-minutes: 20
+    13	    steps:
+    14	      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+    15	      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+    16	        with:
+    17	          python-version: "3.12"
+    18	      - run: pip install -e ".[dev]"
+    19	      - name: Require route, side-effect, and body-processing mutants to be killed
+    20	        run: python scripts/security_mutations_stop_b.py
+
+[.github/workflows/security_stop_c.yml lines 5-22]
+     5	permissions:
+     6	  contents: read
+     7
+     8	jobs:
+     9	  stop-c-mutations:
+    10	    name: STOP-C authority mutations
+    11	    runs-on: ubuntu-latest
+    12	    timeout-minutes: 20
+    13	    steps:
+    14	      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+    15	      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+    16	        with:
+    17	          python-version: "3.12"
+    18	      - run: pip install -e ".[dev]"
+    19	      - name: Require root-grant, missing-authority, and permission mutants to be killed
+    20	        run: python scripts/security_mutations_stop_c.py
+
+[.github/workflows/security_remote_key.yml lines 5-22]
+     5	permissions:
+     6	  contents: read
+     7
+     8	jobs:
+     9	  remote-key-mutations:
+    10	    name: REMOTE-KEY ingress and cache-path mutations
+    11	    runs-on: ubuntu-latest
+    12	    timeout-minutes: 20
+    13	    steps:
+    14	      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+    15	      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+    16	        with:
+    17	          python-version: "3.12"
+    18	      - run: pip install -e ".[dev]"
+    19	      - name: Require ingress, decoding, traversal, and symlink mutants to be killed
+    20	        run: python scripts/security_mutations_remote_key.py

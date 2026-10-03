@@ -1,0 +1,31 @@
+captured_at_utc=2026-10-03T20:27:24Z
+subject=live PR #148 facts after push to session-bound arena/01a10329-nexus-ai-agent; no push to PR-head branch
+commands below; statuses and annotations are read-only GitHub queries
+[pr_api] command=gh api repos/bot523h/nexus-ai-agent/pulls/148 --jq {number,state,draft,head:{ref:.head.ref,sha:.head.sha,repo:.head.repo.full_name},base:{ref:.base.ref,sha:.base.sha,repo:.base.repo.full_name},mergeable,mergeable_state,updated_at:.updated_at}
+exit_code=0
+stdout={"base":{"ref":"main","repo":"bot523h/nexus-ai-agent","sha":"e5b326b2eaf691a638d030ad57acf1ce60016ef0"},"draft":false,"head":{"ref":"arena/01a0fe18-nexus-ai-agent","repo":"bot523h/nexus-ai-agent","sha":"5dbe96e111c896daa8e136eecc21f70b67515c76"},"mergeable":true,"mergeable_state":"unstable","number":148,"state":"open","updated_at":"2026-10-03T05:15:14Z"}
+stderr=
+[pr_view] command=gh pr view 148 --json state,isDraft,url,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,reviewDecision,updatedAt,reviews,statusCheckRollup --jq {state,isDraft,url,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,reviewDecision,updatedAt,reviews:[.reviews[]|{author:.author.login,state,submittedAt}],checks:[.statusCheckRollup[]|select(.name=="python-parity (3.11)")|{name,conclusion:(.conclusion // .state),workflowName,detailsUrl}]}
+exit_code=0
+stdout={"baseRefName":"main","checks":[{"conclusion":"FAILURE","detailsUrl":"https://github.com/bot523h/nexus-ai-agent/actions/runs/37097893624/job/111131465632","name":"python-parity (3.11)","workflowName":"CI"},{"conclusion":"SUCCESS","detailsUrl":"https://github.com/bot523h/nexus-ai-agent/actions/runs/37097890060/job/111131455195","name":"python-parity (3.11)","workflowName":"CI"}],"headRefName":"arena/01a0fe18-nexus-ai-agent","headRefOid":"5dbe96e111c896daa8e136eecc21f70b67515c76","isDraft":false,"mergeStateStatus":"UNSTABLE","mergeable":"MERGEABLE","reviewDecision":"APPROVED","reviews":[{"author":"coderabbitai","state":"COMMENTED","submittedAt":"2026-10-02T21:48:04Z"},{"author":"coderabbitai","state":"APPROVED","submittedAt":"2026-10-02T21:52:03Z"},{"author":"coderabbitai","state":"COMMENTED","submittedAt":"2026-10-03T04:55:04Z"}],"state":"OPEN","updatedAt":"2026-10-03T05:15:14Z","url":"https://github.com/bot523h/nexus-ai-agent/pull/148"}
+stderr=
+[push_run] command=gh api repos/bot523h/nexus-ai-agent/actions/runs/37097890060 --jq {id,event,head_branch,head_sha,status,conclusion,created_at,updated_at}
+exit_code=0
+stdout={"conclusion":"success","created_at":"2026-10-03T04:50:51Z","event":"push","head_branch":"arena/01a0fe18-nexus-ai-agent","head_sha":"5dbe96e111c896daa8e136eecc21f70b67515c76","id":37097890060,"status":"completed","updated_at":"2026-10-03T05:14:49Z"}
+stderr=
+[pull_request_run] command=gh api repos/bot523h/nexus-ai-agent/actions/runs/37097893624 --jq {id,event,head_branch,head_sha,status,conclusion,created_at,updated_at}
+exit_code=0
+stdout={"conclusion":"failure","created_at":"2026-10-03T04:50:55Z","event":"pull_request","head_branch":"arena/01a0fe18-nexus-ai-agent","head_sha":"5dbe96e111c896daa8e136eecc21f70b67515c76","id":37097893624,"status":"completed","updated_at":"2026-10-03T05:24:02Z"}
+stderr=
+[failure_annotation] command=gh api repos/bot523h/nexus-ai-agent/check-runs/111131465632/annotations --jq .[] | [.annotation_level,.message] | @tsv
+exit_code=0
+stdout=warning	Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683, actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065, actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+failure	Process completed with exit code 1.
+notice	"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+stderr=
+[session_branch] command=bash -lc git branch --show-current && git rev-parse HEAD && git ls-remote origin refs/heads/arena/01a10329-nexus-ai-agent
+exit_code=0
+stdout=arena/01a10329-nexus-ai-agent
+7f1873033d968b2368a9a15abff7e8ecfab5338f
+7f1873033d968b2368a9a15abff7e8ecfab5338f	refs/heads/arena/01a10329-nexus-ai-agent
+stderr=

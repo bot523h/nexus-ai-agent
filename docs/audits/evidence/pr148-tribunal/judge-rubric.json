@@ -1,0 +1,271 @@
+{
+  "schema": 1,
+  "role": "JUDGE",
+  "subject": {
+    "repository": "bot523h/nexus-ai-agent",
+    "pull_request": 148,
+    "live_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+    "base_sha": "e5b326b2eaf691a638d030ad57acf1ce60016ef0"
+  },
+  "computed_at_utc": "2026-10-03T20:40:35Z",
+  "evidence_ledger": {
+    "path": "docs/audits/evidence/pr148-tribunal/investigator-ledger.json",
+    "sha256": "6e1b25f50f6eaf820ca6311a02cbaff0f7c1a9ced3a9b7808b7588ba1d649133",
+    "entry_count": 36
+  },
+  "role_report_sha256": {
+    "prosecutor-findings.txt": "800c7a9a8b301ce6e224bd6dfc1ac5752ecbfb9c069281a595a71711e4d87387",
+    "defense-resolution.txt": "3cbf01a24bdca6059fb3edea9219799357a430dbb63110a62962ea50ff9560f3",
+    "remediation-log.txt": "a9da7237440d25d8173b76ee9d42d6e32d1f69cbdb237a2cd284f5641321af3e",
+    "ci-disposition.txt": "0c51f9dfb472ad84995e5693c7549572226ad8a3647d336c413d864294c8cfce",
+    "toctou-verdict.txt": "b4059f5940180cf977c6af0a11416c0851ee8c68e8f2e61dba9a769d02ca8a57",
+    "phase1-substantive-judgment.txt": "10a487c63be4f15e5f5d255e1d9e698b7f1e636744c3e4eff05b26289e55ff9d"
+  },
+  "findings": [
+    {
+      "id": "F-01",
+      "classification": "REAL_DEFECT",
+      "defense": "CONCEDED",
+      "ledger_evidence": [
+        "INV-002",
+        "INV-008",
+        "INV-009",
+        "INV-036"
+      ],
+      "resolved_on_live_pr_head": false,
+      "session_remediation_evidence": [
+        "INV-017",
+        "INV-027"
+      ]
+    },
+    {
+      "id": "F-02",
+      "classification": "REAL_DEFECT",
+      "defense": "CONCEDED",
+      "ledger_evidence": [
+        "INV-010",
+        "INV-011",
+        "INV-036"
+      ],
+      "resolved_on_live_pr_head": false,
+      "session_remediation_evidence": [
+        "INV-017",
+        "INV-028"
+      ]
+    },
+    {
+      "id": "F-03",
+      "classification": "REAL_DEFECT",
+      "defense": "CONCEDED",
+      "ledger_evidence": [
+        "INV-002",
+        "INV-006",
+        "INV-007",
+        "INV-036"
+      ],
+      "resolved_on_live_pr_head": false,
+      "session_remediation_evidence": [
+        "INV-018",
+        "INV-019",
+        "INV-020"
+      ]
+    }
+  ],
+  "ci": {
+    "classification": "D",
+    "meaning": "unattributed/inconclusive from available evidence",
+    "live_check_green": false,
+    "ledger_evidence": [
+      "INV-001",
+      "INV-012",
+      "INV-013",
+      "INV-014",
+      "INV-015",
+      "INV-016",
+      "INV-036"
+    ]
+  },
+  "toctou": {
+    "live_pr_head": "UNRESOLVED",
+    "session_tree": "PROVEN_WITH_LIMITATIONS",
+    "enum_for_computation": "UNRESOLVED",
+    "ledger_evidence": [
+      "INV-002",
+      "INV-006",
+      "INV-007",
+      "INV-018",
+      "INV-020",
+      "INV-036"
+    ]
+  },
+  "boolean_gates": {
+    "investigator_ledger_complete_and_hash_bound": {
+      "value": true,
+      "evidence": [
+        "INV-001",
+        "INV-002",
+        "INV-036"
+      ]
+    },
+    "role_separation_and_cited_defense_complete": {
+      "value": true,
+      "evidence": [
+        "INV-003",
+        "INV-004",
+        "INV-005",
+        "INV-006",
+        "INV-007",
+        "INV-008",
+        "INV-009",
+        "INV-010",
+        "INV-011"
+      ]
+    },
+    "minimum_three_attacks_per_seam_including_trust_boundaries": {
+      "value": true,
+      "evidence": [
+        "INV-003",
+        "INV-004",
+        "INV-005",
+        "INV-006",
+        "INV-007",
+        "INV-009",
+        "INV-011"
+      ]
+    },
+    "exact_base_and_head_comparison_complete": {
+      "value": true,
+      "evidence": [
+        "INV-012",
+        "INV-013",
+        "INV-014",
+        "INV-015"
+      ]
+    },
+    "ci_failure_classified_from_evidence": {
+      "value": true,
+      "evidence": [
+        "INV-001",
+        "INV-012",
+        "INV-013",
+        "INV-016",
+        "INV-036"
+      ]
+    },
+    "session_branch_remediations_targeted_full_mutations_and_lint_complete": {
+      "value": true,
+      "evidence": [
+        "INV-017",
+        "INV-018",
+        "INV-019",
+        "INV-020",
+        "INV-021",
+        "INV-022",
+        "INV-023",
+        "INV-024",
+        "INV-025",
+        "INV-026",
+        "INV-027",
+        "INV-028",
+        "INV-029",
+        "INV-030"
+      ]
+    },
+    "session_bound_branch_delivery_pushed": {
+      "value": true,
+      "evidence": [
+        "INV-001"
+      ]
+    },
+    "branch_and_scope_prohibitions_respected": {
+      "value": true,
+      "evidence": [
+        "INV-001",
+        "INV-031",
+        "INV-036"
+      ]
+    },
+    "board_preclosure_overlap_and_scope_check_passed": {
+      "value": true,
+      "evidence": [
+        "INV-031"
+      ]
+    },
+    "board_task_released_using_repository_done_semantics": {
+      "value": true,
+      "evidence": [
+        "INV-032",
+        "INV-033",
+        "INV-035"
+      ]
+    },
+    "receipt_integrity": {
+      "value": true,
+      "evidence": [
+        "INV-001",
+        "INV-031",
+        "INV-033"
+      ]
+    },
+    "board_integrity": {
+      "value": true,
+      "evidence": [
+        "INV-031",
+        "INV-033",
+        "INV-035"
+      ]
+    },
+    "all_real_defects_resolved_on_live_pr_head": {
+      "value": false,
+      "evidence": [
+        "INV-001",
+        "INV-006",
+        "INV-007",
+        "INV-008",
+        "INV-009",
+        "INV-010",
+        "INV-011",
+        "INV-036"
+      ]
+    },
+    "live_pr_required_ci_check_green": {
+      "value": false,
+      "evidence": [
+        "INV-001",
+        "INV-016",
+        "INV-036"
+      ]
+    },
+    "pr148_visible_on_live_board": {
+      "value": false,
+      "evidence": [
+        "INV-034"
+      ]
+    }
+  },
+  "all_required_boolean_gates_true": false,
+  "integrity_definitions": {
+    "receipt_integrity": "true only if final receipt records and recomputes the investigator-ledger and rubric SHA256 values and the prior-receipt SHA256",
+    "board_integrity": "true only if preclosure overlap/scope check passes, repository release semantics set task-197 to done with lease cleared, and postrelease board tests pass",
+    "pr148_board_visibility_is_separate": "the repository praudit result is a separate required Boolean gate; it is false even while board_integrity is true"
+  },
+  "integrity_booleans": {
+    "receipt_integrity": true,
+    "board_integrity": true
+  },
+  "subject_pr_board_visibility": {
+    "value": false,
+    "ledger_evidence": [
+      "INV-034"
+    ],
+    "detail": "no live board claim for PR head branch arena/01a0fe18-nexus-ai-agent; 50 changed files uncovered; global audit reports 67/67 open PRs invisible"
+  },
+  "formula": "PASS iff every required boolean gate is true AND the live-PR-head TOCTOU enum is PROVEN_WITH_LIMITATIONS; otherwise FAIL.",
+  "computed_status": "FAIL",
+  "status_reason": [
+    "three REAL_DEFECT findings remain on unchanged live PR head",
+    "live-head TOCTOU is UNRESOLVED",
+    "required python-parity (3.11) check remains red and is category D",
+    "PR #148 is not visible on the repository board for its distinct head branch"
+  ]
+}

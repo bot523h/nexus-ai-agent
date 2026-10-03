@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-03T19:17:50Z",
+  "updated_at": "2026-10-03T20:33:46Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2861,11 +2861,11 @@
       "title_fa": "ممیزی خصمانهٔ PR 148 و اصلاح گیت‌های امنیتی",
       "zone": "security-wave1",
       "priority": "P0",
-      "status": "active",
-      "agent_branch": "arena/01a10329-nexus-ai-agent",
-      "claimed_at": "2026-10-03T19:17:50Z",
+      "status": "done",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
-      "gates_owner": true,
+      "gates_owner": false,
       "prerequisites": [
         "task-196-wave1-security-hardening"
       ],
@@ -2901,7 +2901,7 @@
         "docs/architecture/MODULE_MAP.md",
         "docs/architecture/SECURITY.md"
       ],
-      "note": ""
+      "note": "Phase 1 substantive judgment complete: computed PR #148 live-head status FAIL; F-01 mutation false-kill, F-02 checkout credential persistence, and F-03 LocalCache TOCTOU remain on unchanged head 5dbe96e111c896daa8e136eecc21f70b67515c76. Session remediation is pushed only to arena/01a10329-nexus-ai-agent; PR-head branch untouched. Phase 2 receipt path: docs/audits/receipts/task-197-pr148-tribunal-2026-10-03.json. Repository praudit reports PR #148 invisible on its distinct head branch (and 67/67 open PRs invisible); this is recorded, not masked."
     }
   ],
   "deferred_log": [

@@ -1,0 +1,14 @@
+subject_pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+PR_148_LIVE_HEAD_TOCTOU=UNRESOLVED
+SESSION_TREE_TOCTOU=PROVEN_WITH_LIMITATIONS (not transferable to PR #148 without a new head)
+
+Live-head basis: three distinct path-substitution sequences on the exact PR head returned an outside secret on download or wrote attacker-controlled bytes to an outside target (INV-006, INV-007). Exact-head source shows check/resolve followed by later pathname-based `shutil.copy2` (INV-002). The live GitHub queries after the session-branch push and immediately before rubric computation still report the same PR head SHA (INV-001, INV-036). Therefore the session changes do not close the live-head finding.
+
+Session-tree basis: the remediation is structurally descriptor-relative and the focused download-leaf, upload-leaf, and parent-directory-swap regressions all pass (INV-018, INV-019, INV-020). Its operating contract is explicitly limited as follows; all conditions are documented and the enforceable ones have code/tests:
+1. Required POSIX `dir_fd`, `O_DIRECTORY`, `O_NOFOLLOW`, and descriptor-listing primitives must exist; provider initialization fails closed otherwise.
+2. The cache root must be effective-UID-owned and not group/world writable; ancestor ownership and sticky/writable rules are checked so another UID cannot replace the root.
+3. Every traversed directory and opened cache leaf is checked for effective-UID ownership and safe group/world write modes; all key-derived opens are relative to pinned descriptors and no-follow.
+4. Download leaves must be regular, same-device, single-link files; FIFO opens are nonblocking and rejected; uploads stage exclusively and atomically replace within the opened parent.
+5. The stated local threat model covers untrusted remote keys and other-UID local actors; it explicitly trusts a malicious process running as the service UID, root/privileged actors, and privileged mount administrators.
+
+The session implementation meets that limited contract and structurally blocks the tested leaf/parent substitutions. The requested enum for the subject being judged—PR #148's unchanged live head—is still `UNRESOLVED`, not `PROVEN_WITH_LIMITATIONS`.

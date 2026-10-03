@@ -1,0 +1,338 @@
+{
+  "schema": 1,
+  "role": "INVESTIGATOR",
+  "subject": {
+    "repository": "bot523h/nexus-ai-agent",
+    "pull_request": 148,
+    "head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+    "base_sha": "e5b326b2eaf691a638d030ad57acf1ce60016ef0"
+  },
+  "captured_at_utc": "2026-10-03T20:40:35Z",
+  "evidence_entry_count": 36,
+  "entries": [
+    {
+      "id": "INV-001",
+      "fact": "GitHub reports PR #148 open, non-draft, approved, mergeable but unstable; head=5dbe96e111c896daa8e136eecc21f70b67515c76, base=e5b326b2eaf691a638d030ad57acf1ce60016ef0; same-head push run succeeds and pull_request run fails python-parity (3.11); session push does not move PR head.",
+      "command": "gh api repos/bot523h/nexus-ai-agent/pulls/148 --jq {number,state,draft,head:{ref:.head.ref,sha:.head.sha,repo:.head.repo.full_name},base:{ref:.base.ref,sha:.base.sha,repo:.base.repo.full_name},mergeable,mergeable_state,updated_at:.updated_at} ; gh pr view 148 --json state,isDraft,url,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,reviewDecision,updatedAt,reviews,statusCheckRollup --jq {state,isDraft,url,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,reviewDecision,updatedAt,reviews:[.reviews[]|{author:.author.login,state,submittedAt}],checks:[.statusCheckRollup[]|select(.name==\"python-parity (3.11)\")|{name,conclusion:(.conclusion // .state),workflowName,detailsUrl}]} ; gh api repos/bot523h/nexus-ai-agent/actions/runs/37097890060 --jq {id,event,head_branch,head_sha,status,conclusion,created_at,updated_at} ; gh api repos/bot523h/nexus-ai-agent/actions/runs/37097893624 --jq {id,event,head_branch,head_sha,status,conclusion,created_at,updated_at} ; gh api repos/bot523h/nexus-ai-agent/check-runs/111131465632/annotations --jq .[] | [.annotation_level,.message] | @tsv ; bash -lc git branch --show-current && git rev-parse HEAD && git ls-remote origin refs/heads/arena/01a10329-nexus-ai-agent",
+      "artifact": "docs/audits/evidence/pr148-tribunal/live-truth-final.txt",
+      "artifact_sha256": "5a63c34c63f2763deead3db5c1f0232224b4dca67d21d4f2a9623e925d62be07",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:27:24Z"
+    },
+    {
+      "id": "INV-002",
+      "fact": "Exact-head source hashes and excerpts show substring acceptance after any nonzero pytest result, path-based LocalCache validation followed by pathname copies, and omitted workflow persist-credentials inputs.",
+      "command": "sha256sum source files; nl -ba relevant source ranges",
+      "artifact": "docs/audits/evidence/pr148-tribunal/pr148-head-root-cause-source.txt",
+      "artifact_sha256": "b43a103636901fe5d32788322f4dd7f47c49e9eff968d90de6311dd134387eed",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:28:20Z"
+    },
+    {
+      "id": "INV-003",
+      "fact": "Unauthenticated JSON, valid-HMAC JSON, and stale-HMAC malformed-body probes each return HTTP 410; registry_calls=0.",
+      "command": "env PYTHONPATH=/tmp/tribunal-head/src /home/user/nexus-ai-agent/.venv/bin/python /tmp/pr148-head/tribunal_stop_b.py ",
+      "artifact": "docs/audits/evidence/pr148-tribunal/pr148-head-stop-b-attacks.txt",
+      "artifact_sha256": "d2d0dfbd90cc08c20bee0579f8493b98406235312571c26d2447f3d9ca2e3d4d",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T19:40:19Z"
+    },
+    {
+      "id": "INV-004",
+      "fact": "Queue actor/permission smuggling, project/target smuggling, and operation escalation to /edit system.undo are rejected as invalid_request or unsupported_operation.",
+      "command": "/home/user/nexus-ai-agent/.venv/bin/python /tmp/pr148-head/tribunal_stop_c_queue.py (cwd=/tmp/pr148-head; PYTHONPATH=/tmp/tribunal-head/src)",
+      "artifact": "docs/audits/evidence/pr148-tribunal/pr148-head-stop-c-attacks.txt",
+      "artifact_sha256": "772d6a326461807763d2e3e2852d42b84037da7f8359c5dd6ca8caf278758ed3",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T19:40:36Z"
+    },
+    {
+      "id": "INV-005",
+      "fact": "External filename ../../outside.txt sanitizes to outside.txt with no escape; encoded traversal and existing symlink downloads are rejected without output; NUL filename is rejected.",
+      "command": "/home/user/nexus-ai-agent/.venv/bin/python /tmp/pr148-head/tribunal_remote_key.py (cwd=/tmp/pr148-head; PYTHONPATH=/tmp/tribunal-head/src)",
+      "artifact": "docs/audits/evidence/pr148-tribunal/pr148-head-remote-key-attacks.txt",
+      "artifact_sha256": "2ec53872033a687375fe4164937a0e98944f90846830b5c4dcdcb298e9c8af56",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T19:40:36Z"
+    },
+    {
+      "id": "INV-006",
+      "fact": "Exact-head download leaf replacement copies outside-secret bytes to the requested output; upload leaf replacement writes attacker-controlled bytes to the outside target.",
+      "command": "/home/user/nexus-ai-agent/.venv/bin/python /tmp/pr148-head/tribunal_toctou.py (cwd=/tmp/pr148-head; PYTHONPATH=/tmp/tribunal-head/src)",
+      "artifact": "docs/audits/evidence/pr148-tribunal/pr148-head-localcache-toctou.txt",
+      "artifact_sha256": "788adfba3827657599d55af87f692416182689d2a275abd1f9fc049013788829",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T19:40:37Z"
+    },
+    {
+      "id": "INV-007",
+      "fact": "After three path validations, replacing the checked parent directory with an outside symlink causes the outside target to contain ATTACKER-CONTROLLED-UPLOAD.",
+      "command": "PYTHONPATH=/tmp/tribunal-head/src /home/user/nexus-ai-agent/.venv/bin/python /tmp/pr148-head/tribunal_parent_swap.py (cwd=/tmp/pr148-head)",
+      "artifact": "docs/audits/evidence/pr148-tribunal/pr148-head-parent-directory-swap.txt",
+      "artifact_sha256": "6f28fc04afc823e9d665d003e4f92ed10031d484c636bd64d143e3477dc66bc0",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:22:17Z"
+    },
+    {
+      "id": "INV-008",
+      "fact": "On the PR-head runner, the synthetic unrelated-failure case whose diagnostic mentions the expected node ID is reported killed (1/1); baseline and restoration are green.",
+      "command": "/home/user/nexus-ai-agent/.venv/bin/python /tmp/pr148-head/tribunal_false_kill.py (cwd=/tmp/pr148-head; PYTHONPATH=/tmp/pr148-head/scripts)",
+      "artifact": "docs/audits/evidence/pr148-tribunal/pr148-head-mutation-false-kill.txt",
+      "artifact_sha256": "9dd7823aa920a3d2a10b2d5d073a2236b532bf6379ef84e13cf0b2f6f05214e2",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T19:40:40Z"
+    },
+    {
+      "id": "INV-009",
+      "fact": "Three exact-head runner probes—unrelated failure with expected-node token, collection error with token, and unrelated failure mentioning all expected tokens—are each counted killed (1/1).",
+      "command": "PYTHONPATH=/tmp/pr148-head/scripts /home/user/nexus-ai-agent/.venv/bin/python /tmp/pr148-head/tribunal_mutation_attack_suite.py (cwd=/tmp/pr148-head)",
+      "artifact": "docs/audits/evidence/pr148-tribunal/pr148-head-mutation-runner-attacks.txt",
+      "artifact_sha256": "852ea053df07b7bcf34d2bcb7e3ee0747e01416d9cb173a4a6476d52cbcbb736",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:29:55Z"
+    },
+    {
+      "id": "INV-010",
+      "fact": "At exact PR head, each of the three workflows uses the pinned checkout and contents:read, omits persist-credentials, and executes test/mutation steps afterward; the pinned action default is true.",
+      "command": "python YAML scan of .github/workflows/security_{stop_b,stop_c,remote_key}.yml with PyYAML BaseLoader",
+      "artifact": "docs/audits/evidence/pr148-tribunal/pr148-head-workflow-credential-review.txt",
+      "artifact_sha256": "20619c23e5fa8d41b408ab3add917d0b05223b14ba734bec0d2f24837d7e0e7a",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T19:42:01Z"
+    },
+    {
+      "id": "INV-011",
+      "fact": "The pinned checkout action declares default=true; all three head workflows have later test/mutation steps; in a disposable repo a synthetic canary config was readable, replaceable, and removable.",
+      "command": "gh api repos/actions/checkout/contents/action.yml?ref=11bd71901bbe5b1630ceea73d27597364c9af683 --jq .content | base64 -d; action.yml_sha256=b55508de183b8a6c978efc7e1d811d653acd84f4972e147f878b50301b245d00 ; PyYAML BaseLoader inventory plus synthetic-canary git-config read/overwrite/unset probe in a disposable git repository",
+      "artifact": "docs/audits/evidence/pr148-tribunal/pr148-head-workflow-credential-attacks.txt",
+      "artifact_sha256": "7a049263b02b2ddedba55fe54af7b3c25d6f06224116290998bef9b0208076c0",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:26:24Z"
+    },
+    {
+      "id": "INV-012",
+      "fact": "Exact PR base e5b326b2eaf691a638d030ad57acf1ce60016ef0 passes 2,915 tests and skips 30 under Python 3.11.2.",
+      "command": "PYTHONPATH=/tmp/pr148-base-worktree/src /home/user/nexus-ai-agent/.venv/bin/python -m pytest -q -rs -m \"not slow\" --tb=short",
+      "artifact": "docs/audits/evidence/pr148-tribunal/pr148-base-py311-full-suite.txt",
+      "artifact_sha256": "dd478b9423ec2eddfba691705b0f047ac07b3f45a9ebd9b661099b79083b76e9",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T19:51:17Z"
+    },
+    {
+      "id": "INV-013",
+      "fact": "Exact PR head 5dbe96e111c896daa8e136eecc21f70b67515c76 passes 2,952 tests and skips 30 under the same Python 3.11.2 environment.",
+      "command": "PYTHONPATH=/tmp/pr148-head-worktree/src /home/user/nexus-ai-agent/.venv/bin/python -m pytest -q -rs -m \"not slow\" --tb=short",
+      "artifact": "docs/audits/evidence/pr148-tribunal/pr148-head-py311-full-suite.txt",
+      "artifact_sha256": "4103167522bd52087a41d3e451c9f1607f4157bf23f04ddf69df5921719f70c7",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T19:51:17Z"
+    },
+    {
+      "id": "INV-014",
+      "fact": "KnowledgeManager hardening suite passes 88 tests on exact PR base e5b326b2eaf691a638d030ad57acf1ce60016ef0.",
+      "command": "PYTHONPATH=/tmp/pr148-base-worktree/src /home/user/nexus-ai-agent/.venv/bin/python -m pytest -q tests/unit/test_knowledge_hardening.py (cwd=/tmp/pr148-base-worktree)",
+      "artifact": "docs/audits/evidence/pr148-tribunal/pr148-base-knowledge-manager-tests.txt",
+      "artifact_sha256": "48230439a215dd0a7df57656d9b3bbbafc37c01ba372f420c9bbfaca7af33f74",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T19:51:23Z"
+    },
+    {
+      "id": "INV-015",
+      "fact": "KnowledgeManager hardening suite passes 88 tests on exact PR head 5dbe96e111c896daa8e136eecc21f70b67515c76.",
+      "command": "PYTHONPATH=/tmp/pr148-head-worktree/src /home/user/nexus-ai-agent/.venv/bin/python -m pytest -q tests/unit/test_knowledge_hardening.py (cwd=/tmp/pr148-head-worktree)",
+      "artifact": "docs/audits/evidence/pr148-tribunal/pr148-head-knowledge-manager-tests.txt",
+      "artifact_sha256": "7b865b7e471b21ed881962f2ed68387fdf04f6693b2b96073d2691fcd0223144",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T19:51:29Z"
+    },
+    {
+      "id": "INV-016",
+      "fact": "GitHub failed-run log and artifact retrieval returned EOF; rerun was denied with the exact message that the workflow file may be broken; annotation only says process exit 1.",
+      "command": "gh api repos/bot523h/nexus-ai-agent/pulls/148 --jq '{number,state,draft,head:{ref:.head.ref,sha:.head.sha,repo:.head.repo.full_name},base:{ref:.base.ref,sha:.base.sha,repo:.base.repo.full_name},mergeable,mergeable_state,updated_at:.updated_at}' ; gh pr view 148 --json state,isDraft,url,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,reviewDecision,updatedAt,reviews,statusCheckRollup --jq '{state,isDraft,url,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,reviewDecision,updatedAt,reviews:[.reviews[]|{author:.author.login,state,submittedAt}],checks:[.statusCheckRollup[]|select(.name==\"python-parity (3.11)\")|{name,conclusion:(.conclusion // .state),workflowName,detailsUrl}]}' ; gh api repos/bot523h/nexus-ai-agent/check-runs/111131465632/annotations --jq '.[] | [.annotation_level,.message] | @tsv' ; gh api repos/bot523h/nexus-ai-agent/actions/runs/37097890060 --jq '{id,event,head_branch,head_sha,status,conclusion,created_at,updated_at}' ; gh api repos/bot523h/nexus-ai-agent/actions/runs/37097893624 --jq '{id,event,head_branch,head_sha,status,conclusion,created_at,updated_at}' ; gh run view 37097893624 --log-failed ; gh run download 37097893624 --name parity-log-3.11 --dir /tmp/tribunal-artifacts ; gh run rerun 37097893624 --failed ; git branch --show-current && git rev-parse HEAD",
+      "artifact": "docs/audits/evidence/pr148-tribunal/live-truth-prepush.txt",
+      "artifact_sha256": "cf457a7bb256dbd5ac799dda9ebef40e972e1c6a860c24b5e952230c155d738c",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T19:53:53Z"
+    },
+    {
+      "id": "INV-017",
+      "fact": "Session commit 7f1873033d968b2368a9a15abff7e8ecfab5338f contains exit-1 plus exact short-summary FAILED-node mutation acceptance, regression cases, and persist-credentials:false on all three workflows.",
+      "command": "sha256sum changed files; nl -ba helper/tests/workflows; inspect mutation constructors",
+      "artifact": "docs/audits/evidence/pr148-tribunal/session-remediation-source.txt",
+      "artifact_sha256": "c1e2c0733c64e391477ef5c1ae4922984352a068b4823a4f29be68d36d7d2038",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:28:35Z"
+    },
+    {
+      "id": "INV-018",
+      "fact": "Session LocalCache source is descriptor-relative, uses no-follow opens and atomic publication, and has deterministic leaf-download, leaf-upload, and parent-directory replacement regressions; source/test hashes recorded.",
+      "command": "nl -ba src/nexus_ai_agent/storage/providers/local_cache.py; nl -ba tests/unit/test_local_cache_provider.py; sha256sum both files",
+      "artifact": "docs/audits/evidence/pr148-tribunal/localcache-structural-review.txt",
+      "artifact_sha256": "df276c7437d141c0c8f25f68eda6841074bc1994f77a82bd3ee6675112a1c2d3",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:23:04Z"
+    },
+    {
+      "id": "INV-019",
+      "fact": "The session tree passes 59 focused LocalCache, mutation-support, safe-path, and storage-key tests.",
+      "command": "/home/user/nexus-ai-agent/.venv/bin/python -m pytest -q tests/unit/test_local_cache_provider.py tests/unit/test_security_mutation_support.py tests/unit/test_safe_paths.py tests/architecture/test_storage_key_boundary.py (cwd=/home/user/nexus-ai-agent; PYTHONPATH=src)",
+      "artifact": "docs/audits/evidence/pr148-tribunal/session-remote-key-focused-tests.txt",
+      "artifact_sha256": "f1d1430b2a52d68125760e2ed57dfd45d6f1c8c655be4d694152fdcd585594a3",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:21:59Z"
+    },
+    {
+      "id": "INV-020",
+      "fact": "The session tree passes the three focused download-leaf, upload-leaf, and parent-directory-swap regression tests.",
+      "command": "/home/user/nexus-ai-agent/.venv/bin/python -m pytest -q -vv tests/unit/test_local_cache_provider.py::test_download_reads_the_opened_inode_if_a_key_is_replaced_with_a_symlink tests/unit/test_local_cache_provider.py::test_upload_atomically_replaces_a_key_symlink_without_writing_its_target tests/unit/test_local_cache_provider.py::test_upload_stays_in_opened_directory_if_parent_is_replaced_with_symlink (cwd=/home/user/nexus-ai-agent; PYTHONPATH=src)",
+      "artifact": "docs/audits/evidence/pr148-tribunal/session-localcache-focused-reprosecution.txt",
+      "artifact_sha256": "c6a3a3280e6e4972057400a46001f46f5d08c343ca26a8e5165561435b510661",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:30:43Z"
+    },
+    {
+      "id": "INV-021",
+      "fact": "The session STOP-B/API focused suite passes 66 tests.",
+      "command": "/home/user/nexus-ai-agent/.venv/bin/python -m pytest -q tests/unit/test_api_ssrf_download.py tests/unit/test_creative_studio.py tests/unit/test_security_hardening.py tests/architecture/test_legacy_creative_boundary.py tests/architecture/test_legacy_lane_verification_gap.py (cwd=/home/user/nexus-ai-agent; PYTHONPATH=src)",
+      "artifact": "docs/audits/evidence/pr148-tribunal/session-stop-b-focused-tests.txt",
+      "artifact_sha256": "db63f884447d792f48ea6bcb95db9b160ef26c84cd3d5350a171a0ee983c0371",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:21:55Z"
+    },
+    {
+      "id": "INV-022",
+      "fact": "The session STOP-C/authorization focused suite passes 94 tests.",
+      "command": "/home/user/nexus-ai-agent/.venv/bin/python -m pytest -q tests/architecture/test_command_capability_boundary.py tests/unit/test_authority_policy.py tests/unit/test_command_capability_contract.py tests/unit/test_creative_studio.py (cwd=/home/user/nexus-ai-agent; PYTHONPATH=src)",
+      "artifact": "docs/audits/evidence/pr148-tribunal/session-stop-c-focused-tests.txt",
+      "artifact_sha256": "8e3340c1224649ed4d1ec4d916531c5f4ddaba69016439adae6499bd80bed567",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:21:58Z"
+    },
+    {
+      "id": "INV-023",
+      "fact": "Session commit 7f1873033d968b2368a9a15abff7e8ecfab5338f passes 2,964 non-slow tests and skips 30.",
+      "command": "PYTHONPATH=src .venv/bin/python -m pytest -q -rs -m \"not slow\" --tb=short",
+      "artifact": "docs/audits/evidence/pr148-tribunal/session-full-test-suite.txt",
+      "artifact_sha256": "36e1e348839411e518313bd9c751a3ee0971f87b058a82f1fee436c6424f40a0",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:22:26Z"
+    },
+    {
+      "id": "INV-024",
+      "fact": "STOP-B mutation campaign reports baseline green, 3/3 mutants killed with FAILED expected node IDs, and restored baseline green.",
+      "command": "/home/user/nexus-ai-agent/.venv/bin/python scripts/security_mutations_stop_b.py (cwd=/home/user/nexus-ai-agent; PYTHONPATH=src)",
+      "artifact": "docs/audits/evidence/pr148-tribunal/session-stop-b-mutations.txt",
+      "artifact_sha256": "7df205e900695a103cebffa4e04e94c45462b085be74a0682a3a0f196452c2b1",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:21:12Z"
+    },
+    {
+      "id": "INV-025",
+      "fact": "STOP-C mutation campaign reports baseline green, 4/4 mutants killed with FAILED expected node IDs, and restored baseline green.",
+      "command": "/home/user/nexus-ai-agent/.venv/bin/python scripts/security_mutations_stop_c.py (cwd=/home/user/nexus-ai-agent; PYTHONPATH=src)",
+      "artifact": "docs/audits/evidence/pr148-tribunal/session-stop-c-mutations.txt",
+      "artifact_sha256": "8b6910d220f6ca82af43b0cc5ebf5f7e5606e2493f3edc90e1e7d7222a832ebe",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:21:21Z"
+    },
+    {
+      "id": "INV-026",
+      "fact": "REMOTE-KEY mutation campaign reports baseline green, 3/3 mutants killed with FAILED expected node IDs, and restored baseline green.",
+      "command": "/home/user/nexus-ai-agent/.venv/bin/python scripts/security_mutations_remote_key.py (cwd=/home/user/nexus-ai-agent; PYTHONPATH=src)",
+      "artifact": "docs/audits/evidence/pr148-tribunal/session-remote-key-mutations.txt",
+      "artifact_sha256": "46a1723031c36d156fa146592bf17924e4ac2229d5bd7225de83636f4ca402d9",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:21:27Z"
+    },
+    {
+      "id": "INV-027",
+      "fact": "The session runner does not count an unrelated failure that mentions the expected node ID as a kill; the mutant survives (0/1) and the baseline is restored green.",
+      "command": "/home/user/nexus-ai-agent/.venv/bin/python -c 'from pathlib import Path",
+      "artifact": "docs/audits/evidence/pr148-tribunal/session-synthetic-false-kill.txt",
+      "artifact_sha256": "7e4fafbdf72a87321629e6e60f3686eb28bb6884d89ff33226f91c05a5e2587a",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:21:48Z"
+    },
+    {
+      "id": "INV-028",
+      "fact": "All three session workflows retain exact 40-hex checkout pins and contents:read, set persist-credentials:false, and have no later Git-auth consumer.",
+      "command": "PyYAML BaseLoader parse of .github/workflows/security_{stop_b,stop_c,remote_key}.yml; scan later steps for git-auth consumers",
+      "artifact": "docs/audits/evidence/pr148-tribunal/session-security-workflow-hardening.txt",
+      "artifact_sha256": "eaa4c907d78cfb61c229dad39725e8900de3f9cb304a37cd284a927d64042317",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:24:15Z"
+    },
+    {
+      "id": "INV-029",
+      "fact": "Session tree passes ruff check and ruff format --check; 541 files already formatted.",
+      "command": "ruff check . ; ruff format --check .",
+      "artifact": "docs/audits/evidence/pr148-tribunal/session-ruff-checks.txt",
+      "artifact_sha256": "f1799a259d4b04fba57b2c6d0486d9e2f3350aa90f044b78e6943a79558cb367",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:22:32Z"
+    },
+    {
+      "id": "INV-030",
+      "fact": "Targeted mypy for local_cache.py passes; full mypy reports two errors only in untouched creative/slideshow/ffmpeg.py due missing imageio_ffmpeg and unused ignore.",
+      "command": "mypy src ; mypy --follow-imports=silent src/nexus_ai_agent/storage/providers/local_cache.py",
+      "artifact": "docs/audits/evidence/pr148-tribunal/session-mypy-checks.txt",
+      "artifact_sha256": "6fc142940a1ed7b4334cb78cb9083e7957467519909071f5fceca6a63d8fbb17",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:22:39Z"
+    },
+    {
+      "id": "INV-031",
+      "fact": "Before release, board check reports no overlap and all 53 non-coordination task-scope paths are covered by task-197 exclusive_paths.",
+      "command": "python scripts/agent_board.py check --branch arena/01a10329-nexus-ai-agent --files .agents/board.json,.github/workflows/security_remote_key.yml,.github/workflows/security_stop_b.yml,.github/workflows/security_stop_c.yml,docs/DECISION_LOG.md,docs/architecture/MODULE_MAP.md,docs/architecture/SECURITY.md,docs/audits/evidence/pr148-tribunal/board-governance-and-praudit.txt,docs/audits/evidence/pr148-tribunal/board-preclosure-overlap-check.txt,docs/audits/evidence/pr148-tribunal/ci-disposition.txt,docs/audits/evidence/pr148-tribunal/defense-resolution.txt,docs/audits/evidence/pr148-tribunal/live-truth-final.txt,docs/audits/evidence/pr148-tribunal/live-truth-prepush.txt,docs/audits/evidence/pr148-tribunal/localcache-structural-review.txt,docs/audits/evidence/pr148-tribunal/phase1-substantive-judgment.txt,docs/audits/evidence/pr148-tribunal/pr148-base-knowledge-manager-tests.txt,docs/audits/evidence/pr148-tribunal/pr148-base-py311-full-suite.txt,docs/audits/evidence/pr148-tribunal/pr148-head-ast-inventory.txt,docs/audits/evidence/pr148-tribunal/pr148-head-knowledge-manager-tests.txt,docs/audits/evidence/pr148-tribunal/pr148-head-localcache-toctou.txt,docs/audits/evidence/pr148-tribunal/pr148-head-mutation-false-kill.txt,docs/audits/evidence/pr148-tribunal/pr148-head-mutation-runner-attacks.txt,docs/audits/evidence/pr148-tribunal/pr148-head-parent-directory-swap.txt,docs/audits/evidence/pr148-tribunal/pr148-head-py311-full-suite.txt,docs/audits/evidence/pr148-tribunal/pr148-head-remote-key-attacks.txt,docs/audits/evidence/pr148-tribunal/pr148-head-root-cause-source.txt,docs/audits/evidence/pr148-tribunal/pr148-head-stop-b-attacks.txt,docs/audits/evidence/pr148-tribunal/pr148-head-stop-c-attacks.txt,docs/audits/evidence/pr148-tribunal/pr148-head-workflow-credential-attacks.txt,docs/audits/evidence/pr148-tribunal/pr148-head-workflow-credential-review.txt,docs/audits/evidence/pr148-tribunal/prosecutor-findings.txt,docs/audits/evidence/pr148-tribunal/remediation-log.txt,docs/audits/evidence/pr148-tribunal/session-full-test-suite.txt,docs/audits/evidence/pr148-tribunal/session-localcache-focused-reprosecution.txt,docs/audits/evidence/pr148-tribunal/session-localcache-focused-tests.txt,docs/audits/evidence/pr148-tribunal/session-mypy-checks.txt,docs/audits/evidence/pr148-tribunal/session-remediation-source.txt,docs/audits/evidence/pr148-tribunal/session-remote-key-focused-tests.txt,docs/audits/evidence/pr148-tribunal/session-remote-key-mutations.txt,docs/audits/evidence/pr148-tribunal/session-ruff-checks.txt,docs/audits/evidence/pr148-tribunal/session-security-workflow-hardening.txt,docs/audits/evidence/pr148-tribunal/session-stop-b-focused-tests.txt,docs/audits/evidence/pr148-tribunal/session-stop-b-mutations.txt,docs/audits/evidence/pr148-tribunal/session-stop-c-focused-tests.txt,docs/audits/evidence/pr148-tribunal/session-stop-c-mutations.txt,docs/audits/evidence/pr148-tribunal/session-synthetic-false-kill.txt,docs/audits/evidence/pr148-tribunal/toctou-verdict.txt,scripts/security_mutation_support.py,scripts/security_mutations_remote_key.py,scripts/security_mutations_stop_b.py,scripts/security_mutations_stop_c.py,src/nexus_ai_agent/storage/providers/local_cache.py,tests/unit/test_local_cache_provider.py,tests/unit/test_security_mutation_support.py",
+      "artifact": "docs/audits/evidence/pr148-tribunal/board-preclosure-overlap-check.txt",
+      "artifact_sha256": "ee9d702178c16be514c1f0b9a9a5c31dd3654fe64d286aea5125ffd72ab042cf",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:33:42Z"
+    },
+    {
+      "id": "INV-032",
+      "fact": "Repository script defines active_in_review as an active lease and release as status=done with lease fields cleared; pre-release praudit returned 67 open PRs, all invisible, including #148.",
+      "command": "python scripts/agent_board.py praudit --repo bot523h/nexus-ai-agent --json; inspect scripts/agent_board.py lifecycle code",
+      "artifact": "docs/audits/evidence/pr148-tribunal/board-governance-and-praudit.txt",
+      "artifact_sha256": "a5878f6c9a5e9526b6b078b8e5697265fa144a9e029786e00d36351ea1d40bc3",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:01:48Z"
+    },
+    {
+      "id": "INV-033",
+      "fact": "Release output marks task-197 done and zone free; board record has empty branch/no lease/gates_owner=false; JSON parses; source lifecycle semantics and check/test references are recorded.",
+      "command": "python scripts/agent_board.py release task-197-pr148-tribunal-hardening --branch arena/01a10329-nexus-ai-agent; python -m json.tool .agents/board.json; pytest tests/unit/test_agent_board.py tests/unit/test_docs_integrity.py",
+      "artifact": "docs/audits/evidence/pr148-tribunal/board-closure-verification.txt",
+      "artifact_sha256": "71d58edeef84d913e38e7581a49d90a62295cffca9561d39551c46e450ba4cd5",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:34:47Z"
+    },
+    {
+      "id": "INV-034",
+      "fact": "After release, praudit reports 67/67 open PRs invisible; PR #148 has no live claim for arena/01a0fe18-nexus-ai-agent, 50 uncovered changed files, and no foreign fence.",
+      "command": "python scripts/agent_board.py praudit --repo bot523h/nexus-ai-agent --json",
+      "artifact": "docs/audits/evidence/pr148-tribunal/board-postrelease-praudit.txt",
+      "artifact_sha256": "a9592b69cefb670560e18189489c886468a490cfad7cd5e7483c792818e25917",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:34:25Z"
+    },
+    {
+      "id": "INV-035",
+      "fact": "After release, agent-board and documentation-integrity tests pass 75 tests.",
+      "command": "/home/user/nexus-ai-agent/.venv/bin/python -m pytest -q tests/unit/test_agent_board.py tests/unit/test_docs_integrity.py (cwd=/home/user/nexus-ai-agent; PYTHONPATH=src)",
+      "artifact": "docs/audits/evidence/pr148-tribunal/board-postrelease-tests.txt",
+      "artifact_sha256": "afd0b35cab831904e9633c62f32b085fc4007c2d6538e3de63db3ce63f63a296",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:34:34Z"
+    },
+    {
+      "id": "INV-036",
+      "fact": "Immediately before final rubric computation, GitHub again reports PR #148 open/non-draft, head 5dbe96e111c896daa8e136eecc21f70b67515c76, base e5b326b2eaf691a638d030ad57acf1ce60016ef0, approved, mergeable but unstable, with one successful same-SHA push check and one failed pull_request python-parity (3.11) check.",
+      "command": "gh pr view 148 --json state,isDraft,url,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,reviewDecision,updatedAt,reviews,statusCheckRollup --jq {state,isDraft,url,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,reviewDecision,updatedAt,reviews:[.reviews[]|{author:.author.login,state,submittedAt}],checks:[.statusCheckRollup[]|select(.name==\"python-parity (3.11)\")|{name,conclusion:(.conclusion // .state),detailsUrl}]} ; gh api repos/bot523h/nexus-ai-agent/pulls/148 --jq {head:{ref:.head.ref,sha:.head.sha},base:{ref:.base.ref,sha:.base.sha},state,draft,mergeable,mergeable_state}",
+      "artifact": "docs/audits/evidence/pr148-tribunal/live-truth-computation-check.txt",
+      "artifact_sha256": "dca8a3b804a7cd65b09bf23538fd050ef3c450aec3bbb7b89055de47e6e3529a",
+      "current_pr_head_sha": "5dbe96e111c896daa8e136eecc21f70b67515c76",
+      "captured_at_utc": "2026-10-03T20:37:39Z"
+    }
+  ]
+}

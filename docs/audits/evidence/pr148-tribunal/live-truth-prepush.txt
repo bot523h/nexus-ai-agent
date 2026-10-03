@@ -1,0 +1,43 @@
+captured_at_utc=2026-10-03T19:53:53Z
+subject=PR #148 live state; evidence is keyed to PR head (not session branch)
+[PR API] command=gh api repos/bot523h/nexus-ai-agent/pulls/148 --jq '{number,state,draft,head:{ref:.head.ref,sha:.head.sha,repo:.head.repo.full_name},base:{ref:.base.ref,sha:.base.sha,repo:.base.repo.full_name},mergeable,mergeable_state,updated_at:.updated_at}'
+exit_code=0
+stdout={"base":{"ref":"main","repo":"bot523h/nexus-ai-agent","sha":"e5b326b2eaf691a638d030ad57acf1ce60016ef0"},"draft":false,"head":{"ref":"arena/01a0fe18-nexus-ai-agent","repo":"bot523h/nexus-ai-agent","sha":"5dbe96e111c896daa8e136eecc21f70b67515c76"},"mergeable":true,"mergeable_state":"unstable","number":148,"state":"open","updated_at":"2026-10-03T05:15:14Z"}
+stderr=
+[PR review/check summary] command=gh pr view 148 --json state,isDraft,url,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,reviewDecision,updatedAt,reviews,statusCheckRollup --jq '{state,isDraft,url,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,reviewDecision,updatedAt,reviews:[.reviews[]|{author:.author.login,state,submittedAt}],checks:[.statusCheckRollup[]|select(.name=="python-parity (3.11)")|{name,conclusion:(.conclusion // .state),workflowName,detailsUrl}]}'
+exit_code=0
+stdout={"baseRefName":"main","checks":[{"conclusion":"FAILURE","detailsUrl":"https://github.com/bot523h/nexus-ai-agent/actions/runs/37097893624/job/111131465632","name":"python-parity (3.11)","workflowName":"CI"},{"conclusion":"SUCCESS","detailsUrl":"https://github.com/bot523h/nexus-ai-agent/actions/runs/37097890060/job/111131455195","name":"python-parity (3.11)","workflowName":"CI"}],"headRefName":"arena/01a0fe18-nexus-ai-agent","headRefOid":"5dbe96e111c896daa8e136eecc21f70b67515c76","isDraft":false,"mergeStateStatus":"UNSTABLE","mergeable":"MERGEABLE","reviewDecision":"APPROVED","reviews":[{"author":"coderabbitai","state":"COMMENTED","submittedAt":"2026-10-02T21:48:04Z"},{"author":"coderabbitai","state":"APPROVED","submittedAt":"2026-10-02T21:52:03Z"},{"author":"coderabbitai","state":"COMMENTED","submittedAt":"2026-10-03T04:55:04Z"}],"state":"OPEN","updatedAt":"2026-10-03T05:15:14Z","url":"https://github.com/bot523h/nexus-ai-agent/pull/148"}
+stderr=
+[Failed check annotation] command=gh api repos/bot523h/nexus-ai-agent/check-runs/111131465632/annotations --jq '.[] | [.annotation_level,.message] | @tsv'
+exit_code=0
+stdout=warning	Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683, actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065, actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+failure	Process completed with exit code 1.
+notice	"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+stderr=
+[Push-run metadata] command=gh api repos/bot523h/nexus-ai-agent/actions/runs/37097890060 --jq '{id,event,head_branch,head_sha,status,conclusion,created_at,updated_at}'
+exit_code=0
+stdout={"conclusion":"success","created_at":"2026-10-03T04:50:51Z","event":"push","head_branch":"arena/01a0fe18-nexus-ai-agent","head_sha":"5dbe96e111c896daa8e136eecc21f70b67515c76","id":37097890060,"status":"completed","updated_at":"2026-10-03T05:14:49Z"}
+stderr=
+[Pull-request-run metadata] command=gh api repos/bot523h/nexus-ai-agent/actions/runs/37097893624 --jq '{id,event,head_branch,head_sha,status,conclusion,created_at,updated_at}'
+exit_code=0
+stdout={"conclusion":"failure","created_at":"2026-10-03T04:50:55Z","event":"pull_request","head_branch":"arena/01a0fe18-nexus-ai-agent","head_sha":"5dbe96e111c896daa8e136eecc21f70b67515c76","id":37097893624,"status":"completed","updated_at":"2026-10-03T05:24:02Z"}
+stderr=
+[failed-log retrieval] command=gh run view 37097893624 --log-failed
+exit_code=1
+stdout=
+stderr=failed to get run log: Get "https://results-receiver.actions.githubusercontent.com/rest/runs/fc0f1850-6c0c-8c89-b869-93948a93f761/logs?filename=logs_100487944309.zip&signature=1791057238.18ce419390c8f5b4e799fb8094cfe54aa4ee525ef460a14a5744dc8b296ed927": EOF
+[artifact retrieval] command=gh run download 37097893624 --name parity-log-3.11 --dir /tmp/tribunal-artifacts
+exit_code=1
+stdout=
+stderr=error downloading parity-log-3.11: Get "https://productionresultssa15.blob.core.windows.net/actions-results/fc0f1850-6c0c-8c89-b869-93948a93f761/workflow-job-run-ac41cc0b-30d4-5a1b-9bba-b43f76136fdd/artifacts/00ab4525508c433c3e21cf4feda8ef70de36a678cca63e47a7c95b98a6c8c6e3.zip?rscd=attachment%3B+filename%3D%22parity-log-3.11.zip%22&rsct=application%2Fzip&se=2026-10-03T20%3A03%3A59Z&sig=pcTwdeZv0NevDNUkA9Mtxqgdp5wqFwRMiyDLS7ix6LY%3D&ske=2026-10-03T23%3A32%3A35Z&skoid=ca7593d4-ee42-46cd-af88-8b886a2f84eb&sks=b&skt=2026-10-03T19%3A32%3A35Z&sktid=398a6654-997b-47e9-b12b-9515b896b4de&skv=2025-11-05&sp=r&spr=https&sr=b&st=2026-10-03T19%3A53%3A54Z&sv=2025-11-05": EOF
+[rerun attempt] command=gh run rerun 37097893624 --failed
+exit_code=1
+stdout=
+stderr=run 37097893624 cannot be rerun; its workflow file may be broken
+[session branch] command=git branch --show-current && git rev-parse HEAD
+exit_code=0
+stdout=arena/01a10329-nexus-ai-agent
+bca8544a36262833e67c965ea2731cb0ba91a16e
+stderr=
+previous_receipt=docs/audits/receipts/task-196-wave1-security-hardening-2026-10-03.json
+previous_receipt_sha256=fb97374ff2c7d464677aebd07260bfe57f2f87e6c322356bad8199616b9670ab

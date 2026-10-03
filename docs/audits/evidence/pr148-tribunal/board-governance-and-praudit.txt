@@ -1,0 +1,46 @@
+captured_at_utc=2026-10-03T20:01:48Z
+subject_pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+board_governance_source=scripts/agent_board.py (not assumptions)
+praudit_summary=total_open_prs=67 invisible_count=67
+pr148_visibility={"files": [".agents/board.json", ".github/workflows/security_remote_key.yml", ".github/workflows/security_stop_b.yml", ".github/workflows/security_stop_c.yml", "docs/DECISION_LOG.md", "docs/architecture/COMMAND_CAPABILITY_CONTRACT.md", "docs/architecture/MODULE_MAP.md", "docs/architecture/SECURITY.md", "docs/architecture/adr/0005-canonical-command-capability-contract.md", "docs/audits/receipts/task-196-wave1-security-hardening-2026-10-03.json", "scripts/security_mutation_support.py", "scripts/security_mutations_remote_key.py", "scripts/security_mutations_stop_b.py", "scripts/security_mutations_stop_c.py", "src/nexus_ai_agent/api/app.py", "src/nexus_ai_agent/bot/handlers.py", "src/nexus_ai_agent/config/settings.py", "src/nexus_ai_agent/continuum/pack_coverage.py", "src/nexus_ai_agent/creative/__init__.py", "src/nexus_ai_agent/creative/render_jobs.py", "src/nexus_ai_agent/creative/slideshow/service.py", "src/nexus_ai_agent/creative/slideshow/upscale.py", "src/nexus_ai_agent/creative/studio/bus.py", "src/nexus_ai_agent/creative/studio/models.py", "src/nexus_ai_agent/storage/providers/local_cache.py", "tests/architecture/test_command_capability_boundary.py", "tests/architecture/test_legacy_creative_boundary.py", "tests/architecture/test_legacy_lane_verification_gap.py", "tests/architecture/test_storage_key_boundary.py", "tests/unit/command_authority.py", "tests/unit/test_api_ssrf_download.py", "tests/unit/test_audio_pack.py", "tests/unit/test_authority_policy.py", "tests/unit/test_capability_lifecycle.py", "tests/unit/test_caption_ass.py", "tests/unit/test_caption_pack.py", "tests/unit/test_command_capability_contract.py", "tests/unit/test_creative_studio.py", "tests/unit/test_delivery_pack.py", "tests/unit/test_delivery_signing.py", "tests/unit/test_edit_pack.py", "tests/unit/test_gate2_lifecycle_mutations.py", "tests/unit/test_local_cache_provider.py", "tests/unit/test_motion_pack.py", "tests/unit/test_nagar_wave1_green_cockpit.py", "tests/unit/test_opgap_audio_motion.py", "tests/unit/test_opgap_wave5.py", "tests/unit/test_security_hardening.py", "tests/unit/test_slideshow_invariants.py", "tests/unit/test_slideshow_pack.py", "tests/unit/test_slideshow_upscale.py"], "foreign_fences": ["task-197-pr148-tribunal-hardening"], "head_branch": "arena/01a0fe18-nexus-ai-agent", "invisible": true, "number": 148, "own_claims": [], "reasons": ["no live board claim for head branch", "37 file(s) outside every exclusive_paths"], "title": "Security: close STOP-B, STOP-C, and remote-key boundaries", "uncovered_files": ["docs/architecture/COMMAND_CAPABILITY_CONTRACT.md", "docs/architecture/adr/0005-canonical-command-capability-contract.md", "src/nexus_ai_agent/api/app.py", "src/nexus_ai_agent/bot/handlers.py", "src/nexus_ai_agent/config/settings.py", "src/nexus_ai_agent/continuum/pack_coverage.py", "src/nexus_ai_agent/creative/__init__.py", "src/nexus_ai_agent/creative/render_jobs.py", "src/nexus_ai_agent/creative/slideshow/service.py", "src/nexus_ai_agent/creative/slideshow/upscale.py", "src/nexus_ai_agent/creative/studio/bus.py", "src/nexus_ai_agent/creative/studio/models.py", "tests/architecture/test_command_capability_boundary.py", "tests/architecture/test_legacy_creative_boundary.py", "tests/architecture/test_legacy_lane_verification_gap.py", "tests/architecture/test_storage_key_boundary.py", "tests/unit/command_authority.py", "tests/unit/test_api_ssrf_download.py", "tests/unit/test_audio_pack.py", "tests/unit/test_authority_policy.py", "tests/unit/test_capability_lifecycle.py", "tests/unit/test_caption_ass.py", "tests/unit/test_caption_pack.py", "tests/unit/test_command_capability_contract.py", "tests/unit/test_creative_studio.py", "tests/unit/test_delivery_pack.py", "tests/unit/test_delivery_signing.py", "tests/unit/test_edit_pack.py", "tests/unit/test_gate2_lifecycle_mutations.py", "tests/unit/test_motion_pack.py", "tests/unit/test_nagar_wave1_green_cockpit.py", "tests/unit/test_opgap_audio_motion.py", "tests/unit/test_opgap_wave5.py", "tests/unit/test_security_hardening.py", "tests/unit/test_slideshow_invariants.py", "tests/unit/test_slideshow_pack.py", "tests/unit/test_slideshow_upscale.py"]}
+[cmd_release semantics]
+250: def cmd_release(args: argparse.Namespace) -> int:
+251:     board = load_board()
+252:     claim = _find(board, args.task)
+253:     if claim is None:
+254:         print(f"task not found: {args.task}")
+255:         return 2
+256:     if claim.get("agent_branch") != args.branch:
+257:         print(f"refusing: {args.task} belongs to {claim.get('agent_branch')}, not {args.branch}")
+258:         return 2
+259:     claim.update(status="done", agent_branch="", claimed_at=None, gates_owner=False)
+260:     save_board(board)
+261:     print(f"RELEASED {args.task}. Zone free — the next agent can claim it.")
+262:     return 0
+263:
+[cmd_check semantics]
+314: def cmd_check(args: argparse.Namespace) -> int:
+315:     board = load_board()
+316:     files = [f for f in args.files.split(",") if f.strip()]
+317:     hits = _conflicting_paths(board, args.branch or "", files)
+318:     if hits:
+319:         print("OVERLAP with another agent's active or active-in-review exclusive paths:")
+320:         for task, path in hits:
+321:             print(f"  {path}  ← claimed by {task}")
+322:         print(STOP_BANNER)
+323:         return 1
+324:     print("no overlap — safe to proceed.")
+325:     return 0
+326:
+[active claim semantics]
+75: def _is_active_claim(claim: dict) -> bool:
+76:     """True when a claim owns its zone and exclusive paths right now.
+77:
+78:     ``active_in_review`` is intentionally treated as an active lease: an open PR
+79:     can still conflict even though the author has stopped coding.  Older boards
+80:     only checked the literal string ``active``, which made review-phase PRs
+81:     invisible to the referee.
+82:     """
+83:
+84:     return claim.get("status") in ACTIVE_STATUSES
+85:

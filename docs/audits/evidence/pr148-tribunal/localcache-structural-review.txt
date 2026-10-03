@@ -1,0 +1,33 @@
+captured_at_utc=2026-10-03T20:23:04Z
+subject_pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+reviewed_tree=local session branch arena/01a10329-nexus-ai-agent (not PR #148 source)
+reviewed_session_commit=7f1873033d968b2368a9a15abff7e8ecfab5338f
+source_file=src/nexus_ai_agent/storage/providers/local_cache.py
+source_sha256=b51234dbc1f8a4df33683b291e4442a98f07e8e651e9b8260814d379271b9a62
+regression_file=tests/unit/test_local_cache_provider.py
+regression_sha256=8cc72c97131ea73c2d6f2545f4f3610f6887c644e3768345a3812e1a55f75607
+compared_pr_head_source_sha256=443e1e4b62d34b998efa6e04b96183e4bbbeb45a30c761b1f4d5f08cf269d1c5
+review_command=nl -ba src/nexus_ai_agent/storage/providers/local_cache.py; nl -ba tests/unit/test_local_cache_provider.py; sha256sum both files
+
+Structural race-safety proof on the session tree:
+- local_cache.py:38-46 verifies POSIX dir_fd support, directory-fd listing, O_DIRECTORY and O_NOFOLLOW; unsupported platforms fail closed at lines 52-57.
+- local_cache.py:59-90 validates and pins one private cache-root inode; root device/inode and effective UID/mode are checked. Ancestor rules are enforced in lines 109-149; root renames/substitution are rechecked at lines 215-243.
+- local_cache.py:245-293 opens each key directory relative to its already-open parent using O_DIRECTORY|O_NOFOLLOW and validates the opened descriptor metadata; no key-derived path is re-resolved for upload/download/list I/O.
+- local_cache.py:319-379 creates an exclusive 0600 staging leaf in the opened parent and atomically publishes by os.replace(src_dir_fd=parent_fd,dst_dir_fd=parent_fd); leaf and parent-name substitutions cannot redirect publication outside that opened directory.
+- local_cache.py:385-436 opens a download leaf once with O_NOFOLLOW relative to the opened parent, fstats that descriptor, and copies from the same descriptor; the later pathname cannot select a different inode.
+- local_cache.py:443-501 lists only by opened directory descriptors; child directories/files are opened no-follow and checked for ownership, mode, type, device, and link count.
+
+Deterministic session regression cases:
+- tests/unit/test_local_cache_provider.py:170-202 replaces a download leaf with an outside symlink during copying; result remains the inode opened before replacement and outside bytes stay unchanged.
+- tests/unit/test_local_cache_provider.py:205-236 races an upload leaf with an outside symlink; atomic replacement removes the link without modifying its target.
+- tests/unit/test_local_cache_provider.py:243-286 renames an opened parent and substitutes an outside symlink before staging; upload remains in the opened directory and leaves the outside sentinel unchanged.
+- tests/unit/test_local_cache_provider.py:293-307 rejects a hard-linked leaf; lines 310 onward cover ownership/mode, FIFO, unsupported primitives, and other fail-closed cases.
+- Final focused command: PYTHONPATH=src .venv/bin/python -m pytest -q tests/unit/test_local_cache_provider.py tests/unit/test_security_mutation_support.py tests/unit/test_safe_paths.py tests/architecture/test_storage_key_boundary.py; 59 passed.
+
+Enforced/documented operating conditions: POSIX descriptor-relative primitives are required; the root is effective-UID-owned and not group/world writable; ancestors are effective-UID/root-owned and cannot be changed by another UID (except sticky ancestors); traversed directories and regular-file leaves are effective-UID-owned and not group/world writable; download leaves must be regular, same-device, single-link files and FIFO opens fail closed. The operating contract trusts a malicious process running as the service UID, root/privileged actors, and privileged mount administrators. These limits are recorded in docs/DECISION_LOG.md D-0014 amendment and docs/architecture/SECURITY.md T5/R14.
+
+PR-head adversarial sequences (each separately captured at the exact unchanged PR head):
+- pr148-head-localcache-toctou.txt: validated download leaf swapped to outside symlink; outside secret bytes were copied; upload leaf swapped to symlink; outside target was overwritten.
+- pr148-head-parent-directory-swap.txt: after three pathname validations, the validated parent was moved and replaced by an outside symlink before copy; outside target contains ATTACKER-CONTROLLED-UPLOAD.
+
+Conclusion is scoped to the reviewed session tree: descriptor-relative operations structurally close the tested key-derived pathname races under the enforced operating contract. PR #148 head 5dbe96e111c896daa8e136eecc21f70b67515c76 remains unchanged and retains the reproduced defects; this artifact does not claim PR #148 is fixed.

@@ -1,0 +1,10 @@
+captured_at_utc=2026-10-03T20:22:17Z
+pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+source_snapshot=/tmp/tribunal-head extracted from 5dbe96e111c896daa8e136eecc21f70b67515c76
+command=PYTHONPATH=/tmp/tribunal-head/src /home/user/nexus-ai-agent/.venv/bin/python /tmp/pr148-head/tribunal_parent_swap.py (cwd=/tmp/pr148-head)
+command_exit_code=0
+--- stdout ---
+path_validation_calls=3
+parent_now_symlink=True
+outside_target_contains=ATTACKER-CONTROLLED-UPLOAD
+--- stderr ---

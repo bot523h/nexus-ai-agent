@@ -1,0 +1,22 @@
+captured_at_utc=2026-10-03T20:30:43Z
+subject_pr_148_head_sha=5dbe96e111c896daa8e136eecc21f70b67515c76
+tested_session_commit=7f1873033d968b2368a9a15abff7e8ecfab5338f
+tested_tree=local session branch arena/01a10329-nexus-ai-agent (not PR #148 source)
+command=/home/user/nexus-ai-agent/.venv/bin/python -m pytest -q -vv tests/unit/test_local_cache_provider.py::test_download_reads_the_opened_inode_if_a_key_is_replaced_with_a_symlink tests/unit/test_local_cache_provider.py::test_upload_atomically_replaces_a_key_symlink_without_writing_its_target tests/unit/test_local_cache_provider.py::test_upload_stays_in_opened_directory_if_parent_is_replaced_with_symlink (cwd=/home/user/nexus-ai-agent; PYTHONPATH=src)
+command_exit_code=0
+--- stdout ---
+============================= test session starts ==============================
+platform linux -- Python 3.11.2, pytest-8.4.2, pluggy-1.6.0 -- /home/user/nexus-ai-agent/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /home/user/nexus-ai-agent
+configfile: pyproject.toml
+plugins: anyio-4.15.1, asyncio-1.4.0, langsmith-0.14.4
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 3 items
+
+tests/unit/test_local_cache_provider.py::test_download_reads_the_opened_inode_if_a_key_is_replaced_with_a_symlink PASSED [ 33%]
+tests/unit/test_local_cache_provider.py::test_upload_atomically_replaces_a_key_symlink_without_writing_its_target PASSED [ 66%]
+tests/unit/test_local_cache_provider.py::test_upload_stays_in_opened_directory_if_parent_is_replaced_with_symlink PASSED [100%]
+
+============================== 3 passed in 0.28s ===============================
+--- stderr ---
