@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from command_authority import TEST_SERVICE_ACTOR, make_test_authorizer
 from pydantic import ValidationError
 
 from nexus_ai_agent.creative.packs.motion.models import (
@@ -44,7 +45,12 @@ def _setup_motion_bus() -> tuple[Project, CommandBus]:
     timeline = Timeline(timeline_id="tl_motion", duration_us=8_000_000)
     project = new_project("p_motion_01", "Motion Graphics Project", timeline)
     project = project.model_copy(update={"assets": [clip_a, clip_b]})
-    bus = CommandBus(project, registry=registry, allow_experimental=True)
+    bus = CommandBus(
+        project,
+        registry=registry,
+        authorizer=make_test_authorizer(project),
+        allow_experimental=True,
+    )
     return project, bus
 
 
@@ -91,6 +97,7 @@ def test_add_transition_execution() -> None:
 
     cmd = TypedCommand(
         command_id="cmd_trans_01",
+        actor=TEST_SERVICE_ACTOR,
         operation="motion.add_transition",
         input={
             "left_clip_id": "clip_scene_a",
@@ -119,6 +126,7 @@ def test_keyframe_transform_execution() -> None:
 
     cmd = TypedCommand(
         command_id="cmd_kf_01",
+        actor=TEST_SERVICE_ACTOR,
         operation="motion.keyframe_transform",
         input={
             "clip_asset_id": "clip_scene_a",
@@ -140,6 +148,7 @@ def test_add_glow_execution() -> None:
 
     cmd = TypedCommand(
         command_id="cmd_glow_01",
+        actor=TEST_SERVICE_ACTOR,
         operation="motion.add_glow",
         input={
             "clip_asset_id": "clip_scene_a",
@@ -162,6 +171,7 @@ def test_add_motion_blur_execution() -> None:
 
     cmd = TypedCommand(
         command_id="cmd_blur_01",
+        actor=TEST_SERVICE_ACTOR,
         operation="motion.add_motion_blur",
         input={
             "clip_asset_id": "clip_scene_a",
@@ -183,6 +193,7 @@ def test_add_title_execution() -> None:
 
     cmd = TypedCommand(
         command_id="cmd_title_01",
+        actor=TEST_SERVICE_ACTOR,
         operation="motion.add_title",
         input={
             "text": "استودیوی خلاق نگار",
@@ -209,6 +220,7 @@ def test_reversible_undo() -> None:
 
     cmd = TypedCommand(
         command_id="cmd_trans_undo",
+        actor=TEST_SERVICE_ACTOR,
         operation="motion.add_transition",
         input={
             "left_clip_id": "clip_scene_a",
@@ -220,7 +232,9 @@ def test_reversible_undo() -> None:
     trans_id = res.output["asset_id"]
     assert trans_id in [a.asset_id for a in bus.project.assets]
 
-    undo_cmd = TypedCommand(command_id="cmd_undo", operation="system.undo", input={})
+    undo_cmd = TypedCommand(
+        command_id="cmd_undo", actor=TEST_SERVICE_ACTOR, operation="system.undo", input={}
+    )
     undo_res = bus.dispatch(undo_cmd)
     assert undo_res.status == "applied"
     assert trans_id not in [a.asset_id for a in bus.project.assets]

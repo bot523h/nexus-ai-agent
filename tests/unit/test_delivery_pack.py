@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from command_authority import TEST_SERVICE_ACTOR, make_test_authorizer
 from pydantic import ValidationError
 
 from nexus_ai_agent.creative.packs.delivery.models import (
@@ -53,7 +54,12 @@ def _setup_delivery_bus() -> tuple[Project, CommandBus]:
     timeline = Timeline(timeline_id="tl_delivery", duration_us=10_000_000)
     project = new_project("p_delivery_01", "Cinema Delivery Project", timeline)
     project = project.model_copy(update={"assets": [clip_1, clip_2, audio_1]})
-    bus = CommandBus(project, registry=registry, allow_experimental=True)
+    bus = CommandBus(
+        project,
+        registry=registry,
+        authorizer=make_test_authorizer(project),
+        allow_experimental=True,
+    )
     return project, bus
 
 
@@ -106,6 +112,7 @@ def test_apply_lut_execution() -> None:
 
     cmd = TypedCommand(
         command_id="cmd_lut_01",
+        actor=TEST_SERVICE_ACTOR,
         operation="color.apply_lut",
         input={
             "clip_asset_id": "clip_master_01",
@@ -130,6 +137,7 @@ def test_adjust_exposure_execution() -> None:
 
     cmd = TypedCommand(
         command_id="cmd_exp_01",
+        actor=TEST_SERVICE_ACTOR,
         operation="color.adjust_exposure",
         input={
             "clip_asset_id": "clip_master_01",
@@ -152,6 +160,7 @@ def test_make_proxy_execution() -> None:
 
     cmd = TypedCommand(
         command_id="cmd_proxy_01",
+        actor=TEST_SERVICE_ACTOR,
         operation="delivery.make_proxy_480p",
         input={"video_asset_id": "clip_master_01", "resolution": "854x480"},
     )
@@ -169,6 +178,7 @@ def test_match_shot_execution() -> None:
 
     cmd = TypedCommand(
         command_id="cmd_match_01",
+        actor=TEST_SERVICE_ACTOR,
         operation="color.match_shot",
         input={
             "source_clip_id": "clip_master_01",
@@ -191,6 +201,7 @@ def test_export_otio_execution() -> None:
 
     cmd = TypedCommand(
         command_id="cmd_otio_01",
+        actor=TEST_SERVICE_ACTOR,
         operation="delivery.export_otio",
         input={"timeline_id": "tl_delivery", "frame_rate": 24.0},
     )
@@ -221,6 +232,7 @@ def test_render_master_4k_requires_confirmation() -> None:
     # Missing confirmation -> fails with PermissionDeniedError at Level C gate
     cmd_unconf = TypedCommand(
         command_id="cmd_master_unconf",
+        actor=TEST_SERVICE_ACTOR,
         operation="delivery.render_master_4k",
         confirmed=False,
         input={"width": 3840, "height": 2160, "codec": "hevc"},
@@ -231,6 +243,7 @@ def test_render_master_4k_requires_confirmation() -> None:
     # Confirmed -> succeeds
     cmd_conf = TypedCommand(
         command_id="cmd_master_ok",
+        actor=TEST_SERVICE_ACTOR,
         operation="delivery.render_master_4k",
         confirmed=True,
         input={

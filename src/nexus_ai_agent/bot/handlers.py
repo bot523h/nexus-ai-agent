@@ -604,7 +604,9 @@ def build_handlers(
             tmp_path.write_bytes(bytes(file_bytes))
             result = await unified_cloud.upload_file(
                 tmp_path,
-                remote_key=doc.file_name or "unnamed",
+                # The external name also becomes a remote object key, so use
+                # the same validated base name as the local staging path.
+                remote_key=safe_name,
             )
             tmp_path.unlink(missing_ok=True)
             if result.get("success"):

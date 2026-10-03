@@ -1,12 +1,12 @@
-"""Security hardening tests: CORS lock-down, HMAC endpoint auth, redaction.
+"""Security hardening tests: CORS lock-down, retired media route, redaction.
 
 Covers the hardening of the dashboard API surface:
 
 * CORS is an explicit allowlist (empty by default) — never ``*`` with
   credentials.
-* ``POST /creative/video-edit`` is **fail-closed**: without
-  ``NEXUS_API_HMAC_KEY`` (unset or empty) it answers ``503``; with a key it
-  verifies an HMAC-SHA256 request signature (constant-time, ±300 s).
+* ``POST /creative/video-edit`` is retired and always answers ``410``;
+  neither an HMAC key nor a valid signature can reactivate it.
+* ``GET /creative/jobs/{id}`` remains fail-closed behind the HMAC gate.
 * The Telegram webhook stays fail-closed on secret mismatch.
 * Logs never carry raw bot tokens / bearer / key-value secrets.
 """
@@ -111,7 +111,7 @@ def _signed_headers(key: str, timestamp: str, body: bytes) -> dict[str, str]:
     return {"X-NEXUS-Timestamp": timestamp, "X-NEXUS-Signature": signature}
 
 
-def test_hmac_missing_or_wrong_signature_rejected(
+def test_retired_video_edit_ignores_missing_or_wrong_signatures(
     api_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -119,27 +119,21 @@ def test_hmac_missing_or_wrong_signature_rejected(
     settings_module.get_settings.cache_clear()
 
     missing = api_client.post("/creative/video-edit", data={})
-    assert missing.status_code == 401
-    assert "signature" in missing.json()["detail"]
-
     stale_ts = str(int(time.time()) - 4000)
     stale = api_client.post(
         "/creative/video-edit", data={}, headers=_signed_headers("test-key", stale_ts, b"")
     )
-    assert stale.status_code == 401
-    assert "stale" in stale.json()["detail"]
-
     now = str(int(time.time()))
     wrong = api_client.post(
         "/creative/video-edit",
         data={},
         headers=_signed_headers("attacker-key", now, b""),
     )
-    assert wrong.status_code == 401
-    assert "invalid signature" in wrong.json()["detail"]
+
+    assert missing.status_code == stale.status_code == wrong.status_code == 410
 
 
-def test_hmac_valid_signature_reaches_handler(
+def test_valid_hmac_cannot_reactivate_retired_video_edit(
     api_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -148,48 +142,39 @@ def test_hmac_valid_signature_reaches_handler(
 
     body = b""
     headers = _signed_headers("test-key", str(int(time.time())), body)
-    # The signature gates the endpoint; an empty form is then rejected by
-    # normal request validation (400) — proving the handler was reached.
+    # Even a valid signature cannot re-enable the retired operation.
     ok = api_client.post("/creative/video-edit", content=body, headers=headers)
-    assert ok.status_code == 400
-    assert "Provide either file or video_url" in ok.json()["detail"]
+    assert ok.status_code == 410
 
 
-def test_hmac_key_unset_fails_closed(
+def test_retired_video_edit_returns_410_without_hmac_key(
     api_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No key configured ⇒ the mutating endpoint is disabled outright (503)."""
-    import nexus_ai_agent.api.app as app_module
-
+    """No key configured still yields the route's unconditional 410."""
     monkeypatch.delenv("NEXUS_API_HMAC_KEY", raising=False)
     settings_module.get_settings.cache_clear()
-    del app_module
 
     missing = api_client.post("/creative/video-edit", data={})
-    assert missing.status_code == 503
-    assert "Security configuration incomplete" in missing.json()["detail"]
+    assert missing.status_code == 410
 
 
-def test_hmac_key_empty_string_fails_closed(
+def test_retired_video_edit_returns_410_with_empty_hmac_key(
     api_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An empty-string key counts as 'not configured' and must not pass."""
+    """An empty-string HMAC key cannot change the route's unconditional 410."""
     monkeypatch.setenv("NEXUS_API_HMAC_KEY", "")
     settings_module.get_settings.cache_clear()
 
     empty = api_client.post("/creative/video-edit", data={})
-    assert empty.status_code == 503
-    assert "Security configuration incomplete" in empty.json()["detail"]
+    assert empty.status_code == 410
 
 
 # ── Legacy job-status endpoint (P0-A hardening) ─────────────────────────
 #
-# ``GET /creative/jobs/{job_id}`` returned the full job row — including local
-# filesystem paths and source URLs — to ANY unsigned caller before task-165.
-# It now sits behind the same fail-closed HMAC gate as the POST (one shared
-# operator key: signature over ``{timestamp}:`` + empty body).
+# ``GET /creative/jobs/{job_id}`` returns local paths and source URLs, so it
+# remains behind a fail-closed HMAC gate. The retired POST has no auth path.
 
 
 def _seed_job(api_client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path) -> str:
@@ -283,22 +268,18 @@ def test_get_job_signed_caller_reads_own_registry(
     assert missing.status_code == 404
 
 
-def test_upload_larger_than_cap_rejected_413(
+def test_large_upload_to_retired_route_returns_410_without_materializing_files(
     api_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    """Resource limit: a multipart body beyond the cap dies before the job row."""
+    """Even a signed oversized multipart body cannot reach the old upload path."""
     import nexus_ai_agent.api.app as api_app_module
 
     monkeypatch.setenv("NEXUS_API_HMAC_KEY", "test-key")
     monkeypatch.setenv("NEXUS_CREATIVE_TEMP_DIR", str(tmp_path))
     settings_module.get_settings.cache_clear()
     api_app_module._creative_registry = None
-    # Shrink the cap so the test body stays tiny; the production constant is
-    # asserted to exist and stay positive.
-    monkeypatch.setattr(api_app_module, "_MAX_UPLOAD_BYTES", 1024)
-
     body = b"\r\n".join(
         [
             b"--boundary",
@@ -315,9 +296,7 @@ def test_upload_larger_than_cap_rejected_413(
     headers["Content-Length"] = str(len(body))
 
     res = api_client.post("/creative/video-edit", content=body, headers=headers)
-    assert res.status_code == 413
-    # The rejected partial upload was cleaned up and no job row was created:
-    # the registry sqlite only materializes when get_creative_registry() runs.
+    assert res.status_code == 410
     import glob
 
     assert not glob.glob(str(tmp_path / "creative-upload-*"))

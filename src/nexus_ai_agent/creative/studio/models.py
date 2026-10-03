@@ -30,10 +30,11 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 PROTOCOL_VERSION: Literal["nagar.command.v1"] = "nagar.command.v1"
-#: Canonical envelope schema. ``1`` is the legacy shape (claims optional);
-#: ``2`` requires explicit actor, project target and provenance claims.
-#: The external protocol identifier stays at v1 -- no v2 protocol exists
-#: (Gate 2 reconciliation, D-0013; the v2 protocol id is banned from src/).
+#: Canonical envelope schema. ``1`` is the legacy shape (target/provenance
+#: claims optional); dispatch always requires an actor and trusted authorizer.
+#: ``2`` additionally requires explicit actor, project target and provenance
+#: claims. The external protocol identifier stays at v1 -- no v2 protocol
+#: exists (Gate 2 reconciliation, D-0013; the v2 protocol id is banned from src/).
 COMMAND_SCHEMA_VERSION: Literal[2] = 2
 LEGACY_SCHEMA_VERSION: Literal[1] = 1
 MICROSECONDS_PER_SECOND = 1_000_000
@@ -457,12 +458,12 @@ class CapabilitySnapshot(BaseModel):
 class TypedCommand(BaseModel):
     """Canonical typed command: the only input the studio accepts.
 
-    ``schema_version=1`` (default) is the legacy shape: claims are optional and
-    a claim-less command dispatches under implicit local trust (deprecated
-    compatibility path for in-process runtime call sites). ``schema_version=2``
-    requires explicit ``actor``, ``target.project_id`` and ``provenance``
-    claims and a trusted authorizer at dispatch. Unknown schema versions and
-    any ``protocol_version`` other than ``nagar.command.v1`` are refused.
+    ``schema_version=1`` (default) is the legacy shape: target and provenance
+    claims may be absent, but every dispatch still requires an explicit actor
+    and a trusted authorizer. ``schema_version=2`` additionally requires
+    explicit ``target.project_id`` and ``provenance`` claims. Unknown schema
+    versions and any ``protocol_version`` other than ``nagar.command.v1`` are
+    refused.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)

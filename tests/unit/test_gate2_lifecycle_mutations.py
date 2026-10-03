@@ -140,7 +140,9 @@ GATE_CALL = """        if descriptor.required_packs:
                 descriptor.required_packs, allow_experimental=self._allow_experimental
             )
 """
-AUTHORIZE_CALL = "            access = self._authorizer.authorize(command.actor, project_id)"
+AUTHORIZE_CALL = (
+    "        access: ProjectAccess = self._authorizer.authorize(command.actor, project_id)"
+)
 CAPABILITY_CALL = "        descriptor = self._registry.check_capability(command)"
 APPLY_MARKER = (
     "    def _apply_guarded(\n"
@@ -246,11 +248,11 @@ def test_m4_fabricating_the_actor_grant_lets_an_intruder_through(project: Projec
     mutant = _mutant(
         _replace_once(
             AUTHORIZE_CALL,
-            "            access = ProjectAccess(\n"
-            "                actor=command.actor,\n"
-            "                project_id=project_id,\n"
-            '                permissions=frozenset({"project:read", "project:write"}),\n'
-            "            )",
+            "        access = ProjectAccess(\n"
+            "            actor=command.actor,\n"
+            "            project_id=project_id,\n"
+            '            permissions=frozenset({"project:read", "project:write"}),\n'
+            "        )",
         ),
         "mutant_bus_m4",
     )

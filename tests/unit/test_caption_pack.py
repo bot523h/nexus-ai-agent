@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 
 import pytest
+from command_authority import TEST_SERVICE_ACTOR, make_test_authorizer
 
 from nexus_ai_agent.application.ports.caption_engine import (
     CaptionProfileUnavailableError,
@@ -298,7 +299,7 @@ def _setup_project_with_audio() -> tuple[Project, CommandBus]:
     )
     project = project.model_copy(update={"assets": [audio_record]})
     registry = build_caption_registry()
-    bus = CommandBus(project, registry=registry)
+    bus = CommandBus(project, registry=registry, authorizer=make_test_authorizer(project))
     return project, bus
 
 
@@ -311,6 +312,7 @@ def test_caption_transcribe_permission_level_a_and_execution() -> None:
     transcript = _golden_transcript()
     cmd = TypedCommand(
         command_id="cmd_transcribe_01",
+        actor=TEST_SERVICE_ACTOR,
         operation="caption.transcribe",
         input={
             "audio_asset_id": "asset_audio_01",
@@ -332,6 +334,7 @@ def test_caption_transcribe_rejects_missing_evidence_or_unknown_audio() -> None:
     # Missing pinned transcript
     cmd_no_evidence = TypedCommand(
         command_id="cmd_no_ev",
+        actor=TEST_SERVICE_ACTOR,
         operation="caption.transcribe",
         input={"audio_asset_id": "asset_audio_01"},
     )
@@ -342,6 +345,7 @@ def test_caption_transcribe_rejects_missing_evidence_or_unknown_audio() -> None:
     transcript = _golden_transcript()
     cmd_bad_audio = TypedCommand(
         command_id="cmd_bad_audio",
+        actor=TEST_SERVICE_ACTOR,
         operation="caption.transcribe",
         input={
             "audio_asset_id": "non_existent_audio",
@@ -364,6 +368,7 @@ def test_caption_generate_srt_produces_companion_vtt_and_derived_asset() -> None
 
     cmd = TypedCommand(
         command_id="cmd_gen_srt_01",
+        actor=TEST_SERVICE_ACTOR,
         operation="caption.generate_srt",
         input={
             "transcript": transcript.model_dump(mode="json"),
@@ -396,6 +401,7 @@ def test_caption_generate_srt_produces_companion_vtt_and_derived_asset() -> None
     # Test reversible undo: system.undo must restore original project state
     undo_cmd = TypedCommand(
         command_id="cmd_undo_srt",
+        actor=TEST_SERVICE_ACTOR,
         operation="system.undo",
         input={},
     )

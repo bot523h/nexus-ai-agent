@@ -1,21 +1,18 @@
-"""GAP-D executable evidence: the legacy ``/creative`` HTTP lane, characterized.
+"""GAP-D executable evidence after STOP-B retires legacy video editing.
 
-Task-180 does NOT change this lane — it is frozen + deprecated by D-0010
-and enforced by ``test_legacy_creative_boundary.py``; removal is sequenced
-after PR#58. This file converts the GAP-D questions into reproducible
-evidence so the recorded gap cannot silently drift:
+The ``POST /creative/video-edit`` route now exists only as an unconditional
+410 tombstone; job-status GET remains HMAC-gated. This file keeps the residual
+legacy-lane questions reproducible:
 
-1. reachability — the two routes exist, are marked ``deprecated=True`` and
-   sit behind the fail-closed HMAC gate;
-2. false-success potential — the lane's own registry persists ``done`` with
-   NO independent artifact verification (the documented risk);
-3. production surface — the deployed container runs the bot, not the API
-   app, so the lane is code-reachable but not on the deployed surface;
-4. isolation — the lane never touches the canonical job queue, so the
-   task-178/180 verification contract cannot leak in (or be bypassed) here.
+1. reachability — POST is inert and GET stays behind the fail-closed HMAC gate;
+2. false-success potential — the standalone legacy registry can still persist
+   ``done`` with NO independent artifact verification, but the retired POST
+   cannot create or process jobs;
+3. production surface — the deployed container runs the bot, not the API app;
+4. isolation — the legacy lane never touches the canonical job queue.
 
-The remediation owner, dependency and acceptance criteria live in
-``docs/audits/VERIFICATION_GAP_REPORT_2026-09-24.md`` (GAP-D entry).
+The evidence/report entry is updated in
+``docs/audits/VERIFICATION_GAP_REPORT_2026-09-24.md``.
 """
 
 from __future__ import annotations
@@ -32,15 +29,18 @@ def _app_source() -> str:
     return (REPO_ROOT / "src" / "nexus_ai_agent" / "api" / "app.py").read_text(encoding="utf-8")
 
 
-def test_legacy_routes_are_frozen_deprecated_and_hmac_gated() -> None:
-    """Q1 reachability: present, deprecated, fail-closed authenticated."""
+def test_legacy_post_is_inert_410_and_job_status_get_stays_hmac_gated() -> None:
+    """Q1 reachability: POST is retired; sensitive GET remains authenticated."""
     source = _app_source()
-    assert '@app.post("/creative/video-edit", deprecated=True)' in source
+    assert '@app.post("/creative/video-edit", deprecated=True, status_code=410)' in source
     assert '@app.get("/creative/jobs/{job_id}", deprecated=True)' in source
-    # the HMAC gate runs before any form parsing in the POST handler and
-    # before any row is read in the GET handler (D-0010 hardening, PR#65)
-    post_body = source.split('@app.post("/creative/video-edit"', 1)[1]
-    assert "await require_hmac_signature(request)" in post_body.split("async def", 2)[1]
+    post_body = source.split('@app.post("/creative/video-edit"', 1)[1].split(
+        '@app.get("/creative/jobs/{job_id}"', 1
+    )[0]
+    assert "require_hmac_signature" not in post_body
+    assert "get_creative_registry" not in post_body
+    assert "background_tasks" not in post_body
+    assert "execute_ffmpeg_commands" not in source
     get_body = source.split('@app.get("/creative/jobs/{job_id}"', 1)[1]
     assert "await require_hmac_signature(request)" in get_body.split("async def", 2)[1]
 

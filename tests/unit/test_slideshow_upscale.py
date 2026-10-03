@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from command_authority import TEST_SERVICE_ACTOR, make_test_authorizer
 from PIL import Image
 
 from nexus_ai_agent.creative.packs.slideshow.models import AssetEvidence
@@ -24,10 +25,14 @@ from nexus_ai_agent.creative.studio.bus import CommandBus
 from nexus_ai_agent.creative.studio.models import PermissionLevel, Playhead, Timeline, new_project
 
 
-def _command(operation: str, payload: dict[str, object]) -> dict[str, object]:
+def _command(operation: str, payload: dict[str, object], *, project_id: str) -> dict[str, object]:
     return {
         "protocol_version": "nagar.command.v1",
+        "schema_version": 2,
         "command_id": f"cmd_{uuid4().hex}",
+        "actor": TEST_SERVICE_ACTOR.model_dump(mode="json"),
+        "target": {"project_id": project_id},
+        "provenance": {"source": "service", "source_id": TEST_SERVICE_ACTOR.actor_id},
         "session_id": "upscale-test",
         "operation": operation,
         "input": payload,
@@ -103,7 +108,7 @@ def test_catalog_operation_is_level_b_and_undo_restores_state() -> None:
         name="upscale",
         timeline=Timeline(timeline_id="timeline", duration_us=0, playhead=Playhead(timecode_us=0)),
     )
-    bus = CommandBus(project, registry=registry)
+    bus = CommandBus(project, registry=registry, authorizer=make_test_authorizer(project))
     source = AssetEvidence(
         evidence_id="source-image",
         path="/tmp/source.png",
@@ -112,7 +117,13 @@ def test_catalog_operation_is_level_b_and_undo_restores_state() -> None:
         width=8,
         height=6,
     )
-    bus.dispatch(_command(OPERATION_SCAN, {"assets": [source.model_dump(mode="json")]}))
+    bus.dispatch(
+        _command(
+            OPERATION_SCAN,
+            {"assets": [source.model_dump(mode="json")]},
+            project_id=project.project_id,
+        )
+    )
     before = bus.project.state_hash
     result = bus.dispatch(
         _command(
@@ -128,11 +139,12 @@ def test_catalog_operation_is_level_b_and_undo_restores_state() -> None:
                 "height": 12,
                 "scale_factor": 2.0,
             },
+            project_id=project.project_id,
         )
     )
     assert result.undo_available is True
     assert len(bus.project.assets) == 2
     assert bus.project.assets[-1].parent_asset_ids == (source.evidence_id,)
-    bus.dispatch(_command("system.undo", {}))
+    bus.dispatch(_command("system.undo", {}, project_id=project.project_id))
     assert bus.project.state_hash == before
     assert len(bus.project.assets) == 1

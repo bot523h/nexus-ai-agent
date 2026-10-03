@@ -13,8 +13,16 @@ from nexus_ai_agent.creative.packs.slideshow.operations import (
 )
 from nexus_ai_agent.creative.slideshow.ffmpeg import UpscaleArtifact, upscale_image
 from nexus_ai_agent.creative.slideshow.probe import probe_image
+from nexus_ai_agent.creative.studio.authorization import ProjectAccess
 from nexus_ai_agent.creative.studio.bus import CommandBus
-from nexus_ai_agent.creative.studio.models import Playhead, Timeline, new_project
+from nexus_ai_agent.creative.studio.models import ActorIdentity, Playhead, Timeline, new_project
+
+SLIDESHOW_UPSCALE_ACTOR = ActorIdentity(kind="service", actor_id="nexus.slideshow.upscale")
+SLIDESHOW_UPSCALE_OPERATION_PERMISSIONS: dict[str, frozenset[str]] = {
+    OPERATION_SCAN: frozenset({"project:write"}),
+    OPERATION_UPSCALE: frozenset({"project:write"}),
+}
+SLIDESHOW_UPSCALE_PERMISSIONS = frozenset().union(*SLIDESHOW_UPSCALE_OPERATION_PERMISSIONS.values())
 
 
 @dataclass(frozen=True)
@@ -28,10 +36,19 @@ class UpscaleOutcome:
     state_hash: str
 
 
-def _command(operation: str, payload: dict[str, object]) -> dict[str, object]:
+def _command(operation: str, payload: dict[str, object], *, project_id: str) -> dict[str, object]:
+    if operation not in SLIDESHOW_UPSCALE_OPERATION_PERMISSIONS:
+        raise ValueError(f"slideshow upscale service is not authorized for {operation!r}")
     return {
         "protocol_version": "nagar.command.v1",
+        "schema_version": 2,
         "command_id": f"cmd_{uuid4().hex[:16]}",
+        "actor": SLIDESHOW_UPSCALE_ACTOR.model_dump(mode="json"),
+        "target": {"project_id": project_id},
+        "provenance": {
+            "source": "service",
+            "source_id": SLIDESHOW_UPSCALE_ACTOR.actor_id,
+        },
         "session_id": "slideshow-upscale",
         "operation": operation,
         "input": payload,
@@ -86,8 +103,22 @@ def upscale_from_file(
             playhead=Playhead(timecode_us=0),
         ),
     )
-    bus = CommandBus(project, registry=build_slideshow_registry())
-    bus.dispatch(_command(OPERATION_SCAN, {"assets": [source.model_dump(mode="json")]}))
+    bus = CommandBus(
+        project,
+        registry=build_slideshow_registry(),
+        authorizer=ProjectAccess(
+            actor=SLIDESHOW_UPSCALE_ACTOR,
+            project_id=project.project_id,
+            permissions=SLIDESHOW_UPSCALE_PERMISSIONS,
+        ),
+    )
+    bus.dispatch(
+        _command(
+            OPERATION_SCAN,
+            {"assets": [source.model_dump(mode="json")]},
+            project_id=project.project_id,
+        )
+    )
     artifact = upscale_image(
         input_path,
         output_path,
@@ -115,6 +146,7 @@ def upscale_from_file(
                     "target_resolution": target_resolution,
                     "filter_flags": "lanczos",
                 },
+                project_id=project.project_id,
             )
         )
     except Exception:
