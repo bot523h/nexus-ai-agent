@@ -1,0 +1,54 @@
+{
+  "schema_version": "1.0.0",
+  "phase_id": "phase4-durability",
+  "phase_name": "DURABLE STATE, LEASES, FENCING & IDEMPOTENCY",
+  "timestamp_utc": "2026-10-03T23:01:43Z",
+  "branch": "arena/01a103a6-nexus-ai-agent",
+  "subject_sha": "ac67cf42a8dc03e076be24454b1bc86c83a5d159",
+  "witness_sha": "SELF_WITNESS_COMMIT_FOLLOWING_SUBJECT_SHA",
+  "parent_witness_sha": "bd495698dec29d931bbc4e455c70c5ad1daccfef",
+  "previous_receipt_path": "docs/audits/receipts/phase3-architecture.receipt.json",
+  "previous_receipt_digest": "8a4c4eaabe5a6ea18e3a286cc2df251f2ebd6e7bd845d5c4f6028b99cc254cf2",
+  "delivery_status": "PUSHED",
+  "verification_status": "VERIFIED",
+  "commands_executed": [
+    {
+      "command": ".venv/bin/ruff format --check .",
+      "exit_code": 0
+    },
+    {
+      "command": ".venv/bin/ruff check .",
+      "exit_code": 0
+    },
+    {
+      "command": ".venv/bin/mypy src",
+      "exit_code": 0
+    },
+    {
+      "command": "PYTHONPATH=src .venv/bin/pytest -q tests/architecture tests/unit/test_docs_integrity.py tests/unit/test_persistence_recovery.py tests/unit/test_durable_studio_store.py tests/unit/test_artifact_passport.py tests/unit/test_checkpoint_lifecycle_lock_exclusion.py tests/unit/test_checkpoint_lifecycle_store.py tests/unit/test_checkpoint_lifecycle_store_boundary.py tests/unit/test_storage_wal_init_race.py tests/unit/test_inspect_contract.py tests/unit/test_retention_policy_divergence.py tests/unit/test_thread_retention_verdict.py tests/unit/test_fake_llm_embedding_contract.py tests/unit/test_gate2_lifecycle_mutations.py",
+      "exit_code": 0,
+      "summary": "349 passed"
+    },
+    {
+      "command": "PYTHONPATH=src .venv/bin/python scripts/retention_verdict_mutations.py",
+      "exit_code": 0,
+      "summary": "17/17 mutants caught"
+    },
+    {
+      "command": "PYTHONPATH=src .venv/bin/python scripts/security_mutations_stop_c.py",
+      "exit_code": 0,
+      "summary": "STOP-C: 4/4 mutants killed"
+    }
+  ],
+  "gate_booleans": {
+    "durable_project_state_verified": true,
+    "atomic_plan_commit_verified": true,
+    "lease_fencing_verified": true,
+    "stale_worker_rejected": true,
+    "durable_idempotency_verified": true,
+    "sqlite_concurrency_verified": true,
+    "durability_receipt_pushed": true,
+    "DURABILITY_GATE": true,
+    "PHASE_4": true
+  }
+}
