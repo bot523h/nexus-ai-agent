@@ -132,6 +132,13 @@ def test_video_edit_post_is_a_410_without_processing_or_auth_gates() -> None:
         and keyword.value.value == 410
         for keyword in route.keywords
     )
+    assert not (
+        handler.args.posonlyargs
+        or handler.args.args
+        or handler.args.vararg
+        or handler.args.kwonlyargs
+        or handler.args.kwarg
+    ), "the retired POST must not accept request data or processing dependencies"
     forbidden_calls = {
         "require_hmac_signature",
         "get_creative_registry",

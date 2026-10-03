@@ -61,16 +61,14 @@ _HMAC_MAX_AGE_SECONDS = 300.0
 _HMAC_TIMESTAMP_HEADER = "X-NEXUS-Timestamp"
 _HMAC_SIGNATURE_HEADER = "X-NEXUS-Signature"
 
-#: Resource cap for legacy upload bodies (task-165, ADR 0006). Enforced
-#: while streaming the multipart body to temp storage; an oversized upload
-#: is rejected with 413 before any job row exists and the partial file is
-#: unlinked. Legacy route only — the canonical surface caps media by
-#: duration (bot/creative_surface.py, 30 s) at validation time.
+#: Resource cap used by the retained upload helper (task-165, ADR 0006).
+#: The retired ``POST /creative/video-edit`` route does not call that helper;
+#: the canonical creative surface caps media by duration (30 s) at validation.
 _MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 MiB
 
 
 async def require_hmac_signature(request: Request) -> None:
-    """HMAC-SHA256 request signing for state-changing dashboard endpoints.
+    """HMAC-SHA256 request authentication for the legacy job-status endpoint.
 
     **Fail-closed**: without a configured ``NEXUS_API_HMAC_KEY`` the
     endpoint is disabled outright and answers ``503 Security configuration
@@ -312,9 +310,9 @@ async def create_video_edit_job() -> JSONResponse:
 @app.get("/creative/jobs/{job_id}", deprecated=True)
 async def get_job_status(job_id: str, request: Request) -> dict[str, object]:
     # Legacy read gate (task-165, ADR 0006): job rows carry local paths and
-    # source URLs — the same fail-closed HMAC gate as the POST. A GET signs
-    # "{timestamp}:" + empty body, so any caller that can create jobs (it
-    # must hold the key) can also read them; unsigned callers cannot.
+    # source URLs, so this endpoint remains behind the fail-closed HMAC gate.
+    # A GET signs "{timestamp}:" + empty body; unsigned callers cannot read
+    # the old job registry. The POST that used to create these jobs is retired.
     await require_hmac_signature(request)
     job = await get_creative_registry().get_job(job_id)
     if job is None:
