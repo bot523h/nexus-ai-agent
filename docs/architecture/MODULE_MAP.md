@@ -2,7 +2,7 @@
 
 **Status:** Living document — every rule here names the test that enforces it
 **Scope:** package inventory, allowed dependency directions, fitness-function catalogue, extension recipes
-**Verified against:** `main` @ `e5b326b` (2026-10-02)
+**Verified against:** `main` @ `e5b326b` (2026-10-03)
 
 This is the *structural* contract of the repository. If a rule is not in §3 or §4, it is a convention, not a law. If a rule is in this file and **not** enforced by a test, that is a documentation bug — file it against zone `docs-architecture`.
 

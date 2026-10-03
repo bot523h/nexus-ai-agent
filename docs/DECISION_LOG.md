@@ -1215,7 +1215,7 @@ opt-in-completeness test go red on any other resolution.
 `tests/architecture/test_lifecycle_gate_boundary.py`, and the task-183
 trust-boundary tests in `tests/unit/test_creative_render_jobs.py`.
 
-### D-0013 amendment (2026-10-02, task-196 STOP-C): retire implicit local dispatch trust
+### D-0013 amendment (2026-10-03, task-196 STOP-C): retire implicit local dispatch trust
 
 The task-179 *Decision* and *Limits* paragraphs above record the original
 compatibility posture; their claim-less schema-1 dispatch exception and

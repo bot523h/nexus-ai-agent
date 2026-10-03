@@ -109,7 +109,7 @@ and every page there must be indexed and linked.
   `tests/unit/test_gate2_lifecycle_seam.py` (A–H),
   `tests/unit/test_gate2_lifecycle_mutations.py` (M1–M5),
   `tests/architecture/test_lifecycle_gate_boundary.py`.
-- (+) **Amendment, task-196 STOP-C (2026-10-02):** the compatibility
+- (+) **Amendment, task-196 STOP-C (2026-10-03):** the compatibility
   exception for claim-less schema-1 dispatch is retired. Schema 1 remains
   parseable, but both an actor claim and injected `ProjectAuthorizer` are
   mandatory at dispatch. All three production roots now bind explicit
