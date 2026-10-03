@@ -1,0 +1,126 @@
+{
+  "schema_version": "1.0.0",
+  "phase_id": "phase1-security",
+  "phase_name": "SECURITY CLOSURE (STOP-B, STOP-C, REMOTE-KEY, MUTATION FRAMEWORK)",
+  "timestamp_utc": "2026-10-03T22:07:47Z",
+  "branch": "arena/01a103a6-nexus-ai-agent",
+  "subject_sha": "08438f3f458eff197c5c1f3f1795b331281f5fe6",
+  "witness_sha": "SELF_WITNESS_COMMIT_FOLLOWING_SUBJECT_SHA",
+  "parent_sha": "PENDING_WITNESS_COMMIT",
+  "previous_receipt_path": "docs/audits/receipts/phase0-truth-freeze.receipt.json",
+  "previous_receipt_digest": "753bc8c7b1fcfd2a650a7f877e037512182c89f29642f8c6a40cb708e4a236e7",
+  "delivery_status": "PUSHED",
+  "verification_status": "VERIFIED",
+  "seams_closed": {
+    "STOP_B": {
+      "status": "CLOSED",
+      "summary": "POST /api/v1/creative/video/edit permanently returns HTTP 410 before reading body/headers/creating jobs/invoking LLM or ffmpeg.",
+      "code_paths": [
+        "src/nexus_ai_agent/api/app.py",
+        "src/nexus_ai_agent/config/settings.py"
+      ],
+      "tests": [
+        "tests/unit/test_security_hardening.py::test_valid_hmac_cannot_reactivate_retired_video_edit",
+        "tests/unit/test_creative_studio.py::test_video_edit_retirement_has_no_runtime_side_effects",
+        "tests/architecture/test_legacy_creative_boundary.py::test_video_edit_post_is_a_410_without_processing_or_auth_gates"
+      ],
+      "mutants_killed": "3/3"
+    },
+    "STOP_C": {
+      "status": "CLOSED",
+      "summary": "CommandBus.dispatch fails closed without both trusted ProjectAuthorizer and CommandEnvelope.actor; every reachable production bus root binds a project-scoped ProjectAuthorizer and ActorContext.",
+      "code_paths": [
+        "src/nexus_ai_agent/creative/studio/bus.py",
+        "src/nexus_ai_agent/creative/studio/models.py",
+        "src/nexus_ai_agent/creative/render_jobs.py",
+        "src/nexus_ai_agent/creative/slideshow/service.py",
+        "src/nexus_ai_agent/creative/slideshow/upscale.py",
+        "src/nexus_ai_agent/continuum/pack_coverage.py"
+      ],
+      "tests": [
+        "tests/architecture/test_command_capability_boundary.py::test_every_production_command_bus_root_has_a_trusted_authorizer",
+        "tests/architecture/test_command_capability_boundary.py::test_every_production_dispatch_envelope_has_a_service_identity",
+        "tests/architecture/test_command_capability_boundary.py::test_reachable_operation_authority_matrix_matches_dispatch_and_registry",
+        "tests/unit/test_authority_policy.py",
+        "tests/unit/test_command_capability_contract.py::TestAuthorization"
+      ],
+      "mutants_killed": "4/4"
+    },
+    "REMOTE_KEY": {
+      "status": "CLOSED",
+      "summary": "Telegram ingress sanitizes remote_key before upload; LocalCacheProvider pins canonical cache root (st_dev, st_ino), validates multi-pass decoded components (blocking traversal, NUL/control chars, Windows device names, colons/ADS, trailing dots/spaces), and performs descriptor-relative O_NOFOLLOW | O_DIRECTORY traversal and O_NOFOLLOW leaf opens + fstat regular-file verification.",
+      "code_paths": [
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/storage/providers/local_cache.py"
+      ],
+      "tests": [
+        "tests/architecture/test_storage_key_boundary.py::test_cloud_upload_uses_the_sanitized_external_filename_as_its_remote_key",
+        "tests/unit/test_local_cache_provider.py::test_path_for_key_rejects_traversal_absolute_nul_and_encoded_keys",
+        "tests/unit/test_local_cache_provider.py::test_symlinked_key_components_cannot_escape_cache",
+        "tests/unit/test_local_cache_provider.py::test_toctou_directory_component_substitution_after_path_for_key_is_blocked",
+        "tests/unit/test_local_cache_provider.py::test_toctou_leaf_symlink_substitution_after_parent_open_is_blocked"
+      ],
+      "mutants_killed": "4/4"
+    },
+    "MUTATION_FRAMEWORK": {
+      "status": "CLOSED",
+      "summary": "Replaced substring-based mutation kill checks with exact FAILED <pytest-nodeid> parsing and explicit MutationStatus classification (KILLED, SURVIVED, UNEXPECTED_FAILURE, COLLECTION_ERROR, INFRASTRUCTURE_ERROR, TIMEOUT, PRE_EXISTING_FAILURE).",
+      "code_paths": [
+        "src/nexus_ai_agent/continuum/security_mutation_support.py",
+        "scripts/security_mutation_support.py",
+        "scripts/security_mutations_stop_b.py",
+        "scripts/security_mutations_stop_c.py",
+        "scripts/security_mutations_remote_key.py"
+      ],
+      "tests": [
+        "tests/unit/test_mutation_framework_security.py"
+      ]
+    }
+  },
+  "commands_executed": [
+    {
+      "command": ".venv/bin/ruff format --check .",
+      "exit_code": 0
+    },
+    {
+      "command": ".venv/bin/ruff check .",
+      "exit_code": 0
+    },
+    {
+      "command": ".venv/bin/mypy src",
+      "exit_code": 0
+    },
+    {
+      "command": "PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_mutation_framework_security.py tests/unit/test_local_cache_provider.py tests/unit/test_safe_paths.py tests/architecture/test_storage_key_boundary.py tests/unit/test_authority_policy.py tests/unit/test_command_capability_contract.py tests/architecture/test_command_capability_boundary.py tests/unit/test_security_hardening.py tests/unit/test_creative_studio.py tests/architecture/test_legacy_creative_boundary.py tests/architecture/test_legacy_lane_verification_gap.py",
+      "exit_code": 0,
+      "summary": "193 passed"
+    },
+    {
+      "command": "PYTHONPATH=src .venv/bin/python scripts/security_mutations_stop_b.py",
+      "exit_code": 0,
+      "summary": "STOP-B: 3/3 mutants killed"
+    },
+    {
+      "command": "PYTHONPATH=src .venv/bin/python scripts/security_mutations_stop_c.py",
+      "exit_code": 0,
+      "summary": "STOP-C: 4/4 mutants killed"
+    },
+    {
+      "command": "PYTHONPATH=src .venv/bin/python scripts/security_mutations_remote_key.py",
+      "exit_code": 0,
+      "summary": "REMOTE-KEY: 4/4 mutants killed"
+    }
+  ],
+  "gate_booleans": {
+    "stop_b_enforced": true,
+    "stop_c_enforced": true,
+    "remote_key_enforced": true,
+    "adversarial_tests_green": true,
+    "mutation_framework_hardened": true,
+    "security_mutations_green": true,
+    "security_receipt_pushed": true,
+    "SECURITY_GATE": true,
+    "PHASE_1": true
+  },
+  "receipt_digest_sha256": "659147d78ae88859cb3aa2bece5d5feab1c8ab6f7e7e8177a57aaf6ac9260e85"
+}
