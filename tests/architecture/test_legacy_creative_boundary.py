@@ -11,11 +11,11 @@ boundary load-bearing instead of aspirational:
    may grow the legacy surface;
 2. no *new* importer of the legacy support modules may appear anywhere in
    ``src/`` (whitelisted importers only);
-3. both legacy routes are behind the fail-closed HMAC gate — a route can
-   never silently lose its auth by an edit in between.
+3. POST /creative/video-edit is an inert 410 response with no processing
+   or executor call path, while the job-status GET stays HMAC-gated.
 
-Nothing here forbids *removing* legacy code (the ADR's end state): when the
-routes are deleted, update this file to assert their absence instead.
+The POST route remains registered temporarily to provide an explicit 410;
+its legacy executor module is retained but must have no production importer.
 """
 
 from __future__ import annotations
@@ -103,18 +103,87 @@ def test_no_new_importers_of_legacy_support_modules() -> None:
     assert offenders == [], "new legacy-pipeline importers (ADR 0006):\n" + "\n".join(offenders)
 
 
-def test_legacy_routes_call_the_fail_closed_hmac_gate() -> None:
-    """Every legacy handler body must call ``require_hmac_signature`` directly."""
-    tree = ast.parse(API_APP.read_text(encoding="utf-8"))
+def _function_node(tree: ast.Module, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
     kinds = (ast.FunctionDef, ast.AsyncFunctionDef)
-    for (_, _), func_name in LEGACY_ROUTES.items():
-        func = next(n for n in tree.body if isinstance(n, kinds) and n.name == func_name)
-        calls = {
-            node.func.id
-            for node in ast.walk(func)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-        }
-        assert _AUTH_HELPER in calls, (
-            f"{func_name} no longer calls {_AUTH_HELPER} — the legacy route "
-            "must stay fail-closed until removal (ADR 0006)"
+    return next(node for node in tree.body if isinstance(node, kinds) and node.name == name)
+
+
+def _direct_calls(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    return {
+        node.func.id
+        for node in ast.walk(func)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+
+
+def test_video_edit_post_is_a_410_without_processing_or_auth_gates() -> None:
+    tree = ast.parse(API_APP.read_text(encoding="utf-8"))
+    handler = _function_node(tree, "create_video_edit_job")
+    route = next(
+        dec
+        for dec in handler.decorator_list
+        if isinstance(dec, ast.Call)
+        and isinstance(dec.func, ast.Attribute)
+        and dec.func.attr == "post"
+    )
+    assert any(
+        keyword.arg == "status_code"
+        and isinstance(keyword.value, ast.Constant)
+        and keyword.value.value == 410
+        for keyword in route.keywords
+    )
+    assert not (
+        handler.args.posonlyargs
+        or handler.args.args
+        or handler.args.vararg
+        or handler.args.kwonlyargs
+        or handler.args.kwarg
+    ), "the retired POST must not accept request data or processing dependencies"
+    forbidden_calls = {
+        "require_hmac_signature",
+        "get_creative_registry",
+        "_process_video_edit_job",
+        "_save_upload_to_temp",
+        "_download_video_to_temp",
+        "execute_ffmpeg_commands",
+        "analyze_video_with_gemini",
+    }
+    assert _direct_calls(handler).isdisjoint(forbidden_calls)
+    assert "background_tasks" not in {arg.arg for arg in handler.args.args}
+
+
+def test_job_status_get_remains_fail_closed_hmac_gated() -> None:
+    tree = ast.parse(API_APP.read_text(encoding="utf-8"))
+    handler = _function_node(tree, "get_job_status")
+    assert _AUTH_HELPER in _direct_calls(handler)
+
+
+def test_ffmpeg_executor_module_is_retained_but_not_imported_by_production() -> None:
+    executor = SRC / "creative" / "ffmpeg_executor.py"
+    assert executor.is_file(), "STOP-B retires the call path, not the executor module"
+    offenders: list[str] = []
+    for path in sorted(SRC.rglob("*.py")):
+        if path == executor:
+            continue
+        text = path.read_text(encoding="utf-8")
+        tree = ast.parse(text, filename=str(path))
+        has_ast_ref = any(
+            (
+                isinstance(node, ast.Import)
+                and any("ffmpeg_executor" in alias.name for alias in node.names)
+            )
+            or (
+                isinstance(node, ast.ImportFrom)
+                and (
+                    (node.module and "ffmpeg_executor" in node.module)
+                    or any(
+                        alias.name in {"ffmpeg_executor", "execute_ffmpeg_commands"}
+                        for alias in node.names
+                    )
+                )
+            )
+            for node in ast.walk(tree)
         )
+        if has_ast_ref or "execute_ffmpeg_commands" in text or "creative.ffmpeg_executor" in text:
+            offenders.append(path.relative_to(SRC).as_posix())
+    assert offenders == [], "production executor call/import path remains: " + ", ".join(offenders)

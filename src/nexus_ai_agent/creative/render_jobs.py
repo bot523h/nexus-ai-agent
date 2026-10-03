@@ -42,6 +42,13 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from nexus_ai_agent.config.settings import get_settings
+from nexus_ai_agent.creative.studio.authorization import ProjectAccess
+from nexus_ai_agent.creative.studio.models import (
+    ActorIdentity,
+    CommandProvenance,
+    TargetRef,
+    TypedCommand,
+)
 from nexus_ai_agent.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -64,6 +71,20 @@ SURFACE_TO_CANONICAL: dict[tuple[str, str], str] = {
     ("grade", "proxy"): "delivery.make_proxy_480p",
     ("grade", "otio"): "delivery.export_otio",
 }
+
+#: Operation-level permissions the trusted worker may exercise. Keep this map
+#: exactly aligned with SURFACE_TO_CANONICAL and OperationSpec.effective_permissions;
+#: the dispatch root checks for drift before constructing the CommandBus.
+RENDER_JOB_OPERATION_PERMISSIONS: dict[str, frozenset[str]] = {
+    "timeline.trim": frozenset({"project:write"}),
+    "timeline.speed_ramp": frozenset({"project:write"}),
+    "timeline.reverse_segment": frozenset({"project:write"}),
+    "caption.transcribe": frozenset({"project:read"}),
+    "color.adjust_exposure": frozenset({"project:write"}),
+    "delivery.make_proxy_480p": frozenset({"project:read"}),
+    "delivery.export_otio": frozenset({"project:write"}),
+}
+RENDER_JOB_SERVICE_ACTOR = ActorIdentity(kind="service", actor_id="nexus.creative.render-worker")
 
 #: Server-controlled EXPERIMENTAL-pack opt-in (task-183 trust boundary).
 #: The canonical operations below run on the ``EXPERIMENTAL``
@@ -214,26 +235,58 @@ def _dispatch(
     input_data: dict[str, Any],
     idempotency_key: str,
 ) -> dict[str, Any]:
-    """Registry lookup → bus dispatch. Bad args become typed
-    ``invalid_request`` (a retry with the same payload fails identically).
+    """Dispatch one closed-set worker operation through the trusted bus.
 
-    The bus's EXPERIMENTAL opt-in is derived from the canonical operation via
-    the server-controlled ``EXPERIMENTAL_OPT_IN_OPERATIONS``; no caller (and no
-    queue row) can pass it in."""
+    The queue row never supplies identity, permissions or lifecycle opt-in.
+    The operation-level grant is pinned by ``RENDER_JOB_OPERATION_PERMISSIONS``
+    and checked against the registry before the bus is constructed. Bad args
+    become typed ``invalid_request`` failures (a retry fails identically)."""
     from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
     from nexus_ai_agent.creative.studio.bus import CommandBus
-    from nexus_ai_agent.creative.studio.models import TargetRef, TypedCommand
 
+    required_permissions = RENDER_JOB_OPERATION_PERMISSIONS.get(operation)
+    if required_permissions is None:
+        raise CreativeRenderError(
+            "unsupported_operation", f"worker authority matrix does not permit {operation!r}"
+        )
+
+    registry = build_runtime_registry()
+    try:
+        actual_permissions = frozenset(registry.get_spec(operation).effective_permissions)
+    except Exception as exc:
+        raise CreativeRenderError(
+            "unsupported_operation", f"operation is not registered: {operation!r}"
+        ) from exc
+    if actual_permissions != required_permissions:
+        raise CreativeRenderError(
+            "unsupported_operation",
+            f"worker authority matrix drift for {operation!r}: "
+            f"expected {sorted(required_permissions)}, got {sorted(actual_permissions)}",
+        )
+
+    authorizer = ProjectAccess(
+        actor=RENDER_JOB_SERVICE_ACTOR,
+        project_id=project.project_id,
+        permissions=required_permissions,
+    )
     bus = CommandBus(
         state=project,
-        registry=build_runtime_registry(),
+        registry=registry,
+        authorizer=authorizer,
         allow_experimental=operation in EXPERIMENTAL_OPT_IN_OPERATIONS,
     )
     command = TypedCommand(
         command_id=f"cmd-{idempotency_key}-{operation}",
+        schema_version=2,
+        actor=RENDER_JOB_SERVICE_ACTOR,
         operation=operation,
         input=input_data,
         target=TargetRef(project_id=project.project_id, track_id="main"),
+        provenance=CommandProvenance(
+            source="service",
+            source_id=RENDER_JOB_SERVICE_ACTOR.actor_id,
+            reason="queued creative render worker",
+        ),
         idempotency_key=idempotency_key,
     )
     try:

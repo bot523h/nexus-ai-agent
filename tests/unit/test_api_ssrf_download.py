@@ -1,22 +1,14 @@
-"""S5: SSRF hardening of the legacy video_url download path.
+"""SSRF guard characterization and STOP-B route-retirement regressions.
 
-``POST /creative/video-edit`` (deprecated lane, ADR 0006) accepts an
-attacker-controlled ``video_url``. These tests prove the *real* path
+The standalone URL guard and DNS-pinned transport remain tested against
+localhost/loopback, RFC1918, cloud metadata, IPv6 and mapped IPv4, scheme and
+userinfo tricks, DNS rebinding, redirects, and malformed hosts. Separately,
+HTTP requests carrying attacker-controlled URLs must now stop at the retired
+``POST /creative/video-edit`` boundary with 410, before URL validation,
+download, job creation, or background work.
 
-    user URL → validate_url (fail-fast, no job row / no temp file)
-            → SafeAsyncTransport (re-resolves + re-checks EVERY
-              connection, redirect hops included, DNS-pinned)
-
-against the classic SSRF vector list: localhost/loopback, RFC1918,
-cloud metadata, IPv6 loopback, IPv4-mapped IPv6, plain http scheme,
-userinfo tricks, DNS rebinding at connect time, public→private
-redirects, and temp-file litter on refusal.
-
-Only the TCP stream itself is faked (an in-memory httpcore backend for
-the redirect test); ``validate_url``, ``SafeAsyncTransport``,
-``_ValidatingNetworkBackend``, the httpx redirect machinery and the
-route handler are the real production code paths. No test
-monkeypatches the guard logic itself — that would be a fake success.
+Only TCP streams in transport tests are faked (in-memory httpcore backends);
+the route-level tests use the real FastAPI app.
 """
 
 from __future__ import annotations
@@ -126,12 +118,13 @@ def test_validate_url_allows_public_https(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 # ------------------------------------------------------------------ #
-# 2. Route-level fail-fast: unsafe video_url → 400, no job row
+# 2. Route-level retirement: every video_url is stopped before DNS, jobs,
+#    and background work.
 # ------------------------------------------------------------------ #
 
 
 @pytest.mark.parametrize("url", BLOCKED_URLS)
-def test_video_edit_rejects_unsafe_url_with_400(
+def test_video_edit_rejects_unsafe_url_with_410(
     api_client: TestClient, url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("NEXUS_API_HMAC_KEY", "test-key")
@@ -140,26 +133,38 @@ def test_video_edit_rejects_unsafe_url_with_400(
     response = api_client.post(
         "/creative/video-edit", data=urlencode({"video_url": url}), headers=headers
     )
-    assert response.status_code == 400, f"{url} must be rejected before a job is created"
-    assert "rejected" in response.json()["detail"]
+    assert response.status_code == 410, f"retired route must reject {url} unconditionally"
 
 
-def test_video_edit_accepts_safe_url_shape(
-    api_client: TestClient, monkeypatch: pytest.MonkeyPatch
+def test_video_edit_rejects_safe_url_without_creating_or_scheduling(
+    api_client: TestClient,
+    temp_download_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A public https URL passes the fail-fast gate (job is created; the
-    background download would then still be connect-time guarded)."""
+    """Even a valid public URL and HMAC cannot create a legacy job."""
+    from starlette.background import BackgroundTasks
+
+    import nexus_ai_agent.api.app as app_module
+
     monkeypatch.setenv("NEXUS_API_HMAC_KEY", "test-key")
     settings_module.get_settings.cache_clear()
     monkeypatch.setattr(socket, "getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr(app_module, "_creative_registry", None)
+    scheduled: list[str] = []
+    monkeypatch.setattr(
+        BackgroundTasks,
+        "add_task",
+        lambda self, func, *args, **kwargs: scheduled.append(getattr(func, "__name__", repr(func))),
+    )
     headers = _signed_form_headers("test-key", {"video_url": "https://cdn.example.com/video.mp4"})
     response = api_client.post(
         "/creative/video-edit",
         data=urlencode({"video_url": "https://cdn.example.com/video.mp4"}),
         headers=headers,
     )
-    assert response.status_code == 200
-    assert response.json()["status"] == "pending"
+    assert response.status_code == 410
+    assert scheduled == []
+    assert not (temp_download_dir / "creative_jobs.sqlite3").exists()
 
 
 # ------------------------------------------------------------------ #
