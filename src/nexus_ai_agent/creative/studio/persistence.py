@@ -776,6 +776,88 @@ class DurableStudioStore:
                 status="completed",
             )
 
+    def reconcile_on_startup(
+        self,
+        project_id: str,
+        *,
+        allowed_root: str | Path | None = None,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Reconcile durable state after a crash/restart across CRASH_1..CRASH_8 boundaries.
+
+        1. Verifies the project's transaction hash chain from genesis.
+        2. Removes any partial/staging (.part / .tmp) files under ``allowed_root`` (CRASH_5).
+        3. Backfills any missing execution receipts for verified ArtifactPassports (CRASH_6).
+        4. Marks any expired active worker leases as ``expired`` (CRASH_4 / CRASH_7).
+        """
+        current_time = time.time() if now is None else now
+        cleaned_staging_files: list[str] = []
+        backfilled_receipts: list[str] = []
+        expired_leases = 0
+
+        with self._lock, self._conn:
+            project = self.replay_project(project_id)
+
+            if allowed_root is not None:
+                root_path = Path(allowed_root)
+                if root_path.exists():
+                    for candidate in sorted(root_path.rglob("*")):
+                        if candidate.is_file() and (
+                            candidate.name.endswith(".part") or candidate.name.endswith(".tmp")
+                        ):
+                            candidate.unlink(missing_ok=True)
+                            cleaned_staging_files.append(str(candidate))
+
+            existing_receipt_ids = {
+                r["receipt_id"] for r in self.list_execution_receipts(project_id)
+            }
+            for passport in self.list_artifact_passports(project_id):
+                expected_rcpt_id = (
+                    passport.verification_receipt_id
+                    or f"rcpt_{passport.causal_chain.transaction_id}"
+                )
+                if expected_rcpt_id not in existing_receipt_ids:
+                    self.record_execution_receipt(
+                        receipt_id=expected_rcpt_id,
+                        project_id=project_id,
+                        transaction_id=passport.causal_chain.transaction_id,
+                        command_id=passport.causal_chain.command_id,
+                        plan_id=passport.causal_chain.plan_id,
+                        job_id=passport.causal_chain.job_id,
+                        attempt_id=passport.causal_chain.attempt_id,
+                        fencing_token=passport.causal_chain.fencing_token,
+                        artifact_id=passport.artifact_id,
+                        payload={
+                            "receipt_id": expected_rcpt_id,
+                            "project_id": project_id,
+                            "transaction_id": passport.causal_chain.transaction_id,
+                            "command_id": passport.causal_chain.command_id,
+                            "artifact_id": passport.artifact_id,
+                            "passport_hash": passport.passport_hash,
+                            "recovered_on_startup": True,
+                        },
+                    )
+                    backfilled_receipts.append(expected_rcpt_id)
+
+            cur = self._conn.execute(
+                """
+                UPDATE job_leases
+                SET status = 'expired'
+                WHERE status = 'active' AND lease_expires_at <= ?
+                """,
+                (current_time,),
+            )
+            expired_leases = cur.rowcount
+
+        return {
+            "project_id": project.project_id,
+            "state_revision": project.state_revision,
+            "state_hash": project.state_hash,
+            "cleaned_staging_files": cleaned_staging_files,
+            "backfilled_receipts": backfilled_receipts,
+            "expired_leases": expired_leases,
+        }
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()
