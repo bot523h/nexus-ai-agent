@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.0.0",
+  "phase_id": "phase5-provenance",
+  "phase_name": "ARTIFACT PASSPORTS, PROVENANCE & INDEPENDENT MEDIA VERIFICATION",
+  "timestamp_utc": "2026-10-04T03:44:12Z",
+  "branch": "arena/01a103a6-nexus-ai-agent",
+  "subject_sha": "cacc3d4dc3f8125e12c36c4ccd4d3bc88826ee54",
+  "witness_sha": "SELF_WITNESS_COMMIT_FOLLOWING_SUBJECT_SHA",
+  "parent_witness_sha": "77f5c201594b750744731d0c70d66c54e19f83cb",
+  "previous_receipt_path": "docs/audits/receipts/phase4-durability.receipt.json",
+  "previous_receipt_digest": "2977e19de3614bef3a59ad391b5a1b0d6436cb9e13c3ef563606d132d7f3fcde",
+  "delivery_status": "PUSHED",
+  "verification_status": "VERIFIED",
+  "commands_executed": [
+    {
+      "command": ".venv/bin/ruff format --check .",
+      "exit_code": 0
+    },
+    {
+      "command": ".venv/bin/ruff check .",
+      "exit_code": 0
+    },
+    {
+      "command": ".venv/bin/mypy src",
+      "exit_code": 0
+    },
+    {
+      "command": "PYTHONPATH=src .venv/bin/pytest -q tests/architecture tests/unit/test_docs_integrity.py tests/unit/test_artifact_passport.py tests/unit/test_execution_trace_causality.py tests/unit/test_creative_render_jobs.py tests/unit/test_creative_surface.py",
+      "exit_code": 0,
+      "summary": "342 passed"
+    },
+    {
+      "command": "PYTHONPATH=src .venv/bin/python scripts/execution_trace_mutations.py",
+      "exit_code": 0,
+      "summary": "12/12 mutants killed"
+    }
+  ],
+  "gate_booleans": {
+    "artifact_passport_verified": true,
+    "independent_media_verifier_verified": true,
+    "corrupted_or_spoofed_artifact_rejected": true,
+    "causal_chain_verified": true,
+    "provenance_receipt_pushed": true,
+    "PROVENANCE_GATE": true,
+    "PHASE_5": true
+  }
+}
