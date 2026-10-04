@@ -7,8 +7,8 @@
 | Chosen mode | **MODE B** (substrate present; no cognition boundary; additive slice) |
 | Base SHA | `e5b326b2eaf691a638d030ad57acf1ce60016ef0` (origin/main) |
 | Branch | `overnight/nagar-20261004` |
-| Working SHA | (set at commit below) |
-| Last known green SHA | `e5b326b` (baseline); working tree gates all green |
+| Working SHA | `3789abc` (this commit; see LOG) |
+| Last known green SHA | `3789abc` — full suite 2978 passed, 0 failed, 30 skipped; ruff/mypy clean |
 | Next action | Commit + push branch; open handoff for A-1/A-2/A-3 |
 | Current blockers | none (B-2 is a deliberate deferral, not a blocker) |
 

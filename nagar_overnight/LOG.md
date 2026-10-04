@@ -83,3 +83,8 @@ the contract.
 - `mypy src` → PASS (255 source files)
 - new cognition tests → 60 passed
 - `pytest -q` → see REPORT.md "Tests" (recorded there once the run completes)
+
+## Commit
+
+- `3789abc` feat(nagar): additive model-optional cognition boundary
+- Final full suite after the commit: `2978 passed, 0 failed, 30 skipped`.
