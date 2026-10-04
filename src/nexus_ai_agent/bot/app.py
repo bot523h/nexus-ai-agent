@@ -198,12 +198,25 @@ def _build_job_completion_notifier(token: str) -> Any:
     return _notify
 
 
-def _init_v2_engines(settings: Settings) -> dict[str, Any]:
+def create_application_job_queue(settings: Settings) -> Any:
+    """Create the single durable queue instance shared by graph and Telegram."""
+    from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+    from nexus_ai_agent.worker import default_job_handlers, job_queue_db_path
+
+    queue = InProcessJobQueue(
+        job_queue_db_path(settings.db_path),
+        on_job_finished=_build_job_completion_notifier(_bot_token(settings)),
+    )
+    for job_type, handler in default_job_handlers().items():
+        queue.register_handler(job_type, handler)
+    return queue
+
+
+def _init_v2_engines(settings: Settings, *, job_queue: Any | None = None) -> dict[str, Any]:
     """Initialize all v2.0.0+ feature engines.
 
     Returns a dict suitable for storing in application.bot_data.
     """
-    from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
     from nexus_ai_agent.features.ai_chat import GeminiEngine
     from nexus_ai_agent.features.conversation_store import ConversationStore
     from nexus_ai_agent.features.image_gen import ImageGenEngine
@@ -215,17 +228,11 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
 
     engines: dict[str, Any] = {}
 
-    # Application-owned background jobs. The queue is a SQLite sidecar owned
-    # by this adapter; execution remains on the bot process event loop.
-    # D4: finished jobs notify the origin Telegram chat (fail-safe hook).
-    from nexus_ai_agent.worker import default_job_handlers, job_queue_db_path
-
-    job_queue = InProcessJobQueue(
-        job_queue_db_path(settings.db_path),
-        on_job_finished=_build_job_completion_notifier(_bot_token(settings)),
-    )
-    for job_type, handler in default_job_handlers().items():
-        job_queue.register_handler(job_type, handler)
+    # Use the queue instance already bound into the LangGraph Agent runtime,
+    # or compose one here for legacy application callers. Do not rely on queue
+    # truthiness: replacing a valid but falsy adapter would split queue ownership.
+    if job_queue is None:
+        job_queue = create_application_job_queue(settings)
     engines["job_queue"] = job_queue
 
     # Persistent conversation store
@@ -296,6 +303,7 @@ def build_application(
     *,
     presence: PresenceStore | None = None,
     session_factory: Callable[[], Any] | None = None,
+    job_queue: Any | None = None,
 ) -> Application:
     token = os.environ.get("TELEGRAM_BOT_TOKEN", settings.telegram_bot_token)
     if not token or token == "CHANGE_ME":
@@ -305,7 +313,7 @@ def build_application(
     storage_manager = storage or _build_default_storage(settings)
 
     # Initialize all v2.0.0+ engines
-    engines = _init_v2_engines(settings)
+    engines = _init_v2_engines(settings, job_queue=job_queue)
     job_queue = engines["job_queue"]
     feature_engines = engines["feature_engines"]
 
@@ -369,6 +377,14 @@ def build_application(
 
     for _name, _fn in build_creative_handlers(job_queue).items():
         application.add_handler(_CommandHandler(_name, _fn))
+
+    # Natural-language Agent path; media is supplied by replying to an uploaded
+    # video, while graph and durable render queue remain the same shared services.
+    from nexus_ai_agent.bot.agent_intelligence_surface import build_agent_intelligence_handler
+
+    application.add_handler(
+        _CommandHandler("agent_edit", build_agent_intelligence_handler(graph, settings))
+    )
     # Custom command handlers removed as they should be part of build_handlers or imported correctly
     # install_presence_heartbeat(application) # Removed as it was an unawaited mock
     return application

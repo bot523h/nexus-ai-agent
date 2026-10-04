@@ -362,11 +362,17 @@ class JobResult:
         spec = dict(spec_raw) if isinstance(spec_raw, dict) else {}
         physical = dict(physical_raw) if isinstance(physical_raw, dict) else {}
         key = str(payload.get("idempotency_key") or "")
+        command_id_raw = result.get("command_id") if isinstance(result, dict) else None
+        command_id = (
+            str(command_id_raw)
+            if isinstance(command_id_raw, str) and command_id_raw
+            else f"cmd-{key}-{payload.get('operation', '')}"
+        )
         sha_raw = verification.get("sha256")
         size_raw = verification.get("size_bytes")
         probe_raw = verification.get("probe")
         return cls(
-            command_id=f"cmd-{key}-{payload.get('operation', '')}",
+            command_id=command_id,
             job_id=job_id,
             project_id=str(logical.get("project_id") or f"shot-{key}"),
             operation_id=str(spec.get("operation") or payload.get("operation") or ""),

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Literal, TypedDict
 
+from typing_extensions import NotRequired
+
 
 class NexusState(TypedDict):
     thread_id: str
@@ -18,3 +20,7 @@ class NexusState(TypedDict):
     error: str | None
     turn_count: int
     moderation_passed: bool
+    # Host-injected, trusted upload metadata; never populated by the LLM.
+    creative_asset: NotRequired[dict[str, object] | None]
+    # Structured request/plan/job/artifact/verification trace for the agent path.
+    agent_intelligence: NotRequired[dict[str, object]]

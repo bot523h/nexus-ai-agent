@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
+
+if TYPE_CHECKING:
+    from nexus_ai_agent.orchestration.agent_intelligence import AgentIntelligenceRuntime
 
 from langgraph.graph import END, START, StateGraph
 
@@ -172,6 +175,8 @@ def compile_graph(
     checkpointer: Any,
     long_term_memory: LongTermMemory,
     tool_registry: ToolRegistry,
+    *,
+    agent_intelligence: AgentIntelligenceRuntime | None = None,
 ) -> Any:
     _ = tool_registry  # tool wiring is used by executor/planner in later phases
 
@@ -210,6 +215,12 @@ def compile_graph(
         return {**state, "moderation_passed": True}
 
     def route_intent(state: NexusState) -> str:
+        # A staged creative asset is a trusted upload context. Such requests
+        # always bypass keyword/tool execution and enter the typed fail-closed
+        # Agent node, even if its runtime is unavailable; ordinary chat keeps
+        # the legacy routes.
+        if state.get("creative_asset") is not None:
+            return "agent_intelligence"
         intent = state.get("intent", "chat")
         if intent == "task":
             return "memory_reader_task"
@@ -228,6 +239,60 @@ def compile_graph(
     async def executor_agent_node(state: NexusState) -> NexusState:
         return await _executor_agent(state, tool_registry=tool_registry)
 
+    async def agent_intelligence_node(state: NexusState) -> NexusState:
+        if agent_intelligence is None:
+            return {
+                **state,
+                "error": "agent_intelligence_unavailable",
+                "response": "The creative Agent path is not configured; no action was run.",
+                "creative_asset": None,
+                "agent_intelligence": {
+                    "status": "failed",
+                    "error_code": "agent_intelligence_unavailable",
+                    "max_replans": 0,
+                },
+            }
+        from nexus_ai_agent.orchestration.agent_intelligence import AgentInputContext
+
+        try:
+            context = AgentInputContext.model_validate(state.get("creative_asset"))
+        except Exception:
+            return {
+                **state,
+                "error": "invalid_creative_asset_context",
+                "response": "The staged video context is invalid; no action was run.",
+                "creative_asset": None,
+                "agent_intelligence": {
+                    "status": "failed",
+                    "error_code": "invalid_creative_asset_context",
+                    "max_replans": 0,
+                },
+            }
+        text = state.get("messages", [])[-1].get("content", "") if state.get("messages") else ""
+        outcome = await agent_intelligence.run(
+            str(text),
+            request_id=str(state.get("correlation_id", "")),
+            context=context,
+        )
+        updated: NexusState = {
+            **state,
+            "intent": "task",
+            "response": outcome.response,
+            "agent_intelligence": outcome.state_value(),
+            "creative_asset": None,
+        }
+        if outcome.status == "completed":
+            updated["error"] = None
+        elif outcome.error_code:
+            updated["error"] = f"agent_intelligence:{outcome.error_code}"
+        if outcome.job_id:
+            updated["current_task"] = {
+                "job_id": outcome.job_id,
+                "status": outcome.status,
+                "plan_id": outcome.plan_id,
+            }
+        return updated
+
     async def memory_writer_node(state: NexusState) -> NexusState:
         return await _memory_writer(state, long_term_memory=long_term_memory)
 
@@ -236,6 +301,7 @@ def compile_graph(
     graph.add_node("memory_reader_chat", memory_reader_chat_node)
     graph.add_node("planner_agent", planner_node)
     graph.add_node("executor_agent", executor_agent_node)
+    graph.add_node("agent_intelligence", agent_intelligence_node)
     graph.add_node("route_persona", lambda s: s)
     graph.add_node("phi_agent", phi_node)
     graph.add_node("qwen_agent", qwen_node)
@@ -248,6 +314,7 @@ def compile_graph(
         "router",
         route_intent,
         {
+            "agent_intelligence": "agent_intelligence",
             "memory_reader_task": "memory_reader_task",
             "memory_reader_chat": "memory_reader_chat",
             "route_persona": "route_persona",
@@ -274,6 +341,7 @@ def compile_graph(
     graph.add_edge("memory_reader_task", "planner_agent")
     graph.add_edge("planner_agent", "executor_agent")
     graph.add_edge("executor_agent", "moderation")
+    graph.add_edge("agent_intelligence", "moderation")
     graph.add_edge("memory_writer", END)
 
     return graph.compile(checkpointer=checkpointer)
