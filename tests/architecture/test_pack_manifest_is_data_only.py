@@ -32,6 +32,7 @@ ALLOWED_TOP_LEVEL = {
     "dataclasses",
     "datetime",
     "enum",
+    "fractions",
     "hashlib",
     "importlib",
     "json",
@@ -156,7 +157,11 @@ def test_pack_substrate_does_not_cross_package_boundaries() -> None:
     for path in sorted(PACKS.rglob("*.py")):
         for module in _nexus_modules(path):
             assert module.startswith(
-                ("nexus_ai_agent.creative.packs", "nexus_ai_agent.creative.studio")
+                (
+                    "nexus_ai_agent.creative.packs",
+                    "nexus_ai_agent.creative.studio",
+                    "nexus_ai_agent.creative.temporal",
+                )
             ), (
                 f"{path.relative_to(REPO_ROOT)} crosses a package boundary via {module!r}; "
                 "packs may only use the studio contracts (no storage/, llm/ or bot/ imports)"

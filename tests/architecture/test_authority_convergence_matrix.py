@@ -41,8 +41,8 @@ CANONICAL_AUTHORITY_REGISTRY: dict[str, tuple[str, str]] = {
         "CreativeWork",
     ),
     "7_timeline_temporal_truth_timebase_rational_math": (
-        "nexus_ai_agent.creative.studio.models",
-        "TimeBase",
+        "nexus_ai_agent.creative.temporal.core",
+        "FrameRateResolver",
     ),
     "8_reference_resolution": (
         "nexus_ai_agent.creative.studio.references",
