@@ -1,0 +1,46 @@
+{
+  "schema_version": "1.0.0",
+  "phase_id": "phase6-recovery",
+  "phase_name": "CRASH / RESTART / RECOVERY MATRIX",
+  "timestamp_utc": "2026-10-04T03:47:50Z",
+  "branch": "arena/01a103a6-nexus-ai-agent",
+  "subject_sha": "6187a46a562b31de93076f98aef2343d02198139",
+  "witness_sha": "SELF_WITNESS_COMMIT_FOLLOWING_SUBJECT_SHA",
+  "parent_witness_sha": "8fb4c19039fd655a8ddadfcc62373d76bf87ba54",
+  "previous_receipt_path": "docs/audits/receipts/phase5-provenance.receipt.json",
+  "previous_receipt_digest": "13beb207e407a82b833a32d1fe9e125f883c8152d778e19bedb261c68a4aa5b3",
+  "delivery_status": "PUSHED",
+  "verification_status": "VERIFIED",
+  "commands_executed": [
+    {
+      "command": ".venv/bin/ruff format --check .",
+      "exit_code": 0
+    },
+    {
+      "command": ".venv/bin/ruff check .",
+      "exit_code": 0
+    },
+    {
+      "command": ".venv/bin/mypy src",
+      "exit_code": 0
+    },
+    {
+      "command": "PYTHONPATH=src .venv/bin/pytest -q tests/architecture tests/unit/test_docs_integrity.py tests/unit/test_crash_recovery_matrix.py tests/unit/test_persistence_recovery.py tests/unit/test_durable_studio_store.py",
+      "exit_code": 0,
+      "summary": "262 passed"
+    }
+  ],
+  "gate_booleans": {
+    "CRASH_1": true,
+    "CRASH_2": true,
+    "CRASH_3": true,
+    "CRASH_4": true,
+    "CRASH_5": true,
+    "CRASH_6": true,
+    "CRASH_7": true,
+    "CRASH_8": true,
+    "recovery_receipt_pushed": true,
+    "RECOVERY_GATE": true,
+    "PHASE_6": true
+  }
+}
