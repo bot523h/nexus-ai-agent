@@ -23,7 +23,12 @@ enforce elsewhere):
   key and never a hard-coded sentence;
 * the idempotency key is anchored to the Telegram message identity
   (``user_id/chat_id/message_id``): redelivered updates dedupe at the
-  durable queue, distinct commands stay distinct.
+  durable queue, distinct commands stay distinct;
+* the execution trace (task-215) is minted **here**, where the user request
+  arrives, and never downstream: its identity is derived from the durable
+  idempotency key the surface already owns, so a redelivered message keeps
+  one causal identity instead of forking one per attempt. The worker only
+  *verifies* that binding; it never mints.
 """
 
 from __future__ import annotations
@@ -35,6 +40,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from nexus_ai_agent.application.execution_trace import ExecutionTrace, mint_trace
 from nexus_ai_agent.application.ports.job_queue import JobQueuePort
 from nexus_ai_agent.bot.surface._ptb import bot_of, user_language_code
 from nexus_ai_agent.i18n import i18n
@@ -145,6 +151,7 @@ class CreativeSurfaceMapper:
         idempotency_key: str,
         workspace_dir: str,
         input_path: str | None,
+        trace_id: str,
     ) -> dict[str, Any]:
         return {
             "command": req.command,
@@ -159,10 +166,39 @@ class CreativeSurfaceMapper:
             "chat_id": chat_id,
             "lang": lang,
             "idempotency_key": idempotency_key,
+            # Proof-carrying execution spine (task-215): the identity minted at
+            # this surface. The worker re-derives it from the idempotency key
+            # and refuses a row that does not match, so this value carries no
+            # authority of its own.
+            "trace_id": trace_id,
             # No lifecycle opt-in travels in the job row: the worker derives
             # the EXPERIMENTAL-pack opt-in from the canonical operation
             # (render_jobs.EXPERIMENTAL_OPT_IN_OPERATIONS, task-183).
         }
+
+
+#: Surface identity for the proof-carrying execution spine (task-215). Closed
+#: vocabulary: ``ExecutionTrace`` refuses an unknown surface rather than
+#: silently forking the trace namespace. Kept identical to
+#: ``creative/render_jobs.py::CREATIVE_SURFACE`` on purpose -- the worker
+#: re-derives the identity under this exact name.
+CREATIVE_SURFACE = "telegram.creative"
+
+
+def execution_trace(*, user_id: int, chat_id: int, message_id: int | None) -> ExecutionTrace:
+    """Mint the trace for one creative request at the surface that received it.
+
+    The identity is derived from the durable idempotency key this surface
+    already owns, so a redelivered Telegram message keeps ONE causal identity
+    instead of minting a new one per delivery. ``actor_ref`` is a scope
+    (``tg:<user_id>``), never a name, a handle, or a token.
+    """
+    return mint_trace(
+        surface=CREATIVE_SURFACE,
+        actor_ref=f"tg:{user_id}",
+        idempotency_key=idempotency_key(user_id, chat_id, message_id),
+        intent_ref=None,
+    )
 
 
 def idempotency_key(user_id: int, chat_id: int, message_id: int | None) -> str:
@@ -282,6 +318,17 @@ def build_creative_handlers(
             return
 
         key = idempotency_key(user_id, chat_id, getattr(message, "message_id", None))
+        # Proof-carrying execution spine (task-215): minted here, verified by
+        # the worker, never minted downstream.
+        trace = execution_trace(
+            user_id=user_id, chat_id=chat_id, message_id=getattr(message, "message_id", None)
+        )
+        logger.info(
+            "creative_trace_minted",
+            trace_id=trace.trace_id,
+            command=command,
+            idempotency_key=key,
+        )
 
         from nexus_ai_agent.config.settings import get_settings
 
@@ -311,6 +358,7 @@ def build_creative_handlers(
             idempotency_key=key,
             workspace_dir=str(workspace),
             input_path=input_path,
+            trace_id=trace.trace_id,
         )
         try:
             job_id = await job_queue.enqueue(

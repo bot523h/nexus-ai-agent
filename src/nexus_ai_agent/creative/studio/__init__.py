@@ -80,7 +80,10 @@ from nexus_ai_agent.creative.studio.models import (
 from nexus_ai_agent.creative.studio.passport import (
     ArtifactPassport,
     ExecutionProof,
+    IndependentMediaVerificationError,
     ProvenanceCausalChain,
+    verify_causal_provenance_chain,
+    verify_media_artifact_independently,
 )
 from nexus_ai_agent.creative.studio.persistence import (
     DurableStore,
@@ -124,6 +127,7 @@ __all__ = [
     "ExecutionPolicyError",
     "ExecutionProof",
     "IdempotencyConflictError",
+    "IndependentMediaVerificationError",
     "InputRef",
     "InputReferenceError",
     "JobAttemptLease",
@@ -167,4 +171,6 @@ __all__ = [
     "compute_state_hash",
     "frame_number_for",
     "new_project",
+    "verify_causal_provenance_chain",
+    "verify_media_artifact_independently",
 ]

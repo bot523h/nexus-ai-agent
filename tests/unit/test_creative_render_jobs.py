@@ -331,3 +331,127 @@ def test_caption_burnin_is_typed_unsupported(workspace: Path) -> None:
     result = _run(_payload(workspace, command="caption", operation="burnin", args=[]))
     assert result["success"] is False
     assert result["error_code"] == "unsupported_operation"
+
+
+# ── task-215: the proof-carrying execution spine, one real vertical slice ───
+#
+# USER REQUEST → INTENT → DECISION → COMMAND → CAPABILITY → EXECUTION →
+# RESULT → EVIDENCE, all bound to ONE trace identity, driven through the real
+# worker handler and the real CommandBus (no mocked dispatch).
+
+
+def _surface_trace_id(payload: dict[str, Any]) -> str:
+    """The identity the Telegram surface would have minted for this row."""
+    from nexus_ai_agent.application.execution_trace import trace_id_for
+    from nexus_ai_agent.bot.creative_surface import CREATIVE_SURFACE
+
+    return trace_id_for(CREATIVE_SURFACE, str(payload["idempotency_key"]))
+
+
+def test_a_real_render_carries_one_trace_identity(workspace: Path) -> None:
+    """request → trace created → command/execution linked → result recorded."""
+    _make_clip(workspace / "input.mp4")
+    payload = _payload(workspace, operation="trim", args=["0", "1"])
+    result = _run(payload)
+    assert result["success"] is True, result
+
+    expected = _surface_trace_id(payload)
+    # The durable job result carries the identity, so the row and the studio
+    # command that produced it are inspectable under one name.
+    assert result["trace_id"] == expected
+    assert result["trace_id"] == _surface_trace_id(payload)  # stable, not re-minted
+
+
+def test_the_command_bus_receives_the_bound_trace(workspace: Path) -> None:
+    """The trace crosses the L4→L1 boundary onto the typed command itself."""
+    from nexus_ai_agent.creative.studio.bus import CommandBus
+
+    _make_clip(workspace / "input.mp4")
+    payload = _payload(workspace, operation="trim", args=["0", "1"])
+    expected = _surface_trace_id(payload)
+
+    seen: list[object] = []
+    original = CommandBus.dispatch
+
+    def _spy(self: CommandBus, command: object) -> object:
+        seen.append(command)
+        return original(self, command)  # type: ignore[arg-type]
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(CommandBus, "dispatch", _spy)
+    try:
+        result = _run(payload)
+    finally:
+        monkey.undo()
+
+    assert result["success"] is True, result
+    assert seen, "the worker never reached the command bus"
+    dispatched = seen[0]
+    assert getattr(dispatched, "trace_id", None) == expected
+    context = getattr(dispatched, "request_context", None)
+    assert context is not None and context.request_id == expected
+    assert context.channel == "telegram"
+
+
+def test_the_trace_identity_survives_a_redelivered_row(workspace: Path) -> None:
+    """I6 at runtime: the same message redelivered keeps one causal identity."""
+    _make_clip(workspace / "input.mp4")
+    payload = _payload(workspace, operation="trim", args=["0", "1"])
+    first = _run(payload)
+    second = _run(payload)
+    assert first["trace_id"] == second["trace_id"] == _surface_trace_id(payload)
+
+
+def test_a_row_that_forged_its_trace_is_refused_before_any_engine(
+    workspace: Path,
+) -> None:
+    """I7 at runtime: a queue row cannot mint execution identity."""
+    _make_clip(workspace / "input.mp4")
+    payload = _payload(workspace, operation="trim", args=["0", "1"])
+    payload["trace_id"] = "tr-" + "f" * 32
+    result = _run(payload)
+    assert result["success"] is False
+    assert result["error_code"] == "invalid_request"
+    assert "trace" in result["error_detail"]
+    # No artifact was produced: the refusal happened before the lane ran.
+    assert not (workspace / "output.mp4").exists()
+
+
+def test_a_row_borrowing_another_requests_trace_is_refused(workspace: Path) -> None:
+    _make_clip(workspace / "input.mp4")
+    payload = _payload(workspace, operation="trim", args=["0", "1"])
+    from nexus_ai_agent.application.execution_trace import trace_id_for
+    from nexus_ai_agent.bot.creative_surface import CREATIVE_SURFACE
+
+    payload["trace_id"] = trace_id_for(CREATIVE_SURFACE, "creative:42:4242:999")
+    result = _run(payload)
+    assert result["success"] is False
+    assert result["error_code"] == "invalid_request"
+
+
+def test_a_row_that_predates_the_spine_is_explained_not_invented(workspace: Path) -> None:
+    """An old row carries no trace; its identity is derived, never fabricated."""
+    _make_clip(workspace / "input.mp4")
+    payload = _payload(workspace, operation="trim", args=["0", "1"])
+    payload.pop("trace_id", None)
+    result = _run(payload)
+    assert result["success"] is True, result
+    assert result["trace_id"] == _surface_trace_id(payload)
+
+
+def test_the_surface_and_the_worker_agree_on_the_surface_name() -> None:
+    """Two spellings of one surface would silently fork the trace namespace."""
+    from nexus_ai_agent.bot.creative_surface import CREATIVE_SURFACE as surface_name
+    from nexus_ai_agent.creative.render_jobs import CREATIVE_SURFACE as worker_name
+
+    assert surface_name == worker_name == "telegram.creative"
+
+
+def test_the_surface_mints_the_identity_the_worker_verifies() -> None:
+    """The minted id must be exactly what the worker re-derives (no fork)."""
+    from nexus_ai_agent.bot.creative_surface import execution_trace
+
+    trace = execution_trace(user_id=42, chat_id=4242, message_id=111)
+    assert trace.trace_id == _surface_trace_id({"idempotency_key": "creative:42:4242:111"})
+    assert trace.surface == "telegram.creative"
+    assert trace.actor_ref == "tg:42"

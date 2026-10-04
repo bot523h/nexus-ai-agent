@@ -15,7 +15,10 @@ from pydantic import ValidationError
 from nexus_ai_agent.creative.studio.passport import (
     ArtifactPassport,
     ExecutionProof,
+    IndependentMediaVerificationError,
     ProvenanceCausalChain,
+    verify_causal_provenance_chain,
+    verify_media_artifact_independently,
 )
 from nexus_ai_agent.creative.studio.persistence import DurableStore
 from nexus_ai_agent.creative.studio.testing import make_project
@@ -135,3 +138,90 @@ class TestArtifactPassportAdversarialSuite:
         assert loaded_passport.verify_integrity() is True
 
         store.close()
+
+    def test_independent_media_verifier_accepts_valid_and_rejects_spoofed_or_corrupted(
+        self, tmp_path
+    ) -> None:
+        import hashlib
+
+        # Valid PNG
+        png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+        png_file = tmp_path / "valid.png"
+        png_file.write_bytes(png_bytes)
+        png_sha = f"sha256:{hashlib.sha256(png_bytes).hexdigest()}"
+
+        report = verify_media_artifact_independently(
+            png_file,
+            allowed_root=tmp_path,
+            declared_sha256=png_sha,
+            declared_media_kind="image",
+            declared_byte_size=len(png_bytes),
+        )
+        assert report["verified"] is True
+        assert report["byte_size"] == len(png_bytes)
+
+        # Zero-byte file rejected
+        empty_file = tmp_path / "empty.mp4"
+        empty_file.write_bytes(b"")
+        with pytest.raises(IndependentMediaVerificationError, match="Zero-byte"):
+            verify_media_artifact_independently(
+                empty_file,
+                allowed_root=tmp_path,
+                declared_sha256=f"sha256:{hashlib.sha256(b'').hexdigest()}",
+                declared_media_kind="video",
+            )
+
+        # Truncated / byte_size mismatch rejected
+        with pytest.raises(IndependentMediaVerificationError, match="Truncated"):
+            verify_media_artifact_independently(
+                png_file,
+                allowed_root=tmp_path,
+                declared_sha256=png_sha,
+                declared_media_kind="image",
+                declared_byte_size=len(png_bytes) + 10,
+            )
+
+        # Wrong digest rejected
+        with pytest.raises(IndependentMediaVerificationError, match="SHA-256 mismatch"):
+            verify_media_artifact_independently(
+                png_file,
+                allowed_root=tmp_path,
+                declared_sha256="sha256:" + "ff" * 32,
+                declared_media_kind="image",
+            )
+
+        # Spoofed extension / wrong magic header rejected (text file pretending to be MP4 video)
+        spoofed = tmp_path / "spoofed.mp4"
+        spoofed_bytes = b"not an mp4 container at all"
+        spoofed.write_bytes(spoofed_bytes)
+        with pytest.raises(IndependentMediaVerificationError, match="Spoofed or corrupted video"):
+            verify_media_artifact_independently(
+                spoofed,
+                allowed_root=tmp_path,
+                declared_sha256=f"sha256:{hashlib.sha256(spoofed_bytes).hexdigest()}",
+                declared_media_kind="video",
+            )
+
+    def test_causal_provenance_chain_verifies_parent_links_and_rejects_broken_chain(self) -> None:
+        parent = make_valid_passport()
+        child_chain = parent.causal_chain.model_copy(
+            update={
+                "transaction_id": "tx_12346",
+                "command_id": "cmd_split_2",
+                "parent_passport_hashes": (parent.passport_hash,),
+            }
+        )
+        child = ArtifactPassport(
+            artifact_id="art_clip_split_2",
+            artifact_type="timeline_clip",
+            content_hash="sha256:" + "bb" * 32,
+            causal_chain=child_chain,
+            execution_proof=parent.execution_proof,
+        ).with_computed_hash()
+
+        assert verify_causal_provenance_chain([parent, child]) is True
+        # Missing parent in sequence fails closed
+        assert verify_causal_provenance_chain([child]) is False
+        # Tampered child fails closed
+        tampered_child = child.model_copy(update={"content_hash": "sha256:" + "cc" * 32})
+        assert verify_causal_provenance_chain([parent, tampered_child]) is False
