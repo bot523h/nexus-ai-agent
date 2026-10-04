@@ -665,8 +665,7 @@
       "paths": [
         "src/nexus_ai_agent/evaluation/",
         "tests/agent_evaluation/",
-        "docs/evaluation/",
-        "docs/README.md"
+        "docs/evaluation/"
       ]
     }
   ],
@@ -2739,8 +2738,7 @@
       "exclusive_paths": [
         "src/nexus_ai_agent/evaluation/",
         "tests/agent_evaluation/",
-        "docs/evaluation/",
-        "docs/README.md"
+        "docs/evaluation/"
       ],
       "gates_owner": false,
       "owner_hint": "arena/01a1052c-nexus-ai-agent",
@@ -2765,7 +2763,7 @@
       ],
       "scope": "Build an independent assurance evaluator, not the Agent: typed deterministic evaluation domain, versioned goldens/adversarial fixtures, independent behavioral oracles, architecture ratchets, mutation probes, machine gate, evidence/report schema and an honest blocked-ready E2E adapter. Do not execute production commands, authorize, replace verifiers/persistence, implement Arena A, or modify another team’s runtime/test zones.",
       "scope_fa": "",
-      "note": "Live audit 2026-10-04: docs/README.md added for docs-as-code indexing; open-PR index edits are additive and no evaluation path overlap was found."
+      "note": "Live audit 2026-10-04: evaluator/test/docs paths have no open-PR overlap; docs/README.md remains a shared index with additive unrelated open-PR entries."
     }
   ],
   "deferred_log": [
