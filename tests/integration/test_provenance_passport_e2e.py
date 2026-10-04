@@ -32,6 +32,7 @@ from nexus_ai_agent.config import settings as settings_module
 from nexus_ai_agent.creative.slideshow.ffmpeg import resolve_ffmpeg_bin
 from nexus_ai_agent.provenance import (
     CausalJournal,
+    EventKind,
     PassportBuilder,
     PassportStatus,
     QueueLedgerObserver,
@@ -98,7 +99,7 @@ def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     settings_module.get_settings.cache_clear()
 
 
-async def _render_trim(queue: InProcessJobQueue, key: str) -> str:
+async def _render_trim(queue: InProcessJobQueue, journal: CausalJournal, key: str) -> str:
     """A real /edit trim through the real handler; the workspace lives inside
     the CREATIVE_TEMP_DIR the worker validates against (render_jobs law)."""
     workspace = queue.db_path.parent / "creative_tmp" / f"creative_{key}"
@@ -111,9 +112,18 @@ async def _render_trim(queue: InProcessJobQueue, key: str) -> str:
     )
     for _ in range(600):
         if await queue.get_status(job_id) is JobStatus.COMPLETED:
-            return job_id
+            break
         await asyncio.sleep(0.05)
-    raise AssertionError("creative_render did not complete")
+    else:
+        raise AssertionError("creative_render did not complete")
+    deadline = asyncio.get_running_loop().time() + 10.0
+    while asyncio.get_running_loop().time() < deadline:
+        if any(
+            record.kind is EventKind.JOB_COMPLETED for record in journal.records_for_job(job_id)
+        ):
+            return job_id
+        await asyncio.sleep(0.02)
+    raise AssertionError("completion record never landed")
 
 
 def _row_fingerprint(queue: InProcessJobQueue, job_id: str) -> str:
@@ -133,7 +143,7 @@ def _row_fingerprint(queue: InProcessJobQueue, job_id: str) -> str:
 
 async def test_real_render_passport_is_verified_and_remeasured(harness) -> None:  # noqa: ANN001
     queue, journal = harness
-    job_id = await _render_trim(queue, "e2e-1")
+    job_id = await _render_trim(queue, journal, "e2e-1")
 
     builder = PassportBuilder(journal, queue)
     passport = builder.build(job_id)
@@ -174,7 +184,7 @@ async def test_real_render_passport_is_verified_and_remeasured(harness) -> None:
 
 async def test_tampered_artifact_bytes_flip_passport_to_compromised(harness) -> None:  # noqa: ANN001
     queue, journal = harness
-    job_id = await _render_trim(queue, "e2e-2")
+    job_id = await _render_trim(queue, journal, "e2e-2")
     builder = PassportBuilder(journal, queue)
     assert builder.build(job_id).status is PassportStatus.VERIFIED
 
@@ -190,7 +200,7 @@ async def test_tampered_artifact_bytes_flip_passport_to_compromised(harness) -> 
 
 async def test_removed_artifact_is_a_limitation_never_a_lie(harness) -> None:  # noqa: ANN001
     queue, journal = harness
-    job_id = await _render_trim(queue, "e2e-3")
+    job_id = await _render_trim(queue, journal, "e2e-3")
     result = await queue.get_result(job_id)
     Path(str(result["artifact_path"])).unlink()
 
@@ -201,7 +211,7 @@ async def test_removed_artifact_is_a_limitation_never_a_lie(harness) -> None:  #
 
 async def test_corrupted_journal_compromises_every_passport(harness) -> None:  # noqa: ANN001
     queue, journal = harness
-    job_id = await _render_trim(queue, "e2e-4")
+    job_id = await _render_trim(queue, journal, "e2e-4")
 
     connection = sqlite3.connect(journal.db_path)
     connection.execute(
@@ -219,7 +229,7 @@ async def test_corrupted_journal_compromises_every_passport(harness) -> None:  #
 async def test_journal_lost_then_backfilled_is_honested(harness) -> None:  # noqa: ANN001
     """A fresh journal + labeled backfill → limitations, never fake VERIFIED."""
     queue, journal = harness
-    job_id = await _render_trim(queue, "e2e-5")
+    job_id = await _render_trim(queue, journal, "e2e-5")
 
     fresh = CausalJournal(":memory:")
     assert PassportBuilder(fresh, queue).build(job_id).status is PassportStatus.INCOMPLETE

@@ -92,6 +92,33 @@ async def _wait_terminal(queue: InProcessJobQueue, job_id: str) -> JobStatus:
     raise AssertionError("job never reached a terminal state")
 
 
+async def _wait_record(
+    journal: CausalJournal,
+    job_id: str,
+    kind: EventKind,
+    *,
+    attempt: int | None = None,
+    timeout: float = 10.0,
+):
+    """Wait until the journal carries the transition record for a committed row.
+
+    The observer appends strictly AFTER the durable commit, so a row can be
+    observed terminal a few microseconds before its record lands (the record
+    is evidence, not the truth — the row is). Tests must poll, never race.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        for record in journal.records_for_job(job_id):
+            if record.kind is not kind:
+                continue
+            if attempt is not None and record.payload.get("attempt") != attempt:
+                continue
+            return record
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"record {kind.value} for {job_id} never landed")
+
+
 class TestLifecycleRecording:
     async def test_full_success_lifecycle_is_recorded_in_order(self, tmp_path: Path) -> None:
         journal = CausalJournal(tmp_path / "causal.sqlite3")
@@ -109,6 +136,7 @@ class TestLifecycleRecording:
             job_type="creative_render", idempotency_key="k1", payload=_payload()
         )
         assert await _wait_terminal(queue, job_id) is JobStatus.COMPLETED
+        await _wait_record(journal, job_id, EventKind.JOB_COMPLETED, attempt=1)
 
         kinds = [record.kind for record in journal.records_for_job(job_id)]
         assert kinds == [
@@ -152,7 +180,7 @@ class TestLifecycleRecording:
         )
         assert first == second == conflict
         assert await _wait_terminal(queue, first) is JobStatus.COMPLETED
-        await asyncio.sleep(0.3)
+        await _wait_record(journal, first, EventKind.JOB_COMPLETED, attempt=1)
 
         duplicates = [
             record
@@ -191,6 +219,7 @@ class TestFailureRecording:
         )
         status = await _wait_terminal(queue, job_id)
         assert status in {JobStatus.FAILED_RETRYABLE, JobStatus.FAILED_TERMINAL}
+        await _wait_record(journal, job_id, EventKind.JOB_FAILED, attempt=1)
 
         failed = journal.records_for_job(job_id)[-1]
         assert failed.kind is EventKind.JOB_FAILED
@@ -221,6 +250,7 @@ class TestFailureRecording:
             JobStatus.FAILED_RETRYABLE,
             JobStatus.FAILED_TERMINAL,
         }
+        await _wait_record(journal, job_id, EventKind.JOB_FAILED, attempt=1)
         failed = journal.records_for_job(job_id)[-1]
         assert failed.kind is EventKind.JOB_FAILED
         assert failed.payload["result_digest"] == digest_of(
@@ -301,10 +331,18 @@ class TestTakeoverAndFencing:
         taken = await successor.resume_pending()
         assert taken == [job_id]
         assert await _wait_terminal(successor, job_id) is JobStatus.COMPLETED
+        await _wait_record(journal, job_id, EventKind.JOB_COMPLETED, attempt=2)
 
         # The stale owner finally finishes — its CAS must reject (fencing).
+        # A slow stale owner can never change the journal: every transition
+        # it attempts loses the fencing CAS and records nothing, so there is
+        # no race to sleep over — but give its rejection path a moment to
+        # finish before reading the chain for the assertion below.
         release_first.set()
-        await asyncio.sleep(0.2)
+        for _ in range(100):
+            await asyncio.sleep(0.02)
+            if owner._tasks.get(job_id) is None or owner._tasks[job_id].done():
+                break
 
         kinds = [record.kind for record in journal.records_for_job(job_id)]
         assert kinds == [
