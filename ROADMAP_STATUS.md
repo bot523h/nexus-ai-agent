@@ -1,4 +1,4 @@
-# ROADMAP_STATUS — NEXUS AI agent (as of 2026-09-21, v3.12.0 housekeeping, Phase 6)
+# ROADMAP_STATUS — NEXUS AI agent (as of 2026-10-04, v3.13.0 + V1 Foundation Convergence, Phase 6)
 
 Header: **No hidden migration. No hidden mutation. No implicit repair.**
 Phase 6 adds: **packs are data; commands carry evidence; only the last step

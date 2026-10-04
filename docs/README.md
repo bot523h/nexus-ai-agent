@@ -102,6 +102,7 @@ placeholder text.
 | [audits/EXECUTION_PLAN_2026-09-27.md](audits/EXECUTION_PLAN_2026-09-27.md) | Phased implementation plan with dependencies, verification/CI strategy, operational gates, and Definition of Done. |
 | [audits/PR_CONVERGENCE_2026-10-03.md](audits/PR_CONVERGENCE_2026-10-03.md) | 67-PR convergence audit and overwritten-branch recovery (`#135@788a1db`, `#140@5c9a818`) at `main` `e5b326b`. |
 | [audits/PR_CONVERGENCE_MATRIX_2026-10-03.json](audits/PR_CONVERGENCE_MATRIX_2026-10-03.json) | Machine-readable 67-PR convergence disposition matrix and overwritten-commit recovery inventory. |
+| [audits/FOUNDATION_VERIFICATION_MATRIX.md](audits/FOUNDATION_VERIFICATION_MATRIX.md) | Nagar / Nexus V1 foundation verification matrix: 15 canonical authorities, phase receipt chain, and 33-boolean machine gate. |
 
 ## History (archived — read-only, never a source of truth)
 

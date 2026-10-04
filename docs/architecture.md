@@ -1,6 +1,6 @@
 # NEXUS AI — Architecture (front door)
 
-**Release baseline:** v3.13.0 · **Verified against:** `main` @ `7573249` · **Index:** [`docs/README.md`](README.md)
+**Release baseline:** v3.13.0 · **Verified against:** `main` @ `e5b326b` (plus V1 Foundation Convergence on `arena/01a103a6-nexus-ai-agent`) · **Index:** [`docs/README.md`](README.md)
 
 NEXUS AI Agent is a single-process, offline-first multi-agent system with two products on one runtime: a **Telegram assistant surface** and **Nagar**, a typed creative studio that compiles pure pack operations into deterministic FFmpeg renders. It is a **modular monolith**: one process, one logical data model (SQLite locally, PostgreSQL/Neon when deployed), and no broker.
 

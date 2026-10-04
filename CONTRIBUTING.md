@@ -11,6 +11,7 @@ make version-check  # VERSION == pyproject.toml == newest released CHANGELOG hea
 make lint           # ruff check . && ruff format --check .
 make types          # mypy src
 make test           # pytest -q -m "not slow"
+python3 scripts/foundation_gate.py --require-phase9  # verify all 7 foundation gates + receipt chain
 ```
 
 * **Ruff has one pinned version, declared twice on purpose**: `rev:` in

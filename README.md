@@ -2,7 +2,7 @@
 
 **Telegram AI platform** — multi-provider conversations, cloud storage, 15-language support, image generation, speech synthesis, and the Nagar creative studio. Local/free paths are available; optional hosted services may require credentials and incur charges.
 
-> **Version: v3.12.0** (see `VERSION` and [the changelog](CHANGELOG.md)). Nagar Wave 2.5 and Wave 3 image generation; local upscaling remains deferred.
+> **Version: v3.13.0** (see `VERSION`, [the changelog](CHANGELOG.md), and [the Foundation Verification Matrix](docs/audits/FOUNDATION_VERIFICATION_MATRIX.md)). Nagar V1 foundation convergence: fail-closed security boundaries (STOP-A..D), Creative IR v1 + Execution Spine, DurableStudioStore with lease fencing and crash recovery, content-addressed ArtifactPassports, rational temporal truth, and machine-verified receipt chain.
 
 ---
 

@@ -9,13 +9,13 @@ It is deliberately honest about status. A domain is `PROVEN` only when the
 implementation is on `main`, the guard exists, and an adversarial mutation of
 that guard turns the suite red.
 
-| Domain | Question it answers | Status (2026-09-27) |
+| Domain | Question it answers | Status on `main@e5b326b` vs Converged Foundation (`arena/01a103a6-nexus-ai-agent`) |
 |---|---|---|
-| A — command truth | did the action the user was told about actually happen? | NOT PROVEN (open PR #99) |
-| B — pack trust | may this capability pack execute? | PROVEN (ADR 0006; PR #101 merged as `e6b06e0`; main CI run `36314653561` green) |
-| C — execution truth | were pixels really produced, or only planned? | NOT PROVEN (open PR #97) |
-| D — evidence truth | is the coverage/CI evidence measured, or asserted? | NOT PROVEN (open PRs #95, #98) |
-| E — replay truth | can the same command commit twice? | PARTIALLY PROVEN (process-local, documented) |
+| A — command truth | did the action the user was told about actually happen? | PROVEN on converged branch (`CommandBus` fail-closed authorizer STOP-C + `PlanTransactionExecutor`; `scripts/security_mutations_stop_c.py` 4/4 killed) |
+| B — pack trust | may this capability pack execute? | PROVEN on `main` and converged branch (ADR 0006; `creative/packs/trust.py` + `ed25519.py`) |
+| C — execution truth | were pixels really produced, or only planned? | PROVEN on converged branch (`ArtifactPassport` + `verify_media_artifact_independently` + `ProvenanceCausalChain`; `scripts/execution_trace_mutations.py` 12/12 killed) |
+| D — evidence truth | is the coverage/CI evidence measured, or asserted? | PROVEN on converged branch (`scripts/foundation_gate.py` + `SUBJECT_SHA -> WITNESS_SHA` receipt chain; ADR 0013) |
+| E — replay truth | can the same command commit twice? | PROVEN on converged branch (`DurableStudioStore` SQLite-backed idempotency, undo/redo, lease fencing, and `reconcile_on_startup`; `test_crash_recovery_matrix.py` CRASH_1..CRASH_8) |
 
 ## Domain B interfaces (the part that is proven)
 
