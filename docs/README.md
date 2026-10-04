@@ -60,6 +60,12 @@ placeholder text.
 | [MULTI_AGENT_PROTOCOL.md](MULTI_AGENT_PROTOCOL.md) | Multi-agent coordination protocol (English). |
 | [MULTI_AGENT_PROTOCOL.fa.md](MULTI_AGENT_PROTOCOL.fa.md) | همان پروتکل به فارسی. |
 
+## Assurance and Evaluation (living views)
+
+| Document | What it is |
+|---|---|
+| [evaluation/ASSURANCE_PLANE.md](evaluation/ASSURANCE_PLANE.md) | Independent typed evaluator: corpus, behavioral oracles, hard invariants, deterministic reports, fail-closed gate, adapter limits, and blocked Arena A E2E status. |
+
 ## Operations
 
 | Document | What it is |
