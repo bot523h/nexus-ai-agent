@@ -2736,7 +2736,7 @@
       "title_fa": "دفتر علّی بادوام (گراف پروژه) + گذرنامهٔ شاهد-مبناي مصنوع",
       "zone": "provenance-ledger",
       "priority": "P0",
-      "status": "active",
+      "status": "active_in_review",
       "scope": "Append-only hash-chained causal journal beside the durable job queue; fail-safe queue observer recording every durable lifecycle transition (enqueue/dedupe/reserve/verify/complete/fail/reopen/takeover) with digests; Artifact Passport as a read-only projection that re-measures the artifact, cross-checks chain vs authoritative row, and never invents proof (VERIFIED / VERIFIED_WITH_LIMITATIONS / INCOMPLETE / COMPROMISED).",
       "scope_fa": "ژورنال علّی الحاق-تنها با زنجیر هش در کنار صف بادوام؛ ناظر fail-safe صف برای هر گذار بادوام؛ گذرنامهٔ مصنوع به‌مثابهٔ تصویر فقط-خواندنی که مصنوع را دوباره می‌سنبد و هرگز شاهد نمی‌سازد.",
       "prerequisites": [],
@@ -2769,7 +2769,7 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": false,
-      "note": ""
+      "note": "Delivered as PR #153 (head fc20f654). CI: push run 37236986763 fully green (16/16 incl. continuum-evidence x3, python-parity x3, test); the parallel pull_request run was concurrency-cancelled mid-continuum (annotations prove gate passed=True/27 + coverage accepted=True before cancellation). Local gates: pytest -m 'not slow' 2953 passed x3, ruff clean, mypy clean, gate PASSED (27 attacks rejected), mutation campaign PASSED (all killed+restored), pack coverage ACCEPTED 97.37."
     }
   ],
   "deferred_log": [
