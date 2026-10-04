@@ -1,0 +1,49 @@
+{
+  "branch": "arena/01a103a6-nexus-ai-agent",
+  "commands_executed": [
+    {
+      "command": ".venv/bin/ruff format --check .",
+      "exit_code": 0
+    },
+    {
+      "command": ".venv/bin/ruff check .",
+      "exit_code": 0
+    },
+    {
+      "command": ".venv/bin/mypy src",
+      "exit_code": 0
+    },
+    {
+      "command": "PYTHONPATH=src .venv/bin/pytest -q tests/architecture/ tests/unit/test_agent_board.py tests/unit/test_agent_board_collision.py tests/unit/test_agent_board_governance.py tests/unit/test_foundation_gate.py tests/unit/test_docs_integrity.py tests/unit/test_surface_docs.py tests/unit/test_ci_continuum_evidence.py tests/unit/test_continuum_gate.py tests/unit/test_continuum_snapshot_contract.py",
+      "exit_code": 0,
+      "summary": "462 passed"
+    },
+    {
+      "command": "PYTHONPATH=src .venv/bin/python scripts/foundation_gate.py --no-require-phase8",
+      "exit_code": 0,
+      "summary": "All gates PASS"
+    }
+  ],
+  "delivery_status": "PUSHED",
+  "gate_booleans": {
+    "GOVERNANCE_GATE": true,
+    "PHASE_8": true,
+    "board_collision_preflight_verified": true,
+    "board_governance_invariants_verified": true,
+    "board_lease_fencing_verified": true,
+    "continuum_contract_verified": true,
+    "foundation_gate_runner_verified": true,
+    "governance_receipt_pushed": true,
+    "referee_exit_codes_verified": true
+  },
+  "parent_witness_sha": "5cc4671457d42100744065c71bf57d906dae1487",
+  "phase_id": "phase8-governance",
+  "phase_name": "BOARD, REFEREE, CONTINUUM & GOVERNANCE HARDENING",
+  "previous_receipt_digest": "a25250b8a4969c468fca819d5e4372e54761a5d217cf5eb6abbd136fe821428b",
+  "previous_receipt_path": "docs/audits/receipts/phase7-l4.receipt.json",
+  "schema_version": "1.0.0",
+  "subject_sha": "2d68c7cbd2ff3ecf2628a18d1806521dd5258110",
+  "timestamp_utc": "2026-10-04T04:08:59Z",
+  "verification_status": "VERIFIED",
+  "witness_sha": "SELF_WITNESS_COMMIT_FOLLOWING_SUBJECT_SHA"
+}
