@@ -11,11 +11,11 @@ boundary load-bearing instead of aspirational:
    may grow the legacy surface;
 2. no *new* importer of the legacy support modules may appear anywhere in
    ``src/`` (whitelisted importers only);
-3. both legacy routes are behind the fail-closed HMAC gate — a route can
-   never silently lose its auth by an edit in between.
+3. POST /creative/video-edit is an inert 410 response with no processing
+   or executor call path, while the job-status GET stays HMAC-gated.
 
-Nothing here forbids *removing* legacy code (the ADR's end state): when the
-routes are deleted, update this file to assert their absence instead.
+The POST route remains registered temporarily to provide an explicit 410;
+its legacy executor module is retained but must have no production importer.
 """
 
 from __future__ import annotations
@@ -86,6 +86,72 @@ def test_legacy_creative_route_set_is_frozen() -> None:
     )
 
 
+LEGACY_SHORT_NAMES = {"job_registry", "video_director", "ffmpeg_executor"}
+
+
+def _check_imports_in_tree(tree: ast.AST, rel_path: str) -> list[str]:
+    offenders: list[str] = []
+    rel_parent_parts = Path(rel_path).parent.parts
+    if rel_parent_parts == (".",):
+        rel_parent_parts = ()
+    file_pkg_parts = ["nexus_ai_agent"] + list(rel_parent_parts)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in LEGACY_MODULES or alias.name in LEGACY_SHORT_NAMES:
+                    offenders.append(f"{rel_path}: import {alias.name}")
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0:
+                if node.module in LEGACY_MODULES:
+                    offenders.append(f"{rel_path}: from {node.module} import …")
+                elif node.module == "nexus_ai_agent.creative":
+                    for alias in node.names:
+                        if alias.name in LEGACY_SHORT_NAMES:
+                            offenders.append(f"{rel_path}: from {node.module} import {alias.name}")
+            else:
+                if node.level <= len(file_pkg_parts):
+                    base_parts = file_pkg_parts[: len(file_pkg_parts) - (node.level - 1)]
+                    if node.module:
+                        mod_parts = base_parts + node.module.split(".")
+                    else:
+                        mod_parts = base_parts
+                    resolved = ".".join(mod_parts)
+                    if resolved in LEGACY_MODULES:
+                        offenders.append(f"{rel_path}: relative import resolved to {resolved}")
+                    else:
+                        for alias in node.names:
+                            is_legacy_alias = (
+                                f"{resolved}.{alias.name}" in LEGACY_MODULES
+                                or alias.name in LEGACY_SHORT_NAMES
+                            )
+                            if is_legacy_alias:
+                                offenders.append(
+                                    f"{rel_path}: relative import {alias.name} from {resolved}"
+                                )
+        elif isinstance(node, ast.Call):
+            is_dynamic_import = False
+            if isinstance(node.func, ast.Name) and node.func.id == "__import__":
+                is_dynamic_import = True
+            elif (
+                isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "importlib"
+                and node.func.attr == "import_module"
+            ):
+                is_dynamic_import = True
+
+            if is_dynamic_import and node.args and isinstance(node.args[0], ast.Constant):
+                target = str(node.args[0].value)
+                is_legacy_target = any(m in target for m in LEGACY_MODULES) or any(
+                    s in target for s in LEGACY_SHORT_NAMES
+                )
+                if is_legacy_target:
+                    offenders.append(f"{rel_path}: dynamic import of {target}")
+
+    return offenders
+
+
 def test_no_new_importers_of_legacy_support_modules() -> None:
     offenders: list[str] = []
     for path in sorted(SRC.rglob("*.py")):
@@ -93,28 +159,92 @@ def test_no_new_importers_of_legacy_support_modules() -> None:
         if rel in ALLOWED_IMPORTERS:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    if alias.name in LEGACY_MODULES:
-                        offenders.append(f"{rel}: import {alias.name}")
-            elif isinstance(node, ast.ImportFrom) and node.module in LEGACY_MODULES:
-                offenders.append(f"{rel}: from {node.module} import …")
+        file_offenders = _check_imports_in_tree(tree, rel)
+        offenders.extend(file_offenders)
     assert offenders == [], "new legacy-pipeline importers (ADR 0006):\n" + "\n".join(offenders)
 
 
-def test_legacy_routes_call_the_fail_closed_hmac_gate() -> None:
-    """Every legacy handler body must call ``require_hmac_signature`` directly."""
-    tree = ast.parse(API_APP.read_text(encoding="utf-8"))
+def test_legacy_import_guard_catches_relative_package_and_dynamic_bypasses() -> None:
+    """Prove that relative, package, and dynamic import bypasses are detected."""
+    package_import = ast.parse("from nexus_ai_agent.creative import job_registry")
+    assert len(_check_imports_in_tree(package_import, "bot/foo.py")) > 0
+
+    relative_import = ast.parse("from . import ffmpeg_executor")
+    assert len(_check_imports_in_tree(relative_import, "creative/foo.py")) > 0
+
+    relative_from_import = ast.parse("from .video_director import VideoEditPlan")
+    assert len(_check_imports_in_tree(relative_from_import, "creative/foo.py")) > 0
+
+    dynamic_importlib = ast.parse("importlib.import_module('nexus_ai_agent.creative.job_registry')")
+    assert len(_check_imports_in_tree(dynamic_importlib, "bot/foo.py")) > 0
+
+    dynamic_builtin = ast.parse("__import__('nexus_ai_agent.creative.ffmpeg_executor')")
+    assert len(_check_imports_in_tree(dynamic_builtin, "bot/foo.py")) > 0
+
+
+def _function_node(tree: ast.Module, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
     kinds = (ast.FunctionDef, ast.AsyncFunctionDef)
-    for (_, _), func_name in LEGACY_ROUTES.items():
-        func = next(n for n in tree.body if isinstance(n, kinds) and n.name == func_name)
-        calls = {
-            node.func.id
-            for node in ast.walk(func)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-        }
-        assert _AUTH_HELPER in calls, (
-            f"{func_name} no longer calls {_AUTH_HELPER} — the legacy route "
-            "must stay fail-closed until removal (ADR 0006)"
-        )
+    return next(node for node in tree.body if isinstance(node, kinds) and node.name == name)
+
+
+def _direct_calls(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    return {
+        node.func.id
+        for node in ast.walk(func)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+
+
+def test_video_edit_post_is_a_410_without_processing_or_auth_gates() -> None:
+    tree = ast.parse(API_APP.read_text(encoding="utf-8"))
+    handler = _function_node(tree, "create_video_edit_job")
+    route = next(
+        dec
+        for dec in handler.decorator_list
+        if isinstance(dec, ast.Call)
+        and isinstance(dec.func, ast.Attribute)
+        and dec.func.attr == "post"
+    )
+    assert any(
+        keyword.arg == "status_code"
+        and isinstance(keyword.value, ast.Constant)
+        and keyword.value.value == 410
+        for keyword in route.keywords
+    )
+    assert not (
+        handler.args.posonlyargs
+        or handler.args.args
+        or handler.args.vararg
+        or handler.args.kwonlyargs
+        or handler.args.kwarg
+    ), "the retired POST must not accept request data or processing dependencies"
+    forbidden_calls = {
+        "require_hmac_signature",
+        "get_creative_registry",
+        "_process_video_edit_job",
+        "_save_upload_to_temp",
+        "_download_video_to_temp",
+        "execute_ffmpeg_commands",
+        "analyze_video_with_gemini",
+    }
+    assert _direct_calls(handler).isdisjoint(forbidden_calls)
+    assert "background_tasks" not in {arg.arg for arg in handler.args.args}
+
+
+def test_job_status_get_remains_fail_closed_hmac_gated() -> None:
+    tree = ast.parse(API_APP.read_text(encoding="utf-8"))
+    handler = _function_node(tree, "get_job_status")
+    assert _AUTH_HELPER in _direct_calls(handler)
+
+
+def test_ffmpeg_executor_module_is_retained_but_not_imported_by_production() -> None:
+    executor = SRC / "creative" / "ffmpeg_executor.py"
+    assert executor.is_file(), "STOP-B retires the call path, not the executor module"
+    offenders: list[str] = []
+    for path in sorted(SRC.rglob("*.py")):
+        if path == executor:
+            continue
+        text = path.read_text(encoding="utf-8")
+        if "execute_ffmpeg_commands" in text or "creative.ffmpeg_executor" in text:
+            offenders.append(path.relative_to(SRC).as_posix())
+    assert offenders == [], "production executor call/import path remains: " + ", ".join(offenders)

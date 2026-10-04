@@ -90,6 +90,12 @@ PACK_TEST_TARGETS: Mapping[str, tuple[str, ...]] = {
 #: canonical target (:func:`pack_test_import_issues`), so a new pack test can
 #: never be silently left out of the evidence, and no entry here may go stale.
 HOST_LAYER_PACK_IMPORTERS: Mapping[str, str] = {
+    "tests/architecture/test_command_capability_boundary.py": (
+        "production CommandBus roots and operation-permission matrix"
+    ),
+    "tests/unit/test_authority_policy.py": (
+        "production service actors, grants, and operation policy"
+    ),
     "tests/unit/test_capability_lifecycle.py": "studio lifecycle gate (creative/studio)",
     "tests/unit/test_creative_render_jobs.py": "worker render adapter; encodes with FFmpeg",
     "tests/unit/test_optional_extras.py": "optional-extras install legs (CI extras matrix)",

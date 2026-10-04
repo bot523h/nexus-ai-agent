@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from command_authority import TEST_SERVICE_ACTOR, make_test_authorizer
 from pydantic import ValidationError
 
 from nexus_ai_agent.creative.packs.audio.models import (
@@ -58,7 +59,12 @@ def _setup_audio_bus() -> tuple[Project, CommandBus]:
     timeline = Timeline(timeline_id="tl_audio", duration_us=10_000_000)
     project = new_project("test_audio_proj", "Audio Studio Test", timeline)
     project = project.model_copy(update={"assets": [audio_rec, voice_rec, clip_1, clip_2]})
-    bus = CommandBus(project, registry=registry, allow_experimental=True)
+    bus = CommandBus(
+        project,
+        registry=registry,
+        authorizer=make_test_authorizer(project),
+        allow_experimental=True,
+    )
     return project, bus
 
 
@@ -112,6 +118,7 @@ def test_detect_beats_execution() -> None:
 
     cmd = TypedCommand(
         command_id="cmd_detect_01",
+        actor=TEST_SERVICE_ACTOR,
         operation="audio.detect_beats",
         input={"audio_asset_id": "music_track_01", "sensitivity": 0.8},
     )
@@ -131,6 +138,7 @@ def test_detect_beats_rejects_missing_asset() -> None:
 
     cmd = TypedCommand(
         command_id="cmd_detect_fail",
+        actor=TEST_SERVICE_ACTOR,
         operation="audio.detect_beats",
         input={"audio_asset_id": "non_existent_audio"},
     )
@@ -144,6 +152,7 @@ def test_normalize_loudness_requires_level_c_confirmation() -> None:
     # Unconfirmed command -> PermissionDeniedError at gate
     cmd_unconf = TypedCommand(
         command_id="cmd_norm_unconf",
+        actor=TEST_SERVICE_ACTOR,
         operation="audio.normalize_loudness",
         confirmed=False,
         input={"audio_asset_id": "music_track_01", "target_lufs": -16.0},
@@ -154,6 +163,7 @@ def test_normalize_loudness_requires_level_c_confirmation() -> None:
     # Confirmed command -> succeeds and creates derived AssetRecord
     cmd_conf = TypedCommand(
         command_id="cmd_norm_ok",
+        actor=TEST_SERVICE_ACTOR,
         operation="audio.normalize_loudness",
         confirmed=True,
         input={
@@ -180,6 +190,7 @@ def test_duck_music_execution() -> None:
 
     cmd = TypedCommand(
         command_id="cmd_duck_01",
+        actor=TEST_SERVICE_ACTOR,
         operation="audio.duck_music",
         input={
             "music_asset_id": "music_track_01",
@@ -201,6 +212,7 @@ def test_beat_sync_cut_execution() -> None:
 
     cmd = TypedCommand(
         command_id="cmd_cut_01",
+        actor=TEST_SERVICE_ACTOR,
         operation="audio.beat_sync_cut",
         input={
             "audio_asset_id": "music_track_01",
@@ -225,6 +237,7 @@ def test_command_bus_idempotency() -> None:
 
     cmd = TypedCommand(
         command_id="cmd_idem_01",
+        actor=TEST_SERVICE_ACTOR,
         idempotency_key="key-audio-12345",
         operation="audio.detect_beats",
         input={"audio_asset_id": "music_track_01"},

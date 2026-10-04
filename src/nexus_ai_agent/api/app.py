@@ -10,18 +10,16 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from nexus_ai_agent.api.dashboard import router as dashboard_router
 from nexus_ai_agent.config.settings import get_settings
-from nexus_ai_agent.core.ssrf_guard import SafeAsyncTransport, SSRFBlockError, validate_url
+from nexus_ai_agent.core.ssrf_guard import SafeAsyncTransport, validate_url
 from nexus_ai_agent.creative import image_post
-from nexus_ai_agent.creative.ffmpeg_executor import execute_ffmpeg_commands
 from nexus_ai_agent.creative.job_registry import JobRegistry
-from nexus_ai_agent.creative.video_director import analyze_video_with_gemini
 
 CREATIVE_IMAGE_POST_AVAILABLE = hasattr(image_post, "generate_image_post")
 _creative_registry: JobRegistry | None = None
@@ -63,16 +61,14 @@ _HMAC_MAX_AGE_SECONDS = 300.0
 _HMAC_TIMESTAMP_HEADER = "X-NEXUS-Timestamp"
 _HMAC_SIGNATURE_HEADER = "X-NEXUS-Signature"
 
-#: Resource cap for legacy upload bodies (task-165, ADR 0006). Enforced
-#: while streaming the multipart body to temp storage; an oversized upload
-#: is rejected with 413 before any job row exists and the partial file is
-#: unlinked. Legacy route only — the canonical surface caps media by
-#: duration (bot/creative_surface.py, 30 s) at validation time.
+#: Resource cap used by the retained upload helper (task-165, ADR 0006).
+#: The retired ``POST /creative/video-edit`` route does not call that helper;
+#: the canonical creative surface caps media by duration (30 s) at validation.
 _MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 MiB
 
 
 async def require_hmac_signature(request: Request) -> None:
-    """HMAC-SHA256 request signing for state-changing dashboard endpoints.
+    """HMAC-SHA256 request authentication for the legacy job-status endpoint.
 
     **Fail-closed**: without a configured ``NEXUS_API_HMAC_KEY`` the
     endpoint is disabled outright and answers ``503 Security configuration
@@ -295,111 +291,28 @@ async def _download_video_to_temp(video_url: str) -> str:
     return temp_path
 
 
-async def _process_video_edit_job(
-    job_id: str,
-    source: str,
-    cleanup_path: str | None = None,
-) -> None:
-    local_input_path = cleanup_path
-    registry = get_creative_registry()
-    try:
-        await registry.update_job_status(job_id, "processing")
-        if source.startswith(("http://", "https://")):
-            local_input_path = await _download_video_to_temp(source)
-        if local_input_path is None:
-            raise RuntimeError("No local video source available for processing")
-
-        settings = get_settings()
-        plan = await analyze_video_with_gemini(
-            local_input_path,
-            settings.creative_gemini_api_key or "",
-        )
-        output_path = str(Path(settings.creative_temp_dir) / f"{job_id}.mp4")
-        result = await execute_ffmpeg_commands(plan, local_input_path, output_path)
-        if not result.success:
-            raise RuntimeError(result.error_message or "FFmpeg execution failed")
-        await registry.update_job_status(
-            job_id,
-            "done",
-            result=result.model_dump(),
-        )
-    except Exception as exc:
-        await registry.update_job_status(job_id, "failed", error=str(exc))
-    finally:
-        if local_input_path:
-            Path(local_input_path).unlink(missing_ok=True)
-
-
-# Legacy lane (ADR 0006): the canonical media path is the Telegram creative
-# surface → durable job queue → packs registry → render lane. These two
-# routes are frozen (tests/architecture/test_legacy_creative_boundary.py) and
-# fail-closed; removal is sequenced after PR#58's hardening lands.
-@app.post("/creative/video-edit", deprecated=True)
-async def create_video_edit_job(
-    request: Request,
-    background_tasks: BackgroundTasks,
-) -> dict[str, str]:
-    # Fail-closed HMAC gate runs BEFORE any form parsing so the raw body is
-    # read exactly once here (starlette caches it in request._body, and the
-    # multipart parser below reuses that cache).
-    await require_hmac_signature(request)
-
-    form = await request.form()
-    upload = form.get("file")
-    # request.form() yields starlette UploadFile instances (fastapi's class
-    # only subclasses it), so the isinstance target is the starlette one.
-    file = upload if isinstance(upload, StarletteUploadFile) else None
-    raw_video_url = form.get("video_url")
-    video_url = str(raw_video_url) if isinstance(raw_video_url, str) and raw_video_url else None
-
-    if file is None and not video_url:
-        raise HTTPException(status_code=400, detail="Provide either file or video_url")
-    if file is not None and video_url:
-        raise HTTPException(status_code=400, detail="Provide only one video source")
-
-    source: str
-    cleanup_path: str | None = None
-    input_data: dict[str, str | None]
-
-    if file is not None:
-        cleanup_path = await _save_upload_to_temp(file)
-        source = cleanup_path
-        input_data = {
-            "source_type": "upload",
-            "path": cleanup_path,
-            "filename": file.filename,
-            "content_type": file.content_type,
-        }
-    else:
-        normalized_url = (video_url or "").strip()
-        if not normalized_url:
-            raise HTTPException(status_code=400, detail="video_url must not be empty")
-        # SSRF fail-fast at request time: reject unsafe targets with a 400
-        # *before* a job row is created. The background download re-validates
-        # at connect time via SafeAsyncTransport (defence in depth).
-        try:
-            await asyncio.to_thread(validate_url, normalized_url)
-        except SSRFBlockError as exc:
-            raise HTTPException(status_code=400, detail=f"video_url rejected: {exc}") from exc
-        source = normalized_url
-        input_data = {
-            "source_type": "url",
-            "video_url": normalized_url,
-            "filename": None,
-            "content_type": None,
-        }
-
-    job_id = await get_creative_registry().create_job("video_edit", input_data)
-    background_tasks.add_task(_process_video_edit_job, job_id, source, cleanup_path)
-    return {"job_id": job_id, "status": "pending"}
+# STOP-B tombstone: keep the historical URL discoverable, but never parse,
+# authorize, persist, enqueue, download, or process its request body.
+@app.post("/creative/video-edit", deprecated=True, status_code=410)
+async def create_video_edit_job() -> JSONResponse:
+    return JSONResponse(
+        status_code=410,
+        content={
+            "detail": "This legacy video-edit endpoint has been retired.",
+            "canonical_execution_lane": (
+                "Telegram creative surface → durable job queue → "
+                "packs runtime registry → render lane"
+            ),
+        },
+    )
 
 
 @app.get("/creative/jobs/{job_id}", deprecated=True)
 async def get_job_status(job_id: str, request: Request) -> dict[str, object]:
     # Legacy read gate (task-165, ADR 0006): job rows carry local paths and
-    # source URLs — the same fail-closed HMAC gate as the POST. A GET signs
-    # "{timestamp}:" + empty body, so any caller that can create jobs (it
-    # must hold the key) can also read them; unsigned callers cannot.
+    # source URLs, so this endpoint remains behind the fail-closed HMAC gate.
+    # A GET signs "{timestamp}:" + empty body; unsigned callers cannot read
+    # the old job registry. The POST that used to create these jobs is retired.
     await require_hmac_signature(request)
     job = await get_creative_registry().get_job(job_id)
     if job is None:

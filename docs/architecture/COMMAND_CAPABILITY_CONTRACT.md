@@ -4,7 +4,8 @@
 `creative/studio/` command bus and capability registry — not a new renderer, a
 new executor, or a UI. **Baseline:** `main` @
 `035a896dd2ed1293de6accf2ef4309da2fd64c89` (2026-09-24, after PR#65).
-Behaviour decision: [D-0013](../DECISION_LOG.md); governance record:
+Behaviour decision: [D-0013](../DECISION_LOG.md), amended for mandatory runtime
+authority in its task-196 follow-up; governance record:
 [ADR 0005](adr/0005-canonical-command-capability-contract.md).
 
 ## 1. Canonical decision
@@ -27,15 +28,17 @@ of evolving the merged `TypedCommand` in place (§10).
 | Version | Value | Rule |
 |---|---|---|
 | external protocol identifier | `nagar.command.v1` | fixed; any other value (including a `v2` protocol id) is refused at parse |
-| envelope `schema_version` | `1` (legacy, default) or `2` (canonical) | unknown values refused; `2` requires explicit `actor`, `target.project_id`, `provenance` |
+| envelope `schema_version` | `1` (legacy, default) or `2` (canonical) | unknown values refused; `2` requires explicit `actor`, `target.project_id`, `provenance`; every dispatch version requires an actor claim and trusted authorizer |
 | per-operation `operation_schema_version` | integer `>= 1`, default `1` | must equal the registered `OperationSpec.schema_version`; mismatch refused |
 | capability `version` | `MAJOR.MINOR.PATCH` per capability | snapshot major must equal installed major and must not be newer |
 
-Backward compatibility is additive: schema 1 commands (the shape every
-in-process runtime call site emits today) parse and dispatch unchanged; schema
-2 adds required claims for the claimed path. No database migration, no
-protocol rename, no fallback conversion that could silently reinterpret a
-command. The six shipped pack manifests keep pinning `nagar.command.v1`.
+Backward compatibility is parse-compatible, not trust-compatible: schema 1
+commands remain parseable, but dispatch fails closed unless both an explicit
+actor claim and trusted authorizer are present. Schema 2 additionally requires
+target project and provenance claims and is emitted by every production Nagar
+root. No database migration, protocol rename, or fallback conversion silently
+reinterprets a command. The six shipped pack manifests keep pinning
+`nagar.command.v1`.
 
 ## 2. Dispatch pipeline
 
@@ -65,12 +68,11 @@ flowchart LR
    operation (`UnknownOperationError`), operation schema version match, typed
    input validation (every input model forbids extra fields; input must be
    finite JSON within 512 KiB).
-3. **Actor / project.** `target.project_id` is a claim, verified against the
-   bus project. The injected `ProjectAuthorizer` binds actor and project
-   independently; a missing, mismatched, or foreign grant is denied. An actor
-   claim without an authorizer is denied. A claim-less schema-1 command
-   without an authorizer dispatches under implicit local trust (deprecated
-   compatibility path, §4).
+3. **Actor / project.** `target.project_id`, when present, is a claim verified
+   against the bus project. The injected `ProjectAuthorizer` binds actor and
+   project independently; missing authorizer, missing actor, mismatched
+   project, or foreign grant is denied for both schema versions. Schema 2
+   requires explicit project target and provenance before dispatch.
 4. **Capability.** `check_capability` verifies existence, availability, and
    snapshot compatibility against the authoritative registry; the grant must
    cover the operation's effective permissions (`project:read` baseline for
@@ -131,16 +133,16 @@ derived from the builders, never from a hardcoded list.
 
 ## 4. Authorization semantics
 
-The envelope actor is a claim, never proof. Trust enters only through the
-`ProjectAuthorizer` port, injected by the composition root that authenticated
-the caller. The pure studio layer knows no database or web framework.
-Claim-less schema-1 dispatch without an authorizer is the deprecated local
-path that keeps the three in-process runtime call sites
+The envelope actor is a claim, never proof. Every dispatch version requires a
+non-empty actor claim and a `ProjectAuthorizer` injected by the trusted
+composition root; missing either is denied. The pure studio layer knows no
+database or web framework. The three production roots
 (`creative/slideshow/service.py`, `creative/slideshow/upscale.py`,
-`creative/render_jobs.py`) working unchanged; binding explicit service grants
-there is the runtime owner's follow-up (board task-181), after which the
-implicit path can be retired. No anonymous or bypass principal exists: with
-an authorizer configured, a missing actor claim is denied.
+`creative/render_jobs.py`) bind typed service actors to project-specific
+`ProjectAccess` grants. Each root has a closed operation-to-permission map;
+the architecture matrix pins those grants to the registry's effective
+permissions. Schema 1 remains a parse-compatibility shape only—there is no
+implicit local-trust dispatch path.
 
 ## 5. Error taxonomy
 
@@ -196,13 +198,12 @@ for the identical logical payload under its own key.
 
 ## 8. Compatibility strategy
 
-Additive fields with defaults, strict literals for versions, and one
-documented legacy path (claim-less schema 1 under implicit local trust).
-Sunset rule: the implicit path may be retired only after the runtime owner
-lands explicit grants at the three call sites (task-181) plus an
-architecture guard requiring `authorizer=` there; the retirement PR must keep
-the full suite green without touching the contract layer. No second bus, no
-second resolver, no parallel envelope package.
+Additive fields with defaults and strict literals for versions preserve
+schema-1 parsing, while authorization is mandatory at dispatch for both
+schemas. All three production roots now pass explicit project-scoped grants
+and schema-2 actor/target/provenance claims; architecture and unit tests pin
+root reachability, actor identity, and operation-level permissions. No second
+bus, no second resolver, no parallel envelope package.
 
 ## 9. Security implications
 
@@ -212,10 +213,11 @@ schema, references, or payload were compared. Revalidation of typed objects
 and of the initial snapshot closes fabricated-hash preconditions. Handler
 isolation (deep copy in, identity check out) closes mutating-handler
 corruption. Input bounds (512 KiB finite JSON, identifier shapes, 512 refs)
-bound the pure validation path. Residuals: the implicit local path trusts
-the in-process caller by design (in-process callers already own the
-process); network-facing adapters MUST inject an authorizer — the seam
-exists, the enforcement at each future adapter is that adapter's contract.
+bound the pure validation path. Residuals: `ProjectAccess` is a trusted static
+grant for the current ephemeral production projects, not an authenticated
+multi-user membership store. Any future network-facing adapter must inject an
+authorizer backed by its authenticated principal/project-membership boundary;
+request JSON must never construct that grant.
 
 ## 10. Reconciliation record
 
@@ -247,8 +249,9 @@ Salvaged from Agent 2 into this contract: the operation-matrix *question*
 fail-closed locality (`network_access = False`), and dry-run surface
 (`preview` mode reserved, not yet executable). This gate supersedes PR#68's
 contract scope (same studio files; expected textual conflict resolved by
-merge order); PR#68's queue hardening and runtime call-site migrations stay
-valid follow-ups for their lanes.
+merge order). PR#68's durable-queue payload hardening remains a separate
+follow-up; its implicit-trust runtime migration is superseded by the task-196
+STOP-C amendment.
 
 ## 11. Open gaps
 
@@ -256,7 +259,7 @@ valid follow-ups for their lanes.
 |---|---|
 | Bus reservation across instances / processes / restart | NOT VERIFIED by design (in-memory); no claim |
 | Durable queue payload-conflict | GAP, lifecycle lane (task-182) |
-| Explicit service grants at the three runtime call sites | RUNTIME GAP, owner Agent 1 (task-181) |
+| Explicit actor + project-scoped authorizer at the three production roots | CLOSED by task-196 STOP-C; `test_command_capability_boundary.py` + `test_authority_policy.py` |
 | Integration with PR#67's `required_packs`/lifecycle bus gate | INTEGRATED at stage 4b (task-183, stacked on PR#72; PR#67's lifecycle suite runs unchanged on this tree); `MERGED` only after PR#72 lands and CI re-runs. Merging PR#67 afterwards is a *semantic* resolution: keep stage 4b and drop PR#67's stage-3.5 call and its `CreativeRenderPayload.allow_experimental` / surface flag (the architecture guards fail otherwise), and add `color.apply_lut` to `EXPERIMENTAL_OPT_IN_OPERATIONS` |
 | Runtime opt-in propagation beyond the render-job queue (studio/slideshow service call sites) | runtime-owner follow-up; slideshow/caption/edit packs are `AVAILABLE`, so no opt-in is needed today |
 | `preview` execution mode semantics | reserved surface, no implementation |

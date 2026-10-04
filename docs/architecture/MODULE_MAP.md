@@ -2,7 +2,7 @@
 
 **Status:** Living document — every rule here names the test that enforces it
 **Scope:** package inventory, allowed dependency directions, fitness-function catalogue, extension recipes
-**Verified against:** `main` @ `7573249`
+**Verified against:** `main` @ `e5b326b` (2026-10-03)
 
 This is the *structural* contract of the repository. If a rule is not in §3 or §4, it is a convention, not a law. If a rule is in this file and **not** enforced by a test, that is a documentation bug — file it against zone `docs-architecture`.
 
@@ -37,7 +37,7 @@ Dependencies point **downward**. A lower layer may never import a higher one, an
 | `application/` | L3 | use-case composition with no framework imports | `get_image_gen_provider` |
 | `infrastructure/observability/` | L3 | metrics registry, structured lifecycle events, redaction | `MetricsRegistry`, `log_lifecycle_event`, `redact` |
 | `continuum/`, `maintenance/`, `integrations/` | L3 | project-state snapshot + evidence contracts (pack coverage, provenance, threat-model gate, mutation campaign), housekeeping/backup, external integrations | `snapshot`, `pack_coverage`, `provenance`, `gate`, `mutations`, `housekeeping` |
-| `storage/` | L4 | SQLModel tables, Alembic bootstrap, checkpoint adapters, lifecycle store, reconciler, R2 | `get_session`, `get_checkpointer`, `CheckpointReconciler` |
+| `storage/` | L4 | SQLModel tables, Alembic bootstrap, checkpoint adapters, lifecycle store, reconciler, key-contained local cache, R2 | `get_session`, `get_checkpointer`, `CheckpointReconciler`, `LocalCacheProvider` |
 | `adapters/` | L4 | port implementations: in-process job queue, Whisper caption engine, LangGraph lifecycle hooks | `InProcessJobQueue`, `WhisperLocalCaptionEngine` |
 | `llm/` | L4 | provider chain (litellm router), local llama.cpp server provider, fake provider for tests | `build_router`, `LocalServerProvider`, `FakeLLMProvider` |
 | `orchestration/` | L4 | LangGraph state machine + intent router + persona selection | `compile_graph`, `classify_intent` |
@@ -67,7 +67,8 @@ Dependencies point **downward**. A lower layer may never import a higher one, an
 | R10 | Image generation never imports the bot/storage layers, directly or dynamically | `test_image_gen_boundary.py` |
 | R11 | The domain glossary and retention constants stay live (a deleted guarantee is a failing test) | `test_glossary_liveness.py` |
 | R12 | `bot/surface/` is importable without `telegram`: no module in the package imports PTB directly, **and** no top-level import pulls an engine that does (such engines are imported lazily inside the function). Every stub-replaced command resolves to a surface symbol | `test_surface_onboarding.py::test_the_surface_package_imports_without_telegram` (subprocess probe), `test_surface_ptb.py::test_the_surface_package_imports_no_telegram`, `test_surface_registration.py` (20-command `EXPECTED` map, callback map, forbidden stub strings) |
-| R13 | One canonical command contract: AI modules cannot import Nagar executors/pack handlers, in the creative tree only `CommandBus` calls an operation handler, the studio authorization seam points inward only, `TypedCommand` is the single envelope with protocol `nagar.command.v1` (a `v2` protocol id is banned from `src/`), and the studio core cannot invoke shell/media/UI tooling | `test_command_capability_boundary.py` (structural), `test_command_capability_contract.py` (versioning, ordered denial before handler, replay/conflict, behavioural). This does **not** assert generic non-Nagar tools cannot run a shell, nor fence the runtime-owned call sites (board task-181). |
+| R13 | One canonical command contract: AI modules cannot import Nagar executors/pack handlers, in the creative tree only `CommandBus` calls an operation handler, the studio authorization seam points inward only, `TypedCommand` is the single envelope with protocol `nagar.command.v1` (a `v2` protocol id is banned from `src/`), all three production `CommandBus` roots bind a project-scoped trusted authorizer and service actor, and the studio core cannot invoke shell/media/UI tooling | `test_command_capability_boundary.py` (root/actor/permission-matrix structure), `test_command_capability_contract.py` (versioning, fail-closed authorization, ordered denial before handler, replay/conflict, behavioural), `test_authority_policy.py` (production-root service grants). This does **not** assert generic non-Nagar tools cannot run a shell. |
+| R14 | External filenames are reduced to safe base names before becoming remote keys; `LocalCacheProvider` rejects absolute/traversal/NUL/repeatedly URL-encoded keys and symlink escapes for upload, download, and list prefixes | `test_storage_key_boundary.py` (Telegram ingress), `test_local_cache_provider.py` (path and operation adversaries) |
 
 **Legacy baseline.** `tests/architecture/legacy_baseline.json` freezes the pre-existing `langgraph`/`sqlmodel`/`telegram` import set with an explicit `approval: ARCH_BASELINE_APPROVED`. New violations fail; removing a baseline entry is allowed (and should be celebrated, not blocked).
 
@@ -75,7 +76,7 @@ Dependencies point **downward**. A lower layer may never import a higher one, an
 
 The repository follows the evolutionary-architecture practice of turning structural intent into executable guards — the mechanism described by Ford/Parsons/Kua and popularised as *architecture fitness functions* ([InfoQ overview](https://www.infoq.com/articles/fitness-functions-architecture/), [agentic pattern entry](https://aipatternbook.com/architecture-fitness-function)). Two properties make it work here:
 
-- **Fast**: the whole `tests/architecture/` suite is pure AST/JSON analysis — no imports of production modules, no I/O, milliseconds per file.
+- **Fast**: the suite is low-latency; most structural checks are AST/JSON analysis, while selected contract gates import live registries to compare authority and manifest data. No external service is required.
 - **Actionable**: each assertion names the offending file and rule, so a coding agent can fix the violation without asking a human.
 
 | Signal | Rule | Cadence |

@@ -319,11 +319,11 @@ class Settings(BaseSettings):
         default="",
         validation_alias="NEXUS_API_CORS_ORIGINS",
     )
-    # Fail-closed: unset/empty disables mutating dashboard API endpoints
-    # (currently POST /creative/video-edit answers 503 "Security
-    # configuration incomplete"). When set, requests must be signed with
-    # X-NEXUS-Signature: hex(HMAC-SHA256(key, "{timestamp}:{raw_body}"))
-    # plus a fresh X-NEXUS-Timestamp (unix seconds, ±300 s).
+    # HMAC key for the legacy creative-job status read endpoint. Unset/empty
+    # makes that endpoint fail closed with 503; POST /creative/video-edit is
+    # retired and always returns 410 regardless of this setting. Signed
+    # requests use X-NEXUS-Signature: hex(HMAC-SHA256(key,
+    # "{timestamp}:{raw_body}")) plus a fresh X-NEXUS-Timestamp (±300 s).
     api_hmac_key: str | None = Field(
         default=None,
         validation_alias="NEXUS_API_HMAC_KEY",
