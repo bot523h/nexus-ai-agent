@@ -42,6 +42,10 @@ placeholder text.
 | [architecture/adr/0004-board-schema-2.md](architecture/adr/0004-board-schema-2.md) | Coordination board schema 2: prerequisites, acceptance criteria, history split. |
 | [architecture/adr/0005-canonical-command-capability-contract.md](architecture/adr/0005-canonical-command-capability-contract.md) | Canonical command and capability contract: versioning, location, and reconciliation. |
 | [architecture/adr/0006-capability-pack-trust-root.md](architecture/adr/0006-capability-pack-trust-root.md) | Capability packs get an explicit trust root (Ed25519, offline, fail-closed). |
+| [architecture/adr/0007-multisource-referee-exit-codes.md](architecture/adr/0007-multisource-referee-exit-codes.md) | The overlap referee reports unverifiable data as exit 2, not as a pass. |
+| [architecture/adr/0011-restricted-shell-flag-grammar.md](architecture/adr/0011-restricted-shell-flag-grammar.md) | Restricted shell validates an explicit argument grammar, not a forbidden-flag list. |
+| [architecture/adr/0012-board-composition-and-evidence-governance.md](architecture/adr/0012-board-composition-and-evidence-governance.md) | Board composition preflight, cited-evidence resolver, executable governance invariants. |
+| [architecture/adr/0013-foundation-gate-subject-witness-chain.md](architecture/adr/0013-foundation-gate-subject-witness-chain.md) | Foundation gate verification uses a SUBJECT_SHA vs WITNESS_SHA hash-chained receipt protocol. |
 | [architecture/TRUST_CONTROL_PLANE.md](architecture/TRUST_CONTROL_PLANE.md) | Trust/truth domains A–E: interfaces, authorities, non-bypass guards, honest status. |
 
 ## Authoritative records

@@ -18,6 +18,10 @@ This directory holds **decisions about how the architecture documentation and it
 | [0004](0004-board-schema-2.md) | Coordination board schema 2: declared prerequisites and acceptance criteria | accepted | 2026-09-21 |
 | [0005](0005-canonical-command-capability-contract.md) | Canonical command and capability contract: versioning, location, and reconciliation | accepted | 2026-09-24 |
 | [0006](0006-capability-pack-trust-root.md) | Capability packs get an explicit trust root, not a self-asserted one | accepted | 2026-09-27 |
+| [0007](0007-multisource-referee-exit-codes.md) | The overlap referee reports unverifiable data as exit 2, not as a pass | accepted | 2026-09-30 |
+| [0011](0011-restricted-shell-flag-grammar.md) | The restricted shell validates an argument grammar, not a list of forbidden options | accepted | 2026-09-27 |
+| [0012](0012-board-composition-and-evidence-governance.md) | Board composition preflight, cited-evidence resolver, executable governance invariants | accepted | 2026-10-01 |
+| [0013](0013-foundation-gate-subject-witness-chain.md) | Foundation gate verification uses a SUBJECT_SHA vs WITNESS_SHA hash-chained receipt protocol | accepted | 2026-10-04 |
 
 ## Rules
 
@@ -26,3 +30,4 @@ This directory holds **decisions about how the architecture documentation and it
 3. An ADR here must not restate a `DECISION_LOG.md` decision; it links to it.
 4. `tests/unit/test_docs_integrity.py` fails if an ADR file exists that is not in the index above, or if an index entry points at a missing file.
 5. Statuses: `proposed` → `accepted` → (`deprecated` | `superseded by ADR-XXXX`).
+6. **Number allocation is by highest-visible, not next-in-file.** Before adding an ADR, take the highest number visible on *any* open branch (`git ls-tree` over `refs/remotes/origin`), not merely the highest on `main`.

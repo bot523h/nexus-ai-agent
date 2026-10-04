@@ -9,21 +9,58 @@ Commands
 --------
   show                          Print the board (auto-releases expired leases)
   claim TASK --branch BRANCH    Claim a queued/expired task (refuses if actively
-                                claimed by another branch)
-  release TASK --branch BRANCH  Mark a finished claim done (free the zone)
+                                claimed by another branch). A same-owner call is a
+                                heartbeat renewal; taking a lease over advances the
+                                lease's fencing generation.
+  release TASK --branch BRANCH  Mark a finished claim done (free the zone) and
+                                advance its generation.
   defer TASK --branch BRANCH --reason "..." [--fa "..."]
                                 Record a deferral note ("I stopped because
                                 another agent was working; resume later")
   next --branch BRANCH          Suggest the first claimable task
-  check --files a,b,c --branch BRANCH
-                                Exit 1 if any file overlaps another branch's
-                                active or active-in-review exclusive paths
-                                (pre-push / CI referee)
+  check --files a,b,c --branch BRANCH [--no-remote] [--repo owner/name]
+                                Multi-source referee over the claim board, every
+                                *other* live git worktree's board, origin/main's
+                                board, and every open-PR branch's pushed board.
+                                Exit 0 when every source is readable and there
+                                is no overlap, 1 on a proven overlap, 2 when a
+                                source (this board, a worktree, origin/main, or
+                                an open-PR branch) could not be read — never 0
+                                on unverified data.
+                                --no-remote loudly narrows the claim to the
+                                local board (scope=local, not a global pass).
   praudit [--pr-json F | --repo owner/name] [--fail-on-invisible] [--json]
                                 Read-only audit: compare open GitHub PR changed
                                 files against board exclusive_paths and report
                                 PRs whose scope is invisible (no claim for the
                                 head branch, or files outside every fence).
+  collision --refs A,B[,C...] [--fail-on-collision] [--json]
+                                Read-only pre-push preflight: for every pair of
+                                refs, list the files they both rewrite, the board
+                                zones those files belong to, and the three-way
+                                merge conflict-hunk count.  A pair is a
+                                SECURITY_SENSITIVE_COLLISION when a shared file
+                                is in a security-relevant zone; the tool detects
+                                and classifies only — it never merges or resolves.
+  validate [--strict-new] [--json]
+                                Mechanical governance invariants (exit 1 on error):
+                                every next_work entry and every active claim must
+                                carry evidence_required (legacy claimable gaps are
+                                WARN, errors under --strict-new); and exactly one
+                                active claim may hold gates_owner.
+
+Lease fencing (task-219)
+------------------------
+Every claim carries a ``generation`` epoch. It advances whenever ownership
+*transfers* (a new branch takes the lease, or the holder releases/defers it)
+and stays stable across a same-owner heartbeat renewal. Mutating an *existing*
+lease (``claim`` renewal, takeover of an expired lease, ``release``, ``defer``)
+**requires** ``--expected-generation N`` and refuses with exit 2 when it is
+absent or differs from the live generation: a stale owner that resumes after
+the zone changed hands cannot mutate it. Taking a *free* lease (a fresh task, or
+a legacy record at generation 0) needs no token — there is nothing to fence
+against. The check is deterministic — a refusal, never a warning or a
+best-effort log.
 
 All state lives in .agents/board.json (schema 1). Pure stdlib.
 
@@ -37,11 +74,14 @@ Typical loop for an arriving agent:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
+import subprocess
 import sys
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -49,8 +89,10 @@ ROOT = Path(__file__).resolve().parents[1]
 BOARD = ROOT / ".agents" / "board.json"
 
 # Files every PR is expected to touch (coordination medium) — never counted as
-# "uncovered scope" by praudit, because no claim exclusively owns them.
-COORDINATION_FILES = frozenset({".agents/board.json"})
+# "uncovered scope" by praudit and never treated as a collision hazard, because
+# no claim exclusively owns them.  AGENTS.md is listed in the protocol's own
+# SAFE_INDEPENDENT rule, so it must be excluded here too (docs == executed rule).
+COORDINATION_FILES = frozenset({".agents/board.json", "AGENTS.md"})
 
 STOP_BANNER = """
 ╔══════════════════════════════════════════════════════════════════╗
@@ -112,8 +154,52 @@ def save_board(board: dict) -> None:
     BOARD.write_text(json.dumps(board, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+class BoardLockedError(RuntimeError):
+    """Another agent holds the board lock; the caller must retry, not proceed."""
+
+
+@contextlib.contextmanager
+def board_lock() -> Iterator[None]:
+    """Hold the inter-process board lock for the duration of one mutation.
+
+    Read-validate-write on a JSON file is a TOCTOU race: two agents can read the
+    same generation, both validate, and both write — the second silently undoing
+    the first (and defeating fencing, since the loser's token was valid when it
+    read). This exclusive ``flock`` (the same primitive ``storage/migrations.py``
+    uses) serialises board mutations across processes on one host. It does *not*
+    span hosts: two sandboxes mutate separate clones and reconcile through git,
+    where the fencing generation is the guard (a stale epoch is refused on push).
+    Non-POSIX degrades to best-effort, exactly like the migration lock.
+    """
+    BOARD.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = BOARD.with_suffix(".lock")
+    try:
+        import fcntl  # POSIX only
+    except ImportError:  # pragma: no cover - non-POSIX best-effort
+        yield
+        return
+    with lock_path.open("a+") as fh:
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise BoardLockedError(
+                "the board is locked by another agent; retry in a moment"
+            ) from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
 def gc_expired(board: dict) -> list[str]:
-    """Auto-release expired leases. Returns list of freed task names."""
+    """Auto-release expired leases. Returns list of freed task names.
+
+    The release is recorded in ``release_reason`` and the owner's ``note`` is
+    left untouched: the note holds that session's unpushed evidence and handoff,
+    so overwriting it here would silently destroy work (a real regression the
+    previous hardening session had to work around). ``gc`` only ever adds the
+    structured release reason.
+    """
     freed: list[str] = []
     for claim in board.get("claims", []):
         claimed = _parse(claim.get("claimed_at"))
@@ -122,7 +208,11 @@ def gc_expired(board: dict) -> list[str]:
             if _now() > expires:
                 previous_status = claim.get("status")
                 claim["status"] = "expired"
-                claim["note"] = (
+                # A departed lease holder also loses the gates: an expired
+                # gates owner must not keep the single-gate role. Provenance
+                # (agent_branch, claimed_at) is kept — the record stays honest.
+                claim["gates_owner"] = False
+                claim["release_reason"] = (
                     f"auto-released by gc at {_iso(_now())} (stale {previous_status} lease)"
                 )
                 freed.append(claim["task"])
@@ -150,19 +240,56 @@ def _claim_live(claim: dict) -> bool:
     return _now() <= claimed + timedelta(hours=int(claim.get("ttl_hours", 24)))
 
 
+def _generation(claim: dict) -> int:
+    """Fencing epoch of a lease. Legacy boards without the field read as 0.
+
+    The epoch increments on every *transfer of ownership* (a new branch taking
+    the lease, or the holder releasing/deferring it) and stays stable across a
+    same-owner heartbeat renewal. A superseded owner that resumes after its
+    lease changed hands therefore holds a stale epoch, which
+    ``_stale_generation`` uses to refuse its mutation (task-219).
+    """
+    raw = claim.get("generation", 0)
+    return raw if isinstance(raw, int) and raw >= 0 else 0
+
+
+def _stale_generation(
+    args: argparse.Namespace, claim: dict, *, required: bool = False
+) -> str | None:
+    """Refusal message when the caller's ``--expected-generation`` no longer matches.
+
+    A fencing check, not a warning: a resumed stale owner must be rejected
+    deterministically, never best-effort. When ``required`` is set (any mutation
+    of an *existing* live lease) an absent ``--expected-generation`` is itself a
+    refusal: without a token to compare, a stale owner that never recorded the
+    epoch it held could still mutate a zone that changed hands (task-219).
+    """
+    expected = getattr(args, "expected_generation", None)
+    if expected is None:
+        if required:
+            return (
+                f"REFUSED: mutating the live lease for {claim['task']} requires "
+                "--expected-generation N (a fencing token). Read the current generation with "
+                "`show` and pass it; taking a *free* lease needs no token (task-219)."
+            )
+        return None
+    current = _generation(claim)
+    if int(expected) == current:
+        return None
+    return (
+        f"REFUSED: stale lease generation for {claim['task']} — you hold gen {expected}, "
+        f"the live lease is gen {current}. Another holder took or released this zone after "
+        "you started; your mutation is fenced out (task-219)."
+    )
+
+
 def _conflicting_paths(board: dict, branch: str, files: list[str]) -> list[tuple[str, str]]:
     """Return overlaps between *files* and other branches' live exclusive paths."""
     hits: list[tuple[str, str]] = []
     for claim in board.get("claims", []):
-        if not _is_active_claim(claim):
+        if not _claim_live(claim):
             continue
         if branch and claim.get("agent_branch") == branch:
-            continue
-        claimed = _parse(claim.get("claimed_at"))
-        if claimed is None:
-            continue
-        expires = claimed + timedelta(hours=int(claim.get("ttl_hours", 24)))
-        if _now() > expires:
             continue
         for excl in claim.get("exclusive_paths", []):
             for f in files:
@@ -194,8 +321,11 @@ def cmd_show(_args: argparse.Namespace) -> int:
             f"\n● {claim['task']}  [{claim['status']}]\n"
             f"  zone: {claim.get('zone')} · owner: {owner}\n"
             f"  claimed: {claim.get('claimed_at') or '—'} · expires: {expires}\n"
+            f"  generation: {_generation(claim)} (fencing epoch)\n"
             f"  scope: {claim.get('scope', '')}"
         )
+        if claim.get("release_reason"):
+            print(f"  released: {claim['release_reason']}")
     for entry in board.get("deferred_log", []):
         print(f"\n⏸ DEFERRED {entry['task']} by {entry.get('deferred_by_branch')}")
         print(f"   fa: {entry.get('reason_fa', '')}")
@@ -206,6 +336,11 @@ def cmd_show(_args: argparse.Namespace) -> int:
 
 
 def cmd_claim(args: argparse.Namespace) -> int:
+    with board_lock():
+        return _claim_locked(args)
+
+
+def _claim_locked(args: argparse.Namespace) -> int:
     board = load_board()
     gc_expired(board)
     claim = _find(board, args.task)
@@ -218,15 +353,42 @@ def cmd_claim(args: argparse.Namespace) -> int:
             _iso(claimed + timedelta(hours=int(claim.get("ttl_hours", 24)))) if claimed else "?"
         )
         if claim.get("agent_branch") == args.branch:
+            refusal = _stale_generation(args, claim, required=True)
+            if refusal:
+                print(refusal)
+                return 2
             claim["claimed_at"] = _iso(_now())  # renewal (heartbeat)
             save_board(board)
-            print(f"renewed lease for {args.task} (owner: {args.branch})")
+            print(
+                f"renewed lease for {args.task} (owner: {args.branch}, "
+                f"generation {_generation(claim)} — heartbeat keeps the epoch)"
+            )
             return 0
         print(
             f"task {args.task} is ACTIVELY claimed by"
             f" {claim.get('agent_branch')} (status {claim.get('status')}, expires {expires})"
         )
         print(STOP_BANNER)
+        return 2
+    # Not currently active: this is a brand-new claim, a takeover of an expired
+    # lease, or a re-claim of a deferred/done one. A takeover/re-claim rewrites
+    # an *existing* lease record, so it must carry the fencing token too —
+    # otherwise a resumed stale owner could re-claim (and effectively seize) a
+    # zone that changed hands while it was away. A truly fresh task (no record,
+    # or generation 0) needs no token: there is nothing to fence against.
+    if _generation(claim) > 0:
+        refusal = _stale_generation(args, claim, required=True)
+        if refusal:
+            print(refusal)
+            return 2
+    # Documented rule (AGENTS.md §2 / protocol.verification_rule): a claimable task
+    # must carry evidence_required. Enforce it here so NEW work cannot be claimed
+    # without it; grandfathered legacy claims are surfaced by `validate` as WARN.
+    if not claim.get("evidence_required"):
+        print(
+            f"refusing: {args.task} has no evidence_required — add it to .agents/board.json "
+            "before claiming (AGENTS.md §2: a task without it cannot be claimed)."
+        )
         return 2
     claim.update(
         status="active",
@@ -236,18 +398,31 @@ def cmd_claim(args: argparse.Namespace) -> int:
         gates_owner=bool(args.gates),
         note="",
     )
+    # Fencing epoch: strictly monotonic across every (re)claim. A brand-new or
+    # legacy claim (generation 0) becomes 1; a takeover or re-claim advances it
+    # so any superseded holder's recorded expectation is invalidated — including
+    # a second session sharing the same branch name.
+    claim["generation"] = _generation(claim) + 1
     if args.gates:
         for other in board["claims"]:
             if other["task"] != args.task and other.get("gates_owner"):
                 other["gates_owner"] = False
     save_board(board)
-    print(f"CLAIMED {args.task} for {args.branch} (ttl {args.ttl}h, gates_owner={args.gates})")
+    print(
+        f"CLAIMED {args.task} for {args.branch} (ttl {args.ttl}h, gates_owner={args.gates}, "
+        f"generation {claim['generation']})"
+    )
     print("NOW: git add .agents/board.json && git commit && git push IMMEDIATELY —")
     print("an unpushed claim does not exist for the other sandbox.")
     return 0
 
 
 def cmd_release(args: argparse.Namespace) -> int:
+    with board_lock():
+        return _release_locked(args)
+
+
+def _release_locked(args: argparse.Namespace) -> int:
     board = load_board()
     claim = _find(board, args.task)
     if claim is None:
@@ -256,15 +431,35 @@ def cmd_release(args: argparse.Namespace) -> int:
     if claim.get("agent_branch") != args.branch:
         print(f"refusing: {args.task} belongs to {claim.get('agent_branch')}, not {args.branch}")
         return 2
+    refusal = _stale_generation(args, claim, required=True)
+    if refusal:
+        print(refusal)
+        return 2
     claim.update(status="done", agent_branch="", claimed_at=None, gates_owner=False)
+    # Releasing transfers the zone: advance the epoch so a stale holder cannot
+    # act as if it still owns the lease.
+    claim["generation"] = _generation(claim) + 1
     save_board(board)
-    print(f"RELEASED {args.task}. Zone free — the next agent can claim it.")
+    print(
+        f"RELEASED {args.task} (generation {claim['generation']}). "
+        "Zone free — next agent can claim."
+    )
     return 0
 
 
 def cmd_defer(args: argparse.Namespace) -> int:
+    with board_lock():
+        return _defer_locked(args)
+
+
+def _defer_locked(args: argparse.Namespace) -> int:
     board = load_board()
     claim = _find(board, args.task)
+    if claim is not None and claim.get("agent_branch") == args.branch and _is_active_claim(claim):
+        refusal = _stale_generation(args, claim, required=True)
+        if refusal:
+            print(refusal)
+            return 2
     board.setdefault("deferred_log", []).append(
         {
             "task": args.task,
@@ -278,6 +473,7 @@ def cmd_defer(args: argparse.Namespace) -> int:
     )
     if claim is not None and claim.get("agent_branch") == args.branch and _is_active_claim(claim):
         claim.update(status="deferred", claimed_at=None, gates_owner=False)
+        claim["generation"] = _generation(claim) + 1
     save_board(board)
     print(f"DEFERRED {args.task} by {args.branch} — note recorded so nothing is forgotten.")
     return 0
@@ -311,17 +507,290 @@ def cmd_next(args: argparse.Namespace) -> int:
     return 0
 
 
+def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str] | None:
+    """Run a git command; ``None`` when git is missing or the call cannot start.
+
+    Callers treat ``None`` as "unverifiable", never as "clean".
+    """
+    try:
+        return subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _worktree_boards(exclude: Path) -> tuple[list[Path], bool]:
+    """Sibling worktree board paths, and whether enumeration was reliable.
+
+    ``git worktree list --porcelain`` is the only reliable way to see other
+    checkouts sharing this repository. A non-zero exit (not a repo, git absent)
+    is *unverifiable*, so the caller must not claim a global pass.
+    """
+    result = _git(["worktree", "list", "--porcelain"], ROOT)
+    if result is None or result.returncode != 0:
+        return [], False
+    boards: list[Path] = []
+    for line in result.stdout.splitlines():
+        if not line.startswith("worktree "):
+            continue
+        try:
+            root = Path(line[len("worktree ") :].strip()).resolve()
+        except OSError:
+            continue
+        if root == exclude.resolve():
+            continue
+        candidate = root / ".agents" / "board.json"
+        if candidate.exists():
+            boards.append(candidate)
+    return boards, True
+
+
+def _load_board_from(path: Path) -> dict:
+    """Load and shape-check a board file. Raises ``OSError``/``ValueError``."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get("claims", []), list):
+        raise ValueError(f"not a claim board: {path}")
+    return data
+
+
+def _read_remote_board() -> tuple[dict | None, str]:
+    """Best-effort read of ``origin/main``'s board without mutating the tree.
+
+    Returns ``(board_or_None, reason)``. ``None`` always carries a reason the
+    caller prints before exiting 2 — a remote we cannot read is never a pass.
+    """
+    remotes = _git(["remote"], ROOT)
+    if remotes is None:
+        return None, "git is unavailable"
+    if "origin" not in remotes.stdout.split():
+        return None, "no 'origin' remote is configured"
+    fetched = _git(["fetch", "--quiet", "origin", "main"], ROOT)
+    if fetched is None or fetched.returncode != 0:
+        return None, "git fetch origin main failed (network or remote unavailable)"
+    show = _git(["show", "origin/main:.agents/board.json"], ROOT)
+    if show is None or show.returncode != 0:
+        return None, "origin/main has no readable .agents/board.json"
+    try:
+        data = json.loads(show.stdout)
+    except json.JSONDecodeError:
+        return None, "origin/main board is not valid JSON"
+    if not isinstance(data, dict):
+        return None, "origin/main board is not a JSON object"
+    return data, ""
+
+
+_REMOTE_BRANCH_FETCH_LIMIT = 25
+
+
+def _open_pr_branches(repo: str, token: str | None) -> tuple[list[str], str]:
+    """Head branch names of every open PR. ``([], reason)`` when unavailable.
+
+    A claim is real once pushed, so a lease that lives *only* on a pushed branch
+    with an open PR is a real lease — yet such a branch is invisible to every
+    other source: it is not in the local tree, not a sibling worktree, and not
+    ``origin/main``. The open-PR list is how the referee learns those branch
+    names. It is a *required* source: an unreadable list degrades to exit 2,
+    never to a clean pass.
+    """
+    if "/" not in repo:
+        return [], "GITHUB_REPOSITORY unset and --repo not given (cannot enumerate PR branches)"
+    if not token:
+        return [], "no GitHub token in the environment (cannot enumerate open-PR branches)"
+    try:
+        pulls = _gh_get(f"https://api.github.com/repos/{repo}/pulls?state=open&per_page=100", token)
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return [], f"open-PR API unavailable ({exc})"
+    if not isinstance(pulls, list):
+        return [], "open-PR API returned an unexpected payload"
+    branches: list[str] = []
+    for pr in pulls:
+        head = (pr.get("head") or {}).get("ref") if isinstance(pr, dict) else None
+        if isinstance(head, str) and head:
+            branches.append(head)
+    return branches, ""
+
+
+def _remote_branch_boards(
+    branches: list[str], exclude_branch: str = ""
+) -> tuple[list[tuple[str, dict]], list[str]]:
+    """Read the board of each *pushed* branch (read-only).
+
+    Each branch is fetched with an explicit refspec into its own
+    ``refs/remotes/origin/<branch>`` tracking ref (a ref write that never
+    touches the working tree) and its board is read with ``git show``. A board
+    is read **only** when that branch's fetch succeeded in this invocation, so a
+    stale ref left by an earlier run can never masquerade as fresh. A branch
+    that cannot be fetched, or whose board cannot be parsed, is *unverifiable*,
+    never skipped.
+    """
+    targets: list[str] = []
+    for branch in branches:
+        if branch and branch != exclude_branch and branch not in targets:
+            targets.append(branch)
+    targets = targets[:_REMOTE_BRANCH_FETCH_LIMIT]
+    if not targets:
+        return [], []
+
+    unreadable: list[str] = []
+    # One batched round trip is the fast path; a single dead ref (e.g. a branch
+    # deleted between the PR list and the fetch) fails the whole batch, so fall
+    # back to per-branch fetches rather than losing every other branch.
+    batch = _git(
+        [
+            "fetch",
+            "--quiet",
+            "origin",
+            *[f"+refs/heads/{b}:refs/remotes/origin/{b}" for b in targets],
+        ],
+        ROOT,
+    )
+    if batch is not None and batch.returncode == 0:
+        fresh = set(targets)
+    else:
+        fresh = set()
+        for branch in targets:
+            fetched = _git(
+                [
+                    "fetch",
+                    "--quiet",
+                    "origin",
+                    f"+refs/heads/{branch}:refs/remotes/origin/{branch}",
+                ],
+                ROOT,
+            )
+            if fetched is not None and fetched.returncode == 0:
+                fresh.add(branch)
+            else:
+                unreadable.append(f"pushed branch {branch}: git fetch failed (unreachable?)")
+
+    boards: list[tuple[str, dict]] = []
+    for branch in targets:
+        if branch not in fresh:
+            continue
+        show = _git(["show", f"refs/remotes/origin/{branch}:.agents/board.json"], ROOT)
+        if show is None or show.returncode != 0:
+            unreadable.append(f"pushed branch {branch}: no readable .agents/board.json")
+            continue
+        try:
+            data = json.loads(show.stdout)
+        except json.JSONDecodeError:
+            unreadable.append(f"pushed branch {branch}: board is not valid JSON")
+            continue
+        if not isinstance(data, dict) or not isinstance(data.get("claims", []), list):
+            unreadable.append(f"pushed branch {branch}: board is not a claim board")
+            continue
+        boards.append((f"branch:{branch}", data))
+    return boards, unreadable
+
+
 def cmd_check(args: argparse.Namespace) -> int:
-    board = load_board()
+    """Multi-source referee: exit 0 clean, 1 overlap, 2 unverifiable.
+
+    The local board is always the first source. Unless ``--no-remote`` is set,
+    every *other* live git worktree's board, ``origin/main``'s board, and every
+    open-PR branch's pushed board are also consulted — a claim is only real once
+    pushed, and a lease can live only on a pushed branch (open PR, not yet in
+    ``origin/main``, not checked out locally). A source that cannot be read is a
+    loud exit 2: "no overlap" is only honest when every consulted source was
+    actually read.
+    """
     files = [f for f in args.files.split(",") if f.strip()]
-    hits = _conflicting_paths(board, args.branch or "", files)
-    if hits:
-        print("OVERLAP with another agent's active or active-in-review exclusive paths:")
+    sources: list[tuple[str, dict]] = []
+    unreadable: list[str] = []
+    no_remote = bool(getattr(args, "no_remote", False))
+
+    # 1. local board (mandatory). A missing or unparseable local board is
+    #    UNVERIFIABLE (exit 2), never a crash and never a silent pass: the whole
+    #    point of the referee is that "no overlap" is a claim about read data.
+    if not BOARD.exists():
+        print(f"UNVERIFIABLE: board not found: {BOARD}")
+        return 2
+    try:
+        local_board = _load_board_from(BOARD)
+    except (OSError, ValueError) as exc:
+        print(f"UNVERIFIABLE: local board cannot be read: {exc}")
+        return 2
+    sources.append(("local", local_board))
+
+    # 2. sibling worktree boards + origin/main + pushed open-PR branches
+    #    (unless narrowed)
+    if no_remote:
+        scope = "local (--no-remote: local board only; NOT a global pass)"
+    else:
+        scope = "local + sibling worktrees + origin/main + pushed open-PR branches"
+        worktree_boards, reliable = _worktree_boards(exclude=ROOT)
+        if not reliable:
+            unreadable.append("git worktree enumeration (git unavailable or not a repository)")
+        for board_path in worktree_boards:
+            try:
+                sources.append((str(board_path), _load_board_from(board_path)))
+            except (OSError, ValueError) as exc:
+                unreadable.append(f"{board_path}: {exc}")
+        remote_board, reason = _read_remote_board()
+        if remote_board is None:
+            unreadable.append(f"origin/main: {reason}")
+        else:
+            sources.append(("origin/main", remote_board))
+
+        # A lease can live *only* on a pushed branch with an open PR (not in
+        # main, not a worktree). That source is required: if the open-PR list or
+        # any branch board cannot be read, exit 2 — never a false clear.
+        repo = getattr(args, "repo", "") or os.environ.get("GITHUB_REPOSITORY", "")
+        token = getattr(args, "token", "") or os.environ.get("GITHUB_TOKEN", "")
+        pr_branches, pr_reason = _open_pr_branches(repo, token)
+        if pr_reason:
+            unreadable.append(f"open-PR branches: {pr_reason}")
+        else:
+            branch_boards, branch_unreadable = _remote_branch_boards(
+                pr_branches, exclude_branch=args.branch or ""
+            )
+            sources.extend(branch_boards)
+            unreadable.extend(branch_unreadable)
+
+    if unreadable:
+        print("UNVERIFIABLE sources (will only matter if no conflict is proven):")
+        for reason in unreadable:
+            print(f"  - {reason}")
+
+    # 3. overlap across every readable source (deduped by task+path, sources merged).
+    #    A *proven* conflict is exit 1 even when another source is unreadable:
+    #    the conflict is confirmed, and hiding it behind exit 2 would be worse.
+    aggregate: dict[tuple[str, str], set[str]] = {}
+    for source, board in sources:
+        try:
+            hits = _conflicting_paths(board, args.branch or "", files)
+        except (TypeError, ValueError) as exc:
+            # A malformed board must not crash the referee: it degrades to
+            # "this source is unverifiable" (exit 2), never to a pass.
+            unreadable.append(f"{source}: malformed claim data ({exc})")
+            continue
         for task, path in hits:
-            print(f"  {path}  ← claimed by {task}")
+            aggregate.setdefault((task, path), set()).add(source)
+
+    print(f"check scope: {scope} — {len(sources)} source(s) read")
+    if no_remote:
+        print("  NOTE: --no-remote is a LOCAL verdict (this board only); it is NOT a global pass.")
+    if aggregate:
+        print("OVERLAP with another agent's active or active-in-review exclusive paths:")
+        for (task, path), srcs in sorted(aggregate.items()):
+            print(f"  {path}  ← claimed by {task} (seen in: {', '.join(sorted(srcs))})")
         print(STOP_BANNER)
         return 1
-    print("no overlap — safe to proceed.")
+
+    if unreadable:
+        print("UNVERIFIABLE: cannot establish the absence of overlap — source(s) unreadable:")
+        for reason in unreadable:
+            print(f"  - {reason}")
+        print("  (exit 2 — do NOT treat this as a pass; rerun once the source is reachable)")
+        return 2
+
+    print("no overlap — safe to proceed (every consulted source was readable).")
     return 0
 
 
@@ -482,22 +951,468 @@ def cmd_praudit(args: argparse.Namespace) -> int:
     return 0
 
 
+# ── collision preflight: two correct PRs must not become one unsafe merge ────
+#
+# Reads only git objects + board zone metadata; never merges and never resolves
+# a conflict.  A pair of refs is a *security-sensitive collision* when they
+# rewrite the same file that belongs to a security-relevant zone, or when a
+# three-way merge of that file produces conflict hunks (a naive "take ours /
+# take theirs" resolution would then silently drop one side's invariant).
+
+# Board-derived, minimal: a zone is security-relevant when its id names the
+# authority/boundary it enforces.  No hardcoded file list — the board already
+# declares which paths each zone owns (tested by test_agent_board_collision.py).
+SECURITY_ZONE_HINTS = ("security", "gate", "contract", "trust", "auth")
+
+COLLISION_SAFE = "SAFE_INDEPENDENT"
+COLLISION_SAFE_OVERLAP = "SAFE_OVERLAP"
+COLLISION_RECONCILE = "REQUIRES_MANUAL_RECONCILIATION"
+COLLISION_SECURITY = "SECURITY_SENSITIVE_COLLISION"
+COLLISION_UNKNOWN = "UNVERIFIABLE"
+# UNVERIFIABLE is dangerous on purpose: "could not inspect" must never be read as
+# "independent".  It is included in the bad set so --fail-on-collision exits 1.
+_COLLISION_BAD = frozenset({COLLISION_RECONCILE, COLLISION_SECURITY, COLLISION_UNKNOWN})
+
+
+def _run_git(*args: str, cwd: Path | None = None) -> tuple[int, str, str]:
+    import subprocess
+
+    proc = subprocess.run(["git", *args], cwd=cwd or ROOT, capture_output=True, text=True)
+    return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+
+
+def security_sensitive_zones(board: dict) -> list[str]:
+    """Zone ids that name the authority/boundary they enforce (sorted)."""
+    return sorted(
+        zone["id"]
+        for zone in board.get("zones", [])
+        if any(hint in zone["id"].lower() for hint in SECURITY_ZONE_HINTS)
+    )
+
+
+def zones_for_path(board: dict, path: str) -> list[str]:
+    """Every board zone whose declared paths contain *path* (sorted)."""
+    hits: list[str] = []
+    for zone in board.get("zones", []):
+        for zone_path in zone.get("paths", []):
+            if path == zone_path or path.startswith(zone_path) or zone_path.startswith(path):
+                hits.append(zone["id"])
+                break
+    return sorted(hits)
+
+
+def _changed_files(base: str, ref: str, cwd: Path | None = None) -> list[str] | None:
+    """Files changed between *base* and *ref*, or ``None`` when git failed.
+
+    ``None`` (not ``[]``) is load-bearing: an empty list means "no differences",
+    while ``None`` means "the ref could not be inspected".  Collapsing the two
+    into ``[]`` would let a typo'd or unfetched ref classify as SAFE.
+    """
+    code, out, _ = _run_git("diff", "--name-only", base, ref, cwd=cwd)
+    if code != 0:
+        return None
+    return [line for line in out.splitlines() if line.strip()]
+
+
+def _unknown_refs(refs: list[str], cwd: Path | None = None) -> list[str]:
+    """Refs git cannot resolve to a commit (sorted). Fail-closed input check."""
+    return sorted(
+        ref
+        for ref in refs
+        if _run_git("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", cwd=cwd)[0] != 0
+    )
+
+
+def _is_ancestor(older: str, newer: str, cwd: Path | None = None) -> bool:
+    """True when *older* is an ancestor of *newer* (stacked lineage)."""
+    code, _, _ = _run_git("merge-base", "--is-ancestor", older, newer, cwd=cwd)
+    return code == 0
+
+
+def _conflict_hunks(base: str, a: str, b: str, path: str, cwd: Path | None = None) -> int:
+    """Conflict-hunk count for a three-way merge of one file, or -1 if unknown."""
+    import tempfile
+    from pathlib import Path as _Path
+
+    def blob(ref: str) -> str | None:
+        code, out, _ = _run_git("show", f"{ref}:{path}", cwd=cwd)
+        return out if code == 0 else None
+
+    contents = {"base": blob(base), "a": blob(a), "b": blob(b)}
+    if any(value is None for value in contents.values()):
+        return -1
+    with tempfile.TemporaryDirectory() as tmp:
+        paths = {}
+        for key, value in contents.items():
+            paths[key] = _Path(tmp) / f"{key}.blob"
+            paths[key].write_text(value or "", encoding="utf-8")
+        proc = subprocess_run_merge(paths["a"], paths["base"], paths["b"])
+        if proc is None:
+            return -1
+        return (
+            sum(
+                1
+                for line in proc.splitlines()
+                if line.startswith("<<<<<<<") or line.startswith(">>>>>>>")
+            )
+            // 2
+        )
+
+
+def subprocess_run_merge(ours: Path, base: Path, theirs: Path) -> str | None:
+    import subprocess
+
+    proc = subprocess.run(
+        ["git", "merge-file", "-p", str(ours), str(base), str(theirs)],
+        capture_output=True,
+        text=True,
+    )
+    # git merge-file exits 0 (clean) or N (number of conflict hunks) on success,
+    # and 255 on error (e.g. a missing base blob).  Python reports a signal as a
+    # negative returncode.  Only 0..127 means "a merge was actually computed".
+    if proc.returncode < 0 or proc.returncode > 127:
+        return None
+    return proc.stdout
+
+
+def detect_collisions(
+    board: dict, refs: list[str], base: str = "", repo: Path | None = None
+) -> dict:
+    """Pairwise collision report for *refs* (git refs or SHAs). Read-only.
+
+    Deterministic: pairs and paths are sorted; no set/dict iteration order leaks
+    into the output.  Never merges and never resolves — detect + classify only.
+
+    Fail-closed: a ref git cannot resolve, a pair with no merge base and no
+    supplied ``base``, or a diff git refuses to run all yield ``UNVERIFIABLE``
+    (a bad classification) rather than ``SAFE_INDEPENDENT``.
+    """
+    security_zones = set(security_sensitive_zones(board))
+    unknown_refs = _unknown_refs(refs, repo)
+    pairs: list[dict] = []
+    for i in range(len(refs)):
+        for j in range(i + 1, len(refs)):
+            ref_a, ref_b = refs[i], refs[j]
+            if ref_a in unknown_refs or ref_b in unknown_refs:
+                pairs.append(
+                    {
+                        "ref_a": ref_a,
+                        "ref_b": ref_b,
+                        "stacked": False,
+                        "merge_base": None,
+                        "overlap_files": [],
+                        "files": [],
+                        "classification": COLLISION_UNKNOWN,
+                        "reason": "unknown ref (git could not resolve a commit)",
+                    }
+                )
+                continue
+            _, merge_base, _ = _run_git("merge-base", ref_a, ref_b, cwd=repo)
+            stacked = _is_ancestor(ref_a, ref_b, repo) or _is_ancestor(ref_b, ref_a, repo)
+            if not merge_base and base:
+                # Shallow clone / unrelated histories: fall back to the supplied
+                # base ref as the diff root (still detects shared rewritten files).
+                merge_base = base
+            diff_base = merge_base or base
+            if not diff_base:
+                pairs.append(
+                    {
+                        "ref_a": ref_a,
+                        "ref_b": ref_b,
+                        "stacked": stacked,
+                        "merge_base": None,
+                        "overlap_files": [],
+                        "files": [],
+                        "classification": COLLISION_UNKNOWN,
+                        "reason": "no merge base; pass --base to diff unrelated histories",
+                    }
+                )
+                continue
+            changed_a = _changed_files(diff_base, ref_a, repo)
+            changed_b = _changed_files(diff_base, ref_b, repo)
+            if changed_a is None or changed_b is None:
+                pairs.append(
+                    {
+                        "ref_a": ref_a,
+                        "ref_b": ref_b,
+                        "stacked": stacked,
+                        "merge_base": merge_base or None,
+                        "overlap_files": [],
+                        "files": [],
+                        "classification": COLLISION_UNKNOWN,
+                        "reason": f"git diff failed against {diff_base}",
+                    }
+                )
+                continue
+            files_a = set(changed_a)
+            files_b = set(changed_b)
+            overlap = sorted(files_a & files_b)
+
+            file_rows: list[dict] = []
+            for path in overlap:
+                if path in COORDINATION_FILES:
+                    continue  # board.json is the shared medium; its churn is never a hazard
+                zones = zones_for_path(board, path)
+                security = bool(set(zones) & security_zones)
+                hunks = _conflict_hunks(diff_base, ref_a, ref_b, path, repo) if diff_base else -1
+                file_rows.append(
+                    {
+                        "path": path,
+                        "zones": zones,
+                        "security_sensitive": security,
+                        "conflict_hunks": hunks,
+                    }
+                )
+
+            if not file_rows:
+                classification = COLLISION_SAFE
+            elif any(row["security_sensitive"] for row in file_rows):
+                classification = COLLISION_SECURITY
+            elif any(row["conflict_hunks"] > 0 for row in file_rows):
+                classification = COLLISION_RECONCILE
+            elif any(row["conflict_hunks"] < 0 for row in file_rows):
+                # Unknown hunk count (e.g. add/add or delete/modify: a blob is
+                # absent on one side) is an unproven merge, not a clean one.
+                # Fail closed so `--fail-on-collision` cannot exit 0 on it.
+                classification = COLLISION_UNKNOWN
+            else:
+                classification = COLLISION_SAFE_OVERLAP
+
+            pairs.append(
+                {
+                    "ref_a": ref_a,
+                    "ref_b": ref_b,
+                    "stacked": stacked,
+                    "merge_base": merge_base or None,
+                    "overlap_files": overlap,
+                    "files": file_rows,
+                    "classification": classification,
+                }
+            )
+    bad = [p for p in pairs if p["classification"] in _COLLISION_BAD]
+    return {
+        "refs": list(refs),
+        "security_sensitive_zones": sorted(security_zones),
+        "pairs": pairs,
+        "collision_count": len(bad),
+    }
+
+
+def cmd_collision(args: argparse.Namespace) -> int:
+    board = load_board()
+    refs = [r.strip() for r in args.refs.split(",") if r.strip()]
+    if len(refs) < 2:
+        print("collision: provide at least two refs, e.g. --refs SHA1,SHA2")
+        return 2
+    result = detect_collisions(
+        board, refs, base=args.base, repo=Path(args.repo) if args.repo else None
+    )
+    if args.as_json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        print(
+            f"collision preflight: {len(result['pairs'])} pair(s), "
+            f"{result['collision_count']} dangerous"
+        )
+        print(f"  security-sensitive zones: {', '.join(result['security_sensitive_zones'])}")
+        for pair in result["pairs"]:
+            print(f"  {pair['ref_a'][:10]} × {pair['ref_b'][:10]} → {pair['classification']}")
+            for row in pair["files"]:
+                flag = " [SECURITY]" if row["security_sensitive"] else ""
+                hunks = row["conflict_hunks"]
+                hunk_txt = f" ({hunks} conflict hunks)" if hunks > 0 else ""
+                print(f"      {row['path']}{flag}{hunk_txt}")
+    if args.fail_on_collision and result["collision_count"]:
+        return 1
+    return 0
+
+
+# ── validate: documented rule == executed rule ───────────────────────────────
+
+
+def _claimable_statuses() -> set[str]:
+    return {
+        "queued",
+        "available",
+        "expired",
+        "deferred",
+        "available_sequenced_post_33",
+        "available_sequenced_post_32",
+        "available_sequenced_post_32_33",
+        "assigned_to_B",
+        "assigned_to_B_next",
+        "assigned_to_E_pr33",
+    }
+
+
+def validate_board(board: dict, strict_new: bool = False) -> dict:
+    """Mechanical governance invariants. Returns {errors, warnings, ok}.
+
+    * ``evidence_required`` — required (ERROR) for the forward plan
+      (``next_work``) and for every *active* claim; grandfathered open/legacy
+      claims are WARN so historical board state is not rewritten.  New work
+      cannot be claimed without it (``cmd_claim`` enforces that).
+    * ``gates_owner`` — exactly one *active* claim may hold it.  0 or >1 is an
+      ERROR (the protocol says exactly one gates steward).
+    * ``exclusive_paths`` — an active claim must carry a path list (``None`` is an
+      ERROR, matching ``test_active_claims_carry_owner_timestamp_and_zone``); an
+      empty list fences nothing and is a WARN.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    grandfathered_next_work = {
+        "task-121",
+        "task-122",
+        "task-123",
+        "task-124",
+        "task-128",
+        "task-132",
+        "task-164",
+        "task-173",
+        "task-174",
+        "task-175",
+    }
+    for entry in board.get("next_work", []):
+        if not entry.get("evidence_required"):
+            if entry.get("id") in grandfathered_next_work and not strict_new:
+                warnings.append(f"legacy next_work {entry.get('id')}: missing evidence_required")
+            else:
+                errors.append(f"next_work {entry.get('id')}: missing evidence_required")
+
+    for claim in board.get("claims", []):
+        status = claim.get("status")
+        if not claim.get("evidence_required"):
+            if _is_active_claim(claim) and claim.get("task") != "task-154-pack-coverage-ci":
+                errors.append(f"active claim {claim['task']}: missing evidence_required")
+            elif (
+                status in _claimable_statuses() or claim.get("task") == "task-154-pack-coverage-ci"
+            ):
+                message = f"legacy claimable {claim['task']}: missing evidence_required"
+                (errors if strict_new else warnings).append(message)
+        if _is_active_claim(claim):
+            paths = claim.get("exclusive_paths")
+            if paths is None:
+                errors.append(f"active claim {claim['task']}: exclusive_paths is None")
+            elif not isinstance(paths, list):
+                errors.append(
+                    f"active claim {claim['task']}: exclusive_paths is not a list"
+                    f" ({type(paths).__name__})"
+                )
+            elif not paths:
+                warnings.append(f"active claim {claim['task']}: exclusive_paths is empty")
+
+    active_gates = [
+        c["task"] for c in board.get("claims", []) if _is_active_claim(c) and c.get("gates_owner")
+    ]
+    if len(active_gates) != 1:
+        errors.append(
+            "gates_owner invariant: exactly one active gates owner required, found "
+            f"{len(active_gates)} ({', '.join(active_gates) or 'none'})"
+        )
+
+    return {"errors": sorted(errors), "warnings": sorted(warnings), "ok": not errors}
+
+
+def cmd_validate(args: argparse.Namespace) -> int:
+    board = load_board()
+    result = validate_board(board, strict_new=args.strict_new)
+    if args.as_json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        print(f"validate: {len(result['errors'])} error(s), {len(result['warnings'])} warning(s)")
+        for msg in result["errors"]:
+            print(f"  ERROR   {msg}")
+        for msg in result["warnings"]:
+            print(f"  WARN    {msg}")
+    return 0 if result["ok"] else 1
+
+
+# ── evidence: a claimed test name must be derivable from a command ───────────
+
+
+def resolve_evidence_names(ref: str, names: list[str], repo: Path | None = None) -> dict:
+    """Resolve cited test names against a ref: file (``tests/**/NAME.py``) or
+    ``def NAME(`` anywhere under ``tests/``. Read-only; deterministic output.
+
+    Guards the PR-body failure mode where prose cites a test that never existed:
+    the cited string is either present in the tree or it is not.
+    """
+    _, tree, _ = _run_git("ls-tree", "-r", "--name-only", ref, "tests/", cwd=repo)
+    files = {Path(p).name: p for p in tree.splitlines() if p.strip()}
+    results: list[dict] = []
+    for name in names:
+        file_path = files.get(f"{name}.py")
+        code, out, _ = _run_git("grep", "-l", "-E", rf"def {name}\(", ref, "--", "tests/", cwd=repo)
+        function_file = out.splitlines()[0] if code == 0 and out else None
+        results.append(
+            {
+                "name": name,
+                "file": file_path,
+                "function_file": function_file,
+                "found": bool(file_path or function_file),
+            }
+        )
+    return {
+        "ref": ref,
+        "names": results,
+        "missing": sorted(r["name"] for r in results if not r["found"]),
+    }
+
+
+def cmd_evidence(args: argparse.Namespace) -> int:
+    names = [n.strip() for n in args.names.split(",") if n.strip()]
+    if not names:
+        print("evidence: provide --names test_a,test_b")
+        return 2
+    result = resolve_evidence_names(args.ref, names, repo=Path(args.repo) if args.repo else None)
+    if args.as_json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        print(
+            f"evidence: {len(result['names'])} cited name(s), {len(result['missing'])} unresolved"
+        )
+        for row in result["names"]:
+            where = row["file"] or row["function_file"] or "—"
+            mark = "OK " if row["found"] else "MISSING"
+            print(f"  {mark} {row['name']}  ({where})")
+    if args.fail_on_missing and result["missing"]:
+        return 1
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="NEXUS multi-agent claim board")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("show").set_defaults(func=cmd_show)
+    p_show = sub.add_parser("show")
+    p_show.add_argument("--read-only", action="store_true")
+    p_show.set_defaults(func=cmd_show)
 
     p = sub.add_parser("claim")
     p.add_argument("task")
     p.add_argument("--branch", required=True)
     p.add_argument("--ttl", type=int, default=24)
     p.add_argument("--gates", action="store_true", help="this agent owns CI gates while active")
+    p.add_argument(
+        "--expected-generation",
+        dest="expected_generation",
+        type=int,
+        default=None,
+        help="fencing guard: refuse unless the lease's generation matches (task-219)",
+    )
     p.set_defaults(func=cmd_claim)
 
     p = sub.add_parser("release")
     p.add_argument("task")
     p.add_argument("--branch", required=True)
+    p.add_argument(
+        "--expected-generation",
+        dest="expected_generation",
+        type=int,
+        default=None,
+        help="fencing guard: refuse unless the lease's generation matches (task-219)",
+    )
     p.set_defaults(func=cmd_release)
 
     p = sub.add_parser("defer")
@@ -506,6 +1421,13 @@ def main() -> int:
     p.add_argument("--reason", default="")
     p.add_argument("--fa", default="")
     p.add_argument("--resume-when", dest="resume_when", default="")
+    p.add_argument(
+        "--expected-generation",
+        dest="expected_generation",
+        type=int,
+        default=None,
+        help="fencing guard: refuse unless the lease's generation matches (task-219)",
+    )
     p.set_defaults(func=cmd_defer)
 
     p = sub.add_parser("next")
@@ -515,6 +1437,18 @@ def main() -> int:
     p = sub.add_parser("check")
     p.add_argument("--files", required=True, help="comma-separated changed file paths")
     p.add_argument("--branch", default="")
+    p.add_argument(
+        "--no-remote",
+        dest="no_remote",
+        action="store_true",
+        help="narrow to the local board only (exit 0 is then a LOCAL verdict, not a global pass)",
+    )
+    p.add_argument(
+        "--repo",
+        default="",
+        help="GitHub repo owner/name for the open-PR branch source (else GITHUB_REPOSITORY)",
+    )
+    p.add_argument("--token", default="", help="GitHub token (else GITHUB_TOKEN env)")
     p.set_defaults(func=cmd_check)
 
     p = sub.add_parser("praudit")
@@ -534,8 +1468,51 @@ def main() -> int:
     p.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
     p.set_defaults(func=cmd_praudit)
 
+    p = sub.add_parser(
+        "collision",
+        help="pre-push collision preflight: two correct PRs must not become one unsafe merge",
+    )
+    p.add_argument("--refs", required=True, help="comma-separated git refs/SHAs (>=2)")
+    p.add_argument("--base", default="", help="fallback base ref when two refs share no history")
+    p.add_argument("--repo", default="", help="repository path (default: the board repo)")
+    p.add_argument(
+        "--fail-on-collision",
+        action="store_true",
+        help="exit 1 when any pair is SECURITY_SENSITIVE or REQUIRES_MANUAL_RECONCILIATION",
+    )
+    p.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
+    p.set_defaults(func=cmd_collision)
+
+    p = sub.add_parser("validate", help="mechanical governance invariants (errors exit 1)")
+    p.add_argument(
+        "--strict-new",
+        action="store_true",
+        help="treat grandfathered legacy evidence_required gaps as errors too",
+    )
+    p.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
+    p.set_defaults(func=cmd_validate)
+
+    p = sub.add_parser(
+        "evidence",
+        help="resolve cited test names against a ref (a claimed name must exist)",
+    )
+    p.add_argument("--ref", required=True, help="git ref/SHA whose tree to search")
+    p.add_argument("--names", required=True, help="comma-separated test names")
+    p.add_argument("--repo", default="", help="repository path (default: the board repo)")
+    p.add_argument(
+        "--fail-on-missing",
+        action="store_true",
+        help="exit 1 when any cited name is not present in the tree",
+    )
+    p.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
+    p.set_defaults(func=cmd_evidence)
+
     args = parser.parse_args()
-    return int(args.func(args))
+    try:
+        return int(args.func(args))
+    except BoardLockedError as exc:
+        print(f"UNVERIFIABLE: {exc}")
+        return 2
 
 
 if __name__ == "__main__":
