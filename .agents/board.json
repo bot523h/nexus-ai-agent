@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T16:54:20Z",
+  "updated_at": "2026-10-04T20:29:23Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -657,6 +657,21 @@
         "tests/unit/test_request_queue.py",
         "scripts/llm_queue_mutations.py",
         "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
+      ]
+    },
+    {
+      "id": "causal-evidence-ledger",
+      "description": "The causal evidence layer only: the append-only hash-chained journal, the observer port it implements, the Artifact Passport projection, its independent verifier, and the tests/docs that pin them. It is a witness: no execution, no second authority over job state, no new operations, no memory/reference/learning work.",
+      "paths": [
+        "src/nexus_ai_agent/causal/",
+        "src/nexus_ai_agent/application/ports/job_lifecycle_observer.py",
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        "tests/unit/test_causal_journal.py",
+        "tests/unit/test_causal_passport.py",
+        "tests/integration/test_causal_chain_e2e.py",
+        "tests/integration/test_causal_fault_injection.py",
+        "tests/architecture/test_causal_boundary.py",
+        "docs/architecture/CAUSAL_EVIDENCE_LEDGER.md"
       ]
     }
   ],
@@ -2715,6 +2730,49 @@
       "ttl_hours": 24,
       "gates_owner": true,
       "note": "Continues task-195-llm-queue-lifecycle (original branch arena/01a0e2f0, claim released via takeover). MODULE_MAP.md/docs-architecture excluded exactly as the original claim scoped itself. | SESSION-BOUND CONTINUATION 2026-09-27T16:54:20Z: arena/01a0e3b7 fast-forwarded cd79bfe (PR #109 head) and continues the same exclusive paths. This session cannot push to arena/01a0e356. PR #109 python-parity (3.10) is RED on run 36329794486 (asyncio.wait_for raises asyncio.TimeoutError, not builtin TimeoutError)."
+    },
+    {
+      "task": "task-231-causal-evidence-ledger",
+      "title": "Causal evidence ledger + Artifact Passport: durable, tamper-evident, reconciled history on the canonical job chain",
+      "title_fa": "دفتر شواهد علّی + گذرنامهٔ آرتیفکت: تاریخچهٔ پایدار، دست‌کاری‌آشکار و سازش‌یافته روی زنجیرهٔ متعارف جاب",
+      "zone": "causal-evidence-ledger",
+      "priority": "P0",
+      "status": "active_in_review",
+      "agent_branch": "arena/01a1087f-nexus-ai-agent",
+      "claimed_at": "2026-10-04T20:25:57Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "prerequisites": [],
+      "scope": "P0 foundation convergence, the durable-causal-history half: record the committed facts of the existing canonical chain (enqueue → reservation/fencing → execution → independent verification → terminal receipt) into an append-only hash-chained SQLite journal, and project an evidence-backed Artifact Passport that reconciles the journal, the authoritative queue row and freshly measured artifact bytes. Refusal over invention: no record ⇒ no passport; row/journal/bytes disagreement is reported as a typed divergence. No new executor, no second authority over job state, no change to job semantics, no new creative operation, no memory/reference/learning/multiverse work. The typed-intent/strategy/compiler stages stay unclaimed (task-230 / PR #126-128 own those branches): the stage vocabulary is prepared so whichever contract lands can record them, and passports report them not_recorded.",
+      "scope_fa": "نیمهٔ «تاریخچهٔ علّی پایدار» از هم‌گرایی بنیاد: ثبت حقایق کامیت‌شدهٔ زنجیرهٔ موجود در یک دفتر فقط-افزودنی و زنجیره‌شده با هش، و پروجکشن گذرنامهٔ آرتیفکت بر پایهٔ شواهد با سازش بین ردیف صف، دفتر و بایت‌های واقعی؛ بدون مجری تازه، بدون مرجع دوم، بدون عملیات خلاقانهٔ جدید.",
+      "acceptance_criteria": [
+        "Every record is appended only after the queue committed the fact it describes, and the journal contains exactly one table with no UPDATE and no DELETE statement.",
+        "Identities are deterministic (request/job/attempt/execution/verification/receipt) and the artifact node is the verifier-measured sha256; handler-claimed artifact facts are never recorded.",
+        "Re-appending the same committed observation (lost acknowledgement) creates no second record, and no duplicate request creates a second logical execution or artifact.",
+        "A passport is refused when no record mentions the subject, and its completeness is COMPLETE only when the journal verifies, the row's terminal attempt agrees, the row digest equals the artifact node, the required stages are recorded and the bytes on disk still hash to the artifact identity.",
+        "Passport verification is independent: bytes are re-measured, incomplete/diverged passports are refused, and an edited passport is detected by its own content digest.",
+        "Fault injection at real boundaries: a real child-process crash inside the verifier recovers via takeover to a higher fence with exactly one artifact; a lost enqueue acknowledgement yields one durable job and one execution; a fenced stale execution certifies nothing; corrupted input yields a failure receipt and no artifact node; a tampered journal refuses and leaves the artifact intact.",
+        "The causal package cannot execute anything and cannot import adapters/creative/jobs/llm/storage (architecture gate).",
+        "No regression: the full local suite is green with the ledger observer attached and with it absent."
+      ],
+      "evidence_required": [
+        "Exact SHA + local full-suite counts (before/after) and the targeted ledger suites; CI evidence deferred to the designated gates owner.",
+        "Real-artifact integration run (real FFmpeg, real queue, real verifier) producing a COMPLETE passport whose artifact identity is recomputed from the file by the test.",
+        "Fault-injection output for crash/lost-ack/fencing/corruption/tamper.",
+        "ADR-lite entry: docs/DECISION_LOG.md D-0024 plus docs/architecture/CAUSAL_EVIDENCE_LEDGER.md (indexed in docs/README.md)."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/causal/",
+        "src/nexus_ai_agent/application/ports/job_lifecycle_observer.py",
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        "tests/unit/test_causal_journal.py",
+        "tests/unit/test_causal_passport.py",
+        "tests/integration/test_causal_chain_e2e.py",
+        "tests/integration/test_causal_fault_injection.py",
+        "tests/architecture/test_causal_boundary.py",
+        "docs/architecture/CAUSAL_EVIDENCE_LEDGER.md"
+      ],
+      "note": "Collision preflight (2026-10-04): scripts/agent_board.py check exited 0 for every path in this zone against main's board, and the live praudit scan of 69 open PRs shows no open PR touching src/nexus_ai_agent/causal/ or the observer port. in_process_job_queue.py is touched only by PRs #57/#68/#69 (ancient bases). jobs/lifecycle.py is deliberately NOT touched (PR #150 holds it). Delivered on arena/01a1087f-nexus-ai-agent (see PR): journal + observer port + passport + verifier, 49 targeted tests, local full suite 2964 passed/30 skipped; CI deferred to the gates owner."
     }
   ],
   "deferred_log": [
@@ -2755,196 +2813,190 @@
   ],
   "next_work": [
     {
-      "id": "task-164",
-      "priority": "P1",
-      "zone": "ci-quality",
-      "title": "Nightly DB backup has never succeeded (3/3 red) — make the production backup pipeline actually work",
-      "title_fa": "بکاپ شبانهٔ دیتابیس هرگز موفق نشده (۳ از ۳ سرخ) — مسیر بکاپ Production واقعاً کار کند",
-      "why_fa": "تنها مکانیسم DR برای دیتابیس Production (R2 blob tier) سه اجرا پیاپی شکست خورده و هیچ بکاپی تولید نشده؛ ریشهٔ دقیق بدون لوق جاب نامشخص است (R2 secrets؟ پیکربندی Neon؟).",
-      "acceptance_criteria": [
-        "a manual workflow_dispatch run of maintenance/backup-db completes SUCCESS with a visible object under backups/ in R2 including sha256/verified/timestamp in the step log",
-        "NEXUS_R2_* secrets are configured in GitHub Actions (owner-side)",
-        "the scheduled (cron) run after that also completes SUCCESS"
-      ],
-      "prerequisites": [],
-      "exclusive_paths": [
-        ".github/workflows/maintenance.yml"
-      ],
-      "status_note": "repo-side verifiability delivered by task-167 (verified backup contract, round-trip byte identity, restore-into-temp-SQLite verification); what remains is owner-secrets configuration + one real green dispatch"
-    },
-    {
-      "id": "task-124",
+      "id": "task-232",
       "priority": "P0",
-      "zone": "audit-remainder",
-      "title": "P0-8 single wiring + P0-9 graph memory write path",
-      "title_fa": "بستن P0-8 و P0-9",
-      "why_fa": "دو یافتهٔ باز ممیزی امنیتی/کارکردی با معیار پذیرش روشن.",
+      "zone": "causal-evidence-ledger",
+      "title": "Wire the causal observer into the production composition root (bot + worker startup) and prove it on a restart",
+      "title_fa": "سیم‌کشی ناظر علّی در ریشهٔ ترکیب Production (شروع بات و ورکر) و اثبات آن با ری‌استارت",
+      "why_fa": "لایهٔ شواهد الان اختیاری است: تست‌ها آن را روشن می‌کنند ولی مسیر Production بدون ناظر اجرا می‌شود؛ تا وقتی ریشهٔ ترکیب آن را نسازد، history در تولید ساخته نمی‌شود.",
       "acceptance_criteria": [
-        "تست ONE-OWNER سبز",
-        "write→read گراف با round-trip",
-        "صفر رگرسیون"
-      ],
-      "prerequisites": [
-        "task-122",
-        "task-123"
+        "bot/worker startup constructs exactly one CausalJournal + CausalObserver per process and passes it to the queue (no second writer)",
+        "restart test: a job enqueued before restart is observed after recovery with no missing stage",
+        "observer absence leaves current behaviour byte-identical (no behaviour change when None)"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/memory/",
-        "src/nexus_ai_agent/features/rag.py",
-        "tests/unit/test_audit_remainder.py"
-      ]
+        "src/nexus_ai_agent/worker.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/causal/",
+        "tests/integration/test_causal_chain_e2e.py"
+      ],
+      "prerequisites": []
     },
     {
-      "id": "task-122",
+      "id": "task-233",
       "priority": "P0",
-      "zone": "feature-wiring",
-      "title": "PR#32 rebase + dedupe",
-      "title_fa": "ریبیس و رفع دوگانگی PR#32",
-      "why_fa": "بزرگ‌ترین PR باز روی بیس باستانی؛ ریسک دو سیم‌کشی موازی.",
+      "zone": "causal-evidence-ledger",
+      "title": "Anchor the journal head externally (receipt file beside the artifact + queue row field) to close truncation/rewrite",
+      "title_fa": "لنگرانداختن سر دفتر به‌صورت بیرونی (فایل رسید کنار آرتیفکت + فیلد ردیف صف) برای بستن شکاف حذف/بازنویسی",
+      "why_fa": "زنجیره هش، ویرایش درجا و حذف میانی را می‌گیرد اما بریدن دنباله را فقط با لنگر بیرونی می‌شود اثبات کرد؛ لنگر باید از خود دفتر مستقل باشد.",
       "acceptance_criteria": [
-        "دیف یکتا",
-        "تست‌های feature_* سبز",
-        "CI سبز روی main تازه"
+        "full-rewrite/truncation attack on the journal is detected against the external anchor",
+        "anchor lives outside the journal's own table and is written only after the terminal commit",
+        "verify_chain(expected_head=…) is exercised from the anchor, not from the journal"
       ],
-      "prerequisites": [],
       "exclusive_paths": [
-        "src/nexus_ai_agent/bot/surface/",
-        "src/nexus_ai_agent/features/"
+        "src/nexus_ai_agent/causal/",
+        "src/nexus_ai_agent/jobs/verification.py"
       ],
-      "status_note": "delivered via PR#47 (forensic triage docs/audits/PR32_TRIAGE_2026-09-21.md + port-forward)"
+      "prerequisites": []
     },
     {
-      "id": "task-123",
+      "id": "task-234",
       "priority": "P0",
-      "zone": "packaging+interop",
-      "title": "PR#33 slim-down",
-      "title_fa": "کوچک‌سازی PR#33",
-      "why_fa": "برای باز شدن مسیر بسته‌بندی/داک و آزادسازی cli.py.",
+      "zone": "causal-evidence-ledger",
+      "title": "Persist the authorization decision durably so the passport can report authority truthfully",
+      "title_fa": "ثبت پایدار تصمیم مجوز تا گذرنامه بتواند اختیار را صادقانه گزارش کند",
+      "why_fa": "در این درخت هیچ تصمیم مجوزی پایدار نمی‌شود؛ به همین دلیل هر رکورد authority=null دارد و گذرنامه آن مرحله را غایب گزارش می‌کند. صادقانه بودن گزارش، وابسته به ثبت واقعی تصمیم است.",
       "acceptance_criteria": [
-        "دیف فقط یکتاها",
-        "CI سبز"
-      ],
-      "prerequisites": [],
-      "exclusive_paths": []
-    },
-    {
-      "id": "task-121",
-      "priority": "P1",
-      "zone": "delivery-interop-markers",
-      "title": "OTIO marker round-trip",
-      "title_fa": "مارکرهای OTIO",
-      "why_fa": "تنها شکاف باقی‌ماندهٔ تسک ۱۱۰؛ include_markers فعلاً بی‌اثر است.",
-      "acceptance_criteria": [
-        "include_markers مؤثر",
-        "۲ تست round-trip با OTIO واقعی"
-      ],
-      "prerequisites": [
-        "task-123"
+        "surface/policy authorization outcome is persisted with the job (actor, capability, version, decision)",
+        "records carry the observed decision; a denied authorization never produces an artifact node",
+        "passport reports authority as recorded only when the durable decision exists"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/creative/packs/delivery/",
-        "tests/unit/test_otio_interop.py"
+        "src/nexus_ai_agent/bot/creative_surface.py",
+        "src/nexus_ai_agent/creative/studio/authorization.py",
+        "src/nexus_ai_agent/causal/"
+      ],
+      "prerequisites": []
+    },
+    {
+      "id": "task-235",
+      "priority": "P0",
+      "zone": "causal-evidence-ledger",
+      "title": "Spine convergence: whichever typed-intent contract lands must record intent/strategy/work/plan/transaction in the ledger",
+      "title_fa": "هم‌گرایی اسپاین: هر قرارداد Intent تایپ‌شده‌ای که نهایی شد باید مراحل intent/strategy/work/plan/transaction را در دفتر ثبت کند",
+      "why_fa": "سه قرارداد رقیب (#126/#127 مقابل #150) هنوز یکی نشده‌اند؛ کار درست این است که پس از انتخاب مالک، همان مسیر مراحل را ثبت کند نه اینکه گراف در حافظه بماند.",
+      "acceptance_criteria": [
+        "the accepted spine records its stages through the existing journal API (no schema change)",
+        "a real natural-language request yields a passport whose intent/strategy/work/plan stages are RECORDED, not not_recorded",
+        "the memory-only graph claim is retired or explicitly bounded by a decision entry"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/causal/",
+        "docs/DECISION_LOG.md"
+      ],
+      "prerequisites": [
+        "task-231-causal-evidence-ledger"
       ]
     },
     {
-      "id": "task-128",
+      "id": "task-236",
       "priority": "P1",
-      "zone": "core-database",
-      "title": "Async DB phase 1",
-      "title_fa": "فاز ۱ دیتابیس ناهمگام",
-      "why_fa": "حذف create_engine سینک از features با آزمون نگهبان معماری.",
+      "zone": "causal-evidence-ledger",
+      "title": "Read-only operator CLI: `nexus records passport` and `nexus records verify`",
+      "title_fa": "CLI فقط-خواندنی برای اپراتور: `nexus records passport` و `nexus records verify`",
+      "why_fa": "اکنون گذرنامه فقط از پایتون ساخته می‌شود؛ اپراتور برای پاسخ «چرا این فایل وجود دارد؟» به ابزار خط فرمان نیاز دارد، بدون دست‌زدن به هیچ مسیر اجرایی.",
       "acceptance_criteria": [
-        "انجین مرکزی + ۲ پایلوت",
-        "گارد معماری سبز"
-      ],
-      "prerequisites": [
-        "task-122"
+        "CLI prints the passport (stages, divergences, journal head) and the verification verdict as JSON and human text",
+        "non-zero exit when the passport is not COMPLETE or evidence is missing; never writes anywhere"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/core/async_db.py",
-        "src/nexus_ai_agent/features/"
-      ]
+        "src/nexus_ai_agent/cli.py",
+        "src/nexus_ai_agent/causal/",
+        "tests/unit/test_jobs_cli.py"
+      ],
+      "prerequisites": []
     },
     {
-      "id": "task-132",
+      "id": "task-237",
       "priority": "P1",
-      "zone": "ci-quality",
-      "title": "Extras smoke matrix",
-      "title_fa": "ماتریس دود اختیاری‌ها",
-      "why_fa": "مسیرهای اختیاری خارج از CI پیش‌فرض می‌توانند بی‌صدا بشکنند (شکاف مستند در TESTING §7).",
+      "zone": "causal-evidence-ledger",
+      "title": "Journal retention and growth decision (append-only vs compaction) with an enforced contract",
+      "title_fa": "تصمیم نگهداشت و رشد دفتر (فقط-افزودنی در برابر فشرده‌سازی) با قرارداد اجراشدنی",
+      "why_fa": "دفتر هرگز پاک نمی‌شود و هیچ سیاست نگهداشتی ندارد؛ DATA_LIFECYCLE.md باید تصمیم بگیرد و آزمون نگهبان داشته باشد، وگرنه رشد نامحدود به بدهی عملیاتی تبدیل می‌شود.",
       "acceptance_criteria": [
-        "job ماتریسی per-extra",
-        "شکست نصب = شکست CI"
+        "explicit retention decision recorded with rationale and rejected alternatives",
+        "either a compaction design that preserves verifiability (with a tested seal) or a documented size bound + alert",
+        "the journal's append-only law keeps its architecture test regardless of the decision"
       ],
-      "prerequisites": [],
       "exclusive_paths": [
-        "tests/unit/test_optional_extras.py",
-        ".github/"
-      ]
+        "src/nexus_ai_agent/causal/",
+        "docs/architecture/DATA_LIFECYCLE.md",
+        "docs/architecture/CAUSAL_EVIDENCE_LEDGER.md"
+      ],
+      "prerequisites": []
     },
     {
-      "acceptance_criteria": [
-        "routes + creative/job_registry.py + video_director.py + ffmpeg_executor.py removed; creative/__init__ exports cleaned",
-        "importer-ratchet test updated to assert ABSENCE; GET HMAC tests removed with the routes",
-        "grep proves zero remaining callers; full suite green; release note added"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/api/app.py",
-        "src/nexus_ai_agent/creative/job_registry.py",
-        "src/nexus_ai_agent/creative/video_director.py",
-        "src/nexus_ai_agent/creative/ffmpeg_executor.py",
-        "tests/architecture/test_legacy_creative_boundary.py",
-        "tests/unit/test_security_hardening.py"
-      ],
-      "prerequisites": [
-        "PR#58 merged"
-      ],
-      "status_note": "evidence: D-0010 in DECISION_LOG; removal only after PR#58 merges",
-      "id": "task-173",
+      "id": "task-238",
       "priority": "P1",
-      "zone": "p0-stabilization",
-      "title": "Remove the legacy /creative/* HTTP lane (D-0010 reopen clause) after PR#58 lands",
-      "title_fa": "حذف مسیر قدیمی /creative/* بعد از ادغام PR#58",
-      "why_fa": "AD-0010: مسیر legacy فقط برای عدم برخورد با رفع SSRF درحال انجام (PR#58) نگه داشته شده؛ بعد از مرج باید حذف شود تا یک مسیر اجرایی Creative یگانه بماند."
-    },
-    {
+      "zone": "causal-evidence-ledger",
+      "title": "Make the passport the delivery gate: no user delivery of a creative artifact without a verifying passport",
+      "title_fa": "گذرنامه به‌عنوان دروازهٔ تحویل: هیچ تحویل کاربری آرتیفکت خلاقانه بدون گذرنامهٔ تأییدشده",
+      "why_fa": "امروز تحویل به کاربر از مسیر نوتیفایر انجام می‌شود؛ اگر تحویل به گذرنامهٔ COMPLETE گره نخورد، مرز «اثبات‌شده» صرفاً گزارش است نه کنترل.",
       "acceptance_criteria": [
-        "lane op(s) with golden argv tests + a decision on shipping reference .cube assets",
-        "worker map + surface ALLOWED updated in the same PR; real-render regression tests",
-        "no silent degradation: unavailable inputs stay typed failures"
+        "delivery refuses (with a typed, translated failure) when the passport is missing/not COMPLETE",
+        "the refusal path is tested end-to-end and the artifact is left intact",
+        "the gate cannot be bypassed by a second delivery path (architecture test)"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/creative/rendering/ir.py",
-        "src/nexus_ai_agent/creative/rendering/compiler.py",
-        "src/nexus_ai_agent/creative/render_jobs.py",
-        "src/nexus_ai_agent/bot/creative_surface.py"
+        "src/nexus_ai_agent/bot/",
+        "src/nexus_ai_agent/causal/"
       ],
-      "prerequisites": [],
-      "status_note": "owned by the creative-runtime agent; surface/worker files change atomically with the lane instrument",
-      "id": "task-174",
-      "priority": "P2",
-      "zone": "creative-runtime",
-      "title": "Lane instruments for LUT (color.apply_lut) and subtitles (caption.burn_in) so the refused surface ops can enter the matrix",
-      "title_fa": "ابزارهای lane برای LUT و subtitles تا دو عمل ردشدهٔ surface وارد ماتریس واقعی شوند",
-      "why_fa": "D-0011: lut/burnin به دلیل نبود مسیر اجرای صادقانه (بدون .cube shipped و بدون subtitles op در lane IR) typed refuse می‌شوند؛ با ابزار واقعی lane قابل برگشت‌اند."
+      "prerequisites": []
     },
     {
+      "id": "task-239",
+      "priority": "P0",
+      "zone": "causal-evidence-ledger",
+      "title": "Two-store durability: crash/power-loss policy between the journal and the queue sidecar",
+      "title_fa": "پایداری دو-انباره: سیاست سقوط/قطع برق بین دفتر و sidecar صف",
+      "why_fa": "دفتر و صف دو فایل SQLite جدا هستند؛ کرنش‌های میان دو کامیت (journal ahead/behind) باید سیاست روشن و آزمون‌شده داشته باشند، وگرنه «تاریخچهٔ ناقص» به یک حالت پیش‌بینی‌نشده تبدیل می‌شود.",
       "acceptance_criteria": [
-        "real user sends /edit trim on staging and receives translated queued + video artifact",
-        "caption transcribe on default install returns the typed unavailable message (localized)",
-        "job rows show durable COMPLETED/not FAILED for the typed paths"
+        "documented + tested reconciliation for journal-ahead-of-row and row-ahead-of-journal cases",
+        "SQLite durability settings (journal mode, sync) are explicit and pinned by a test",
+        "recovery never certifies an artifact on partial evidence"
       ],
-      "exclusive_paths": [],
-      "prerequisites": [
-        "staging bot token + a test chat"
+      "exclusive_paths": [
+        "src/nexus_ai_agent/causal/",
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py"
       ],
-      "status_note": "owner/staging action; evidence = staging screenshots + job row dump",
-      "id": "task-175",
-      "priority": "P2",
-      "zone": "p0-stabilization",
-      "title": "Staging smoke of /edit /caption /grade against the live bot (PTB runtime)",
-      "title_fa": "اسموک استیجینگ سه فرمان creative روی ربات زنده",
-      "why_fa": "زنجیره در سطح unit/integration با artifact واقعی اثبات شده؛ اثبات نهایی کاربر-واقعی به کانتکست PTB زنده و توکن استیجینگ نیاز دارد (external dependency)."
+      "prerequisites": []
+    },
+    {
+      "id": "task-240",
+      "priority": "P1",
+      "zone": "causal-evidence-ledger",
+      "title": "Semantic verification beyond content identity (operation-spec conformance in the passport)",
+      "title_fa": "راستی‌آزمایی معنایی فراتر از هویت محتوا (تطابق با مشخصات عملیات در گذرنامه)",
+      "why_fa": "hویت sha256 ثابت می‌کند «همان بایت‌ها» است، نه اینکه آرتیفکت مشخصات عملیات (مدت، نرخ فریم، مسیر، دیکشنری خروجی) را برآورده می‌کند؛ این لایه باید جدا و مستقل از producer باشد.",
+      "acceptance_criteria": [
+        "SpecConformance module re-derives expected properties from the operation spec and the measured probe",
+        "passport completeness distinguishes identity agreement from spec conformance",
+        "adversarial tests for duration/frame-rate/container mismatches on real FFmpeg output"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/causal/",
+        "src/nexus_ai_agent/jobs/verification.py"
+      ],
+      "prerequisites": []
+    },
+    {
+      "id": "task-241",
+      "priority": "P1",
+      "zone": "causal-evidence-ledger",
+      "title": "Accepted semantics for superseded attempts and multi-artifact jobs (decision + enforcement)",
+      "title_fa": "معناشناسی پذیرفته‌شده برای تلاش‌های جایگزین‌شده و جاب‌های چندآرتیفکتی (تصمیم + اجرا)",
+      "why_fa": "پس از تسخیر و تلاش دوم، گذرنامه فعلاً «superseded_attempt» را هشدار می‌دهد؛ باید مشخص شود کدام آرتیفکت قانونی است، آرتیفکت تلاش باطل‌شده چه سرنوشتی دارد و این تصمیم آزمون داشته باشد.",
+      "acceptance_criteria": [
+        "decision entry names the lawful artifact per logical job and the fate of superseded bytes",
+        "passport enforcement matches the decision (no warning-only ambiguity)",
+        "tests cover same-digest and different-digest supersession"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/causal/",
+        "docs/DECISION_LOG.md"
+      ],
+      "prerequisites": []
     }
   ],
   "history": {
@@ -3245,7 +3297,204 @@
         "date": "2026-09-21",
         "note": "schema 2: protocol block, structured next_work with acceptance criteria, history split, structural tests (ADR 0004)."
       }
-    ]
+    ],
+    "next_work_superseded_2026_10_04": {
+      "note": "Replaced by the task-231 forward map (causal evidence ledger session). Kept verbatim: some items were already delivered, others belong to zones owned by open PRs.",
+      "entries": [
+        {
+          "id": "task-164",
+          "priority": "P1",
+          "zone": "ci-quality",
+          "title": "Nightly DB backup has never succeeded (3/3 red) — make the production backup pipeline actually work",
+          "title_fa": "بکاپ شبانهٔ دیتابیس هرگز موفق نشده (۳ از ۳ سرخ) — مسیر بکاپ Production واقعاً کار کند",
+          "why_fa": "تنها مکانیسم DR برای دیتابیس Production (R2 blob tier) سه اجرا پیاپی شکست خورده و هیچ بکاپی تولید نشده؛ ریشهٔ دقیق بدون لوق جاب نامشخص است (R2 secrets؟ پیکربندی Neon؟).",
+          "acceptance_criteria": [
+            "a manual workflow_dispatch run of maintenance/backup-db completes SUCCESS with a visible object under backups/ in R2 including sha256/verified/timestamp in the step log",
+            "NEXUS_R2_* secrets are configured in GitHub Actions (owner-side)",
+            "the scheduled (cron) run after that also completes SUCCESS"
+          ],
+          "prerequisites": [],
+          "exclusive_paths": [
+            ".github/workflows/maintenance.yml"
+          ],
+          "status_note": "repo-side verifiability delivered by task-167 (verified backup contract, round-trip byte identity, restore-into-temp-SQLite verification); what remains is owner-secrets configuration + one real green dispatch"
+        },
+        {
+          "id": "task-124",
+          "priority": "P0",
+          "zone": "audit-remainder",
+          "title": "P0-8 single wiring + P0-9 graph memory write path",
+          "title_fa": "بستن P0-8 و P0-9",
+          "why_fa": "دو یافتهٔ باز ممیزی امنیتی/کارکردی با معیار پذیرش روشن.",
+          "acceptance_criteria": [
+            "تست ONE-OWNER سبز",
+            "write→read گراف با round-trip",
+            "صفر رگرسیون"
+          ],
+          "prerequisites": [
+            "task-122",
+            "task-123"
+          ],
+          "exclusive_paths": [
+            "src/nexus_ai_agent/memory/",
+            "src/nexus_ai_agent/features/rag.py",
+            "tests/unit/test_audit_remainder.py"
+          ]
+        },
+        {
+          "id": "task-122",
+          "priority": "P0",
+          "zone": "feature-wiring",
+          "title": "PR#32 rebase + dedupe",
+          "title_fa": "ریبیس و رفع دوگانگی PR#32",
+          "why_fa": "بزرگ‌ترین PR باز روی بیس باستانی؛ ریسک دو سیم‌کشی موازی.",
+          "acceptance_criteria": [
+            "دیف یکتا",
+            "تست‌های feature_* سبز",
+            "CI سبز روی main تازه"
+          ],
+          "prerequisites": [],
+          "exclusive_paths": [
+            "src/nexus_ai_agent/bot/surface/",
+            "src/nexus_ai_agent/features/"
+          ],
+          "status_note": "delivered via PR#47 (forensic triage docs/audits/PR32_TRIAGE_2026-09-21.md + port-forward)"
+        },
+        {
+          "id": "task-123",
+          "priority": "P0",
+          "zone": "packaging+interop",
+          "title": "PR#33 slim-down",
+          "title_fa": "کوچک‌سازی PR#33",
+          "why_fa": "برای باز شدن مسیر بسته‌بندی/داک و آزادسازی cli.py.",
+          "acceptance_criteria": [
+            "دیف فقط یکتاها",
+            "CI سبز"
+          ],
+          "prerequisites": [],
+          "exclusive_paths": []
+        },
+        {
+          "id": "task-121",
+          "priority": "P1",
+          "zone": "delivery-interop-markers",
+          "title": "OTIO marker round-trip",
+          "title_fa": "مارکرهای OTIO",
+          "why_fa": "تنها شکاف باقی‌ماندهٔ تسک ۱۱۰؛ include_markers فعلاً بی‌اثر است.",
+          "acceptance_criteria": [
+            "include_markers مؤثر",
+            "۲ تست round-trip با OTIO واقعی"
+          ],
+          "prerequisites": [
+            "task-123"
+          ],
+          "exclusive_paths": [
+            "src/nexus_ai_agent/creative/packs/delivery/",
+            "tests/unit/test_otio_interop.py"
+          ]
+        },
+        {
+          "id": "task-128",
+          "priority": "P1",
+          "zone": "core-database",
+          "title": "Async DB phase 1",
+          "title_fa": "فاز ۱ دیتابیس ناهمگام",
+          "why_fa": "حذف create_engine سینک از features با آزمون نگهبان معماری.",
+          "acceptance_criteria": [
+            "انجین مرکزی + ۲ پایلوت",
+            "گارد معماری سبز"
+          ],
+          "prerequisites": [
+            "task-122"
+          ],
+          "exclusive_paths": [
+            "src/nexus_ai_agent/core/async_db.py",
+            "src/nexus_ai_agent/features/"
+          ]
+        },
+        {
+          "id": "task-132",
+          "priority": "P1",
+          "zone": "ci-quality",
+          "title": "Extras smoke matrix",
+          "title_fa": "ماتریس دود اختیاری‌ها",
+          "why_fa": "مسیرهای اختیاری خارج از CI پیش‌فرض می‌توانند بی‌صدا بشکنند (شکاف مستند در TESTING §7).",
+          "acceptance_criteria": [
+            "job ماتریسی per-extra",
+            "شکست نصب = شکست CI"
+          ],
+          "prerequisites": [],
+          "exclusive_paths": [
+            "tests/unit/test_optional_extras.py",
+            ".github/"
+          ]
+        },
+        {
+          "acceptance_criteria": [
+            "routes + creative/job_registry.py + video_director.py + ffmpeg_executor.py removed; creative/__init__ exports cleaned",
+            "importer-ratchet test updated to assert ABSENCE; GET HMAC tests removed with the routes",
+            "grep proves zero remaining callers; full suite green; release note added"
+          ],
+          "exclusive_paths": [
+            "src/nexus_ai_agent/api/app.py",
+            "src/nexus_ai_agent/creative/job_registry.py",
+            "src/nexus_ai_agent/creative/video_director.py",
+            "src/nexus_ai_agent/creative/ffmpeg_executor.py",
+            "tests/architecture/test_legacy_creative_boundary.py",
+            "tests/unit/test_security_hardening.py"
+          ],
+          "prerequisites": [
+            "PR#58 merged"
+          ],
+          "status_note": "evidence: D-0010 in DECISION_LOG; removal only after PR#58 merges",
+          "id": "task-173",
+          "priority": "P1",
+          "zone": "p0-stabilization",
+          "title": "Remove the legacy /creative/* HTTP lane (D-0010 reopen clause) after PR#58 lands",
+          "title_fa": "حذف مسیر قدیمی /creative/* بعد از ادغام PR#58",
+          "why_fa": "AD-0010: مسیر legacy فقط برای عدم برخورد با رفع SSRF درحال انجام (PR#58) نگه داشته شده؛ بعد از مرج باید حذف شود تا یک مسیر اجرایی Creative یگانه بماند."
+        },
+        {
+          "acceptance_criteria": [
+            "lane op(s) with golden argv tests + a decision on shipping reference .cube assets",
+            "worker map + surface ALLOWED updated in the same PR; real-render regression tests",
+            "no silent degradation: unavailable inputs stay typed failures"
+          ],
+          "exclusive_paths": [
+            "src/nexus_ai_agent/creative/rendering/ir.py",
+            "src/nexus_ai_agent/creative/rendering/compiler.py",
+            "src/nexus_ai_agent/creative/render_jobs.py",
+            "src/nexus_ai_agent/bot/creative_surface.py"
+          ],
+          "prerequisites": [],
+          "status_note": "owned by the creative-runtime agent; surface/worker files change atomically with the lane instrument",
+          "id": "task-174",
+          "priority": "P2",
+          "zone": "creative-runtime",
+          "title": "Lane instruments for LUT (color.apply_lut) and subtitles (caption.burn_in) so the refused surface ops can enter the matrix",
+          "title_fa": "ابزارهای lane برای LUT و subtitles تا دو عمل ردشدهٔ surface وارد ماتریس واقعی شوند",
+          "why_fa": "D-0011: lut/burnin به دلیل نبود مسیر اجرای صادقانه (بدون .cube shipped و بدون subtitles op در lane IR) typed refuse می‌شوند؛ با ابزار واقعی lane قابل برگشت‌اند."
+        },
+        {
+          "acceptance_criteria": [
+            "real user sends /edit trim on staging and receives translated queued + video artifact",
+            "caption transcribe on default install returns the typed unavailable message (localized)",
+            "job rows show durable COMPLETED/not FAILED for the typed paths"
+          ],
+          "exclusive_paths": [],
+          "prerequisites": [
+            "staging bot token + a test chat"
+          ],
+          "status_note": "owner/staging action; evidence = staging screenshots + job row dump",
+          "id": "task-175",
+          "priority": "P2",
+          "zone": "p0-stabilization",
+          "title": "Staging smoke of /edit /caption /grade against the live bot (PTB runtime)",
+          "title_fa": "اسموک استیجینگ سه فرمان creative روی ربات زنده",
+          "why_fa": "زنجیره در سطح unit/integration با artifact واقعی اثبات شده؛ اثبات نهایی کاربر-واقعی به کانتکست PTB زنده و توکن استیجینگ نیاز دارد (external dependency)."
+        }
+      ]
+    }
   },
   "takeover_log": [
     {

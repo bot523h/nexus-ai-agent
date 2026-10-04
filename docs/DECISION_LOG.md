@@ -1651,3 +1651,72 @@ stated goal is a nominal gate).
 coverage ACCEPTED and byte-identical across two runs; gate control accepted and
 27/27 attacks rejected; mutation campaign with every applicable mutation killed and
 restored.
+
+## 2026-10-04 — D-0024: the causal evidence ledger and the Artifact Passport (session `arena/01a1087f-nexus-ai-agent`)
+
+*Context.* The creative chain's causal facts were durable but scattered (job row
+status/attempt/verification block; artifact bytes on disk) and no durable,
+ordered, tamper-evident history bound them. "Why and how did this artifact come
+into existence?" had no deterministic, evidence-backed answer, and no layer
+reconciled the queue's authoritative row against what a record claimed. The
+proposal/compiler work in flight on other branches keeps its graph in memory by
+advertisement, which is exactly the state this decision replaces.
+
+*Decision.* Add `nexus_ai_agent.causal` — a witness, not an authority:
+
+1. **One fact, one owner.** The queue row owns job state; the bytes own artifact
+   content; the journal owns causal order. The ledger never writes another
+   table (its SQL is `CREATE`/`SELECT`/`INSERT` on `causal_journal` only, no
+   `UPDATE`, no `DELETE`) and the passport projects these three sources instead
+   of becoming a fourth.
+2. **Append-only, hash-chained, idempotent.** Each record links to its
+   predecessor by hash; a record's logical identity excludes volatile fields so
+   a replayed observation (lost acknowledgement) collapses instead of
+   duplicating; a corrupted tail refuses new appends.
+3. **Deterministic identities, content-addressed artifacts.** Node ids are
+   derived from durable facts (`request:`, `job:`, `attempt:<id>#n`,
+   `execution:`, `verification:`, `receipt:`); the artifact node is the
+   verifier-measured `sha256:`. An execution record deliberately carries no
+   artifact claim: a handler's word is not a causal fact.
+4. **Refusal over invention.** `PassportBuilder` refuses when no record
+   mentions the subject, and downgrades to `PARTIAL`/`IN_FLIGHT`/`DIVERGED`/
+   `UNPROVEN` with typed divergences when the row, the journal and the bytes
+   disagree. `verify_passport` independently re-measures the bytes and refuses
+   anything that is not `COMPLETE`; a passport edited after issuance is
+   detected by its own content digest.
+5. **Observation is post-commit and fail-safe.** The queue notifies an optional
+   observer only after a transition committed, through `_observe`, which logs
+   and continues on observer failure; a resulting gap is detectable because the
+   passport cross-checks the row (``journal_incomplete``).
+6. **The proposal stages stay unrecorded.** `intent`, `strategy`, `work`,
+   `plan` and `transaction` are a closed vocabulary and an extension point —
+   no producer exists on this tree, and every passport reports them as
+   `not_recorded` rather than filling them with a plausible story.
+
+*Rejected.* Making the ledger authoritative for job state (two sources of truth
+would drift with no reconciliation rule); storing the handler-claimed digest as
+an artifact fact (it is precisely the untrusted claim the verifier exists to
+check); anchoring authority in the ledger (authority must be persisted by the
+component that decides it — recording a decision nobody made would be
+fabrication); a per-project chain with no global order (loses the total order
+that makes tampering detectable); accepting unplanned fact keys (a silent path
+for PII into durable history).
+
+*Evidence.* `tests/unit/test_causal_journal.py` (chain, idempotency, corruption,
+redaction, single-table ownership), `tests/unit/test_causal_passport.py`
+(reconciliation, refusal, divergence, passport identity),
+`tests/architecture/test_causal_boundary.py` (no execution authority, no
+non-journal SQL), `tests/integration/test_causal_chain_e2e.py` (real FFmpeg +
+real queue + real verifier → `COMPLETE` passport, duplicate collapse, conflict
+explanation, post-hoc byte tamper) and
+`tests/integration/test_causal_fault_injection.py` (real child-process crash
+inside the verifier, lost enqueue acknowledgement, fenced stale execution,
+corrupted input, tampered history). Local suite on this decision's branch:
+2962 passed, 30 skipped (see the PR for the exact SHA and CI evidence).
+
+*Limitations recorded, not hidden.* The chain has no external secret or anchor,
+so a rewrite of the whole journal can be made self-consistent — detection for
+that case rests on the passport's cross-authority agreement with the row and
+the bytes; no durable authorization decision exists on this tree yet, so
+`authority` is reported absent; artifact re-measurement is restricted to
+caller-supplied allowed roots.

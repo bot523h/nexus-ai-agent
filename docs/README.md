@@ -41,6 +41,7 @@ placeholder text.
 | [architecture/adr/0005-canonical-command-capability-contract.md](architecture/adr/0005-canonical-command-capability-contract.md) | Canonical command and capability contract: versioning, location, and reconciliation. |
 | [architecture/adr/0006-capability-pack-trust-root.md](architecture/adr/0006-capability-pack-trust-root.md) | Capability packs get an explicit trust root (Ed25519, offline, fail-closed). |
 | [architecture/TRUST_CONTROL_PLANE.md](architecture/TRUST_CONTROL_PLANE.md) | Trust/truth domains A–E: interfaces, authorities, non-bypass guards, honest status. |
+| [architecture/CAUSAL_EVIDENCE_LEDGER.md](architecture/CAUSAL_EVIDENCE_LEDGER.md) | The causal evidence ledger and Artifact Passport: identities, chain, reconciliation, refusal, failure proofs, honest limits. |
 
 ## Authoritative records
 

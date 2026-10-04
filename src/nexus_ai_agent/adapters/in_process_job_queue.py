@@ -57,6 +57,17 @@ historical two-phase semantics otherwise unchanged.
 Trace (task-181): every event emitted while a job runs is bound to its
 ``job_id`` (structlog contextvars — the worker's events carry it
 automatically) and the queue's own lifecycle lines name it explicitly.
+
+Observation (causal evidence): an optional
+:class:`~nexus_ai_agent.application.ports.job_lifecycle_observer.JobLifecycleObserverPort`
+may be passed as ``causal_observer``.  It is notified *after* each transition
+became durable, through ``_observe`` — a strictly fail-safe call: an observer
+failure is logged with the explicit note that the evidence may be incomplete
+and never changes what the queue committed, re-opens a decided transition or
+schedules anything.  The observer port carries facts, never commands, so it
+cannot become a second execution path (the durable row stays the only
+authority; a gap in the observer's evidence is detectable later because a
+passport cross-checks the row against the observer's records).
 """
 
 from __future__ import annotations
@@ -75,6 +86,15 @@ from uuid import uuid4
 
 import structlog
 
+from nexus_ai_agent.application.ports.job_lifecycle_observer import (
+    ExecutionFinished,
+    JobEnqueued,
+    JobLifecycleObserverPort,
+    JobReservationRejected,
+    JobReserved,
+    JobSettled,
+    VerificationFinished,
+)
 from nexus_ai_agent.application.ports.job_queue import JobStatus
 from nexus_ai_agent.jobs.failure_semantics import (
     FailureClass,
@@ -94,6 +114,22 @@ JobCompletionHook = Callable[["JobCompletion"], Awaitable[None]]
 #: A verifier re-measures a handler result against the filesystem. It must
 #: be sync (the queue runs it in a worker thread) and side-effect free.
 ArtifactVerifier = Callable[[dict[str, object], dict[str, object]], VerificationOutcome]
+
+
+@dataclass(frozen=True)
+class EnqueueOutcome:
+    """What the durable idempotency collapse did with one enqueue request.
+
+    ``created=False`` means an existing row absorbed the request (first
+    payload wins); ``payload_conflict=True`` additionally means the retried
+    request carried a different payload, which is exactly the case a caller
+    can otherwise never distinguish from a fresh dispatch after a lost
+    acknowledgement.
+    """
+
+    job_id: str
+    created: bool
+    payload_conflict: bool
 
 
 @dataclass(frozen=True)
@@ -222,7 +258,9 @@ class InProcessJobQueue:
         on_job_finished: JobCompletionHook | None = None,
         artifact_verifiers: Mapping[str, ArtifactVerifier] | None = None,
         artifact_publications: Mapping[str, ArtifactPublication] | None = None,
+        causal_observer: JobLifecycleObserverPort | None = None,
     ) -> None:
+        self._causal_observer = causal_observer
         self.db_path = Path(db_path)
         self._sqlite_path = str(db_path)
         self._on_job_finished = on_job_finished
@@ -295,14 +333,25 @@ class InProcessJobQueue:
         if not idempotency_key.strip():
             raise ValueError("idempotency_key must not be empty")
 
-        job_id = await asyncio.to_thread(
+        outcome = await asyncio.to_thread(
             self._insert_or_get,
             normalized,
             idempotency_key,
             payload,
         )
-        self._schedule(job_id)
-        return job_id
+        await self._observe(
+            "on_enqueued",
+            JobEnqueued(
+                job_id=outcome.job_id,
+                job_type=normalized,
+                idempotency_key=idempotency_key,
+                payload=payload,
+                created=outcome.created,
+                payload_conflict=outcome.payload_conflict,
+            ),
+        )
+        self._schedule(outcome.job_id)
+        return outcome.job_id
 
     async def get_status(self, job_id: str) -> JobStatus:
         row = await asyncio.to_thread(self._fetch_row, job_id)
@@ -454,6 +503,17 @@ class InProcessJobQueue:
                 status.value,
                 error,
             )
+            await self._observe(
+                "on_settled",
+                JobSettled(
+                    job_id=job_id,
+                    job_type=job_type,
+                    attempt=0,
+                    status=status.value,
+                    result=None,
+                    error=error,
+                ),
+            )
             await self._notify_completion(
                 JobCompletion(
                     job_id=job_id,
@@ -473,8 +533,16 @@ class InProcessJobQueue:
         claim = await asyncio.to_thread(self._mark_processing, job_id)
         if claim is None:
             logger.info("job_reservation_rejected job_id=%s type=%s", job_id, job_type)
+            await self._observe(
+                "on_reservation_rejected",
+                JobReservationRejected(job_id=job_id, job_type=job_type),
+            )
             return
         logger.info("job_processing job_id=%s type=%s attempt=%d", job_id, job_type, claim.attempt)
+        await self._observe(
+            "on_reserved",
+            JobReserved(job_id=job_id, job_type=job_type, attempt=claim.attempt),
+        )
         payload: dict[str, object] = {}
         try:
             parsed = json.loads(str(row["payload_json"]))
@@ -495,6 +563,17 @@ class InProcessJobQueue:
         except Exception as exc:  # noqa: BLE001 - job failure must be persisted
             # Fail-closed conversion: classify and persist a failure status.
             status = failure_status(classify_exception(exc))
+            await self._observe(
+                "on_execution_finished",
+                ExecutionFinished(
+                    job_id=job_id,
+                    job_type=job_type,
+                    attempt=claim.attempt,
+                    result=None,
+                    error=str(exc),
+                    typed_failure_code=None,
+                ),
+            )
             await self._fail_owned(claim, job_type, payload, str(exc), status, None)
             return
 
@@ -505,6 +584,17 @@ class InProcessJobQueue:
         # The result payload is preserved so the notifier can translate it
         # and the audit chain can read it.
         code = failure_code_of(result)
+        await self._observe(
+            "on_execution_finished",
+            ExecutionFinished(
+                job_id=job_id,
+                job_type=job_type,
+                attempt=claim.attempt,
+                result=result,
+                error=None,
+                typed_failure_code=code,
+            ),
+        )
         if code is not None:
             status = failure_status(classify_typed_code(code))
             await self._fail_owned(
@@ -521,6 +611,17 @@ class InProcessJobQueue:
             if not await asyncio.to_thread(self._mark_completed, claim, final_result):
                 self._log_rejected(job_id, claim, JobStatus.COMPLETED)
                 return
+            await self._observe(
+                "on_settled",
+                JobSettled(
+                    job_id=job_id,
+                    job_type=job_type,
+                    attempt=claim.attempt,
+                    status=JobStatus.COMPLETED.value,
+                    result=final_result,
+                    error=None,
+                ),
+            )
         else:
             # Execution success ≠ job success: verify the artifact
             # independently before the row may become terminal-success.
@@ -539,6 +640,21 @@ class InProcessJobQueue:
                 result, outcome, published = await self._publish_and_reprobe(
                     claim, publication, verifier, payload, result
                 )
+            # The observed block is the FINAL one (a publication re-probe
+            # replaces it); ``published`` distinguishes "written to its final
+            # destination" from "measured only in the job workspace".
+            await self._observe(
+                "on_verification_finished",
+                VerificationFinished(
+                    job_id=job_id,
+                    job_type=job_type,
+                    attempt=claim.attempt,
+                    ok=outcome.ok,
+                    reason_code=outcome.reason_code,
+                    block=outcome.block,
+                    published=published,
+                ),
+            )
             if outcome.ok:
                 final_result = {**result, VERIFICATION_RESULT_KEY: outcome.block}
                 if not await asyncio.to_thread(self._mark_completed, claim, final_result):
@@ -547,6 +663,17 @@ class InProcessJobQueue:
                     # decides the fate of the destination.
                     self._log_rejected(job_id, claim, JobStatus.COMPLETED)
                     return
+                await self._observe(
+                    "on_settled",
+                    JobSettled(
+                        job_id=job_id,
+                        job_type=job_type,
+                        attempt=claim.attempt,
+                        status=JobStatus.COMPLETED.value,
+                        result=final_result,
+                        error=None,
+                    ),
+                )
                 if publication is not None and publication.finalize is not None and published:
                     await self._finalize_safely(publication, payload, result)
             else:
@@ -600,6 +727,17 @@ class InProcessJobQueue:
             status.value,
             error,
             claim.attempt,
+        )
+        await self._observe(
+            "on_settled",
+            JobSettled(
+                job_id=claim.job_id,
+                job_type=job_type,
+                attempt=claim.attempt,
+                status=status.value,
+                result=result,
+                error=error,
+            ),
         )
         await self._notify_completion(
             JobCompletion(
@@ -745,6 +883,29 @@ class InProcessJobQueue:
                 exc_info=True,
             )
 
+    async def _observe(self, method: str, event: object) -> None:
+        """Notify the optional causal observer — strictly fail-safe.
+
+        Called only after the transition it describes committed.  A failing
+        observer never undoes, delays or re-opens a committed transition; it
+        leaves a detectable gap instead (the passport reconciles the durable
+        row against the observer's records and reports ``journal_incomplete``
+        when a required record is missing).
+        """
+        observer = self._causal_observer
+        if observer is None:
+            return
+        try:
+            callback = getattr(observer, method)
+            await asyncio.to_thread(callback, event)
+        except Exception:  # noqa: BLE001 - evidence failure must not break the job
+            logger.warning(
+                "causal observer %s failed; evidence may be incomplete "
+                "(the durable job row is unaffected)",
+                method,
+                exc_info=True,
+            )
+
     def _initialize_db(self) -> None:
         """Create only the queue-owned table; no application migration is run."""
         with self._connection() as connection:
@@ -780,7 +941,7 @@ class InProcessJobQueue:
         job_type: str,
         idempotency_key: str,
         payload: dict[str, object],
-    ) -> str:
+    ) -> EnqueueOutcome:
         payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         job_id = uuid4().hex
         with self._db_lock, self._connection() as connection:
@@ -790,7 +951,8 @@ class InProcessJobQueue:
             ).fetchone()
             if existing is not None:
                 existing_id = str(existing[0])
-                if str(existing[1]) != payload_json:
+                conflict = str(existing[1]) != payload_json
+                if conflict:
                     # First dispatch wins: the original payload keeps the
                     # key. Deterministic, observable, and a retry under the
                     # same key can never create a second, different effect.
@@ -800,7 +962,7 @@ class InProcessJobQueue:
                         idempotency_key,
                         existing_id,
                     )
-                return existing_id
+                return EnqueueOutcome(job_id=existing_id, created=False, payload_conflict=conflict)
             connection.execute(
                 """
                 INSERT INTO nexus_job_queue
@@ -816,7 +978,7 @@ class InProcessJobQueue:
                     _now(),
                 ),
             )
-        return job_id
+        return EnqueueOutcome(job_id=job_id, created=True, payload_conflict=False)
 
     def _fetch_row(self, job_id: str) -> sqlite3.Row | None:
         with self._db_lock, self._connection() as connection:
