@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-04T19:58:52Z",
+  "updated_at": "2026-10-04T21:08:46Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -657,6 +657,18 @@
         "tests/unit/test_request_queue.py",
         "scripts/llm_queue_mutations.py",
         "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
+      ]
+    },
+    {
+      "id": "creative-durable-queue-evidence",
+      "description": "Task-231: durable creative queue identity, attempt history, and trim artifact passport.",
+      "paths": [
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        "src/nexus_ai_agent/jobs/creative_passport.py",
+        "tests/unit/test_creative_passport.py",
+        "tests/integration/test_creative_execution_recovery.py",
+        "tests/integration/test_job_lifecycle_queue.py",
+        "docs/architecture/JOB_LIFECYCLE.md"
       ]
     }
   ],
