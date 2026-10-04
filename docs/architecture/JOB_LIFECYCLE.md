@@ -6,8 +6,10 @@
 > `src/nexus_ai_agent/adapters/in_process_job_queue.py`. Delivered by task-178
 > (Agent C, 2026-09-24), closed by task-180 (verification GAPs, 2026-09-24)
 > and task-181 (failure semantics + 6-state taxonomy + publication order,
-> 2026-09-24). Decision records: `docs/DECISION_LOG.md` D-0017, D-0018,
-> D-0019.
+> 2026-09-24). Task-231 adds queue-only stable request identity, JSON attempt
+> history, and a re-readable verified passport for `timeline.trim`; it does
+> not persist the canonical CreativeWork/Project/CommandBus lineage. Decision
+> records: `docs/DECISION_LOG.md` D-0017, D-0018, D-0019.
 
 ## 1. The canonical chain
 
@@ -77,8 +79,13 @@ stale execution's ②/④ write matches zero rows → `job_transition_rejected`,
 nothing announced, nothing published, nothing retracted. Crash recovery:
 a crash anywhere before ④ leaves a `processing`/`verifying` row that ⑤
 reopens; the next ① mints a higher token, so a zombie of the crashed
-execution is fenced out; a crash between publish and ④ leaves the
-published bytes + `.prev`, which the re-execution replaces (§6).
+execution is fenced out. For queue-only `timeline.trim`, task-231 also
+checkpoints the verified passport and attempt before ④; recovery can re-read
+and re-verify that checkpoint, then reconcile completion without invoking the
+renderer again. A crash before that checkpoint still allows at-least-once
+handler execution. Other job types retain their existing re-execution
+behavior; a crash between publication and ④ leaves the published bytes +
+`.prev`, which the re-execution replaces (§6).
 
 **Both failure states are terminal as implemented.** The reserved
 `failed_retryable → pending` scheduler retry edge is deliberately **outside**
@@ -96,7 +103,7 @@ zero rows):
 
 | Edge | Owner | Invariant |
 |---|---|---|
-| `pending → processing` | queue (reservation CAS) | **PENDING-only** CAS (`WHERE status = 'pending'`, `rowcount == 1`); `started_at` set; `attempt += 1` mints this execution's fencing token (`ExecutionClaim`); a `processing` row is **not** re-claimable — takeover happens only through `resume_pending` (§2a) |
+| `pending → processing` | queue (reservation CAS) | **PENDING-only** CAS (`WHERE status = 'pending'`, `rowcount == 1`); `started_at` set; `attempt += 1` mints this execution's fencing token (`ExecutionClaim`) and appends its attempt record to `attempt_history_json` in the same queue-row transaction; a `processing` row is **not** re-claimable — takeover happens only through `resume_pending` (§2a) |
 | `pending → failed_retryable` | queue (claim-time) | structural failure classified RETRYABLE (a deploy can make the identical job succeed); zero side effects |
 | `pending → failed_terminal` | queue (claim-time) | structural failure classified TERMINAL (e.g. no handler); zero side effects |
 | `processing → verifying` | queue (fenced) | handler returned a dict; nothing trusted yet; `attempt = claim` |
@@ -173,7 +180,7 @@ runtime staging.
 1. `authorization` — surface/HMAC gate + payload schema validation
 2. `capability` — operation ∈ packs `CapabilityRegistry` allow-list
 3. `references` — input media contained in its workspace, readable
-4. `idempotency` — durable UNIQUE key collapse at enqueue
+4. `idempotency` — durable UNIQUE-key collapse at enqueue; the `creative_render` lane also rejects a same-key payload fingerprint mismatch before scheduling
 5. `revision/precondition` — guarded status CAS (row in expected state)
 6. `job reservation` — `pending → processing` owns the execution
 
@@ -219,12 +226,13 @@ Three identities (found in the tree, not assumed; evidence in
 |---|---|---|
 | logical | `project_id = shot-<idempotency_key>` + output asset id | re-derived from the payload's key at verification; persisted in the result |
 | spec | canonical operation id + compiled lane IR hash (`CompiledLane.ir_hash = sha256(canonical payload)`) | recorded by the worker (`spec_ir_hash`), persisted in the result |
-| physical | output path (inside the job workspace) + size + `sha256:<hex>` + probe evidence | **re-measured now**: exists → `size > 0` → expected path per operation (`output.mp4` / `captions.srt` / `timeline.otio`) → containment → sha recompute → probe (media) |
+| physical | output path (job workspace, or the queue-owned attempt store for archived `timeline.trim`) + size + `sha256:<hex>` + probe evidence | **re-measured now**: exists → `size > 0` → expected path per operation (`output.mp4` / `captions.srt` / `timeline.otio`) → verifier-workspace containment → sha recompute → probe (media) |
 
 Verification invariants (§ of the mission, all enforced in
 `jobs/verification.verify_artifact`): the artifact must exist, be non-empty,
-be *the* expected artifact of the operation inside the job's own workspace,
-carry a stable identity (recorded sha equals recomputed sha), and for media
+be *the* expected artifact of the operation inside the verifier's declared
+workspace (for archived trims, the job/attempt evidence directory), carry a
+stable identity (recorded sha equals recomputed sha), and for media
 carry valid probe evidence (a probe failure is exactly "ffprobe failed" by
 runtime semantics). Document artifacts are verified structurally (SubRip
 timing-block syntax; OTIO must parse as a JSON object).
@@ -265,12 +273,27 @@ duplicate of the staged-bytes verification — it measures the bytes under the
 final name after the rename (the claim that downstream readers will see) and
 is the only check that catches a wrong-destination or truncated rename.
 
-Workspace-scoped lanes (`creative_render`, `slideshow_render`, `story`) map
-the same order as: stage in workspace → verify → publish at delivery (the
-notifier sends the verified bytes and owns cleanup). Their handler-side
-writes are key-scoped to the job's own workspace and are **handler-owned**,
-not fenced by the queue (documented residual; a stale handler can only
-overwrite its own key's staging files).
+Workspace-scoped lanes (`slideshow_render`, `story`, and creative renders
+other than `timeline.trim`) map the same order as: stage in workspace →
+verify → deliver (the notifier sends the verified bytes and owns workspace
+cleanup). Their handler-side writes are key-scoped to the job's own workspace
+and are **handler-owned**, not fenced by the queue (documented residual; a
+stale handler can only overwrite its own key's staging files).
+
+The queue-only `timeline.trim` lane is the task-231 exception: after the
+ordinary independent workspace verification, the queue snapshots and copies
+the input and output into a sibling `<sqlite-path>.artifacts` store under a
+job/attempt key, compares copied hashes and sizes, and runs the registered
+verifier again against the archived output. The passport, attempt checkpoint,
+and result are then stored in `nexus_job_queue`; notification may clean the
+temporary render workspace without destroying the retained input/output.
+Each evidence file is bounded to 100 MiB. A fresh queue instance can load the
+passport by storage key, re-hash both files, and re-run verification. The
+source is sampled before and after rendering, but the legacy worker does not
+bind that sampled digest to the bytes actually opened by CommandBus; a
+change-and-restore race is still possible. An archive written before its
+checkpoint can be orphaned, and this task adds no retention/garbage-collection
+policy.
 
 Typed user failures (`{"success": false, "error_code": …}`, the durable
 dialect of this repository) claim **no artifact** and — since task-181
@@ -340,10 +363,12 @@ as implemented (both failure states have no outgoing edges).
 | duplicate during PROCESSING | same job id, one execution (per-process task table + UNIQUE key) |
 | destination exists | the runtime refuses blind replacement (`overwrite` gate) and publishes by atomic rename; `overwrite=True` at the worker is scoped to the job's own key-derived workspace path; a failed re-render leaves previous bytes in place (M5) |
 | same key, same payload | same job id, no second effect (redelivery dedupe) |
-| same key, different payload | **first payload wins**: same job id, original effect; conflict logged (`job_idempotency_payload_conflict`) — a retry can never smuggle a second, different effect (M6/M7) |
+| same key, different payload | `creative_render`: raise `CreativeRequestConflictError` before scheduling, fail-closed with no second mutation; other legacy job types retain **first payload wins** and log `job_idempotency_payload_conflict` |
 | retry after valid artifact exists (completed job) | same job id + stored verified result; handler not called again (M8) |
-| revision changes | revision is part of the payload ⇒ same-key revision = conflict row above; a genuinely revised request takes a new key ⇒ new job + new workspace |
-| crash mid-execution / mid-verification | row recoverable (`resume_pending` takes over orphaned `processing/verifying` rows → `pending`); the next reservation mints a new token, so a zombie of the crashed execution is fenced out; verification is read-only so re-running it is idempotent; `attempt` counts executions |
+| creative request changes | changed intent/args in a `creative_render` payload under the same key is rejected as a conflict; a genuinely revised request takes a new key ⇒ new job + new workspace |
+| crash before a durable verification checkpoint | row is recoverable (`resume_pending` takes over orphaned `processing/verifying` rows → `pending`); the next reservation mints a new token, so a zombie is fenced out; handler execution may repeat (at-least-once) |
+| crash after the `timeline.trim` verified-attempt checkpoint but before job completion | a new reservation re-hashes the retained input/output, re-runs the verifier, and completes with `reconciled_from_attempt_id`; the renderer is not called again if the checkpoint is valid; invalid evidence fails closed |
+| crash mid-verification/publication for other job types | existing behavior: recover and re-execute; verification is read-only and idempotent; `attempt` counts reservations, not successful effects |
 | crash between publish and re-probe / before `completed` | the published bytes and `.prev` survive; recovery re-executes, re-stages, re-publishes (a stray `.prev` is replaced) and completes; `.prev` is removed at finalize |
 | concurrent workers (two processes, one DB) | exactly one `pending → processing` CAS wins; the loser's handler never runs (T5) |
 
@@ -362,7 +387,100 @@ durable facts only: `command_id`, `job_id`, `project_id`, `operation_id`,
 ride inside the persisted result under the queue-owned
 `artifact_verification` key, so any consumer of `get_result` sees the
 verification truth, and the completion notifier delivers after the durable
-state is already final.
+state is already final. Task-231 adds a separate `request_identity` object to
+this chain; its transaction ID is a deterministic queue-request projection,
+not a CommandBus transaction ID.
+
+## 7a. Durable creative queue evidence (task-231; queue-only foundation)
+
+This addition is deliberately confined to the existing SQLite queue and the
+already registered `creative_render` handler/verifier for `timeline.trim`.
+It does not add a second domain store or change the worker/CommandBus
+contract.
+
+### Persisted queue facts
+
+Schema migration adds `request_id`, `request_fingerprint`, `transaction_id`,
+`artifact_passport_json`, and `attempt_history_json` to
+`nexus_job_queue`. The attempt ledger is a JSON array **on the queue row**;
+there is no `nexus_job_attempts` table. A reservation appends its attempt
+record with the new monotonic `attempt` fencing token, and verification,
+recovery, failure, completion, and reconciliation update the ledger under the
+same queue-row fence. Existing rows receive derivable request identities and
+at most one `legacy_observed_*` latest-attempt record; missing historical
+attempts are not invented.
+
+Identity rules (`jobs.creative_passport`):
+
+- `request_id` is domain-separated canonical JSON of job type + idempotency
+  key; `request_fingerprint` is SHA-256 of canonical payload JSON; and
+  `transaction_id` binds those two values. The tuple is persisted with the
+  job and recomputed on duplicate-enqueue and passport re-verification paths.
+- An exact creative duplicate returns the existing job. Reusing a
+  `creative_render` idempotency key with a changed type/payload raises
+  `CreativeRequestConflictError` before a second schedule/mutation. Other
+  legacy job types retain the older logged first-payload-wins behavior.
+- `attempt_id` is derived from durable job ID + monotonic reservation number.
+  It identifies a queue execution attempt; it does not certify that the
+  external renderer ran only once.
+
+### `timeline.trim` passport and recovery boundary
+
+After the existing worker returns and the queue's independent verifier
+accepts the output, the queue archives both input and output under
+`<sqlite-path>.artifacts/jobs/<job-hash>/<attempt-id>/`. File bytes are
+bounded to 100 MiB per asset. It checks source stability across the render,
+checks the copied hashes/sizes, and independently re-runs the registered
+verifier against the archived output. The canonical passport JSON, result,
+verification facts, runtime evidence, and the attempt's `verified` checkpoint
+are persisted before the terminal `COMPLETED` update. The final result,
+passport pointer, and `completed` attempt transition are then committed under
+the existing fenced queue update. A clean adapter can call
+`get_artifact_passport(job_id)` to resolve the storage keys, re-hash the input
+and output, re-run the verifier, rebuild the passport, and compare it with the
+persisted record. The retained input/output therefore do not depend on the
+notifier's temporary workspace surviving.
+
+The passport links stable request/transaction/job/attempt IDs to measured
+input/output assets, the verifier's logical `project_id`, canonical operation
+and lane-IR spec hash, a payload-derived intent projection, a plan projection,
+a revision projection, and recorded capability/policy evidence. It labels
+these as projections rather than asserting that canonical project state was
+persisted. It explicitly records `canonical_commandbus_transaction_id =
+null`, no actor authorization decision, and no canonical project-state hash.
+The payload's `user_id` is not treated as authorization. The observed
+capability/policy decision is not an actor permission check.
+
+Recovery contract:
+
+| Crash point | Durable fact | Recovery behavior |
+|---|---|---|
+| before handler effect | reserved attempt + queue row | mark the attempt interrupted; reserve a higher fencing token; execute again |
+| after external render but before verified checkpoint | no completed evidence checkpoint | handler may run again; renderer semantics remain at-least-once |
+| after verified-attempt checkpoint, before `COMPLETED` | passport + both archived assets + verification/result in `attempt_history_json` | new attempt re-hashes and re-verifies the earlier checkpoint, records `reconciled_from_attempt_id`, and completes without invoking the renderer if evidence still matches |
+| corrupted/missing checkpoint or asset | mismatch or verifier refusal | fail closed; do not trust the previous passport as a successful result |
+| after terminal commit, before notification | completed row and result | notification may be lost; no transactional outbox is added |
+
+The source is sampled after queue reservation and before handler invocation,
+then sampled again after rendering. The legacy CommandBus path does not bind
+its actual opened source digest to this queue record; a change-and-restore
+race remains. An archive written before its checkpoint can leave
+unreferenced files. Attempt-history JSON grows with each reservation; no
+compaction, retention/garbage-collection policy, cross-device replication, or
+artifact-store backup coordination is added. The SQLite file and its
+`.artifacts` sibling must be backed up/moved together. These facts do not
+establish exactly-once effects, reproducible rendering across runtimes, actor
+authorization, persisted CreativeWork/project revisions, or a durable
+CommandBus transaction. The wider project/revision/CommandBus mission remains
+open.
+
+Focused evidence lives in `tests/unit/test_creative_passport.py`,
+`tests/integration/test_creative_execution_recovery.py`, and the real FFmpeg
+§17 path in `tests/integration/test_job_lifecycle_queue.py`. The recovery
+tests inject actual child-process exits before render effect and after the
+verified checkpoint, then reopen the same SQLite queue and asset store. They
+prove only those tested boundaries; they do not constitute independent
+assurance or a production-readiness verdict.
 
 ## 8. Negative-test matrix (M1–M10) and the §17 regression
 
@@ -371,7 +489,7 @@ for probe paths):
 
 M1 execution failure · M2 probe failure · M3 zero-byte · M4 sha tamper ·
 M5 existing-destination survival · M6 idempotency conflict + exact
-redelivery · M7 revision conflict · M8 completed-job reuse · M9 invalid
+redelivery · M7 creative request conflict · M8 completed-job reuse · M9 invalid
 media after "successful encode" · M10 verifier crash fail-closed · M10b
 runtime fail-closed never success · A/B (legacy hole vs canonical queue on
 the same lying claim) · VERIFYING observability + cancel/recover ·
@@ -383,7 +501,11 @@ real chain): `COMPLETED` ⇒ artifact exists on disk, `size > 0`,
 + spec + physical identities persisted, `attempt` recorded. That test *is*
 the durable answer to the mandatory question — see D-0017 for the A/B
 evidence that the pre-contract queue could complete a lying claim and the
-canonical queue cannot.
+canonical queue cannot. Task-231 extends this real trim path with persisted
+input/output hashes, a passport re-read by a fresh adapter after temporary
+workspace cleanup, fail-closed re-read after output tampering, and embedded
+attempt-history assertions. Process-exit
+fault cases are in `tests/integration/test_creative_execution_recovery.py`.
 
 Task-181 adds `tests/integration/test_gate5_closure.py` (typed-failure
 regression across codes/classes, notification matrix, refused-publication
