@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-04T04:35:00Z",
+  "updated_at": "2026-10-04T17:27:57Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2735,7 +2735,7 @@
       "title": "Phase 10 agent intelligence integration: one typed natural-language creative execution slice",
       "zone": "agent-intelligence-integration",
       "priority": "P0",
-      "status": "active",
+      "status": "active_in_review",
       "scope": "Integrate the existing typed Intent, CreativeWork semantics, a provider-agnostic strategy proposal, and a narrow deterministic compiler into the current LangGraph request path. Use only registered timeline.trim through the existing durable creative job/CommandBus/render/verifier path. Do not add another executor, policy, storage authority, or unbounded replanning loop. Record the architecture decision and prove fail-closed boundaries plus one artifact-producing natural-language request.",
       "scope_fa": "اتصال یک مسیر محدود از درخواست طبیعی تا Intent تایپ‌شده، CreativeWork، کامپایل قطعی و مسیر موجود CommandBus/رندر/راستی‌آزمایی؛ بدون اجرای موازی، اختیار تازه، یا حلقهٔ بی‌نهایت.",
       "prerequisites": [],
@@ -2761,14 +2761,21 @@
         "tests/unit/test_agent_intelligence.py",
         "tests/integration/test_agent_intelligence_e2e.py",
         "tests/architecture/test_agent_intelligence_boundaries.py",
-        "docs/DECISION_LOG.md"
+        "docs/DECISION_LOG.md",
+        "src/nexus_ai_agent/creative/render_contracts.py",
+        "src/nexus_ai_agent/jobs/lifecycle.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/bot/agent_intelligence_surface.py",
+        "src/nexus_ai_agent/cli.py",
+        "tests/unit/test_agent_intelligence_surface.py",
+        "src/nexus_ai_agent/i18n/locales/en.json"
       ],
       "owner_hint": "arena/01a10528-nexus-ai-agent",
       "agent_branch": "arena/01a10528-nexus-ai-agent",
-      "claimed_at": "2026-10-04T04:35:00Z",
-      "ttl_hours": 24,
+      "claimed_at": "2026-10-04T17:19:00Z",
+      "ttl_hours": 72,
       "gates_owner": false,
-      "note": ""
+      "note": "Local delivery evidence: 54 focused tests, 57 docs-integrity tests, 34 PR #134 boundary checks, 118 PR #134 IR/determinism/semantics tests, one real FFmpeg/queue-verifier artifact e2e with duplicate/reopened-queue replay, Ruff check/format. Full gates/live provider/Telegram/production/crash recovery not run. Live PR hunk overlap is documented in D-0028: bot/app/CLI #33/#60/#63/#66/#112/#113/#115; graph/CLI #96/#119/#122/#125/#139; render worker #67-#69/#124/#148/#149; spine #126-#128; CreativeWork #131/#134. Canonical board found no active foreign lease, but this delivery must remain draft until maintainers reconcile the #126-#128 spine choice and sequence shared app/worker changes. The worker actor/permission matrix overlaps #148/#149 and needs dedup review."
     }
   ],
   "deferred_log": [

@@ -35,18 +35,28 @@ Nothing here imports Telegram; the worker runs outside the bot process.
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
+from decimal import Decimal, DecimalException
 from pathlib import Path
-from typing import Any, Literal
-
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Any
 
 from nexus_ai_agent.config.settings import get_settings
+from nexus_ai_agent.creative.render_contracts import (
+    CREATIVE_RENDER_JOB_TYPE,  # noqa: F401 - retained as a compatibility re-export
+    CreativeRenderPayload,
+)
+from nexus_ai_agent.creative.studio.authorization import ProjectAccess
+from nexus_ai_agent.creative.studio.models import (
+    ActorIdentity,
+    CommandProvenance,
+    TargetRef,
+    TypedCommand,
+)
 from nexus_ai_agent.observability.logging import get_logger
 
 logger = get_logger(__name__)
 
-CREATIVE_RENDER_JOB_TYPE = "creative_render"
 WORKSPACE_PREFIX = "creative_"
 SOURCE_ASSET_ID = "src"
 
@@ -64,6 +74,19 @@ SURFACE_TO_CANONICAL: dict[tuple[str, str], str] = {
     ("grade", "proxy"): "delivery.make_proxy_480p",
     ("grade", "otio"): "delivery.export_otio",
 }
+
+#: Worker grants are pinned per canonical operation and checked against the
+#: current registry before dispatch, so a queue row cannot widen authority.
+RENDER_JOB_OPERATION_PERMISSIONS: dict[str, frozenset[str]] = {
+    "timeline.trim": frozenset({"project:write"}),
+    "timeline.speed_ramp": frozenset({"project:write"}),
+    "timeline.reverse_segment": frozenset({"project:write"}),
+    "caption.transcribe": frozenset({"project:read"}),
+    "color.adjust_exposure": frozenset({"project:write"}),
+    "delivery.make_proxy_480p": frozenset({"project:read"}),
+    "delivery.export_otio": frozenset({"project:write"}),
+}
+RENDER_JOB_SERVICE_ACTOR = ActorIdentity(kind="service", actor_id="nexus.creative.render-worker")
 
 #: Server-controlled EXPERIMENTAL-pack opt-in (task-183 trust boundary).
 #: The canonical operations below run on the ``EXPERIMENTAL``
@@ -107,26 +130,6 @@ class CreativeRenderError(ValueError):
         super().__init__(f"[{code}] {detail}".strip())
         self.code = code
         self.detail = detail
-
-
-class CreativeRenderPayload(BaseModel):
-    """Trusty schema for the surface→queue→worker contract."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    command: Literal["edit", "caption", "grade"]
-    operation: str = Field(min_length=1)
-    args: list[str] = Field(default_factory=list)
-    workspace_dir: str = Field(min_length=1)
-    input_path: str | None = None
-    media_duration_us: int | None = Field(default=None, ge=0)
-    user_id: int
-    chat_id: int
-    lang: str = "en"
-    idempotency_key: str = Field(min_length=1)
-    # Deliberately no lifecycle opt-in field: the EXPERIMENTAL-pack opt-in is
-    # server policy (``EXPERIMENTAL_OPT_IN_OPERATIONS``), and ``extra="forbid"``
-    # rejects a row that tries to carry one (task-183 trust boundary).
 
 
 # ---------------------------------------------------------------------------
@@ -214,33 +217,96 @@ def _dispatch(
     input_data: dict[str, Any],
     idempotency_key: str,
 ) -> dict[str, Any]:
-    """Registry lookup → bus dispatch. Bad args become typed
-    ``invalid_request`` (a retry with the same payload fails identically).
+    """Dispatch one closed-set worker operation through the trusted bus.
 
-    The bus's EXPERIMENTAL opt-in is derived from the canonical operation via
-    the server-controlled ``EXPERIMENTAL_OPT_IN_OPERATIONS``; no caller (and no
-    queue row) can pass it in."""
+    Queue rows never supply identity, permissions, or lifecycle opt-in. The
+    operation-level grant is pinned here and checked against the registry
+    before the bus is constructed. Bad arguments become typed failures, so a
+    retry with the same payload fails identically.
+    """
     from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
     from nexus_ai_agent.creative.studio.bus import CommandBus
-    from nexus_ai_agent.creative.studio.models import TargetRef, TypedCommand
 
+    required_permissions = RENDER_JOB_OPERATION_PERMISSIONS.get(operation)
+    if required_permissions is None:
+        raise CreativeRenderError(
+            "unsupported_operation", f"worker authority matrix does not permit {operation!r}"
+        )
+
+    registry = build_runtime_registry()
+    try:
+        actual_permissions = frozenset(registry.get_spec(operation).effective_permissions)
+    except Exception as exc:
+        raise CreativeRenderError(
+            "unsupported_operation", f"operation is not registered: {operation!r}"
+        ) from exc
+    if actual_permissions != required_permissions:
+        raise CreativeRenderError(
+            "unsupported_operation",
+            f"worker authority matrix drift for {operation!r}: "
+            f"expected {sorted(required_permissions)}, got {sorted(actual_permissions)}",
+        )
+
+    authorizer = ProjectAccess(
+        actor=RENDER_JOB_SERVICE_ACTOR,
+        project_id=project.project_id,
+        permissions=required_permissions,
+    )
     bus = CommandBus(
         state=project,
-        registry=build_runtime_registry(),
+        registry=registry,
+        authorizer=authorizer,
         allow_experimental=operation in EXPERIMENTAL_OPT_IN_OPERATIONS,
     )
     command = TypedCommand(
         command_id=f"cmd-{idempotency_key}-{operation}",
+        schema_version=2,
+        actor=RENDER_JOB_SERVICE_ACTOR,
         operation=operation,
         input=input_data,
         target=TargetRef(project_id=project.project_id, track_id="main"),
+        provenance=CommandProvenance(
+            source="service",
+            source_id=RENDER_JOB_SERVICE_ACTOR.actor_id,
+            reason="queued creative render worker",
+        ),
         idempotency_key=idempotency_key,
     )
     try:
         result = bus.dispatch(command)
     except Exception as exc:
         raise CreativeRenderError("invalid_request", f"{type(exc).__name__}: {exc}") from exc
-    return dict(result.output or {})
+    return {
+        **dict(result.output or {}),
+        "_command_id": command.command_id,
+        "_transaction_id": result.transaction_id,
+        "_state_hash": result.state_hash,
+    }
+
+
+def _seconds_to_us(payload: CreativeRenderPayload, index: int, default_us: int) -> int:
+    """Parse trim seconds exactly; reject sub-microsecond and non-finite values."""
+    seconds, remainder = divmod(default_us, 1_000_000)
+    raw = payload.args[index] if len(payload.args) > index else f"{seconds}.{remainder:06d}"
+    try:
+        value = Decimal(raw)
+        if not value.is_finite():
+            raise CreativeRenderError(
+                "invalid_request", f"argument {index + 1} must be a finite number"
+            )
+        scaled = value * Decimal(1_000_000)
+        integral = scaled.to_integral_value()
+        if scaled != integral:
+            raise CreativeRenderError(
+                "invalid_request", f"argument {index + 1} must be an exact microsecond value"
+            )
+        return int(scaled)
+    except CreativeRenderError:
+        raise
+    except (DecimalException, ValueError, OverflowError) as exc:
+        raise CreativeRenderError(
+            "invalid_request", f"argument {index + 1} must be a finite exact microsecond value"
+        ) from exc
 
 
 def _seconds_args(payload: CreativeRenderPayload, index: int, default: float) -> float:
@@ -256,14 +322,19 @@ def _seconds_args(payload: CreativeRenderPayload, index: int, default: float) ->
 def _operation_inputs(payload: CreativeRenderPayload, duration_us: int) -> dict[str, Any]:
     """Pack-level input record (validated by the bus, journaled in history)."""
     if payload.operation == "trim":
-        in_us = int(_seconds_args(payload, 0, 0.0) * 1_000_000)
-        out_us = int(_seconds_args(payload, 1, duration_us / 1_000_000) * 1_000_000)
+        in_us = _seconds_to_us(payload, 0, 0)
+        out_us = _seconds_to_us(payload, 1, duration_us)
         if in_us >= out_us:
             raise CreativeRenderError("invalid_request", "trim needs in < out (seconds)")
+        if out_us > duration_us:
+            raise CreativeRenderError(
+                "invalid_request", "trim out-point exceeds measured source duration"
+            )
         return {
             "clip_asset_id": SOURCE_ASSET_ID,
             "in_point_us": in_us,
             "out_point_us": out_us,
+            "output_asset_id": None,
         }
     if payload.operation == "speed":
         return {"clip_asset_id": SOURCE_ASSET_ID, "speed_factor": _seconds_args(payload, 0, 1.0)}
@@ -282,7 +353,7 @@ def _lane_ops(
     payload: CreativeRenderPayload, canonical_id: str, duration_us: int
 ) -> tuple[list[Any], Any | None]:  # noqa: ANN401
     """Lane-IR instrumentation matching the canonical operation one-to-one.
-    Trim is clamped to the measured duration — the media is the truth."""
+    Trim points are checked against the measured duration and never clamped."""
     from nexus_ai_agent.creative.rendering.ir import (
         ExposureOp,
         LaneProfile,
@@ -292,15 +363,14 @@ def _lane_ops(
     )
 
     if canonical_id == "timeline.trim":
-        in_us = int(_seconds_args(payload, 0, 0.0) * 1_000_000)
-        out_us = (
-            int(_seconds_args(payload, 1, duration_us / 1_000_000) * 1_000_000)
-            if len(payload.args) > 1
-            else duration_us
-        )
-        out_us = min(out_us, duration_us)
+        in_us = _seconds_to_us(payload, 0, 0)
+        out_us = _seconds_to_us(payload, 1, duration_us)
         if out_us <= in_us:
             raise CreativeRenderError("invalid_request", "trim needs in < out (seconds)")
+        if out_us > duration_us:
+            raise CreativeRenderError(
+                "invalid_request", "trim out-point exceeds measured source duration"
+            )
         return [TrimOp(in_us=in_us, out_us=out_us)], None
     if canonical_id == "timeline.speed_ramp":
         return [SpeedOp(factor=_seconds_args(payload, 0, 1.0))], None
@@ -311,6 +381,192 @@ def _lane_ops(
     if canonical_id == "delivery.make_proxy_480p":
         return [], LaneProfile(width=854, height=480)
     raise CreativeRenderError("unsupported_operation", canonical_id)
+
+
+def _reject_snapshot_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON constant {value!r} is not allowed")
+
+
+def _unique_snapshot_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate snapshot field")
+        result[key] = value
+    return result
+
+
+def _snapshot_object(raw: str, label: str) -> dict[str, Any]:
+    try:
+        value = json.loads(
+            raw,
+            object_pairs_hook=_unique_snapshot_object,
+            parse_constant=_reject_snapshot_constant,
+        )
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise CreativeRenderError("invalid_request", f"Agent {label} snapshot is invalid") from exc
+    if not isinstance(value, dict):
+        raise CreativeRenderError("invalid_request", f"Agent {label} snapshot must be an object")
+    return value
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _validate_agent_lineage(
+    payload: CreativeRenderPayload,
+    *,
+    canonical_id: str,
+    operation_input: dict[str, Any],
+    source_duration_us: int,
+    source_sha256: str,
+) -> None:
+    """Revalidate the persisted Agent snapshots with the canonical authoring/compiler path.
+
+    The queue row is a trust boundary.  A successful Agent artifact must be the
+    exact operation recompiled from its immutable Intent, strategy, Work and
+    plan snapshots—not merely a trim with the same output duration.
+    """
+    lineage = payload.agent_lineage
+    if lineage is None:
+        return
+    if canonical_id != "timeline.trim":
+        raise CreativeRenderError(
+            "invalid_request", "Agent lineage is only valid for timeline.trim"
+        )
+    if lineage.max_replans != 0:
+        raise CreativeRenderError("invalid_request", "Agent replan budget is not zero")
+    if (
+        lineage.source_duration_us != source_duration_us
+        or payload.media_duration_us != source_duration_us
+    ):
+        raise CreativeRenderError("invalid_request", "Agent source duration changed")
+    if lineage.source_sha256 != source_sha256:
+        raise CreativeRenderError("invalid_request", "Agent source content changed")
+
+    try:
+        from nexus_ai_agent.creative.intelligence.ir import CreativeWork
+        from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+        from nexus_ai_agent.creative.spine.authoring import build_creative_work
+        from nexus_ai_agent.creative.spine.compiler import (
+            CreativeWorkCompiler,
+            request_idempotency_key,
+        )
+        from nexus_ai_agent.creative.spine.models import CompiledIntent, Intent
+        from nexus_ai_agent.creative.spine.strategy import (
+            SourceAssetDescriptor,
+            StrategyProposal,
+        )
+
+        intent = Intent.model_validate(_snapshot_object(lineage.intent_snapshot_json, "intent"))
+        strategy = StrategyProposal.model_validate(
+            _snapshot_object(lineage.strategy_snapshot_json, "strategy")
+        )
+        work = CreativeWork.model_validate(_snapshot_object(lineage.work_snapshot_json, "work"))
+        plan = CompiledIntent.model_validate(_snapshot_object(lineage.plan_snapshot_json, "plan"))
+    except CreativeRenderError:
+        raise
+    except Exception as exc:
+        raise CreativeRenderError(
+            "invalid_request", "Agent lineage snapshots failed their typed schemas"
+        ) from exc
+
+    if _canonical_json(intent.model_dump(mode="json")) != lineage.intent_snapshot_json:
+        raise CreativeRenderError("invalid_request", "Agent Intent snapshot is not canonical")
+    intent_without_id = intent.model_dump(mode="python")
+    intent_without_id["intent_id"] = ""
+    if Intent.model_validate(intent_without_id).intent_id != intent.intent_id:
+        raise CreativeRenderError("invalid_request", "Agent Intent content identity is invalid")
+    if _canonical_json(strategy.model_dump(mode="json")) != lineage.strategy_snapshot_json:
+        raise CreativeRenderError("invalid_request", "Agent strategy snapshot is not canonical")
+    if work.to_canonical_json() != lineage.work_snapshot_json:
+        raise CreativeRenderError("invalid_request", "Agent CreativeWork snapshot is not canonical")
+    if _canonical_json(plan.model_dump(mode="json")) != lineage.plan_snapshot_json:
+        raise CreativeRenderError("invalid_request", "Agent plan snapshot is not canonical")
+
+    expected_command = f"cmd-{payload.idempotency_key}-timeline.trim"
+    expected_project = f"shot-{payload.idempotency_key}"
+    if (
+        request_idempotency_key(lineage.request_id) != payload.idempotency_key
+        or intent.request_id != lineage.request_id
+        or intent.intent_id != lineage.intent_id
+        or intent.project_id != expected_project
+        or intent.objective != "video_trim"
+        or intent.ambiguity_state != "clear"
+        or intent.confidence < 0.75
+        or intent.unresolved_requirements
+        or intent.constraints
+    ):
+        raise CreativeRenderError("invalid_request", "Agent Intent identity or readiness changed")
+    if (
+        strategy.strategy_id != lineage.strategy_id
+        or strategy.objective != "video_trim"
+        or strategy.operation != "timeline.trim"
+        or strategy.source_asset_id != lineage.source_asset_id
+        or intent.source_range is None
+        or strategy.in_point_us != intent.source_range.in_point_us
+        or strategy.out_point_us != intent.source_range.out_point_us
+        or strategy.semantic_intents != intent.semantic_intents
+    ):
+        raise CreativeRenderError("invalid_request", "Agent strategy no longer matches the Intent")
+    if work.work_id != lineage.work_id:
+        raise CreativeRenderError("invalid_request", "Agent CreativeWork identity changed")
+    try:
+        work.verify_identity()
+        work.assert_valid()
+        work.assert_constraints()
+    except Exception as exc:
+        raise CreativeRenderError(
+            "invalid_request", "Agent CreativeWork validation failed"
+        ) from exc
+    if len(work.assets) != 1 or work.assets[0].kind.value != "video":
+        raise CreativeRenderError(
+            "invalid_request", "Agent Work no longer describes one source video"
+        )
+    source_asset = work.assets[0]
+    expected_uri = (
+        f"asset://{lineage.source_asset_id}/{lineage.source_sha256.removeprefix('sha256:')}"
+    )
+    if source_asset.uri != expected_uri or source_asset.duration_us != source_duration_us:
+        raise CreativeRenderError("invalid_request", "Agent Work source identity changed")
+
+    source = SourceAssetDescriptor(
+        asset_id=lineage.source_asset_id,
+        media_kind="video",
+        duration_us=source_duration_us,
+        content_sha256=source_sha256,
+        width_px=source_asset.width_px,
+        height_px=source_asset.height_px,
+        frame_rate_milli=source_asset.frame_rate_milli,
+    )
+    try:
+        rebuilt_work = build_creative_work(intent, strategy, source)
+        if rebuilt_work.to_canonical_json() != work.to_canonical_json():
+            raise ValueError("Work snapshot differs from deterministic authoring")
+        compiled = CreativeWorkCompiler().compile(work, intent, build_runtime_registry())
+    except Exception as exc:
+        raise CreativeRenderError(
+            "invalid_request", "Agent Work or plan no longer compiles deterministically"
+        ) from exc
+    if (
+        plan.model_dump(mode="json") != compiled.model_dump(mode="json")
+        or plan.plan_id != lineage.plan_id
+        or plan.max_replans != 0
+        or plan.operations != ("timeline.trim",)
+        or len(plan.plan) != 1
+        or plan.plan[0].command_id != expected_command
+        or plan.plan[0].operation != "timeline.trim"
+        or plan.plan[0].input != operation_input
+        or lineage.command_id != expected_command
+        or operation_input.get("in_point_us") != strategy.in_point_us
+        or operation_input.get("out_point_us") != strategy.out_point_us
+        or operation_input.get("out_point_us", 0) - operation_input.get("in_point_us", 0)
+        != lineage.expected_output_duration_us
+    ):
+        raise CreativeRenderError(
+            "invalid_request", "Agent plan snapshot does not match the compiled trim input"
+        )
 
 
 def _sha256_text(text: str) -> str:
@@ -371,16 +627,25 @@ async def _run_render_branch(
         probed = probe_video(input_path, binary=binary)
     except Exception as exc:
         raise CreativeRenderError("invalid_request", f"unreadable media: {exc}") from exc
-    duration_us = payload.media_duration_us or probed.duration_us
-
+    # The worker's independent probe is authoritative; a queue-row duration
+    # is only a dispatch-time claim and can never widen the source timeline.
+    duration_us = probed.duration_us
     sha256 = sha256_file(input_path)
     project = _build_project(payload=payload, duration_us=duration_us, sha256=sha256)
 
     # 1) canonical operation (state mutation + history + measured record)
+    operation_input = _operation_inputs(payload, duration_us)
+    _validate_agent_lineage(
+        payload,
+        canonical_id=canonical_id,
+        operation_input=operation_input,
+        source_duration_us=duration_us,
+        source_sha256=sha256,
+    )
     output = _dispatch(
         project,
         operation=canonical_id,
-        input_data=_operation_inputs(payload, duration_us),
+        input_data=operation_input,
         idempotency_key=payload.idempotency_key,
     )
     render_project = project  # lane instrumentation below mirrors the SAME op
@@ -418,6 +683,9 @@ async def _run_render_branch(
         "output_asset_id": str(output.get("asset_id", "out")),
         "workspace_dir": str(workspace),
         "spec_ir_hash": artifact.lane_ir_hash,
+        "command_id": str(output.get("_command_id", "")),
+        "transaction_id": str(output.get("_transaction_id", "")),
+        "state_hash": str(output.get("_state_hash", "")),
     }
 
 
@@ -522,6 +790,13 @@ async def creative_render_job(payload: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         return {"success": False, "error_code": "invalid_request", "error_detail": str(exc)}
 
+    if data.agent_lineage is not None and (data.command, data.operation) != ("edit", "trim"):
+        return {
+            "success": False,
+            "error_code": "invalid_request",
+            "error_detail": "Agent lineage is only valid for the edit trim operation",
+        }
+
     try:
         workspace = _guarded_workspace(data.workspace_dir)
     except CreativeRenderError as exc:
@@ -557,6 +832,8 @@ async def creative_render_job(payload: dict[str, Any]) -> dict[str, Any]:
     except CreativeRenderError as exc:
         logger.warning("creative_render_typed_failure", code=exc.code, detail=exc.detail)
         return {"success": False, "error_code": exc.code, "error_detail": exc.detail}
+    if data.agent_lineage is not None:
+        result["agent_lineage"] = data.agent_lineage.model_dump(mode="json")
     logger.info("creative_render_done", operation=data.operation, sha256=result["sha256"][:26])
     result.pop("_artifact_probe", None)
     return result

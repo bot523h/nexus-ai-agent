@@ -77,5 +77,9 @@
   "creative.failed.caption_profile_unavailable": "❌ Captions are unavailable on this installation (no speech engine).",
   "creative.failed.render_failed": "❌ Rendering failed. Try shorter media or different parameters.",
   "creative.failed.ffmpeg_unavailable": "❌ The render engine isn't installed on this deployment.",
-  "creative.failed.internal": "❌ An internal error occurred. The details are visible to the team."
+  "creative.failed.internal": "❌ An internal error occurred. The details are visible to the team.",
+  "creative.agent_edit.request_required": "Add a natural-language edit after /agent_edit.",
+  "creative.agent_edit.request_too_long": "Please keep the edit request to 4,000 characters or fewer.",
+  "creative.agent_edit.processing_failed": "The creative request could not be processed safely.",
+  "creative.agent_edit.no_result": "No result was produced."
 }

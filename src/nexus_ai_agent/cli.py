@@ -1055,7 +1055,7 @@ def run_bot(
     ),
 ) -> None:
     """Start the NEXUS AI Telegram bot."""
-    from nexus_ai_agent.bot.app import build_application
+    from nexus_ai_agent.bot.app import build_application, create_application_job_queue
     from nexus_ai_agent.bot.webhook import resolve_run_mode, run_webhook
     from nexus_ai_agent.config.settings import get_settings
     from nexus_ai_agent.memory.long_term import LongTermMemory
@@ -1112,11 +1112,28 @@ def run_bot(
     long_term = LongTermMemory(settings.vector_path, llm)
     checkpointer = get_checkpointer(settings.checkpoint_path)
 
-    # Graph
-    graph = compile_graph(llm, checkpointer, long_term, registry)
+    # Graph + the same durable queue instance that the bot will expose to
+    # handlers; the Agent path cannot run against a private/parallel queue.
+    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+    from nexus_ai_agent.orchestration.agent_intelligence import AgentIntelligenceRuntime
+
+    job_queue = create_application_job_queue(settings)
+    capability_registry = build_runtime_registry()
+    agent_intelligence = AgentIntelligenceRuntime.from_llm(
+        llm,
+        job_queue,
+        registry=capability_registry,
+    )
+    graph = compile_graph(
+        llm,
+        checkpointer,
+        long_term,
+        registry,
+        agent_intelligence=agent_intelligence,
+    )
 
     # Bot
-    application = build_application(settings, graph)
+    application = build_application(settings, graph, job_queue=job_queue)
 
     if run_mode == "webhook":
         typer.echo("✓ Starting bot in webhook mode…")
