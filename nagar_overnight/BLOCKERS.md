@@ -42,3 +42,39 @@ hypothesis, attempts, why unresolved, effect on scope.
   without production proof".
 - **Effect on scope:** the boundary is IMPLEMENTED + VERIFIED with the null
   provider; a model-backed provider is DESIGNED, not implemented.
+
+---
+
+## B-3 — Remote push is blocked by environment credential scope (NOT bypassed)
+
+- **Symptom:** `git push -u origin overnight/nagar-20261004` is refused.
+- **Exact command:**
+  `git push -u origin overnight/nagar-20261004`
+- **Output:**
+  `remote: Permission to bot523h/nexus-ai-agent.git denied to bot523h.`
+  `fatal: unable to access '...': The requested URL returned error: 403`
+- **Files:** none (environment/credential issue, not a code defect).
+- **Diagnosis performed:**
+  1. `gh auth status` → logged in as `bot523h` with token `ghu_…`.
+  2. `GET /repos/bot523h/nexus-ai-agent` → `"permissions": {"admin": true,
+     "push": true}` — the *user* may push.
+  3. `POST /repos/.../git/refs` → `"Resource not accessible by integration"`
+     for **every** tested prefix (`arena/`, `openhands/`, `overnight/`,
+     `feature/`), and `git ls-remote` shows **no** probe ref was created.
+  → The GitHub App installation token has **read-only** repository access.
+  The `admin: true` in the repo payload describes the underlying account, not
+  the installation's granted scope.
+- **Attempts:** updated the remote URL to the current `$GITHUB_TOKEN`
+  (the documented stale-token fix) and retried → still 403. Probed four branch
+  prefixes via the API → all 403. That is the maximum of 3 distinct attempts.
+- **Why unresolved / why not worked around:** pushing requires a token with
+  write scope, which the sandbox does not have. Bypassing this would mean
+  escalating privileges or exposing credentials — both forbidden. The mission's
+  prohibition on authority/governance bypass applies.
+- **Effect on scope:** **none on the engineering.** The commit is intact and
+  verified locally at `e27db0b` on `overnight/nagar-20261004` (working tree
+  clean). The only unmet step is the remote push/PR, which is an environment
+  grant the owner can fix by giving the integration `contents: write`.
+- **Owner action to unblock:** grant the GitHub App `contents: write` on
+  `bot523h/nexus-ai-agent` (or push the local branch yourself:
+  `git push origin overnight/nagar-20261004`).

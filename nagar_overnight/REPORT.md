@@ -13,10 +13,10 @@ claim is weaker than it sounds, it says so.
 | `origin/main` SHA | `e5b326b2eaf691a638d030ad57acf1ce60016ef0` | `git rev-parse HEAD` (read-only) |
 | Base SHA (branch point) | `e5b326b2eaf691a638d030ad57acf1ce60016ef0` | branch created from main |
 | Branch | `overnight/nagar-20261004` | `git branch` |
-| Final SHA | recorded in `STATE.md` after the commit | `git rev-parse` |
+| Final SHA | `e27db0b960ad5b04ab168f563b32a4b0c4b97629` | `git rev-parse HEAD` |
 | Accessible Arena refs | **none** (`git ls-remote origin "arena/*"` empty) | read-only |
 | Relevant open PRs | #150, #151, #152, #153 | `gh pr list` (read-only) |
-| CI status | not consulted for a change (no push yet) | — |
+| Remote push | **BLOCKED** — installation token is read-only (see BLOCKERS B-3) | `git push` → 403 |
 | Board/lease state | `.agents/board.json` schema 2, `updated_at 2026-09-27T16:54:20Z` | read via `scripts/agent_board.py show` |
 
 The mission's historical main SHA is **still live** — no drift, no surprise.
