@@ -42,6 +42,14 @@ placeholder text.
 | [architecture/adr/0006-capability-pack-trust-root.md](architecture/adr/0006-capability-pack-trust-root.md) | Capability packs get an explicit trust root (Ed25519, offline, fail-closed). |
 | [architecture/TRUST_CONTROL_PLANE.md](architecture/TRUST_CONTROL_PLANE.md) | Trust/truth domains A–E: interfaces, authorities, non-bypass guards, honest status. |
 
+## Overnight (dated engineering record — one-night session)
+
+| Document | What it is |
+|---|---|
+| [overnight/RECON.md](overnight/RECON.md) | Live read-only reconnaissance of `main` @ `e5b326b` with file:line evidence (what exists, what is absent). |
+| [overnight/MODEL_OPTIONAL.md](overnight/MODEL_OPTIONAL.md) | The additive model-optional cognition boundary: contract, invariants, Model Kill Test, honest limits. |
+| [overnight/RESEARCH.md](overnight/RESEARCH.md) | Dated deep-research record: each source → finding → decision → Nagar impact. |
+
 ## Authoritative records
 
 | Document | What it is |
