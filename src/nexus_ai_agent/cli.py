@@ -930,12 +930,24 @@ def jobs_resume(
     from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
     from nexus_ai_agent.application.ports.job_queue import JobStatus
     from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.provenance import CausalJournal, QueueLedgerObserver
+    from nexus_ai_agent.provenance.backfill import backfill_journal
+    from nexus_ai_agent.provenance.paths import causal_journal_db_path
     from nexus_ai_agent.worker import default_job_handlers, job_queue_db_path
 
     async def _run() -> None:
-        queue = InProcessJobQueue(job_queue_db_path(get_settings().db_path))
+        queue_db = job_queue_db_path(get_settings().db_path)
+        journal = CausalJournal(causal_journal_db_path(queue_db))
+        queue = InProcessJobQueue(queue_db, causal_observer=QueueLedgerObserver(journal))
         for job_type, handler in default_job_handlers().items():
             queue.register_handler(job_type, handler)
+        # task-231: recovery closes crash-window holes with labeled
+        # reconstructions before anything is drained (idempotent).
+        report = backfill_journal(journal, queue, queue.job_ids())
+        typer.echo(
+            f"Causal journal: +{report.appended} reconstructed, "
+            f"{report.already_present} already present."
+        )
         job_ids = await queue.resume_pending_jobs()
         if not job_ids:
             typer.echo("No pending jobs to resume.")
@@ -968,6 +980,41 @@ def jobs_resume(
                 await asyncio.sleep(0.2)
 
     asyncio.run(_run())
+
+
+# ── task-231: nexus jobs passport — the Artifact Passport reader ──────────
+
+
+@jobs_app.command("passport")
+def jobs_passport(
+    job_id: str = typer.Argument(..., help="The durable job id to explain."),
+) -> None:
+    """Reconstruct the Artifact Passport for one job (read-only).
+
+    Derives the causal account from the hash-chained journal + the
+    authoritative row, re-measures the artifact bytes when reachable, and
+    prints the passport with its status (VERIFIED / VERIFIED_WITH_LIMITATIONS
+    / INCOMPLETE / COMPROMISED). Exit code 2 on COMPROMISED or INCOMPLETE.
+    """
+    import json as _json
+
+    from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+    from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.provenance import CausalJournal, PassportBuilder
+    from nexus_ai_agent.provenance.paths import causal_journal_db_path
+    from nexus_ai_agent.worker import job_queue_db_path
+
+    queue_db = job_queue_db_path(get_settings().db_path)
+    journal = CausalJournal(causal_journal_db_path(queue_db))
+    builder = PassportBuilder(journal, InProcessJobQueue(queue_db))
+    try:
+        passport = builder.build(job_id)
+    except KeyError:
+        typer.echo(f"Unknown job: {job_id}")
+        raise typer.Exit(2) from None
+    typer.echo(_json.dumps(passport.to_dict(), ensure_ascii=False, indent=2))
+    if passport.status.value in {"COMPROMISED", "INCOMPLETE"}:
+        raise typer.Exit(2)
 
 
 # ── v3.9.0: nexus maintenance — stateless scheduled jobs (Phase 5) ─────

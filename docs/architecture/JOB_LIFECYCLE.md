@@ -416,6 +416,21 @@ for this scope (D-0020). Evidence: `tests/integration/test_gate5_closure.py`
 (notification matrix + lying-result regression), `tests/unit/test_creative_notify.py`,
 `tests/unit/test_bot_slideshow_notify.py`.
 
+## 10bis. Causal recording (task-231)
+
+Every durable edge of this state machine is **journaled**, after its commit,
+into the causal ledger (`provenance/`, `architecture/PROVENANCE_LEDGER.md`):
+`job_enqueued` / `job_enqueue_duplicate`, `job_reserved`, `job_verification_started`,
+`job_completed`, `job_failed`, `job_reopened`, and `job_takeover` (the
+`→ PENDING` recovery edges of §2). The recording is strictly fail-safe — a
+broken ledger is logged degradation (`causal_ledger_observe_failed`) and can
+never change a job outcome — and the ledger itself is evidence, never
+authority: the row above remains the only source of truth for status,
+attempt, payload and result. The **Artifact Passport** (`nexus jobs passport
+<job_id>`) is the read-only projection that reconciles chain against this
+row, re-measures the artifact bytes, and answers, fail-closed, "why does this
+artifact exist?".
+
 ## 10. Trace contract (task-181)
 
 Every event emitted while a job runs carries the durable `job_id`:

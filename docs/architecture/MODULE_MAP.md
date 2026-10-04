@@ -38,6 +38,7 @@ Dependencies point **downward**. A lower layer may never import a higher one, an
 | `infrastructure/observability/` | L3 | metrics registry, structured lifecycle events, redaction | `MetricsRegistry`, `log_lifecycle_event`, `redact` |
 | `continuum/`, `maintenance/`, `integrations/` | L3 | project-state snapshot + evidence contracts (pack coverage, provenance, threat-model gate, mutation campaign), housekeeping/backup, external integrations | `snapshot`, `pack_coverage`, `provenance`, `gate`, `mutations`, `housekeeping` |
 | `storage/` | L4 | SQLModel tables, Alembic bootstrap, checkpoint adapters, lifecycle store, reconciler, R2 | `get_session`, `get_checkpointer`, `CheckpointReconciler` |
+| `provenance/` | L3 | causal ledger: hash-chained journal, fail-safe queue observer, Artifact Passport projection (read-only, no authority) | `CausalJournal`, `QueueLedgerObserver`, `PassportBuilder` |
 | `adapters/` | L4 | port implementations: in-process job queue, Whisper caption engine, LangGraph lifecycle hooks | `InProcessJobQueue`, `WhisperLocalCaptionEngine` |
 | `llm/` | L4 | provider chain (litellm router), local llama.cpp server provider, fake provider for tests | `build_router`, `LocalServerProvider`, `FakeLLMProvider` |
 | `orchestration/` | L4 | LangGraph state machine + intent router + persona selection | `compile_graph`, `classify_intent` |
@@ -56,6 +57,7 @@ Dependencies point **downward**. A lower layer may never import a higher one, an
 | # | Law | Test (file → what fails) |
 |---|---|---|
 | R1 | `domain/` and `application/ports/` never import adapters, and never leave the frozen import baseline | `test_import_boundaries.py::test_new_boundary_files_do_not_import_adapters`, `::test_domain_and_ports_respect_baseline` |
+| R1b | `provenance/` never imports adapters/frameworks, never spawns processes, and owns no execution path — it observes durable commits and projects evidence | `test_provenance_boundary.py` (all four tests) |
 | R2 | `langgraph`, `sqlmodel`, `telegram` are framework imports confined to the composition roots and their sanctioned adapters | `test_import_boundaries.py::test_global_legacy_baseline_has_no_new_violations` (+ `tests/architecture/legacy_baseline.json`) |
 | R3 | Raw LangGraph savers (`SqliteSaver`, `AsyncSqliteSaver`) appear only in `storage/langgraph_checkpoint.py` and `adapters/langgraph/` | `test_saver_boundary.py` (both tests) |
 | R4 | No Celery/Redis import, no distributed dispatch (`.delay(`, `celery_app`), no such dependency, compose has exactly `{bot, dashboard}` | `test_modular_monolith.py` (all three tests) |
