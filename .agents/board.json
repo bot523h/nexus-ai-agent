@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-05T07:43:54Z",
+  "updated_at": "2026-10-05T19:12:57Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -691,6 +691,21 @@
     }
   ],
   "claims": [
+    {
+      "task": "task-233-repo-agent-skills",
+      "status": "active",
+      "zone": "coordination",
+      "agent_branch": "arena/skills-suite",
+      "claimed_at": "2026-10-05T19:12:57Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": [
+        ".agents/skills/"
+      ],
+      "scope": "Author repository-specific agent skills under .agents/skills/ (SKILL.md + references/ + scripts/) encoding the board protocol, gate reproduction, the Nagar pack recipe, architecture/docs governance, the job lifecycle, and the bot surface contract.",
+      "acceptance_criteria": "Six SKILL.md files with valid frontmatter, each passing skill-creator quick_validate.py; every referenced relative path resolves; helper scripts are executable; ruff check/format clean; tests/unit/test_docs_integrity.py, test_agent_board.py, test_test_suite_hygiene.py and test_scripts_import_boundary.py stay green.",
+      "evidence_required": "quick_validate output per skill; ruff check .agents/skills && ruff format --check .agents/skills; pytest -q tests/unit/test_docs_integrity.py tests/unit/test_agent_board.py."
+    },
     {
       "task": "task-131",
       "title": "Architecture & documentation suite + board rewrite",
