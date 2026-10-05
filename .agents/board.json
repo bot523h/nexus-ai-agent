@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-05T07:43:54Z",
+  "updated_at": "2026-10-05T18:35:04Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -687,6 +687,30 @@
         "src/nexus_ai_agent/provenance/passport.py",
         "tests/integration/test_provenance_queue_recording.py",
         "tests/integration/test_creative_chain_e2e.py"
+      ]
+    },
+    {
+      "id": "identity-arbitration",
+      "description": "ADR-0008 canonical identity contract + its executable confirmation",
+      "paths": [
+        "docs/architecture/adr/",
+        "tests/architecture/test_canonical_identity_contract.py"
+      ]
+    },
+    {
+      "id": "creative-revision-lineage",
+      "description": "task-240: durable Project -> CreativeWork -> revision -> Intent -> CommandBus -> queue -> verified artifact -> lineage evidence",
+      "paths": [
+        "src/nexus_ai_agent/creative/spine/",
+        "src/nexus_ai_agent/creative/studio/bus.py",
+        "src/nexus_ai_agent/creative/studio/models.py",
+        "src/nexus_ai_agent/creative/render_jobs.py",
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        "src/nexus_ai_agent/jobs/creative_passport.py",
+        "src/nexus_ai_agent/provenance/",
+        "tests/unit/test_creative_revision_lineage.py",
+        "tests/integration/test_creative_revision_lineage.py",
+        "tests/architecture/test_creative_revision_lineage_boundary.py"
       ]
     }
   ],
@@ -2830,6 +2854,73 @@
       "gates_owner": true,
       "delivered": false,
       "note": "Re-identified from PR #154 historical task-231-durable-creative-queue-evidence: #153 is merged and owns task-231-provenance-ledger. Identity correction only; the original seven PR #154 commits and valid queue implementation are preserved. Source head 47f7ba998787406fbbc0816f57275109ac582613; source merge-base e5b326b2eaf691a638d030ad57acf1ce60016ef0; post-#153 main 6e41123b40f15a63241c8db27cd884010f55db38."
+    },
+    {
+      "task": "task-241-canonical-identity-arbitration",
+      "title": "Canonical identity arbitration: ADR-0008 + executable contract",
+      "title_fa": "داوری هویت متعارف: ADR-0008 و قرارداد اجراپذیر",
+      "zone": "identity-arbitration",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Decide exactly one authority per identity (Project, CreativeWork, typed Intent, revision, parent revision, CommandBus transaction, queue request/job/attempt, artifact, lineage binding, legacy unknown) over merged main, and dispose of every competing open candidate (ADOPT/ADAPT/SUPERSEDE/DEFER) without merging anyone else's PR, without claiming task-240, and without writing runtime code. Delivers ADR-0008 plus an executable confirmation test that is green on merged main and fails on any second authority, queue/CommandBus id confusion, revision/hash conflation, ledger duplication, or silent contradiction healing.",
+      "scope_fa": "تعیین دقیقاً یک مرجع برای هر هویت روی main و تعیین تکلیف همهٔ کاندیدهای باز (ADOPT/ADAPT/SUPERSEDE/DEFER) بدون merge کردن PR دیگران، بدون claim تسک ۲۴۰ و بدون کد runtime؛ تحویل ADR-0008 + تست تأیید اجراپذیر.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "ADR-0008 states, for every identity, its source of truth, construction rule, writer authority, durability point, and what must never be stored or recreated.",
+        "Every open candidate PR in scope receives an explicit ADOPT/ADAPT/SUPERSEDE/DEFER verdict with conditions; no PR is merged or closed by this session.",
+        "The confirmation test tests/architecture/test_canonical_identity_contract.py is green on merged main and fails on a second ledger writer, a queue/CommandBus transaction mix-up, a revision-dependent state hash, wiped nullable queue identity, or silent contradiction healing.",
+        "Live lease/overlap blockers are recorded with exact owners and expiries; task-240 stays unclaimed until they clear.",
+        "docs integrity, board schema tests, ruff, and exact-head CI pass on this branch."
+      ],
+      "evidence_required": [
+        "ADR file path and the live-truth table it records (SHAs, CI runs, leases, expiries).",
+        "Exact commands and outputs: pytest for the confirmation test, docs integrity, board tests, ruff check/format.",
+        "Board claim pushed before the code push (claim commit precedes content commit).",
+        "agent_board.py check output for the changed files on this branch."
+      ],
+      "deliverables": [
+        "docs/architecture/adr/0008-canonical-identity-arbitration.md",
+        "tests/architecture/test_canonical_identity_contract.py"
+      ],
+      "exclusive_paths": [
+        "docs/architecture/adr/0008-canonical-identity-arbitration.md",
+        "docs/architecture/adr/README.md",
+        "tests/architecture/test_canonical_identity_contract.py"
+      ],
+      "agent_branch": "arena/01a10d52-nexus-ai-agent",
+      "claimed_at": "2026-10-05T18:35:04Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": ""
+    },
+    {
+      "task": "task-240-durable-creative-project-revision-lineage",
+      "title": "Durable Project -> CreativeWork -> revision -> Intent -> CommandBus -> queue -> verified artifact -> lineage evidence",
+      "title_fa": "تداوم Project تا CreativeWork، Revision، Intent، تراکنش CommandBus، صف، آرتیفکت تأییدشده و شواهد نسب",
+      "zone": "creative-revision-lineage",
+      "priority": "P0",
+      "status": "deferred",
+      "scope": "Implement one vertical slice over the canonical identity contract of ADR-0008: Project -> CreativeWork -> immutable Revision + nullable Parent -> typed Intent -> a real CommandBus transaction -> durable queue -> independently verified artifact -> durable lineage/passport evidence. Legacy unknowns stay NULL, historical lineage is immutable, contradictory reassignment fails closed, retry/recovery never rewrites historical identity, fresh-process/SQLite restart readback is mandatory, and missing evidence stays INCOMPLETE/failed. No new store, renderer, executor, UI, capability, or second identity.",
+      "scope_fa": "یک اسلایس عمودی روی قرارداد ADR-0008: پروژه → CreativeWork → Revision تغییرناپذیر + Parent تهی‌پذیر → Intent تایپ‌شده → تراکنش واقعی CommandBus → صف بادوام → آرتیفکت مستقلاً تأییدشده → شواهد نسب/پاسپورت. ناشناخته‌های legacy NULL می‌مانند، نسب تاریخی تغییرناپذیر است، واگذاری متناقض fail-closed می‌شود و شاهد گمشده هرگز موفق‌نما نمی‌شود.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "One explicitly selected canonical Project/CreativeWork/Intent/revision/CommandBus identity contract (ADR-0008); no second identity system and no confusion between queue transaction_id and a CommandBus transaction.",
+        "Immutable append-oriented revision/parent/Intent facts and real Bus command/transaction linkage persisted through the existing durable queue and passport.",
+        "Legacy unknown lineage stays NULL; conflicting reassignment is rejected; only an independently verified artifact completes the evidence chain; missing evidence stays INCOMPLETE/failed.",
+        "Proves identity stability, close/reopen or process restart durability, real queue + CommandBus + verifier linkage, retry/recovery, invalid references, failure evidence, and historical immutability.",
+        "Architecture/decision docs updated, focused and regression tests, board overlap check, docs integrity, and exact-head CI with classified evidence."
+      ],
+      "evidence_required": [
+        "Exact-head CI plus focused tests for the slice, including a restart/readback proof.",
+        "Board check output proving the freed zone, and the released leases of task-232/task-230/task-231 recorded in this board.",
+        "A DECISION_LOG.md ratification entry for the ADR-0008 contract (id assigned at merge time)."
+      ],
+      "exclusive_paths": [],
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Registered as deferred by arena/01a10d52-nexus-ai-agent on 2026-10-05 (ADR-0008). Blocked by three live leases: task-232 (branch arena/01a10af5-nexus-ai-agent, PR #156 merged; fences provenance/models.py, provenance/passport.py, jobs/creative_passport.py, adapters/in_process_job_queue.py, docs/architecture/JOB_LIFECYCLE.md + five tests; expires 2026-10-06T07:39:41Z), task-230 (PR #150; fences creative/spine/, creative/intelligence/, orchestration/, render_jobs.py, docs/DECISION_LOG.md; expires 2026-10-07T17:19:00Z), task-231 (PR #152 re-claim of a merged task; fences src/nexus_ai_agent/causal/ and the queue adapter; expires 2026-10-05T20:25:57Z). No claim taken; release/consolidation is the holder's action."
     }
   ],
   "deferred_log": [
@@ -2866,6 +2957,14 @@
       "reason_fa": "چون عامل task-179 مالک TESTING.md و docs/README.md است، به‌روزرسانی جدول گیت‌ها و ایندکس را defer کردم؛ مستندات CI موقتاً در .github/DEPENDENCY_MATRIX.md و CHANGELOG ثبت می‌شود.",
       "reason_en": "task-132 (CI extras matrix) must update TESTING.md gate table and docs/README.md index, but those files are exclusively claimed by task-179. Documentation update deferred; CI docs live in .github/DEPENDENCY_MATRIX.md + CHANGELOG entry meanwhile.",
       "resume_when": "task-179 lands (TESTING.md/docs/README.md free) — then port the gate-table rows + docs index line"
+    },
+    {
+      "task": "task-240-durable-creative-project-revision-lineage",
+      "deferred_by_branch": "arena/01a10d52-nexus-ai-agent",
+      "at": "2026-10-05T18:35:04Z",
+      "reason_fa": "قرارداد هویت متعارف در ADR-0008 تعیین شد، اما ناحیهٔ پیاده‌سازی هنوز توسط سه lease زندهٔ دیگر (task-232 روی شاخهٔ merge‌شدهٔ #156، task-230 روی PR #150 و claim متناقض task-231 روی PR #152) حصار شده است؛ طبق قاعده، تسک claim نشد.",
+      "reason_en": "The canonical identity contract is decided in ADR-0008, but the implementation zone is still fenced by three live leases (task-232 on the merged #156 branch, task-230 on PR #150, the contradictory task-231 claim on PR #152). Per the no-overlap rule, task-240 was not claimed and no runtime code was written.",
+      "resume_when": "task-232 and task-231 leases are released (or expire) and PR #150 rebases/releases task-230; then re-run agent_board.py check for the creative-revision-lineage zone on a fresh main and claim."
     }
   ],
   "next_work": [
@@ -3499,6 +3598,13 @@
       "previous_task": "task-231-durable-creative-queue-evidence",
       "reason": "PR #154 source history is carried forward unchanged as the successor merge parent. Its queue task used numeric identity 231, now reserved by merged PR #153 (task-231-provenance-ledger). The successor uses task-232-durable-creative-queue-evidence; only the active identity changes, not the implementation or origin.",
       "evidence": "Live PR #154 head 47f7ba998787406fbbc0816f57275109ac582613; seven source commits 9039f546f47129cf0ed94b0c6452c933a304ee0d through 47f7ba998787406fbbc0816f57275109ac582613; current origin/main 6e41123b40f15a63241c8db27cd884010f55db38; historical board claim preserved in the PR #154 source tree and represented by this task-232 successor record."
+    },
+    {
+      "at": "2026-10-05T18:35:04Z",
+      "by_branch": "arena/01a10d52-nexus-ai-agent",
+      "action": "stale-lease-observed",
+      "task": "task-232-durable-creative-queue-evidence",
+      "reason": "Observed, NOT modified: main still carries this claim as active (gates_owner true) on branch arena/01a10af5-nexus-ai-agent even though its PR #156 is merged (5a228ea9a114363f6b77a4becd0681eeab3527a2, second parent eb18091777330b1c95a966b92548ec72dd79cbe6). It fences provenance/models.py, provenance/passport.py, jobs/creative_passport.py, adapters/in_process_job_queue.py, docs/architecture/JOB_LIFECYCLE.md and five tests until 2026-10-06T07:39:41Z. cmd_release refuses cross-branch release; PR #159 proposes the release but is unmerged. The holder or a steward acting under the orphaned-lease rule must release it."
     }
   ],
   "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins."
