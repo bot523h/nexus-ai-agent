@@ -93,6 +93,12 @@ HOST_LAYER_PACK_IMPORTERS: Mapping[str, str] = {
     "tests/unit/test_capability_lifecycle.py": "studio lifecycle gate (creative/studio)",
     "tests/unit/test_creative_render_jobs.py": "worker render adapter; encodes with FFmpeg",
     "tests/unit/test_optional_extras.py": "optional-extras install legs (CI extras matrix)",
+    "tests/unit/test_cognition_bus_integration.py": (
+        "cognition boundary -> CommandBus integration (nagar.cognition, host layer)"
+    ),
+    "tests/unit/test_cognition_model_kill.py": (
+        "Model Kill Test: deterministic path survives with no model (nagar.cognition, host layer)"
+    ),
 }
 
 #: The substrate (``core``) and cross-pack contracts that compose every pack.

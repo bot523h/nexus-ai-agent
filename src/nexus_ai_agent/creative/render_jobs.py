@@ -207,6 +207,39 @@ def _build_project(*, payload: CreativeRenderPayload, duration_us: int, sha256: 
     return project.model_copy(update={"assets": [src]})
 
 
+def build_job_bus(
+    project: Any,  # noqa: ANN401
+    *,
+    operation: str | None = None,
+    authorizer: Any = None,  # noqa: ANN401
+) -> Any:  # noqa: ANN401
+    """The canonical, server-policy bus factory for job-side callers.
+
+    This is the single reviewed construction site for a ``CommandBus`` outside
+    ``studio.bus`` itself (pinned by
+    ``tests/architecture/test_lifecycle_gate_boundary.py``).  It guarantees two
+    invariants no caller may bypass:
+
+    * the registry is always the runtime registry (never a caller-built one);
+    * the EXPERIMENTAL opt-in is derived only from the server-controlled
+      ``EXPERIMENTAL_OPT_IN_OPERATIONS`` for the operation actually being run —
+      a caller can never pass ``allow_experimental``.
+
+    ``authorizer`` is optional: a caller that needs authority (the cognition
+    slice) supplies its own trusted ``ProjectAuthorizer``; the render lane
+    leaves it unset and keeps the bus's legacy no-authorizer semantics.
+    """
+    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+    from nexus_ai_agent.creative.studio.bus import CommandBus
+
+    return CommandBus(
+        state=project,
+        registry=build_runtime_registry(),
+        allow_experimental=operation in EXPERIMENTAL_OPT_IN_OPERATIONS,
+        authorizer=authorizer,
+    )
+
+
 def _dispatch(
     project: Any,  # noqa: ANN401
     *,
@@ -220,15 +253,9 @@ def _dispatch(
     The bus's EXPERIMENTAL opt-in is derived from the canonical operation via
     the server-controlled ``EXPERIMENTAL_OPT_IN_OPERATIONS``; no caller (and no
     queue row) can pass it in."""
-    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
-    from nexus_ai_agent.creative.studio.bus import CommandBus
     from nexus_ai_agent.creative.studio.models import TargetRef, TypedCommand
 
-    bus = CommandBus(
-        state=project,
-        registry=build_runtime_registry(),
-        allow_experimental=operation in EXPERIMENTAL_OPT_IN_OPERATIONS,
-    )
+    bus = build_job_bus(project, operation=operation)
     command = TypedCommand(
         command_id=f"cmd-{idempotency_key}-{operation}",
         operation=operation,
