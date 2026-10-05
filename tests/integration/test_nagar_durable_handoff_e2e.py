@@ -195,6 +195,9 @@ async def test_free_text_to_durable_queue_to_verified_artifact(harness) -> None:
         chat_id=4242,
     )
     assert again.job_id == outcome.job_id
+    # AC-4: a duplicate enqueue creates NO second durable row and NO second
+    # execution — one logical job for one intent.
+    assert queue.job_ids() == [outcome.job_id]
 
     status = await _drain(queue, outcome.job_id)
     assert status is JobStatus.COMPLETED
@@ -367,3 +370,114 @@ async def main():
 
 asyncio.run(main())
 """
+
+
+_CHILD_RENDER_THEN_CRASH_IN_VERIFY = """
+import asyncio, json, os
+from pathlib import Path
+
+from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+from nexus_ai_agent.creative.render_jobs import build_job_bus
+from nexus_ai_agent.creative.studio.authorization import ProjectAccess
+from nexus_ai_agent.creative.studio.models import ActorIdentity, AssetRecord, Timeline, new_project
+from nexus_ai_agent.nagar.cognition import build_cognition_gateway
+from nexus_ai_agent.nagar.creative import run_free_text_intent_durable
+from nexus_ai_agent.worker import default_job_handlers
+
+
+class ScriptedProducer:
+    consults_model = True
+
+    async def complete(self, prompt, *, idempotency_key=None):
+        return json.dumps({
+            "schema_id": "nagar.gateway.proposal.v1",
+            "schema_version": 1,
+            "operation": "timeline.trim",
+            "input": {"clip_asset_id": "src", "in_point_us": 0, "out_point_us": 1000000},
+            "rationale": "scripted", "confidence": 1.0,
+        })
+
+
+class CrashDuringVerificationQueue(InProcessJobQueue):
+    async def _verify_safely(self, verifier, payload, result):
+        os._exit(73)
+
+
+actor = ActorIdentity(kind="user", actor_id="operator")
+project = new_project("nagar-durable-e2e", "durable",
+                      Timeline(timeline_id="tl", duration_us=2000000)).model_copy(
+    update={"assets": [AssetRecord(asset_id="src", media_kind="video",
+                                   content_sha256="sha256:" + "0" * 64, duration_us=2000000)]})
+access = ProjectAccess(actor=actor, project_id="nagar-durable-e2e",
+                       permissions=frozenset({"project:read", "project:write"}))
+gateway = build_cognition_gateway(bus=build_job_bus(project, authorizer=access),
+                                  actor=actor, project_id="nagar-durable-e2e",
+                                  enabled=True, completion=ScriptedProducer())
+queue = CrashDuringVerificationQueue(os.environ["QUEUE_DB_PATH"])
+for job_type, handler in default_job_handlers().items():
+    queue.register_handler(job_type, handler)
+
+
+async def main():
+    outcome = await run_free_text_intent_durable(
+        "trim", gateway=gateway, queue=queue, project=project,
+        source_path=os.environ["SOURCE_PATH"],
+        workspace_dir=str(Path(os.environ["SOURCE_PATH"]).parent),
+        user_id=1, chat_id=1)
+    Path(os.environ["JOB_ID_FILE"]).write_text(outcome.job_id, encoding="utf-8")
+    await asyncio.sleep(180)  # the scheduled worker runs and crashes in _verify_safely
+
+
+asyncio.run(main())
+"""
+
+
+@pytest.mark.asyncio
+async def test_stale_attempt_cannot_finalize_and_retry_preserves_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    creative_root = tmp_path / "creative_tmp"
+    workspace = creative_root / "creative_handoff_fencing"
+    workspace.mkdir(parents=True)
+    monkeypatch.setenv("CREATIVE_TEMP_DIR", str(creative_root))
+    settings_module.get_settings.cache_clear()
+    source = workspace / "real_source.mp4"
+    _clip(source)
+    db = tmp_path / "fencing.sqlite3"
+    env = _child_env(tmp_path, db, creative_root)
+    env["SOURCE_PATH"] = str(source)
+
+    # A process renders the artifact but dies during verification: the attempt
+    # is left uncommitted, its fencing token superseded by the recovery below.
+    child = subprocess.run(
+        [sys.executable, "-c", _CHILD_RENDER_THEN_CRASH_IN_VERIFY],
+        cwd=str(Path(__file__).resolve().parents[2]),
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=120,
+        check=False,
+    )
+    assert child.returncode == 73, child.stderr
+    job_id = (tmp_path / "job-id.txt").read_text(encoding="utf-8")
+
+    queue = InProcessJobQueue(db)
+    for job_type, handler in default_job_handlers().items():
+        queue.register_handler(job_type, handler)
+    # Startup recovery takes over the orphaned in-flight row (a fresh fencing
+    # token supersedes the dead process's), then re-executes it exactly once.
+    resumed = await queue.resume_pending()
+    assert job_id in resumed
+    assert await _drain(queue, job_id) is JobStatus.COMPLETED
+    result = await queue.get_result(job_id)
+    artifact = Path(str(result["artifact_path"]))
+    assert "sha256:" + hashlib.sha256(artifact.read_bytes()).hexdigest() == result["sha256"]
+
+    # The stale attempt is recorded as interrupted; exactly one attempt completed,
+    # and the fenced CAS means the dead process cannot finalize the current job.
+    history = await queue.get_attempt_history(job_id)
+    statuses = [item["status"] for item in history]
+    assert statuses[-1] == "completed"
+    assert statuses.count("completed") == 1
+    assert any(s in {"interrupted", "verifying", "failed"} for s in statuses[:-1])
+    settings_module.get_settings.cache_clear()
