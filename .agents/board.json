@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-05T19:40:11Z",
+  "updated_at": "2026-10-05T22:17:16Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2877,7 +2877,7 @@
       "title_fa": "تحویل بادوام شناخت->صف خلاق (گام ۲ دروازه C)",
       "zone": "nagar-cognition-durable-handoff",
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "scope": "Continue the PR #155 free-text cognition slice (NOT an ancestor of main) by turning its inline CommandBus dispatch into a durable handoff: a typed canonical creative_render payload is persisted through the existing JobQueuePort.enqueue and executed by the existing creative_render_job worker (runtime registry -> existing CommandBus -> render lane -> independent verification -> durable result). The cognition layer gains a propose-only path (no dispatch); the only enqueue is the existing queue; the only execution is the existing worker. No second bus, registry, authorizer, queue, render lane, verifier or authority.",
       "scope_fa": "ادامهٔ اسلایس متن‌آزاد PR #155 (که اجداد main نیست) با تبدیل dispatch درون‌خطی به تحویل بادوام: payload تایپ‌شدهٔ متعارف creative_render از طریق JobQueuePort.enqueue موجود پایدار می‌شود و کارگر موجود creative_render_job آن را اجرا می‌کند؛ بدون هیچ اقتدار/صف/رجیستری/مسیر اجرای دوم.",
       "acceptance_criteria": [
@@ -2935,8 +2935,8 @@
         "tests/architecture/test_nagar_creative_slice_boundary.py"
       ],
       "owner_hint": "Direct successor of PR #155 (overnight/nagar-20261004). Compose with main's merged task-232 durable queue; do not touch task-232's exclusive paths.",
-      "agent_branch": "arena/nagar-durable-handoff",
-      "claimed_at": "2026-10-05T19:40:11Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": false,
