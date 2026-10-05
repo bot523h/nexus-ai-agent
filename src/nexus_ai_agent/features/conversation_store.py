@@ -7,7 +7,7 @@ survive process restarts and can be queried/audited.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -101,7 +101,7 @@ class ConversationStore:
                     "cid": conv_id,
                     "role": role,
                     "parts": parts_json,
-                    "ts": datetime.utcnow().isoformat(),
+                    "ts": datetime.now(timezone.utc).isoformat(),
                 },
             )
 
@@ -121,7 +121,7 @@ class ConversationStore:
                         "cid": conv_id,
                         "role": role,
                         "parts": parts_json,
-                        "ts": datetime.utcnow().isoformat(),
+                        "ts": datetime.now(timezone.utc).isoformat(),
                     },
                 )
 

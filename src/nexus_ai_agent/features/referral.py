@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import create_engine as _ce
@@ -31,7 +31,7 @@ class Referral(SQLModel, table=True):
     status: str = Field(default="pending", index=True)  # pending | completed | rewarded
     reward_claimed: bool = Field(default=False)
     xp_awarded: bool = Field(default=False)
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
     completed_at: datetime | None = Field(default=None)
 
 
@@ -45,7 +45,7 @@ class ReferralCode(SQLModel, table=True):
     code: str = Field(index=True, unique=True)
     total_referrals: int = Field(default=0)
     successful_referrals: int = Field(default=0)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # ── Tiered Rewards ───────────────────────────────────────────────────
@@ -176,7 +176,7 @@ class ReferralEngine:
                 referee_id=referee_id,
                 referral_code=code,
                 status="completed",
-                completed_at=datetime.utcnow(),
+                completed_at=datetime.now(timezone.utc),
                 xp_awarded=True,
             )
             s.add(ref)

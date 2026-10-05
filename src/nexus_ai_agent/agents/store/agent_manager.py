@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlmodel import select
 
@@ -42,7 +42,7 @@ class AgentManager:
 
             if existing:
                 existing.agent_name = agent_id
-                existing.activated_at = datetime.utcnow()
+                existing.activated_at = datetime.now(timezone.utc)
                 session.add(existing)
             else:
                 new_active = UserActiveAgent(user_id=user_id, agent_name=agent_id)
