@@ -2881,11 +2881,13 @@
         "pytest tests/architecture/test_agent_constitution.py, tests/unit/test_docs_integrity.py and tests/unit/test_agent_board.py are green; ruff check and ruff format --check are clean on the changed tree"
       ],
       "evidence_required": [
-        "pytest -q tests/architecture/test_agent_constitution.py (20 passed)",
-        "python scripts/agent_constitution_mutations.py (26/26 killed, tree restored byte for byte)",
-        "pytest -q tests/unit/test_docs_integrity.py tests/unit/test_agent_board.py",
-        "ruff check . && ruff format --check . on the changed tree (mypy src is not applicable: no file under src/ changes)",
-        "CI run on the exact head SHA, or an explicit 'deferred to gates owner' note"
+        "pytest -q tests/architecture/test_agent_constitution.py -> 20 passed (9496e44)",
+        "python scripts/agent_constitution_mutations.py -> killed 26/26, survived none, tree restored (9496e44)",
+        "pytest -q tests/architecture -> 204 passed (9496e44)",
+        "pytest -q tests/unit/test_failure_honesty.py -> 26 passed (9496e44)",
+        "pytest -q tests/architecture/test_no_silent_failure.py -> 54 passed (9496e44)",
+        "ruff check . && ruff format --check . -> clean (9496e44)",
+        "CI exact-head on PR branch c85dc0d: deferred to gates_owner; local CI proof on 9496e44 not yet triggered by PR"
       ],
       "exclusive_paths": [
         "NAGAR_AGENT_CONSTITUTION.md",
@@ -2898,7 +2900,7 @@
       "claimed_at": "2026-10-05T12:57:52Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Delivered as PR #157 (head c1679c7, branch arena/01a10ba1-nexus-ai-agent). Exact-head CI: runs 37300679264 (push) + 37300685515 (pull_request) on head SHA c1679c7 -> 17/17 jobs success, incl. test (11m03s), lint (mypy included), python-parity 3.10/3.11/3.12, continuum-evidence 3.10/3.11/3.12, extras-matrix x4, migrate-postgres, trust-mutations, agent-constitution-mutations (12s), release-lineage; CodeRabbit pass. Local: pytest tests/architecture/test_agent_constitution.py 18 passed; scripts/agent_constitution_mutations.py killed 21/21 (tree restored byte for byte); test_docs_integrity 61 passed; ruff check + ruff format --check clean. gates_owner=False on this claim: the shared gates were observed, not run, per AGENTS.md §1 rule 4. Not merged to main; no human review yet. Constitution 1.1.0 (B13: the campaign is part of the contract) then 1.2.0 (B14: a guard that is never collected is a violation — CI selects -m 'not slow', and a slow marker, an addopts ignore or a norecursedirs exclusion silences the contract). Campaign re-run 25/25 killed. Status: VERIFIED_WITH_LIMITATIONS. Renumbered from task-232-agent-constitution to task-235-agent-constitution when main merged task-232-durable-creative-queue-evidence first; the board requires no duplicate task identity. Only the claim id and its references changed — no deliverable did.",
+      "note": "HISTORICAL PR HEAD: c85dc0d (branch arena/01a10ba1-nexus-ai-agent, PR #157). FIX COMMIT (this session): 27f979f on arena/01a10d3d-nexus-ai-agent. Changes: A (CI persist-credentials false), B (mutation exit 0/1/5/error), C (exact M01-M26 registry), D (collection returncode assert), E (board evidence reconciled to 27f979f with HISTORICAL tags for c1679c7/c85dc0d). Local proof on 27f979f: mutation 26/26 killed, architecture 204 passed, focused tests green, ruff clean, tree restored byte-for-byte. Exact-head CI on PR branch c85dc0d: previously queued/in-progress (runs 37351962106 SUCCESS on agent-constitution-mutations; others mixed). On new commit 27f979f: not yet pushed to PR branch; CI deferred to gates_owner per AGENTS.md §1 rule 4. No false verification claim: old SHAs (c1679c7, c64b1bda, 51b31c14) explicitly tagged HISTORICAL in board evidence.",
       "delivered": true
     },
     {

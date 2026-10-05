@@ -284,8 +284,19 @@ def _enforcer_is_red() -> bool:
         capture_output=True,
         text=True,
     )
-    # Exit code 5 ("no tests collected") is a deselected guard, not a green one.
-    return result.returncode != 0
+    # Precise exit-code semantics per mission (B):
+    # 0 = enforcer passed → mutant survived
+    # 1 = test failure → mutant killed
+    # 5 = no tests collected → killed only for deselection guard (M23)
+    # other non-zero = campaign ERROR (fail loudly)
+    if result.returncode == 0:
+        return False
+    if result.returncode in (1, 5):
+        return True
+    raise RuntimeError(
+        f"pytest invocation failed with unexpected exit code {result.returncode} "
+        f"(expected 0/1/5 only). stderr tail: {result.stderr[-800:]!r}"
+    )
 
 
 def _check_for_duplicate_mutants() -> list[str]:

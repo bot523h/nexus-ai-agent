@@ -407,6 +407,11 @@ def test_the_guard_is_actually_collected_by_the_ci_selection() -> None:
         capture_output=True,
         text=True,
     )
+    assert result.returncode == 0, (
+        f"pytest collection probe failed (returncode={result.returncode}) — "
+        f"if the invocation errors, a failure must NOT be counted as success. "
+        f"stdout tail: {result.stdout[-600:]!r} | stderr tail: {result.stderr[-600:]!r}"
+    )
     collected = len([line for line in result.stdout.splitlines() if "::" in line])
     assert collected == expected, (
         f"CI's selection collects {collected} of {expected} guard tests — the contract is "
@@ -427,10 +432,48 @@ def test_the_mutation_campaign_is_real_and_stays_comprehensive() -> None:
     )
     assert CAMPAIGN in _text(CONSTITUTION), "the constitution no longer names its mutation campaign"
     source = _text(CAMPAIGN_SCRIPT)
-    registered = re.findall(r'^\s+\("M\d+ ', source, re.MULTILINE)
-    assert len(registered) >= 15, (
-        f"the campaign registers only {len(registered)} mutants — it was gutted"
+    # Capture all mutant IDs declared in the tuple section (before plumbing/comment block)
+    split_at = source.find("# plumbing")
+    prefix = source[:split_at] if split_at != -1 else source
+    registered = re.findall(r'\(\s*"(M\d+) ', prefix)
+    # Exact registry pin — M01..M25 must all be present, no duplicates, M26 separate
+    required = {
+        "M01",
+        "M02",
+        "M03",
+        "M04",
+        "M05",
+        "M06",
+        "M07",
+        "M08",
+        "M09",
+        "M10",
+        "M11",
+        "M12",
+        "M13",
+        "M14",
+        "M15",
+        "M16",
+        "M17",
+        "M18",
+        "M19",
+        "M20",
+        "M21",
+        "M22",
+        "M23",
+        "M24",
+        "M25",
+    }
+    registered_set = set(registered)
+    assert registered_set == required, (
+        f"registry mismatch: expected {sorted(required)} got {sorted(registered_set)}"
     )
+    assert len(registered) == len(registered_set), f"duplicate mutant entries: {registered}"
+    assert "M26" in source, "M26 root-move mutant missing from campaign source"
+    # Target checks for critical guards (self-protection / CI / deselection / pytest config)
+    for mid in ("M21", "M22", "M23", "M19", "M24", "M25", "M01", "M05"):
+        assert f'"{mid} ' in source, f"{mid} not found in mutation source"
+    assert len(registered) >= 15, "deprecated count guard — should never trigger after exact pin"
     for target in ("AGENTS.md", "NAGAR_AGENT_CONSTITUTION.md", "ci.yml"):
         assert target in source, f"the campaign no longer reaches {target}"
 
