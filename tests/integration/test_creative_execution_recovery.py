@@ -468,3 +468,55 @@ asyncio.run(main())
     assert passport["job"]["idempotency_key"] == key
     assert passport["artifact"]["sha256"].startswith("sha256:")
     settings_module.get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_missing_trim_media_preserves_real_handler_typed_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Evidence preflight must leave ``media_missing`` translation to the worker."""
+    creative_root = tmp_path / "creative_tmp"
+    creative_root.mkdir()
+    monkeypatch.setenv("CREATIVE_TEMP_DIR", str(creative_root))
+    settings_module.get_settings.cache_clear()
+    workspace = creative_root / "creative_missing_input"
+    workspace.mkdir()
+    key = "creative:missing-input"
+    payload = _trim_payload(workspace, key)
+    assert not Path(str(payload["input_path"])).exists()
+
+    real_handler = default_job_handlers()[CREATIVE_RENDER_JOB_TYPE]
+    handler_calls = 0
+
+    async def observed_handler(job_payload: dict[str, object]) -> dict[str, object]:
+        nonlocal handler_calls
+        handler_calls += 1
+        return await real_handler(job_payload)
+
+    db = tmp_path / "missing-input.sqlite3"
+    queue = InProcessJobQueue(db)
+    queue.register_handler(CREATIVE_RENDER_JOB_TYPE, observed_handler)
+    job_id = await queue.enqueue(
+        job_type=CREATIVE_RENDER_JOB_TYPE,
+        idempotency_key=key,
+        payload=payload,
+    )
+
+    assert await _drain(queue, job_id) is JobStatus.FAILED_TERMINAL
+    assert handler_calls == 1
+    result = await queue.get_result(job_id)
+    assert result is not None
+    assert result["success"] is False
+    assert result["error_code"] == "media_missing"
+    history = await queue.get_attempt_history(job_id)
+    assert len(history) == 1
+    assert history[0]["status"] == JobStatus.FAILED_TERMINAL.value
+    with sqlite3.connect(db) as connection:
+        status, passport_json = connection.execute(
+            "SELECT status, artifact_passport_json FROM nexus_job_queue WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+    assert status == JobStatus.FAILED_TERMINAL.value
+    assert passport_json is None
+    assert not queue._artifact_root.exists()
+    settings_module.get_settings.cache_clear()
