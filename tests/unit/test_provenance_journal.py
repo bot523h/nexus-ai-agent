@@ -14,7 +14,12 @@ from nexus_ai_agent.provenance.journal import (
     CausalConflictError,
     CausalJournal,
 )
-from nexus_ai_agent.provenance.models import CausalEvent, EventKind, verify_chain
+from nexus_ai_agent.provenance.models import (
+    CausalEvent,
+    EventKind,
+    JobFacts,
+    verify_chain,
+)
 
 
 def _event_typed(job_id: str = "job-1", kind: EventKind = EventKind.JOB_ENQUEUED, **kw):
@@ -332,3 +337,139 @@ class TestCrossProcessSerialization:
         after = journal.append(_event_typed(job_id="storm-after", kind=EventKind.JOB_ENQUEUED))
         assert not after.duplicate and after.record.seq == workers * per_worker + 1
         assert verify_chain(journal.all_records()).ok
+
+
+class TestQuarantineDurability:
+    def test_storage_failure_during_quarantine_is_loud_and_carries_the_claim(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog
+    ) -> None:
+        """Honest contract under injected storage loss:
+
+        conflict DETECTION succeeds (the first tx works) -> the QUARANTINE
+        write fails (simulated storage loss on the second tx) -> the kept
+        truth stays untouched, the failure is LOGGED (never silent), and the
+        raised CausalConflictError carries the full rejected claim as the
+        durable carrier. After storage recovers, the same conflicting
+        redelivery is re-raised and this time durably quarantined.
+        """
+        from contextlib import contextmanager
+
+        journal = CausalJournal(tmp_path / "causal.sqlite3")
+        kept = journal.append(
+            _event_typed(
+                kind=EventKind.JOB_COMPLETED,
+                attempt=1,
+                status="completed",
+                result_digest="sha256:" + ("a" * 64),
+            )
+        )
+
+        original = CausalJournal._write_connection
+        uses = {"n": 0}
+
+        @contextmanager
+        def flaky_write(self: CausalJournal):
+            uses["n"] += 1
+            if uses["n"] >= 2:  # detection tx = 1, quarantine tx = 2
+                raise sqlite3.OperationalError("simulated storage loss")
+            with original(self) as connection:
+                yield connection
+
+        monkeypatch.setattr(CausalJournal, "_write_connection", flaky_write)
+        with caplog.at_level("WARNING"):
+            with pytest.raises(CausalConflictError) as excinfo:
+                journal.append(
+                    _event_typed(
+                        kind=EventKind.JOB_COMPLETED,
+                        attempt=1,
+                        status="completed",
+                        result_digest="sha256:" + ("b" * 64),
+                    )
+                )
+        # the exception is the durable carrier of the rejected claim
+        assert excinfo.value.kept_seq == kept.record.seq
+        assert excinfo.value.rejected_event.result_digest == "sha256:" + ("b" * 64)
+        assert excinfo.value.key.startswith("job_completed:")
+        # kept truth untouched; nothing partial landed
+        assert journal.count() == 1
+        assert journal.head() is not None and journal.head()[1] == kept.record.record_hash
+        # the quarantine failure is VISIBLE
+        assert any(
+            "causal_journal_quarantine_failed" in record.message for record in caplog.records
+        )
+
+        monkeypatch.undo()
+        # recovery: the same conflicting claim is re-raised and now quarantined
+        with pytest.raises(CausalConflictError):
+            journal.append(
+                _event_typed(
+                    kind=EventKind.JOB_COMPLETED,
+                    attempt=1,
+                    status="completed",
+                    result_digest="sha256:" + ("b" * 64),
+                )
+            )
+        records = journal.records_for_job("job-1")
+        conflicts = [r for r in records if r.kind is EventKind.EVENT_CONFLICT]
+        assert len(conflicts) == 1
+        assert conflicts[0].payload["detail"]["kept_record_hash"] == kept.record.record_hash
+        assert verify_chain(records).ok
+
+    def test_passport_sees_the_durable_conflict(self, tmp_path: Path) -> None:
+        """After a quarantined conflict the passport refuses certification:
+        COMPROMISED with the typed event_conflict_recorded finding."""
+        from nexus_ai_agent.provenance.passport import PassportBuilder, PassportStatus
+
+        journal = CausalJournal(tmp_path / "causal.sqlite3")
+        journal.append(
+            _event_typed(
+                kind=EventKind.JOB_ENQUEUED,
+                payload_digest="sha256:" + ("a" * 64),
+            )
+        )
+        journal.append(
+            _event_typed(
+                kind=EventKind.JOB_COMPLETED,
+                attempt=1,
+                status="completed",
+                payload_digest="sha256:" + ("a" * 64),
+                result_digest="sha256:" + ("b" * 64),
+            )
+        )
+        with pytest.raises(CausalConflictError):
+            journal.append(
+                _event_typed(
+                    kind=EventKind.JOB_COMPLETED,
+                    attempt=1,
+                    status="completed",
+                    payload_digest="sha256:" + ("a" * 64),
+                    result_digest="sha256:" + ("c" * 64),  # different "truth"
+                )
+            )
+
+        facts = JobFacts(
+            job_id="job-1",
+            job_type="creative_render",
+            idempotency_key="ik-1",
+            status="completed",
+            attempt=1,
+            error=None,
+            created_at=None,
+            started_at=None,
+            finished_at=None,
+            payload={},
+            payload_digest="sha256:" + ("a" * 64),
+            result={"ok": True},
+            result_digest="sha256:" + ("b" * 64),
+            verification=None,
+            status_known=True,
+        )
+
+        class _FactsMap:
+            def get_job_facts(self, job_id: str) -> JobFacts | None:
+                return facts if job_id == "job-1" else None
+
+        passport = PassportBuilder(journal, _FactsMap()).build("job-1")
+        assert passport.status is PassportStatus.COMPROMISED
+        codes = [f.code for f in passport.findings]
+        assert "event_conflict_recorded" in codes

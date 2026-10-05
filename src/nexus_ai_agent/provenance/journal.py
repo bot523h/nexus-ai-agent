@@ -29,6 +29,7 @@ must never be a schema guest inside the authority it observes.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
 from collections.abc import Iterator
@@ -45,6 +46,8 @@ from nexus_ai_agent.provenance.models import (
     compute_record_hash,
     dedupe_key,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class CausalConflictError(RuntimeError):
@@ -233,7 +236,14 @@ class CausalJournal:
         raise last_error if last_error is not None else RuntimeError("append failed")
 
     def _quarantine_conflict(self, key: str, kept: LedgerRecord, rejected: CausalEvent) -> None:
-        """Durably record a rejected conflicting claim (best-effort, no dedupe)."""
+        """Record a rejected conflicting claim (best-effort, no dedupe).
+
+        Honesty contract: quarantine is written best-effort — if THIS write
+        fails (storage unavailable), nothing durable about the rejected claim
+        is left on the ledger; the raised :class:`CausalConflictError` then
+        carries the full rejected event (``.rejected_event`` / ``.kept_seq``)
+        as the durable carrier for the caller. The conflict is never silent.
+        """
         try:
             self.append(
                 CausalEvent(
@@ -258,7 +268,13 @@ class CausalJournal:
                 )
             )
         except Exception:  # noqa: BLE001 - the raise below carries the conflict
-            pass
+            _LOGGER.warning(
+                "causal_journal_quarantine_failed path=%s kept_seq=%s "
+                "rejected_kind=%s — the CausalConflictError carries the rejected claim",
+                self._sqlite_path,
+                kept.seq,
+                rejected.kind.value,
+            )
 
     # -- reads ------------------------------------------------------------
 

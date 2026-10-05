@@ -374,6 +374,20 @@ class PassportBuilder:
             terminal = by_kind.get(kind)
             if terminal is None:
                 continue
+            # The row's live facts describe the CURRENT attempt only. A
+            # terminal record from an OLDER attempt is legitimate superseded
+            # history (a retry reopened the job) — it can never "diverge"
+            # from the row, or every successful retry would read as
+            # COMPROMISED. Cross-check the current attempt's terminal record.
+            if facts.attempt is not None:
+                current_match = [
+                    r
+                    for r in records
+                    if r.kind is kind and r.payload.get("attempt") == facts.attempt
+                ]
+                if not current_match:
+                    continue  # only an older attempt's terminal exists
+                terminal = current_match[-1]
             recorded_result = terminal.payload.get("result_digest")
             if recorded_result is not None and recorded_result != facts.result_digest:
                 findings.append(

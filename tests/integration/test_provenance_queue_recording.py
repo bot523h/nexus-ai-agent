@@ -658,3 +658,65 @@ class TestRealJournalFailureDuringExecution:
         with caplog.at_level("WARNING"):
             assert await _wait_terminal(queue, job_id) is JobStatus.COMPLETED
         assert any("causal_ledger_observe_failed" in record.message for record in caplog.records)
+
+
+class TestMultiAttemptPassport:
+    async def test_retryable_failure_then_retry_is_verified_not_compromised(
+        self, tmp_path: Path
+    ) -> None:
+        """The real retry lifecycle, real queue + real verifier lane:
+
+        attempt 1 fails retryable -> operator requeue -> attempt 2 completes.
+        The passport must treat attempt 2 as the current truth, keep attempt
+        1's failure as history (never a divergence), reconcile the digests
+        with the right attempt, and find the chain intact.
+        """
+        import sqlite3 as _sqlite3
+
+        journal = CausalJournal(tmp_path / "causal.sqlite3")
+        queue = InProcessJobQueue(
+            tmp_path / "jobs.sqlite3", causal_observer=QueueLedgerObserver(journal)
+        )
+        calls = {"n": 0}
+
+        async def flaky(payload: dict[str, object]) -> dict[str, object]:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("transient render outage")
+            return _ok_result(tmp_path)
+
+        queue.register_handler("creative_render", flaky)
+        queue.register_artifact_verifier("creative_render", _ok_verifier)
+        job_id = await queue.enqueue(
+            job_type="creative_render", idempotency_key="k1", payload=_payload()
+        )
+        assert await _wait_terminal(queue, job_id) is JobStatus.FAILED_RETRYABLE
+        await _wait_record(journal, job_id, EventKind.JOB_FAILED, attempt=1)
+
+        # The sanctioned operator requeue (same entrypoint the lifecycle
+        # tests use): row back to pending, then resumed -> attempt 2.
+        with _sqlite3.connect(tmp_path / "jobs.sqlite3") as connection:
+            connection.execute(
+                "UPDATE nexus_job_queue SET status = 'pending' WHERE id = ?",
+                (job_id,),
+            )
+        assert await queue.resume_pending() == [job_id]
+        assert await _wait_terminal(queue, job_id) is JobStatus.COMPLETED
+        await _wait_record(journal, job_id, EventKind.JOB_COMPLETED, attempt=2)
+
+        passport = PassportBuilder(journal, queue).build(job_id)
+        assert passport.status is PassportStatus.VERIFIED, passport.findings
+        codes = [f.code for f in passport.findings]
+        assert "status_divergence" not in codes
+        assert "result_digest_divergence" not in codes
+        assert "event_conflict_recorded" not in codes
+
+        # History: exactly one failure (attempt 1) and one completion
+        # (attempt 2) — both retained, chain intact.
+        records = journal.records_for_job(job_id)
+        failures = [r for r in records if r.kind is EventKind.JOB_FAILED]
+        completions = [r for r in records if r.kind is EventKind.JOB_COMPLETED]
+        assert len(failures) == 1 and failures[0].payload.get("attempt") == 1
+        assert len(completions) == 1 and completions[0].payload.get("attempt") == 2
+        assert verify_chain(records).ok
+        assert verify_chain(journal.all_records()).ok

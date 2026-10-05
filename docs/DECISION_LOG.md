@@ -1720,9 +1720,15 @@ review-driven corrections, each enforced by a named test:
 2. **Conflict quarantine, never silent absorption.** A redelivery that
    matches an existing `dedupe_key` but carries different evidence claims
    (`status`, `error`, `payload_digest`, `result_digest` — timestamp/detail
-   legitimately differ) raises `CausalConflictError` and durably records an
-   `EVENT_CONFLICT` observation quoting the rejected claims and the kept
-   record. Identical redelivery remains an honest duplicate.
+   legitimately differ) raises `CausalConflictError`; the rejected claim is
+   quarantined as an `EVENT_CONFLICT` observation quoting the rejected
+   claims and the kept record. The quarantine write is best-effort: if it
+   itself fails (storage loss), the failure is logged and the raised error
+   carries the full rejected event — the conflict is never silent, and the
+   kept truth is never overwritten. Identical redelivery remains an honest
+   duplicate. (Multi-attempt honesty, same pass: a superseded attempt's
+   terminal record is history, never a divergence — the passport
+   cross-checks the live row against the CURRENT attempt only.)
 3. **Takeover truthfulness.** Restart/shutdown re-lists record takeover
    events only for rows with a real in-flight attempt (fencing token ≥ 1);
    a pending row that was never owned yields no fabricated ownership
