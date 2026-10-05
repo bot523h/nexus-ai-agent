@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-05T18:35:04Z",
+  "updated_at": "2026-10-05T18:35:46Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2861,7 +2861,7 @@
       "title_fa": "داوری هویت متعارف: ADR-0008 و قرارداد اجراپذیر",
       "zone": "identity-arbitration",
       "priority": "P0",
-      "status": "active",
+      "status": "active_in_review",
       "scope": "Decide exactly one authority per identity (Project, CreativeWork, typed Intent, revision, parent revision, CommandBus transaction, queue request/job/attempt, artifact, lineage binding, legacy unknown) over merged main, and dispose of every competing open candidate (ADOPT/ADAPT/SUPERSEDE/DEFER) without merging anyone else's PR, without claiming task-240, and without writing runtime code. Delivers ADR-0008 plus an executable confirmation test that is green on merged main and fails on any second authority, queue/CommandBus id confusion, revision/hash conflation, ledger duplication, or silent contradiction healing.",
       "scope_fa": "تعیین دقیقاً یک مرجع برای هر هویت روی main و تعیین تکلیف همهٔ کاندیدهای باز (ADOPT/ADAPT/SUPERSEDE/DEFER) بدون merge کردن PR دیگران، بدون claim تسک ۲۴۰ و بدون کد runtime؛ تحویل ADR-0008 + تست تأیید اجراپذیر.",
       "prerequisites": [],
@@ -2891,7 +2891,8 @@
       "claimed_at": "2026-10-05T18:35:04Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": ""
+      "note": "",
+      "pr": "https://github.com/bot523h/nexus-ai-agent/pull/161"
     },
     {
       "task": "task-240-durable-creative-project-revision-lineage",
