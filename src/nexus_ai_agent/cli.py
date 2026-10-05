@@ -1150,25 +1150,6 @@ def _write_receipt(path: str, payload: dict[str, Any]) -> None:
     target.write_text(_json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
-class _AllowanceAuthorizer:
-    """Grants exactly one actor/project pair — the CLI intent demo scope.
-
-    This is the honest host-side authorizer for the throwaway demo project: it
-    is an explicit allow-list of one, not a wildcard.  A real deployment injects
-    its own ``ProjectAuthorizer``; the slice never constructs one.
-    """
-
-    def __init__(self, access: Any) -> None:
-        self._access = access
-
-    def authorize(self, actor: object, project_id: str) -> Any:
-        from nexus_ai_agent.creative.studio.models import AuthorizationError
-
-        if actor != self._access.actor or project_id != self._access.project_id:
-            raise AuthorizationError("actor is not authorized for this project")
-        return self._access
-
-
 @app.command("intent")
 def intent(
     text: str = typer.Argument(..., help="Free-text creative intent (e.g. 'trim from 1s to 8s')."),
@@ -1234,7 +1215,11 @@ def intent(
         permissions=frozenset({"project:read", "project:write"}),
     )
     # The one canonical, server-policy bus factory — never a second path.
-    bus = build_job_bus(project, authorizer=_AllowanceAuthorizer(access))
+    # ``ProjectAccess`` is itself the canonical authorizer for an ephemeral
+    # local project (see ``creative/studio/authorization.py``), so no bespoke
+    # authorizer is needed; it independently binds actor + project and carries
+    # the operation's required permissions.
+    bus = build_job_bus(project, authorizer=access)
 
     provider, status = build_cognition_provider()
     if status is not ProviderStatus.AVAILABLE:
