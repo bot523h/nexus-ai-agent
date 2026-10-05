@@ -607,6 +607,9 @@ class InProcessJobQueue:
         row = await asyncio.to_thread(self._fetch_row_full, job_id)
         if row is None:
             raise KeyError(f"unknown job: {job_id}")
+        identity_fields = ("request_id", "request_fingerprint", "transaction_id")
+        if any(row[field] is None for field in identity_fields):
+            raise RuntimeError(f"request identity is incomplete for job {job_id}")
         return {
             "job_id": job_id,
             "job_type": str(row["job_type"]),
@@ -1502,8 +1505,13 @@ class InProcessJobQueue:
                 identity = build_request_identity(
                     str(row["job_type"]), str(row["idempotency_key"]), payload
                 )
-            except Exception as exc:  # noqa: BLE001 - corrupt request rows fail closed
-                raise RuntimeError(f"cannot backfill request identity for job {job_id}") from exc
+            except Exception as exc:  # noqa: BLE001 - corrupt legacy rows remain unknown
+                logger.warning(
+                    "request_identity_backfill_skipped job_id=%s reason=%s",
+                    job_id,
+                    type(exc).__name__,
+                )
+                continue
             expected = (
                 identity.request_id,
                 identity.request_fingerprint,

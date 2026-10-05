@@ -149,6 +149,32 @@ def test_startup_backfill_is_idempotent_and_skips_corrupt_attempt_history(
         InProcessJobQueue(db, artifact_verifiers={})
 
 
+@pytest.mark.asyncio
+async def test_startup_skips_uncanonicalizable_legacy_request_payload(tmp_path: Path) -> None:
+    db = tmp_path / "uncanonicalizable.sqlite3"
+    queue = InProcessJobQueue(db, artifact_verifiers={})
+    outcome = queue._insert_or_get("test", "uncanonicalizable", {"value": 1})
+    with sqlite3.connect(db) as connection:
+        connection.execute(
+            """
+            UPDATE nexus_job_queue
+            SET payload_json = ?, request_id = NULL, request_fingerprint = NULL,
+                transaction_id = NULL
+            WHERE id = ?
+            """,
+            ('{"value":NaN}', outcome.job_id),
+        )
+
+    reopened = InProcessJobQueue(db, artifact_verifiers={})
+    facts = reopened.get_job_facts(outcome.job_id)
+    assert facts is not None
+    assert facts.request_id is None
+    assert facts.request_fingerprint is None
+    assert facts.transaction_id is None
+    with pytest.raises(RuntimeError, match="request identity is incomplete"):
+        await reopened.get_request_identity(outcome.job_id)
+
+
 def test_trim_request_recognition_requires_the_existing_typed_surface() -> None:
     assert is_timeline_trim_request(_trim_payload())
     assert not is_timeline_trim_request(_trim_payload(operation="speed"))

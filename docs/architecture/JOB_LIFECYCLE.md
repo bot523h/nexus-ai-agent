@@ -408,12 +408,15 @@ Schema migration adds `request_id`, `request_fingerprint`, `transaction_id`,
 there is no `nexus_job_attempts` table. A reservation appends its attempt
 record with the new monotonic `attempt` fencing token, and verification,
 recovery, failure, completion, and reconciliation update the ledger under the
-same queue-row fence. Existing rows receive derivable request identities and
-at most one `legacy_observed_*` latest-attempt record; missing historical
-attempts are not invented. `get_job_facts` projects these queue-owned
-request, attempt-history, and creative-passport columns into `JobFacts`,
-with explicit parse-known flags; the provenance passport exposes them as a
-read-only `queue_evidence` projection. Neither projection nor the causal
+same queue-row fence. Existing rows receive derivable request identities;
+uncanonicalizable legacy payloads are logged and remain identity-incomplete,
+and `get_request_identity` fails closed rather than inventing a value. Rows
+receive at most one `legacy_observed_*` latest-attempt record; missing
+historical attempts are not invented. `get_job_facts` projects these queue-owned
+request, attempt-history, and creative-passport columns into `JobFacts`; attempt
+history and passport parsing carry explicit known flags. The provenance
+passport exposes them as a read-only `queue_evidence` projection. Neither
+projection nor the causal
 observer authorizes execution or changes queue state. Every queue connection
 sets and verifies `PRAGMA synchronous=EXTRA` before I/O. SQLite documents
 `EXTRA` as adding a
