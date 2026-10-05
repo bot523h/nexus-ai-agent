@@ -416,8 +416,9 @@ is equivalent to `FULL` ([SQLite synchronous pragma](https://sqlite.org/pragma.h
 Identity rules (`jobs.creative_passport`):
 
 - `request_id` is domain-separated canonical JSON of job type + idempotency
-  key; `request_fingerprint` is SHA-256 of canonical payload JSON; and
-  `transaction_id` binds those two values. The tuple is persisted with the
+  key; `request_fingerprint` is SHA-256 of the exact canonical payload JSON
+  snapshot persisted in the row; and `transaction_id` binds those two values.
+  The tuple is persisted with the
   job and recomputed on duplicate-enqueue and passport re-verification paths.
 - An exact creative duplicate returns the existing job. Reusing a
   `creative_render` idempotency key with a changed type/payload raises

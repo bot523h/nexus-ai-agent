@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import nexus_ai_agent.adapters.in_process_job_queue as queue_module
 from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
 from nexus_ai_agent.jobs.creative_passport import (
     CreativePassportError,
@@ -55,6 +56,31 @@ def test_attempt_identity_is_stable_and_increments_by_generation() -> None:
     assert attempt_id("job-1", 1) != attempt_id("job-1", 2)
     with pytest.raises(ValueError):
         attempt_id("job-1", 0)
+
+
+def test_queue_fingerprint_matches_the_exact_payload_json_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    queue = InProcessJobQueue(tmp_path / "snapshot.sqlite3", artifact_verifiers={})
+    payload: dict[str, object] = {"value": "before-serialization"}
+    original_canonical_json = queue_module.canonical_json
+
+    def mutate_after_serialization(value: object) -> str:
+        serialized = original_canonical_json(value)
+        if value is payload:
+            payload["value"] = "after-serialization"
+        return serialized
+
+    monkeypatch.setattr(queue_module, "canonical_json", mutate_after_serialization)
+    job_id = queue._insert_or_get("test", "snapshot-key", payload)
+    row = queue._fetch_row_full(job_id)
+    assert row is not None
+    persisted_payload = json.loads(str(row["payload_json"]))
+    expected = request_identity("test", "snapshot-key", persisted_payload)
+
+    assert persisted_payload == {"value": "before-serialization"}
+    assert row["request_fingerprint"] == expected.request_fingerprint
+    assert row["transaction_id"] == expected.transaction_id
 
 
 def test_trim_request_recognition_requires_the_existing_typed_surface() -> None:

@@ -1119,7 +1119,10 @@ class InProcessJobQueue:
         payload: dict[str, object],
     ) -> str:
         payload_json = canonical_json(payload)
-        identity = build_request_identity(job_type, idempotency_key, payload)
+        persisted_payload = json.loads(payload_json)
+        if not isinstance(persisted_payload, dict):
+            raise CreativePassportError("queue payload must serialize to a JSON object")
+        identity = build_request_identity(job_type, idempotency_key, persisted_payload)
         proposed_job_id = uuid4().hex
         with self._db_lock, self._connection() as connection:
             cursor = connection.execute(
