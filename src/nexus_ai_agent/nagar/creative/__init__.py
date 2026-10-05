@@ -132,6 +132,14 @@ async def run_free_text_intent(
         return FreeTextOutcome(
             status="refused", refusal_reason="malformed", detail="empty intent text"
         )
+    try:
+        facts_duration_us = int(duration_us)
+    except (TypeError, ValueError, OverflowError):
+        # A non-integer caller value (including inf/NaN) must fail closed,
+        # not raise mid-flight.
+        return FreeTextOutcome(
+            status="refused", refusal_reason="malformed", detail="duration_us must be an integer"
+        )
 
     gateway = build_cognition_gateway(
         bus=bus,
@@ -170,7 +178,7 @@ async def run_free_text_intent(
         intent_text=intent,
         deterministic_facts={
             "clip_asset_id": clip_asset_id,
-            "duration_us": int(duration_us),
+            "duration_us": facts_duration_us,
         },
         hints={
             "operation": TRIM_OPERATION,

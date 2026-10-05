@@ -232,3 +232,14 @@ operations, malformed JSON, empty, executable prose, NaN, bad schema version) �
 every one → typed refusal, **zero** bus dispatch, **zero** state mutation.
 Provider exception/timeout → typed refusal. Denied actor → attempted-but-not-applied.
 Retrieved-memory text claiming authority → refused.
+
+### Gate C-final — self-review hardening (found by my own test)
+- §37B hostile re-read of `nagar/creative/__init__.py` found a totality gap:
+  `int(duration_us)` could raise `TypeError`/`ValueError`/`OverflowError`
+  (e.g. `inf`) instead of failing closed.
+- Fix: compute `facts_duration_us` once, guarded; a bad value returns
+  `refused/malformed`. Added a parametrized test (None / "not-a-number" /
+  `float('inf')` / arbitrary object). The `inf` case is what forced
+  `OverflowError` into the guard — self-review caught a real defect.
+- Final suite after hardening: **3098 passed, 30 skipped, 0 failed** (was 3094;
+  +4 = the parametrized cases). ruff/format/mypy clean.

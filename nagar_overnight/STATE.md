@@ -9,7 +9,7 @@
 | Branch | `overnight/nagar-20261004` |
 | Base (Phase-2 start) SHA | `0af3b9e` (15 commits ahead of main at Gate C start) |
 | Working SHA | see LOG.md (Gate C commit) |
-| Last known green SHA | Gate C — full suite **3094 passed, 0 failed, 30 skipped**; ruff/format/mypy clean |
+| Last known green SHA | Gate C-final — full suite **3098 passed, 0 failed, 30 skipped**; ruff/format/mypy clean |
 | Next action | Push branch (now unblocked) → open PR → CI on exact SHA |
 | Current blockers | none that block local work; B-3 **resolved** (push via PAT) |
 
@@ -18,7 +18,7 @@
 - `ruff check .` → PASS
 - `ruff format --check src tests` → PASS (461 files)
 - `mypy src` → PASS (259 source files)
-- `pytest -q` → **3094 passed, 30 skipped, 0 failed** (delta from Phase-5
+- `pytest -q` → **3098 passed, 30 skipped, 0 failed** (delta from Phase-5
   baseline 3044 = **+50**, failure set unchanged at 0)
 - new tests in Gate C → 50:
   - `tests/unit/test_nagar_free_text_slice.py` — 29 (E2E + 15-case hostile matrix + memory authority)

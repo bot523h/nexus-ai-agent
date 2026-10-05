@@ -358,3 +358,17 @@ def test_build_provider_returns_none_or_a_generator_without_leaking_config() -> 
     # either yields a provider object or None (-> null producer).
     provider = build_provider()
     assert provider is None or hasattr(provider, "generate")
+
+
+# -- totality: bad caller input fails closed, never raises -----------------
+
+
+@pytest.mark.parametrize("bad_duration", [None, "not-a-number", 1.5e400, object()])
+def test_non_integer_duration_fails_closed_without_raising(bad_duration: object) -> None:
+    provider = FakeProvider(_valid_proposal())
+    bus = _make_bus()
+    seen = _spy(bus)
+    outcome = _run("trim it", bus, enabled=True, provider=provider, duration_us=bad_duration)
+    assert outcome.status == "refused"
+    assert outcome.refusal_reason == "malformed"
+    assert seen == []
