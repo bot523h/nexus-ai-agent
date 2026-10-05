@@ -473,10 +473,10 @@ Wire a production free-text surface to CognitionGateway (the only production Com
 | `origin/main` SHA | `e5b326b2eaf691a638d030ad57acf1ce60016ef0` | `git rev-parse` (read-only) |
 | Base SHA | `e5b326b` — `merge-base HEAD origin/main`; **0 behind** | `git merge-base` |
 | Branch | `overnight/nagar-20261004` | `git branch` |
-| **Final SHA** | `b257d5f` (Gate C commit) | `git rev-parse HEAD` |
+| **Final SHA** | `b257d5f` (code) → `d0c2566` (report) → `3c3250f` (memory) | `git rev-parse HEAD` |
 | Remote push | **UNBLOCKED** — pushed via `$GITHUB_PERSONAL_ACCESS_TOKEN` | `git push` → `* [new branch]` |
 | PR | **#155** (draft) — https://github.com/bot523h/nexus-ai-agent/pull/155 | GitHub API |
-| CI | CI runs on **exact SHA `b257d5f`**: push + pull_request | Actions API |
+| CI | **16/16 jobs SUCCESS on exact SHA `3c3250f`** (lint, lint-fast, test, trust-mutations, migrate-postgres, python-parity 3.10/3.11/3.12, continuum-evidence 3.10/3.11/3.12, extras-matrix core/pdf/speech/translate, release-lineage) | Actions API |
 | Repo | shallow (`git rev-parse --is-shallow-repository` = `true`) | read-only |
 
 The mission's historical main SHA is still live — no drift, no divergence.
