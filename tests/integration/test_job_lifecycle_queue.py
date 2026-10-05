@@ -13,10 +13,10 @@ M2   ffprobe failure (corrupt media at the expected path) → FAILED
 M3   zero-byte output → FAILED (no exception path can bypass it)
 M4   verification mismatch (sha/size lie) → FAILED
 M5   existing destination survives a failed retry (never deleted first)
-M6   idempotency: same key + different payload → first payload wins,
-     one effect; same payload → same job id
-M7   revision conflict: changed args under the same key cannot create a
-     second effect; spec identity binds the recorded operation
+M6   legacy non-creative idempotency: same key + different payload keeps
+     the first payload, one effect; same payload → same job id
+M7   creative request conflict: changed args under the same key are
+     refused; spec identity binds the recorded operation
 M8   valid artifact + retry (re-enqueue of a completed job) → no re-run
 M9   successful "encoding" of invalid artifact bytes → FAILED
 M10  runtime/verifier fail-closed can never become Job success
@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shutil
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -53,6 +54,10 @@ from nexus_ai_agent.creative.slideshow.ffmpeg import (
     RenderError,
     resolve_ffmpeg_bin,
     sha256_file,
+)
+from nexus_ai_agent.jobs.creative_passport import (
+    CreativePassportError,
+    CreativeRequestConflictError,
 )
 from nexus_ai_agent.jobs.lifecycle import is_failure
 from nexus_ai_agent.jobs.verification import VerificationOutcome
@@ -112,6 +117,16 @@ def _row_error(db_path: Path, job_id: str) -> str | None:
             "SELECT error FROM nexus_job_queue WHERE id = ?", (job_id,)
         ).fetchone()
     return None if row is None else row[0]
+
+
+def test_queue_connections_require_sqlite_synchronous_extra(tmp_path: Path) -> None:
+    queue = InProcessJobQueue(tmp_path / "durable.sqlite3")
+    with queue._connection() as connection:
+        assert connection.execute("PRAGMA synchronous").fetchone()[0] == 3
+
+    memory_queue = InProcessJobQueue(":memory:")
+    with memory_queue._connection() as connection:
+        assert connection.execute("PRAGMA synchronous").fetchone()[0] == 3
 
 
 def _creative_result(artifact: Path, *, duration_us: int = 500_000) -> dict[str, Any]:
@@ -344,10 +359,12 @@ async def test_m6_idempotency_first_payload_wins_and_conflict_is_observed(
 
 
 # ---------------------------------------------------------------------------
-# M7 — revision conflict: changed intent under the same key
+# M7 — creative request conflict: changed intent under the same key
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_m7_revision_change_cannot_smuggle_a_second_effect(tmp_path: Path) -> None:
+async def test_m7_changed_creative_request_cannot_smuggle_a_second_effect(
+    tmp_path: Path,
+) -> None:
     db = tmp_path / "jobs.sqlite3"
     queue = InProcessJobQueue(db)
     workspace = tmp_path / "creative_m7"
@@ -370,13 +387,13 @@ async def test_m7_revision_change_cannot_smuggle_a_second_effect(tmp_path: Path)
     chain = await queue.get_result_chain(job_id)
     assert chain["spec_identity"] == {"operation": "timeline.trim"}
 
-    # a "revised" request under the same identity: deterministic refusal to
-    # double-effect — same job, original intent, no second execution
+    # A changed creative request under the same identity is refused rather
+    # than silently returning the original job as if the request matched.
     payload_v2 = {"workspace_dir": str(workspace), "operation": "trim", "args": ["0.1", "0.9"]}
-    revised = await queue.enqueue(
-        job_type=CREATIVE_RENDER_JOB_TYPE, idempotency_key="m7", payload=payload_v2
-    )
-    assert revised == job_id
+    with pytest.raises(CreativeRequestConflictError):
+        await queue.enqueue(
+            job_type=CREATIVE_RENDER_JOB_TYPE, idempotency_key="m7", payload=payload_v2
+        )
     await asyncio.sleep(0.1)
     assert calls == 1
     assert await queue.get_result_chain(job_id) == chain  # revision did not land
@@ -642,6 +659,9 @@ async def test_verifying_state_is_observable_and_cancellation_recovers(
             break
         await asyncio.sleep(0.01)
     assert await queue.get_status(job_id) is JobStatus.VERIFYING
+    history_while_verifying = await queue.get_attempt_history(job_id)
+    assert len(history_while_verifying) == 1
+    assert history_while_verifying[0]["status"] == "verifying"
 
     release.set()
     assert await _drain(queue, job_id) is JobStatus.COMPLETED
@@ -682,11 +702,15 @@ async def test_shutdown_during_verification_recovers_on_resume(tmp_path: Path) -
             "SELECT status FROM nexus_job_queue WHERE id = ?", (job_id,)
         ).fetchone()[0]
     assert status == JobStatus.PENDING.value, "cancelled verification must stay recoverable"
+    interrupted = await queue.get_attempt_history(job_id)
+    assert len(interrupted) == 1 and interrupted[0]["status"] == "interrupted"
 
     release.set()
     resumed = await queue.resume_pending()
     assert resumed == [job_id]
     assert await _drain(queue, job_id) is JobStatus.COMPLETED
+    recovered_history = await queue.get_attempt_history(job_id)
+    assert [item["status"] for item in recovered_history] == ["interrupted", "completed"]
 
 
 @pytest.mark.asyncio
@@ -708,6 +732,8 @@ async def test_attempt_counts_executions_and_chain_reports_it(tmp_path: Path) ->
     await queue.resume_pending()
     await _drain(queue, job_id)
     assert _attempt(db, job_id) == 2
+    attempt_history = await queue.get_attempt_history(job_id)
+    assert [item["status"] for item in attempt_history] == ["completed", "completed"]
     chain = await queue.get_result_chain(job_id)
     assert chain["attempt"] == 2
 
@@ -783,8 +809,8 @@ async def test_succeeded_implies_valid_stable_traceable_artifact(creative_env: P
         "timeline.trim"
     )
     artifact = Path(str(chain["physical_identity"]["path"]))
-    assert artifact == workspace / "output.mp4"
-    assert artifact.is_file(), "the verified artifact must exist"
+    assert artifact != workspace / "output.mp4"
+    assert artifact.is_file(), "the archived verified artifact must exist"
     assert (int(chain["size_bytes"] or 0)) > 0
     assert chain["sha256"] == sha256_file(artifact), "stable identity: bytes == recorded digest"
     probe = chain["probe"]
@@ -796,3 +822,34 @@ async def test_succeeded_implies_valid_stable_traceable_artifact(creative_env: P
     assert verification["logical_identity"]["project_id"] == f"shot-{key}"
     assert verification["physical_identity"]["sha256"] == chain["sha256"]
     assert isinstance(json.dumps(result), str)  # result is durable/serializable
+
+    identity = await queue.get_request_identity(job_id)
+    assert chain["request_identity"]["request_id"] == identity["request_id"]
+    assert identity["transaction_id"].startswith("transaction_")
+    passport = await queue.get_artifact_passport(job_id)
+    assert passport["project_id"] == f"shot-{key}"
+    assert passport["artifact"]["sha256"] == chain["sha256"]
+    assert passport["input_asset"]["sha256"] == sha256_file(input_clip)
+    assert passport["transaction"]["canonical_commandbus_transaction_id"] is None
+    assert passport["authorization"]["status"] == "not_recorded_by_legacy_worker"
+    assert passport["revision"]["kind"] == "execution_projection_only"
+    history = await queue.get_attempt_history(job_id)
+    assert len(history) == 1 and history[0]["status"] == "completed"
+
+    # A new adapter instance re-reads from SQLite + the retained asset store.
+    reopened = InProcessJobQueue(db)
+    reread = await reopened.get_artifact_passport(job_id)
+    assert reread == passport
+
+    # The notifier owns temporary workspace cleanup; evidence survives it.
+    shutil.rmtree(workspace)
+    assert not workspace.exists()
+    assert await reopened.get_artifact_passport(job_id) == passport
+
+    # Re-reading is an integrity check, not a blind JSON deserialization.
+    stored_artifact = passport["artifact"]
+    assert isinstance(stored_artifact, dict)
+    output_store_path = Path(str(db) + ".artifacts") / str(stored_artifact["storage_key"])
+    output_store_path.write_bytes(output_store_path.read_bytes() + b"tamper")
+    with pytest.raises(CreativePassportError, match="output asset"):
+        await reopened.get_artifact_passport(job_id)

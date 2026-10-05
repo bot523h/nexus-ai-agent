@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-05T00:00:00Z",
+  "updated_at": "2026-10-05T14:15:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -671,6 +671,22 @@
         "tests/integration/test_provenance_passport_e2e.py",
         "tests/architecture/test_provenance_boundary.py",
         "docs/architecture/PROVENANCE_LEDGER.md"
+      ]
+    },
+    {
+      "id": "durable-creative-queue-evidence",
+      "description": "Task-232: canonical successor to PR #154; durable creative-queue request identity, attempt history, trim evidence passport, source preflight, and queue-row facts. Queue state remains authoritative; the provenance journal remains post-commit evidence-only.",
+      "paths": [
+        "docs/architecture/JOB_LIFECYCLE.md",
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        "src/nexus_ai_agent/jobs/creative_passport.py",
+        "tests/integration/test_creative_execution_recovery.py",
+        "tests/integration/test_job_lifecycle_queue.py",
+        "tests/unit/test_creative_passport.py",
+        "src/nexus_ai_agent/provenance/models.py",
+        "src/nexus_ai_agent/provenance/passport.py",
+        "tests/integration/test_provenance_queue_recording.py",
+        "tests/integration/test_creative_chain_e2e.py"
       ]
     },
     {
@@ -2167,7 +2183,7 @@
       "agent_branch": "arena/01a0d43c-nexus-ai-agent",
       "claimed_at": "2026-09-24T16:32:01Z",
       "ttl_hours": 48,
-      "gates_owner": true,
+      "gates_owner": false,
       "note": "PR#72 https://github.com/bot523h/nexus-ai-agent/pull/72 (commit 5f955ce) — awaiting merge; merge-order disclosures in PR body (PR#68 supersede, PR#67/PR#70/PR#71 collisions). | STEWARDSHIP-RELEASED 2026-09-24T23:06:38Z by arena/01a0d5a1-nexus-ai-agent: delivery vehicle PR#72 is MERGED; a merged PR must not keep a live lease (PR#51/#47/#65 precedent). exclusive_paths released.",
       "evidence": [
         "contract 80 + boundary 16 + wave1 22: all pass (local)",
@@ -2750,7 +2766,7 @@
       "agent_branch": "arena/01a0e3b7-nexus-ai-agent",
       "claimed_at": "2026-09-27T16:54:20Z",
       "ttl_hours": 24,
-      "gates_owner": true,
+      "gates_owner": false,
       "note": "auto-released by gc at 2026-10-04T20:19:53Z (stale active lease)"
     },
     {
@@ -2759,7 +2775,7 @@
       "title_fa": "دفتر علّی بادوام (گراف پروژه) + گذرنامهٔ شاهد-مبناي مصنوع",
       "zone": "provenance-ledger",
       "priority": "P0",
-      "status": "active_in_review",
+      "status": "completed_merged",
       "scope": "Append-only hash-chained causal journal beside the durable job queue; fail-safe queue observer recording every durable lifecycle transition (enqueue/dedupe/reserve/verify/complete/fail/reopen/takeover) with digests; Artifact Passport as a read-only projection that re-measures the artifact, cross-checks chain vs authoritative row, and never invents proof (VERIFIED / VERIFIED_WITH_LIMITATIONS / INCOMPLETE / COMPROMISED).",
       "scope_fa": "ژورنال علّی الحاق-تنها با زنجیر هش در کنار صف بادوام؛ ناظر fail-safe صف برای هر گذار بادوام؛ گذرنامهٔ مصنوع به‌مثابهٔ تصویر فقط-خواندنی که مصنوع را دوباره می‌سنبد و هرگز شاهد نمی‌سازد.",
       "prerequisites": [],
@@ -2776,26 +2792,70 @@
         "ruff + mypy clean on the changed tree",
         "CI run on the exact head SHA"
       ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/provenance/",
-        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
-        "tests/unit/test_provenance_chain.py",
-        "tests/unit/test_provenance_journal.py",
-        "tests/integration/test_provenance_queue_recording.py",
-        "tests/integration/test_provenance_passport_e2e.py",
-        "tests/architecture/test_provenance_boundary.py",
-        "docs/architecture/PROVENANCE_LEDGER.md"
-      ],
+      "exclusive_paths": [],
       "owner_hint": null,
-      "agent_branch": "arena/01a10891-nexus-ai-agent",
-      "claimed_at": "2026-10-05T03:49:39Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "delivered": false,
-      "note": "Delivered as PR #153 (head fc20f654). CI: push run 37236986763 fully green (16/16 incl. continuum-evidence x3, python-parity x3, test); the parallel pull_request run was concurrency-cancelled mid-continuum (annotations prove gate passed=True/27 + coverage accepted=True before cancellation). Local gates: pytest -m 'not slow' 2953 passed x3, ruff clean, mypy clean, gate PASSED (27 attacks rejected), mutation campaign PASSED (all killed+restored), pack coverage ACCEPTED 97.37."
+      "delivered": true,
+      "note": "Delivered as PR #153 (head fc20f654). CI: push run 37236986763 fully green (16/16 incl. continuum-evidence x3, python-parity x3, test); the parallel pull_request run was concurrency-cancelled mid-continuum (annotations prove gate passed=True/27 + coverage accepted=True before cancellation). Local gates: pytest -m 'not slow' 2953 passed x3, ruff clean, mypy clean, gate PASSED (27 attacks rejected), mutation campaign PASSED (all killed+restored), pack coverage ACCEPTED 97.37. PR #153 terminal release verified on 2026-10-05: state=MERGED, mergeCommit=6e41123b40f15a63241c8db27cd884010f55db38, head=0b785edf730ef44ed43d428b0a394010b336803e. The stale active_in_review lease had continued to fence the shared queue adapter; exclusive paths released by stewardship reconciliation. task-231 remains provenance-only."
     },
     {
-      "task": "task-232-agent-constitution",
+      "task": "task-232-durable-creative-queue-evidence",
+      "title": "Durable creative queue evidence — canonical successor to PR #154",
+      "title_fa": "شواهد بادوام صف خلاق — جانشین متعارف PR #154",
+      "zone": "durable-creative-queue-evidence",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Preserve PR #154 source history and its existing SQLite creative-queue foundation: stable request/transaction identity, durable per-attempt history, crash reconciliation, and a re-readable passport for timeline.trim. Re-identify the queue lane from its historical task-231 name to task-232 because task-231 belongs to #153 provenance. Semantically compose with the merged post-commit provenance observer and expose queue-row request/attempt/passport facts without changing queue-row state authority. Preflight trim source evidence before handler/render except for the genuine typed media_missing path. No second domain store, causal ledger, renderer, or execution authority.",
+      "scope_fa": "حفظ تاریخچهٔ منبع PR #154 و همگرایی معنایی پیاده‌سازی صف خلاق بادوام روی main پس از #153؛ تغییر هویت صف از task-231 به task-232 چون task-231 متعلق به provenance در #153 است؛ حفظ اقتدار ردیف صف و ناظر شواهد پس از commit؛ پیش‌بررسی شاهد trim پیش از handler/render با حفظ مسیر typed واقعی media_missing.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "The successor is a descendant of the exact current origin/main and preserves the seven PR #154 commits semantically, proven by range-diff.",
+        "task-231 remains the merged provenance-ledger identity; the active durable creative queue lane is task-232 with no duplicate task identity.",
+        "Queue row remains the sole job-state authority; the provenance journal is post-commit causal evidence only; passport is a read-only projection; caches are re-derivable.",
+        "Persisted request snapshot/fingerprint, same-key changed-payload rejection, attempts, durable checkpoints, takeover/reopen semantics, and artifact sync failure behavior remain covered.",
+        "Trim evidence preflight fails deterministically unavailable evidence before the real handler/render path; genuine media_missing still traverses the default handler and persists its typed failure.",
+        "Regression proves no handler, renderer, result, or passport on preflight infrastructure failure; successful trim retains real verified evidence.",
+        "No exactly-once external/render effects or unproven power-loss/hardware guarantees are claimed.",
+        "Same creative request identity resolves to one stable transaction and job; same identity with changed payload fails closed before a second mutation.",
+        "Each successful reservation has a durable attempt identity/state; restart/replay records interrupted attempts and preserves a single transaction lineage.",
+        "A real timeline.trim completion stores a passport derived from persisted request identity, measured input/output bytes, attempt, and independent verifier evidence; a clean queue instance can reconstruct and re-verify it.",
+        "Deterministic fault tests cover duplicate enqueue/delivery, crash before handler effect, crash after durable verification but before final job completion, restart/replay, verification retry, and passport replay.",
+        "The guarantee remains at-least-once renderer execution with deterministic identity and reconciliation; no exactly-once claim."
+      ],
+      "evidence_required": [
+        "Exact source/main topology and PR154-to-successor range-diff with commit reconciliation table.",
+        "Board uniqueness and task-identity tests; exact file board check on the session branch.",
+        "Focused queue, passport, recovery, E2E, durability, fencing, and verification-gap tests plus docs integrity.",
+        "ruff check, ruff format --check, mypy src, git diff --check, and full pytest on the final successor tree.",
+        "Exact-head GitHub CI, fresh review, zero unresolved actionable threads, and clean mergeability before marking ready.",
+        "SQLite restart/fault-injection integration tests inspect queue and attempt rows directly.",
+        "Real FFmpeg timeline.trim proof with persisted input/output hashes and independent post-restart verification."
+      ],
+      "exclusive_paths": [
+        "docs/architecture/JOB_LIFECYCLE.md",
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        "src/nexus_ai_agent/jobs/creative_passport.py",
+        "tests/integration/test_creative_execution_recovery.py",
+        "tests/integration/test_job_lifecycle_queue.py",
+        "tests/unit/test_creative_passport.py",
+        "src/nexus_ai_agent/provenance/models.py",
+        "src/nexus_ai_agent/provenance/passport.py",
+        "tests/integration/test_provenance_queue_recording.py",
+        "tests/integration/test_creative_chain_e2e.py"
+      ],
+      "owner_hint": "Canonical successor to PR #154; only the session-bound branch arena/01a10af5-nexus-ai-agent may be updated.",
+      "agent_branch": "arena/01a10af5-nexus-ai-agent",
+      "claimed_at": "2026-10-05T07:39:41Z",
+      "ttl_hours": 24,
+      "gates_owner": true,
+      "delivered": false,
+      "note": "Re-identified from PR #154 historical task-231-durable-creative-queue-evidence: #153 is merged and owns task-231-provenance-ledger. Identity correction only; the original seven PR #154 commits and valid queue implementation are preserved. Source head 47f7ba998787406fbbc0816f57275109ac582613; source merge-base e5b326b2eaf691a638d030ad57acf1ce60016ef0; post-#153 main 6e41123b40f15a63241c8db27cd884010f55db38."
+    },
+    {
+      "task": "task-235-agent-constitution",
       "title": "Persistent, version-controlled agent engineering contract (Nagar constitution layer)",
       "title_fa": "قرارداد مهندسی دائمی و نسخه‌دار برای همهٔ عامل‌ها (لایهٔ قانون اساسی نگار)",
       "zone": "agent-constitution",
@@ -2843,7 +2903,7 @@
       "scope": "The layer is structurally enforced, but no later session has yet obeyed it in practice. The next session must run the bootstrap (§0) before its first edit, fill the mandatory report (§6) with a bootstrap attestation, a conflict register and a closed-vocabulary status, and record whether the contract actually changed its behaviour — including any bypass it found, which must be added to the loophole register (§10) in the same PR.",
       "scope_fa": "این لایه از نظر ساختاری اِعمال می‌شود، اما هنوز هیچ سشن بعدی در عمل از آن پیروی نکرده است. سشن بعدی باید پیش از نخستین ویرایش bootstrap را اجرا کند، گزارش اجباری را با attestation و ثبت تعارض و وضعیتِ واژگانِ بسته پر کند و ثبت کند که آیا این قرارداد واقعاً رفتارش را تغییر داد یا نه.",
       "prerequisites": [
-        "task-232-agent-constitution"
+        "task-235-agent-constitution"
       ],
       "acceptance_criteria": [
         "the session's first commit is preceded by a recorded bootstrap attestation naming AGENTS.md, NAGAR_AGENT_CONSTITUTION.md and the mission instructions, at a commit SHA",
@@ -2869,7 +2929,7 @@
       "scope": "AST audit of all 74 exception handlers that swallow or fabricate a default in src/; fail-closed moderation; honest storage listing/quota; ratchet test with frozen baseline.",
       "scope_fa": "ممیزی AST همهٔ ۷۴ هندلر خطا در src/ که استثنا را می‌بلعند یا مقدار جعلی برمی‌گردانند؛ ایمنیِ fail-closed؛ لیست/سهمیهٔ صادقِ storage؛ تستِ چرخ‌دنده با baseline منجمد.",
       "prerequisites": [
-        "task-232-agent-constitution"
+        "task-235-agent-constitution"
       ],
       "acceptance_criteria": [
         "ممیزی AST به‌صورت تست معماریِ چرخ‌دنده‌ای با baseline منجمد کامیت شود",
@@ -3539,6 +3599,33 @@
       "action": "session-bound-continuation",
       "task": "task-195-salvage (PR #109)",
       "reason": "This Arena session is bound to arena/01a0e3b7-nexus-ai-agent and cannot push to arena/01a0e356-nexus-ai-agent. PR #109 head cd79bfe3b8e42b1943ad8ff0d352646fc54df548 is MERGEABLE but UNSTABLE: python-parity (3.10) FAILURE on run 36329794486 (job 108649421192) and the duplicate run 36329718482. Local reproduction on CPython 3.10.16 against that exact tree: 3 failed (test_same_user_timeout_releases_exactly_one_pending_slot, test_withdrawn_queued_requests_never_run_after_backlog_clears, test_timeout_during_rate_wait_wakes_worker_without_provider_invocation), 14 passed. Root cause: asyncio.wait_for raises asyncio.TimeoutError on 3.10, which is not a subclass of builtin TimeoutError (docs.python.org/3.10/library/asyncio-exceptions.html) and is an Exception, so the worker generic handler records queue_processor_error. 3.11+ aliases the names (Changed in version 3.11). History was fast-forwarded onto this branch (cd79bfe remains an ancestor); no rewrite, no force-push. Exclusive paths unchanged. gates_owner stays with this continuation."
+    },
+    {
+      "at": "2026-10-05T07:39:41Z",
+      "by_branch": "arena/01a10af5-nexus-ai-agent",
+      "action": "stewardship-release",
+      "task": "task-231-provenance-ledger",
+      "reason": "PR #153 is verified MERGED into the current main. Its active_in_review claim still exclusively fenced src/nexus_ai_agent/adapters/in_process_job_queue.py and caused the current-main board check to STOP. Following the board's stewardship-release precedent, terminalize the merged provenance claim and release its lease before claiming the successor queue lane. The task identity and provenance implementation remain intact.",
+      "evidence": "gh pr view 153 --json state,mergedAt,mergeCommit,headRefOid => MERGED at 2026-10-05T07:24:05Z; mergeCommit 6e41123b40f15a63241c8db27cd884010f55db38; PR head 0b785edf730ef44ed43d428b0a394010b336803e; git rev-parse origin/main => 6e41123b40f15a63241c8db27cd884010f55db38; agent_board.py check had reported task-231 as the exclusive overlap.",
+      "released_paths": [
+        "src/nexus_ai_agent/provenance/",
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        "tests/unit/test_provenance_chain.py",
+        "tests/unit/test_provenance_journal.py",
+        "tests/integration/test_provenance_queue_recording.py",
+        "tests/integration/test_provenance_passport_e2e.py",
+        "tests/architecture/test_provenance_boundary.py",
+        "docs/architecture/PROVENANCE_LEDGER.md"
+      ]
+    },
+    {
+      "at": "2026-10-05T07:43:54Z",
+      "by_branch": "arena/01a10af5-nexus-ai-agent",
+      "action": "successor-task-reidentification",
+      "task": "task-232-durable-creative-queue-evidence",
+      "previous_task": "task-231-durable-creative-queue-evidence",
+      "reason": "PR #154 source history is carried forward unchanged as the successor merge parent. Its queue task used numeric identity 231, now reserved by merged PR #153 (task-231-provenance-ledger). The successor uses task-232-durable-creative-queue-evidence; only the active identity changes, not the implementation or origin.",
+      "evidence": "Live PR #154 head 47f7ba998787406fbbc0816f57275109ac582613; seven source commits 9039f546f47129cf0ed94b0c6452c933a304ee0d through 47f7ba998787406fbbc0816f57275109ac582613; current origin/main 6e41123b40f15a63241c8db27cd884010f55db38; historical board claim preserved in the PR #154 source tree and represented by this task-232 successor record."
     }
   ],
   "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins."

@@ -182,6 +182,24 @@ class PassportBuilder:
         else:
             verification = facts.verification
             status_known = facts.status_known
+            if not facts.attempt_history_known:
+                findings.append(
+                    Finding(
+                        "incomplete",
+                        "queue_attempt_history_unreadable",
+                        "the authoritative queue row's attempt-history evidence is malformed; "
+                        "the projection does not infer missing attempt facts",
+                    )
+                )
+            if not facts.artifact_passport_known:
+                findings.append(
+                    Finding(
+                        "incomplete",
+                        "queue_artifact_passport_unreadable",
+                        "the authoritative queue row's creative artifact-passport evidence is "
+                        "malformed; the projection does not infer passport facts",
+                    )
+                )
             if not status_known:
                 # The AUTHORITY row carries a status spelling outside the
                 # canonical state machine — an impossible persisted state
@@ -209,6 +227,21 @@ class PassportBuilder:
                 "error": facts.error,
                 "created_at": facts.created_at,
                 "finished_at": facts.finished_at,
+                "queue_evidence": {
+                    "request_identity": {
+                        "request_id": facts.request_id,
+                        "request_fingerprint": facts.request_fingerprint,
+                        "transaction_id": facts.transaction_id,
+                    },
+                    "attempt_history": {
+                        "known": facts.attempt_history_known,
+                        "records": facts.attempt_history,
+                    },
+                    "creative_artifact_passport": {
+                        "known": facts.artifact_passport_known,
+                        "document": facts.artifact_passport,
+                    },
+                },
             }
             payload = facts.payload
             status = self._status(facts, subject, findings)
