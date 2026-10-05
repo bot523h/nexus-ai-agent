@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+import nexus_ai_agent.jobs.creative_passport as passport_module
 from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
 from nexus_ai_agent.application.ports.job_queue import JobStatus
 from nexus_ai_agent.config import settings as settings_module
@@ -219,6 +220,159 @@ asyncio.run(main())
     assert (
         passport["input_asset"]["sha256"]
         == "sha256:" + hashlib.sha256(input_path.read_bytes()).hexdigest()
+    )
+    settings_module.get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_real_trim_fsync_failure_never_persists_completion_or_passport(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    creative_root = tmp_path / "creative_tmp"
+    creative_root.mkdir()
+    monkeypatch.setenv("CREATIVE_TEMP_DIR", str(creative_root))
+    settings_module.get_settings.cache_clear()
+    workspace = creative_root / "creative_fsync_failure"
+    workspace.mkdir()
+    input_path = workspace / "input.mp4"
+    _clip(input_path)
+    key = "creative:fsync-failure"
+    db = tmp_path / "fsync-failure.sqlite3"
+
+    def fail_directory_sync(_directory: Path) -> None:
+        raise passport_module.CreativePassportError("injected directory fsync failure")
+
+    monkeypatch.setattr(passport_module, "_fsync_directory", fail_directory_sync)
+    queue = InProcessJobQueue(db)
+    for job_type, handler in default_job_handlers().items():
+        queue.register_handler(job_type, handler)
+    job_id = await queue.enqueue(
+        job_type=CREATIVE_RENDER_JOB_TYPE,
+        idempotency_key=key,
+        payload=_trim_payload(workspace, key),
+    )
+
+    assert await _drain(queue, job_id) is JobStatus.FAILED_TERMINAL
+    history = await queue.get_attempt_history(job_id)
+    assert len(history) == 1
+    assert history[0]["status"] == JobStatus.FAILED_TERMINAL.value
+    assert str(history[0]["error"]).startswith("creative_passport_failed:CreativePassportError")
+    with sqlite3.connect(db) as connection:
+        row = connection.execute(
+            "SELECT status, result_json, artifact_passport_json FROM nexus_job_queue WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+        assert row == (JobStatus.FAILED_TERMINAL.value, None, None)
+    with pytest.raises(LookupError, match="no persisted artifact passport"):
+        await queue.get_artifact_passport(job_id)
+    settings_module.get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_process_crash_during_real_trim_verification_retries_with_new_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    creative_root = tmp_path / "creative_tmp"
+    creative_root.mkdir()
+    monkeypatch.setenv("CREATIVE_TEMP_DIR", str(creative_root))
+    settings_module.get_settings.cache_clear()
+    workspace = creative_root / "creative_verification_crash"
+    workspace.mkdir()
+    input_path = workspace / "input.mp4"
+    _clip(input_path)
+    key = "creative:crash-during-verification"
+    payload = _trim_payload(workspace, key)
+    db = tmp_path / "during-verification.sqlite3"
+    marker = tmp_path / "rendered-attempts.txt"
+    env = _child_env(tmp_path, db, payload)
+    env["RENDER_ATTEMPTS_FILE"] = str(marker)
+
+    child = _child_run(
+        """
+import asyncio, os
+from pathlib import Path
+from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+from nexus_ai_agent.worker import default_job_handlers
+
+class CrashDuringVerificationQueue(InProcessJobQueue):
+    async def _verify_safely(self, verifier, payload, result):
+        os._exit(73)
+
+async def main():
+    queue = CrashDuringVerificationQueue(os.environ['QUEUE_DB_PATH'])
+    handlers = default_job_handlers()
+    render = handlers[os.environ['JOB_TYPE']]
+    async def recorded_render(payload):
+        result = await render(payload)
+        with Path(os.environ['RENDER_ATTEMPTS_FILE']).open('a', encoding='utf-8') as stream:
+            stream.write('rendered\\n')
+        return result
+    for job_type, handler in handlers.items():
+        if job_type != os.environ['JOB_TYPE']:
+            queue.register_handler(job_type, handler)
+    queue.register_handler(os.environ['JOB_TYPE'], recorded_render)
+    job_id = await queue.enqueue(
+        job_type=os.environ['JOB_TYPE'],
+        idempotency_key=os.environ['JOB_KEY'],
+        payload=__import__('json').loads(os.environ['JOB_PAYLOAD_JSON']),
+    )
+    Path(os.environ['JOB_ID_FILE']).write_text(job_id, encoding='utf-8')
+    await asyncio.sleep(180)
+
+asyncio.run(main())
+""",
+        env,
+    )
+    assert child.returncode == 73, child.stderr
+    assert marker.read_text(encoding="utf-8").splitlines() == ["rendered"]
+    job_id = (tmp_path / "job-id.txt").read_text(encoding="utf-8")
+    with sqlite3.connect(db) as connection:
+        row = connection.execute(
+            "SELECT status, attempt, result_json, artifact_passport_json, attempt_history_json "
+            "FROM nexus_job_queue WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+        assert row is not None
+        assert row[0] == JobStatus.VERIFYING.value
+        assert row[1] == 1
+        assert row[2] is None and row[3] is None
+        interrupted_history = json.loads(str(row[4]))
+        assert len(interrupted_history) == 1
+        assert interrupted_history[0]["status"] == "verifying"
+
+    queue = InProcessJobQueue(db)
+    handlers = default_job_handlers()
+    original_render = handlers[CREATIVE_RENDER_JOB_TYPE]
+    render_calls = 0
+
+    async def counted_render(render_payload: dict[str, object]) -> dict[str, object]:
+        nonlocal render_calls
+        render_calls += 1
+        return await original_render(render_payload)
+
+    for job_type, handler in handlers.items():
+        if job_type != CREATIVE_RENDER_JOB_TYPE:
+            queue.register_handler(job_type, handler)
+    queue.register_handler(CREATIVE_RENDER_JOB_TYPE, counted_render)
+    assert await queue.resume_pending() == [job_id]
+    assert await _drain(queue, job_id) is JobStatus.COMPLETED
+    assert render_calls == 1, (
+        "the uncheckpointed attempt is retried after verification interruption"
+    )
+
+    history = await queue.get_attempt_history(job_id)
+    assert [item["status"] for item in history] == ["interrupted", "completed"]
+    assert [item["attempt_number"] for item in history] == [1, 2]
+    assert history[0]["error"] == "process_recovered_before_attempt_checkpoint"
+    passport = await queue.get_artifact_passport(job_id)
+    assert passport["attempt"]["attempt_number"] == 2
+    assert passport["attempt"]["attempt_id"] == history[1]["attempt_id"]
+    assert passport["input_asset"]["sha256"] == (
+        "sha256:" + hashlib.sha256(input_path.read_bytes()).hexdigest()
+    )
+    artifact = queue._artifact_root / str(passport["artifact"]["storage_key"])
+    assert passport["artifact"]["sha256"] == (
+        "sha256:" + hashlib.sha256(artifact.read_bytes()).hexdigest()
     )
     settings_module.get_settings.cache_clear()
 
