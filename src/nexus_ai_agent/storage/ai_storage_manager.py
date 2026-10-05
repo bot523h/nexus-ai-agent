@@ -257,7 +257,8 @@ class AIStorageManager:
             try:
                 for k in await provider.list_files(prefix=prefix):
                     keys.add(k)
-            except Exception as exc:  # noqa: BLE001 - one broken provider must not hide the others
+            # Deliberate broad catch: one broken provider must not hide the others.
+            except Exception as exc:
                 failures.append(f"{name}: {type(exc).__name__}: {exc}")
                 log.warning("storage_list_provider_failed", provider=name, error=str(exc))
         if len(failures) == len(providers):

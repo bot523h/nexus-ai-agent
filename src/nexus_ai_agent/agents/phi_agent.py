@@ -54,7 +54,7 @@ class PhiAgent(BaseAgent):
         raw = await self.llm.generate(f"Is this content safe?\n{text}", system=system)
         try:
             verdict = json.loads(raw)
-        except Exception as exc:  # noqa: BLE001 - moderation must never raise
+        except Exception as exc:  # deliberate broad catch: moderation must never raise
             # Never echo ``raw``: it quotes user content.
             log.warning("moderation_verdict_unparseable", error_type=type(exc).__name__)
             return {"safe": False, "reason": "verdict_unparseable"}

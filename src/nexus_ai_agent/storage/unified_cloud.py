@@ -130,7 +130,8 @@ class _DropboxProvider:
                 ]
         except ProviderUnavailable:
             raise
-        except Exception as exc:  # noqa: BLE001 - a transport fault is a typed unavailability
+        # Deliberate broad catch: a transport fault is a typed unavailability
+        except Exception as exc:
             raise ProviderUnavailable(f"Dropbox listing failed: {type(exc).__name__}") from exc
 
     async def get_usage(self) -> dict[str, Any] | None:
@@ -168,7 +169,8 @@ class _DropboxProvider:
                         provider=self.name,
                         status=resp.status_code,
                     )
-        except Exception as exc:  # noqa: BLE001 - usage is informational, never fatal
+        # Deliberate broad catch: usage is informational, never fatal
+        except Exception as exc:
             log.warning("cloud_usage_unknown", provider=self.name, error=type(exc).__name__)
         return None
 
@@ -234,7 +236,8 @@ class _PcloudProvider:
                 ]
         except ProviderUnavailable:
             raise
-        except Exception as exc:  # noqa: BLE001 - a transport fault is a typed unavailability
+        # Deliberate broad catch: a transport fault is a typed unavailability
+        except Exception as exc:
             raise ProviderUnavailable(f"pCloud listing failed: {type(exc).__name__}") from exc
 
     async def get_usage(self) -> dict[str, Any] | None:
@@ -483,7 +486,8 @@ class UnifiedCloudStorage:
         for provider in candidates:
             try:
                 keys = await provider.list_files(prefix=prefix)
-            except Exception as exc:  # noqa: BLE001 - one broken cloud must not hide the others
+            # Deliberate broad catch: one broken cloud must not hide the others
+            except Exception as exc:
                 failures.append(f"{provider.name}: {type(exc).__name__}: {exc}")
                 log.warning("cloud_list_provider_failed", provider=provider.name, error=str(exc))
                 continue
