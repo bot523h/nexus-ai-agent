@@ -8,9 +8,9 @@
 | Base SHA | `e5b326b2eaf691a638d030ad57acf1ce60016ef0` (origin/main; merge-base, 0 behind) |
 | Branch | `overnight/nagar-20261004` |
 | Base (Phase-2 start) SHA | `0af3b9e` (15 commits ahead of main at Gate C start) |
-| Working SHA | see LOG.md (Gate C commit) |
+| Working SHA | `5fbc7fa` (final; CI 16/16 green) |
 | Last known green SHA | Gate C-final — full suite **3098 passed, 0 failed, 30 skipped**; ruff/format/mypy clean |
-| Next action | Push branch (now unblocked) → open PR → CI on exact SHA |
+| Next action | Wire a production caller (CLI/Telegram) to run_free_text_intent (see REPORT) |
 | Current blockers | none that block local work; B-3 **resolved** (push via PAT) |
 
 ## Gate C results

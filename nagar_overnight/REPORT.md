@@ -473,10 +473,10 @@ Wire a production free-text surface to CognitionGateway (the only production Com
 | `origin/main` SHA | `e5b326b2eaf691a638d030ad57acf1ce60016ef0` | `git rev-parse` (read-only) |
 | Base SHA | `e5b326b` — `merge-base HEAD origin/main`; **0 behind** | `git merge-base` |
 | Branch | `overnight/nagar-20261004` | `git branch` |
-| **Final SHA** | `b257d5f` (code) → `d0c2566` (report) → `3c3250f` (memory) | `git rev-parse HEAD` |
+| **Final SHA** | `5fbc7fa` (code+hardening+report+memory) | `git rev-parse HEAD` |
 | Remote push | **UNBLOCKED** — pushed via `$GITHUB_PERSONAL_ACCESS_TOKEN` | `git push` → `* [new branch]` |
 | PR | **#155** (draft) — https://github.com/bot523h/nexus-ai-agent/pull/155 | GitHub API |
-| CI | **16/16 jobs SUCCESS on exact SHA `3c3250f`** (lint, lint-fast, test, trust-mutations, migrate-postgres, python-parity 3.10/3.11/3.12, continuum-evidence 3.10/3.11/3.12, extras-matrix core/pdf/speech/translate, release-lineage) | Actions API |
+| CI | **16/16 jobs SUCCESS on exact SHA `5fbc7fa`** (lint, lint-fast, test, trust-mutations, migrate-postgres, python-parity 3.10/3.11/3.12, continuum-evidence 3.10/3.11/3.12, extras-matrix core/pdf/speech/translate, release-lineage) | Actions API |
 | Repo | shallow (`git rev-parse --is-shallow-repository` = `true`) | read-only |
 
 The mission's historical main SHA is still live — no drift, no divergence.
@@ -531,7 +531,7 @@ and strong; Gate C adds one thin, additive free-text seam over the *existing*
 ## TESTS
 
 Baseline (Phase-5 tip): **3044 passed, 30 skipped, 0 failed**.
-Final (Gate C): **3094 passed, 30 skipped, 0 failed** — delta **+50**, failure set unchanged at 0.
+Final (Gate C-final): **3098 passed, 30 skipped, 0 failed** — delta **+50**, failure set unchanged at 0.
 `ruff check` clean · `ruff format --check` clean (461 files) · `mypy src` clean (259 files).
 
 ## ADVERSARIAL TESTS (executed)
@@ -641,5 +641,5 @@ CLI/Telegram caller is wired yet.
 
 Wire a production caller (CLI/Telegram) to `nagar.creative.run_free_text_intent`
 so the free-text→operation path is reachable end-to-end in production, and add
-one test through that entry point. CI for PR **#155** runs on exact SHA
-`b257d5f`; the PR stays **draft** for the gates owner.
+one test through that entry point. CI for PR **#155** is **16/16 green on exact
+SHA `5fbc7fa`**; the PR stays **draft** for the gates owner.

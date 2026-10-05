@@ -243,3 +243,6 @@ Retrieved-memory text claiming authority → refused.
   `OverflowError` into the guard — self-review caught a real defect.
 - Final suite after hardening: **3098 passed, 30 skipped, 0 failed** (was 3094;
   +4 = the parametrized cases). ruff/format/mypy clean.
+
+### CI
+d0c2566: 16/16 SUCCESS. Final 5fbc7fa: 16/16 SUCCESS (exact SHA).
