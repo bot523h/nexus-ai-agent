@@ -21,7 +21,7 @@ from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
 from nexus_ai_agent.application.ports.job_queue import JobStatus
 from nexus_ai_agent.config import settings as settings_module
 from nexus_ai_agent.creative.render_jobs import CREATIVE_RENDER_JOB_TYPE
-from nexus_ai_agent.creative.slideshow.ffmpeg import resolve_ffmpeg_bin
+from nexus_ai_agent.creative.slideshow.ffmpeg import FfmpegUnavailableError, resolve_ffmpeg_bin
 from nexus_ai_agent.worker import default_job_handlers
 
 
@@ -33,9 +33,13 @@ def _clear_settings_cache() -> Any:
 
 
 def _clip(path: Path, seconds: float = 2.0) -> None:
+    try:
+        binary = resolve_ffmpeg_bin()
+    except FfmpegUnavailableError as exc:
+        pytest.skip(f"FFmpeg unavailable: {exc}")
     subprocess.run(
         [
-            resolve_ffmpeg_bin(),
+            binary,
             "-hide_banner",
             "-nostdin",
             "-loglevel",
@@ -506,6 +510,14 @@ asyncio.run(main())
         assert len(attempt_history) == 1
         assert attempt_history[0]["status"] == "verified"
         assert attempt_history[0]["passport_json"] is not None
+
+    original_db = db
+    original_artifact_root = Path(f"{original_db}.artifacts")
+    relocated_root = tmp_path / "relocated"
+    relocated_root.mkdir()
+    db = relocated_root / original_db.name
+    original_db.rename(db)
+    original_artifact_root.rename(Path(f"{db}.artifacts"))
 
     queue = InProcessJobQueue(db)
     handlers = default_job_handlers()

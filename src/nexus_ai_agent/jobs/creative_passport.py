@@ -657,12 +657,12 @@ def reverify_stored_passport(
         raise CreativePassportError("persisted input asset no longer matches its passport")
     if (output_sha, output_size) != (passport.artifact.sha256, passport.artifact.size_bytes):
         raise CreativePassportError("persisted output asset no longer matches its passport")
-    if Path(str(attempt_result.get("artifact_path") or "")).resolve() != output_path:
-        raise CreativePassportError("attempt result does not point to the archived output")
-
     verifier_payload = dict(attempt_payload)
     verifier_payload["workspace_dir"] = str(output_path.parent)
     verification_result: dict[str, object] = dict(attempt_result)
+    # The storage key is relocatable; persisted absolute paths can point to the
+    # pre-restore root. Reverify the bytes resolved under the current root.
+    verification_result["artifact_path"] = str(output_path)
     outcome = verifier(verifier_payload, verification_result)
     if not outcome.ok:
         reason = outcome.reason_code or "unknown"
