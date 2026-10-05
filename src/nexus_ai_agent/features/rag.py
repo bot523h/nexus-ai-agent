@@ -126,14 +126,20 @@ def _clean_metadata(metadata: dict[str, Any]) -> dict[str, str | int | float | b
     return cleaned
 
 
-def _distance_to_score(distance: Any) -> float:
-    """Chroma returns distances (smaller = closer): map to a similarity score."""
+def _distance_to_score(distance: Any) -> float | None:
+    """Chroma returns distances (smaller = closer): map to a similarity score.
+
+    ``None`` means *unscoreable*. A distance the runtime cannot read is not a
+    distance of zero: scoring it 0.0 would rank a corrupt hit as maximally
+    irrelevant, which is a measurement nobody made rather than a bad score.
+    Callers must drop such rows (and say so) instead of ranking them last.
+    """
     try:
         value = float(distance)
     except (TypeError, ValueError):
-        return 0.0
+        return None
     if value != value:  # NaN
-        return 0.0
+        return None
     return 1.0 / (1.0 + max(0.0, value))
 
 
@@ -439,7 +445,13 @@ class AdvancedRAGEngine:
 
         hits: list[Any] = []
         for doc_id, distance in zip(ids[0], distances[0], strict=False):
-            hits.append(ScoredDoc(doc_id=str(doc_id), score=_distance_to_score(distance)))
+            score = _distance_to_score(distance)
+            if score is None:
+                # A hit we cannot score is dropped, not ranked last: "unknown"
+                # must never be silently rendered as "irrelevant".
+                logger.debug("rag_distance_unscoreable doc_id=%s", doc_id)
+                continue
+            hits.append(ScoredDoc(doc_id=str(doc_id), score=score))
         hits.sort(key=lambda item: -item.score)
         return hits
 

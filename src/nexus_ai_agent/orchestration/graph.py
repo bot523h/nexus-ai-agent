@@ -5,7 +5,7 @@ from typing import Any, Literal, cast
 from langgraph.graph import END, START, StateGraph
 
 from nexus_ai_agent.agents.gemma_agent import GemmaAgent
-from nexus_ai_agent.agents.phi_agent import PhiAgent
+from nexus_ai_agent.agents.phi_agent import PhiAgent, moderation_allows
 from nexus_ai_agent.agents.qwen_agent import QwenAgent
 from nexus_ai_agent.llm.provider import LLMProvider
 from nexus_ai_agent.memory.long_term import LongTermMemory
@@ -205,7 +205,8 @@ def compile_graph(
         if not resp:
             return {**state, "moderation_passed": True}
         result = await phi.moderate(resp)
-        if not result.get("safe", True):
+        # Fail closed: only a positive assertion of safety lets content through.
+        if not moderation_allows(result):
             return {**state, "response": "I cannot respond to that.", "moderation_passed": False}
         return {**state, "moderation_passed": True}
 

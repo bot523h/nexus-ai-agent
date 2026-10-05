@@ -1,0 +1,491 @@
+{
+  "approval": "FAILSAFE_APPROVED",
+  "baseline_version": 1,
+  "scan_scope": "src/nexus_ai_agent/**/*.py — exception handlers that swallow the exception or return an invented default without recording it",
+  "established_by": "board task-234 (silent-failure audit); 74 handlers found, 61 silent, 8 fixed",
+  "note": "Frozen debt, not an endorsement. New silent handlers fail tests/architecture/test_no_silent_failure.py; fixing one of these requires deleting its entry, so the list can only shrink.",
+  "counts": {
+    "swallows": 31,
+    "absence": 16
+  },
+  "categories": {
+    "cleanup-best-effort": 5,
+    "best-effort-degradation": 25,
+    "parse-skip-one-item": 6,
+    "security-fail-closed": 5,
+    "optional-dependency": 3,
+    "logging-must-not-raise": 3
+  },
+  "entries": [
+    {
+      "file": "src/nexus_ai_agent/adapters/langgraph/lifecycle_recording.py",
+      "symbol": "_close_quietly",
+      "action": "pass",
+      "caught": "Exception",
+      "ordinal": 0,
+      "category": "cleanup-best-effort",
+      "severity": "swallows",
+      "reason": "closing a broken resource must not mask the error that caused it"
+    },
+    {
+      "file": "src/nexus_ai_agent/bot/app.py",
+      "symbol": "_post_shutdown",
+      "action": "pass",
+      "caught": "Exception",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "swallows",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/bot/handlers.py",
+      "symbol": "analytics_active_cmd",
+      "action": "pass",
+      "caught": "ValueError",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "swallows",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/bot/handlers.py",
+      "symbol": "analytics_retention_cmd",
+      "action": "pass",
+      "caught": "ValueError",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "swallows",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/bot/handlers.py",
+      "symbol": "engagement_on_cmd",
+      "action": "pass",
+      "caught": "ValueError",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "swallows",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/bot/memory_handlers.py",
+      "symbol": "consent_callback",
+      "action": "pass",
+      "caught": "Exception",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "swallows",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/bot/slideshow_notify.py",
+      "symbol": "_contained_workspace",
+      "action": "return None",
+      "caught": "OSError",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "absence",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/bot/surface/_ptb.py",
+      "symbol": "chat_id",
+      "action": "return None",
+      "caught": "(TypeError, ValueError)",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "absence",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/bot/surface/_ptb.py",
+      "symbol": "reply_to_message_id",
+      "action": "return None",
+      "caught": "(TypeError, ValueError)",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "absence",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/bot/surface/_ptb.py",
+      "symbol": "reply_to_user_id",
+      "action": "return None",
+      "caught": "(TypeError, ValueError)",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "absence",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/bot/surface/_ptb.py",
+      "symbol": "user_id",
+      "action": "return None",
+      "caught": "(TypeError, ValueError)",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "absence",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/bot/surface/channel_management.py",
+      "symbol": "parse_schedule_args",
+      "action": "continue",
+      "caught": "ValueError",
+      "ordinal": 0,
+      "category": "parse-skip-one-item",
+      "severity": "swallows",
+      "reason": "skips one unusable record while the surrounding loop continues"
+    },
+    {
+      "file": "src/nexus_ai_agent/core/ssrf_guard.py",
+      "symbol": "is_public_ip",
+      "action": "return False",
+      "caught": "ValueError",
+      "ordinal": 0,
+      "category": "security-fail-closed",
+      "severity": "absence",
+      "reason": "denies by default: the invented value is the safe direction (refuse, not allow)"
+    },
+    {
+      "file": "src/nexus_ai_agent/creative/image_gen/resilience.py",
+      "symbol": "_send",
+      "action": "pass",
+      "caught": "ValueError",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "swallows",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/creative/image_gen/resilience.py",
+      "symbol": "_send",
+      "action": "pass",
+      "caught": "httpx.TransportError",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "swallows",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/creative/packs/runtime.py",
+      "symbol": "installed_version",
+      "action": "return None",
+      "caught": "PackageNotFoundError",
+      "ordinal": 0,
+      "category": "optional-dependency",
+      "severity": "absence",
+      "reason": "an absent optional dependency degrades one capability instead of breaking the import"
+    },
+    {
+      "file": "src/nexus_ai_agent/creative/packs/trust.py",
+      "symbol": "_verifies",
+      "action": "return False",
+      "caught": "Ed25519Error",
+      "ordinal": 0,
+      "category": "security-fail-closed",
+      "severity": "absence",
+      "reason": "denies by default: the invented value is the safe direction (refuse, not allow)"
+    },
+    {
+      "file": "src/nexus_ai_agent/creative/packs/trust.py",
+      "symbol": "decode_signature",
+      "action": "return None",
+      "caught": "(binascii.Error, ValueError)",
+      "ordinal": 0,
+      "category": "security-fail-closed",
+      "severity": "absence",
+      "reason": "denies by default: the invented value is the safe direction (refuse, not allow)"
+    },
+    {
+      "file": "src/nexus_ai_agent/creative/render_jobs.py",
+      "symbol": "_default_caption_engine",
+      "action": "pass",
+      "caught": "Exception",
+      "ordinal": 0,
+      "category": "optional-dependency",
+      "severity": "swallows",
+      "reason": "an absent optional dependency degrades one capability instead of breaking the import"
+    },
+    {
+      "file": "src/nexus_ai_agent/creative/render_jobs.py",
+      "symbol": "cleanup_workspace",
+      "action": "pass",
+      "caught": "OSError",
+      "ordinal": 0,
+      "category": "optional-dependency",
+      "severity": "swallows",
+      "reason": "an absent optional dependency degrades one capability instead of breaking the import"
+    },
+    {
+      "file": "src/nexus_ai_agent/creative/slideshow/analysis.py",
+      "symbol": "_inline_image",
+      "action": "return None",
+      "caught": "OSError",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "absence",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/creative/slideshow/worker_adapter.py",
+      "symbol": "_prune_stale_workspaces",
+      "action": "continue",
+      "caught": "OSError",
+      "ordinal": 0,
+      "category": "parse-skip-one-item",
+      "severity": "swallows",
+      "reason": "skips one unusable record while the surrounding loop continues"
+    },
+    {
+      "file": "src/nexus_ai_agent/features/conversation_store.py",
+      "symbol": "_ensure_table",
+      "action": "pass",
+      "caught": "Exception",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "swallows",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/features/rag.py",
+      "symbol": "_distance_to_score",
+      "action": "return None",
+      "caught": "(TypeError, ValueError)",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "absence",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/features/request_queue.py",
+      "symbol": "_remove_queued_locked",
+      "action": "pass",
+      "caught": "ValueError",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "swallows",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/infrastructure/observability/redaction.py",
+      "symbol": "replace",
+      "action": "pass",
+      "caught": "ValueError",
+      "ordinal": 0,
+      "category": "logging-must-not-raise",
+      "severity": "swallows",
+      "reason": "telemetry must never take the runtime down with it"
+    },
+    {
+      "file": "src/nexus_ai_agent/infrastructure/observability/structured.py",
+      "symbol": "log_lifecycle_event",
+      "action": "pass",
+      "caught": "Exception",
+      "ordinal": 0,
+      "category": "logging-must-not-raise",
+      "severity": "swallows",
+      "reason": "telemetry must never take the runtime down with it"
+    },
+    {
+      "file": "src/nexus_ai_agent/integrations/external.py",
+      "symbol": "_select_parser",
+      "action": "continue",
+      "caught": "(FeatureNotFound, Exception)",
+      "ordinal": 0,
+      "category": "parse-skip-one-item",
+      "severity": "swallows",
+      "reason": "skips one unusable record while the surrounding loop continues"
+    },
+    {
+      "file": "src/nexus_ai_agent/llm/litellm_provider.py",
+      "symbol": "_record",
+      "action": "pass",
+      "caught": "Exception",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "swallows",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/llm/local_server_provider.py",
+      "symbol": "health",
+      "action": "return False",
+      "caught": "httpx.HTTPError",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "absence",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/maintenance/housekeeping.py",
+      "symbol": "_clean_temp_dir",
+      "action": "continue",
+      "caught": "OSError",
+      "ordinal": 0,
+      "category": "parse-skip-one-item",
+      "severity": "swallows",
+      "reason": "skips one unusable record while the surrounding loop continues"
+    },
+    {
+      "file": "src/nexus_ai_agent/maintenance/housekeeping.py",
+      "symbol": "_clean_temp_dir",
+      "action": "continue",
+      "caught": "(OSError, ValueError)",
+      "ordinal": 0,
+      "category": "parse-skip-one-item",
+      "severity": "swallows",
+      "reason": "skips one unusable record while the surrounding loop continues"
+    },
+    {
+      "file": "src/nexus_ai_agent/maintenance/housekeeping.py",
+      "symbol": "_parse_backup_stamp",
+      "action": "return None",
+      "caught": "ValueError",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "absence",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/observability/logging.py",
+      "symbol": "replace",
+      "action": "pass",
+      "caught": "ValueError",
+      "ordinal": 0,
+      "category": "logging-must-not-raise",
+      "severity": "swallows",
+      "reason": "telemetry must never take the runtime down with it"
+    },
+    {
+      "file": "src/nexus_ai_agent/orchestration/graph.py",
+      "symbol": "_memory_writer",
+      "action": "pass",
+      "caught": "Exception",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "swallows",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/personality/engine.py",
+      "symbol": "_load",
+      "action": "pass",
+      "caught": "Exception",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "swallows",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/provenance/backfill.py",
+      "symbol": "_recorded_kinds",
+      "action": "continue",
+      "caught": "ValueError",
+      "ordinal": 0,
+      "category": "parse-skip-one-item",
+      "severity": "swallows",
+      "reason": "skips one unusable record while the surrounding loop continues"
+    },
+    {
+      "file": "src/nexus_ai_agent/storage/checkpoint_fingerprint.py",
+      "symbol": "core_manifest_head",
+      "action": "return None",
+      "caught": "Exception",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "absence",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/storage/checkpoint_fingerprint.py",
+      "symbol": "core_schema_fingerprint",
+      "action": "return None",
+      "caught": "sqlite3.Error",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "absence",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/storage/checkpoint_lifecycle_pg_store.py",
+      "symbol": "close",
+      "action": "pass",
+      "caught": "psycopg.Error",
+      "ordinal": 0,
+      "category": "cleanup-best-effort",
+      "severity": "swallows",
+      "reason": "closing a broken resource must not mask the error that caused it"
+    },
+    {
+      "file": "src/nexus_ai_agent/storage/checkpoint_pg_adapter.py",
+      "symbol": "close",
+      "action": "pass",
+      "caught": "psycopg.Error",
+      "ordinal": 0,
+      "category": "cleanup-best-effort",
+      "severity": "swallows",
+      "reason": "closing a broken resource must not mask the error that caused it"
+    },
+    {
+      "file": "src/nexus_ai_agent/storage/checkpoint_pg_adapter.py",
+      "symbol": "core_head",
+      "action": "return None",
+      "caught": "psycopg.Error",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "absence",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/storage/db.py",
+      "symbol": "_dispose_replaced_engines",
+      "action": "pass",
+      "caught": "Exception",
+      "ordinal": 0,
+      "category": "cleanup-best-effort",
+      "severity": "swallows",
+      "reason": "closing a broken resource must not mask the error that caused it"
+    },
+    {
+      "file": "src/nexus_ai_agent/storage/langgraph_checkpoint.py",
+      "symbol": "_close_quietly",
+      "action": "pass",
+      "caught": "Exception",
+      "ordinal": 0,
+      "category": "cleanup-best-effort",
+      "severity": "swallows",
+      "reason": "closing a broken resource must not mask the error that caused it"
+    },
+    {
+      "file": "src/nexus_ai_agent/storage/langgraph_checkpoint.py",
+      "symbol": "get_checkpointer",
+      "action": "pass",
+      "caught": "sqlite3.OperationalError",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "swallows",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/tools/filesystem_policy.py",
+      "symbol": "iter_files",
+      "action": "continue",
+      "caught": "OSError",
+      "ordinal": 0,
+      "category": "security-fail-closed",
+      "severity": "swallows",
+      "reason": "denies by default: the invented value is the safe direction (refuse, not allow)"
+    },
+    {
+      "file": "src/nexus_ai_agent/tools/filesystem_policy.py",
+      "symbol": "iter_files",
+      "action": "continue",
+      "caught": "OSError",
+      "ordinal": 1,
+      "category": "security-fail-closed",
+      "severity": "swallows",
+      "reason": "denies by default: the invented value is the safe direction (refuse, not allow)"
+    }
+  ]
+}

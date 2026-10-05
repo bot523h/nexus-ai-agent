@@ -239,11 +239,34 @@ class AIStorageManager:
         raise StorageError(f"Download failed for key '{remote_key}': {last_err}") from last_err
 
     async def list_files(self, *, prefix: str = "") -> list[str]:
+        """List stored keys across every candidate.
+
+        A provider that cannot answer is **recorded**, not skipped in silence.
+        If every candidate failed, this raises ``StorageError`` instead of
+        returning ``[]``: "no provider could answer" and "nothing is stored"
+        are different facts, and a caller that cannot tell them apart will
+        quietly treat an outage as an empty bucket.
+        """
+        providers = [self.cache, *self._download_candidates()]
+        if not providers:
+            raise StorageError("no storage providers configured")
         keys: set[str] = set()
-        for provider in [self.cache] + self._download_candidates():
+        failures: list[str] = []
+        for provider in providers:
+            name = str(getattr(provider, "name", type(provider).__name__))
             try:
                 for k in await provider.list_files(prefix=prefix):
                     keys.add(k)
-            except Exception:
-                continue
+            except Exception as exc:  # noqa: BLE001 - one broken provider must not hide the others
+                failures.append(f"{name}: {type(exc).__name__}: {exc}")
+                log.warning("storage_list_provider_failed", provider=name, error=str(exc))
+        if len(failures) == len(providers):
+            raise StorageError("every storage provider failed to list: " + "; ".join(failures))
+        if failures:
+            log.warning(
+                "storage_list_partial",
+                failed=len(failures),
+                succeeded=len(providers) - len(failures),
+                keys=len(keys),
+            )
         return sorted(keys)

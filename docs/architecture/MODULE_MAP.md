@@ -73,7 +73,11 @@ Dependencies point **downward**. A lower layer may never import a higher one, an
 
 | R14 | The agent contract is a boundary, not prose: `NAGAR_AGENT_CONSTITUTION.md` sits at the repository root, is versioned, and carries the bootstrap law (L0) plus laws L1–L10, the closed five-word completion vocabulary, and the sixteen-dimension completion gate; `AGENTS.md` carries the mandatory bootstrap block **above** its first section, names the constitution, and does not restate it; every entry point (`README.md`, `CONTRIBUTING.md`, `docs/architecture.md`, `docs/MULTI_AGENT_PROTOCOL.md`, this file, the docs index) names the constitution; the constitution names its own enforcer, and neither side of that mutual pin may be removed alone | `test_agent_constitution.py` (all tests, incl. two positive controls) |
 
+| R15 | An exception handler either records the failure — a logging call or a re-raise — or it is frozen in `tests/architecture/silent_failure_baseline.json` with a written reason. Swallowing an exception (`pass`/`continue`) or returning an invented default (`[]`, `0`, `""`, a fabricated quota) without a trace is rejected; existing debt may only shrink, so a baselined handler that is fixed or made observable forces its entry out | `test_no_silent_failure.py` (`test_no_new_silent_handlers`, the per-entry ratchet `test_baseline_entry_is_still_justified`) |
+
 **Legacy baseline.** `tests/architecture/legacy_baseline.json` freezes the pre-existing `langgraph`/`sqlmodel`/`telegram` import set with an explicit `approval: ARCH_BASELINE_APPROVED`. New violations fail; removing a baseline entry is allowed (and should be celebrated, not blocked).
+
+**Silent-failure baseline.** `tests/architecture/silent_failure_baseline.json` carries the same contract for R15 with `approval: FAILSAFE_APPROVED`: 47 handlers that degrade without a trace, each with a category and a reason. A sweep for this class (board task-234) closed the two defects it was hiding — a moderation gate that approved unreadable verdicts, and a storage layer that reported an outage as an empty bucket and an unmeasurable quota as `0 / 2 GiB`.
 
 ## 4. Fitness-function catalogue (why these are tests, not prose)
 

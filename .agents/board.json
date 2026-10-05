@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-05T12:57:52Z",
+  "updated_at": "2026-10-05T00:00:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -683,6 +683,18 @@
         "docs/architecture/adr/0008-agent-constitution-layer.md"
       ],
       "note": "Declared by arena/01a10ba1-nexus-ai-agent with the task that introduces the layer (additive zone; no other zone claims these paths). AGENTS.md/README.md/CONTRIBUTING.md/docs/README.md/docs/architecture/MODULE_MAP.md/.github/workflows/ci.yml receive additive pointer or configuration edits only and stay owned by their existing zones."
+    },
+    {
+      "id": "silent-failure-ratchet",
+      "description": "Ratchet against handlers that swallow an exception or fabricate a default: src/nexus_ai_agent/agents/phi_agent.py, storage listing/quota paths, tests/architecture/test_no_silent_failure.py",
+      "paths": [
+        "src/nexus_ai_agent/agents/phi_agent.py",
+        "src/nexus_ai_agent/storage/ai_storage_manager.py",
+        "src/nexus_ai_agent/storage/unified_cloud.py",
+        "tests/architecture/test_no_silent_failure.py",
+        "tests/architecture/silent_failure_baseline.json",
+        "tests/unit/test_failure_honesty.py"
+      ]
     }
   ],
   "claims": [
@@ -2846,6 +2858,45 @@
       ],
       "exclusive_paths": [],
       "owner_hint": null
+    },
+    {
+      "task": "task-234",
+      "title": "Close fail-open moderation and fabricated storage defaults found by the silent-failure audit",
+      "title_fa": "بستن دروازهٔ ایمنیِ fail-open و مقادیر جعلیِ storage کشف‌شده در ممیزیِ شکستِ خاموش",
+      "zone": "silent-failure-ratchet",
+      "priority": "P1",
+      "status": "active",
+      "scope": "AST audit of all 74 exception handlers that swallow or fabricate a default in src/; fail-closed moderation; honest storage listing/quota; ratchet test with frozen baseline.",
+      "scope_fa": "ممیزی AST همهٔ ۷۴ هندلر خطا در src/ که استثنا را می‌بلعند یا مقدار جعلی برمی‌گردانند؛ ایمنیِ fail-closed؛ لیست/سهمیهٔ صادقِ storage؛ تستِ چرخ‌دنده با baseline منجمد.",
+      "prerequisites": [
+        "task-232-agent-constitution"
+      ],
+      "acceptance_criteria": [
+        "ممیزی AST به‌صورت تست معماریِ چرخ‌دنده‌ای با baseline منجمد کامیت شود",
+        "PhiAgent.moderate در صورت خروجیِ ناخوانا یا بدشکل هرگز safe=True ندهد",
+        "هیچ مسیر storage‌ای به‌جای شکستِ صادق، لیست خالی یا سهمیهٔ جعلی برنگرداند",
+        "هر اصلاح تستی داشته باشد که پیش از آن قرمز و پس از آن سبز باشد"
+      ],
+      "evidence_required": [
+        "pytest tests/architecture/test_no_silent_failure.py tests/unit/test_failure_honesty.py",
+        "pytest -m 'not slow' سبز",
+        "CI سبز روی PR"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/agents/phi_agent.py",
+        "src/nexus_ai_agent/storage/ai_storage_manager.py",
+        "src/nexus_ai_agent/storage/unified_cloud.py",
+        "tests/architecture/test_no_silent_failure.py",
+        "tests/architecture/silent_failure_baseline.json",
+        "tests/unit/test_failure_honesty.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a10ba1-nexus-ai-agent",
+      "claimed_at": "2026-10-05T00:00:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": [],
+      "note": "Audit found 74 handlers that swallow/fabricate; 61 are silent (no log, no re-raise). Highest severity: moderation fail-open."
     }
   ],
   "deferred_log": [
