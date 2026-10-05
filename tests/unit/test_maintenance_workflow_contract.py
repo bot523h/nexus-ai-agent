@@ -64,6 +64,73 @@ def _commands(job: str) -> str:
     return "\n".join(line for line in _job_lines(job) if not line.strip().startswith("#"))
 
 
+def _top_block(key: str) -> list[str]:
+    """Raw lines of a top-level YAML mapping (``on:``, ``permissions:``)."""
+    lines = WORKFLOW.splitlines()
+    start = lines.index(f"{key}:")
+    body: list[str] = []
+    for line in lines[start + 1 :]:
+        if line and not line.startswith((" ", "#")):
+            break
+        body.append(line)
+    return body
+
+
+def _mapping(block: list[str], indent: int) -> dict[str, str]:
+    """``key: value`` pairs at exactly ``indent`` spaces; comments/blank dropped."""
+    prefix = " " * indent
+    deeper = " " * (indent + 1)
+    pairs: dict[str, str] = {}
+    for line in block:
+        if not line.startswith(prefix) or line.startswith(deeper):
+            continue
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        key, _, value = stripped.partition(":")
+        pairs[key.strip()] = value.strip()
+    return pairs
+
+
+def _steps(job: str) -> list[list[str]]:
+    """Each step's raw lines (a step starts with ``      - `` in this workflow)."""
+    steps: list[list[str]] = []
+    current: list[str] | None = None
+    for line in _job_lines(job):
+        if line.startswith("      - "):
+            current = [line]
+            steps.append(current)
+        elif current is not None:
+            current.append(line)
+    return steps
+
+
+def _workflow_permissions() -> dict[str, str]:
+    return _mapping(_top_block("permissions"), 2)
+
+
+def _job_permissions(job: str) -> dict[str, str]:
+    lines = _job_lines(job)
+    for index, line in enumerate(lines):
+        if line == "    permissions:":
+            block: list[str] = []
+            for follow in lines[index + 1 :]:
+                if follow.strip() and not follow.startswith(" " * 6):
+                    break
+                block.append(follow)
+            return _mapping(block, 6)
+    return {}
+
+
+def _effective_permissions(job: str) -> dict[str, str]:
+    """GitHub applies job-level permissions *after* workflow-level ones."""
+    return _job_permissions(job) or _workflow_permissions()
+
+
+def _triggers() -> dict[str, str]:
+    return _mapping(_top_block("on"), 2)
+
+
 def _preflight_script() -> str:
     """Extract the preflight ``run:`` block from the workflow verbatim."""
     lines = _job_lines("backup-db")
@@ -160,10 +227,21 @@ def test_a_fully_configured_preflight_passes() -> None:
 # ── invariants that cannot be executed here ─────────────────────────────
 
 
+def _step_index(job: str, needle: str) -> int:
+    steps = _steps(job)
+    for index, step in enumerate(steps):
+        if any(needle in line for line in step):
+            return index
+    raise AssertionError(f"no step of {job} contains {needle!r}")
+
+
 def test_the_preflight_runs_before_the_install_and_the_backup() -> None:
-    body = "\n".join(_job_lines("backup-db"))
-    assert body.index(PREFLIGHT_STEP_NAME) < body.index("pip install -e .")
-    assert body.index(PREFLIGHT_STEP_NAME) < body.index("nexus maintenance backup")
+    preflight = _step_index("backup-db", PREFLIGHT_STEP_NAME)
+    install = _step_index("backup-db", "pip install -e .")
+    backup = _step_index("backup-db", "nexus maintenance backup")
+    assert preflight < install < backup, (
+        "the preflight must run before the dependency install and the backup itself"
+    )
 
 
 def test_the_backup_job_cannot_mask_a_failure() -> None:
@@ -173,7 +251,33 @@ def test_the_backup_job_cannot_mask_a_failure() -> None:
     assert "nexus maintenance backup" in body
 
 
-def test_the_workflow_stays_scheduled_only_and_least_privilege() -> None:
-    assert "push:" not in WORKFLOW, "the maintenance workflow must not run on push"
-    assert "pull_request:" not in WORKFLOW, "secrets must not be reachable from PR runs"
-    assert "permissions:\n  contents: read" in WORKFLOW
+def test_the_workflow_exposes_only_the_scheduled_and_manual_triggers() -> None:
+    triggers = _triggers()
+    assert set(triggers) == {"schedule", "workflow_dispatch"}, (
+        "the maintenance workflow must be scheduled + manual only: secrets must never be "
+        f"reachable from push/pull_request runs (found triggers: {sorted(triggers)})"
+    )
+    crons = [line.strip() for line in _top_block("on") if line.strip().startswith("- cron:")]
+    assert crons == ['- cron: "17 3 * * *"', '- cron: "23 4 * * 1"'], (
+        "the nightly backup and weekly housekeeping schedules must stay unchanged"
+    )
+
+
+@pytest.mark.parametrize("job", ["backup-db", "housekeeping"])
+def test_every_job_effectively_grants_only_contents_read(job: str) -> None:
+    assert _workflow_permissions() == {"contents": "read"}
+    # A job-level block replaces the workflow-level one, so it is checked too.
+    assert _effective_permissions(job) == {"contents": "read"}, (
+        f"{job} must not be able to escalate its token beyond contents: read"
+    )
+
+
+@pytest.mark.parametrize("job", ["backup-db", "housekeeping"])
+def test_checkout_credentials_are_never_persisted(job: str) -> None:
+    checkouts = [step for step in _steps(job) if "uses: actions/checkout@" in step[0]]
+    assert checkouts, f"{job} must check the repository out"
+    for step in checkouts:
+        assert any(line.strip() == "persist-credentials: false" for line in step), (
+            f"{job} persists the checkout token in .git/config while "
+            "`pip install -e .` executes dependency build code"
+        )

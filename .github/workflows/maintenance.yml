@@ -38,7 +38,11 @@ jobs:
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
     steps:
+      # No step pushes: never leave the checkout token in .git/config while
+      # `pip install -e .` executes dependency build code (artipacked).
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       # Deterministic preflight (task-164): fail in seconds naming the EXACT
       # missing secret(s) instead of a late generic failure after the install
       # of the whole dependency tree. Names are printed; values never are —
@@ -90,6 +94,8 @@ jobs:
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
