@@ -41,6 +41,7 @@ placeholder text.
 | [architecture/adr/0004-board-schema-2.md](architecture/adr/0004-board-schema-2.md) | Coordination board schema 2: prerequisites, acceptance criteria, history split. |
 | [architecture/adr/0005-canonical-command-capability-contract.md](architecture/adr/0005-canonical-command-capability-contract.md) | Canonical command and capability contract: versioning, location, and reconciliation. |
 | [architecture/adr/0006-capability-pack-trust-root.md](architecture/adr/0006-capability-pack-trust-root.md) | Capability packs get an explicit trust root (Ed25519, offline, fail-closed). |
+| [architecture/adr/0008-canonical-identity-arbitration.md](architecture/adr/0008-canonical-identity-arbitration.md) | One authority per identity (project, creative work, intent, revision, bus/queue transaction, artifact, lineage); dispositions for the competing open PRs. |
 | [architecture/TRUST_CONTROL_PLANE.md](architecture/TRUST_CONTROL_PLANE.md) | Trust/truth domains A–E: interfaces, authorities, non-bypass guards, honest status. |
 
 ## Authoritative records
