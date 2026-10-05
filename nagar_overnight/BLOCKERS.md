@@ -90,3 +90,22 @@ hypothesis, attempts, why unresolved, effect on scope.
   the *configured remote URL's* embedded credential is read-only, but a scoped
   PAT secret is present; prefer the PAT secret for writes.
 
+
+## B-4 — CI flake: `python-parity (3.12)` migration race (NOT a code defect)
+
+- **Symptom:** on the docs-only commit `4a8e902`, `python-parity (3.12)` failed
+  with `sqlite3.OperationalError: database schema has changed` in
+  `tests/unit/test_knowledge_hardening.py::test_r_f28_concurrent_identical_learns_collapse_into_one`
+  (`1 failed, 3175 passed, 30 skipped`).
+- **Evidence it is a flake, not a defect:**
+  - The exact same check **passed** on `8c9b66e`, whose code is identical
+    (`4a8e902` changes only `nagar_overnight/*.md` and `docs/overnight/*.md`).
+  - Local reproduction 3/3: `pytest -q ...::test_r_f28_concurrent_identical_learns_collapse_into_one`
+    -> `1 passed` each run.
+  - Failure mode is the SQLite concurrent-DDL race (`database schema has changed`),
+    i.e. the migration-race class already documented in
+    `docs/architecture/TESTING.md` §5.
+- **Action taken:** re-ran the failed job on the same SHA (`gh run rerun --failed`);
+  no test was weakened, skipped, xfailed or edited.
+- **Effect on scope:** none. `python-parity (3.10)` and `(3.11)` pass; the slice's
+  own tests pass; 32/33 checks were SUCCESS at first completion.
