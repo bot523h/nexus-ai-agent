@@ -37,7 +37,7 @@ from nexus_ai_agent.storage.db import (
 
 def _conflict(message: str) -> OperationalError:
     """Build a SQLAlchemy OperationalError wrapping a DBAPI 'already exists'."""
-    return OperationalError("CREATE TABLE x", None, Exception(message))  # type: ignore[arg-type]
+    return OperationalError("CREATE TABLE x", None, Exception(message))
 
 
 class _ScriptedConnection:
@@ -90,10 +90,13 @@ class TestConflictMatcher:
 
     @pytest.mark.parametrize(
         "message",
-        ["database is locked", "no such table: chat", "syntax error at or near"],
+        ["no such table: chat", "syntax error at or near"],
     )
     def test_ignores_unrelated_errors(self, message: str) -> None:
         assert _is_concurrent_create_conflict(_conflict(message)) is False
+
+    def test_recognises_database_locked_conflicts(self) -> None:
+        assert _is_concurrent_create_conflict(_conflict("database is locked")) is True
 
     def test_loose_matching_is_a_deliberate_trade_off(self) -> None:
         """The matcher over-matches on purpose.
@@ -132,8 +135,8 @@ class TestRetryBehaviour:
         assert engine.connection.calls == _CREATE_ALL_ATTEMPTS
 
     async def test_unrelated_error_propagates_immediately(self) -> None:
-        engine = _ScriptedEngine([_conflict("database is locked")])
-        with pytest.raises(OperationalError, match="database is locked"):
+        engine = _ScriptedEngine([_conflict("syntax error at or near")])
+        with pytest.raises(OperationalError, match="syntax error at or near"):
             await create_all_metadata(engine, MetaData())
         assert engine.connection.calls == 1
 
