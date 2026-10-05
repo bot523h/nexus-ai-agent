@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-05T14:50:00Z",
+  "updated_at": "2026-10-05T18:00:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2974,7 +2974,7 @@
         "tests/unit/test_failure_honesty.py (26 behavioural tests)",
         "docs/architecture/MODULE_MAP.md (R15)"
       ],
-      "note": "Measured before -> after (reproducible): moderation on an unparseable verdict {'safe': True, 'reason': 'parse_error'} -> {'safe': False, 'reason': 'verdict_unparseable'} + warning; AIStorageManager.list_files with every provider down: [] -> raises StorageError; UnifiedCloudStorage.list_all_files with every provider down: [] -> raises StorageError; _DropboxProvider(no token).list_files: [] -> raises ProviderUnavailable; _DropboxProvider(no token).get_usage: {'used_bytes': 0, 'allocated_bytes': 2147483648} -> None; _PcloudProvider.get_usage: {'used_bytes': 0, 'allocated_bytes': 10737418240} -> None; _InternxtProvider.list_files: [] -> raises ProviderUnavailable. Ratchet verified red in both directions: injecting a silent handler fails test_no_new_silent_handlers; making a frozen handler log fails that entry's test_baseline_entry_is_still_justified. Evidence: 3103 passed / 30 skipped (-m 'not slow'), 348 guard tests green, mutation campaign 26/26 killed, mypy src clean, ruff check + format clean. Not merged into main, no human review yet."
+      "note": "Measured before -> after (reproducible): moderation on an unparseable verdict {'safe': True, 'reason': 'parse_error'} -> {'safe': False, 'reason': 'verdict_unparseable'} + warning; AIStorageManager.list_files with every provider down: [] -> raises StorageError; UnifiedCloudStorage.list_all_files with every provider down: [] -> raises StorageError; _DropboxProvider(no token).list_files: [] -> raises ProviderUnavailable; _DropboxProvider(no token).get_usage: {'used_bytes': 0, 'allocated_bytes': 2147483648} -> None; _PcloudProvider.get_usage: {'used_bytes': 0, 'allocated_bytes': 10737418240} -> None; _InternxtProvider.list_files: [] -> raises ProviderUnavailable. Ratchet verified red in both directions: injecting a silent handler fails test_no_new_silent_handlers; making a frozen handler log fails that entry's test_baseline_entry_is_still_justified. Evidence: 3103 passed / 30 skipped (-m 'not slow'), 348 guard tests green, mutation campaign 26/26 killed, mypy src clean, ruff check + format clean. Exact-head CI on PR #157 at b5ddb56: both runs completed/success with 18/18 checks (37346481474 + 37346472262, headSha b5ddb56138d1 == PR headRefOid). Not merged into main; no human review yet."
     }
   ],
   "deferred_log": [
