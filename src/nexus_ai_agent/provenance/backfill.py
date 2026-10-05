@@ -14,6 +14,11 @@ evidence about the fact — never a claim about having been written at event
 time — and the passport downgrades any history containing one to
 ``VERIFIED_WITH_LIMITATIONS``.
 
+Critical honesty rule (task-231 closure): if the journal already carries a
+terminal transition for an attempt (``JOB_COMPLETED`` / ``JOB_FAILED``) but
+lacks the matching ``JOB_RESERVED``, backfill MUST NOT invent that reservation.
+Incomplete history stays incomplete; false continuity is forbidden.
+
 Dedupe makes this idempotent: re-running backfill after another crash appends
 nothing that already exists.
 """
@@ -29,6 +34,7 @@ from nexus_ai_agent.provenance.observer import utc_now_iso
 from nexus_ai_agent.provenance.passport import JobFactsProvider
 
 _IN_FLIGHT = frozenset({"pending", "processing", "verifying"})
+_TERMINAL_KINDS = frozenset({EventKind.JOB_COMPLETED, EventKind.JOB_FAILED})
 
 
 @dataclass(frozen=True)
@@ -40,32 +46,55 @@ class BackfillReport:
     already_present: int
 
 
-def _events_for(facts: JobFacts) -> list[tuple[EventKind, int | None]]:
+def _recorded_kinds(journal: CausalJournal, job_id: str) -> set[tuple[EventKind, int | None]]:
+    """Kinds already durable for *job_id* (attempt-aware)."""
+    found: set[tuple[EventKind, int | None]] = set()
+    for record in journal.records_for_job(job_id):
+        payload = record.payload
+        kind_raw = payload.get("kind")
+        if not kind_raw:
+            continue
+        try:
+            kind = EventKind(kind_raw)
+        except ValueError:
+            continue
+        attempt = payload.get("attempt")
+        found.add((kind, int(attempt) if attempt is not None else None))
+    return found
+
+
+def _events_for(
+    facts: JobFacts,
+    *,
+    existing: set[tuple[EventKind, int | None]],
+) -> list[tuple[EventKind, int | None]]:
     """Transitions the durable row state *proves* (never assumed history).
 
-    An unparseable row status corrupts the authority itself: nothing beyond
-    the row's existence (the enqueue) can be proven, so nothing else is
-    reconstructed — the gap stays visible instead of being guessed.
+    When a terminal record already exists for an attempt without a matching
+    reservation, the reservation is **not** synthesized: inventing continuity
+    after the fact is the false-coherence path this function forbids.
     """
     events: list[tuple[EventKind, int | None]] = [(EventKind.JOB_ENQUEUED, None)]
     if not facts.status_known:
         return events
     if facts.status in _IN_FLIGHT:
-        # Mid-flight history is NOT reconstructable from one row — only the
-        # creation is provable. The remaining gap stays visible (the passport
-        # reports it) instead of being invented away.
         return events
+
+    attempt = facts.attempt if facts.attempt >= 1 else None
+    terminal_present = any((kind, attempt) in existing for kind in _TERMINAL_KINDS)
+    reserved_present = (EventKind.JOB_RESERVED, attempt) in existing
+
     if facts.status == "completed":
-        events.append((EventKind.JOB_RESERVED, facts.attempt))
+        if attempt is not None and not (terminal_present and not reserved_present):
+            events.append((EventKind.JOB_RESERVED, attempt))
         if facts.verification is not None:
-            # The durable verification block proves the verification phase
-            # ran; its labeled reconstruction belongs to the account.
-            events.append((EventKind.JOB_VERIFICATION_STARTED, facts.attempt))
-        events.append((EventKind.JOB_COMPLETED, facts.attempt))
+            events.append((EventKind.JOB_VERIFICATION_STARTED, attempt))
+        events.append((EventKind.JOB_COMPLETED, attempt))
         return events
-    if facts.attempt >= 1:
-        events.append((EventKind.JOB_RESERVED, facts.attempt))
-    events.append((EventKind.JOB_FAILED, facts.attempt if facts.attempt >= 1 else None))
+
+    if attempt is not None and not (terminal_present and not reserved_present):
+        events.append((EventKind.JOB_RESERVED, attempt))
+    events.append((EventKind.JOB_FAILED, attempt if attempt is not None else None))
     return events
 
 
@@ -95,7 +124,8 @@ def backfill_journal(
     """Append the labeled reconstructions the authoritative rows prove.
 
     Idempotent: transition dedupe skips anything already recorded, so this is
-    safe to run on every startup.
+    safe to run on every startup. Never invents a reservation for an attempt
+    whose terminal transition is already on the ledger without one.
     """
     examined = 0
     appended = 0
@@ -106,7 +136,8 @@ def backfill_journal(
             continue
         examined += 1
         now = utc_now_iso()
-        for kind, attempt in _events_for(facts):
+        existing = _recorded_kinds(journal, job_id)
+        for kind, attempt in _events_for(facts, existing=existing):
             result = journal.append(
                 _reconstructed_event(kind, facts, attempt, now), backfilled=True
             )

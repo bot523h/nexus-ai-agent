@@ -1737,3 +1737,15 @@ review-driven corrections, each enforced by a named test:
    CLI drain/backfill degrade with echoed reasons, `nexus jobs passport`
    exits 3 on unreadable evidence. The execution plane never dies because
    evidence storage failed — and nothing pretends evidence exists.
+6. **No false continuity after a witnessed gap.** When the journal already
+   carries a terminal transition for an attempt but lacks the matching
+   `JOB_RESERVED`, the journal has *affirmatively witnessed later steps and
+   not that one* — the record was never written, not lost. Backfill must
+   therefore refuse to synthesize the reservation (incomplete history stays
+   incomplete; the passport keeps flagging the gap), while the ordinary
+   crash-window case (journal simply silent) is still reconstructed labeled.
+   A journal/row disagreement is evidence, never auto-healed. Also adopted
+   on the drain path: `nexus jobs resume` degrades on `CausalConflictError`
+   with an explicit warning — a refused reconstruction never vetoes
+   execution (regression: `tests/unit/test_backfill_no_false_reservation.py`,
+   `test_resume_survives_journal_evidence_conflict`).
