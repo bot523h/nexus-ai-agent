@@ -554,6 +554,24 @@ authorizer; only external model *text* is faked. A `timeline.trim` derived asset
 is produced with a content hash and parent lineage, and `verify_trim_artifact`
 re-reads committed state to confirm hash, lineage and duration.
 
+Independently reproduced at the end of the session (Gate C-final) against the
+runtime registry:
+
+```
+status: applied  op: timeline.trim
+result: {"asset_id":"src_trim","source_asset_id":"src","in_point_us":1000000,
+         "out_point_us":4000000,"duration_us":3000000,
+         "content_sha256":"sha256:bd993c3e8e23454f5ee4936667da82fa81dfe885194fd7e236b1fb31f3750828"}
+verify: {"verified":true,"checks":{"asset_present":true,"hash_matches":true,
+         "lineage_present":true,"duration_positive":true},
+         "parent_asset_ids":["src"]}
+history events: 1
+```
+
+A real derived asset (3 s = 4 s − 1 s), with a content hash and a parent lineage
+to `src`, checked independently of the handler's return value. So the free-text
+slice is **ARTIFACT-PROVEN** (test + manual reproduction), not production-proven.
+
 ## FAILURE / RECOVERY EVIDENCE
 
 - Provider raise and provider timeout → typed refusal, no dispatch, no mutation.
