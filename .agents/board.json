@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-05T03:49:39Z",
+  "updated_at": "2026-10-05T10:58:46Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -672,6 +672,17 @@
         "tests/architecture/test_provenance_boundary.py",
         "docs/architecture/PROVENANCE_LEDGER.md"
       ]
+    },
+    {
+      "id": "agent-constitution",
+      "description": "Persistent cross-session agent engineering contract: the root constitution, its enforcing architecture test, and its adversarial mutation campaign",
+      "paths": [
+        "NAGAR_AGENT_CONSTITUTION.md",
+        "tests/architecture/test_agent_constitution.py",
+        "scripts/agent_constitution_mutations.py",
+        "docs/architecture/adr/0008-agent-constitution-layer.md"
+      ],
+      "note": "Declared by arena/01a10ba1-nexus-ai-agent with the task that introduces the layer (additive zone; no other zone claims these paths). AGENTS.md/README.md/CONTRIBUTING.md/docs/README.md/docs/architecture/MODULE_MAP.md/.github/workflows/ci.yml receive additive pointer or configuration edits only and stay owned by their existing zones."
     }
   ],
   "claims": [
@@ -2770,6 +2781,44 @@
       "gates_owner": false,
       "delivered": false,
       "note": "Delivered as PR #153 (head fc20f654). CI: push run 37236986763 fully green (16/16 incl. continuum-evidence x3, python-parity x3, test); the parallel pull_request run was concurrency-cancelled mid-continuum (annotations prove gate passed=True/27 + coverage accepted=True before cancellation). Local gates: pytest -m 'not slow' 2953 passed x3, ruff clean, mypy clean, gate PASSED (27 attacks rejected), mutation campaign PASSED (all killed+restored), pack coverage ACCEPTED 97.37."
+    },
+    {
+      "task": "task-232-agent-constitution",
+      "title": "Persistent, version-controlled agent engineering contract (Nagar constitution layer)",
+      "title_fa": "قرارداد مهندسی دائمی و نسخه‌دار برای همهٔ عامل‌ها (لایهٔ قانون اساسی نگار)",
+      "zone": "agent-constitution",
+      "priority": "P1",
+      "status": "active",
+      "scope": "A future session inherits no memory of this one, and the engineering law (truth before code, no fake verification, authority discipline, exact-head proof, the closed completion vocabulary, the completion gate) lived only in mission prompts and dated audits. This task adds NAGAR_AGENT_CONSTITUTION.md at the repository root, a bootstrap pointer in AGENTS.md above its first section, an enforcing architecture test, an adversarial mutation campaign, and a CI job, so the contract is discoverable, versioned, and non-bypassable.",
+      "scope_fa": "سشن بعدی هیچ حافظه‌ای از این سشن ندارد و قانون مهندسی فقط در پرامپت مأموریت و گزارش‌های تاریخ‌دار بود. این تسک قانون اساسی را در ریشهٔ مخزن، اشاره‌گر bootstrap را در AGENTS.md، تست نگهبان، کمپین میوتیشن و یک job CI اضافه می‌کند تا قرارداد قابل کشف، نسخه‌دار و غیرقابل دور زدن باشد.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "NAGAR_AGENT_CONSTITUTION.md sits at the repository root with a version header, an amendment record, laws L0-L10, the closed five-word completion vocabulary, the sixteen-dimension gate, the mandatory report template, and the loophole register",
+        "AGENTS.md carries the MANDATORY SESSION BOOTSTRAP block above its first section, names the constitution, and does not restate the laws",
+        "tests/architecture/test_agent_constitution.py turns red for every bypass in the loophole register: 17/17 mutants killed by scripts/agent_constitution_mutations.py with the tree restored byte for byte",
+        "every entry point an agent can land on (README.md, CONTRIBUTING.md, docs/README.md, docs/architecture/MODULE_MAP.md) names the constitution, and the law/test pair is registered as R14",
+        "no existing governance rule is overridden: the single gates_owner rule, board leases, and DECISION_LOG precedence are preserved and stated explicitly in the constitution",
+        "pytest tests/architecture/test_agent_constitution.py, tests/unit/test_docs_integrity.py and tests/unit/test_agent_board.py are green; ruff check and ruff format --check are clean on the changed tree"
+      ],
+      "evidence_required": [
+        "pytest -q tests/architecture/test_agent_constitution.py (17 passed)",
+        "python scripts/agent_constitution_mutations.py (17/17 killed, tree restored byte for byte)",
+        "pytest -q tests/unit/test_docs_integrity.py tests/unit/test_agent_board.py",
+        "ruff check . && ruff format --check . on the changed tree (mypy src is not applicable: no file under src/ changes)",
+        "CI run on the exact head SHA, or an explicit 'deferred to gates owner' note"
+      ],
+      "exclusive_paths": [
+        "NAGAR_AGENT_CONSTITUTION.md",
+        "tests/architecture/test_agent_constitution.py",
+        "scripts/agent_constitution_mutations.py",
+        "docs/architecture/adr/0008-agent-constitution-layer.md"
+      ],
+      "owner_hint": null,
+      "agent_branch": "arena/01a10ba1-nexus-ai-agent",
+      "claimed_at": "2026-10-05T10:58:46Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": ""
     }
   ],
   "deferred_log": [
