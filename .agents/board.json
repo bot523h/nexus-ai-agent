@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-05T07:43:54Z",
+  "updated_at": "2026-10-05T19:40:11Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -687,6 +687,25 @@
         "src/nexus_ai_agent/provenance/passport.py",
         "tests/integration/test_provenance_queue_recording.py",
         "tests/integration/test_creative_chain_e2e.py"
+      ]
+    },
+    {
+      "id": "nagar-cognition-durable-handoff",
+      "description": "Cognition -> durable creative-queue handoff (task-233): free-text intent becomes a typed canonical creative_render queue row executed by the existing worker; no second bus/registry/queue/authority",
+      "paths": [
+        "src/nexus_ai_agent/nagar/creative/",
+        "src/nexus_ai_agent/nagar/cognition/",
+        "src/nexus_ai_agent/nagar/observation.py",
+        "src/nexus_ai_agent/nagar/composition.py",
+        "tests/unit/test_nagar_cognition_durable.py",
+        "tests/unit/test_nagar_cognition_queue_handoff.py",
+        "tests/integration/test_nagar_durable_handoff_e2e.py",
+        "tests/architecture/test_nagar_durable_handoff_boundary.py",
+        "docs/overnight/COGNITION_CONVERGENCE.md",
+        "nagar_overnight/ARENA_HANDOFF.md",
+        "nagar_overnight/REPORT.md",
+        "nagar_overnight/STATE.md",
+        "nagar_overnight/LOG.md"
       ]
     }
   ],
@@ -2830,6 +2849,56 @@
       "gates_owner": true,
       "delivered": false,
       "note": "Re-identified from PR #154 historical task-231-durable-creative-queue-evidence: #153 is merged and owns task-231-provenance-ledger. Identity correction only; the original seven PR #154 commits and valid queue implementation are preserved. Source head 47f7ba998787406fbbc0816f57275109ac582613; source merge-base e5b326b2eaf691a638d030ad57acf1ce60016ef0; post-#153 main 6e41123b40f15a63241c8db27cd884010f55db38."
+    },
+    {
+      "task": "task-233-nagar-durable-cognition-handoff",
+      "title": "Durable cognition->creative-queue handoff (Gate C step 2)",
+      "title_fa": "تحویل بادوام شناخت->صف خلاق (گام ۲ دروازه C)",
+      "zone": "nagar-cognition-durable-handoff",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Continue the PR #155 free-text cognition slice (NOT an ancestor of main) by turning its inline CommandBus dispatch into a durable handoff: a typed canonical creative_render payload is persisted through the existing JobQueuePort.enqueue and executed by the existing creative_render_job worker (runtime registry -> existing CommandBus -> render lane -> independent verification -> durable result). The cognition layer gains a propose-only path (no dispatch); the only enqueue is the existing queue; the only execution is the existing worker. No second bus, registry, authorizer, queue, render lane, verifier or authority.",
+      "scope_fa": "ادامهٔ اسلایس متن‌آزاد PR #155 (که اجداد main نیست) با تبدیل dispatch درون‌خطی به تحویل بادوام: payload تایپ‌شدهٔ متعارف creative_render از طریق JobQueuePort.enqueue موجود پایدار می‌شود و کارگر موجود creative_render_job آن را اجرا می‌کند؛ بدون هیچ اقتدار/صف/رجیستری/مسیر اجرای دوم.",
+      "acceptance_criteria": [
+        "AC-1: free-text model output becomes a typed proposal; raw text never enters the queue as a command",
+        "AC-2: the typed proposal is persisted via the existing JobQueuePort.enqueue (durable SQLite row)",
+        "AC-3: same idempotency key collapses to one logical job (duplicate enqueue -> no second execution)",
+        "AC-4: the worker is the existing creative_render_job using the existing runtime registry/CommandBus/policy/authorizer",
+        "AC-5: no second execution path exists (architecture test enforces one dispatch/enqueue/worker site)",
+        "AC-6: job lifecycle survives restart/recovery; a stale attempt cannot record completion",
+        "AC-7: a real media fixture traverses queue -> FFmpeg lane -> measured artifact -> independent probe + sha256 verification",
+        "AC-8: artifact tampering turns verification RED; missing model enqueues nothing; hostile proposals cause no unauthorized enqueue/dispatch/mutation",
+        "AC-9: full regression green with no test deletion/skip/xfail; exact pushed HEAD == tested HEAD == CI HEAD"
+      ],
+      "evidence_required": [
+        "Focused unit tests (typing, idempotency, adversarial matrix) + architecture boundary test",
+        "Integration test: real imageio-ffmpeg clip through the durable queue to a verified artifact, plus tamper -> RED",
+        "ruff check, ruff format --check, mypy src, and full pytest on the final successor tree",
+        "Exact-head GitHub CI result recorded with SHA; board/PR claims no higher status than evidence"
+      ],
+      "prerequisites": [],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/nagar/creative/",
+        "src/nexus_ai_agent/nagar/cognition/",
+        "src/nexus_ai_agent/nagar/observation.py",
+        "src/nexus_ai_agent/nagar/composition.py",
+        "tests/unit/test_nagar_cognition_durable.py",
+        "tests/unit/test_nagar_cognition_queue_handoff.py",
+        "tests/integration/test_nagar_durable_handoff_e2e.py",
+        "tests/architecture/test_nagar_durable_handoff_boundary.py",
+        "docs/overnight/COGNITION_CONVERGENCE.md",
+        "nagar_overnight/ARENA_HANDOFF.md",
+        "nagar_overnight/REPORT.md",
+        "nagar_overnight/STATE.md",
+        "nagar_overnight/LOG.md"
+      ],
+      "owner_hint": "Direct successor of PR #155 (overnight/nagar-20261004). Compose with main's merged task-232 durable queue; do not touch task-232's exclusive paths.",
+      "agent_branch": "arena/nagar-durable-handoff",
+      "claimed_at": "2026-10-05T19:40:11Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": false,
+      "note": "PR #155 (overnight/nagar-20261004, head 3f09aba) is open/draft and is NOT an ancestor of main (main=5a228ea after PR #156 merged task-232's durable creative queue). This task composes the two: PR #155's cognition slice + main's durable queue, without a history rewrite. Composes with task-232 (gates_owner) - disjoint paths."
     }
   ],
   "deferred_log": [
