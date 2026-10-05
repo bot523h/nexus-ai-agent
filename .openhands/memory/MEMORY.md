@@ -1,5 +1,7 @@
 # Project memory — nexus-ai-agent
 
+> Working notes for the overnight session: `.openhands/memory/2026-10-04.md`.
+
 ## Environment / gates
 - Editable install is required for the full suite: `pip install -e ".[dev]"`.
   With a bare `PYTHONPATH=src`, 4 migration-race tests + 1 distribution-version
