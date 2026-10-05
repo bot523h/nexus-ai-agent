@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-05T19:12:57Z",
+  "updated_at": "2026-10-05T20:49:40Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -688,9 +688,47 @@
         "tests/integration/test_provenance_queue_recording.py",
         "tests/integration/test_creative_chain_e2e.py"
       ]
+    },
+    {
+      "id": "architecture-law-enforcement",
+      "paths": [
+        "tests/architecture/",
+        "docs/architecture/MODULE_MAP.md",
+        "docs/architecture/adr/",
+        "docs/architecture/TESTING.md"
+      ]
     }
   ],
   "claims": [
+    {
+      "task": "task-234-module-map-law-enforcement",
+      "title": "Enforce the MODULE_MAP boundary-law → guard contract (fitness function)",
+      "zone": "architecture-law-enforcement",
+      "priority": "P1",
+      "status": "active",
+      "agent_branch": "arena/skills-suite",
+      "claimed_at": "2026-10-05T20:49:40Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "tests/architecture/",
+        "docs/architecture/MODULE_MAP.md",
+        "docs/architecture/adr/",
+        "docs/architecture/TESTING.md"
+      ],
+      "scope": "Make AGENTS.md §7's rule ('every boundary law must name its enforcing test in MODULE_MAP.md §3') executable: a fitness function that parses §3, resolves each named test file::symbol against the tree, and fails on a missing file/symbol. Add the ADR row + MODULE_MAP row that names the new guard.",
+      "acceptance_criteria": [
+        "tests/architecture/test_module_map_law_coverage.py parses MODULE_MAP §3 and asserts every named test file::symbol exists",
+        "positive control: a law row naming a missing test/symbol is detected",
+        "the gate names itself in MODULE_MAP §3 and is recorded in the ADR index",
+        "zero regression: full tests/architecture + test_docs_integrity green"
+      ],
+      "evidence_required": [
+        "pytest -q tests/architecture/test_module_map_law_coverage.py",
+        "pytest -q tests/architecture/ tests/unit/test_docs_integrity.py",
+        "ruff check . && ruff format --check . && mypy src"
+      ]
+    },
     {
       "task": "task-233-repo-agent-skills",
       "status": "active",
