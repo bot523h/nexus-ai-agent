@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import json
+import multiprocessing
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from nexus_ai_agent.provenance.journal import CausalJournal
+import pytest
+
+from nexus_ai_agent.provenance.journal import (
+    CausalConflictError,
+    CausalJournal,
+)
 from nexus_ai_agent.provenance.models import CausalEvent, EventKind, verify_chain
 
 
@@ -124,3 +131,204 @@ class TestCorruptionDetection:
         verdict = verify_chain(reopened.all_records())
         assert not verdict.ok
         assert verdict.first_broken_seq == 1
+
+
+class TestEvidenceConflicts:
+    def test_identical_evidence_redelivery_is_an_honest_duplicate(self, tmp_path: Path) -> None:
+        """Same key + same claims (different timestamp) = retry, absorbed."""
+        journal = CausalJournal(tmp_path / "causal.sqlite3")
+        first = journal.append(
+            _event_typed(
+                kind=EventKind.JOB_COMPLETED,
+                attempt=1,
+                status="completed",
+                result_digest="sha256:" + ("a" * 64),
+                occurred_at="2026-10-05T10:00:00+00:00",
+            )
+        )
+        retry = journal.append(
+            _event_typed(
+                kind=EventKind.JOB_COMPLETED,
+                attempt=1,
+                status="completed",
+                result_digest="sha256:" + ("a" * 64),
+                occurred_at="2026-10-05T10:00:05+00:00",
+            )
+        )
+        assert not first.duplicate
+        assert retry.duplicate
+        assert retry.record == first.record
+        assert journal.count() == 1  # no duplicate row, no conflict row
+        assert verify_chain(journal.all_records()).ok
+
+    def test_conflicting_redelivery_is_quarantined_never_absorbed(self, tmp_path: Path) -> None:
+        """Same key + DIFFERENT claims: kept truth stands + durable conflict."""
+        journal = CausalJournal(tmp_path / "causal.sqlite3")
+        first = journal.append(
+            _event_typed(
+                kind=EventKind.JOB_COMPLETED,
+                attempt=1,
+                status="completed",
+                result_digest="sha256:" + ("a" * 64),
+            )
+        )
+        with pytest.raises(CausalConflictError) as excinfo:
+            journal.append(
+                _event_typed(
+                    kind=EventKind.JOB_COMPLETED,
+                    attempt=1,
+                    status="completed",
+                    result_digest="sha256:" + ("b" * 64),  # different truth
+                )
+            )
+        assert excinfo.value.kept_seq == first.record.seq
+        records = journal.all_records()
+        kinds = [record.kind for record in records]
+        assert kinds == [EventKind.JOB_COMPLETED, EventKind.EVENT_CONFLICT]
+        # the FIRST-recorded truth is untouched
+        assert records[0].record_hash == first.record.record_hash
+        conflict_payload = records[1].payload
+        assert conflict_payload["detail"]["kept_seq"] == first.record.seq
+        assert conflict_payload["detail"]["rejected_claims"]["result_digest"] == (
+            "sha256:" + ("b" * 64)
+        )
+        assert verify_chain(records).ok
+
+    def test_conflicting_redelivery_on_other_claim_fields(self, tmp_path: Path) -> None:
+        journal = CausalJournal(tmp_path / "causal.sqlite3")
+        journal.append(
+            _event_typed(
+                kind=EventKind.JOB_FAILED,
+                attempt=1,
+                status="failed_terminal",
+                error="render exploded",
+            )
+        )
+        with pytest.raises(CausalConflictError):
+            journal.append(
+                _event_typed(
+                    kind=EventKind.JOB_FAILED,
+                    attempt=1,
+                    status="failed_terminal",
+                    error="a DIFFERENT error for the same transition",
+                )
+            )
+        assert journal.records_for_job("job-1")[-1].kind is EventKind.EVENT_CONFLICT
+
+
+def _same_event_worker(path: str, result_path: str) -> None:
+    """One real OS process redelivering the SAME transition event repeatedly."""
+    import traceback
+
+    errors = []
+    try:
+        journal = CausalJournal(path)
+        for _ in range(10):
+            journal.append(
+                _event_typed(
+                    job_id="same-event",
+                    kind=EventKind.JOB_COMPLETED,
+                    attempt=1,
+                    status="completed",
+                    result_digest="sha256:" + ("c" * 64),
+                )
+            )
+    except Exception:
+        errors.append(traceback.format_exc())
+    with open(result_path, "w", encoding="utf-8") as handle:
+        json.dump({"errors": errors}, handle)
+
+
+class TestCrossProcessDedupe:
+    def test_same_event_from_two_processes_yields_exactly_one_record(self, tmp_path: Path) -> None:
+        """Cross-process dedupe: concurrent redelivery of one transition
+        (the bot-process + CLI-drain reality over one sidecar) collapses to
+        exactly one record — no second effect, no lost evidence."""
+        journal_path = tmp_path / "dedupe.sqlite3"
+        ctx = multiprocessing.get_context("fork")
+        results = [tmp_path / f"dedupe-{w}.json" for w in range(2)]
+        processes = [
+            ctx.Process(target=_same_event_worker, args=(str(journal_path), str(results[w])))
+            for w in range(2)
+        ]
+        for process in processes:
+            process.start()
+        for process in processes:
+            process.join(timeout=60)
+            assert process.exitcode == 0
+        for result in results:
+            assert json.loads(result.read_text(encoding="utf-8"))["errors"] == []
+
+        journal = CausalJournal(journal_path)
+        records = journal.records_for_job("same-event")
+        completions = [r for r in records if r.kind is EventKind.JOB_COMPLETED]
+        assert len(completions) == 1, "exactly-once across processes"
+        conflicts = [r for r in records if r.kind is EventKind.EVENT_CONFLICT]
+        assert conflicts == [], "identical redelivery is an honest retry, not a conflict"
+        assert verify_chain(records).ok
+
+
+def _storm_worker(path: str, worker_id: int, per_worker: int, result_path: str) -> None:
+    """One real OS process appending its own events to the shared journal."""
+    import traceback
+
+    errors = []
+    appended = 0
+    try:
+        journal = CausalJournal(path)
+        for step in range(per_worker):
+            journal.append(
+                _event_typed(
+                    job_id=f"storm-{worker_id}-{step}",
+                    kind=EventKind.JOB_ENQUEUED,
+                )
+            )
+            appended += 1
+    except Exception:
+        errors.append(traceback.format_exc())
+    with open(result_path, "w", encoding="utf-8") as handle:
+        json.dump({"worker": worker_id, "appended": appended, "errors": errors}, handle)
+
+
+class TestCrossProcessSerialization:
+    def test_real_processes_never_lose_or_corrupt_records(self, tmp_path: Path) -> None:
+        """4 real OS processes × 12 appends against one SQLite sidecar.
+
+        Proves at a real process boundary (not threads, not mocks): sequence
+        integrity, prev-hash correctness, no lost event under contention, and
+        that the chain still verifies — then that a fresh append works after
+        the contention storm (recovery).
+        """
+        journal_path = tmp_path / "storm.sqlite3"
+        workers = 4
+        per_worker = 12
+        ctx = multiprocessing.get_context("fork")
+        results = [tmp_path / f"result-{w}.json" for w in range(workers)]
+        processes = [
+            ctx.Process(
+                target=_storm_worker,
+                args=(str(journal_path), w, per_worker, str(results[w])),
+            )
+            for w in range(workers)
+        ]
+        for process in processes:
+            process.start()
+        for process in processes:
+            process.join(timeout=120)
+            assert process.exitcode == 0, f"worker died with {process.exitcode}"
+        for result in results:
+            payload = json.loads(result.read_text(encoding="utf-8"))
+            assert payload["errors"] == [], payload["errors"]
+            assert payload["appended"] == per_worker
+
+        journal = CausalJournal(journal_path)
+        assert journal.count() == workers * per_worker
+        verdict = verify_chain(journal.all_records())
+        assert verdict.ok, verdict.reason
+        head = journal.head()
+        assert head is not None and head[0] == workers * per_worker
+
+        # recovery after contention: the journal accepts new work cleanly
+        after = journal.append(_event_typed(job_id="storm-after", kind=EventKind.JOB_ENQUEUED))
+        assert not after.duplicate and after.record.seq == workers * per_worker + 1
+        assert verify_chain(journal.all_records()).ok

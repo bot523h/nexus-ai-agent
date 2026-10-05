@@ -927,27 +927,43 @@ def jobs_resume(
     Handlers are the standard application ones, so resumed jobs run exactly
     as they would inside the bot.
     """
+    import sqlite3
+
     from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
     from nexus_ai_agent.application.ports.job_queue import JobStatus
     from nexus_ai_agent.config.settings import get_settings
-    from nexus_ai_agent.provenance import CausalJournal, QueueLedgerObserver
+    from nexus_ai_agent.provenance import QueueLedgerObserver
     from nexus_ai_agent.provenance.backfill import backfill_journal
-    from nexus_ai_agent.provenance.paths import causal_journal_db_path
+    from nexus_ai_agent.provenance.paths import (
+        causal_journal_db_path,
+        try_open_causal_journal,
+    )
     from nexus_ai_agent.worker import default_job_handlers, job_queue_db_path
 
     async def _run() -> None:
         queue_db = job_queue_db_path(get_settings().db_path)
-        journal = CausalJournal(causal_journal_db_path(queue_db))
-        queue = InProcessJobQueue(queue_db, causal_observer=QueueLedgerObserver(journal))
+        # Evidence degrades, execution never dies for the ledger (D-0024).
+        journal = try_open_causal_journal(causal_journal_db_path(queue_db))
+        observer = QueueLedgerObserver(journal) if journal is not None else None
+        if journal is None:
+            typer.echo(
+                "⚠️  Causal ledger unavailable — draining WITHOUT evidence"
+                " recording (job outcomes stay authoritative)."
+            )
+        queue = InProcessJobQueue(queue_db, causal_observer=observer)
         for job_type, handler in default_job_handlers().items():
             queue.register_handler(job_type, handler)
-        # task-231: recovery closes crash-window holes with labeled
-        # reconstructions before anything is drained (idempotent).
-        report = backfill_journal(journal, queue, queue.job_ids())
-        typer.echo(
-            f"Causal journal: +{report.appended} reconstructed, "
-            f"{report.already_present} already present."
-        )
+        if journal is not None:
+            # task-231: recovery closes crash-window holes with labeled
+            # reconstructions before anything is drained (idempotent).
+            try:
+                report = backfill_journal(journal, queue, queue.job_ids())
+                typer.echo(
+                    f"Causal journal: +{report.appended} reconstructed, "
+                    f"{report.already_present} already present."
+                )
+            except sqlite3.Error as exc:
+                typer.echo(f"⚠️  Causal backfill failed ({exc}); draining without it.")
         job_ids = await queue.resume_pending_jobs()
         if not job_ids:
             typer.echo("No pending jobs to resume.")
@@ -997,6 +1013,7 @@ def jobs_passport(
     / INCOMPLETE / COMPROMISED). Exit code 2 on COMPROMISED or INCOMPLETE.
     """
     import json as _json
+    import sqlite3
 
     from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
     from nexus_ai_agent.config.settings import get_settings
@@ -1005,13 +1022,20 @@ def jobs_passport(
     from nexus_ai_agent.worker import job_queue_db_path
 
     queue_db = job_queue_db_path(get_settings().db_path)
-    journal = CausalJournal(causal_journal_db_path(queue_db))
+    try:
+        journal = CausalJournal(causal_journal_db_path(queue_db))
+    except (sqlite3.Error, OSError) as exc:
+        typer.echo(f"Causal evidence unavailable: {exc}")
+        raise typer.Exit(3) from None
     builder = PassportBuilder(journal, InProcessJobQueue(queue_db))
     try:
         passport = builder.build(job_id)
     except KeyError:
         typer.echo(f"Unknown job: {job_id}")
         raise typer.Exit(2) from None
+    except sqlite3.Error as exc:
+        typer.echo(f"Causal evidence unreadable: {exc}")
+        raise typer.Exit(3) from None
     typer.echo(_json.dumps(passport.to_dict(), ensure_ascii=False, indent=2))
     if passport.status.value in {"COMPROMISED", "INCOMPLETE"}:
         raise typer.Exit(2)

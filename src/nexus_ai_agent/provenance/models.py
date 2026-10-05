@@ -89,9 +89,16 @@ class EventKind(str, Enum):
     JOB_FAILED = "job_failed"
     #: PROCESSING/VERIFYING → PENDING for the running attempt (cancellation).
     JOB_REOPENED = "job_reopened"
-    #: Explicit takeover: an orphaned in-flight row was reset to PENDING by
-    #: recovery (startup or expiry-gated). The old token is fenced out.
+    #: Explicit takeover: an orphaned IN-FLIGHT row (attempt >= 1, i.e. a
+    #: real previous owner) was reset to PENDING by recovery. Never recorded
+    #: for a row that merely sat in ``pending`` — that is re-scheduling, not
+    #: an ownership transfer.
     JOB_TAKEOVER = "job_takeover"
+    #: A redelivered transition claimed DIFFERENT evidence for an
+    #: already-recorded (kind, job, attempt). The kept record stands; the
+    #: rejected claim is durably quarantined here (an observation — appended
+    #: every time, never deduped). The passport reads this as COMPROMISED.
+    EVENT_CONFLICT = "event_conflict"
 
     @property
     def is_transition(self) -> bool:
@@ -99,10 +106,10 @@ class EventKind(str, Enum):
 
         Fencing guarantees a given (kind, job_id, attempt) transition commits
         at most once, so the key is a sound exactly-once marker. Observations
-        (``JOB_ENQUEUE_DUPLICATE``) may legitimately repeat and are appended
-        every time.
+        (``JOB_ENQUEUE_DUPLICATE``, ``EVENT_CONFLICT``) may legitimately
+        repeat and are appended every time.
         """
-        return self is not EventKind.JOB_ENQUEUE_DUPLICATE
+        return self not in (EventKind.JOB_ENQUEUE_DUPLICATE, EventKind.EVENT_CONFLICT)
 
 
 def dedupe_key(kind: EventKind, job_id: str, attempt: int | None) -> str | None:
@@ -284,6 +291,11 @@ class JobFacts:
     result: dict[str, Any] | None
     result_digest: str | None
     verification: dict[str, Any] | None
+    #: False when the row's persisted status spelling is unknown — the
+    #: authority row itself is corrupt/impossible. The raw spelling stays in
+    #: ``status``; consumers must treat the evidence as degraded (never
+    #: parse-guess, never crash).
+    status_known: bool = True
 
 
 __all__ = [

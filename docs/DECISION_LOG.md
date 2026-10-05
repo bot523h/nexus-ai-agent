@@ -1705,3 +1705,35 @@ takeover/fencing, backfill),
 `tests/integration/test_provenance_passport_e2e.py` (real FFmpeg artifact:
 VERIFIED → tamper → COMPROMISED → limitation), and CI on the landing PR's
 exact head SHA. Design view: `architecture/PROVENANCE_LEDGER.md`.
+
+*Hardening (review pass on the same decision, task-231).* Five
+review-driven corrections, each enforced by a named test:
+
+1. **Cross-process serialization.** The head-read → hash → insert sequence
+   now runs inside one `BEGIN IMMEDIATE` write transaction (retry ×3 on
+   `IntegrityError` as defense-in-depth for foreign writers). Two real OS
+   processes appending to one sidecar can no longer read the same head; a
+   real-process storm test proves gapless `seq`, intact `prev_hash` chain,
+   zero lost events under contention, and clean recovery afterwards.
+   `connect_timeout` is a constructor policy and surfaces `sqlite3`
+   busy conditions instead of hiding them.
+2. **Conflict quarantine, never silent absorption.** A redelivery that
+   matches an existing `dedupe_key` but carries different evidence claims
+   (`status`, `error`, `payload_digest`, `result_digest` — timestamp/detail
+   legitimately differ) raises `CausalConflictError` and durably records an
+   `EVENT_CONFLICT` observation quoting the rejected claims and the kept
+   record. Identical redelivery remains an honest duplicate.
+3. **Takeover truthfulness.** Restart/shutdown re-lists record takeover
+   events only for rows with a real in-flight attempt (fencing token ≥ 1);
+   a pending row that was never owned yields no fabricated ownership
+   transfer (its first-ever reservation is the takeover, honestly).
+4. **Explicit status-unknown degradation.** `get_job_facts` never raises on
+   an unparseable persisted status; facts carry `status_known=False`, the
+   passport reports `COMPROMISED` with `unparseable_row_status`, and
+   backfill reconstructs only the enqueue (nothing it cannot prove).
+5. **Degradation at one policy point.** `provenance.paths.try_open_causal_journal`
+   is the single composition-root entry: corrupt/locked sidecar → `None` +
+   `causal_journal_unavailable` warning; bot/webhook runs observer-less,
+   CLI drain/backfill degrade with echoed reasons, `nexus jobs passport`
+   exits 3 on unreadable evidence. The execution plane never dies because
+   evidence storage failed — and nothing pretends evidence exists.

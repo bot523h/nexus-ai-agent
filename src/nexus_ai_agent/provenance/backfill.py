@@ -41,8 +41,15 @@ class BackfillReport:
 
 
 def _events_for(facts: JobFacts) -> list[tuple[EventKind, int | None]]:
-    """Transitions the durable row state *proves* (never assumed history)."""
+    """Transitions the durable row state *proves* (never assumed history).
+
+    An unparseable row status corrupts the authority itself: nothing beyond
+    the row's existence (the enqueue) can be proven, so nothing else is
+    reconstructed — the gap stays visible instead of being guessed.
+    """
     events: list[tuple[EventKind, int | None]] = [(EventKind.JOB_ENQUEUED, None)]
+    if not facts.status_known:
+        return events
     if facts.status in _IN_FLIGHT:
         # Mid-flight history is NOT reconstructable from one row — only the
         # creation is provable. The remaining gap stays visible (the passport
@@ -50,6 +57,10 @@ def _events_for(facts: JobFacts) -> list[tuple[EventKind, int | None]]:
         return events
     if facts.status == "completed":
         events.append((EventKind.JOB_RESERVED, facts.attempt))
+        if facts.verification is not None:
+            # The durable verification block proves the verification phase
+            # ran; its labeled reconstruction belongs to the account.
+            events.append((EventKind.JOB_VERIFICATION_STARTED, facts.attempt))
         events.append((EventKind.JOB_COMPLETED, facts.attempt))
         return events
     if facts.attempt >= 1:

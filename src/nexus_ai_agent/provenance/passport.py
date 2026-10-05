@@ -181,9 +181,25 @@ class PassportBuilder:
             payload: dict[str, Any] = {}
         else:
             verification = facts.verification
+            status_known = facts.status_known
+            if not status_known:
+                # The AUTHORITY row carries a status spelling outside the
+                # canonical state machine — an impossible persisted state
+                # (the queue fail-closed-writes only known spellings).
+                # Evidence is corrupt, not merely incomplete: say so and
+                # stop inferring which transitions to expect.
+                findings.append(
+                    Finding(
+                        "compromised",
+                        "unparseable_row_status",
+                        f"the authoritative row's status {facts.status!r} is outside the"
+                        " canonical state machine; the row itself is corrupt — no"
+                        " transition can be proven from it",
+                    )
+                )
             subject, subject_findings = self._subject(facts)
             findings.extend(subject_findings)
-            findings.extend(self._reconcile(facts, records))
+            findings.extend(self._reconcile(facts, records, status_known=status_known))
             predicate_job = {
                 "job_id": facts.job_id,
                 "job_type": facts.job_type,
@@ -304,11 +320,30 @@ class PassportBuilder:
             "matches": measured == recorded_sha,
         }
 
-    def _reconcile(self, facts: JobFacts, records: list[LedgerRecord]) -> list[Finding]:
+    def _reconcile(
+        self, facts: JobFacts, records: list[LedgerRecord], *, status_known: bool = True
+    ) -> list[Finding]:
         """Cross-check the ledger against the live authoritative row."""
         findings: list[Finding] = []
         by_kind = self._by_kind(records)
-        for kind, attempt in self._expected_events(facts):
+        for record in records:
+            if record.kind is EventKind.EVENT_CONFLICT:
+                detail = record.payload.get("detail", {})
+                findings.append(
+                    Finding(
+                        "compromised",
+                        "event_conflict_recorded",
+                        f"seq {record.seq}: a redelivered"
+                        f" {detail.get('rejected_kind', 'transition')} claimed different"
+                        f" evidence for a record already at seq {detail.get('kept_seq')}"
+                        " — the conflicting claim was quarantined, the account cannot"
+                        " be certified",
+                    )
+                )
+        # With an unparseable row status, the transitions to expect cannot be
+        # derived without guessing — only the digest checks below still run.
+        expected = self._expected_events(facts) if status_known else []
+        for kind, attempt in expected:
             present = any(
                 record.kind is kind
                 and (attempt is None or record.payload.get("attempt") == attempt)
@@ -336,10 +371,10 @@ class PassportBuilder:
                     )
                 )
         for kind in (EventKind.JOB_COMPLETED, EventKind.JOB_FAILED):
-            record = by_kind.get(kind)
-            if record is None:
+            terminal = by_kind.get(kind)
+            if terminal is None:
                 continue
-            recorded_result = record.payload.get("result_digest")
+            recorded_result = terminal.payload.get("result_digest")
             if recorded_result is not None and recorded_result != facts.result_digest:
                 findings.append(
                     Finding(
@@ -349,7 +384,7 @@ class PassportBuilder:
                         f" ledger observed at {kind.value}",
                     )
                 )
-            recorded_status = record.payload.get("status")
+            recorded_status = terminal.payload.get("status")
             if recorded_status is not None and recorded_status != facts.status:
                 findings.append(
                     Finding(
@@ -437,12 +472,23 @@ class PassportBuilder:
 
     @staticmethod
     def _expected_events(facts: JobFacts) -> list[tuple[EventKind, int | None]]:
-        """The transitions the durable row state *proves* must have happened."""
+        """The transitions the durable row state *proves* must have happened.
+
+        A completed row carrying the queue-owned verification block proves
+        the verification phase RAN — ``job_verification_started`` is part of
+        the canonical successful chain and its absence is a real gap in the
+        account (the row is the truth; the journal must account for it).  A
+        completed row WITHOUT such a block belongs to a no-verifier lane: no
+        verification phase ever existed, and expecting its record would
+        invent a requirement the system never had.
+        """
         expected: list[tuple[EventKind, int | None]] = [(EventKind.JOB_ENQUEUED, None)]
         if facts.status in _IN_FLIGHT:
             return expected
         if facts.status == _TERMINAL_SUCCESS:
             expected.append((EventKind.JOB_RESERVED, facts.attempt))
+            if facts.verification is not None:
+                expected.append((EventKind.JOB_VERIFICATION_STARTED, facts.attempt))
             expected.append((EventKind.JOB_COMPLETED, facts.attempt))
             return expected
         # Failure states: the fencing token proves whether a reservation ran.

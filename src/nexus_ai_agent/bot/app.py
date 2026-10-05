@@ -221,16 +221,32 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
     # D4: finished jobs notify the origin Telegram chat (fail-safe hook).
     # task-231: the causal journal (Project Graph ledger) records every
     # durable transition into its own sidecar — evidence, never authority.
-    from nexus_ai_agent.provenance import CausalJournal, QueueLedgerObserver
-    from nexus_ai_agent.provenance.paths import causal_journal_db_path
+    # Its unavailability DEGRADES EVIDENCE, never the bot: a corrupt, locked
+    # or unwritable sidecar logs ``causal_journal_unavailable``, the queue
+    # runs without an observer, and the passport plane reports the gap.
+    import sqlite3
+
+    from nexus_ai_agent.provenance import QueueLedgerObserver
+    from nexus_ai_agent.provenance.paths import (
+        causal_journal_db_path,
+        try_open_causal_journal,
+    )
     from nexus_ai_agent.worker import default_job_handlers, job_queue_db_path
 
     _queue_db = job_queue_db_path(settings.db_path)
-    causal_journal = CausalJournal(causal_journal_db_path(_queue_db))
+    try:
+        causal_journal = try_open_causal_journal(causal_journal_db_path(_queue_db))
+        if causal_journal is None:
+            raise sqlite3.OperationalError(f"unavailable: {_queue_db}")
+        causal_observer = QueueLedgerObserver(causal_journal)
+    except sqlite3.Error as exc:
+        logger.warning("causal_journal_unavailable error=%s", exc)
+        causal_journal = None
+        causal_observer = None
     job_queue = InProcessJobQueue(
         _queue_db,
         on_job_finished=_build_job_completion_notifier(_bot_token(settings)),
-        causal_observer=QueueLedgerObserver(causal_journal),
+        causal_observer=causal_observer,
     )
     for job_type, handler in default_job_handlers().items():
         job_queue.register_handler(job_type, handler)
@@ -330,17 +346,20 @@ def build_application(
         except Exception:  # noqa: BLE001 — startup wiring must not kill the bot
             logger.exception("feature_engines_startup_failed")
         # task-231: close any crash-window holes in the causal journal with
-        # explicitly labeled reconstructions (idempotent, fail-safe).
-        try:
-            from nexus_ai_agent.provenance.backfill import backfill_journal
+        # explicitly labeled reconstructions (idempotent, fail-safe). A
+        # degraded (None) journal simply has nothing to backfill into.
+        journal = engines.get("causal_journal")
+        if journal is not None:
+            try:
+                from nexus_ai_agent.provenance.backfill import backfill_journal
 
-            backfill_journal(
-                engines["causal_journal"],
-                job_queue,
-                await asyncio.to_thread(job_queue.job_ids),
-            )
-        except Exception:  # noqa: BLE001 — ledger recovery must not kill the bot
-            logger.exception("causal_journal_backfill_failed")
+                backfill_journal(
+                    journal,
+                    job_queue,
+                    await asyncio.to_thread(job_queue.job_ids),
+                )
+            except Exception:  # noqa: BLE001 — ledger recovery must not kill the bot
+                logger.exception("causal_journal_backfill_failed")
         await job_queue.resume_pending()
 
     async def _post_shutdown(application: Any) -> None:

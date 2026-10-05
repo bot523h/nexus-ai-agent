@@ -27,6 +27,7 @@ from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
 from nexus_ai_agent.application.ports.job_queue import JobStatus
 from nexus_ai_agent.jobs.verification import VerificationOutcome
 from nexus_ai_agent.provenance import (
+    CausalEvent,
     CausalJournal,
     EventKind,
     PassportBuilder,
@@ -335,14 +336,12 @@ class TestTakeoverAndFencing:
 
         # The stale owner finally finishes — its CAS must reject (fencing).
         # A slow stale owner can never change the journal: every transition
-        # it attempts loses the fencing CAS and records nothing, so there is
-        # no race to sleep over — but give its rejection path a moment to
-        # finish before reading the chain for the assertion below.
+        # it attempts loses the fencing CAS and records nothing. Await the
+        # task itself — deterministic and bounded, no polling ambiguity.
         release_first.set()
-        for _ in range(100):
-            await asyncio.sleep(0.02)
-            if owner._tasks.get(job_id) is None or owner._tasks[job_id].done():
-                break
+        stale_task = owner._tasks.get(job_id)
+        if stale_task is not None:
+            await asyncio.wait_for(asyncio.shield(stale_task), timeout=10)
 
         kinds = [record.kind for record in journal.records_for_job(job_id)]
         assert kinds == [
@@ -388,10 +387,10 @@ class TestBackfill:
 
         first = backfill_journal(journal, queue, queue.job_ids())
         assert first.jobs_examined == 1
-        assert first.appended == 3  # enqueued + reserved(1) + completed(1)
+        assert first.appended == 4  # enqueued + reserved(1) + verifying(1) + completed(1)
         second = backfill_journal(journal, queue, queue.job_ids())
         assert second.appended == 0
-        assert second.already_present == 3  # idempotent under lost ACKs
+        assert second.already_present == 4  # idempotent under lost ACKs
 
         assert verify_chain(journal.all_records()).ok
         passport = PassportBuilder(journal, queue).build(job_id)
@@ -401,3 +400,261 @@ class TestBackfill:
             record.payload["detail"]["backfilled"] is True
             for record in journal.records_for_job(job_id)
         )
+
+
+class TestTakeoverTruthfulness:
+    async def test_pending_row_that_was_never_owned_records_no_takeover(
+        self, tmp_path: Path
+    ) -> None:
+        """B: re-listing a never-reserved pending row is scheduling, NOT an
+        ownership transfer — the journal must not fabricate a takeover."""
+        journal = CausalJournal(tmp_path / "causal.sqlite3")
+        creator = InProcessJobQueue(
+            tmp_path / "jobs.sqlite3", causal_observer=QueueLedgerObserver(journal)
+        )
+
+        async def handler(payload: dict[str, object]) -> dict[str, object]:
+            return _ok_result(tmp_path)
+
+        creator.register_handler("creative_render", handler)
+        creator.register_artifact_verifier("creative_render", _ok_verifier)
+        job_id = await creator.enqueue(
+            job_type="creative_render", idempotency_key="k1", payload=_payload()
+        )
+        # Cancel the task BEFORE it ever runs: the durable row stays
+        # pending with attempt=0 — a row no execution ever owned.
+        creator._tasks[job_id].cancel()
+        await asyncio.sleep(0)
+        assert await creator.get_status(job_id) is JobStatus.PENDING
+        assert all(
+            record.kind is not EventKind.JOB_TAKEOVER for record in journal.records_for_job(job_id)
+        )
+
+        # Restart semantics: a fresh process resumes the pending row.
+        successor = InProcessJobQueue(
+            tmp_path / "jobs.sqlite3", causal_observer=QueueLedgerObserver(journal)
+        )
+        successor.register_handler("creative_render", handler)
+        successor.register_artifact_verifier("creative_render", _ok_verifier)
+        taken = await successor.resume_pending()
+        assert taken == [job_id]
+        assert await _wait_terminal(successor, job_id) is JobStatus.COMPLETED
+        await _wait_record(journal, job_id, EventKind.JOB_COMPLETED, attempt=1)
+
+        kinds = [record.kind for record in journal.records_for_job(job_id)]
+        assert kinds == [
+            EventKind.JOB_ENQUEUED,
+            EventKind.JOB_RESERVED,  # the FIRST reservation ever minted
+            EventKind.JOB_VERIFICATION_STARTED,
+            EventKind.JOB_COMPLETED,
+        ]
+        assert not any(
+            record.kind is EventKind.JOB_TAKEOVER for record in journal.records_for_job(job_id)
+        )
+        passport = PassportBuilder(journal, successor).build(job_id)
+        assert passport.status is PassportStatus.VERIFIED
+
+    async def test_shutdown_of_inflight_records_reopen_not_takeover(self, tmp_path: Path) -> None:
+        """Cancellation already reopened the row (JOB_REOPENED); shutdown's
+        re-list of the now-pending row must not add a fictitious takeover,
+        and the fencing token stays in the durable record."""
+        journal = CausalJournal(tmp_path / "causal.sqlite3")
+        queue = InProcessJobQueue(
+            tmp_path / "jobs.sqlite3", causal_observer=QueueLedgerObserver(journal)
+        )
+        started = asyncio.Event()
+
+        async def blocking(payload: dict[str, object]) -> dict[str, object]:
+            started.set()
+            await asyncio.Event().wait()  # cancelled by shutdown
+
+        queue.register_handler("creative_render", blocking)
+        job_id = await queue.enqueue(
+            job_type="creative_render", idempotency_key="k1", payload=_payload()
+        )
+        await asyncio.wait_for(started.wait(), timeout=5)
+        await asyncio.sleep(0.05)  # let the reservation record land
+        await queue.shutdown()
+
+        kinds = [record.kind for record in journal.records_for_job(job_id)]
+        assert kinds == [
+            EventKind.JOB_ENQUEUED,
+            EventKind.JOB_RESERVED,
+            EventKind.JOB_REOPENED,  # the honest cancellation record
+        ]
+        assert not any(kind is EventKind.JOB_TAKEOVER for kind in kinds)
+
+
+class TestCorruptAuthorityRow:
+    async def test_unparseable_status_degrades_evidence_without_crashing(
+        self, tmp_path: Path
+    ) -> None:
+        """A: unknown status spelling → get_job_facts degrades explicitly
+        (status_known=False), the passport says COMPROMISED (an impossible
+        persisted state), and backfill reconstructs nothing it cannot prove."""
+        import sqlite3 as _sqlite3
+
+        from nexus_ai_agent.provenance import PassportStatus
+
+        journal = CausalJournal(tmp_path / "causal.sqlite3")
+        queue = InProcessJobQueue(
+            tmp_path / "jobs.sqlite3", causal_observer=QueueLedgerObserver(journal)
+        )
+
+        async def handler(payload: dict[str, object]) -> dict[str, object]:
+            return _ok_result(tmp_path)
+
+        queue.register_handler("creative_render", handler)
+        queue.register_artifact_verifier("creative_render", _ok_verifier)
+        job_id = await queue.enqueue(
+            job_type="creative_render", idempotency_key="k1", payload=_payload()
+        )
+        assert await _wait_terminal(queue, job_id) is JobStatus.COMPLETED
+        await _wait_record(journal, job_id, EventKind.JOB_COMPLETED, attempt=1)
+
+        connection = _sqlite3.connect(tmp_path / "jobs.sqlite3")
+        connection.execute(
+            "UPDATE nexus_job_queue SET status = 'garbage_status' WHERE id = ?",
+            (job_id,),
+        )
+        connection.commit()
+        connection.close()
+
+        facts = queue.get_job_facts(job_id)
+        assert facts is not None
+        assert facts.status_known is False
+        assert facts.status == "garbage_status"  # raw spelling surfaced
+
+        passport = PassportBuilder(journal, queue).build(job_id)
+        assert passport.status is PassportStatus.COMPROMISED
+        assert any(f.code == "unparseable_row_status" for f in passport.findings)
+
+        fresh = CausalJournal(tmp_path / "backfill.sqlite3")
+        report = backfill_journal(fresh, queue, [job_id])
+        # Only the enqueue is provable from a corrupt row — nothing invented:
+        assert report.appended == 1
+        kinds = [record.kind for record in fresh.records_for_job(job_id)]
+        assert kinds == [EventKind.JOB_ENQUEUED]
+
+
+class TestCausalCompleteness:
+    async def test_completed_without_verification_started_is_never_verified(
+        self, tmp_path: Path
+    ) -> None:
+        """E: the verification phase is part of the canonical successful
+        chain — a journal that omits its record must NOT certify VERIFIED."""
+        from nexus_ai_agent.provenance import PassportStatus
+
+        journal = CausalJournal(tmp_path / "causal.sqlite3")
+        queue = InProcessJobQueue(
+            tmp_path / "jobs.sqlite3", causal_observer=QueueLedgerObserver(journal)
+        )
+
+        async def handler(payload: dict[str, object]) -> dict[str, object]:
+            return _ok_result(tmp_path)
+
+        queue.register_handler("creative_render", handler)
+        queue.register_artifact_verifier("creative_render", _ok_verifier)
+        job_id = await queue.enqueue(
+            job_type="creative_render", idempotency_key="k1", payload=_payload()
+        )
+        assert await _wait_terminal(queue, job_id) is JobStatus.COMPLETED
+        await _wait_record(journal, job_id, EventKind.JOB_COMPLETED, attempt=1)
+
+        # A journal that lost exactly the verification-started record:
+        incomplete = CausalJournal(tmp_path / "incomplete.sqlite3")
+        for record in journal.records_for_job(job_id):
+            payload = record.payload
+            if payload["kind"] == "job_verification_started":
+                continue
+            incomplete.append(
+                CausalEvent(
+                    kind=EventKind(payload["kind"]),
+                    job_id=job_id,
+                    job_type=payload["job_type"],
+                    idempotency_key=payload["idempotency_key"],
+                    attempt=payload.get("attempt"),
+                    status=payload.get("status"),
+                    payload_digest=payload.get("payload_digest"),
+                    result_digest=payload.get("result_digest"),
+                    occurred_at=payload["occurred_at"],
+                )
+            )
+        passport = PassportBuilder(incomplete, queue).build(job_id)
+        assert passport.status is PassportStatus.INCOMPLETE
+        missing = [
+            f
+            for f in passport.findings
+            if f.code == "missing_transition_record" and "job_verification_started" in f.detail
+        ]
+        assert missing, "verification-started gap must be named explicitly"
+
+    async def test_truncated_journal_tail_is_incomplete_not_verified(self, tmp_path: Path) -> None:
+        """Tail truncation: the prefix verifies, but the affected job's
+        account is incomplete — the completeness check catches it."""
+        import sqlite3 as _sqlite3
+
+        from nexus_ai_agent.provenance import PassportStatus
+
+        journal = CausalJournal(tmp_path / "causal.sqlite3")
+        queue = InProcessJobQueue(
+            tmp_path / "jobs.sqlite3", causal_observer=QueueLedgerObserver(journal)
+        )
+
+        async def handler(payload: dict[str, object]) -> dict[str, object]:
+            return _ok_result(tmp_path)
+
+        queue.register_handler("creative_render", handler)
+        queue.register_artifact_verifier("creative_render", _ok_verifier)
+        job_id = await queue.enqueue(
+            job_type="creative_render", idempotency_key="k1", payload=_payload()
+        )
+        assert await _wait_terminal(queue, job_id) is JobStatus.COMPLETED
+        await _wait_record(journal, job_id, EventKind.JOB_COMPLETED, attempt=1)
+
+        connection = _sqlite3.connect(journal.db_path)
+        connection.execute(
+            "DELETE FROM nexus_causal_journal WHERE job_id = ? AND kind IN ('job_completed')",
+            (job_id,),
+        )
+        connection.commit()
+        connection.close()
+
+        passport = PassportBuilder(journal, queue).build(job_id)
+        assert passport.status is PassportStatus.INCOMPLETE
+        assert any(f.code == "missing_transition_record" for f in passport.findings)
+
+
+class TestRealJournalFailureDuringExecution:
+    async def test_wrong_schema_journal_degrades_execution_stays_green(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """C with a REAL broken journal (not a fake observer): the sidecar
+        exists but its schema is foreign — every record attempt fails, the
+        job still completes, and the degradation is logged."""
+        import sqlite3 as _sqlite3
+
+        path = tmp_path / "broken.sqlite3"
+        journal = CausalJournal(path)  # opens healthy...
+        # ...then the file is externally replaced by a foreign-schema
+        # database AFTER construction (corruption between init and execution):
+        connection = _sqlite3.connect(path)
+        connection.execute("DROP TABLE nexus_causal_journal")
+        connection.execute("CREATE TABLE nexus_causal_journal (x TEXT)")
+        connection.commit()
+        connection.close()
+        queue = InProcessJobQueue(
+            tmp_path / "jobs.sqlite3", causal_observer=QueueLedgerObserver(journal)
+        )
+
+        async def handler(payload: dict[str, object]) -> dict[str, object]:
+            return _ok_result(tmp_path)
+
+        queue.register_handler("creative_render", handler)
+        queue.register_artifact_verifier("creative_render", _ok_verifier)
+        job_id = await queue.enqueue(
+            job_type="creative_render", idempotency_key="k1", payload=_payload()
+        )
+        with caplog.at_level("WARNING"):
+            assert await _wait_terminal(queue, job_id) is JobStatus.COMPLETED
+        assert any("causal_ledger_observe_failed" in record.message for record in caplog.records)

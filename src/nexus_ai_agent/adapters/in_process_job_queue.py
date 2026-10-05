@@ -391,10 +391,17 @@ class InProcessJobQueue:
             block = result.get(VERIFICATION_RESULT_KEY)
             if isinstance(block, dict):
                 verification = dict(block)
+        # An unknown persisted spelling is an expected corrupt-row case
+        # (``parse_job_status`` raises ValueError for it, fail-closed): the
+        # raw spelling is surfaced with ``status_known=False`` so the
+        # provenance plane can degrade explicitly instead of crashing —
+        # never a guessed canonical status.
         try:
             status = parse_job_status(str(row["status"])).value
-        except RuntimeError:
+            status_known = True
+        except ValueError:
             status = str(row["status"])
+            status_known = False
         return JobFacts(
             job_id=str(row["id"]),
             job_type=str(row["job_type"]),
@@ -410,6 +417,7 @@ class InProcessJobQueue:
             result=result,
             result_digest=self._content_digest(str(result_raw) if result_raw is not None else None),
             verification=verification,
+            status_known=status_known,
         )
 
     async def enqueue(
@@ -546,23 +554,28 @@ class InProcessJobQueue:
         live = {job_id for job_id, task in self._tasks.items() if not task.done()}
         reset = await asyncio.to_thread(self._reset_unfinished, stale_after, live)
         for job_id, job_type, attempt in reset:
-            # Record the takeover BEFORE scheduling the successor execution:
-            # the causal order (takeover → fresh reservation) must be the
-            # journal order, not a race.
-            await self._record(
-                CausalEvent(
-                    kind=EventKind.JOB_TAKEOVER,
-                    job_id=job_id,
-                    job_type=job_type,
-                    attempt=attempt,
-                    status=JobStatus.PENDING.value,
-                    detail={
-                        "mode": "expiry_gated" if stale_after is not None else "startup",
-                        "fencing": "previous token superseded by the next reservation",
-                    },
-                    occurred_at=_now(),
+            if attempt is not None:
+                # A real ownership transfer: the row was IN FLIGHT with a
+                # minted fencing token that recovery superseded. A row that
+                # merely sat in ``pending`` was never owned — re-listing it
+                # is scheduling, not a takeover, and is not journaled.
+                # Recorded BEFORE scheduling the successor execution: the
+                # causal order (takeover → fresh reservation) must be the
+                # journal order, not a race.
+                await self._record(
+                    CausalEvent(
+                        kind=EventKind.JOB_TAKEOVER,
+                        job_id=job_id,
+                        job_type=job_type,
+                        attempt=attempt,
+                        status=JobStatus.PENDING.value,
+                        detail={
+                            "mode": "expiry_gated" if stale_after is not None else "startup",
+                            "fencing": "previous token superseded by the next reservation",
+                        },
+                        occurred_at=_now(),
+                    )
                 )
-            )
             self._schedule(job_id)
         return [job_id for job_id, _, _ in reset]
 
@@ -590,6 +603,8 @@ class InProcessJobQueue:
             await asyncio.gather(*tasks, return_exceptions=True)
         reset = await asyncio.to_thread(self._reset_unfinished, None, set())
         for job_id, job_type, attempt in reset:
+            if attempt is None:
+                continue  # never owned: re-listed pending, not a takeover
             await self._record(
                 CausalEvent(
                     kind=EventKind.JOB_TAKEOVER,

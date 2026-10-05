@@ -105,7 +105,7 @@ over the real FFmpeg chain):
 | `VERIFIED` | chain intact + row fully accounted + live digests match the recorded ones + bytes re-measure to the recorded digest (failure passports expect no artifact) | the e2e render test |
 | `VERIFIED_WITH_LIMITATIONS` | as above, but bytes are no longer reachable (delivered/retention-cleaned — normal here) and/or history contains labeled backfills | the removal + backfill tests |
 | `INCOMPLETE` | missing transition records, no recorded artifact identity on a completed job, job not terminal, or row unknown | the broken-ledger + fresh-journal tests |
-| `COMPROMISED` | broken chain, payload/result/status divergence between ledger and live row, or artifact bytes that no longer match the recorded identity | the tamper + corrupt-journal tests |
+| `COMPROMISED` | broken chain, payload/result/status divergence between ledger and live row, artifact bytes that no longer match the recorded identity, or a row whose authoritative status cannot be parsed (`unparseable_row_status` — an impossible persisted state) | the tamper + corrupt-journal + unknown-status tests |
 
 Reconciliation findings (typed, severities `note < limitation < incomplete <
 compromised`) are part of the passport document — the reader sees *why* a
@@ -124,6 +124,10 @@ status was assigned, every time.
 | Truncate the journal tail | detected **for the affected job** (missing records); truncation of *other* jobs' tails requires an externally anchored head — `predicate.chain.journal_head` is published precisely so a future signed checkpoint can close this (documented limitation, not hidden) |
 | Ledger storage loss at runtime | jobs unaffected (`causal_ledger_observe_failed` degradation log); passport honestly `INCOMPLETE` |
 | Out-of-process SQLite rewrite of one row | caught by chain verification (`test_provenance_journal.py`) |
+| Redeliver the same transition with a *different* claim (buggy recovery, lying writer) | `CausalConflictError` raised + the rejected claim durably quarantined as an `EVENT_CONFLICT` record — the kept truth is never silently overwritten, identical redelivery is still an honest duplicate (`TestEvidenceConflicts`) |
+| Fabricate an ownership transfer (restart re-lists a pending row) | no takeover record: reservation is minted exactly once, per real attempt (`TestTakeoverTruthfulness`); shutdown re-lists only record `JOB_REOPENED` |
+| Corrupt/locked sidecar at startup or mid-run | execution plane never dies: `try_open_causal_journal` degrades to `None` (`causal_journal_unavailable` log); record-time failures degrade per event (`causal_ledger_observe_failed`); passport honestly reports absent evidence (`TestTryOpenCausalJournal`, `TestRealJournalFailureDuringExecution`) |
+| Two processes appending concurrently to one sidecar | serialized by `BEGIN IMMEDIATE` over head-read→hash→insert (retries on `IntegrityError` as defense-in-depth); proven by real-OS-process storm + cross-process dedupe tests (`TestCrossProcessSerialization`, `TestCrossProcessDedupe`) |
 
 The known ceiling: an attacker who rewrites the *entire* journal consistently
 and the row coherently defeats a local verifier — exactly the gap external

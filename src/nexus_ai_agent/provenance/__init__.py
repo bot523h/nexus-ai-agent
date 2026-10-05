@@ -11,7 +11,11 @@ state. It observes facts after they are durably committed and proves (or
 honestly refuses to prove) what happened.
 """
 
-from nexus_ai_agent.provenance.journal import AppendResult, CausalJournal
+from nexus_ai_agent.provenance.journal import (
+    AppendResult,
+    CausalConflictError,
+    CausalJournal,
+)
 from nexus_ai_agent.provenance.models import (
     GENESIS_HASH,
     RECORD_DOMAIN,
@@ -38,6 +42,7 @@ __all__ = [
     "RECORD_DOMAIN",
     "AppendResult",
     "ArtifactPassport",
+    "CausalConflictError",
     "CausalEvent",
     "CausalJournal",
     "CausalObserver",

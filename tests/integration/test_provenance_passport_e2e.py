@@ -235,7 +235,7 @@ async def test_journal_lost_then_backfilled_is_honested(harness) -> None:  # noq
     assert PassportBuilder(fresh, queue).build(job_id).status is PassportStatus.INCOMPLETE
 
     report = backfill_journal(fresh, queue, [job_id])
-    assert report.appended == 3
+    assert report.appended == 4
     passport = PassportBuilder(fresh, queue).build(job_id)
     assert passport.status is PassportStatus.VERIFIED_WITH_LIMITATIONS
     assert any(f.code == "backfilled_history" for f in passport.findings)
