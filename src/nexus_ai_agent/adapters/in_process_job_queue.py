@@ -685,9 +685,8 @@ class InProcessJobQueue:
         )
         chain = job_result.to_dict()
         chain["request_identity"] = {
-            "request_id": str(row["request_id"]),
-            "request_fingerprint": str(row["request_fingerprint"]),
-            "transaction_id": str(row["transaction_id"]),
+            field: (str(row[field]) if row[field] is not None else None)
+            for field in ("request_id", "request_fingerprint", "transaction_id")
         }
         return chain
 
@@ -873,7 +872,19 @@ class InProcessJobQueue:
         # PENDING-only CAS mints this execution's fencing token; a row that
         # is already PROCESSING/VERIFYING belongs to someone else (another
         # process over the same sidecar, or a live task) and is NOT ours.
-        claim = await asyncio.to_thread(self._mark_processing, job_id)
+        try:
+            claim = await asyncio.to_thread(self._mark_processing, job_id)
+        except CreativePassportError:
+            # Never execute a row whose queue-owned attempt evidence cannot
+            # be decoded and extended atomically. Recovery leaves it pending
+            # for repair; other jobs continue independently.
+            logger.warning(
+                "job_attempt_history_unreadable job_id=%s; reservation rolled back "
+                "and job remains pending",
+                job_id,
+                exc_info=True,
+            )
+            return
         if claim is None:
             logger.info("job_reservation_rejected job_id=%s type=%s", job_id, job_type)
             return
@@ -1959,16 +1970,32 @@ class InProcessJobQueue:
                     if cutoff is not None and started_at is not None and started_at >= cutoff:
                         continue  # a live peer may still own a recent row
                     current_attempt = int(row["attempt"] or 0)
-                    history = self._decode_attempt_history(str(row["attempt_history_json"] or "[]"))
-                    for entry in history:
-                        if self._attempt_number(entry) == current_attempt and entry.get(
-                            "status"
-                        ) in {"processing", "verifying"}:
-                            entry["status"] = "interrupted"
-                            entry["finished_at"] = _now()
-                            entry["error"] = entry.get("error") or (
-                                "process_recovered_before_attempt_checkpoint"
-                            )
+                    raw_history = row["attempt_history_json"]
+                    try:
+                        history = self._decode_attempt_history(str(raw_history or "[]"))
+                        for entry in history:
+                            if self._attempt_number(entry) == current_attempt and entry.get(
+                                "status"
+                            ) in {"processing", "verifying"}:
+                                entry["status"] = "interrupted"
+                                entry["finished_at"] = _now()
+                                entry["error"] = entry.get("error") or (
+                                    "process_recovered_before_attempt_checkpoint"
+                                )
+                        history_json = canonical_json(history)
+                    except CreativePassportError as exc:
+                        # The queue row remains the state authority, but its
+                        # corrupt attempt evidence cannot be reconstructed.
+                        # Preserve the raw bytes, release the orphaned in-flight
+                        # state, and let other rows recover independently.
+                        logger.warning(
+                            "attempt_history_unreadable_during_recovery "
+                            "job_id=%s attempt=%s reason=%s; preserving raw history",
+                            job_id,
+                            current_attempt,
+                            type(exc).__name__,
+                        )
+                        history_json = raw_history
                     cursor = connection.execute(
                         """
                         UPDATE nexus_job_queue
@@ -1977,7 +2004,7 @@ class InProcessJobQueue:
                         """,
                         (
                             JobStatus.PENDING.value,
-                            canonical_json(history),
+                            history_json,
                             job_id,
                             *in_flight,
                             current_attempt,

@@ -119,6 +119,70 @@ def _child_run(code: str, env: dict[str, str]) -> subprocess.CompletedProcess[st
 
 
 @pytest.mark.asyncio
+async def test_result_chain_preserves_missing_request_identity_fields(tmp_path: Path) -> None:
+    db = tmp_path / "missing-identity.sqlite3"
+    queue = InProcessJobQueue(db, artifact_verifiers={})
+    outcome = queue._insert_or_get("test", "missing-identity", {"value": 1})
+    with sqlite3.connect(db) as connection:
+        connection.execute(
+            """
+            UPDATE nexus_job_queue
+            SET request_id = NULL, request_fingerprint = NULL, transaction_id = NULL
+            WHERE id = ?
+            """,
+            (outcome.job_id,),
+        )
+
+    chain = await queue.get_result_chain(outcome.job_id)
+
+    assert chain["request_identity"] == {
+        "request_id": None,
+        "request_fingerprint": None,
+        "transaction_id": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_corrupt_inflight_history_does_not_block_other_job_recovery(tmp_path: Path) -> None:
+    db = tmp_path / "corrupt-inflight-history.sqlite3"
+    queue = InProcessJobQueue(db, artifact_verifiers={})
+    handler_calls: list[str] = []
+
+    async def handler(payload: dict[str, object]) -> dict[str, object]:
+        handler_calls.append(str(payload["name"]))
+        return {"ok": True}
+
+    queue.register_handler("test", handler)
+    corrupt_job_id = queue._insert_or_get("test", "corrupt-history", {"name": "bad"}).job_id
+    healthy_job_id = queue._insert_or_get("test", "healthy-history", {"name": "good"}).job_id
+    assert queue._mark_processing(corrupt_job_id) is not None
+    assert queue._mark_processing(healthy_job_id) is not None
+    with sqlite3.connect(db) as connection:
+        connection.execute(
+            "UPDATE nexus_job_queue SET attempt_history_json = ? WHERE id = ?",
+            ("not-json", corrupt_job_id),
+        )
+
+    resumed = await queue.resume_pending()
+    assert set(resumed) == {corrupt_job_id, healthy_job_id}
+    recovery_tasks = tuple(queue._tasks.values())
+    assert len(recovery_tasks) == 2
+    await asyncio.gather(*recovery_tasks)
+
+    assert handler_calls == ["good"]
+    assert await queue.get_status(healthy_job_id) is JobStatus.COMPLETED
+    assert await queue.get_status(corrupt_job_id) is JobStatus.PENDING
+    facts = queue.get_job_facts(corrupt_job_id)
+    assert facts is not None and facts.attempt == 1 and not facts.attempt_history_known
+    with sqlite3.connect(db) as connection:
+        raw_history = connection.execute(
+            "SELECT attempt_history_json FROM nexus_job_queue WHERE id = ?",
+            (corrupt_job_id,),
+        ).fetchone()[0]
+    assert raw_history == "not-json"
+
+
+@pytest.mark.asyncio
 async def test_duplicate_delivery_across_queue_instances_executes_one_handler(
     tmp_path: Path,
 ) -> None:
