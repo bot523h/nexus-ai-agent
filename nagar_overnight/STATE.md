@@ -2,50 +2,42 @@
 
 | Field | Value |
 |---|---|
-| Current phase | Phase 6 — **Gate C**: propagation → CI → real free-text→operation E2E cognition path |
-| Current task | Free-text vertical slice + `moderate` fail-closed fix + architecture guards + docs |
+| Current phase | Phase 3 — **convergence**: free-text slice on a real host path + canonical `LLMPort` |
+| Current task | Wire the canonical model seam + host composition + a real CLI caller; keep ONE bus path |
 | Chosen mode | **MODE B** (substrate present; slice additive, no second execution path) |
-| Base SHA | `e5b326b2eaf691a638d030ad57acf1ce60016ef0` (origin/main; merge-base, 0 behind) |
-| Branch | `overnight/nagar-20261004` |
-| Base (Phase-2 start) SHA | `0af3b9e` (15 commits ahead of main at Gate C start) |
-| Working SHA | `5fbc7fa` (final; CI 16/16 green) |
-| Last known green SHA | Gate C-final — full suite **3098 passed, 0 failed, 30 skipped**; ruff/format/mypy clean |
-| Next action | Wire a production caller (CLI/Telegram) to run_free_text_intent (see REPORT) |
-| Current blockers | none that block local work; B-3 **resolved** (push via PAT) |
+| Base SHA (historical main) | `e5b326b2eaf691a638d030ad57acf1ce60016ef0` |
+| Converged onto | `origin/main` `6e41123` (PR #153), merge-base == `origin/main` |
+| Branch | `sync/nagar-gatec-20261005` |
+| Working SHA | `28b6986` (Phase 3 code commit) |
+| Last known green SHA | `28b6986` — full suite **3176 passed, 30 skipped, 0 failed**; ruff/format/mypy clean |
+| Next action | Commit records; fast-forward `overnight/nagar-20261004` (PR #155) onto this branch |
+| Current blockers | none |
 
-## Gate C results
+## Phase 3 result (convergence)
 
-- `ruff check .` → PASS
-- `ruff format --check src tests` → PASS (461 files)
-- `mypy src` → PASS (259 source files)
-- `pytest -q` → **3098 passed, 30 skipped, 0 failed** (delta from Phase-5
-  baseline 3044 = **+50**, failure set unchanged at 0)
-- new tests in Gate C → 50:
-  - `tests/unit/test_nagar_free_text_slice.py` — 29 (E2E + 15-case hostile matrix + memory authority)
-  - `tests/unit/test_phi_moderation_fail_closed.py` — 13
-  - `tests/architecture/test_nagar_creative_slice_boundary.py` — 8
+- `ruff check .` -> PASS; `ruff format --check` -> PASS; `mypy src` -> PASS (268 files)
+- `pytest -q` -> **3176 passed, 30 skipped, 0 failed** (converged baseline was 3160; +16)
+- New/changed this phase:
+  - `nagar/cognition/adapter.py` — canonical `LLMPort` (`complete`) preferred over legacy `generate`;
+    idempotency key propagated to exactly that seam.
+  - `nagar/cognition/{port,null,gateway}.py` — idempotency key through the seam; gateway `actor`/
+    `project_id`/`producer` accessors; `completion` is the canonical builder arg.
+  - `nagar/composition.py` — the only place a provider is built; a `FakeLLM` fallback is
+    reported `not_configured` (never fed into a proposal as a real model).
+  - `nagar/observation.py` — cognition decision -> existing causal journal (observation, not
+    authority); failure degrades evidence only. Outside the pure cognition package so the
+    isolation gate stays green.
+  - `creative/render_jobs.py` — `build_job_bus` = the single canonical bus factory (registry +
+    server-policy opt-in); CLI and slice reach the bus through it (ONE path preserved).
+  - `cli.py` — `nexus intent`: real host caller (free-text -> typed proposal -> registry -> bus ->
+    verified artifact; independent verdict; optional JSON receipt; Model Kill Test observable).
+  - tests: `test_nagar_free_text_slice.py` (45), `test_nagar_intent_cli.py` (4), architecture gates
+    updated to the hardened shape.
 
-## Gate C0/C1 live truth
+## Artifact proof (this phase)
 
-- `merge-base(overnight/nagar-20261004, origin/main)` = `e5b326b` — branch is a
-  strict descendant (15 ahead / 0 behind at Gate C start; no divergence, no rebase).
-- Repo is shallow (`git rev-parse --is-shallow-repository` = `true`).
-- **B-3 resolved:** the credential embedded in the configured remote URL is
-  read-only (403). `$GITHUB_PERSONAL_ACCESS_TOKEN` authenticates as `bot523h`
-  and a **dry-run push** confirmed `* [new branch]` — write access is real.
-
-## Mode rationale (short)
-
-Live recon on `main @ e5b326b` proves the deterministic substrate exists and is
-strong (CommandBus, CapabilityRegistry, authorizer, pack lifecycle gate, durable
-jobs with fencing, independent artifact verification, FFmpeg lane, `timeline.trim`
-`AVAILABLE`). What was absent was a *production free-text→operation caller*. Gate C
-adds exactly that — as one thin seam over the existing `CognitionGateway`, plus a
-printable fail-open fix — and nothing else.
-
-## Scope guards honoured
-
-- No push to main, no merge, no force-push, no history rewrite.
-- No gate/test weakening; no `xfail`/skip to get green.
-- No second competing execution path: the slice owns no bus/authorizer and
-  module-imports none; it delegates to the one `CognitionGateway` → `CommandBus`.
+- Applied path driven end-to-end with a **declared scripted model** (external seam only):
+  `status: applied`, `verified: True`, real receipt written
+  (`/tmp/nagar_artifact_receipt.json`, 946 bytes, `sha256:72a4d498...`).
+- Model Kill Test (no model configured): `status: clarification_required`, `state_revision: 0`,
+  real receipt with `verified: false` — nothing executed.

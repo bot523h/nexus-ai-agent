@@ -95,3 +95,21 @@ patch would be unsafe.
   integration. Status is **VERIFIED (local)**, never **REMOTE-DELIVERED**.
 - **Recommended action:** grant the App installation `contents: write`, then
   push the branch and open one PR (do not re-apply any commit).
+
+## A-6 — PR #155 diverged from `main`; resolved by fast-forward (Phase 3)
+
+- **Symptom:** PR #155 (`overnight/nagar-20261004` @ `4572322`) reported
+  `mergeable: CONFLICTING` / `mergeStateStatus: DIRTY` against `main` @ `6e41123`.
+- **Root cause:** #155 was branched from the old main (`e5b326b`, per
+  `git merge-base`) and is 15 commits behind; newer main-bound PRs touched the
+  same files.
+- **Evidence (read-only):** `git merge-base --is-ancestor overnight/nagar-20261004 HEAD`
+  -> true; `git rev-list --left-right --count overnight/nagar-20261004...HEAD` -> `0  19`.
+  i.e. #155 is a strict ancestor of the converged branch `sync/nagar-gatec-20261005`
+  (merge-base == `origin/main`).
+- **Resolution (no history rewrite):** fast-forward the PR branch to this branch's
+  head once pushed. `git push origin sync/nagar-gatec-20261005:overnight/nagar-20261004`
+  is a **fast-forward** — no force-push, no rebase, no protected ref touched. This
+  updates the existing PR #155 in place.
+- **Confidence:** high (ancestry proven locally; refs read-only).
+- **Status:** pending the push step below.

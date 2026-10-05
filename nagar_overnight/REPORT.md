@@ -661,3 +661,46 @@ Wire a production caller (CLI/Telegram) to `nagar.creative.run_free_text_intent`
 so the free-text→operation path is reachable end-to-end in production, and add
 one test through that entry point. CI for PR **#155** is **16/16 green on exact
 SHA `5fbc7fa`**; the PR stays **draft** for the gates owner.
+
+---
+
+## PHASE 3 DELTA — convergence onto a real host path
+
+> Later in the same session, on branch `sync/nagar-gatec-20261005` (converged onto
+> `origin/main` `6e41123`). This supersedes the Phase-3 body above where they differ.
+
+### LIVE TRUTH (Phase 3)
+- `origin/main` SHA: `6e41123` (PR #153). Merge-base of this branch == `origin/main`.
+- Branch: `sync/nagar-gatec-20261005`; working SHA `28b6986` (code) + records.
+- PR #155 (`overnight/nagar-20261004`): OPEN, was `CONFLICTING`; strict ancestor of this
+  branch -> a fast-forward push converges it (no history rewrite).
+- Remote refs (read-only): `arena/*` present (10+); `sync/nagar-gatec-20261005` present.
+
+### What became more coherent
+- ONE model seam: `LLMPort.complete` is canonical; the legacy `generate` shape is a declared
+  test shim. The idempotency key reaches exactly that seam.
+- ONE bus construction path: `render_jobs.build_job_bus` is the single canonical factory
+  (runtime registry + server-policy opt-in); the CLI and the slice call it, never `CommandBus`.
+  An architecture gate enforces this and *caught the first draft's violation*.
+- ONE provider construction site: `nagar/composition.py`; a fake fallback is `not_configured`.
+- Cognition decision is an **observation** in the existing causal journal — evidence, not authority.
+
+### Model-Optional result
+- Works with **no model**: routing, registry-derived schema, policy/authority, canonical
+  execution, independent verification, receipts, causal observation — all deterministic.
+  The Model Kill Test is observable from the CLI (`status: clarification_required`, revision 0).
+- Still requires cognition: parsing genuinely open free text into a typed proposal. Honest
+  refusal is returned when no model exists; nothing is fabricated.
+
+### Evidence (exact)
+- `pytest -q` -> `3176 passed, 30 skipped, 0 failed` (converged baseline 3160; +16).
+- `make lint` PASS; `make types` PASS (268 files).
+- Model Kill (CLI): `status: clarification_required`, `state_revision: 0`, receipt `verified:false`.
+- Applied (CLI, declared scripted model at the external seam only): `status: applied`,
+  `verified: True`, receipt 946 bytes `sha256:72a4d498...`.
+
+### Claim status
+- `nagar.cognition` port + Null/Local producers + deterministic router + gateway: VERIFIED.
+- `nagar.creative` free-text slice + `nagar.observation` + `nagar.composition`: VERIFIED.
+- `nexus intent` CLI host caller: IMPLEMENTED + VERIFIED (tests) + ARTIFACT-PROVEN
+  (receipt), with the model seam declared-faked for the applied path. Not PRODUCTION-PROVEN.

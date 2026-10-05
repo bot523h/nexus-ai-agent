@@ -258,3 +258,53 @@ d0c2566: 16/16 SUCCESS. Final 5fbc7fa: 16/16 SUCCESS (exact SHA).
 8. Final test health >= baseline? Yes — 0 failures (baseline 0), +54 tests.
 9. Turned a model into an authority? No — models produce proposals only; registry ∩ request gates the op.
 10. Confused implementation with proof? No — status kept at ARTIFACT-PROVEN, not production-proven.
+
+---
+
+## Phase 3 — convergence onto a real host path (`sync/nagar-gatec-20261005`)
+
+Branch head before this phase: `3fddeac` (merge of `origin/main` `6e41123`).
+`merge-base(sync/nagar-gatec-20261005, origin/main)` == `origin/main` (fully converged).
+
+### What changed and why
+- **Canonical model seam.** `LocalCognition` now prefers a `LLMPort`-shaped `complete(prompt, *,
+  idempotency_key=...)` over the legacy `generate(prompt, system)` shim; the idempotency key is
+  propagated to exactly that seam. `CognitionPort.propose` gained the keyword-only key.
+- **Host composition.** `nagar/composition.py` is the *only* place a provider is built. A `FakeLLM`
+  fallback from `build_llm_provider` is reported `ProviderStatus.NOT_CONFIGURED` — a fake is not a
+  model, so it is never fed into a proposal as if it were one.
+- **Observation, not authority.** `nagar/observation.py` records the cognition decision to the
+  existing `CausalJournal` (accepted = `job_reserved`, refusal = `event_conflict`), append-only and
+  failure-swallowing: recording degrades evidence, never execution. Moved out of the pure
+  `nagar.cognition` package so the isolation gate (no cognition -> provenance import) stays green.
+- **ONE bus path preserved (gate caught a real violation).** The first CLI draft constructed a
+  second `CommandBus`; `tests/architecture/test_lifecycle_gate_boundary.py::
+  test_no_second_command_bus_construction_path` failed. Fix: `render_jobs.build_job_bus` is now the
+  single canonical factory (registry always runtime; opt-in always server-policy; optional
+  authorizer). The CLI and the slice reach the bus through it. The gate was *not* weakened.
+- **Dead code removed (self-review).** `CognitionGateway.proposals_from` / `proposed_schema` and
+  `build_cognition_gateway_from_completion` were unused; removed to avoid a second route to the bus.
+- **Real CLI host caller.** `nexus intent <text>` builds the provider via `build_cognition_provider`,
+  the bus via `build_job_bus`, runs `run_free_text_intent`, prints an independent verification
+  verdict, and can write a real JSON receipt.
+
+### Evidence
+- `make lint` PASS; `make types` PASS (268 files); `pytest -q` -> **3176 passed, 30 skipped, 0 failed**.
+- Model Kill Test (CLI, no model): `status: clarification_required`, `state_revision: 0`,
+  receipt `verified: false` — nothing executed.
+- Applied path (CLI, declared scripted model at the external seam only): `status: applied`,
+  `verified: True`, receipt 946 bytes `sha256:72a4d498...`.
+
+### Drift check (section 34)
+1. In scope? Yes — additive cognition slice + its host caller.
+2. Prohibited area? No `main`, no force-push, no other branch mutation.
+3. Weakened a gate? **No** — the bus gate fired and was satisfied by a canonical factory, not by
+   editing the assertion set to allow the CLI.
+4. Evidence? Yes (commands + receipts above).
+5. Cosmetic refactor? No; the observation move is required by the isolation gate.
+6. Second source of truth? No — one bus factory; offered set = registry INTERSECT request.
+7. Speculative complexity? No — dead APIs removed.
+8. Health >= baseline? Yes (0 failures; +16 tests).
+9. Model as authority? No — models only propose; registry INTERSECT request gates the operation.
+10. Implementation vs proof? Kept at ARTIFACT-PROVEN (declared fake at the model seam), not
+    production-proven.
