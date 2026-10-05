@@ -246,3 +246,15 @@ Retrieved-memory text claiming authority → refused.
 
 ### CI
 d0c2566: 16/16 SUCCESS. Final 5fbc7fa: 16/16 SUCCESS (exact SHA).
+
+### Final drift check (§34)
+1. Inside approved scope? Yes — additive `nagar.creative` slice + one printable bug fix + docs/tests.
+2. Touched a prohibited area? No — no `main`, no `cli.py`/`bot/handlers.py`/`creative/studio`/gates.
+3. Weakened any gate/test/security control? No — no skip/xfail, no assertion loosening; +54 tests.
+4. Latest claims have evidence? Yes — command outputs recorded (3098 passed, CI 16/16, artifact proof).
+5. Cosmetic refactoring? No.
+6. Created a second source of truth? No — offered set derives from the same registry the bus uses.
+7. Added speculative complexity? No — one seam, one operation.
+8. Final test health >= baseline? Yes — 0 failures (baseline 0), +54 tests.
+9. Turned a model into an authority? No — models produce proposals only; registry ∩ request gates the op.
+10. Confused implementation with proof? No — status kept at ARTIFACT-PROVEN, not production-proven.
