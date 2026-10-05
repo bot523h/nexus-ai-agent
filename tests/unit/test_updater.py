@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sys
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -136,7 +136,7 @@ async def test_stale_approval_requires_fresh_approval(
     async with temp_db() as session:
         stale = await session.get(PendingApproval, row.id)
         assert stale is not None
-        stale.created_at = datetime.utcnow() - timedelta(hours=1)
+        stale.created_at = datetime.now(timezone.utc) - timedelta(hours=1)
         session.add(stale)
         await session.commit()
 

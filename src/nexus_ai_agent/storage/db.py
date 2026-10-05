@@ -221,16 +221,21 @@ _CREATE_ALL_ATTEMPTS = 6
 
 
 def _is_concurrent_create_conflict(exc: Exception) -> bool:
-    """Whether ``exc`` is another process having just created the same object.
+    """Whether ``exc`` is another process having just created the same schema object.
 
     ``MetaData.create_all`` runs with ``checkfirst=True``, so it asks whether a
-    table exists and *then* emits ``CREATE TABLE``.  Two processes booting
+    table exists and *then* emits ``CREATE TABLE``. Two processes booting
     together both see "does not exist", both emit the DDL, and the loser gets
-    ``table … already exists`` or ``database is locked``.  That is a benign race,
-    not a broken schema — the winner did exactly the work the loser was about to do.
+    a duplicate object creation error (e.g. ``already exists`` in SQLite/PostgreSQL).
     """
     message = str(getattr(exc, "orig", exc)).lower()
-    return "already exists" in message or "database is locked" in message or "locked" in message
+    return "already exists" in message or "duplicate" in message
+
+
+def _is_sqlite_lock_conflict(exc: Exception) -> bool:
+    """Whether ``exc`` is a transient SQLite lock contention during PRAGMA or DDL."""
+    message = str(getattr(exc, "orig", exc)).lower()
+    return "database is locked" in message or "database table is locked" in message
 
 
 async def create_all_metadata(engine: Any, metadata: MetaData) -> None:
@@ -276,8 +281,11 @@ async def create_all_tables(db_path: str = "data/app.sqlite") -> None:
                 await conn.execute(text("PRAGMA journal_mode=WAL"))
             break
         except (OperationalError, ProgrammingError) as exc:
-            if attempt >= _CREATE_ALL_ATTEMPTS or not _is_concurrent_create_conflict(exc):
+            if attempt >= _CREATE_ALL_ATTEMPTS or not _is_sqlite_lock_conflict(exc):
                 raise
+            log.warning(
+                "PRAGMA journal_mode=WAL locked; retry %d/%d", attempt, _CREATE_ALL_ATTEMPTS
+            )
             await asyncio.sleep(0.05 * attempt)
     await create_all_metadata(engine, SQLModel.metadata)
     _initialized_paths.add(normalized_path)

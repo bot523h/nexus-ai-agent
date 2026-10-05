@@ -90,13 +90,10 @@ class TestConflictMatcher:
 
     @pytest.mark.parametrize(
         "message",
-        ["no such table: chat", "syntax error at or near"],
+        ["database is locked", "no such table: chat", "syntax error at or near"],
     )
     def test_ignores_unrelated_errors(self, message: str) -> None:
         assert _is_concurrent_create_conflict(_conflict(message)) is False
-
-    def test_recognises_database_locked_conflicts(self) -> None:
-        assert _is_concurrent_create_conflict(_conflict("database is locked")) is True
 
     def test_loose_matching_is_a_deliberate_trade_off(self) -> None:
         """The matcher over-matches on purpose.
