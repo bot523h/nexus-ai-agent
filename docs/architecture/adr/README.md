@@ -18,6 +18,7 @@ This directory holds **decisions about how the architecture documentation and it
 | [0004](0004-board-schema-2.md) | Coordination board schema 2: declared prerequisites and acceptance criteria | accepted | 2026-09-21 |
 | [0005](0005-canonical-command-capability-contract.md) | Canonical command and capability contract: versioning, location, and reconciliation | accepted | 2026-09-24 |
 | [0006](0006-capability-pack-trust-root.md) | Capability packs get an explicit trust root, not a self-asserted one | accepted | 2026-09-27 |
+| [0008](0008-agent-constitution-layer.md) | The agent engineering contract is a versioned root constitution, enforced by a test | accepted | 2026-10-05 |
 
 ## Rules
 

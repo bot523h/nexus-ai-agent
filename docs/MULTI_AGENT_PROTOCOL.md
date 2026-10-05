@@ -1,7 +1,10 @@
 # Multi-Agent Working Protocol (NEXUS AI Agent)
 
 Version 1.0 — 2026-09-21
-Companion files: `AGENTS.md` (root contract), `.agents/board.json` (state), `scripts/agent_board.py` (CLI).
+Companion files: `AGENTS.md` (root contract), `NAGAR_AGENT_CONSTITUTION.md` (the persistent
+cross-session engineering law — bootstrap, laws L0–L10, completion vocabulary, completion gate;
+read it together with `AGENTS.md` before any work), `.agents/board.json` (state),
+`scripts/agent_board.py` (CLI).
 
 ## 1. Why this exists
 

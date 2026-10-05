@@ -31,8 +31,14 @@ make test           # pytest -q -m "not slow"
 ## Multi-agent coordination (required reading for AI agents)
 
 If you are an AI agent (Arena session, Claude Code, …) or a human working in
-parallel with one: **read `AGENTS.md` at the repo root first.** Claims, leases
-and deferrals are managed through `.agents/board.json` and
+parallel with one: **read `AGENTS.md` and `NAGAR_AGENT_CONSTITUTION.md` at the
+repo root first.** `AGENTS.md` is the coordination and ownership contract;
+`NAGAR_AGENT_CONSTITUTION.md` is the persistent cross-session engineering law
+(truth before code, no fake verification, authority discipline, exact-head
+proof, the closed completion vocabulary, and the completion gate). Both are
+pinned by `tests/architecture/test_agent_constitution.py`.
+
+Claims, leases and deferrals are managed through `.agents/board.json` and
 `scripts/agent_board.py` (see `docs/MULTI_AGENT_PROTOCOL.md` /
 `docs/MULTI_AGENT_PROTOCOL.fa.md`). Claim your task, push the board change
 immediately, never touch a file under another agent's active exclusive paths,

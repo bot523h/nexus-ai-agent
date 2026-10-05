@@ -8,6 +8,27 @@
 
 # AGENTS.md — Multi-Agent Coordination Contract (protocol v2)
 
+> ### MANDATORY SESSION BOOTSTRAP
+>
+> Before any planning, analysis, coding, testing, Git operation, PR operation, or completion
+> claim, every agent MUST read:
+>
+> 1. `AGENTS.md`
+> 2. `NAGAR_AGENT_CONSTITUTION.md`
+> 3. all mission-specific instructions explicitly applicable to the current task
+>
+> The agent MUST NOT begin implementation before reading and applying these files.
+>
+> These files are the persistent cross-session engineering contract for Nagar.
+
+This file is the **entry** contract: coordination, ownership, and evidence rules. The engineering
+law — truth before code, no fake verification, authority discipline, exact-head proof, the closed
+completion vocabulary, and the completion gate — lives in
+[`NAGAR_AGENT_CONSTITUTION.md`](NAGAR_AGENT_CONSTITUTION.md) and is **not** repeated here. Both files
+are pinned by `tests/architecture/test_agent_constitution.py` (law R14 in
+`docs/architecture/MODULE_MAP.md` §3): the bootstrap block above cannot be moved below §1, softened,
+or deleted without turning CI red.
+
 Several agents work on this repository **in parallel, from separate sandboxes**. The only shared
 medium between sandboxes is **this git repository**, so coordination is file-based: a claim board
 committed and pushed through git, backed by a zero-dependency CLI
@@ -43,6 +64,10 @@ The board is `.agents/board.json` (**schema 2**: `protocol`, `zones`, `claims`, 
   observed result. "Tests pass" without a command is not evidence.
 - Honest status beats optimistic status: if a capability is implemented but not reachable, say so and
   record the reproduction (see `task-126` in the board as the worked example).
+- A PR body ends with a completion status chosen from the **closed vocabulary** of
+  `NAGAR_AGENT_CONSTITUTION.md` §4 — `VERIFIED`, `VERIFIED_WITH_LIMITATIONS`,
+  `HARDENED_BUT_NOT_COMPLETE`, `BLOCKED`, or `DEFERRED` — plus the bootstrap attestation
+  (§0) and the exact-head CI coordinates (commit SHA + run id, or "deferred to gates owner").
 - Numbers in documentation must be reproducible from the tree
   (`docs/architecture/TESTING.md` §6).
 
@@ -118,3 +143,8 @@ touching it must coordinate explicitly in the board note before pushing. The rul
 - Every boundary rule must name its enforcing test in `docs/architecture/MODULE_MAP.md` §3.
 - Architecture decisions that change **system behaviour** go to `docs/DECISION_LOG.md`; decisions about
   the **documentation/board layer** go to `docs/architecture/adr/`.
+- `NAGAR_AGENT_CONSTITUTION.md` is a living root contract, not a dated record: amending its protected
+  sections (laws, completion vocabulary, completion gate, amendment law) requires a version bump, an
+  amendment-record row, and an update to `tests/architecture/test_agent_constitution.py` in the same
+  commit. On conflict, `docs/DECISION_LOG.md` and executable truth win; the contradiction is recorded,
+  never hidden (constitution §9).

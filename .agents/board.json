@@ -2795,14 +2795,14 @@
       "acceptance_criteria": [
         "NAGAR_AGENT_CONSTITUTION.md sits at the repository root with a version header, an amendment record, laws L0-L10, the closed five-word completion vocabulary, the sixteen-dimension gate, the mandatory report template, and the loophole register",
         "AGENTS.md carries the MANDATORY SESSION BOOTSTRAP block above its first section, names the constitution, and does not restate the laws",
-        "tests/architecture/test_agent_constitution.py turns red for every bypass in the loophole register: 17/17 mutants killed by scripts/agent_constitution_mutations.py with the tree restored byte for byte",
+        "tests/architecture/test_agent_constitution.py turns red for every bypass in the loophole register: 21/21 mutants killed by scripts/agent_constitution_mutations.py with the tree restored byte for byte",
         "every entry point an agent can land on (README.md, CONTRIBUTING.md, docs/README.md, docs/architecture/MODULE_MAP.md) names the constitution, and the law/test pair is registered as R14",
         "no existing governance rule is overridden: the single gates_owner rule, board leases, and DECISION_LOG precedence are preserved and stated explicitly in the constitution",
         "pytest tests/architecture/test_agent_constitution.py, tests/unit/test_docs_integrity.py and tests/unit/test_agent_board.py are green; ruff check and ruff format --check are clean on the changed tree"
       ],
       "evidence_required": [
-        "pytest -q tests/architecture/test_agent_constitution.py (17 passed)",
-        "python scripts/agent_constitution_mutations.py (17/17 killed, tree restored byte for byte)",
+        "pytest -q tests/architecture/test_agent_constitution.py (18 passed)",
+        "python scripts/agent_constitution_mutations.py (21/21 killed, tree restored byte for byte)",
         "pytest -q tests/unit/test_docs_integrity.py tests/unit/test_agent_board.py",
         "ruff check . && ruff format --check . on the changed tree (mypy src is not applicable: no file under src/ changes)",
         "CI run on the exact head SHA, or an explicit 'deferred to gates owner' note"
