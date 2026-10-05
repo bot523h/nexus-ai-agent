@@ -34,6 +34,8 @@ the amendment process working, not an obstacle to route around.
 from __future__ import annotations
 
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
@@ -47,12 +49,14 @@ PROTOCOL = ROOT / "docs" / "MULTI_AGENT_PROTOCOL.md"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 CAMPAIGN = "scripts/agent_constitution_mutations.py"
 CAMPAIGN_SCRIPT = ROOT / CAMPAIGN
+PYTEST_CONFIG = ROOT / "pyproject.toml"
+ENFORCER_REL = "tests/architecture/test_agent_constitution.py"
 CI_JOB = "agent-constitution-mutations"
 MODULE_MAP = ROOT / "docs" / "architecture" / "MODULE_MAP.md"
 
 #: Pinned by the amendment law: bumping the constitution version without
 #: updating this constant is exactly the "silent rewrite" the law forbids.
-EXPECTED_VERSION = "1.1.0"
+EXPECTED_VERSION = "1.2.0"
 ENFORCER_PATH = "tests/architecture/test_agent_constitution.py"
 
 #: Canonical law headings — the ids are the vocabulary agents cite in reports.
@@ -337,6 +341,69 @@ def test_the_constitution_does_not_bypass_repository_authority() -> None:
     authority_map = _level2_section(text, "Authority map")
     for row in ("Source of truth", "Cache", "Projection", "Evidence"):
         assert row in authority_map, f"the authority map lost its {row!r} role (L5)"
+
+
+def test_the_guard_is_actually_collected_by_the_ci_selection() -> None:
+    """A guard that exists but never runs is worse than no guard (§10 B14).
+
+    CI runs ``pytest -v -rs -m "not slow"``. Three cheap edits remove every
+    assertion in this file from the gate while leaving the file in the tree:
+    marking the module ``slow``, ignoring it from ``addopts``, or collecting it
+    away in a ``conftest.py``.
+
+    Coverage of this guard, stated honestly: the marker case is caught twice
+    (by the textual pin and by the collection probe, which uses CI's selection
+    and therefore sees the deselection); the ``addopts`` and ``conftest`` cases
+    are pinned as text, because the probe hands pytest an explicit path — which
+    is exactly how ``--ignore`` would be bypassed in a manual run while still
+    hiding the module from CI, where no path is given.
+    """
+    source = _text(Path(__file__))
+    # The needles are assembled at run time: a literal here would match this
+    # module's own prohibition text and make the assertion unfalsifiable.
+    slow_marker = "pytest." + "mark.slow"
+    module_marker = "pytest" + "mark"
+    assert slow_marker not in source, (
+        "this module must never carry the slow marker: CI selects `not slow`"
+    )
+    assert f"{module_marker} =" not in source and f"\n{module_marker} " not in source, (
+        "a module-level marker can deselect the whole guard without touching a test"
+    )
+    config = _text(PYTEST_CONFIG)
+    offenders = [
+        line.strip() for line in config.splitlines() if "--ignore" in line and ENFORCER_REL in line
+    ]
+    assert not offenders, f"pytest configuration ignores the guard: {offenders}"
+    for conftest in sorted((ROOT / "tests").rglob("conftest.py")):
+        body = _text(conftest)
+        if "collect_ignore" in body and ENFORCER_REL.split("/")[-1] in body:
+            raise AssertionError(f"{conftest.relative_to(ROOT)} collects the guard away")
+
+    expected = len(re.findall(r"^def test_", source, re.MULTILINE))
+    assert expected >= 15, "the guard lost most of its tests"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            ENFORCER_REL,
+            "-m",
+            "not slow",
+            "--noconftest",
+            "-p",
+            "no:cacheprovider",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    collected = len([line for line in result.stdout.splitlines() if "::" in line])
+    assert collected == expected, (
+        f"CI's selection collects {collected} of {expected} guard tests — the contract is "
+        f"partially or entirely deselected. pytest said:\n{result.stdout[-800:]}"
+    )
 
 
 def test_the_mutation_campaign_is_real_and_stays_comprehensive() -> None:

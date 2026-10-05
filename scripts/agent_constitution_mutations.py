@@ -40,6 +40,8 @@ DOCS_DOOR = ROOT / "docs" / "architecture.md"
 PROTOCOL = ROOT / "docs" / "MULTI_AGENT_PROTOCOL.md"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 CAMPAIGN = ROOT / "scripts" / "agent_constitution_mutations.py"
+ENFORCER_PATH = ROOT / "tests" / "architecture" / "test_agent_constitution.py"
+PYTEST_CONFIG = ROOT / "pyproject.toml"
 CONSTITUTION = ROOT / "NAGAR_AGENT_CONSTITUTION.md"
 AGENTS = ROOT / "AGENTS.md"
 CONTRIBUTING = ROOT / "CONTRIBUTING.md"
@@ -145,6 +147,26 @@ def _drop_the_ci_campaign_job(text: str) -> str:
     return "\n".join(lines[:start] + lines[end:])
 
 
+def _deselect_the_guard_with_a_marker(text: str) -> str:
+    """CI runs `pytest -m "not slow"`: mark the whole module slow and it never runs."""
+    return text.replace(
+        "from __future__ import annotations\n",
+        "from __future__ import annotations\n\nimport pytest\n\npytestmark = pytest.mark.slow\n",
+        1,
+    )
+
+
+def _ignore_the_guard_in_pytest_config(text: str) -> str:
+    """A config-level ignore: the file stays in the tree, the assertions leave the gate."""
+    return text.replace(
+        "[tool.pytest.ini_options]\n",
+        "[tool.pytest.ini_options]\n"
+        "addopts = '"
+        "--ignore=tests/architecture/test_agent_constitution.py'\n",
+        1,
+    )
+
+
 def _gut_the_campaign(text: str) -> str:
     """Reduce the campaign to a decorative shell: no mutants left to run."""
     start = text.index("MUTANTS: tuple[tuple[str, Path, object], ...] = (")
@@ -209,6 +231,16 @@ MUTANTS: tuple[tuple[str, Path, object], ...] = (
         _gut_the_campaign,
     ),
     ("M22 the mutation campaign is blinded to the real files", CAMPAIGN, _blind_the_campaign),
+    (
+        "M23 the guard is marked slow so CI deselects it",
+        ENFORCER_PATH,
+        _deselect_the_guard_with_a_marker,
+    ),
+    (
+        "M24 the guard is ignored from the pytest configuration",
+        PYTEST_CONFIG,
+        _ignore_the_guard_in_pytest_config,
+    ),
 )
 
 
@@ -221,12 +253,26 @@ def _digest(path: Path) -> str:
 
 def _enforcer_is_red() -> bool:
     """True when the enforcing suite fails — i.e. the mutant was detected."""
+    # The same selection CI uses (`-m "not slow"`): a guard that CI deselects
+    # must fail here too, not only when somebody runs the file by hand.
     result = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", TARGET, "--noconftest", "-p", "no:cacheprovider"],
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            TARGET,
+            "-m",
+            "not slow",
+            "--noconftest",
+            "-p",
+            "no:cacheprovider",
+        ],
         cwd=ROOT,
         capture_output=True,
         text=True,
     )
+    # Exit code 5 ("no tests collected") is a deselected guard, not a green one.
     return result.returncode != 0
 
 
@@ -277,7 +323,7 @@ def run_campaign() -> int:
     shutil.move(str(moved_to), str(CONSTITUTION))
     print(
         f"  {'RED  (killed)' if moved_detected else 'GREEN (SURVIVED)'}  "
-        "M23 constitution moved out of the repository root"
+        "M25 the constitution is moved out of the repository root"
     )
 
     unrestored = [str(p) for p in guarded if _digest(p) != digests[p]]
@@ -305,7 +351,7 @@ def main() -> int:
         for name, path, _ in MUTANTS:
             print(f"{name}  ->  {path.relative_to(ROOT)}")
         print(
-            "M23 constitution moved out of the repository root  ->  "
+            "M25 the constitution is moved out of the repository root  ->  "
             f"{CONSTITUTION.relative_to(ROOT)}"
         )
         return 0

@@ -1,6 +1,6 @@
 # Nagar Agent Constitution
 
-**CONSTITUTION_VERSION:** `1.1.0`
+**CONSTITUTION_VERSION:** `1.2.0`
 **AMENDED_AT:** `2026-10-05`
 **STATUS:** `active` — in force from the commit that carries this file
 **LOCATION:** repository root, beside `AGENTS.md`. This file must never be moved, renamed, or folded into another file without an amendment (§8).
@@ -132,7 +132,7 @@ The agent deliberately tries to break its own implementation, and records what i
 | security abuse | privilege escalation, path escape, SSRF, secret leakage, forged identity |
 | boundary conditions | empty, zero, one, max, off-by-one, clock edges, unicode/RTL |
 
-A guard that has never been attacked is not evidence. Where the repository provides a mutation harness (`scripts/pack_trust_mutations.py`, `scripts/continuum_mutations.py`, `scripts/llm_queue_mutations.py`), use it and record the kill count. **This constitution attacks itself**: `python scripts/agent_constitution_mutations.py` runs twenty-three bypass mutants — bootstrap buried below §1, law renamed to guidance, law deleted, version bumped silently, mutual pin broken, gate dimension dropped, status definition removed, `gates_owner` deference removed, entry points silenced, the CI campaign job deleted or made non-blocking, and the file moved out of the root — and passes only when every one of them turns the enforcer red and every file is restored byte for byte. CI runs it on every push (`agent-constitution-mutations` job).
+A guard that has never been attacked is not evidence. Where the repository provides a mutation harness (`scripts/pack_trust_mutations.py`, `scripts/continuum_mutations.py`, `scripts/llm_queue_mutations.py`), use it and record the kill count. **This constitution attacks itself**: `python scripts/agent_constitution_mutations.py` runs twenty-five bypass mutants — bootstrap buried below §1, law renamed to guidance, law deleted, version bumped silently, mutual pin broken, gate dimension dropped, status definition removed, `gates_owner` deference removed, entry points silenced, the CI campaign job deleted or made non-blocking, and the file moved out of the root — and passes only when every one of them turns the enforcer red and every file is restored byte for byte. CI runs it on every push (`agent-constitution-mutations` job).
 
 ### L5 — AUTHORITY DISCIPLINE
 
@@ -381,7 +381,7 @@ Each entry is a way a future session could bypass this contract, and the closure
 | # | Bypass attempt | Closure |
 |---|---|---|
 | B1 | "I already know the rules" — skip the reading | L0 has no exemption clause; the bootstrap is unconditional and pinned in `AGENTS.md` above its first section; §6 requires a named attestation at a commit SHA |
-| B2 | Delete or soften the enforcing test, or drop the CI job that attacks it | the constitution names its enforcer and the enforcer pins the constitution's laws (mutual pin); the law→test pair is registered as R14 in `MODULE_MAP.md` §3; and `scripts/agent_constitution_mutations.py` re-runs all twenty-three bypass mutants in CI, so removing either side of the pin — or the pin itself — fails the build |
+| B2 | Delete or soften the enforcing test, or drop the CI job that attacks it | the constitution names its enforcer and the enforcer pins the constitution's laws (mutual pin); the law→test pair is registered as R14 in `MODULE_MAP.md` §3; and `scripts/agent_constitution_mutations.py` re-runs all twenty-five bypass mutants in CI, so removing either side of the pin — or the pin itself — fails the build |
 | B3 | "The mission overrides the constitution" | §9.1 precedence + §8.3: mission instructions may add constraints, never remove one, except through a five-field recorded exception |
 | B4 | Invent a friendlier status word | §4 is a closed vocabulary; the enforcer pins the five words and the closure rule |
 | B5 | Read but do not apply | §0 requires four outputs (attestation, truth pass, conflict check, status plan) and §6 requires them in the report |
@@ -391,6 +391,7 @@ Each entry is a way a future session could bypass this contract, and the closure
 | B9 | "It is only documentation, the gate does not apply" | §5: proportionality applies to depth, never to existence; every row is answered or marked `N/A` with a reason |
 | B10 | Ship the Markdown and call the mission complete | §2 (no superficial work) + §4 + §6: a document is evidence only of itself; the gate still has to be walked and reported |
 | B11 | Hide a contradiction to keep the report clean | §9.2 makes the CONFLICT REGISTER mandatory and §6 makes it visible in every report |
+| B14 | Let the guard exist but never run it — mark it `slow` so CI's `-m "not slow"` deselects it, ignore it from the pytest configuration, or collect it away in a `conftest.py` | the enforcer asserts the module carries no slow marker and no module-level marker, that no `addopts` line ignores it, and that no `conftest.py` collects it away — and then collects itself under CI's selection and requires the count to match its own test functions. The campaign runs the enforcer with the same `-m "not slow"` CI uses, so a deselected guard exits 5 and is red |
 | B13 | Delete or gut the mutation campaign | the enforcer asserts the campaign exists, that the constitution names it, that it registers at least fifteen mutants, and that it reaches `AGENTS.md`, the constitution and `ci.yml`; the campaign itself fails on duplicate or missing mutants, so a gutted campaign is a red build rather than a quieter proof |
 | B12 | Treat session memory or a previous audit as architecture | §8.2 and §9.1 rank memory and dated records below executable truth; the enforcer pins the precedence list |
 
@@ -415,3 +416,4 @@ Each entry is a way a future session could bypass this contract, and the closure
 |---|---|---|---|
 | `1.0.0` | 2026-10-05 | `arena/01a10ba1-nexus-ai-agent` | Initial constitution: bootstrap law (L0), laws L1–L10, authority map, closed completion vocabulary, 16-dimension completion gate, report template, future-generation contract, amendment law, precedence, loophole register. Enforced by `tests/architecture/test_agent_constitution.py` (R14). |
 | `1.1.0` | 2026-10-05 | `arena/01a10ba1-nexus-ai-agent` | MINOR — added obligation: the mutation campaign itself is part of the contract. §10 gains B13 (the campaign may not be deleted or gutted) and §2 L4 now names twenty-three mutants. Enforcement added in the same commit: `test_the_mutation_campaign_is_real_and_stays_comprehensive` (the script exists, the constitution names it, it registers at least fifteen mutants, and it reaches `AGENTS.md`, the constitution and `ci.yml`), plus mutants M21/M22 that gut or blind it. |
+| `1.2.0` | 2026-10-05 | `arena/01a10ba1-nexus-ai-agent` | MINOR — added obligation: **a guard that exists but is never collected is a violation**, not a neutral state (§10 B14). CI selects `-m "not slow"`, so a `slow` marker, an `addopts` ignore, or a `collect_ignore` in a conftest silences the whole contract while the file stays in the tree. Enforcement added in the same commit: `test_the_guard_is_actually_collected_by_the_ci_selection` (textual pins plus a collection probe under CI's selection that counts the tests pytest actually found), and the campaign now runs the enforcer with `-m "not slow"`. Mutants M23/M24 reproduce both bypasses. |
