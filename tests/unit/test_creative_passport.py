@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 
@@ -11,6 +12,7 @@ import pytest
 from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
 from nexus_ai_agent.jobs.creative_passport import (
     CreativePassportError,
+    _fsync_directory,
     _resolve_store_path,
     attempt_id,
     is_timeline_trim_request,
@@ -68,6 +70,17 @@ def test_artifact_storage_keys_cannot_escape_the_queue_root(tmp_path: Path) -> N
     with pytest.raises(CreativePassportError):
         _resolve_store_path(root, "/tmp/outside.mp4")
     assert _resolve_store_path(root, "jobs/job/attempt/output.mp4").is_relative_to(root)
+
+
+def test_directory_sync_failure_fails_the_evidence_write_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_sync(_descriptor: int) -> None:
+        raise OSError("injected directory fsync failure")
+
+    monkeypatch.setattr(os, "fsync", fail_sync)
+    with pytest.raises(CreativePassportError, match="sync directory entry"):
+        _fsync_directory(tmp_path)
 
 
 @pytest.mark.asyncio

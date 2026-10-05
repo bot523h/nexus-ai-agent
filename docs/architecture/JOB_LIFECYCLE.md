@@ -408,7 +408,10 @@ record with the new monotonic `attempt` fencing token, and verification,
 recovery, failure, completion, and reconciliation update the ledger under the
 same queue-row fence. Existing rows receive derivable request identities and
 at most one `legacy_observed_*` latest-attempt record; missing historical
-attempts are not invented.
+attempts are not invented. Every queue connection sets and verifies
+`PRAGMA synchronous=EXTRA` before I/O. SQLite documents `EXTRA` as adding a
+directory sync after rollback-journal unlink in rollback mode; in WAL mode it
+is equivalent to `FULL` ([SQLite synchronous pragma](https://sqlite.org/pragma.html#pragma_synchronous)).
 
 Identity rules (`jobs.creative_passport`):
 
@@ -431,11 +434,13 @@ accepts the output, the queue archives both input and output under
 `<sqlite-path>.artifacts/jobs/<job-hash>/<attempt-id>/`. File bytes are
 bounded to 100 MiB per asset. It checks source stability across the render,
 checks the copied hashes/sizes, and independently re-runs the registered
-verifier against the archived output. The canonical passport JSON, result,
-verification facts, runtime evidence, and the attempt's `verified` checkpoint
-are persisted before the terminal `COMPLETED` update. The final result,
-passport pointer, and `completed` attempt transition are then committed under
-the existing fenced queue update. A clean adapter can call
+verifier against the archived output. Each staged file is flushed and
+`fsync`'d before atomic rename; the affected directory chain is `fsync`'d as
+well. A sync failure aborts passport creation and completion. The canonical
+passport JSON, result, verification facts, runtime evidence, and the attempt's
+`verified` checkpoint are persisted before the terminal `COMPLETED` update.
+The final result, passport pointer, and `completed` attempt transition are
+then committed under the existing fenced queue update. A clean adapter can call
 `get_artifact_passport(job_id)` to resolve the storage keys, re-hash the input
 and output, re-run the verifier, rebuild the passport, and compare it with the
 persisted record. The retained input/output therefore do not depend on the
@@ -468,7 +473,12 @@ race remains. An archive written before its checkpoint can leave
 unreferenced files. Attempt-history JSON grows with each reservation; no
 compaction, retention/garbage-collection policy, cross-device replication, or
 artifact-store backup coordination is added. The SQLite file and its
-`.artifacts` sibling must be backed up/moved together. These facts do not
+`.artifacts` sibling must be backed up/moved together. The recovery tests kill
+processes, not the operating system or storage device; `fsync` cannot validate
+hardware/VFS honesty. Linux documents that file `fsync` alone does not persist
+the directory entry, which is why the directory chain is separately synced
+([fsync(2)](https://man7.org/linux/man-pages/man2/fsync.2.html)). Trim evidence
+fails closed where POSIX directory sync is unavailable. These facts do not
 establish exactly-once effects, reproducible rendering across runtimes, actor
 authorization, persisted CreativeWork/project revisions, or a durable
 CommandBus transaction. The wider project/revision/CommandBus mission remains

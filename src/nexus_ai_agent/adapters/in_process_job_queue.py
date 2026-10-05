@@ -1805,10 +1805,19 @@ class InProcessJobQueue:
             )
             return cursor.rowcount == 1
 
+    @staticmethod
+    def _enable_durable_sqlite_sync(connection: sqlite3.Connection) -> None:
+        """Require SQLite's strongest synchronous setting before queue I/O."""
+        connection.execute("PRAGMA synchronous = EXTRA")
+        row = connection.execute("PRAGMA synchronous").fetchone()
+        if row is None or int(row[0]) != 3:
+            raise RuntimeError("SQLite refused synchronous=EXTRA for the durable job queue")
+
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
         if self._memory_connection is not None:
             try:
+                self._enable_durable_sqlite_sync(self._memory_connection)
                 yield self._memory_connection
             except Exception:
                 self._memory_connection.rollback()
@@ -1820,6 +1829,7 @@ class InProcessJobQueue:
         connection = sqlite3.connect(self._sqlite_path, timeout=30)
         connection.row_factory = sqlite3.Row
         try:
+            self._enable_durable_sqlite_sync(connection)
             yield connection
         except Exception:
             connection.rollback()

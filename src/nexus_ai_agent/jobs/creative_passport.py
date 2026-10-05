@@ -260,7 +260,7 @@ def archive_trim_evidence(
 
     attempt_directory_key = f"jobs/{_safe_job_key(job_id)}/{attempt_identifier}"
     attempt_directory = _resolve_store_path(artifact_root, attempt_directory_key)
-    attempt_directory.mkdir(parents=True, exist_ok=True)
+    _mkdirs_durable(artifact_root, attempt_directory)
     root_resolved = artifact_root.resolve()
     attempt_directory = attempt_directory.resolve()
     try:
@@ -722,9 +722,48 @@ def _resolve_existing_store_file(root: Path, storage_key: str) -> Path:
     return resolved
 
 
+def _mkdirs_durable(artifact_root: Path, directory: Path) -> None:
+    """Create store directories, then sync every component through the store root."""
+    root = artifact_root.resolve()
+    target = directory.resolve(strict=False)
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise CreativePassportError("artifact directory escaped its configured root") from exc
+
+    missing: list[Path] = []
+    current = directory
+    while not current.exists():
+        missing.append(current)
+        parent = current.parent
+        if parent == current:
+            raise CreativePassportError("could not find an existing artifact-store ancestor")
+        current = parent
+    if not current.is_dir():
+        raise CreativePassportError("artifact-store path component is not a directory")
+
+    for candidate in reversed(missing):
+        try:
+            candidate.mkdir()
+        except FileExistsError:
+            if not candidate.is_dir():
+                raise CreativePassportError(
+                    "artifact-store path was replaced by a non-directory"
+                ) from None
+
+    current = directory
+    while current != root.parent:
+        if not current.is_dir():
+            raise CreativePassportError("artifact-store path component is not a directory")
+        _fsync_directory(current)
+        current = current.parent
+    _fsync_directory(root.parent)
+
+
 def _copy_verified(source: Path, destination: Path) -> tuple[str, int]:
     """Atomically copy one evidence file and return the destination's measured identity."""
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    if not destination.parent.is_dir():
+        raise CreativePassportError("artifact-store destination directory is missing")
     if destination.exists():
         existing_sha, existing_size = hash_file(destination)
         source_sha, source_size = hash_file(source)
@@ -759,16 +798,20 @@ def _copy_verified(source: Path, destination: Path) -> tuple[str, int]:
 
 
 def _fsync_directory(directory: Path) -> None:
-    """Persist the rename when the platform exposes directory fsync."""
+    """Persist directory-entry changes or fail the evidence write closed."""
+    if os.name != "posix":
+        raise CreativePassportError("durable trim evidence requires POSIX directory fsync")
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     try:
         descriptor = os.open(directory, flags)
-    except OSError:
-        return
+    except OSError as exc:
+        raise CreativePassportError(
+            f"cannot open directory for durability sync: {directory}"
+        ) from exc
     try:
         os.fsync(descriptor)
-    except OSError:
-        pass
+    except OSError as exc:
+        raise CreativePassportError(f"cannot sync directory entry durability: {directory}") from exc
     finally:
         os.close(descriptor)
 

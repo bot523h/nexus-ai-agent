@@ -119,6 +119,16 @@ def _row_error(db_path: Path, job_id: str) -> str | None:
     return None if row is None else row[0]
 
 
+def test_queue_connections_require_sqlite_synchronous_extra(tmp_path: Path) -> None:
+    queue = InProcessJobQueue(tmp_path / "durable.sqlite3")
+    with queue._connection() as connection:
+        assert connection.execute("PRAGMA synchronous").fetchone()[0] == 3
+
+    memory_queue = InProcessJobQueue(":memory:")
+    with memory_queue._connection() as connection:
+        assert connection.execute("PRAGMA synchronous").fetchone()[0] == 3
+
+
 def _creative_result(artifact: Path, *, duration_us: int = 500_000) -> dict[str, Any]:
     return {
         "success": True,
