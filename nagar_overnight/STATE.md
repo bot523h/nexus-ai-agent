@@ -2,15 +2,15 @@
 
 | Field | Value |
 |---|---|
-| Current phase | Phase 4 complete — model-backed adapter (`LocalCognition`) + adversarial review + full gates |
-| Current task | `LocalCognition` cognition adapter implemented, tested, linted, typed |
+| Current phase | Phase 5 — cognition convergence (one model→execution path) complete |
+| Current task | Gateway + registry-derived authority + anti-bypass gates; docs; final audit |
 | Chosen mode | **MODE B** (substrate present; cognition boundary additive) |
 | Base SHA | `e5b326b2eaf691a638d030ad57acf1ce60016ef0` (origin/main) |
 | Branch | `overnight/nagar-20261004` |
-| Working SHA | see LOG (Phase 4 commit) |
-| Last known green SHA | Phase 4 commit — full suite 3019 passed, 0 failed, 30 skipped; ruff/mypy clean |
-| Next action | Commit + push branch; open handoff for A-1/A-2/A-3 |
-| Current blockers | none (B-2 is a deliberate deferral, not a blocker) |
+| Working SHA | see LOG (Phase 5 commits) |
+| Last known green SHA | Phase 5 — full suite 3044 passed, 0 failed, 30 skipped; ruff/mypy clean |
+| Next action | Wire a production free-text surface to `CognitionGateway`; push branch (blocked) |
+| Current blockers | B-3 (push 403); A-1 (live provider binding) — neither blocks local work |
 
 ## Final gate results
 

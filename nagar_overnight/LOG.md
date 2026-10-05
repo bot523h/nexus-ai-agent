@@ -129,3 +129,49 @@ Evidence:
 - Full suite: 3019 passed, 30 skipped, 0 failed (baseline 2978 + 41 new).
 - ruff check / ruff format --check clean; mypy src 256 files clean.
 
+---
+
+## 2026-10-04 — Phase 5: cognition convergence (one model→execution path)
+
+Base SHA: `e5b326b2…` (origin/main, no drift). Branch: `overnight/nagar-20261004`.
+
+Live truth re-verified: HEAD `94ecc55`, tree clean, origin/main unchanged.
+LocalCognition present in history. Push still BLOCKED (B-3, 403).
+
+Recon (read-only) before any edit:
+- `grep -rn "\.generate(" src` → every model call site classified; only
+  `agents/*` + `orchestration/graph._chat_agent` consume model text, all into
+  `state["response"]` (prose) — never an execution selection.
+- `graph._planner_agent` / `PlannerAgent` are deterministic; `graph._executor_agent`
+  / `ExecutorAgent` call `tool_registry.run` on a deterministic plan, never model text.
+- `creative/render_jobs.py` is the only production CommandBus consumer with user
+  intent — and it consumes a *typed* payload, not free text. So no production
+  NL→operation caller exists today (stated honestly, not faked).
+
+Changes:
+- NEW `nagar/cognition/capabilities.py`: `offered_operations` /
+  `offered_operations_within` derive the proposal allow-list from the
+  CapabilityRegistry (the same allow-list the bus consults); a caller may only
+  narrow. Closes the caller-supplied `allowed_operations` authority gap.
+- NEW `nagar/cognition/gateway.py`: `CognitionGateway` (router → registry-derived
+  schema → producer → bridge → bus) and `build_cognition_gateway` (fail-closed
+  flag/provider selector; disabled/missing provider → NullCognition, never a
+  raw-model fallback). All rejections → typed `CognitionRefused`.
+- `proposal.py`: new `RefusalReason.DENIED` for deterministic bus rejections.
+- `__init__.py`: export gateway + capabilities helpers.
+- NEW `tests/unit/test_cognition_gateway.py` (21): cases 1–7 + authority-gap tests.
+- NEW `tests/architecture/test_legacy_agent_no_raw_execution.py` (4): prove no
+  agents/** module both `generate()`s and executes; no agent imports bus/bridge;
+  model-consumer set pinned.
+- `tests/architecture/test_cognition_isolation.py`: allow cognition to import
+  studio *capabilities* (registry) in addition to studio *models*; still forbids
+  bus/authorizer/execution primitives.
+- `docs/overnight/COGNITION_CONVERGENCE.md` + docs/README index.
+
+Gates: ruff check . PASS · ruff format --check (457 files) PASS · mypy src
+(258 files) PASS. Full suite: 3044 passed, 30 skipped, 0 failed (baseline 3019
++ 25 new: 21 gateway + 4 anti-bypass). One unrelated test
+(`test_reminder_system::…delivers_to_originating_chat`) flaked under the
+random-order full run and passed on re-run + isolation ×3 — recorded, not
+"fixed" by weakening.
+

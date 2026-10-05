@@ -49,6 +49,7 @@ placeholder text.
 | [overnight/RECON.md](overnight/RECON.md) | Live read-only reconnaissance of `main` @ `e5b326b` with file:line evidence (what exists, what is absent). |
 | [overnight/MODEL_OPTIONAL.md](overnight/MODEL_OPTIONAL.md) | The additive model-optional cognition boundary: contract, invariants, Model Kill Test, honest limits. |
 | [overnight/RESEARCH.md](overnight/RESEARCH.md) | Dated deep-research record: each source → finding → decision → Nagar impact. |
+| [overnight/COGNITION_CONVERGENCE.md](overnight/COGNITION_CONVERGENCE.md) | One path from model cognition to execution: gateway, registry-derived authority, fail-closed selection, mechanical anti-bypass gates, honest limits. |
 
 ## Authoritative records
 
