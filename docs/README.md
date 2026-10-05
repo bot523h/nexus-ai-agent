@@ -50,6 +50,7 @@ placeholder text.
 | [overnight/MODEL_OPTIONAL.md](overnight/MODEL_OPTIONAL.md) | The additive model-optional cognition boundary: contract, invariants, Model Kill Test, honest limits. |
 | [overnight/RESEARCH.md](overnight/RESEARCH.md) | Dated deep-research record: each source → finding → decision → Nagar impact. |
 | [overnight/COGNITION_CONVERGENCE.md](overnight/COGNITION_CONVERGENCE.md) | One path from model cognition to execution: gateway, registry-derived authority, fail-closed selection, mechanical anti-bypass gates, honest limits. |
+| [overnight/FREE_TEXT_SLICE.md](overnight/FREE_TEXT_SLICE.md) | The Gate-C vertical slice: free text → typed proposal → registry → CommandBus → verified `timeline.trim` artifact, with the adversarial matrix and honest limits. |
 
 ## Authoritative records
 

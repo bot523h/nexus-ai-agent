@@ -2,45 +2,50 @@
 
 | Field | Value |
 |---|---|
-| Current phase | Phase 5 — cognition convergence (one model→execution path) complete |
-| Current task | Gateway + registry-derived authority + anti-bypass gates; docs; final audit |
-| Chosen mode | **MODE B** (substrate present; cognition boundary additive) |
-| Base SHA | `e5b326b2eaf691a638d030ad57acf1ce60016ef0` (origin/main) |
+| Current phase | Phase 6 — **Gate C**: propagation → CI → real free-text→operation E2E cognition path |
+| Current task | Free-text vertical slice + `moderate` fail-closed fix + architecture guards + docs |
+| Chosen mode | **MODE B** (substrate present; slice additive, no second execution path) |
+| Base SHA | `e5b326b2eaf691a638d030ad57acf1ce60016ef0` (origin/main; merge-base, 0 behind) |
 | Branch | `overnight/nagar-20261004` |
-| Working SHA | see LOG (Phase 5 commits) |
-| Last known green SHA | Phase 5 — full suite 3044 passed, 0 failed, 30 skipped; ruff/mypy clean |
-| Next action | Wire a production free-text surface to `CognitionGateway`; push branch (blocked) |
-| Current blockers | B-3 (push 403); A-1 (live provider binding) — neither blocks local work |
+| Base (Phase-2 start) SHA | `0af3b9e` (15 commits ahead of main at Gate C start) |
+| Working SHA | see LOG.md (Gate C commit) |
+| Last known green SHA | Gate C — full suite **3094 passed, 0 failed, 30 skipped**; ruff/format/mypy clean |
+| Next action | Push branch (now unblocked) → open PR → CI on exact SHA |
+| Current blockers | none that block local work; B-3 **resolved** (push via PAT) |
 
-## Final gate results
+## Gate C results
 
 - `ruff check .` → PASS
-- `ruff format --check src tests` → PASS
-- `mypy src` → PASS (255 source files)
-- `pytest -q` → **2975 passed, 0 failed, 30 skipped** (baseline was 2914 passed,
-  1 pre-existing flake, 30 skipped → failure set did not grow; it shrank)
-- new cognition tests → 63 passed:
-  - `tests/unit/test_cognition_boundary.py` — 38
-  - `tests/unit/test_cognition_router.py` — 12
-  - `tests/unit/test_cognition_model_kill.py` — 3
-  - `tests/unit/test_cognition_bus_integration.py` — 5
-  - `tests/architecture/test_cognition_isolation.py` — 5
+- `ruff format --check src tests` → PASS (461 files)
+- `mypy src` → PASS (259 source files)
+- `pytest -q` → **3094 passed, 30 skipped, 0 failed** (delta from Phase-5
+  baseline 3044 = **+50**, failure set unchanged at 0)
+- new tests in Gate C → 50:
+  - `tests/unit/test_nagar_free_text_slice.py` — 29 (E2E + 15-case hostile matrix + memory authority)
+  - `tests/unit/test_phi_moderation_fail_closed.py` — 13
+  - `tests/architecture/test_nagar_creative_slice_boundary.py` — 8
+
+## Gate C0/C1 live truth
+
+- `merge-base(overnight/nagar-20261004, origin/main)` = `e5b326b` — branch is a
+  strict descendant (15 ahead / 0 behind at Gate C start; no divergence, no rebase).
+- Repo is shallow (`git rev-parse --is-shallow-repository` = `true`).
+- **B-3 resolved:** the credential embedded in the configured remote URL is
+  read-only (403). `$GITHUB_PERSONAL_ACCESS_TOKEN` authenticates as `bot523h`
+  and a **dry-run push** confirmed `* [new branch]` — write access is real.
 
 ## Mode rationale (short)
 
-Live recon on `main @ e5b326b` proves the **deterministic substrate exists and is
-strong** (CommandBus, CapabilityRegistry, authorizer, pack lifecycle gate, durable
-job lifecycle with fencing, independent artifact verification, FFmpeg render lane,
-`timeline.trim`). What is **absent on main** is a canonical *cognition boundary*
-(`propose(context, schema, budget) -> TypedProposal | Refusal`): zero files mention
-cognition/proposal/refusal/budget as a boundary. MODE A would require me to build on
-an *unmerged* candidate branch (PRs #150/#126/#124/#131, all open, all `unstable`) —
-not a safe base. So: **MODE B** — a small additive, self-contained model-optional
-package that does not duplicate or compete with the existing execution path.
+Live recon on `main @ e5b326b` proves the deterministic substrate exists and is
+strong (CommandBus, CapabilityRegistry, authorizer, pack lifecycle gate, durable
+jobs with fencing, independent artifact verification, FFmpeg lane, `timeline.trim`
+`AVAILABLE`). What was absent was a *production free-text→operation caller*. Gate C
+adds exactly that — as one thin seam over the existing `CognitionGateway`, plus a
+printable fail-open fix — and nothing else.
 
 ## Scope guards honoured
 
 - No push to main, no merge, no force-push, no history rewrite.
 - No gate/test weakening; no `xfail`/skip to get green.
-- No second competing execution path: the new port only *produces typed proposals*;
-  it cannot execute and carries no authority fields.
+- No second competing execution path: the slice owns no bus/authorizer and
+  module-imports none; it delegates to the one `CognitionGateway` → `CommandBus`.

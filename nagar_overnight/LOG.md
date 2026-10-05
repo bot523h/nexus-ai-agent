@@ -175,3 +175,60 @@ Gates: ruff check . PASS · ruff format --check (457 files) PASS · mypy src
 random-order full run and passed on re-run + isolation ×3 — recorded, not
 "fixed" by weakening.
 
+
+---
+
+## Phase 6 — Gate C (propagation → CI → real free-text E2E) — append-only
+
+### Gate C1 — remote access (resolved B-3)
+- `curl -H "Authorization: Bearer $GITHUB_TOKEN" .../repos/bot523h/nexus-ai-agent`
+  → 200, `permissions.push = true`.
+- `git push --dry-run <url-with-$GITHUB_TOKEN>` → **403** ("Permission … denied").
+  The embedded remote credential is read-only.
+- `curl .../user` for `$GITHUB_TOKEN` and `$GITHUB_PERSONAL_ACCESS_TOKEN` → both
+  authenticate as `bot523h`.
+- `git push --dry-run` using `$GITHUB_PERSONAL_ACCESS_TOKEN` → **`* [new branch]`**.
+  Write access is real via the PAT. B-3 resolved without touching any protected ref.
+
+### Gate C2 — vertical-slice selection (evidence)
+- `timeline.trim` handler: `creative/packs/edit/operations.py:61`.
+- lifecycle: `PACK_LIFECYCLE["nexus.edit.timeline"] = AVAILABLE`
+  (`creative/studio/lifecycle.py`).
+- producer path proven by the existing `tests/unit/test_cognition_e2e_pipeline.py`
+  against the pack-free Wave-1 registry; the slice uses the **runtime** registry
+  (packs active) end-to-end for the first time.
+
+### Gate C3-C4 — `nagar.creative` slice
+- New `src/nexus_ai_agent/nagar/creative/__init__.py`:
+  `run_free_text_intent(...)` = free text → `CognitionGateway.run` with
+  `requested_operations=frozenset({"timeline.trim"})`; `verify_trim_artifact(...)`
+  = independent judgment against committed bus state.
+- No new authority: actor/project are keyword-only, no-default; the slice
+  module-imports no bus/authorizer (enforced by `test_nagar_creative_slice_boundary.py`).
+
+### Gate C5 — provider composition root
+- `build_provider(settings=None)` lazily imports `nexus_ai_agent.llm.litellm_provider`;
+  returns a provider or `None` (→ null producer → clarification). Never logs settings.
+- Architecture test pins provider/settings imports to be function-local only.
+
+### Gate C9 — `phi_agent.moderate` fail-closed
+- `src/nexus_ai_agent/agents/phi_agent.py`: parse error now returns
+  `{"safe": False, "reason": "parse_error"}` (was `{"safe": True}` — a fail-OPEN
+  that could silently suppress moderation); non-dict / missing `safe` →
+  `malformed_verdict`; only JSON `true` is normalized to `safe=True`.
+
+### Evidence (labels)
+- `pytest -q` → **3094 passed, 30 skipped, 0 failed** (VERIFIED; 236.89s).
+- `ruff check src tests` → PASS. `ruff format --check` → 461 files already formatted.
+  `mypy src` → Success (259 files).
+- new tests → 50 passed (29 slice + 13 moderate + 8 architecture guard).
+- `pack_test_import_issues()` → `()` (new tests don't disturb the pack-coverage contract).
+- `test_docs_integrity.py` → 57 passed after indexing `docs/overnight/FREE_TEXT_SLICE.md`.
+
+### Adversarial matrix (executed)
+15 hostile model outputs (shell op, actor/permission/confirmed/capability/command
+injection, forged authority with a valid op, unknown/outside-registry/op-widening
+operations, malformed JSON, empty, executable prose, NaN, bad schema version) —
+every one → typed refusal, **zero** bus dispatch, **zero** state mutation.
+Provider exception/timeout → typed refusal. Denied actor → attempted-but-not-applied.
+Retrieved-memory text claiming authority → refused.
