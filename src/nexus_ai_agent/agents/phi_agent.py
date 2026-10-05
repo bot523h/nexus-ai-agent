@@ -31,6 +31,14 @@ class PhiAgent(BaseAgent):
         system = 'Reply ONLY with JSON: {"safe": true, "reason": "ok"}'
         raw = await self.llm.generate(f"Is this content safe?\n{text}", system=system)
         try:
-            return json.loads(raw)
+            verdict = json.loads(raw)
         except Exception:
-            return {"safe": True, "reason": "parse_error"}
+            # Fail CLOSED: an unparseable safety verdict is UNKNOWN, never
+            # "safe".  Treating a parse error as safe would let a truncated or
+            # injected response silently suppress moderation.
+            return {"safe": False, "reason": "parse_error"}
+        if not isinstance(verdict, dict) or "safe" not in verdict:
+            return {"safe": False, "reason": "malformed_verdict"}
+        # Normalise to a real bool: only JSON ``true`` counts as safe, so a
+        # truthy string like "false" or a stray 1 cannot read as "safe".
+        return {"safe": verdict["safe"] is True, "reason": str(verdict.get("reason", ""))}

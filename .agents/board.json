@@ -705,7 +705,11 @@
         "nagar_overnight/ARENA_HANDOFF.md",
         "nagar_overnight/REPORT.md",
         "nagar_overnight/STATE.md",
-        "nagar_overnight/LOG.md"
+        "nagar_overnight/LOG.md",
+        "src/nexus_ai_agent/cli.py",
+        "src/nexus_ai_agent/continuum/pack_coverage.py",
+        "src/nexus_ai_agent/agents/phi_agent.py",
+        "tests/unit/test_phi_moderation_fail_closed.py"
       ]
     }
   ],
@@ -2890,7 +2894,11 @@
         "nagar_overnight/ARENA_HANDOFF.md",
         "nagar_overnight/REPORT.md",
         "nagar_overnight/STATE.md",
-        "nagar_overnight/LOG.md"
+        "nagar_overnight/LOG.md",
+        "src/nexus_ai_agent/cli.py",
+        "src/nexus_ai_agent/continuum/pack_coverage.py",
+        "src/nexus_ai_agent/agents/phi_agent.py",
+        "tests/unit/test_phi_moderation_fail_closed.py"
       ],
       "owner_hint": "Direct successor of PR #155 (overnight/nagar-20261004). Compose with main's merged task-232 durable queue; do not touch task-232's exclusive paths.",
       "agent_branch": "arena/nagar-durable-handoff",
@@ -2898,7 +2906,7 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": false,
-      "note": "PR #155 (overnight/nagar-20261004, head 3f09aba) is open/draft and is NOT an ancestor of main (main=5a228ea after PR #156 merged task-232's durable creative queue). This task composes the two: PR #155's cognition slice + main's durable queue, without a history rewrite. Composes with task-232 (gates_owner) - disjoint paths."
+      "note": "PR #155 (overnight/nagar-20261004, head 3f09aba) is open/draft and is NOT an ancestor of main (main=5a228ea after PR #156 merged task-232's durable creative queue). This task composes the two: PR #155's cognition slice + main's durable queue, without a history rewrite. Composes with task-232 (gates_owner) - disjoint paths. | +src/nexus_ai_agent/cli.py (durable `nexus intent` operator entry point; cli-packs-registry zone has no live claim). | +continuum/pack_coverage.py (classify the ported cognition host-layer tests; continuum-evidence-measurement has no live claim). | +agents/phi_agent.py + its regression test (fail-closed moderation, part of the Gate C slice; no other live claim touches agents/)."
     }
   ],
   "deferred_log": [
