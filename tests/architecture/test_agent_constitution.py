@@ -374,6 +374,14 @@ def test_the_guard_is_actually_collected_by_the_ci_selection() -> None:
         line.strip() for line in config.splitlines() if "--ignore" in line and ENFORCER_REL in line
     ]
     assert not offenders, f"pytest configuration ignores the guard: {offenders}"
+    # CI collects by directory (testpaths = ["tests"]), so a recursion
+    # exclusion hides the guard even though an explicit path still finds it.
+    exclusions = [
+        line.strip()
+        for line in config.splitlines()
+        if "norecursedirs" in line and "architecture" in line
+    ]
+    assert not exclusions, f"pytest configuration recurses away from the guard: {exclusions}"
     for conftest in sorted((ROOT / "tests").rglob("conftest.py")):
         body = _text(conftest)
         if "collect_ignore" in body and ENFORCER_REL.split("/")[-1] in body:

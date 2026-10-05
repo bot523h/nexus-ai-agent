@@ -156,6 +156,13 @@ def _deselect_the_guard_with_a_marker(text: str) -> str:
     )
 
 
+def _recurse_away_from_the_guard(text: str) -> str:
+    """CI collects `tests/` by directory: exclude the guard's directory from recursion."""
+    marker = "[tool.pytest.ini_options]"
+    line = "norecursedirs = ['tests/architecture']"
+    return text.replace(marker, f"{marker}\n{line}", 1)
+
+
 def _ignore_the_guard_in_pytest_config(text: str) -> str:
     """A config-level ignore: the file stays in the tree, the assertions leave the gate."""
     return text.replace(
@@ -241,6 +248,11 @@ MUTANTS: tuple[tuple[str, Path, object], ...] = (
         PYTEST_CONFIG,
         _ignore_the_guard_in_pytest_config,
     ),
+    (
+        "M25 pytest recursion is pointed away from the guard's directory",
+        PYTEST_CONFIG,
+        _recurse_away_from_the_guard,
+    ),
 )
 
 
@@ -323,7 +335,7 @@ def run_campaign() -> int:
     shutil.move(str(moved_to), str(CONSTITUTION))
     print(
         f"  {'RED  (killed)' if moved_detected else 'GREEN (SURVIVED)'}  "
-        "M25 the constitution is moved out of the repository root"
+        "M26 the constitution is moved out of the repository root"
     )
 
     unrestored = [str(p) for p in guarded if _digest(p) != digests[p]]
@@ -351,7 +363,7 @@ def main() -> int:
         for name, path, _ in MUTANTS:
             print(f"{name}  ->  {path.relative_to(ROOT)}")
         print(
-            "M25 the constitution is moved out of the repository root  ->  "
+            "M26 the constitution is moved out of the repository root  ->  "
             f"{CONSTITUTION.relative_to(ROOT)}"
         )
         return 0
