@@ -53,11 +53,16 @@ def proposal_to_command(
     command is schema 2, so the bus will demand a trusted authorizer that
     binds that actor to that project — a proposal can never grant itself
     access by naming an actor.
+
+    ``command_id`` is a fresh transport id; it is deliberately *not* part of the
+    bus's idempotency fingerprint (which excludes ``command_id``/``trace_id``),
+    so a redelivery of the same operation+input+key still dedupes on payload.
     """
+    command_id = f"cmd_{uuid4().hex}"
     return TypedCommand(
         schema_version=2,
         operation_schema_version=operation_schema_version,
-        command_id=f"cmd_{uuid4().hex}",
+        command_id=command_id,
         actor=actor,
         operation=proposal.operation,
         target=TargetRef(project_id=project_id),

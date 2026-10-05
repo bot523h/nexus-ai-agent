@@ -109,6 +109,21 @@ class CognitionGateway:
         self._schema_id = schema_id
         self._budget = budget if budget is not None else CognitionBudget()
 
+    @property
+    def actor(self) -> ActorIdentity:
+        """The host-owned actor every proposal-derived command runs as."""
+        return self._actor
+
+    @property
+    def project_id(self) -> str:
+        """The host-owned project every proposal-derived command targets."""
+        return self._project_id
+
+    @property
+    def producer(self) -> CognitionPort:
+        """The configured producer (for honest routing/model-availability checks)."""
+        return self._producer
+
     # -- the offered set is authoritative: from the registry only ------------
 
     def offered(self, requested: frozenset[str] | None = None) -> frozenset[str]:
@@ -180,7 +195,9 @@ class CognitionGateway:
                 "the registry offers no operation for this request",
             )
 
-        outcome = await self._producer.propose(context, schema, self._budget)
+        outcome = await self._producer.propose(
+            context, schema, self._budget, idempotency_key=idempotency_key
+        )
         if isinstance(outcome, Refusal):
             raise CognitionRefused(
                 outcome.reason, outcome.detail or "the cognition producer refused"
@@ -221,6 +238,7 @@ def build_cognition_gateway(
     actor: ActorIdentity,
     project_id: str,
     enabled: bool,
+    completion: Any | None = None,
     provider: Any | None = None,
     router: DeterministicRouter | None = None,
     budget: CognitionBudget | None = None,
@@ -230,22 +248,28 @@ def build_cognition_gateway(
     ``enabled`` selects the producer; it never selects authority — both
     producers hand any proposal through the *same* ``CommandBus`` pipeline.
 
-    * ``enabled and provider is not None`` -> :class:`LocalCognition` over the
-      injected provider (the only place a model is ever consulted);
+    * ``enabled and completion is not None`` -> :class:`LocalCognition` over the
+      injected completion port (the only place a model is ever consulted);
     * otherwise -> :class:`NullCognition`, which always refuses.  A disabled
       flag or a missing provider can therefore never fall back to raw-model
       execution; the worst case is an explicit refusal.
 
-    No configuration object is read here: the composition root passes an
-    explicit ``enabled`` and an explicit ``provider`` (dependency injection,
-    no global singleton).
+    ``completion`` is the canonical, ``LLMPort``-shaped dependency and is the
+    only name a production composition root should pass.  ``provider`` is a
+    deprecated alias kept for existing callers/tests; it is used only when
+    ``completion`` is absent.  No configuration object is read here: the
+    composition root passes explicit values (dependency injection, no global
+    singleton).
     """
     # Imported lazily so the selector stays import-light and the null path
     # never drags the adapter in.
     from nexus_ai_agent.nagar.cognition.adapter import LocalCognition
     from nexus_ai_agent.nagar.cognition.null import NullCognition
 
-    producer = LocalCognition(provider) if (enabled and provider is not None) else NullCognition()
+    model_port = completion if completion is not None else provider
+    producer = (
+        LocalCognition(model_port) if (enabled and model_port is not None) else NullCognition()
+    )
     return CognitionGateway(
         bus=bus,
         producer=producer,

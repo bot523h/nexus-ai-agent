@@ -31,6 +31,7 @@ from nexus_ai_agent.nagar.cognition.adapter import (
     CognitionObserver,
     LocalCognition,
     TextGenerator,
+    call_completion_port,
 )
 from nexus_ai_agent.nagar.cognition.bridge import proposal_to_command
 from nexus_ai_agent.nagar.cognition.capabilities import (
@@ -95,6 +96,7 @@ __all__ = [
     "TextGenerator",
     "TypedProposal",
     "build_cognition_gateway",
+    "call_completion_port",
     "offered_operations",
     "offered_operations_within",
     "parse_proposal",

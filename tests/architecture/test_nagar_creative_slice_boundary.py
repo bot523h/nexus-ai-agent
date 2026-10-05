@@ -93,7 +93,8 @@ def test_slice_module_level_imports_stay_light() -> None:
 
 def test_provider_and_settings_are_lazy_and_confined_to_the_composition_root() -> None:
     # The provider/config imports must exist (the composition root is real) but
-    # only inside a function — never at import time.
+    # only inside a function — never at import time, and only in the slice's
+    # modules.
     for path in _files():
         for is_local, module in _imports(path):
             if module.startswith(LAZY_ONLY_PREFIXES):
@@ -101,22 +102,27 @@ def test_provider_and_settings_are_lazy_and_confined_to_the_composition_root() -
                     f"{path.relative_to(ROOT)} imports {module!r} at module scope; "
                     "provider/settings must be lazy so the boundary stays light"
                 )
-    # And the composition root must actually be where the provider is built.
-    source = (CREATIVE / "__init__.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    build_provider = next(
+    # The composition root lives in ``nagar.composition`` (host-owned) and must
+    # actually construct the provider there, lazily.
+    composition = ROOT / "src" / "nexus_ai_agent" / "nagar" / "composition.py"
+    tree = ast.parse(composition.read_text(encoding="utf-8"))
+    build = next(
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "build_provider"
+        if isinstance(node, ast.FunctionDef) and node.name == "build_cognition_provider"
     )
     local_imports = {
-        node.module
-        for node in ast.walk(build_provider)
-        if isinstance(node, ast.ImportFrom) and node.module
+        node.module for node in ast.walk(build) if isinstance(node, ast.ImportFrom) and node.module
     }
     assert any(m and m.startswith("nexus_ai_agent.llm") for m in local_imports), (
-        "build_provider must construct the provider (lazy import of nexus_ai_agent.llm)"
+        "build_cognition_provider must construct the provider (lazy import of nexus_ai_agent.llm)"
     )
+    # And the slice itself must NOT build a provider: no llm import in it at all.
+    for path in _files():
+        for _is_local, module in _imports(path):
+            assert not module.startswith("nexus_ai_agent.llm"), (
+                f"{path.relative_to(ROOT)} must not build a model; use nagar.composition"
+            )
 
 
 def test_slice_never_module_imports_a_bus_or_authorizer() -> None:
@@ -150,11 +156,20 @@ def test_both_models_forbid_extra_fields() -> None:
         assert model.model_config.get("extra") == "forbid", model.__name__
 
 
-def test_run_free_text_intent_requires_actor_and_project_from_caller() -> None:
+def test_run_free_text_intent_gets_actor_and_project_from_the_gateway() -> None:
+    # The slice receives its authority *through the injected gateway* (which the
+    # host composition root built with an explicit actor/project), and takes the
+    # authoritative project state as an injected, keyword-only argument.  A
+    # caller/model cannot pass an actor or project into the slice directly.
     params = inspect.signature(run_free_text_intent).parameters
-    # Actor/project are keyword-only and have no default: a caller must supply
-    # them, so a proposal/model can never choose them.
-    for name in ("actor", "project_id"):
-        assert name in params, name
-        assert params[name].kind is inspect.Parameter.KEYWORD_ONLY, name
-        assert params[name].default is inspect.Parameter.empty, name
+    assert "gateway" in params
+    assert params["gateway"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert params["gateway"].default is inspect.Parameter.empty
+    assert "project" in params
+    assert params["project"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert params["project"].default is inspect.Parameter.empty
+    for forbidden in ("actor", "project_id", "authorizer", "permissions"):
+        assert forbidden not in params, f"slice must not accept {forbidden!r} directly"
+    # And the gateway itself exposes no caller-supplied authority on ``run``.
+    run_params = inspect.signature(CognitionGateway.run).parameters
+    assert not (set(run_params) & {"actor", "permissions", "grants", "authorizer"})

@@ -4,11 +4,11 @@ The Gate-C vertical slice.  It adds **one** narrowly bounded production surface
 and no new execution authority:
 
     user free text
-      -> normalize + bound                    (untrusted input, data only)
+      -> normalize + bound + derive an authoritative idempotency key
       -> CognitionGateway.run                 (router -> registry-derived schema
                                                -> producer -> bridge -> bus)
       -> CommandBus                           (policy + authorizer + apply)
-      -> timeline.trim artifact + verification
+      -> timeline.trim artifact + independent verification
 
 The slice is deliberately tiny: one registered, ``AVAILABLE``, REVERSIBLE
 operation (``timeline.trim``) that already has a canonical handler, an input
@@ -23,8 +23,15 @@ Hard invariants (each is a test):
   ``{timeline.trim}``, so a model can never name another operation;
 * the actor, project and authority come from the composition root, never from
   the text or the model;
+* the source asset facts (clip id + duration) come from the **authoritative
+  project state**, never from a caller default or the model — a missing/ambiguous
+  source fails closed *before* any render;
+* the model provider is injected (host-owned composition); this module never
+  constructs one and never reads settings;
 * with no model configured the slice returns an explicit clarification outcome,
-  never a fabricated command (the Model Kill Test at the slice level).
+  never a fabricated command (the Model Kill Test at the slice level);
+* the cognition decision is recorded as a provenance observation against a real
+  authoritative identity — and recording failure never changes what executes.
 
 See ``docs/overnight/COGNITION_CONVERGENCE.md`` and ``nagar_overnight/REPORT.md``.
 """
@@ -35,23 +42,25 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from nexus_ai_agent.creative.studio.models import ActorIdentity
-from nexus_ai_agent.nagar.cognition.context import CognitionBudget, CognitionContext
+from nexus_ai_agent.creative.studio.models import ActorIdentity, Project
+from nexus_ai_agent.nagar.cognition.context import CognitionContext
 from nexus_ai_agent.nagar.cognition.gateway import (
+    CognitionGateway,
     CognitionRefused,
-    build_cognition_gateway,
 )
 from nexus_ai_agent.nagar.cognition.router import (
     CognitionLevel,
     IntentClass,
     RoutingRequest,
 )
+from nexus_ai_agent.nagar.observation import (
+    CognitionDecision,
+    record_cognition_decision,
+)
 
 #: The single operation this slice exposes.  It is registered, AVAILABLE and
 #: REVERSIBLE in ``creative/studio/capabilities`` + the edit pack.
 TRIM_OPERATION = "timeline.trim"
-#: The asset id the render/bus surface uses for the project's source clip.
-SOURCE_ASSET_ID = "src"
 #: Bound on free-text intent length before it enters the context.
 MAX_INTENT_CHARS = 500
 
@@ -61,14 +70,14 @@ class FreeTextOutcome(BaseModel):
 
     ``status`` is one of:
 
-    * ``applied`` — a typed command was authorized the real command bus applied
-      it; ``result`` is the canonical output envelope.
+    * ``applied`` — a typed command was authorized and the real command bus
+      applied it; ``result`` is the canonical output envelope.
     * ``clarification_required`` — no model was configured (or the router chose
       the human level); nothing was executed.
     * ``blocked`` — no eligible reasoning level exists at all; nothing executed.
-    * ``refused`` — a model or the deterministic substrate rejected the
-      candidate; ``refusal_reason`` carries the stable :class:`RefusalReason`
-      value and nothing executed.
+    * ``refused`` — a model, the deterministic substrate, or missing
+      authoritative facts rejected the intent; ``refusal_reason`` carries the
+      stable code and nothing executed.
 
     There is no ``applied`` outcome without a real bus apply: the slice never
     fabricates one.
@@ -90,66 +99,100 @@ def _normalize(text: str) -> str:
     return " ".join(text.split())[:MAX_INTENT_CHARS]
 
 
-def _offered_input_schema(bus: Any, operation: str) -> dict[str, Any]:  # noqa: ANN401
-    """The operation's input schema, derived from the registry the bus uses.
+def derive_intent_idempotency_key(project_id: str, actor: ActorIdentity, intent: str) -> str:
+    """A deterministic, content-addressed identity for one free-text intent.
 
-    Derived (never hand-written) so the producer is prompted with the *real*
-    field names and the slice stays a single source of truth.  A lookup failure
-    yields ``{}`` — the prompt degrades, the parser still enforces the schema.
+    Redelivering the *same* intent by the *same* actor in the *same* project
+    reproduces the key, so the bus's idempotency plane collapses the retry into
+    one execution (exactly-once at the logical-intent level).  A different
+    intent is a different key — never a collision.  The raw text is hashed, not
+    stored, so no prompt leaks into an identifier.
     """
-    registry = getattr(bus, "_registry", None)
-    if registry is None:
-        return {}
+    import hashlib
+
+    seed = f"{project_id}\x00{actor.kind}\x00{actor.actor_id}\x00{intent}"
+    return "cognition:" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:32]
+
+
+def source_asset_facts(project: Project, clip_asset_id: str | None) -> dict[str, Any]:
+    """The **authoritative** source facts for a trim, or raise ``KeyError``.
+
+    Derives the source clip and its duration from committed project state.  This
+    is the slice's single source of truth for "what are we trimming": the model
+    never invents a duration and a caller default never stands in for unknown
+    metadata.  Ambiguity (no clip named, no such asset, zero duration) fails
+    closed at the caller, which turns the ``KeyError`` into a refusal *before*
+    any render is attempted.
+    """
+    assets = {asset.asset_id: asset for asset in project.assets}
+    if clip_asset_id:
+        asset = assets.get(clip_asset_id)
+        if asset is None:
+            raise KeyError(f"clip asset {clip_asset_id!r} is not in the project")
+    else:
+        candidates = [a for a in project.assets if a.media_kind == "video" and a.duration_us > 0]
+        if len(candidates) != 1:
+            raise KeyError(f"expected exactly one source video asset, found {len(candidates)}")
+        asset = candidates[0]
+    if asset.duration_us <= 0:
+        raise KeyError(f"source asset {asset.asset_id!r} has no measured duration")
+    return {"clip_asset_id": asset.asset_id, "duration_us": int(asset.duration_us)}
+
+
+def _schema_for(gateway: CognitionGateway, operation: str, attr: str) -> dict[str, Any]:
+    """A declared registry schema for ``operation``, or ``{}`` on any lookup miss.
+
+    Derived from the *same* registry the bus authorizes against (single source of
+    truth).  A lookup failure degrades the prompt only — the parser still enforces
+    the schema, so a bad hint can never widen what a proposal may contain.
+    """
     try:
+        registry = gateway._bus_registry()
         spec = registry.get_spec(operation)
-    except Exception:  # noqa: BLE001 — a missing spec is a prompt degradation, not an error
+        model = getattr(spec, attr, None)
+        if model is None:
+            return {}
+        return model.model_json_schema()
+    except Exception:  # noqa: BLE001 — a missing schema is a prompt degradation, not an error
         return {}
-    return spec.input_model.model_json_schema()
 
 
 async def run_free_text_intent(
     text: str,
     *,
-    bus: Any,  # noqa: ANN401 — the real CommandBus; typed loosely to avoid a circular import
-    actor: ActorIdentity,
-    project_id: str,
-    enabled: bool = False,
-    provider: Any | None = None,  # noqa: ANN401 — an LLMProvider-shaped generator
-    duration_us: int = 0,
-    clip_asset_id: str = SOURCE_ASSET_ID,
-    idempotency_key: str | None = None,
-    budget: CognitionBudget | None = None,
+    gateway: CognitionGateway,
+    project: Project,
+    journal: Any | None = None,
+    clip_asset_id: str | None = None,
 ) -> FreeTextOutcome:
     """Turn free text into at most one authorized ``timeline.trim`` — or refuse.
 
-    ``enabled`` + ``provider`` are passed explicitly by the composition root
-    (dependency injection, no global config).  A disabled flag or a missing
-    provider selects the null producer, so the worst case is a clarification,
-    never a fabricated command.
+    The gateway, the project (authoritative state) and the optional journal are
+    **injected by the host composition root**; the actor/project authority lives
+    inside the gateway already.  Source facts come from ``project``; the
+    idempotency key is derived from the real intent identity.  Every failure is
+    a typed ``FreeTextOutcome`` — the function never raises for caller input.
     """
     intent = _normalize(text)
     if not intent:
         return FreeTextOutcome(
             status="refused", refusal_reason="malformed", detail="empty intent text"
         )
-    try:
-        facts_duration_us = int(duration_us)
-    except (TypeError, ValueError, OverflowError):
-        # A non-integer caller value (including inf/NaN) must fail closed,
-        # not raise mid-flight.
-        return FreeTextOutcome(
-            status="refused", refusal_reason="malformed", detail="duration_us must be an integer"
-        )
 
-    gateway = build_cognition_gateway(
-        bus=bus,
-        actor=actor,
-        project_id=project_id,
-        enabled=enabled,
-        provider=provider,
-        budget=budget,
-    )
-    model_available = enabled and provider is not None
+    # Authoritative source facts, or fail closed before any cognition/render.
+    try:
+        facts = source_asset_facts(project, clip_asset_id)
+    except KeyError as exc:
+        return FreeTextOutcome(status="refused", refusal_reason="missing_source", detail=str(exc))
+
+    operation = TRIM_OPERATION
+    idempotency_key = derive_intent_idempotency_key(gateway.project_id, gateway.actor, intent)
+    job_id = f"intent-{idempotency_key.split(':', 1)[-1]}"
+    # The routing request must be honest about the configured substrate: a null
+    # producer (no model configured) declares ``local_model_available=False``, so
+    # the deterministic router selects the human/clarify level instead of a model
+    # level that does not exist.
+    model_available = bool(getattr(gateway.producer, "consults_model", False))
     request = RoutingRequest(
         intent_class=IntentClass.PARAMETRIC,
         deterministic_available=False,
@@ -159,14 +202,15 @@ async def run_free_text_intent(
         human_available=True,
     )
 
-    # Read the deterministic routing decision to translate a refusal into the
-    # honest user-facing status.  The gateway re-routes identically (pure).
+    # Deterministic routing decision: blocked -> refuse; human level -> clarify.
     decision = gateway.route(request)
     if decision.blocked:
+        _record_refusal(journal, gateway, job_id, idempotency_key, decision.reason_code)
         return FreeTextOutcome(
             status="blocked", refusal_reason=decision.reason_code, detail=decision.explanation
         )
     if decision.level is CognitionLevel.L4_HUMAN:
+        _record_refusal(journal, gateway, job_id, idempotency_key, decision.reason_code)
         return FreeTextOutcome(
             status="clarification_required",
             refusal_reason=decision.reason_code,
@@ -174,63 +218,100 @@ async def run_free_text_intent(
         )
 
     context = CognitionContext(
-        subject_id=project_id,
+        subject_id=project.project_id,
         intent_text=intent,
-        deterministic_facts={
-            "clip_asset_id": clip_asset_id,
-            "duration_us": facts_duration_us,
-        },
+        deterministic_facts=facts,
         hints={
-            "operation": TRIM_OPERATION,
-            "input_fields": _offered_input_schema(bus, TRIM_OPERATION),
+            "operation": operation,
+            "input_fields": _schema_for(gateway, operation, "input_model"),
+            "output_fields": _schema_for(gateway, operation, "output_model"),
         },
     )
     try:
         result = await gateway.run(
             context,
             request,
-            requested_operations=frozenset({TRIM_OPERATION}),
+            requested_operations=frozenset({operation}),
             idempotency_key=idempotency_key,
         )
     except CognitionRefused as exc:
+        _record_refusal(journal, gateway, job_id, idempotency_key, exc.reason.value)
         return FreeTextOutcome(status="refused", refusal_reason=exc.reason.value, detail=exc.detail)
-    return FreeTextOutcome(
-        status="applied", operation=TRIM_OPERATION, result=dict(result.output or {})
+
+    output = dict(result.output or {})
+    _record_acceptance(
+        journal,
+        gateway,
+        job_id,
+        idempotency_key,
+        operation,
+        {
+            "command_id": str(getattr(result, "transaction_id", "") or ""),
+            "operation": operation,
+            "state_revision": result.state_revision,
+            "state_hash": result.state_hash,
+            "asset_id": output.get("asset_id"),
+            "content_sha256": output.get("content_sha256"),
+        },
+    )
+    return FreeTextOutcome(status="applied", operation=operation, result=output)
+
+
+def _producer_class(gateway: CognitionGateway) -> str:
+    return type(getattr(gateway, "_producer", gateway)).__name__
+
+
+def _record_refusal(
+    journal: Any | None,
+    gateway: CognitionGateway,
+    job_id: str,
+    idempotency_key: str,
+    reason: str,
+) -> None:
+    record_cognition_decision(
+        journal,
+        decision=CognitionDecision.REFUSED,
+        producer_class=_producer_class(gateway),
+        job_id=job_id,
+        idempotency_key=idempotency_key,
+        refusal_reason=reason,
     )
 
 
-def build_provider(settings: Any | None = None) -> Any | None:  # noqa: ANN401
-    """Composition root for the (optional) model provider.
-
-    The **only** place a provider is constructed for this slice.  It is
-    dependency-injected downward; nothing above it imports a concrete provider,
-    so no other module can create a raw-model path.  Returns ``None`` when no
-    settings/provider is available — the slice then routes to the null producer
-    and refuses, rather than fabricating an answer.
-
-    Provider credentials never leave this function: only the returned provider
-    object flows onward, and nothing here logs settings.
-    """
-    if settings is None:
-        from nexus_ai_agent.config.settings import get_settings
-
-        settings = get_settings()
-    try:
-        from nexus_ai_agent.llm.litellm_provider import build_llm_provider
-
-        provider, _label = build_llm_provider(settings)
-        return provider
-    except Exception:  # noqa: BLE001 — no provider available must not crash the slice
-        return None
+def _record_acceptance(
+    journal: Any | None,
+    gateway: CognitionGateway,
+    job_id: str,
+    idempotency_key: str,
+    operation: str,
+    execution_identity: dict[str, Any],
+) -> None:
+    record_cognition_decision(
+        journal,
+        decision=CognitionDecision.PROPOSAL_ACCEPTED,
+        producer_class=_producer_class(gateway),
+        job_id=job_id,
+        idempotency_key=idempotency_key,
+        operation=operation,
+        execution_identity=execution_identity,
+    )
 
 
-def verify_trim_artifact(bus: Any, outcome: FreeTextOutcome) -> dict[str, Any]:  # noqa: ANN401
+def verify_trim_artifact(
+    bus: Any,  # noqa: ANN401 — the real CommandBus
+    outcome: FreeTextOutcome,
+    *,
+    artifact_path: str | None = None,
+) -> dict[str, Any]:
     """Independently check an applied ``timeline.trim`` against committed state.
 
     The verifier re-reads the bus's committed project and confirms the derived
     asset exists with the reported hash, real lineage and a positive duration —
-    it does not trust the handler's returned dict.  This is the *judgment* step
-    that keeps the producing handler from being the sole judge of its artifact.
+    it does not trust the handler's returned dict.  When ``artifact_path`` is
+    given (a real file was produced), it also re-measures that file's sha256
+    with the repository's canonical file hash and requires a match — so a forged
+    or modified artifact turns the verdict RED.  Missing/unreadable bytes are a
+    verification failure, never a pass.
     """
     if outcome.status != "applied" or not outcome.result:
         return {"verified": False, "reason": "no applied artifact to verify"}
@@ -241,27 +322,42 @@ def verify_trim_artifact(bus: Any, outcome: FreeTextOutcome) -> dict[str, Any]: 
     record = next((a for a in project.assets if a.asset_id == asset_id), None)
     if record is None:
         return {"verified": False, "reason": f"asset {asset_id!r} absent from committed state"}
-    checks = {
+    reported_sha = outcome.result.get("content_sha256")
+    checks: dict[str, bool] = {
         "asset_present": True,
-        "hash_matches": record.content_sha256 == outcome.result.get("content_sha256"),
+        "hash_matches": record.content_sha256 == reported_sha,
         "lineage_present": bool(record.parent_asset_ids),
         "duration_positive": (record.duration_us or 0) > 0,
     }
+    measured_sha: str | None = None
+    if artifact_path is not None:
+        from pathlib import Path
+
+        from nexus_ai_agent.creative.slideshow.ffmpeg import sha256_file
+
+        try:
+            measured_sha = sha256_file(Path(artifact_path))
+            checks["artifact_readable"] = True
+            checks["artifact_bytes_match"] = measured_sha == record.content_sha256
+        except (OSError, ValueError):
+            checks["artifact_readable"] = False
+            checks["artifact_bytes_match"] = False
     return {
         "verified": all(checks.values()),
         "checks": checks,
         "asset_id": asset_id,
         "content_sha256": record.content_sha256,
+        "measured_sha256": measured_sha,
         "parent_asset_ids": list(record.parent_asset_ids),
     }
 
 
 __all__ = [
     "MAX_INTENT_CHARS",
-    "SOURCE_ASSET_ID",
     "TRIM_OPERATION",
     "FreeTextOutcome",
-    "build_provider",
+    "derive_intent_idempotency_key",
     "run_free_text_intent",
+    "source_asset_facts",
     "verify_trim_artifact",
 ]

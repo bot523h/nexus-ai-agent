@@ -18,6 +18,8 @@ BUS = STUDIO / "bus.py"
 LIFECYCLE = STUDIO / "lifecycle.py"
 
 #: The only production call sites allowed to construct the canonical bus.
+#: ``render_jobs`` hosts the single job-side factory ``build_job_bus`` (the
+#: cognition slice and the CLI reach the bus through it, never directly).
 BUS_CALL_SITES = {
     "src/nexus_ai_agent/creative/render_jobs.py",
     "src/nexus_ai_agent/creative/slideshow/service.py",

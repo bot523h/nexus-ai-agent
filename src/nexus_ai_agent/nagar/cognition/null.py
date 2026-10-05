@@ -40,6 +40,10 @@ def _utc_now() -> str:
 class NullCognition:
     """A provider that proposes nothing and refuses everything, honestly."""
 
+    #: No model is consulted; callers use this to build an honest routing
+    #: request (a null producer can never satisfy a model level).
+    consults_model = False
+
     def __init__(self, *, reason_detail: str = "no cognition provider is configured") -> None:
         self._detail = reason_detail
 
@@ -55,10 +59,12 @@ class NullCognition:
         context: CognitionContext,
         schema: ProposalSchema,
         budget: CognitionBudget,
+        *,
+        idempotency_key: str | None = None,
     ) -> TypedProposal | Refusal:
         # NullCognition does no work, so it can never exceed its budget; the
         # signature is honoured so it is a drop-in for any other provider.
-        _ = (context, schema, budget)
+        _ = (context, schema, budget, idempotency_key)
         return Refusal(
             reason=RefusalReason.PRODUCER_REFUSED,
             detail=self._detail,

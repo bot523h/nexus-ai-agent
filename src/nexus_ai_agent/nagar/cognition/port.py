@@ -39,6 +39,8 @@ class CognitionPort(Protocol):
         context: CognitionContext,
         schema: ProposalSchema,
         budget: CognitionBudget,
+        *,
+        idempotency_key: str | None = None,
     ) -> TypedProposal | Refusal: ...
 
 

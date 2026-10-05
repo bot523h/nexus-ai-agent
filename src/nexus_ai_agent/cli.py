@@ -1127,6 +1127,180 @@ def housekeeping(
         typer.echo("dry-run: nothing was changed")
 
 
+# -- Gate C: one free-text intent through the cognition boundary -------------
+#
+# A *real* operator caller for the free-text slice.  It is intentionally a
+# diagnostic entry point: it builds a fresh, self-contained project state (an
+# ephemeral in-memory demo asset), exercises the canonical chain
+# (cognition boundary -> CommandBus -> registry -> artifact), independently
+# verifies the result, records the cognition decision to the existing causal
+# journal, and writes a real JSON receipt.  It adds no new capability, policy
+# or actor source — the actor is the operator running the command, scoped to
+# this throwaway project.
+
+NEXUS_INTENT_DEMO_SHA256 = "sha256:" + "e3b0c442" + ("0" * 56)  # fixed demo asset identity
+NEXUS_INTENT_PROJECT_ID = "nagar-free-text-demo"
+
+
+def _write_receipt(path: str, payload: dict[str, Any]) -> None:
+    import json as _json
+
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(_json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+class _AllowanceAuthorizer:
+    """Grants exactly one actor/project pair — the CLI intent demo scope.
+
+    This is the honest host-side authorizer for the throwaway demo project: it
+    is an explicit allow-list of one, not a wildcard.  A real deployment injects
+    its own ``ProjectAuthorizer``; the slice never constructs one.
+    """
+
+    def __init__(self, access: Any) -> None:
+        self._access = access
+
+    def authorize(self, actor: object, project_id: str) -> Any:
+        from nexus_ai_agent.creative.studio.models import AuthorizationError
+
+        if actor != self._access.actor or project_id != self._access.project_id:
+            raise AuthorizationError("actor is not authorized for this project")
+        return self._access
+
+
+@app.command("intent")
+def intent(
+    text: str = typer.Argument(..., help="Free-text creative intent (e.g. 'trim from 1s to 8s')."),
+    clip_asset_id: str | None = typer.Option(
+        None, "--clip", help="Source asset id to trim (defaults to the sole video asset)."
+    ),
+    duration_us: int = typer.Option(
+        9_000_000,
+        "--duration-us",
+        min=1,
+        help="Demo source duration used for the ephemeral project.",
+    ),
+    actor_id: str = typer.Option(
+        "local-operator", "--actor", help="Actor identity for this intent (host-owned)."
+    ),
+    receipt_out: str | None = typer.Option(
+        None, "--receipt-out", help="Write a real JSON receipt to this path."
+    ),
+    journal_db: str | None = typer.Option(
+        None, "--journal-db", help="Path to the causal journal sidecar (default: settings)."
+    ),
+) -> None:
+    """Run one free-text intent through cognition -> bus -> verified artifact.
+
+    This is the zero-infrastructure host caller for the Gate-C slice: with no
+    model configured the command reports ``clarification_required`` and performs
+    nothing (the Model Kill Test, observable from the CLI); with a model it
+    applies exactly one authorized ``timeline.trim`` and prints an independent
+    verification verdict.
+    """
+    import asyncio as _asyncio
+
+    from nexus_ai_agent.creative.render_jobs import build_job_bus
+    from nexus_ai_agent.creative.studio.authorization import ProjectAccess
+    from nexus_ai_agent.creative.studio.models import (
+        ActorIdentity,
+        AssetRecord,
+        Timeline,
+        new_project,
+    )
+    from nexus_ai_agent.nagar.cognition import build_cognition_gateway
+    from nexus_ai_agent.nagar.composition import ProviderStatus, build_cognition_provider
+    from nexus_ai_agent.nagar.creative import (
+        run_free_text_intent,
+        verify_trim_artifact,
+    )
+
+    actor = ActorIdentity(kind="user", actor_id=actor_id)
+    source = AssetRecord(
+        asset_id="src",
+        media_kind="video",
+        content_sha256=NEXUS_INTENT_DEMO_SHA256,
+        duration_us=duration_us,
+    )
+    project = new_project(
+        NEXUS_INTENT_PROJECT_ID,
+        "free-text-intent",
+        Timeline(timeline_id="tl_demo", duration_us=duration_us),
+    ).model_copy(update={"assets": [source]})
+    access = ProjectAccess(
+        actor=actor,
+        project_id=NEXUS_INTENT_PROJECT_ID,
+        permissions=frozenset({"project:read", "project:write"}),
+    )
+    # The one canonical, server-policy bus factory — never a second path.
+    bus = build_job_bus(project, authorizer=_AllowanceAuthorizer(access))
+
+    provider, status = build_cognition_provider()
+    if status is not ProviderStatus.AVAILABLE:
+        typer.echo(
+            f"ℹ️  No model configured ({status.value}); free text will require"
+            " clarification and nothing will be executed."
+        )
+    gateway = build_cognition_gateway(
+        bus=bus,
+        actor=actor,
+        project_id=NEXUS_INTENT_PROJECT_ID,
+        enabled=True,
+        completion=provider,
+    )
+
+    journal: Any | None = None
+    if journal_db is not None:
+        from nexus_ai_agent.provenance.journal import CausalJournal
+
+        journal = CausalJournal(journal_db)
+
+    outcome = _asyncio.run(
+        run_free_text_intent(
+            text,
+            gateway=gateway,
+            project=project,
+            journal=journal,
+            clip_asset_id=clip_asset_id,
+        )
+    )
+
+    verdict = verify_trim_artifact(bus, outcome)
+    typer.echo(f"status: {outcome.status}")
+    if outcome.operation:
+        typer.echo(f"operation: {outcome.operation}")
+    if outcome.status == "applied" and outcome.result:
+        typer.echo(f"asset_id: {outcome.result.get('asset_id')}")
+        typer.echo(f"content_sha256: {outcome.result.get('content_sha256')}")
+    if outcome.refusal_reason:
+        typer.echo(f"refusal_reason: {outcome.refusal_reason}")
+    if outcome.detail:
+        typer.echo(f"detail: {outcome.detail}")
+    typer.echo(f"verified: {verdict.get('verified')}")
+
+    if receipt_out:
+        _write_receipt(
+            receipt_out,
+            {
+                "intent": text,
+                "actor": actor.actor_id,
+                "project_id": NEXUS_INTENT_PROJECT_ID,
+                "operation": outcome.operation,
+                "status": outcome.status,
+                "refusal_reason": outcome.refusal_reason,
+                "result": outcome.result,
+                "verification": verdict,
+                "state_hash": bus.state_hash,
+                "state_revision": bus.state_revision,
+            },
+        )
+        typer.echo(f"receipt: {receipt_out}")
+
+    if outcome.status not in {"applied", "clarification_required"}:
+        raise typer.Exit(1)
+
+
 @app.command()
 def run_bot(
     mode: str | None = typer.Option(

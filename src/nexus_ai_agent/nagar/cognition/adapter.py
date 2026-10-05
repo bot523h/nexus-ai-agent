@@ -78,19 +78,53 @@ _SYSTEM_PROMPT = (
 
 
 class TextGenerator:
-    """Structural view of ``nexus_ai_agent.llm.provider.LLMProvider``.
+    """Legacy structural view of an async text producer (``generate``).
 
-    Declared so the adapter depends on the provider *contract* (one async
-    method returning text) without importing the heavy ``nexus_ai_agent.llm``
-    package.  Any real ``LLMProvider`` satisfies it by duck typing.
-
-    The return type is ``str | Refusal`` because a structured producer that is
-    plugged in behind the port may short-circuit with an explicit refusal;
-    a plain ``LLMProvider`` only ever returns ``str``.
+    Kept for backwards compatibility and for isolated producer tests.  The
+    **canonical** model boundary is :class:`nexus_ai_agent.application.ports.llm.LLMPort`
+    (``complete(prompt, *, idempotency_key=None)``); production wires that.  This
+    shim exists so a structured producer that is plugged in behind the port may
+    short-circuit with an explicit refusal; a plain provider only returns ``str``.
     """
 
     async def generate(self, prompt: str, system: str = "") -> str | Refusal:  # pragma: no cover
         raise NotImplementedError
+
+
+def _combine(prompt: str, system: str) -> str:
+    """Fold the advisory system text into one prompt for a canonical LLMPort.
+
+    ``LLMPort`` has a single ``prompt`` argument, so the system instruction is
+    prepended.  This is a pure, deterministic transformation — no authority and
+    no execution — so the port stays the single canonical model seam.
+    """
+    return f"{system}\n\n{prompt}" if system else prompt
+
+
+async def call_completion_port(
+    port: object,
+    prompt: str,
+    system: str,
+    *,
+    idempotency_key: str | None,
+) -> object:
+    """Invoke either a canonical ``LLMPort`` or a legacy ``TextGenerator``.
+
+    Preference order is deliberate: a **canonical** ``complete`` method wins so
+    a real deployment always exercises the repository's single model seam; the
+    legacy ``generate`` path remains only for isolated tests.  The return flows
+    back to :meth:`LocalCognition.propose` unchanged for typing/refusal checks.
+    """
+    complete = getattr(port, "complete", None)
+    if callable(complete):
+        return await complete(_combine(prompt, system), idempotency_key=idempotency_key)
+    generate = getattr(port, "generate", None)
+    if callable(generate):
+        return await generate(prompt, system)
+    raise TypeError(
+        "cognition provider must implement complete(prompt, *, idempotency_key=...) "
+        "or generate(prompt, system)"
+    )
 
 
 class CognitionObserver:
@@ -151,6 +185,10 @@ def _build_prompt(context: CognitionContext, schema: ProposalSchema) -> str:
 class LocalCognition:
     """A ``CognitionPort`` that asks a configured provider and parses the result."""
 
+    #: This producer consults a real model (declared so callers can build an
+    #: honest routing request without an isinstance hack).
+    consults_model = True
+
     def __init__(
         self,
         provider: TextGenerator,
@@ -182,6 +220,8 @@ class LocalCognition:
         context: CognitionContext,
         schema: ProposalSchema,
         budget: CognitionBudget,
+        *,
+        idempotency_key: str | None = None,
     ) -> TypedProposal | Refusal:
         self._observe("cognition_request")
         provenance = self._provenance()
@@ -213,8 +253,17 @@ class LocalCognition:
             self._observe("provider_call_attempted")
             raw: object
             try:
+                # One canonical model seam: a ``complete``-shaped LLMPort is
+                # preferred; the legacy ``generate`` shape is a test-only shim.
+                # The idempotency key is propagated to exactly that seam.
                 raw = await asyncio.wait_for(
-                    self._provider.generate(prompt, _SYSTEM_PROMPT), timeout=remaining
+                    call_completion_port(
+                        self._provider,
+                        prompt,
+                        _SYSTEM_PROMPT,
+                        idempotency_key=idempotency_key,
+                    ),
+                    timeout=remaining,
                 )
             except (TimeoutError, asyncio.TimeoutError):
                 self._observe("provider_call_failed")
