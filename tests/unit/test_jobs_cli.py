@@ -19,10 +19,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from nexus_ai_agent.config import settings as settings_module
 from typer.testing import CliRunner
 
 from nexus_ai_agent.cli import app
-from nexus_ai_agent.config import settings as settings_module
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 
@@ -143,17 +143,16 @@ def test_resume_survives_journal_evidence_conflict(
     fake_rag_module = types.ModuleType("nexus_ai_agent.features.rag")
 
     class FakeRag:
-        async def add_document(
-            self, user_id: int, text: str, metadata: dict[str, object]
-        ) -> None:
+        async def add_document(self, user_id: int, text: str, metadata: dict[str, object]) -> None:
             pass
 
     fake_rag_module.AdvancedRAGEngine = FakeRag  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "nexus_ai_agent.features.rag", fake_rag_module)
 
-    from nexus_ai_agent.provenance import CausalEvent, CausalJournal, EventKind
     from nexus_ai_agent.provenance.paths import causal_journal_db_path
     from nexus_ai_agent.worker import job_queue_db_path
+
+    from nexus_ai_agent.provenance import CausalEvent, CausalJournal, EventKind
 
     pdf_path = tmp_path / "upload.pdf"
     pdf_path.write_bytes((FIXTURES / "minimal.pdf").read_bytes())
