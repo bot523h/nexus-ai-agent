@@ -5,7 +5,8 @@ the real queue/storage boundary — not boolean unit branches:
 
 * duplicate enqueue under one idempotency key → no second logical job, and
   the duplicate IS an observation record (the ACK-loss/duplicate story);
-* payload conflict → first dispatch wins, durably observable;
+* legacy payload conflicts keep first-payload-wins; changed creative
+  requests are rejected after observation;
 * execution crash → typed durable failure AND a causal JOB_FAILED record;
 * a broken ledger NEVER breaks a job — degradation is logged and visible to
   the passport as missing history;
@@ -19,12 +20,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import threading
 from pathlib import Path
 
 import pytest
 
-from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue, _EnqueueOutcome
 from nexus_ai_agent.application.ports.job_queue import JobStatus
+from nexus_ai_agent.jobs.creative_passport import CreativeRequestConflictError, request_identity
 from nexus_ai_agent.jobs.verification import VerificationOutcome
 from nexus_ai_agent.provenance import (
     CausalEvent,
@@ -36,6 +39,7 @@ from nexus_ai_agent.provenance import (
     verify_chain,
 )
 from nexus_ai_agent.provenance.backfill import backfill_journal
+from nexus_ai_agent.provenance.models import digest_of
 
 
 def _ok_verifier(payload: dict, result: dict) -> VerificationOutcome:
@@ -174,12 +178,13 @@ class TestLifecycleRecording:
         second = await queue.enqueue(
             job_type="creative_render", idempotency_key="k1", payload=_payload()
         )
-        conflict = await queue.enqueue(
-            job_type="creative_render",
-            idempotency_key="k1",
-            payload=_payload(smuggled=True),
-        )
-        assert first == second == conflict
+        with pytest.raises(CreativeRequestConflictError):
+            await queue.enqueue(
+                job_type="creative_render",
+                idempotency_key="k1",
+                payload=_payload(smuggled=True),
+            )
+        assert first == second
         assert await _wait_terminal(queue, first) is JobStatus.COMPLETED
         await _wait_record(journal, first, EventKind.JOB_COMPLETED, attempt=1)
 
@@ -191,14 +196,103 @@ class TestLifecycleRecording:
         assert len(duplicates) == 2
         assert duplicates[0].payload["detail"]["payload_conflict"] is False
         assert duplicates[1].payload["detail"]["payload_conflict"] is True
-        assert duplicates[1].payload["detail"]["resolution"] == "first_dispatch_wins"
-        # exactly one logical effect
+        assert duplicates[1].payload["detail"]["resolution"] == "creative_request_rejected"
+        # One committed queue completion; this makes no exactly-once renderer claim.
         completions = [
             record
             for record in journal.records_for_job(first)
             if record.kind is EventKind.JOB_COMPLETED
         ]
         assert len(completions) == 1
+
+
+@pytest.mark.asyncio
+async def test_enqueue_observer_uses_the_committed_payload_snapshot(
+    tmp_path: Path,
+) -> None:
+    """Caller mutation after commit cannot skew event identity or row facts."""
+    journal = CausalJournal(tmp_path / "causal.sqlite3")
+
+    class DelayedOutcomeQueue(InProcessJobQueue):
+        def __init__(self, db_path: Path) -> None:
+            self.insert_committed = threading.Event()
+            self.allow_outcome_return = threading.Event()
+            super().__init__(
+                db_path,
+                artifact_verifiers={},
+                causal_observer=QueueLedgerObserver(journal),
+            )
+
+        def _insert_or_get(
+            self,
+            job_type: str,
+            idempotency_key: str,
+            payload: dict[str, object],
+            payload_json: str | None = None,
+        ) -> _EnqueueOutcome:
+            outcome = super()._insert_or_get(job_type, idempotency_key, payload, payload_json)
+            self.insert_committed.set()
+            if not self.allow_outcome_return.wait(timeout=5):
+                raise TimeoutError("test did not release the committed enqueue outcome")
+            return outcome
+
+    queue = DelayedOutcomeQueue(tmp_path / "jobs.sqlite3")
+    handled_payloads: list[dict[str, object]] = []
+
+    async def handler(payload: dict[str, object]) -> dict[str, object]:
+        handled_payloads.append(dict(payload))
+        return {"value": payload["value"]}
+
+    queue.register_handler("echo", handler)
+    payload: dict[str, object] = {"value": "before-commit"}
+    committed_snapshot = dict(payload)
+    expected_identity = request_identity("echo", "mutable-payload", committed_snapshot)
+    enqueue_task = asyncio.create_task(
+        queue.enqueue(
+            job_type="echo",
+            idempotency_key="mutable-payload",
+            payload=payload,
+        )
+    )
+    try:
+        assert await asyncio.to_thread(queue.insert_committed.wait, 5)
+        payload["value"] = "mutated-after-commit"
+    finally:
+        queue.allow_outcome_return.set()
+
+    job_id = await enqueue_task
+    assert await _wait_terminal(queue, job_id) is JobStatus.COMPLETED
+    assert handled_payloads == [committed_snapshot]
+    enqueue_record = next(
+        record
+        for record in journal.records_for_job(job_id)
+        if record.kind is EventKind.JOB_ENQUEUED
+    )
+    assert enqueue_record.payload["payload_digest"] == digest_of(committed_snapshot)
+
+    facts = queue.get_job_facts(job_id)
+    assert facts is not None
+    assert facts.payload == committed_snapshot
+    assert facts.payload_digest == enqueue_record.payload["payload_digest"]
+    assert facts.request_id == expected_identity.request_id
+    assert facts.request_fingerprint == expected_identity.request_fingerprint
+    assert facts.transaction_id == expected_identity.transaction_id
+    assert facts.attempt_history_known
+    assert facts.attempt_history[0]["status"] == "completed"
+    assert facts.artifact_passport is None and facts.artifact_passport_known
+
+    projection = PassportBuilder(journal, queue).build(job_id)
+    queue_evidence = projection.content["predicate"]["job"]["queue_evidence"]
+    assert queue_evidence["request_identity"] == {
+        "request_id": expected_identity.request_id,
+        "request_fingerprint": expected_identity.request_fingerprint,
+        "transaction_id": expected_identity.transaction_id,
+    }
+    assert queue_evidence["attempt_history"]["records"][0]["status"] == "completed"
+    assert queue_evidence["creative_artifact_passport"] == {
+        "known": True,
+        "document": None,
+    }
 
 
 class TestFailureRecording:
