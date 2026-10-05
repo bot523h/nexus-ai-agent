@@ -302,7 +302,8 @@ IMPLEMENTED + VERIFIED.
 |---|---|---|
 | `origin/main` SHA | `e5b326b2eaf691a638d030ad57acf1ce60016ef0` | `git rev-parse` (no drift) |
 | Phase-3 final SHA | `75387ca0bccc991ca1aa3f566832ceaf3d926cf5` | `git log` |
-| Phase-4 code commit | `7f2d13c`; hardening `6d2c63d`; final `a537e82` (HEAD) | `git log --oneline -1` |
+| Phase-4 code commits | feature `7f2d13c`, hardening `6d2c63d` | `git log` |
+| Phase-4 docs-only tail | through `f3a30d0` | `git log --oneline -1` |
 | Remote push | **BLOCKED** — 403 "Permission to bot523h/nexus-ai-agent.git denied" (B-3) | `git push` |
 | Accessible Arena refs | none | `git ls-remote origin "arena/*"` |
 
