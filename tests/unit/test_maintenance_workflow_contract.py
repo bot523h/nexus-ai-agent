@@ -23,6 +23,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -110,15 +111,25 @@ def _workflow_permissions() -> dict[str, str]:
 
 
 def _job_permissions(job: str) -> dict[str, str]:
+    """Job-level permissions in either form GitHub accepts.
+
+    ``permissions: write-all`` (scalar) is reported as a sentinel entry, so a
+    scalar override can never be mistaken for "no job-level block" and silently
+    inherit the workflow-level ``contents: read``.
+    """
     lines = _job_lines(job)
     for index, line in enumerate(lines):
-        if line == "    permissions:":
-            block: list[str] = []
-            for follow in lines[index + 1 :]:
-                if follow.strip() and not follow.startswith(" " * 6):
-                    break
-                block.append(follow)
-            return _mapping(block, 6)
+        if not re.match(r"^    permissions:", line):
+            continue
+        inline = line.split(":", 1)[1].strip()
+        if inline:
+            return {"__scalar__": inline}
+        block: list[str] = []
+        for follow in lines[index + 1 :]:
+            if follow.strip() and not follow.startswith(" " * 6):
+                break
+            block.append(follow)
+        return _mapping(block, 6)
     return {}
 
 
@@ -270,6 +281,21 @@ def test_every_job_effectively_grants_only_contents_read(job: str) -> None:
     assert _effective_permissions(job) == {"contents": "read"}, (
         f"{job} must not be able to escalate its token beyond contents: read"
     )
+
+
+def test_the_permission_guard_rejects_scalar_and_mapping_job_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mutation probe: the guard must fail on BOTH override forms, not just one."""
+    assert _effective_permissions("backup-db") == {"contents": "read"}
+    for override in ("    permissions: write-all\n", "    permissions:\n      contents: write\n"):
+        mutated = WORKFLOW.replace("  backup-db:\n", "  backup-db:\n" + override, 1)
+        assert mutated != WORKFLOW
+        monkeypatch.setattr(sys.modules[__name__], "WORKFLOW", mutated)
+        assert _effective_permissions("backup-db") != {"contents": "read"}, (
+            f"a job-level override ({override.strip()}) must never inherit the "
+            "workflow-level contents: read"
+        )
 
 
 @pytest.mark.parametrize("job", ["backup-db", "housekeeping"])
