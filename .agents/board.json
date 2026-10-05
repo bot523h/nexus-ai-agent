@@ -2788,7 +2788,7 @@
       "title_fa": "قرارداد مهندسی دائمی و نسخه‌دار برای همهٔ عامل‌ها (لایهٔ قانون اساسی نگار)",
       "zone": "agent-constitution",
       "priority": "P1",
-      "status": "active",
+      "status": "active_in_review",
       "scope": "A future session inherits no memory of this one, and the engineering law (truth before code, no fake verification, authority discipline, exact-head proof, the closed completion vocabulary, the completion gate) lived only in mission prompts and dated audits. This task adds NAGAR_AGENT_CONSTITUTION.md at the repository root, a bootstrap pointer in AGENTS.md above its first section, an enforcing architecture test, an adversarial mutation campaign, and a CI job, so the contract is discoverable, versioned, and non-bypassable.",
       "scope_fa": "سشن بعدی هیچ حافظه‌ای از این سشن ندارد و قانون مهندسی فقط در پرامپت مأموریت و گزارش‌های تاریخ‌دار بود. این تسک قانون اساسی را در ریشهٔ مخزن، اشاره‌گر bootstrap را در AGENTS.md، تست نگهبان، کمپین میوتیشن و یک job CI اضافه می‌کند تا قرارداد قابل کشف، نسخه‌دار و غیرقابل دور زدن باشد.",
       "prerequisites": [],
@@ -2818,7 +2818,8 @@
       "claimed_at": "2026-10-05T10:58:46Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": ""
+      "note": "Delivered as PR #157 (head a76b43c, branch arena/01a10ba1-nexus-ai-agent). Local: pytest tests/architecture/test_agent_constitution.py 18 passed; scripts/agent_constitution_mutations.py killed 21/21 with the tree restored byte for byte; 138 passed across the enforcer, docs-integrity, board, CI-rail and suite-hygiene guards; ruff check + ruff format --check clean. gates_owner=False: exact-head CI is deferred to the gates owner per AGENTS.md §1 rule 4. Not gates-owner work: no production code under src/ was touched (mypy src is not applicable).",
+      "delivered": true
     }
   ],
   "deferred_log": [
