@@ -33,11 +33,22 @@ from nexus_ai_agent.nagar.cognition.adapter import (
     TextGenerator,
 )
 from nexus_ai_agent.nagar.cognition.bridge import proposal_to_command
+from nexus_ai_agent.nagar.cognition.capabilities import (
+    offered_operations,
+    offered_operations_within,
+)
 from nexus_ai_agent.nagar.cognition.context import (
     CognitionBudget,
     CognitionContext,
     ProducerIdentity,
     ProposalSchema,
+)
+from nexus_ai_agent.nagar.cognition.gateway import (
+    GATEWAY_PROPOSAL_SCHEMA_ID,
+    GATEWAY_PROPOSAL_SCHEMA_VERSION,
+    CognitionGateway,
+    CognitionRefused,
+    build_cognition_gateway,
 )
 from nexus_ai_agent.nagar.cognition.null import NullCognition
 from nexus_ai_agent.nagar.cognition.port import CognitionPort
@@ -59,13 +70,17 @@ from nexus_ai_agent.nagar.cognition.router import (
 
 __all__ = [
     "DEFAULT_MAX_OUTPUT_CHARS",
+    "GATEWAY_PROPOSAL_SCHEMA_ID",
+    "GATEWAY_PROPOSAL_SCHEMA_VERSION",
     "LOCAL_PRODUCER_NAME",
     "PROPOSAL_SCHEMA_VERSION",
     "CognitionBudget",
     "CognitionContext",
+    "CognitionGateway",
     "CognitionLevel",
     "CognitionObserver",
     "CognitionPort",
+    "CognitionRefused",
     "DeterministicRouter",
     "IntentClass",
     "LocalCognition",
@@ -79,6 +94,9 @@ __all__ = [
     "RoutingRequest",
     "TextGenerator",
     "TypedProposal",
+    "build_cognition_gateway",
+    "offered_operations",
+    "offered_operations_within",
     "parse_proposal",
     "proposal_to_command",
 ]

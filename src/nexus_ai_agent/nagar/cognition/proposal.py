@@ -68,6 +68,7 @@ class RefusalReason(str, Enum):
     UNSUPPORTED_SCHEMA_VERSION = "unsupported_schema_version"
     DISALLOWED_OPERATION = "disallowed_operation"  # outside the offered set
     AUTHORITY_FIELD = "authority_field"  # tried to carry authority
+    DENIED = "denied"  # the deterministic substrate rejected the candidate command
     NON_FINITE = "non_finite"  # NaN / Infinity in the payload
     BUDGET_EXHAUSTED = "budget_exhausted"  # producer exceeded its budget
 
