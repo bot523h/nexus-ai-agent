@@ -10,8 +10,8 @@ one row or rule of that contract, and each is green on merged main today:
   revision chain, and separates content identity (``state_hash``) from sequence
   identity (``state_revision``);
 * recorded history stays immutable while new commits append;
-* exactly one module writes the durable causal ledger, and the passport is a
-  read-only projection;
+* exactly one module writes the durable causal ledger, and building the
+  passport projection appends nothing to it;
 * a contradictory reassignment fails closed, is quarantined, and reads back the
   same account from a fresh instance on the same file.
 
@@ -43,6 +43,7 @@ from nexus_ai_agent.provenance.models import (
     JobFacts,
     verify_chain,
 )
+from nexus_ai_agent.provenance.passport import PassportBuilder
 
 SRC = Path(__file__).parents[2] / "src" / "nexus_ai_agent"
 BUS_TRANSACTION_ID = re.compile(r"^tx_[0-9a-f]{32}$")
@@ -172,7 +173,7 @@ def test_state_hash_excludes_revision_and_recorded_history_is_immutable() -> Non
 # --------------------------------------------------------------------------- #
 # 3. lineage authority: one ledger writer, one read-only projection
 # --------------------------------------------------------------------------- #
-def test_exactly_one_module_writes_the_durable_ledger_and_the_passport_is_read_only() -> None:
+def test_exactly_one_module_writes_the_durable_ledger() -> None:
     ledger_writers = sorted(
         str(path.relative_to(SRC))
         for path in SRC.rglob("*.py")
@@ -183,16 +184,60 @@ def test_exactly_one_module_writes_the_durable_ledger_and_the_passport_is_read_o
         f"found: {ledger_writers}"
     )
 
-    passport_source = (SRC / "provenance" / "passport.py").read_text(encoding="utf-8")
-    for statement in ("INSERT", "UPDATE ", "DELETE "):
-        assert statement not in passport_source, (
-            f"provenance/passport.py must stay a read-only projection; found {statement!r}"
+
+def test_the_passport_builds_without_writing_to_the_ledger(tmp_path: Path) -> None:
+    """The passport is a read-only projection: building it must append nothing.
+
+    A spelling check for SQL keywords cannot prove this (an ``append()`` call
+    needs none of them), so this test exercises the real builder against an
+    isolated journal and compares the stored records byte-for-byte.
+    """
+    journal_path = tmp_path / "passport-read-only.sqlite3"
+    journal = CausalJournal(journal_path)
+    for kind, attempt, status in (
+        (EventKind.JOB_ENQUEUED, None, "pending"),
+        (EventKind.JOB_RESERVED, 1, "processing"),
+        (EventKind.JOB_VERIFICATION_STARTED, 1, "verifying"),
+        (EventKind.JOB_COMPLETED, 1, "completed"),
+    ):
+        journal.append(
+            CausalEvent(
+                kind=kind,
+                job_id="job_readonly",
+                job_type="creative.render",
+                idempotency_key="key-readonly",
+                attempt=attempt,
+                status=status,
+                occurred_at="2026-10-05T00:00:00Z",
+            )
         )
 
-    queue_source = (SRC / "adapters" / "in_process_job_queue.py").read_text(encoding="utf-8")
-    queue_tables = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", queue_source))
-    assert queue_tables, "the queue adapter must keep creating its own state table"
-    assert "nexus_causal_journal" not in queue_tables
+    facts = JobFacts(
+        job_id="job_readonly",
+        job_type="creative.render",
+        idempotency_key="key-readonly",
+        status="completed",
+        attempt=1,
+        error=None,
+        created_at=None,
+        started_at=None,
+        finished_at=None,
+        payload={},
+        payload_digest=None,
+        result={},
+        result_digest=None,
+        verification={"status": "verified"},
+    )
+
+    class _Facts:
+        def get_job_facts(self, job_id: str) -> JobFacts | None:
+            return facts if job_id == "job_readonly" else None
+
+    before = [(record.seq, record.record_hash) for record in journal.all_records()]
+    PassportBuilder(journal, _Facts()).build("job_readonly")
+    after = [(record.seq, record.record_hash) for record in journal.all_records()]
+    assert after == before, "building a passport must not append, mutate, or repair the ledger"
+    assert CausalJournal(journal_path).count() == len(before)
 
 
 # --------------------------------------------------------------------------- #

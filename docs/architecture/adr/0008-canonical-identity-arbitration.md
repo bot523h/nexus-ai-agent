@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: proposed
 date: 2026-10-05
 deciders: session arena/01a10d52-nexus-ai-agent (canonical identity arbitration; no task-240 claim taken)
 consulted: live GitHub state re-read at 2026-10-05T18:30Z (origin/main 5a228ea9a114363f6b77a4becd0681eeab3527a2; PRs #126/#127/#128/#129/#131/#134/#148/#149/#150/#151/#152/#156/#159 at their exact heads), merged main code (`creative/studio`, `jobs/creative_passport`, `provenance`), D-0013, D-0017, D-0020, D-0024
@@ -104,6 +104,15 @@ exists to prevent (B forks Intent/plan/graph identity, C forks the durable accou
 forks identity ownership); E solves a problem the single vertical slice does not have
 (one CommandBus command is already atomic).
 
+**Status and ratification.** This record fixes the canonical *target* contract and the
+dispositions, and it is deliberately `proposed`, not `accepted`: AGENTS.md §7 and
+`README.md` assign decisions that change system behaviour to `docs/DECISION_LOG.md`,
+which is authoritative when summaries disagree. Until the implementing PR adds the
+ratifying `DECISION_LOG.md` entry (action 4 below), this file is binding for *what may
+be built* and non-authoritative for *system behaviour*, and no runtime code may cite it
+as evidence of a merged behaviour change. That is also why the successor stays
+unclaimed: the contract is decided, the ownership is not yet free.
+
 ### The canonical identity contract (normative)
 
 | Identity | Source of truth | How it is built | Authority (who writes it) | Where it is durable | Never stored or recreated |
@@ -115,8 +124,8 @@ forks identity ownership); E solves a problem the single vertical slice does not
 | **Revision (content)** | `studio.models.Project.state_hash` | `sha256` over canonical project JSON (`project_id`, `name`, `timeline`, `assets`), revision excluded | `CommandBus` commit only (`compute_state_hash`) | in-memory in V1; durable as `canonical_project_state_hash` evidence once the worker returns it | never recompute over a mutated snapshot; never let two revisions share a hash silently as "the same state" |
 | **Parent revision** | `EditTransaction.parent_revision` | the previous `state_revision` copied at commit | `CommandBus` commit | in-memory history in V1; durable as evidence (nullable) | never recomputed after the fact; unknown stays `NULL` |
 | **CommandBus transaction** | `EditTransaction.transaction_id` (`tx_` + `uuid4().hex`) with `command_id` and the `(project, operation, idempotency_key)` reservation | opaque unique id minted per applied commit; `command_id` is request-stable | `CommandBus` only | in-memory in V1; durable only as *evidence* referenced by the queue passport after the implementing slice | never used as the queue `transaction_id`; never reused; never fabricated when a worker returns none |
-| **Queue request/job** | the `nexus_job_queue` row; `RequestIdentity = (request_id, request_fingerprint, transaction_id)` | `content_id("request", {job_type, idempotency_key})`; `content_id("transaction", {request_id, fingerprint})` | `InProcessJobQueue` at enqueue; `UNIQUE` index on `transaction_id` | SQLite row (WAL + durable sync) | never re-minted on retry, recovery, restart, or backfill; `request_id/fingerprint/transaction_id` stay `NULL` for legacy rows |
-| **Queue attempt** | `nexus_job_queue` attempt history | `content_id("attempt", {job_id, attempt_number})` | queue fencing token (CAS) | SQLite attempt history | never rewrite a historical attempt; a retry adds an attempt, it does not edit one |
+| **Queue request/job** | the `nexus_job_queue` row; `RequestIdentity = (request_id, request_fingerprint, transaction_id)` | `content_id("request", {job_type, idempotency_key})`; `content_id("transaction", {request_id, request_fingerprint})` | `InProcessJobQueue` at enqueue; `UNIQUE` index on `transaction_id` | SQLite row (WAL + durable sync) | never re-minted on retry, recovery, restart, or backfill; `request_id/fingerprint/transaction_id` stay `NULL` for legacy rows |
+| **Queue attempt** | `nexus_job_queue` attempt history | `content_id("attempt", {job_id, attempt})` | queue fencing token (CAS) | SQLite attempt history | never rewrite a historical attempt; a retry adds an attempt, it does not edit one |
 | **Artifact** | the stored bytes; `StoredAsset.sha256` (content) + `storage_key` (locator) | digest measured from the stored bytes and re-verified independently | the registered artifact verifier — never the handler | artifact store + queue row + passport | never trust a handler-declared digest; never create a second artifact registry |
 | **Lineage binding** | `provenance.CausalJournal` (`nexus_causal_journal`), with the queue row as state authority | exactly-once `dedupe_key(kind, job, attempt)` + hash chain over canonical record bytes | the journal append path (observer/backfill) only; the passport is a **read-only** projection | SQLite sidecar | no second ledger or passport store; no journal mutation; no invented reservation across a witnessed gap |
 | **Legacy unknown** | the authority row's `NULL` / absent fields | nothing — absence *is* the representation | none | persisted `NULL`, with `*_known = False` flags | never backfilled by invention; never shaped as verified; never used to authorize |

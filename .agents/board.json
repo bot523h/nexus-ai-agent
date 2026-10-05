@@ -702,6 +702,7 @@
       "description": "task-240: durable Project -> CreativeWork -> revision -> Intent -> CommandBus -> queue -> verified artifact -> lineage evidence",
       "paths": [
         "src/nexus_ai_agent/creative/spine/",
+        "src/nexus_ai_agent/creative/intelligence/",
         "src/nexus_ai_agent/creative/studio/bus.py",
         "src/nexus_ai_agent/creative/studio/models.py",
         "src/nexus_ai_agent/creative/render_jobs.py",
@@ -710,7 +711,8 @@
         "src/nexus_ai_agent/provenance/",
         "tests/unit/test_creative_revision_lineage.py",
         "tests/integration/test_creative_revision_lineage.py",
-        "tests/architecture/test_creative_revision_lineage_boundary.py"
+        "tests/architecture/test_creative_revision_lineage_boundary.py",
+        "docs/DECISION_LOG.md"
       ]
     }
   ],
