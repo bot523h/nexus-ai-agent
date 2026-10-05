@@ -2,7 +2,7 @@
 
 **Status:** Living document — every rule here names the test that enforces it
 **Scope:** package inventory, allowed dependency directions, fitness-function catalogue, extension recipes
-**Verified against:** `main` @ `7573249`
+**Verified against:** `main` @ `6e41123`
 
 This is the *structural* contract of the repository. If a rule is not in §3 or §4, it is a convention, not a law. If a rule is in this file and **not** enforced by a test, that is a documentation bug — file it against zone `docs-architecture`.
 
@@ -70,6 +70,7 @@ Dependencies point **downward**. A lower layer may never import a higher one, an
 | R11 | The domain glossary and retention constants stay live (a deleted guarantee is a failing test) | `test_glossary_liveness.py` |
 | R12 | `bot/surface/` is importable without `telegram`: no module in the package imports PTB directly, **and** no top-level import pulls an engine that does (such engines are imported lazily inside the function). Every stub-replaced command resolves to a surface symbol | `test_surface_onboarding.py::test_the_surface_package_imports_without_telegram` (subprocess probe), `test_surface_ptb.py::test_the_surface_package_imports_no_telegram`, `test_surface_registration.py` (20-command `EXPECTED` map, callback map, forbidden stub strings) |
 | R13 | One canonical command contract: AI modules cannot import Nagar executors/pack handlers, in the creative tree only `CommandBus` calls an operation handler, the studio authorization seam points inward only, `TypedCommand` is the single envelope with protocol `nagar.command.v1` (a `v2` protocol id is banned from `src/`), and the studio core cannot invoke shell/media/UI tooling | `test_command_capability_boundary.py` (structural), `test_command_capability_contract.py` (versioning, ordered denial before handler, replay/conflict, behavioural). This does **not** assert generic non-Nagar tools cannot run a shell, nor fence the runtime-owned call sites (board task-181). |
+| R14 | The SQLite `InProcessJobQueue` row is the sole job-state/outcome authority; attempt history and verified creative passports are queue-row checkpoints, the provenance observer records post-commit evidence only, and checkpoint reuse requires re-reading/re-verifying stored bytes | `tests/integration/test_provenance_queue_recording.py` (committed snapshots, fail-safe observer, takeover/fencing), `tests/integration/test_creative_execution_recovery.py` (interruption, verified-checkpoint reconciliation, and preflight failures), `tests/unit/test_creative_passport.py` (identities and corrupt-evidence handling), `tests/architecture/test_provenance_boundary.py::test_passport_builder_takes_no_write_path_to_the_queue` |
 
 **Legacy baseline.** `tests/architecture/legacy_baseline.json` freezes the pre-existing `langgraph`/`sqlmodel`/`telegram` import set with an explicit `approval: ARCH_BASELINE_APPROVED`. New violations fail; removing a baseline entry is allowed (and should be celebrated, not blocked).
 
