@@ -27,12 +27,13 @@ import importlib.util
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 AGENT_BOARD = REPO_ROOT / "scripts" / "agent_board.py"
 
 
-def _load_board_module():
+def _load_board_module() -> ModuleType:
     if not AGENT_BOARD.is_file():
         sys.exit(f"board CLI not found at {AGENT_BOARD}")
     spec = importlib.util.spec_from_file_location("_agent_board", AGENT_BOARD)
@@ -74,7 +75,7 @@ def _changed_files() -> list[str]:
     return sorted(files)
 
 
-def _live_own_claim(board: dict, branch: str, ab) -> list[str]:
+def _live_own_claim(board: dict, branch: str, ab: ModuleType) -> list[str]:
     held = []
     for claim in board.get("claims", []):
         if claim.get("agent_branch") == branch and ab._claim_live(claim):
@@ -82,7 +83,7 @@ def _live_own_claim(board: dict, branch: str, ab) -> list[str]:
     return held
 
 
-def _next_task(board: dict, branch: str, ab) -> str | None:
+def _next_task(board: dict, branch: str, ab: ModuleType) -> str | None:
     for claim in board.get("claims", []):
         if claim.get("status") not in ("queued", "expired", "deferred"):
             continue
