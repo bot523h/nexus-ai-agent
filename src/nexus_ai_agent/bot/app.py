@@ -224,8 +224,6 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
     # Its unavailability DEGRADES EVIDENCE, never the bot: a corrupt, locked
     # or unwritable sidecar logs ``causal_journal_unavailable``, the queue
     # runs without an observer, and the passport plane reports the gap.
-    import sqlite3
-
     from nexus_ai_agent.provenance import QueueLedgerObserver
     from nexus_ai_agent.provenance.paths import (
         causal_journal_db_path,
@@ -234,15 +232,8 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
     from nexus_ai_agent.worker import default_job_handlers, job_queue_db_path
 
     _queue_db = job_queue_db_path(settings.db_path)
-    try:
-        causal_journal = try_open_causal_journal(causal_journal_db_path(_queue_db))
-        if causal_journal is None:
-            raise sqlite3.OperationalError(f"unavailable: {_queue_db}")
-        causal_observer = QueueLedgerObserver(causal_journal)
-    except sqlite3.Error as exc:
-        logger.warning("causal_journal_unavailable error=%s", exc)
-        causal_journal = None
-        causal_observer = None
+    causal_journal = try_open_causal_journal(causal_journal_db_path(_queue_db))
+    causal_observer = QueueLedgerObserver(causal_journal) if causal_journal is not None else None
     job_queue = InProcessJobQueue(
         _queue_db,
         on_job_finished=_build_job_completion_notifier(_bot_token(settings)),
