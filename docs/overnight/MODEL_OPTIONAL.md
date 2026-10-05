@@ -85,10 +85,12 @@ eligible exists and no human is available.
 ## LocalCognition (model-backed producer)
 
 `LocalCognition` (`src/nexus_ai_agent/nagar/cognition/adapter.py`) is the one
-place that talks to a language model. It reuses the existing provider contract
-structurally (`async generate(prompt, system) -> str`), so any
-`nexus_ai_agent.llm.provider.LLMProvider` plugs in with no second abstraction,
-and the cognition package never imports the heavy `llm` package initialiser.
+place that talks to a language model. Its canonical seam is
+`nexus_ai_agent.application.ports.llm.LLMPort`
+(`async complete(prompt, *, idempotency_key=None) -> str`), which the adapter
+prefers; the legacy `generate(prompt, system)` shape is kept as a declared
+test-only shim. Either way the cognition package never imports the heavy `llm`
+package initialiser, and the idempotency key reaches exactly that seam.
 
 It is fail-closed and bounded: the provider's untrusted text goes straight into
 `parse_proposal`; a wall-clock deadline (`asyncio.wait_for`) and at most
@@ -108,14 +110,15 @@ producer cannot forge its origin or impersonate the null producer.
 
 ## Honest limits
 
-- **`LocalCognition` is implemented and tested; no concrete production
-  `LLMProvider` is bound to it in a runtime composition root yet.** Binding a
-  live provider (and choosing it via the router) is the next integration step;
-  the adapter itself is done and exercised end-to-end against a fake provider
-  (only external model behaviour is faked).
-- **No provider adapter is wired into the bot/worker runtime.** The boundary is
-  implemented and tested with `NullCognition` and `LocalCognition`; wiring a
-  live cognition producer into a bot surface is deferred (see
+- **`LocalCognition` is implemented and tested; a real host composition root
+  binds a live provider only when one is configured.** `nagar.composition`
+  builds the provider and reports a fake fallback as `not_configured`; with no
+  model the path clarifies. The applied path has been driven with a *declared*
+  scripted model at the external seam only — ARTIFACT-PROVEN, not
+  PRODUCTION-PROVEN.
+- **A production host caller now exists (`nexus intent` in `cli.py`), but no
+  bot/worker runtime surface is wired to the cognition producer.** Wiring a live
+  cognition producer into the bot is deferred (see
   `nagar_overnight/ARENA_HANDOFF.md`).
 - **No recipe crystallization is active.** The router has an `L0_recipe`
   level, but nothing activates a recipe: that requires independent evidence

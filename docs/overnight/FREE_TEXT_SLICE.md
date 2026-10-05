@@ -11,7 +11,7 @@ flowchart TD
     A[user free text] --> B[normalize + bound 500 chars]
     B --> C[CognitionGateway.run]
     C --> D[DeterministicRouter: level]
-    D -->|L2 model selected| E[LocalCognition over injected provider]
+    D -->|L2 model selected| E[LocalCognition over injected LLMPort]
     D -->|L4 human / blocked| Z[clarification_required]
     E --> F[parse_proposal -> TypedProposal | Refusal]
     F --> G[offered set = registry ∩ timeline.trim]
@@ -25,6 +25,12 @@ The seam is `nagar.creative.run_free_text_intent`.  It is the **only** function
 that accepts free text, and it never calls `CommandBus.dispatch` itself — it
 delegates to `CognitionGateway`, which is the one place model output can become
 a candidate command.
+
+The host caller is `nexus intent <text>` in `cli.py`: it composes the provider
+(`nagar.composition`), builds the bus through the single canonical factory
+(`creative.render_jobs.build_job_bus`), runs the slice, prints an independent
+verification verdict and can write a real JSON receipt.  With no model
+configured it prints `clarification_required` and executes nothing.
 
 ## Why `timeline.trim`
 
@@ -45,6 +51,8 @@ without inventing a new operation.
 | 15 hostile model outputs never dispatch | `…::test_hostile_model_output_never_dispatches` |
 | retrieved memory text cannot create authority | `…::test_retrieved_memory_text_cannot_create_authority` |
 | the slice never owns a bus / authorizer | `test_nagar_creative_slice_boundary.py` |
+| the real CLI caller applies and writes a verified receipt | `test_nagar_intent_cli.py::test_cli_intent_applies_and_writes_verified_receipt` |
+| the CLI Model Kill Test clarifies and executes nothing | `test_nagar_intent_cli.py::test_cli_intent_model_kill_reports_clarification_and_writes_receipt` |
 
 ## Independence
 
@@ -56,9 +64,11 @@ returned dictionary, so the producer is not the sole judge of its artifact.
 
 * One operation only.  Broader intent coverage needs more registered operations
   and a richer projection of deterministic facts — not a new path.
-* The provider is real and injected (`build_provider`) but no free-text→operation
-  *caller* is wired into the CLI/Telegram surfaces yet; this is the host-layer
-  seam they should call.
+* The provider is real and injected (`nagar.composition.build_cognition_provider`)
+  and a real host caller exists (`nexus intent`).  The applied path has only been
+  driven with a *declared* scripted model at the external seam — no paid/cloud
+  model has been exercised in this environment, so the claim is ARTIFACT-PROVEN,
+  not PRODUCTION-PROVEN.
 * Recipe crystallization is **not** activated — no independently validated
   recipe exists.
 * With no model configured the slice *clarifies*; it does not invent.  This is

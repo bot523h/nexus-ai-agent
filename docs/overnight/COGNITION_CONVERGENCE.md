@@ -83,26 +83,28 @@ refuses with `DISALLOWED_OPERATION`.
 
 ## 3. Fail-closed feature selection
 
-`build_cognition_gateway(enabled=..., provider=...)` selects the producer,
+`build_cognition_gateway(enabled=..., completion=...)` selects the producer,
 never the authority:
 
-* `enabled and provider is not None` → `LocalCognition(provider)` (the only
-  place a model is ever consulted);
+* `enabled and completion is not None` → `LocalCognition(completion)` (the only
+  place a model is ever consulted; `completion` is the canonical `LLMPort`);
 * otherwise → `NullCognition` (always refuses).
 
 A disabled flag or a missing provider therefore **cannot** fall back to a
 raw-model path; the worst case is an explicit refusal. The selector reads no
-global config object — the composition root passes `enabled` and `provider`
-explicitly (dependency injection, no singleton).
+global config object — the composition root passes `enabled` and `completion`
+explicitly (dependency injection, no singleton). A fake provider is never
+accepted as a model: `nagar.composition.build_cognition_provider` reports a
+`FakeLLM` fallback as `not_configured`, so it cannot become a proposal source.
 
 ## 4. Honest limits (not overclaimed)
 
-* **No production NL→operation caller exists yet.** The only production
-  consumer of `CommandBus` that touches user intent is
-  `creative/render_jobs.py`, which consumes a *typed* job payload
-  (`command`, `operation`, `input`) — not free-text model output. The gateway
-  is the reviewed seam a future free-text surface plugs into; wiring one is out
-  of scope for this phase (it would be a new user-facing surface).
+* **A production NL→operation caller exists now (`nexus intent`), but the
+  applied path has only been driven with a *declared* scripted model** at the
+  external `LLMPort` seam. The deterministic chain (router, registry schema,
+  policy/authority, bus, verification, receipts, causal observation) is real;
+  no paid/cloud model has been exercised here, so the claim is ARTIFACT-PROVEN,
+  not PRODUCTION-PROVEN.
 * **`phi_agent.moderate` remains a model verdict.** It parses `{"safe": ...}`
   from model text and **fails open on parse error** (`{"safe": True}`). This is
   a *policy* weakness, not an execution bypass — the verdict does not select or
@@ -126,9 +128,9 @@ explicitly (dependency injection, no singleton).
 |---|---|
 | Gateway (router → registry schema → producer → bridge → bus) | **IMPLEMENTED + VERIFIED** |
 | `allowed_operations` derived from the registry | **IMPLEMENTED + VERIFIED** |
-| Fail-closed flag/provider selection | **IMPLEMENTED + VERIFIED** |
+| Fail-closed flag/completion selection | **IMPLEMENTED + VERIFIED** |
 | Legacy raw-model→execution bypass | **ABSENT — mechanically proven** |
 | `agents/**` model consumers pinned | **VERIFIED** |
-| Production free-text → gateway wiring | **DESIGNED (deferred — no such surface today)** |
+| Production free-text → gateway wiring (`nexus intent`) | **IMPLEMENTED + VERIFIED + ARTIFACT-PROVEN** |
 | `phi_agent.moderate` → boundary | **DEFERRED (ADR)** |
-| Remote delivery / main integration | **BLOCKED (push 403 — B-3)** |
+| Remote delivery / main integration | **DELIVERED — PR #155 fast-forwarded to a converged head** |
