@@ -63,6 +63,8 @@ The files under `tests/architecture/` are the executable form of the boundary la
 | no `TODO`/`FIXME`/placeholder tokens in architecture docs | architecture pages are claims, not notes |
 | `VERSION` == `pyproject.toml` == latest `CHANGELOG` heading | the release-drift guard (task-111 partner) |
 
+The law register in [`MODULE_MAP.md`](MODULE_MAP.md) §3 is gated by a sibling fitness function, `tests/architecture/test_module_map_law_coverage.py` (ADR [`0009`](adr/0009-module-map-law-enforcement.md)): it parses the table and fails if any law names a test file or `::symbol` that no longer exists on the tree — so a renamed or deleted guard turns the documentation contract red instead of silently decaying.
+
 Documentation linting beyond this (Vale prose linting, `markdownlint-cli2`, Mermaid's own parser via [`mermaid-lint`](https://github.com/jasonworden/mermaid-lint), link checkers such as Lychee — the toolchain GitLab documents in its [docs testing](https://docs.gitlab.com/development/documentation/testing/)) is deliberately **not** wired in yet: it would add a Node/Chromium toolchain to a Python-only CI for a documentation set that is currently < 20 files. The trade-off is recorded in [`adr/0002-docs-as-code-enforcement.md`](adr/0002-docs-as-code-enforcement.md).
 
 ## 5. Baseline (2026-09-21, local)
