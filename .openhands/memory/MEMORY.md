@@ -18,6 +18,7 @@
   if you did not intend to claim anything.
 
 ## Architecture facts (verified on main @ e5b326b)
+
 - Deterministic core: `creative/studio/bus.py` CommandBus (only path that mutates
   state; identity never self-asserted), `studio/capabilities.py` registry,
   `studio/authorization.py` ProjectAuthorizer/ProjectAccess, `studio/lifecycle.py`
@@ -46,3 +47,15 @@
   shows admin:true. Do not retry endlessly; the owner must grant `contents: write`.
 - Pre-existing flake: `tests/unit/test_knowledge_hardening.py::test_r_f28_...`
   (timing-sensitive cache-stampede; passes in isolation).
+
+## Cognition convergence (phase 5)
+- One model-to-execution path: `nagar.cognition.CognitionGateway`
+  (`cognition/gateway.py`) wires DeterministicRouter -> registry-derived
+  ProposalSchema -> CognitionPort -> `proposal_to_command` -> CommandBus.
+  Rejections become typed `CognitionRefused`; no second execution path.
+- `allowed_operations` MUST derive from `CapabilityRegistry` via
+  `nagar.cognition.capabilities.offered_operations`; a caller may only narrow
+  (`offered_operations_within` = requested INTERSECT registry).
+- Fail-closed selection: `build_cognition_gateway(enabled=, provider=)`;
+  disabled/missing provider -> NullCognition, never a raw-model fallback.
+- Anti-bypass gate: `tests/architecture/test_legacy_agent_no_raw_execution.py`.
