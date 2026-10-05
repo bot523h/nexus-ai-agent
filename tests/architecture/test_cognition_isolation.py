@@ -126,9 +126,15 @@ def test_studio_core_does_not_import_cognition() -> None:
 
 
 def test_cognition_only_imports_its_own_package_and_studio_models() -> None:
+    # The boundary may reach the studio *models* (to bridge a proposal to the
+    # canonical command envelope) and the studio *capabilities* module (to
+    # derive the offered operations from the authoritative registry — the same
+    # allow-list the command bus consults).  It must not reach the bus, the
+    # authorizer or any other execution surface.
     allowed_prefixes = (
         "nexus_ai_agent.nagar",
-        "nexus_ai_agent.creative.studio",
+        "nexus_ai_agent.creative.studio.models",
+        "nexus_ai_agent.creative.studio.capabilities",
     )
     violations: list[str] = []
     for path in sorted(COGNITION.rglob("*.py")):
