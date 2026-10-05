@@ -197,9 +197,11 @@ would be testing unchanged code. No "exactly once" claim is made anywhere.
 
 | Evidence | SHA |
 |---|---|
-| Base / `origin/main` | `e5b326b2eaf691a638d030ad57acf1ce60016ef0` |
-| Baseline test run | `e5b326b2eaf691a638d030ad57acf1ce60016ef0` (working tree clean) |
-| Final code + tests | recorded in `STATE.md` (`Working SHA`) |
+| Base / `origin/main` | `6e41123b40f15a63241c8db27cd884010f55db38` |
+| Historical main (context only) | `e5b326b2eaf691a638d030ad57acf1ce60016ef0` |
+| Baseline test run | `6e41123` (converged tree, clean) |
+| Final code + tests (CI-green) | `36793c7` (33/33), `13f336c` (33/33) |
+| Final branch head (records) | `6146e42` (33/33) |
 
 ## STATUS MATRIX
 
@@ -796,11 +798,11 @@ retry, fencing and recovery. That converts the applied path from ARTIFACT-PROVEN
 PRODUCTION-PROVEN without adding a new execution path.
 
 ## CI FINAL BINDING (observed)
-- Final branch head `13f336cc806265f0e48fbe86206d65050ae790c1` == remote
+- Final branch head `6146e42697e28f75abdbea37dfb06f52d628cbfb` == remote
   `refs/heads/overnight/nagar-20261004` (PR #155 head). Exact-SHA binding confirmed.
 - **All 33 CI checks SUCCESS, 0 failures** (`gh pr checks 155`).
 - `mergeStateStatus: CLEAN`, `mergeable: MERGEABLE`, `state: OPEN`.
 - Earlier code-green SHAs: `844e21a` (full suite 3176/30/0) and `36793c7` (33/33).
   The single `python-parity (3.12)` failure on the intermediate `4a8e902` was the
-  documented SQLite migration race (B-4); it passed on `36793c7` and `13f336c`.
+  documented SQLite migration race (B-4); it passed on `36793c7`, `13f336c`, `6146e42`.
 - Not merged (owner decision). Left as the existing draft PR; no protected ref touched.
