@@ -185,7 +185,17 @@ class LocalCognition:
     ) -> TypedProposal | Refusal:
         self._observe("cognition_request")
         provenance = self._provenance()
-        prompt = _build_prompt(context, schema)
+        try:
+            prompt = _build_prompt(context, schema)
+        except (TypeError, ValueError):
+            # A degenerate context/schema (e.g. NaN buried in input_schema) must
+            # not crash the port; fail closed instead of raising.
+            self._observe("refusal")
+            return Refusal(
+                reason=RefusalReason.MALFORMED,
+                detail="cognition request could not be rendered as finite JSON",
+                provenance=provenance,
+            )
         deadline = time.monotonic() + budget.max_wall_clock_seconds
         last: Refusal | None = None
 

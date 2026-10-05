@@ -123,6 +123,9 @@ Evidence:
   LocalCognition -> bridge -> real ProjectAuthorizer -> real CommandBus with the
   pack-free Wave-1 registry -> handler).
 - tests/unit/test_cognition_boundary.py — +2 tests for provenance override.
-- Full suite: 3016 passed, 30 skipped, 0 failed (baseline 2978 + 38 new).
+- Final hostile re-read found a crash path: a degenerate `input_schema` (e.g. NaN)
+  made `_build_prompt` raise out of `propose`. Fixed by wrapping prompt
+  rendering and failing closed with `MALFORMED`; regression test added.
+- Full suite: 3019 passed, 30 skipped, 0 failed (baseline 2978 + 41 new).
 - ruff check / ruff format --check clean; mypy src 256 files clean.
 

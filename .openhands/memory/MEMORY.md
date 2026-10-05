@@ -30,8 +30,15 @@
 
 ## Session learnings (overnight/nagar-20261004)
 - New additive package: `src/nexus_ai_agent/nagar/cognition/` (typed, authority-free
-  proposal boundary + DeterministicRouter + NullCognition). One-way dependency:
-  cognition -> studio, enforced by tests/architecture/test_cognition_isolation.py.
+  proposal boundary + DeterministicRouter + NullCognition + **LocalCognition adapter**
+  in `adapter.py`). One-way dependency: cognition -> studio, enforced by
+  tests/architecture/test_cognition_isolation.py (asyncio allowed; subprocess/os/eval/
+  exec/socket forbidden).
+- `LocalCognition` reuses `LLMProvider` structurally via a `TextGenerator` base — the
+  cognition package must NOT import `nexus_ai_agent.llm` (heavy). Provider text goes
+  through `parse_proposal`; trusted `provenance=` kwargs override model-claimed provenance.
+- e2e integration tests should use the **pack-free** `build_wave1_registry()` to avoid
+  needing a `HOST_LAYER_PACK_IMPORTERS` edit (that file/zone belongs to task-184).
 - GitHub push from this sandbox is BLOCKED: the App installation token is read-only
   (`Resource not accessible by integration` on POST git/refs) even though the user
   shows admin:true. Do not retry endlessly; the owner must grant `contents: write`.

@@ -299,6 +299,21 @@ async def test_observer_records_budget_exhaustion() -> None:
 # -- prompt construction ---------------------------------------------------
 
 
+async def test_degenerate_input_schema_fails_closed_not_crashes() -> None:
+    # A NaN buried in the schema must not propagate out of the port.
+    schema = ProposalSchema(
+        schema_id=SCHEMA_ID,
+        schema_version=1,
+        allowed_operations=frozenset({"timeline.trim"}),
+        input_schema={"trap": float("nan")},
+    )
+    result = await LocalCognition(ScriptedProvider(_valid_json())).propose(
+        _context(), schema, CognitionBudget()
+    )
+    assert isinstance(result, Refusal)
+    assert result.reason is RefusalReason.MALFORMED
+
+
 async def test_prompt_lists_only_the_offered_operations() -> None:
     provider = ScriptedProvider(_valid_json())
     await LocalCognition(provider).propose(_context(), _schema("timeline.trim"), CognitionBudget())

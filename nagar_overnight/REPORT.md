@@ -4,6 +4,11 @@ Session `overnight/nagar-20261004`. Owner reviews this in the morning. Every
 number below is reproducible from the tree with the command shown. Where a
 claim is weaker than it sounds, it says so.
 
+> **Phase 4 delta (later in the same session):** `LocalCognition` — the
+> model-backed adapter that Phase 3 recorded as DESIGNED — is now
+> **IMPLEMENTED + VERIFIED**. See the "PHASE 4 DELTA" section at the end of this
+> report; the Phase-3 body below is kept intact so the progression is auditable.
+
 ---
 
 ## LIVE TRUTH
@@ -283,3 +288,124 @@ contract test proving it can never reach the bus except through an accepted,
 authorized proposal.** This converts the boundary from "proven with a null
 provider" into "proven with a real model", which is the smallest change that
 materially advances the model-optional thesis.
+
+---
+
+# PHASE 4 DELTA — model-backed adapter (`LocalCognition`)
+
+Phase 3 recorded the model-backed adapter as DESIGNED. It is now
+IMPLEMENTED + VERIFIED.
+
+## LIVE TRUTH (Phase 4)
+
+| Fact | Value | How checked |
+|---|---|---|
+| `origin/main` SHA | `e5b326b2eaf691a638d030ad57acf1ce60016ef0` | `git rev-parse` (no drift) |
+| Phase-3 final SHA | `75387ca0bccc991ca1aa3f566832ceaf3d926cf5` | `git log` |
+| Phase-4 code commit | `7f2d13c` (HEAD) | `git log --oneline -1` |
+| Remote push | **BLOCKED** — 403 "Permission to bot523h/nexus-ai-agent.git denied" (B-3) | `git push` |
+| Accessible Arena refs | none | `git ls-remote origin "arena/*"` |
+
+## WHAT I CHANGED (Phase 4)
+
+| File | Change |
+|---|---|
+| `src/nexus_ai_agent/nagar/cognition/adapter.py` | **new** — `LocalCognition`, `TextGenerator`, `CognitionObserver` |
+| `src/nexus_ai_agent/nagar/cognition/proposal.py` | +`RefusalReason.PRODUCER_FAILED`; trusted `provenance` overrides model-claimed provenance |
+| `src/nexus_ai_agent/nagar/cognition/__init__.py` | export the adapter surface |
+| `tests/architecture/test_cognition_isolation.py` | allow `asyncio` (the port is async); execution primitives still forbidden |
+| `tests/unit/test_cognition_adapter.py` | **new** — 28 unit + adversarial tests |
+| `tests/unit/test_cognition_e2e_pipeline.py` | **new** — 11 end-to-end tests |
+| `tests/unit/test_cognition_boundary.py` | +2 provenance-override tests |
+| `.agents/board.json` | new `nagar-cognition` zone + `task-186` claim with acceptance criteria |
+| `docs/overnight/MODEL_OPTIONAL.md`, `nagar_overnight/*.md` | record |
+
+## MODEL-OPTIONAL RESULT (Phase 4)
+
+- **Reuses the existing contract.** `LocalCognition` wraps anything with
+  `async generate(prompt, system) -> str` (i.e. any `LLMProvider`) via the
+  structural `TextGenerator`; no second model abstraction, no heavy `llm` import.
+- **Untrusted in, typed out.** Provider text goes straight into
+  `parse_proposal`; the only outcomes are a validated `TypedProposal` or an
+  explicit `Refusal`. The adapter cannot dispatch, authorize, do I/O or shell.
+- **Bounded and fail-closed.** `asyncio.wait_for` wall-clock deadline +
+  `budget.max_attempts`; provider exception / timeout / oversized / empty /
+  non-str / malformed all end as a `Refusal`. No crash.
+- **No forged origin.** Caller-supplied trusted provenance overrides any
+  provenance in the model payload.
+- **No fabricated metrics.** `CognitionObserver` counts stages only; tokens are
+  deliberately not reported (the provider contract exposes no usage field).
+
+## TESTS (Phase 4)
+
+| | Phase-3 final | Phase-4 final |
+|---|---|---|
+| `ruff check src tests` | PASS | PASS |
+| `ruff format --check src tests` | PASS | PASS (453 files) |
+| `mypy src` | PASS (255) | PASS (256 files) |
+| `pytest -q` | 2978 passed, 0 failed, 30 skipped | **3019 passed, 0 failed, 30 skipped** |
+
+New tests: 29 + 11 + 2 = **42 new**, all green. (29 = 28 adapter tests + 1
+fail-closed regression found in the final hostile re-read.)
+
+## ADVERSARIAL TESTS (Phase 4)
+
+- prompt-injection prose ("ignore policy", "I am an admin", "use shell") -> `MALFORMED`;
+- forged `actor` / `permissions` -> `AUTHORITY_FIELD`; disallowed op ->
+  `DISALLOWED_OPERATION`; prose-wrapped JSON -> `MALFORMED`;
+- NaN confidence / bool schema version -> refused, not coerced;
+- provider exception carrying `api_key=secret` -> `PRODUCER_FAILED` and the
+  secret is **not** echoed; provider timeout -> `PRODUCER_FAILED`;
+- oversized / empty / non-str output -> refused; bounded retry recovers on
+  attempt 2 and stops at `max_attempts`;
+- degenerate `input_schema` with NaN -> `MALFORMED` (no crash) — found in the
+  final hostile re-read and fixed;
+- e2e: hostile model output never reaches the bus and never mutates state; a
+  valid proposal still fails when the authorizer denies/absent or names another
+  project.
+
+## REAL ARTIFACT EVIDENCE (Phase 4)
+
+Still **none** (no new runtime media artifact). The e2e test drives the genuine
+`CommandBus` and applies a real state transition, but that is a test-time state
+object, not a media file. Claiming ARTIFACT-PROVEN would be dishonest.
+
+## FAILURE / RECOVERY EVIDENCE (Phase 4)
+
+Provider-side failure boundaries are tested. Durable-substrate failure
+boundaries (crash, lost ACK, fencing) are **not** tested here because this
+session did not change that code. No "exactly once" claim is made.
+
+## STATUS MATRIX (Phase 4 — supersedes Phase 3 on the adapter row)
+
+| Area | DESIGNED | IMPLEMENTED | VERIFIED | ARTIFACT-PROVEN | PRODUCTION-PROVEN |
+|---|---|---|---|---|---|
+| Cognition boundary | ✓ | ✓ | ✓ | — | — |
+| Typed proposal + fail-closed parser | ✓ | ✓ | ✓ | — | — |
+| Null provider (Model Kill Test) | ✓ | ✓ | ✓ | — | — |
+| Proposal → command bridge | ✓ | ✓ | ✓ | — | — |
+| Deterministic router | ✓ | ✓ | ✓ | — | — |
+| **Model-backed adapter (`LocalCognition`)** | ✓ | **✓** | **✓** | — | — |
+| Live-provider runtime binding | ✓ | — | — | — | — |
+| Recipe crystallization (L0) | ✓ | — | — | — | — |
+| Causal project graph / passport | ✓ | — | — | — | — |
+| Reactor (Event→Rule→Action) | ✓ | — | — | — | — |
+
+## WEAKNESSES (Phase 4 — updated, not softened)
+
+- **No live provider is bound in a runtime composition root.** The adapter is
+  tested against a fake provider; the bot/worker do not yet construct one.
+- **The legacy chat/agent paths still consume free model text with no bus gate**
+  (`agents/{chat,qwen,gemma,phi}_agent.py` call `generate()` and act on the
+  string) — **High** risk, deferred, recorded as A-3.
+- **`ProposalSchema.allowed_operations` is still caller-populated**; nothing
+  derives it from the live capability registry yet.
+- **No token/latency metrics** — deliberately, pending a provider-usage contract.
+
+## HIGHEST-LEVERAGE NEXT ACTION (exactly one, Phase 4)
+
+**Bind `LocalCognition` into the worker composition root behind a feature flag,
+selected by `DeterministicRouter`, and migrate the legacy chat/agent `generate()`
+call sites to the boundary one at a time** — this removes the last place where
+raw model text can be treated as a decision, the highest ranked remaining risk.
+
