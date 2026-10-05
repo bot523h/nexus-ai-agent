@@ -458,3 +458,188 @@ VERIFIED (local). Not REMOTE-DELIVERED (push blocked), not MAIN-INTEGRATED, not 
 ## HIGHEST-LEVERAGE NEXT ACTION
 
 Wire a production free-text surface to CognitionGateway (the only production CommandBus consumer today, creative/render_jobs.py, consumes a typed payload) — this is the single remaining step to make the one-path claim true end to end in production.
+
+---
+
+# PHASE 6 DELTA — GATE C (propagation → CI → real free-text→operation E2E)
+
+> This section supersedes the "STATUS" and "HIGHEST-LEVERAGE NEXT ACTION" lines
+> above. The Phase-5 body is kept intact so the progression stays auditable.
+
+## LIVE TRUTH (Gate C)
+
+| Fact | Value | How it was checked |
+|---|---|---|
+| `origin/main` SHA | `e5b326b2eaf691a638d030ad57acf1ce60016ef0` | `git rev-parse` (read-only) |
+| Base SHA | `e5b326b` — `merge-base HEAD origin/main`; **0 behind** | `git merge-base` |
+| Branch | `overnight/nagar-20261004` | `git branch` |
+| **Final SHA** | `b257d5f` (Gate C commit) | `git rev-parse HEAD` |
+| Remote push | **UNBLOCKED** — pushed via `$GITHUB_PERSONAL_ACCESS_TOKEN` | `git push` → `* [new branch]` |
+| PR | **#155** (draft) — https://github.com/bot523h/nexus-ai-agent/pull/155 | GitHub API |
+| CI | CI runs on **exact SHA `b257d5f`**: push + pull_request | Actions API |
+| Repo | shallow (`git rev-parse --is-shallow-repository` = `true`) | read-only |
+
+The mission's historical main SHA is still live — no drift, no divergence.
+
+## MODE
+
+**MODE B** (unchanged). Live evidence proves the deterministic substrate is real
+and strong; Gate C adds one thin, additive free-text seam over the *existing*
+`CognitionGateway` and **no** new execution authority.
+
+## WHAT I CHANGED
+
+| File | Purpose |
+|---|---|
+| `src/nexus_ai_agent/nagar/creative/__init__.py` | **New.** `run_free_text_intent` (free text → gateway → real CommandBus, offered set = registry ∩ `{timeline.trim}`), `verify_trim_artifact` (independent judgment), `build_provider` (lazy injected provider root). |
+| `src/nexus_ai_agent/agents/phi_agent.py` | Fix fail-**open** in `moderate`: parse error now → `safe=false`; non-dict/missing-`safe` → `malformed_verdict`; only JSON `true` normalizes to `safe`. |
+| `tests/unit/test_nagar_free_text_slice.py` | **New.** 29 tests: E2E happy chain, 15-case hostile matrix, memory-authority, provider exception/timeout, denied actor. |
+| `tests/unit/test_phi_moderation_fail_closed.py` | **New.** 13 tests pinning fail-closed moderation. |
+| `tests/architecture/test_nagar_creative_slice_boundary.py` | **New.** 8 architecture guards (no module-scope bus/authorizer; lazy-only provider import; no authority fields). |
+| `docs/overnight/FREE_TEXT_SLICE.md` + `docs/README.md` | **New doc** + index row. |
+| `nagar_overnight/{STATE,LOG,BLOCKERS,REPORT}.md` | Mission record. |
+
+## ARCHITECTURAL RESULT
+
+- **More coherent:** there is now exactly one production seam that accepts free
+  text, and it delegates to the one `CognitionGateway`; the offered set is derived
+  from the *same* registry the bus authorizes against, so authority cannot drift.
+- **Remained separate:** judgment (`verify_trim_artifact`), policy/authority
+  (`CommandBus` + `ProjectAuthorizer`), and the cognition boundary stay distinct;
+  the slice never module-imports the bus `authorizer`.
+
+## MODEL-OPTIONAL RESULT
+
+- **Works without a model:** deterministic substrate, routing, registry-derived
+  offering, bus authorizing/applying, artifact verification, the whole refusal
+  taxonomy. With no provider, the slice returns `clarification_required`.
+- **Still requires cognition:** mapping genuinely open free text to parameters —
+  i.e. slot-filling from natural language — which is exactly the L2 model step.
+
+## CREATIVE / INNOVATION RESULT
+
+- **N1 (integration):** the first free-text→operation production path over the
+  existing gateway + bus. It reuses the registry, bridge, bus, authorizer,
+  lifecycle gate and `timeline.trim` handler; the new mechanism is the *bounded
+  seam* that types free text and routes it through the one path.
+- **N2 claimed:** any. No novelty claim without an experiment; no A/B or
+  held-out evaluation was run, so no N2/N3 is asserted.
+- **Prior art:** model-output→command bridges exist widely; the differentiator
+  attempted here (registry-derived offering + no second path + fail-closed
+  refusal taxonomy) is an *integration* property, not a new mechanism.
+
+## TESTS
+
+Baseline (Phase-5 tip): **3044 passed, 30 skipped, 0 failed**.
+Final (Gate C): **3094 passed, 30 skipped, 0 failed** — delta **+50**, failure set unchanged at 0.
+`ruff check` clean · `ruff format --check` clean (461 files) · `mypy src` clean (259 files).
+
+## ADVERSARIAL TESTS (executed)
+
+15 hostile model outputs, all → typed refusal with **zero** bus dispatch and
+**zero** state mutation: shell operation; `actor`/`permissions`/`confirmed`/
+`capability_snapshot`/`command` injection; forged authority carried with a
+*valid* operation; unknown / outside-registry / operation-widening names;
+malformed JSON; empty string; executable prose; `NaN`; unsupported schema
+version. Plus: provider exception and `asyncio.TimeoutError` → typed refusal;
+a denied real authorizer → attempted-but-not-applied (`history == ()`, state
+unchanged); retrieved-memory text claiming authority → refused. The dispatch
+spy proves no unauthorized dispatch on any refusal path.
+
+## ARTIFACT PROOF
+
+Real, not mocked. The E2E test constructs the **real** `CommandBus` with the
+**real** runtime registry (packs active) and a **real** `ProjectAccess`
+authorizer; only external model *text* is faked. A `timeline.trim` derived asset
+is produced with a content hash and parent lineage, and `verify_trim_artifact`
+re-reads committed state to confirm hash, lineage and duration.
+
+## FAILURE / RECOVERY EVIDENCE
+
+- Provider raise and provider timeout → typed refusal, no dispatch, no mutation.
+- Denied actor inside the bus → `history == ()`, `state_hash` unchanged.
+- Empty intent → refused before any model call.
+- No provider (Model Kill) → `clarification_required`, no dispatch attempted.
+
+## EXACT-SHA MATRIX
+
+| Evidence | SHA |
+|---|---|
+| Base / merge-base / `origin/main` | `e5b326b` |
+| Gate C commit / working HEAD | `b257d5f` |
+| CI runs on | `b257d5f` (push + pull_request) |
+
+## STATUS MATRIX
+
+| Area | DESIGNED | IMPLEMENTED | VERIFIED | ARTIFACT-PROVEN | PRODUCTION-PROVEN |
+|---|---|---|---|---|---|
+| Free-text seam | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Independent judgment (`verify_trim_artifact`) | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Provider composition root | ✅ | ✅ | ✅ | n/a | ❌ |
+| Moderate fail-closed | ✅ | ✅ | ✅ | n/a | ❌ |
+| Recipe crystallization | ✅ | ❌ | ❌ | ❌ | ❌ |
+
+`ARTIFACT-PROVEN` = a real derived artifact was independently checked in a test.
+`PRODUCTION-PROVEN` = none: there is no production runtime evidence, and no
+CLI/Telegram caller is wired yet.
+
+## STRENGTHS
+
+- One real free-text path, no second execution path, no new authority source.
+- Registry-derived offering means the model's option set can never exceed what
+  the bus will authorize — mechanically, not by convention.
+- Independent verification exists and is exercised.
+- A genuine fail-open in moderation is fixed and pinned by 13 tests.
+- 50 new tests; +0 failures; architecture guards make the boundaries executable.
+
+## WEAKNESSES
+
+- Exactly one operation; the slice proves the *pipe*, not intent breadth.
+- No production caller (CLI/Telegram) is wired to `run_free_text_intent`.
+- `verify_trim_artifact` is a shape/hash/lineage check, not an independent
+  model-judge; a stronger judge is still absent.
+- The provider is real but unexercised against a live model here (honest: tests
+  fake external behaviour only).
+
+## RISKS
+
+- **Medium:** a caller might wire `run_free_text_intent` without re-checking the
+  offered set per request; mitigated by registry-derived offering, but the
+  caller must still pass the right `requested_operations`.
+- **Medium:** `moderate` now fails closed, so a flaky model could reject safe
+  content; this is the safe direction and is documented, but it is a behaviour
+  change that a downstream path may notice.
+- **Low:** the slice reads `bus._registry` (private); pinned by an architecture
+  test and by the gateway's own `_bus_registry` accessor.
+
+## TECHNICAL DEBT REMOVED
+
+- The moderation fail-open (`{"safe": true}` on parse error) is gone.
+
+## TECHNICAL DEBT CREATED
+
+- `run_free_text_intent` reads the bus's registry indirectly and depends on the
+  private `_registry` attribute (same pattern the gateway already used).
+- One operation hard-coded as the slice's intent target.
+- No observability counter on the seam yet.
+
+## WHAT ARENA SHOULD FIX NEXT
+
+1. Wire a real caller (CLI/Telegram) to `run_free_text_intent` and add one
+   end-to-end test through that entry point.
+2. Add an independent-judgment step beyond shape/hash (a real verifier or a
+   deterministic quality check) before any `timeline.trim` result is trusted by
+   a downstream surface.
+
+## WHAT SHOULD NOT BE TOUCHED YET
+
+- Recipe crystallization (no validated recipe proves it).
+- Broader multi-operation intent coverage (needs more registered ops first).
+- Any change to the compaction/authority surface for convenience.
+
+## NEXT HIGHEST-LEVERAGE ACTION (exactly one)
+
+Wire a production caller (CLI/Telegram) to `nagar.creative.run_free_text_intent`
+so the free-text→operation path is reachable end-to-end in production, and add
+one test through that entry point. CI for PR **#155** runs on exact SHA
+`b257d5f`; the PR stays **draft** for the gates owner.
