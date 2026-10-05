@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-05T20:49:40Z",
+  "updated_at": "2026-10-05T21:03:22Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -705,7 +705,7 @@
       "title": "Enforce the MODULE_MAP boundary-law → guard contract (fitness function)",
       "zone": "architecture-law-enforcement",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "agent_branch": "arena/skills-suite",
       "claimed_at": "2026-10-05T20:49:40Z",
       "ttl_hours": 24,
@@ -727,6 +727,14 @@
         "pytest -q tests/architecture/test_module_map_law_coverage.py",
         "pytest -q tests/architecture/ tests/unit/test_docs_integrity.py",
         "ruff check . && ruff format --check . && mypy src"
+      ],
+      "note": "Delivered on branch arena/skills-suite (commit 2a15eeb), pending PR/merge. AGENTS.md 7's rule is now executable: MODULE_MAP 3 law R15 names test_module_map_law_coverage.py; ADR-0009 records it. No src/ or bot/ files touched.",
+      "evidence": [
+        "pytest -q tests/architecture/test_module_map_law_coverage.py -> 5 passed",
+        "pytest -q tests/architecture/ tests/unit/test_docs_integrity.py -> 196 passed",
+        "ruff check . OK; ruff format --check . 569 files; mypy src OK (255 files)",
+        "RED: R11 -> test_glossary_liveness_ZZZ.py / ::test_never_defined_zzz both fail by law id",
+        "broad regression: 2818 passed, 11 skipped (asyncpg gap was environmental, closed)"
       ]
     },
     {
