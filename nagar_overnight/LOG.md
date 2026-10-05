@@ -319,3 +319,15 @@ Branch head before this phase: `3fddeac` (merge of `origin/main` `6e41123`).
   `MODEL_OPTIONAL.md`) to the converged CLI caller + canonical `LLMPort`.
 - Evidence labels: CLI caller = IMPLEMENTED+VERIFIED+ARTIFACT-PROVEN (scripted model
   at the external seam); NOT PRODUCTION-PROVEN. CI-to-SHA binding observed: `8c9b66e`.
+
+## 2026-10-05 — hostile self-audit + final CI-green binding
+- Hostile re-read of the full branch diff vs `origin/main` found a **stale-claim
+  defect**: docs still said `phi_agent.moderate` fails open, but `b257d5f` fixed
+  it to fail closed. Corrected `COGNITION_CONVERGENCE.md`, `REPORT.md`,
+  `ARENA_HANDOFF.md` A-4 (commit `36793c7`).
+- Secret scan of the diff: clean (only env-var *names*, one masked prefix).
+- Focused adversarial suites at HEAD: 70 passed.
+- CI on `36793c7`: **33/33 SUCCESS**, `mergeStateStatus: CLEAN`, MERGEABLE.
+  Exact-SHA binding: PR #155 head == local HEAD == `36793c7`.
+- The earlier `4a8e902` `python-parity (3.12)` failure was the SQLite migration
+  race (B-4); not reproducible locally (3/3 pass) and absent on `36793c7`.

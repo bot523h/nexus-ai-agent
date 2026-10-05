@@ -8,9 +8,9 @@
 | Base SHA (historical main) | `e5b326b2eaf691a638d030ad57acf1ce60016ef0` |
 | Converged onto | `origin/main` `6e41123` (PR #153), merge-base == `origin/main` |
 | Branch | `sync/nagar-gatec-20261005` |
-| Working SHA | `8c9b66e` (Phase 3 code + docs + authorizer dedup + records) |
-| Last known green SHA | `8c9b66e` — full suite **3176 passed, 30 skipped, 0 failed**; ruff/format/mypy clean; CI **33/33 SUCCESS** |
-| Next action | PR #155 is CI-green at `8c9b66e`, `CLEAN`/`MERGEABLE` — owner review/merge (do not self-merge). Then wire free-text intent into the durable creative job queue. |
+| Working SHA | `36793c7` (final: doc corrections + records) |
+| Last known green SHA | `36793c7` — full suite 3176 passed / 30 skipped / 0 failed; CI **33/33 SUCCESS**, CLEAN/MERGEABLE |
+| Next action | PR #155 is CI-green at `36793c7`, `CLEAN`/`MERGEABLE` — owner review/merge (do not self-merge). Then wire free-text intent into the durable creative job queue. |
 | Current blockers | none |
 
 ## Phase 3 result (convergence)
