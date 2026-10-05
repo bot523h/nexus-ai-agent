@@ -226,11 +226,11 @@ def _is_concurrent_create_conflict(exc: Exception) -> bool:
     ``MetaData.create_all`` runs with ``checkfirst=True``, so it asks whether a
     table exists and *then* emits ``CREATE TABLE``.  Two processes booting
     together both see "does not exist", both emit the DDL, and the loser gets
-    ``table … already exists``.  That is a benign race, not a broken schema —
-    the winner did exactly the work the loser was about to do.
+    ``table … already exists`` or ``database is locked``.  That is a benign race,
+    not a broken schema — the winner did exactly the work the loser was about to do.
     """
     message = str(getattr(exc, "orig", exc)).lower()
-    return "already exists" in message
+    return "already exists" in message or "database is locked" in message or "locked" in message
 
 
 async def create_all_metadata(engine: Any, metadata: MetaData) -> None:
@@ -270,8 +270,15 @@ async def create_all_tables(db_path: str = "data/app.sqlite") -> None:
     if normalized_path in _initialized_paths:
         return
 
-    async with engine.begin() as conn:
-        await conn.execute(text("PRAGMA journal_mode=WAL"))
+    for attempt in range(1, _CREATE_ALL_ATTEMPTS + 1):
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text("PRAGMA journal_mode=WAL"))
+            break
+        except (OperationalError, ProgrammingError) as exc:
+            if attempt >= _CREATE_ALL_ATTEMPTS or not _is_concurrent_create_conflict(exc):
+                raise
+            await asyncio.sleep(0.05 * attempt)
     await create_all_metadata(engine, SQLModel.metadata)
     _initialized_paths.add(normalized_path)
 
