@@ -421,11 +421,28 @@ async def run_free_text_intent_durable(
 
     # The one durable handoff: the existing queue persists the typed payload and
     # the existing worker executes it.  No dispatch happens here.
-    job_id = await queue.enqueue(
-        job_type=CREATIVE_RENDER_JOB_TYPE,
-        idempotency_key=idempotency_key,
-        payload=payload,
-    )
+    from nexus_ai_agent.jobs.creative_passport import CreativeRequestConflictError
+
+    try:
+        job_id = await queue.enqueue(
+            job_type=CREATIVE_RENDER_JOB_TYPE,
+            idempotency_key=idempotency_key,
+            payload=payload,
+        )
+    except CreativeRequestConflictError as exc:
+        # The same intent key is already bound to a *different* request.  Fail
+        # closed with a typed refusal: never overwrite, never fabricate a job.
+        _record(
+            journal,
+            decision=CognitionDecision.REFUSED,
+            gateway=gateway,
+            job_id=intent_job_id,
+            idempotency_key=idempotency_key,
+            refusal_reason="idempotency_conflict",
+        )
+        return CognitionJobOutcome(
+            status="refused", refusal_reason="idempotency_conflict", detail=str(exc)
+        )
     _record(
         journal,
         decision=CognitionDecision.PROPOSAL_ACCEPTED,

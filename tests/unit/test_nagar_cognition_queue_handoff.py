@@ -288,6 +288,51 @@ def test_same_intent_same_key_different_intent_different_key() -> None:
     assert key_a.startswith("cognition:")
 
 
+def test_contradictory_payload_under_same_key_fails_closed(tmp_path, source) -> None:  # noqa: ANN001
+    """Same intent + a model that changes its points ⇒ typed refusal, never overwrite.
+
+    The intent key is deterministic, so a *non-deterministic* model returning a
+    different trim for the same text collides on the key with a different payload.
+    The queue must reject that (Case 5), and the slice must surface it as a typed
+    refusal rather than raising or silently overwriting the durable row.
+    """
+    from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+
+    actor, project = _project()
+    queue = InProcessJobQueue(tmp_path / "contradiction.sqlite3")
+
+    async def _noop(payload: dict) -> dict:  # pragma: no cover - handler never asserted
+        return {"success": True}
+
+    queue.register_handler("creative_render", _noop)
+
+    def _gateway_with(in_us: int, out_us: int):
+        producer = ScriptedProducer(
+            _proposal(input={"clip_asset_id": "src", "in_point_us": in_us, "out_point_us": out_us})
+        )
+        return _gateway(actor, project, producer)
+
+    async def _attempt(gateway):  # noqa: ANN001
+        return await run_free_text_intent_durable(
+            "trim it",
+            gateway=gateway,
+            queue=queue,
+            project=project,
+            source_path=str(source),
+            workspace_dir=str(tmp_path / "creative_ws"),
+            user_id=1,
+            chat_id=1,
+        )
+
+    first = asyncio.run(_attempt(_gateway_with(0, 1_000_000)))
+    assert first.status == "enqueued"
+    second = asyncio.run(_attempt(_gateway_with(0, 2_000_000)))
+    assert second.status == "refused"
+    assert second.refusal_reason == "idempotency_conflict"
+    assert queue.job_ids() == [first.job_id]
+    asyncio.run(queue.shutdown())
+
+
 # ── the typed handoff builder is strict ─────────────────────────────────────
 
 

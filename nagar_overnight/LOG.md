@@ -353,7 +353,7 @@ Branch head before this phase: `3fddeac` (merge of `origin/main` `6e41123`).
 - `agents/phi_agent.py::moderate` fails CLOSED (parse_error / malformed_verdict, JSON
   `true` only) — ported from PR #155 `b257d5f`; regression `test_phi_moderation_fail_closed.py` (4).
 - Evidence (exact commands, exact numbers):
-  - `pytest -q` → **3219 passed, 30 skipped, 0 failed** (204.43s)
+  - `pytest -q` → **3220 passed, 30 skipped, 0 failed** (204.43s)
   - `ruff check src tests` → All checks passed; `ruff format --check` → 486 formatted;
     `mypy src` → no issues (270 files)
   - `test_nagar_durable_handoff_e2e.py` → real `.mp4`, `sha256` == bytes on disk, probe
@@ -363,4 +363,11 @@ Branch head before this phase: `3fddeac` (merge of `origin/main` `6e41123`).
   DURABLE-PROVEN (scripted model at the external seam); NOT PRODUCTION-PROVEN.
 - Not self-merged: PR #155 remains open/draft; this work is a successor branch. Full
   gates deferred to the gates owner per AGENTS.md §4.
+- Hostile self-audit found a real defect: a contradictory re-delivery under the same
+  intent key made `queue.enqueue` raise `CreativeRequestConflictError`, which escaped
+  the slice as an unhandled exception. Fixed: the slice now catches it and returns a
+  typed `refused` (`idempotency_conflict`), never overwriting or fabricating a row;
+  regression `test_contradictory_payload_under_same_key_fails_closed`. Re-run full suite
+  → **3220 passed, 30 skipped, 0 failed**.
+
 

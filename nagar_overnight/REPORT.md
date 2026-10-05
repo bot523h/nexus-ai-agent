@@ -857,7 +857,7 @@ No second bus / registry / authorizer / queue / verifier / render site.
 ## Evidence (exact)
 
 ```
-pytest -q                       -> 3219 passed, 30 skipped, 0 failed (204.43s)
+pytest -q                       -> 3220 passed, 30 skipped, 0 failed (204.43s)
 ruff check src tests            -> All checks passed!
 ruff format --check src tests   -> 486 files already formatted
 mypy src                        -> Success: no issues found in 270 source files
@@ -869,8 +869,9 @@ mypy src                        -> Success: no issues found in 270 source files
   renders exactly once; a verification-time crash → `resume_pending()` takeover with
   a fresh fencing token, exactly one `completed` attempt and the stale one recorded
   as interrupted.
-- `test_nagar_cognition_queue_handoff.py` (19): typed handoff contract, idempotency
-  collapse, refusal-enqueues-nothing, hostile model output.
+- `test_nagar_cognition_queue_handoff.py` (20): typed handoff contract, idempotency
+  collapse, contradictory re-delivery fails closed, refusal-enqueues-nothing, hostile
+  model output.
 - `test_nagar_durable_handoff_boundary.py` (7): no worker/queue/verifier import from
   the slice; closed job type; canonical payload `extra="forbid"`; no execution primitive.
 

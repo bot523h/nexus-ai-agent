@@ -9,7 +9,7 @@
 | Converged onto | `origin/main` `5a228ea` (merge of #156); PR #155 lineage `6e41123` |
 | Branch | `arena/nagar-durable-handoff` (successor of `overnight/nagar-20261004`) |
 | Working SHA | branch tip of `arena/nagar-durable-handoff` (exact SHA bound in the PR/report) |
-| Last known green SHA | branch tip — full suite **3219 passed / 30 skipped / 0 failed** (docs delta is docs-only) |
+| Last known green SHA | branch tip — full suite **3220 passed / 30 skipped / 0 failed** (docs delta is docs-only) |
 | Next action | Open the successor PR (base `main`) recording ancestry to #155; owner review of #155 remains independent. |
 | Current blockers | none |
 
@@ -45,7 +45,7 @@
 ## Phase 5 result (durability)
 
 - `ruff check src tests` -> PASS; `ruff format --check` -> PASS; `mypy src` -> PASS (270 files)
-- `pytest -q` -> **3219 passed, 30 skipped, 0 failed**
+- `pytest -q` -> **3220 passed, 30 skipped, 0 failed**
 - New/changed this phase:
   - `nagar/creative/handoff.py` — `run_free_text_intent_durable`: propose-only gateway →
     typed canonical `CreativeRenderPayload` (`extra="forbid"`) → `JobQueuePort.enqueue`
