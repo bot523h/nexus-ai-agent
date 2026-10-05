@@ -1,18 +1,25 @@
-"""Adapt CognitionPort → legacy LLMProvider surface for graph migration."""
+"""Adapt CognitionPort → legacy LLMProvider-shaped surface for graph migration."""
 
 from __future__ import annotations
 
 import uuid
+from typing import Protocol
 
 from nexus_ai_agent.cognition.port import CognitionPort, CognitionRequest, TaskClass
-from nexus_ai_agent.llm.provider import LLMProvider
 
 
 class EmbeddingUnsupportedError(RuntimeError):
     """Embeddings are not part of the Gate B cognition surface."""
 
 
-class CognitionLLMProvider(LLMProvider):
+class _LLMProviderLike(Protocol):
+    async def generate(self, prompt: str, system: str = "") -> str: ...
+    async def embed(self, text: str) -> list[float]: ...
+
+
+class CognitionLLMProvider:
+    """Graph/legacy callers keep LLMProvider shape; authority is CognitionPort."""
+
     def __init__(self, cognition: CognitionPort) -> None:
         self._cognition = cognition
 
