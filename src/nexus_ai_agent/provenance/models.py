@@ -296,6 +296,18 @@ class JobFacts:
     #: ``status``; consumers must treat the evidence as degraded (never
     #: parse-guess, never crash).
     status_known: bool = True
+    #: Queue-owned creative request identity. These fields are projected,
+    #: never used by the provenance layer to authorize or alter execution.
+    request_id: str | None = None
+    request_fingerprint: str | None = None
+    transaction_id: str | None = None
+    #: Parsed snapshots of the queue row's attempt/passport evidence columns.
+    #: A malformed column yields an empty/None value with its ``*_known`` flag
+    #: false, so consumers can degrade explicitly instead of inferring proof.
+    attempt_history: list[dict[str, Any]] = field(default_factory=list)
+    attempt_history_known: bool = True
+    artifact_passport: dict[str, Any] | None = None
+    artifact_passport_known: bool = True
 
 
 __all__ = [
