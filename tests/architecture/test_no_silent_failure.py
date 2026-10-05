@@ -63,6 +63,7 @@ class Offender:
     caught: str
     lineno: int = 0
     ordinal: int = 0  # disambiguates two identical handlers inside one function
+    observable: bool = False  # logs the failure or re-raises → allowed without a baseline entry
 
     @property
     def key(self) -> str:
@@ -132,8 +133,9 @@ def _handler_action(handler: ast.ExceptHandler) -> str | None:
 
 
 class _Visitor(ast.NodeVisitor):
-    def __init__(self, relpath: str) -> None:
+    def __init__(self, relpath: str, include_all: bool = False) -> None:
         self.relpath = relpath
+        self.include_all = include_all  # True → also report handlers that record the failure
         self.offenders: list[Offender] = []
         self._stack: list[str] = []
         self._seen: dict[tuple[str, str, str], int] = {}
@@ -148,34 +150,47 @@ class _Visitor(ast.NodeVisitor):
 
     def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
         action = _handler_action(node)
-        if action is not None and not _records_failure(node):
-            symbol = self._stack[-1] if self._stack else "<module>"
-            caught = ast.unparse(node.type) if node.type else "Exception"
-            identity = (symbol, action, caught)
-            seen = self._seen.get(identity, 0)
-            self._seen[identity] = seen + 1
-            self.offenders.append(
-                Offender(
-                    file=self.relpath,
-                    symbol=symbol,
-                    action=action,
-                    caught=caught,
-                    lineno=node.lineno,
-                    ordinal=seen,
+        if action is not None:
+            records = _records_failure(node)
+            if self.include_all or not records:
+                symbol = self._stack[-1] if self._stack else "<module>"
+                caught = ast.unparse(node.type) if node.type else "Exception"
+                identity = (symbol, action, caught)
+                seen = self._seen.get(identity, 0)
+                self._seen[identity] = seen + 1
+                self.offenders.append(
+                    Offender(
+                        file=self.relpath,
+                        symbol=symbol,
+                        action=action,
+                        caught=caught,
+                        lineno=node.lineno,
+                        ordinal=seen,
+                        observable=records,
+                    )
                 )
-            )
         self.generic_visit(node)
+
+
+def collect_handlers(include_all: bool = False) -> list[Offender]:
+    """Every handler in ``src/`` that swallows or fabricates a default.
+
+    With ``include_all`` the handlers that *record* the failure (log or
+    re-raise) are reported too — that is how the baseline keeps its measured
+    totals honest instead of quoting numbers from a report.
+    """
+    offenders: list[Offender] = []
+    for path in sorted(SRC.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        visitor = _Visitor(str(path.relative_to(ROOT)).replace("\\", "/"), include_all)
+        visitor.visit(tree)
+        offenders.extend(visitor.offenders)
+    return offenders
 
 
 def collect_offenders() -> list[Offender]:
     """Every handler in ``src/`` that swallows or fabricates without a trace."""
-    offenders: list[Offender] = []
-    for path in sorted(SRC.rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        visitor = _Visitor(str(path.relative_to(ROOT)).replace("\\", "/"))
-        visitor.visit(tree)
-        offenders.extend(visitor.offenders)
-    return offenders
+    return collect_handlers(include_all=False)
 
 
 def load_baseline() -> dict:

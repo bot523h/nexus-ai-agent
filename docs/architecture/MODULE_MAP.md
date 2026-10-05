@@ -78,7 +78,7 @@ Dependencies point **downward**. A lower layer may never import a higher one, an
 
 **Legacy baseline.** `tests/architecture/legacy_baseline.json` freezes the pre-existing `langgraph`/`sqlmodel`/`telegram` import set with an explicit `approval: ARCH_BASELINE_APPROVED`. New violations fail; removing a baseline entry is allowed (and should be celebrated, not blocked).
 
-**Silent-failure baseline.** `tests/architecture/silent_failure_baseline.json` carries the same contract for R15 with `approval: FAILSAFE_APPROVED`: 47 handlers that degrade without a trace, each with a category and a reason. A sweep for this class (board task-234) closed the two defects it was hiding — a moderation gate that approved unreadable verdicts, and a storage layer that reported an outage as an empty bucket and an unmeasurable quota as `0 / 2 GiB`.
+**Silent-failure baseline.** `tests/architecture/silent_failure_baseline.json` carries the same contract for R15 with `approval: FAILSAFE_APPROVED`: the handlers that degrade without a trace (52 at the time of writing, each with a category and a reason; the counts are re-measured whenever the baseline is regenerated). A sweep for this class (board task-235) closed the two defects it was hiding — a moderation gate that approved unreadable verdicts, and a storage layer that reported an outage as an empty bucket and an unmeasurable quota as `0 / 2 GiB`. Entries in another agent's active zone are frozen with an attribution note rather than edited around their lease.
 
 ## 4. Fitness-function catalogue (why these are tests, not prose)
 

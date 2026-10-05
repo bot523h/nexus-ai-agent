@@ -1,22 +1,58 @@
 {
   "approval": "FAILSAFE_APPROVED",
-  "baseline_version": 1,
+  "baseline_version": 2,
   "scan_scope": "src/nexus_ai_agent/**/*.py — exception handlers that swallow the exception or return an invented default without recording it",
-  "established_by": "board task-234 (silent-failure audit); 74 handlers found, 61 silent, 8 fixed",
-  "note": "Frozen debt, not an endorsement. New silent handlers fail tests/architecture/test_no_silent_failure.py; fixing one of these requires deleting its entry, so the list can only shrink.",
-  "counts": {
-    "swallows": 31,
-    "absence": 16
+  "established_by": "board task-235 (silent-failure audit). The first sweep found 74 such handlers, 61 of them silent; the two defects they hid are fixed and regressed by tests/unit/test_failure_honesty.py.",
+  "note": "Frozen debt, not an endorsement. A new silent handler fails tests/architecture/test_no_silent_failure.py; fixing a frozen one forces its entry out, so the list can only shrink. Entries carry the reason they are tolerated and, where the truth is uncomfortable, a KNOWN DEBT note.",
+  "measured": {
+    "handlers_that_swallow_or_fabricate": 71,
+    "of_which_record_the_failure": 19,
+    "of_which_are_silent_and_frozen": 52,
+    "fabricates_data": 0
+  },
+  "severity": {
+    "absence": 21,
+    "swallows": 31
   },
   "categories": {
+    "optional-dependency": 4,
+    "best-effort-degradation": 29,
     "cleanup-best-effort": 5,
-    "best-effort-degradation": 25,
     "parse-skip-one-item": 6,
     "security-fail-closed": 5,
-    "optional-dependency": 3,
     "logging-must-not-raise": 3
   },
   "entries": [
+    {
+      "file": "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+      "symbol": "_is_typed_render_preflight_error",
+      "action": "return False",
+      "caught": "ImportError",
+      "ordinal": 0,
+      "category": "optional-dependency",
+      "severity": "absence",
+      "reason": "an absent optional dependency degrades one capability instead of breaking the import"
+    },
+    {
+      "file": "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+      "symbol": "_mark_pending",
+      "action": "return False",
+      "caught": "_AttemptTransitionError",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "absence",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+      "symbol": "_mark_verifying",
+      "action": "return False",
+      "caught": "_AttemptTransitionError",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "absence",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
     {
       "file": "src/nexus_ai_agent/adapters/langgraph/lifecycle_recording.py",
       "symbol": "_close_quietly",
@@ -296,6 +332,26 @@
       "category": "parse-skip-one-item",
       "severity": "swallows",
       "reason": "skips one unusable record while the surrounding loop continues"
+    },
+    {
+      "file": "src/nexus_ai_agent/jobs/creative_passport.py",
+      "symbol": "capture_trim_source",
+      "action": "return None",
+      "caught": "Exception",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "absence",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
+    },
+    {
+      "file": "src/nexus_ai_agent/jobs/creative_passport.py",
+      "symbol": "is_timeline_trim_request",
+      "action": "return False",
+      "caught": "Exception",
+      "ordinal": 0,
+      "category": "best-effort-degradation",
+      "severity": "absence",
+      "reason": "documented best-effort degradation; returns an explicit absence rather than invented data"
     },
     {
       "file": "src/nexus_ai_agent/llm/litellm_provider.py",
