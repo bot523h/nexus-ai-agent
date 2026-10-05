@@ -31,7 +31,7 @@ skip_no_pg = pytest.mark.skipif(not pg_url, reason="requires PostgreSQL (NEXUS_D
 @pytest.mark.asyncio
 async def test_postgres_ai_memory_consent_lifecycle() -> None:
     engine = AIMemoryEngine()
-    test_user_id = random.randint(1_000_000_000, 9_999_999_999)
+    test_user_id = random.randint(100_000_000, 2_000_000_000)
 
     try:
         # Pre-cleanup in case of remnant
@@ -54,9 +54,9 @@ async def test_postgres_ai_memory_consent_lifecycle() -> None:
             assert row is not None
             assert row.ai_memory_consent == CONSENT_GRANTED
             assert isinstance(row.last_updated, datetime)
-            assert row.last_updated.tzinfo is None, "PostgreSQL timestamp must be timezone-naive UTC"
+            assert row.last_updated.tzinfo is None, "PG ts must be naive UTC"
             assert isinstance(row.ai_memory_consent_at, datetime)
-            assert row.ai_memory_consent_at.tzinfo is None, "PostgreSQL timestamp must be timezone-naive UTC"
+            assert row.ai_memory_consent_at.tzinfo is None, "PG ts must be naive UTC"
 
         # 3. Deny consent
         stored_state_denied = await engine.set_consent(test_user_id, granted=False)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+
 from sqlmodel import select
 
 from nexus_ai_agent.integrations.external import naive_utcnow

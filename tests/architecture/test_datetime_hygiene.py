@@ -1,4 +1,4 @@
-"""Architecture test forbidding deprecated datetime.utcnow() and datetime.utcfromtimestamp() in src/.
+"""Architecture test forbidding deprecated datetime.utcnow()/utcfromtimestamp() in src/.
 
 Supports:
 - import datetime / import datetime as dt -> dt.datetime.utcnow() / dt.datetime.utcfromtimestamp()
@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-
-import pytest
 
 
 def check_ast_for_datetime_deprecations(tree: ast.AST) -> list[tuple[int, str]]:
