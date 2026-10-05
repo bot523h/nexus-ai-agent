@@ -796,8 +796,11 @@ retry, fencing and recovery. That converts the applied path from ARTIFACT-PROVEN
 PRODUCTION-PROVEN without adding a new execution path.
 
 ## CI FINAL BINDING (observed)
-- PR **#155** head = `8c9b66eb8944ac68eab7d7df849d9b53760fd401` == local `HEAD` == remote
-  `refs/heads/overnight/nagar-20261004`. Exact-SHA binding confirmed.
+- Final branch head `13f336cc806265f0e48fbe86206d65050ae790c1` == remote
+  `refs/heads/overnight/nagar-20261004` (PR #155 head). Exact-SHA binding confirmed.
 - **All 33 CI checks SUCCESS, 0 failures** (`gh pr checks 155`).
 - `mergeStateStatus: CLEAN`, `mergeable: MERGEABLE`, `state: OPEN`.
+- Earlier code-green SHAs: `844e21a` (full suite 3176/30/0) and `36793c7` (33/33).
+  The single `python-parity (3.12)` failure on the intermediate `4a8e902` was the
+  documented SQLite migration race (B-4); it passed on `36793c7` and `13f336c`.
 - Not merged (owner decision). Left as the existing draft PR; no protected ref touched.
