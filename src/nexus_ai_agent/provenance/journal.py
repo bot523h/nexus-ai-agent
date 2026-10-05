@@ -22,7 +22,8 @@ Properties (each enforced here, tested in ``tests/unit/test_provenance_journal.p
   detectable hole, which the passport reports (never invents) and the
   explicit backfill (``provenance.backfill``) reconstructs *labeled*.
 
-Storage location: its own sidecar (``<queue-db>-causal.sqlite``) — the ledger
+Storage location: its own sidecar (``<queue-db>.causal.sqlite3`` — see
+``provenance.paths``) — the ledger
 must never be a schema guest inside the authority it observes.
 """
 
