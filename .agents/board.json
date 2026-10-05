@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-05T14:15:00Z",
+  "updated_at": "2026-10-05T14:50:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -710,6 +710,14 @@
         "tests/architecture/test_no_silent_failure.py",
         "tests/architecture/silent_failure_baseline.json",
         "tests/unit/test_failure_honesty.py"
+      ]
+    },
+    {
+      "id": "silent-failure-residue",
+      "description": "Residue of the silent-failure audit on paths no zone owns yet: orchestration/graph.py and personality/engine.py",
+      "paths": [
+        "src/nexus_ai_agent/orchestration/graph.py",
+        "src/nexus_ai_agent/personality/engine.py"
       ]
     }
   ],
@@ -2890,7 +2898,7 @@
       "claimed_at": "2026-10-05T12:57:52Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Delivered as PR #157 (head c1679c7, branch arena/01a10ba1-nexus-ai-agent). Exact-head CI: runs 37300679264 (push) + 37300685515 (pull_request) on head SHA c1679c7 -> 17/17 jobs success, incl. test (11m03s), lint (mypy included), python-parity 3.10/3.11/3.12, continuum-evidence 3.10/3.11/3.12, extras-matrix x4, migrate-postgres, trust-mutations, agent-constitution-mutations (12s), release-lineage; CodeRabbit pass. Local: pytest tests/architecture/test_agent_constitution.py 18 passed; scripts/agent_constitution_mutations.py killed 21/21 (tree restored byte for byte); test_docs_integrity 61 passed; ruff check + ruff format --check clean. gates_owner=False on this claim: the shared gates were observed, not run, per AGENTS.md §1 rule 4. Not merged to main; no human review yet. Constitution 1.1.0 (B13: the campaign is part of the contract) then 1.2.0 (B14: a guard that is never collected is a violation — CI selects -m 'not slow', and a slow marker, an addopts ignore or a norecursedirs exclusion silences the contract). Campaign re-run 25/25 killed. Status: VERIFIED_WITH_LIMITATIONS.",
+      "note": "Delivered as PR #157 (head c1679c7, branch arena/01a10ba1-nexus-ai-agent). Exact-head CI: runs 37300679264 (push) + 37300685515 (pull_request) on head SHA c1679c7 -> 17/17 jobs success, incl. test (11m03s), lint (mypy included), python-parity 3.10/3.11/3.12, continuum-evidence 3.10/3.11/3.12, extras-matrix x4, migrate-postgres, trust-mutations, agent-constitution-mutations (12s), release-lineage; CodeRabbit pass. Local: pytest tests/architecture/test_agent_constitution.py 18 passed; scripts/agent_constitution_mutations.py killed 21/21 (tree restored byte for byte); test_docs_integrity 61 passed; ruff check + ruff format --check clean. gates_owner=False on this claim: the shared gates were observed, not run, per AGENTS.md §1 rule 4. Not merged to main; no human review yet. Constitution 1.1.0 (B13: the campaign is part of the contract) then 1.2.0 (B14: a guard that is never collected is a violation — CI selects -m 'not slow', and a slow marker, an addopts ignore or a norecursedirs exclusion silences the contract). Campaign re-run 25/25 killed. Status: VERIFIED_WITH_LIMITATIONS. Renumbered from task-232-agent-constitution to task-235-agent-constitution when main merged task-232-durable-creative-queue-evidence first; the board requires no duplicate task identity. Only the claim id and its references changed — no deliverable did.",
       "delivered": true
     },
     {
@@ -2925,7 +2933,7 @@
       "title_fa": "بستن دروازهٔ ایمنیِ fail-open و مقادیر جعلیِ storage کشف‌شده در ممیزیِ شکستِ خاموش",
       "zone": "silent-failure-ratchet",
       "priority": "P1",
-      "status": "active",
+      "status": "active_in_review",
       "scope": "AST audit of all 74 exception handlers that swallow or fabricate a default in src/; fail-closed moderation; honest storage listing/quota; ratchet test with frozen baseline.",
       "scope_fa": "ممیزی AST همهٔ ۷۴ هندلر خطا در src/ که استثنا را می‌بلعند یا مقدار جعلی برمی‌گردانند؛ ایمنیِ fail-closed؛ لیست/سهمیهٔ صادقِ storage؛ تستِ چرخ‌دنده با baseline منجمد.",
       "prerequisites": [
@@ -2955,8 +2963,18 @@
       "claimed_at": "2026-10-05T00:00:00Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "delivered": [],
-      "note": "Audit found 74 handlers that swallow/fabricate; 61 are silent (no log, no re-raise). Highest severity: moderation fail-open."
+      "delivered": [
+        "src/nexus_ai_agent/agents/phi_agent.py (moderation_allows + fail-closed moderate)",
+        "src/nexus_ai_agent/orchestration/graph.py (gate uses moderation_allows)",
+        "src/nexus_ai_agent/storage/ai_storage_manager.py (outage != empty bucket)",
+        "src/nexus_ai_agent/storage/unified_cloud.py (typed unavailability, quota unknown not zero)",
+        "src/nexus_ai_agent/features/rag.py (unscoreable distance is None, row dropped with a trace)",
+        "src/nexus_ai_agent/features/gamification.py (corrupt achievements are logged, not implied)",
+        "tests/architecture/test_no_silent_failure.py + tests/architecture/silent_failure_baseline.json",
+        "tests/unit/test_failure_honesty.py (26 behavioural tests)",
+        "docs/architecture/MODULE_MAP.md (R15)"
+      ],
+      "note": "Measured before -> after (reproducible): moderation on an unparseable verdict {'safe': True, 'reason': 'parse_error'} -> {'safe': False, 'reason': 'verdict_unparseable'} + warning; AIStorageManager.list_files with every provider down: [] -> raises StorageError; UnifiedCloudStorage.list_all_files with every provider down: [] -> raises StorageError; _DropboxProvider(no token).list_files: [] -> raises ProviderUnavailable; _DropboxProvider(no token).get_usage: {'used_bytes': 0, 'allocated_bytes': 2147483648} -> None; _PcloudProvider.get_usage: {'used_bytes': 0, 'allocated_bytes': 10737418240} -> None; _InternxtProvider.list_files: [] -> raises ProviderUnavailable. Ratchet verified red in both directions: injecting a silent handler fails test_no_new_silent_handlers; making a frozen handler log fails that entry's test_baseline_entry_is_still_justified. Evidence: 3103 passed / 30 skipped (-m 'not slow'), 348 guard tests green, mutation campaign 26/26 killed, mypy src clean, ruff check + format clean. Not merged into main, no human review yet."
     }
   ],
   "deferred_log": [
@@ -2997,24 +3015,6 @@
   ],
   "next_work": [
     {
-      "id": "task-164",
-      "priority": "P1",
-      "zone": "ci-quality",
-      "title": "Nightly DB backup has never succeeded (3/3 red) — make the production backup pipeline actually work",
-      "title_fa": "بکاپ شبانهٔ دیتابیس هرگز موفق نشده (۳ از ۳ سرخ) — مسیر بکاپ Production واقعاً کار کند",
-      "why_fa": "تنها مکانیسم DR برای دیتابیس Production (R2 blob tier) سه اجرا پیاپی شکست خورده و هیچ بکاپی تولید نشده؛ ریشهٔ دقیق بدون لوق جاب نامشخص است (R2 secrets؟ پیکربندی Neon؟).",
-      "acceptance_criteria": [
-        "a manual workflow_dispatch run of maintenance/backup-db completes SUCCESS with a visible object under backups/ in R2 including sha256/verified/timestamp in the step log",
-        "NEXUS_R2_* secrets are configured in GitHub Actions (owner-side)",
-        "the scheduled (cron) run after that also completes SUCCESS"
-      ],
-      "prerequisites": [],
-      "exclusive_paths": [
-        ".github/workflows/maintenance.yml"
-      ],
-      "status_note": "repo-side verifiability delivered by task-167 (verified backup contract, round-trip byte identity, restore-into-temp-SQLite verification); what remains is owner-secrets configuration + one real green dispatch"
-    },
-    {
       "id": "task-124",
       "priority": "P0",
       "zone": "audit-remainder",
@@ -3035,25 +3035,6 @@
         "src/nexus_ai_agent/features/rag.py",
         "tests/unit/test_audit_remainder.py"
       ]
-    },
-    {
-      "id": "task-122",
-      "priority": "P0",
-      "zone": "feature-wiring",
-      "title": "PR#32 rebase + dedupe",
-      "title_fa": "ریبیس و رفع دوگانگی PR#32",
-      "why_fa": "بزرگ‌ترین PR باز روی بیس باستانی؛ ریسک دو سیم‌کشی موازی.",
-      "acceptance_criteria": [
-        "دیف یکتا",
-        "تست‌های feature_* سبز",
-        "CI سبز روی main تازه"
-      ],
-      "prerequisites": [],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/bot/surface/",
-        "src/nexus_ai_agent/features/"
-      ],
-      "status_note": "delivered via PR#47 (forensic triage docs/audits/PR32_TRIAGE_2026-09-21.md + port-forward)"
     },
     {
       "id": "task-123",
@@ -3108,21 +3089,22 @@
       ]
     },
     {
-      "id": "task-132",
+      "id": "task-164",
       "priority": "P1",
       "zone": "ci-quality",
-      "title": "Extras smoke matrix",
-      "title_fa": "ماتریس دود اختیاری‌ها",
-      "why_fa": "مسیرهای اختیاری خارج از CI پیش‌فرض می‌توانند بی‌صدا بشکنند (شکاف مستند در TESTING §7).",
+      "title": "Nightly DB backup has never succeeded (3/3 red) — make the production backup pipeline actually work",
+      "title_fa": "بکاپ شبانهٔ دیتابیس هرگز موفق نشده (۳ از ۳ سرخ) — مسیر بکاپ Production واقعاً کار کند",
+      "why_fa": "تنها مکانیسم DR برای دیتابیس Production (R2 blob tier) سه اجرا پیاپی شکست خورده و هیچ بکاپی تولید نشده؛ ریشهٔ دقیق بدون لوق جاب نامشخص است (R2 secrets؟ پیکربندی Neon؟).",
       "acceptance_criteria": [
-        "job ماتریسی per-extra",
-        "شکست نصب = شکست CI"
+        "a manual workflow_dispatch run of maintenance/backup-db completes SUCCESS with a visible object under backups/ in R2 including sha256/verified/timestamp in the step log",
+        "NEXUS_R2_* secrets are configured in GitHub Actions (owner-side)",
+        "the scheduled (cron) run after that also completes SUCCESS"
       ],
       "prerequisites": [],
       "exclusive_paths": [
-        "tests/unit/test_optional_extras.py",
-        ".github/"
-      ]
+        ".github/workflows/maintenance.yml"
+      ],
+      "status_note": "repo-side verifiability delivered by task-167 (verified backup contract, round-trip byte identity, restore-into-temp-SQLite verification); what remains is owner-secrets configuration + one real green dispatch"
     },
     {
       "acceptance_criteria": [
@@ -3187,6 +3169,42 @@
       "title": "Staging smoke of /edit /caption /grade against the live bot (PTB runtime)",
       "title_fa": "اسموک استیجینگ سه فرمان creative روی ربات زنده",
       "why_fa": "زنجیره در سطح unit/integration با artifact واقعی اثبات شده؛ اثبات نهایی کاربر-واقعی به کانتکست PTB زنده و توکن استیجینگ نیاز دارد (external dependency)."
+    },
+    {
+      "id": "task-236",
+      "priority": "P2",
+      "zone": "feature-wiring-continuation",
+      "title": "Answer the user when an analytics/engagement argument cannot be parsed",
+      "title_fa": "پاسخ به کاربر هنگامی که آرگومانِ فرمانِ تحلیلی قابل parse نیست",
+      "why_fa": "سه هندلر در bot/handlers.py (engagement_on_cmd، analytics_active_cmd، analytics_retention_cmd) مقدارِ بد را می‌بلعند و کاربر هیچ پاسخی نمی‌گیرد؛ فرمان بی‌صدا هیچ کاری نمی‌کند.",
+      "acceptance_criteria": [
+        "هر آرگومانِ نامعتبر یک پیامِ خطای کاربر-محور تولید می‌کند، نه سکوت",
+        "شکست در لاگ ثبت می‌شود و تست رفتاری آن را قفل می‌کند",
+        "مدخل‌های مربوط از silent_failure_baseline.json حذف می‌شوند"
+      ],
+      "prerequisites": [],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/handlers.py"
+      ]
+    },
+    {
+      "id": "task-241",
+      "priority": "P2",
+      "zone": "durable-creative-queue-evidence",
+      "title": "Decide the fate of the five silent handlers the ratchet froze in this zone",
+      "title_fa": "تعیین تکلیفِ پنج هندلرِ ساکت که چرخ‌دنده در این ناحیه منجمد کرد",
+      "why_fa": "ادغامِ کارِ صفِ خلاق پنج هندلرِ ساکت آورد (in_process_job_queue ×۳، creative_passport ×۲)؛ چون اجارهٔ ناحیه فعال بود، فقط منجمد و منتسب شدند و اصلاح نشدند.",
+      "acceptance_criteria": [
+        "برای هر پنج مورد تصمیمِ مستند (ثبت در لاگ یا نگه‌داری با دلیل) گرفته شود",
+        "تصمیم در پیامِ PR همان ناحیه ثبت شود",
+        "مدخل‌های منجمدِ مربوط به‌روز یا حذف شوند"
+      ],
+      "prerequisites": [],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        "src/nexus_ai_agent/jobs/creative_passport.py"
+      ],
+      "status_note": "frozen with attribution by task-234 on 2026-10-05 while the zone lease was active; the owning agent decides"
     }
   ],
   "history": {
@@ -3486,6 +3504,11 @@
         "rev": 2,
         "date": "2026-09-21",
         "note": "schema 2: protocol block, structured next_work with acceptance criteria, history split, structural tests (ADR 0004)."
+      },
+      {
+        "rev": 3,
+        "date": "2026-10-05",
+        "note": "next_work curated by task-234 (silent-failure audit) back to the protocol's ten: task-132 dropped (its claim is 'done'), task-122 dropped (its own note records delivery via PR#47; the claim stays as 'assigned_to_B'). Added task-236 (silent command failures must answer the user) and task-241 (decide the five handlers the ratchet froze in the durable-queue zone). The six remaining audit findings are recorded where they live — tests/architecture/silent_failure_baseline.json, each with a KNOWN DEBT note — because the forward queue is capped at ten and those items are P2/P3."
       }
     ]
   },
