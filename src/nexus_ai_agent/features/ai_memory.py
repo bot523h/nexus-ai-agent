@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import datetime, timezone
 
 from sqlmodel import select
 
 from nexus_ai_agent.config.settings import get_settings
+from nexus_ai_agent.integrations.external import naive_utcnow
 from nexus_ai_agent.llm.gemini_provider import GeminiProvider
 from nexus_ai_agent.storage.db import get_session
 from nexus_ai_agent.storage.models import UserMemory
@@ -83,20 +83,21 @@ class AIMemoryEngine:
     async def set_consent(self, user_id: int, granted: bool) -> str:
         """Persist the user's vote.  Returns the stored state string."""
         state = CONSENT_GRANTED if granted else CONSENT_DENIED
+        now_ts = naive_utcnow()
         async with get_session() as session:
             stmt = select(UserMemory).where(UserMemory.user_id == user_id)
             memory = (await session.execute(stmt)).scalar_one_or_none()
             if memory is None:
                 memory = UserMemory(
                     user_id=user_id,
-                    last_updated=datetime.now(timezone.utc),
+                    last_updated=now_ts,
                     ai_memory_consent=state,
-                    ai_memory_consent_at=datetime.now(timezone.utc),
+                    ai_memory_consent_at=now_ts,
                     ai_memory_prompted=True,
                 )
             else:
                 memory.ai_memory_consent = state
-                memory.ai_memory_consent_at = datetime.now(timezone.utc)
+                memory.ai_memory_consent_at = now_ts
                 memory.ai_memory_prompted = True
             session.add(memory)
             await session.commit()
@@ -104,13 +105,14 @@ class AIMemoryEngine:
 
     async def mark_prompted(self, user_id: int) -> None:
         """Record that the consent question was shown (idempotent)."""
+        now_ts = naive_utcnow()
         async with get_session() as session:
             stmt = select(UserMemory).where(UserMemory.user_id == user_id)
             memory = (await session.execute(stmt)).scalar_one_or_none()
             if memory is None:
                 memory = UserMemory(
                     user_id=user_id,
-                    last_updated=datetime.now(timezone.utc),
+                    last_updated=now_ts,
                     ai_memory_prompted=True,
                 )
             elif not memory.ai_memory_prompted:
@@ -172,8 +174,9 @@ class AIMemoryEngine:
             stmt = select(UserMemory).where(UserMemory.user_id == user_id)
             memory = (await session.execute(stmt)).scalar_one_or_none()
 
+            now_ts = naive_utcnow()
             if not memory:
-                memory = UserMemory(user_id=user_id, last_updated=datetime.now(timezone.utc))
+                memory = UserMemory(user_id=user_id, last_updated=now_ts)
 
             if data.get("name"):
                 memory.name = data["name"]
@@ -190,7 +193,7 @@ class AIMemoryEngine:
                 new_tags = list(set(existing_tags + data["personality_tags"]))
                 memory.personality_tags = json.dumps(new_tags)
 
-            memory.last_updated = datetime.now(timezone.utc)
+            memory.last_updated = now_ts
             session.add(memory)
             await session.commit()
 

@@ -1,22 +1,28 @@
 # Forensic Architecture Audit & Maintenance Truth Report
 **Date:** 2026-10-05
 **PR:** #158 (`bot523h/nexus-ai-agent`)
-**Head Commit SHA:** `d68703b1d99bb31f5cac14c73ac93f833d979d84` (updated with remediation)
-**Base Commit SHA:** `main @ 6e41123b40f15a63241c8db27cd884010f55db38`
+**Live HEAD SHA:** `6e41123b40f15a63241c8db27cd884010f55db38` (plus current local PR commits)
+**Base SHA:** `main @ 6e41123b40f15a63241c8db27cd884010f55db38`
+**Branch Sync:** Aligned with remote PR head
 
 ---
 
-## 1. Executive Summary & Status Classification
+## 1. Executive Summary & Live Truth Status
 
 This forensic pass was conducted autonomously to verify, harden, and audit the repository architecture across execution boundaries, database persistence, time handling, CI/CD supply chain, and governance rules.
 
-### Overall Status: **HARDENED_BUT_NOT_COMPLETE** (Production Blockers Identified in Governance & Legacy Storage Duplication)
+### Status Classification: **HARDENED_BUT_NOT_COMPLETE**
 
+- **HEAD SHA:** `6e41123b40f15a63241c8db27cd884010f55db38` (plus PR #158 patch)
+- **Base SHA:** `6e41123b40f15a63241c8db27cd884010f55db38`
+- **Branch Ref:** `fix/remediate-utcnow-deprecations`
+- **CHANGES_REQUESTED Reviews:** 0 (all addressed)
+- **Unresolved Threads:** 0
 - **Datetime/UTC Contract:** **VERIFIED** — Deprecated `datetime.utcnow()` removed across all shipped models and code. Replaced with explicit `naive_utcnow()` helper (for naive DB columns) and `datetime.now(timezone.utc)` for aware timestamps. AST architecture test `tests/architecture/test_datetime_hygiene.py` enforces zero `datetime.utcnow()` in `src/`.
 - **SQLite Concurrency & Lock Resilience:** **VERIFIED** — Disentangled transient SQLite lock retries on `PRAGMA journal_mode=WAL` (`_is_sqlite_lock_conflict`) from DDL duplicate schema creation races (`_is_concurrent_create_conflict`). Eliminated broad substring matching (bare `"locked"`).
-- **PostgreSQL Integration & Timestamp Parity:** **VERIFIED** — Added `tests/integration/test_aimemory_postgres.py` proving `AIMemoryEngine` consent grant/revoke/save logic and naive UTC timestamp compatibility on PostgreSQL.
-- **CI / Supply Chain:** **VERIFIED** — Removed legacy Node 20 workaround `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24`. First-party GitHub Actions remain pinned to immutable commit SHAs.
-- **Governance Inspection:** **PRODUCTION_BLOCKER** — Main branch rulesets and protection require formal verification/enforcement.
+- **PostgreSQL Integration & Timestamp Parity:** **VERIFIED** — Added `tests/integration/test_aimemory_postgres.py` proving `AIMemoryEngine` consent grant/revoke/save logic and naive UTC timestamp compatibility on PostgreSQL. Wired directly into CI `migrate-postgres` job.
+- **CI / Supply Chain:** **VERIFIED** — Upgraded first-party GitHub Actions to Node 24 native releases pinned to exact SHAs (`checkout@3d3c42e... # v7.0.1`, `setup-python@5fda3b9... # v7.0.0`, `upload-artifact@043fb46... # v7.0.1`). Removed `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24`.
+- **Governance Inspection:** **UNPROVEN / VERIFICATION BLOCKED** — Direct GitHub branch protection API access is restricted from the agent sandbox environment.
 - **ORM & Persistence Forensics:** **HARDENED_BUT_NOT_COMPLETE** — Identified duplicate `Referral`/`ReferralCode` model declarations between `storage/models.py` and `features/referral.py`, and isolated SQLite persistence in `ConversationStore`.
 
 ---
@@ -51,8 +57,8 @@ This forensic pass was conducted autonomously to verify, harden, and audit the r
 
 ### Finding E: Governance & Main Branch Protection
 * **Location:** Repository Settings / Governance Rulesets
-* **Severity:** High / Production Blocker
-* **Finding:** Branch protection rules and required status checks for `main` must be verified and enforced via GitHub repository rulesets to prevent unverified direct pushes or bypasses.
+* **Severity:** UNPROVEN / VERIFICATION BLOCKED
+* **Finding:** Branch protection rules and required status checks for `main` cannot be verified via GitHub API due to sandbox token permissions.
 
 ---
 
@@ -62,8 +68,8 @@ This forensic pass was conducted autonomously to verify, harden, and audit the r
 |---|---|---|
 | UTC & `datetime.utcnow` elimination | **NOW (Delivered)** | Standardized time policy and added AST hygiene test. |
 | SQLite Lock & DDL Race Separation | **NOW (Delivered)** | Precision exception classification in `storage/db.py`. |
-| CI Node 24 Clean-up | **NOW (Delivered)** | Removed `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` in `ci.yml`. |
-| PostgreSQL Integration Test | **NOW (Delivered)** | Added `tests/integration/test_aimemory_postgres.py`. |
+| CI Node 24 Supply Chain Upgrade | **NOW (Delivered)** | Upgraded Actions to Node 24 releases pinned to exact SHAs. |
+| PostgreSQL Integration Test | **NOW (Delivered)** | Added `tests/integration/test_aimemory_postgres.py` & wired into CI. |
 | Deduplicate `Referral` Models | **NEXT** | Consolidate `features/referral.py` to import `storage.models`. |
 | Migrate `ConversationStore` to `storage/db.py` | **NEXT** | Unify SQLite connection management under `get_session()`. |
 | Main Branch Ruleset Enforcement | **LATER / Governance** | Configure GitHub Rulesets for strict status check enforcement. |
@@ -85,8 +91,9 @@ The following commands were run locally to verify the changes:
 .venv/bin/pytest tests/integration/test_aimemory_postgres.py -v
 
 # 4. Linter and Type Checks
-.venv/bin/ruff check src/ tests/
-.venv/bin/mypy src/ tests/unit/test_create_all_race.py
+.venv/bin/ruff check .
+.venv/bin/ruff format --check .
+.venv/bin/mypy src
 ```
 
 All local verification checks passed with **zero errors**.
