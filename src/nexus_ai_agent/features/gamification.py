@@ -345,7 +345,14 @@ class GamificationEngine:
         xp = GamificationEngine._get_or_create_xp(user_id, chat_id)
         try:
             return json.loads(xp.achievements) if xp.achievements else []
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError) as exc:
+            # Corrupt state is not an empty achievement list. Returning [] here
+            # degrades the display, so the loss is recorded instead of implied.
+            logger.warning(
+                "gamification_achievements_unreadable",
+                error=type(exc).__name__,
+                user_id=user_id,
+            )
             return []
 
     @staticmethod

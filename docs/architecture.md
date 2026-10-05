@@ -41,7 +41,7 @@ flowchart LR
 | [`NAGAR_70_OPERATIONS_TDD.md`](NAGAR_70_OPERATIONS_TDD.md) | the Phase-6 creative-studio technical design baseline (71 operation ids) |
 | [`architecture/DATA_LIFECYCLE.md`](architecture/DATA_LIFECYCLE.md), [`architecture/RETENTION_DECISION.md`](architecture/RETENTION_DECISION.md) | data-lifecycle contract and retention policy |
 | [`architecture/LLM_PROVIDERS.md`](architecture/LLM_PROVIDERS.md) | provider chain, cooldowns, strict-privacy behaviour |
-| [`ROADMAP_STATUS.md`](../ROADMAP_STATUS.md) · [`REQUIREMENTS_LEDGER.md`](../REQUIREMENTS_LEDGER.md) · [`AGENTS.md`](../AGENTS.md) | roadmap state, requirement ledger, multi-agent protocol |
+| [`ROADMAP_STATUS.md`](../ROADMAP_STATUS.md) · [`REQUIREMENTS_LEDGER.md`](../REQUIREMENTS_LEDGER.md) · [`AGENTS.md`](../AGENTS.md) · [`NAGAR_AGENT_CONSTITUTION.md`](../NAGAR_AGENT_CONSTITUTION.md) | roadmap state, requirement ledger, multi-agent protocol, and the persistent engineering law every agent must read first (bootstrap, laws L0–L10, completion vocabulary, completion gate) |
 | [`../README.md`](../README.md) | product overview, command reference, quick start |
 | [`history/architecture-v2.0.0.md`](history/architecture-v2.0.0.md) | archived v2.0.0 diagram (traceability only — not a source of truth) |
 

@@ -537,6 +537,11 @@ Everything lives under `docs/` (index: [`docs/README.md`](docs/README.md)):
 - `docs/audits/` — dated audits and handoff analyses
 - `docs/history/` — archived plans from the v1/v2 era (kept for traceability only)
 - `docs/ops/` — deployment & operations runbooks (Koyeb, Neon, R2)
+- `AGENTS.md` + `NAGAR_AGENT_CONSTITUTION.md` — the multi-agent coordination contract and the
+  persistent cross-session engineering law (bootstrap, non-negotiable laws, completion
+  vocabulary, completion gate). Every agent must read both before any work; the bootstrap is
+  enforced by `tests/architecture/test_agent_constitution.py` (law R14) and attacked on every
+  push by `scripts/agent_constitution_mutations.py`.
 
 ## License
 

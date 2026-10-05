@@ -41,6 +41,7 @@ placeholder text.
 | [architecture/adr/0004-board-schema-2.md](architecture/adr/0004-board-schema-2.md) | Coordination board schema 2: prerequisites, acceptance criteria, history split. |
 | [architecture/adr/0005-canonical-command-capability-contract.md](architecture/adr/0005-canonical-command-capability-contract.md) | Canonical command and capability contract: versioning, location, and reconciliation. |
 | [architecture/adr/0006-capability-pack-trust-root.md](architecture/adr/0006-capability-pack-trust-root.md) | Capability packs get an explicit trust root (Ed25519, offline, fail-closed). |
+| [architecture/adr/0008-agent-constitution-layer.md](architecture/adr/0008-agent-constitution-layer.md) | The agent engineering contract becomes a versioned root constitution enforced by an architecture test (R14). |
 | [architecture/TRUST_CONTROL_PLANE.md](architecture/TRUST_CONTROL_PLANE.md) | Trust/truth domains A–E: interfaces, authorities, non-bypass guards, honest status. |
 
 ## Authoritative records
@@ -50,7 +51,8 @@ placeholder text.
 | [DECISION_LOG.md](DECISION_LOG.md) | **The** architecture decision log. When any summary disagrees with it, this file wins. |
 | [../ROADMAP_STATUS.md](../ROADMAP_STATUS.md) | Living roadmap status with per-wave commit anchors. |
 | [../REQUIREMENTS_LEDGER.md](../REQUIREMENTS_LEDGER.md) | PR1/PR2/PR3 checkpoint-lifecycle requirements ledger. |
-| [../AGENTS.md](../AGENTS.md) | Multi-agent coordination contract + current board summary. |
+| [../AGENTS.md](../AGENTS.md) | Multi-agent coordination contract + current board summary (bootstrap entry point). |
+| [../NAGAR_AGENT_CONSTITUTION.md](../NAGAR_AGENT_CONSTITUTION.md) | Persistent cross-session engineering law for every agent: the non-negotiable laws, the closed completion vocabulary, the completion gate, and the future-generation contract. Enforced by `tests/architecture/test_agent_constitution.py` (R14). |
 | [NAGAR_70_OPERATIONS_TDD.md](NAGAR_70_OPERATIONS_TDD.md) | Phase 6 (Nagar creative studio) technical design baseline — 71 operation ids. |
 | [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) | End-user guide: bring any NEXUS database to the Alembic head. |
 

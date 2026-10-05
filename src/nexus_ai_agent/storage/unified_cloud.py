@@ -109,7 +109,7 @@ class _DropboxProvider:
 
     async def list_files(self, *, prefix: str = "") -> list[str]:
         if not self._token:
-            return []
+            raise ProviderUnavailable("Dropbox token not configured")
         url = "https://api.dropboxapi.com/2/files/list_folder"
         headers = {
             "Authorization": f"Bearer {self._token}",
@@ -120,7 +120,7 @@ class _DropboxProvider:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.post(url, headers=headers, json=payload)
                 if resp.status_code != 200:
-                    return []
+                    raise ProviderUnavailable(f"Dropbox listing failed: {resp.status_code}")
                 data = resp.json()
                 entries = data.get("entries", [])
                 return [
@@ -128,12 +128,24 @@ class _DropboxProvider:
                     for e in entries
                     if e.get(".tag") == "file" and e["name"].startswith(prefix)
                 ]
-        except Exception:
-            return []
+        except ProviderUnavailable:
+            raise
+        # Deliberate broad catch: a transport fault is a typed unavailability
+        except Exception as exc:
+            raise ProviderUnavailable(f"Dropbox listing failed: {type(exc).__name__}") from exc
 
-    async def get_usage(self) -> dict[str, Any]:
+    async def get_usage(self) -> dict[str, Any] | None:
+        """Return measured space usage, or ``None`` when it cannot be measured.
+
+        ``None`` means *unknown*. The previous fallback reported
+        ``{"used_bytes": 0, "allocated_bytes": 2 GiB}`` on every failure, which
+        is a fabricated quota a caller would happily act on (L7: no fake
+        defaults) — and an unconfigured provider advertising 2 GiB of free
+        space is worse than admitting we do not know.
+        """
         if not self._token:
-            return {"used_bytes": 0, "allocated_bytes": 2 * 1024**3}
+            log.warning("cloud_usage_unknown", provider=self.name, reason="no_token")
+            return None
         try:
             url = "https://api.dropboxapi.com/2/users/get_space_usage"
             headers = {
@@ -144,17 +156,23 @@ class _DropboxProvider:
                 resp = await client.post(url, headers=headers)
                 if resp.status_code == 200:
                     data = resp.json()
-                    return {
-                        "used_bytes": data.get("used", 0),
-                        "allocated_bytes": (
-                            data.get("allocation", {})
-                            .get("individual", {})
-                            .get("allocated", 2 * 1024**3)
-                        ),
-                    }
-        except Exception:
-            pass
-        return {"used_bytes": 0, "allocated_bytes": 2 * 1024**3}
+                    used = data.get("used")
+                    allocated = (
+                        (data.get("allocation") or {}).get("individual", {}).get("allocated")
+                    )
+                    if isinstance(used, int) and isinstance(allocated, int):
+                        return {"used_bytes": used, "allocated_bytes": allocated}
+                    log.warning("cloud_usage_incomplete", provider=self.name)
+                else:
+                    log.warning(
+                        "cloud_usage_unknown",
+                        provider=self.name,
+                        status=resp.status_code,
+                    )
+        # Deliberate broad catch: usage is informational, never fatal
+        except Exception as exc:
+            log.warning("cloud_usage_unknown", provider=self.name, error=type(exc).__name__)
+        return None
 
 
 class _PcloudProvider:
@@ -203,24 +221,29 @@ class _PcloudProvider:
 
     async def list_files(self, *, prefix: str = "") -> list[str]:
         if not self._token:
-            return []
+            raise ProviderUnavailable("pCloud token not configured")
         url = "https://api.pcloud.com/listfolder"
         params = {"auth": self._token, "path": "/NEXUS"}
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.get(url, params=params)
                 if resp.status_code != 200:
-                    return []
+                    raise ProviderUnavailable(f"pCloud listing failed: {resp.status_code}")
                 data = resp.json()
                 entries = data.get("metadata", {}).get("contents", [])
                 return [
                     e["name"] for e in entries if e.get("isfile") and e["name"].startswith(prefix)
                 ]
-        except Exception:
-            return []
+        except ProviderUnavailable:
+            raise
+        # Deliberate broad catch: a transport fault is a typed unavailability
+        except Exception as exc:
+            raise ProviderUnavailable(f"pCloud listing failed: {type(exc).__name__}") from exc
 
-    async def get_usage(self) -> dict[str, Any]:
-        return {"used_bytes": 0, "allocated_bytes": 10 * 1024**3}
+    async def get_usage(self) -> dict[str, Any] | None:
+        """pCloud usage is not queried here — ``None`` means *unknown*, never zero."""
+        log.warning("cloud_usage_unknown", provider=self.name, reason="provider_reports_no_usage")
+        return None
 
 
 class _InternxtProvider:
@@ -251,10 +274,13 @@ class _InternxtProvider:
         raise ProviderUnavailable("Internxt download not yet supported")
 
     async def list_files(self, *, prefix: str = "") -> list[str]:
-        return []
+        # The provider has no listing endpoint. Returning [] here would report
+        # "the bucket is empty" for a question we never asked.
+        raise ProviderUnavailable("Internxt listing is not supported")
 
-    async def get_usage(self) -> dict[str, Any]:
-        return {"used_bytes": 0, "allocated_bytes": 10 * 1024**3}
+    async def get_usage(self) -> dict[str, Any] | None:
+        log.warning("cloud_usage_unknown", provider=self.name, reason="provider_reports_no_usage")
+        return None
 
 
 class UnifiedCloudStorage:
@@ -432,27 +458,55 @@ class UnifiedCloudStorage:
             try:
                 await provider.download(remote_key=remote_key, local_path=local_path)
                 return {"success": True, "provider": provider.name, "error": None}
-            except (ProviderUnavailable, StorageError):
+            except (ProviderUnavailable, StorageError) as exc:
+                # Trying the next provider is correct; doing it without a trace
+                # is not. The key only travels in a debug field.
+                log.debug(
+                    "cloud_download_provider_miss",
+                    provider=provider.name,
+                    error=type(exc).__name__,
+                )
                 continue
 
         return {"success": False, "provider": None, "error": "❌ فایل در هیچ سرویس ابری یافت نشد."}
 
     async def list_all_files(self, prefix: str = "") -> list[dict[str, Any]]:
-        """List files from all providers."""
+        """List files from every configured provider.
+
+        Providers that are not configured are not candidates and are skipped.
+        A configured provider that fails is recorded; if **every** candidate
+        failed this raises ``StorageError`` rather than returning ``[]``, so
+        "all clouds are unreachable" can never be mistaken for "the clouds are
+        empty".
+        """
         all_files: list[dict[str, Any]] = []
         seen: set[str] = set()
-        for provider in self._providers:
-            if not provider.is_configured():
-                continue
+        candidates = [p for p in self._providers if p.is_configured()]
+        failures: list[str] = []
+        for provider in candidates:
             try:
                 keys = await provider.list_files(prefix=prefix)
-                for key in keys:
-                    if key not in seen:
-                        seen.add(key)
-                        all_files.append({"name": key, "provider": provider.name})
-                        self._file_map[key] = provider.name
-            except Exception:
+            # Deliberate broad catch: one broken cloud must not hide the others
+            except Exception as exc:
+                failures.append(f"{provider.name}: {type(exc).__name__}: {exc}")
+                log.warning("cloud_list_provider_failed", provider=provider.name, error=str(exc))
                 continue
+            for key in keys:
+                if key not in seen:
+                    seen.add(key)
+                    all_files.append({"name": key, "provider": provider.name})
+                    self._file_map[key] = provider.name
+        if candidates and len(failures) == len(candidates):
+            raise StorageError(
+                "every configured cloud provider failed to list: " + "; ".join(failures)
+            )
+        if failures:
+            log.warning(
+                "cloud_list_partial",
+                failed=len(failures),
+                succeeded=len(candidates) - len(failures),
+                files=len(all_files),
+            )
         return all_files
 
     async def get_status(self) -> str:
