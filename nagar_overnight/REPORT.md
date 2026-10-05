@@ -753,14 +753,14 @@ SHA `5fbc7fa`**; the PR stays **draft** for the gates owner.
   retry/fencing, or recovery for this path yet.
 - **Causal project graph / Artifact Passport remain NOT-FOUND** on main (from recon);
   the journal observation is a first step, not the graph.
-- **`phi_agent.moderate` still fails open on parse error** (policy weakness, deferred).
+- **The CLI caller's project is ephemeral** (rebuilt per run) and the applied path
+  has not been driven by a live paid model.
 - **CI-to-SHA binding pending** in this session (runner backlog).
 
 ## RISKS (ranked)
 - **Medium** — real-model behaviour on the free-text path is unproven (only scripted
   output was driven). Mitigation: the fail-closed parser + hostile matrix bound the
   blast radius; a live-provider experiment is the next step.
-- **Medium** — `phi_agent.moderate` fail-open (policy, not an execution bypass).
 - **Low** — single-operation scope; ephemeral demo project in the CLI caller.
 - **Low** — CI backlog delays the exact-SHA green binding.
 
@@ -781,7 +781,7 @@ SHA `5fbc7fa`**; the PR stays **draft** for the gates owner.
 
 ## ARENA HANDOFF
 - A-6 — PR #155 was diverged; resolved by fast-forward (documented, no rewrite).
-- A-4 — `phi_agent.moderate` fail-open; needs an ADR (unchanged).
+- A-4 — `phi_agent.moderate` fail-open — **RESOLVED** (fail-closed in `b257d5f`).
 
 ## DEFERRED / UNSAFE IDEAS
 - Recipe crystallization (needs independent evidence).

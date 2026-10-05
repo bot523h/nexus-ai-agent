@@ -105,11 +105,12 @@ accepted as a model: `nagar.composition.build_cognition_provider` reports a
   policy/authority, bus, verification, receipts, causal observation) is real;
   no paid/cloud model has been exercised here, so the claim is ARTIFACT-PROVEN,
   not PRODUCTION-PROVEN.
-* **`phi_agent.moderate` remains a model verdict.** It parses `{"safe": ...}`
-  from model text and **fails open on parse error** (`{"safe": True}`). This is
-  a *policy* weakness, not an execution bypass — the verdict does not select or
-  grant an operation — but it is recorded for a future ADR (see
-  `ARENA_HANDOFF.md`).
+* **`phi_agent.moderate` now fails closed** (`agents/phi_agent.py`, commit
+  `b257d5f`): an unparseable verdict is `{"safe": False, "reason": "parse_error"}`,
+  a non-dict or `safe`-less verdict is `malformed_verdict`, and `safe` is
+  normalised so only JSON `true` counts (a truthy `"false"`/`1` cannot read as
+  safe). This closes the earlier policy weakness where a parse error was treated
+  as "safe"; the verdict still never selects or grants an operation.
 * **Chat paths remain raw-model by design** (§1). They are not execution.
 
 ## 5. Mechanical enforcement
@@ -132,5 +133,6 @@ accepted as a model: `nagar.composition.build_cognition_provider` reports a
 | Legacy raw-model→execution bypass | **ABSENT — mechanically proven** |
 | `agents/**` model consumers pinned | **VERIFIED** |
 | Production free-text → gateway wiring (`nexus intent`) | **IMPLEMENTED + VERIFIED + ARTIFACT-PROVEN** |
-| `phi_agent.moderate` → boundary | **DEFERRED (ADR)** |
+| `phi_agent.moderate` fail-open | **RESOLVED — fail-closed (`b257d5f`)** |
+| `phi_agent.moderate` → cognition boundary | **DEFERRED (ADR)** |
 | Remote delivery / main integration | **DELIVERED — PR #155 fast-forwarded to a converged head** |

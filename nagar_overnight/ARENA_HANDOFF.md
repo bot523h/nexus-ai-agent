@@ -68,24 +68,18 @@ patch would be unsafe.
 - **Recommended investigation:** migrate these call sites to `CognitionPort`
   incrementally, one agent at a time, with a contract test per migration.
 
-## A-4 — `phi_agent.moderate` fails open on a parse error (policy weakness)
+## A-4 — `phi_agent.moderate` fail-open (policy weakness) — **RESOLVED**
 
-- **Reproduction:** `tests/integration/test_agents.py::test_phi_moderate` and
-  `src/nexus_ai_agent/agents/phi_agent.py:30-36` — `moderate()` parses a model
-  JSON verdict and returns `{"safe": True, "reason": "parse_error"}` when the
-  model output is not valid JSON.
-- **Evidence:** `phi_agent.py:34-36` (`except Exception: return {"safe": True}`).
-- **Risk:** medium — **not** an execution bypass (the verdict never selects or
-  grants an operation), but a *policy* weakness: an unparseable safety verdict
-  is treated as "safe". Prompt-injection or truncation can therefore suppress
-  moderation.
-- **Why not patched overnight:** changing fail-open → fail-closed alters
-  user-visible bot behaviour (messages the model can't parse would start being
-  blocked) — a product decision beyond this convergence mission. Also touches
-  `graph.py` moderation routing and its tests.
-- **Recommended investigation:** add an ADR for moderation semantics; if the
-  decision is fail-closed, route `moderate` through a typed verdict
-  (`nagar.cognition` style) so a malformed verdict is an explicit refusal.
+- **Reproduction (pre-fix):** `src/nexus_ai_agent/agents/phi_agent.py:30-36` —
+  `moderate()` parsed a model JSON verdict and returned
+  `{"safe": True, "reason": "parse_error"}` when the output was not valid JSON.
+- **Risk:** medium — a *policy* weakness (an unparseable safety verdict read as
+  "safe"), never an execution bypass (the verdict does not select or grant an
+  operation).
+- **Resolution:** fixed in commit `b257d5f` (fail-closed). An unparseable verdict
+  is `{"safe": False, "reason": "parse_error"}`; a non-dict / `safe`-less verdict
+  is `malformed_verdict`; `safe` is normalised so only JSON `true` counts. Covered
+  by `tests/unit/test_phi_moderation_fail_closed.py`.
 
 ## A-5 — Phase 5 convergence not remotely delivered
 
