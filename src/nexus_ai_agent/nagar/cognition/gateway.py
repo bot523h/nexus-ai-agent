@@ -192,22 +192,22 @@ class CognitionGateway:
                 f"producer returned {type(outcome).__name__}, expected TypedProposal|Refusal",
             )
 
-        command = proposal_to_command(
-            outcome,
-            actor=self._actor,
-            project_id=self._project_id,
-            operation_schema_version=self._operation_schema_version(outcome.operation),
-            idempotency_key=idempotency_key,
-            reason=reason,
-        )
         try:
+            command = proposal_to_command(
+                outcome,
+                actor=self._actor,
+                project_id=self._project_id,
+                operation_schema_version=self._operation_schema_version(outcome.operation),
+                idempotency_key=idempotency_key,
+                reason=reason,
+            )
             return self._bus.dispatch(command)
         except AuthorizationError as exc:
             raise CognitionRefused(RefusalReason.AUTHORITY_FIELD, str(exc)) from exc
         except NagarError as exc:
-            # Any other deterministic rejection (unknown operation, schema,
-            # permission, policy, precondition, reference, idempotency) is a
-            # refusal — never a raw-model execution and never an unhandled crash.
+            # Any deterministic rejection (unknown operation, schema, permission,
+            # policy, precondition, reference, idempotency) is a refusal — never
+            # a raw-model execution, never an unhandled crash.
             raise CognitionRefused(RefusalReason.DENIED, str(exc)) from exc
 
     def _operation_schema_version(self, operation: str) -> int:
