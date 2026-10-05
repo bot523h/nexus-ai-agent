@@ -2818,7 +2818,7 @@
       "claimed_at": "2026-10-05T10:58:46Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Delivered as PR #157 (head a76b43c, branch arena/01a10ba1-nexus-ai-agent). Local: pytest tests/architecture/test_agent_constitution.py 18 passed; scripts/agent_constitution_mutations.py killed 21/21 with the tree restored byte for byte; 138 passed across the enforcer, docs-integrity, board, CI-rail and suite-hygiene guards; ruff check + ruff format --check clean. gates_owner=False: exact-head CI is deferred to the gates owner per AGENTS.md §1 rule 4. Not gates-owner work: no production code under src/ was touched (mypy src is not applicable).",
+      "note": "Delivered as PR #157 (head c1679c7, branch arena/01a10ba1-nexus-ai-agent). Exact-head CI: runs 37300679264 (push) + 37300685515 (pull_request) on head SHA c1679c7 -> 17/17 jobs success, incl. test (11m03s), lint (mypy included), python-parity 3.10/3.11/3.12, continuum-evidence 3.10/3.11/3.12, extras-matrix x4, migrate-postgres, trust-mutations, agent-constitution-mutations (12s), release-lineage; CodeRabbit pass. Local: pytest tests/architecture/test_agent_constitution.py 18 passed; scripts/agent_constitution_mutations.py killed 21/21 (tree restored byte for byte); test_docs_integrity 61 passed; ruff check + ruff format --check clean. gates_owner=False on this claim: the shared gates were observed, not run, per AGENTS.md §1 rule 4. Not merged to main; no human review yet. Status: VERIFIED_WITH_LIMITATIONS.",
       "delivered": true
     }
   ],
