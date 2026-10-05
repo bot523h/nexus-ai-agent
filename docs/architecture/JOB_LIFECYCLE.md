@@ -442,12 +442,14 @@ For a fresh trim attempt with no reusable verified checkpoint, the queue
 preflights source evidence after reservation and before invoking the handler.
 Deterministic evidence-infrastructure failures, a missing preflight snapshot,
 and a file-backed-queue requirement failure produce a terminal queue failure
-with no handler/render call, result, or passport. The one intentional
-exception is a genuine typed `media_missing` from the guarded input path: it
-continues through the real default handler so the public typed failure result
-is persisted; it has no passport. A `:memory:` queue cannot start a new trim
-render. After a successful handler return, the queue's independent verifier
-accepts the output and the queue archives both input and output under
+with no handler/render call, result, or passport. Typed render-input failures
+from the existing workspace/input guards (including `media_missing` and
+`invalid_request`) continue through the real default handler so the public
+typed failure result is persisted; they produce no passport. A source that
+exceeds the evidence size bound fails before the handler with the existing
+user-translatable `invalid_request` code and no result. A `:memory:` queue cannot start a new trim render. After a successful handler
+return, the queue's independent verifier accepts the output and archives both
+input and output under
 `<sqlite-path>.artifacts/jobs/<job-hash>/<attempt-id>/`. File bytes are
 bounded to 100 MiB per asset. It checks source stability across the render,
 checks the copied hashes/sizes, and independently re-runs the registered

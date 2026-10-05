@@ -78,6 +78,7 @@ import structlog
 from nexus_ai_agent.application.ports.job_queue import JobStatus
 from nexus_ai_agent.jobs.creative_passport import (
     CREATIVE_RENDER_JOB_TYPE,
+    CreativeEvidenceTooLargeError,
     CreativePassportError,
     CreativeRequestConflictError,
     FileSnapshot,
@@ -782,8 +783,8 @@ class InProcessJobQueue:
         task.add_done_callback(lambda _: self._tasks.pop(job_id, None))
 
     @staticmethod
-    def _is_media_missing_preflight_error(exc: BaseException) -> bool:
-        """Recognize only the renderer's typed missing-input outcome."""
+    def _is_typed_render_preflight_error(exc: BaseException) -> bool:
+        """Recognize typed failures that the real handler must persist and translate."""
         try:
             from nexus_ai_agent.creative.render_jobs import CreativeRenderError
         except ImportError:
@@ -792,7 +793,7 @@ class InProcessJobQueue:
         current: BaseException | None = exc
         seen: set[int] = set()
         while current is not None and id(current) not in seen:
-            if isinstance(current, CreativeRenderError) and current.code == "media_missing":
+            if isinstance(current, CreativeRenderError):
                 return True
             seen.add(id(current))
             current = current.__cause__ or current.__context__
@@ -984,30 +985,35 @@ class InProcessJobQueue:
                         )
                     )
                     return
-                media_missing_preflight = False
+                typed_render_preflight = False
                 try:
                     source_snapshot = await asyncio.to_thread(capture_trim_source, payload)
                 except Exception as exc:  # noqa: BLE001 - preflight failures fail closed
-                    if self._is_media_missing_preflight_error(exc):
-                        # Preserve the real handler's public typed failure
-                        # (media_missing), including its persisted result.
-                        media_missing_preflight = True
+                    if self._is_typed_render_preflight_error(exc):
+                        # Preserve the real handler's public typed input failure,
+                        # including its persisted result and translation.
+                        typed_render_preflight = True
                         logger.info(
-                            "creative_trim_source_missing job_id=%s reason=%s",
+                            "creative_trim_source_typed_failure job_id=%s reason=%s",
                             job_id,
                             type(exc).__name__,
                         )
                     else:
+                        error = (
+                            typed_failure_error(exc.code)
+                            if isinstance(exc, CreativeEvidenceTooLargeError)
+                            else f"creative_passport_source_unavailable:{type(exc).__name__}"
+                        )
                         await self._fail_owned(
                             claim,
                             job_type,
                             payload,
-                            f"creative_passport_source_unavailable:{type(exc).__name__}",
+                            error,
                             JobStatus.FAILED_TERMINAL,
                             None,
                         )
                         return
-                if source_snapshot is None and not media_missing_preflight:
+                if source_snapshot is None and not typed_render_preflight:
                     await self._fail_owned(
                         claim,
                         job_type,
@@ -1017,7 +1023,7 @@ class InProcessJobQueue:
                         None,
                     )
                     return
-                if self._sqlite_path == ":memory:" and not media_missing_preflight:
+                if self._sqlite_path == ":memory:" and not typed_render_preflight:
                     # A memory-only queue cannot durably bind row completion
                     # to the archived source/output/passport evidence. Reject
                     # before invoking the real render handler.
@@ -1178,11 +1184,16 @@ class InProcessJobQueue:
                             type(exc).__name__,
                             exc_info=True,
                         )
+                        error = (
+                            typed_failure_error(exc.code)
+                            if isinstance(exc, CreativeEvidenceTooLargeError)
+                            else f"creative_passport_failed:{type(exc).__name__}"
+                        )
                         await self._fail_owned(
                             claim,
                             job_type,
                             payload,
-                            f"creative_passport_failed:{type(exc).__name__}",
+                            error,
                             JobStatus.FAILED_TERMINAL,
                             None,
                         )
@@ -1477,7 +1488,9 @@ class InProcessJobQueue:
             """
             SELECT id, job_type, idempotency_key, payload_json,
                    request_id, request_fingerprint, transaction_id
-            FROM nexus_job_queue ORDER BY created_at, id
+            FROM nexus_job_queue
+            WHERE request_id IS NULL OR request_fingerprint IS NULL OR transaction_id IS NULL
+            ORDER BY created_at, id
             """
         ).fetchall()
         for row in rows:
@@ -1505,30 +1518,86 @@ class InProcessJobQueue:
                 for index, value in enumerate(existing)
             ):
                 raise RuntimeError(f"persisted request identity does not match job {job_id}")
+            if all(value is not None for value in existing):
+                continue
             connection.execute(
                 """
                 UPDATE nexus_job_queue
                 SET request_id = ?, request_fingerprint = ?, transaction_id = ?
                 WHERE id = ?
+                  AND (request_id IS NULL OR request_fingerprint IS NULL OR transaction_id IS NULL)
                 """,
                 (*expected, job_id),
             )
 
     def _backfill_legacy_attempts(self, connection: sqlite3.Connection) -> None:
-        """Record the latest known legacy attempt without inventing missing history."""
-        rows = connection.execute(
-            """
-            SELECT id, attempt, status, started_at, finished_at, error, result_json,
-                   artifact_passport_json, attempt_history_json
-            FROM nexus_job_queue WHERE attempt > 0 ORDER BY created_at, id
-            """
-        ).fetchall()
+        """Record missing latest legacy attempts without inventing older history."""
+        select_missing = """
+            SELECT q.id, q.attempt, q.status, q.started_at, q.finished_at, q.error,
+                   q.result_json, q.artifact_passport_json, q.attempt_history_json
+            FROM nexus_job_queue AS q
+            WHERE q.attempt > 0
+              AND (
+                json_valid(q.attempt_history_json) = 0
+                OR json_type(
+                    CASE WHEN json_valid(q.attempt_history_json)
+                         THEN q.attempt_history_json ELSE 'null' END
+                ) != 'array'
+                OR NOT EXISTS (
+                    SELECT 1
+                    FROM json_each(
+                        CASE
+                            WHEN json_valid(q.attempt_history_json)
+                             AND json_type(q.attempt_history_json) = 'array'
+                            THEN q.attempt_history_json ELSE '[]'
+                        END
+                    ) AS prior
+                    WHERE prior.type = 'object'
+                      AND json_type(
+                          CASE WHEN prior.type = 'object' THEN prior.value ELSE '{}' END,
+                          '$.attempt'
+                      ) = 'integer'
+                      AND json_extract(
+                          CASE WHEN prior.type = 'object' THEN prior.value ELSE '{}' END,
+                          '$.attempt'
+                      ) = q.attempt
+                )
+              )
+            ORDER BY q.created_at, q.id
+        """
+        try:
+            rows = connection.execute(select_missing).fetchall()
+        except sqlite3.OperationalError as exc:
+            if not any(name in str(exc) for name in ("json_valid", "json_type", "json_each")):
+                raise
+            # JSON1 is bundled with supported SQLite builds, but retain a
+            # portable Python filter for builds compiled without the extension.
+            logger.info("sqlite_json1_unavailable; scanning attempt histories in Python")
+            rows = connection.execute(
+                """
+                SELECT id, attempt, status, started_at, finished_at, error, result_json,
+                       artifact_passport_json, attempt_history_json
+                FROM nexus_job_queue WHERE attempt > 0 ORDER BY created_at, id
+                """
+            ).fetchall()
+
         for row in rows:
             job_id = str(row["id"])
             attempt_number = int(row["attempt"])
-            history = self._decode_attempt_history(str(row["attempt_history_json"] or "[]"))
-            if any(self._attempt_number(entry) == attempt_number for entry in history):
+            try:
+                history = self._decode_attempt_history(str(row["attempt_history_json"] or "[]"))
+                if any(self._attempt_number(entry) == attempt_number for entry in history):
+                    continue
+            except CreativePassportError as exc:
+                # A malformed queue-owned history is evidence degradation,
+                # not a reason to prevent the entire queue from starting.
+                logger.warning(
+                    "legacy_attempt_history_backfill_skipped job_id=%s reason=%s",
+                    job_id,
+                    type(exc).__name__,
+                )
                 continue
+
             persisted_status = str(row["status"])
             if persisted_status == JobStatus.COMPLETED.value:
                 attempt_status = "legacy_observed_completed"

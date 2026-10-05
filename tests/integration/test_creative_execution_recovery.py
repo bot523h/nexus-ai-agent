@@ -524,7 +524,64 @@ async def test_missing_trim_media_preserves_real_handler_typed_failure(
     settings_module.get_settings.cache_clear()
 
 
-@pytest.mark.parametrize("failure_mode", ["evidence_unavailable", "memory_queue"])
+@pytest.mark.asyncio
+async def test_trim_invalid_workspace_preserves_real_handler_typed_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Typed guard failures are delegated to the handler, not relabeled as infrastructure."""
+    creative_root = tmp_path / "creative_tmp"
+    creative_root.mkdir()
+    monkeypatch.setenv("CREATIVE_TEMP_DIR", str(creative_root))
+    outside_workspace = tmp_path / "outside_workspace"
+    outside_workspace.mkdir()
+    key = "creative:invalid-workspace"
+    payload = _trim_payload(outside_workspace, key)
+
+    real_handler = default_job_handlers()[CREATIVE_RENDER_JOB_TYPE]
+    handler_calls = 0
+
+    async def observed_handler(job_payload: dict[str, object]) -> dict[str, object]:
+        nonlocal handler_calls
+        handler_calls += 1
+        return await real_handler(job_payload)
+
+    real_render_branch = render_jobs._run_render_branch
+    renderer_calls = 0
+
+    async def observed_render_branch(
+        render_payload: render_jobs.CreativeRenderPayload,
+        render_workspace: Path,
+        canonical_id: str,
+    ) -> dict[str, Any]:
+        nonlocal renderer_calls
+        renderer_calls += 1
+        return await real_render_branch(render_payload, render_workspace, canonical_id)
+
+    monkeypatch.setattr(render_jobs, "_run_render_branch", observed_render_branch)
+    queue = InProcessJobQueue(tmp_path / "invalid-workspace.sqlite3")
+    queue.register_handler(CREATIVE_RENDER_JOB_TYPE, observed_handler)
+    job_id = await queue.enqueue(
+        job_type=CREATIVE_RENDER_JOB_TYPE,
+        idempotency_key=key,
+        payload=payload,
+    )
+
+    assert await _drain(queue, job_id) is JobStatus.FAILED_TERMINAL
+    assert handler_calls == 1
+    assert renderer_calls == 0
+    result = await queue.get_result(job_id)
+    assert result is not None
+    assert result["success"] is False
+    assert result["error_code"] == "invalid_request"
+    row = queue._fetch_row_full(job_id)
+    assert row is not None
+    assert row["artifact_passport_json"] is None
+    assert not queue._artifact_root.exists()
+
+
+@pytest.mark.parametrize(
+    "failure_mode", ["evidence_unavailable", "oversized_media", "memory_queue"]
+)
 @pytest.mark.asyncio
 async def test_trim_preflight_infrastructure_failure_prevents_handler_and_renderer(
     tmp_path: Path,
@@ -539,7 +596,11 @@ async def test_trim_preflight_infrastructure_failure_prevents_handler_and_render
     workspace = creative_root / f"creative_preflight_{failure_mode}"
     workspace.mkdir()
     input_path = workspace / "input.mp4"
-    _clip(input_path)
+    if failure_mode == "oversized_media":
+        input_path.write_bytes(b"oversized")
+        monkeypatch.setattr(passport_module, "MAX_EVIDENCE_FILE_BYTES", 4)
+    else:
+        _clip(input_path)
     key = f"creative:preflight-{failure_mode}"
     payload = _trim_payload(workspace, key)
 
@@ -553,6 +614,8 @@ async def test_trim_preflight_infrastructure_failure_prevents_handler_and_render
 
         monkeypatch.setattr(queue_module, "capture_trim_source", fail_source_evidence)
         db: Path | str = tmp_path / "preflight.sqlite3"
+    elif failure_mode == "oversized_media":
+        db = tmp_path / "oversized-media.sqlite3"
     else:
         db = ":memory:"
 
@@ -601,6 +664,8 @@ async def test_trim_preflight_infrastructure_failure_prevents_handler_and_render
     error = str(row["error"])
     if failure_mode == "evidence_unavailable":
         assert error == "creative_passport_source_unavailable:CreativePassportError"
+    elif failure_mode == "oversized_media":
+        assert error == "typed_failure:invalid_request"
     else:
         assert error == "creative_passport_requires_file_backed_queue"
     history = json.loads(str(row["attempt_history_json"]))

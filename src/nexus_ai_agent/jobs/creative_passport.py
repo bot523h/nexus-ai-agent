@@ -19,7 +19,7 @@ import platform
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -32,6 +32,19 @@ MAX_EVIDENCE_FILE_BYTES = 100 * 1024 * 1024
 
 class CreativePassportError(RuntimeError):
     """A successful render could not be given a complete durable passport."""
+
+
+class CreativeEvidenceTooLargeError(CreativePassportError):
+    """An evidence asset exceeded the bounded store's per-file size limit."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: Literal["invalid_request", "render_failed"],
+    ) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class CreativeRequestConflictError(ValueError):
@@ -172,12 +185,14 @@ def is_timeline_trim_request(payload: Mapping[str, object]) -> bool:
 def capture_trim_source(payload: Mapping[str, object]) -> FileSnapshot | None:
     """Measure the guarded input for an actual ``/edit trim`` request.
 
-    Non-trim creative jobs return ``None``.  Invalid/missing trim inputs raise
-    a typed evidence error; the queue captures that as unavailable evidence
-    and the render lane remains responsible for its normal typed failure.
+    Non-trim creative jobs return ``None``. Typed render-input errors from the
+    existing guards propagate so the real handler can persist its public
+    failure. Evidence-infrastructure errors raise ``CreativePassportError``
+    and fail before the handler runs.
     """
     from nexus_ai_agent.creative.render_jobs import (
         SURFACE_TO_CANONICAL,
+        CreativeRenderError,
         CreativeRenderPayload,
         _guarded_input,
         _guarded_workspace,
@@ -196,14 +211,22 @@ def capture_trim_source(payload: Mapping[str, object]) -> FileSnapshot | None:
         workspace = _guarded_workspace(creative_payload.workspace_dir)
         source_path = _guarded_input(creative_payload, workspace).resolve(strict=True)
         sha, size = hash_file(source_path)
-    except Exception as exc:  # noqa: BLE001 - preserve worker's typed failure behavior
+    except CreativeRenderError:
+        raise
+    except CreativePassportError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - evidence failures fail closed
         raise CreativePassportError(
             f"trim input evidence unavailable: {type(exc).__name__}"
         ) from exc
     return FileSnapshot(path=source_path, sha256=sha, size_bytes=size)
 
 
-def hash_file(path: Path) -> tuple[str, int]:
+def hash_file(
+    path: Path,
+    *,
+    too_large_code: Literal["invalid_request", "render_failed"] = "invalid_request",
+) -> tuple[str, int]:
     """Stream and bound a file while measuring its stable content identity."""
     digest = hashlib.sha256()
     size = 0
@@ -212,8 +235,9 @@ def hash_file(path: Path) -> tuple[str, int]:
             while chunk := stream.read(1024 * 1024):
                 size += len(chunk)
                 if size > MAX_EVIDENCE_FILE_BYTES:
-                    raise CreativePassportError(
-                        f"evidence file exceeds {MAX_EVIDENCE_FILE_BYTES} bytes"
+                    raise CreativeEvidenceTooLargeError(
+                        f"evidence file exceeds {MAX_EVIDENCE_FILE_BYTES} bytes",
+                        code=too_large_code,
                     )
                 digest.update(chunk)
     except CreativePassportError:
@@ -256,7 +280,7 @@ def archive_trim_evidence(
         source_snapshot.size_bytes,
     ):
         raise CreativePassportError("trim input changed while the render was running")
-    output_sha, output_size = hash_file(output_source)
+    output_sha, output_size = hash_file(output_source, too_large_code="render_failed")
 
     attempt_directory_key = f"jobs/{_safe_job_key(job_id)}/{attempt_identifier}"
     attempt_directory = _resolve_store_path(artifact_root, attempt_directory_key)
@@ -272,8 +296,12 @@ def archive_trim_evidence(
     output_key = f"{attempt_directory_key}/output.mp4"
     input_path = _resolve_store_path(artifact_root, input_key)
     output_path = _resolve_store_path(artifact_root, output_key)
-    input_sha, input_size = _copy_verified(source_snapshot.path, input_path)
-    archived_sha, archived_size = _copy_verified(output_source, output_path)
+    input_sha, input_size = _copy_verified(
+        source_snapshot.path, input_path, too_large_code="invalid_request"
+    )
+    archived_sha, archived_size = _copy_verified(
+        output_source, output_path, too_large_code="render_failed"
+    )
     if (input_sha, input_size) != (source_snapshot.sha256, source_snapshot.size_bytes):
         raise CreativePassportError("archived trim input differs from the measured source")
     if (archived_sha, archived_size) != (output_sha, output_size):
@@ -624,7 +652,7 @@ def reverify_stored_passport(
     input_path = _resolve_existing_store_file(root, passport.input_asset.storage_key)
     output_path = _resolve_existing_store_file(root, passport.artifact.storage_key)
     input_sha, input_size = hash_file(input_path)
-    output_sha, output_size = hash_file(output_path)
+    output_sha, output_size = hash_file(output_path, too_large_code="render_failed")
     if (input_sha, input_size) != (passport.input_asset.sha256, passport.input_asset.size_bytes):
         raise CreativePassportError("persisted input asset no longer matches its passport")
     if (output_sha, output_size) != (passport.artifact.sha256, passport.artifact.size_bytes):
@@ -760,13 +788,18 @@ def _mkdirs_durable(artifact_root: Path, directory: Path) -> None:
     _fsync_directory(root.parent)
 
 
-def _copy_verified(source: Path, destination: Path) -> tuple[str, int]:
+def _copy_verified(
+    source: Path,
+    destination: Path,
+    *,
+    too_large_code: Literal["invalid_request", "render_failed"],
+) -> tuple[str, int]:
     """Atomically copy one evidence file and return the destination's measured identity."""
     if not destination.parent.is_dir():
         raise CreativePassportError("artifact-store destination directory is missing")
     if destination.exists():
-        existing_sha, existing_size = hash_file(destination)
-        source_sha, source_size = hash_file(source)
+        existing_sha, existing_size = hash_file(destination, too_large_code=too_large_code)
+        source_sha, source_size = hash_file(source, too_large_code=too_large_code)
         if (existing_sha, existing_size) != (source_sha, source_size):
             raise CreativePassportError("artifact-store key already contains different bytes")
         return existing_sha, existing_size
@@ -779,8 +812,9 @@ def _copy_verified(source: Path, destination: Path) -> tuple[str, int]:
             while chunk := reader.read(1024 * 1024):
                 size += len(chunk)
                 if size > MAX_EVIDENCE_FILE_BYTES:
-                    raise CreativePassportError(
-                        f"evidence file exceeds {MAX_EVIDENCE_FILE_BYTES} bytes"
+                    raise CreativeEvidenceTooLargeError(
+                        f"evidence file exceeds {MAX_EVIDENCE_FILE_BYTES} bytes",
+                        code=too_large_code,
                     )
                 digest.update(chunk)
                 writer.write(chunk)
@@ -819,6 +853,7 @@ def _fsync_directory(directory: Path) -> None:
 __all__ = [
     "ArchivedCreativeEvidence",
     "CreativeExecutionPassport",
+    "CreativeEvidenceTooLargeError",
     "CreativePassportError",
     "CreativeRequestConflictError",
     "FileSnapshot",

@@ -108,6 +108,47 @@ def test_job_facts_mark_malformed_queue_evidence_unreadable(tmp_path: Path) -> N
     assert not facts.artifact_passport_known and facts.artifact_passport is None
 
 
+def test_startup_backfill_is_idempotent_and_skips_corrupt_attempt_history(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "backfill.sqlite3"
+    queue = InProcessJobQueue(db, artifact_verifiers={})
+    outcome = queue._insert_or_get("test", "backfill", {"value": 1})
+    with sqlite3.connect(queue._sqlite_path) as connection:
+        connection.execute("CREATE TABLE identity_updates (value INTEGER NOT NULL)")
+        connection.execute(
+            """
+            CREATE TRIGGER count_identity_updates
+            AFTER UPDATE OF request_id, request_fingerprint, transaction_id
+            ON nexus_job_queue
+            BEGIN
+                INSERT INTO identity_updates VALUES (1);
+            END
+            """
+        )
+        connection.execute(
+            "UPDATE nexus_job_queue SET attempt = 2, attempt_history_json = ? WHERE id = ?",
+            ("not-json", outcome.job_id),
+        )
+
+    reopened = InProcessJobQueue(db, artifact_verifiers={})
+    facts = reopened.get_job_facts(outcome.job_id)
+    assert facts is not None
+    assert facts.request_id and facts.request_fingerprint and facts.transaction_id
+    assert not facts.attempt_history_known
+    with sqlite3.connect(db) as connection:
+        update_count = connection.execute("SELECT COUNT(*) FROM identity_updates").fetchone()[0]
+    assert update_count == 0
+
+    with sqlite3.connect(db) as connection:
+        connection.execute(
+            "UPDATE nexus_job_queue SET request_id = ?, request_fingerprint = NULL WHERE id = ?",
+            ("wrong-request-id", outcome.job_id),
+        )
+    with pytest.raises(RuntimeError, match="persisted request identity does not match"):
+        InProcessJobQueue(db, artifact_verifiers={})
+
+
 def test_trim_request_recognition_requires_the_existing_typed_surface() -> None:
     assert is_timeline_trim_request(_trim_payload())
     assert not is_timeline_trim_request(_trim_payload(operation="speed"))
