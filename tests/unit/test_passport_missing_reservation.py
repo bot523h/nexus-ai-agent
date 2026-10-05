@@ -17,7 +17,6 @@ from pathlib import Path
 from nexus_ai_agent.provenance.journal import CausalJournal
 from nexus_ai_agent.provenance.models import CausalEvent, EventKind, JobFacts
 from nexus_ai_agent.provenance.observer import utc_now_iso
-
 from nexus_ai_agent.provenance.passport import PassportBuilder, PassportStatus
 
 
@@ -90,7 +89,7 @@ def test_missing_reservation_cannot_reach_verified(tmp_path: Path) -> None:
     }
     codes = {f.code for f in passport.findings}
     assert "missing_transition_record" in codes
-    assert any("job_reserved" in f.message for f in passport.findings)
+    assert any("job_reserved" in f.detail for f in passport.findings)
 
 
 def test_backfill_does_not_upgrade_bare_terminal_to_verified(tmp_path: Path) -> None:
