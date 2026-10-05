@@ -25,6 +25,13 @@ envelope.  ``creative.studio`` never imports ``nagar``.
 
 from __future__ import annotations
 
+from nexus_ai_agent.nagar.cognition.adapter import (
+    DEFAULT_MAX_OUTPUT_CHARS,
+    LOCAL_PRODUCER_NAME,
+    CognitionObserver,
+    LocalCognition,
+    TextGenerator,
+)
 from nexus_ai_agent.nagar.cognition.bridge import proposal_to_command
 from nexus_ai_agent.nagar.cognition.context import (
     CognitionBudget,
@@ -51,13 +58,17 @@ from nexus_ai_agent.nagar.cognition.router import (
 )
 
 __all__ = [
+    "DEFAULT_MAX_OUTPUT_CHARS",
+    "LOCAL_PRODUCER_NAME",
     "PROPOSAL_SCHEMA_VERSION",
     "CognitionBudget",
     "CognitionContext",
     "CognitionLevel",
+    "CognitionObserver",
     "CognitionPort",
     "DeterministicRouter",
     "IntentClass",
+    "LocalCognition",
     "NullCognition",
     "ProducerIdentity",
     "ProposalProvenance",
@@ -66,6 +77,7 @@ __all__ = [
     "RefusalReason",
     "RoutingDecision",
     "RoutingRequest",
+    "TextGenerator",
     "TypedProposal",
     "parse_proposal",
     "proposal_to_command",

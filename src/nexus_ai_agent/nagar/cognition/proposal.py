@@ -62,6 +62,7 @@ class RefusalReason(str, Enum):
     """Why a proposal was refused.  Deterministic, stable, testable."""
 
     PRODUCER_REFUSED = "producer_refused"  # explicit, honest "I cannot"
+    PRODUCER_FAILED = "producer_failed"  # provider raised / timed out / empty
     MALFORMED = "malformed"  # not parseable as the declared structure
     SCHEMA_VIOLATION = "schema_violation"  # failed typed validation
     UNSUPPORTED_SCHEMA_VERSION = "unsupported_schema_version"
@@ -224,8 +225,16 @@ def parse_proposal(
         )
 
     # 6. Typed validation (extra="forbid" rejects any unlisted key).
+    #    A *trusted* provenance supplied by the caller always wins: a producer
+    #    may not forge its own origin (e.g. impersonate the null producer or
+    #    another model).  When no trusted provenance is supplied, the payload's
+    #    own provenance (validated for shape) is used.
+    validated_payload = payload
+    if provenance is not None:
+        validated_payload = dict(payload)
+        validated_payload["provenance"] = provenance.model_dump(mode="json")
     try:
-        proposal = TypedProposal.model_validate(payload)
+        proposal = TypedProposal.model_validate(validated_payload)
     except ValidationError as exc:
         detail = exc.errors()[0].get("msg", "validation failed") if exc.errors() else "invalid"
         return _refusal(

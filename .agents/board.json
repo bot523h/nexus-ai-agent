@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-09-27T16:54:20Z",
+  "updated_at": "2026-10-05T04:06:16Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -657,6 +657,17 @@
         "tests/unit/test_request_queue.py",
         "scripts/llm_queue_mutations.py",
         "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
+      ]
+    },
+    {
+      "id": "nagar-cognition",
+      "description": "Model-optional cognition boundary (nagar.cognition)",
+      "paths": [
+        "src/nexus_ai_agent/nagar/cognition/",
+        "tests/unit/test_cognition_adapter.py",
+        "tests/unit/test_cognition_e2e_pipeline.py",
+        "tests/unit/test_cognition_boundary.py",
+        "tests/architecture/test_cognition_isolation.py"
       ]
     }
   ],
@@ -2715,6 +2726,40 @@
       "ttl_hours": 24,
       "gates_owner": true,
       "note": "Continues task-195-llm-queue-lifecycle (original branch arena/01a0e2f0, claim released via takeover). MODULE_MAP.md/docs-architecture excluded exactly as the original claim scoped itself. | SESSION-BOUND CONTINUATION 2026-09-27T16:54:20Z: arena/01a0e3b7 fast-forwarded cd79bfe (PR #109 head) and continues the same exclusive paths. This session cannot push to arena/01a0e356. PR #109 python-parity (3.10) is RED on run 36329794486 (asyncio.wait_for raises asyncio.TimeoutError, not builtin TimeoutError)."
+    },
+    {
+      "task": "task-186-model-backed-cognition-adapter",
+      "title": "Model-backed CognitionPort adapter (LocalCognition) + provenance hardening",
+      "title_fa": "آداپتور احساس‌گرای پشتیبانی‌شده با مدل (LocalCognition) و سخت‌سازی منشأ",
+      "zone": "nagar-cognition",
+      "priority": "P1",
+      "status": "active",
+      "gates_owner": false,
+      "prerequisites": [],
+      "scope": "LocalCognition wraps the existing LLMProvider contract, routes untrusted model text through parse_proposal, is bounded/fail-closed, and carries no authority. Trusted provenance overrides model-claimed provenance.",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/nagar/cognition/",
+        "tests/unit/test_cognition_adapter.py",
+        "tests/unit/test_cognition_e2e_pipeline.py",
+        "tests/unit/test_cognition_boundary.py",
+        "tests/architecture/test_cognition_isolation.py"
+      ],
+      "acceptance_criteria": [
+        "A valid model response becomes a TypedProposal only through parse_proposal; every adversarial/invalid response is a Refusal with a stable reason code.",
+        "The adapter cannot dispatch, authorize, or perform I/O; a proposal is not executable.",
+        "Provider exceptions, timeouts, oversized/empty/non-str output fail closed as Refusal; retries are bounded by max_attempts and the wall-clock budget.",
+        "A trusted provenance supplied by the caller overrides any provenance in the model payload.",
+        "End-to-end: fake provider -> LocalCognition -> bridge -> real authorizer -> real CommandBus executes a known operation exactly once, and hostile output never mutates bus state."
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_cognition_adapter.py tests/unit/test_cognition_e2e_pipeline.py (exact counts)",
+        "pytest -q (full suite) counts vs baseline",
+        "ruff check + ruff format --check + mypy src (exact output)",
+        "adversarial cases listed in test docstrings"
+      ],
+      "agent_branch": "overnight/nagar-20261004",
+      "claimed_at": "2026-10-05T04:06:16Z",
+      "ttl_hours": 24
     }
   ],
   "deferred_log": [

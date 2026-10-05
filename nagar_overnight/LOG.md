@@ -88,3 +88,41 @@ the contract.
 
 - `3789abc` feat(nagar): additive model-optional cognition boundary
 - Final full suite after the commit: `2978 passed, 0 failed, 30 skipped`.
+
+## Phase 4 — model-backed adapter (LocalCognition)
+
+Chosen mode: MODE B retained. Live recon found **no path on main where raw model
+text reaches privilege** — model output is schema-validated at every adapter
+(render JSON mode, image_gen decode); the legacy video_director model output
+drives *edits* but has no authority surface. So the security task is a
+documented trace, not a patch, and the genuinely-missing capability is the
+model-backed producer the boundary was designed for.
+
+Implemented (additive, zone nagar-cognition):
+
+- adapter.py: LocalCognition — a real CognitionPort over the existing provider
+  contract (async generate(prompt, system) -> str), reused structurally via
+  TextGenerator, so the cognition package never imports the heavy llm package.
+  Provider text goes straight into parse_proposal (single fail-closed gate).
+  Bounded: asyncio.wait_for wall-clock + budget.max_attempts. Fail-closed:
+  provider exception/timeout/oversized/empty/malformed -> Refusal with a stable
+  code. No dispatch, no authority, no I/O, no shell.
+- CognitionObserver — dependency-free counts of stages only; never records
+  prompt/response content. Token accounting intentionally omitted (provider
+  contract exposes no usage field — not fabricated).
+- RefusalReason.PRODUCER_FAILED added.
+- parse_proposal(..., provenance=...) hardening: a trusted provenance now
+  overrides any provenance in the model payload (a producer cannot forge its
+  origin / impersonate the null producer).
+- Architecture isolation gate updated honestly: asyncio now allowed (the port
+  is async); subprocess/os/eval/exec/socket/etc. stay forbidden.
+
+Evidence:
+- tests/unit/test_cognition_adapter.py — 27 tests.
+- tests/unit/test_cognition_e2e_pipeline.py — 11 tests (fake provider ->
+  LocalCognition -> bridge -> real ProjectAuthorizer -> real CommandBus with the
+  pack-free Wave-1 registry -> handler).
+- tests/unit/test_cognition_boundary.py — +2 tests for provenance override.
+- Full suite: 3016 passed, 30 skipped, 0 failed (baseline 2978 + 38 new).
+- ruff check / ruff format --check clean; mypy src 256 files clean.
+

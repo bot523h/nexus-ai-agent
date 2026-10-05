@@ -304,3 +304,28 @@ def test_bridge_passes_an_explicit_idempotency_key() -> None:
         idempotency_key="creative:1:2:3",
     )
     assert command.idempotency_key == "creative:1:2:3"
+
+
+# -- trusted provenance overrides the producer's own claim -----------------
+
+
+def test_trusted_provenance_overrides_the_producers_own_claim() -> None:
+    # A model must not be able to forge its origin (e.g. impersonate the null
+    # producer or another model) by writing its own provenance block.
+    forged = _valid_payload()
+    forged["provenance"] = _provenance().model_dump(mode="json")
+    trusted = ProposalProvenance(
+        producer=ProducerIdentity(kind="service", name="trusted"),
+        created_at="2026-10-04T00:00:00Z",
+        source="trusted-source",
+    )
+    parsed = parse_proposal(forged, _schema(), provenance=trusted)
+    assert isinstance(parsed, TypedProposal)
+    assert parsed.provenance.producer.name == "trusted"
+    assert parsed.provenance.source == "trusted-source"
+
+
+def test_trusted_provenance_is_not_injected_when_absent() -> None:
+    parsed = parse_proposal(_valid_payload(), _schema())
+    assert isinstance(parsed, TypedProposal)
+    assert parsed.provenance.producer.name == "test-model"

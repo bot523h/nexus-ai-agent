@@ -6,26 +6,35 @@ patch would be unsafe.
 
 ---
 
-## A-1 — Wire a real model provider behind `CognitionPort` (DESIGNED, not built)
+## A-1 — Bind a real model provider behind `CognitionPort` (adapter IMPLEMENTED; live binding deferred)
 
-- **Reproduction:** `python -c "from nexus_ai_agent.nagar.cognition import NullCognition"`
-  — only the null provider exists.
-- **Evidence:** `src/nexus_ai_agent/nagar/cognition/port.py:33` (the protocol),
-  `src/nexus_ai_agent/llm/provider.py:6` (the existing `LLMProvider` ABC that an
-  adapter would wrap).
-- **Affected files:** new `src/nexus_ai_agent/nagar/cognition/providers/local.py`
-  and `.../cloud.py` (to be added); callers in the composition root.
+- **Reproduction:** `python -c "from nexus_ai_agent.nagar.cognition import LocalCognition"`
+  — the adapter exists now; what is still missing is a composition root that
+  constructs a live `LLMProvider` (Gemini/local-server/fake) and binds it.
+- **Evidence:** `src/nexus_ai_agent/nagar/cognition/adapter.py` (`LocalCognition`,
+  `TextGenerator`), `src/nexus_ai_agent/llm/provider.py:6` (the existing
+  `LLMProvider` ABC it satisfies structurally).
+- **Status:** the adapter is **IMPLEMENTED + VERIFIED** (unit + end-to-end with a
+  fake provider). Live-provider binding in the bot/worker runtime is deferred.
+- **Affected files:** the composition root that constructs providers (runtime
+  wiring), not the adapter.
 - **Risk:** a provider adapter is the first place untrusted model text becomes a
-  proposal. It must go through `parse_proposal` and must never touch the bus
-  directly.
-- **Confidence:** high that the boundary is correct; medium that the adapter can
-  be added without a new observability story (model calls / tokens / escalation
-  rate — the mission's §31 metrics).
-- **Why not patched overnight:** it needs a model-quality evaluation harness and
-  live-provider configuration; doing it blind would risk a second execution path.
-- **Recommended investigation:** add `LocalCognition` wrapping an injected
-  `LLMProvider`, a contract test that it always returns through
-  `parse_proposal`, and a cost/latency metric hook — as its own PR.
+  proposal. `LocalCognition` already routes every response through
+  `parse_proposal` and cannot reach the bus directly; the remaining risk is in
+  *choosing* a provider via the deterministic router, which must not let a model
+  influence routing or privilege.
+- **Confidence:** high that the adapter is correct (27 unit + 11 e2e tests, and
+  the full suite green); medium on the runtime binding because it touches the
+  highest-conflict `bot/handlers.py` surface.
+- **Why not patched overnight:** binding a live provider adds an external
+  dependency and touches the bot surface; doing it without a token/latency
+  metric story (the mission's §31 metrics) and without touching
+  `bot/handlers.py` would risk scope creep and conflict.
+- **Recommended investigation:** construct `LocalCognition(provider)` in the
+  worker composition root behind a feature flag, select it with
+  `DeterministicRouter`, and add token/latency instrumentation to `LLMProvider`
+  (the contract currently exposes no usage field, so the adapter deliberately
+  reports none).
 
 ## A-2 — Causal Project Graph + Artifact Passport (NOT-FOUND on main)
 

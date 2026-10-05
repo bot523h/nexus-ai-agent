@@ -82,11 +82,40 @@ can only *lower* the level; the router never escalates past the caller's
 ceiling, never calls a model to decide, and returns `blocked` when nothing
 eligible exists and no human is available.
 
+## LocalCognition (model-backed producer)
+
+`LocalCognition` (`src/nexus_ai_agent/nagar/cognition/adapter.py`) is the one
+place that talks to a language model. It reuses the existing provider contract
+structurally (`async generate(prompt, system) -> str`), so any
+`nexus_ai_agent.llm.provider.LLMProvider` plugs in with no second abstraction,
+and the cognition package never imports the heavy `llm` package initialiser.
+
+It is fail-closed and bounded: the provider's untrusted text goes straight into
+`parse_proposal`; a wall-clock deadline (`asyncio.wait_for`) and at most
+`budget.max_attempts` attempts bound every call; every provider error, timeout,
+oversized, empty or malformed response ends as an explicit `Refusal` with a
+stable reason code. The adapter cannot dispatch, authorize, touch the
+filesystem or run a shell — a `TypedProposal` is not executable.
+
+`CognitionObserver` records only *stages* (counts), never prompt or response
+content. Token accounting is intentionally absent: the provider contract
+exposes no usage field (`LLMProvider.generate` returns `str`), so no token
+number is fabricated.
+
+Trusted provenance: `parse_proposal(..., provenance=...)` injects the caller's
+trusted origin and **overrides** any provenance in the model payload, so a
+producer cannot forge its origin or impersonate the null producer.
+
 ## Honest limits
 
-- **No provider adapter is wired to `LLMProvider` yet.** The boundary is
-  implemented and tested with `NullCognition`; a `LocalCognition` /
-  `CloudCognition` adapter is designed but deferred (see
+- **`LocalCognition` is implemented and tested; no concrete production
+  `LLMProvider` is bound to it in a runtime composition root yet.** Binding a
+  live provider (and choosing it via the router) is the next integration step;
+  the adapter itself is done and exercised end-to-end against a fake provider
+  (only external model behaviour is faked).
+- **No provider adapter is wired into the bot/worker runtime.** The boundary is
+  implemented and tested with `NullCognition` and `LocalCognition`; wiring a
+  live cognition producer into a bot surface is deferred (see
   `nagar_overnight/ARENA_HANDOFF.md`).
 - **No recipe crystallization is active.** The router has an `L0_recipe`
   level, but nothing activates a recipe: that requires independent evidence

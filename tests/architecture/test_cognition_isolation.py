@@ -4,12 +4,15 @@ The boundary is only trustworthy if it stays *authority-free* and
 *dependency-light*.  These fitness tests make the laws executable:
 
 * ``nagar.cognition`` may import ``creative.studio`` models (one direction)
-  and ``pydantic`` — nothing heavy, nothing that could execute;
+  and ``pydantic`` plus a small stdlib set — nothing heavy, nothing that could
+  execute;
 * ``creative.studio`` must NOT import ``nagar`` (the boundary is upstream;
   the execution core must not depend on cognition);
 * no module in the cognition package may reference an execution primitive
   (subprocess, os.system, eval/exec, socket, file writes) — a proposal
-  producer can never run anything.
+  producer can never run anything.  ``asyncio`` is allowed because the
+  ``CognitionPort`` contract is async (a real provider adapter awaits the
+  provider); it is not an execution primitive here.
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ STUDIO = ROOT / "src" / "nexus_ai_agent" / "creative" / "studio"
 #: Top-level imports the cognition boundary may use (stdlib + pydantic + self).
 ALLOWED_TOP_LEVEL = {
     "__future__",
+    "asyncio",  # the CognitionPort contract is async; awaiting a provider is not execution
     "json",
     "time",
     "enum",
@@ -58,7 +62,6 @@ FORBIDDEN_IMPORTS = {
     "pickle",
     "marshal",
     "multiprocessing",
-    "asyncio",  # the boundary is sync-pure; async is the port's caller concern
 }
 
 
