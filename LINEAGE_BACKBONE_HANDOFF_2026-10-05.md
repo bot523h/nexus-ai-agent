@@ -1,18 +1,19 @@
 # NEXUS/NAGAR — Post-Merge Lineage Backbone Handoff
 
-**Captured:** 2026-10-05 16:16 UTC
+**Captured:** 2026-10-05 16:25 UTC (exact-main CI rechecked at 16:24; session PR checks rechecked at 16:24; live PR/lease scan dated 16:20)
 **Mission status:** `BLOCKED` — no runtime implementation was started because the complete vertical slice necessarily overlaps a live typed-spine lease and unresolved queue ownership. This is not a claim that lineage is complete.
 **Session branch:** `arena/01a10ccd-nexus-ai-agent`
 **Main/base at start:** `5a228ea9a114363f6b77a4becd0681eeab3527a2`
 **Initial local HEAD:** `5a228ea9a114363f6b77a4becd0681eeab3527a2`; working tree was clean.
 **Board successor:** `task-240-durable-creative-project-revision-lineage`, zone `creative-revision-lineage`, recorded as `deferred` (not claimed).
-**Implementation PR:** none at the time this handoff was drafted; any follow-up PR must remain draft until implementation and its exact-head proof exist.
+**Canonical session PR:** #159, open draft and governance/handoff-only, based on `main`. It was opened from exact head `34700d73252462fba6825df1750928ea28e85630`; this PR-metadata handoff refresh advances the branch, so re-query GitHub for the latest head SHA. It contains no task-240 implementation.
 
 ## Live truth
 
 - Live `origin/main` was `5a228ea9a114363f6b77a4becd0681eeab3527a2`, a merge commit for PR #156. `gh pr view 156` reports `MERGED`, approved, merge commit `5a228ea9a114363f6b77a4becd0681eeab3527a2`, source head `eb18091777330b1c95a966b92548ec72dd79cbe6`. `git cat-file -p origin/main` shows parents `6e41123b40f15a63241c8db27cd884010f55db38` and `eb18091777330b1c95a966b92548ec72dd79cbe6`; the second parent exactly matches the fetched PR head. The current main tree contains the merged queue adapter, creative passport, recovery tests, provenance recording tests, and lifecycle documentation.
 - PR #154 is `MERGED`, not an open/superseded branch to revive. PR #156 is the current merged queue-evidence baseline.
-- Exact-current-main CI is GitHub Actions run **37337104871** on exactly `5a228ea9a114363f6b77a4becd0681eeab3527a2`: **13/16 jobs completed successfully, 0 failures, 3 `continuum-evidence` jobs still in progress** at the last query (2026-10-05 16:16 UTC). This is pending, not green overall. Re-query the run before using it as evidence.
+- Exact-current-main CI is GitHub Actions run **37337104871** on exactly `5a228ea9a114363f6b77a4becd0681eeab3527a2`: **16/16 jobs succeeded, 0 failures; run conclusion `success`** at the last query (2026-10-05 16:24 UTC, updated `2026-10-05T16:24:43Z`). This proves exact-current-main CI only, not task-240 implementation. Re-query the run before using it as evidence.
+- Session PR **#159** is open/draft, governance-only, and has no review decision. Its exact opening head was `34700d73252462fba6825df1750928ea28e85630` on base `main`; the handoff metadata refresh described above advances the head. At the 16:24 UTC query, CI runs **37339962444** (push; 2 jobs in progress, 14 queued) and **37340061921** (PR event; 3 jobs in progress, 13 queued) had not completed. CodeRabbit passed in the earlier PR check rollup. No PR-head CI conclusion is available yet; query the latest head and checks after the handoff update.
 - The main board initially still had merged `task-232-durable-creative-queue-evidence` active, with `gates_owner: true`, and its queue paths fenced. This handoff branch releases only that verified-merged claim by the existing stewardship-release precedent. Main already has `task-231-provenance-ledger` as `completed_merged`; no unrelated claim was changed.
 - `.agents/board.json` now records task-240 with acceptance/evidence criteria and the smallest proposed lineage paths, but status is `deferred`; **there is no active task claim and no runtime file has been edited**. The forward-task entry replaces task-122, which its existing board note says was delivered through PR #47.
 
@@ -75,7 +76,7 @@ Task-240 is recorded in `.agents/board.json` with acceptance criteria and eviden
 
 - `.venv/bin/python -m pytest --noconftest -q tests/unit/test_agent_board.py` → **18 passed**. (`--noconftest` is necessary in this bare environment: repository-wide `tests/conftest.py` imports the uninstalled application package and `tests/unit/conftest.py` imports NumPy; neither is required by the board test.)
 - `python scripts/agent_board.py check --files .agents/board.json,LINEAGE_BACKBONE_HANDOFF_2026-10-05.md --branch arena/01a10ccd-nexus-ai-agent` → **no overlap** for these governance/handoff files against the current-main board.
-- Full lint/types/regression were **not run**: no runtime implementation was made, and the local environment is not fully installed. Current-main CI remains pending as stated above. Do not report those gates green.
+- Full lint/types/regression were **not run locally**: no runtime implementation was made, and the local environment is not fully installed. Exact-current-main CI now passed on the main SHA as stated above; the session PR checks remain pending, and no task-240 branch validation is claimed.
 
 **Required when task-240 is claimed:** focused identity/nullability and invalid-reference tests; queue/Bus/artifact integration through the real verifier; SQLite close/reopen or process-restart readback; replay/retry/recovery immutability; failed execution and missing-evidence incomplete behavior; then all relevant queue/passport/provenance and Studio regression suites, docs integrity, and exact-head CI.
 
@@ -83,15 +84,16 @@ Task-240 is recorded in `.agents/board.json` with acceptance criteria and eviden
 
 - **Main merge truth:** verified from GitHub merge metadata, direct merge-commit parent match to PR #156 head, and the current main tree. This proves PR #156 is the baseline, not that Project/CreativeWork lineage is implemented.
 - **Local governance proof:** board schema/behavior test 18/18 passed; changed-file board check passed. No application code was changed.
-- **Main CI:** run 37337104871 is exact-head but pending (13 success / 3 in progress / 0 failed at last query). No green claim.
-- **Branch/PR/production evidence:** no runtime branch evidence exists for task-240; production behavior is not claimed. Any governance-only draft PR opened from this branch must remain marked as a handoff, not as implementation completion.
+- **Main CI:** run 37337104871 is exact-head for current main and passed all 16 jobs (0 failures; conclusion success, last updated 2026-10-05T16:24:43Z). This is not task-240 proof.
+- **Branch/PR/production evidence:** PR #159 is the session’s sole canonical PR, open and draft for the governance/handoff changes only; its opening head is recorded above, and its latest head/check state must be re-queried after this metadata commit. No runtime branch evidence exists for task-240; production behavior is not claimed, and the PR must not be treated as implementation completion.
 
 ## Next action — required before any implementation
 
 1. Re-fetch `origin/main`, re-run `gh pr list`, inspect current boards on every open PR head touching these paths, and re-query run `37337104871`.
 2. Resolve the canonical typed `Intent`/CreativeWork/Revision contract across PRs #126–#128, #131/#134, and #150; PR #150’s own description requires this arbitration.
 3. Have the owners/reviewers reconcile/release the task-230 spine/render lease and the contradictory task-231 queue claims on PR #152/#157. Confirm PR #157 no longer removes the PR #156 queue/passport files. Do not alter or merge those PRs from this session.
-4. Only then claim `task-240-durable-creative-project-revision-lineage` on `arena/01a10ccd-nexus-ai-agent`, run `agent_board.py check` for the exact final file set, and commit/push the claim before code.
-5. Implement the smallest vertical slice, run required tests and exact-head CI, and update this artifact with new SHAs/results. Human merge remains required.
+4. Human-review PR #159 as a governance-only board/handoff change; its merge would release the verified-merged task-232 board fence, but does not resolve the typed-spine or task-231 queue conflicts and does not unblock task-240 by itself. Keep it draft until its checks are resolved.
+5. Only after steps 1–3 resolve the architecture/lease blockers, claim `task-240-durable-creative-project-revision-lineage` on `arena/01a10ccd-nexus-ai-agent`, run `agent_board.py check` for the exact final file set, and commit/push the claim before code.
+6. Implement the smallest vertical slice, run required tests and exact-head CI, and update this artifact with new SHAs/results. Human merge remains required.
 
 **Next agent MUST verify live Git/GitHub/board state again; every SHA, PR state, TTL, and CI status above is a dated observation, not a standing truth.**
