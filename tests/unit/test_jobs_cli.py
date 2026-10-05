@@ -127,3 +127,59 @@ def test_resume_drains_seeded_pdf_job(
         ).fetchone()
     assert row is not None
     assert row[0] == "completed"
+
+
+def test_resume_survives_journal_evidence_conflict(
+    cli_env: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A conflicting claim already on the ledger must NOT abort the drain.
+
+    The journal holds a JOB_ENQUEUED whose payload digest disagrees with the
+    authoritative row — backfill refuses (CausalConflictError + quarantine)
+    and the CLI must degrade with an explicit warning while the job still
+    executes: evidence conflict, never an execution veto (D-0024).
+    """
+    pytest.importorskip("pypdf")
+    fake_rag_module = types.ModuleType("nexus_ai_agent.features.rag")
+
+    class FakeRag:
+        async def add_document(
+            self, user_id: int, text: str, metadata: dict[str, object]
+        ) -> None:
+            pass
+
+    fake_rag_module.AdvancedRAGEngine = FakeRag  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "nexus_ai_agent.features.rag", fake_rag_module)
+
+    from nexus_ai_agent.provenance import CausalEvent, CausalJournal, EventKind
+    from nexus_ai_agent.provenance.paths import causal_journal_db_path
+    from nexus_ai_agent.worker import job_queue_db_path
+
+    pdf_path = tmp_path / "upload.pdf"
+    pdf_path.write_bytes((FIXTURES / "minimal.pdf").read_bytes())
+    _seed_pending_pdf_job(cli_env, "cli-job-c", pdf_path)
+
+    journal = CausalJournal(causal_journal_db_path(job_queue_db_path(cli_env)))
+    journal.append(
+        CausalEvent(
+            kind=EventKind.JOB_ENQUEUED,
+            job_id="cli-job-c",
+            job_type="pdf_extract",
+            payload_digest="sha256:" + ("f" * 64),  # a DIFFERENT, older claim
+        )
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["jobs", "resume"])
+
+    assert result.exit_code == 0, result.output
+    assert "evidence conflict" in result.output
+    assert "cli-job-c: completed" in result.output
+
+    with sqlite3.connect(job_queue_db_path(cli_env)) as connection:
+        row = connection.execute(
+            "SELECT status FROM nexus_job_queue WHERE id = 'cli-job-c'"
+        ).fetchone()
+    assert row is not None and row[0] == "completed"
+    kinds = [r.kind for r in journal.records_for_job("cli-job-c")]
+    assert EventKind.EVENT_CONFLICT in kinds  # the rejected claim is durably kept

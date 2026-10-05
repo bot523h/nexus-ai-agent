@@ -932,7 +932,10 @@ def jobs_resume(
     from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
     from nexus_ai_agent.application.ports.job_queue import JobStatus
     from nexus_ai_agent.config.settings import get_settings
-    from nexus_ai_agent.provenance import QueueLedgerObserver
+    from nexus_ai_agent.provenance import (
+        CausalConflictError,
+        QueueLedgerObserver,
+    )
     from nexus_ai_agent.provenance.backfill import backfill_journal
     from nexus_ai_agent.provenance.paths import (
         causal_journal_db_path,
@@ -961,6 +964,15 @@ def jobs_resume(
                 typer.echo(
                     f"Causal journal: +{report.appended} reconstructed, "
                     f"{report.already_present} already present."
+                )
+            except CausalConflictError as exc:
+                # The ledger itself refuses a lying reconstruction: the job
+                # authority is untouched and the drain still proceeds — but
+                # the quarantined conflict stays on the ledger for audit.
+                typer.echo(
+                    f"⚠️  Causal backfill stopped on an evidence conflict"
+                    f" ({exc}); draining without backfill. Inspect the"
+                    f" EVENT_CONFLICT records before trusting this history."
                 )
             except sqlite3.Error as exc:
                 typer.echo(f"⚠️  Causal backfill failed ({exc}); draining without it.")
