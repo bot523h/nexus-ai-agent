@@ -410,3 +410,51 @@ selected by `DeterministicRouter`, and migrate the legacy chat/agent `generate()
 call sites to the boundary one at a time** — this removes the last place where
 raw model text can be treated as a decision, the highest ranked remaining risk.
 
+
+
+---
+
+# Phase 5 (cognition convergence) — morning report
+
+## LIVE TRUTH
+
+- origin/main: e5b326b2eaf691a638d030ad57acf1ce60016ef0 (no drift)
+- base SHA: 94ecc55 (phase-4 tip)
+- branch: overnight/nagar-20261004
+- final SHA: 4addc9d
+- remote: BLOCKED (403, B-3) — no PR, no CI, no main integration
+- tree: CLEAN
+
+## MODE
+
+MODE B — deterministic substrate present; cognition boundary additive.
+
+## WHAT I CHANGED
+
+- NEW nagar/cognition/capabilities.py — offered operations derived from CapabilityRegistry.
+- NEW nagar/cognition/gateway.py — CognitionGateway + build_cognition_gateway.
+- proposal.py — RefusalReason.DENIED.
+- __init__.py — export gateway/capabilities.
+- NEW tests/unit/test_cognition_gateway.py (21), NEW tests/architecture/test_legacy_agent_no_raw_execution.py (4).
+- tests/architecture/test_cognition_isolation.py — allow studio capabilities import.
+- docs/overnight/COGNITION_CONVERGENCE.md + docs/README index.
+
+## SECURITY / AUTHORITY
+
+- raw model -> boundary: proven (parse_proposal is the only gate; gateway refuses on Refusal/malformed).
+- caller -> cannot manufacture authority: proven (offered = requested INTERSECT registry).
+- model -> cannot manufacture authority: proven (authority-field refusal + registry clip + bus authorizer).
+- legacy agents -> no raw execution: proven mechanically (AST gate) — none both generate() and execute.
+
+## TESTS
+
+Baseline (phase-4 tip): 3019 passed, 30 skipped. Final: 3044 passed, 30 skipped, 0 failed.
+Delta +25 = 21 gateway + 4 anti-bypass gate. ruff/format/mypy clean.
+
+## STATUS
+
+VERIFIED (local). Not REMOTE-DELIVERED (push blocked), not MAIN-INTEGRATED, not PRODUCTION-CONNECTED.
+
+## HIGHEST-LEVERAGE NEXT ACTION
+
+Wire a production free-text surface to CognitionGateway (the only production CommandBus consumer today, creative/render_jobs.py, consumes a typed payload) — this is the single remaining step to make the one-path claim true end to end in production.
