@@ -794,3 +794,10 @@ Wire the free-text intent into the **durable creative job queue**: enqueue a typ
 job keyed by the derived idempotency key so the slice runs under the real worker with
 retry, fencing and recovery. That converts the applied path from ARTIFACT-PROVEN to
 PRODUCTION-PROVEN without adding a new execution path.
+
+## CI FINAL BINDING (observed)
+- PR **#155** head = `8c9b66eb8944ac68eab7d7df849d9b53760fd401` == local `HEAD` == remote
+  `refs/heads/overnight/nagar-20261004`. Exact-SHA binding confirmed.
+- **All 33 CI checks SUCCESS, 0 failures** (`gh pr checks 155`).
+- `mergeStateStatus: CLEAN`, `mergeable: MERGEABLE`, `state: OPEN`.
+- Not merged (owner decision). Left as the existing draft PR; no protected ref touched.

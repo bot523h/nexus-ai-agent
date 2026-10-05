@@ -308,3 +308,14 @@ Branch head before this phase: `3fddeac` (merge of `origin/main` `6e41123`).
 9. Model as authority? No — models only propose; registry INTERSECT request gates the operation.
 10. Implementation vs proof? Kept at ARTIFACT-PROVEN (declared fake at the model seam), not
     production-proven.
+
+## 2026-10-05 — Phase 3 convergence closed (CI-green)
+- Pushed `sync/nagar-gatec-20261005`; fast-forwarded `overnight/nagar-20261004`
+  (PR #155) `4572322..8c9b66e` — no force, no rebase, no protected ref touched.
+- PR #155: `mergeable: MERGEABLE`, `mergeStateStatus: CLEAN`; **33/33 CI SUCCESS**.
+- Removed a bespoke CLI authorizer duplicating canonical `ProjectAccess`; full suite
+  re-run green (3176 passed / 30 skipped / 0 failed); mypy clean (268 files).
+- Refreshed living docs (`FREE_TEXT_SLICE.md`, `COGNITION_CONVERGENCE.md`,
+  `MODEL_OPTIONAL.md`) to the converged CLI caller + canonical `LLMPort`.
+- Evidence labels: CLI caller = IMPLEMENTED+VERIFIED+ARTIFACT-PROVEN (scripted model
+  at the external seam); NOT PRODUCTION-PROVEN. CI-to-SHA binding observed: `8c9b66e`.
