@@ -1651,3 +1651,107 @@ stated goal is a nominal gate).
 coverage ACCEPTED and byte-identical across two runs; gate control accepted and
 27/27 attacks rejected; mutation campaign with every applicable mutation killed and
 restored.
+
+---
+
+### D-0024 — The causal ledger is evidence, never authority: a hash-chained journal beside the durable queue, and a fail-closed Artifact Passport projection (task-231)
+
+*Problem.* The Foundation-Convergence invariant — one real input, one plan,
+one authorized execution, one real artifact, one independent verification,
+one **durable causal history** — stopped one step short: the durable row and
+the verification block carried the facts, but nothing durably recorded the
+*account* (enqueue → reservation → verification → terminal) or made any
+post-hoc rewrite of that account detectable. Parallel agent-intelligence
+proposals (PRs #126/#127/#150) each grew their own in-memory graph instead —
+exactly the "required durable fact exists only in memory" failure the
+contract forbids.
+
+*Decision.*
+1. **One journal, beside the authority.** `provenance.CausalJournal` is an
+   append-only, hash-chained SQLite sidecar (`*.causal.sqlite3`) recording
+   every durable queue transition AFTER its commit, keyed by the system's own
+   identities (job id, idempotency key, fencing attempt). It never shares the
+   queue's transaction: a shared transaction would let ledger failure veto
+   execution — handing the ledger authority — so that was rejected. The cost
+   (a crash window) is paid honestly: detectable holes, a labeled
+   backfill (`backfilled: true`), and a passport that downgrades, never
+   invents.
+2. **The observer is fail-safe by contract.** `QueueLedgerObserver` records
+   facts, never decisions; its failure is a logged degradation
+   (`causal_ledger_observe_failed`) and can never change a job outcome
+   (proved by `test_broken_ledger_never_breaks_a_job_and_is_visible`).
+3. **The passport fails closed.** `PassportBuilder` is a read-only projection
+   of (verified chain + authoritative row + fresh byte re-measurement via the
+   runtime's own `sha256_file`), typed VERIFIED /
+   VERIFIED_WITH_LIMITATIONS / INCOMPLETE / COMPROMISED, with its
+   reconciliation findings published inside the document. Digests bind to
+   canonical content, hashes are domain-separated, and transition records are
+   exactly-once under (kind, job, attempt).
+4. **Known ceiling, documented.** A fully consistent rewrite of journal + row
+   defeats any local verifier; the published `journal_head` is the anchor a
+   future signed checkpoint closes. Declared, not hidden.
+
+*Rejected alternatives.* A shared-transaction ledger (authority leakage);
+Merkle trees now (single-writer, small logs — the chain is the honest fit;
+ anchoring can add trees later); making the passport a stored document
+(becomes a second source of truth); recording handler-claimed facts
+pre-verification (would journal unverified claims as if they happened).
+
+*Evidence.* `tests/unit/test_provenance_chain.py` (attack matrix),
+`tests/unit/test_provenance_journal.py` (dedupe/crash/corruption),
+`tests/integration/test_provenance_queue_recording.py` (failure proofs:
+duplicate enqueue, payload conflict, crash, broken-ledger fail-safety,
+takeover/fencing, backfill),
+`tests/integration/test_provenance_passport_e2e.py` (real FFmpeg artifact:
+VERIFIED → tamper → COMPROMISED → limitation), and CI on the landing PR's
+exact head SHA. Design view: `architecture/PROVENANCE_LEDGER.md`.
+
+*Hardening (review pass on the same decision, task-231).* Five
+review-driven corrections, each enforced by a named test:
+
+1. **Cross-process serialization.** The head-read → hash → insert sequence
+   now runs inside one `BEGIN IMMEDIATE` write transaction (retry ×3 on
+   `IntegrityError` as defense-in-depth for foreign writers). Two real OS
+   processes appending to one sidecar can no longer read the same head; a
+   real-process storm test proves gapless `seq`, intact `prev_hash` chain,
+   zero lost events under contention, and clean recovery afterwards.
+   `connect_timeout` is a constructor policy and surfaces `sqlite3`
+   busy conditions instead of hiding them.
+2. **Conflict quarantine, never silent absorption.** A redelivery that
+   matches an existing `dedupe_key` but carries different evidence claims
+   (`status`, `error`, `payload_digest`, `result_digest` — timestamp/detail
+   legitimately differ) raises `CausalConflictError`; the rejected claim is
+   quarantined as an `EVENT_CONFLICT` observation quoting the rejected
+   claims and the kept record. The quarantine write is best-effort: if it
+   itself fails (storage loss), the failure is logged and the raised error
+   carries the full rejected event — the conflict is never silent, and the
+   kept truth is never overwritten. Identical redelivery remains an honest
+   duplicate. (Multi-attempt honesty, same pass: a superseded attempt's
+   terminal record is history, never a divergence — the passport
+   cross-checks the live row against the CURRENT attempt only.)
+3. **Takeover truthfulness.** Restart/shutdown re-lists record takeover
+   events only for rows with a real in-flight attempt (fencing token ≥ 1);
+   a pending row that was never owned yields no fabricated ownership
+   transfer (its first-ever reservation is the takeover, honestly).
+4. **Explicit status-unknown degradation.** `get_job_facts` never raises on
+   an unparseable persisted status; facts carry `status_known=False`, the
+   passport reports `COMPROMISED` with `unparseable_row_status`, and
+   backfill reconstructs only the enqueue (nothing it cannot prove).
+5. **Degradation at one policy point.** `provenance.paths.try_open_causal_journal`
+   is the single composition-root entry: corrupt/locked sidecar → `None` +
+   `causal_journal_unavailable` warning; bot/webhook runs observer-less,
+   CLI drain/backfill degrade with echoed reasons, `nexus jobs passport`
+   exits 3 on unreadable evidence. The execution plane never dies because
+   evidence storage failed — and nothing pretends evidence exists.
+6. **No false continuity after a witnessed gap.** When the journal already
+   carries a terminal transition for an attempt but lacks the matching
+   `JOB_RESERVED`, the journal has *affirmatively witnessed later steps and
+   not that one* — the record was never written, not lost. Backfill must
+   therefore refuse to synthesize the reservation (incomplete history stays
+   incomplete; the passport keeps flagging the gap), while the ordinary
+   crash-window case (journal simply silent) is still reconstructed labeled.
+   A journal/row disagreement is evidence, never auto-healed. Also adopted
+   on the drain path: `nexus jobs resume` degrades on `CausalConflictError`
+   with an explicit warning — a refused reconstruction never vetoes
+   execution (regression: `tests/unit/test_backfill_no_false_reservation.py`,
+   `test_resume_survives_journal_evidence_conflict`).

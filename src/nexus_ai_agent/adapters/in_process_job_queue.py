@@ -87,6 +87,14 @@ from nexus_ai_agent.jobs.failure_semantics import (
 )
 from nexus_ai_agent.jobs.lifecycle import ExecutionClaim, parse_job_status
 from nexus_ai_agent.jobs.verification import VerificationOutcome
+from nexus_ai_agent.provenance.models import (
+    CausalEvent,
+    EventKind,
+    JobFacts,
+    digest_of,
+    sha256_hex,
+)
+from nexus_ai_agent.provenance.observer import CausalObserver
 
 JobHandler = Callable[[dict[str, object]], Awaitable[dict[str, object]]]
 JobCompletionHook = Callable[["JobCompletion"], Awaitable[None]]
@@ -178,6 +186,15 @@ class JobCompletion:
     payload: dict[str, object]
 
 
+@dataclass(frozen=True)
+class _EnqueueOutcome:
+    """What the durable insert actually did (idempotency made observable)."""
+
+    job_id: str
+    created: bool
+    payload_conflict: bool
+
+
 def default_artifact_verifiers() -> dict[str, ArtifactVerifier]:
     """Built-in verifiers keyed by job type.
 
@@ -222,10 +239,16 @@ class InProcessJobQueue:
         on_job_finished: JobCompletionHook | None = None,
         artifact_verifiers: Mapping[str, ArtifactVerifier] | None = None,
         artifact_publications: Mapping[str, ArtifactPublication] | None = None,
+        causal_observer: CausalObserver | None = None,
     ) -> None:
         self.db_path = Path(db_path)
         self._sqlite_path = str(db_path)
         self._on_job_finished = on_job_finished
+        # task-231: optional causal observer. It records durable transitions
+        # AFTER their commit into the causal journal (the Project Graph
+        # ledger). It has no authority: it receives facts, never decisions,
+        # and its failure is logged degradation — never a job outcome.
+        self._causal_observer = causal_observer
         # ``artifact_verifiers=None`` installs the built-in registry
         # (creative_render verified by default); pass ``{}`` to opt out.
         self._artifact_verifiers: dict[str, ArtifactVerifier] = (
@@ -274,6 +297,129 @@ class InProcessJobQueue:
             raise ValueError("job_type must not be empty")
         self._artifact_publications[normalized] = publication
 
+    # ------------------------------------------------------------------
+    # Causal recording (task-231). Every call happens strictly AFTER the
+    # durable commit it describes and is strictly fail-safe: the ledger is
+    # evidence, never authority — a broken ledger is logged degradation and
+    # can never change a job outcome.
+    # ------------------------------------------------------------------
+    async def _record(self, event: CausalEvent) -> None:
+        observer = self._causal_observer
+        if observer is None:
+            return
+        try:
+            await asyncio.to_thread(observer.observe, event)
+        except Exception:  # noqa: BLE001 - the ledger must never break a job
+            logger.warning(
+                "causal_ledger_observe_failed job_id=%s kind=%s "
+                "(ledger degraded; the durable job state remains authoritative)",
+                event.job_id,
+                event.kind.value,
+                exc_info=True,
+            )
+
+    def _content_digest(self, raw_json: str | None) -> str | None:
+        """Canonical content digest of a persisted JSON column (never raw bytes)."""
+        if raw_json is None:
+            return None
+        try:
+            return digest_of(json.loads(raw_json))
+        except (TypeError, ValueError):
+            return sha256_hex(raw_json.encode("utf-8"))
+
+    @staticmethod
+    def _artifact_facts(result: Mapping[str, object]) -> dict[str, object]:
+        """The artifact identity the verified result claims (digest evidence)."""
+        facts: dict[str, object] = {}
+        for key in ("artifact_path", "output_path"):
+            value = result.get(key)
+            if isinstance(value, str) and value:
+                facts["artifact_path"] = value
+                break
+        for key in ("sha256", "content_sha256"):
+            value = result.get(key)
+            if isinstance(value, str) and value:
+                facts["artifact_sha256"] = value
+                break
+        size = result.get("size_bytes")
+        if isinstance(size, int):
+            facts["artifact_size_bytes"] = size
+        return facts
+
+    async def get_job_facts_async(self, job_id: str) -> JobFacts | None:
+        """Async wrapper for :meth:`get_job_facts` (thread off the loop)."""
+        return await asyncio.to_thread(self.get_job_facts, job_id)
+
+    def get_job_facts(self, job_id: str) -> JobFacts | None:
+        """The authoritative row as typed facts (the passport's read port).
+
+        This is the one sanctioned way for the provenance plane to read
+        execution truth: the row — not the ledger — is the source of truth
+        for status, attempt, payload and result. ``status`` is the canonical
+        parsed spelling (legacy ``failed`` reads ``failed_terminal``).
+        """
+        with self._db_lock, self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT id, job_type, idempotency_key, payload_json, status, result_json,
+                       error, attempt, created_at, started_at, finished_at
+                FROM nexus_job_queue WHERE id = ?
+                """,
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        payload_raw = str(row["payload_json"])
+        try:
+            payload_obj = json.loads(payload_raw)
+            payload = (
+                {str(k): v for k, v in payload_obj.items()} if isinstance(payload_obj, dict) else {}
+            )
+        except ValueError:
+            payload = {}
+        result_raw = row["result_json"]
+        result: dict[str, object] | None = None
+        verification: dict[str, object] | None = None
+        if result_raw is not None:
+            try:
+                parsed_result = json.loads(str(result_raw))
+            except ValueError:
+                parsed_result = None
+            if isinstance(parsed_result, dict):
+                result = {str(k): v for k, v in parsed_result.items()}
+        if result is not None:
+            block = result.get(VERIFICATION_RESULT_KEY)
+            if isinstance(block, dict):
+                verification = dict(block)
+        # An unknown persisted spelling is an expected corrupt-row case
+        # (``parse_job_status`` raises ValueError for it, fail-closed): the
+        # raw spelling is surfaced with ``status_known=False`` so the
+        # provenance plane can degrade explicitly instead of crashing —
+        # never a guessed canonical status.
+        try:
+            status = parse_job_status(str(row["status"])).value
+            status_known = True
+        except ValueError:
+            status = str(row["status"])
+            status_known = False
+        return JobFacts(
+            job_id=str(row["id"]),
+            job_type=str(row["job_type"]),
+            idempotency_key=str(row["idempotency_key"] or ""),
+            status=status,
+            attempt=int(row["attempt"] or 0),
+            error=str(row["error"]) if row["error"] is not None else None,
+            created_at=str(row["created_at"]) if row["created_at"] is not None else None,
+            started_at=str(row["started_at"]) if row["started_at"] is not None else None,
+            finished_at=str(row["finished_at"]) if row["finished_at"] is not None else None,
+            payload=payload,
+            payload_digest=self._content_digest(payload_raw),
+            result=result,
+            result_digest=self._content_digest(str(result_raw) if result_raw is not None else None),
+            verification=verification,
+            status_known=status_known,
+        )
+
     async def enqueue(
         self,
         *,
@@ -287,7 +433,9 @@ class InProcessJobQueue:
         create a second effect. If the same key arrives with a DIFFERENT
         payload, the original payload still wins (first dispatch wins — a
         retry can never smuggle a second, different effect under one key);
-        the conflict is logged as a structured event so it is observable.
+        the conflict is logged as a structured event so it is observable —
+        and, when a causal observer is installed, recorded as a durable
+        ``job_enqueue_duplicate`` observation.
         """
         normalized = job_type.strip()
         if not normalized:
@@ -295,14 +443,42 @@ class InProcessJobQueue:
         if not idempotency_key.strip():
             raise ValueError("idempotency_key must not be empty")
 
-        job_id = await asyncio.to_thread(
+        outcome = await asyncio.to_thread(
             self._insert_or_get,
             normalized,
             idempotency_key,
             payload,
         )
-        self._schedule(job_id)
-        return job_id
+        if outcome.created:
+            await self._record(
+                CausalEvent(
+                    kind=EventKind.JOB_ENQUEUED,
+                    job_id=outcome.job_id,
+                    job_type=normalized,
+                    idempotency_key=idempotency_key,
+                    status=JobStatus.PENDING.value,
+                    payload_digest=digest_of(payload),
+                    occurred_at=_now(),
+                )
+            )
+        else:
+            await self._record(
+                CausalEvent(
+                    kind=EventKind.JOB_ENQUEUE_DUPLICATE,
+                    job_id=outcome.job_id,
+                    job_type=normalized,
+                    idempotency_key=idempotency_key,
+                    status=JobStatus.PENDING.value,
+                    payload_digest=digest_of(payload),
+                    detail={
+                        "payload_conflict": outcome.payload_conflict,
+                        "resolution": "first_dispatch_wins",
+                    },
+                    occurred_at=_now(),
+                )
+            )
+        self._schedule(outcome.job_id)
+        return outcome.job_id
 
     async def get_status(self, job_id: str) -> JobStatus:
         row = await asyncio.to_thread(self._fetch_row, job_id)
@@ -376,10 +552,32 @@ class InProcessJobQueue:
         Terminal rows are never touched.
         """
         live = {job_id for job_id, task in self._tasks.items() if not task.done()}
-        job_ids = await asyncio.to_thread(self._reset_unfinished, stale_after, live)
-        for job_id in job_ids:
+        reset = await asyncio.to_thread(self._reset_unfinished, stale_after, live)
+        for job_id, job_type, attempt in reset:
+            if attempt is not None:
+                # A real ownership transfer: the row was IN FLIGHT with a
+                # minted fencing token that recovery superseded. A row that
+                # merely sat in ``pending`` was never owned — re-listing it
+                # is scheduling, not a takeover, and is not journaled.
+                # Recorded BEFORE scheduling the successor execution: the
+                # causal order (takeover → fresh reservation) must be the
+                # journal order, not a race.
+                await self._record(
+                    CausalEvent(
+                        kind=EventKind.JOB_TAKEOVER,
+                        job_id=job_id,
+                        job_type=job_type,
+                        attempt=attempt,
+                        status=JobStatus.PENDING.value,
+                        detail={
+                            "mode": "expiry_gated" if stale_after is not None else "startup",
+                            "fencing": "previous token superseded by the next reservation",
+                        },
+                        occurred_at=_now(),
+                    )
+                )
             self._schedule(job_id)
-        return job_ids
+        return [job_id for job_id, _, _ in reset]
 
     async def resume_pending_jobs(self) -> list[str]:
         """Requeue jobs currently sitting in ``pending`` and run them here.
@@ -403,7 +601,21 @@ class InProcessJobQueue:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        await asyncio.to_thread(self._reset_unfinished, None, set())
+        reset = await asyncio.to_thread(self._reset_unfinished, None, set())
+        for job_id, job_type, attempt in reset:
+            if attempt is None:
+                continue  # never owned: re-listed pending, not a takeover
+            await self._record(
+                CausalEvent(
+                    kind=EventKind.JOB_TAKEOVER,
+                    job_id=job_id,
+                    job_type=job_type,
+                    attempt=attempt,
+                    status=JobStatus.PENDING.value,
+                    detail={"mode": "shutdown"},
+                    occurred_at=_now(),
+                )
+            )
 
     def _schedule(self, job_id: str) -> None:
         existing = self._tasks.get(job_id)
@@ -434,6 +646,7 @@ class InProcessJobQueue:
         # never cross-bind.
         structlog.contextvars.bind_contextvars(job_id=job_id)
         job_type = str(row["job_type"])
+        payload_digest = self._content_digest(str(row["payload_json"]))
 
         # Claim-time structural failure: PENDING → FAILED_* before any
         # reservation is useful (no side effect has occurred).  "No handler"
@@ -447,6 +660,19 @@ class InProcessJobQueue:
             if not await asyncio.to_thread(self._fail_unclaimed, job_id, error, status):
                 self._log_rejected(job_id, None, status)
                 return
+            await self._record(
+                CausalEvent(
+                    kind=EventKind.JOB_FAILED,
+                    job_id=job_id,
+                    job_type=job_type,
+                    idempotency_key=str(row["idempotency_key"] or ""),
+                    status=status.value,
+                    error=error,
+                    payload_digest=payload_digest,
+                    detail={"phase": "claim_time_structural"},
+                    occurred_at=_now(),
+                )
+            )
             logger.info(
                 "job_failed job_id=%s type=%s status=%s error=%r",
                 job_id,
@@ -475,6 +701,18 @@ class InProcessJobQueue:
             logger.info("job_reservation_rejected job_id=%s type=%s", job_id, job_type)
             return
         logger.info("job_processing job_id=%s type=%s attempt=%d", job_id, job_type, claim.attempt)
+        await self._record(
+            CausalEvent(
+                kind=EventKind.JOB_RESERVED,
+                job_id=job_id,
+                job_type=job_type,
+                idempotency_key=str(row["idempotency_key"] or ""),
+                attempt=claim.attempt,
+                status=JobStatus.PROCESSING.value,
+                payload_digest=payload_digest,
+                occurred_at=_now(),
+            )
+        )
         payload: dict[str, object] = {}
         try:
             parsed = json.loads(str(row["payload_json"]))
@@ -491,6 +729,20 @@ class InProcessJobQueue:
             # must never be reopened by a cancelled predecessor.
             if not await asyncio.to_thread(self._mark_pending, claim):
                 self._log_rejected(job_id, claim, JobStatus.PENDING)
+            else:
+                await self._record(
+                    CausalEvent(
+                        kind=EventKind.JOB_REOPENED,
+                        job_id=job_id,
+                        job_type=job_type,
+                        idempotency_key=str(row["idempotency_key"] or ""),
+                        attempt=claim.attempt,
+                        status=JobStatus.PENDING.value,
+                        payload_digest=payload_digest,
+                        detail={"phase": "cancellation"},
+                        occurred_at=_now(),
+                    )
+                )
             raise
         except Exception as exc:  # noqa: BLE001 - job failure must be persisted
             # Fail-closed conversion: classify and persist a failure status.
@@ -521,6 +773,20 @@ class InProcessJobQueue:
             if not await asyncio.to_thread(self._mark_completed, claim, final_result):
                 self._log_rejected(job_id, claim, JobStatus.COMPLETED)
                 return
+            await self._record(
+                CausalEvent(
+                    kind=EventKind.JOB_COMPLETED,
+                    job_id=job_id,
+                    job_type=job_type,
+                    idempotency_key=str(payload.get("idempotency_key") or ""),
+                    attempt=claim.attempt,
+                    status=JobStatus.COMPLETED.value,
+                    payload_digest=payload_digest,
+                    result_digest=digest_of(final_result),
+                    detail=self._artifact_facts(final_result),
+                    occurred_at=_now(),
+                )
+            )
         else:
             # Execution success ≠ job success: verify the artifact
             # independently before the row may become terminal-success.
@@ -528,6 +794,18 @@ class InProcessJobQueue:
                 self._log_rejected(job_id, claim, JobStatus.VERIFYING)
                 return  # row was reclaimed/reset elsewhere; not ours anymore
             logger.info("job_verifying job_id=%s type=%s", job_id, job_type)
+            await self._record(
+                CausalEvent(
+                    kind=EventKind.JOB_VERIFICATION_STARTED,
+                    job_id=job_id,
+                    job_type=job_type,
+                    idempotency_key=str(payload.get("idempotency_key") or ""),
+                    attempt=claim.attempt,
+                    status=JobStatus.VERIFYING.value,
+                    payload_digest=payload_digest,
+                    occurred_at=_now(),
+                )
+            )
             outcome = await self._verify_safely(verifier, payload, result)
             published = False
             if outcome.ok and publication is not None:
@@ -547,6 +825,20 @@ class InProcessJobQueue:
                     # decides the fate of the destination.
                     self._log_rejected(job_id, claim, JobStatus.COMPLETED)
                     return
+                await self._record(
+                    CausalEvent(
+                        kind=EventKind.JOB_COMPLETED,
+                        job_id=job_id,
+                        job_type=job_type,
+                        idempotency_key=str(payload.get("idempotency_key") or ""),
+                        attempt=claim.attempt,
+                        status=JobStatus.COMPLETED.value,
+                        payload_digest=payload_digest,
+                        result_digest=digest_of(final_result),
+                        detail=self._artifact_facts(final_result),
+                        occurred_at=_now(),
+                    )
+                )
                 if publication is not None and publication.finalize is not None and published:
                     await self._finalize_safely(publication, payload, result)
             else:
@@ -593,6 +885,20 @@ class InProcessJobQueue:
         if not await asyncio.to_thread(self._mark_failed, claim, error, status, result):
             self._log_rejected(claim.job_id, claim, status)
             return
+        await self._record(
+            CausalEvent(
+                kind=EventKind.JOB_FAILED,
+                job_id=claim.job_id,
+                job_type=job_type,
+                idempotency_key=str(payload.get("idempotency_key") or ""),
+                attempt=claim.attempt,
+                status=status.value,
+                error=error,
+                payload_digest=digest_of(payload) if payload else None,
+                result_digest=digest_of(result) if isinstance(result, dict) else None,
+                occurred_at=_now(),
+            )
+        )
         logger.info(
             "job_failed job_id=%s type=%s status=%s error=%s attempt=%d",
             claim.job_id,
@@ -780,7 +1086,7 @@ class InProcessJobQueue:
         job_type: str,
         idempotency_key: str,
         payload: dict[str, object],
-    ) -> str:
+    ) -> _EnqueueOutcome:
         payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         job_id = uuid4().hex
         with self._db_lock, self._connection() as connection:
@@ -790,7 +1096,8 @@ class InProcessJobQueue:
             ).fetchone()
             if existing is not None:
                 existing_id = str(existing[0])
-                if str(existing[1]) != payload_json:
+                conflict = str(existing[1]) != payload_json
+                if conflict:
                     # First dispatch wins: the original payload keeps the
                     # key. Deterministic, observable, and a retry under the
                     # same key can never create a second, different effect.
@@ -800,7 +1107,7 @@ class InProcessJobQueue:
                         idempotency_key,
                         existing_id,
                     )
-                return existing_id
+                return _EnqueueOutcome(job_id=existing_id, created=False, payload_conflict=conflict)
             connection.execute(
                 """
                 INSERT INTO nexus_job_queue
@@ -816,13 +1123,13 @@ class InProcessJobQueue:
                     _now(),
                 ),
             )
-        return job_id
+        return _EnqueueOutcome(job_id=job_id, created=True, payload_conflict=False)
 
     def _fetch_row(self, job_id: str) -> sqlite3.Row | None:
         with self._db_lock, self._connection() as connection:
             return connection.execute(
                 """
-                SELECT id, job_type, payload_json, status, result_json, error
+                SELECT id, job_type, idempotency_key, payload_json, status, result_json, error
                 FROM nexus_job_queue WHERE id = ?
                 """,
                 (job_id,),
@@ -838,11 +1145,15 @@ class InProcessJobQueue:
                 (job_id,),
             ).fetchone()
 
-    def _reset_unfinished(self, stale_after: timedelta | None, exclude: set[str]) -> list[str]:
+    def _reset_unfinished(
+        self, stale_after: timedelta | None, exclude: set[str]
+    ) -> list[tuple[str, str, int | None]]:
         """Takeover: orphaned in-flight rows → pending; pending rows re-listed.
 
         ``attempt`` is deliberately left as is — the next reservation
-        increments it, which is what fences the previous owner out.
+        increments it, which is what fences the previous owner out.  Returns
+        ``(job_id, job_type, attempt)`` triples so the causal takeover record
+        can name the superseded token (``None`` for merely re-listed rows).
         """
         in_flight = (JobStatus.PROCESSING.value, JobStatus.VERIFYING.value)
         cutoff = (
@@ -853,15 +1164,16 @@ class InProcessJobQueue:
         with self._db_lock, self._connection() as connection:
             rows = connection.execute(
                 """
-                SELECT id, status, started_at FROM nexus_job_queue
+                SELECT id, job_type, status, started_at, attempt FROM nexus_job_queue
                 WHERE status IN (?, ?, ?)
                 ORDER BY created_at, id
                 """,
                 (JobStatus.PENDING.value, *in_flight),
             ).fetchall()
-            selected: list[str] = []
+            selected: list[tuple[str, str, int | None]] = []
             for row in rows:
                 job_id = str(row["id"])
+                job_type = str(row["job_type"])
                 if job_id in exclude:
                     continue
                 if str(row["status"]) in in_flight:
@@ -876,7 +1188,9 @@ class InProcessJobQueue:
                         """,
                         (JobStatus.PENDING.value, job_id, *in_flight),
                     )
-                selected.append(job_id)
+                    selected.append((job_id, job_type, int(row["attempt"] or 0) or None))
+                else:
+                    selected.append((job_id, job_type, None))
         return selected
 
     def _select_pending(self) -> list[str]:
@@ -889,6 +1203,14 @@ class InProcessJobQueue:
                 ORDER BY created_at, id
                 """,
                 (JobStatus.PENDING.value,),
+            ).fetchall()
+        return [str(row[0]) for row in rows]
+
+    def job_ids(self) -> list[str]:
+        """Every durable job id, oldest first (recovery/backfill iteration)."""
+        with self._db_lock, self._connection() as connection:
+            rows = connection.execute(
+                "SELECT id FROM nexus_job_queue ORDER BY created_at, id"
             ).fetchall()
         return [str(row[0]) for row in rows]
 
