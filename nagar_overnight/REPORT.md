@@ -704,3 +704,93 @@ SHA `5fbc7fa`**; the PR stays **draft** for the gates owner.
 - `nagar.creative` free-text slice + `nagar.observation` + `nagar.composition`: VERIFIED.
 - `nexus intent` CLI host caller: IMPLEMENTED + VERIFIED (tests) + ARTIFACT-PROVEN
   (receipt), with the model seam declared-faked for the applied path. Not PRODUCTION-PROVEN.
+
+---
+
+# PHASE 3 FINAL — converged state, full assessment (`sync/nagar-gatec-20261005` @ `844e21a`)
+
+## LIVE TRUTH (final)
+- `origin/main`: `6e41123`; branch merge-base == `origin/main` (no divergence).
+- Branch `sync/nagar-gatec-20261005`; final SHA `844e21a` (4 commits this phase).
+- PR **#155** (head `overnight/nagar-20261004`): **OPEN**, was `CONFLICTING` -> now
+  **MERGEABLE** after a fast-forward push `4572322..844e21a` (no force, no rebase).
+- Arena refs: 10+ present under `arena/*` (read-only).
+- CI: **pending** at write time (shared-runner backlog across the repo). Local
+  reproduction is green (`3176 passed, 30 skipped, 0 failed`, ruff/format/mypy clean);
+  the CI-to-SHA binding is not yet observed and is not claimed.
+
+## STRENGTHS (evidence)
+- **One execution path, mechanically enforced.** `render_jobs.build_job_bus` is the
+  single canonical bus factory; `tests/architecture/test_lifecycle_gate_boundary.py`
+  pins it. The gate *caught* the first CLI draft constructing a second bus — the fix
+  was a factory, not an assertion change.
+- **One model seam.** `LocalCognition` prefers `LLMPort.complete(prompt, *,
+  idempotency_key=...)`; the idempotency key reaches exactly that seam; the legacy
+  `generate` shape is a declared test-only shim.
+- **A fake is never a model.** `nagar.composition` reports a `FakeLLM` fallback as
+  `not_configured`, so a fabricated model answer can never become a proposal.
+- **Model output can never reach execution.** 15 hostile cases (shell op, actor/
+  permissions/confirmed injection, forged capability snapshot, malformed JSON,
+  NaN, bad schema version, operation widening, extra fields, ...) all refuse with no
+  bus dispatch and no state mutation.
+- **Authority is host-owned.** actor + project + authorizer come from the composition
+  root; `ProjectAccess` independently binds them; the model has no authority fields.
+- **Independent verification reads bytes.** `verify_trim_artifact` re-reads committed
+  state and re-measures the file hash; a mismatch is RED.
+- **Evidence, not authority.** the cognition decision is an append-only observation in
+  the existing journal, deduped exactly-once; a journal failure never changes execution.
+- **Model Kill Test is observable from the CLI** (`status: clarification_required`,
+  revision 0, nothing executed).
+
+## WEAKNESSES (not softened)
+- **The applied path is proven only with a *declared* scripted model.** No real LLM
+  provider has been exercised here, so routing/parse behaviour on genuine model output
+  is unproven. Status is ARTIFACT-PROVEN, not PRODUCTION-PROVEN.
+- **One operation only** (`timeline.trim`). Broader intent coverage needs more
+  registered operations, not a new path.
+- **`nexus intent` is a diagnostic caller**, not a worker/bot surface: it builds an
+  ephemeral in-memory project per invocation; there is no durable free-text job,
+  retry/fencing, or recovery for this path yet.
+- **Causal project graph / Artifact Passport remain NOT-FOUND** on main (from recon);
+  the journal observation is a first step, not the graph.
+- **`phi_agent.moderate` still fails open on parse error** (policy weakness, deferred).
+- **CI-to-SHA binding pending** in this session (runner backlog).
+
+## RISKS (ranked)
+- **Medium** — real-model behaviour on the free-text path is unproven (only scripted
+  output was driven). Mitigation: the fail-closed parser + hostile matrix bound the
+  blast radius; a live-provider experiment is the next step.
+- **Medium** — `phi_agent.moderate` fail-open (policy, not an execution bypass).
+- **Low** — single-operation scope; ephemeral demo project in the CLI caller.
+- **Low** — CI backlog delays the exact-SHA green binding.
+
+## TECHNICAL DEBT REMOVED
+- Dead gateway APIs (`proposals_from`, `proposed_schema`,
+  `build_cognition_gateway_from_completion`) — removed.
+- A bespoke single-actor authorizer in the CLI duplicating canonical `ProjectAccess`.
+- A `hashlib` import that had leaked into the pure cognition package (reverted).
+- Fake-model-as-answer fallback (now `not_configured`).
+
+## TECHNICAL DEBT CREATED
+- `build_job_bus` uses `Any`-typed parameters to keep `render_jobs` import-light;
+  acceptable but loose.
+- `nexus intent` builds a throwaway in-memory project per run (diagnostic only).
+
+## BLOCKERS
+- None engineering. CI runner backlog only (not a code blocker).
+
+## ARENA HANDOFF
+- A-6 — PR #155 was diverged; resolved by fast-forward (documented, no rewrite).
+- A-4 — `phi_agent.moderate` fail-open; needs an ADR (unchanged).
+
+## DEFERRED / UNSAFE IDEAS
+- Recipe crystallization (needs independent evidence).
+- Causal project graph + passport (NOT-FOUND; next high-leverage work).
+- Durable free-text jobs + bot surface (product decision + new surface).
+- Bot/worker binding of a live cognition producer.
+
+## HIGHEST-LEVERAGE NEXT ACTION (exactly one)
+Wire the free-text intent into the **durable creative job queue**: enqueue a typed
+job keyed by the derived idempotency key so the slice runs under the real worker with
+retry, fencing and recovery. That converts the applied path from ARTIFACT-PROVEN to
+PRODUCTION-PROVEN without adding a new execution path.
