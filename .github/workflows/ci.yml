@@ -293,7 +293,7 @@ jobs:
         run: git diff --exit-code
 
   # A contract that is only enforced when somebody remembers to run it is not a
-  # contract: mutate the agent-constitution layer twenty-one ways (buried bootstrap,
+  # contract: mutate the agent-constitution layer twenty-three ways (buried bootstrap,
   # softened law, dropped status, broken mutual pin, silenced entry point, a
   # constitution moved out of the root) and require the enforcing suite to go red
   # every time.  scripts/agent_constitution_mutations.py restores every file it

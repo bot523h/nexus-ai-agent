@@ -125,11 +125,11 @@ Concretely:
   law, a softened law, and a buried bootstrap block are all detected.
 - `docs/architecture/MODULE_MAP.md` §3 registers the pair as **R14**, so the
   law→test mapping is discoverable in the boundary register.
-- `scripts/agent_constitution_mutations.py` — twenty-one adversarial mutants of the contract
+- `scripts/agent_constitution_mutations.py` — twenty-three adversarial mutants of the contract
   itself (bootstrap buried or softened, a law renamed or deleted, a silent version bump,
   the mutual pin broken, a gate dimension and a status definition dropped, the
   `gates_owner` deference removed, an entry point silenced, the CI campaign job deleted or
-  made non-blocking, and the file moved out of the root). The campaign passes only if every mutant turns the enforcer red **and**
+  made non-blocking, the campaign itself gutted or blinded, and the file moved out of the root). The campaign passes only if every mutant turns the enforcer red **and**
   every file is restored byte for byte; it is stdlib-only and needs nothing but pytest.
 - CI job `agent-constitution-mutations` in `.github/workflows/ci.yml` runs that campaign
   on every push and then asserts `git diff --exit-code`, so a mutant that edits the tree

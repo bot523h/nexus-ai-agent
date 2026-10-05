@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-05T10:58:46Z",
+  "updated_at": "2026-10-05T12:57:52Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2795,14 +2795,14 @@
       "acceptance_criteria": [
         "NAGAR_AGENT_CONSTITUTION.md sits at the repository root with a version header, an amendment record, laws L0-L10, the closed five-word completion vocabulary, the sixteen-dimension gate, the mandatory report template, and the loophole register",
         "AGENTS.md carries the MANDATORY SESSION BOOTSTRAP block above its first section, names the constitution, and does not restate the laws",
-        "tests/architecture/test_agent_constitution.py turns red for every bypass in the loophole register: 21/21 mutants killed by scripts/agent_constitution_mutations.py with the tree restored byte for byte",
+        "tests/architecture/test_agent_constitution.py turns red for every bypass in the loophole register: 23/23 mutants killed by scripts/agent_constitution_mutations.py with the tree restored byte for byte, and the campaign itself may not be deleted or gutted",
         "every entry point an agent can land on (README.md, CONTRIBUTING.md, docs/README.md, docs/architecture/MODULE_MAP.md) names the constitution, and the law/test pair is registered as R14",
         "no existing governance rule is overridden: the single gates_owner rule, board leases, and DECISION_LOG precedence are preserved and stated explicitly in the constitution",
         "pytest tests/architecture/test_agent_constitution.py, tests/unit/test_docs_integrity.py and tests/unit/test_agent_board.py are green; ruff check and ruff format --check are clean on the changed tree"
       ],
       "evidence_required": [
-        "pytest -q tests/architecture/test_agent_constitution.py (18 passed)",
-        "python scripts/agent_constitution_mutations.py (21/21 killed, tree restored byte for byte)",
+        "pytest -q tests/architecture/test_agent_constitution.py (19 passed)",
+        "python scripts/agent_constitution_mutations.py (23/23 killed, tree restored byte for byte)",
         "pytest -q tests/unit/test_docs_integrity.py tests/unit/test_agent_board.py",
         "ruff check . && ruff format --check . on the changed tree (mypy src is not applicable: no file under src/ changes)",
         "CI run on the exact head SHA, or an explicit 'deferred to gates owner' note"
@@ -2815,11 +2815,37 @@
       ],
       "owner_hint": null,
       "agent_branch": "arena/01a10ba1-nexus-ai-agent",
-      "claimed_at": "2026-10-05T10:58:46Z",
+      "claimed_at": "2026-10-05T12:57:52Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Delivered as PR #157 (head c1679c7, branch arena/01a10ba1-nexus-ai-agent). Exact-head CI: runs 37300679264 (push) + 37300685515 (pull_request) on head SHA c1679c7 -> 17/17 jobs success, incl. test (11m03s), lint (mypy included), python-parity 3.10/3.11/3.12, continuum-evidence 3.10/3.11/3.12, extras-matrix x4, migrate-postgres, trust-mutations, agent-constitution-mutations (12s), release-lineage; CodeRabbit pass. Local: pytest tests/architecture/test_agent_constitution.py 18 passed; scripts/agent_constitution_mutations.py killed 21/21 (tree restored byte for byte); test_docs_integrity 61 passed; ruff check + ruff format --check clean. gates_owner=False on this claim: the shared gates were observed, not run, per AGENTS.md §1 rule 4. Not merged to main; no human review yet. Status: VERIFIED_WITH_LIMITATIONS.",
+      "note": "Delivered as PR #157 (head c1679c7, branch arena/01a10ba1-nexus-ai-agent). Exact-head CI: runs 37300679264 (push) + 37300685515 (pull_request) on head SHA c1679c7 -> 17/17 jobs success, incl. test (11m03s), lint (mypy included), python-parity 3.10/3.11/3.12, continuum-evidence 3.10/3.11/3.12, extras-matrix x4, migrate-postgres, trust-mutations, agent-constitution-mutations (12s), release-lineage; CodeRabbit pass. Local: pytest tests/architecture/test_agent_constitution.py 18 passed; scripts/agent_constitution_mutations.py killed 21/21 (tree restored byte for byte); test_docs_integrity 61 passed; ruff check + ruff format --check clean. gates_owner=False on this claim: the shared gates were observed, not run, per AGENTS.md §1 rule 4. Not merged to main; no human review yet. Constitution bumped to 1.1.0 (MINOR): the mutation campaign is now part of the contract (B13); campaign re-run 23/23 killed. Status: VERIFIED_WITH_LIMITATIONS.",
       "delivered": true
+    },
+    {
+      "task": "task-233-constitution-in-vivo",
+      "title": "First in-vivo exercise of the agent constitution (next session)",
+      "title_fa": "نخستین اجرای عملیِ قانون اساسیِ عامل در سشن بعدی",
+      "zone": "agent-constitution",
+      "priority": "P2",
+      "status": "queued",
+      "scope": "The layer is structurally enforced, but no later session has yet obeyed it in practice. The next session must run the bootstrap (§0) before its first edit, fill the mandatory report (§6) with a bootstrap attestation, a conflict register and a closed-vocabulary status, and record whether the contract actually changed its behaviour — including any bypass it found, which must be added to the loophole register (§10) in the same PR.",
+      "scope_fa": "این لایه از نظر ساختاری اِعمال می‌شود، اما هنوز هیچ سشن بعدی در عمل از آن پیروی نکرده است. سشن بعدی باید پیش از نخستین ویرایش bootstrap را اجرا کند، گزارش اجباری را با attestation و ثبت تعارض و وضعیتِ واژگانِ بسته پر کند و ثبت کند که آیا این قرارداد واقعاً رفتارش را تغییر داد یا نه.",
+      "prerequisites": [
+        "task-232-agent-constitution"
+      ],
+      "acceptance_criteria": [
+        "the session's first commit is preceded by a recorded bootstrap attestation naming AGENTS.md, NAGAR_AGENT_CONSTITUTION.md and the mission instructions, at a commit SHA",
+        "its completion report carries all eight sections of §6, including LIMITATIONS and a status from the closed vocabulary of §4",
+        "any bypass discovered is added to the loophole register §10 and closed by a test or a mutant in the same PR",
+        "the observation is recorded on this task: did the contract change the session's behaviour, yes or no, with evidence"
+      ],
+      "evidence_required": [
+        "the session's PR body (bootstrap attestation + status word)",
+        "git log / commit SHA of the first post-bootstrap commit",
+        "a note on this task recording the yes/no observation with the evidence behind it"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": null
     }
   ],
   "deferred_log": [

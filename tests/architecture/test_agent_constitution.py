@@ -46,12 +46,13 @@ ARCHITECTURE_DOOR = ROOT / "docs" / "architecture.md"
 PROTOCOL = ROOT / "docs" / "MULTI_AGENT_PROTOCOL.md"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 CAMPAIGN = "scripts/agent_constitution_mutations.py"
+CAMPAIGN_SCRIPT = ROOT / CAMPAIGN
 CI_JOB = "agent-constitution-mutations"
 MODULE_MAP = ROOT / "docs" / "architecture" / "MODULE_MAP.md"
 
 #: Pinned by the amendment law: bumping the constitution version without
 #: updating this constant is exactly the "silent rewrite" the law forbids.
-EXPECTED_VERSION = "1.0.0"
+EXPECTED_VERSION = "1.1.0"
 ENFORCER_PATH = "tests/architecture/test_agent_constitution.py"
 
 #: Canonical law headings — the ids are the vocabulary agents cite in reports.
@@ -336,6 +337,27 @@ def test_the_constitution_does_not_bypass_repository_authority() -> None:
     authority_map = _level2_section(text, "Authority map")
     for row in ("Source of truth", "Cache", "Projection", "Evidence"):
         assert row in authority_map, f"the authority map lost its {row!r} role (L5)"
+
+
+def test_the_mutation_campaign_is_real_and_stays_comprehensive() -> None:
+    """A campaign that can be deleted or gutted is decoration, not evidence (§10 B13).
+
+    The constitution names the campaign and the campaign attacks the
+    constitution; this pins the third side, so the three cannot be removed
+    one at a time. Gutting the mutant list or re-pointing it at other files
+    turns the suite red before any reviewer has to notice.
+    """
+    assert CAMPAIGN_SCRIPT.is_file(), (
+        f"{CAMPAIGN} is missing — the contract is no longer attacked on every push (§2 L4)"
+    )
+    assert CAMPAIGN in _text(CONSTITUTION), "the constitution no longer names its mutation campaign"
+    source = _text(CAMPAIGN_SCRIPT)
+    registered = re.findall(r'^\s+\("M\d+ ', source, re.MULTILINE)
+    assert len(registered) >= 15, (
+        f"the campaign registers only {len(registered)} mutants — it was gutted"
+    )
+    for target in ("AGENTS.md", "NAGAR_AGENT_CONSTITUTION.md", "ci.yml"):
+        assert target in source, f"the campaign no longer reaches {target}"
 
 
 def test_the_mutation_campaign_runs_in_ci_on_every_push() -> None:

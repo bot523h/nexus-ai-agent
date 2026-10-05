@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import re
 import shutil
 import subprocess
 import sys
@@ -38,6 +39,7 @@ README = ROOT / "README.md"
 DOCS_DOOR = ROOT / "docs" / "architecture.md"
 PROTOCOL = ROOT / "docs" / "MULTI_AGENT_PROTOCOL.md"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+CAMPAIGN = ROOT / "scripts" / "agent_constitution_mutations.py"
 CONSTITUTION = ROOT / "NAGAR_AGENT_CONSTITUTION.md"
 AGENTS = ROOT / "AGENTS.md"
 CONTRIBUTING = ROOT / "CONTRIBUTING.md"
@@ -81,7 +83,13 @@ def _delete_a_law(text: str) -> str:
 
 
 def _bump_the_version_silently(text: str) -> str:
-    return text.replace("CONSTITUTION_VERSION:** `1.0.0`", "CONSTITUTION_VERSION:** `1.1.0`")
+    """Bump the patch component without touching the version pinned in the enforcer."""
+    return re.sub(
+        r"CONSTITUTION_VERSION:\*\* `(\d+)\.(\d+)\.(\d+)`",
+        lambda m: f"CONSTITUTION_VERSION:** `{m.group(1)}.{m.group(2)}.{int(m.group(3)) + 1}`",
+        text,
+        count=1,
+    )
 
 
 def _break_the_mutual_pin(text: str) -> str:
@@ -137,6 +145,18 @@ def _drop_the_ci_campaign_job(text: str) -> str:
     return "\n".join(lines[:start] + lines[end:])
 
 
+def _gut_the_campaign(text: str) -> str:
+    """Reduce the campaign to a decorative shell: no mutants left to run."""
+    start = text.index("MUTANTS: tuple[tuple[str, Path, object], ...] = (")
+    end = text.index("\n)\n", start)
+    return text[:start] + "MUTANTS: tuple[tuple[str, Path, object], ...] = (" + text[end:]
+
+
+def _blind_the_campaign(text: str) -> str:
+    """Point the campaign at files that are not the contract."""
+    return text.replace("NAGAR_AGENT_CONSTITUTION.md", "legacy_constitution.md")
+
+
 def _make_the_ci_campaign_non_blocking(text: str) -> str:
     return text.replace(
         "  agent-constitution-mutations:\n    name: agent-constitution-mutations (agent contract "
@@ -183,6 +203,12 @@ MUTANTS: tuple[tuple[str, Path, object], ...] = (
         WORKFLOW,
         _make_the_ci_campaign_non_blocking,
     ),
+    (
+        "M21 the mutation campaign is gutted to an empty shell",
+        CAMPAIGN,
+        _gut_the_campaign,
+    ),
+    ("M22 the mutation campaign is blinded to the real files", CAMPAIGN, _blind_the_campaign),
 )
 
 
@@ -251,7 +277,7 @@ def run_campaign() -> int:
     shutil.move(str(moved_to), str(CONSTITUTION))
     print(
         f"  {'RED  (killed)' if moved_detected else 'GREEN (SURVIVED)'}  "
-        "M21 constitution moved out of the repository root"
+        "M23 constitution moved out of the repository root"
     )
 
     unrestored = [str(p) for p in guarded if _digest(p) != digests[p]]
@@ -279,7 +305,7 @@ def main() -> int:
         for name, path, _ in MUTANTS:
             print(f"{name}  ->  {path.relative_to(ROOT)}")
         print(
-            "M17 constitution moved out of the repository root  ->  "
+            "M23 constitution moved out of the repository root  ->  "
             f"{CONSTITUTION.relative_to(ROOT)}"
         )
         return 0
