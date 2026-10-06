@@ -35,7 +35,7 @@ Corrected both current user-facing `v3.12.0` labels to `v3.13.0`. The historical
 
 ### Checkpoint 3 — Continuum refresh
 
-`.nexus/continuum.json` refreshed from a clean checkout with the measured test count and this machine's environment fingerprint. `python -m nexus_ai_agent.cli continuum verify` passes after the snapshot commit.
+`.nexus/continuum.json` refreshed from a clean checkout with the measured test count and this machine's environment fingerprint (`3252` collected items, Python `3.13.15`), stepping from the P0-4 source commit. `python -m nexus_ai_agent.cli continuum verify` passes after the snapshot commit.
 
 ### Checkpoint 4 — forensic report
 
