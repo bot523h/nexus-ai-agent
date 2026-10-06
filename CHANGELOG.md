@@ -46,6 +46,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (inside-pointing symlink refused), `scripts/shell_sandbox_mutations.py` (11/11 mutants
   killed). Decision record: ADR 0011.
 
+### Docs — canonical identity arbitration (P0-3, session `arena/p0-3-identity-successor`; successor of #161)
+
+- ADR 0008 records **one authority per identity, one durable lineage** over merged main
+  (`8de0edd7`), with a disposition table for the competing open identity PRs
+  (#134 adopt, #131 supersede, #150 adapt, #126/#127 supersede, #152 supersede, #161
+  superseded by this successor). Confirmation:
+  `tests/architecture/test_canonical_identity_contract.py`.
+
 ### Continuum evidence foundation (task-184, session `arena/01a0e1e0-nexus-ai-agent`; supersedes PR #95 / PR #98)
 
 - **Pack coverage is a real 95% gate (DECISION_LOG D-0023, option A).** A report is

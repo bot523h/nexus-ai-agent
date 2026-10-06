@@ -18,7 +18,11 @@ This directory holds **decisions about how the architecture documentation and it
 | [0004](0004-board-schema-2.md) | Coordination board schema 2: declared prerequisites and acceptance criteria | accepted | 2026-09-21 |
 | [0005](0005-canonical-command-capability-contract.md) | Canonical command and capability contract: versioning, location, and reconciliation | accepted | 2026-09-24 |
 | [0006](0006-capability-pack-trust-root.md) | Capability packs get an explicit trust root, not a self-asserted one | accepted | 2026-09-27 |
+<<<<<<< HEAD
 | [0011](0011-restricted-shell-flag-grammar.md) | The restricted shell validates an argument grammar, not a list of forbidden options | accepted | 2026-09-27 |
+=======
+| [0008](0008-canonical-identity-arbitration.md) | Canonical identity arbitration: one authority per identity, one durable lineage | accepted | 2026-10-06 |
+>>>>>>> 93f75d5 (docs(adr): canonical identity arbitration ADR-0008 (P0-3 successor of #161))
 
 ## Rules
 
