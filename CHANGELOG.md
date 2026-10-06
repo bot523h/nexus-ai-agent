@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Test — wait on the persisted reminder status, not the send (P0-11, session `arena/p0-11-checkpoint-flush-race-successor`)
+
+- **`test_delivers_to_originating_chat_not_user_id` was intermittently red on
+  live main** (`assert saved[0].status == 'sent'` saw `'pending'`; observed on
+  `python-parity (3.12)`). The test waited for `bot.sent` (set *inside* the
+  send) and then read the row, but `_mark_status('sent')` is a later
+  `asyncio.to_thread` hop — so the read raced the status write.
+- **Fix:** the test waits on the row predicate (`status == 'sent'`), the same
+  pattern `test_send_failure_marks_failed` already uses. Test-only; no
+  production behaviour changes.
+
 ### Storage — drain in-flight checkpoint record writes before flushing touches (P0-11, session `arena/p0-11-checkpoint-flush-race-successor`)
 
 - **`LifecycleRecordingSaver.flush()` could apply a coalesced touch before the
