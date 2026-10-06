@@ -144,3 +144,82 @@ def test_inspect_thread_filter(cli_env: Path) -> None:
     assert result.exit_code == 0, result.output
     output = json.loads(result.output)
     assert [item["thread_id"] for item in output] == ["tb"]
+
+
+def test_inspect_restores_access_context_when_backend_open_fails(
+    cli_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed setup must not leak the admin access context (task-250).
+
+    ``inspect_checkpoints`` raises the access context to ``"admin"`` *before*
+    it opens the checkpoint backend.  When that open fails (a missing driver,
+    an unreachable database), the reset used to be skipped entirely because the
+    only ``finally`` started after the setup — so ``"admin"`` stayed installed
+    in the caller's context.  That silently disables every lifecycle access
+    touch (``LifecycleRecordingSaver`` only records while the context is
+    ``"user"``) and poisons whatever runs next in the same context.
+    """
+    from nexus_ai_agent import cli as cli_module
+    from nexus_ai_agent.adapters.langgraph.lifecycle_recording import nexus_access_context
+
+    assert nexus_access_context.get() == "system"
+
+    def _unavailable_backend() -> object:
+        raise ModuleNotFoundError("No module named 'psycopg'")
+
+    monkeypatch.setattr(cli_module, "_open_checkpoint_backend", _unavailable_backend)
+    with pytest.raises(ModuleNotFoundError):
+        cli_module.inspect_checkpoints(json_output=False, thread=None)
+
+    assert nexus_access_context.get() == "system"
+
+
+def test_inspect_restores_access_context_when_cleanup_fails(
+    cli_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exit path G: a raising ``close()`` must not skip the context reset (task-250).
+
+    The setup guard closes paths A/B; this test pins the *cleanup* half of the
+    same invariant.  ``adapter.close()`` used to run before the reset inside the
+    outer ``finally``, so a failing close skipped the reset and leaked
+    ``"admin"`` into the caller's context — the same silent access-touch
+    disablement the task-250 leak caused.  The backend is stubbed so no file or
+    connection is involved.
+    """
+    from nexus_ai_agent import cli as cli_module
+    from nexus_ai_agent.adapters.langgraph.lifecycle_recording import nexus_access_context
+
+    class _Adapter:
+        def list_threads(self) -> list[str]:
+            return []
+
+        def list_checkpoints(self, thread_id: str) -> list[object]:
+            return []
+
+        def estimate_thread_bytes(self, thread_id: str) -> int:
+            return 0
+
+        def close(self) -> None:
+            raise RuntimeError("close failed")
+
+    monkeypatch.setattr(cli_module, "_open_checkpoint_backend", lambda: (_Adapter(), None))
+    monkeypatch.setattr(cli_module, "_open_lifecycle_store", lambda *args, **kwargs: None)
+
+    assert nexus_access_context.get() == "system"
+    with pytest.raises(RuntimeError, match="close failed"):
+        cli_module.inspect_checkpoints(json_output=False, thread=None)
+
+    assert nexus_access_context.get() == "system"
+
+
+def test_access_context_is_independent_of_a_previous_failed_inspect() -> None:
+    """Order-sensitivity half of the regression (task-250).
+
+    The next thing to run in the same context must observe the untouched
+    default, not a leftover ``"admin"`` from the failed command above.  This
+    test is red whenever :func:`test_inspect_restores_access_context_when_backend_open_fails`
+    leaks, so the leak cannot come back silently.
+    """
+    from nexus_ai_agent.adapters.langgraph.lifecycle_recording import nexus_access_context
+
+    assert nexus_access_context.get() == "system"

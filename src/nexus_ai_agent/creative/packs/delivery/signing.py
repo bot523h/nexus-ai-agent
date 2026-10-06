@@ -109,26 +109,46 @@ def _canonical_bytes(manifest: dict[str, Any] | bytes | str) -> bytes:
     )
 
 
-def _sign_with_nacl(canonical: bytes, seed: bytes) -> str:
+def _seed_key(seed: bytes) -> Any:
+    """Build the nacl signing key, mapping every failure to a typed error.
+
+    PyNaCl rejects a seed that is not exactly 32 bytes with a bare
+    ``ValueError``; the module contract is a :class:`SigningError` on *every*
+    failure, so the raw exception must not escape to the caller.
+    """
     assert _NaclSigningKey is not None
-    sk = _NaclSigningKey(seed)
+    try:
+        return _NaclSigningKey(seed)
+    except SigningError:
+        raise
+    except Exception as exc:
+        raise SigningError(
+            f"NEXUS_SIGNING_KEY is not usable by the Ed25519 backend: {exc}"
+        ) from exc
+
+
+def _sign_with_nacl(canonical: bytes, seed: bytes) -> str:
+    sk = _seed_key(seed)
     sig = sk.sign(canonical).signature
     return base64.b64encode(sig).decode("ascii")
 
 
 def _verify_with_nacl(canonical: bytes, signature_b64: str, seed: bytes) -> None:
-    assert _NaclSigningKey is not None and _NaclVerifyKey is not None
+    assert _NaclVerifyKey is not None
     try:
         sig = base64.b64decode(signature_b64, validate=True)
     except Exception as exc:
         raise SigningError(f"signature is not valid base64: {exc}") from exc
-    sk = _NaclSigningKey(seed)
-    vk: Any = sk.verify_key
+    vk: Any = _seed_key(seed).verify_key
     # nacl's VerifyKey.verify expects signature + message concatenated
     try:
         vk.verify(canonical, sig)
     except _NaclBadSig as exc:
         raise SigningError("signature verification failed — manifest was tampered") from exc
+    except Exception as exc:
+        # nacl raises a bare ValueError when the signature is not exactly 64
+        # bytes long; a malformed signature is a rejection, not a crash.
+        raise SigningError(f"not a valid Ed25519 signature: {exc}") from exc
 
 
 def _sign_with_hmac(canonical: bytes, key: bytes) -> str:
