@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-06T15:29:20Z",
+  "updated_at": "2026-10-06T15:56:16Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -781,11 +781,11 @@
         "tests/unit/test_delivery_signing.py"
       ],
       "owner_hint": "",
-      "agent_branch": "",
+      "agent_branch": "arena/01a0mission-repair",
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "DELIVERED on arena/01a0mission-repair. FIX: signing.py maps the raw PyNaCl ValueError (signature not exactly 64 bytes; seed not exactly 32 bytes) to SigningError via _seed_key plus an explicit except on the verify call; the deterministic PyNaCl double now enforces the same length rules as real PyNaCl, and the two environment-dependent tests no longer assume PyNaCl is absent. REGRESSION: test_nacl_short_signature_is_a_typed_error + test_nacl_unusable_seed_is_a_typed_error (RED pre-fix: nacl.exceptions.ValueError escaped). EVIDENCE: test_delivery_signing.py 29 passed WITHOUT and WITH pynacl; full pytest tests/unit -m 'not slow' 2877 passed with pynacl installed (the exact environment that previously reddened 3 tests)."
+      "note": "DELIVERED on arena/01a0mission-repair. FIX: signing.py maps the raw PyNaCl ValueError (signature not exactly 64 bytes; seed not exactly 32 bytes) to SigningError via _seed_key plus an explicit except on the verify call; the deterministic PyNaCl double now enforces the same length rules as real PyNaCl, and the two environment-dependent tests no longer assume PyNaCl is absent. REGRESSION: test_nacl_short_signature_is_a_typed_error + test_nacl_unusable_seed_is_a_typed_error (RED pre-fix: nacl.exceptions.ValueError escaped). EVIDENCE: test_delivery_signing.py 29 passed WITHOUT and WITH pynacl; full pytest tests/unit -m 'not slow' 2877 passed with pynacl installed (the exact environment that previously reddened 3 tests). CURRENT-SHA REVALIDATION 2026-10-06: the branch was rebased onto main f1b4253ec104729ded5cccd36270aaf9efc6f662 (merge-base = f1b4253, 0 behind) and every proof below was re-run on the rebased tree. MATRIX RE-RUN on this SHA: missing/empty/malformed key, invalid base64, short/long/tampered signature, non-ASCII canonical input, HMAC and PyNaCl all typed (SigningError). EVIDENCE: tests/unit/test_delivery_signing.py => 29 passed WITH PyNaCl AND 29 passed WITHOUT PyNaCl (HMAC-only path); pre-fix control with main's signing.py => test_nacl_short_signature_is_a_typed_error + test_nacl_unusable_seed_is_a_typed_error RED (raw nacl ValueError escaped). LIMITATION (pre-existing, DEFERRED): with PyNaCl installed 'mypy src' errors on the import-fallback block signing.py:71-73; the identical errors reproduce with main's signing.py, and CI installs no PyNaCl, so this is an environment-dependent, pre-existing typing gap, not part of this PR."
     },
     {
       "task": "task-250-cli-access-context-leak",
@@ -814,11 +814,11 @@
         "tests/unit/test_inspect_contract.py"
       ],
       "owner_hint": "",
-      "agent_branch": "",
+      "agent_branch": "arena/01a0mission-repair",
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "DELIVERED on arena/01a0mission-repair (main 8de0edd, v3.13.0). FIX: inspect_checkpoints guards the backend/lifecycle setup so the access context is reset on EVERY exit path; previously a setup exception (e.g. missing psycopg) leaked \"admin\" into the caller context and silently disabled lifecycle access touches. REGRESSION: tests/unit/test_inspect_contract.py::test_inspect_restores_access_context_when_backend_open_fails + ::test_access_context_is_independent_of_a_previous_failed_inspect — both RED pre-fix (assert 'admin' == 'system'), GREEN post-fix. EVIDENCE: ruff check/format clean; mypy src clean (270 files); pytest tests/unit -m 'not slow' 2877 passed / 0 failed / 11 intentional skips; tests/architecture 154 passed; tests/integration 190 passed / 19 PostgreSQL-skipped."
+      "note": "DELIVERED on arena/01a0mission-repair (main 8de0edd, v3.13.0). FIX: inspect_checkpoints guards the backend/lifecycle setup so the access context is reset on EVERY exit path; previously a setup exception (e.g. missing psycopg) leaked \"admin\" into the caller context and silently disabled lifecycle access touches. REGRESSION: tests/unit/test_inspect_contract.py::test_inspect_restores_access_context_when_backend_open_fails + ::test_access_context_is_independent_of_a_previous_failed_inspect — both RED pre-fix (assert 'admin' == 'system'), GREEN post-fix. EVIDENCE: ruff check/format clean; mypy src clean (270 files); pytest tests/unit -m 'not slow' 2877 passed / 0 failed / 11 intentional skips; tests/architecture 154 passed; tests/integration 190 passed / 19 PostgreSQL-skipped. CURRENT-SHA REVALIDATION 2026-10-06: the branch was rebased onto main f1b4253ec104729ded5cccd36270aaf9efc6f662 (merge-base = f1b4253, 0 behind) and every proof below was re-run on the rebased tree. EXIT-PATH MATRIX A-G on this SHA: A backend-open failure + F propagation RED->GREEN (test_inspect_restores_access_context_when_backend_open_fails); B lifecycle-store-open failure shares the same guarded try; C/D operation+s success paths GREEN (5 inspect-v1 tests); E nested context via ContextVar token reset. G (cleanup failure) was NOT covered: a raising adapter.close() inside the outer finally skipped the reset and still leaked 'admin' -> found and fixed on this branch with a new nested try/finally (3 lines) and a dedicated regression test test_inspect_restores_access_context_when_cleanup_fails (RED pre-fix: assert 'admin' == 'system'; GREEN after). EVIDENCE on this SHA: pytest tests/unit/test_inspect_contract.py tests/unit/test_lifecycle_recording.py => 11 passed; pre-fix control with main's cli.py => 2 failed ('admin' == 'system'); ruff check/format clean; mypy src clean (270 files); full local gates: tests/unit -m 'not slow' 2978 passed/11 skipped, tests/architecture 162 passed, tests/integration 190 passed/19 skipped."
     },
     {
       "task": "task-252-reminder-delivery-status-race",
@@ -826,7 +826,7 @@
       "title_fa": "تست تحویل یادآوری پیش از ثبت وضعیت، ردیف را می‌خواند (قرمزی python-parity 3.11)",
       "zone": "reminder-delivery-status-sync",
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "scope": "CI run 37451126180 (pull_request, head 7371174) failed python-parity (3.11) on tests/unit/test_reminder_system.py::test_delivers_to_originating_chat_not_user_id: assert saved[0].status == 'sent' observed 'pending'. The send itself succeeded (the test's bot.sent assertions passed); _deliver only records the terminal status AFTER a successful send, through asyncio.to_thread + a SQLite commit, so waiting on bot.sent and reading the row immediately is a race, not a delivery failure. Same code and same test are unchanged from main, and the same SHA passed 3.11 in the push run 37451051208: pre-existing test synchronisation defect. Fix = wait for the durable terminal status (sent/failed) and keep every existing assertion (destination chat, text, status == 'sent').",
       "scope_fa": "در run 37451126180 job python-parity (3.11) تست test_delivers_to_originating_chat_not_user_id شکست خورد؛ ارسال انجام شده بود ولی وضعیت ردیف هنوز pending خوانده شد چون تست روی bot.sent همگام می‌شود و رکورد وضعیت (to_thread + commit) بعد از آن می‌آید. رفع: همگام‌سازی روی وضعیت پایدار ردیف؛ هیچ assertion‌ای شل نمی‌شود.",
       "prerequisites": [],
@@ -849,7 +849,7 @@
       "claimed_at": "2026-10-06T15:29:20Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "claimed before the fix, per AGENTS.md rule 1 (repair session on PR #173)."
+      "note": "DELIVERED on arena/01a0mission-repair (rebased onto main f1b4253; 0 behind). CLASSIFICATION: TEST BUG (race in test synchronisation), pre-existing on main - the test file and the product path are byte-identical to main (git diff origin/main -- tests/unit/test_reminder_system.py src/nexus_ai_agent/features/tools.py => empty). ROOT CAUSE: _deliver() awaits send_message() and only then records the terminal status through asyncio.to_thread + a SQLite commit; the test waited on bot.sent (recorded inside send_message) and read the row immediately, so a commit slower than the 0-50 ms poll slack shows 'pending' after a successful send. CI: run 37451126180 (pull_request, head 7371174) job python-parity (3.11) => 1 failed, 3253 passed, 30 skipped with assert 'pending' == 'sent'; the same SHA passed 3.11 in the push run 37451051208 => nondeterminism, not a 3.11 language defect. No reminder_* error logs in the failing job (0 occurrences (grep -c)), so the bookkeeping never raised - it simply had not committed yet. REPRODUCTION (deterministic): delaying _mark_status by 250 ms reproduces the exact CI assertion on main's test file (RED: assert 'pending' == 'sent'), and the repaired synchronisation passes under the same delay. FIX: wait for the durable terminal status (sent/failed) before reading; every pre-existing assertion is preserved (one send, originating chat id, text, status == 'sent'). EVIDENCE: repaired module 9 passed x6 consecutive runs with the delay plugin; pre-fix control RED with the same plugin; full local unit suite 2978 passed / 11 skipped. The suite delta vs main is exactly +5 tests (the branch's 5 new regressions) with the identical 18 environmental failures before the local venv was completed."
     },
     {
       "task": "task-131",
@@ -3097,6 +3097,22 @@
       "reason_fa": "چون عامل task-179 مالک TESTING.md و docs/README.md است، به‌روزرسانی جدول گیت‌ها و ایندکس را defer کردم؛ مستندات CI موقتاً در .github/DEPENDENCY_MATRIX.md و CHANGELOG ثبت می‌شود.",
       "reason_en": "task-132 (CI extras matrix) must update TESTING.md gate table and docs/README.md index, but those files are exclusively claimed by task-179. Documentation update deferred; CI docs live in .github/DEPENDENCY_MATRIX.md + CHANGELOG entry meanwhile.",
       "resume_when": "task-179 lands (TESTING.md/docs/README.md free) — then port the gate-table rows + docs index line"
+    },
+    {
+      "task": "task-252-reminder-delivery-status-race",
+      "deferred_by_branch": "arena/01a0mission-repair",
+      "at": "2026-10-06T15:56:16Z",
+      "reason_fa": "پنجرهٔ بین ارسال موفق و ثبت وضعیت ردیف (send -> mark_status) هنوز دوام ندارد: اگر پروسه بین این دو بمیرد، ردیف pending می‌ماند و در ری‌استارت دوباره تحویل می‌شود (تحویل تکراری). این یک مشاهدهٔ durability است، نه نقص CI؛ خارج از دامنهٔ PR #173.",
+      "reason_en": "Product-side observation recorded while root-causing the CI race: the window between a successful send and the durable status write is not crash-safe. A crash in that window leaves the row 'pending', and restore_pending() re-delivers it on restart (at-least-once). Invariant to decide: 'a reminder is recorded as sent only after delivery, and a redelivery after a crash must be either avoided or observable'. Out of PR #173's scope.",
+      "resume_when": "a durability/ack-ordering slice owns the reminder delivery contract (task-232 lane or a new claim); then decide crash-in-window semantics + idempotency for redelivery."
+    },
+    {
+      "task": "task-251-delivery-signing-typed-error",
+      "deferred_by_branch": "arena/01a0mission-repair",
+      "at": "2026-10-06T15:56:16Z",
+      "reason_fa": "با نصب PyNaCl، اجرای 'mypy src' روی بلوک import-fallback فایل signing.py (خطوط ۷۱ تا ۷۳) خطا می‌دهد (Cannot assign to a type). همین خطاها با نسخهٔ main هم بازتولید می‌شوند و CI چون PyNaCl ندارد آن‌ها را نمی‌بیند؛ پس مربوط به این PR نیست و در دامنهٔ مأموریت نیست.",
+      "reason_en": "With PyNaCl installed, 'mypy src' reports 6 errors on the optional-import fallback block (signing.py:71-73, Cannot assign to a type / incompatible assignment). The identical errors reproduce with main's signing.py, and CI installs no PyNaCl, so `make types` is green in CI. The fix (a typing-safe optional-import shim, e.g. non-type assignments or TYPE_CHECKING guard) is a small follow-up, not part of PR #173.",
+      "resume_when": "an operator/CI environment installs PyNaCl or the signing lane is touched again; then make the optional-import block typing-safe and keep 'mypy src' green in both environments."
     }
   ],
   "next_work": [

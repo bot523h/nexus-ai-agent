@@ -363,10 +363,15 @@ def inspect_checkpoints(
             for item in output:
                 typer.echo(json.dumps(item, default=str, sort_keys=True))
     finally:
-        adapter.close()
-        if lifecycle is not None:
-            lifecycle.close()
-        nexus_access_context.reset(access_token)
+        try:
+            adapter.close()
+            if lifecycle is not None:
+                lifecycle.close()
+        finally:
+            # Restore the access context even when a backend close() raises:
+            # a leaked "admin" silences the lifecycle access touches, which
+            # only record while the context is "user" (task-250, exit path G).
+            nexus_access_context.reset(access_token)
 
 
 @checkpoints_app.command("reconcile")

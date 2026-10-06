@@ -174,6 +174,44 @@ def test_inspect_restores_access_context_when_backend_open_fails(
     assert nexus_access_context.get() == "system"
 
 
+def test_inspect_restores_access_context_when_cleanup_fails(
+    cli_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exit path G: a raising ``close()`` must not skip the context reset (task-250).
+
+    The setup guard closes paths A/B; this test pins the *cleanup* half of the
+    same invariant.  ``adapter.close()`` used to run before the reset inside the
+    outer ``finally``, so a failing close skipped the reset and leaked
+    ``"admin"`` into the caller's context — the same silent access-touch
+    disablement the task-250 leak caused.  The backend is stubbed so no file or
+    connection is involved.
+    """
+    from nexus_ai_agent import cli as cli_module
+    from nexus_ai_agent.adapters.langgraph.lifecycle_recording import nexus_access_context
+
+    class _Adapter:
+        def list_threads(self) -> list[str]:
+            return []
+
+        def list_checkpoints(self, thread_id: str) -> list[object]:
+            return []
+
+        def estimate_thread_bytes(self, thread_id: str) -> int:
+            return 0
+
+        def close(self) -> None:
+            raise RuntimeError("close failed")
+
+    monkeypatch.setattr(cli_module, "_open_checkpoint_backend", lambda: (_Adapter(), None))
+    monkeypatch.setattr(cli_module, "_open_lifecycle_store", lambda *args, **kwargs: None)
+
+    assert nexus_access_context.get() == "system"
+    with pytest.raises(RuntimeError, match="close failed"):
+        cli_module.inspect_checkpoints(json_output=False, thread=None)
+
+    assert nexus_access_context.get() == "system"
+
+
 def test_access_context_is_independent_of_a_previous_failed_inspect() -> None:
     """Order-sensitivity half of the regression (task-250).
 
