@@ -42,6 +42,7 @@ REPO_ROOT = Path(__file__).parents[2]
 VERSION_FILE = REPO_ROOT / "VERSION"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
+README = REPO_ROOT / "README.md"
 
 #: ``## [3.13.0] — 2026-09-21`` / ``## [3.13.0] - 2026-09-21`` (em dash or hyphen).
 _RELEASED_HEADING = re.compile(r"^##\s*\[(\d+\.\d+\.\d+)\]", re.MULTILINE)
@@ -86,29 +87,43 @@ def read_changelog_version(text: str | None = None) -> str:
     return match.group(1)
 
 
+def read_readme_version() -> str:
+    text = README.read_text(encoding="utf-8")
+    match = re.search(r"^[> \t]*\*\*Version:[ \t]*v?(\d+\.\d+\.\d+)\*\*", text, re.MULTILINE)
+    assert match is not None, "README.md has no canonical Version label"
+    return match.group(1)
+
+
 def lockstep_violations(
     version_file: str,
     pyproject_version: str,
     changelog_version: str,
     installed_version: str | None = None,
+    readme_version: str | None = None,
 ) -> list[str]:
-    """Every disagreement between the four version sources (empty list = in lock-step)."""
+    """Every disagreement between release declarations (empty list = in lock-step)."""
     problems: list[str] = []
-    for label, value in (
+    declarations = [
         ("VERSION", version_file),
         ("pyproject.toml [project].version", pyproject_version),
         ("CHANGELOG.md newest released heading", changelog_version),
-    ):
+    ]
+    if readme_version is not None:
+        declarations.append(("README.md Version label", readme_version))
+    for label, value in declarations:
         if not _SEMVER.match(value):
             problems.append(f"{label} is not a semantic version: {value!r}")
     if problems:
         return problems
 
     canonical = version_file
-    for label, value in (
+    comparisons = [
         ("pyproject.toml [project].version", pyproject_version),
         ("CHANGELOG.md newest released heading", changelog_version),
-    ):
+    ]
+    if readme_version is not None:
+        comparisons.append(("README.md Version label", readme_version))
+    for label, value in comparisons:
         if value != canonical:
             problems.append(f"{label} ({value}) != VERSION ({canonical})")
     if installed_version is not None and installed_version != canonical:
@@ -127,6 +142,11 @@ def test_the_guard_is_red_on_a_mismatched_fixture() -> None:
     assert lockstep_violations("3.13.0", "3.13.0", "3.13.0") == []
 
 
+def test_the_guard_is_red_on_a_stale_readme_fixture() -> None:
+    problems = lockstep_violations("3.13.0", "3.13.0", "3.13.0", readme_version="3.12.0")
+    assert problems == ["README.md Version label (3.12.0) != VERSION (3.13.0)"]
+
+
 def test_the_guard_rejects_a_non_semver_fixture() -> None:
     problems = lockstep_violations("v3.13.0", "3.13.0", "3.13.0")
     assert problems and "not a semantic version" in problems[0]
@@ -137,7 +157,10 @@ def test_the_guard_rejects_a_non_semver_fixture() -> None:
 # --------------------------------------------------------------------------- #
 def test_repository_versions_are_in_lock_step() -> None:
     problems = lockstep_violations(
-        read_repository_version(), read_pyproject_version(), read_changelog_version()
+        read_repository_version(),
+        read_pyproject_version(),
+        read_changelog_version(),
+        readme_version=read_readme_version(),
     )
     assert not problems, "version drift: " + "; ".join(problems)
 
@@ -149,7 +172,11 @@ def test_installed_distribution_matches_the_repository_version() -> None:
         pytest.skip("package not installed (bare PYTHONPATH checkout) — CI installs it")
     assert (
         lockstep_violations(
-            read_repository_version(), read_pyproject_version(), read_changelog_version(), installed
+            read_repository_version(),
+            read_pyproject_version(),
+            read_changelog_version(),
+            installed,
+            read_readme_version(),
         )
         == []
     )
