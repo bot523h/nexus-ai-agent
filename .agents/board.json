@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-06T05:23:52Z",
+  "updated_at": "2026-10-06T05:30:22Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2919,8 +2919,16 @@
         "pytest -q tests/architecture/test_agent_skills_contract.py",
         "pytest -q tests/architecture/ tests/unit/test_docs_integrity.py tests/unit/test_agent_board.py"
       ],
-      "note": "Delivered tests/architecture/test_agent_skills_contract.py (12 tests: 5 real-tree checks over .agents/skills/ + 6 tmp-fixture mutations + 1 vacuity guard), registered as law R16 in MODULE_MAP.md 3. Real-tree adversarial proof: removing a README index entry, adding a dangling local ref, and stripping a helper's +x each turned the gate RED; tree restored byte-identical. Docs/skills stale knowledge corrected: R1-R14 -> R1-R16, 63 -> 79 i18n keys, board 'show' rewrite guidance made non-destructive, TESTING.md 3 bidirectional-sync claim scoped to the enforced law->test direction, nagar scaffold R8 static/runtime split, board-schema zone list + architecture-law-enforcement. Evidence: pytest architecture+docs 226 passed; ruff/format/mypy clean; quick_validate 6/6.",
-      "released_at": "2026-10-06T05:23:52Z"
+      "note": "Delivered tests/architecture/test_agent_skills_contract.py (12 tests: 5 real-tree checks over .agents/skills/ + 6 tmp-fixture mutations + 1 vacuity guard), registered as law R16 in MODULE_MAP.md 3. Real-tree adversarial proof: removing a README index entry, adding a dangling local ref, and stripping a helper's +x each turned the gate RED; tree restored byte-identical. Docs/skills stale knowledge corrected: R1-R14 -> R1-R16, 63 -> 79 i18n keys, board 'show' rewrite guidance made non-destructive, TESTING.md 3 bidirectional-sync claim scoped to the enforced law->test direction, nagar scaffold R8 static/runtime split, board-schema zone list + architecture-law-enforcement. Evidence: pytest architecture+docs 226 passed; ruff/format/mypy clean; quick_validate 6/6. Final: full not-slow suite 3020 passed / 30 skipped / 0 failed; second precision pass (commit 4a0cc6b) fixed three more stale claims (board claim-gating, ruff format scope, ADR sequence vs index).",
+      "released_at": "2026-10-06T05:23:52Z",
+      "evidence_observed": [
+        "pytest -q tests/architecture/ tests/unit/test_docs_integrity.py = 226 passed",
+        "pytest -q -m 'not slow' = 3020 passed, 30 skipped, 0 failed (258.7s)",
+        "ruff check . = All checks passed; ruff format --check . = 571 files already formatted",
+        "mypy src = Success (255 files)",
+        "quick_validate.py 6/6 PASS",
+        "real-tree mutations (README index removed / dangling ref added / +x stripped) each RED, then byte-identical restore"
+      ]
     }
   ],
   "deferred_log": [
