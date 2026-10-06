@@ -285,12 +285,23 @@ def inspect_checkpoints(
 
     settings = get_settings()
     access_token = nexus_access_context.set("admin")
-    adapter, _ = _open_checkpoint_backend()
-    # Read-only by contract: inspect never creates or mutates the lifecycle
-    # index (on PostgreSQL the read-only connection is server-enforced).
-    # A missing local index file simply means "no metadata yet".
-    database_url = resolve_database_url()
-    lifecycle = _open_lifecycle_store(settings, database_url, strict=True, read_only=True)
+    # The access context is raised *before* the backend is opened, so the setup
+    # itself is guarded: a failing open (missing driver, unreachable database)
+    # would otherwise jump past the ``finally`` below and leak "admin" into the
+    # caller's context.  A leaked "admin" permanently silences the lifecycle
+    # access touches, which only record while the context is "user".
+    try:
+        adapter, _ = _open_checkpoint_backend()
+        # Read-only by contract: inspect never creates or mutates the lifecycle
+        # index (on PostgreSQL the read-only connection is server-enforced).
+        # A missing local index file simply means "no metadata yet".
+        database_url = resolve_database_url()
+        lifecycle = _open_lifecycle_store(settings, database_url, strict=True, read_only=True)
+    except BaseException:
+        # Setup aborted before the guarded block exists: restore the previous
+        # access context exactly once and propagate (never swallow).
+        nexus_access_context.reset(access_token)
+        raise
     try:
         now = datetime.now(timezone.utc)
         records = lifecycle.records() if lifecycle is not None else []

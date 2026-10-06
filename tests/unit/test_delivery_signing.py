@@ -146,9 +146,16 @@ def test_base64_key_fallback_round_trip(monkeypatch: pytest.MonkeyPatch) -> None
     assert not all(c in "0123456789abcdefABCDEF" for c in key_b64) or len(key_b64) != 64
     monkeypatch.setenv("NEXUS_SIGNING_KEY", key_b64)
     assert sut.get_signing_key_bytes() == raw_key
-    # same canonicalisation, so sign/verify round-trips through the fallback
+    # The subject of this test is the *key decoding* fallback, which is
+    # backend-independent.  The 30-byte key is not a valid Ed25519 seed, so the
+    # sign/verify round-trip only holds on the HMAC backend; on the PyNaCl
+    # backend an unusable key must still fail closed with the typed error.
     manifest = {"fallback": "base64", "n": 42}
-    sut.verify_manifest(manifest, sut.sign_manifest(manifest))
+    if sut._HAVE_NACL:
+        with pytest.raises(sut.SigningError):
+            sut.sign_manifest(manifest)
+    else:
+        sut.verify_manifest(manifest, sut.sign_manifest(manifest))
 
 
 def test_malformed_key_raises_signing_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -204,8 +211,11 @@ class _FakeNaclSigningKey:
     """Semantically faithful double for ``nacl.signing.SigningKey``."""
 
     def __init__(self, seed: bytes) -> None:
-        if not seed:
-            raise ValueError("seed must not be empty")
+        # PyNaCl requires an exactly-32-byte seed and raises a bare ValueError
+        # otherwise; the double must mirror that so the seam cannot be green
+        # while the module's typed-error contract is broken (task-251).
+        if len(seed) != 32:
+            raise ValueError("The seed must be exactly 32 bytes long")
         self._seed = bytes(seed)
         self.verify_key = _FakeNaclVerifyKey(self._seed)
 
@@ -220,6 +230,11 @@ class _FakeNaclVerifyKey:
         self._seed = bytes(seed)
 
     def verify(self, canonical: bytes, signature: bytes) -> bytes:
+        # Real PyNaCl validates the signature length BEFORE the signature itself
+        # and raises a bare ValueError; mirror that so the length boundary is
+        # exercised rather than silently treated as a forgery (task-251).
+        if len(signature) != 64:
+            raise ValueError("The signature must be exactly 64 bytes long")
         if not hmac.compare_digest(_fake_signature(self._seed, canonical), signature):
             raise _FakeNaclBadSig("Signature was forged or corrupt")
         return canonical
@@ -276,6 +291,7 @@ def test_nacl_import_probe_success_branch(monkeypatch: pytest.MonkeyPatch) -> No
     in a venv where PyNaCl is not installed.  State is restored in a finally
     block so later tests observe the original import truth again.
     """
+    had_nacl = sut._HAVE_NACL
     probe_names = ("nacl", "nacl.signing", "nacl.exceptions")
     stashed = {name: sys.modules.get(name) for name in probe_names}
 
@@ -307,7 +323,40 @@ def test_nacl_import_probe_success_branch(monkeypatch: pytest.MonkeyPatch) -> No
             else:
                 sys.modules[name] = original
         importlib.reload(sut)
-    assert sut._HAVE_NACL is False  # PyNaCl is not installed in this venv
+    # The probe must be restored to whatever this venv really has.  PyNaCl is
+    # not a declared dependency, but it may legitimately be installed, so a
+    # hard-coded ``is False`` made the suite environment-dependent (task-251).
+    assert sut._HAVE_NACL is had_nacl
+
+
+def test_nacl_short_signature_is_a_typed_error(
+    monkeypatch: pytest.MonkeyPatch, fake_nacl_backend: None
+) -> None:
+    """A signature that is not 64 bytes must be a typed rejection (task-251).
+
+    Real PyNaCl raises ``ValueError`` before it compares anything; that raw
+    exception used to escape ``verify_manifest`` and violate the module's
+    "only ``SigningError``" contract (fail-closed for every caller that catches
+    the documented type).
+    """
+    _set_key(monkeypatch)
+    short = base64.b64encode(b"not-a-64-byte-signature").decode("ascii")
+    with pytest.raises(sut.SigningError):
+        sut.verify_manifest({"x": 1}, short)
+
+
+def test_nacl_unusable_seed_is_a_typed_error(
+    monkeypatch: pytest.MonkeyPatch, fake_nacl_backend: None
+) -> None:
+    """A key the Ed25519 backend cannot use must fail closed (task-251).
+
+    SigningKey requires a 32-byte seed; the module used to let nacl's raw
+    ``ValueError`` out of ``sign_manifest`` instead of ``SigningError``.
+    """
+    raw_key = b"nexus-wave5-task142-key-bytes!"  # 30 bytes
+    monkeypatch.setenv("NEXUS_SIGNING_KEY", base64.b64encode(raw_key).decode("ascii"))
+    with pytest.raises(sut.SigningError):
+        sut.sign_manifest({"x": 1})
 
 
 # ── wave-5 task-142: delivery operations branch coverage (fail-closed) ────
