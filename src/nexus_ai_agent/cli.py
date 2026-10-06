@@ -1127,6 +1127,229 @@ def housekeeping(
         typer.echo("dry-run: nothing was changed")
 
 
+# -- Gate C step 2: one free-text intent through the DURABLE queue ------------
+#
+# The durable successor to PR #155's inline slice.  It is a real operator entry
+# point: it builds the canonical chain (cognition propose-only boundary -> typed
+# creative_render payload -> the existing durable queue), the EXISTING worker
+# executes it (runtime registry -> existing CommandBus -> render lane ->
+# independent verification), and it reports the durable outcome.  It adds no
+# capability, policy or actor source; authority is applied once, in the worker.
+
+NEXUS_INTENT_PROJECT_ID = "nagar-free-text-demo"
+
+
+def _intent_workspace(root: str, idempotency_key: str) -> str:
+    """A fresh, guarded workspace for the durable job (worker's own contract)."""
+    import uuid as _uuid
+    from pathlib import Path as _Path
+
+    token = idempotency_key.split(":", 1)[-1][:12] + _uuid.uuid4().hex[:6]
+    workspace = _Path(root) / f"creative_intent_{token}"
+    workspace.mkdir(parents=True, exist_ok=True)
+    return str(workspace)
+
+
+def _run_durable_intent(
+    *,
+    text: str,
+    source_path: str,
+    workspace_root: str,
+    duration_us: int,
+    actor_id: str,
+    clip_asset_id: str | None,
+    timeout: float,
+) -> tuple[Any, Any]:
+    """Compose the chain, enqueue the typed job, drain it, return (outcome, queue)."""
+    import asyncio as _asyncio
+
+    from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+    from nexus_ai_agent.application.ports.job_queue import JobStatus
+    from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.creative.render_jobs import build_job_bus
+    from nexus_ai_agent.creative.studio.authorization import ProjectAccess
+    from nexus_ai_agent.creative.studio.models import (
+        ActorIdentity,
+        AssetRecord,
+        Timeline,
+        new_project,
+    )
+    from nexus_ai_agent.nagar.cognition import build_cognition_gateway
+    from nexus_ai_agent.nagar.composition import ProviderStatus, build_cognition_provider
+    from nexus_ai_agent.nagar.creative import (
+        derive_intent_idempotency_key,
+        run_free_text_intent_durable,
+    )
+    from nexus_ai_agent.worker import default_job_handlers, job_queue_db_path
+
+    actor = ActorIdentity(kind="user", actor_id=actor_id)
+    source = AssetRecord(
+        asset_id="src",
+        media_kind="video",
+        content_sha256="sha256:" + "0" * 64,
+        duration_us=duration_us,
+    )
+    project = new_project(
+        NEXUS_INTENT_PROJECT_ID,
+        "free-text-intent",
+        Timeline(timeline_id="tl_intent", duration_us=duration_us),
+    ).model_copy(update={"assets": [source]})
+    # The one canonical, server-policy bus factory.  ``ProjectAccess`` is the
+    # canonical authorizer for an ephemeral local project; no bespoke authorizer.
+    access = ProjectAccess(
+        actor=actor,
+        project_id=NEXUS_INTENT_PROJECT_ID,
+        permissions=frozenset({"project:read", "project:write"}),
+    )
+    bus = build_job_bus(project, authorizer=access)
+
+    provider, status = build_cognition_provider()
+    if status is not ProviderStatus.AVAILABLE:
+        typer.echo(
+            f"ℹ️  No model configured ({status.value}); the intent will require"
+            " clarification and nothing will be enqueued."
+        )
+    gateway = build_cognition_gateway(
+        bus=bus,
+        actor=actor,
+        project_id=NEXUS_INTENT_PROJECT_ID,
+        # Fail closed: with no available provider the gateway is disabled and
+        # selects NullCognition, so nothing is ever fabricated or enqueued.
+        enabled=status is ProviderStatus.AVAILABLE,
+        completion=provider,
+    )
+
+    queue_db = job_queue_db_path(get_settings().db_path)
+    queue = InProcessJobQueue(queue_db)
+    for job_type, handler in default_job_handlers().items():
+        queue.register_handler(job_type, handler)
+
+    # Derive the key up front so the workspace name is deterministic per intent.
+    key = derive_intent_idempotency_key(gateway.project_id, actor, " ".join(text.split()))
+    workspace = _intent_workspace(workspace_root, key)
+
+    async def _run_all() -> Any:
+        # One event loop: enqueue schedules the job on THIS loop (the same way the
+        # long-lived bot loop does), so the drain below actually runs it.  A
+        # process restart mid-flight is recovered by ``resume_pending_jobs``,
+        # which only ever touches still-pending rows.
+        outcome = await run_free_text_intent_durable(
+            text,
+            gateway=gateway,
+            queue=queue,
+            project=project,
+            source_path=source_path,
+            workspace_dir=workspace,
+            user_id=0,
+            chat_id=0,
+            clip_asset_id=clip_asset_id,
+        )
+        if outcome.status != "enqueued" or outcome.job_id is None:
+            return outcome
+        terminal = {JobStatus.COMPLETED, JobStatus.FAILED_RETRYABLE, JobStatus.FAILED_TERMINAL}
+        loop = _asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while loop.time() < deadline:
+            if await queue.get_status(outcome.job_id) in terminal:
+                return outcome
+            await _asyncio.sleep(0.1)
+        raise TimeoutError(f"job {outcome.job_id} did not reach a terminal state")
+
+    outcome = _asyncio.run(_run_all())
+    return outcome, queue
+
+
+@app.command("intent")
+def intent(
+    text: str = typer.Argument(..., help="Free-text creative intent (e.g. 'trim from 1s to 8s')."),
+    source: str = typer.Option(
+        ...,
+        "--source",
+        help="Path to the REAL source media file to trim (staged into the job workspace).",
+    ),
+    clip_asset_id: str | None = typer.Option(
+        None, "--clip", help="Source asset id to trim (defaults to the sole video asset)."
+    ),
+    duration_us: int = typer.Option(
+        9_000_000,
+        "--duration-us",
+        min=1,
+        help="Authoritative source duration (microseconds) the project commits.",
+    ),
+    actor_id: str = typer.Option(
+        "local-operator", "--actor", help="Actor identity for this intent (host-owned)."
+    ),
+    workspace_root: str | None = typer.Option(
+        None, "--workspace-root", help="Root for the guarded job workspace (default: settings)."
+    ),
+    timeout: float = typer.Option(
+        120.0, "--timeout", min=1.0, help="Max seconds to wait for the durable job to finish."
+    ),
+    journal_db: str | None = typer.Option(
+        None, "--journal-db", help="Path to the causal journal sidecar (default: none)."
+    ),
+) -> None:
+    """Run one free-text intent through cognition -> DURABLE queue -> verified artifact.
+
+    With no model configured the command reports ``clarification_required`` and
+    enqueues nothing (the Model Kill Test, observable from the CLI).  With a model
+    it persists exactly one typed ``creative_render`` job whose EXISTING worker
+    applies exactly one authorized ``timeline.trim`` through the existing
+    CommandBus, renders a real artifact, and independently verifies it.
+    """
+    from nexus_ai_agent.application.ports.job_queue import JobStatus
+    from nexus_ai_agent.config.settings import get_settings
+
+    root = workspace_root or str(get_settings().creative_temp_dir)
+
+    journal: Any | None = None
+    if journal_db is not None:
+        from nexus_ai_agent.provenance.journal import CausalJournal
+
+        journal = CausalJournal(journal_db)
+
+    try:
+        outcome, queue = _run_durable_intent(
+            text=text,
+            source_path=source,
+            workspace_root=root,
+            duration_us=duration_us,
+            actor_id=actor_id,
+            clip_asset_id=clip_asset_id,
+            timeout=timeout,
+        )
+    except TimeoutError as exc:
+        typer.echo(f"⏳ {exc}")
+        raise typer.Exit(1) from exc
+
+    typer.echo(f"status: {outcome.status}")
+    if outcome.operation:
+        typer.echo(f"operation: {outcome.operation}")
+    if outcome.refusal_reason:
+        typer.echo(f"refusal_reason: {outcome.refusal_reason}")
+    if outcome.detail:
+        typer.echo(f"detail: {outcome.detail}")
+
+    if outcome.status == "enqueued" and outcome.job_id:
+        import asyncio as _asyncio
+
+        status = _asyncio.run(queue.get_status(outcome.job_id))
+        result = _asyncio.run(queue.get_result(outcome.job_id)) or {}
+        typer.echo(f"job_id: {outcome.job_id}")
+        typer.echo(f"durable_status: {status.value}")
+        if status is JobStatus.COMPLETED:
+            typer.echo(f"artifact_path: {result.get('artifact_path')}")
+            typer.echo(f"sha256: {result.get('sha256')}")
+            typer.echo(f"duration_us: {result.get('duration_us')}")
+            verification = result.get("artifact_verification") or {}
+            typer.echo(f"verified: {verification.get('status') == 'verified'}")
+        if journal is not None:
+            typer.echo(f"journal: {journal_db}")
+
+    if outcome.status not in {"enqueued", "clarification_required"}:
+        raise typer.Exit(1)
+
+
 @app.command()
 def run_bot(
     mode: str | None = typer.Option(
