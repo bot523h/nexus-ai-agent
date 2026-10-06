@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Storage — drain in-flight checkpoint record writes before flushing touches (P0-11, session `arena/p0-11-checkpoint-flush-race-successor`)
+
+- **`LifecycleRecordingSaver.flush()` could apply a coalesced touch before the
+  checkpoint upsert it targets had landed.** The record write is fire-and-forget
+  (a best-effort task), and `SQLiteCheckpointLifecycleStore.touch_thread` only
+  updates an *existing* row — a touch that finds no row returns `False` and is
+  dropped, never retried. The observable effect is an intermittently missing
+  `last_accessed_at` (`tests/integration/test_checkpoint_composition.py::
+  test_wrapper_records_lifecycle_end_to_end` was red on live main on
+  `python-parity (3.11)`), but the defect is production behaviour: a touch can be
+  silently lost under load.
+- **Fix:** the wrapper tracks its outstanding best-effort lifecycle tasks and
+  `flush()` drains them (awaiting, never raising) before flushing touches, so an
+  upsert can neither precede the touch it should follow nor clobber it afterwards.
+- **Evidence:** `test_flush_drains_record_writes_before_touches` (deterministic
+  RED/GREEN ordering guard with a stub lifecycle that only exposes the row after
+  the record coroutine completes).
+
 ### Test — settle the executor task before the operator requeue (P0-10, session `arena/p0-10-provenance-requeue-race-successor`)
 
 - **`TestMultiAttemptPassport::test_retryable_failure_then_retry_is_verified_not_compromised`

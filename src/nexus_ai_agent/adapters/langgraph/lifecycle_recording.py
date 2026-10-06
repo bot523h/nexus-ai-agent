@@ -116,6 +116,11 @@ class LifecycleRecordingSaver(BaseCheckpointSaver):
         self._touches = TouchCoalescer(drop_window=drop_window)
         self._ops = 0
         self._failures = 0
+        # Outstanding best-effort lifecycle writes.  ``flush`` drains these
+        # before flushing touches so a touch can never be applied to a row the
+        # still-in-flight checkpoint upsert has not created yet (a touch that
+        # finds no row is dropped, never retried).
+        self._inflight: set[asyncio.Task[Any]] = set()
         # Point the serializer at the wrapped saver so with_allowlist() and
         # Pregel serialisation behave exactly as against the raw saver.
         self.serde = self._saver.serde
@@ -125,6 +130,11 @@ class LifecycleRecordingSaver(BaseCheckpointSaver):
         return self._saver.config_specs
 
     async def flush(self) -> None:
+        # Drain outstanding record writes first: the touch below targets rows
+        # they create, and an in-flight upsert must not be allowed to
+        # overwrite the touch afterwards.
+        if self._inflight:
+            await asyncio.gather(*tuple(self._inflight), return_exceptions=True)
         await self._touches.flush(self._lifecycle)
 
     def flush_sync(self) -> None:
@@ -175,7 +185,9 @@ class LifecycleRecordingSaver(BaseCheckpointSaver):
             _close_quietly(operation)
             log_lifecycle_event(logging.WARNING, "lifecycle operation skipped", operation=metric)
             return
-        loop.create_task(self._run_best_effort(operation, metric))
+        task = loop.create_task(self._run_best_effort(operation, metric))
+        self._inflight.add(task)
+        task.add_done_callback(self._inflight.discard)
 
     async def _run_best_effort(self, operation: Awaitable[Any], metric: str) -> None:
         self._ops += 1
