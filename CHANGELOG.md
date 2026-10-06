@@ -170,6 +170,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Least privilege pinned: `permissions: contents: read` and `persist-credentials: false` on checkout.
 - Contract test `tests/unit/test_maintenance_workflow_contract.py` executes the extracted preflight under bash for the configuration-failure paths (behavioural, not string matching).
 - `docs/ops/r2-storage.md` §4 records the preflight and marks the production leg `VERIFIED_WITH_LIMITATIONS` (no fabricated R2/restore proof; owner-side run still required).
+### Architecture — AST-based rendering-lane boundary (P1-6, session `arena/p1-6-render-boundary-ast-successor`; successor of #141)
+
+- **`test_exactly_one_subprocess_site_and_no_shell_true()` in
+  `tests/architecture/test_rendering_lane_boundary.py` was a false green.** It used
+  raw substring scans, so `from subprocess import run` / `import subprocess as sp`
+  escaped the one-process-site check, and `shell = True` (with spaces) escaped the
+  `shell=True` check. Replaced both with AST helpers: `_imports_subprocess` (any
+  import form) and `_uses_shell_true` (any truthy `shell=` call keyword).
+- Added red-proofs: from/aliased imports are detected, whitespace-insensitive
+  `shell = True` is detected, `shell=False` is not, and a rogue lane file fails the
+  end-to-end boundary test.
 
 ### Continuum evidence foundation (task-184, session `arena/01a0e1e0-nexus-ai-agent`; supersedes PR #95 / PR #98)
 
