@@ -24,6 +24,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Evidence:** `tests/unit/test_local_cache_provider.py`, `tests/architecture/test_storage_key_boundary.py`,
   `scripts/security_mutations_remote_key.py` (3/3 mutants killed).
 
+### Security — restricted-shell argument grammar (P0-1, session `arena/p0-1-shell-grammar-successor`; successor of PR #105 / PR #119)
+
+- **The restricted shell validated a forbidden-option list, not an argument grammar.**
+  Measured on `main@8de0edd7d6bd182be2f53ccba8df45cc9fbd09a8`: `date -f FILE`
+  (`--file=FILE`) made GNU `date` read an arbitrary host file and echo each line back
+  inside its own error text — a direct disclosure primitive; `date -r FILE` leaked
+  existence and mtime; `grep -fFILE`/`grep --file=`/`--exclude-from=` bypassed validation;
+  `grep -R`, `ls -L` and `find -L` followed an in-workspace symlink out of the workspace.
+- **Fix:** every allowlisted command (`ls`, `pwd`, `echo`, `cat`, `grep`, `find`, `date`)
+  now has a declared table of the flags it may receive and the kind of value tokens each
+  consumes (`bool`/`value`/`path`/`optional_value`/`tuple`). A flag absent from the table
+  is refused, so a future coreutils option cannot widen the sandbox. An independent
+  path-shaped-argument net contains any absolute/traversing token in any position and
+  spelling. Every `path`-kind value and every path-shaped token goes through
+  `WorkspaceFilesystem` (absolute paths, `..`, NUL, non-POSIX spellings, and any symlink
+  component refused). Symlink-following options are refused by absence from the tables.
+  Subprocess still runs with `shell=False` and `cwd` at the workspace root.
+- **Evidence:** `tests/unit/test_shell_sandbox.py` (Phase-0 surface + adversarial half +
+  the 53-case legitimate-surface pin), `tests/unit/test_filesystem_boundary.py`
+  (inside-pointing symlink refused), `scripts/shell_sandbox_mutations.py` (11/11 mutants
+  killed). Decision record: ADR 0011.
+
 ### Continuum evidence foundation (task-184, session `arena/01a0e1e0-nexus-ai-agent`; supersedes PR #95 / PR #98)
 
 - **Pack coverage is a real 95% gate (DECISION_LOG D-0023, option A).** A report is
