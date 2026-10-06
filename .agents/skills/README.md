@@ -26,9 +26,15 @@ so keep them formatted.
 ## Verifying a skill
 
 ```bash
-# structural validation (skill-creator's validator)
+# permanent repo-native contract guard (index, name==dir, description, refs, exec bit)
+python -m pytest -q tests/architecture/test_agent_skills_contract.py
+
+# develop-time structural validation (skill-creator's validator)
 python3 <skill-creator>/scripts/quick_validate.py .agents/skills/<skill>
 
 # lint gate (the repo's own config)
 ruff check .agents/skills && ruff format --check .agents/skills
 ```
+
+The repo-native guard is law **R16** in `docs/architecture/MODULE_MAP.md` §3; the external validator is
+a develop-time tool, not a CI gate, so the two are deliberately separate.

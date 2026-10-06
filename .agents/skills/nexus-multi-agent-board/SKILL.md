@@ -50,9 +50,19 @@ python scripts/agent_board.py show              # zones, claims, deferred log, g
 python scripts/agent_board.py next --branch <your-branch>
 ```
 
-`show` is safe and read-only on this tree, but it auto-GCs expired leases and rewrites the board
-in memory before printing. If `git status` shows `.agents/board.json` changed after a mere `show`,
-run `git checkout -- .agents/board.json` — do not commit an incidental GC.
+`show` only reads, but it auto-GCs expired leases and, when it frees any, **rewrites the board on
+disk** before printing. If `git status` shows `.agents/board.json` changed after a mere `show`, do
+**not** discard it blindly — inspect and classify first:
+
+```bash
+git diff .agents/board.json     # classify: incidental GC, or an edit you meant to keep?
+```
+
+- Incidental GC (only stale `active` cards flipped to `expired`): discard just that file —
+  `git checkout -- .agents/board.json`.
+- A change you intended (a claim you made): keep it and commit.
+
+`git checkout -- .agents/board.json` also discards a real edit, so never run it as a reflex.
 
 ### 2. Claim the task
 
@@ -105,5 +115,6 @@ task id, zone, the acceptance criteria met, the exact commands run, and their ob
 - Coding first and claiming after — the claim is the lock, not a formality.
 - Claiming but not pushing — other sandboxes cannot see an unpushed board change.
 - Editing `bot/handlers.py` (the highest-conflict file) without an explicit board note and a claim.
-- Treating `show` as pure: it GCs expired leases. Verify `git status` afterwards.
+- Treating `show` as pure: it GCs expired leases and may rewrite the board. Classify
+  `git diff .agents/board.json` before discarding anything.
 - Running the full gate suite while another agent holds `gates_owner`.

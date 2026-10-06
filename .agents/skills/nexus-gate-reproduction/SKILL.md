@@ -67,6 +67,7 @@ make lint && make types && make test
 ruff check .
 python -m pytest -q tests/unit/<target>.py
 python -m pytest -q tests/architecture/       # the fitness functions: fast, pure AST/JSON
+python -m pytest -q tests/architecture/test_agent_skills_contract.py  # .agents/skills/ contract
 python -m pytest -q tests/unit/test_docs_integrity.py   # documentation gates
 ```
 

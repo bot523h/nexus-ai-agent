@@ -73,10 +73,12 @@ So `src/nexus_ai_agent/cli.py` does *not* fence `src/nexus_ai_agent/cli_helpers.
 
 ## The lease clock
 
-A lease is live while `now <= claimed_at + ttl_hours` (default 24 h). `show`, `next`, and `claim`
-call `gc_expired`, which flips stale `active` cards back and (in `show`) rewrites the file. This is
-why a `show` can dirty the tree — and why the board tests pin `agent_board._now` instead of trusting
-the calendar (the 2026-09-22 clock-bomb incident).
+A lease is live while `now <= claimed_at + ttl_hours` (default 24 h). Every command calls
+`gc_expired`, which flips stale `active` cards to `expired`. `show` rewrites the file **only when it
+frees a lease**; `next` and `claim` call `save_board` unconditionally (so they always rewrite it,
+refreshing `updated_at`). This is why a `show`/`next` can dirty the tree — classify
+`git diff .agents/board.json` before discarding — and why the board tests pin `agent_board._now`
+instead of trusting the calendar (the 2026-09-22 clock-bomb incident).
 
 ## Zone list (current)
 
@@ -94,7 +96,7 @@ the calendar (the 2026-09-22 clock-bomb incident).
 `release-docker-ffmpeg`, `release-metadata`, `repo-hygiene`, `security-boundary`,
 `storage-observability`, `storage-r2-integration`, `storage-r2-smoke`, `storage-resilience`,
 `storage-resilience-boundaries`, `storage-runbook`, `llm-request-queue-lifecycle`,
-`provenance-ledger`, `durable-creative-queue-evidence`.
+`provenance-ledger`, `durable-creative-queue-evidence`, `architecture-law-enforcement`.
 
 Re-read the live list with:
 
@@ -106,6 +108,9 @@ python3 -c "import json;print('\n'.join(z['id'] for z in json.load(open('.agents
 
 - `docs-architecture` owns `.agents/` and `AGENTS.md` — a board edit collides with it.
 - `coordination` also owns `.agents/` and `AGENTS.md`.
+- `architecture-law-enforcement` owns `tests/architecture/`, `docs/architecture/MODULE_MAP.md`,
+  `docs/architecture/adr/`, and `docs/architecture/TESTING.md` — a new architecture fitness function
+  collides with it.
 - `continuum-evidence-measurement` owns `scripts/pack_coverage.py` and the coverage tests.
 - `nagar-contract-gate` owns `docs/architecture/MODULE_MAP.md`, `TESTING.md`, `docs/README.md`.
 - `repo-hygiene` owns `scripts/` and the top-level status docs.

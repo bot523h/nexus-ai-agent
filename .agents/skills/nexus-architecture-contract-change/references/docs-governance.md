@@ -46,6 +46,8 @@ and listed in `docs/architecture/adr/README.md` + `docs/README.md`.
 | R12 | `bot/surface/` importable without `telegram`; every stub-replaced command resolves | `test_surface_onboarding.py`, `test_surface_ptb.py`, `test_surface_registration.py` |
 | R13 | one canonical command contract; only the bus calls a handler; `v2` banned | `test_command_capability_boundary.py`, `test_command_capability_contract.py` |
 | R14 | SQLite queue row is the sole job-state authority; passports are checkpoints | `test_provenance_queue_recording.py`, `test_creative_execution_recovery.py`, `test_creative_passport.py` |
+| R15 | every law in this table names a *live* guard (file + optional `::symbol` resolve) | `test_module_map_law_coverage.py` |
+| R16 | `.agents/skills/` stays discoverable + consistent (index, name==dir, description, refs, exec bit) | `test_agent_skills_contract.py` |
 
 ## Release lockstep chain
 
@@ -58,7 +60,7 @@ docs-integrity version assertion. `release-lineage` CI job additionally checks t
 
 ## i18n parity
 
-`src/nexus_ai_agent/i18n/locales/` holds 15 locales × 63 keys. `tests/unit/test_i18n_parity.py`
+`src/nexus_ai_agent/i18n/locales/` holds 15 locales × 79 keys. `tests/unit/test_i18n_parity.py`
 fails on any missing key. Add new keys to every locale in the same PR.
 
 ## Living vs dated

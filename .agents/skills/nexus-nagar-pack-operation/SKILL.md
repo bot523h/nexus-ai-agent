@@ -105,7 +105,9 @@ own lifecycle.
 - **`references/contracts.md`** — the full command envelope, error taxonomy, idempotency formulas,
   the permission ladder, and the exact laws (R6–R9, R13, R14) with their enforcing tests.
 - **`scripts/scaffold_pack_operation.py`** — prints the five file edits for a new operation from a
-  small spec, so none is forgotten.
+  small spec, and checks the **static** half of law R8 (models constants ↔ manifest `capabilities`).
+  The **runtime** half (the pack registers those operations when activated) is proven separately by
+  `tests/unit/test_command_capability_contract.py::test_live_runtime_registry_reconciles_every_operation`.
 
 ## Common mistakes
 

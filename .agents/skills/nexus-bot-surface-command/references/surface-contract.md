@@ -50,7 +50,7 @@ referrals, and force-join. The surface package deliberately does **not** duplica
 
 ## i18n
 
-15 locales × 63 keys under `src/nexus_ai_agent/i18n/locales/`. `tests/unit/test_i18n_parity.py` fails
+15 locales × 79 keys under `src/nexus_ai_agent/i18n/locales/`. `tests/unit/test_i18n_parity.py` fails
 on any missing key. Add new keys to every locale in the same PR. English is canonical; Persian
 summaries defer to English.
 

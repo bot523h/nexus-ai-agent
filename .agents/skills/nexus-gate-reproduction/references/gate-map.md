@@ -63,6 +63,9 @@ python -m pytest -q tests/unit/test_<port>.py tests/integration/<port>_contract.
 # a boundary law
 python -m pytest -q tests/architecture/
 
+# the agent skills under .agents/skills/ (index, frontmatter name, refs, exec bit)
+python -m pytest -q tests/architecture/test_agent_skills_contract.py
+
 # documentation
 python -m pytest -q tests/unit/test_docs_integrity.py
 

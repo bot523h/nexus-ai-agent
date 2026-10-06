@@ -14,9 +14,12 @@ against you.
 
 ## The three guarantees
 
-1. **Every rule names its test.** `docs/architecture/MODULE_MAP.md` §3 is the register: each law R1–R14
-   points at the fitness function that enforces it. A rule without a test, or a test without a rule,
-   is a defect filed against zone `docs-architecture`.
+1. **Every rule names its test.** `docs/architecture/MODULE_MAP.md` §3 is the register: each law R1–R16
+   points at the fitness function that enforces it. The forward direction is itself enforced —
+   `tests/architecture/test_module_map_law_coverage.py` (law R15) fails if a law names a test file or a
+   `::symbol` that no longer exists. A rule stated in prose with no guard is still a defect by
+   convention, but the reverse ("a test with no rule") is **not** a violation: helper and
+   infrastructure tests under `tests/architecture/` legitimately have no law.
 2. **Every document is indexed and links resolve.** `tests/unit/test_docs_integrity.py` fails on an
    unindexed file under `docs/`, a broken relative link, an unbalanced/empty Mermaid fence, leftover
    `TODO`/`FIXME`, and version drift between `VERSION`, `pyproject.toml`, and the `CHANGELOG` head.
@@ -46,8 +49,9 @@ quote a count, include the command that regenerates it (`TESTING.md` §6).
 
 ### Add a locale key
 
-`src/nexus_ai_agent/i18n/locales/` — 15 locales × 63 keys. `tests/unit/test_i18n_parity.py` fails on
-a missing key in any locale. Add the key to all 15.
+`src/nexus_ai_agent/i18n/locales/` — 15 locales × 79 keys. `tests/unit/test_i18n_parity.py` fails on
+a missing key in any locale. Add the key to all 15. (Re-derive the count with
+`python3 -c "import json;print(len(json.load(open('src/nexus_ai_agent/i18n/locales/en.json'))))"`.)
 
 ### Bump the version (a release)
 
@@ -71,7 +75,7 @@ canonical for architecture/CI/PR text; Persian summaries defer to the English te
 ## Additional Resources
 
 - **`references/docs-governance.md`** — the docs-integrity assertion table, the ADR/DECISION_LOG
-  split, the full rule→test register (R1–R14), the i18n parity rule, and the version-lockstep chain.
+  split, the full rule→test register (R1–R16), the i18n parity rule, and the version-lockstep chain.
 
 ## Common mistakes
 

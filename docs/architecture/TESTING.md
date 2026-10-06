@@ -49,7 +49,7 @@ flowchart LR
 
 ## 3. Fitness functions
 
-The files under `tests/architecture/` are the executable form of the boundary laws; the rule → test mapping is maintained in [`MODULE_MAP.md`](MODULE_MAP.md) §3 and must stay in sync (a test without a documented rule, or a rule without a test, is a defect). Nagar's Gate 2 adds R13 for the command boundary; behavioural refusals live in `tests/unit/test_command_capability_contract.py`. They run in the same `pytest` job as everything else — the standard practice for architecture fitness functions ([InfoQ](https://www.infoq.com/articles/fitness-functions-architecture/), [fitness-function pattern](https://aipatternbook.com/architecture-fitness-function)).
+The files under `tests/architecture/` are the executable form of the boundary laws; the rule → test mapping is maintained in [`MODULE_MAP.md`](MODULE_MAP.md) §3. The **law → test** direction is itself enforced — `tests/architecture/test_module_map_law_coverage.py` (law R15) fails if a law names a test file or `::symbol` that no longer exists. The reverse ("a test without a documented rule") is a review convention, not a gate: helper and infrastructure tests under `tests/architecture/` legitimately have no law. Nagar's Gate 2 adds R13 for the command boundary; behavioural refusals live in `tests/unit/test_command_capability_contract.py`. They run in the same `pytest` job as everything else — the standard practice for architecture fitness functions ([InfoQ](https://www.infoq.com/articles/fitness-functions-architecture/), [fitness-function pattern](https://aipatternbook.com/architecture-fitness-function)).
 
 ## 4. Documentation is tested too
 

@@ -5,7 +5,9 @@ Given a small spec, print the exact edits for the six-step recipe
 (see ../SKILL.md), so no file is forgotten. Also perform a lightweight,
 dependency-free coherence check between a pack's ``OPERATION_*`` constants in
 ``models.py`` and the ``capabilities`` list in ``pack.manifest.json`` — the
-static half of law R8.
+**static** half of law R8. It does **not** prove the runtime half (that the pack
+actually *registers* those operations when activated); that is proven by
+``tests/unit/test_command_capability_contract.py::test_live_runtime_registry_reconciles_every_operation``.
 
 Usage:
     python .agents/skills/nexus-nagar-pack-operation/scripts/scaffold_pack_operation.py \
