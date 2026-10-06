@@ -829,11 +829,36 @@ def build_handlers(
     # leaves the message alone for payloads with no branch.
 
     async def newchat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Reset conversation history."""
+        """Start a fresh conversation by dropping the thread's checkpoints.
+
+        The message handler resumes each chat by ``thread_id = f"tg:{chat_id}"``
+        through the compiled graph's checkpointer, so that checkpoint history —
+        not ``ConversationStore`` (which the reply path never reads) — is the
+        conversation's memory. Previously this command replied "history
+        cleared" without touching any state, so the next message continued the
+        old thread: a fake-success surface.
+        """
         user_id = _user_id(update)
-        if user_id:
-            # In real app, this would clear ConversationStore
-            await _reply(update, "🔄 Conversation history cleared.")
+        if user_id is None:
+            return
+        chat_id = _chat_id(update)
+        checkpointer = getattr(graph, "checkpointer", None)
+        delete = getattr(checkpointer, "adelete_thread", None) if checkpointer else None
+        if delete is None:
+            # No resumable memory in this composition: the honest answer is
+            # "nothing to clear", never a false confirmation.
+            await _reply(
+                update,
+                "ℹ️ این گفتگو حافظهٔ ذخیره‌شده‌ای ندارد؛ چیز جدیدی برای پاک کردن نیست.",
+            )
+            return
+        try:
+            await delete(f"tg:{chat_id}")
+        except Exception as exc:  # noqa: BLE001 - a command handler must never raise
+            logger.exception("newchat_clear_failed", chat_id=chat_id)
+            await _reply(update, f"❌ پاک کردن تاریخچهٔ گفتگو انجام نشد: {exc}")
+            return
+        await _reply(update, "🔄 تاریخچهٔ گفتگو پاک شد؛ گفتگوی تازه‌ای شروع کنید.")
 
     # ── v3.2.0: Core Message Handler ──────────────────────────────
     async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
