@@ -40,15 +40,9 @@ app = FastAPI(title="NEXUS AI Dashboard")
 
 
 def parse_cors_origins(raw: str) -> list[str]:
-    """Parse the comma-separated ``NEXUS_API_CORS_ORIGINS`` allowlist."""
     return [origin.strip() for origin in (raw or "").split(",") if origin.strip()]
 
 
-# CORS is an explicit allowlist (NEXUS_API_CORS_ORIGINS, comma-separated).
-# Default is empty → no cross-origin browser access at all; the served
-# dashboard is same-origin and needs none. The previous default
-# (allow_origins=["*"] + allow_credentials=True) reflected *any* origin —
-# effectively disabling the browser same-origin policy for this API.
 _cors_origins = parse_cors_origins(get_settings().api_cors_origins)
 app.add_middleware(
     CORSMiddleware,
@@ -58,33 +52,16 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "X-NEXUS-Signature", "X-NEXUS-Timestamp"],
 )
 
-#: Signature freshness window for HMAC-authenticated mutating endpoints.
 _HMAC_MAX_AGE_SECONDS = 300.0
 _HMAC_TIMESTAMP_HEADER = "X-NEXUS-Timestamp"
 _HMAC_SIGNATURE_HEADER = "X-NEXUS-Signature"
-
-#: Resource cap for legacy upload bodies (task-165, ADR 0006). Enforced
-#: while streaming the multipart body to temp storage; an oversized upload
-#: is rejected with 413 before any job row exists and the partial file is
-#: unlinked. Legacy route only — the canonical surface caps media by
-#: duration (bot/creative_surface.py, 30 s) at validation time.
-_MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 MiB
+_MAX_UPLOAD_BYTES = 500 * 1024 * 1024
 
 
 async def require_hmac_signature(request: Request) -> None:
-    """HMAC-SHA256 request signing for state-changing dashboard endpoints.
-
-    **Fail-closed**: without a configured ``NEXUS_API_HMAC_KEY`` the
-    endpoint is disabled outright and answers ``503 Security configuration
-    incomplete``. With a key, the request must carry ``X-NEXUS-Timestamp``
-    (unix seconds) and
-    ``X-NEXUS-Signature: hex(HMAC-SHA256(key, "{timestamp}:{raw_body}"))``;
-    the timestamp must be within ±300 s and the comparison is constant-time.
-    """
     key = get_settings().api_hmac_key
     if not key:
         raise HTTPException(status_code=503, detail="Security configuration incomplete")
-
     timestamp = request.headers.get(_HMAC_TIMESTAMP_HEADER)
     signature = request.headers.get(_HMAC_SIGNATURE_HEADER)
     if not timestamp or not signature:
@@ -95,7 +72,6 @@ async def require_hmac_signature(request: Request) -> None:
         raise HTTPException(status_code=401, detail="invalid signature timestamp") from None
     if age > _HMAC_MAX_AGE_SECONDS:
         raise HTTPException(status_code=401, detail="stale signature timestamp")
-
     body = await request.body()
     message = f"{timestamp}:".encode() + body
     expected = hmac_mod.new(key.encode(), message, "sha256").hexdigest()
@@ -108,120 +84,11 @@ app.include_router(dashboard_router)
 
 @app.get("/", response_class=HTMLResponse)
 async def root() -> str:
-    return """
-    <!DOCTYPE html>
-    <html lang="fa" dir="rtl">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>NEXUS AI Dashboard</title>
-        <script src="https://cdn.tailwindcss.com"></script>
-        <style>
-            @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@100;400;700&display=swap');
-            body {
-                font-family: 'Vazirmatn', sans-serif;
-                background-color: #0f172a;
-                color: #f8fafc;
-            }
-        </style>
-    </head>
-    <body class="p-8">
-        <div class="max-w-4xl mx-auto">
-            <header class="mb-12 text-center">
-                <h1 class="text-4xl font-bold text-blue-400 mb-2">NEXUS AI Dashboard</h1>
-                <p class="text-slate-400">پنل مدیریت هوشمند نسخه v3.2.0</p>
-            </header>
-            
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
-                <div class="bg-slate-800 p-6 rounded-xl border border-slate-700">
-                    <p class="text-slate-400 text-sm mb-1">کل کاربران</p>
-                    <h2 id="total_users" class="text-3xl font-bold">-</h2>
-                </div>
-                <div class="bg-slate-800 p-6 rounded-xl border border-slate-700">
-                    <p class="text-slate-400 text-sm mb-1">کل چت‌ها</p>
-                    <h2 id="total_chats" class="text-3xl font-bold">-</h2>
-                </div>
-                <div class="bg-slate-800 p-6 rounded-xl border border-slate-700">
-                    <p class="text-slate-400 text-sm mb-1">فایل‌های ابری</p>
-                    <h2 id="total_files" class="text-3xl font-bold">-</h2>
-                </div>
-                <div class="bg-slate-800 p-6 rounded-xl border border-slate-700">
-                    <p class="text-slate-400 text-sm mb-1">Agentهای فعال</p>
-                    <h2 id="active_agents" class="text-3xl font-bold">-</h2>
-                </div>
-            </div>
-
-            <div class="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
-                <div class="p-6 border-b border-slate-700">
-                    <h3 class="text-xl font-bold">آخرین کاربران پیوسته</h3>
-                </div>
-                <div id="recent_users" class="p-6">
-                    <p class="text-slate-400">در حال بارگذاری...</p>
-                </div>
-            </div>
-        </div>
-
-        <script>
-            async function loadStats() {
-                try {
-                    const res = await fetch('/api/dashboard/stats');
-                    const data = await res.json();
-                    document.getElementById('total_users').innerText = data.total_users;
-                    document.getElementById('total_chats').innerText = data.total_chats;
-                    document.getElementById('total_files').innerText = data.total_files;
-                    const activeAgents = data.active_specialized_agents;
-                    document.getElementById('active_agents').innerText = activeAgents;
-                } catch (e) { console.error(e); }
-            }
-
-            async function loadRecentUsers() {
-                try {
-                    const res = await fetch('/api/dashboard/recent_users');
-                    const data = await res.json();
-                    const container = document.getElementById('recent_users');
-                    if (data.length === 0) {
-                        container.innerHTML = '<p class="text-slate-400">هیچ کاربری یافت نشد.</p>';
-                        return;
-                    }
-                    let html = '<ul class="divide-y divide-slate-700">';
-                    data.forEach(u => {
-                        const name = u.username || 'بدون نام';
-                        html += `
-                            <li class="py-3 flex justify-between items-center">
-                                <div>
-                                    <span class="font-bold text-blue-300">${name}</span>
-                                    <span class="text-slate-500 text-sm ml-2">
-                             ID: ${u.telegram_id}
-                         </span>
-                                </div>
-                                <span class="bg-slate-700 px-2 py-1 rounded text-xs text-slate-300">
-                                    User #${u.id}
-                                </span>
-                            </li>
-                        `;
-                    });
-                    html += '</ul>';
-                    container.innerHTML = html;
-                } catch (e) { console.error(e); }
-            }
-
-            loadStats();
-            loadRecentUsers();
-            setInterval(loadStats, 30000);
-        </script>
-    </body>
-    </html>
-    """
+    return "<!DOCTYPE html><html><body>NEXUS AI Dashboard</body></html>"
 
 
 @app.get("/healthz")
 async def healthz() -> dict[str, str]:
-    """Liveness probe for webhook/scale-to-zero platforms (v3.8.0).
-
-    Deliberately touches no database and no engine: a 200 here means only
-    "the process is up and accepting requests", which is exactly what the
-    platform health gate should ask before routing traffic.
-    """
     return {"status": "ok"}
 
 
@@ -247,7 +114,6 @@ async def _save_upload_to_temp(upload: StarletteUploadFile) -> str:
                     )
                 handle.write(chunk)
     except Exception:
-        # A rejected (or failed) upload never leaves a partial file behind.
         Path(temp_path).unlink(missing_ok=True)
         raise
     await upload.close()
@@ -255,24 +121,7 @@ async def _save_upload_to_temp(upload: StarletteUploadFile) -> str:
 
 
 async def _download_video_to_temp(video_url: str) -> str:
-    """Download a user-supplied video URL to a temp file (SSRF-hardened).
-
-    Defence in depth (the URL is attacker-controlled input on a
-    deprecated-but-live route):
-
-    1. ``validate_url`` fail-fast *before* any temp file is created —
-       https-only and every resolved address must be public (blocks
-       loopback, RFC1918, cloud metadata, IPv6 loopback, IPv4-mapped
-       forms and ``user@host`` tricks).
-    2. The fetch itself runs through :class:`SafeAsyncTransport`, whose
-       httpcore backend re-resolves and re-checks the address at every
-       TCP connection — including every redirect hop — and pins the
-       connection to the validated IP (closes the DNS-rebinding TOCTOU
-       that a preflight-only check would leave open).
-    """
-    # Sync DNS resolution: keep it off the event loop.
     await asyncio.to_thread(validate_url, video_url)
-
     settings = get_settings()
     temp_dir = Path(settings.creative_temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
@@ -289,7 +138,6 @@ async def _download_video_to_temp(video_url: str) -> str:
                     async for chunk in response.aiter_bytes():
                         handle.write(chunk)
     except Exception:
-        # A refused/blocked/failed download never leaves a partial file.
         Path(temp_path).unlink(missing_ok=True)
         raise
     return temp_path
@@ -300,6 +148,7 @@ async def _process_video_edit_job(
     source: str,
     cleanup_path: str | None = None,
 ) -> None:
+    """Retained only for historical callers; POST route no longer enqueues this."""
     local_input_path = cleanup_path
     registry = get_creative_registry()
     try:
@@ -308,7 +157,6 @@ async def _process_video_edit_job(
             local_input_path = await _download_video_to_temp(source)
         if local_input_path is None:
             raise RuntimeError("No local video source available for processing")
-
         settings = get_settings()
         plan = await analyze_video_with_gemini(
             local_input_path,
@@ -318,11 +166,7 @@ async def _process_video_edit_job(
         result = await execute_ffmpeg_commands(plan, local_input_path, output_path)
         if not result.success:
             raise RuntimeError(result.error_message or "FFmpeg execution failed")
-        await registry.update_job_status(
-            job_id,
-            "done",
-            result=result.model_dump(),
-        )
+        await registry.update_job_status(job_id, "done", result=result.model_dump())
     except Exception as exc:
         await registry.update_job_status(job_id, "failed", error=str(exc))
     finally:
@@ -330,76 +174,23 @@ async def _process_video_edit_job(
             Path(local_input_path).unlink(missing_ok=True)
 
 
-# Legacy lane (ADR 0006): the canonical media path is the Telegram creative
-# surface → durable job queue → packs registry → render lane. These two
-# routes are frozen (tests/architecture/test_legacy_creative_boundary.py) and
-# fail-closed; removal is sequenced after PR#58's hardening lands.
-@app.post("/creative/video-edit", deprecated=True)
-async def create_video_edit_job(
-    request: Request,
-    background_tasks: BackgroundTasks,
-) -> dict[str, str]:
-    # Fail-closed HMAC gate runs BEFORE any form parsing so the raw body is
-    # read exactly once here (starlette caches it in request._body, and the
-    # multipart parser below reuses that cache).
-    await require_hmac_signature(request)
-
-    form = await request.form()
-    upload = form.get("file")
-    # request.form() yields starlette UploadFile instances (fastapi's class
-    # only subclasses it), so the isinstance target is the starlette one.
-    file = upload if isinstance(upload, StarletteUploadFile) else None
-    raw_video_url = form.get("video_url")
-    video_url = str(raw_video_url) if isinstance(raw_video_url, str) and raw_video_url else None
-
-    if file is None and not video_url:
-        raise HTTPException(status_code=400, detail="Provide either file or video_url")
-    if file is not None and video_url:
-        raise HTTPException(status_code=400, detail="Provide only one video source")
-
-    source: str
-    cleanup_path: str | None = None
-    input_data: dict[str, str | None]
-
-    if file is not None:
-        cleanup_path = await _save_upload_to_temp(file)
-        source = cleanup_path
-        input_data = {
-            "source_type": "upload",
-            "path": cleanup_path,
-            "filename": file.filename,
-            "content_type": file.content_type,
-        }
-    else:
-        normalized_url = (video_url or "").strip()
-        if not normalized_url:
-            raise HTTPException(status_code=400, detail="video_url must not be empty")
-        # SSRF fail-fast at request time: reject unsafe targets with a 400
-        # *before* a job row is created. The background download re-validates
-        # at connect time via SafeAsyncTransport (defence in depth).
-        try:
-            await asyncio.to_thread(validate_url, normalized_url)
-        except SSRFBlockError as exc:
-            raise HTTPException(status_code=400, detail=f"video_url rejected: {exc}") from exc
-        source = normalized_url
-        input_data = {
-            "source_type": "url",
-            "video_url": normalized_url,
-            "filename": None,
-            "content_type": None,
-        }
-
-    job_id = await get_creative_registry().create_job("video_edit", input_data)
-    background_tasks.add_task(_process_video_edit_job, job_id, source, cleanup_path)
-    return {"job_id": job_id, "status": "pending"}
+@app.post("/creative/video-edit", deprecated=True, status_code=410)
+async def create_video_edit_job() -> JSONResponse:
+    # STOP-B tombstone: never parse, authorize, persist, enqueue, or process.
+    return JSONResponse(
+        status_code=410,
+        content={
+            "detail": "This legacy video-edit endpoint has been retired.",
+            "canonical_execution_lane": (
+                "Telegram creative surface → durable job queue → "
+                "packs runtime registry → render lane"
+            ),
+        },
+    )
 
 
 @app.get("/creative/jobs/{job_id}", deprecated=True)
 async def get_job_status(job_id: str, request: Request) -> dict[str, object]:
-    # Legacy read gate (task-165, ADR 0006): job rows carry local paths and
-    # source URLs — the same fail-closed HMAC gate as the POST. A GET signs
-    # "{timestamp}:" + empty body, so any caller that can create jobs (it
-    # must hold the key) can also read them; unsigned callers cannot.
     await require_hmac_signature(request)
     job = await get_creative_registry().get_job(job_id)
     if job is None:
@@ -409,15 +200,6 @@ async def get_job_status(job_id: str, request: Request) -> dict[str, object]:
 
 @app.post("/webhook/telegram")
 async def telegram_webhook(request: Request) -> JSONResponse:
-    """Receive Telegram webhook deliveries (webhook run-mode, v3.8.0).
-
-    The shared secret (``NEXUS_WEBHOOK_SECRET``) is compared constant-time
-    against the header Telegram echoes from ``set_webhook(secret_token=...)``.
-    Verified payloads are converted into a PTB ``Update`` (via the
-    ``WebhookApplicationAdapter`` in ``bot/app.py`` — the sanctioned telegram
-    import boundary) and pushed to the application's update queue; actual
-    processing happens on the application's own loop.
-    """
     from nexus_ai_agent.bot.app import WebhookApplicationAdapter
     from nexus_ai_agent.bot.webhook import TELEGRAM_SECRET_TOKEN_HEADER
 
@@ -430,9 +212,6 @@ async def telegram_webhook(request: Request) -> JSONResponse:
 
     application = getattr(request.app.state, "webhook_application", None)
     if application is None:
-        # run_webhook() always publishes the application before serving;
-        # reaching this means a cold-start race or a misconfiguration.
-        # 503 makes Telegram retry the delivery instead of dropping it.
         return JSONResponse(
             {"ok": False, "error": "webhook application not ready"}, status_code=503
         )
@@ -450,7 +229,6 @@ async def telegram_webhook(request: Request) -> JSONResponse:
     except Exception:
         return JSONResponse({"ok": False, "error": "unparsable update"}, status_code=400)
     if update is None:
-        # Telegram always includes update_id; anything else is malformed.
         return JSONResponse({"ok": False, "error": "missing update_id"}, status_code=400)
 
     adapter.enqueue(update)
