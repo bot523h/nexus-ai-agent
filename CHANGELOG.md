@@ -97,6 +97,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exact-SHA truth, the release-metadata defects, and the honest production limitations
   (no claim of production backup/restore or deployment readiness).
 
+### CI — AST-based 3.10 parity guard (P1-5, session `arena/p1-5-parity-guard-ast-successor`; successor of #138)
+
+- **`_py310_runtime_blockers()` in `tests/unit/test_ci_extras_parity.py` was a
+  substring scan** (`if marker in text`), so a comment or docstring that merely
+  *mentions* `StrEnum` was misread as a real use. Replaced it with AST detection:
+  only a real `import`/`from ... import` or an `enum.StrEnum` attribute access is a
+  blocker; an unparsable file is skipped rather than crashing the guard.
+- Added red-proofs: a comment/docstring-only fixture is clean, while an
+  `enum.StrEnum` attribute access (no import) is still a blocker.
+
 ### Continuum evidence foundation (task-184, session `arena/01a0e1e0-nexus-ai-agent`; supersedes PR #95 / PR #98)
 
 - **Pack coverage is a real 95% gate (DECISION_LOG D-0023, option A).** A report is
