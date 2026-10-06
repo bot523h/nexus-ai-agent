@@ -613,7 +613,8 @@
       "id": "storage-observability",
       "paths": [
         "src/nexus_ai_agent/storage/",
-        "docs/ops/"
+        "docs/ops/",
+        "tests/unit/test_storage_wal_init_race.py"
       ],
       "note": "storage observability (queued)"
     },
@@ -3338,7 +3339,7 @@
     {
       "task": "task-190-sqlite-wal-init-race",
       "zone": "storage-observability",
-      "status": "available",
+      "status": "active",
       "title": "SQLite first-use WAL init races under concurrent first use (CI flake: 'database is locked' on PRAGMA journal_mode=WAL)",
       "title_fa": "مسابقهٔ مقداردهی WAL در اولین استفادهٔ هم‌زمان SQLite (فلیک CI: database is locked روی PRAGMA journal_mode=WAL)",
       "why_fa": "create_all_tables یک بار به ازای هر مسیر محافظت می‌شود (_initialized_paths) اما خودِ مقداردهی از چند تسک/process هم‌زمان بی‌محافظت است؛ دو مقداردهی هم‌زمان WAL یک‌دیگر را قفل می‌کنند و یکی با sqlite3.OperationalError: database is locked شکست می‌خورد.",
@@ -3350,9 +3351,15 @@
       ],
       "prerequisites": [],
       "exclusive_paths": [
-        "src/nexus_ai_agent/storage/db.py"
+        "src/nexus_ai_agent/storage/db.py",
+        "tests/unit/test_storage_wal_init_race.py"
       ],
-      "note": "Filed by task-223 from live CI forensics; unclaimed, owner zone storage-observability."
+      "note": "RED reproduced deterministically (both pre-fix tests fail in ~1.3s): a raw sqlite3 connection holding BEGIN IMMEDIATE makes a bare PRAGMA journal_mode=WAL raise 'database is locked'. Fix: bounded retry around the one-time WAL transition (_set_wal_mode + _is_locked) plus a 30s busy timeout on the engine. Mutation evidence (PYTHONPATH forced to the mutant): M1 = bare pragma, timeout kept -> 3 failed (busy timeout alone does NOT cover the WAL transition); M2 = retry kept, timeout removed -> 3 passed (the retry is load-bearing). Commands: pytest tests/unit/test_storage_wal_init_race.py -> 3 passed; storage suite (test_db/test_storage_resilience/test_storage_resilience_boundaries/test_database_url/test_migrations) -> 119 passed; full suite -> 2991 passed, 30 skipped; ruff check+format clean; mypy clean. Board claim updated in the same commit.",
+      "agent_branch": "arena/01a0181931-task190-wal-init-race",
+      "claimed_at": "2026-10-01T20:10:56Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1
     }
   ],
   "deferred_log": [
@@ -3904,6 +3911,12 @@
         "id": "duplicate-fail-open-fix",
         "what": "دو شاخه هم‌زمان «check باید fail-closed شود» (task-207) را در scripts/agent_board.py و tests/unit/test_agent_board.py پیاده کردند: arena/01a0eade (PR#122، لیز فعال task-207-agent-board-check-fails-open، انقضا 2026-10-01T06:30Z) و arena/hardening-task207-foreign-check (PR#126). دو طراحی متفاوت: جمع‌آوری «تختهٔ PRهای باز» در برابر منبع «شاخه‌های push‌شدهٔ PR باز».",
         "resolution": "چک چندمنبعیِ همین سخت‌سازی، تصادم را پیش از push نشان داد (exit 1؛ فایل‌های scripts/agent_board.py و tests/unit/test_agent_board.py در branch:arena/01a0eade-nexus-ai-agent). قانون: «کار تازه‌تر و کامل‌تر برنده است» پس از مقایسهٔ دو diff؛ بازنده کارش را به برنده ارجاع می‌دهد. درس: پیش از شروع کار روی ناحیهٔ پرتصادم، `check` با منبع PRهای باز اجرا شود نه فقط تختهٔ محلی."
+      },
+      {
+        "date": "2026-10-01",
+        "id": "undo-contract-plan-collision",
+        "what": "PR#128 (task-223 identity-addressable system.undo, arena/01a0181931-task223-undo-contract) and PR#129 (task-221 staged plan atomicity, jules-...) both rewrite the same system.undo handler in src/nexus_ai_agent/creative/studio/capabilities.py. An independent 3-way merge (main + #129 diff + #128 diff) shows three conflicting hunks inside that one handler: UndoCommandInput.transaction_id (plain field vs validated Field+validator), the identity-guard vs plan-selection branch, and the OperationOutcome keys (undone_plan_id vs requested_transaction_id). #128 has no UndoConflictError and #129 has no identity guard (grep: absent in both directions).",
+        "resolution": "Recorded for the merge order (AGENTS.md §6). #128 is green and merges first; #129 must be rebased onto it and its undo handler reconciled so the identity gate and plan selection coexist -- a wholesale 'ours/theirs' resolution silently drops either the TOCTOU guard (re-opening the check-then-act window) or plan-undo atomicity. #129 is additionally red independently: test_command_idempotency_inside_plan_does_not_index_error fails (idempotency dedupe not applied inside dispatch_plan)."
       }
     ],
     "board_revisions": [
