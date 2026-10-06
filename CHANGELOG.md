@@ -107,6 +107,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added red-proofs: a comment/docstring-only fixture is clean, while an
   `enum.StrEnum` attribute access (no import) is still a blocker.
 
+### Ops — deterministic production-backup preflight (P1-7, session `arena/p1-7-backup-preflight-successor`; refresh of #160)
+
+- **`backup-db` never actually succeeded; green runs were housekeeping with the job skipped.** Added a deterministic preflight as the first step: it fails in seconds naming the exact missing secret(s), refuses a non-PostgreSQL `NEXUS_DATABASE_URL` (no CI-local SQLite fallback), and refuses when `pg_dump` is absent. Secret names are printed; values never are.
+- Least privilege pinned: `permissions: contents: read` and `persist-credentials: false` on checkout.
+- Contract test `tests/unit/test_maintenance_workflow_contract.py` executes the extracted preflight under bash for the configuration-failure paths (behavioural, not string matching).
+- `docs/ops/r2-storage.md` §4 records the preflight and marks the production leg `VERIFIED_WITH_LIMITATIONS` (no fabricated R2/restore proof; owner-side run still required).
+
 ### Continuum evidence foundation (task-184, session `arena/01a0e1e0-nexus-ai-agent`; supersedes PR #95 / PR #98)
 
 - **Pack coverage is a real 95% gate (DECISION_LOG D-0023, option A).** A report is
