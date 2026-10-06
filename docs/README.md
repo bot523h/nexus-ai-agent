@@ -105,6 +105,7 @@ placeholder text.
 | [audits/CONTINUUM_CLOSURE_2026-09-27.md](audits/CONTINUUM_CLOSURE_2026-09-27.md) | Continuum evidence-foundation closure (task-184 / task-154): 95%-per-pack coverage gate, fail-closed snapshot, replayable mutation campaign, exact-SHA CI — with the recorded lost-lineage recovery. |
 | [audits/MASTER_ARCHITECTURAL_ASSESSMENT_2026-09-27.md](audits/MASTER_ARCHITECTURAL_ASSESSMENT_2026-09-27.md) | Exact-SHA Phase Zero assessment: actual runtime, trust boundaries, Continuum/GitHub truth, five-angle research decisions, gaps, and risk register. |
 | [audits/EXECUTION_PLAN_2026-09-27.md](audits/EXECUTION_PLAN_2026-09-27.md) | Phased implementation plan with dependencies, verification/CI strategy, operational gates, and Definition of Done. |
+| [audits/FORENSIC_ARCHITECTURE_AUDIT_2026-10-05.md](audits/FORENSIC_ARCHITECTURE_AUDIT_2026-10-05.md) | Forensic architecture audit & maintenance pass: datetime deprecation elimination, SQLite/PG concurrency classification, CI Node 24 supply chain upgrade. |
 
 ## History (archived — read-only, never a source of truth)
 

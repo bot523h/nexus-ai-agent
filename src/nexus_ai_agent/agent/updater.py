@@ -5,13 +5,14 @@ from __future__ import annotations
 import logging
 import subprocess
 import sys
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import httpx
 from sqlalchemy import literal_column
 from sqlmodel import select
 
 from nexus_ai_agent.agent.approval import ApprovalSystem
+from nexus_ai_agent.integrations.external import naive_utcnow
 from nexus_ai_agent.storage.db import get_session
 from nexus_ai_agent.storage.models import PendingApproval
 
@@ -72,7 +73,7 @@ class AutoUpdater:
 
     async def _ensure_self_update_approval(self, approval: ApprovalSystem) -> tuple[bool, str]:
         """Return (approved, detail) for the self-update approval gate."""
-        now = datetime.utcnow()  # naive UTC — matches PendingApproval.created_at
+        now = naive_utcnow()  # naive UTC — matches PendingApproval.created_at
         async with get_session() as session:
             result = await session.execute(
                 select(PendingApproval)
