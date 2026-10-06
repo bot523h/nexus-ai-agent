@@ -39,8 +39,9 @@ against you.
 ### Write an ADR
 
 Use `docs/architecture/adr/template.md` (MADR 4.0-lite). The **Confirmation** section is mandatory —
-it names the test or command that keeps the decision true. Number it `NNNN-slug.md` (the docs gate
-checks the sequence) and add it to `docs/architecture/adr/README.md` and `docs/README.md`.
+it names the test or command that keeps the decision true. Number it `NNNN-slug.md` (four digits;
+`test_docs_integrity.py` checks that the index lists exactly the existing records) and add it to
+`docs/architecture/adr/README.md` and `docs/README.md`.
 
 ### Change a documented claim
 

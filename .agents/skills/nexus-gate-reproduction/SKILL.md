@@ -16,7 +16,7 @@ The gates (from `docs/architecture/TESTING.md` §1 and the `Makefile`):
 | Gate | Command |
 |---|---|
 | Lint | `ruff check .` |
-| Format | `ruff format --check .` (note: also `src tests` in some CI steps) |
+| Format | `ruff format --check .` |
 | Types | `mypy src` |
 | Tests | `pytest -q -m "not slow"` |
 

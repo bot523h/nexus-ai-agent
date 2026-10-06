@@ -98,10 +98,11 @@ python scripts/agent_board.py defer <task> --branch <your-branch> \
 
 ## The card and the PR
 
-A claimable task carries `acceptance_criteria` and `evidence_required` — a task without them cannot
-be claimed and `tests/unit/test_agent_board.py` fails the board if one appears. A PR body states:
-task id, zone, the acceptance criteria met, the exact commands run, and their observed result.
-"Tests pass" without a command is not evidence.
+A claimable task carries `acceptance_criteria` and `evidence_required`. The CLI does not gate on them,
+but `tests/unit/test_agent_board.py::test_open_work_declares_acceptance_criteria` fails the board if an
+open claim (or a `next_work` entry) lacks them — so a task without them cannot pass a green board. A PR
+body states: task id, zone, the acceptance criteria met, the exact commands run, and their observed
+result. "Tests pass" without a command is not evidence.
 
 ## Additional Resources
 
