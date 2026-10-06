@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Storage — SQLite first-use WAL transition retried under concurrent use (P0-9, session `arena/p0-9-wal-init-race-successor`; successor of PR #132)
+
+- **A bare `PRAGMA journal_mode=WAL` on a fresh database raises
+  `sqlite3.OperationalError: database is locked` when another caller holds a write
+  transaction at first use.** This is the intermittent CI failure in
+  `tests/unit/test_knowledge_hardening.py::test_r_f28_concurrent_identical_learns_collapse_into_one`,
+  measured red on live main. The fix that addressed it (PR #132) was stacked on the
+  #128 branch and never landed on main.
+- **Fix:** `create_all_tables` retries the one-time WAL transition (`_set_wal_mode` +
+  `_is_locked`); a non-lock error still propagates on the first attempt. The SQLite
+  engine gets a 30s busy timeout for ordinary statement contention.
+- **Evidence:** `tests/unit/test_storage_wal_init_race.py` (deterministic RED/GREEN
+  regression with a raw `sqlite3` `BEGIN IMMEDIATE` holder, plus a retry-path test).
+
 ### Security — remote-key ingress and local-cache containment (P0-2, session `arena/p0-2-remote-key-successor`; successor of PR #148 remote-key portion)
 
 - **`LocalCacheProvider.path_for_key` did `cache_dir / remote_key` with no validation.**
