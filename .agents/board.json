@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-05T21:03:22Z",
+  "updated_at": "2026-10-06T05:11:26Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2891,6 +2891,29 @@
       "gates_owner": true,
       "delivered": false,
       "note": "Re-identified from PR #154 historical task-231-durable-creative-queue-evidence: #153 is merged and owns task-231-provenance-ledger. Identity correction only; the original seven PR #154 commits and valid queue implementation are preserved. Source head 47f7ba998787406fbbc0816f57275109ac582613; source merge-base e5b326b2eaf691a638d030ad57acf1ce60016ef0; post-#153 main 6e41123b40f15a63241c8db27cd884010f55db38."
+    },
+    {
+      "task": "task-236-agent-skills-contract-guard",
+      "status": "active",
+      "zone": "architecture-law-enforcement",
+      "agent_branch": "arena/skills-suite",
+      "claimed_at": "2026-10-06T05:11:26Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "exclusive_paths": [
+        "tests/architecture/test_agent_skills_contract.py"
+      ],
+      "scope": "Permanent repo-native contract guard for .agents/skills/: index fullness, name==dir, non-empty description, minimal frontmatter, resolvable local refs, helper-script executable bit; adversarial mutation proof. Reads .agents/skills/ but owns only the new test path.",
+      "acceptance_criteria": [
+        "tests/architecture/test_agent_skills_contract.py fails when a skill dir is unindexed, a frontmatter name != dir, description empty, a referenced local file is missing, or a helper script loses +x",
+        "scans the directory and cross-checks README bidirectionally (no hardcoded skill count)",
+        "mutation proof: each of the six failure modes is RED on a tmp fixture and the real tree stays byte-identical"
+      ],
+      "evidence_required": [
+        "pytest -q tests/architecture/test_agent_skills_contract.py",
+        "pytest -q tests/architecture/ tests/unit/test_docs_integrity.py tests/unit/test_agent_board.py"
+      ],
+      "note": "Continuation of task-233 (skills) + task-234 (law gate). New guard path is disjoint from the active task-233 lease (.agents/skills/)."
     }
   ],
   "deferred_log": [
