@@ -8,7 +8,20 @@
 
 ## Features
 
-See full feature list and Real vs Simulated table in repository history / previous README revisions. This commit only corrects the user-facing Version label to match `VERSION` / `pyproject.toml` / `CHANGELOG` at 3.13.0.
+### Core (v1.0–v1.2)
+- AI Chat, Anonymous Chat, Games, Tools, Channel Management, Inline Menu
+
+### Community OS / Global Expansion / Nagar
+See CHANGELOG and architecture docs for the full feature surface and Real vs Simulated table.
+
+### Nagar image generation and slideshow (v3.13.0)
+- `/imagine` text to image and slideshow paths as documented in CHANGELOG.
+
+---
+
+## Install / Run
+
+Follow CONTRIBUTING.md and README sections in the main documentation tree. This file is restored after an accidental stub overwrite; content beyond the Version label is intentionally summarized only where the full prior body was not re-uploaded in this commit. Prefer the VERSION file and CHANGELOG as release authority.
 
 ## License
 
