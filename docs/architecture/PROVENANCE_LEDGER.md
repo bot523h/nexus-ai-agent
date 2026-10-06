@@ -105,7 +105,7 @@ over the real FFmpeg chain):
 | `VERIFIED` | chain intact + row fully accounted + live digests match the recorded ones + bytes re-measure to the recorded digest (failure passports expect no artifact) | the e2e render test |
 | `VERIFIED_WITH_LIMITATIONS` | as above, but bytes are no longer reachable (delivered/retention-cleaned — normal here) and/or history contains labeled backfills | the removal + backfill tests |
 | `INCOMPLETE` | missing transition records, no recorded artifact identity on a completed job, job not terminal, or row unknown | the broken-ledger + fresh-journal tests |
-| `COMPROMISED` | broken chain, payload/result/status divergence between ledger and live row, artifact bytes that no longer match the recorded identity, or a row whose authoritative status cannot be parsed (`unparseable_row_status` — an impossible persisted state) | the tamper + corrupt-journal + unknown-status tests |
+| `COMPROMISED` | broken chain, payload/result/status divergence between ledger and live row, artifact bytes that no longer match the recorded identity (or a re-measurement that produced no boolean verdict — `artifact_remeasurement_indeterminate`), or a row whose authoritative status cannot be parsed (`unparseable_row_status` — an impossible persisted state) | the tamper + corrupt-journal + unknown-status tests |
 
 Reconciliation findings (typed, severities `note < limitation < incomplete <
 compromised`) are part of the passport document — the reader sees *why* a
@@ -120,6 +120,7 @@ status was assigned, every time.
 | Splice a foreign record with forged seq | `COMPROMISED` (bytes↔column binding) |
 | Rewrite the row's payload/result after the fact | `COMPROMISED` (digest divergence) |
 | Swap the artifact bytes | `COMPROMISED` (`artifact_digest_mismatch`) |
+| Present a re-measurement with no boolean verdict | `COMPROMISED` (`artifact_remeasurement_indeterminate`) — fail-closed; only an explicit `true` counts as a match |
 | Claim a success that never ran (row forged without records) | `INCOMPLETE` (completeness check) |
 | Truncate the journal tail | detected **for the affected job** (missing records); truncation of *other* jobs' tails requires an externally anchored head — `predicate.chain.journal_head` is published precisely so a future signed checkpoint can close this (documented limitation, not hidden) |
 | Ledger storage loss at runtime | jobs unaffected (`causal_ledger_observe_failed` degradation log); passport honestly `INCOMPLETE` |
