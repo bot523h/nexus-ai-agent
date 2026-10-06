@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-05T07:43:54Z",
+  "updated_at": "2026-10-06T06:46:44Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1346,14 +1346,14 @@
     {
       "task": "task-135-lockstep-residue",
       "zone": "release-metadata",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/forensic-mainline-20261006",
+      "claimed_at": "2026-10-06T06:46:44Z",
       "ttl_hours": 24,
-      "status": "queued",
+      "status": "active",
       "gates_owner": false,
       "exclusive_paths": [],
       "scope": "بازماندهٔ تسک ۱۱۱ روی main: README.md:5 هنوز «Version: v3.12.0» می‌گوید و .nexus/continuum.json هنوز test_count_expected=649 دارد (منشأ هر دو: 92dcb47 / نسخهٔ 3.12.0) در حالی که VERSION/pyproject/CHANGELOG روی 3.13.0 هستند. پس از merge شدن PR#33 (که همین دو فایل را در دست دارد): خواندن نسخه از README و شمارش تست را هم به گارد lockstep اضافه کن تا `nexus continuum --verify` روی main سبز شود.",
-      "note": "OWNED BY PR#33 UNTIL MERGED — do not touch these two files before then (PR#33 diff already modifies both). Sequenced: claim after PR#33 lands; evidence = lockstep guard extended to README+continuum and continuum --verify exit 0. | exclusive_paths released with terminal status during schema-2 merge (history in scope)",
+      "note": "",
       "acceptance_criteria": [
         "README version line and .nexus/continuum.json test_count join the lockstep guard",
         "nexus continuum --verify green on main"
