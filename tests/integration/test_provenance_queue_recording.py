@@ -786,6 +786,14 @@ class TestMultiAttemptPassport:
         )
         assert await _wait_terminal(queue, job_id) is JobStatus.FAILED_RETRYABLE
         await _wait_record(journal, job_id, EventKind.JOB_FAILED, attempt=1)
+        # The terminal row is committed before the executor task returns (the
+        # ledger record lands inside the failure path, before the task unwinds).
+        # Let that task fully settle: requeueing while this process still owns a
+        # live task for the row is exactly the case `resume_pending` refuses to
+        # take over, and the refusal is not the point of this test.
+        executor = queue._tasks.get(job_id)
+        if executor is not None:
+            await asyncio.gather(executor, return_exceptions=True)
 
         # The sanctioned operator requeue (same entrypoint the lifecycle
         # tests use): row back to pending, then resumed -> attempt 2.
