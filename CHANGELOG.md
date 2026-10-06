@@ -68,6 +68,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   superseded by this successor). Confirmation:
   `tests/architecture/test_canonical_identity_contract.py`.
 
+### Release truth — README version lockstep + forensic recovery (P0-4, session `arena/p0-4-version-truth-successor`; successor of #164)
+
+- **`README.md` claimed v3.12.0 while `VERSION` and `pyproject.toml` were 3.13.0.**
+  Corrected both stale user-facing labels to v3.13.0.
+- **`scripts/check_version_lockstep.py` was blind to the README.** It now reads and
+  compares the README canonical `**Version:**` label against `VERSION`,
+  `pyproject.toml`, and the newest released `CHANGELOG` heading. The black-box
+  `tests/unit/test_version_lockstep_script.py` fixtures now carry a README (the guard
+  fails closed when it is absent) and a new stale-README fixture proves the guard is red.
+- **Continuum snapshot refreshed** from a clean checkout (`nexus continuum publish`),
+  so `nexus continuum verify` passes for this exact SHA and environment.
+- **Forensic report** `docs/audits/FORENSIC_MAINLINE_RECOVERY_2026-10-06.md` records the
+  exact-SHA truth, the release-metadata defects, and the honest production limitations
+  (no claim of production backup/restore or deployment readiness).
+
 ### Continuum evidence foundation (task-184, session `arena/01a0e1e0-nexus-ai-agent`; supersedes PR #95 / PR #98)
 
 - **Pack coverage is a real 95% gate (DECISION_LOG D-0023, option A).** A report is
