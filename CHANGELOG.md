@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security — remote-key ingress and local-cache containment (P0-2, session `arena/p0-2-remote-key-successor`; successor of PR #148 remote-key portion)
+
+- **`LocalCacheProvider.path_for_key` did `cache_dir / remote_key` with no validation.**
+  Measured on `main@8de0edd7d6bd182be2f53ccba8df45cc9fbd09a8`: `remote_key="../x"`
+  made `upload` write and `download` read outside the cache directory, an absolute key
+  escaped outright, and `list_files(prefix="..")` returned keys for files outside the
+  cache. The Telegram `/cloud` handler also passed the raw `doc.file_name` as the remote
+  key while sanitising only the local staging name.
+- **Fix:** every remote key is validated (empty/`.`/`..` components, absolute paths,
+  Windows separators/drives, NUL bytes, over-length, and repeatedly percent-decoded
+  traversal spellings refused), no key may traverse a symlink component, the cache root
+  is pinned to its canonical directory, and containment is re-checked after creating
+  parents and immediately before opening. `/cloud` now uses the same sanitised base name
+  as its remote key. No SSRF path is touched (that boundary already exists on main).
+- **Evidence:** `tests/unit/test_local_cache_provider.py`, `tests/architecture/test_storage_key_boundary.py`,
+  `scripts/security_mutations_remote_key.py` (3/3 mutants killed).
+
 ### Continuum evidence foundation (task-184, session `arena/01a0e1e0-nexus-ai-agent`; supersedes PR #95 / PR #98)
 
 - **Pack coverage is a real 95% gate (DECISION_LOG D-0023, option A).** A report is

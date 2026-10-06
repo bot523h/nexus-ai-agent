@@ -21,10 +21,11 @@ types:
 test:
 	pytest -q -m "not slow"
 
-# Adversarial proof for the capability-pack trust plane (ADR 0006): every
-# mutation of the trust boundary must turn the trust suite red.
+# Adversarial proof for the capability-pack trust plane (ADR 0006) and the
+# remote-key ingress/cache boundary: every mutation must turn its suite red.
 mutations:
 	python scripts/pack_trust_mutations.py
+	python scripts/security_mutations_remote_key.py
 
 migrate:
 	python -m nexus_ai_agent.cli migrate
