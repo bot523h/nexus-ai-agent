@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Test — settle the executor task before the operator requeue (P0-10, session `arena/p0-10-provenance-requeue-race-successor`)
+
+- **`TestMultiAttemptPassport::test_retryable_failure_then_retry_is_verified_not_compromised`
+  was intermittently red on live main** (`assert await queue.resume_pending() == [job_id]`
+  saw `[]`). The test requeued the row while the same queue process still owned a live
+  executor task for it — the exact case `resume_pending`'s `live` guard deliberately
+  refuses to take over. Whether the task had unwound by the assertion was a race.
+- **Fix:** the test now awaits the executor task (already terminal — the ledger record
+  lands before it unwinds) before the operator requeue. No production behaviour changes:
+  refusing to take over a row this process is still executing is correct.
+- **Evidence:** the test now passes 10/10 where it previously failed ~70% of runs;
+  `test_provenance_queue_recording.py`, `test_creative_execution_recovery.py`, and
+  `test_gate5_execution_fencing.py` all green (48 passed).
+
 ### Storage — SQLite first-use WAL transition retried under concurrent use (P0-9, session `arena/p0-9-wal-init-race-successor`; successor of PR #132)
 
 - **A bare `PRAGMA journal_mode=WAL` on a fresh database raises
