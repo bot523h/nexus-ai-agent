@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Test — wait on the persisted reminder status, not the send (P0-11, session `arena/p0-11-checkpoint-flush-race-successor`)
+
+- **`test_delivers_to_originating_chat_not_user_id` was intermittently red on
+  live main** (`assert saved[0].status == 'sent'` saw `'pending'`; observed on
+  `python-parity (3.12)`). The test waited for `bot.sent` (set *inside* the
+  send) and then read the row, but `_mark_status('sent')` is a later
+  `asyncio.to_thread` hop — so the read raced the status write.
+- **Fix:** the test waits on the row predicate (`status == 'sent'`), the same
+  pattern `test_send_failure_marks_failed` already uses. Test-only; no
+  production behaviour changes.
+
+### Storage — drain in-flight checkpoint record writes before flushing touches (P0-11, session `arena/p0-11-checkpoint-flush-race-successor`)
+
+- **`LifecycleRecordingSaver.flush()` could apply a coalesced touch before the
+  checkpoint upsert it targets had landed.** The record write is fire-and-forget
+  (a best-effort task), and `SQLiteCheckpointLifecycleStore.touch_thread` only
+  updates an *existing* row — a touch that finds no row returns `False` and is
+  dropped, never retried. The observable effect is an intermittently missing
+  `last_accessed_at` (`tests/integration/test_checkpoint_composition.py::
+  test_wrapper_records_lifecycle_end_to_end` was red on live main on
+  `python-parity (3.11)`), but the defect is production behaviour: a touch can be
+  silently lost under load.
+- **Fix:** the wrapper tracks its outstanding best-effort lifecycle tasks and
+  `flush()` drains them (awaiting, never raising) before flushing touches, so an
+  upsert can neither precede the touch it should follow nor clobber it afterwards.
+- **Evidence:** `test_flush_drains_record_writes_before_touches` (deterministic
+  RED/GREEN ordering guard with a stub lifecycle that only exposes the row after
+  the record coroutine completes).
+
 ### Test — settle the executor task before the operator requeue (P0-10, session `arena/p0-10-provenance-requeue-race-successor`)
 
 - **`TestMultiAttemptPassport::test_retryable_failure_then_retry_is_verified_not_compromised`
@@ -106,6 +135,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   blocker; an unparsable file is skipped rather than crashing the guard.
 - Added red-proofs: a comment/docstring-only fixture is clean, while an
   `enum.StrEnum` attribute access (no import) is still a blocker.
+
+### Ops — deterministic production-backup preflight (P1-7, session `arena/p1-7-backup-preflight-successor`; refresh of #160)
+
+- **`backup-db` never actually succeeded; green runs were housekeeping with the job skipped.** Added a deterministic preflight as the first step: it fails in seconds naming the exact missing secret(s), refuses a non-PostgreSQL `NEXUS_DATABASE_URL` (no CI-local SQLite fallback), and refuses when `pg_dump` is absent. Secret names are printed; values never are.
+- Least privilege pinned: `permissions: contents: read` and `persist-credentials: false` on checkout.
+- Contract test `tests/unit/test_maintenance_workflow_contract.py` executes the extracted preflight under bash for the configuration-failure paths (behavioural, not string matching).
+- `docs/ops/r2-storage.md` §4 records the preflight and marks the production leg `VERIFIED_WITH_LIMITATIONS` (no fabricated R2/restore proof; owner-side run still required).
 
 ### Continuum evidence foundation (task-184, session `arena/01a0e1e0-nexus-ai-agent`; supersedes PR #95 / PR #98)
 

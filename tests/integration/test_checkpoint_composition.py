@@ -93,6 +93,52 @@ async def test_wrapper_records_lifecycle_end_to_end(settings_env, tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_flush_drains_record_writes_before_touches() -> None:
+    """``flush`` must apply the checkpoint upsert before the coalesced touch.
+
+    A touch only updates an *existing* row (``touch_thread`` returns False for
+    an unknown thread and the touch is dropped, never retried), so flushing a
+    touch while its record write is still in flight silently loses the touch.
+    """
+
+    class _StubSaver:
+        serde = None
+        config_specs: list = []
+
+        async def aput(self, config, checkpoint, metadata, new_versions):
+            return {"configurable": {"thread_id": "t1", "checkpoint_id": "cp1"}}
+
+        async def aget_tuple(self, config):
+            return {"configurable": {"thread_id": "t1", "checkpoint_id": "cp1"}}
+
+    class _OrderedLifecycle:
+        def __init__(self) -> None:
+            self.order: list[str] = []
+            self.rows: set[str] = set()
+
+        async def record_checkpoint(self, thread_id, checkpoint_id, *, created_at) -> None:
+            # Simulate the real store hop: the row appears only after this
+            # coroutine has actually run to completion.
+            await asyncio.sleep(0.05)
+            self.rows.add(thread_id)
+            self.order.append("record")
+
+        async def touch_thread(self, thread_id, *, accessed_at) -> None:
+            assert thread_id in self.rows, "touch applied before its row existed"
+            self.order.append("touch")
+
+    lifecycle = _OrderedLifecycle()
+    wrapper = LifecycleRecordingSaver(_StubSaver(), lifecycle)
+    async with access_context("user"):
+        await wrapper.aput({"configurable": {"thread_id": "t1"}}, {}, {}, {})
+    async with access_context("user"):
+        await wrapper.aget_tuple({"configurable": {"thread_id": "t1"}})
+
+    await wrapper.flush()
+    assert lifecycle.order == ["record", "touch"]
+
+
+@pytest.mark.asyncio
 async def test_kill_switch_removes_wrapper(settings_env, tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("NEXUS_LIFECYCLE_HOOKS_ENABLED", "false")
     from nexus_ai_agent.config.settings import get_settings
