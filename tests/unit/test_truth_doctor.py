@@ -374,3 +374,45 @@ def test_real_repository_is_truthful() -> None:
     """This repository itself must pass the doctor (no drift, no stale claim)."""
     report = truth.run_doctor(REPO_ROOT)
     assert report.findings == (), report.format_text()
+
+
+def test_live_lease_statuses_match_the_board_cli() -> None:
+    """The doctor cannot import the CLI, so the two definitions are pinned equal.
+
+    ``scripts/agent_board.py::ACTIVE_STATUSES`` is the board's authority on what
+    a live lease is.  The truth doctor hard-coding the literal ``"active"`` was a
+    real defect: it reported TRUTH041 for a delivered-but-unmerged PR whose claim
+    had legitimately moved to ``active_in_review``.
+    """
+    import importlib.util
+    import sys
+
+    script = REPO_ROOT / "scripts" / "agent_board.py"
+    spec = importlib.util.spec_from_file_location("agent_board_statuses", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+        assert truth.LIVE_LEASE_STATUSES == frozenset(module.ACTIVE_STATUSES), (
+            "the truth doctor and the board CLI disagree about what a live lease is"
+        )
+    finally:
+        sys.modules.pop(spec.name, None)
+
+
+def test_a_gates_owner_in_review_is_not_a_defect(tmp_path: Path) -> None:
+    board = _minimal_board()
+    board["claims"] = [
+        {"task": "task-1", "status": "active_in_review", "zone": "z", "gates_owner": True}
+    ]
+    _write_board(tmp_path, board)
+    assert truth.check_board_truth(tmp_path) == []
+
+
+def test_a_gates_owner_on_a_deferred_lease_is_still_reported(tmp_path: Path) -> None:
+    board = _minimal_board()
+    board["claims"] = [{"task": "task-1", "status": "deferred", "zone": "z", "gates_owner": True}]
+    _write_board(tmp_path, board)
+    findings = truth.check_board_truth(tmp_path)
+    assert [f.code for f in findings] == ["TRUTH041"]
