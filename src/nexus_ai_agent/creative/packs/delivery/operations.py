@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import uuid
 from typing import Any
 
@@ -53,6 +54,7 @@ from nexus_ai_agent.creative.studio.models import (
     PermissionLevel,
     Project,
 )
+from nexus_ai_agent.creative.temporal import FrameRateResolver
 
 
 def _asset_index(project: Project) -> dict[str, AssetRecord]:
@@ -293,21 +295,52 @@ def _export_otio(project: Project, context: OperationContext) -> OperationOutcom
     """Level B (REVERSIBLE) handler for delivery.export_otio.
 
     Serializes project timeline, layers, and color metadata into the canonical
-    OpenTimelineIO (OTIO v1) interchange format.
+    OpenTimelineIO (OTIO v1) interchange format. Uses exact rational arithmetic to derive
+    frame counts and record loss metadata.
     """
     payload = ExportOtioInput.model_validate(context.input_data)
-    rate = payload.frame_rate
+
+    tb = FrameRateResolver.resolve(payload.frame_rate)
+    num, den = tb.numerator, tb.denominator
+    otio_rate = float(tb.rate)
 
     video_clips: list[OtioClip] = []
     audio_clips: list[OtioClip] = []
 
     for asset in project.assets:
-        duration_us = asset.duration_us or 1_000_000
-        duration_frames = max(1, int((duration_us / 1_000_000.0) * rate))
+        duration_us = 1_000_000 if asset.duration_us is None else asset.duration_us
+        exact_ticks = (duration_us * num) / (1_000_000 * den)
+        raw_conv_frames = round(exact_ticks)
+        emitted_frames = max(1, raw_conv_frames)
+
         time_range = TimeRange(
-            start_time=RationalTime(value=0, rate=rate),
-            duration=RationalTime(value=duration_frames, rate=rate),
+            start_time=RationalTime(value=0, rate=otio_rate),
+            duration=RationalTime(value=emitted_frames, rate=otio_rate),
         )
+
+        res_num = duration_us * num - emitted_frames * den * 1_000_000
+        res_den = 1_000_000 * num
+        g = math.gcd(res_num, res_den)
+        simp_num = res_num // g
+        simp_den = res_den // g
+
+        residual_str = "0" if simp_num == 0 else f"{simp_num}/{simp_den}"
+        abs_err_str = "0" if simp_num == 0 else f"{abs(simp_num)}/{simp_den}"
+
+        meta = {
+            "provenance": asset.provenance,
+            "temporal_conversion": {
+                "raw_conv_frames": raw_conv_frames,
+                "emitted_frames": emitted_frames,
+                "lossless": (simp_num == 0),
+                "residual_seconds": residual_str,
+                "absolute_error_seconds": abs_err_str,
+                "target_timebase": {
+                    "numerator": num,
+                    "denominator": den,
+                },
+            },
+        }
 
         if asset.media_kind == "video":
             video_clips.append(
@@ -315,7 +348,7 @@ def _export_otio(project: Project, context: OperationContext) -> OperationOutcom
                     name=asset.asset_id,
                     source_range=time_range,
                     media_url=f"asset:{asset.asset_id}",
-                    metadata={"provenance": asset.provenance},
+                    metadata=meta,
                 )
             )
         elif asset.media_kind == "audio":
@@ -324,7 +357,7 @@ def _export_otio(project: Project, context: OperationContext) -> OperationOutcom
                     name=asset.asset_id,
                     source_range=time_range,
                     media_url=f"asset:{asset.asset_id}",
-                    metadata={"provenance": asset.provenance},
+                    metadata=meta,
                 )
             )
 
@@ -360,7 +393,7 @@ def _export_otio(project: Project, context: OperationContext) -> OperationOutcom
         parent_asset_ids=tuple(a.asset_id for a in project.assets),
         provenance={
             "format": "otio",
-            "frame_rate": rate,
+            "frame_rate": otio_rate,
             "video_clip_count": len(video_clips),
             "audio_clip_count": len(audio_clips),
             "generator": "nagar.delivery.otio.v1",
@@ -374,7 +407,7 @@ def _export_otio(project: Project, context: OperationContext) -> OperationOutcom
         {
             "asset_id": output_id,
             "format": "otio",
-            "frame_rate": rate,
+            "frame_rate": otio_rate,
             "total_video_clips": len(video_clips),
             "total_audio_clips": len(audio_clips),
             "otio_json": otio_json,

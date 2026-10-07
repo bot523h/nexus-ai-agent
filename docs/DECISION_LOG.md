@@ -1,6 +1,6 @@
 # NEXUS AI — Architecture Decision Log
 
-**Status:** Canonical historical record; revision 11 effective 2026-09-25  
+**Status:** Canonical historical record; revision 11 effective 2026-09-25
 **r11 scope:** S3/S5 adversarial closure of the security-boundary salvage (D-0016; session `arena/01a0d563-nexus-ai-agent`, PR#79): 5 proven defects closed, 12/12 mutation-killed.  
 **r10 scope:** security-boundary truth salvage (D-0015; PR#76 head `5b17a70` carried into PR#79): S1–S5 real deltas fixed, 9/9 mutation-killed.  
 **r9 scope:** Gate 2 canonical command + capability reconciliation, board task-179 (session `arena/01a0d43c-nexus-ai-agent`): the v1/v2 contract conflict resolved to one canonical contract (D-0013); see `architecture/COMMAND_CAPABILITY_CONTRACT.md` and `architecture/adr/0005-canonical-command-capability-contract.md` for evidence, scoring, and limits.  
