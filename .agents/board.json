@@ -771,6 +771,14 @@
         "src/nexus_ai_agent/creative/spine/",
         "tests/unit/test_creative_spine.py"
       ]
+    },
+    {
+      "id": "owner-authority",
+      "description": "Owner identity authorization gates (fail-closed owner sentinel) — owner-only command gates must refuse every user id when no owner is configured",
+      "paths": [
+        "src/nexus_ai_agent/features/owner_control.py",
+        "tests/unit/test_owner_gate_fail_closed.py"
+      ]
     }
   ],
   "claims": [
@@ -3360,6 +3368,40 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "generation": 1
+    },
+    {
+      "task": "task-253-owner-gate-failclosed",
+      "title": "Owner identity gate is fail-open when the owner is unconfigured: is_owner(0) is True",
+      "title_fa": "دروازهٔ هویت مالک در حالت تنظیم‌نشده fail-open است: is_owner(0) درست است",
+      "zone": "owner-authority",
+      "priority": "P0",
+      "status": "active",
+      "scope": "features/owner_control.py::is_owner compares every candidate against settings.owner_telegram_id, whose settings default is 0; the unset sentinel therefore authenticates the Telegram user id 0 that owner-gated call sites fabricate for an update with no effective_user (AccessGuardHandler.check_update deliberately lets such updates through). Make the owner identity fail closed when no owner is configured and prove the composition with an adversarial test.",
+      "scope_fa": "is_owner هر کاربر را با owner_telegram_id مقایسه می‌کند که پیش‌فرضش در settings صفر است؛ بنابراین نگهبانِ «تنظیم‌نشده» هویت user id صفر را تأیید می‌کند — همان صفری که مسیرهای owner-only برای update بدون effective_user می‌سازند و گارد دسترسی عمداً آن را رد نمی‌کند. رفع: fail-closed کردن هویت مالک در حالت تنظیم‌نشده + تست خصمانه روی ترکیب گارد و دروازه.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "is_owner(0) با مالکِ تنظیم‌نشده (پیش‌فرض 0) نادرست باشد و هیچ user id دیگری هم در این حالت مالک نباشد",
+        "ترکیب AccessGuardHandler + owner_only در update بدون effective_user هیچ هندلری را اجرا نکند",
+        "مالکِ واقعاً تنظیم‌شده دسترسی خود را از دست ندهد (بدون رگرسیون در تست‌های owner-only موجود)"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_owner_gate_fail_closed.py",
+        "pytest tests/unit/test_surface_ads.py tests/unit/test_surface_channel_management.py tests/unit/test_newchat_command.py tests/unit/test_access_guard.py tests/unit/test_auth_middleware.py",
+        "mutation proof: حذف نگهبان fail-closed دوباره RED می‌شود",
+        "CI سبز روی همان SHA"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/features/owner_control.py",
+        "tests/unit/test_owner_gate_fail_closed.py"
+      ],
+      "owner_hint": "free",
+      "agent_branch": "arena/p0-owner-gate-failclosed",
+      "claimed_at": "2026-10-07T05:27:12Z",
+      "ttl_hours": 24,
+      "generation": 1,
+      "gates_owner": false,
+      "delivered": false,
+      "note": ""
     }
   ],
   "deferred_log": [
