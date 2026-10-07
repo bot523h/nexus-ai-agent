@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from fractions import Fraction
 
 import pytest
 from pydantic import ValidationError
@@ -248,6 +249,55 @@ def test_otio_export_boundary_and_emitted_evidence() -> None:
     assert meta_conv["emitted_frames"] == 0
     assert meta_conv["lossless"] is True
     assert meta_conv["residual_seconds"] == "0"
+
+
+# ---------------------------------------------------------------------------
+# The production consumer: delivery.export_otio.
+#
+# Every other export test on this path used a *lossless* rate (24.0) or a zero
+# duration, so a float-truncation regression in the shipped handler went
+# unnoticed.  5 s at 23.976 is the probe that separates them: exact NEAREST is
+# 120 frames, ``int(float(5) * float(24000/1001))`` is 119.
+# ---------------------------------------------------------------------------
+
+
+def test_otio_export_rounds_exactly_at_ntsc_and_reports_the_loss() -> None:
+    asset = AssetRecord(
+        asset_id="v_ntsc",
+        media_kind="video",
+        content_sha256="sha256:" + "a" * 64,
+        duration_us=5_000_000,  # exactly 5 s
+    )
+    project = Project(
+        project_id="p_ntsc",
+        name="NTSC",
+        timeline=Timeline(timeline_id="tl_ntsc", duration_us=5_000_000),
+        assets=[asset],
+    )
+    ctx = OperationContext(
+        command=TypedCommand(command_id="cmd_ntsc", operation="delivery.export_otio"),
+        input_data={"frame_rate": 23.976},
+        history=(),
+    )
+
+    outcome = _export_otio(project, ctx)
+    clip = json.loads(outcome.output["otio_json"])["tracks"]["children"][0]["children"][0]
+
+    # 5 s * 24000/1001 = 120000/1001 = 119.880... -> NEAREST is 120, truncation is 119.
+    assert clip["source_range"]["duration"]["value"] == 120
+    conv = clip["metadata"]["temporal_conversion"]
+    assert conv["raw_conv_frames"] == 120
+    assert conv["emitted_frames"] == 120
+    # 120 frames at 24000/1001 is 1001/200 s = 5.005 s, i.e. 5 ms over the source.
+    assert conv["lossless"] is False
+    assert conv["residual_seconds"] == str(Fraction(-1, 200))
+    assert conv["absolute_error_seconds"] == str(Fraction(1, 200))
+    assert conv["target_timebase"] == {"numerator": 24000, "denominator": 1001}
+
+    # The emitted rate must be the exact rational rendered as a float, and the
+    # artifact provenance must carry it so the output is traceable to its timebase.
+    assert clip["source_range"]["duration"]["rate"] == pytest.approx(24000 / 1001, rel=1e-12)
+    assert outcome.output["frame_rate"] == pytest.approx(24000 / 1001, rel=1e-12)
 
 
 def test_render_master_4k_requires_confirmation() -> None:
