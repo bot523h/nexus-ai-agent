@@ -62,24 +62,25 @@ distribution-version test fail for purely environmental reasons — documented i
 
 ## 4. Board state (schema 2 — summary; always verify with `show`)
 
-Verified at `2026-09-21T16:45Z`, `main` @ `7573249` (v3.13.0).
+Verified at `2026-10-06T23:20Z`, `main` @ `b733fb0` (after the #126 → #183 → #128 spine stack and the #184 owner-gate fix merged).
 
 | Task | Zone | Owner (branch) | Status |
 |---|---|---|---|
-| `task-131` documentation & architecture suite + board rewrite | `docs-architecture` | `arena/01a0c4c1-…` | **active** (this contract's author) |
-| `task-111` release version lock-step guard (tests-only) | `ci-quality` | `arena/01a0c4c1-…` | **active** |
-| `ci-gates-steward` interim gates stewardship | `ci-quality` | `arena/01a0c460-…` | **active** (`gates_owner: true`) |
-| `feature-wiring-batch` PR#32 | `feature-wiring` | `arena/01a0c34d-…` | **active** — needs rebase (see `task-122`) |
-| `pr33-in-review` PR#33 (legacy record, no path claim) | `packaging+interop` | `arena/01a0c3aa-…` | active_in_review — needs slim-down (`task-123`) |
+| `task-186` intent-first creative spine + `task-207` referee / `task-219` lease fencing / `task-220` gc-note | `nagar-creative-graph` / `coordination-referee` | merged | `done` (PR#126) |
+| `task-221` spine plan atomicity · `task-222` transaction-scoped rollback · `task-223` identity-aware `system.undo` | `nagar-creative-graph` / `nagar-contract-gate` | merged | `done` (#126 / #183 / #128) |
+| `task-190` SQLite WAL init race | `storage-observability` | merged | `done` (#132 → #174) |
+| `task-253` owner identity gate fails closed when unconfigured | `features-owner-control` | merged | `done` (PR#184) |
+| `task-131` documentation & architecture suite + board rewrite | `docs-architecture` | — | `done` |
+| `ci-gates-steward` interim gates stewardship | `ci-quality` | — | `completed_released` (no live `gates_owner`) |
+| `task-122` PR#32 rebase + dedupe | `feature-wiring` | عامل B | `assigned_to_B` (stale lease) |
+| `task-123` PR#33 slim-down | `packaging+interop` | شاخه 3aa | `assigned_to_E_pr33` (stale lease) |
+| `task-124` P0-8 single wiring + P0-9 graph memory | `audit-remainder` | free | `available_sequenced_post_32_33` — **P0** |
 | `task-126` unified pack registry (4 packs pending) | `cli-packs-registry` | free | `available_sequenced_post_33` — **P0** |
-| `task-124` P0-8 single wiring + P0-9 graph memory | `audit-remainder` | free | `available_sequenced_post_32_33` |
-| `task-122` PR#32 rebase + dedupe | `feature-wiring` | عامل B | `assigned_to_B` |
-| `task-123` PR#33 slim-down | `packaging+interop` | شاخه 3aa | `assigned_to_E_pr33` |
-| `task-121` OTIO markers · `task-128` async DB · `task-106` studio surface · `task-127` real RAG | — | free / B | sequenced (prerequisites in the board) |
-| `task-132` extras CI matrix · `task-134` portrait slice | `ci-quality` / `nagar-portrait` | free | `queued` |
-| `task-186` Nagar creative execution spine (intent-first loop, in-memory) | `nagar-creative-graph` | done (this session) | `done` — direction D-0025; durability is `task-187` in `next_work` |
+| `task-121` OTIO markers · `task-128` async DB · `task-127` real RAG | — | free / B | sequenced (prerequisites in the board) |
+| `task-134` portrait slice | `nagar-portrait` | free | `queued` |
+| `task-106` studio surface · `task-132` extras CI matrix | — | — | `done` |
 
-Closed waves, merged PRs (#19–#38) and the four recorded incidents live in
+Closed waves, merged PRs (#19–#38 and the spine stack) and the four recorded incidents live in
 `history` inside `.agents/board.json`; the durable narrative is
 `docs/architecture/` plus `docs/audits/`.
 
@@ -100,6 +101,11 @@ Deferred improvements (toolchain adoption triggers) are recorded in
 `protocol.deferred_improvements` so they are not forgotten.
 
 ## 6. Merge order
+
+Landed (do not re-order): the creative-spine stack **#126 → #183 → #128** (task-186/-207/-219/-220,
+task-221, task-222, task-223) merged into `main` @ `090f35d`.
+
+Remaining main-bound order:
 
 1. **`task-123`** (PR#33 slim-down) — frees `cli.py`, largest conflict surface.
 2. **`task-122`** (PR#32 rebase + dedupe against the merged #34).

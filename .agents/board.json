@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-06T21:20:00Z",
+  "updated_at": "2026-10-06T23:20:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3038,7 +3038,7 @@
       "title_fa": "بررسی حقیقت تخته در پزشک + آشتی اجاره/نگهبان‌های کهنه",
       "zone": "runtime-truth-tooling",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "Extend the repo-truth doctor with a board-truth check (declared zones for next_work, no gates_owner on a non-active lease, deferred_log references real tasks) and reconcile the stale gates_owner + undeclared zone on the board.",
       "scope_fa": "افزودن بررسی حقیقت تخته به پزشک (زون اعلان‌شده برای next_work، نبود gates_owner روی اجارهٔ غیرفعال، ارجاع deferred_log به تسک واقعی) و آشتی gates_owner کهنه و زون اعلان‌نشده روی تخته.",
       "prerequisites": [],
@@ -3056,12 +3056,12 @@
         "src/nexus_ai_agent/diagnostics/",
         "tests/unit/test_truth_doctor.py"
       ],
-      "agent_branch": "arena/board-truth-reconcile",
-      "claimed_at": "2026-10-06T21:20:00Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "delivered": false,
-      "note": ""
+      "delivered": true,
+      "note": "| RECONCILE: delivered by PR#182 (board-truth doctor check). Verified on main: check_board_truth() implements all three criteria with unit tests in tests/unit/test_truth_doctor.py."
     },
     {
       "task": "task-207-multisource-check",
@@ -3283,7 +3283,7 @@
       "title_fa": "system.undo باید با هویت تراکنش آدرس‌پذیر باشد، نه فقط «آخرین»",
       "zone": "nagar-contract-gate",
       "priority": "P1",
-      "status": "active_in_review",
+      "status": "done",
       "scope": "task-221/task-222 finding. ROOT CAUSE: _system_undo in src/nexus_ai_agent/creative/studio/capabilities.py selects the most recent editable transaction globally and restores its full-state snapshot; it has no transaction-identity parameter. task-222 made the SPINE rollback fail closed rather than corrupt a foreign edit, but the bus primitive itself is still globally unsafe for concurrent actors. Because snapshots are full project state, rewinding a non-newest transaction while newer ones stand is not sound, so a correct root fix is a design choice: (A) add an optional transaction_id to system.undo that only rewinds when it is the newest (spine then addresses its own txn, no behavior change when absent); (B) staged command DAG + single commit (no rollback needed); (C) explicit compensating saga per capability. Evaluate with the evidence rules; do NOT pick the smallest diff if it leaves the race.",
       "acceptance_criteria": [
         "a design note (Option A/B/C) with concurrency, crash, authorization and replay semantics recorded in docs/DECISION_LOG.md",
@@ -3296,11 +3296,11 @@
         "pytest -q tests/architecture/test_command_capability_boundary.py"
       ],
       "owner_hint": "any free agent with the nagar-contract-gate zone (touches creative/studio/)",
-      "agent_branch": "arena/01a0181931-task223-undo-contract",
-      "claimed_at": "2026-10-01T04:45:40Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "DELIVERED on arena/01a0181931-task223-undo-contract @ 3ba9aac, PR#128 (stacked on #127). Option A: identity-aware system.undo enforced INSIDE the stage-9 handler under the bus lock. Evidence: TestUndoIdentity 126 passed; two-thread race test (test_race_b_identity_closes_the_check_then_act_window); test_undo_contract_mutations.py 4 passed / 3 mutants killed; tests/unit+tests/architecture 2832 passed, 11 skipped; mypy+ruff clean; referee exit 0 (27 sources). Docs: DECISION_LOG task-223 amendment + COMMAND_CAPABILITY_CONTRACT 7.1 / stage-9 / open-gaps.",
+      "note": "DELIVERED on arena/01a0181931-task223-undo-contract @ 3ba9aac, PR#128 (stacked on #127). Option A: identity-aware system.undo enforced INSIDE the stage-9 handler under the bus lock. Evidence: TestUndoIdentity 126 passed; two-thread race test (test_race_b_identity_closes_the_check_then_act_window); test_undo_contract_mutations.py 4 passed / 3 mutants killed; tests/unit+tests/architecture 2832 passed, 11 skipped; mypy+ruff clean; referee exit 0 (27 sources). Docs: DECISION_LOG task-223 amendment + COMMAND_CAPABILITY_CONTRACT 7.1 / stage-9 / open-gaps. | RECONCILE: MERGED in #128 (main 090f35d). Identity-aware system.undo enforced inside the stage-9 handler under the bus lock (Option A).",
       "generation": 1,
       "exclusive_paths": [
         "src/nexus_ai_agent/creative/studio/",
@@ -3316,7 +3316,7 @@
       "title": "Spine rollback adopts the bus identity-aware system.undo (task-223 part 2)",
       "zone": "nagar-creative-graph",
       "priority": "P1",
-      "status": "active_in_review",
+      "status": "done",
       "scope": "task-222 guarded the spine rollback with a caller-side read-then-dispatch check, which cannot be atomic: the bus lock is released between reading the newest transaction and dispatching system.undo. With the bus now exposing transaction identity (task-223), the spine names its recorded per-step transaction id and lets the stage-9 gate be authoritative; the caller-side pre-check is removed.",
       "prerequisites": [
         "task-221-spine-plan-atomicity"
@@ -3337,17 +3337,17 @@
         "tests/unit/test_spine_mutations.py"
       ],
       "owner_hint": "any free agent with the nagar-creative-graph zone",
-      "agent_branch": "arena/01a0181931-task223-undo-contract",
-      "claimed_at": "2026-10-01T04:45:40Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "generation": 1,
       "gates_owner": false,
-      "note": "DELIVERED in PR#128: _rollback names the run's own transaction id and translates UndoConflictError -> SpineRollbackError; task-222's caller-side check removed. Evidence: test_creative_spine.py + test_spine_mutations.py + test_spine_boundary.py pass; the spine foreign-edit test now asserts __cause__ is UndoConflictError; spine mutation retargeted and green. Merge order #126 -> #127 -> #128."
+      "note": "DELIVERED in PR#128: _rollback names the run's own transaction id and translates UndoConflictError -> SpineRollbackError; task-222's caller-side check removed. Evidence: test_creative_spine.py + test_spine_mutations.py + test_spine_boundary.py pass; the spine foreign-edit test now asserts __cause__ is UndoConflictError; spine mutation retargeted and green. Merge order #126 -> #127 -> #128. | RECONCILE: MERGED in #128 (main 090f35d): the spine rollback addresses its own transaction id and maps UndoConflictError -> SpineRollbackError."
     },
     {
       "task": "task-190-sqlite-wal-init-race",
       "zone": "storage-observability",
-      "status": "active",
+      "status": "done",
       "title": "SQLite first-use WAL init races under concurrent first use (CI flake: 'database is locked' on PRAGMA journal_mode=WAL)",
       "title_fa": "مسابقهٔ مقداردهی WAL در اولین استفادهٔ هم‌زمان SQLite (فلیک CI: database is locked روی PRAGMA journal_mode=WAL)",
       "why_fa": "create_all_tables یک بار به ازای هر مسیر محافظت می‌شود (_initialized_paths) اما خودِ مقداردهی از چند تسک/process هم‌زمان بی‌محافظت است؛ دو مقداردهی هم‌زمان WAL یک‌دیگر را قفل می‌کنند و یکی با sqlite3.OperationalError: database is locked شکست می‌خورد.",
@@ -3362,9 +3362,9 @@
         "src/nexus_ai_agent/storage/db.py",
         "tests/unit/test_storage_wal_init_race.py"
       ],
-      "note": "RED reproduced deterministically (both pre-fix tests fail in ~1.3s): a raw sqlite3 connection holding BEGIN IMMEDIATE makes a bare PRAGMA journal_mode=WAL raise 'database is locked'. Fix: bounded retry around the one-time WAL transition (_set_wal_mode + _is_locked) plus a 30s busy timeout on the engine. Mutation evidence (PYTHONPATH forced to the mutant): M1 = bare pragma, timeout kept -> 3 failed (busy timeout alone does NOT cover the WAL transition); M2 = retry kept, timeout removed -> 3 passed (the retry is load-bearing). Commands: pytest tests/unit/test_storage_wal_init_race.py -> 3 passed; storage suite (test_db/test_storage_resilience/test_storage_resilience_boundaries/test_database_url/test_migrations) -> 119 passed; full suite -> 2991 passed, 30 skipped; ruff check+format clean; mypy clean. Board claim updated in the same commit.",
-      "agent_branch": "arena/01a0181931-task190-wal-init-race",
-      "claimed_at": "2026-10-01T20:10:56Z",
+      "note": "RED reproduced deterministically (both pre-fix tests fail in ~1.3s): a raw sqlite3 connection holding BEGIN IMMEDIATE makes a bare PRAGMA journal_mode=WAL raise 'database is locked'. Fix: bounded retry around the one-time WAL transition (_set_wal_mode + _is_locked) plus a 30s busy timeout on the engine. Mutation evidence (PYTHONPATH forced to the mutant): M1 = bare pragma, timeout kept -> 3 failed (busy timeout alone does NOT cover the WAL transition); M2 = retry kept, timeout removed -> 3 passed (the retry is load-bearing). Commands: pytest tests/unit/test_storage_wal_init_race.py -> 3 passed; storage suite (test_db/test_storage_resilience/test_storage_resilience_boundaries/test_database_url/test_migrations) -> 119 passed; full suite -> 2991 passed, 30 skipped; ruff check+format clean; mypy clean. Board claim updated in the same commit. | RECONCILE: MERGED via #132 -> #174. Verified on main: storage/db.py and tests/unit/test_storage_wal_init_race.py byte-identical to the delivered branch head.",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "generation": 1
@@ -3375,7 +3375,7 @@
       "title_fa": "دروازهٔ هویت مالک در حالت تنظیم‌نشده fail-open است: is_owner(0) درست است",
       "zone": "owner-authority",
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "scope": "features/owner_control.py::is_owner compares every candidate against settings.owner_telegram_id, whose settings default is 0; the unset sentinel therefore authenticates the Telegram user id 0 that owner-gated call sites fabricate for an update with no effective_user (AccessGuardHandler.check_update deliberately lets such updates through). Make the owner identity fail closed when no owner is configured and prove the composition with an adversarial test.",
       "scope_fa": "is_owner هر کاربر را با owner_telegram_id مقایسه می‌کند که پیش‌فرضش در settings صفر است؛ بنابراین نگهبانِ «تنظیم‌نشده» هویت user id صفر را تأیید می‌کند — همان صفری که مسیرهای owner-only برای update بدون effective_user می‌سازند و گارد دسترسی عمداً آن را رد نمی‌کند. رفع: fail-closed کردن هویت مالک در حالت تنظیم‌نشده + تست خصمانه روی ترکیب گارد و دروازه.",
       "prerequisites": [],
@@ -3395,13 +3395,13 @@
         "tests/unit/test_owner_gate_fail_closed.py"
       ],
       "owner_hint": "free",
-      "agent_branch": "arena/p0-owner-gate-failclosed",
-      "claimed_at": "2026-10-07T05:27:12Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "generation": 1,
       "gates_owner": false,
       "delivered": false,
-      "note": ""
+      "note": "| RECONCILE: MERGED in #184 (main b733fb0). is_owner() now fails closed when owner_telegram_id is unset (0 is no longer a valid identity)."
     }
   ],
   "deferred_log": [
@@ -3903,6 +3903,42 @@
         "state": "MERGED",
         "title": "PR#51 integration — green the test job (3 board clock bombs, env-dependent RAG test, queue hook race)",
         "note": "head arena/01a0ca9c, MERGED → main 315d38a; CI run 35776958516 4/4 SUCCESS."
+      },
+      {
+        "pr": 126,
+        "state": "MERGED",
+        "title": "feat(nagar): intent-first creative spine + board referee/lease hardening (task-186,-207,-219,-220)",
+        "note": "head arena/hardening-task207-foreign-check @ 786673c; MERGED -> main 8486b5c; CI 37/37."
+      },
+      {
+        "pr": 183,
+        "state": "MERGED",
+        "title": "fix(spine): transaction-scoped rollback + exactly-once intent replay (task-222)",
+        "note": "head arena/01a0181931-nexus-ai-agent @ cb1243e; supersedes #127; MERGED -> main a94bd8b; CI 37/37."
+      },
+      {
+        "pr": 128,
+        "state": "MERGED",
+        "title": "fix(studio): identity-aware system.undo in the stage-9 handler (task-223)",
+        "note": "head arena/01a0181931-task223-undo-contract @ 056f641; MERGED -> main 090f35d; CI 37/37."
+      },
+      {
+        "pr": 184,
+        "state": "MERGED",
+        "title": "fix(security): owner identity gate fails closed when the owner is unconfigured (task-253)",
+        "note": "head arena/p0-owner-gate-failclosed @ e869c52; MERGED -> main b733fb0; CI 37/37."
+      },
+      {
+        "pr": 127,
+        "state": "CLOSED",
+        "title": "fix(spine): transaction-scoped rollback + exactly-once intent replay (task-222)",
+        "note": "SUPERSEDED by #183. Auto-closed when its stacked base branch was deleted on #126 merge."
+      },
+      {
+        "pr": 112,
+        "state": "CLOSED",
+        "title": "feat(runtime): W1 recovery (task-196)",
+        "note": "SUPERSEDED by #113 (ancestor proof: head-112 ancestor of head-113; zero unique files)."
       }
     ],
     "incidents": [
@@ -3971,6 +4007,11 @@
         "rev": 2,
         "date": "2026-09-21",
         "note": "schema 2: protocol block, structured next_work with acceptance criteria, history split, structural tests (ADR 0004)."
+      },
+      {
+        "rev": 3,
+        "date": "2026-10-06",
+        "note": "truth reconcile after the spine stack + owner-gate fix merged: merged claims moved to done; AGENTS.md sections 4/6 refreshed; #126/#183/#128/#184 MERGED, #127/#112 SUPERSEDED."
       }
     ]
   },
