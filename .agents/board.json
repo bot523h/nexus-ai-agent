@@ -3427,7 +3427,7 @@
       "title_fa": "موج ۱ حکمرانی: پیوند checkهای لازم GitHub با jobهای CI که واقعاً gateها را اجرا می‌کنند",
       "zone": "nagar-foundation-waves",
       "priority": "P0",
-      "status": "active",
+      "status": "active_in_review",
       "scope": "scripts/governance_guard.py (new, stdlib-only) + tests/architecture/test_governance_enforcement.py + law R19 + docs/architecture/GOVERNANCE_ENFORCEMENT.md + dated live GitHub witness. Shared (NOT exclusively fenced, coordinated by review): .github/workflows/ci.yml, docs/architecture/MODULE_MAP.md, docs/README.md",
       "scope_fa": "guard جدید حکمرانی (فقط stdlib) + تست معماری + قانون R19 + سند + witness تاریخ‌دار از وضعیت زندهٔ GitHub",
       "prerequisites": [],
@@ -3455,7 +3455,7 @@
       "ttl_hours": 72,
       "gates_owner": true,
       "delivered": null,
-      "note": "",
+      "note": " | Delivered on arena/79164857-nexus-ai-agent (base=main, one PR, three wave-commits); gates deferred to the gates owner.",
       "generation": 1
     },
     {
@@ -3464,7 +3464,7 @@
       "title_fa": "موج ۲ همگرایی PRها: گراف همگرایی deterministic و فقط‌خواندنی روی صف PRهای باز",
       "zone": "nagar-foundation-waves",
       "priority": "P0",
-      "status": "active",
+      "status": "active_in_review",
       "scope": "scripts/pr_convergence.py (new, stdlib-only, imports the existing board transport) + tests/architecture/test_pr_convergence.py + law R20 + docs/architecture/PR_CONVERGENCE.md + dated live report witness",
       "scope_fa": "ابزار جدید همگرایی (فقط stdlib) + تست معماری + قانون R20 + سند + witness تاریخ‌دار",
       "prerequisites": [
@@ -3493,7 +3493,7 @@
       "ttl_hours": 72,
       "gates_owner": false,
       "delivered": null,
-      "note": "",
+      "note": " | Delivered on arena/79164857-nexus-ai-agent (base=main, one PR, three wave-commits); gates deferred to the gates owner.",
       "generation": 1
     },
     {
@@ -3502,7 +3502,7 @@
       "title_fa": "موج ۳ بایگانی خلاق ماندگار: گراف و lineage به‌عنوان projection بازساختنی دفتر کل رویدادها",
       "zone": "nagar-foundation-waves",
       "priority": "P0",
-      "status": "active",
+      "status": "active_in_review",
       "scope": "src/nexus_ai_agent/provenance/graph.py (new) + tests/unit/test_creative_graph.py + tests/architecture/test_creative_graph_boundary.py + law R21 + docs/architecture/CREATIVE_GRAPH.md. Shared (coordinated by review): src/nexus_ai_agent/provenance/__init__.py, docs/README.md, docs/architecture/MODULE_MAP.md, docs/DECISION_LOG.md",
       "scope_fa": "ماژول جدید گراف در provenance + تست واحد + تست مرز معماری + قانون R21 + سند",
       "prerequisites": [
@@ -3533,7 +3533,7 @@
       "ttl_hours": 72,
       "gates_owner": false,
       "delivered": null,
-      "note": "",
+      "note": " | Delivered on arena/79164857-nexus-ai-agent (base=main, one PR, three wave-commits); gates deferred to the gates owner.",
       "generation": 1
     }
   ],
