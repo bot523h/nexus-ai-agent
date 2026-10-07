@@ -41,7 +41,14 @@ def timebase_to_dict(tb: Timebase) -> dict[str, Any]:
 
 
 def timebase_from_spec(spec: str | float | int | dict[str, Any] | Timebase) -> Timebase:
-    """Reconstruct Timebase from spec or dictionary."""
+    """Reconstruct Timebase from spec or dictionary.
+
+    The dict branch passes the components through *uncoerced*.  ``int(...)`` here
+    would silently truncate (``int(24000.7) == 24000``) at a deserialization
+    boundary whose input is serialized -- therefore untrusted -- data.  Letting
+    :meth:`Timebase.__post_init__` see the raw value makes a non-integer
+    component fail closed instead of becoming a plausible-looking rate.
+    """
     if isinstance(spec, dict):
-        return Timebase(int(spec["numerator"]), int(spec["denominator"]))
+        return Timebase(spec["numerator"], spec["denominator"])
     return FrameRateResolver.resolve(spec)
