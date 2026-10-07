@@ -77,6 +77,12 @@ from nexus_ai_agent.bot.surface import (
     daily_cmd,
     doc_delete_cmd,
     docs_list_cmd,
+    mod_config_cmd,
+    mod_mute_cmd,
+    mod_reputation_cmd,
+    mod_unmute_cmd,
+    mod_warn_cmd,
+    model_cmd,
     onboarding_callback_cmd,
     pin_cmd,
     post_cmd,
@@ -84,7 +90,12 @@ from nexus_ai_agent.bot.surface import (
     route_doc_text,
     schedule_cmd,
     stats_cmd,
+    storage_cmd,
+    story_style_cmd,
     unban_cmd,
+    viral_post_cmd,
+    viral_preview_cmd,
+    viral_stats_cmd,
     welcome_cmd,
     xp_leaderboard_cmd,
 )
@@ -374,15 +385,50 @@ def build_handlers(
         await _reply(update, f"🌐 {result}")
 
     async def vision_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Describe a real photo with Gemini Vision.
+
+        This used to answer with one hard-coded sentence about seeing a
+        beautiful landscape — the same constant for every caller and every
+        photo, returned without ever looking at (or even downloading) an
+        image. ``GeminiEngine.vision()`` was implemented and had no importer:
+        the capability existed, the command lied about using it. The exact
+        literal is quoted in ``tests/unit/test_surface_registration.py``
+        (``STUB_STRINGS``), which is what keeps it from coming back.
+        """
         if gemini_engine is None:
             await _reply(update, "❌ Gemini AI not configured.")
             return
+        user_id = _user_id(update)
+        if user_id is None:
+            return
+        msg = _message(update)
+        photo = None
+        if msg is not None:
+            source = msg.reply_to_message or msg
+            photo = source.photo[-1] if source.photo else None
+        if photo is None:
+            await _reply(
+                update,
+                "🖼️ /vision — یک عکس بفرستید و روی آن /vision بزنید "
+                "(یا فرمان را پاسخِ همان عکس کنید).\n"
+                "می‌توانید سؤال هم اضافه کنید: /vision در تصویر چند نفر هستند؟",
+            )
+            return
+        question = " ".join(context.args) if context.args else "Describe this image in detail."
         try:
-            # Simulated vision check
-            result = "I see a beautiful landscape in this image."
-            await _reply(update, f"🤖 {result}")
-        except Exception as exc:  # noqa: BLE001
-            await _reply(update, f"❌ Vision error: {exc}")
+            file = await photo.get_file()
+            image_bytes = bytes(await file.download_as_bytearray())
+        except Exception as exc:  # noqa: BLE001 - Telegram download boundary
+            await _reply(update, f"❌ دریافت تصویر ناموفق بود: {exc}")
+            return
+        try:
+            result = await gemini_engine.vision(
+                image_bytes, question=question, user_id=user_id, mime_type="image/jpeg"
+            )
+        except Exception as exc:  # noqa: BLE001 - provider boundary
+            await _reply(update, f"❌ تحلیل تصویر ناموفق بود: {exc}")
+            return
+        await _reply(update, f"🤖 {result}")
 
     # ── v2.0.0: /image — AI Image Generation via Pollinations.ai ──
     async def image_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1169,17 +1215,12 @@ def build_handlers(
         post_id = ViralEngine.save_post(chat_id, text, score)
         await _reply(update, f"🔥 Viral post saved (id={post_id}, score={score:.1f}):\n\n{text}")
 
-    async def viral_preview_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Preview next viral post."""
-        await _reply(update, "🔥 Preview: Top AI trends of the week...")
-
-    async def viral_stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Show viral engine stats."""
-        await _reply(update, "🔥 Viral Engine: 12 posts sent, 450 likes total.")
-
-    async def viral_post_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Manage pending viral posts."""
-        await _reply(update, "📋 Pending viral posts: 3 in queue.")
+    # /viral_preview /viral_stats /viral_post are imported from
+    # bot/surface/viral.py: the real ViralEngine, chat-scoped row counts, and a
+    # generated-and-scored preview instead of the previous "12 posts sent, 450
+    # likes total" — a likes figure no column in the ViralPost table can
+    # produce. /viral_now already called the engine, which is exactly why the
+    # drift stayed invisible for so long.
 
     # ── Phase 12: Advertisement System ────────────────────────────
     # /ad_create /ad_list /ad_pause /ad_resume /ad_delete /ad_stats are
@@ -1211,25 +1252,12 @@ def build_handlers(
         )
         await _reply(update, "🛡️ Smart Moderation disabled.")
 
-    async def mod_config_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Configure moderation rules."""
-        await _reply(update, "🛡️ Moderation rules updated.")
-
-    async def mod_warn_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Warn a user."""
-        await _reply(update, "⚠️ User warned (1/3).")
-
-    async def mod_mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Mute a user."""
-        await _reply(update, "🔇 User muted for 10 minutes.")
-
-    async def mod_unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Unmute a user."""
-        await _reply(update, "🔊 User unmuted.")
-
-    async def mod_reputation_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Show user reputation."""
-        await _reply(update, "👤 User Reputation: 85/100 (Good).")
+    # /mod_config /warn /mute /unmute /reputation are imported from
+    # bot/surface/moderation.py: the real ModerationEngine (add_warning,
+    # mute_user, unmute_user, get_reputation had no importer anywhere in src/),
+    # owner-gated writes, per-(user, chat) scope, and the persisted counters
+    # instead of "User warned (1/3)" — a counter that stayed 1/3 forever
+    # because nothing was ever written.
 
     # ── Phase 14: Gamification ─────────────────────────────────────
     # /profile /daily /xp_leaderboard /achievements are imported from
@@ -1592,18 +1620,23 @@ async def story_cmd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await _reply(update, f"🎨 استوری در صف پردازش داخلی قرار گرفت.\nشناسه: {job_id}")
 
 
-async def story_style_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _reply(update, "🎨 استایل فعلی: Motivational\nگزینه‌ها: Motivational | Romantic | Success")
-
-
-async def storage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    pass
-
-
-async def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    pass
-
-
-async def install_presence_heartbeat(application: Any) -> None:
-    """Mock presence heartbeat for now."""
-    pass
+# /model, /storage and /story_style are imported from bot/surface/status.py.
+# /storage and /model previously had a body of exactly ``pass`` while staying
+# registered, so Telegram advertised two commands that answered with silence —
+# indistinguishable, from the user's side, from the bot being down.
+# /story_style advertised "Motivational | Romantic | Success" although
+# AIStoryGenerator.create_story starts with ``_ = style``: no value changed a
+# single pixel.
+#
+# install_presence_heartbeat() was deleted here. Its body was ``pass`` under
+# the docstring "Mock presence heartbeat for now." and nothing in src/ or
+# tests/ ever called it (bot/app.py:373 carries a commented-out call noting it
+# was "an unawaited mock"), so PresenceStore.mark_online() had no caller
+# anywhere in src/ and every user read as permanently offline.
+#
+# Deleting the mock is in scope here; *replacing* it is not. The real fix is a
+# catch-all TypeHandler registered in bot/app.py at a group after the access
+# guard, and bot/app.py is an exclusive path of task-181-gate5-closure on the
+# claim board — plus PR#94 ("bound personality and presence lifecycle") is
+# already in that lane. Recorded in .agents/board.json deferred_log rather than
+# done twice.

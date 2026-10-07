@@ -4,7 +4,7 @@ import hmac
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import literal_column
 from sqlmodel import func, select
 
@@ -74,12 +74,28 @@ async def get_global_stats() -> dict[str, int]:
         }
 
 
+#: Hard ceiling for ``/recent_users?limit=``.
+#: ``limit`` was an unvalidated ``int`` straight from the query string, so a
+#: single authenticated request for ``?limit=100000000`` materialised the whole
+#: user table into memory and serialised it — a trivial denial of service
+#: behind an endpoint whose only other protection is a shared bearer token.
+#: A negative value was worse than useless: SQLite reads ``LIMIT -1`` as
+#: "no limit".
+MAX_RECENT_USERS = 100
+DEFAULT_RECENT_USERS = 5
+
+
 @router.get("/recent_users")
-async def get_recent_users(limit: int = 5) -> list[dict[str, Any]]:
+async def get_recent_users(
+    limit: int = Query(DEFAULT_RECENT_USERS, ge=1, le=MAX_RECENT_USERS),
+) -> list[dict[str, Any]]:
     """Get list of recently joined users.
 
     PII-free (P0-5): returns only the internal DB surrogate id and the
     join timestamp — never ``telegram_id`` or ``username``.
+
+    ``limit`` is bounded by FastAPI to ``1..MAX_RECENT_USERS``; an out-of-range
+    value is a 422, not an unbounded table scan.
     """
     async with get_session() as session:
         stmt = select(User).order_by(literal_column("id").desc()).limit(limit)

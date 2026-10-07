@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 
 from sqlmodel import select
 
+from nexus_ai_agent.core.timeutil import utcnow
 from nexus_ai_agent.storage.db import get_session
 from nexus_ai_agent.storage.models import UserActiveAgent
 
@@ -42,7 +42,7 @@ class AgentManager:
 
             if existing:
                 existing.agent_name = agent_id
-                existing.activated_at = datetime.utcnow()
+                existing.activated_at = utcnow()
                 session.add(existing)
             else:
                 new_active = UserActiveAgent(user_id=user_id, agent_name=agent_id)
