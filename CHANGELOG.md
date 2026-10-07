@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Feature — truth doctor: one authority for repository truth (law R16, session `arena/runtime-truth-tooling`)
+
+- **The repository could not prove its own truth.** Version drift, an unindexed
+  document, a boundary law pointing at a deleted test, and a stale "simulated"
+  claim were all invisible to CI. The runtime refuses to lie; the tree did not.
+- **Fix:** `src/nexus_ai_agent/diagnostics/truth.py` — a pure-stdlib scanner
+  (runs before `pip install`) producing one `TruthReport` whose every finding
+  carries a code, a severity and a witness. Checks: `version-lockstep`,
+  `docs-index`, `law-test-resolution`, `claim-witnesses`, `fail-open-defaults`.
+- **Enforcement:** `tests/architecture/test_repo_truth_consistency.py` (law
+  **R16** in `docs/architecture/MODULE_MAP.md` §3) and
+  `tests/unit/test_truth_doctor.py` (24 tests, each check proven in both
+  directions). Documented in `docs/architecture/TRUTH_DOCTOR.md`.
+- **CLI:** `python -m nexus_ai_agent.diagnostics.truth [--format json] [--fail-on error|warning|info] [--only NAME]`.
+
 ### Test — wait on the persisted reminder status, not the send (P0-11, session `arena/p0-11-checkpoint-flush-race-successor`)
 
 - **`test_delivers_to_originating_chat_not_user_id` was intermittently red on
