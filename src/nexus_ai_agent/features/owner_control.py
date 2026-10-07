@@ -32,7 +32,12 @@ _owner_id: int | None = None
 
 
 def _get_owner_id() -> int:
-    """Return the configured owner Telegram user ID."""
+    """Return the configured owner Telegram user ID (``0`` means *no owner*).
+
+    ``0`` is the settings default and the repository's "owner not configured"
+    sentinel; it is not a Telegram user id.  Every caller must treat it as
+    *nobody*, never as an identity — see :func:`is_owner`.
+    """
     global _owner_id  # noqa: PLW0603
     if _owner_id is None:
         _owner_id = get_settings().owner_telegram_id
@@ -44,9 +49,30 @@ def _get_owner_id() -> int:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def is_owner(user_id: int) -> bool:
-    """Check whether *user_id* is the bot owner."""
-    return user_id == _get_owner_id()
+def is_owner(user_id: object) -> bool:
+    """Check whether *user_id* is the bot owner — fail closed when unset.
+
+    The argument is an *unvalidated candidate*: anything that is not the
+    configured owner's ``int`` Telegram user id is refused.
+
+    An unconfigured owner (``owner_telegram_id`` unset; the settings default is
+    ``0``) owns **nobody**: the sentinel must never authenticate a caller,
+    because several owner-gated call sites fabricate the id ``0`` for an update
+    that carries no ``effective_user`` (``bot/handlers.py``:
+    ``is_owner(update.effective_user.id if update.effective_user else 0)``), and
+    the global access guard deliberately lets such updates through
+    (``bot/access_guard.py``).  Mirroring ``AuthMiddleware``'s documented
+    deny-by-default rule ("empty list + no owner configured -> nobody is
+    allowed"), a missing owner therefore authorizes no caller.
+    """
+    owner_id = _get_owner_id()
+    if not owner_id:
+        return False
+    # An identity is an ``int`` Telegram user id, nothing else: ``True == 1`` is
+    # exactly the kind of wrong-typed candidate an authority gate must refuse.
+    if not isinstance(user_id, int) or isinstance(user_id, bool):
+        return False
+    return user_id == owner_id
 
 
 def owner_only(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -58,14 +84,19 @@ def owner_only(func: Callable[..., Any]) -> Callable[..., Any]:
 
     @functools.wraps(func)
     async def wrapper(*args: Any, **kwargs: Any) -> Any:
-        # Extract user_id from Update (first positional arg in PTB handlers)
+        # Extract the caller from the Update (first positional arg in PTB handlers).
+        # A missing effective_user is NOT turned into an id: the gate refuses,
+        # because only a configured owner may act and a userless update cannot
+        # be the owner.
         update = kwargs.get("update") or (args[0] if args else None)
-        user_id = 0
-        if update is not None and hasattr(update, "effective_user") and update.effective_user:
-            user_id = update.effective_user.id
-        if not is_owner(user_id):
-            if update is not None and hasattr(update, "effective_chat") and update.effective_chat:
-                await update.effective_chat.send_message("⛔ Access denied")
+        user = getattr(update, "effective_user", None)
+        # The raw id goes to the single identity authority; a missing attribute
+        # is simply not an identity (fail closed, no coercion).
+        allowed = user is not None and is_owner(getattr(user, "id", None))
+        if not allowed:
+            chat = getattr(update, "effective_chat", None)
+            if chat is not None:
+                await chat.send_message("⛔ Access denied")
             return None
         return await func(*args, **kwargs)
 
