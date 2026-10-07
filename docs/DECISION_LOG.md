@@ -1902,3 +1902,83 @@ the newest; identity on an empty stack is refused; the two-thread
 and `tests/unit/test_undo_contract_mutations.py` — 4 tests, 3 mutants killed (gate disabled; wrong
 field compared; comparison inverted). `docs/architecture/COMMAND_CAPABILITY_CONTRACT.md` §`system.undo`
 records the contract.
+
+## 2026-10-07 — Governance enforcement plane: the gates must be *required*, not merely present (D-0026)
+
+### D-0026 — Law R19: GitHub's required status contexts are bound mechanically to the CI jobs that actually run the gates, and an unreadable governance source is BLOCKED
+
+**Status:** Accepted and implemented (board `task-254-governance-enforcement-plane`).
+**Measured on:** `main` @ `6122c9bfa99db0a31c57e782959deb1e7ad12269`, 2026-10-07.
+
+**Context.** R18 (D-adjacent, incident #143) made `base == main` a fail-closed *decision*.
+Three properties of the *enforcement of that decision* were unprotected, and each was
+measured rather than assumed:
+
+1. **The required checks lived only in GitHub.** `GET /repos/bot523h/nexus-ai-agent/branches/main`
+   returned `protected: true` with exactly three contexts — `lint (ruff + mypy + version
+   lockstep)`, `test (pytest -m "not slow")`, `merge-base-guard (base == main)`. No file in the
+   repository named them, so un-requiring one in the settings page left the whole suite green.
+2. **The CI-wiring assertion was vacuous.** `test_merge_base_guard.py::test_guard_is_wired_into_ci`
+   asserted only that the string `scripts/merge_base_guard.py` appears in `ci.yml`; the workflow's
+   own prose comment contains that string. **Reproduced:** the job's `run:` step was deleted and
+   the suite still reported **12 passed**. The mutation survived, so by the repository's own rule
+   the invariant was not proven.
+3. **Retargeting bypassed R18.** `ci.yml` declared `on: [push, pull_request]`. GitHub's default
+   `pull_request` activity types are `opened`/`synchronize`/`reopened`; changing a PR's base is an
+   `edited` event. A PR opened against `main`, allowed to go green, then retargeted to `arena/*`
+   reused its previous green check against the new base.
+
+**Decision.** Add `scripts/governance_guard.py` — stdlib-only, like `merge_base_guard.py`, so it
+runs before `pip install` — with two planes:
+
+* `check-offline`: every declared required context is produced by exactly one real CI job; the
+  merge-base context's job actually executes `merge_base_guard.py check-event` with `--event` and
+  `--base`; no producer carries `continue-on-error: true`; and the workflow re-runs on every
+  base-changing PR activity type (`opened`, `synchronize`, `reopened`, `edited`,
+  `ready_for_review`).
+* `check-live`: `main` is protected, the live required contexts **equal** the declared ones (in
+  both directions — an undeclared required context is drift, not silence), and enforcement is
+  `everyone`. Each protection sub-setting is either read or recorded `UNKNOWN`.
+
+Exit codes: `0` VERIFIED, `1` VIOLATION, `2` BLOCKED. **An unreadable governance source is never a
+pass** (the ADR 0007 discipline, applied to the governance plane). Verdict vocabulary is restricted
+to VERIFIED / VERIFIED_WITH_LIMITATIONS / HARDENED_BUT_NOT_COMPLETE / BLOCKED / DEFERRED.
+
+**Rejected alternatives.**
+
+* *A second truth-doctor check.* R16 makes `diagnostics/truth.py` the single repo-truth authority,
+  and it must stay offline. A governance check that needs the network does not belong there; the
+  law→test resolver (R16, unmodified) already enforces that R19 names a real test.
+* *A ruleset instead of branch protection.* `GET /rulesets` returned `[]` and `POST /rulesets`
+  returned `403`; migrating the enforcement mechanism was neither possible nor necessary.
+* *Growing R18 into a freshness/merge coordinator.* Freshness (`base == main` but behind `main`)
+  is a different invariant and belongs to GitHub's `strict` required checks / merge queue.
+  `check-pr` keeps reporting a stale base SHA as a loud `REBASE_REQUIRED`, not a red gate.
+* *Extending `test_merge_base_guard.py`.* PR #188 (`governance/phase1-hardening-20261007`, open,
+  base `main`) already rewrites that test and fixes the guard's `_report(None, …)` fail-open and
+  the same `edited` gap. Duplicating it would have created two owners of one file. This decision
+  therefore adds an *independent* witness (`governance_guard.py`) that kills the surviving mutation
+  without touching that PR's lines, and records the overlap explicitly.
+
+**Evidence.**
+
+* `tests/architecture/test_governance_enforcement.py` — 26 tests: 11 mutation attacks (invocation
+  deleted, `--base`/`--event` dropped, wrong subcommand, `continue-on-error`, job renamed, job
+  deleted, `edited` dropped, flow-form trigger, zero-job workflow, unreadable workflow), the live
+  plane under a stubbed transport, and the parser's own contract.
+* `tests/architecture/` — 214 passed. Truth doctor: exit 0, 0 errors, 0 warnings.
+* Live snapshot: `.agents/evidence/GOVERNANCE_GITHUB_2026-10-07.json`, verdict **BLOCKED**
+  (14 affirmative checks, 0 violations, 5 unreadable sub-settings).
+
+**Honest limitations (recorded, not explained away).** The available credential carried
+`X-OAuth-Scopes:` (empty) and `X-Accepted-GitHub-Permissions: metadata=read`. Therefore:
+
+* invariants A/F/G/H/I/R are `VERIFIED` or `VERIFIED_WITH_LIMITATIONS` from live GitHub;
+* invariants B (PR required), C (≥1 approval), D (stale approvals dismissed), E (conversation
+  resolution), J (strict / up-to-date), K (force push blocked), L (branch deletion blocked) are
+  `UNKNOWN` — the sub-endpoints returned 403/404. They are **not** claimed to be off.
+* `PUT /branches/main/protection` → `403` and `POST /rulesets` → `403`; the protection state
+  re-read afterwards was unchanged. Applying B–E and J–L is `BLOCKED` for this session and needs
+  a token with the `administration` permission.
+* **No zero-bypass claim is made.** GitHub lets an owner bypass required checks, and the
+  admin-enforcement sub-setting was unreadable here.

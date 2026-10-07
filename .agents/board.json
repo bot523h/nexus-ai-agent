@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-06T23:20:00Z",
+  "updated_at": "2026-10-07T21:03:11Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -778,6 +778,16 @@
       "paths": [
         "src/nexus_ai_agent/features/owner_control.py",
         "tests/unit/test_owner_gate_fail_closed.py"
+      ]
+    },
+    {
+      "id": "nagar-foundation-waves",
+      "description": "Nagar foundation waves (governance / PR convergence / durable creative archive)",
+      "paths": [
+        "scripts/governance_guard.py",
+        "tests/architecture/test_governance_enforcement.py",
+        "docs/architecture/GOVERNANCE_ENFORCEMENT.md",
+        ".agents/evidence/GOVERNANCE_GITHUB_2026-10-07.json"
       ]
     }
   ],
@@ -3402,6 +3412,43 @@
       "gates_owner": false,
       "delivered": false,
       "note": "| RECONCILE: MERGED in #184 (main b733fb0). is_owner() now fails closed when owner_telegram_id is unset (0 is no longer a valid identity)."
+    },
+    {
+      "task": "task-254-governance-enforcement-plane",
+      "title": "Wave 1 governance: bind GitHub's required checks to the CI jobs that actually run the gates",
+      "title_fa": "موج ۱ حکمرانی: پیوند checkهای لازم GitHub با jobهای CI که واقعاً gateها را اجرا می‌کنند",
+      "zone": "nagar-foundation-waves",
+      "priority": "P0",
+      "status": "active",
+      "scope": "scripts/governance_guard.py (new, stdlib-only) + tests/architecture/test_governance_enforcement.py + law R19 + docs/architecture/GOVERNANCE_ENFORCEMENT.md + dated live GitHub witness. Shared (NOT exclusively fenced, coordinated by review): .github/workflows/ci.yml, docs/architecture/MODULE_MAP.md, docs/README.md",
+      "scope_fa": "guard جدید حکمرانی (فقط stdlib) + تست معماری + قانون R19 + سند + witness تاریخ‌دار از وضعیت زندهٔ GitHub",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "check-offline is VERIFIED on the repository plane",
+        "the 11 mutation attacks in the test file each turn the guard red",
+        "an unreadable governance source yields BLOCKED (exit 2), never VERIFIED",
+        "the live GitHub snapshot is committed with an explicit date and is not presented as live truth",
+        "no custom bypass is created; owner/admin immunity is recorded as a limitation, not claimed away"
+      ],
+      "evidence_required": [
+        "pytest tests/architecture/test_governance_enforcement.py",
+        "python scripts/governance_guard.py check-offline",
+        "python scripts/governance_guard.py check-live --repo bot523h/nexus-ai-agent"
+      ],
+      "exclusive_paths": [
+        "scripts/governance_guard.py",
+        "tests/architecture/test_governance_enforcement.py",
+        "docs/architecture/GOVERNANCE_ENFORCEMENT.md",
+        ".agents/evidence/GOVERNANCE_GITHUB_2026-10-07.json"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/79164857-nexus-ai-agent",
+      "claimed_at": "2026-10-07T21:03:11Z",
+      "ttl_hours": 72,
+      "gates_owner": true,
+      "delivered": null,
+      "note": "",
+      "generation": 1
     }
   ],
   "deferred_log": [

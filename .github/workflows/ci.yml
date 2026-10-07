@@ -1,9 +1,15 @@
 name: CI
 
+# Activity types are declared explicitly, not left to GitHub's defaults
+# (opened/synchronize/reopened).  `edited` is what fires when a PR's *base* is
+# retargeted; without it a PR opened against main and then retargeted to
+# arena/* reuses its previous green `merge-base-guard` check and law R18 is
+# bypassed.  `ready_for_review` covers a draft that becomes mergeable.
+# scripts/governance_guard.py check-offline (law R19) fails if either is dropped.
 on:
   push:
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
 
 # A superseded push's matrix run is wasted minutes: cancel it so the queue
 # always reflects the newest SHA (the maintenance workflow deliberately does

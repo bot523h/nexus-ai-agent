@@ -62,7 +62,11 @@ distribution-version test fail for purely environmental reasons — documented i
 
 ## 4. Board state (schema 2 — summary; always verify with `show`)
 
-Verified at `2026-10-06T23:20Z`, `main` @ `b733fb0` (after the #126 → #183 → #128 spine stack and the #184 owner-gate fix merged).
+Verified at `2026-10-07T21:20Z`, `main` @ `6122c9b` (after PR#186/#187 landed).
+Live `gates_owner`: **`task-254-governance-enforcement-plane`** on branch
+`arena/79164857-nexus-ai-agent` (ttl 72 h, generation 1). Before that claim the board
+held **zero** active gates owners, which contradicts rule 4 below — the absence was
+silent, not `BLOCKED`. Verify with `python scripts/agent_board.py show`.
 
 | Task | Zone | Owner (branch) | Status |
 |---|---|---|---|
@@ -71,7 +75,8 @@ Verified at `2026-10-06T23:20Z`, `main` @ `b733fb0` (after the #126 → #183 →
 | `task-190` SQLite WAL init race | `storage-observability` | merged | `done` (#132 → #174) |
 | `task-253` owner identity gate fails closed when unconfigured | `features-owner-control` | merged | `done` (PR#184) |
 | `task-131` documentation & architecture suite + board rewrite | `docs-architecture` | — | `done` |
-| `ci-gates-steward` interim gates stewardship | `ci-quality` | — | `completed_released` (no live `gates_owner`) |
+| `ci-gates-steward` interim gates stewardship | `ci-quality` | — | `completed_released` |
+| `task-254` governance enforcement plane (law R19) | `nagar-foundation-waves` | `arena/79164857-nexus-ai-agent` | `active` — **live `gates_owner`** |
 | `task-122` PR#32 rebase + dedupe | `feature-wiring` | عامل B | `assigned_to_B` (stale lease) |
 | `task-123` PR#33 slim-down | `packaging+interop` | شاخه 3aa | `assigned_to_E_pr33` (stale lease) |
 | `task-124` P0-8 single wiring + P0-9 graph memory | `audit-remainder` | free | `available_sequenced_post_32_33` — **P0** |
