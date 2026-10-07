@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-06T09:33:28Z",
+  "updated_at": "2026-10-06T20:30:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -727,6 +727,15 @@
         "tests/architecture/test_cognition_isolation.py",
         "tests/architecture/test_legacy_agent_no_raw_execution.py",
         "tests/architecture/test_nagar_creative_slice_boundary.py"
+      ]
+    },
+    {
+      "id": "runtime-truth-tooling",
+      "description": "Living-truth tooling: one repo-truth doctor + an enforced repo-consistency law, so a stale SHA/PR/branch/version/docs claim is a failing check rather than a silent lie",
+      "paths": [
+        "src/nexus_ai_agent/diagnostics/",
+        "tests/unit/test_truth_doctor.py",
+        "tests/architecture/test_repo_truth_consistency.py"
       ]
     }
   ],
@@ -2941,6 +2950,141 @@
       "gates_owner": false,
       "delivered": false,
       "note": "PR #155 (overnight/nagar-20261004, head 3f09aba) is open/draft and is NOT an ancestor of main (main=5a228ea after PR #156 merged task-232's durable creative queue). This task composes the two: PR #155's cognition slice + main's durable queue, without a history rewrite. Composes with task-232 (gates_owner) - disjoint paths. | +src/nexus_ai_agent/cli.py (durable `nexus intent` operator entry point; cli-packs-registry zone has no live claim). | +continuum/pack_coverage.py (classify the ported cognition host-layer tests; continuum-evidence-measurement has no live claim). | +agents/phi_agent.py + its regression test (fail-closed moderation, part of the Gate C slice; no other live claim touches agents/)."
+    },
+    {
+      "task": "task-240",
+      "title": "Repo-truth doctor: one report that reconciles live truth",
+      "title_fa": "پزشک حقیقت مخزن: یک گزارش که حقیقت زنده را تطبیق می‌دهد",
+      "zone": "runtime-truth-tooling",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Repo-truth doctor: one report that reconciles live truth",
+      "scope_fa": "پزشک حقیقت مخزن: یک گزارش که حقیقت زنده را تطبیق می‌دهد",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "مخزن را از یک فرمان اسکن می‌کند و هر یافته کد، شاهد و شدت دارد",
+        "هیچ یافته‌ای بی‌شاهد گزارش نمی‌شود"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_truth_doctor.py"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/diagnostics/"
+      ],
+      "agent_branch": "arena/runtime-truth-tooling",
+      "claimed_at": "2026-10-06T20:30:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": false,
+      "note": ""
+    },
+    {
+      "task": "task-241",
+      "title": "Docs-to-tree claim consistency law (marker syntax + gate)",
+      "title_fa": "قانون سازگاری ادعاهای مستندات با درخت",
+      "zone": "runtime-truth-tooling",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Docs-to-tree claim consistency law (marker syntax + gate)",
+      "scope_fa": "قانون سازگاری ادعاهای مستندات با درخت",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "هر ادعای ماشین‌خوان با فایل:خط شاهد را resolve می‌کند",
+        "ادعای بی‌شاهد باعث شکست تست می‌شود"
+      ],
+      "evidence_required": [
+        "pytest tests/architecture/test_repo_truth_consistency.py"
+      ],
+      "exclusive_paths": [
+        "tests/architecture/test_repo_truth_consistency.py"
+      ],
+      "agent_branch": "arena/runtime-truth-tooling",
+      "claimed_at": "2026-10-06T20:30:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": false,
+      "note": ""
+    },
+    {
+      "task": "task-242",
+      "title": "Version lock-step parity across every declaration",
+      "title_fa": "هم‌گامی نسخه در همهٔ اعلان‌ها",
+      "zone": "runtime-truth-tooling",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Version lock-step parity across every declaration",
+      "scope_fa": "هم‌گامی نسخه در همهٔ اعلان‌ها",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "VERSION==pyproject==CHANGELOG==README و بدنهٔ continuum",
+        "دکتر واگرایی را با کد پیدا می‌کند"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_truth_doctor.py -k version"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/diagnostics/"
+      ],
+      "agent_branch": "arena/runtime-truth-tooling",
+      "claimed_at": "2026-10-06T20:30:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": false,
+      "note": ""
+    },
+    {
+      "task": "task-243",
+      "title": "Assertion and documentation surface (README section + tests)",
+      "title_fa": "سطح ادعا و مستندسازی (بخش README + تست‌ها)",
+      "zone": "runtime-truth-tooling",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Assertion and documentation surface (README section + tests)",
+      "scope_fa": "سطح ادعا و مستندسازی (بخش README + تست‌ها)",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "هر یافته و کد آن مستند شده",
+        "README ورودی docs/README.md دارد"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_truth_doctor.py tests/architecture/test_repo_truth_consistency.py"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/diagnostics/"
+      ],
+      "agent_branch": "arena/runtime-truth-tooling",
+      "claimed_at": "2026-10-06T20:30:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": false,
+      "note": ""
+    },
+    {
+      "task": "task-244",
+      "title": "CLI surface + one report format shared by CLI and gate",
+      "title_fa": "سطح CLI + یک قالب گزارش مشترک بین CLI و گیت",
+      "zone": "runtime-truth-tooling",
+      "priority": "P1",
+      "status": "active",
+      "scope": "CLI surface + one report format shared by CLI and gate",
+      "scope_fa": "سطح CLI + یک قالب گزارش مشترک بین CLI و گیت",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "nexus truth doctor --format json همان قالب گیت را می‌دهد",
+        "کدهای خروج مشخص و مستند"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_truth_doctor.py -k cli"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/diagnostics/"
+      ],
+      "agent_branch": "arena/runtime-truth-tooling",
+      "claimed_at": "2026-10-06T20:30:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": false,
+      "note": ""
     }
   ],
   "deferred_log": [
