@@ -23,12 +23,13 @@ flowchart LR
 | 2 | [`architecture/MODULE_MAP.md`](architecture/MODULE_MAP.md) | What may import what — and which test fails when a boundary is crossed |
 | 3 | [`architecture/RUNTIME_FLOWS.md`](architecture/RUNTIME_FLOWS.md) | What happens on a message, a slideshow job, a render, a migration, a webhook cold start — including the failure contract |
 | 4 | [`architecture/CREATIVE_STUDIO.md`](architecture/CREATIVE_STUDIO.md) | The Nagar capability model, the seven packs, the honest coverage ledger, the render lane |
-| 5 | [`architecture/DATA_AND_STORAGE.md`](architecture/DATA_AND_STORAGE.md) | Every store, who owns it, how it is migrated, and what never enters it |
-| 6 | [`architecture/SECURITY.md`](architecture/SECURITY.md) | Trust boundaries, STRIDE → control → test evidence, P0 audit follow-through |
-| 7 | [`architecture/OBSERVABILITY.md`](architecture/OBSERVABILITY.md) | Logs, metrics, health semantics, and the short list of things worth alerting on |
-| 8 | [`architecture/TESTING.md`](architecture/TESTING.md) | Taxonomies, the four gates, determinism rules, honest gaps |
-| 9 | [`architecture/PORTS.md`](architecture/PORTS.md) | The six hexagonal ports and their invariants |
-| 10 | [`architecture/REFERENCES.md`](architecture/REFERENCES.md) | The external standards this documentation follows (C4, arc42, MADR, fitness functions) |
+| 5 | [`architecture/CREATIVE_DIRECTION.md`](architecture/CREATIVE_DIRECTION.md) | The product direction above the execution chain: the intent-first backbone, the first vertical slice, and what is deliberately deferred |
+| 6 | [`architecture/DATA_AND_STORAGE.md`](architecture/DATA_AND_STORAGE.md) | Every store, who owns it, how it is migrated, and what never enters it |
+| 7 | [`architecture/SECURITY.md`](architecture/SECURITY.md) | Trust boundaries, STRIDE → control → test evidence, P0 audit follow-through |
+| 8 | [`architecture/OBSERVABILITY.md`](architecture/OBSERVABILITY.md) | Logs, metrics, health semantics, and the short list of things worth alerting on |
+| 9 | [`architecture/TESTING.md`](architecture/TESTING.md) | Taxonomies, the four gates, determinism rules, honest gaps |
+| 10 | [`architecture/PORTS.md`](architecture/PORTS.md) | The six hexagonal ports and their invariants |
+| 11 | [`architecture/REFERENCES.md`](architecture/REFERENCES.md) | The external standards this documentation follows (C4, arc42, MADR, fitness functions) |
 
 **Persian navigation summary:** [`architecture/OVERVIEW.fa.md`](architecture/OVERVIEW.fa.md).
 

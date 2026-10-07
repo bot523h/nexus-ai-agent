@@ -24,8 +24,10 @@ The board is `.agents/board.json` (**schema 2**: `protocol`, `zones`, `claims`, 
    an unpushed claim does not exist for the other sandbox. Finish → `release`; blocked → `defer`
    (the Persian note template is built into the CLI).
 2. **ONE OWNER PER FILE-ZONE.** Claims carry `exclusive_paths`. Before pushing, run
-   `python scripts/agent_board.py check --files <changed,files> --branch <you>`; exit 1 means overlap
-   with another agent's live lease — do not push that work, pick another task or defer.
+   `python scripts/agent_board.py check --files <changed,files> --branch <you>`; exit `1` means a
+   proven overlap with another agent's live lease — do not push that work, pick another task or
+   defer. Exit `2` means a source (git/remote/worktree) was unreadable — that is **not** a pass;
+   retry once it is reachable. Only exit `0` means "every consulted source was readable and disjoint".
 3. **BRANCH NAME IS THE CANONICAL IDENTITY.** Letters (A/B/C/…) are convenience labels only.
    A newcomer must state its identity as *its branch*, after checking `git ls-remote origin "arena/*"`,
    the open PRs, and this board. (The rule exists because three sessions once declared "agent E".)
@@ -75,6 +77,7 @@ Verified at `2026-09-21T16:45Z`, `main` @ `7573249` (v3.13.0).
 | `task-123` PR#33 slim-down | `packaging+interop` | شاخه 3aa | `assigned_to_E_pr33` |
 | `task-121` OTIO markers · `task-128` async DB · `task-106` studio surface · `task-127` real RAG | — | free / B | sequenced (prerequisites in the board) |
 | `task-132` extras CI matrix · `task-134` portrait slice | `ci-quality` / `nagar-portrait` | free | `queued` |
+| `task-186` Nagar creative execution spine (intent-first loop, in-memory) | `nagar-creative-graph` | done (this session) | `done` — direction D-0025; durability is `task-187` in `next_work` |
 
 Closed waves, merged PRs (#19–#38) and the four recorded incidents live in
 `history` inside `.agents/board.json`; the durable narrative is

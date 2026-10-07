@@ -123,9 +123,13 @@
       "id": "coordination-referee",
       "paths": [
         "scripts/agent_board.py",
-        "tests/unit/test_agent_board_active_in_review.py"
+        "tests/unit/test_agent_board_active_in_review.py",
+        "scripts/board_referee_mutations.py",
+        "tests/unit/test_agent_board.py",
+        "docs/MULTI_AGENT_PROTOCOL.md",
+        "AGENTS.md"
       ],
-      "note": "historical referee work"
+      "note": "referee CLI + its schema/mutation tests + protocol doc"
     },
     {
       "id": "coordination-schema2",
@@ -748,6 +752,24 @@
         "src/nexus_ai_agent/creative/render_jobs.py",
         "src/nexus_ai_agent/bot/creative_surface.py"
       ]
+    },
+    {
+      "id": "nagar-creative-graph",
+      "description": "Nagar intent-first creative execution spine: typed intent, creative graph, artifact lineage (CREATIVE_DIRECTION.md)",
+      "paths": [
+        "src/nexus_ai_agent/creative/spine/",
+        "tests/unit/test_creative_spine.py",
+        "tests/unit/test_spine_mutations.py",
+        "tests/architecture/test_spine_boundary.py"
+      ]
+    },
+    {
+      "id": "nagar-spine-atomicity",
+      "description": "Creative-execution spine plan atomicity (D-0025): a multi-step plan is all-or-nothing.",
+      "paths": [
+        "src/nexus_ai_agent/creative/spine/",
+        "tests/unit/test_creative_spine.py"
+      ]
     }
   ],
   "claims": [
@@ -781,8 +803,8 @@
         "tests/unit/test_agent_board.py"
       ],
       "owner_hint": "",
-      "agent_branch": "arena/01a0c4c1-nexus-ai-agent",
-      "claimed_at": "2026-09-21T16:21:42Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": [
@@ -815,8 +837,8 @@
       ],
       "exclusive_paths": [],
       "owner_hint": "",
-      "agent_branch": "arena/01a0c4c1-nexus-ai-agent",
-      "claimed_at": "2026-09-21T16:21:42Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": [
@@ -841,8 +863,8 @@
       "evidence_required": [],
       "exclusive_paths": [],
       "owner_hint": "",
-      "agent_branch": "arena/01a0c460-nexus-ai-agent",
-      "claimed_at": "2026-09-21T15:21:39Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "lease expired 2026-09-22T15:21:39Z without renewal; stewardship transferred via task-145 claim (arena/01a0c992) with full handoff note"
@@ -1144,8 +1166,8 @@
       ],
       "exclusive_paths": [],
       "owner_hint": "",
-      "agent_branch": "arena/01a0d709-nexus-ai-agent",
-      "claimed_at": "2026-09-25T05:50:21Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "DELIVERED 2026-09-25 on arena/01a0d709-nexus-ai-agent (PR82): extras-matrix legs core/pdf/speech/translate + python-parity 3.10/3.11/3.12 (all blocking, 3.10 exception removed after the runtime was made truly 3.10-compatible) + release-lineage. Final head 0f2f8f8: CI 12/12 SUCCESS on both runs 36168073743 (pull_request) and 36168067276 (push). Skip-audit mutant-proofed (M1 pinned+killed, M2 killed, intentional skips allowed). Old 3.11-only failure (run 36101703012) proven non-reproducible (flake-or-fixed, no product bug); line-0 test synced. Gates released."
@@ -1188,8 +1210,8 @@
       "evidence_required": [],
       "exclusive_paths": [],
       "owner_hint": "",
-      "agent_branch": "arena/01a0c3a0-nexus-ai-agent",
-      "claimed_at": "2026-09-21T13:05:00Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "evidence": "PR#34 state=MERGED; main @93cee5e; CI 35613892356 SUCCESS"
@@ -1210,7 +1232,7 @@
       "evidence_required": [],
       "exclusive_paths": [],
       "owner_hint": "",
-      "agent_branch": "arena/01a0c460-nexus-ai-agent",
+      "agent_branch": "",
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
@@ -1253,8 +1275,8 @@
     {
       "task": "nagar-wave3-timeline-edit-delivery",
       "zone": "nagar-creative-edit",
-      "agent_branch": "arena/01a0c36f-nexus-ai-agent",
-      "claimed_at": "2026-09-21T11:00:00Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "released_at": "2026-09-21T11:54:00Z",
       "ttl_hours": 24,
       "status": "completed_released",
@@ -1266,8 +1288,8 @@
     {
       "task": "board-gc-engineered-handoff",
       "zone": "coordination",
-      "agent_branch": "arena/01a0c3ca-nexus-ai-agent",
-      "claimed_at": "2026-09-21T11:48:00Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "released_at": "2026-09-21T11:54:00Z",
       "ttl_hours": 24,
       "status": "completed_released",
@@ -1279,8 +1301,8 @@
     {
       "task": "task-101",
       "zone": "ci-quality",
-      "agent_branch": "arena/01a0c3ca-nexus-ai-agent",
-      "claimed_at": "2026-09-21T12:10:00Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "status": "completed_released",
       "gates_owner": false,
@@ -1293,7 +1315,7 @@
     {
       "task": "task-104",
       "zone": "nagar-render-lane",
-      "agent_branch": "arena/01a0c460-nexus-ai-agent",
+      "agent_branch": "",
       "claimed_at": null,
       "ttl_hours": 24,
       "status": "done",
@@ -1310,7 +1332,7 @@
     {
       "task": "task-105",
       "zone": "nagar-caption-engine",
-      "agent_branch": "arena/01a0c460-nexus-ai-agent",
+      "agent_branch": "",
       "claimed_at": null,
       "ttl_hours": 24,
       "status": "done",
@@ -1376,8 +1398,8 @@
     {
       "task": "task-113-ci-lint-rail",
       "zone": "ci-quality-2",
-      "agent_branch": "arena/01a0c54f-nexus-ai-agent",
-      "claimed_at": "2026-09-21T18:56:20Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "status": "done",
       "gates_owner": false,
@@ -1422,8 +1444,8 @@
     {
       "task": "pr39-in-review-docs",
       "zone": "docs-architecture",
-      "agent_branch": "arena/01a0c4c1-nexus-ai-agent",
-      "claimed_at": "2026-09-21T16:33:37Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "status": "done",
       "gates_owner": false,
@@ -1799,8 +1821,8 @@
     {
       "task": "task-142-delivery-signing-coverage-95",
       "zone": "quality-packs",
-      "agent_branch": "arena/01a0c920-nexus-ai-agent",
-      "claimed_at": "2026-09-22T13:10:53Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "status": "done",
       "gates_owner": false,
@@ -1811,8 +1833,8 @@
     {
       "task": "task-151-board-test-clock-time-bomb",
       "zone": "ci-quality",
-      "agent_branch": "arena/01a0c920-nexus-ai-agent",
-      "claimed_at": "2026-09-22T13:27:26Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "status": "done",
       "gates_owner": false,
@@ -1890,7 +1912,8 @@
       "claimed_at": "2026-09-27T12:27:18Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "exclusive_paths": []
+      "exclusive_paths": [],
+      "release_reason": "auto-released by gc at 2026-09-30T13:55:33Z (stale active lease)"
     },
     {
       "task": "task-155-packs-doctor",
@@ -1929,8 +1952,8 @@
       "zone": "pr51-ci-repair",
       "priority": "P0",
       "status": "done",
-      "agent_branch": "arena/01a0ca9c-nexus-ai-agent",
-      "claimed_at": "2026-09-22T19:50:02Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "exclusive_paths": [
@@ -2127,8 +2150,8 @@
         "pytest tests/unit/test_security_hardening.py tests/architecture/test_legacy_creative_boundary.py"
       ],
       "exclusive_paths": [],
-      "agent_branch": "arena/01a0d23e-nexus-ai-agent",
-      "claimed_at": "2026-09-24T07:36:43Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "released_at": "2026-09-24T16:32:01Z",
       "evidence": "PR#65 MERGED -> main 035a896 (035a896dd2ed1293de6accf2ef4309da2fd64c89) at 2026-09-24T09:44:16Z (verified with gh pr view 65 --json state,mergedAt). Reconciled by arena/01a0d43c-nexus-ai-agent: a merged PR must not keep a live lease (PR#51 integration + PR#47 stewardship precedent)."
     },
@@ -2156,8 +2179,8 @@
         "pytest tests/unit/test_creative_surface.py tests/unit/test_creative_render_jobs.py tests/unit/test_i18n_parity.py"
       ],
       "exclusive_paths": [],
-      "agent_branch": "arena/01a0d23e-nexus-ai-agent",
-      "claimed_at": "2026-09-24T07:36:43Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "released_at": "2026-09-24T16:32:01Z",
       "evidence": "PR#65 MERGED -> main 035a896 (035a896dd2ed1293de6accf2ef4309da2fd64c89) at 2026-09-24T09:44:16Z (verified with gh pr view 65 --json state,mergedAt). Reconciled by arena/01a0d43c-nexus-ai-agent: a merged PR must not keep a live lease (PR#51 integration + PR#47 stewardship precedent)."
     },
@@ -2184,8 +2207,8 @@
         "pytest tests/unit/test_maintenance_backup.py"
       ],
       "exclusive_paths": [],
-      "agent_branch": "arena/01a0d23e-nexus-ai-agent",
-      "claimed_at": "2026-09-24T07:36:43Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "released_at": "2026-09-24T16:32:01Z",
       "evidence": "PR#65 MERGED -> main 035a896 (035a896dd2ed1293de6accf2ef4309da2fd64c89) at 2026-09-24T09:44:16Z (verified with gh pr view 65 --json state,mergedAt). Reconciled by arena/01a0d43c-nexus-ai-agent: a merged PR must not keep a live lease (PR#51 integration + PR#47 stewardship precedent)."
     },
@@ -2217,8 +2240,8 @@
         "CI green on the PR"
       ],
       "exclusive_paths": [],
-      "agent_branch": "arena/01a0d43c-nexus-ai-agent",
-      "claimed_at": "2026-09-24T16:32:01Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 48,
       "gates_owner": false,
       "note": "PR#72 https://github.com/bot523h/nexus-ai-agent/pull/72 (commit 5f955ce) — awaiting merge; merge-order disclosures in PR body (PR#68 supersede, PR#67/PR#70/PR#71 collisions). | STEWARDSHIP-RELEASED 2026-09-24T23:06:38Z by arena/01a0d5a1-nexus-ai-agent: delivery vehicle PR#72 is MERGED; a merged PR must not keep a live lease (PR#51/#47/#65 precedent). exclusive_paths released.",
@@ -2436,8 +2459,8 @@
         "docs/DECISION_LOG.md",
         "docs/README.md"
       ],
-      "agent_branch": "arena/01a0d43e-nexus-ai-agent",
-      "claimed_at": "2026-09-24T16:45:20Z"
+      "agent_branch": "",
+      "claimed_at": null
     },
     {
       "task": "task-180-verification-gap-closure",
@@ -2446,8 +2469,8 @@
       "zone": "job-verification-gap-closure",
       "priority": "P0",
       "status": "done",
-      "agent_branch": "arena/01a0d475-nexus-ai-agent",
-      "claimed_at": "2026-09-24T17:45:24Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 48,
       "gates_owner": false,
       "prerequisites": [
@@ -2684,7 +2707,8 @@
         "Two-run reproducibility comparison and exact PR #95/head/main/CI evidence."
       ],
       "note": "auto-released by gc at 2026-10-04T20:19:53Z (stale active lease)",
-      "previous_agent_branch": "arena/01a0e1e0-nexus-ai-agent"
+      "previous_agent_branch": "arena/01a0e1e0-nexus-ai-agent",
+      "release_reason": "auto-released by gc at 2026-09-30T13:55:33Z (stale active lease)"
     },
     {
       "task": "task-185-external-intelligence-hardening",
@@ -2724,7 +2748,8 @@
       "note": "auto-released by gc at 2026-10-04T20:19:53Z (stale active lease)",
       "agent_branch": "arena/01a0df05-nexus-ai-agent",
       "claimed_at": "2026-09-26T18:46:40Z",
-      "ttl_hours": 24
+      "ttl_hours": 24,
+      "release_reason": "auto-released by gc at 2026-09-30T13:55:33Z (stale active lease)"
     },
     {
       "task": "task-195-llm-queue-lifecycle",
@@ -2760,8 +2785,8 @@
         "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
       ],
       "owner_hint": "Arena agent on arena/01a0e2f0-nexus-ai-agent",
-      "agent_branch": "arena/01a0e2f0-nexus-ai-agent",
-      "claimed_at": "2026-09-27T13:02:33Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "MODULE_MAP.md and docs/architecture paths are excluded from this claim: current open PRs #105/#107/#102/#87/#69/#68 overlap that documentation zone. Add/refresh the architecture rule only after those owners reconcile; this slice uses behavioral regression and mutation proof. | SALVAGE-RELEASED 2026-09-27T15:12:52Z by arena/01a0e356-nexus-ai-agent: PR #108 (head 5a4cb23b, merge-base 93c7809, 4 ahead / 30 behind main 05dec617) is CONFLICTING on .agents/board.json and RED on python-parity (3.10) in both check runs on its head — root cause: asyncio.Task.cancelling() (Python 3.11+) called on the worker cancellation path, undefined on 3.10. A session is bound to exactly one branch and cannot push to arena/01a0e2f0; per the PR#102->PR#107 precedent the four commits 565c429..5a4cb23 are merged into the successor branch VERBATIM (git merge, no rebase/force-push, authorship preserved) and the 3.10 defect is fixed under claim task-195-salvage; takeovers in takeover_log. This claim must not keep a live lease. | gates_owner cleared 2026-09-27T16:54:20Z when task-195-salvage continued on arena/01a0e3b7 (sole gates owner)."
@@ -2804,7 +2829,8 @@
       "claimed_at": "2026-09-27T16:54:20Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "auto-released by gc at 2026-10-04T20:19:53Z (stale active lease)"
+      "note": "auto-released by gc at 2026-10-04T20:19:53Z (stale active lease)",
+      "release_reason": "auto-released by gc at 2026-09-30T13:55:33Z (stale active lease)"
     },
     {
       "task": "task-231-provenance-ledger",
@@ -3026,6 +3052,182 @@
       "gates_owner": false,
       "delivered": false,
       "note": ""
+    },
+    {
+      "task": "task-207-multisource-check",
+      "title": "Multi-source check referee: honest 0/1/2 exit codes over local + worktrees + origin/main",
+      "title_fa": "داور چندمنبعی check: کدهای خروج صادق ۰/۱/۲ روی برد محلی + ورک‌تری‌ها + origin/main",
+      "zone": "coordination-referee",
+      "priority": "P0",
+      "status": "done",
+      "scope": "cmd_check consults the local board, every sibling git worktree board and origin/main; exit 2 when any source is unreadable; --no-remote narrows loudly to a local verdict; a proven overlap stays exit 1 even if another source is unreadable. Mutation harness kills the referee guards.",
+      "scope_fa": "cmd_check برد محلی، برد همهٔ ورک‌تری‌های همسایه و origin/main را می‌خواند؛ اگر منبعی خوانده نشود خروج ۲؛ --no-remote با صدای بلند به حکم محلی محدود می‌کند؛ برخورد اثبات‌شده حتی با منبع ناخوانا خروج ۱ می‌ماند.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "check exits 2 when any consulted source (local board, worktree enumeration, origin/main) cannot be read — never a silent 0",
+        "check exits 1 on a proven overlap, even when another source is unreadable",
+        "check exits 0 only when every consulted source was readable and no overlap exists",
+        "--no-remote narrows to the local board and prints an explicit 'NOT a global pass' scope line",
+        "a foreign lease living only in a sibling worktree is detected",
+        "scripts/board_referee_mutations.py kills every catalogued referee mutation and restores the script byte-for-byte",
+        "zero regression on the existing board schema/CLI suite"
+      ],
+      "evidence_required": [
+        "pytest --noconftest -q tests/unit/test_agent_board.py",
+        "python scripts/board_referee_mutations.py  # N/N killed",
+        "ruff check + ruff format --check on scripts/agent_board.py, scripts/board_referee_mutations.py, tests/unit/test_agent_board.py"
+      ],
+      "exclusive_paths": [
+        "scripts/agent_board.py",
+        "scripts/board_referee_mutations.py",
+        "tests/unit/test_agent_board.py",
+        "docs/MULTI_AGENT_PROTOCOL.md",
+        "AGENTS.md"
+      ],
+      "owner_hint": "arena/hardening-task207-foreign-check",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "implements the task-207 design (0/1/2 multi-source referee). D-0025 direction page is separate (docs-architecture). | 2026-09-30: lease-fencing continuation (task-219) landed on the same branch; board tests 34 passed, referee mutations 8/8 killed. | CLOSED 2026-09-30: referee + lease fencing (task-219) + gc note-preservation (task-220) all merged on this branch; evidence: test_agent_board.py 40 passed, board_referee_mutations.py 9/9 killed. | 2026-09-30 CLOSED via PR#126 (head 203cfb5): 32/32 CI checks green incl. lint+test+continuum; full unit suite 2685 passed/11 skipped; board mutation harness 14/14 killed; ruff check+format clean.",
+      "release_reason": "completed on arena/hardening-task207-foreign-check (multi-source referee + task-219 fencing + task-220 gc-note fix)",
+      "generation": 0
+    },
+    {
+      "task": "task-219-lease-fencing",
+      "title": "Incremental lease fencing: generation/epoch + heartbeat vs staleness (design locked)",
+      "title_fa": "حصارگذاری افزایشی اجاره: نسل/دوران + ضربان در برابر کهنگی (طرح قفل‌شده)",
+      "zone": "coordination-referee",
+      "priority": "P1",
+      "status": "done",
+      "scope": "Add generation/epoch fencing and a last_heartbeat field alongside claimed_at+ttl_hours; distinguish abandoned vs stale leases; tie PR activity to the lease. Schema-additive only (no hard break).",
+      "scope_fa": "افزودن حصار نسل/دوران و فیلد last_heartbeat در کنار claimed_at+ttl_hours؛ تفکیک اجارهٔ رهاشده از کهنه؛ اتصال فعالیت PR به اجاره. فقط افزایشی در طرح‌واره (بدون شکست سخت).",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "board schema stays backward compatible: existing boards load without new fields",
+        "a stale lease (heartbeat older than TTL) is distinguishable from an abandoned one (no heartbeat, owner gone)",
+        "generation/epoch increments on takeover so a resurrected old owner cannot silently re-fence",
+        "gc/show report which rule released a lease"
+      ],
+      "evidence_required": [
+        "pytest --noconftest -q tests/unit/test_agent_board.py"
+      ],
+      "exclusive_paths": [
+        "scripts/agent_board.py",
+        "scripts/board_referee_mutations.py",
+        "tests/unit/test_agent_board.py"
+      ],
+      "owner_hint": "free after task-207 lands",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "implemented on arena/hardening-task207-foreign-check: generation/epoch fencing (_generation/_stale_generation), claim renewal = heartbeat (epoch stable), takeover/release/defer advance the epoch, --expected-generation refuses a stale owner with exit 2. Evidence: pytest --noconftest -q tests/unit/test_agent_board.py -> 34 passed; python scripts/board_referee_mutations.py -> 8/8 killed. | 2026-09-30 CLOSED via PR#126 (head 203cfb5): 32/32 CI checks green incl. lint+test+continuum; full unit suite 2685 passed/11 skipped; board mutation harness 14/14 killed; ruff check+format clean.",
+      "generation": 0
+    },
+    {
+      "task": "task-186-nagar-intent-spine",
+      "title": "Nagar creative execution spine: intent-first loop over the existing command surface",
+      "title_fa": "ستون فقرات اجرای خلاق نگر: حلقهٔ نیت‌محور روی سطح فرمان موجود",
+      "zone": "nagar-creative-graph",
+      "priority": "P0",
+      "status": "done",
+      "scope": "Intent -> creative graph -> capability compiler -> CommandBus -> artifact + evidence, in-memory, in creative/spine/. First capability: reference -> CreativeRecipe -> Intent (heuristic). No new media operation, no new pack, no second dispatch path.",
+      "scope_fa": "نیت -> گراف خلاق -> کامپایلر قابلیت -> CommandBus -> مصنوع + شواهد، در حافظه، در creative/spine/. اولین قابلیت: ارجاع -> دستور پخت خلاقانه -> نیت (اکتشافی). بدون عملیات رسانه‌ای جدید، بدون پک جدید، بدون مسیر ارسال دوم.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "typed Intent round-trips; empty/foreign-project request refused typed before any handler",
+        "intent compiles to registry-checked operations; unknown operation refused before dispatch",
+        "execution enters through CommandBus only (test_only_the_bus_invokes_an_operation_handler)",
+        "artifact node binds transaction + state_hash + EvidenceRecord; a refused command produces no artifact",
+        "reference -> recipe carries a low confidence and a no-copy constraint",
+        "no regression on the existing command-contract and studio-isolation suites"
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_creative_spine.py tests/unit/test_spine_mutations.py tests/architecture/test_spine_boundary.py",
+        "pytest -q tests/architecture/test_command_capability_boundary.py tests/architecture/test_nagar_studio_isolation.py",
+        "ruff check + mypy clean on creative/spine/"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/spine/",
+        "tests/unit/test_creative_spine.py",
+        "tests/unit/test_spine_mutations.py",
+        "tests/architecture/test_spine_boundary.py"
+      ],
+      "owner_hint": "any free agent after a board claim",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "generation": 0,
+      "gates_owner": false,
+      "note": "direction authorized by D-0025 / docs/architecture/CREATIVE_DIRECTION.md; durability (persisted graph + lineage) is the next trigger in that page's section 6"
+    },
+    {
+      "task": "task-220-gc-note-preservation",
+      "title": "gc must not destroy a departed owner's evidence note (schema-additive release_reason)",
+      "title_fa": "gc نباید یادداشت شواهد مالکِ رفته را نابود کند (release_reason افزایشی)",
+      "zone": "coordination-referee",
+      "priority": "P0",
+      "status": "done",
+      "scope": "gc_expired overwrote claim['note'] (the departing session's unpushed evidence/handoff) with a generic release line. Record the release reason additively in release_reason, leave note untouched, and surface it in `show`. Schema-additive only.",
+      "scope_fa": "gc_expired یادداشت مالک را با یک خط عمومی بازنویسی می‌کرد و شواهد push‌نشده را نابود می‌ساخت. دلیل آزادسازی به‌صورت افزایشی در release_reason ثبت شود، یادداشت دست‌نخورده بماند و در `show` نمایش داده شود.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "gc records release_reason and never mutates the owner's note",
+        "`show` surfaces the release reason for a gc-released lease",
+        "the mutation harness kills a note-clobbering mutation"
+      ],
+      "evidence_required": [
+        "pytest --noconftest -q tests/unit/test_agent_board.py tests/unit/test_agent_board_active_in_review.py",
+        "python scripts/board_referee_mutations.py"
+      ],
+      "exclusive_paths": [
+        "scripts/agent_board.py",
+        "scripts/board_referee_mutations.py",
+        "tests/unit/test_agent_board.py"
+      ],
+      "owner_hint": "coordination-referee owner",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "generation": 0,
+      "gates_owner": false,
+      "note": "Implemented on arena/hardening-task207-foreign-check. Evidence: pytest --noconftest -q tests/unit/test_agent_board.py tests/unit/test_agent_board_active_in_review.py -> 40 passed; python scripts/board_referee_mutations.py -> 9/9 killed. Reproduced first: running `show` on the shared board replaced four agents' notes (task-154/184/185/195) with 'auto-released by gc'; the fix keeps those notes."
+    },
+    {
+      "task": "task-221-spine-plan-atomicity",
+      "title": "A multi-step spine plan must be all-or-nothing (no partial commit)",
+      "title_fa": "برنامهٔ چندمرحله‌ای ستون فقرات باید همه-یا-هیچ باشد (بدون کامیت جزئی)",
+      "zone": "nagar-spine-atomicity",
+      "priority": "P0",
+      "status": "done",
+      "scope": "CreativeExecutionSpine.execute_intent dispatches planned operations one at a time and commits each through the bus. When a later step is refused, the earlier steps are already committed (revision advances, artifact nodes written), contradicting the spine docstring and CREATIVE_DIRECTION.md §5.4 ('a command the bus refuses fails the run and leaves no artifact'). Reproduce: a two-step plan whose second command is invalid leaves the first step committed. Fix: make the run transactional -- on any step failure, undo the steps already applied via the bus's own system.undo path (no bypass, no fabricated rollback), so the run leaves state and revision exactly as it began.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "a two-step plan whose second command is refused leaves state_revision and state_hash exactly as before the run",
+        "no artifact or evidence node is written to the graph for a failed run",
+        "a successful multi-step run still commits every step (no regression)",
+        "the bus remains the only write path; the spine does not bypass authority to roll back",
+        "a mutation that disables the rollback turns the regression RED"
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_creative_spine.py",
+        "pytest -q tests/unit/test_spine_mutations.py",
+        "pytest -q tests/architecture/test_spine_boundary.py",
+        "python scripts/agent_board.py check --files src/nexus_ai_agent/creative/spine/execution.py,tests/unit/test_creative_spine.py --branch arena/hardening-task207-foreign-check"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/spine/",
+        "tests/unit/test_creative_spine.py"
+      ],
+      "owner_hint": "arena/hardening-task207-foreign-check",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "generation": 2,
+      "gates_owner": false,
+      "note": "DONE on arena/hardening-task207-foreign-check @ 3324ce6. Reproduced the defect on main e5b326b (two-step plan, second step refused -> state_revision 0->1 + one artifact node). Fix: transactional execute_intent (rollback via bus system.undo + graph artifact retraction). Evidence: pytest -q tests/unit/test_creative_spine.py tests/unit/test_spine_mutations.py tests/architecture/test_spine_boundary.py -> 21 passed (7/7 mutants killed); full tests/unit+tests/architecture -> 2816 passed, 11 skipped; mypy src -> clean; ruff check+format -> clean; docs integrity 61 passed; referee check with repo+token -> no overlap across 27 sources."
     }
   ],
   "deferred_log": [
@@ -3240,22 +3442,26 @@
       "why_fa": "D-0011: lut/burnin به دلیل نبود مسیر اجرای صادقانه (بدون .cube shipped و بدون subtitles op در lane IR) typed refuse می‌شوند؛ با ابزار واقعی lane قابل برگشت‌اند."
     },
     {
+      "id": "task-187-nagar-graph-durability",
+      "priority": "P1",
+      "zone": "nagar-creative-graph",
+      "title": "Persist the creative graph and artifact lineage (make the spine durable)",
+      "title_fa": "پایدارسازی گراف خلاق و تبار مصنوع (پایدار کردن ستون فقرات)",
+      "why_fa": "اسلایس D-0025 فقط در حافظه است؛ تا گراف و تبار پایدار نشوند، چندجهانی و بازخورد اجتماعی چیزی برای شاخه‌گرفتن و ابطال ندارند.",
       "acceptance_criteria": [
-        "real user sends /edit trim on staging and receives translated queued + video artifact",
-        "caption transcribe on default install returns the typed unavailable message (localized)",
-        "job rows show durable COMPLETED/not FAILED for the typed paths"
+        "graph nodes and artifact lineage persist and round-trip by (intent_id, project_id, state_revision)",
+        "a stale revision is refused untouched, reusing the bus state_revision/state_hash preconditions",
+        "the persistence adapter lives outside the pure creative/spine module (boundary stays stdlib+pydantic)",
+        "no regression on tests/unit/test_creative_spine.py and the command-contract suite"
       ],
-      "exclusive_paths": [],
       "prerequisites": [
-        "staging bot token + a test chat"
+        "task-186-nagar-intent-spine"
       ],
-      "status_note": "owner/staging action; evidence = staging screenshots + job row dump",
-      "id": "task-175",
-      "priority": "P2",
-      "zone": "p0-stabilization",
-      "title": "Staging smoke of /edit /caption /grade against the live bot (PTB runtime)",
-      "title_fa": "اسموک استیجینگ سه فرمان creative روی ربات زنده",
-      "why_fa": "زنجیره در سطح unit/integration با artifact واقعی اثبات شده؛ اثبات نهایی کاربر-واقعی به کانتکست PTB زنده و توکن استیجینگ نیاز دارد (external dependency)."
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/graph/",
+        "tests/unit/test_creative_graph.py"
+      ],
+      "status_note": "sequenced after task-186 (spine in-memory slice, done); trigger recorded in docs/architecture/CREATIVE_DIRECTION.md section 6"
     }
   ],
   "history": {
@@ -3543,6 +3749,12 @@
         "id": "nightly-backup-never-succeeded",
         "what": "The maintenance workflow's backup-db job (nightly 03:17 UTC, the production DB backup to the R2 blob tier) has failed EVERY run since it was introduced: runs 35580701817 (2026-09-21, 04d8820), 35705502209 (2026-09-22, 40327bc) and 35838057275 (2026-09-23, main @a997aab) — all with the 'Run nexus maintenance backup' step exiting 1. The one 'success' in the series (35586584833, 2026-09-21 10:02Z) was the Monday housekeeping job with backup-db SKIPPED (job-level API verified). Since 09-21 the backup path code (maintenance/backup.py, storage/providers/r2.py) is unchanged, so the failure is environmental: either the R2 secrets are not configured (by-design red, 'fail loudly'), or the R2+Neon combination is misconfigured. The exact error text is UNVERIFIED from this sandbox (Actions log download EOFs here). Consequence: no production database backup has ever been produced by this pipeline.",
         "resolution": "Owner action required: read the failed job log (any of the three runs), set/verify the R2_* and NEXUS_DATABASE_URL repo secrets per docs/ops/r2-storage.md §4, then trigger a manual run (workflow_dispatch) and confirm an upload under backups/db/<stamp>/. Tracked as task-164 (next_work). NOTE: if NEXUS_DATABASE_URL is unset in CI the job can never back up real data — the runner has no local SQLite file (settings default data/app.sqlite does not exist there), so the documented 'local SQLite fallback' is only meaningful on a host that actually runs the bot."
+      },
+      {
+        "date": "2026-09-30",
+        "id": "duplicate-fail-open-fix",
+        "what": "دو شاخه هم‌زمان «check باید fail-closed شود» (task-207) را در scripts/agent_board.py و tests/unit/test_agent_board.py پیاده کردند: arena/01a0eade (PR#122، لیز فعال task-207-agent-board-check-fails-open، انقضا 2026-10-01T06:30Z) و arena/hardening-task207-foreign-check (PR#126). دو طراحی متفاوت: جمع‌آوری «تختهٔ PRهای باز» در برابر منبع «شاخه‌های push‌شدهٔ PR باز».",
+        "resolution": "چک چندمنبعیِ همین سخت‌سازی، تصادم را پیش از push نشان داد (exit 1؛ فایل‌های scripts/agent_board.py و tests/unit/test_agent_board.py در branch:arena/01a0eade-nexus-ai-agent). قانون: «کار تازه‌تر و کامل‌تر برنده است» پس از مقایسهٔ دو diff؛ بازنده کارش را به برنده ارجاع می‌دهد. درس: پیش از شروع کار روی ناحیهٔ پرتصادم، `check` با منبع PRهای باز اجرا شود نه فقط تختهٔ محلی."
       }
     ],
     "board_revisions": [
