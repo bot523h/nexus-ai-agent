@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-07T21:03:11Z",
+  "updated_at": "2026-10-07T21:18:32Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -787,7 +787,11 @@
         "scripts/governance_guard.py",
         "tests/architecture/test_governance_enforcement.py",
         "docs/architecture/GOVERNANCE_ENFORCEMENT.md",
-        ".agents/evidence/GOVERNANCE_GITHUB_2026-10-07.json"
+        ".agents/evidence/GOVERNANCE_GITHUB_2026-10-07.json",
+        "scripts/pr_convergence.py",
+        "tests/architecture/test_pr_convergence.py",
+        "docs/architecture/PR_CONVERGENCE.md",
+        ".agents/evidence/PR_CONVERGENCE_2026-10-07.json"
       ]
     }
   ],
@@ -3446,6 +3450,44 @@
       "claimed_at": "2026-10-07T21:03:11Z",
       "ttl_hours": 72,
       "gates_owner": true,
+      "delivered": null,
+      "note": "",
+      "generation": 1
+    },
+    {
+      "task": "task-255-pr-convergence-graph",
+      "title": "Wave 2 PR convergence: a deterministic, read-only convergence graph over the open-PR queue",
+      "title_fa": "موج ۲ همگرایی PRها: گراف همگرایی deterministic و فقط‌خواندنی روی صف PRهای باز",
+      "zone": "nagar-foundation-waves",
+      "priority": "P0",
+      "status": "active",
+      "scope": "scripts/pr_convergence.py (new, stdlib-only, imports the existing board transport) + tests/architecture/test_pr_convergence.py + law R20 + docs/architecture/PR_CONVERGENCE.md + dated live report witness",
+      "scope_fa": "ابزار جدید همگرایی (فقط stdlib) + تست معماری + قانون R20 + سند + witness تاریخ‌دار",
+      "prerequisites": [
+        "task-254-governance-enforcement-plane"
+      ],
+      "acceptance_criteria": [
+        "every open PR is classified with evidence, and an unknown PR is never silently ignored",
+        "duplicate verdicts carry confidence and witnesses; a title alone is never proof",
+        "supersession is recorded as a relationship and never closes the superseded PR",
+        "the tool contains no mutating call and does not mutate the board it is handed",
+        "the report is byte-identical for the same input"
+      ],
+      "evidence_required": [
+        "pytest tests/architecture/test_pr_convergence.py",
+        "python scripts/pr_convergence.py --repo bot523h/nexus-ai-agent --json"
+      ],
+      "exclusive_paths": [
+        "scripts/pr_convergence.py",
+        "tests/architecture/test_pr_convergence.py",
+        "docs/architecture/PR_CONVERGENCE.md",
+        ".agents/evidence/PR_CONVERGENCE_2026-10-07.json"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/79164857-nexus-ai-agent",
+      "claimed_at": "2026-10-07T21:18:32Z",
+      "ttl_hours": 72,
+      "gates_owner": false,
       "delivered": null,
       "note": "",
       "generation": 1

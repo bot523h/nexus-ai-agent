@@ -1982,3 +1982,80 @@ to VERIFIED / VERIFIED_WITH_LIMITATIONS / HARDENED_BUT_NOT_COMPLETE / BLOCKED / 
   a token with the `administration` permission.
 * **No zero-bypass claim is made.** GitHub lets an owner bypass required checks, and the
   admin-enforcement sub-setting was unreadable here.
+
+## 2026-10-07 — PR convergence: a deterministic read-only graph over the open-PR queue (D-0027)
+
+### D-0027 — Law R20: convergence discovers, classifies, correlates, detects, ranks and recommends — and never mutates
+
+**Status:** Accepted and implemented (board `task-255-pr-convergence-graph`).
+**Measured on:** `main` @ `6122c9bfa99db0a31c57e782959deb1e7ad12269`, 2026-10-07.
+
+**Context.** The queue was unreadable: **49 open pull requests**, all based on `main`, across
+**13 distinct base SHAs**, from three authors, 967 changed-file entries, and **zero live board
+leases** for any of the 49 head branches. **36** of the 49 touch `.agents/board.json`, 19 touch
+`docs/README.md`, and **783 pairs** of open PRs share at least one changed path — so nearly every
+merge needs a manual conflict resolution and nobody can say which PR should land first.
+
+**Decision.** Add `scripts/pr_convergence.py`, a stdlib-only, read-only analyser with a pure core
+(`analyze(prs, board, live_main_sha, now, thresholds)`) and a thin collection adapter. It:
+
+* classifies every open PR into one primary class (`BLOCKED`, `DUPLICATE`, `CANONICAL`,
+  `SUPERSEDING`, `STALE`, `ORPHANED`, `DEPENDENT`, `ACTIVE`) while recording *every* matched
+  condition in `signals`, so a PR that is both unowned and superseded reports both facts;
+* detects duplicates from weighted signals (identical `head_sha`, tiered change-set overlap,
+  shared board task/zone, subtree-concentrated architectural objective, title tokens) and emits
+  **confidence plus witnesses carrying the measured values**, so a reviewer can re-derive the
+  verdict by hand;
+* records supersession as a **relationship** (explicit from the board, or derived from change-set
+  containment) and never closes the superseded PR;
+* builds `conflicts_with` / `duplicates` / `supersedes` / `depends_on` / `blocks` / `unlocks`
+  edges, refuses to create an edge for a prerequisite no open PR owns, and reports dependency
+  cycles instead of ordering around them;
+* measures per-PR evidence freshness (`FRESH` / `PARTIAL` / `UNVERIFIABLE`) against the live
+  `main` head, so evidence recorded against an old SHA is never generalised to a new one;
+* emits a deterministic recommended merge order (Kahn over declared dependencies, tie-broken by
+  class rank → unlocks → conflict pressure → scope → freshness → PR number).
+
+**It is not a second coordinator.** The board, its leases, fencing and the GitHub transport stay
+in `scripts/agent_board.py`; this module imports `_claim_live`, `_gh_get`, `gc_expired` and
+`load_board`. Read-only-ness is a *checked* property, not a promise: the source is scanned for
+HTTP write verbs, mutating `gh pr` subcommands and board writes, and the board handed to
+`analyze` is asserted byte-identical afterwards.
+
+**Rejected alternatives.**
+
+* *Auto-merge / auto-close / auto-delete.* Rejected outright. With 783 conflict pairs and 18
+  unowned-but-real PRs, an automated disposition would destroy work. Mutation stays with the owner.
+* *A runtime model deciding merge order.* Rejected: an order decided by a model at runtime is not
+  auditable. The order here is a pure function of the evidence and reproduces byte for byte.
+* *A new graph database or a second PR store.* Rejected: the analysis is a pure function over the
+  live PR list and the existing board; nothing new is persisted except a dated evidence snapshot.
+* *Duplicating the open-PR fetcher.* Rejected in favour of importing `agent_board._gh_get`.
+
+**Two calibration defects found by measuring, not by reasoning.**
+
+1. The first weight table found **zero** duplicates on a queue that contained one: PR#140 and
+   PR#144 shared 9 paths in `creative/temporal/` + `delivery/operations.py` at jaccard `0.82`,
+   with #140's change set a strict subset of #144's, and scored below the floor because only
+   board-correlation signals could push past it. The change-set signal is now tiered and a
+   subtree-concentration signal (S5) was added.
+2. The staleness composite first marked **41 of 49** PRs stale, because base drift and
+   "a newer PR touches the same file" are each true for most of the queue. Inactivity is now a
+   *necessary* condition with one corroborating signal, which yields 28 — all genuinely untouched
+   for ≥ 7 days.
+
+A third defect was caught by the tests rather than by measurement: the topological sort wired
+`depends_on` backwards, so a prerequisite was placed *after* its dependent.
+
+**Evidence.** `tests/architecture/test_pr_convergence.py` — 30 tests: one positive test per class,
+the dependency graph (real, invented, removed, cyclic), evidence freshness, determinism under
+input reordering, completeness (no input PR silently ignored), threshold sensitivity, and six
+mutation attacks (duplicate detector disabled, supersession edge removed, stale evidence
+accepted, unknown PR dropped, invented dependency, removed dependency). Live snapshot:
+`.agents/evidence/PR_CONVERGENCE_2026-10-07.json`. Determinism verified by digesting two runs
+over the live inventory: identical.
+
+**Honest limitations.** No patch-level diff comparison (change *sets* only, the conservative
+direction); `ORPHANED` describes the board, not the value of the work; CI and review state are
+not read, so "stale CI" is approximated by base drift and inactivity and labelled as such; the
+recommended order is advisory and knows nothing a reviewer knows.
