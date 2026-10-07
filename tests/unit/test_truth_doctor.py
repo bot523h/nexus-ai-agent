@@ -270,6 +270,66 @@ def test_every_registered_check_fires_on_its_own_defect(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# board truth
+# --------------------------------------------------------------------------- #
+def _write_board(root: Path, board: dict) -> None:
+    (root / ".agents").mkdir(parents=True, exist_ok=True)
+    (root / ".agents" / "board.json").write_text(json.dumps(board), encoding="utf-8")
+
+
+def _minimal_board() -> dict:
+    return {
+        "schema": 2,
+        "zones": [{"id": "z", "paths": ["src/z/"]}],
+        "claims": [{"task": "task-1", "status": "active", "zone": "z", "gates_owner": True}],
+        "next_work": [{"id": "task-9", "zone": "z"}],
+        "deferred_log": [{"task": "task-1"}],
+    }
+
+
+def test_clean_board_has_no_findings(tmp_path: Path) -> None:
+    _clean_tree(tmp_path)
+    _write_board(tmp_path, _minimal_board())
+    report = truth.run_doctor(tmp_path, only=["board-truth"])
+    assert report.findings == (), report.format_text()
+
+
+def test_undeclared_next_work_zone_is_reported(tmp_path: Path) -> None:
+    _clean_tree(tmp_path)
+    board = _minimal_board()
+    board["next_work"] = [{"id": "task-9", "zone": "ghost-zone"}]
+    _write_board(tmp_path, board)
+    report = truth.run_doctor(tmp_path, only=["board-truth"])
+    assert "TRUTH040" in _codes(report.findings)
+
+
+def test_gates_owner_on_expired_lease_is_reported(tmp_path: Path) -> None:
+    _clean_tree(tmp_path)
+    board = _minimal_board()
+    board["claims"] = [{"task": "task-1", "status": "expired", "zone": "z", "gates_owner": True}]
+    _write_board(tmp_path, board)
+    report = truth.run_doctor(tmp_path, only=["board-truth"])
+    assert "TRUTH041" in _codes(report.findings)
+
+
+def test_deferred_log_unknown_task_is_reported(tmp_path: Path) -> None:
+    _clean_tree(tmp_path)
+    board = _minimal_board()
+    board["deferred_log"] = [{"task": "task-404"}]
+    _write_board(tmp_path, board)
+    report = truth.run_doctor(tmp_path, only=["board-truth"])
+    assert "TRUTH042" in _codes(report.findings)
+
+
+def test_unparsable_board_is_reported(tmp_path: Path) -> None:
+    _clean_tree(tmp_path)
+    (tmp_path / ".agents").mkdir(parents=True)
+    (tmp_path / ".agents" / "board.json").write_text("{not json", encoding="utf-8")
+    report = truth.run_doctor(tmp_path, only=["board-truth"])
+    assert "TRUTH040" in _codes(report.findings)
+
+
+# --------------------------------------------------------------------------- #
 # CLI surface
 # --------------------------------------------------------------------------- #
 def test_cli_json_matches_report_model(tmp_path: Path) -> None:

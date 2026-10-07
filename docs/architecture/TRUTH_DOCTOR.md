@@ -34,6 +34,7 @@ runs a single registered check.
 | `law-test-resolution` | `TRUTH020/021/022` | Each boundary law in `docs/architecture/MODULE_MAP.md` §3 names at least one `test_*.py[::symbol]` that exists — the machine form of the AGENTS.md §7 rule. A law with no test, a renamed file, or a deleted symbol is an error. |
 | `claim-witnesses` | `TRUTH023/024` | Every `<!-- truth:... -->` / `<!-- truth-absent:... -->` marker in the docs resolves against the tree. |
 | `fail-open-defaults` | `TRUTH030` | A truthy-default verdict read (`.get("safe", True)`) in `src/` is a warning, so the silent-success class cannot spread unnoticed. |
+| `board-truth` | `TRUTH040/041/042` | The coordination board is a truth surface: every `next_work` entry names a declared zone, no non-active lease holds `gates_owner`, and every `deferred_log` entry references a real task. |
 
 ## Documentation claim markers
 
