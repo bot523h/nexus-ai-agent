@@ -346,7 +346,13 @@ def test_concurrent_factory_processes_preserve_sqlite_vectors_and_thread_scope(
         for _, _, process in workers:
             if process.poll() is None:
                 process.kill()
-            process.communicate()
+            try:
+                # Bounded cleanup: a killed worker normally exits at once, but
+                # never let a stuck child hang the test's teardown forever.
+                process.communicate(timeout=10)
+            except subprocess.TimeoutExpired:  # pragma: no cover - defensive
+                process.kill()
+                process.wait(timeout=10)
 
     assert {payload["thread"] for payload in worker_payloads} == set(threads)
     assert all(payload["provider"] == "FakeLLMProvider" for payload in worker_payloads)
