@@ -62,6 +62,13 @@ class PresenceStore:
             self._validate_clock_value(expires_at)
         if len(self._online_until) > self.max_entries:
             raise PresenceCapacityError("initial presence mapping exceeds max_entries")
+        # Take a store-owned, revalidated copy so a caller retaining the initial
+        # mapping cannot mutate live state behind ``_lock`` or bypass the
+        # capacity and timestamp checks.
+        self._online_until = {
+            self._validate_user_id(uid): self._validate_clock_value(expires_at)
+            for uid, expires_at in self._online_until.items()
+        }
 
     def mark_online(self, user_id: int, *, ttl_seconds: float | None = None) -> None:
         """Record one online lease, refreshing an existing lease atomically."""
@@ -124,9 +131,11 @@ class PresenceStore:
 
     def _now(self) -> float:
         try:
-            value = float(self.clock())
+            value = self.clock()
         except (TypeError, ValueError, OverflowError) as exc:
             raise PresenceClockError("clock must return a real number") from exc
+        # Validate the raw clock result before any coercion: ``float(True)`` or
+        # ``float("123")`` would otherwise slip past the type guard.
         return self._validate_clock_value(value)
 
     @staticmethod

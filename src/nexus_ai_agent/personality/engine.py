@@ -180,9 +180,11 @@ _POSITIVE_WORDS = frozenset(
         "خوب",
         "ممنون",
         "مرسی",
-        "دوست دارم",
     }
 )
+# Phrases are matched as contiguous token runs because ``_TOKEN_RE`` splits on
+# whitespace, so a multi-word entry in a token set could never match.
+_POSITIVE_PHRASES = (("دوست", "دارم"),)
 _NEGATIVE_WORDS = frozenset(
     {
         "bad",
@@ -203,6 +205,17 @@ _NEGATIVE_WORDS = frozenset(
 )
 _EXCITEMENT_WORDS = frozenset({"wow", "omg", "incredible", "fantastic", "وای"})
 _TOKEN_RE = re.compile(r"[^\W_]+(?:['’][^\W_]+)?", re.UNICODE)
+
+
+def _contains_phrase(tokens: list[str], phrases: tuple[tuple[str, ...], ...]) -> bool:
+    """Return whether *tokens* contains any *phrases* as a contiguous run."""
+
+    for phrase in phrases:
+        width = len(phrase)
+        for start in range(len(tokens) - width + 1):
+            if tuple(tokens[start : start + width]) == phrase:
+                return True
+    return False
 
 
 class PersonalityEngine:
@@ -304,10 +317,11 @@ class PersonalityEngine:
         if not isinstance(text, str):
             raise TypeError("text must be a string")
         observed = text[: self.MAX_INPUT_CHARS]
-        tokens = set(_TOKEN_RE.findall(observed.casefold()))
-        positive = bool(tokens & _POSITIVE_WORDS)
-        negative = bool(tokens & _NEGATIVE_WORDS)
-        excited = "!" in observed or bool(tokens & _EXCITEMENT_WORDS)
+        tokens = _TOKEN_RE.findall(observed.casefold())
+        token_set = set(tokens)
+        positive = bool(token_set & _POSITIVE_WORDS) or _contains_phrase(tokens, _POSITIVE_PHRASES)
+        negative = bool(token_set & _NEGATIVE_WORDS)
+        excited = "!" in observed or bool(token_set & _EXCITEMENT_WORDS)
 
         with self._lock:
             current = self.es

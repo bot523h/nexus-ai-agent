@@ -220,3 +220,18 @@ def test_atomic_write_failure_keeps_previous_file_and_memory(
 def test_missing_state_starts_from_defaults(tmp_path: Path) -> None:
     engine = PersonalityEngine(state_path=str(tmp_path / "missing" / "state.json"))
     assert engine.snapshot() == EmotionalState()
+
+
+def test_multi_word_persian_positive_phrase_is_matched() -> None:
+    engine = PersonalityEngine()
+    before = engine.snapshot()
+    engine.update("من از این کار دوست دارم خیلی")
+    assert engine.es.valence > before.valence
+
+
+def test_phrase_words_in_isolation_do_not_trigger_positive() -> None:
+    # The phrase must be contiguous: ``دوست`` and ``دارم`` apart are not a match.
+    engine = PersonalityEngine()
+    before = engine.snapshot()
+    engine.update("دوست بدون دارم")
+    assert engine.es.valence <= before.valence

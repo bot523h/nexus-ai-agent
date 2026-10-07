@@ -8,6 +8,7 @@ from nexus_ai_agent.presence import (
     InvalidPresenceTTL,
     InvalidPresenceUser,
     PresenceCapacityError,
+    PresenceClockError,
     PresenceStore,
 )
 
@@ -133,3 +134,25 @@ def test_concurrent_access_is_serialized_and_bounded() -> None:
 
     assert errors == []
     assert store.size == 100
+
+
+def test_clock_result_is_validated_before_coercion() -> None:
+    for bad in (True, "123"):
+        store = PresenceStore(clock=lambda bad=bad: bad)  # type: ignore[arg-type,return-value]
+        with pytest.raises(PresenceClockError):
+            store.mark_online(1)
+
+
+def test_initial_mapping_is_copied_and_revalidated() -> None:
+    seed = {1: 5.0}
+    store = PresenceStore(clock=FakeClock(), _online_until=seed)
+    seed[2] = 5.0
+    assert store.size == 1
+    assert store.is_online(2) is False
+
+
+def test_initial_mapping_rejects_invalid_entries() -> None:
+    with pytest.raises(InvalidPresenceUser):
+        PresenceStore(clock=FakeClock(), _online_until={True: 5.0})
+    with pytest.raises(PresenceCapacityError):
+        PresenceStore(max_entries=1, clock=FakeClock(), _online_until={1: 5.0, 2: 5.0})
