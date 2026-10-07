@@ -520,6 +520,79 @@ def check_fail_open_defaults(root: Path) -> list[Finding]:
 
 
 # --------------------------------------------------------------------------- #
+# check 6 — the coordination board tells the truth
+# --------------------------------------------------------------------------- #
+
+
+def check_board_truth(root: Path) -> list[Finding]:
+    """The board is a truth surface: its zones, leases and references must be real.
+
+    Two governance defects this catches (both observed on the live board on
+    2026-10-06):
+
+    * a ``next_work`` entry pointing at a zone that was never declared, and
+    * an ``expired`` lease still carrying ``gates_owner: true`` — the board CLI's
+      ``gc_expired`` releases the *status* but not the flag, so a stale session
+      keeps the single-gates privilege after its lease is gone.
+    """
+    path = root / ".agents" / "board.json"
+    if not path.is_file():
+        return []
+    try:
+        board = json.loads(_read(path))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+        return [
+            Finding(
+                "TRUTH040",
+                "error",
+                "coordination board is unparsable",
+                f"{path.relative_to(root)}: {type(exc).__name__}",
+            )
+        ]
+
+    findings: list[Finding] = []
+    zones = {z.get("id") for z in board.get("zones", [])}
+    claims = board.get("claims", [])
+    claim_ids = {c.get("task") for c in claims}
+
+    for entry in board.get("next_work", []):
+        zone = entry.get("zone")
+        if zone and zone not in zones:
+            findings.append(
+                Finding(
+                    "TRUTH040",
+                    "error",
+                    "next_work entry references an undeclared zone",
+                    f"board.json next_work {entry.get('id')} -> zone {zone!r}",
+                )
+            )
+
+    for claim in claims:
+        if claim.get("gates_owner") and claim.get("status") != "active":
+            findings.append(
+                Finding(
+                    "TRUTH041",
+                    "error",
+                    "gates_owner is held by a non-active lease",
+                    f"board.json {claim.get('task')} "
+                    f"status={claim.get('status')!r} gates_owner=true",
+                )
+            )
+
+    for entry in board.get("deferred_log", []):
+        if entry.get("task") not in claim_ids:
+            findings.append(
+                Finding(
+                    "TRUTH042",
+                    "error",
+                    "deferred_log references an unknown task",
+                    f"board.json deferred_log -> {entry.get('task')}",
+                )
+            )
+    return findings
+
+
+# --------------------------------------------------------------------------- #
 # registry + driver
 # --------------------------------------------------------------------------- #
 
@@ -529,6 +602,7 @@ CHECKS: tuple[tuple[str, Callable[[Path], list[Finding]]], ...] = (
     ("law-test-resolution", check_law_test_resolution),
     ("claim-witnesses", check_claim_witnesses),
     ("fail-open-defaults", check_fail_open_defaults),
+    ("board-truth", check_board_truth),
 )
 
 

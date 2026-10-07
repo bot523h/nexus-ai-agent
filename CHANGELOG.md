@@ -18,9 +18,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs-index`, `law-test-resolution`, `claim-witnesses`, `fail-open-defaults`.
 - **Enforcement:** `tests/architecture/test_repo_truth_consistency.py` (law
   **R16** in `docs/architecture/MODULE_MAP.md` §3) and
-  `tests/unit/test_truth_doctor.py` (24 tests, each check proven in both
+  `tests/unit/test_truth_doctor.py` (29 tests, each check proven in both
   directions). Documented in `docs/architecture/TRUTH_DOCTOR.md`.
 - **CLI:** `python -m nexus_ai_agent.diagnostics.truth [--format json] [--fail-on error|warning|info] [--only NAME]`.
+
+### Fix — board truth: stale gates_owner and an undeclared next_work zone (task-245, session `arena/board-truth-reconcile`)
+
+- **Two governance lies on the live board:** the expired lease
+  `task-232-durable-creative-queue-evidence` still carried `gates_owner: true`
+  (the board CLI's `gc_expired` releases the status but not the flag), and
+  `next_work` entry `task-174` referenced zone `creative-runtime` that was never
+  declared.
+- **Fix:** reconciled the board (cleared the stale `gates_owner`, declared the
+  `creative-runtime` zone) and extended the doctor with a **`board-truth`** check
+  (`TRUTH040/041/042`) so both classes — plus a `deferred_log` pointing at an
+  unknown task — are caught automatically. `scripts/agent_board.py`'s own GC
+  behaviour is owned by other open PRs and was left untouched.
 
 ### Test — wait on the persisted reminder status, not the send (P0-11, session `arena/p0-11-checkpoint-flush-race-successor`)
 
