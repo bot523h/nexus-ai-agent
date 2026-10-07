@@ -74,10 +74,17 @@ class FakeR2Client:
     def delete_objects(self, *, Bucket: str, Delete: dict) -> dict:
         assert Bucket == "bkt"  # the real boto3 call requires the bucket
         objects = Delete["Objects"]
+        quiet = bool(Delete.get("Quiet", False))
         for obj in objects:
             self.objects.pop(obj["Key"], None)
             self.deleted.append(obj["Key"])
-        response = {"Deleted": [{"Key": obj["Key"]} for obj in objects]}
+        # AWS omits successfully deleted keys from ``Deleted`` when Quiet=True;
+        # only failed keys (those in ``Errors``) are echoed back.
+        if quiet:
+            failed = {error.get("Key") for error in self._delete_errors}
+            response: dict = {"Deleted": [{"Key": k} for k in failed if k]}
+        else:
+            response = {"Deleted": [{"Key": obj["Key"]} for obj in objects]}
         if self._delete_errors:
             response["Errors"] = self._delete_errors
         return response

@@ -407,7 +407,9 @@ class UnifiedCloudStorage:
             }
 
         size = local_path.stat().st_size
-        key = remote_key or local_path.name
+        # Only default the key when it is absent; an explicit empty string is
+        # an invalid key and must be rejected, not silently replaced.
+        key = local_path.name if remote_key is None else remote_key
         try:
             key = _validate_remote_key(key)
         except StorageError as exc:

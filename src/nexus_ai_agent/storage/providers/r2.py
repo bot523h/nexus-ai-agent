@@ -176,7 +176,10 @@ class R2Provider:
                         "R2 delete partial failure: "
                         f"{len(errors)} provider error(s), codes={code_summary}"
                     )
-                deleted += len(response.get("Deleted", []))
+                # AWS omits successful keys from ``Deleted`` when Quiet=True, so
+                # the returned count is unreliable; the whole batch is deleted
+                # once the error check above passes.
+                deleted += len(batch)
         except StorageError:
             raise
         except Exception as e:

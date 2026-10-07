@@ -135,3 +135,16 @@ async def test_dropbox_rejects_control_character_remote_key(tmp_path: Path) -> N
 
     with pytest.raises(StorageError, match="remote_key"):
         await _DropboxProvider(token="token").upload(local_path=local, remote_key="bad\nkey.txt")
+
+
+@pytest.mark.asyncio
+async def test_unified_cloud_rejects_explicit_empty_remote_key(tmp_path: Path) -> None:
+    """An explicit empty key is invalid; only ``None`` falls back to the name."""
+    local = tmp_path / "payload.txt"
+    local.write_text("x", encoding="utf-8")
+    storage = UnifiedCloudStorage(mega_provider=RecordingProvider())
+
+    result = await storage.upload_file(local, remote_key="")
+    assert result["success"] is False
+    assert result["remote_key"] is None
+    assert "remote_key" in result["error"]
