@@ -44,7 +44,7 @@ from nexus_ai_agent.creative.studio import (
     build_wave1_registry,
     new_project,
 )
-from nexus_ai_agent.creative.studio.models import UnknownOperationError
+from nexus_ai_agent.creative.studio.models import UndoConflictError, UnknownOperationError
 
 
 def _bus(project_id: str = "proj1", *, authorizer: object | None = None) -> CommandBus:
@@ -372,12 +372,21 @@ def test_failed_run_never_rolls_back_a_foreign_edit(monkeypatch) -> None:
 
     monkeypatch.setattr(bus, "dispatch", dispatch_then_interleave)
 
-    with pytest.raises(SpineRollbackError):
+    with pytest.raises(SpineRollbackError) as excinfo:
         spine.execute_intent(Intent(project_id="proj1", goal="probe"))
 
+    # The refusal is the bus contract (task-223), not a caller-side pre-check:
+    # the undo named the run's own transaction, the identity gate saw a foreign
+    # newest, and the spine translated UndoConflictError into SpineRollbackError.
+    assert isinstance(excinfo.value.__cause__, UndoConflictError)
+
     labels = [marker.label for marker in bus.project.timeline.markers]
-    # the foreign edit survives; only the run's own work is a candidate to undo
+    # the foreign edit survives, and the run's own step-1 legitimately remains
+    # too: with a foreign newest the run cannot undo its own step without
+    # rewinding foreign work, so it fails closed (loudly) rather than silently
+    # corrupting the foreign actor. The surviving content is last-writer-wins.
     assert "FOREIGN" in labels
+    assert "OURS" in labels
     # no artifact/evidence node is left for a run that did not complete
     assert not any(node.kind == "artifact" for node in graph.nodes())
     assert not any(node.kind == "evidence" for node in graph.nodes())

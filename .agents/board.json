@@ -613,7 +613,8 @@
       "id": "storage-observability",
       "paths": [
         "src/nexus_ai_agent/storage/",
-        "docs/ops/"
+        "docs/ops/",
+        "tests/unit/test_storage_wal_init_race.py"
       ],
       "note": "storage observability (queued)"
     },
@@ -2104,7 +2105,7 @@
       "title_fa": "بکاپ شبانهٔ دیتابیس هرگز موفق نشده (۳ از ۳ سرخ) — مسیر بکاپ Production واقعاً کار کند",
       "zone": "ci-quality",
       "priority": "P1",
-      "status": "queued",
+      "status": "deferred",
       "scope": "maintenance.yml backup-db fails 3/3 scheduled runs (35580701817, 35705502209, 35838057275 — the 'Run nexus maintenance backup' step exits 1; the 2026-09-21 'success' 35586584833 was housekeeping-only with backup-db skipped, verified via the job API). backup.py/r2.py unchanged across those runs, so the failure is environmental (R2 secrets missing => by-design red, or R2+Neon misconfiguration). Read the job log, record the exact root cause, fix configuration (owner secrets per docs/ops/r2-storage.md §4) and/or the workflow preflight, then prove a real upload under backups/db/<stamp>/ via workflow_dispatch.",
       "scope_fa": "backup-db در سه اجرا پیاپی سرخ است؛ کد backup.py/r2.py در بازهٔ آن اجراها دست‌نخورده مانده، پس شکست محیطی است (R2 secrets / پیکربندی Neon). لوق جاب باید خوانده، ریشه ثبت و با یک اجرای دستی موفق (آپلود واقع‌زیر backups/db/<stamp>/) اثبات شود.",
       "prerequisites": [],
@@ -2125,7 +2126,8 @@
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Forensics recorded 2026-09-23. Repo-side verifiability absorbed by task-167-backup-verifiability (P0-C, 2026-09-24). This task keeps ONLY the owner-action part: set R2/Neon secrets (docs/ops/r2-storage.md §4) and prove one green workflow_dispatch run with upload under backups/db/<stamp>/."
+      "note": "Forensics recorded 2026-09-23. Repo-side verifiability absorbed by task-167-backup-verifiability (P0-C, 2026-09-24). This task keeps ONLY the owner-action part: set R2/Neon secrets (docs/ops/r2-storage.md §4) and prove one green workflow_dispatch run with upload under backups/db/<stamp>/.",
+      "release_reason": "owner-blocked: repo-side verifiability already delivered by task-167; only the owner-side R2/Neon secret configuration remains (see deferred_log)."
     },
     {
       "priority": "P0",
@@ -3263,10 +3265,9 @@
       "agent_branch": "",
       "claimed_at": null,
       "ttl_hours": 24,
-      "generation": 1,
+      "generation": 2,
       "gates_owner": false,
-      "note": "successor to task-221 (PR#126). Reproduced failure mode D on base head 1fc4938 before any code change: step-1 commits OURS, a VALID foreign mark commits, step-2 refused -> the old unconditional compensating undo rewinds FOREIGN and leaves OURS (silent cross-actor corruption). Fix (spine zone only; studio/ untouched): record each step's committed transaction_id, undo only while the newest editable transaction is the run's own, else fail closed with SpineRollbackError; retract artifact/evidence nodes on every failure path; exactly-once replay for a redelivered successful intent; unique per-step command ids. Evidence: pytest -q tests/unit/test_creative_spine.py tests/unit/test_spine_mutations.py tests/architecture/test_spine_boundary.py -> 25 passed (9/9 mutants killed); tests/unit + tests/architecture -> 2820 passed, 11 skipped; mypy clean; ruff check+format clean. Referee: check --files <changed> --repo bot523h/nexus-ai-agent -> exit 0 (27 sources, no overlap). Docs: DECISION_LOG.md task-222 amendment. Delivery: PR#127 (head 0f98d59) stacked on #126; base #126 pending merge, so merge order is #126 -> #127. Released 2026-10-01: the bus now owns the identity contract (task-223), so the caller-side guard is superseded; the spine adoption is tracked as task-223-spine-undo-identity-adoption.",
-      "release_reason": "delivered in PR#127; released so the spine zone is free for the task-223 adoption follow-up"
+      "note": "successor to task-221 (PR#126). Reproduced failure mode D on base head 1fc4938 before any code change: step-1 commits OURS, a VALID foreign mark commits, step-2 refused -> the old unconditional compensating undo rewinds FOREIGN and leaves OURS (silent cross-actor corruption). Fix (spine zone only; studio/ untouched): record each step's committed transaction_id, undo only while the newest editable transaction is the run's own, else fail closed with SpineRollbackError; retract artifact/evidence nodes on every failure path; exactly-once replay for a redelivered successful intent; unique per-step command ids. Evidence: pytest -q tests/unit/test_creative_spine.py tests/unit/test_spine_mutations.py tests/architecture/test_spine_boundary.py -> 25 passed (9/9 mutants killed); tests/unit + tests/architecture -> 2820 passed, 11 skipped; mypy clean; ruff check+format clean. Referee: check --files <changed> --repo bot523h/nexus-ai-agent -> exit 0 (27 sources, no overlap). Docs: DECISION_LOG.md task-222 amendment. Delivery: PR#127 (head 0f98d59) stacked on #126; base #126 pending merge, so merge order is #126 -> #127."
     },
     {
       "task": "task-223-bus-transaction-scoped-undo",
@@ -3274,7 +3275,7 @@
       "title_fa": "system.undo باید با هویت تراکنش آدرس‌پذیر باشد، نه فقط «آخرین»",
       "zone": "nagar-contract-gate",
       "priority": "P1",
-      "status": "deferred",
+      "status": "active_in_review",
       "scope": "task-221/task-222 finding. ROOT CAUSE: _system_undo in src/nexus_ai_agent/creative/studio/capabilities.py selects the most recent editable transaction globally and restores its full-state snapshot; it has no transaction-identity parameter. task-222 made the SPINE rollback fail closed rather than corrupt a foreign edit, but the bus primitive itself is still globally unsafe for concurrent actors. Because snapshots are full project state, rewinding a non-newest transaction while newer ones stand is not sound, so a correct root fix is a design choice: (A) add an optional transaction_id to system.undo that only rewinds when it is the newest (spine then addresses its own txn, no behavior change when absent); (B) staged command DAG + single commit (no rollback needed); (C) explicit compensating saga per capability. Evaluate with the evidence rules; do NOT pick the smallest diff if it leaves the race.",
       "acceptance_criteria": [
         "a design note (Option A/B/C) with concurrency, crash, authorization and replay semantics recorded in docs/DECISION_LOG.md",
@@ -3286,7 +3287,79 @@
         "pytest -q tests/unit/test_command_capability_contract.py",
         "pytest -q tests/architecture/test_command_capability_boundary.py"
       ],
-      "owner_hint": "any free agent with the nagar-contract-gate zone (touches creative/studio/)"
+      "owner_hint": "any free agent with the nagar-contract-gate zone (touches creative/studio/)",
+      "agent_branch": "arena/01a0181931-task223-undo-contract",
+      "claimed_at": "2026-10-01T04:45:40Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "DELIVERED on arena/01a0181931-task223-undo-contract @ 3ba9aac, PR#128 (stacked on #127). Option A: identity-aware system.undo enforced INSIDE the stage-9 handler under the bus lock. Evidence: TestUndoIdentity 126 passed; two-thread race test (test_race_b_identity_closes_the_check_then_act_window); test_undo_contract_mutations.py 4 passed / 3 mutants killed; tests/unit+tests/architecture 2832 passed, 11 skipped; mypy+ruff clean; referee exit 0 (27 sources). Docs: DECISION_LOG task-223 amendment + COMMAND_CAPABILITY_CONTRACT 7.1 / stage-9 / open-gaps.",
+      "generation": 1,
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/studio/",
+        "tests/unit/test_command_capability_contract.py",
+        "tests/architecture/test_command_capability_boundary.py",
+        "docs/DECISION_LOG.md",
+        "docs/architecture/COMMAND_CAPABILITY_CONTRACT.md",
+        "docs/architecture/CREATIVE_STUDIO.md"
+      ]
+    },
+    {
+      "task": "task-223-spine-undo-identity-adoption",
+      "title": "Spine rollback adopts the bus identity-aware system.undo (task-223 part 2)",
+      "zone": "nagar-creative-graph",
+      "priority": "P1",
+      "status": "active_in_review",
+      "scope": "task-222 guarded the spine rollback with a caller-side read-then-dispatch check, which cannot be atomic: the bus lock is released between reading the newest transaction and dispatching system.undo. With the bus now exposing transaction identity (task-223), the spine names its recorded per-step transaction id and lets the stage-9 gate be authoritative; the caller-side pre-check is removed.",
+      "prerequisites": [
+        "task-221-spine-plan-atomicity"
+      ],
+      "acceptance_criteria": [
+        "the spine rollback names the transaction it undoes and no longer pre-checks bus history",
+        "a foreign edit interleaved between a step commit and a failure survives; the run fails closed with SpineRollbackError",
+        "a mutation that drops the transaction identity turns the spine suite RED"
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_creative_spine.py",
+        "pytest -q tests/unit/test_spine_mutations.py",
+        "pytest -q tests/architecture/test_spine_boundary.py"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/spine/",
+        "tests/unit/test_creative_spine.py",
+        "tests/unit/test_spine_mutations.py"
+      ],
+      "owner_hint": "any free agent with the nagar-creative-graph zone",
+      "agent_branch": "arena/01a0181931-task223-undo-contract",
+      "claimed_at": "2026-10-01T04:45:40Z",
+      "ttl_hours": 24,
+      "generation": 1,
+      "gates_owner": false,
+      "note": "DELIVERED in PR#128: _rollback names the run's own transaction id and translates UndoConflictError -> SpineRollbackError; task-222's caller-side check removed. Evidence: test_creative_spine.py + test_spine_mutations.py + test_spine_boundary.py pass; the spine foreign-edit test now asserts __cause__ is UndoConflictError; spine mutation retargeted and green. Merge order #126 -> #127 -> #128."
+    },
+    {
+      "task": "task-190-sqlite-wal-init-race",
+      "zone": "storage-observability",
+      "status": "active",
+      "title": "SQLite first-use WAL init races under concurrent first use (CI flake: 'database is locked' on PRAGMA journal_mode=WAL)",
+      "title_fa": "مسابقهٔ مقداردهی WAL در اولین استفادهٔ هم‌زمان SQLite (فلیک CI: database is locked روی PRAGMA journal_mode=WAL)",
+      "why_fa": "create_all_tables یک بار به ازای هر مسیر محافظت می‌شود (_initialized_paths) اما خودِ مقداردهی از چند تسک/process هم‌زمان بی‌محافظت است؛ دو مقداردهی هم‌زمان WAL یک‌دیگر را قفل می‌کنند و یکی با sqlite3.OperationalError: database is locked شکست می‌خورد.",
+      "scope": "Found by task-223 while auditing the final PR#128 CI head: python-parity (3.12) failed with sqlite3.OperationalError: database is locked on PRAGMA journal_mode=WAL (run 36816623063 job 110223040499) in test_r_f28_concurrent_identical_learns_collapse_into_one; the 3.10/3.11 legs and the local full suite (2988 passed) were green, so it is intermittent and contention-dependent. Owner: storage-observability zone (unclaimed). Local repro attempt: 12 concurrent create_all_tables on a fresh path (single loop) did NOT reproduce the WAL lock (only the already-retried create_all race fired); the lock needs a concurrent writer holding a transaction at first-use init, which the CI test that failed supplies. No speculative fix attempted out of zone without a deterministic RED test.",
+      "acceptance_criteria": [
+        "PRAGMA journal_mode=WAL under concurrent first use never raises 'database is locked' (busy_timeout + bounded retry on the one-time pragma)",
+        "a deterministic concurrent-first-use regression test (threads or processes) proves no OperationalError and WAL is actually set",
+        "the initialize/create_all path stays idempotent per path and no regression on the storage suite"
+      ],
+      "prerequisites": [],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/db.py",
+        "tests/unit/test_storage_wal_init_race.py"
+      ],
+      "note": "RED reproduced deterministically (both pre-fix tests fail in ~1.3s): a raw sqlite3 connection holding BEGIN IMMEDIATE makes a bare PRAGMA journal_mode=WAL raise 'database is locked'. Fix: bounded retry around the one-time WAL transition (_set_wal_mode + _is_locked) plus a 30s busy timeout on the engine. Mutation evidence (PYTHONPATH forced to the mutant): M1 = bare pragma, timeout kept -> 3 failed (busy timeout alone does NOT cover the WAL transition); M2 = retry kept, timeout removed -> 3 passed (the retry is load-bearing). Commands: pytest tests/unit/test_storage_wal_init_race.py -> 3 passed; storage suite (test_db/test_storage_resilience/test_storage_resilience_boundaries/test_database_url/test_migrations) -> 119 passed; full suite -> 2991 passed, 30 skipped; ruff check+format clean; mypy clean. Board claim updated in the same commit.",
+      "agent_branch": "arena/01a0181931-task190-wal-init-race",
+      "claimed_at": "2026-10-01T20:10:56Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1
     }
   ],
   "deferred_log": [
@@ -3331,27 +3404,25 @@
       "reason_fa": "ریشهٔ ناامنیِ undo در ناحیهٔ studio/ است (خارج از قفلِ ستون فقرات)؛ task-222 فقط در ستون فقرات fail-closed کرد تا خرابی خاموش حذف شود.",
       "reason_en": "The unsafe primitive lives in creative/studio/ (owned by nagar-contract-gate), outside the spine's exclusive lease. task-222 delivered the safe spine-side guard; the bus-level transaction-identity fix is recorded here so it is not forgotten.",
       "resume_when": "a session holds the nagar-contract-gate zone and a design decision (Option A/B/C) is recorded"
+    },
+    {
+      "task": "task-164",
+      "deferred_by_branch": "arena/01a0181931-task223-undo-contract",
+      "at": "2026-10-01T05:11:48Z",
+      "reason_fa": "بخش repo-side با task-167 تحویل شده؛ آنچه مانده فقط تنظیم سکرت‌های R2/Neon توسط مالک است، پس در لیست کار agent مسدود است.",
+      "reason_en": "Owner-blocked: repo-side verifiability already delivered by task-167; the remaining work is the owner setting NEXUS_R2_* / Neon secrets and one green workflow_dispatch. Not agent-actionable.",
+      "resume_when": "owner sets docs/ops/r2-storage.md §4 secrets and runs workflow_dispatch backup-db"
+    },
+    {
+      "task": "task-190-sqlite-wal-init-race",
+      "deferred_by_branch": "arena/01a0181931-task223-undo-contract",
+      "at": "2026-10-01T05:11:48Z",
+      "reason_fa": "در حلقهٔ task-223 کشف شد اما خارج از ناحیهٔ claim من است و رفع آن یک PR چهارم پشت سه PR باز می‌سازد؛ به‌جای گسترش دامنه، با شواهد ثبت شد.",
+      "reason_en": "Found during the task-223 loop but out of my claim's zone; fixing it would open a 4th PR stacked behind three open PRs. Recorded with reproduction instead of widening scope.",
+      "resume_when": "next storage-observability window (after #126/#127/#128 merge)"
     }
   ],
   "next_work": [
-    {
-      "id": "task-164",
-      "priority": "P1",
-      "zone": "ci-quality",
-      "title": "Nightly DB backup has never succeeded (3/3 red) — make the production backup pipeline actually work",
-      "title_fa": "بکاپ شبانهٔ دیتابیس هرگز موفق نشده (۳ از ۳ سرخ) — مسیر بکاپ Production واقعاً کار کند",
-      "why_fa": "تنها مکانیسم DR برای دیتابیس Production (R2 blob tier) سه اجرا پیاپی شکست خورده و هیچ بکاپی تولید نشده؛ ریشهٔ دقیق بدون لوق جاب نامشخص است (R2 secrets؟ پیکربندی Neon؟).",
-      "acceptance_criteria": [
-        "a manual workflow_dispatch run of maintenance/backup-db completes SUCCESS with a visible object under backups/ in R2 including sha256/verified/timestamp in the step log",
-        "NEXUS_R2_* secrets are configured in GitHub Actions (owner-side)",
-        "the scheduled (cron) run after that also completes SUCCESS"
-      ],
-      "prerequisites": [],
-      "exclusive_paths": [
-        ".github/workflows/maintenance.yml"
-      ],
-      "status_note": "repo-side verifiability delivered by task-167 (verified backup contract, round-trip byte identity, restore-into-temp-SQLite verification); what remains is owner-secrets configuration + one real green dispatch"
-    },
     {
       "id": "task-124",
       "priority": "P0",
@@ -3529,6 +3600,24 @@
         "tests/unit/test_creative_graph.py"
       ],
       "status_note": "sequenced after task-186 (spine in-memory slice, done); trigger recorded in docs/architecture/CREATIVE_DIRECTION.md section 6"
+    },
+    {
+      "id": "task-190-sqlite-wal-init-race",
+      "priority": "P1",
+      "zone": "storage-observability",
+      "title": "SQLite first-use WAL init races under concurrent first use (CI flake: 'database is locked' on PRAGMA journal_mode=WAL)",
+      "title_fa": "مسابقهٔ مقداردهی WAL در اولین استفادهٔ هم‌زمان SQLite (فلیک CI: database is locked روی PRAGMA journal_mode=WAL)",
+      "why_fa": "create_all_tables یک بار به ازای هر مسیر محافظت می‌شود (_initialized_paths) اما خودِ مقداردهی از چند تسک/process هم‌زمان بی‌محافظت است؛ دو مقداردهی هم‌زمان WAL یک‌دیگر را قفل می‌کنند و یکی با sqlite3.OperationalError: database is locked شکست می‌خورد.",
+      "acceptance_criteria": [
+        "PRAGMA journal_mode=WAL under concurrent first use never raises 'database is locked' (busy_timeout + bounded retry on the one-time pragma)",
+        "a deterministic concurrent-first-use regression test (threads or processes) proves no OperationalError and WAL is actually set",
+        "the initialize/create_all path stays idempotent per path and no regression on the storage suite"
+      ],
+      "prerequisites": [],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/db.py"
+      ],
+      "status_note": "Found by task-223 while auditing the final PR#128 CI head: python-parity (3.12) failed with sqlite3.OperationalError: database is locked on PRAGMA journal_mode=WAL (run 36816623063 job 110223040499) in test_r_f28_concurrent_identical_learns_collapse_into_one; the 3.10/3.11 legs and the local full suite (2988 passed) were green, so it is intermittent and contention-dependent. Owner: storage-observability zone (unclaimed). Local repro attempt: 12 concurrent create_all_tables on a fresh path (single loop) did NOT reproduce the WAL lock (only the already-retried create_all race fired); the lock needs a concurrent writer holding a transaction at first-use init, which the CI test that failed supplies. No speculative fix attempted out of zone without a deterministic RED test."
     }
   ],
   "history": {
@@ -3822,6 +3911,12 @@
         "id": "duplicate-fail-open-fix",
         "what": "دو شاخه هم‌زمان «check باید fail-closed شود» (task-207) را در scripts/agent_board.py و tests/unit/test_agent_board.py پیاده کردند: arena/01a0eade (PR#122، لیز فعال task-207-agent-board-check-fails-open، انقضا 2026-10-01T06:30Z) و arena/hardening-task207-foreign-check (PR#126). دو طراحی متفاوت: جمع‌آوری «تختهٔ PRهای باز» در برابر منبع «شاخه‌های push‌شدهٔ PR باز».",
         "resolution": "چک چندمنبعیِ همین سخت‌سازی، تصادم را پیش از push نشان داد (exit 1؛ فایل‌های scripts/agent_board.py و tests/unit/test_agent_board.py در branch:arena/01a0eade-nexus-ai-agent). قانون: «کار تازه‌تر و کامل‌تر برنده است» پس از مقایسهٔ دو diff؛ بازنده کارش را به برنده ارجاع می‌دهد. درس: پیش از شروع کار روی ناحیهٔ پرتصادم، `check` با منبع PRهای باز اجرا شود نه فقط تختهٔ محلی."
+      },
+      {
+        "date": "2026-10-01",
+        "id": "undo-contract-plan-collision",
+        "what": "PR#128 (task-223 identity-addressable system.undo, arena/01a0181931-task223-undo-contract) and PR#129 (task-221 staged plan atomicity, jules-...) both rewrite the same system.undo handler in src/nexus_ai_agent/creative/studio/capabilities.py. An independent 3-way merge (main + #129 diff + #128 diff) shows three conflicting hunks inside that one handler: UndoCommandInput.transaction_id (plain field vs validated Field+validator), the identity-guard vs plan-selection branch, and the OperationOutcome keys (undone_plan_id vs requested_transaction_id). #128 has no UndoConflictError and #129 has no identity guard (grep: absent in both directions).",
+        "resolution": "Recorded for the merge order (AGENTS.md §6). #128 is green and merges first; #129 must be rebased onto it and its undo handler reconciled so the identity gate and plan selection coexist -- a wholesale 'ours/theirs' resolution silently drops either the TOCTOU guard (re-opening the check-then-act window) or plan-undo atomicity. #129 is additionally red independently: test_command_idempotency_inside_plan_does_not_index_error fails (idempotency dedupe not applied inside dispatch_plan)."
       }
     ],
     "board_revisions": [

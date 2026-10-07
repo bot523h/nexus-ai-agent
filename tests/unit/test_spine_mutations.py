@@ -87,9 +87,9 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "rollback_ignores_transaction_identity",
         SPINE / "execution.py",
-        "                newest = self._newest_editable_transaction_id()\n                if newest != expected:",
-        "                newest = expected  # mutation: always assume the newest is ours\n                if newest != expected:",
-        "a rollback must refuse when the newest transaction is a foreign edit",
+        '"input": {"transaction_id": transaction_id},',
+        '"input": {},  # mutation: the rollback drops transaction identity',
+        "a rollback must name the transaction it undoes, not rewind the newest",
     ),
     Mutation(
         "duplicate_delivery_reapplies_the_plan",
