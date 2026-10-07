@@ -85,13 +85,19 @@ async def test_delivers_to_originating_chat_not_user_id(reminder_sys: ReminderSy
     reminder_sys.bind(bot)
     # user_id and chat_id deliberately differ and chat is a *group* id.
     await reminder_sys.set_reminder(user_id=111, chat_id=-1001234567, time_str="1s", text="آب بنوش")
-    await _sleep_until(lambda: bool(bot.sent), seconds=3.0)
+
+    # ``bot.sent`` is set inside the send; the ``sent`` status write is a later
+    # hop (to_thread). Wait on the row, not the send, or the read races it.
+    def _sent() -> bool:
+        saved = rows(reminder_sys._db_path)  # type: ignore[arg-type]
+        return bool(saved) and saved[0].status == "sent"
+
+    await _sleep_until(_sent, seconds=3.0)
     assert len(bot.sent) == 1
     chat_id, text = bot.sent[0]
     assert chat_id == -1001234567  # the originating chat, NOT user 111
     assert "آب بنوش" in text
-    saved = rows(reminder_sys._db_path)  # type: ignore[arg-type]
-    assert saved[0].status == "sent"
+    assert rows(reminder_sys._db_path)[0].status == "sent"  # type: ignore[arg-type]
 
 
 async def test_cancel_by_non_owner_rejected(reminder_sys: ReminderSystem) -> None:
