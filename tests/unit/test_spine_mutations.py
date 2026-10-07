@@ -1,4 +1,4 @@
-"""Adversarial mutation tests for the creative spine (D-0024).
+"""Adversarial mutation tests for the creative spine (D-0025).
 
 A guard that has never been attacked is not evidence. Each mutation below
 weakens one spine invariant in place, runs the spine suite, and requires it to

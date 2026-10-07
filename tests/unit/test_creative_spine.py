@@ -1,4 +1,4 @@
-"""The creative execution spine: the intent-first vertical slice (D-0024).
+"""The creative execution spine: the intent-first vertical slice (D-0025).
 
 This suite proves the end-to-end path the direction document describes::
 

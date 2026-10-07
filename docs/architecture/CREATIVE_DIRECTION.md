@@ -188,7 +188,7 @@ A slice is complete only when each of these is proven by a named test. Status is
 - Any new capability must still respect the pack rules in
   [`MODULE_MAP.md`](MODULE_MAP.md) §5 and the trust root in
   [`adr/0006`](adr/0006-capability-pack-trust-root.md).
-- The decision itself is recorded in [`../DECISION_LOG.md`](../DECISION_LOG.md) (D-0024). When a
+- The decision itself is recorded in [`../DECISION_LOG.md`](../DECISION_LOG.md) (D-0025). When a
   summary here disagrees with the log, the log wins.
 
 ## 8. How to verify this document

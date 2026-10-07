@@ -765,7 +765,7 @@
     },
     {
       "id": "nagar-spine-atomicity",
-      "description": "Creative-execution spine plan atomicity (D-0024): a multi-step plan is all-or-nothing.",
+      "description": "Creative-execution spine plan atomicity (D-0025): a multi-step plan is all-or-nothing.",
       "paths": [
         "src/nexus_ai_agent/creative/spine/",
         "tests/unit/test_creative_spine.py"
@@ -3089,7 +3089,7 @@
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "implements the task-207 design (0/1/2 multi-source referee). D-0024 direction page is separate (docs-architecture). | 2026-09-30: lease-fencing continuation (task-219) landed on the same branch; board tests 34 passed, referee mutations 8/8 killed. | CLOSED 2026-09-30: referee + lease fencing (task-219) + gc note-preservation (task-220) all merged on this branch; evidence: test_agent_board.py 40 passed, board_referee_mutations.py 9/9 killed. | 2026-09-30 CLOSED via PR#126 (head 203cfb5): 32/32 CI checks green incl. lint+test+continuum; full unit suite 2685 passed/11 skipped; board mutation harness 14/14 killed; ruff check+format clean.",
+      "note": "implements the task-207 design (0/1/2 multi-source referee). D-0025 direction page is separate (docs-architecture). | 2026-09-30: lease-fencing continuation (task-219) landed on the same branch; board tests 34 passed, referee mutations 8/8 killed. | CLOSED 2026-09-30: referee + lease fencing (task-219) + gc note-preservation (task-220) all merged on this branch; evidence: test_agent_board.py 40 passed, board_referee_mutations.py 9/9 killed. | 2026-09-30 CLOSED via PR#126 (head 203cfb5): 32/32 CI checks green incl. lint+test+continuum; full unit suite 2685 passed/11 skipped; board mutation harness 14/14 killed; ruff check+format clean.",
       "release_reason": "completed on arena/hardening-task207-foreign-check (multi-source referee + task-219 fencing + task-220 gc-note fix)",
       "generation": 0
     },
@@ -3160,7 +3160,7 @@
       "ttl_hours": 24,
       "generation": 0,
       "gates_owner": false,
-      "note": "direction authorized by D-0024 / docs/architecture/CREATIVE_DIRECTION.md; durability (persisted graph + lineage) is the next trigger in that page's section 6"
+      "note": "direction authorized by D-0025 / docs/architecture/CREATIVE_DIRECTION.md; durability (persisted graph + lineage) is the next trigger in that page's section 6"
     },
     {
       "task": "task-220-gc-note-preservation",
@@ -3447,7 +3447,7 @@
       "zone": "nagar-creative-graph",
       "title": "Persist the creative graph and artifact lineage (make the spine durable)",
       "title_fa": "پایدارسازی گراف خلاق و تبار مصنوع (پایدار کردن ستون فقرات)",
-      "why_fa": "اسلایس D-0024 فقط در حافظه است؛ تا گراف و تبار پایدار نشوند، چندجهانی و بازخورد اجتماعی چیزی برای شاخه‌گرفتن و ابطال ندارند.",
+      "why_fa": "اسلایس D-0025 فقط در حافظه است؛ تا گراف و تبار پایدار نشوند، چندجهانی و بازخورد اجتماعی چیزی برای شاخه‌گرفتن و ابطال ندارند.",
       "acceptance_criteria": [
         "graph nodes and artifact lineage persist and round-trip by (intent_id, project_id, state_revision)",
         "a stale revision is refused untouched, reusing the bus state_revision/state_hash preconditions",

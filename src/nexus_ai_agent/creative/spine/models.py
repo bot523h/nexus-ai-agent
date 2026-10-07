@@ -1,4 +1,4 @@
-"""Intent, creative-graph, plan and lineage/evidence models (D-0024 backbone).
+"""Intent, creative-graph, plan and lineage/evidence models (D-0025 backbone).
 
 These are the *data* half of the creative execution spine. They are pure
 pydantic models plus one in-memory append-only graph; nothing here executes a

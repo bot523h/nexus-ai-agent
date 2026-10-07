@@ -1,7 +1,7 @@
-"""Nagar Creative Execution Spine -- the intent-first backbone (D-0024).
+"""Nagar Creative Execution Spine -- the intent-first backbone (D-0025).
 
 This package is the *execution* side of the direction recorded in
-``docs/architecture/CREATIVE_DIRECTION.md`` and decision ``D-0024``. It turns a
+``docs/architecture/CREATIVE_DIRECTION.md`` and decision ``D-0025``. It turns a
 user's stated **intent** into authorized, typed studio commands, runs them on
 the existing single write path
 (:class:`~nexus_ai_agent.creative.studio.bus.CommandBus`), and returns an

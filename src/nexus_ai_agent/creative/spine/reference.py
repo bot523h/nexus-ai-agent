@@ -1,6 +1,6 @@
 """Reference -> Creative Recipe -> Intent (the first killer capability).
 
-Per D-0024 this is **not** the backbone: it is the first capability that rides
+Per D-0025 this is **not** the backbone: it is the first capability that rides
 the spine. A reference video is analysed into a :class:`CreativeRecipe` (an
 abstract *strategy*, never a copy), and a recipe becomes an :class:`Intent` that
 the spine compiles and executes like any other intent.

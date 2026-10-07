@@ -1,4 +1,4 @@
-"""Boundary gates for the creative execution spine (D-0024).
+"""Boundary gates for the creative execution spine (D-0025).
 
 The spine is an upstream *planner* that compiles an intent into commands. It
 must stay a pure, dependency-light core and must never become a second write
