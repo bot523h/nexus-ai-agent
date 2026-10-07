@@ -2059,3 +2059,90 @@ over the live inventory: identical.
 direction); `ORPHANED` describes the board, not the value of the work; CI and review state are
 not read, so "stale CI" is approximated by base drift and inactivity and labelled as such; the
 recommended order is advisory and knows nothing a reviewer knows.
+
+## 2026-10-07 — Durable creative archive: the graph is a rebuildable projection, not a fourth authority (D-0028)
+
+### D-0028 — Law R21: a typed node/edge projection over the existing causal ledger, with deterministic identity, append-only history, and lineage/invalidation queries
+
+**Status:** Accepted and implemented (board `task-256-durable-creative-graph`).
+**Measured on:** `main` @ `6122c9bfa99db0a31c57e782959deb1e7ad12269`, 2026-10-07.
+
+**Context.** The repository already had three durable authorities and none could answer the
+archive's central question. `nexus_job_queue` owns one job's state (R14); `nexus_causal_journal`
+is an append-only hash-chained record of committed transitions and is *evidence, never authority*
+(D-0024); `ArtifactPassport` is a read-only projection of one artifact. **"Where did this artifact
+come from, and if its intent changes what else is affected?"** required scanning the whole ledger
+by hand.
+
+**Decision.** Add `src/nexus_ai_agent/provenance/graph.py`: a typed node/edge projection in three
+indexed SQLite tables (`nexus_graph_node`, `nexus_graph_edge`, `nexus_graph_node_history`) that
+shares the `CausalJournal`'s connection discipline (`BEGIN IMMEDIATE`, busy timeout, in-process
+writer lock, `:memory:` support) so it can live in the same file as the ledger it is rebuilt from.
+
+* **Identity** is `f"{kind}:{sha256(canonical_json(identity))}"` — deterministic, stable, scoped by
+  kind, auditable (`identity_json`/`identity_digest` are stored and re-checked). Creating the same
+  logical state twice is one node reporting `unchanged`, so two runs cannot produce two
+  contradictory truths.
+* **History is appended, never rewritten.** A changed payload archives the new state after the
+  old one and increments `revision_count`; `invalidate`/`revoke`/`supersede` are explicit
+  transitions; a node already `invalidated`/`revoked` **refuses** a write (`GraphStateError`)
+  rather than being silently revived. There is no `UPDATE history = new_truth` path.
+* **Lineage** walks the declared chain with per-relation direction, reports attachments
+  (verification, passport) separately, and on a broken chain reports *where it stopped*
+  (`complete: False`, `deepest_kind` = last resolved) instead of guessing.
+* **Invalidation** is a descendants query grouped by kind: intent → revision → plan → command →
+  execution → artifact → verification → passport.
+* **Recovery** is backup (SQLite online backup API, not a file copy), restore, `integrity_check`
+  (`GRAPH010`–`GRAPH030`), and `rebuild_from_journal`.
+
+**Rejected alternatives.**
+
+* *Neo4j or any graph database.* Rejected: the queries needed (typed traversal by relation,
+  indexed by endpoint) are served by three indexed tables beside the ledger, and no measured
+  query need justified an operational dependency.
+* *A new event log.* Rejected: the causal journal already **is** an append-only hash-chained
+  record. A second one would have been a second authority.
+* *A parallel passport.* Rejected: `provenance/passport.py` is unchanged. The graph stores the
+  **link** (`ARTIFACT_HAS_PASSPORT`) and the identity, never a second copy of the judgement.
+* *Event sourcing "for a nicer audit trail".* Rejected on the evidence: immutable ledger rows +
+  revision rows + the passport already cover the audit need.
+* *A twelfth relation `ARTIFACT_DEPENDS_ON`.* Rejected: `ARTIFACT_DERIVED_FROM` already expresses
+  it, and two names for one fact is how a graph acquires contradictory truths.
+
+**Five defects found by tests, not by review.**
+
+1. `lineage` walked every relation in one direction; the chain's relations point *downstream*, so
+   the artifact→execution step follows an **incoming** edge. The symptom was not a crash — it was
+   a permanently "unknown" answer, which is why a direction-pinning test now exists.
+2. `integrity_check` compared `revision_count` against the status vocabulary (wrong column index),
+   so it reported a false `GRAPH011` on every healthy graph.
+3. Superseding a node archived the **old** payload a second time and never recorded the new one,
+   so `history()` returned `["v1", "v1"]` for a node whose truth was `v2`.
+4. `rebuild_from_journal` replayed every ledger transition, so replaying the same ledger grew the
+   history log (`7 → 10`) — a rebuild that is really an append. It now collapses each identity to
+   the state the last record establishes, and `replace=True` purges the projected rows *and* their
+   history first.
+5. `restore` targeted a connection inside an open `BEGIN IMMEDIATE` transaction;
+   `Connection.backup` refuses that ("destination database is in use").
+
+**Evidence.** `tests/unit/test_creative_graph.py` (23 tests) +
+`tests/architecture/test_creative_graph_boundary.py` (6 tests) — 29 passed. `mypy
+src/nexus_ai_agent/provenance/` → *Success: no issues found in 8 source files*. The acceptance
+test `test_the_graph_survives_a_closed_process` runs two real processes: the first builds
+Project → Intent → Revision → Plan → Command → Execution → Artifact → Verification → Passport and
+exits; the second opens the file and answers `complete: True`, `deepest_kind: "PROJECT"`, chain
+`EXECUTION ← COMMAND ← PLAN ← REVISION ← INTENT ← PROJECT`. `test_two_processes_can_write_the_same_graph`
+runs two concurrent writers against one file with no lost write and no duplicate.
+
+**Honest limitations — the real remaining gap, named rather than papered over.**
+
+* **Levels above `EXECUTION` have no canonical durable source yet.** The spine holds
+  intent/revision/plan in memory per instance and the `CommandBus` holds command state in memory
+  (D-0025's own note: "no cross-instance undo is claimed", "Multiple processes and restart are NOT
+  VERIFIED"). `rebuild_from_journal` therefore reports `PROJECT`, `INTENT`, `REVISION`, `PLAN`,
+  `COMMAND`, `DECISION` and `ACTOR` as `UNMIGRATED` with the reason. Those levels can be *written*
+  by a caller today, but they are not yet *rebuildable* — so Wave 3's vertical slice is durable
+  from `EXECUTION` upward and honest about the rest.
+* **`DECISION` and `ACTOR` nodes have no writer.** They exist in the vocabulary because the domain
+  has them; nothing records them today.
+* **No cross-process linearization is claimed for the spine**, only for the graph file itself.
