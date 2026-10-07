@@ -285,14 +285,33 @@ def _conflicting_paths(board: dict, branch: str, files: list[str]) -> list[tuple
     return hits
 
 
+def _active_gates_owners(board: dict) -> tuple[list[dict], list[str]]:
+    """Return live gates owners and malformed claims that block verification."""
+    owners: list[dict] = []
+    malformed: list[str] = []
+    for claim in board.get("claims", []):
+        if not claim.get("gates_owner"):
+            continue
+        try:
+            live = _claim_live(claim)
+        except (TypeError, ValueError, OverflowError) as exc:
+            malformed.append(f"{claim.get('task', '<unknown>')}: {exc}")
+            continue
+        if live:
+            owners.append(claim)
+    return owners, malformed
+
+
 # ── commands ──────────────────────────────────────────────────────────
 
 
 def cmd_show(_args: argparse.Namespace) -> int:
-    board = load_board()
-    freed = gc_expired(board)
+    with board_lock():
+        board = load_board()
+        freed = gc_expired(board)
+        if freed:
+            save_board(board)
     if freed:
-        save_board(board)
         print(f"[gc] auto-released expired leases: {', '.join(freed)}")
     print(f"board updated_at: {board['updated_at']}")
     for claim in board.get("claims", []):
@@ -455,9 +474,10 @@ def _defer_locked(args: argparse.Namespace) -> int:
 
 
 def cmd_next(args: argparse.Namespace) -> int:
-    board = load_board()
-    gc_expired(board)
-    save_board(board)
+    with board_lock():
+        board = load_board()
+        gc_expired(board)
+        save_board(board)
     for claim in board.get("claims", []):
         if claim["status"] in ("queued", "expired", "deferred"):
             blockers = []
@@ -758,6 +778,16 @@ def cmd_check(args: argparse.Namespace) -> int:
         print(STOP_BANNER)
         return 1
 
+    owners, malformed_owners = _active_gates_owners(local_board)
+    if not no_remote and (malformed_owners or len(owners) != 1):
+        print(
+            "UNVERIFIABLE: exactly one active, unexpired gates_owner is required; "
+            f"found {len(owners)} (zero or multiple is fail-closed)"
+        )
+        for reason in malformed_owners:
+            print(f"  malformed gates-owner claim: {reason}")
+        return 2
+
     if unreadable:
         print("UNVERIFIABLE: cannot establish the absence of overlap — source(s) unreadable:")
         for reason in unreadable:
@@ -807,12 +837,24 @@ def audit_pr_visibility(board: dict, prs: list[dict]) -> dict:
         uncovered = [f for f in audited_files if not covered(f)]
 
         reasons: list[str] = []
+        files_complete = bool(pr.get("files_complete", not pr.get("files_truncated", False)))
         if not head:
             reasons.append("missing head branch")
+        if not files_complete:
+            reasons.append("changed-file source is incomplete")
         if not own_claims:
             reasons.append("no live board claim for head branch")
         if uncovered:
             reasons.append(f"{len(uncovered)} file(s) outside every exclusive_paths")
+
+        if not head or not files_complete:
+            classification = "BLOCKED"
+        elif own_claims and not uncovered:
+            classification = "OWNED"
+        elif not uncovered:
+            classification = "SCOPED"
+        else:
+            classification = "BLOCKED"
 
         results.append(
             {
@@ -823,6 +865,8 @@ def audit_pr_visibility(board: dict, prs: list[dict]) -> dict:
                 "own_claims": own_claims,
                 "foreign_fences": foreign,
                 "uncovered_files": uncovered,
+                "files_complete": files_complete,
+                "classification": classification,
                 "invisible": bool(reasons),
                 "reasons": reasons,
             }
@@ -850,20 +894,54 @@ def _gh_get(url: str, token: str | None) -> object:
 
 def fetch_open_prs(repo: str, token: str | None = None) -> list[dict]:
     """Live open-PR snapshot (GitHub REST, stdlib urllib)."""
-    pulls = _gh_get(f"https://api.github.com/repos/{repo}/pulls?state=open&per_page=100", token)
+    pulls: list[dict] = []
+    page = 1
+    while True:
+        rows = _gh_get(
+            f"https://api.github.com/repos/{repo}/pulls?state=open&per_page=100&page={page}",
+            token,
+        )
+        if not isinstance(rows, list):
+            raise ValueError("GitHub open-PR response is not a list")
+        pulls.extend(rows)
+        if len(rows) < 100:
+            break
+        page += 1
     out: list[dict] = []
     for pr in pulls:  # type: ignore[assignment]
         number = pr["number"]
-        rows = _gh_get(
-            f"https://api.github.com/repos/{repo}/pulls/{number}/files?per_page=100", token
-        )
+        detail = _gh_get(f"https://api.github.com/repos/{repo}/pulls/{number}", token)
+        expected_files = detail.get("changed_files") if isinstance(detail, dict) else None
+        file_rows: list[dict] = []
+        page = 1
+        files_complete = True
+        while True:
+            rows = _gh_get(
+                f"https://api.github.com/repos/{repo}/pulls/{number}/files?"
+                f"per_page=100&page={page}",
+                token,
+            )
+            if not isinstance(rows, list):
+                raise ValueError(f"GitHub files response for PR #{number} is not a list")
+            file_rows.extend(rows)
+            if len(rows) < 100:
+                break
+            if len(file_rows) >= 3000:
+                files_complete = (
+                    isinstance(expected_files, int) and expected_files <= len(file_rows)
+                )
+                break
+            page += 1
         out.append(
             {
                 "number": number,
                 "title": pr.get("title", ""),
                 "head_branch": (pr.get("head") or {}).get("ref", ""),
-                "files": [row["filename"] for row in rows],  # type: ignore[index]
-                "files_truncated": len(rows) >= 100,  # type: ignore[arg-type]
+                "files": [row["filename"] for row in file_rows],
+                "files_complete": files_complete,
+                "base_ref": (pr.get("base") or {}).get("ref", ""),
+                "base_sha": (pr.get("base") or {}).get("sha", ""),
+                "head_sha": (pr.get("head") or {}).get("sha", ""),
             }
         )
     return out
@@ -893,7 +971,7 @@ def cmd_praudit(args: argparse.Namespace) -> int:
         token = args.token or os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or None
         try:
             prs = fetch_open_prs(repo, token)
-        except (urllib.error.URLError, OSError) as exc:
+        except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError) as exc:
             # URLError covers HTTP errors; OSError covers socket timeouts —
             # both must degrade to an actionable exit, never an unhandled trace.
             print(f"praudit: GitHub API error: {exc}")

@@ -45,11 +45,11 @@ _PR_EVENTS = {"pull_request", "pull_request_target"}
 def base_is_acceptable(base_ref: str | None, expected: str = DEFAULT_EXPECTED) -> bool:
     """The whole decision, in one testable place.
 
-    A missing base ref (non-PR context) is acceptable; a present base ref must
-    equal ``expected`` exactly.
+    A missing base ref is not a verifiable base and is therefore not acceptable.
+    A present base ref must equal ``expected`` exactly.
     """
     if base_ref is None:
-        return True
+        return False
     return base_ref.strip() == expected
 
 
@@ -71,6 +71,12 @@ def check_event(event: str, base_ref: str | None, expected: str = DEFAULT_EXPECT
 
 
 def _report(base_ref: str | None, expected: str) -> int:
+    if not base_ref:
+        print(
+            "merge-base-guard: missing base ref — cannot verify, refusing to pass (exit 2)",
+            file=sys.stderr,
+        )
+        return 2
     if base_is_acceptable(base_ref, expected):
         print(f"merge-base-guard: base {base_ref!r} == {expected!r} — main-bound, pass")
         return 0
@@ -137,9 +143,36 @@ def check_pr(number: int, repo: str | None, expected: str = DEFAULT_EXPECTED) ->
     if err or not isinstance(pr, dict):
         print(f"merge-base-guard: cannot read PR #{number}: {err}", file=sys.stderr)
         return 2
-    base_ref = (pr.get("base") or {}).get("ref")
-    base_sha = (pr.get("base") or {}).get("sha")
-    head_sha = (pr.get("head") or {}).get("sha")
+    base = pr.get("base")
+    head = pr.get("head")
+    if not isinstance(base, dict) or not isinstance(head, dict):
+        print(
+            f"merge-base-guard: PR #{number} has unreadable base/head data — refusing to pass "
+            "(exit 2)",
+            file=sys.stderr,
+        )
+        return 2
+    base_ref = base.get("ref")
+    base_sha = base.get("sha")
+    head_sha = head.get("sha")
+    if not isinstance(base_ref, str) or not base_ref.strip():
+        print(
+            f"merge-base-guard: PR #{number} is missing base.ref — refusing to pass (exit 2)",
+            file=sys.stderr,
+        )
+        return 2
+    if not isinstance(base_sha, str) or not base_sha.strip():
+        print(
+            f"merge-base-guard: PR #{number} is missing base.sha — refusing to pass (exit 2)",
+            file=sys.stderr,
+        )
+        return 2
+    if not isinstance(head_sha, str) or not head_sha.strip():
+        print(
+            f"merge-base-guard: PR #{number} is missing head.sha — refusing to pass (exit 2)",
+            file=sys.stderr,
+        )
+        return 2
     verdict = _report(base_ref, expected)
     if verdict != 0:
         return verdict
