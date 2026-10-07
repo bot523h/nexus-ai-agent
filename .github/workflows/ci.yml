@@ -374,6 +374,29 @@ jobs:
       - run: |
           PGPASSWORD=nexus psql -h localhost -U nexus -d nexus -tAc "SELECT version_num FROM alembic_version" | grep -q 7c2f9d41e8a3
 
+  # ── Merge-base guard (incident #143, fail-closed) ───────────────────────────
+  # PR #143 was merged with base = a *feature* branch, not `main`; GitHub called
+  # it MERGEABLE because the merge was valid against its own wrong base.  This
+  # job makes `base == main` a mechanical precondition: on a `pull_request` event
+  # a non-main base is a red build.  On non-PR events it is a no-op pass.
+  # scripts/merge_base_guard.py is stdlib-only (no install needed).
+  merge-base-guard:
+    name: merge-base-guard (base == main)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: A main-bound merge requires base == main
+        run: |
+          python scripts/merge_base_guard.py check-event \
+            --event "${{ github.event_name }}" \
+            --base "${{ github.base_ref }}"
+
   # ── Release lineage (machine-checked, reported — never assumed) ─────────────
   # VERSION → commit → CI → tag → GitHub Release → CHANGELOG.  Gaps are OPEN
   # (printed, summarized, artifacted); contradictions are RED: once the current
