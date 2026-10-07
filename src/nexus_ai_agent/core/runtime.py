@@ -57,6 +57,7 @@ class Runtime:
     _cleanup_steps: list[CleanupStep] = field(default_factory=list)
     _shutting_down: bool = False
     _shutdown_completed: bool = False
+    _shutdown_done: asyncio.Event | None = None
 
     # -- lifecycle registration -------------------------------------------------
 
@@ -77,34 +78,43 @@ class Runtime:
         if self._shutdown_completed:
             return
         if self._shutting_down:
-            # Re-entrant call while shutdown is in progress: wait for
-            # the in-flight shutdown to finish instead of racing it.
-            for _ in range(50):
-                await asyncio.sleep(0.05)
-                # ``bool()`` defeats the earlier narrowing: another task may
-                # have completed shutdown while this one was suspended.
-                if bool(self._shutdown_completed):
-                    return
-            logger.warning("runtime_shutdown_reentrant_timeout")
+            # Re-entrant call while shutdown is in progress: block until the
+            # in-flight shutdown signals completion, so the caller never
+            # proceeds as if resources were released.  A blocking step (e.g.
+            # ``asyncio.to_thread``) can outlive any fixed poll budget.
+            done = self._shutdown_done
+            if done is not None:
+                await done.wait()
             return
         self._shutting_down = True
+        self._shutdown_done = asyncio.Event()
 
         steps = list(reversed(self._cleanup_steps))
         self._cleanup_steps.clear()
         for i, step in enumerate(steps):
+            task = asyncio.ensure_future(step(self))
             try:
                 # Shield each step so a CancelledError arriving mid-step
                 # cannot strand later resources.
-                await asyncio.shield(step(self))
+                await asyncio.shield(task)
             except asyncio.CancelledError:
-                # Even a shielded CancelledError means the caller asked
-                # for cancellation; but we still continue the cleanup
-                # chain (resources must be released before surfacing it).
+                # The shield keeps the inner step running even though this
+                # caller was cancelled; wait for it to finish before starting
+                # the next step so resources are never released twice or out
+                # of LIFO order.
                 logger.warning(
                     "runtime_cleanup_step_cancelled",
                     step_index=i,
                     total_steps=len(steps),
                 )
+                try:
+                    await task
+                except (Exception, asyncio.CancelledError):  # noqa: BLE001
+                    logger.exception(
+                        "runtime_cleanup_step_failed",
+                        step_index=i,
+                        total_steps=len(steps),
+                    )
             except Exception:  # noqa: BLE001 - fail-safe shutdown
                 logger.exception(
                     "runtime_cleanup_step_failed",
@@ -124,6 +134,8 @@ class Runtime:
 
         self._shutdown_completed = True
         self._shutting_down = False
+        if self._shutdown_done is not None:
+            self._shutdown_done.set()
         logger.info("runtime_shutdown_complete", total_steps=len(steps))
 
 

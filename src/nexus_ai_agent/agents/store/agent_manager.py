@@ -85,6 +85,11 @@ class AgentManager:
         ``None`` so the caller routes through the standard graph
         instead.
         """
+        if provider is None and not allow_legacy_fallback:
+            # No runtime-owned provider (e.g. GEMINI_API_KEY unset).  Return
+            # None so the caller falls back to the standard graph instead of
+            # constructing a StoreAgent that raises RuntimeError.
+            return None
         async with get_session() as session:
             stmt = select(UserActiveAgent).where(UserActiveAgent.user_id == user_id)
             active_record = (await session.execute(stmt)).scalar_one_or_none()

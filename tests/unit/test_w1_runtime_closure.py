@@ -229,6 +229,32 @@ async def test_shutdown_is_idempotent(fake_settings: _FakeSettings) -> None:
     await runtime.shutdown()
 
 
+@pytest.mark.asyncio
+async def test_reentrant_shutdown_waits_for_completion() -> None:
+    """A concurrent shutdown() must block until the in-flight one finishes
+    (no fixed poll budget), and the cleanup step must run exactly once."""
+    import threading
+    import time
+
+    from nexus_ai_agent.core.runtime import Runtime
+
+    runtime = Runtime(settings=object())
+    ran = threading.Event()
+
+    async def slow_step(_rt: Runtime) -> None:
+        await asyncio.to_thread(time.sleep, 0.6)
+        ran.set()
+
+    runtime.add_cleanup(slow_step)
+
+    first = asyncio.ensure_future(runtime.shutdown())
+    await asyncio.sleep(0.05)  # let `first` enter the step
+    await runtime.shutdown()  # re-entrant: must not return early
+    assert ran.is_set(), "re-entrant shutdown returned before cleanup completed"
+    await first
+    assert runtime._shutdown_completed is True
+
+
 # ── 4. StoreAgent bypass guard (W1 Law 8) ─────────────────────────────
 
 
@@ -330,14 +356,32 @@ async def test_agent_manager_get_active_passes_provider(
     assert constructed_with["legacy"] is False
 
 
+@pytest.mark.asyncio
+async def test_agent_manager_missing_provider_routes_to_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No provider + no legacy opt-in must return None (graph fallback), not
+    construct a StoreAgent that raises RuntimeError."""
+    import nexus_ai_agent.agents.store.agent_manager as am
+
+    def _boom(*a, **kw):  # pragma: no cover - must never be reached
+        raise AssertionError("DB must not be queried when the provider is missing")
+
+    monkeypatch.setattr(am, "get_session", _boom)
+    assert await am.AgentManager.get_active(1) is None
+
+
 # ── 6. Webhook _serve_webhook does NOT duplicate resume_pending ───────
 
 
 def test_webhook_lifecycle_no_duplicate_resume() -> None:
-    """_serve_webhook must not call job_queue.resume_pending itself —
-    PTB's post_init (invoked by application.initialize()) is the ONE
-    authority.  We look for an actual call pattern in the body (after
-    the docstring) so the invariant can't be bypassed by renaming.
+    """_serve_webhook must not call job_queue.resume_pending itself, and must
+    invoke the PTB ``post_init`` callback exactly once.
+
+    PTB only runs ``post_init``/``post_shutdown`` from ``run_polling`` and
+    ``run_webhook``; this manual path calls ``initialize``/``shutdown``
+    directly, so it must invoke those callbacks itself (once) and must not
+    duplicate ``resume_pending`` (post_init owns startup).
     """
     import inspect
 
@@ -352,6 +396,8 @@ def test_webhook_lifecycle_no_duplicate_resume() -> None:
         "_serve_webhook must not call resume_pending() directly — PTB "
         "post_init owns startup; webhook must not duplicate it."
     )
+    assert body.count("post_init(") == 1, "post_init must be invoked exactly once"
+    assert body.count("post_shutdown(") == 1, "post_shutdown must be invoked exactly once"
 
 
 # ── 7. Webhook shutdown ordering is stop-then-shutdown ────────────────
@@ -374,6 +420,9 @@ async def test_webhook_shutdown_ordering(monkeypatch: pytest.MonkeyPatch) -> Non
         async def initialize(self):
             calls.append("initialize")
 
+        async def post_init(self, app):
+            calls.append("post_init")
+
         async def start(self):
             calls.append("start")
 
@@ -385,6 +434,9 @@ async def test_webhook_shutdown_ordering(monkeypatch: pytest.MonkeyPatch) -> Non
         async def stop(self):
             calls.append("stop")
             raise RuntimeError("stop failed")
+
+        async def post_shutdown(self, app):
+            calls.append("post_shutdown")
 
         async def shutdown(self):
             calls.append("shutdown")
@@ -417,9 +469,16 @@ async def test_webhook_shutdown_ordering(monkeypatch: pytest.MonkeyPatch) -> Non
         port=8000,
         log_level="warning",
     )
-    assert calls == ["initialize", "start", "set_webhook", "serve", "stop", "shutdown"], (
-        f"shutdown must run even after stop() raised; got {calls}"
-    )
+    assert calls == [
+        "initialize",
+        "post_init",
+        "start",
+        "set_webhook",
+        "serve",
+        "stop",
+        "post_shutdown",
+        "shutdown",
+    ], f"canonical PTB lifecycle order; got {calls}"
 
 
 # ── 8. Feature sync engines have _shutdown_engines ────────────────────

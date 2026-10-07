@@ -152,20 +152,23 @@ async def _serve_webhook(
 ) -> None:
     """Serve webhook mode on a running event loop (see :func:`run_webhook`).
 
-    W1 canonical lifecycle: PTB's ``initialize()`` runs ``post_init`` (our
-    ONE startup authority, which binds engines + restores reminders +
-    resumes pending jobs), and PTB's ``shutdown()`` runs ``post_shutdown``
-    (our ONE shutdown authority which tears down every resource through the
-    Runtime).  We therefore do NOT duplicate ``resume_pending`` here, and
-    we rely on the standard ``initialize → start → (serve) → stop →
-    shutdown`` ordering so no lifecycle step is bypassed or run twice.
+    W1 canonical lifecycle: ``post_init`` is our ONE startup authority
+    (binds engines + restores reminders + resumes pending jobs) and
+    ``post_shutdown`` is our ONE shutdown authority (tears down every
+    resource through the Runtime).  PTB only invokes these callbacks from
+    ``run_polling``/``run_webhook``, so this manual ``initialize → start →
+    (serve) → stop → shutdown`` path must invoke them itself — otherwise a
+    webhook deployment silently skips startup binding and leaks every
+    resource at shutdown.
     """
     import uvicorn
 
-    # 1) Bring the application up: runs post_init (engine bindings +
-    #    pending-job resume).  No Updater is started — Telegram POSTs
-    #    updates to /webhook/telegram instead.
+    # 1) Bring the application up, then run the startup authority.  No
+    #    Updater is started — Telegram POSTs updates to /webhook/telegram.
     await application.initialize()
+    post_init = getattr(application, "post_init", None)
+    if post_init is not None:
+        await post_init(application)
     await application.start()
     try:
         # 2) Register the webhook.  Telegram will echo `webhook_secret`
@@ -195,6 +198,12 @@ async def _serve_webhook(
             await application.stop()
         except Exception:  # noqa: BLE001 — don't strand shutdown
             logger.exception("webhook_application_stop_failed")
+        try:
+            post_shutdown = getattr(application, "post_shutdown", None)
+            if post_shutdown is not None:
+                await post_shutdown(application)
+        except Exception:  # noqa: BLE001
+            logger.exception("webhook_application_post_shutdown_failed")
         try:
             await application.shutdown()
         except Exception:  # noqa: BLE001
