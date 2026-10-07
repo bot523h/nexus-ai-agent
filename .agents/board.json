@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-06T23:20:00Z",
+  "updated_at": "2026-10-07T18:36:56Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -778,6 +778,28 @@
       "paths": [
         "src/nexus_ai_agent/features/owner_control.py",
         "tests/unit/test_owner_gate_fail_closed.py"
+      ]
+    },
+    {
+      "id": "governance-integrity-audit",
+      "description": "Fail-closed PR-base/stack guard, board PR visibility, repo-truth and provenance audit",
+      "paths": [
+        ".github/workflows/ci.yml",
+        "AGENTS.md",
+        "CHANGELOG.md",
+        "ROADMAP_STATUS.md",
+        "docs/MULTI_AGENT_PROTOCOL.md",
+        "docs/README.md",
+        "docs/DECISION_LOG.md",
+        "docs/architecture/MODULE_MAP.md",
+        "docs/architecture/TRUTH_DOCTOR.md",
+        "scripts/agent_board.py",
+        "scripts/merge_base_guard.py",
+        "src/nexus_ai_agent/diagnostics/truth.py",
+        "tests/architecture/test_merge_base_guard.py",
+        "tests/unit/test_agent_board.py",
+        "tests/unit/test_agent_board_pr_visibility.py",
+        "tests/unit/test_truth_doctor.py"
       ]
     }
   ],
@@ -3402,6 +3424,54 @@
       "gates_owner": false,
       "delivered": false,
       "note": "| RECONCILE: MERGED in #184 (main b733fb0). is_owner() now fails closed when owner_telegram_id is unset (0 is no longer a valid identity)."
+    },
+    {
+      "task": "task-254-governance-integrity-closure",
+      "title": "Integrity audit: PR #187 stack-safe guard, board visibility and roadmap truth",
+      "zone": "governance-integrity-audit",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Independently audit PR #187 and the #143 wrong-base merge against live GitHub and repository stack history; harden the existing merge-base guard without banning valid stacked PRs; fix shell/API fail-open paths and non-vacuous workflow tests; repair existing agent_board.py PR-scope completeness and truth.py/roadmap provenance gaps. No product features or destructive GitHub actions.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Direct-main PRs pass; a valid open main-bound parent stack passes only when the child base is the current parent head and is an ancestor of the child head; missing, malformed, ambiguous or unreadable API data never passes; the #143 shape fails.",
+        "CI runs the guard on PR retarget edits; workflow context is passed through environment values, never interpolated into shell source; tests inspect a real executable job step and reject comment-only, disabled or wrong-command wiring.",
+        "agent_board.py audits all pages/files or marks incomplete data unverifiable; own claims must cover the PR scope and foreign fences fail the audit; capped remote branch enumeration cannot yield a clean pass.",
+        "truth.py fails on a missing or malformed schema-2 board and mechanically checks ROADMAP_STATUS source-version lockstep; documentation accurately limits local truth checks and cites their provenance.",
+        "Local targeted/full gates and GitHub CI are recorded for the exact pushed SHA; live post-push PR/check/branch-protection state is re-audited without merging or deleting anything."
+      ],
+      "evidence_required": [
+        "pytest -q tests/architecture/test_merge_base_guard.py tests/unit/test_agent_board_pr_visibility.py tests/unit/test_agent_board.py tests/unit/test_truth_doctor.py",
+        "python -m nexus_ai_agent.diagnostics.truth",
+        "make lint && make types && make test (or exact documented blocker)",
+        "GitHub CI checks for the exact session-branch PR head SHA",
+        "live GitHub re-audit of PR #187, the #143/#136/#186 relationship, open PR inventory and protection visibility"
+      ],
+      "owner_hint": "session branch arena/13300da1-nexus-ai-agent",
+      "agent_branch": "arena/13300da1-nexus-ai-agent",
+      "claimed_at": "2026-10-07T18:36:56Z",
+      "ttl_hours": 24,
+      "generation": 1,
+      "gates_owner": true,
+      "note": "",
+      "exclusive_paths": [
+        ".github/workflows/ci.yml",
+        "AGENTS.md",
+        "CHANGELOG.md",
+        "ROADMAP_STATUS.md",
+        "docs/MULTI_AGENT_PROTOCOL.md",
+        "docs/README.md",
+        "docs/DECISION_LOG.md",
+        "docs/architecture/MODULE_MAP.md",
+        "docs/architecture/TRUTH_DOCTOR.md",
+        "scripts/agent_board.py",
+        "scripts/merge_base_guard.py",
+        "src/nexus_ai_agent/diagnostics/truth.py",
+        "tests/architecture/test_merge_base_guard.py",
+        "tests/unit/test_agent_board.py",
+        "tests/unit/test_agent_board_pr_visibility.py",
+        "tests/unit/test_truth_doctor.py"
+      ]
     }
   ],
   "deferred_log": [
