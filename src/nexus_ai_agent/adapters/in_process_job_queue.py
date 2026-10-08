@@ -753,6 +753,60 @@ class InProcessJobQueue:
             self._schedule(job_id)
         return job_ids
 
+    async def cancel(self, job_id: str) -> bool:
+        """Request cancellation of an in-flight job (fenced, additive primitive).
+
+        Cancellation is a **process-lifecycle** event, never a business
+        failure: an in-flight row (``processing``/``verifying``) is reset to
+        ``pending`` under its *current* fencing token, so the row stays
+        recoverable and the cancelled attempt's later completion is rejected by
+        every fenced CAS.  This is the public, per-job form of the edge
+        ``(PROCESSING/VERIFYING, PENDING)`` documented in
+        ``jobs.lifecycle.TRANSITIONS`` (owner: *"queue (cancellation /
+        shutdown)"*) and the ``JOB_REOPENED`` event kind.
+
+        Returns ``True`` iff an in-flight attempt was affected.  A terminal row
+        is never reopened, and a row that was never owned (``pending``) is not
+        an in-flight attempt, so both return ``False``.  The reset CAS is fenced
+        on ``attempt``: if a takeover or a competing reservation changed the row
+        between the read and the write, the write commits nothing and this
+        returns ``False`` (the caller must not announce anything).
+        """
+        row = await asyncio.to_thread(self._fetch_row, job_id)
+        if row is None:
+            return False
+        try:
+            status = parse_job_status(str(row["status"]))
+        except ValueError:
+            return False  # unknown durable spelling: never touch it (fail-closed)
+        if status not in {JobStatus.PROCESSING, JobStatus.VERIFYING}:
+            return False  # terminal rows are never reopened; pending was never owned
+        attempt = int(row["attempt"] or 0)
+        if attempt < 1:
+            return False  # an in-flight row always carries a minted token
+        claim = ExecutionClaim(job_id=job_id, attempt=attempt)
+        reset = await asyncio.to_thread(self._mark_pending, claim)
+        if not reset:
+            return False  # lost the fence: a newer owner (or terminal row) won
+        # Stop the local execution if this process owns it.  The fenced reset
+        # above already guarantees its later completion cannot commit, so this
+        # is only about not leaving a doomed task running.
+        task = self._tasks.get(job_id)
+        if task is not None and not task.done():
+            task.cancel()
+        await self._record(
+            CausalEvent(
+                kind=EventKind.JOB_REOPENED,
+                job_id=job_id,
+                job_type=str(row["job_type"]),
+                attempt=claim.attempt,
+                status=JobStatus.PENDING.value,
+                detail={"mode": "cancel"},
+                occurred_at=_now(),
+            )
+        )
+        return True
+
     async def shutdown(self) -> None:
         """Cancel local tasks and leave them recoverable as pending jobs."""
         tasks = list(self._tasks.values())
