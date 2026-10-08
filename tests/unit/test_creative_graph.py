@@ -666,3 +666,31 @@ def test_rebuild_never_manufactures_causal_history(tmp_path: Path) -> None:
     for node_id in node_ids:
         rows = graph.history(node_id)
         assert len(rows) == 1, f"{node_id} carries {len(rows)} history rows, expected 1"
+
+
+def test_graph030_still_fires_after_the_membership_rewrite(tmp_path: Path) -> None:
+    """The O(nodes+history) rewrite must not weaken the check.
+
+    GRAPH030 used to re-scan the whole history table per node.  Replacing that
+    with a membership set is only safe if a node with no history row is still
+    reported — and reported against the right node.
+    """
+    db = tmp_path / "graph.sqlite"
+    graph = CreativeGraph(db)
+    for i in range(50):
+        graph.put_node("EVIDENCE", {"n": i}, {"n": i})
+    assert graph.integrity_check().ok
+
+    connection = sqlite3.connect(db)
+    try:
+        stripped = connection.execute("SELECT node_id FROM nexus_graph_node LIMIT 1").fetchone()[0]
+        connection.execute("DELETE FROM nexus_graph_node_history WHERE node_id = ?", (stripped,))
+        connection.commit()
+    finally:
+        connection.close()
+
+    report = graph.integrity_check()
+    assert not report.ok
+    findings = [f for f in report.findings if f.code == "GRAPH030"]
+    assert len(findings) == 1, "exactly the stripped node is missing its history row"
+    assert findings[0].witness == stripped

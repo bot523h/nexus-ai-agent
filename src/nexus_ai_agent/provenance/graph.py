@@ -755,9 +755,13 @@ class CreativeGraph:
                 report.findings.append(
                     IntegrityFinding("GRAPH022", "error", "edge digest mismatch", edge_id)
                 )
+        # One set, not a scan per node: the previous form re-walked the whole
+        # history table for every node, which is O(nodes x history).  The check is
+        # "does this node have at least one history row", so membership is all it
+        # needs — same findings, O(nodes + history).
+        nodes_with_history = {str(row[0]) for row in history}
         for node_id in known:
-            rows = [h for h in history if str(h[0]) == node_id]
-            if not rows:
+            if node_id not in nodes_with_history:
                 report.findings.append(
                     IntegrityFinding("GRAPH030", "error", "node has no history row", node_id)
                 )
