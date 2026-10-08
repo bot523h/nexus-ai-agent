@@ -908,7 +908,7 @@ def fetch_open_prs(repo: str, token: str | None = None) -> list[dict]:
             break
         page += 1
     out: list[dict] = []
-    for pr in pulls:  # type: ignore[assignment]
+    for pr in pulls:
         number = pr["number"]
         detail = _gh_get(f"https://api.github.com/repos/{repo}/pulls/{number}", token)
         expected_files = detail.get("changed_files") if isinstance(detail, dict) else None
@@ -927,8 +927,8 @@ def fetch_open_prs(repo: str, token: str | None = None) -> list[dict]:
             if len(rows) < 100:
                 break
             if len(file_rows) >= 3000:
-                files_complete = (
-                    isinstance(expected_files, int) and expected_files <= len(file_rows)
+                files_complete = isinstance(expected_files, int) and expected_files <= len(
+                    file_rows
                 )
                 break
             page += 1
