@@ -296,11 +296,11 @@ async def test_handler_success_without_independent_verification_is_not_job_succe
 
 
 # --------------------------------------------------------------------------- #
-# Cancellation — fenced, recoverable, terminal rows never reopened
+# Cancellation — attempt-scoped, fenced, recoverable, terminal rows never reopened
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
 async def test_cancel_running_job_is_fenced_and_recoverable(tmp_path: Path) -> None:
-    """I3/I4: cancelling resets the current attempt to pending (recoverable);
+    """I3/I4: cancelling resets *our* attempt to pending (recoverable);
     the cancelled worker's later completion cannot commit."""
     db = tmp_path / "jobs.sqlite3"
     gate = _Gate()
@@ -310,8 +310,9 @@ async def test_cancel_running_job_is_fenced_and_recoverable(tmp_path: Path) -> N
     identity = await backend.submit(_request())
     await _wait_status(queue, identity.job_id, JobStatus.PROCESSING)
     assert _row(db, identity.job_id)["attempt"] == 1
+    current = identity.with_attempt(attempt_id="a#1", fencing_token=1)
 
-    assert await backend.cancel(identity) is True
+    assert await backend.cancel(current) is True
     await _wait_status(queue, identity.job_id, JobStatus.PENDING)
     assert _row(db, identity.job_id)["attempt"] == 1  # token unchanged; row recoverable
 
@@ -322,8 +323,59 @@ async def test_cancel_running_job_is_fenced_and_recoverable(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_cancel_without_a_fencing_token_is_refused(tmp_path: Path) -> None:
+    """P0-1: ``job_id`` alone is never cancellation authority (fail closed).
+
+    An unbound identity (submit-time identity, no fencing token) cannot name
+    the attempt it speaks for, so it must not cancel the current attempt.
+    """
+    db = tmp_path / "jobs.sqlite3"
+    gate = _Gate()
+    queue, _ = _queues(db, gate)
+    backend = NativeLocalBackend(queue)
+
+    identity = await backend.submit(_request())
+    await _wait_status(queue, identity.job_id, JobStatus.PROCESSING)
+    assert identity.fencing_token is None  # the submit-time identity is unbound
+
+    assert await backend.cancel(identity) is False
+    row = _row(db, identity.job_id)
+    assert row["status"] == JobStatus.PROCESSING.value  # the attempt is untouched
+    assert not queue._tasks[identity.job_id].cancelled()
+
+    # The same job, presented with its current fencing token, cancels cleanly.
+    current = identity.with_attempt(attempt_id="a#1", fencing_token=1)
+    assert await backend.cancel(current) is True
+    assert (await queue.get_status(identity.job_id)) is JobStatus.PENDING
+    gate.event(1).set()
+    await queue.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_repeated_cancel_is_safe_and_idempotent(tmp_path: Path) -> None:
+    """A duplicate cancel never re-mutates state and never raises."""
+    db = tmp_path / "jobs.sqlite3"
+    gate = _Gate()
+    queue, _ = _queues(db, gate)
+    backend = NativeLocalBackend(queue)
+
+    identity = await backend.submit(_request())
+    await _wait_status(queue, identity.job_id, JobStatus.PROCESSING)
+    current = identity.with_attempt(attempt_id="a#1", fencing_token=1)
+
+    assert await backend.cancel(current) is True
+    assert await backend.cancel(current) is False  # duplicate: already pending
+    assert await backend.cancel(current) is False  # and again: still safe
+    row = _row(db, identity.job_id)
+    assert row["status"] == JobStatus.PENDING.value
+    assert row["attempt"] == 1
+    gate.event(1).set()
+    await queue.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_cancel_terminal_job_is_refused(tmp_path: Path) -> None:
-    """I3: a terminal row is never reopened."""
+    """I3: a terminal row is never reopened (even by its own attempt token)."""
     db = tmp_path / "jobs.sqlite3"
     gate = _Gate()
     queue, _ = _queues(db, gate)
@@ -332,7 +384,8 @@ async def test_cancel_terminal_job_is_refused(tmp_path: Path) -> None:
     identity = await backend.submit(_request())
     gate.event(1).set()
     await _drain(queue, identity.job_id)
-    assert await backend.cancel(identity) is False
+    current = identity.with_attempt(attempt_id="a#1", fencing_token=1)
+    assert await backend.cancel(current) is False
     assert await queue.get_status(identity.job_id) is JobStatus.COMPLETED
 
 
@@ -341,7 +394,9 @@ async def test_cancel_unknown_job_is_refused(tmp_path: Path) -> None:
     db = tmp_path / "jobs.sqlite3"
     queue, _ = _queues(db, _Gate())
     backend = NativeLocalBackend(queue)
-    ghost = ExecutionIdentity(request_id="r", idempotency_key="k", job_id="nope")
+    ghost = ExecutionIdentity(
+        request_id="r", idempotency_key="k", job_id="nope", attempt_id="a#1", fencing_token=1
+    )
     assert await backend.cancel(ghost) is False
 
 
@@ -356,7 +411,8 @@ async def test_cancel_never_emits_a_success_notification(tmp_path: Path) -> None
 
     identity = await backend.submit(_request())
     await _wait_status(queue_a, identity.job_id, JobStatus.PROCESSING)
-    assert await backend.cancel(identity) is True
+    current = identity.with_attempt(attempt_id="a#1", fencing_token=1)
+    assert await backend.cancel(current) is True
     await asyncio.sleep(0.05)
     assert recorder.successes() == []
 

@@ -211,8 +211,14 @@ class ExecutionIdentity:
         _require_token(self.backend, field_name="backend")
         if self.attempt_id is not None:
             _require_token(self.attempt_id, field_name="attempt_id")
-        if self.fencing_token is not None and self.fencing_token < 1:
-            raise ValueError("fencing_token must be >= 1 when present")
+        if self.fencing_token is not None:
+            # Malformed identities fail closed at construction: the token is
+            # the attempt fence, so ``bool``/``float``/``str`` impostors must
+            # never reach the authority (``True`` would otherwise alias 1).
+            if type(self.fencing_token) is not int:
+                raise ValueError("fencing_token must be an int when present")
+            if self.fencing_token < 1:
+                raise ValueError("fencing_token must be >= 1 when present")
         if self.provider_run_id is not None:
             _require_token(self.provider_run_id, field_name="provider_run_id")
 
@@ -404,7 +410,15 @@ class ExecutionBackend(Protocol):
         ...
 
     async def cancel(self, identity: ExecutionIdentity) -> bool:
-        """Request cancellation; ``True`` iff an in-flight attempt was affected."""
+        """Request cancellation; ``True`` iff an in-flight attempt was affected.
+
+        Cancellation is **attempt-scoped**: the identity must carry its
+        fencing token (``identity.fencing_token``), and the request may only
+        affect the attempt that token names.  A stale identity (an older
+        token) is rejected and must never cancel the current attempt; an
+        unbound identity (``job_id`` without a fencing token) holds no
+        cancellation authority at all — ``job_id`` alone is never sufficient.
+        """
         ...
 
     async def reconcile(self, identity: ExecutionIdentity) -> ExecutionObservation:

@@ -103,6 +103,22 @@ def test_identity_rejects_invalid_tokens(kwargs: dict[str, object]) -> None:
         ExecutionIdentity(**kwargs)  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize("malformed", [True, False, 1.5, "1", 2.0, object()])
+def test_identity_rejects_malformed_fencing_tokens(malformed: object) -> None:
+    """A malformed identity must fail closed at construction.
+
+    The fencing token is the attempt fence: ``True`` must never alias attempt
+    1, and floats/strings/objects must never reach the authority.
+    """
+    with pytest.raises(ValueError):
+        ExecutionIdentity(
+            request_id="r",
+            idempotency_key="k",
+            job_id="j",
+            fencing_token=malformed,  # type: ignore[arg-type]
+        )
+
+
 def test_identity_is_frozen() -> None:
     identity = ExecutionIdentity(request_id="r", idempotency_key="k", job_id="j")
     with pytest.raises(FrozenInstanceError):

@@ -19,9 +19,10 @@ Verb mapping
     ``queue.cancel`` (the additive, fenced cancellation primitive): an
     in-flight attempt is reset to ``pending`` under its current fencing token,
     so the cancelled attempt's later completion is rejected by the fenced CAS.
-    A terminal row is never reopened.  When the identity carries a fencing
-    token, cancellation is **attempt-scoped** (``expected_attempt``): a stale
-    identity can never cancel a newer attempt.
+    A terminal row is never reopened.  Cancellation is **attempt-scoped**: the
+    identity must carry its fencing token (``expected_attempt``), so a stale
+    identity can never cancel a newer attempt, and an unbound identity
+    (``job_id`` without a token) holds no cancellation authority at all.
 ``reconcile``
     observe only by default — reconciliation never invents success and never
     takes over a live peer.  A takeover happens **only** when this backend was
@@ -142,9 +143,14 @@ class NativeLocalBackend:
         return ExecutionObservation(identity=bound, state=state, result=result, failure=failure)
 
     async def cancel(self, identity: ExecutionIdentity) -> bool:
-        # Attempt-scoped when the identity carries a fencing token: a stale
-        # identity must never mutate (cancel) a newer execution.  Only a
-        # token-less identity keeps the historical job-level behaviour.
+        # Cancellation authority is the fencing token, never a bare ``job_id``:
+        # an unbound identity (no token) is refused outright — it cannot name
+        # the execution it speaks for, so it must not mutate anything.  A
+        # bound identity cancels only its own attempt: a stale token (older
+        # attempt) is rejected at the queue's fenced CAS and can never cancel
+        # the current attempt.
+        if not identity.has_fencing_token:
+            return False  # fail closed: job_id alone is not cancellation authority
         return await self._queue.cancel(identity.job_id, expected_attempt=identity.fencing_token)
 
     async def reconcile(self, identity: ExecutionIdentity) -> ExecutionObservation:

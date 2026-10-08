@@ -792,7 +792,7 @@ class InProcessJobQueue:
             self._schedule(jid)
         return [jid for jid, _, _ in reset]
 
-    async def cancel(self, job_id: str, *, expected_attempt: int | None = None) -> bool:
+    async def cancel(self, job_id: str, *, expected_attempt: int) -> bool:
         """Request cancellation of an in-flight job (fenced, additive primitive).
 
         Cancellation is a **process-lifecycle** event, never a business
@@ -804,12 +804,13 @@ class InProcessJobQueue:
         ``jobs.lifecycle.TRANSITIONS`` (owner: *"queue (cancellation /
         shutdown)"*) and the ``JOB_REOPENED`` event kind.
 
-        ``expected_attempt`` binds the cancellation to one specific execution:
-        when supplied (a caller that holds an attempt-scoped identity passes its
-        fencing token), the reset commits **only if the row is still that
-        attempt** — a stale identity can therefore never cancel a newer attempt.
-        When ``None`` the historical job-level behaviour is kept (cancel
-        whatever attempt currently owns the row).
+        ``expected_attempt`` **binds** the cancellation to one specific
+        execution and is mandatory: a caller that holds an attempt-scoped
+        identity passes its fencing token, and the reset commits **only if the
+        row is still that attempt**.  A stale identity (an older token) is
+        therefore rejected and can never cancel a newer attempt; a bare
+        ``job_id`` is never sufficient authority to cancel anything (fail
+        closed — there is deliberately no job-level fallback).
 
         Returns ``True`` iff an in-flight attempt was affected.  A terminal row
         is never reopened, and a row that was never owned (``pending``) is not
@@ -830,7 +831,7 @@ class InProcessJobQueue:
         attempt = int(row["attempt"] or 0)
         if attempt < 1:
             return False  # an in-flight row always carries a minted token
-        if expected_attempt is not None and attempt != expected_attempt:
+        if attempt != expected_attempt:
             # A stale identity (or a lost race): the current owner is a newer
             # attempt.  Never mutate a newer execution on behalf of an older one.
             return False
