@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-06T23:20:00Z",
+  "updated_at": "2026-10-08T14:38:16Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -778,6 +778,19 @@
       "paths": [
         "src/nexus_ai_agent/features/owner_control.py",
         "tests/unit/test_owner_gate_fail_closed.py"
+      ]
+    },
+    {
+      "id": "execution-core",
+      "description": "NEXUS V1 native execution core: provider-neutral Execution Contract, NativeLocalBackend over InProcessJobQueue, attempt-scoped staging",
+      "paths": [
+        "src/nexus_ai_agent/execution/",
+        "src/nexus_ai_agent/adapters/native_local_backend.py",
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        "tests/unit/test_execution_contract.py",
+        "tests/unit/test_execution_staging.py",
+        "tests/integration/test_execution_native_backend.py",
+        "tests/architecture/test_execution_contract_boundary.py"
       ]
     }
   ],
@@ -3402,6 +3415,44 @@
       "gates_owner": false,
       "delivered": false,
       "note": "| RECONCILE: MERGED in #184 (main b733fb0). is_owner() now fails closed when owner_telegram_id is unset (0 is no longer a valid identity)."
+    },
+    {
+      "task": "task-254-execution-core-v1",
+      "title": "NEXUS V1 native execution core: provider-neutral Execution Contract, NativeLocalBackend, attempt-scoped staging, invariant-mapped tests",
+      "title_fa": "هستهٔ اجرای بومی NEXUS V1: قرارداد اجرای مستقل از provider، NativeLocalBackend، staging در محدودهٔ attempt، تست‌های نگاشت‌شده به invariantها",
+      "zone": "execution-core",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Add a provider-neutral execution contract (submit/observe/cancel/reconcile, no execute) that is only an intent/contract, never an authority. Add a thin NativeLocalBackend over the existing InProcessJobQueue (one queue, one authority) plus a small additive public cancel primitive. Add attempt-scoped staging isolation with traversal/symlink protection. Reuse the existing queue-owned atomic fenced commit, independent verification, passport and provenance unchanged. Prove invariants I1-I10 with executable tests including the required stale-attempt race.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "execution/contract.py exposes an ExecutionBackend protocol with exactly submit/observe/cancel/reconcile and no execute(), importing no provider SDK",
+        "NativeLocalBackend wraps an injected InProcessJobQueue without constructing a second queue or opening its own persistence authority",
+        "attempt-scoped staging isolates attempts under job_id/attempt_id/staging with path traversal and symlink protection and no provider-controlled final path",
+        "a stale attempt cannot produce authoritative completion: the T1/T2 race is rejected for the old token and accepted for the current token",
+        "invariants I1-I10 are each mapped to an enforcing symbol and a proving test node id"
+      ],
+      "evidence_required": [
+        "tests/unit/test_execution_contract.py",
+        "tests/unit/test_execution_staging.py",
+        "tests/integration/test_execution_native_backend.py",
+        "tests/architecture/test_execution_contract_boundary.py"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/execution/",
+        "src/nexus_ai_agent/adapters/native_local_backend.py",
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        "tests/unit/test_execution_contract.py",
+        "tests/unit/test_execution_staging.py",
+        "tests/integration/test_execution_native_backend.py",
+        "tests/architecture/test_execution_contract_boundary.py"
+      ],
+      "agent_branch": "arena/execution-core-v1-nexus-ai-agent",
+      "claimed_at": "2026-10-08T14:38:16Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
     }
   ],
   "deferred_log": [
