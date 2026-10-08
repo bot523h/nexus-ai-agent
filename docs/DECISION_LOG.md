@@ -23,6 +23,7 @@
 - **r10 (2026-09-24, security-boundary truth salvage):** PR#58's S1–S5 claims re-verified against main `035a896` — real deltas fixed on a fresh branch (dispatcher-true access guard incl. sync `check_update` + `ApplicationHandlerStop`, force-join SQL predicate + fail-closed-unbound, boundary redaction in both pipelines, Gemini `x-goog-api-key` everywhere, SSRF-safe legacy `video_url` download + `SafeAsyncTransport` stream fix), 9/9 mutation-killed; PR#58 stays unmerged evidence (D-0015).
 - **r11 (2026-09-24, S3/S5 adversarial closure):** PR#76's own S3/S5 surfaces independently re-verified and 5 proven defects closed (stdlib traceback redaction, mapping/non-string arg redaction, Basic-scheme credentials, CGNAT 100.64.0.0/10, https-only scheme gate on redirect hops) — 12/12 mutation-killed; D-0016.
 - **r12 (2026-09-30, creative direction):** recorded the product frame (intent, not tools) and the backbone loop above the proven execution chain, then *built the first vertical slice* — the in-memory, single-project intent loop (typed intent → creative graph → capability compiler → CommandBus → artifact + evidence) in `creative/spine/`, with its own boundary and mutation guards. Reverse engineering, multiverse, social feedback, pack marketplace and style DNA stay deferred behind evidence-based triggers. Direction page: `docs/architecture/CREATIVE_DIRECTION.md`; D-0025.  
+- **r13 (2026-10-08, task-123 PR#33 slim-down, session `arena/01a0c3aa-nexus-ai-agent`):** the 52-file PR#33 was reconciled hunk-by-hunk against live main: the superseded security/wiring cluster (already delivered by PR#34 and successors) dropped with its substitute witness, the still-unique remainder (core/extras split, typed optional-dependency guards, OTIO media-reference fix, `ConversationStorePort` SQLite adapter, core-only install guards) absorbed onto main as a real merge parent — no force-push, no history rewrite — and two live defects the reconciliation exposed were fixed RED-first: seven `await session.exec()` call sites raising `AttributeError` against the plain SQLAlchemy `AsyncSession` the session factory yields (including the swallowing `is_first_time_user`), and `RateLimiter`'s unbounded `_history`. Evidence: `docs/audits/PR33_FORENSIC_DEDUPE_2026-10-08.md`; D-0026.
 - **r8 (2026-09-24, P0 stabilization day):** D-0010 legacy `/creative/*` HTTP lane = keep+harden (strictly harden-edged) on a deprecation track gated on open PR#58's SSRF scope, never a competitor pipeline; D-0011 `/edit` `/caption` `/grade` wired through the canonical chain with message-anchored idempotency, the bogus `mapper` handler key removed, honest op matrix (`lut`/`burnin` refused, not faked), all replies through the i18n catalog; D-0012 backup success must be measured and round-trip-verified, never asserted — plus the r8 coordination facts (task-106 superseded into task-166, task-164 narrowed to owner-secrets, docs number-resync against measured values: 57 registered ops).
 
 This document is the single reference point for architectural decisions in this repository. A new decision must be appended here with its date, status, rationale, rejected alternatives, and repository evidence. Existing historical documents remain useful as detailed records, but this log is authoritative when summaries differ.
@@ -1902,3 +1903,66 @@ the newest; identity on an empty stack is refused; the two-thread
 and `tests/unit/test_undo_contract_mutations.py` — 4 tests, 3 mutants killed (gate disabled; wrong
 field compared; comparison inverted). `docs/architecture/COMMAND_CAPABILITY_CONTRACT.md` §`system.undo`
 records the contract.
+
+---
+
+## 2026-10-08 — task-123: PR#33 slimmed to its unique remainder; the packaging split and the two live session defects it exposed (D-0026)
+
+### D-0026 — An old PR is reconciled hunk-by-hunk against live main, never re-applied: absorb main as a real merge parent (no force-push), keep only the remainder that has no authoritative equivalent, and fix any live defect the remainder's witnesses expose
+
+**Context.** PR#33 (opened 2026-09-21, head `8f2029e`, 52 files, +4351/−207) had
+been re-designated by the board as the task-110/task-107 vehicle, and its
+`DECISION_LOG` r7 record already called it "superseded" before the
+`ci-gates-steward` board reopened it the same day. Both statements were partly
+right: by 2026-10-08 the merge-base `978ae161` versus live `main` `440d290`
+showed the security/wiring half of the PR already delivered (PR#34 and its
+successors), while the packaging half had no equivalent anywhere on main. The
+repository had no mechanism to *tell those halves apart*, which is why the PR
+sat open for two weeks and why two sessions' work was nearly lost.
+
+**Decision.** (1) The PR branch is the vehicle, and it **absorbs** live main as
+a real merge parent (`967791c` tree reset to main, `e6ac7c0` merge) so GitHub
+computes the diff against live main — a force-push or history rewrite is never
+the answer. (2) Every one of the 52 files is classified **superseded /
+conflicting / unique** by reading hunks in both directions, and each drop must
+name the merged artifact that already provides the behaviour (the
+"substitute witness" rule). (3) The unique remainder is ported onto main's
+evolved code (adapting where main had changed the same function), never copied
+over it. (4) A live defect discovered by a remainder's regression test is fixed
+here with RED-first evidence, even when its *symptom* arrived with the other
+cluster — defect ownership is by live tree, not by PR lineage.
+
+**Alternatives rejected.** *Blind rebase + keep everything* — would have
+overwritten main's hardened access guard, path containment, dashboard
+redaction, force-join predicate and gamification fixes with their older
+versions. *Drop the PR and re-open fresh work for packaging only* — loses the
+proven OTIO/CI/contracts design and re-fragments an in-flight review. *Port the
+security cluster anyway so the PR "proves wiring"* — duplicates authority and
+contradicts the merge-only-in-one-place rule. *Leave the `AsyncSession.exec`
+defect to a future task because it came from the other cluster* — the call sites
+are live on main and raise on the core user path (`/language`, `/myfiles`,
+`/download`) and on every user's first message; that is a production defect, not
+a lineage artifact.
+
+**Evidence (all on the branch, exact SHAs in the audit).** Classification table
+for all 52 files, removed/retained hunks with reasons, and the test map live in
+`docs/audits/PR33_FORENSIC_DEDUPE_2026-10-08.md`. RED→GREEN:
+`tests/unit/test_async_session_contract.py` failed 4/4 before the fix (2
+`AttributeError`s, one misreported first-time user, one source-ratchet hit) and
+passes with the 290-test session suite after;
+`tests/unit/test_rate_limiter.py::test_tracked_users_are_bounded_under_a_distinct_user_flood`
+raised `AttributeError` before and passes after. Mutations: removing the OTIO
+`global_start_time` emission kills 4 rate-parameter tests; reverting one
+`execute().scalars()` site kills the behaviour test plus the ratchet.
+Governance: `scripts/extras_matrix.py check` green, `mypy src` green (287
+files), `ruff check`/`format --check` green.
+
+**Scope of the guarantee (no overclaiming).** The PR is **BRANCH_PROVEN** at the
+head recorded in the board note; merging it remains an owner/gates decision and
+is out of scope for this claim. The `[rag]` and `[local-llm]` extras-matrix
+legs are declared and locally validated by the matrix checker, but their full
+CI legs (torch / llama.cpp builds) have not executed in this environment.
+`.nexus/continuum.json` is deliberately **not** republished: it is a
+machine-bound release-cut record whose CI gate publishes for the SHA under test
+and reports the committed copy non-blocking, so a branch-local snapshot would
+be a foreign-environment claim, not evidence.

@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-06T23:20:00Z",
+  "updated_at": "2026-10-08T10:14:38Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -940,7 +940,7 @@
       "title_fa": "کوچک‌سازی PR#33 به بخش‌های یکتا",
       "zone": "packaging+interop",
       "priority": "P0",
-      "status": "assigned_to_E_pr33",
+      "status": "active",
       "scope": "بخش امنیت/سیم‌کشی #33 با #34 لندشده هم‌پوشانی دارد؛ فقط بسته‌بندی، OTIO، conv-store و داک بماند.",
       "scope_fa": "بخش امنیت/سیم‌کشی #33 با #34 لندشده هم‌پوشانی دارد؛ فقط بسته‌بندی، OTIO، conv-store و داک بماند.",
       "prerequisites": [],
@@ -955,10 +955,12 @@
       ],
       "exclusive_paths": [],
       "owner_hint": "شاخه 3aa (کار خودش)",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0c3aa-nexus-ai-agent",
+      "claimed_at": "2026-10-08T10:14:38Z",
       "ttl_hours": 24,
-      "gates_owner": false
+      "gates_owner": false,
+      "note": "EVIDENCE 2026-10-08 (arena/01a0c3aa): delivery commits a0d0b07 (unique remainder ported onto main@440d290), 38ee603 (deterministic lock-removal probe), 2970365 (continuum finding); origin/main 48f280c merged clean. Diff vs live main = 40 files; superseded security/wiring cluster dropped with its substitute witness — full reconciliation table in docs/audits/PR33_FORENSIC_DEDUPE_2026-10-08.md. RED->GREEN: async-session 4 red -> 290 green; rate-limiter AttributeError -> green. Mutations killed: M1 OTIO emission (4 red), M2 exec revert (2 red), M3 lock probe (10/10 red, store restored byte-identical to main). Local gates: unit 1977+1688 passed, arch+integration 383, governance 272+100, pack-coverage ACCEPTED (TOTAL 97.34%), extras-matrix ok, mypy 287 files clean, ruff check+format clean, git diff --check clean. Referee: official check exits 2 (no GitHub token inside the process for the open-PR branch source + board-wide zero gates_owner under #188 fail-closed); equivalent run over 47 sources (local + origin/main + worktree + all 45 open-PR branch boards) using the same scripts/agent_board._conflicting_paths -> no overlap. Discoveries: (1) pre-existing flaky lock-removal probe, 6/10 red on pristine origin/main@460f4d7, fixed deterministic 0/15; (2) `nexus continuum verify` red on pristine main (step 1f8b552 unreachable + stale count) -> BLOCKED for honest republish (needs release python 3.13.15), audit §9, CI unaffected (committed snapshot is non-blocking). CI: GitHub checks pending after push; full gates deferred to gates owner (vacant). Delivery: BRANCH_PROVEN pending push; MAIN_PROVEN only after an owner merge (not performed here).",
+      "generation": 1
     },
     {
       "task": "task-124",
@@ -3518,7 +3520,8 @@
         "CI سبز"
       ],
       "prerequisites": [],
-      "exclusive_paths": []
+      "exclusive_paths": [],
+      "status_note": "DELIVERED on branch arena/01a0c3aa-nexus-ai-agent (commits a0d0b07 -> 2970365): PR#33 now diffs against live main as the unique remainder only; evidence docs/audits/PR33_FORENSIC_DEDUPE_2026-10-08.md. Criterion 1 met and measured (40 files, reconciliation table); criterion 2 (CI green) pending GitHub checks after push + owner merge. Unblocks task-121 (its prerequisite) and frees cli.py for task-126 once merged."
     },
     {
       "id": "task-121",

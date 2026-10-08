@@ -20,15 +20,18 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
-import psycopg
-
+from nexus_ai_agent.optional_deps import require
 from nexus_ai_agent.storage.checkpoint_adapter import (
     POST_V1_DELETE_MARKER,
     CheckpointInfo,
     CleanupDisabled,
 )
+
+# PG-only module: fail closed with the install command instead of a bare
+# ModuleNotFoundError when the [postgres] extra is not installed.
+psycopg: Any = require("psycopg")
 
 # Fingerprint algorithm for the Postgres langgraph schema (distinct from the
 # SQLite one: different engine, tables, and types).

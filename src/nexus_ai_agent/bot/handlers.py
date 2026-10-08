@@ -127,7 +127,7 @@ SessionFactory = Callable[[], Any]
 async def _upsert_user(db_session_factory: SessionFactory, tg_user: Any) -> User:
     async with db_session_factory() as session:
         stmt = select(User).where(User.telegram_id == int(tg_user.id))
-        existing = (await session.exec(stmt)).first()
+        existing = (await session.execute(stmt)).scalars().first()
         if existing:
             existing.username = tg_user.username or existing.username or ""
             await session.commit()
@@ -142,7 +142,7 @@ async def _upsert_user(db_session_factory: SessionFactory, tg_user: Any) -> User
 async def _upsert_chat(db_session_factory: SessionFactory, chat_id: int, thread_id: str) -> Chat:
     async with db_session_factory() as session:
         stmt = select(Chat).where(Chat.chat_id == chat_id)
-        existing = (await session.exec(stmt)).first()
+        existing = (await session.execute(stmt)).scalars().first()
         if existing:
             existing.thread_id = thread_id
             await session.commit()
@@ -642,7 +642,7 @@ def build_handlers(
                 .where(CloudFile.user_id == user_id)
                 .order_by(desc(CloudFile.created_at))
             )
-            files = (await session.exec(stmt)).all()
+            files = (await session.execute(stmt)).scalars().all()
         if not files:
             await _reply(update, "📁 No files. Reply to file → /cloud to upload.")
             return
@@ -666,7 +666,7 @@ def build_handlers(
             stmt = select(CloudFile).where(
                 CloudFile.user_id == user_id, CloudFile.file_name == filename
             )
-            cloud_file = (await session.exec(stmt)).first()
+            cloud_file = (await session.execute(stmt)).scalars().first()
         if cloud_file is None:
             await _reply(update, f"❌ File '{filename}' not found.")
             return
@@ -751,7 +751,7 @@ def build_handlers(
                 keyboard.append(row)
             async with db_session_factory() as session:
                 stmt = select(UserLanguage).where(UserLanguage.user_id == user_id)
-                ul = (await session.exec(stmt)).first()
+                ul = (await session.execute(stmt)).scalars().first()
             current = ul.language if ul else "en"
             await _reply(
                 update,
@@ -771,7 +771,7 @@ def build_handlers(
             return
         async with db_session_factory() as session:
             stmt = select(UserLanguage).where(UserLanguage.user_id == user_id)
-            ul = (await session.exec(stmt)).first()
+            ul = (await session.execute(stmt)).scalars().first()
             if ul:
                 ul.language = lang
                 ul.updated_at = datetime.now(timezone.utc)

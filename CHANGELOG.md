@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Task — PR#33 slim-down: the unique remainder, reconciled onto live main (task-123, session `arena/01a0c3aa-nexus-ai-agent`)
+
+- **The open PR#33 carried 52 files — most of its security/wiring scope had already
+  merged on `main` through PR#34 and its successors, so re-applying it wholesale
+  would have overwritten newer, hardened work.** The branch absorbed live `main`
+  as a real merge parent (no force-push, no history rewrite); every hunk was
+  classified superseded/conflicting/unique by reading it, and only the remainder
+  was kept. Evidence: `docs/audits/PR33_FORENSIC_DEDUPE_2026-10-08.md`.
+- **Kept and reconciled onto main:** the core/capability-extras install split
+  (`pip install .` no longer pulls torch / ChromaDB / llama.cpp), nine extras
+  (`rag`, `local-llm`, `speech`, `r2`, `pdf`, `translate`, `postgres`, `otio`,
+  `media`) with PEP 735 `[dependency-groups]`, fail-closed typed optional-
+  dependency guards (`src/nexus_ai_agent/optional_deps.py`), six new blocking
+  `extras-matrix` CI legs + the generated `.github/DEPENDENCY_MATRIX.md`, the
+  multi-stage Dockerfile with a slim default target, the OTIO document fix
+  (`ExternalReference.1` + `global_start_time` — exported timelines reference
+  real media instead of opening 100% offline), the `ConversationStorePort`
+  SQLite adapter, and the core-only install guards for the PostgreSQL
+  checkpoint stores and the R2/worker/RAG import paths.
+- **Fixed while reconciling (live defects on `main`, RED-first):** seven
+  `await session.exec()` call sites that raise `AttributeError` against the
+  plain SQLAlchemy `AsyncSession` the session factory actually yields —
+  including `is_first_time_user`, whose swallowing `except` silently
+  re-onboarded every returning user; and `RateLimiter`'s `_history` map,
+  documented "bounded" while growing with every unseen `user_id`.
+- **Dropped as superseded, with the witness that already holds it:** PR#33's
+  access guard, dashboard PII/bearer handling, path containment, force-join
+  predicate, gamification and middleware redesign — all live on `main`.
+- **Found red while proving the above:** the checkpoint-lifecycle lock-removal
+  mutation probe was scheduling-dependent — it asserted a *probabilistic*
+  user-visible failure and failed **6/10 runs on a pristine `origin/main`
+  tree** (test bug, not a product defect: the store does hold its lock). The
+  probe now measures the invariant itself — exclusive entry into the shared
+  connection's write critical section, with a forced hold window — and catches
+  the neutered-lock mutation **10/10** times where the old one caught it ~4/10.
+  Store code unchanged (byte-identical to main).
+
 ### Feature — truth doctor: one authority for repository truth (law R16, session `arena/runtime-truth-tooling`)
 
 - **The repository could not prove its own truth.** Version drift, an unindexed

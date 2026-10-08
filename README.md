@@ -229,8 +229,76 @@ for filenames, ownership boundaries and the cleanup policy.
 ```bash
 git clone https://github.com/bot523h/nexus-ai-agent.git
 cd nexus-ai-agent
-make setup
+make setup          # pip install -e ".[dev]"
 ```
+
+#### Core vs capability extras (v3.13.0)
+
+The core install is deliberately small: **bot + API + database + slideshow +
+creative packs**, with no torch, no ChromaDB and no llama.cpp. Anything that
+needs a model download, a native build or a paid-adjacent driver is an opt-in
+extra. Measured when the split was authored (task-107 branch, Python 3.11.2,
+pre-split baseline = the v3.12.0 dependency set):
+
+| Install | site-packages | Install time |
+|---|---|---|
+| before the split (`pip install .`, v3.12.0) | **6.5 GB** | 7 min 50 s |
+| core only, `pip install .` (v3.13.0) | **520 MB** | 43 s |
+| core only, `uv pip install .` | **389 MB** | **2.6 s** |
+
+That is a **12.5×** smaller install and — with [uv](https://docs.astral.sh/uv/)
+(free, Rust-based) — a **16×** faster one.
+
+```bash
+pip install .                                  # core: boots the bot
+pip install --group dev                        # dev tools (PEP 735, pip >= 25.1 / uv)
+pip install -e ".[dev]"                        # same list, legacy spelling
+pip install '.[rag,speech,pdf,media]'          # only what you need
+uv pip install --system .                      # faster core install
+```
+
+| Extra | Enables | Packages |
+|---|---|---|
+| `[rag]` | document Q&A over uploaded files | chromadb, flashrank, sqlite-vec, sentence-transformers (pulls torch ≈ 2 GB) |
+| `[local-llm]` | on-device inference | llama-cpp-python (C++ build) |
+| `[speech]` | `/tts` text-to-speech and local speech-to-text | gTTS, faster-whisper (CTranslate2, int8 CPU) |
+| `[r2]` | Cloudflare R2 storage tier | boto3 |
+| `[pdf]` | PDF text extraction for the RAG lane | pypdf |
+| `[translate]` | fully-offline translation (incl. Persian) | argostranslate |
+| `[postgres]` | PostgreSQL/Neon backend instead of SQLite | psycopg[binary,pool], asyncpg, langgraph-checkpoint-postgres |
+| `[otio]` | real OpenTimelineIO round-trip validation | opentimelineio |
+| `[media]` | `/slideshow` + Nagar renders without a system FFmpeg | imageio-ffmpeg (static binary) |
+
+There is no aggregate `all` extra (a full-fat CI leg for it would install
+torch + llama.cpp just to prove a meta-dependency); install the list explicitly:
+
+```bash
+pip install '.[rag,local-llm,speech,r2,pdf,translate,postgres,otio,media]'
+```
+
+Every extra is imported lazily and guarded by `nexus_ai_agent.optional_deps`, so
+a missing extra **fails closed with the exact install command** instead of a
+`ModuleNotFoundError` traceback — in the Telegram reply, in the durable job
+record, or on the CLI. `tests/unit/test_packaging.py` enforces the contract: no
+heavy package in core, no core entry point importing an extra at module scope,
+and the whole startup path booting in a fresh interpreter with **every** extra
+blocked. Every shipping extra is also installed and smoke-tested by its own
+blocking `extras-matrix` CI leg (`scripts/extras_matrix.py` fails the build when
+a declared extra has no leg).
+
+#### Docker
+
+Two runtime targets; `slim` is the default:
+
+```bash
+docker build -t nexus-slim .                          # core only (default target)
+docker build --target full -t nexus-full .            # every extra + system FFmpeg
+docker build --build-arg NEXUS_EXTRAS=rag,media -t nexus-rag .
+```
+
+Dependencies resolve with `uv` in a builder stage, so no compiler reaches a
+runtime image. The `slim` target ships core only plus the system `ffmpeg` the
+render lane resolves (task-163).
 
 ### 2) Configure environment
 

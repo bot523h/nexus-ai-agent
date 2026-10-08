@@ -66,6 +66,8 @@ PACK_TEST_TARGETS: Mapping[str, tuple[str, ...]] = {
     "delivery": (
         "tests/unit/test_delivery_pack.py",
         "tests/unit/test_delivery_signing.py",
+        # OTIO round-trip: timeline.markers/media refs -> real document (task-110)
+        "tests/unit/test_otio_interop.py",
         "tests/architecture/test_delivery_pack_boundary.py",
     ),
     "edit": (

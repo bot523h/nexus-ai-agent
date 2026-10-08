@@ -25,8 +25,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import psycopg
-
 from nexus_ai_agent.domain.policies.reconciler_policy import (
     anomaly_rate,
     orphan_block_until,
@@ -53,7 +51,14 @@ from nexus_ai_agent.storage.checkpoint_lifecycle_store import (
 
 # Driver exceptions from either backend; a DB error during a scan is a
 # health-gate signal, never an unhandled crash (backend-agnostic since PR3).
-_DB_ERRORS = (sqlite3.Error, psycopg.Error)
+# psycopg is an optional extra ([postgres]); a SQLite-only install must still be
+# able to import this module, so the tuple degrades to the SQLite errors.
+try:
+    import psycopg
+
+    _DB_ERRORS: tuple[type[Exception], ...] = (sqlite3.Error, psycopg.Error)
+except ModuleNotFoundError:
+    _DB_ERRORS = (sqlite3.Error,)
 
 ORPHAN = "orphan_lifecycle"
 MISSING = "missing_lifecycle"

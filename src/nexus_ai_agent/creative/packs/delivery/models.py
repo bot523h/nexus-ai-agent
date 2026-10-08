@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 DELIVERY_PACKAGE_ID = "nexus.color.delivery"
 DOMAIN_COLOR = "color"
@@ -113,16 +113,45 @@ class TimeRange(BaseModel):
     duration: RationalTime
 
 
+class OtioMediaReference(BaseModel):
+    """OpenTimelineIO ``ExternalReference.1`` — where a clip's media lives.
+
+    A clip without a media reference deserialises as ``MissingReference``, which
+    every NLE renders as offline media. The reference is therefore mandatory in
+    the exported document, and it is derived from the pack's ``media_url`` IR
+    field so callers keep the simple ``media_url=`` construction they use today.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    OTIO_SCHEMA: str = "ExternalReference.1"
+    target_url: str = Field(min_length=1)
+    available_range: TimeRange | None = None
+
+
 class OtioClip(BaseModel):
-    """OpenTimelineIO clip element representation."""
+    """OpenTimelineIO clip element representation.
+
+    ``media_url`` is pack IR only: it is *not* an OTIO schema field, and the real
+    OpenTimelineIO reader drops unknown keys silently (proven in
+    ``tests/unit/test_otio_interop.py``, where such a clip comes back as
+    ``MissingReference`` — offline media in every NLE). It is therefore excluded
+    from serialisation and published as a computed ``media_reference``.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     OTIO_SCHEMA: str = "Clip.1"
     name: str
     source_range: TimeRange
-    media_url: str
+    media_url: str = Field(min_length=1, exclude=True)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def media_reference(self) -> OtioMediaReference:
+        """OTIO ``ExternalReference.1`` derived from the pack's ``media_url``."""
+        return OtioMediaReference(target_url=self.media_url)
 
 
 class OtioTrack(BaseModel):
