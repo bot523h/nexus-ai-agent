@@ -300,8 +300,7 @@ async def test_handler_success_without_independent_verification_is_not_job_succe
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
 async def test_cancel_running_job_is_fenced_and_recoverable(tmp_path: Path) -> None:
-    """I3/I4: cancelling resets the current attempt to pending (recoverable);
-    the cancelled worker's later completion cannot commit."""
+    """I3/I4: cancellation hands the recoverable row to a successor attempt."""
     db = tmp_path / "jobs.sqlite3"
     gate = _Gate()
     queue, _ = _queues(db, gate)
@@ -312,13 +311,14 @@ async def test_cancel_running_job_is_fenced_and_recoverable(tmp_path: Path) -> N
     assert _row(db, identity.job_id)["attempt"] == 1
 
     assert await backend.cancel(identity) is True
-    await _wait_status(queue, identity.job_id, JobStatus.PENDING)
-    assert _row(db, identity.job_id)["attempt"] == 1  # token unchanged; row recoverable
+    await _wait_status(queue, identity.job_id, JobStatus.PROCESSING)
+    assert _row(db, identity.job_id)["attempt"] == 2
 
-    # Release the (now cancelled) worker: it must not be able to complete.
+    # The cancelled worker cannot complete; the successor can.
+    gate.event(2).set()
+    assert await _drain(queue, identity.job_id) is JobStatus.COMPLETED
     gate.event(1).set()
-    await asyncio.sleep(0.05)
-    assert await queue.get_status(identity.job_id) is JobStatus.PENDING
+    await queue.shutdown()
 
 
 @pytest.mark.asyncio

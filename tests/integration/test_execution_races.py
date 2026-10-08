@@ -305,6 +305,28 @@ async def test_current_identity_can_cancel_its_own_attempt(tmp_path: Path) -> No
     await queue.shutdown()
 
 
+@pytest.mark.asyncio
+async def test_cancellation_reschedules_a_successor_worker(tmp_path: Path) -> None:
+    """Cancellation must not leave its recoverable pending row unserved."""
+    db = tmp_path / "jobs.sqlite3"
+    gate = _Gate()
+    queue, _ = _two_queues(db, gate)
+    backend = NativeLocalBackend(queue)
+
+    identity = await backend.submit(_request())
+    await _wait_status(queue, identity.job_id, JobStatus.PROCESSING)
+    current = identity.with_attempt(attempt_id="a#1", fencing_token=1)
+    assert await backend.cancel(current) is True
+
+    await _wait_status(queue, identity.job_id, JobStatus.PROCESSING)
+    row = _row(db, identity.job_id)
+    assert row["attempt"] == 2
+    gate.event(2).set()
+    await _wait_status(queue, identity.job_id, JobStatus.COMPLETED)
+    gate.event(1).set()
+    await queue.shutdown()
+
+
 # --------------------------------------------------------------------------- #
 # I10 — notification ordering (instrument the durable commit)
 # --------------------------------------------------------------------------- #

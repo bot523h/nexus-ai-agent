@@ -844,6 +844,9 @@ class InProcessJobQueue:
         task = self._tasks.get(job_id)
         if task is not None and not task.done():
             task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            if self._tasks.get(job_id) is task:
+                self._tasks.pop(job_id, None)
         await self._record(
             CausalEvent(
                 kind=EventKind.JOB_REOPENED,
@@ -855,6 +858,10 @@ class InProcessJobQueue:
                 occurred_at=_now(),
             )
         )
+        # The cancelled attempt left the durable row recoverably pending.  Do
+        # not rely on a duplicate enqueue or a later operator recovery: once
+        # the local task is gone, schedule the successor immediately.
+        self._schedule(job_id)
         return True
 
     async def shutdown(self) -> None:
