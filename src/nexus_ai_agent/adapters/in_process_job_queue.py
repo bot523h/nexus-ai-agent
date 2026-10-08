@@ -862,13 +862,22 @@ class InProcessJobQueue:
         return True
 
     async def shutdown(self) -> None:
-        """Cancel local tasks and leave them recoverable as pending jobs."""
+        """Cancel local tasks and leave them recoverable as pending jobs.
+
+        Recovery is scoped to **this process's own rows** (the job ids it had
+        scheduled, captured before the tasks are cancelled): a peer process's
+        live in-flight row must never be reset here — that would duplicate its
+        work on the next reservation.  An anomalous row left in flight by an
+        already-popped local task is out of scope by design (the DB has no
+        process owner); process-startup ``resume_pending`` owns that sweep.
+        """
         tasks = list(self._tasks.values())
+        own_jobs = set(self._tasks)  # capture first: done-callbacks pop entries
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        reset = await asyncio.to_thread(self._reset_unfinished, None, set())
+        reset = await asyncio.to_thread(self._reset_unfinished, None, set(), own_jobs)
         for job_id, job_type, attempt in reset:
             if attempt is None:
                 continue  # never owned: re-listed pending, not a takeover

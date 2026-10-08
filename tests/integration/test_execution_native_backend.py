@@ -705,6 +705,29 @@ async def test_recover_job_respects_the_stale_window_boundary(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_shutdown_never_resets_a_peer_process_live_row(tmp_path: Path) -> None:
+    """Same class as the reconcile steal: shutting *this* process down must
+    only recover its own rows — a peer's live in-flight job stays untouched."""
+    db = tmp_path / "jobs.sqlite3"
+    gate = _Gate()
+    queue_a, queue_b = _queues(db, gate)
+    backend_b = NativeLocalBackend(queue_b, worker_id="B")
+
+    identity = await backend_b.submit(_request())
+    await _wait_status(queue_b, identity.job_id, JobStatus.PROCESSING)
+
+    await queue_a.shutdown()  # the *other* process exits
+    row = _row(db, identity.job_id)
+    assert row["status"] == JobStatus.PROCESSING.value
+    assert row["attempt"] == 1
+    assert gate.calls == 1
+
+    gate.event(1).set()
+    assert await _drain(queue_b, identity.job_id) is JobStatus.COMPLETED
+    assert (await queue_b.get_result(identity.job_id) or {})["who"] == "worker-1"
+
+
+@pytest.mark.asyncio
 async def test_reconcile_racing_the_live_owner_duplicates_nothing(tmp_path: Path) -> None:
     """Race: reconcile fires while the live worker is still executing *and*
     finishing.  Exactly one handler execution, exactly one authoritative
