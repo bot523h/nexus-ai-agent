@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Feature — Execution Fabric: a provider-neutral execution boundary + thin Hatchet adapter (task-255)
+
+- **Execution and authority were separable in principle but not in code.** A
+  workflow engine (Hatchet) can now *run* a canonical job, but it can never
+  *authorise, verify, commit, or sign* one.
+- **Contract:** `src/nexus_ai_agent/integrations/execution/` — provider-neutral
+  `ExecutionRequest`/`ExecutionAttempt`/`ExecutionResult`/`ExecutionFailure` and
+  `ExecutionIdentity` (`request_id`, `idempotency_key`, `job_id`, `try_id`,
+  `fencing_token`, `backend`, evidence-only `provider_run_id`). `identity_matches`
+  ignores `provider_run_id`/`provider_attempt` on purpose: an engine retry is
+  never a Nexus try.
+- **Adapter:** `src/nexus_ai_agent/integrations/hatchet/` — the only module that
+  imports `hatchet_sdk` (`_sdk.py`), a workflow that dispatches to the **canonical**
+  handler, and `HatchetExecutionAdapter`. Unknown/stale provider results reconcile
+  **fail closed** and cannot commit. Embedded mode is refused without an explicit
+  dev flag and is never reachable from product code.
+- **Enforcement:** `tests/unit/test_execution_contract.py` (11),
+  `tests/integration/test_hatchet_adapter.py` (8),
+  `tests/architecture/test_execution_fabric_boundary.py` (5); a real embedded
+  end-to-end proof in `tests/integration/test_hatchet_embedded_e2e.py`
+  (`NEXUS_HATCHET_E2E=1`). Documented in `docs/architecture/EXECUTION_FABRIC.md`.
+
 ### Feature — truth doctor: one authority for repository truth (law R16, session `arena/runtime-truth-tooling`)
 
 - **The repository could not prove its own truth.** Version drift, an unindexed

@@ -791,8 +791,7 @@
         "tests/integration/test_hatchet_adapter.py",
         "tests/integration/test_hatchet_embedded_e2e.py",
         "docs/architecture/EXECUTION_FABRIC.md",
-        "docs/README.md",
-        "pyproject.toml"
+        "docs/README.md"
       ]
     }
   ],
@@ -831,8 +830,7 @@
         "tests/integration/test_hatchet_adapter.py",
         "tests/integration/test_hatchet_embedded_e2e.py",
         "docs/architecture/EXECUTION_FABRIC.md",
-        "docs/README.md",
-        "pyproject.toml"
+        "docs/README.md"
       ],
       "owner_hint": "execution-fabric",
       "agent_branch": "integrations/hatchet-execution-fabric",
