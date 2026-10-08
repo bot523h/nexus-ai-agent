@@ -82,6 +82,21 @@ def _imports(path: Path) -> tuple[set[str], set[str]]:
     return roots, nexus_paths
 
 
+def _imported_names(path: Path, module: str) -> set[str]:
+    """List imports from one module; ``*`` records a direct module import."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == module:
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.Import):
+            if any(
+                alias.name == module or alias.name.startswith(f"{module}.") for alias in node.names
+            ):
+                names.add("*")
+    return names
+
+
 # --------------------------------------------------------------------------- #
 # Provider neutrality of the whole execution package
 # --------------------------------------------------------------------------- #
@@ -130,10 +145,12 @@ def test_backend_owns_no_persistence_verifier_or_passport() -> None:
     ):
         assert forbidden not in source, f"backend must not own: {forbidden}"
     _, nexus_paths = _imports(BACKEND)
-    # The backend may use the identity helpers (attempt_id/request_identity),
-    # but it must never pull the verifier or the passport *authority* in.
+    # The backend may import the two identity helpers, but the module path is
+    # not proof of authority: inspect names so moving the helpers is harmless
+    # and a future passport/verifier import fails closed.
     assert not any("verification" in p for p in nexus_paths)
-    assert "nexus_ai_agent.jobs.creative_passport" in nexus_paths
+    passport_imports = _imported_names(BACKEND, "nexus_ai_agent.jobs.creative_passport")
+    assert passport_imports <= {"attempt_id", "request_identity"}, passport_imports
 
 
 def test_backend_never_constructs_a_queue_at_runtime() -> None:

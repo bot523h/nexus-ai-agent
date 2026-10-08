@@ -881,11 +881,10 @@ class InProcessJobQueue:
         Snapshot each live task's *reserved attempt* before cancellation.
         The worker's ``CancelledError`` path normally reopens that same fenced
         attempt; this fallback handles cancellation in the small pre-handler
-        window.  Both paths use the original ``ExecutionClaim`` CAS, never a
-        job-id-only sweep, so if another process has taken over the row, its
-        newer attempt remains untouched.  A task cancelled during the
-        reservation thread (before a claim is returned) is left for the
-        explicit process-startup recovery policy rather than guessed at here.
+        window.  The reservation await is shielded too: if shutdown cancels it,
+        the minted claim is awaited and reopened under its own fence before the
+        cancellation propagates. Both paths use the original ``ExecutionClaim``
+        CAS, never a job-id-only sweep, so a peer's newer attempt remains untouched.
         """
         tasks = list(self._tasks.values())
         task_set = set(tasks)
@@ -1018,8 +1017,43 @@ class InProcessJobQueue:
         # PENDING-only CAS mints this execution's fencing token; a row that
         # is already PROCESSING/VERIFYING belongs to someone else (another
         # process over the same sidecar, or a live task) and is NOT ours.
+        reservation = asyncio.create_task(asyncio.to_thread(self._mark_processing, job_id))
         try:
-            claim = await asyncio.to_thread(self._mark_processing, job_id)
+            # Shield the thread-backed CAS: cancelling this coroutine cannot
+            # stop the worker thread after it has begun committing the claim.
+            claim = await asyncio.shield(reservation)
+        except asyncio.CancelledError:
+            # A cancelled await does not imply that the SQLite reservation
+            # did not commit. Wait for the shielded operation, then reopen only
+            # its returned claim before propagating cancellation; a peer's
+            # later attempt remains protected by _mark_pending's fence.
+            try:
+                claim = await asyncio.shield(reservation)
+            except CreativePassportError:
+                logger.warning(
+                    "job_attempt_history_unreadable_during_cancellation job_id=%s; "
+                    "no reservation claim was returned",
+                    job_id,
+                    exc_info=True,
+                )
+            except Exception:
+                logger.exception("job_reservation_failed_during_cancellation job_id=%s", job_id)
+            else:
+                if claim is not None and await asyncio.to_thread(self._mark_pending, claim):
+                    await self._record(
+                        CausalEvent(
+                            kind=EventKind.JOB_REOPENED,
+                            job_id=job_id,
+                            job_type=job_type,
+                            idempotency_key=str(row["idempotency_key"] or ""),
+                            attempt=claim.attempt,
+                            status=JobStatus.PENDING.value,
+                            payload_digest=payload_digest,
+                            detail={"phase": "reservation_cancellation"},
+                            occurred_at=_now(),
+                        )
+                    )
+            raise
         except CreativePassportError:
             # Never execute a row whose queue-owned attempt evidence cannot
             # be decoded and extended atomically. Recovery leaves it pending

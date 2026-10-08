@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ruff: noqa: E501  (the anchors/mutants are verbatim source lines, kept intact)
-"""NEXUS V1 execution-core mutation probes (M1–M14).
+"""NEXUS V1 execution-core mutation probes (M1–M15).
 
 A targeted mutation harness in the same shape as the established
 ``scripts/gate5_mutation_probes.py``: for each correctness property this
@@ -23,6 +23,7 @@ M11   shutdown resets by job id, not local attempt     peer-takeover race
 M12   staging write follows a swapped ancestor         outside-root write race
 M13   remove_tree leaks parent-reopen OSError           cleanup race typing
 M14   backend ignores required-verification policy      fail-closed submit
+M15   shutdown drops a late reservation claim            cancellation race
 ====  ================================================  =========================
 
 Layered-defense note: M5 replaces the whole quarantine move (both the
@@ -481,6 +482,13 @@ PROBES: tuple[Probe, ...] = (
         tests=(
             f"{BACKEND_T}test_submit_rejects_default_verification_policy_without_queue_verifier",
         ),
+    ),
+    Probe(
+        name="M15 shutdown drops a late reservation claim",
+        target=QUEUE,
+        anchor="                if claim is not None and await asyncio.to_thread(self._mark_pending, claim):",
+        mutant="                if False and claim is not None and await asyncio.to_thread(self._mark_pending, claim):",
+        tests=(f"{BACKEND_T}test_shutdown_cancellation_during_reservation_reopens_minted_claim",),
     ),
 )
 

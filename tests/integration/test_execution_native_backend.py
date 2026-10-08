@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -861,6 +862,47 @@ async def test_shutdown_cannot_reset_a_peer_takeover_of_its_own_job_id(tmp_path:
     assert _row(db, identity.job_id)["attempt"] == 2
     assert (await queue_b.get_result(identity.job_id) or {})["who"] == "worker-2"
     await queue_b.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancellation_during_reservation_reopens_minted_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cancelling the await cannot orphan a claim still committing in its thread."""
+    db = tmp_path / "jobs.sqlite3"
+    gate = _Gate()
+    queue, _ = _queues(db, gate)
+    backend = NativeLocalBackend(queue)
+    reservation_started = threading.Event()
+    release_reservation = threading.Event()
+    reservation_finished = threading.Event()
+    original_mark_processing = queue._mark_processing
+
+    def paused_mark_processing(job_id: str) -> Any:
+        reservation_started.set()
+        if not release_reservation.wait(timeout=5):
+            raise TimeoutError("test did not release the reservation")
+        claim = original_mark_processing(job_id)
+        reservation_finished.set()
+        return claim
+
+    monkeypatch.setattr(queue, "_mark_processing", paused_mark_processing)
+    identity = await backend.submit(_request("shutdown-during-reservation"))
+    assert await asyncio.to_thread(reservation_started.wait, 1)
+    shutdown_task = asyncio.create_task(queue.shutdown())
+    await asyncio.sleep(0.05)  # allow shutdown to cancel the awaiting worker
+    release_reservation.set()
+    try:
+        assert await asyncio.to_thread(reservation_finished.wait, 1)
+        await shutdown_task
+    finally:
+        release_reservation.set()
+        await queue.shutdown()
+
+    row = _row(db, identity.job_id)
+    assert row["attempt"] == 1
+    assert row["status"] == JobStatus.PENDING.value
+    assert gate.calls == 0, "a cancelled reservation must never invoke the handler"
 
 
 @pytest.mark.asyncio
