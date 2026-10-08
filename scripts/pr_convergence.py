@@ -972,9 +972,27 @@ def collect_prs(repo: str, token: str | None) -> list[dict]:
 
 
 def live_main_sha(repo: str, token: str | None, branch: str = "main") -> str | None:
-    ref, _err = _gh_get(f"https://api.github.com/repos/{repo}/git/ref/heads/{branch}", token)
+    """The live head of ``branch``, or ``None`` when it cannot be established.
+
+    ``agent_board._gh_get`` returns the decoded JSON *object*, not a
+    ``(value, error)`` pair, so unpacking it raised ``ValueError: too many
+    values to unpack`` on every successful response.  This is called from
+    ``main`` outside any ``try``, so the documented live command
+    ``pr_convergence.py --repo owner/name`` died with a traceback instead of the
+    contracted ``EXIT_BLOCKED``.
+
+    Every failure mode is converted to ``None`` so the caller's existing
+    fail-closed branch runs: no traceback, and never a guessed SHA.
+    """
+    try:
+        ref = _gh_get(f"https://api.github.com/repos/{repo}/git/ref/heads/{branch}", token)
+    except (OSError, ValueError):
+        # OSError covers HTTPError/URLError/timeouts; ValueError covers a
+        # non-JSON body (json.JSONDecodeError subclasses it).
+        return None
     if isinstance(ref, dict):
-        sha = (ref.get("object") or {}).get("sha")
+        target = ref.get("object")
+        sha = target.get("sha") if isinstance(target, dict) else None
         return str(sha) if sha else None
     return None
 

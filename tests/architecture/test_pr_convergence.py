@@ -22,6 +22,7 @@ import importlib.util
 import json
 import re
 import sys
+import urllib.error
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -594,3 +595,98 @@ def test_the_report_carries_the_thresholds_it_used(conv: ModuleType) -> None:
     assert report["thresholds"]["inactive_days"] == 7
     assert report["thresholds"]["duplicate_confidence"] == pytest.approx(0.60)
     assert report["generated_at_utc"] == _iso(NOW)
+
+
+# --------------------------------------------------------------------------- #
+# live_main_sha — the live CLI entry point must never traceback
+# --------------------------------------------------------------------------- #
+# Reproduced: ``agent_board._gh_get`` returns the decoded JSON object, not a
+# ``(value, error)`` pair, so ``ref, _err = _gh_get(...)`` raised
+# ``ValueError: too many values to unpack`` on every *successful* response.  It
+# is called from ``main`` outside any ``try``, so the documented command
+# ``pr_convergence.py --repo owner/name`` died with a traceback instead of the
+# contracted EXIT_BLOCKED.
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        ({"ref": "refs/heads/main", "object": {"sha": "abc123", "type": "commit"}}, "abc123"),
+        ({"ref": "refs/heads/main"}, None),  # missing object
+        ({"ref": "r", "object": {"type": "commit"}}, None),  # object without sha
+        ({"ref": "r", "object": "not-a-dict"}, None),  # wrong shape
+        ({"ref": "r", "object": None}, None),
+        ([1, 2, 3], None),  # a list where an object belongs
+        ("nope", None),
+        (None, None),
+    ],
+)
+def test_live_main_sha_reads_the_response_contract(
+    conv: ModuleType, monkeypatch: pytest.MonkeyPatch, response: object, expected: str | None
+) -> None:
+    monkeypatch.setattr(conv, "_gh_get", lambda url, token: response)
+    assert conv.live_main_sha("o/r", None) == expected
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        urllib.error.HTTPError("u", 404, "Not Found", {}, None),
+        urllib.error.URLError("dns failure"),
+        OSError("connection reset"),
+        TimeoutError("timed out"),
+        ValueError("Expecting value: line 1 column 1"),
+    ],
+)
+def test_live_main_sha_converts_transport_failure_to_none(
+    conv: ModuleType, monkeypatch: pytest.MonkeyPatch, exc: Exception
+) -> None:
+    def boom(url: str, token: str | None) -> object:
+        raise exc
+
+    monkeypatch.setattr(conv, "_gh_get", boom)
+    assert conv.live_main_sha("o/r", None) is None
+
+
+def test_live_main_sha_does_not_unpack_a_tuple(conv: ModuleType) -> None:
+    """Pin the contract itself, so the original defect cannot come back.
+
+    The bug was reading ``_gh_get`` as ``(value, error)``.  A tuple response is
+    not something GitHub returns, so it must be treated as malformed rather than
+    destructured.
+    """
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert "ref, _err = _gh_get" not in source, "reverted to the tuple-unpacking contract"
+
+
+def test_the_cli_blocks_rather_than_crashing_when_main_is_unreadable(
+    conv: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """The whole documented live path, with the network failing.
+
+    Acceptance: no traceback, no false VERIFIED — the contracted EXIT_BLOCKED.
+    """
+
+    def boom(url: str, token: str | None) -> object:
+        raise urllib.error.URLError("network unreachable")
+
+    monkeypatch.setattr(conv, "_gh_get", boom)
+    board = tmp_path / "board.json"
+    board.write_text(json.dumps({"schema": 2, "claims": []}), encoding="utf-8")
+    code = conv.main(["--repo", "o/r", "--board", str(board)])
+    assert code == conv.EXIT_BLOCKED
+    assert "Traceback" not in capsys.readouterr().err
+
+
+def test_the_cli_reports_blocked_when_the_ref_payload_is_malformed(
+    conv: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """HTTP 200 with a body that is not a ref object must not invent a SHA."""
+
+    def fake(url: str, token: str | None) -> object:
+        if "/git/ref/" in url:
+            return {"unexpected": "shape"}
+        return []  # the open-PR list
+
+    monkeypatch.setattr(conv, "_gh_get", fake)
+    board = tmp_path / "board.json"
+    board.write_text(json.dumps({"schema": 2, "claims": []}), encoding="utf-8")
+    assert conv.main(["--repo", "o/r", "--board", str(board)]) == conv.EXIT_BLOCKED
