@@ -38,6 +38,62 @@ def test_ensure_directory_rejects_a_symlinked_component(tmp_path: Path) -> None:
     assert not (outside / "b").exists()
 
 
+def _lose_the_mkdir_race(monkeypatch: pytest.MonkeyPatch, *, as_symlink_to: Path | None = None):
+    """Model a concurrent creator that wins the ``os.mkdir`` race.
+
+    The patched ``os.mkdir`` performs the creation (a real directory, or a
+    hostile symlink when ``as_symlink_to`` is given) and then raises
+    ``FileExistsError`` exactly like a lost race would.
+    """
+    real_mkdir = os.mkdir
+
+    def racing_mkdir(name, mode=0o777, *, dir_fd=None):  # noqa: ANN001, ANN202
+        if as_symlink_to is None:
+            real_mkdir(name, mode, dir_fd=dir_fd)
+        else:
+            os.symlink(as_symlink_to, name, dir_fd=dir_fd)
+        raise FileExistsError(17, "File exists", name)
+
+    monkeypatch.setattr(os, "mkdir", racing_mkdir)
+
+
+def test_ensure_directory_tolerates_a_lost_creation_race(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A losing concurrent creator is success, not a boundary failure: the
+    subsequent ``O_NOFOLLOW`` open re-validates the winner's directory."""
+    ws = _ws(tmp_path)
+    _lose_the_mkdir_race(monkeypatch)
+    created = ws.ensure_directory("leaf")
+    assert created.is_dir() and not created.is_symlink()
+
+    monkeypatch.undo()
+    _lose_the_mkdir_race(monkeypatch)
+    created = ws.ensure_directory("a/b/c")  # exercises the _parent_fd create path too
+    assert created.is_dir() and not created.is_symlink()
+
+
+def test_ensure_directory_race_loser_still_rejects_a_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The race tolerance must never become a symlink bypass: if the entry the
+    loser now finds is a symlink, the no-follow open refuses it."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "victim.txt").write_text("victim")
+    ws = _ws(tmp_path)
+    _lose_the_mkdir_race(monkeypatch, as_symlink_to=outside)
+    with pytest.raises(FilesystemBoundaryError):
+        ws.ensure_directory("leaf")
+    assert not (outside / "leaf").exists() and (outside / "victim.txt").exists()
+
+    monkeypatch.undo()
+    _lose_the_mkdir_race(monkeypatch, as_symlink_to=outside)
+    with pytest.raises(FilesystemBoundaryError):
+        ws.ensure_directory("a/b")  # the _parent_fd create path
+    assert not (outside / "b").exists() and (outside / "victim.txt").exists()
+
+
 def test_require_regular_file_accepts_a_regular_file(tmp_path: Path) -> None:
     ws = _ws(tmp_path)
     (ws.root / "f.bin").write_bytes(b"x")
