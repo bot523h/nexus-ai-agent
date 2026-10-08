@@ -694,3 +694,60 @@ def test_graph030_still_fires_after_the_membership_rewrite(tmp_path: Path) -> No
     findings = [f for f in report.findings if f.code == "GRAPH030"]
     assert len(findings) == 1, "exactly the stripped node is missing its history row"
     assert findings[0].witness == stripped
+
+
+def test_a_replace_rebuild_keeps_the_edge_to_a_revoked_passport(tmp_path: Path) -> None:
+    """Skipping a terminal node must never skip its edge.
+
+    `project()` returns None for a terminal passport, and the edge used to be
+    gated on that result.  In replace mode the edge purge has already removed the
+    old link, so the artifact silently lost ARTIFACT_HAS_PASSPORT — with
+    integrity_check still reporting green.
+    """
+    records, digest = _journal_for(tmp_path)
+    graph = CreativeGraph(tmp_path / "graph.sqlite")
+    graph.rebuild_from_journal(records)
+    edges_before = graph.counts()["edges"]
+
+    passport_id = node_identity("PASSPORT", {"job_id": "job_rebuild", "result_digest": digest})
+    graph.set_status(passport_id, "revoked")
+    report = graph.rebuild_from_journal(records, replace=True)
+
+    assert [s["kind"] for s in report["skipped_terminal"]] == ["PASSPORT"]
+    assert graph.counts()["edges"] == edges_before, "the passport edge was dropped"
+    assert graph.find("PASSPORT", {"job_id": "job_rebuild", "result_digest": digest}).status == (
+        "revoked"
+    )
+    assert graph.integrity_check().ok
+
+
+def test_an_in_memory_rebuild_is_atomic_too(tmp_path: Path) -> None:
+    """`:memory:` skipped BEGIN IMMEDIATE, so it never rolled back either.
+
+    The all-or-nothing property has to hold for the in-memory graph as well: the
+    shared connection keeps the implicit transaction Python opens before the
+    first DML, so without an explicit rollback a failed rebuild left its partial
+    writes visible.
+    """
+    records, _ = _journal_for(tmp_path)
+    graph = CreativeGraph(":memory:")
+    graph.rebuild_from_journal(records)
+    healthy = graph.counts()
+
+    calls = {"n": 0}
+    real_put = CreativeGraph._put_node_tx
+
+    def exploding(self, connection, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise RuntimeError("injected crash mid-rebuild")
+        return real_put(self, connection, *args, **kwargs)
+
+    CreativeGraph._put_node_tx = exploding
+    try:
+        with pytest.raises(RuntimeError, match="injected crash"):
+            graph.rebuild_from_journal(records, replace=True)
+    finally:
+        CreativeGraph._put_node_tx = real_put
+
+    assert graph.counts() == healthy, "a partial in-memory projection was observable"

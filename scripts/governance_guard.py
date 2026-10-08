@@ -330,16 +330,33 @@ def classify_pr_condition(condition: str) -> tuple[str, str]:
         return "ok", "has no condition, so it runs on every subscribed event"
 
     low = cond.lower()
+    # Quoted text is data, not logic: `vars.X == 'false'` is not a constant-false
+    # condition.  Blank the strings out before reasoning about the expression.
+    unquoted = re.sub(r"'[^']*'|\"[^\"]*\"", " ", low)
 
     # A condition that can never be true never runs, whatever else it mentions.
-    if low in ("false", "!true") or re.search(r"&&\s*false\b", low):
+    # `false` is caught on either side of `&&`, so `false && <anything>` cannot
+    # reach the positive branch below just because it names pull_request.
+    if unquoted.strip() in ("false", "!true") or re.search(
+        r"(?:^|&&)\s*false\s*(?:&&|$)", unquoted
+    ):
         return "violation", f"condition {condition!r} can never be true, so it never runs"
 
-    # `pull_request` named only under negation excludes it.
+    # `pull_request` named only to be excluded.
     if re.search(r"!=\s*['\"]?pull_request", low) or (
         "pull_request" in low and re.search(r"!\s*contains\s*\(|\bnot\s+contains\s*\(", low)
     ):
         return "violation", f"condition {condition!r} excludes pull_request"
+
+    # Any *other* negation means we cannot prove pull_request survives, even when
+    # the name appears: `!(github.event_name == 'pull_request')` mentions it and
+    # still never runs.  Fail closed rather than trusting the mention.
+    if "!" in unquoted.replace("!=", " ") or re.search(r"\bnot\b", unquoted):
+        return (
+            "unknown",
+            f"condition {condition!r} contains a negation this guard cannot decide — "
+            "recorded as BLOCKED, never as a pass",
+        )
 
     # Naming other events by equality, with no pull_request among them, excludes it.
     events = _EVENT_EQUALITY.findall(low)

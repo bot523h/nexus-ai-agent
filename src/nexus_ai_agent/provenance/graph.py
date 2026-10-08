@@ -975,17 +975,24 @@ class CreativeGraph:
                 passport_result = project("PASSPORT", passport)
                 if passport_result is not None and passport_result.created:
                     projected["PASSPORT"] += 1
-                if passport_result is not None and passport_result.node is not None:
-                    if self._put_edge_tx(
-                        connection,
-                        "ARTIFACT_HAS_PASSPORT",
-                        artifact_id,
-                        passport_result.node.node_id,
-                        {"ledger_seq": passport["seq"]},
-                        source="causal_journal",
-                        source_seq=passport["seq"],
-                    ).created:
-                        edges += 1
+                # The endpoint is derived from the passport's *identity*, not from
+                # the write result.  A terminal passport is skipped, so its result
+                # is None while the node itself still exists — and in replace mode
+                # the edge purge above has already removed the old link.  Gating on
+                # the result therefore dropped ARTIFACT_HAS_PASSPORT permanently
+                # and silently: integrity_check stayed green while the artifact
+                # lost its lineage.  Skipping the node must never skip its edge.
+                passport_id = node_identity("PASSPORT", passport["identity"])
+                if self._put_edge_tx(
+                    connection,
+                    "ARTIFACT_HAS_PASSPORT",
+                    artifact_id,
+                    passport_id,
+                    {"ledger_seq": passport["seq"]},
+                    source="causal_journal",
+                    source_seq=passport["seq"],
+                ).created:
+                    edges += 1
 
         return {
             "skipped_terminal": skipped_terminal,
@@ -1029,7 +1036,18 @@ class CreativeGraph:
     def _connection(self) -> Iterator[sqlite3.Connection]:
         """One committed-or-rolled-back connection (mirrors ``CausalJournal``)."""
         if self._memory_connection is not None:
-            yield self._memory_connection
+            # Same contract as the file-backed path: commit on success, roll back
+            # on failure.  Without this the shared in-memory connection keeps the
+            # implicit transaction Python opens before the first DML, so a rebuild
+            # that raised partway left its partial writes visible to every later
+            # read — the all-or-nothing property held for files and silently not
+            # for `:memory:`.
+            try:
+                yield self._memory_connection
+                self._memory_connection.commit()
+            except BaseException:
+                self._memory_connection.rollback()
+                raise
             return
         connection = sqlite3.connect(self._sqlite_path, timeout=self._connect_timeout)
         connection.row_factory = sqlite3.Row

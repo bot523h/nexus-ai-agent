@@ -62,10 +62,7 @@ pins; a renamed job means GitHub would require a context that can never report.
 | GOV020 | that job actually executes `merge_base_guard.py check-event` |
 | GOV021 | it passes both `--event` and `--base` |
 | GOV022 | no job producing a required context carries `continue-on-error: true` |
-| GOV023 | the job's `if:` provably still runs for `pull_request` — an empty
-  condition, `always()`, or a positive reference passes; a constant-false,
-  negated, or event-exclusive condition is a `VIOLATION`; anything undecidable
-  is `unknown` (`BLOCKED`), never a pass |
+| GOV023 | the job's `if:` provably still runs for `pull_request`: an empty condition, `always()`, or a positive reference passes; a constant-false (`false`, `false && …`, `… && false`), excluded (`!= 'pull_request'`, `!contains(…)`), or event-exclusive condition is a `VIOLATION`; any other negation or undecidable condition is `unknown` (`BLOCKED`), never a pass |
 | GOV030 | the workflow re-runs on every base-changing PR activity type |
 
 `python scripts/governance_guard.py check-live --repo bot523h/nexus-ai-agent`:

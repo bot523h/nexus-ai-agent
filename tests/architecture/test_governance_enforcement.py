@@ -735,3 +735,65 @@ def test_every_declared_endpoint_has_value_semantics(guard: ModuleType) -> None:
         for field_name, holds, expectation in policy.expectations:
             assert callable(holds)
             assert expectation, f"{policy.endpoint}.{field_name} has no stated expectation"
+
+
+def test_gov023_catches_a_false_conjunct_on_either_side(guard: ModuleType) -> None:
+    """`false && <names pull_request>` never runs, however it is spelled.
+
+    The first version of this fix matched only `&& false`, so a leading
+    `false &&` reached the positive branch and reported ok.
+    """
+    for condition in (
+        "false && github.event_name == 'pull_request'",
+        "github.event_name == 'pull_request' && false",
+        "false",
+        "false && always()",
+    ):
+        severity, _ = guard.classify_pr_condition(condition)
+        assert severity == "violation", f"{condition!r} can never be true"
+
+
+def test_gov023_does_not_trust_a_mention_under_an_unknown_negation(
+    guard: ModuleType,
+) -> None:
+    """Naming pull_request is not evidence when a negation wraps it."""
+    for condition in (
+        "!(github.event_name == 'pull_request')",
+        "! (github.event_name == 'pull_request')",
+        "not (github.event_name == 'pull_request')",
+    ):
+        severity, _ = guard.classify_pr_condition(condition)
+        assert severity != "ok", f"{condition!r} must not be reported ok"
+
+
+def test_gov023_does_not_mistake_quoted_text_for_logic(guard: ModuleType) -> None:
+    """`vars.X == 'false'` is data, not a constant-false condition."""
+    severity, _ = guard.classify_pr_condition("vars.X == 'false'")
+    assert severity != "violation", "a quoted 'false' is not a constant-false expression"
+
+
+def test_every_markdown_table_row_in_the_governance_doc_is_well_formed() -> None:
+    """A table row cannot continue onto the next line.
+
+    The GOV023 row was written across four lines; the renderer ended the row at
+    the first and the rest of the invariant was lost.
+    """
+    lines = (
+        Path(REPO_ROOT, "docs/architecture/GOVERNANCE_ENFORCEMENT.md")
+        .read_text(encoding="utf-8")
+        .split("\n")
+    )
+    in_table = False
+    for number, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        if stripped.startswith("|"):
+            in_table = True
+            assert stripped.endswith("|"), f"line {number}: table row does not end with a pipe"
+        elif in_table and stripped:
+            # A non-empty, non-pipe line ends the table only after a blank line.
+            assert lines[number - 2].strip() == "", (
+                f"line {number}: text continues a markdown table without a blank line"
+            )
+            in_table = False
+        elif not stripped:
+            in_table = False
