@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-06T23:20:00Z",
+  "updated_at": "2026-10-08T14:21:32Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -802,7 +802,7 @@
       "title_fa": "قرارداد Execution Fabric مستقل از ارائه‌دهنده + آداپتور اجرای گردش‌کار Hatchet (بدون اختیار اجرا)",
       "zone": "execution-fabric",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "Introduce a tiny provider-neutral Execution Fabric contract (ExecutionRequest/ExecutionAttempt/ExecutionResult/ExecutionFailure + provider_run_ref) and a thin Hatchet adapter that hands a CANONICAL, already-fenced Nexus request to Hatchet for workflow execution and returns a raw staged witness. Hatchet mints no Nexus authority: no artifact commit, no passport, no lineage, no idempotency, no authorization. Provider retries are metadata, never Nexus try/fencing. Stale/unknown provider results fail closed and cannot commit. Embedded Hatchet is dev/CI proof only, never imported by product entrypoints.",
       "scope_fa": "قرارداد کوچک و مستقل از ارائه‌دهنده (ExecutionRequest/ExecutionAttempt/ExecutionResult/ExecutionFailure) + آداپتور نازک Hatchet که یک درخواست canonical و ازپیشfenceشدهٔ Nexus را برای اجرای گردش‌کار به Hatchet می‌سپارد و شاهد خام staged برمی‌گرداند. Hatchet هیچ اختیار Nexus نمی‌سازد. تلاش مجدد ارائه‌دهنده فقط فراداده است. نتیجهٔ کهنه/ناشناخته fail-closed و بدون commit. embedded فقط برای dev/CI.",
       "prerequisites": [],
@@ -833,9 +833,11 @@
         "docs/README.md"
       ],
       "owner_hint": "execution-fabric",
-      "agent_branch": "integrations/hatchet-execution-fabric",
-      "claimed_at": "2026-10-07T17:30:00Z",
-      "ttl_hours": 24
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1
     },
     {
       "task": "task-131",
