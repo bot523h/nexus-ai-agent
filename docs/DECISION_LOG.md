@@ -2146,3 +2146,50 @@ runs two concurrent writers against one file with no lost write and no duplicate
 * **`DECISION` and `ACTOR` nodes have no writer.** They exist in the vocabulary because the domain
   has them; nothing records them today.
 * **No cross-process linearization is claimed for the spine**, only for the graph file itself.
+
+## 2026-10-08 — PR #189 closure cycle: five in-scope defects closed with mutation proofs (D-0029)
+
+### D-0029 — Law R22: a mention is not semantics, an unreadable source is not a pass, a projection must not overwrite its authority, and a shared connection must not leak partial state
+
+**Status:** Accepted and implemented (PR #189, board `task-254/255/256`).
+**Measured on:** `main` @ `440d29036c2df3e4f67b9d3f34e686930ea1e8a4`, 2026-10-08.
+
+**Context.** After two CodeRabbit review rounds (nine findings, all fixed with
+mutation proofs), a closure cycle re-read the whole PR diff hunting for
+remaining defects and found five.
+
+**Decisions.**
+
+1. **GOV023 acceptance is a whitelist, not a substring test** (R1). The positive
+   branch tested `"pull_request" in low`, so `vars.X == 'pull_request'`, a bare
+   `'pull_request'` literal, `format('pull_request')`, an unrelated `contains`
+   haystack and even `# pull_request` in a comment all reported `ok`. Accepted
+   forms are now only those that compare the literal against `github.event_name`;
+   every other mention falls through to `unknown` (BLOCKED).
+2. **The live protection check reads every repository-supported source** (R2).
+   `GET /branches/main` is readable with a metadata-only token and carries a
+   `protection` object with the same-named fields as the dedicated sub-endpoints
+   that 403; the guard now falls back to it, evaluated with the same predicates,
+   and the witness names the source used. Rulesets are readable too, so GOV043
+   records that plane: `[]` proves classic protection is the only path, a
+   non-empty list is drift, unreadable is BLOCKED. LOGIC VERIFIED still does not
+   become LIVE POLICY VERIFIED: B–E and J–L remain BLOCKED on this token.
+3. **The temporal contract is test-pinned in both directions** (R3). The snapshot
+   value drives classification; GC is deliberately wall-clock-bound; a malformed
+   `--as-of` exits BLOCKED and never runs GC.
+4. **Every graph read takes the in-process lock** (R4). On `:memory:` there is
+   one shared connection, so an unlocked reader could observe a writer's
+   uncommitted rows — reproduced: a reader saw `{nodes: 120, edges: 119,
+   history: 121}`, neither committed state. The lock is reentrant because
+   composite reads hold it across the leaf readers.
+5. **`restore` is a guarded whole-file operation** (R5). The SQLite backup API
+   cannot target a subset of tables, and the projection is designed to share its
+   file with the causal journal — the authority. Reproduced: a projection restore
+   silently rewound the ledger from 6 events to 3. The guard validates the source
+   and refuses to replace a destination holding non-graph tables unless the
+   caller explicitly passes `whole_database=True`.
+
+**Consequences.** All five have targeted tests, and each fix was mutation-proven
+(red without the fix, green with it). The board claims for task-254/255/256 were
+synced with the delivered truth (R6); exactly one live gates_owner is held, by
+this branch's task-254. Nothing was merged, closed, or deleted.

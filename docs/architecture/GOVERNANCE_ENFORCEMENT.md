@@ -62,7 +62,7 @@ pins; a renamed job means GitHub would require a context that can never report.
 | GOV020 | that job actually executes `merge_base_guard.py check-event` |
 | GOV021 | it passes both `--event` and `--base` |
 | GOV022 | no job producing a required context carries `continue-on-error: true` |
-| GOV023 | the job's `if:` provably still runs for `pull_request`: an empty condition, `always()`, or a positive reference passes; a constant-false (`false`, `false && …`, `… && false`), excluded (`!= 'pull_request'`, `!contains(…)`), or event-exclusive condition is a `VIOLATION`; any other negation or undecidable condition is `unknown` (`BLOCKED`), never a pass |
+| GOV023 | the job's `if:` provably still runs for `pull_request`. `ok` is a **whitelist**, not a substring test: an empty condition, `always()`, or a comparison of the literal against `github.event_name` (`==` either way round, `contains(github.event_name, …)`) passes. A constant-false (`false`, `false && …`, `… && false`), excluded (`!= 'pull_request'`, `!contains(…)`), or event-exclusive condition is a `VIOLATION`. Anything else — including a **mere mention** of `pull_request` inside string data (`vars.X == 'pull_request'`, a bare `'pull_request'` literal, `format('pull_request')`, an unrelated `contains` haystack, a comment) or any negation or undecidable structure — is `unknown` (`BLOCKED`), never a pass |
 | GOV030 | the workflow re-runs on every base-changing PR activity type |
 
 `python scripts/governance_guard.py check-live --repo bot523h/nexus-ai-agent`:
@@ -72,7 +72,8 @@ pins; a renamed job means GitHub would require a context that can never report.
 | GOV040 | `main` is protected — otherwise `VIOLATION` |
 | GOV041 | the live required contexts **equal** the declared ones (missing *or* extra is drift) |
 | GOV042 | required checks are enforced for `everyone` |
-| GOV050–GOV054 | review requirement, conversation resolution, force-push, deletion, status-check detail — each checked on its **value**, not on readability: `required_approving_review_count >= 1`, `dismiss_stale_reviews true`, conversation resolution `true`, force-push `enabled false`, deletion `enabled false`, `strict true`. A contradicting value is `VIOLATION`; an absent, null or wrongly typed field is `unknown` (`BLOCKED`), never a pass |
+| GOV043 | the ruleset plane is recorded as live evidence: `GET /rules/branches/main` is readable with a metadata-only token. `[]` proves classic branch protection is the only enforcement path; a non-empty list is governance drift this guard does not evaluate (`VIOLATION`, never green); an unreadable endpoint is `unknown` (`BLOCKED`) |
+| GOV050–GOV054 | review requirement, conversation resolution, force-push, deletion, status-check detail — each checked on its **value**, not on readability: `required_approving_review_count >= 1`, `dismiss_stale_reviews true`, conversation resolution `true`, force-push `enabled false`, deletion `enabled false`, `strict true`. A contradicting value is `VIOLATION`; an absent, null or wrongly typed field is `unknown` (`BLOCKED`), never a pass. When the dedicated sub-endpoint is unreadable (403, or the misleading 404 "Branch not found" the `allow_*`/conversation endpoints return — which is **not** "the setting is off"), the guard falls back to the same-named field inside the `protection` object of `GET /branches/main`, a second repository-supported source, evaluated with the same predicates; the witness names whichever source produced the value |
 
 Exit codes: `0` VERIFIED · `1` VIOLATION · `2` BLOCKED (a source was unreadable).
 **An unreadable governance source is never a pass**, and neither is a readable one
@@ -119,6 +120,9 @@ At capture time, with a token whose only granted permission was `metadata=read`
 | K. force push blocked | UNKNOWN | `.../allow_force_pushes` → 404 |
 | L. branch deletion blocked | UNKNOWN | `.../allow_deletions` → 404 |
 | R. GitHub confirms the policy | VERIFIED_WITH_LIMITATIONS | A/F/G/H/I live; B–E, J–L unreadable |
+| M. ruleset plane | VERIFIED | `GET /rules/branches/main` → `[]` — no ruleset applies; classic protection is the only path |
+| J (fallback) | UNKNOWN | `protection.required_status_checks.strict` is readable but `null` — ambiguous, so BLOCKED; the dedicated endpoint 403s |
+| K/L/E (fallback) | UNKNOWN | absent from the readable `protection` object — BLOCKED, never read as "off" |
 
 Write probes at the same moment: `PUT /branches/main/protection` → `403`,
 `POST /rulesets` → `403`, and the protection state re-read afterwards was

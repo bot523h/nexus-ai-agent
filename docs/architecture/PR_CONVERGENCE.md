@@ -40,7 +40,13 @@ moment)` restates the board's own rule — active status, parseable `claimed_at`
 `moment <= claimed_at + ttl` — against the report's moment, and imports
 `ACTIVE_STATUSES` so the definition of "active" cannot drift. `gc_expired`, which
 rewrites claim status against the wall clock, runs only when the report moment
-*is* the wall clock, so one clock decides everything in a report.
+*is* the wall clock, so one clock decides everything in a report. The matrix is
+test-pinned in both directions: the snapshot **value** drives the outcome (a 24h
+claim is `ACTIVE` at T1 and `ORPHANED` at T1+48h with the same wall clock), and
+GC is deliberately wall-clock-bound (pinning the board clock changes which
+leases it frees — an expired lease is expired in reality, whatever the report
+describes). An unparsable `--as-of` is refused with exit `BLOCKED`, never guessed
+as "now", and GC does not run without a valid moment.
 
 ## 3. Classification
 
