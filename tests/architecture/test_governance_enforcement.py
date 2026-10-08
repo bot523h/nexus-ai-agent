@@ -389,6 +389,38 @@ def test_an_unreadable_sub_setting_never_yields_verified(
     }
 
 
+#: The payload GitHub returns for a plane that genuinely enforces the policy.
+_SECURE_DETAIL_PAYLOADS: dict[str, object] = {
+    "protection/required_pull_request_reviews": {
+        "required_approving_review_count": 1,
+        "dismiss_stale_reviews": True,
+    },
+    "protection/required_conversation_resolution": {"enabled": True},
+    "protection/allow_force_pushes": {"enabled": False},
+    "protection/allow_deletions": {"enabled": False},
+    "protection/required_status_checks": {"strict": True, "contexts": []},
+}
+
+
+def _plane(guard: ModuleType, overrides: dict[str, object]) -> dict[str, object]:
+    """A readable live plane with selected sub-payloads replaced."""
+    responses: dict[str, object] = {
+        "branches/main": {
+            "name": "main",
+            "protected": True,
+            "protection": {
+                "required_status_checks": {
+                    "contexts": list(guard.REQUIRED_CONTEXTS),
+                    "enforcement_level": "everyone",
+                }
+            },
+        }
+    }
+    responses.update(_SECURE_DETAIL_PAYLOADS)
+    responses.update(overrides)
+    return responses
+
+
 def test_a_fully_readable_and_consistent_plane_is_verified(
     guard: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -404,8 +436,11 @@ def test_a_fully_readable_and_consistent_plane_is_verified(
             },
         }
     }
-    for endpoint, _code, _label in guard._DETAIL_ENDPOINTS:
-        responses[f"protection/{endpoint}"] = {"enabled": True}
+    # A *secure* plane.  The previous version of this fixture stubbed
+    # {"enabled": True} for every endpoint — which for allow_force_pushes and
+    # allow_deletions describes force-pushes and deletion as ALLOWED — and still
+    # expected VERIFIED.  Readability was being mistaken for assurance.
+    responses.update(_SECURE_DETAIL_PAYLOADS)
     _stub_api(monkeypatch, guard, responses)
     report = guard.check_live("o/r", "main", "token")
     assert report.verdict() == "VERIFIED", [f.to_dict() for f in report.findings]
@@ -592,3 +627,111 @@ def test_the_live_repository_condition_is_accepted() -> None:
     proc = _run("check-offline")
     assert proc.returncode == EXIT_VERIFIED, proc.stdout
     assert "GOV023" in proc.stdout
+
+
+# --------------------------------------------------------------------------- #
+# GOV050–GOV054 — readability is not assurance
+# --------------------------------------------------------------------------- #
+# Reproduced: with every endpoint answering HTTP 200, the pre-fix guard reported
+# VERIFIED for a plane that allowed force-pushes, allowed deletion, required
+# zero approvals and had strict=false.  Each case below must NOT be VERIFIED.
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        # A readable plane that genuinely enforces the policy.
+        ({}, "VERIFIED"),
+        # Readable, but insecure.
+        ({"protection/allow_force_pushes": {"enabled": True}}, "VIOLATION"),
+        ({"protection/allow_deletions": {"enabled": True}}, "VIOLATION"),
+        ({"protection/required_status_checks": {"strict": False}}, "VIOLATION"),
+        (
+            {
+                "protection/required_pull_request_reviews": {
+                    "required_approving_review_count": 0,
+                    "dismiss_stale_reviews": True,
+                }
+            },
+            "VIOLATION",
+        ),
+        (
+            {
+                "protection/required_pull_request_reviews": {
+                    "required_approving_review_count": 2,
+                    "dismiss_stale_reviews": False,
+                }
+            },
+            "VIOLATION",
+        ),
+        ({"protection/required_conversation_resolution": {"enabled": False}}, "VIOLATION"),
+        # Missing field: ambiguous, so BLOCKED — never a pass.
+        ({"protection/allow_force_pushes": {}}, "BLOCKED"),
+        # Null field: ambiguous.
+        ({"protection/allow_deletions": {"enabled": None}}, "BLOCKED"),
+        # Wrong type: a boolean is not an int, and `isinstance(True, int)` is
+        # True in Python, so this must not be read as "1 approval".
+        (
+            {
+                "protection/required_pull_request_reviews": {
+                    "required_approving_review_count": True,
+                    "dismiss_stale_reviews": True,
+                }
+            },
+            "BLOCKED",
+        ),
+        ({"protection/allow_force_pushes": {"enabled": "false"}}, "BLOCKED"),
+        # Partial payload: only some of the declared fields present.
+        (
+            {"protection/required_pull_request_reviews": {"required_approving_review_count": 1}},
+            "BLOCKED",
+        ),
+        # Malformed shape: an object where GitHub sends an object.
+        ({"protection/required_status_checks": ["strict"]}, "BLOCKED"),
+    ],
+)
+def test_a_readable_but_insecure_plane_is_never_verified(
+    guard: ModuleType, monkeypatch: pytest.MonkeyPatch, overrides: dict, expected: str
+) -> None:
+    _stub_api(monkeypatch, guard, _plane(guard, overrides))
+    report = guard.check_live("o/r", "main", "token")
+    assert report.verdict() == expected, [f.to_dict() for f in report.findings]
+
+
+def test_an_all_200_insecure_plane_is_a_violation(
+    guard: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exact false-green this finding was about, as one fixture.
+
+    Every endpoint answers HTTP 200 — nothing is unreadable — yet the policy is
+    wide open.  Readability must not be mistaken for assurance.
+    """
+    _stub_api(
+        monkeypatch,
+        guard,
+        _plane(
+            guard,
+            {
+                "protection/required_pull_request_reviews": {
+                    "required_approving_review_count": 0,
+                    "dismiss_stale_reviews": False,
+                },
+                "protection/required_conversation_resolution": {"enabled": False},
+                "protection/allow_force_pushes": {"enabled": True},
+                "protection/allow_deletions": {"enabled": True},
+                "protection/required_status_checks": {"strict": False, "contexts": []},
+            },
+        ),
+    )
+    report = guard.check_live("o/r", "main", "token")
+    assert report.verdict() == "VIOLATION", [f.to_dict() for f in report.findings]
+    assert report.exit_code() == EXIT_VIOLATION
+    violated = {f.code for f in report.violations}
+    assert violated == {"GOV050", "GOV051", "GOV052", "GOV053", "GOV054"}, violated
+
+
+def test_every_declared_endpoint_has_value_semantics(guard: ModuleType) -> None:
+    """No endpoint may be checked for readability alone."""
+    for policy in guard._DETAIL_ENDPOINTS:
+        assert policy.expectations, f"{policy.endpoint} is checked for readability only"
+        for field_name, holds, expectation in policy.expectations:
+            assert callable(holds)
+            assert expectation, f"{policy.endpoint}.{field_name} has no stated expectation"

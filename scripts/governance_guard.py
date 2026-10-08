@@ -46,6 +46,7 @@ import os
 import re
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -544,21 +545,84 @@ def check_offline(root: Path) -> Report:
 # live plane — GitHub itself
 # --------------------------------------------------------------------------- #
 
-#: Settings whose absence is a violation, and whose unreadability is BLOCKED.
-_DETAIL_ENDPOINTS: tuple[tuple[str, str, str], ...] = (
-    (
+
+#: Sub-settings whose *absence* is a violation and whose unreadability is BLOCKED.
+#:
+#: Readability alone is not assurance.  Recording ``ok`` for any HTTP 200 was a
+#: security false-green, reproduced with an all-200 fixture whose policy allowed
+#: force-pushes, allowed deletion, required zero approvals and had ``strict``
+#: false — the guard answered VERIFIED.  Each entry therefore declares the value
+#: semantics it must satisfy, taken from this repository's own governance
+#: contract (GOVERNANCE_ENFORCEMENT.md acceptance items C/D/E/J/K/L), not from a
+#: guess about what GitHub usually returns.
+#:
+#: A field that is missing, null or of the wrong type is *ambiguous*: it becomes
+#: ``unknown`` (BLOCKED), never ``ok``.  Only a readable value that contradicts
+#: the policy is a ``violation``.
+@dataclass(frozen=True)
+class DetailPolicy:
+    endpoint: str
+    code: str
+    label: str
+    #: (field, tri-state evaluator, human expectation)
+    expectations: tuple[tuple[str, Callable[[object], str], str], ...]
+
+
+#: A tri-state verdict for one declared value.  ``unknown`` is not a synonym for
+#: "not yet checked": it means the response was readable but the value is of a
+#: shape GitHub does not send, so the setting cannot be decided either way and
+#: must not be reported as satisfied.
+def _flag_is(want: bool) -> Callable[[object], str]:
+    def check(value: object) -> str:
+        if not isinstance(value, bool):
+            return "unknown"  # wrong type: ambiguous, not a contradiction
+        return "ok" if value is want else "violation"
+
+    return check
+
+
+def _approvals_at_least_one(value: object) -> str:
+    # ``isinstance(True, int)`` is True in Python, so a boolean must be rejected
+    # explicitly or ``required_approving_review_count: true`` would read as 1.
+    if isinstance(value, bool) or not isinstance(value, int):
+        return "unknown"  # wrong type: ambiguous, not a contradiction
+    return "ok" if value >= 1 else "violation"
+
+
+_DETAIL_ENDPOINTS: tuple[DetailPolicy, ...] = (
+    DetailPolicy(
         "required_pull_request_reviews",
         "GOV050",
         "review requirement (>=1 approval, stale reviews dismissed)",
+        (
+            ("required_approving_review_count", _approvals_at_least_one, ">= 1"),
+            ("dismiss_stale_reviews", _flag_is(True), "true"),
+        ),
     ),
-    (
+    DetailPolicy(
         "required_conversation_resolution",
         "GOV051",
         "conversation resolution requirement",
+        (("enabled", _flag_is(True), "true"),),
     ),
-    ("allow_force_pushes", "GOV052", "force-push prohibition"),
-    ("allow_deletions", "GOV053", "branch-deletion prohibition"),
-    ("required_status_checks", "GOV054", "required-status-check detail (incl. strict)"),
+    DetailPolicy(
+        "allow_force_pushes",
+        "GOV052",
+        "force-push prohibition",
+        (("enabled", _flag_is(False), "false"),),
+    ),
+    DetailPolicy(
+        "allow_deletions",
+        "GOV053",
+        "branch-deletion prohibition",
+        (("enabled", _flag_is(False), "false"),),
+    ),
+    DetailPolicy(
+        "required_status_checks",
+        "GOV054",
+        "required-status-check detail (strict / up-to-date branch)",
+        (("strict", _flag_is(True), "true"),),
+    ),
 )
 
 
@@ -661,17 +725,61 @@ def check_live(repo: str, branch: str, token: str | None) -> Report:
 
     # Sub-settings: each is either verified, contradicted, or unreadable.  An
     # unreadable sub-setting can never contribute to a VERIFIED verdict.
-    for endpoint, code, label in _DETAIL_ENDPOINTS:
-        payload, err, status = _api_get(f"{base}/branches/{branch}/protection/{endpoint}", token)
+    for policy in _DETAIL_ENDPOINTS:
+        url = f"{base}/branches/{branch}/protection/{policy.endpoint}"
+        payload, err, status = _api_get(url, token)
         if err:
             report.add(
-                code,
+                policy.code,
                 "unknown",
-                f"{label}: source unreadable ({err}) — recorded as BLOCKED, never as a pass",
-                f"GET {base}/branches/{branch}/protection/{endpoint}",
+                f"{policy.label}: source unreadable ({err}) — recorded as BLOCKED, never as a pass",
+                f"GET {url}",
             )
             continue
-        report.add(code, "ok", f"{label}: readable", f"HTTP {status} {json.dumps(payload)[:160]}")
+        if not isinstance(payload, dict):
+            report.add(
+                policy.code,
+                "unknown",
+                f"{policy.label}: HTTP {status} returned {type(payload).__name__}, not an "
+                "object — ambiguous, so BLOCKED rather than a pass",
+                f"GET {url}",
+            )
+            continue
+        # Every declared expectation must hold on the *value*, not on readability.
+        for field_name, holds, expectation in policy.expectations:
+            if field_name not in payload or payload[field_name] is None:
+                report.add(
+                    policy.code,
+                    "unknown",
+                    f"{policy.label}: {field_name} is absent or null — ambiguous, so "
+                    "BLOCKED rather than a pass",
+                    f"GET {url}",
+                )
+                continue
+            actual = payload[field_name]
+            verdict = holds(actual)
+            if verdict == "ok":
+                report.add(
+                    policy.code,
+                    "ok",
+                    f"{policy.label}: {field_name} is {actual!r} (expected {expectation})",
+                    f"HTTP {status} {json.dumps(payload)[:160]}",
+                )
+            elif verdict == "violation":
+                report.add(
+                    policy.code,
+                    "violation",
+                    f"{policy.label}: {field_name} is {actual!r}, expected {expectation}",
+                    f"HTTP {status} {json.dumps(payload)[:160]}",
+                )
+            else:
+                report.add(
+                    policy.code,
+                    "unknown",
+                    f"{policy.label}: {field_name} is {type(actual).__name__} {actual!r}, "
+                    f"not a decidable value (expected {expectation}) — BLOCKED, never a pass",
+                    f"HTTP {status} {json.dumps(payload)[:160]}",
+                )
 
     return report
 
