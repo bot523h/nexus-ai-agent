@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-08T21:02:30Z",
+  "updated_at": "2026-10-09T00:09:45Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -795,7 +795,10 @@
         ".github/workflows/ci.yml",
         ".github/workflows/maintenance.yml",
         "docs/ops/LINUX_PYTHON_FOUNDATION.md",
-        "tests/unit/test_runtime_foundation.py"
+        "tests/unit/test_runtime_foundation.py",
+        ".github/DEPENDENCY_MATRIX.md",
+        "scripts/extras_matrix.py",
+        "uv.lock"
       ],
       "note": "Created for the Linux foundation + Python runtime closure mission; no application feature work."
     }
@@ -3458,7 +3461,10 @@
         ".github/workflows/ci.yml",
         ".github/workflows/maintenance.yml",
         "docs/ops/LINUX_PYTHON_FOUNDATION.md",
-        "tests/unit/test_runtime_foundation.py"
+        "tests/unit/test_runtime_foundation.py",
+        ".github/DEPENDENCY_MATRIX.md",
+        "scripts/extras_matrix.py",
+        "uv.lock"
       ],
       "owner_hint": "session branch arena/linux-python-foundation-20261008",
       "agent_branch": "arena/linux-python-foundation-20261008",

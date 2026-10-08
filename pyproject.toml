@@ -129,3 +129,11 @@ module = [
     "nacl.exceptions",
 ]
 ignore_missing_imports = true
+
+[tool.nexus.runtime]
+# Canonical execution substrate; compatibility floor remains >=3.10 below.
+os = "26.04"
+python = "3.14"
+python_patch = "3.14.8"
+package_manager = "pip"
+ffmpeg = "system"

@@ -1,10 +1,16 @@
-.PHONY: setup lint types test migrate smoke run dev-bootstrap hooks version-check mutations
+.PHONY: setup lint types test migrate smoke run dev-bootstrap runtime-check runtime-receipt hooks version-check mutations
 
 setup:
 	pip install -e ".[dev]"
 
 dev-bootstrap:
 	bash scripts/bootstrap_dev.sh
+
+runtime-check:
+	python scripts/check_runtime.py
+
+runtime-receipt:
+	python scripts/runtime_receipt.py
 
 hooks:
 	pip install pre-commit && pre-commit install --install-hooks
@@ -21,8 +27,6 @@ types:
 test:
 	pytest -q -m "not slow"
 
-# Adversarial proof for the capability-pack trust plane (ADR 0006) and the
-# remote-key ingress/cache boundary: every mutation must turn its suite red.
 mutations:
 	python scripts/pack_trust_mutations.py
 	python scripts/security_mutations_remote_key.py
