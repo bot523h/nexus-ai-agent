@@ -21,25 +21,25 @@ from nexus_ai_agent.storage.models import UserXP
 logger = get_logger(__name__)
 
 
-def _as_utc(value: datetime | None) -> datetime | None:
-    """Return *value* as an aware UTC datetime.
-
-    The columns are plain ``DATETIME`` in SQLite, so a stored
-    ``datetime.now(timezone.utc)`` comes back naive; subtracting it from an
-    aware "now" raises ``TypeError``.  Everything written here is UTC, so
-    re-attaching UTC is the correct reading.
-    """
-    if value is None:
-        return None
-    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
-
-
 def _sync_engine() -> Any:
     """Return a synchronous SQLAlchemy engine for feature CRUD."""
     from sqlalchemy import create_engine as _ce
 
     settings = get_settings()
     return _ce(f"sqlite:///{settings.db_path}", echo=False)
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Normalise a timestamp for arithmetic.
+
+    SQLite hands back **naive** ``datetime`` values even though every write in
+    this module stores UTC. Subtracting a naive value from an aware one raises
+    ``TypeError``, so legacy rows (written before the UTC convention) are
+    re-stamped as UTC instead of crashing the daily reward.
+    """
+    if value is None:
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
 # ---------------------------------------------------------------------------
@@ -233,13 +233,9 @@ class GamificationEngine:
                 return {"streak": 1, "streak_broken": False}
 
             now = datetime.now(timezone.utc)
-            if xp.last_daily is None:
-                # First claim ever for this user/chat.
-                xp.streak = max(xp.streak, 1)
-            else:
-                last = _as_utc(xp.last_daily)
-                assert last is not None  # narrowed by the branch above
-                diff = (now - last).total_seconds() / 86400
+            last_daily = _as_utc(xp.last_daily)
+            if last_daily is not None:
+                diff = (now - last_daily).total_seconds() / 86400
                 if diff < 1.0:
                     # Already claimed today
                     return {"streak": xp.streak, "streak_broken": False}
@@ -248,6 +244,8 @@ class GamificationEngine:
                     xp.streak = 1
                 else:
                     xp.streak += 1
+            else:
+                xp.streak = max(xp.streak, 1)
 
             xp.last_daily = now
             session.add(xp)
@@ -261,7 +259,20 @@ class GamificationEngine:
 
     @staticmethod
     def claim_daily(user_id: int, chat_id: int) -> dict[str, Any]:
-        """Claim daily XP reward. Returns reward info."""
+        """Claim the daily XP reward (once per 24 h, streak-aware).
+
+        The whole reward is computed and committed inside **one** session. The
+        previous implementation inserted the brand-new ``UserXP`` row, kept the
+        transaction open with ``flush()`` and then called
+        :meth:`update_streak` — which opens a *second* engine and therefore a
+        second SQLite connection. On a user's very first claim the row did not
+        exist yet, so the second connection blocked on the first one's pending
+        INSERT until SQLite raised ``database is locked`` (a write-write
+        deadlock, reproducible and fixed here).
+
+        The payload also carries ``streak_broken``, ``title`` and ``xp`` so the
+        Telegram surface can render the reward without a second query.
+        """
         now = datetime.now(timezone.utc)
         engine = _sync_engine()
         with Session(engine) as session:
@@ -269,10 +280,6 @@ class GamificationEngine:
                 select(UserXP).where(UserXP.user_id == user_id, UserXP.chat_id == chat_id)
             ).first()
             if xp is None:
-                # NOTE: do not pre-set last_daily here.  This used to create
-                # the row with last_daily=now and then fall into the
-                # "already claimed today" branch below, so a brand-new user
-                # could never collect a first daily reward at all.
                 xp = UserXP(
                     user_id=user_id,
                     chat_id=chat_id,
@@ -282,33 +289,35 @@ class GamificationEngine:
                     achievements="[]",
                 )
                 session.add(xp)
-                # Commit, not flush: update_streak() below runs in its own
-                # session and must be able to see this row.
-                session.commit()
-                session.refresh(xp)
-            elif xp.last_daily is not None:
-                last = _as_utc(xp.last_daily)
-                assert last is not None  # narrowed by the branch above
-                diff = (now - last).total_seconds() / 86400
-                if diff < 1.0:
-                    remaining = 1.0 - diff
-                    hours = int(remaining * 24)
+
+            last_daily = _as_utc(xp.last_daily)
+            streak_broken = False
+            if last_daily is not None:
+                elapsed_days = (now - last_daily).total_seconds() / 86400
+                if elapsed_days < 1.0:
+                    remaining = 1.0 - elapsed_days
                     return {
                         "claimed": False,
                         "reason": "already_claimed",
-                        "remaining_hours": hours,
+                        "remaining_hours": int(remaining * 24),
+                        "remaining_minutes": max(1, int(remaining * 24 * 60)),
+                        "streak": xp.streak,
                     }
+                if elapsed_days > 2.0:
+                    xp.streak = 1
+                    streak_broken = True
+                else:
+                    xp.streak += 1
+            else:
+                xp.streak = max(xp.streak, 1)
 
-            # Update streak
-            streak_info = GamificationEngine.update_streak(user_id, chat_id)
-            streak_bonus = min(streak_info["streak"], 10) * XP_STREAK_BONUS
+            streak_bonus = min(xp.streak, 10) * XP_STREAK_BONUS
             total_reward = XP_DAILY_BONUS + streak_bonus
-
-            # Add XP
             old_level = xp.level
             xp.xp += total_reward
             xp.level = GamificationEngine._calculate_level(xp.xp)
             xp.last_daily = now
+            xp.updated_at = now
             session.add(xp)
             session.commit()
             session.refresh(xp)
@@ -318,9 +327,12 @@ class GamificationEngine:
                 "base_reward": XP_DAILY_BONUS,
                 "streak_bonus": streak_bonus,
                 "total_reward": total_reward,
-                "streak": streak_info["streak"],
+                "streak": xp.streak,
+                "streak_broken": streak_broken,
                 "leveled_up": xp.level > old_level,
                 "new_level": xp.level,
+                "title": GamificationEngine.get_level_title(xp.level),
+                "xp": xp.xp,
             }
 
     # ------------------------------------------------------------------

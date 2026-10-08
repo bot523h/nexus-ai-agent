@@ -1,6 +1,6 @@
 # Phase 5 — periodic maintenance only. Deliberately NOT on push/pull_request;
 # those gates live in ci.yml. Scheduled workflows only run on the default
-# branch and require the repo secrets to be set (docs/r2-storage.md).
+# branch and require the repo secrets to be set (docs/ops/r2-storage.md).
 name: maintenance
 
 on:
@@ -11,6 +11,11 @@ on:
     - cron: "23 4 * * 1"
   # Allow manual runs from the Actions tab (e.g. right after setting secrets).
   workflow_dispatch: {}
+
+# Both jobs only read the repository; no job pushes anything. Explicit least
+# privilege instead of the (variable) repository default.
+permissions:
+  contents: read
 
 # One shared group: a scheduled backup never overlaps a running one, and a
 # manual run queues behind an in-progress schedule instead of cancelling it.
@@ -23,21 +28,58 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 3 * * *'
     runs-on: ubuntu-latest
     env:
-      # pg_dump target. When unset, the command backs up the local SQLite
-      # file instead (which is empty in CI) — set the secret for real use.
+      # The ACTUAL production database (Neon/Postgres) — REQUIRED. The
+      # production job never falls back to a CI-local SQLite file: a dump of
+      # an empty checkout is not a backup (task-164, enforced by the
+      # preflight step below). See docs/ops/r2-storage.md §4.
       NEXUS_DATABASE_URL: ${{ secrets.NEXUS_DATABASE_URL }}
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
     steps:
+      # No step pushes: never leave the checkout token in .git/config while
+      # `pip install -e .` executes dependency build code (artipacked).
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # Deterministic preflight (task-164): fail in seconds naming the EXACT
+      # missing secret(s) instead of a late generic failure after the install
+      # of the whole dependency tree. Names are printed; values never are —
+      # the script never echoes a secret or the database URL.
+      - name: Preflight — required production backup configuration
+        run: |
+          set -uo pipefail
+          missing=()
+          for name in NEXUS_DATABASE_URL R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET; do
+            if [ -z "${!name:-}" ]; then missing+=("$name"); fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error title=backup-db preflight failed::missing repository secrets: ${missing[*]}"
+            echo "Set them under Settings → Secrets and variables → Actions (or: gh secret set NAME --repo $GITHUB_REPOSITORY)."
+            echo "Runbook: docs/ops/r2-storage.md §4. Refusing to run — no backup was produced and nothing was uploaded."
+            exit 1
+          fi
+          case "${NEXUS_DATABASE_URL}" in
+            postgres://*|postgresql://*|postgresql+asyncpg://*) ;;
+            *)
+              echo "::error title=backup-db preflight failed::NEXUS_DATABASE_URL is not a PostgreSQL URL"
+              echo "The production backup backs up the configured production database; a CI-local SQLite fallback is refused (value deliberately not shown)."
+              exit 1
+              ;;
+          esac
+          if ! command -v pg_dump >/dev/null 2>&1; then
+            echo "::error title=backup-db preflight failed::pg_dump is not on PATH — the PostgreSQL backup leg cannot run"
+            exit 1
+          fi
+          echo "preflight ok: all 5 required secrets are set, the database URL is a PostgreSQL URL, pg_dump is available."
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install -e .
       # Stateless + idempotent: safe to re-run. Exits non-zero when R2 is
-      # not configured so a silently-skipped backup is visible, not hidden.
+      # not configured (or the dump cannot be verified) so a silently-skipped
+      # or unverified backup is visible, never hidden.
       - run: nexus maintenance backup
 
   housekeeping:
@@ -52,6 +94,8 @@ jobs:
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

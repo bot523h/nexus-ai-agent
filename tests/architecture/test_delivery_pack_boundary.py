@@ -53,6 +53,7 @@ ALLOWED_PACK_TOP_LEVEL = {
     "collections",
     "dataclasses",
     "datetime",
+    "fractions",
     "hashlib",
     "importlib",
     "json",
@@ -120,23 +121,35 @@ def test_no_heavy_video_imports_in_delivery_substrate() -> None:
 
 def test_delivery_pack_substrate_is_pure_stdlib_and_pydantic() -> None:
     """Creative delivery pack layer must stay pure stdlib + pydantic."""
+    # signing.py is a security seam (env key + HMAC/nacl) — not a pure
+    # pack model.  It intentionally imports os/base64/hmac/nacl; the
+    # gate carves it out so the security code can exist without weakening
+    # the allowlist for every other pack file.
+    signing_allow = {"os", "base64", "hmac", "nacl", "hashlib"}
     for file_path in DELIVERY_PACK.glob("*.py"):
         imports = _top_level_imports(file_path)
-        assert imports <= ALLOWED_PACK_TOP_LEVEL, (
+        allowed = ALLOWED_PACK_TOP_LEVEL | (
+            signing_allow if file_path.name == "signing.py" else set()
+        )
+        assert imports <= allowed, (
             f"{file_path.relative_to(REPO_ROOT)} imports outside allowlist: "
-            f"{sorted(imports - ALLOWED_PACK_TOP_LEVEL)}"
+            f"{sorted(imports - allowed)}"
         )
 
 
 def test_delivery_pack_does_not_cross_package_boundaries() -> None:
-    """Delivery pack files may only import from creative.packs and creative.studio."""
+    """Delivery pack files may only import from packs, studio, and temporal."""
     for file_path in DELIVERY_PACK.glob("*.py"):
         for module in _nexus_modules(file_path):
             assert module.startswith(
-                ("nexus_ai_agent.creative.packs", "nexus_ai_agent.creative.studio")
+                (
+                    "nexus_ai_agent.creative.packs",
+                    "nexus_ai_agent.creative.studio",
+                    "nexus_ai_agent.creative.temporal",
+                )
             ), (
                 f"{file_path.relative_to(REPO_ROOT)} crosses boundary via {module!r}; "
-                "packs may only use studio contracts"
+                "packs may only use studio and temporal contracts"
             )
 
 

@@ -20,6 +20,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 CAPTION_PACKAGE_ID = "nexus.language.caption"
 OPERATION_TRANSCRIBE = "caption.transcribe"
+OPERATION_ALIGN_WORDS = "caption.align_words"
+OPERATION_DIARIZE = "caption.diarize"
+OPERATION_TRANSLATE_LOCAL = "caption.translate_local"
 OPERATION_GENERATE_SRT = "caption.generate_srt"
 OPERATION_GENERATE_ASS = "caption.generate_ass_rtl"
 OPERATION_STYLE_VAZIRMATN = "caption.style_vazirmatn"
@@ -183,6 +186,37 @@ class TranscribeInput(BaseModel):
     language_policy: str = "auto"
     transcript: TranscriptRef | None = None
     model_name: str | None = None
+
+
+class AlignWordsInput(BaseModel):
+    """Input payload for ``caption.align_words`` (Level A)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    transcript: TranscriptRef
+    output_transcript_id: str | None = None
+
+
+class DiarizeInput(BaseModel):
+    """Input payload for ``caption.diarize`` (Level A)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    transcript: TranscriptRef
+    max_speakers: int = Field(default=2, ge=1, le=8)
+    gap_threshold_us: int = Field(default=800_000, ge=0)
+    output_transcript_id: str | None = None
+
+
+class TranslateLocalInput(BaseModel):
+    """Input payload for ``caption.translate_local`` (Level A)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    transcript: TranscriptRef
+    target_language: str = Field(min_length=1)
+    glossary: dict[str, str] = Field(default_factory=dict)
+    output_transcript_id: str | None = None
 
 
 class GenerateSrtInput(BaseModel):

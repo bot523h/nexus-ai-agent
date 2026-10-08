@@ -5,15 +5,18 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from nexus_ai_agent.bot import handlers
+from nexus_ai_agent.bot import feature_handlers, handlers
 from nexus_ai_agent.config.settings import Settings
 from nexus_ai_agent.creative.image_gen import GeneratedImage, ImageRequest, PaidTierRequiredError
 
 
 @pytest.fixture()
 def imagine(monkeypatch: pytest.MonkeyPatch):
-    for factory in ("ImageGenEngine", "SpeechEngine", "UnifiedCloudStorage", "ReferralEngine"):
+    for factory in ("ImageGenEngine", "SpeechEngine", "UnifiedCloudStorage"):
         monkeypatch.setattr(handlers, factory, Mock())
+    # ReferralEngine construction moved to the shared feature-engine
+    # container (it creates SQLite tables in __init__).
+    monkeypatch.setattr(feature_handlers, "ReferralEngine", Mock())
     registered = handlers.build_handlers(
         graph=None,
         db_session_factory=Mock(),

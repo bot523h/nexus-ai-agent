@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any, cast
 
+import psycopg
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.sqlite import SqliteSaver
 
@@ -16,6 +17,7 @@ from nexus_ai_agent.storage.checkpoint_lifecycle import LifecycleStore
 from nexus_ai_agent.storage.checkpoint_lifecycle_adapter import (
     SQLiteCheckpointLifecycleAdapter,
 )
+from nexus_ai_agent.storage.checkpoint_lifecycle_pg_store import PostgresCheckpointLifecycleStore
 from nexus_ai_agent.storage.checkpoint_lifecycle_store import SQLiteCheckpointLifecycleStore
 from nexus_ai_agent.storage.checkpoint_reconciler import lifecycle_db_path
 from nexus_ai_agent.storage.db import normalize_database_url, resolve_database_url
@@ -27,19 +29,6 @@ SaverFactory = Callable[[], Awaitable[tuple[Any, Any | None]]]
 # Construction retry policy (exponential backoff: base_delay * 2**attempt).
 _DEFAULT_MAX_ATTEMPTS = 5
 _DEFAULT_BASE_DELAY = 0.5
-
-# psycopg ships with the optional [postgres] extra. The module is imported by
-# every bot start (including SQLite-only installs), so the connection-error tuple
-# is resolved at import time and simply empty when the driver is absent.
-try:
-    import psycopg
-
-    _PSYCOPG_ERRORS: tuple[type[Exception], ...] = (
-        psycopg.OperationalError,
-        psycopg.InterfaceError,
-    )
-except ModuleNotFoundError:
-    _PSYCOPG_ERRORS = ()
 
 
 class AsyncCompatibleSqliteSaver(SqliteSaver):
@@ -147,7 +136,7 @@ class PostgresCheckpointer(BaseCheckpointSaver):
                 self._saver = saver
                 self._pool = pool
                 return
-            except _PSYCOPG_ERRORS as exc:
+            except (psycopg.OperationalError, psycopg.InterfaceError) as exc:
                 last_error = exc
                 await self._close_quietly(pool)
                 if attempt + 1 < self._max_attempts:
@@ -201,7 +190,7 @@ class PostgresCheckpointer(BaseCheckpointSaver):
     async def _call_with_reconnect(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
         try:
             return await self._call(method_name, *args, **kwargs)
-        except _PSYCOPG_ERRORS:
+        except (psycopg.OperationalError, psycopg.InterfaceError):
             await self.reset()
             return await self._call(method_name, *args, **kwargs)
 
@@ -290,10 +279,6 @@ def get_checkpointer(
         if not settings.lifecycle_hooks_enabled:
             # Kill-switch off: raw saver, zero lifecycle writes.
             return pg_saver
-        from nexus_ai_agent.storage.checkpoint_lifecycle_pg_store import (
-            PostgresCheckpointLifecycleStore,
-        )
-
         store: LifecycleStore = PostgresCheckpointLifecycleStore(database_url)
         lifecycle = SQLiteCheckpointLifecycleAdapter(store)
         wrapped = LifecycleRecordingSaver(pg_saver, lifecycle, enabled=True)

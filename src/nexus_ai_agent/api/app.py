@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hmac as hmac_mod
 import os
 import secrets
@@ -15,7 +16,9 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from nexus_ai_agent.api.dashboard import router as dashboard_router
+from nexus_ai_agent.api.studio import router as studio_router
 from nexus_ai_agent.config.settings import get_settings
+from nexus_ai_agent.core.ssrf_guard import SafeAsyncTransport, SSRFBlockError, validate_url
 from nexus_ai_agent.creative import image_post
 from nexus_ai_agent.creative.ffmpeg_executor import execute_ffmpeg_commands
 from nexus_ai_agent.creative.job_registry import JobRegistry
@@ -61,6 +64,13 @@ _HMAC_MAX_AGE_SECONDS = 300.0
 _HMAC_TIMESTAMP_HEADER = "X-NEXUS-Timestamp"
 _HMAC_SIGNATURE_HEADER = "X-NEXUS-Signature"
 
+#: Resource cap for legacy upload bodies (task-165, ADR 0006). Enforced
+#: while streaming the multipart body to temp storage; an oversized upload
+#: is rejected with 413 before any job row exists and the partial file is
+#: unlinked. Legacy route only — the canonical surface caps media by
+#: duration (bot/creative_surface.py, 30 s) at validation time.
+_MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 MiB
+
 
 async def require_hmac_signature(request: Request) -> None:
     """HMAC-SHA256 request signing for state-changing dashboard endpoints.
@@ -95,6 +105,7 @@ async def require_hmac_signature(request: Request) -> None:
 
 
 app.include_router(dashboard_router)
+app.include_router(studio_router)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -153,18 +164,9 @@ async def root() -> str:
         </div>
 
         <script>
-            // The dashboard API can be locked behind NEXUS_API_DASHBOARD_TOKEN.
-            // The token is never rendered into this page (it is public); the
-            // operator pastes it once and it stays in sessionStorage.
-            function authHeaders() {
-                const token = sessionStorage.getItem('nexus_dashboard_token');
-                return token ? { 'Authorization': 'Bearer ' + token } : {};
-            }
-
             async function loadStats() {
                 try {
-                    const res = await fetch('/api/dashboard/stats', { headers: authHeaders() });
-                    if (res.status === 401) { renderTokenPrompt(); return; }
+                    const res = await fetch('/api/dashboard/stats');
                     const data = await res.json();
                     document.getElementById('total_users').innerText = data.total_users;
                     document.getElementById('total_chats').innerText = data.total_chats;
@@ -176,9 +178,7 @@ async def root() -> str:
 
             async function loadRecentUsers() {
                 try {
-                    const res = await fetch('/api/dashboard/recent_users',
-                                            { headers: authHeaders() });
-                    if (res.status === 401) { renderTokenPrompt(); return; }
+                    const res = await fetch('/api/dashboard/recent_users');
                     const data = await res.json();
                     const container = document.getElementById('recent_users');
                     if (data.length === 0) {
@@ -187,12 +187,14 @@ async def root() -> str:
                     }
                     let html = '<ul class="divide-y divide-slate-700">';
                     data.forEach(u => {
-                        // Only a masked label is served: user identifiers
-                        // and raw usernames never leave the API.
+                        const name = u.username || 'بدون نام';
                         html += `
                             <li class="py-3 flex justify-between items-center">
                                 <div>
-                                    <span class="font-bold text-blue-300">${u.display}</span>
+                                    <span class="font-bold text-blue-300">${name}</span>
+                                    <span class="text-slate-500 text-sm ml-2">
+                             ID: ${u.telegram_id}
+                         </span>
                                 </div>
                                 <span class="bg-slate-700 px-2 py-1 rounded text-xs text-slate-300">
                                     User #${u.id}
@@ -203,28 +205,6 @@ async def root() -> str:
                     html += '</ul>';
                     container.innerHTML = html;
                 } catch (e) { console.error(e); }
-            }
-
-            function renderTokenPrompt() {
-                const container = document.getElementById('recent_users');
-                const input = '<input id="dash_token" type="password" ' +
-                    'class="bg-slate-900 border border-slate-700 rounded ' +
-                    'px-3 py-2 text-sm w-2/3" />';
-                const button = '<button onclick="saveToken()" ' +
-                    'class="bg-blue-600 hover:bg-blue-500 px-3 py-2 ' +
-                    'rounded text-sm">ورود</button>';
-                container.innerHTML =
-                    '<p class="text-slate-400 mb-2">' +
-                    'داشبورد قفل است. توکن داشبورد را وارد کنید.</p>' +
-                    input + button;
-            }
-
-            function saveToken() {
-                const value = document.getElementById('dash_token').value.trim();
-                if (!value) { return; }
-                sessionStorage.setItem('nexus_dashboard_token', value);
-                loadStats();
-                loadRecentUsers();
             }
 
             loadStats();
@@ -254,17 +234,47 @@ async def _save_upload_to_temp(upload: StarletteUploadFile) -> str:
     suffix = Path(upload.filename or "upload.bin").suffix or ".bin"
     fd, temp_path = tempfile.mkstemp(prefix="creative-upload-", suffix=suffix, dir=temp_dir)
     os.close(fd)
-    with Path(temp_path).open("wb") as handle:
-        while True:
-            chunk = await upload.read(1024 * 1024)
-            if not chunk:
-                break
-            handle.write(chunk)
+    written = 0
+    try:
+        with Path(temp_path).open("wb") as handle:
+            while True:
+                chunk = await upload.read(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > _MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"upload exceeds the {_MAX_UPLOAD_BYTES}-byte limit",
+                    )
+                handle.write(chunk)
+    except Exception:
+        # A rejected (or failed) upload never leaves a partial file behind.
+        Path(temp_path).unlink(missing_ok=True)
+        raise
     await upload.close()
     return temp_path
 
 
 async def _download_video_to_temp(video_url: str) -> str:
+    """Download a user-supplied video URL to a temp file (SSRF-hardened).
+
+    Defence in depth (the URL is attacker-controlled input on a
+    deprecated-but-live route):
+
+    1. ``validate_url`` fail-fast *before* any temp file is created —
+       https-only and every resolved address must be public (blocks
+       loopback, RFC1918, cloud metadata, IPv6 loopback, IPv4-mapped
+       forms and ``user@host`` tricks).
+    2. The fetch itself runs through :class:`SafeAsyncTransport`, whose
+       httpcore backend re-resolves and re-checks the address at every
+       TCP connection — including every redirect hop — and pins the
+       connection to the validated IP (closes the DNS-rebinding TOCTOU
+       that a preflight-only check would leave open).
+    """
+    # Sync DNS resolution: keep it off the event loop.
+    await asyncio.to_thread(validate_url, video_url)
+
     settings = get_settings()
     temp_dir = Path(settings.creative_temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
@@ -272,13 +282,16 @@ async def _download_video_to_temp(video_url: str) -> str:
     fd, temp_path = tempfile.mkstemp(prefix="creative-url-", suffix=suffix, dir=temp_dir)
     os.close(fd)
     try:
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=60.0, transport=SafeAsyncTransport(), follow_redirects=True
+        ) as client:
             async with client.stream("GET", video_url) as response:
                 response.raise_for_status()
                 with Path(temp_path).open("wb") as handle:
                     async for chunk in response.aiter_bytes():
                         handle.write(chunk)
     except Exception:
+        # A refused/blocked/failed download never leaves a partial file.
         Path(temp_path).unlink(missing_ok=True)
         raise
     return temp_path
@@ -319,7 +332,11 @@ async def _process_video_edit_job(
             Path(local_input_path).unlink(missing_ok=True)
 
 
-@app.post("/creative/video-edit")
+# Legacy lane (ADR 0006): the canonical media path is the Telegram creative
+# surface → durable job queue → packs registry → render lane. These two
+# routes are frozen (tests/architecture/test_legacy_creative_boundary.py) and
+# fail-closed; removal is sequenced after PR#58's hardening lands.
+@app.post("/creative/video-edit", deprecated=True)
 async def create_video_edit_job(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -359,6 +376,13 @@ async def create_video_edit_job(
         normalized_url = (video_url or "").strip()
         if not normalized_url:
             raise HTTPException(status_code=400, detail="video_url must not be empty")
+        # SSRF fail-fast at request time: reject unsafe targets with a 400
+        # *before* a job row is created. The background download re-validates
+        # at connect time via SafeAsyncTransport (defence in depth).
+        try:
+            await asyncio.to_thread(validate_url, normalized_url)
+        except SSRFBlockError as exc:
+            raise HTTPException(status_code=400, detail=f"video_url rejected: {exc}") from exc
         source = normalized_url
         input_data = {
             "source_type": "url",
@@ -372,8 +396,13 @@ async def create_video_edit_job(
     return {"job_id": job_id, "status": "pending"}
 
 
-@app.get("/creative/jobs/{job_id}")
-async def get_job_status(job_id: str) -> dict[str, object]:
+@app.get("/creative/jobs/{job_id}", deprecated=True)
+async def get_job_status(job_id: str, request: Request) -> dict[str, object]:
+    # Legacy read gate (task-165, ADR 0006): job rows carry local paths and
+    # source URLs — the same fail-closed HMAC gate as the POST. A GET signs
+    # "{timestamp}:" + empty body, so any caller that can create jobs (it
+    # must hold the key) can also read them; unsigned callers cannot.
+    await require_hmac_signature(request)
     job = await get_creative_registry().get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")

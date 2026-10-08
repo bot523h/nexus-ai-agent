@@ -16,6 +16,8 @@ Surface:
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 AUDIO_PACKAGE_ID = "nexus.audio.studio"
@@ -25,6 +27,41 @@ OPERATION_DETECT_BEATS = "audio.detect_beats"
 OPERATION_NORMALIZE_LOUDNESS = "audio.normalize_loudness"
 OPERATION_DUCK_MUSIC = "audio.duck_music"
 OPERATION_BEAT_SYNC_CUT = "audio.beat_sync_cut"
+OPERATION_REMOVE_NOISE = "audio.remove_noise"
+OPERATION_DEESS = "audio.deess"
+OPERATION_EQ_VOICE = "audio.eq_voice"
+OPERATION_TIME_STRETCH = "audio.time_stretch"
+OPERATION_REMOVE_VOCAL = "audio.remove_vocal"
+OPERATION_ALIGN_MUSIC = "audio.align_music"
+
+#: Stem layouts for ``audio.remove_vocal``: the source-separation policy decides
+#: how many derived stem assets the operation derives.
+StemPolicy = Literal["two_stem", "four_stem"]
+
+STEM_LAYOUTS: dict[str, tuple[str, ...]] = {
+    "two_stem": ("vocals", "accompaniment"),
+    "four_stem": ("vocals", "drums", "bass", "other"),
+}
+
+#: Beat-grid anchor policies for ``audio.align_music``.
+MusicAnchor = Literal["first_beat", "nearest_beat"]
+
+#: Deterministic voice-EQ preset tables: band name → gain in dB (master
+#: ``gain_db`` is added on top by the handler). Pure data, no DSP here.
+VOICE_EQ_PRESETS: dict[str, dict[str, float]] = {
+    "warm": {"low_shelf_120hz": 3.0, "presence_3khz": -1.5, "air_12khz": -2.0},
+    "bright": {"low_shelf_120hz": -2.0, "presence_3khz": 2.5, "air_12khz": 3.0},
+    "broadcast": {"body_250hz": 1.5, "presence_3khz": 2.0, "air_12khz": 1.0},
+    "telephone": {"presence_2khz": 3.0},
+}
+
+#: High/low-pass cuts applied per preset (names only — the lane compiles them).
+VOICE_EQ_CUTS: dict[str, tuple[str, ...]] = {
+    "warm": (),
+    "bright": (),
+    "broadcast": ("high_pass_80hz",),
+    "telephone": ("high_pass_300hz", "low_pass_3400hz"),
+}
 
 
 class BeatMarker(BaseModel):
@@ -120,3 +157,89 @@ class BeatSyncCutInput(BaseModel):
         default=4, ge=1, description="Number of beats per clip cut boundary."
     )
     timeline_track_id: str = Field(default="video_main", min_length=1)
+
+
+class RemoveNoiseInput(BaseModel):
+    """Input payload for ``audio.remove_noise`` (Level B)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    audio_asset_id: str = Field(min_length=1)
+    strength: float = Field(default=0.6, ge=0.0, le=1.0)
+    preserve_speech: bool = True
+    output_asset_id: str | None = None
+
+
+class DeessInput(BaseModel):
+    """Input payload for ``audio.deess`` (Level B)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    audio_asset_id: str = Field(min_length=1)
+    frequency_hz: float = Field(default=6500.0, ge=2000.0, le=12000.0)
+    threshold_db: float = Field(default=-24.0, ge=-60.0, le=0.0)
+    output_asset_id: str | None = None
+
+
+class EqVoiceInput(BaseModel):
+    """Input payload for ``audio.eq_voice`` (Level B)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    audio_asset_id: str = Field(min_length=1)
+    preset: str = Field(default="broadcast")
+    gain_db: float = Field(default=0.0, ge=-12.0, le=12.0)
+    output_asset_id: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_preset(self) -> EqVoiceInput:
+        if self.preset not in VOICE_EQ_PRESETS:
+            raise ValueError(f"unknown voice EQ preset: {self.preset!r}")
+        return self
+
+
+class TimeStretchInput(BaseModel):
+    """Input payload for ``audio.time_stretch`` (Level B)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    audio_asset_id: str = Field(min_length=1)
+    factor: float = Field(default=1.0, ge=0.25, le=4.0)
+    preserve_pitch: bool = True
+    output_asset_id: str | None = None
+
+
+class RemoveVocalInput(BaseModel):
+    """Input payload for ``audio.remove_vocal`` (Level B).
+
+    ``stem_policy`` selects the separation layout; every stem becomes its own
+    content-addressed derived asset, so the caller can reference (and later
+    re-render) the isolated stems without re-running the separator.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    audio_asset_id: str = Field(min_length=1)
+    stem_policy: StemPolicy = "two_stem"
+    strength: float = Field(default=0.85, ge=0.0, le=1.0)
+    output_asset_id: str | None = Field(
+        default=None, description="Optional prefix for the derived stem asset ids."
+    )
+
+
+class AlignMusicInput(BaseModel):
+    """Input payload for ``audio.align_music`` (Level B).
+
+    The beat grid travels as the two numbers ``audio.detect_beats`` derives
+    (tempo + first beat offset), so the operation stays pure: no DSP happens on
+    the substrate, only beat-grid arithmetic and an offset map.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    music_asset_id: str = Field(min_length=1)
+    tempo_bpm: float = Field(gt=0.0, le=400.0)
+    first_beat_us: int = Field(default=0, ge=0)
+    target_start_us: int = Field(default=0, ge=0)
+    anchor: MusicAnchor = "first_beat"
+    max_shift_us: int = Field(default=500_000, ge=0, le=10_000_000)

@@ -1,9 +1,15 @@
 # NEXUS AI — Architecture Decision Log
 
-**Status:** Canonical historical record; revision 6 effective 2026-09-20  
-**Scope:** Architectural, operational, and roadmap decisions from Phase 0 through the released v3.11.0 baseline, the accepted Phase 6 Nagar design, the implemented Nagar Waves 1–2 (2a substrate, 2b pack, 2c render lane), and the owner decisions that sequence what comes next (Wave 2.5 bot surface first; image generation behind an adapter).  
-**Main baseline for this revision:** `ebe995a` (the PR#23 merge — Wave 2c render lane). The live head may have advanced; consult `git log origin/main`.  
-**Current release baseline:** `v3.11.0` (Phase 6 Waves 1–2c on `main`; cut by the housekeeping PR that carries this revision).
+**Status:** Canonical historical record; revision 12 effective 2026-09-30  
+**r12 scope:** product-direction decision (D-0025): the Nagar creative backbone is an intent-first loop (Intent → Creative Graph → Capability Compiler → CommandBus → render lane → verification → artifact + lineage), not a feature. The first vertical slice — the in-memory, single-project intent loop over the existing operation matrix — is implemented in `creative/spine/` with its own boundary and mutation guards; reference reverse engineering ships as the first *capability* over it (heuristic port, low confidence, never a copy). Direction record: `docs/architecture/CREATIVE_DIRECTION.md`.  
+**r11 scope:** S3/S5 adversarial closure of the security-boundary salvage (D-0016; session `arena/01a0d563-nexus-ai-agent`, PR#79): 5 proven defects closed, 12/12 mutation-killed.  
+**r10 scope:** security-boundary truth salvage (D-0015; PR#76 head `5b17a70` carried into PR#79): S1–S5 real deltas fixed, 9/9 mutation-killed.  
+**r9 scope:** Gate 2 canonical command + capability reconciliation, board task-179 (session `arena/01a0d43c-nexus-ai-agent`): the v1/v2 contract conflict resolved to one canonical contract (D-0013); see `architecture/COMMAND_CAPABILITY_CONTRACT.md` and `architecture/adr/0005-canonical-command-capability-contract.md` for evidence, scoring, and limits.  
+**r8 scope:** owner-directed P0 stabilization day (session `arena/01a0d23e-nexus-ai-agent`, board claims task-165/166/167): the legacy `/creative/*` HTTP lane disposition (D-0010), wiring the creative studio surface onto the canonical chain (D-0011), and verifiable backup success (D-0012). Evidence root: `docs/audits/P0_STABILIZATION_2026-09-24.md`.
+
+**Scope:** Architectural, operational, and roadmap decisions from Phase 0 through the released v3.13.0 baseline (P0 week-1 security batch + feature-engine wiring), the accepted Phase 6 Nagar design, the implemented Nagar Waves 1–3 (2a substrate, 2b pack, 2c render lane, 3 image generation) and the owner decisions that sequence what comes next.  
+**Main baseline for this revision:** `93cee5e` (the PR#34 squash merge — P0 week-1 security batch; PR#35 lint rescue merged on top). The live head may have advanced; consult `git log origin/main`.  
+**Current release baseline:** `v3.13.0` (cut by the repo-hygiene housekeeping PR that carries this revision).
 
 **Revision history**
 
@@ -12,7 +18,12 @@
 - **r3 (2026-09-20, PR#19 + the v3.10.0 release commit):** recorded the implemented Nagar Wave 1 core as an accepted decision, moved the release baseline to `v3.10.0`, corrected the Phase 6 “implementation has not started” status, added the PR#18/PR#19 rows to the PR snapshot, marked the D1–D4 bundle as merged (`d9f5cf9`), and locked the Celery/Redis scan result into the record.
 - **r4 (2026-09-20, PR#21 + the Wave 2 slideshow pack):** recorded Nagar Wave 2 — the capability-pack substrate and the slideshow pack — as an accepted and implemented decision, including the “evidence above the bus, pure handlers inside it” split, the additive state extension (`Project.assets` / `Clip.effects` / `AssetRecord` / `EffectLayerRef`), the level assignments of the five new operations, and the dependency verdicts (librosa deferred, Real-ESRGAN deferred, hosted image *generation* left out of the render path).
 - **r5 (2026-09-20, PR#23):** recorded Nagar Wave 2c — the render lane (pure `RenderIR` → filtergraph → argv, one FFmpeg process, staging publish, measured evidence) — as an accepted and implemented decision with its rejected alternatives (agent-authored filtergraphs, `-y` against the destination, trusting the plan's duration, a second `ffprobe` binary, encoding inside a handler, a Python video library).
+- **r7 (2026-09-21, repo-hygiene pass — owner-directed, session `arena/01a0c484`):** release baseline moved to `v3.13.0` (the merged P0 week-1 security batch — README already described its behavior as v3.13.0 while VERSION/pyproject still said 3.12.0); docs reorganized without content loss (`docs/audits/`, `docs/history/`, `docs/ops/`, `docs/README.md` index); the broken root `termux_install.sh` removed and `scripts/termux_install.sh` repaired (canonical `nexus run-bot` entrypoint); PR #33 closed as superseded (security scope already delivered by merged PR #34; feature-wiring scope double-claims agent B's active lease — evidence: `mergeable=CONFLICTING`, head checks green but base-diverged), then **reopened the same day** when the `ci-gates-steward` board (15:21Z) re-designated it as the task-110 vehicle; 28 merged/closed remote branches deleted with per-branch dispositions below.
 - **r6 (2026-09-20, v3.11.0 housekeeping PR):** moved the release baseline to `v3.11.0`; recorded two owner decisions — *image generation behind an adapter (Pollinations by default, Gemini opt-in)*, which resolves the open question left by Wave 2 item 7, and *Wave 2.5 (Telegram surface for the slideshow pack) precedes Wave 3*; corrected the Phase 6 status text to Waves 1–2c merged; updated the PR snapshot (PR#23 merged as `ebe995a`, PR#1/PR#2 closed); noted that the lifecycle PR1/PR2/PR3 line has been on `main` since PR#7 (`acdbcb7`, v3.6.0) — the roadmap file had still called it unmerged.
+- **r10 (2026-09-24, security-boundary truth salvage):** PR#58's S1–S5 claims re-verified against main `035a896` — real deltas fixed on a fresh branch (dispatcher-true access guard incl. sync `check_update` + `ApplicationHandlerStop`, force-join SQL predicate + fail-closed-unbound, boundary redaction in both pipelines, Gemini `x-goog-api-key` everywhere, SSRF-safe legacy `video_url` download + `SafeAsyncTransport` stream fix), 9/9 mutation-killed; PR#58 stays unmerged evidence (D-0015).
+- **r11 (2026-09-24, S3/S5 adversarial closure):** PR#76's own S3/S5 surfaces independently re-verified and 5 proven defects closed (stdlib traceback redaction, mapping/non-string arg redaction, Basic-scheme credentials, CGNAT 100.64.0.0/10, https-only scheme gate on redirect hops) — 12/12 mutation-killed; D-0016.
+- **r12 (2026-09-30, creative direction):** recorded the product frame (intent, not tools) and the backbone loop above the proven execution chain, then *built the first vertical slice* — the in-memory, single-project intent loop (typed intent → creative graph → capability compiler → CommandBus → artifact + evidence) in `creative/spine/`, with its own boundary and mutation guards. Reverse engineering, multiverse, social feedback, pack marketplace and style DNA stay deferred behind evidence-based triggers. Direction page: `docs/architecture/CREATIVE_DIRECTION.md`; D-0025.  
+- **r8 (2026-09-24, P0 stabilization day):** D-0010 legacy `/creative/*` HTTP lane = keep+harden (strictly harden-edged) on a deprecation track gated on open PR#58's SSRF scope, never a competitor pipeline; D-0011 `/edit` `/caption` `/grade` wired through the canonical chain with message-anchored idempotency, the bogus `mapper` handler key removed, honest op matrix (`lut`/`burnin` refused, not faked), all replies through the i18n catalog; D-0012 backup success must be measured and round-trip-verified, never asserted — plus the r8 coordination facts (task-106 superseded into task-166, task-164 narrowed to owner-secrets, docs number-resync against measured values: 57 registered ops).
 
 This document is the single reference point for architectural decisions in this repository. A new decision must be appended here with its date, status, rationale, rejected alternatives, and repository evidence. Existing historical documents remain useful as detailed records, but this log is authoritative when summaries differ.
 
@@ -276,7 +287,7 @@ Nagar is accepted as the Phase 6 design baseline because it makes operation inte
 
 ### Zombie / abandoned branches
 
-The following branches are historical, open, or abandoned proposals and are not part of the active mainline decision path. **They must be deleted manually on GitHub by the owner** — deletion is a remote administrative action and is deliberately not performed by documentation changes:
+The following branches are historical, open, or abandoned proposals and are not part of the active mainline decision path. **They must be deleted manually on GitHub by the owner** — deletion is a remote administrative action and is deliberately not performed by documentation changes. **Update (r7, 2026-09-21):** the owner directed the repo-hygiene session to perform this deletion; all four are no longer present on the remote:
 
 | Branch | Status | Reason / evidence |
 |---|---|---|
@@ -284,6 +295,45 @@ The following branches are historical, open, or abandoned proposals and are not 
 | `feat/phase1-control-plane` | Abandoned — origin unclear | The “phase one control plane foundation” proposal (open as PR#1 historically). Never merged into `main`; its rate-limiter/control-plane ideas survive only as history. Treat as unowned. |
 | `feat/phase2-local-llm` | Abandoned — stacked on an unmerged base | “Provider-agnostic local LLM engine” built **on top of the unmerged `feat/phase1-control-plane`**, so it can never merge cleanly. The underlying need (a provider seam) was satisfied properly by litellm routing in v3.7.0 (Phase 3). |
 | `circleci-project-setup` | Irrelevant — CI platform cut | Only adds `.circleci/config.yml` (commits `265d6a0`, `2818d9d`). `.circleci/` does not exist on `main`; the project standardizes on GitHub Actions (`.github/workflows/ci.yml`, `maintenance.yml`). |
+
+### Remote branch deletion — dispositions (r7, 2026-09-21)
+
+Executed by the `repo-hygiene-2026-09-21` session on owner instruction. Each deletion was
+verified against the GitHub compare API (`main...<head>`) before deletion. Preserved branches:
+`main`, active session branches (`arena/01a0c316` — agent A active lease; `arena/01a0c34d` —
+agent B, PR #32 open; `arena/01a0c3aa` — PR #33 archive, kept despite closure; `arena/01a0c460`
+— agent E active work; `arena/01a0c484` — hygiene session).
+
+| Branch | Evidence | Disposition |
+|---|---|---|
+| `arena/01a0ac24` | PR#3 merged | deleted (behind main) |
+| `arena/01a0ae59` | 1 unique commit: C1 Postgres support — delivered via PR#7 lineage | deleted (superseded) |
+| `arena/01a0af6a` | PR#4 merged | deleted (behind main) |
+| `arena/01a0b0bf` | PR#6 merged | deleted (behind main) |
+| `arena/01a0b123` | fully behind main (session rescued via `arena/01a0b1e8`) | deleted (behind main) |
+| `arena/01a0b1e8` | 1 unique commit: rescue merge of Stage-1 + partial PR2 — delivered via PR#7 lineage | deleted (superseded) |
+| `arena/01a0b5d7` | PR#7 merged; unique commit is bookkeeping only | deleted (superseded) |
+| `arena/01a0bace` | PR#8 merged | deleted (behind main) |
+| `arena/01a0bb1d` | PR#9 merged | deleted (behind main) |
+| `arena/01a0bb93` | PR#10 merged | deleted (behind main) |
+| `arena/01a0bd16` | PR#11 merged | deleted (behind main) |
+| `arena/01a0bd99` | fully behind main | deleted (behind main) |
+| `arena/01a0beae` | PR#15 closed — superseded by `feat/d1-d4-clean-rebuild` (PR#18) | deleted (closed-superseded) |
+| `arena/01a0bf3b` | 3 unique commits, self-documented "already superseded by the merged main line" (wave-1 duplicate) | deleted (superseded) |
+| `arena/01a0c0eb` | PR#26 + PR#27 merged | deleted (behind main) |
+| `arena/01a0c05a` | PR#24 merged | deleted (behind main) |
+| `arena/01a0c099` | PR#25 merged | deleted (behind main) |
+| `arena/01a0c286` | PR#28 merged | deleted (behind main) |
+| `arena/01a0c2d5` | PR#29 merged | deleted (behind main) |
+| `arena/01a0c2ec` | 4 unique commits, self-archived "superseded by PR#29" | deleted (self-archived) |
+| `arena/01a0c36f` | PR#31 merged (squash `c41b1b0`); pre-squash wave commits | deleted (delivered via squash) |
+| `arena/01a0c3a0` | PR#34 merged (squash `93cee5e`) | deleted (delivered via squash) |
+| `arena/01a0c3ca` | PR#35 merged; unique commit is board bookkeeping | deleted (delivered via squash) |
+| `chore/release-v3.10.0` | PR#20 merged | deleted (behind main) |
+| `docs/decision-log-history` | PR#17 merged | deleted (behind main) |
+| `feat/nagar-wave1-green-cockpit` | PR#19 merged | deleted (behind main) |
+| `feat/security-hardening` | PR#16 merged | deleted (behind main) |
+| `feat/wave2a-pack-substrate` | PR#21 merged | deleted (behind main) |
 
 ### Pull-request snapshot at this revision (2026-09-20)
 
@@ -298,6 +348,9 @@ The following branches are historical, open, or abandoned proposals and are not 
 - **PR#23** — Nagar Phase 6 Wave 2c, the render lane (`feat/wave2c-slideshow-render`, head `934f70b`): **MERGED 2026-09-20** (`ebe995a`), CI green (`test` ×2, `migrate-postgres` ×2); head branch deleted.
 - **PR#1 / PR#2** — the abandoned `feat/phase1-control-plane` and `feat/phase2-local-llm` proposals: **CLOSED** (unmerged; see the zombie-branch table).
 - **v3.11.0 housekeeping PR** (opened from the session branch `arena/01a0c05a-nexus-ai-agent`, 2026-09-20): release lock-step, continuum refresh, roadmap rewrite, this revision (r6). Wave 2.5 follows on its own PR once this one is merged.
+- **PR#33** — “v3.13.0 — deliver the P0 security code, wire the dead engines, fix 4 production bugs” (`arena/01a0c3aa`): **CLOSED 2026-09-21 as superseded** — its security scope landed through merged PR#34 (`93cee5e`), its head was `CONFLICTING` with `main`, and its feature-wiring portion overlaps agent B's active `feature-wiring` lease (PR#32). **REOPENED the same day** after the `ci-gates-steward` board (15:21Z, merged via PR#36) designated it the **task-110 vehicle** (OTIO round-trip validation + ConversationStorePort adapter + manifest-signature spike); disposition: keep open, rebase on post-PR#36 main before merge.
+- **PR#34** — P0 week-1 security batch + feature-engine wiring: **MERGED 2026-09-21** (`93cee5e`, squashed).
+- **PR#35** — task-101 lint rescue: **MERGED 2026-09-21**; `main` CI green (run 35613892356).
 
 The repository contains several numbering systems from different workstreams. They must not be interpreted as one chronological sequence. The final roadmap is the **seven-phase plan** documented above: Phase 0 (control plane/security) → 1 (core product) → 2 (local-LLM direction) → 3 (multi-provider routing, scale-to-zero) → 4 (schema management, PostgreSQL/Neon) → 5 (durable storage, lifecycle, R2) → 6 (Nagar creative studio, design accepted).
 
@@ -606,102 +659,1246 @@ depended strictly on English keywords.
 - 63 unit and integration tests passed (`test_caption_ass.py`, `test_caption_pack.py`, `test_router_multilingual.py`, `test_graph_memory.py`, `test_graph.py`, `test_router.py`, `test_persona_routing.py`).
 - Pre-push coordination check passed with zero overlap against Agent A and Agent B leases.
 
-## 2026-09-21 — task-110: ConversationStorePort adapter (gap closed)
+## 2026-09-21 — P0 Week-1 security batch + feature-engine wiring (audit follow-through)
 
-**Status:** Implemented by Agent E (`arena/01a0c3aa-nexus-ai-agent`); wiring into
-the bot is deliberately left to the `feature-wiring` zone owner.
+**Status:** Implemented on `arena/01a0c3a0-nexus-ai-agent`; pending review/merge.
+**Problem:** The 2026-09-21 audit (`AUDIT_REPORT_2026-09-21.md`) found four
+critical P0 gaps — bot auth consulted in only two of ~80 command paths
+(P0-2), public PII on the dashboard API (P0-5), path traversal in
+`/cloud` + `/download` (P0-6) and a duplicate shadowed `CommandHandler("start")`
+that left the referral loop dead (P0-4) — plus 379 lines of "documented"
+feature engines (`features/tools.py`, WordleFA, NumberGuess, QuickPoll) that
+nothing imported (P0-1/P0-8).
 
-**Problem:** `application/ports/conversation_store.py` declared
-`ConversationStorePort` (`append_message`, `list_messages`) but **no
-implementation existed**. `bot/app.py` wires
-`features/conversation_store.ConversationStore` directly, which (a) does not
-match the port and (b) is synchronous — it opens a SQLAlchemy connection and
-blocks the event loop on every message. A port with no adapter is worse than no
-port: the contract is untested and every caller diverges from it.
+**Decisions:**
 
-**Decision:** Add `adapters/conversation_store_sqlite.py::SqliteConversationStore`
-rather than retire the port:
+1. **Global access guard as a conditional-check handler (P0-2).**
+   `AccessGuardHandler` (PTB `BaseHandler`) is registered in group -1 and
+   its `check_update` returns True *only for denied users*. PTB then runs
+   the denial callback (rate-limited reply + structured audit log) and
+   blocks the update; allowed users are invisible to the guard. This gives
+   one choke point with zero per-command edits and no double-processing,
+   while keeping the existing per-command checks (defense in depth).
+   *Rejected alternatives:* wrapping every handler (unmaintainable); a
+   `TypeHandler(Update)` that always claims (would also block allowed
+   users, since blocking is decided by `check_update`, not the callback
+   return value); middleware at the HTTP layer only (polling mode has no
+   HTTP layer).
+2. **AST-whitelist calculator instead of `eval` (P0-1).** The engine parses
+   with `ast.parse(mode="eval")` and walks a closed node whitelist
+   (numeric constants, the six arithmetic ops + pow/mod, whitelisted math
+   functions/constants). Attribute access, subscripts, strings and
+   containers are unrepresentable, which kills the classic
+   `().__class__.__bases__[0].__subclasses__()` class of escapes outright;
+   bounds on length (200), node count (128), depth (64), integer exponents
+   (≤1000), factorial (0–170) and result magnitude stop `9**9**9`-style DoS.
+   Persian/Arabic-Indic digits and `^`/`×`/`÷` are normalized.
+   *Rejected alternatives:* `simpleeval`/`asteval` dependencies (new
+   supply-chain surface for a 150-line stdlib module); keeping `eval` with
+   a tighter regex (regex gates are the thing that failed the audit);
+   keeping `%` as "÷100" (silently wrong for `100%20`; modulo is the
+   calculator-correct semantics — documented as a behaviour change).
+3. **One shared `FeatureEngines` container (P0-8).** Engines are built once
+   in `_init_v2_engines`, stored in `bot_data["feature_engines"]`, and
+   passed into `build_handlers` (optional kwarg; tests may omit it).
+   Commands are closures from `build_feature_command_handlers` bound to
+   that container. This fixes per-call engine construction (which dropped
+   quiz/wordle/guess state between messages), the double `ReferralEngine`
+   construction, and makes every command unit-testable without a bot.
+   **Lazy bot binding:** the Telegram bot only exists at runtime, so
+   bindable engines (`ReminderSystem.bind`, `ForceJoinManager.bind`,
+   `AnonymousChatManager.bind`) are bound in `post_init` and defensively
+   re-checked per use (`_ensure_bot`). *Rejected alternatives:* passing
+   `application.bot` through `build_handlers` (build-time API does not
+   have it, and would couple tests to a live bot); constructing engines
+   inside each handler (the bug being fixed).
+4. **Dashboard: PII-free responses + optional bearer gate + private bind
+   (P0-5).** Responses are PII-free in *all* modes (only the internal
+   surrogate id + join time). `NEXUS_DASHBOARD_TOKEN` enables a constant-time
+   bearer check (401 fail-closed when set and wrong). When unset the API
+   is open *by design* for local development, and `docker-compose.yml`
+   binds 8000 to `127.0.0.1` so the default deployment cannot leak it.
+   *Rejected alternative:* always-503 when no token is set (would break
+   every existing local/CI consumer of `/api/dashboard/stats`); CORS-only
+   (CORS does not stop `curl`).
+5. **Path sanitization as a reusable helper (P0-6).** `bot/safe_paths.py`
+   (`sanitize_file_name` = base-name-only + control-char/length checks;
+   `safe_join` = suffix + `resolve()` + `is_relative_to`) is used by both
+   `/cloud` (upload temp file, unique suffix against overwrite) and
+   `/download` (DB name → safe local path). The raw command argument is
+   never joined to a path; the unclosed file handle in the download
+   fallback is fixed.
 
-1. **Async-only.** `aiosqlite` (already a core dependency), no sync engine, no
-   thread hand-off. This is the same direction task-108 formalises for the rest
-   of the storage layer, and it does not fight it.
-2. **Port-shaped, append-only.** One row per message
-   (`message_id, thread_id, role, content, seq, created_at`), returning the
-   durable message id from `append_message` and chronological
-   `{"message_id","role","content","created_at"}` dicts from `list_messages`.
-   `limit` keeps the *most recent* messages in chronological order, which is
-   what a prompt window needs.
-3. **Fail-closed validation.** Empty ids, non-string content, oversized content
-   and unknown roles raise instead of being persisted: a typo in `role` silently
-   corrupts the model prompt later, which is more expensive than an exception.
-   Roles are canonicalised (stripped, lower-cased) on write.
-4. **Coexists with the legacy store.** It owns a new table
-   (`conversation_messages`) and never touches `conversation_history`, so the
-   migration can be done one call site at a time instead of in one risky
-   switch-over.
-5. **Migration path (owner action, `feature-wiring` zone).** `bot/app.py:119`
-   constructs `ConversationStore(db_path=settings.db_path)`; the adapter is a
-   drop-in for any consumer that only needs the port. `features/ai_chat.py`
-   keeps the legacy `parts`-shaped history until it is ported, which is why the
-   bot wiring itself is not flipped in this task.
+**Contracts:** new public settings `NEXUS_DASHBOARD_TOKEN`; new commands
+`/guess`, `/cancel_remind`, `/reminds`; `/calc` `%` semantics change
+(percent → modulo); unlisted users are now denied on all surfaces
+(deployments must configure `NEXUS_ALLOWED_USER_IDS`/owner id); two new
+files registered in `tests/architecture/legacy_baseline.json`
+(`bot/access_guard.py`, `bot/feature_handlers.py` — bot-layer `telegram`
+imports, same category as every existing `bot/*` file). No schema
+migration: `Reminder.status` is a free-form string (`pending|sent|
+cancelled|failed`).
 
-**Verification:**
-- `tests/unit/test_conversation_store_adapter.py` — 24 tests: signature parity
-  with the port (parameter *names*, so keyword calls through the port keep
-  working, plus annotations), round-trip, thread isolation, persistence across
-  reconnects, `limit` semantics, role canonicalisation, fail-closed inputs,
-  `clear_thread`, `:memory:`, async-context-manager lifecycle.
-- `tests/architecture/test_port_signatures.py` continues to pass unchanged, so
-  the port itself was not bent to fit the adapter.
+**Evidence:** 108 new tests (behavioural + security payloads + DoS inputs);
+881 passed / 20 PostgreSQL-only skips; `ruff check` + `ruff format --check`
+clean; `mypy src` clean (197 files). The stale `P0-security-batch` lease
+from the finished session `arena/01a0c316-nexus-ai-agent` (PR#30 merged as
+`5e5009a`) was released with an explanatory board note and re-claimed by
+this session per owner instruction; see `.agents/board.json`.
 
-## 2026-09-21 — task-110 spike: Ed25519 signing for capability-pack manifests
+## 2026-09-21 — P0-7 LLM-egress consent gate + P1-2 event-loop non-blocking
 
-**Status:** Documented spike. **Not implemented** — it is blocked on an owner
-decision about key custody, and implementing it without that decision would add
-a dependency and a false sense of security.
+**Status:** Implemented on `arena/01a0c3a0-nexus-ai-agent`; pending merge in PR#34.
 
-**Problem:** `creative/packs/verify.py` accepts a manifest signature but never
-verifies it. Every pack therefore reports either `signature=placeholder`
-(`base64:replace-…`) or `signature=format_only_unverified`, both as *warnings*.
-A pack that declares Level C permissions can be edited after publication and
-nothing notices.
+### P0-7: AIMemory consent gate
 
-**Design (ready to implement, ~120 lines + tests):**
+**Problem.** The main message handler (`on_message`) created a fresh
+`AIMemoryEngine()` per message and fire-and-forget'd
+`update_from_message(user_id, text)` — sending *every* user's raw
+message text to the external Gemini model with no consent, no opt-out,
+no rate limit, and one new provider per message.
 
-1. **Canonical bytes.** Sign the manifest with the `security.signature` field
-   replaced by the empty string, serialised with `json.dumps(obj,
-   sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")`.
-   Deterministic, and independent of key ordering or pretty-printing — the same
-   normalisation already used for the OTIO export hash.
-2. **Algorithm and key format.** Ed25519 (`cryptography` package: Apache-2.0,
-   free, no model download, no native build beyond an existing wheel). Signature
-   field format: `base64:<64-byte signature>`. Public keys: a new
-   `NEXUS_PACK_PUBLIC_KEYS` setting holding one or more
-   `base64:<32-byte ed25519 public key>` entries, matched against
-   `security.trusted_publisher`.
-3. **Verification point.** `verify.py` gains two states: `verified` and
-   `signature_invalid`. Fail-closed rule: when at least one public key is
-   configured and verification fails, `signature_invalid` is an **error** (the
-   pack is refused), not a warning. When no key is configured the current
-   warning behaviour is preserved so existing installs keep working.
-4. **Packaging.** `cryptography` becomes a new extra (`[packsign]`) guarded by
-   `optional_deps`, so the core install stays light; the verification tests run
-   in CI where the extra is installed and skip in a typed way otherwise.
+**Decisions:**
 
-**Why this is blocked on a decision, not on code:** if the public key ships
-inside the same repository (or the same pack archive) as the manifest, anyone
-who can modify the manifest can also modify the key — the check would be
-decorative. Signature verification only buys something once the key comes from
-outside the pack's distribution channel. Owner decisions needed:
+1. **Default-deny, consent tri-state.** `UserMemory.ai_memory_consent` is
+   `str | None` (tri-state: `None` = unset, `"granted"`, `"denied"`).
+   No egress unless exactly `"granted"`. Rejected: opt-out model
+   (pre-existing users would egress without knowing), checkbox in
+   /settings (too hidden for a privacy gate).
 
-* where the private key lives (CI secret, release machine, or a hardware token)
-  and who may sign a release;
-* whether a third-party pack with an unknown publisher is **refused** or only
-  **warned** about;
-* whether the seven first-party packs in this repository get signed at all, or
-  only packs fetched from a remote source.
+2. **One-time inline-keyboard question.** Shown exactly once per user
+   (tracked via `ai_memory_prompted: bool | None`). Ignoring the question
+   does not re-prompt (no prompt spam). Rejected: a persistent /consent
+   command (would require users to know the command exists).
 
-**Recommendation:** sign only *remotely fetched* packs, keep first-party packs
-on the placeholder, and treat `signature_invalid` as fatal. That gives a real
-supply-chain guarantee exactly where untrusted bytes enter the system, with no
-key-management burden for self-hosted installs.
+3. **Gate enforced inside the engine, not at call sites.** Returns an
+   outcome string (`EGRESSED` / `SKIP_*`). No future caller can bypass
+   the gate. `ensure_consent_prompted()` is a pure-orchestration helper
+   (testable, in `memory_handlers.py`).
+
+4. **New Alembic revision `7c2f9d41e8a3`.** Three nullable columns on
+   `usermemory` (no server default → zero drift on `alembic check` on
+   both SQLite and PostgreSQL). CI pinned from `f4a9c2e71b08` to
+   `7c2f9d41e8a3`.
+
+5. **Shared engine instance.** `FeatureEngines.ai_memory` is built once
+   in `build_feature_engines` (single Gemini provider, single rate-limit
+   dict). `/memory`, `/forget_me`, `on_message` and the consent callback
+   all share it.
+
+6. **`forget_user` = consent revoke.** The row is deleted (including
+   `ai_memory_consent`), so any future egress requires a fresh vote.
+   Rejected: soft-delete (complex, privacy-unfriendly).
+
+**Tests.** 17 new tests in `test_ai_memory_consent.py` (engine gate,
+global kill switch, one-time prompt, callback, rate limit, forget-wipes,
+shared instance, schema + migration chain). 2 pre-existing tests in
+`test_ai_memory.py` rewritten to the new contract with proper DB
+isolation.
+
+### P1-2: Event-loop non-blocking
+
+**Problem.** All four sync-DB feature engines (`ReminderSystem`,
+`ReferralEngine`, `ForceJoinManager`, `AnonymousChatManager`) executed
+synchronous `Session(engine)` blocks inside `async` handler coroutines,
+blocking the event loop on every message.
+
+**Decisions:**
+
+1. **`asyncio.to_thread(sync_core)` reference pattern.** Each public
+   async method is a thin wrapper over a `*_sync` core. The task
+   management (`_schedule`, `task.cancel()`) stays on the loop thread.
+   Rejected: migrating to `AsyncSession` (too invasive for a batch
+   change, touches every engine and its tests).
+
+2. **Cached engines with `check_same_thread=False`.** `_sync_engine` is
+   `@lru_cache`'d per `db_path` (or stored on `self`). Sessions are
+   created and used within a single worker thread (safe), but the
+   connection pool may be accessed from both the loop and worker threads
+   (requires the flag).
+
+3. **Call-site offload for owner commands.** `ForceJoinManager.set_config`
+   / `get_config` (sync classmethod calls from `handlers.py`) wrapped at
+   the call site with `asyncio.to_thread`. Same for referral
+   `format_stats` / `format_leaderboard` / `process_referral` /
+   `get_referral_link`.
+
+**Tests.** All 990 existing tests pass (20 PG-only skips). The sync
+methods are exercised through the existing behavioural tests which now
+go through the async wrapper + `to_thread`.
+
+**Evidence.** `make lint` ✅, `make types` ✅ (209 files), `make test` ✅
+(990 passed, 20 skipped, 53.58s).
+
+### Nagar Wave 8/9 — apply lane + local speech (agent F, task-104/105) + task-110 deferral
+
+**Date:** 2026-09-21; implemented on `arena/01a0c460-nexus-ai-agent` (this session first mis-declared عامل E; corrected to F — E was taken twice already, see board `identity_map_note`).
+**Status:** Accepted **and implemented** (PR: 104+105 only).
+
+**Decision:**
+1. **Apply lane (`nexus.apply.lane`, `creative/rendering/`):** typed `LaneOp` values → validated `LaneIR` → pure compiler (filtergraph + byte-exact argv, golden-pinned) → exactly one FFmpeg process (no shell, staging + atomic publish, probed evidence). Loudness is film-standard two-pass. 8 composable ops: trim/speed/reverse/freeze/xfade/title/loudnorm/duck.
+2. **Local speech (`adapters/whisper_local.py`, `[speech]`/`[translate]` extras):** faster-whisper (CTranslate2, int8 CPU, no torch) behind `CaptionEnginePort`, lazy import, `to_thread`, offline-first (hub forced offline without explicit consent). Diarization v1 = energy-VAD anchors + the pack's pure merge-then-stamp. Three pure pack ops registered → **caption `pending=0`, pack activates**. The `[speech]`/`[translate]` extras are unique to this PR (PR#33 has none).
+3. **task-110 DEFERRED to PR#33 (no code shipped):** this session also implemented OTIO interop + a sync conv-store, then discovered PR#33 (branch 3aa) had already delivered task-110 first, green, in review — its claim was invisible because it never reached `main` and this base predated it (split-brain). Per the overlapping-PRs rule the duplicate was fully reverted (branch history pre-reset preserved the work). Forensic finding kept for a post-merge supplement (wave-3 task-121): PR#33 keeps `include_markers` but ignores it (zero marker references in its ops) — markers (Marker.2 on the Stack) remain open. Conv-store: PR#33's aiosqlite adapter (15 tests) is the keeper.
+
+**Verification:** `tests/unit/test_rendering_lane.py` (20: 16 golden + 4 real FFmpeg 7.0.2 encodes), `test_caption_engine_adapters.py` (13), `test_rendering_lane_boundary.py` (4); `ruff check` + `format --check` + `mypy` clean; pre-push `agent_board check` zero overlap vs agent B's active lease.
+
+### D-0005 … D-0008 — color/exposure lane ownership decisions (wave 8, ADR-lite)
+
+**Date:** 2026-09-21; implemented on `arena/01a0c58e-nexus-ai-agent`.
+**Status:** Accepted **and implemented** (D-0005/D-0006/D-0008 are deferrals —
+accepted as *not now*, with the trigger that reopens each one named).
+
+**On the identifier family.** These use a new zero-padded `D-00NN` ADR series.
+They are **not** the historical `D1–D10` Phase-D schema bundle in the numbering
+table above, and `D-0007` is not `D7`. The log's own rule is that an identifier
+is optional and only for traceability; the padding exists precisely so the two
+families cannot be confused in a grep.
+
+---
+
+**D-0005 — No `SplitOp`: the lane stays one-input/one-output until a
+multi-output encode exists.**
+
+*Problem.* A colour/exposure lane makes fan-out tempting: grade once, emit a
+proxy *and* a master from the same pass.
+*Decision.* Deferred. `CompiledLane` exposes exactly one `video_out` and one
+`audio_out`, `argv()` writes exactly one `-y` destination, and the executor runs
+exactly one FFmpeg process with staging + atomic publish. A split would break
+the single-encode invariant that makes the artifact's provenance auditable
+(one process ⇒ one set of probed evidence ⇒ one journal entry).
+*Rejected alternatives.* (a) FFmpeg's multi-output argv (`-map ... out1 -map ...
+out2`) — one process but *two* artifacts, so the "one artifact per encode"
+evidence model needs a redesign, not a flag; (b) two sequential encodes — doubles
+decode cost and makes the two outputs non-identical by construction.
+*Reopens when* a real consumer needs proxy+master atomically, and the executor
+gains per-output probed evidence.
+
+**D-0006 — `.nexus/continuum.json` is refreshed only in a release cut, not per
+wave.**
+
+*Problem.* This wave adds 178 test cases; the continuum's `test_count_expected`
+is already stale on `main` at `649`.
+*Decision.* Do not touch it here. Two independent reasons: (1) the file is under
+another task's **exclusive-path lease** — board claim `task-135-lockstep-residue`
+holds `["README.md", ".nexus/continuum.json"]`, and the coordination rule is that
+an exclusive path is not touched by a second branch; (2) a per-wave counter is
+guaranteed to churn into merge conflicts across parallel branches for zero
+safety benefit, because nothing gates on it. It is refreshed deliberately at a
+release cut (next: v3.14), together with `VERSION`/`pyproject`/`CHANGELOG`.
+*Rejected alternative.* Bumping it in this PR — it would collide with PR#33's
+diff on the same file and steal task-135's scope.
+*Consequence, stated plainly.* `test_count_expected` remains wrong after this
+wave. That is pre-existing drift with an owner, not new drift; task-135 stays
+queued.
+
+**D-0007 — The EV→`eq` gamma mapping, and the source of every colour bound.**
+
+*Problem.* Three FFmpeg filters, three different notions of "out of range", and
+the popular documentation disagrees with itself (`eq` contrast is quoted as
+`-2.0…2.0` in some places and `-1000.0…1000.0` in others).
+*Decision.* Take the bounds from the filter **sources**, and clamp in the IR:
+
+| Fact | Source (FFmpeg `master`) |
+|---|---|
+| gamma clipped to `[0.1, 10.0]`, contrast to `[-1000.0, 1000.0]`, brightness `[-1,1]`, saturation `[0,3]`, `gamma_weight` `[0,1]` | `libavfilter/vf_eq.c` — `set_gamma` / `set_contrast` / `set_brightness` / `set_saturation` all use `av_clipf` |
+| `eq`'s LUT is `v → v ** (1/gamma)`, hence `gamma = 2**EV` brightens on positive EV | `vf_eq.c` `create_lut` (`double g = 1.0 / param->gamma`) |
+| `eq` is a *true* no-op at neutral | `vf_eq.c` `check_values` → `param->adjust = NULL` when contrast 1.0, brightness 0.0, gamma 1.0 |
+| `eq` takes the non-LUT fast path only while `\|contrast\| < 7.9` | `vf_eq.c` `check_values` |
+| `temperature` = `{.dbl=6500}, 1000, 40000` | `libavfilter/vf_colortemperature.c` `colortemperature_options[]` |
+| `kelvin2rgb(6500)` ≈ `(1.000, 0.997, 0.981)` — **not** an exact identity | `vf_colortemperature.c` `kelvin2rgb` |
+| `eq` accepts planar YUV/gray only; `colortemperature`/`colorbalance` accept RGB only (disjoint sets) | `vf_eq.c` `pixel_fmts_eq[]` vs `vf_colortemperature.c` `pixel_fmts[]` / `vf_colorbalance.c` `pix_fmts[]` |
+| `gm` = "set green midtones", `{.dbl=0}, -1, 1`, **added** to green | `libavfilter/vf_colorbalance.c` `colorbalance_options[]` + `get_component` |
+
+*Consequences adopted.* `gamma = clamp(2**EV, 0.1, 10.0)` clamped in Python, so
+the argv never claims a grade FFmpeg would have silently clipped; the unclamped
+band is therefore ±log2(10) ≈ ±3.32 EV and both ends are pinned as golden
+contracts. `tint/50 → gm`, positive = green. `6500 K` is neutral because it is
+the filter's own default, and the RGB stages are elided there because they do
+*not* short-circuit. The disjoint pixel-format sets are the reason for the single
+`yuv420p → rgb24 → yuv420p` round trip, shared by both RGB filters.
+*Rejected alternatives.* Reading the bounds from prose docs (they conflict);
+letting FFmpeg clip (the argv would lie); `eq=brightness` instead of gamma
+(brightness is a linear offset that clips highlights, gamma is the curve that
+matches a stop).
+
+**D-0008 — No filmic tone-mapping (`tonemap=hable`) in this lane.**
+
+*Problem.* Once an exposure op exists, the obvious next step is a filmic
+highlight roll-off; `hable` is the well-known style.
+*Decision.* Not now. `tonemap` requires linear-light float input, which means a
+`zscale` transfer-primaries/matrix chain and a working knowledge of the source's
+tagged colour space. Guessing the input transfer function is worse than not
+tone-mapping: it silently re-grades every clip differently depending on its
+metadata. The lane currently guarantees a *predictable* transform.
+*Rejected alternatives.* (a) `tonemap=hable` on assumed BT.709 input — mislabels
+any HLG/PQ source; (b) `eq` with `gamma_weight < 1.0` as a cheap highlight
+protect — plausible, but it changes the meaning of the EV mapping in D-0007 and
+needs its own photometric contract.
+*Reopens when* the lane can read the source's colour metadata via `ffprobe`
+(already the executor's evidence path) and pin it in the IR, so the transfer
+function is a recorded input rather than an assumption.
+
+---
+
+**Verification (this wave).** New: `tests/unit/test_rendering_lane_exposure.py`
+(16 golden pins) and `tests/unit/test_lane_duration_algebra.py` (162 cases:
+40 seeded lanes × 4 invariants + 2 structural guards). Both files were
+mutation-checked — six deliberate breaks of the mapping/elision/guards and four
+breaks of the duration algebra each turned the suite red, and a new op added to
+the `LaneOp` union is caught by the restatement-vocabulary guard. Runbook:
+`docs/ops/COLOR_LANE.md`. Full suite on this branch: **1359 passed, 20 skipped**
+against a measured base-commit baseline of **1181 passed, 20 skipped** — +178
+cases, no new skips, no regressions. `ruff check .` → 0 errors;
+`ruff format --check .` → no files to reformat; `mypy src` → clean, 221 source
+files. The exact invocations are in §3 of that runbook.
+
+---
+
+## 2026-09-22 — dead engines behind live handlers: wire through `bot/surface` (D-0009)
+
+**Status:** Accepted and implemented on `arena/01a0cb38-nexus-ai-agent` (PR#54).
+**Evidence:** `docs/audits/DEAD_ENGINES_2026-09-22.md`.
+
+**D-0009 — Wiring a dead engine goes through the framework-free surface, and the surface owns
+the authorisation the engine never had.**
+
+*Problem.* `features/ads.py` (242 lines, ten methods), `features/channel_manager.py` (239 lines)
+and `features/onboarding.py` (122 lines) had **no importer anywhere in `src/`** — verified by
+`grep -rn` over `src/ tests/ scripts/ migrations/` — while `bot/handlers.py` answered thirteen
+commands with constants (`"(simulated)"`, `"Ad campaign created successfully."`, `"Onboarding step
+completed!"`). Two properties make this a design decision rather than a bug fix: (a) the fake
+replies *cannot* be distinguished from working code by reading the handler list alone, and (b) the
+engines' write APIs are id-only (`AdManager.pause_campaign(campaign_id)`), so a naive wiring turns
+a dead module into a cross-chat IDOR.
+
+*Decision.* Add one module per engine under `bot/surface/` and change nothing but imports in
+`handlers.py`; keep every engine call behind `asyncio.to_thread`; put the chat-scope authorisation
+in the surface (`_load_owned`); render only fields the schema stores; and let
+`tests/unit/test_surface_registration.py` act as the ratchet — its `EXPECTED` map (now 20 commands
+plus a callback-pattern map) and its forbidden-string list make a stub re-introduction a test
+failure rather than a code-review miss. `features/onboarding.py`, `worker.py`, `bot/app.py` and
+`README.md` were left untouched because PR#33 is actively editing them.
+
+*Rejected alternatives.* (1) inline calls in `handlers.py` — adds ~200 lines to the highest-conflict
+file and is only testable through `build_handlers`, which needs PTB; (2) extending
+`bot/feature_handlers.py` — inside PR#33's diff and inside the unfixed `P0-8` double-construction
+problem, so a "one owner per engine" claim could not have been made truthfully; (3) DI-first (single
+`bot_data` engine registry) — correct, but it pre-empts `task-124`/`P0-8`; the accepted shape is a
+step toward it (`manager_for` memoises into `application.bot_data`); (4) truth-only deletion of the
+stubs with a "not wired in this build" reply — honest, but it removes thirteen working commands to
+fix a lie that real code could have fixed. The full comparison table, with the collision measurements,
+is §3 of the audit.
+
+*Consequences.* Two facts are now guaranteed by tests rather than by intent: a `bot/surface` module
+that needs a PTB-coupled engine must import it lazily (R12 in `docs/architecture/MODULE_MAP.md`,
+enforced by `test_surface_onboarding.py::test_the_surface_package_imports_without_telegram`), and an
+engine mutation reachable from a command must carry an ownership check (T14 in
+`docs/architecture/SECURITY.md`). Known residuals — no ad-delivery tick yet, `/start` still not
+onboarding first-time users, owner-only moderation instead of admin-aware — are enumerated in §6 of
+the audit and queued as `task-159`, not left implicit.
+
+*Reopens when* `P0-8` lands a single engine registry: at that point `manager_for` and the ad/channel
+read paths should move onto it, and D-0009's surface-owns-authorisation rule should be re-examined
+for whether the check belongs one layer down, in the engine, where a second caller (the delivery
+tick) would otherwise have to duplicate it.
+
+## 2026-09-24 — P0 stabilization day: legacy creative HTTP lane, studio surface wiring, verifiable backups (D-0010 … D-0012)
+
+**Status:** Accepted and implemented on `arena/01a0d23e-nexus-ai-agent` (board claims
+`task-165` / `task-166` / `task-167`, zone `p0-stabilization`).
+**Evidence:** `docs/audits/P0_STABILIZATION_2026-09-24.md` (repro scripts, before/after
+transcripts, merge-file measurements). Owner directive of 2026-09-24 (Persian, three P0s).
+
+### D-0010 — Legacy `/creative/*` HTTP lane: keep+harden (strictly harden-edged) → deprecate → remove
+
+*Problem.* `api/app.py` carries a pre-Nagar pipeline — `POST /creative/video-edit` +
+`GET /creative/jobs/{job_id}` writing into `creative/job_registry.py`’s own registry,
+driving `creative/video_director.py` + `creative/ffmpeg_executor.py` directly — beside the
+canonical Capability/Command/Job chain. On the audited baseline the GET answered **200 to
+any unsigned caller with full job data** (local paths, source URLs), uploads had no byte
+cap, and the downloader followed redirects with no SSRF guard (open PR#58 owns the SSRF
+fix). Two hardened parallel creative pipelines is exactly the architectural duplication
+the owner forbade.
+
+*Decision.* One canonical creative execution path: the studio chain
+(`creative_surface → JobQueuePort → worker → packs registry → CommandBus → lane →
+measured artifact → translated notify`). The legacy lane survives only as a
+keep+hardened, deprecated, contract-frozen edge — strictly to not collide with the
+in-flight SSRF repair (PR#58) and not to orphan the job-format consumers that CHANGELOG
+v3.0 recorded as live — on a deprecation track whose removal task lands after PR#58
+merges. Hardening shipped now: the GET runs the same fail-closed HMAC gate as the POST
+(503 without `NEXUS_API_HMAC_KEY`, 401 unsigned/stale/wrong; no new auth stack), multipart
+uploads over `_MAX_UPLOAD_BYTES` (500 MiB) die 413 before a job row exists with partial
+temp files unlinked, and both routes are `deprecated = True` in OpenAPI.
+An architecture ratchet freezes the `/creative` route set, whitelists every importer of
+the three legacy modules, and requires both handlers to call the gate — so the legacy
+surface can only shrink from here. GET HMAC signs `"{timestamp}:"+b""` (empty body).
+
+*Rejected alternatives.* (1) *Immediate removal* — would orphan the in-flight PR#58 SSRF
+repair and the signed consumers the v3.0 changelog documents; removal is sequenced, not
+abandoned. (2) *Migrate into packs* — the legacy lane's Gemini-Vertex freedom is
+incompatible with the typed-operation command bus; migration without a typed-op
+substitute is a rewrite, not a stabilization. (3) *Leave as-is with a docs warning* —
+the unsigned-GET data exposure is a live vulnerability, not a documentation issue.
+
+*Reopens when* PR#58 merges: removal PR (routes + three legacy modules + registry),
+evidence = ratchet suite + zero callers in `grep` + a release note.
+
+### D-0011 — `/edit` `/caption` `/grade`: the only Telegram face of the canonical chain
+
+*Problem.* On the audited baseline the studio surface was dead and lying: the handlers
+were never registered in `bot/app.py`, the worker had no `creative_render` handler, the
+command map leaked a bogus `mapper` key, idempotency used `uuid4()` (Telegram redelivery
+= duplicate jobs), users saw raw `creative.not_replied`-style keys, and queued /
+completion flows had no translations (`creative.*` absent from all 15 locale files).
+
+*Decision.* One one-shot surface, one chain. The surface validates via the pure mapper,
+stages the replied media into a deterministic job workspace
+(`creative_<sha256(idempotency)[:12]>`), enqueues `creative_render` with an idempotency
+key anchored to the Telegram message id (`creative:{user}:{chat}:{message}` — redelivery
+dedupes at the durable UNIQUE key), and speaks only i18n catalog strings (16 new
+`creative.*` keys × 15 locales; parity-gate enforced). The worker
+(`creative/render_jobs.py`) treats the queue row as an untrusted trust boundary
+(workspace containment under `creative_temp_dir`, input inside workspace, extra keys
+forbidden), dispatches the canonical op through `build_runtime_registry` +
+`CommandBus` with the same idempotency key, renders with the allow-listed FFmpeg, and
+returns measured facts (probe + sha256). Execution honesty: the op matrix is exactly
+what exists — `edit trim|speed|reverse`, `grade exposure|proxy|otio`,
+`caption transcribe` — while `lut` (no shipped `.cube` assets / no lane LUT op) and
+`burnin` (no subtitles instrument in the lane IR) are **refused typed at the surface**,
+never accepted and faked; caption chains fail closed typed (`caption_profile_unavailable`)
+when the `[speech]` engine is absent, mirroring the §7 rule of CREATIVE_STUDIO.md.
+The OTIO and caption→SRT branches deliver real document artifacts. Completion notify
+(translated, typed failures, workspace ownership + cleanup) lives in the grandfathered
+`bot/app.py` since the frozen import-boundary bars telegram from new modules.
+
+*Rejected alternatives.* (1) touch `bot/handlers.py` — task-106's original constraint,
+kept; the registration is one dedicated block in `build_application`. (2) Ship
+`lut`/`burnin` as stubs — explicitly forbidden by the anti-silent-degradation rule.
+(3) A new notify module outside the grandfathered set — violates the frozen
+import-boundary ratchet.
+
+*Reopens when* a lane LUT/subtitles instrument or shipped LUT assets exist — at that
+point the two refused ops re-enter the matrix with their own regression tests.
+
+### D-0012 — Backup "success" must be measured and round-trip-verified, never asserted
+
+*Problem.* `maintenance/backup.py` returned `uploaded=True` the moment the upload call
+returned: a corrupt, truncated or wrong-key artifact in R2 was indistinguishable from a
+healthy backup, and the summary carried no timestamp, so "nightly backups exist" was an
+unverifiable sentence while the scheduled workflow's failures were invisible to the
+success path. Separately, `sqlite3.backup()` against a 0-byte or corrupt source silently
+yields a valid-looking but empty dump (measured: 4096-byte header-only artifact) — a
+perfect false-success masquerade.
+
+*Decision.* The success contract is now: artifact exists AND non-empty AND sha256-measured
+AND locally verified (SQLite: restore into an isolated temp DB → `PRAGMA integrity_check`
+= `ok` AND non-trivial user-table inventory; PostgreSQL: pg_dump completion footer +
+non-empty — restore-into-cluster needs a live target the job has none of, recorded as the
+typed limitation) AND round-trip-verified after upload (re-download remote bytes, must be
+byte-identical) — else the run hard-fails (non-zero exit, never mislabeled). Success ⇒
+summary + structured log carry `sha256` / `size_bytes` / `verified` / `timestamp`.
+No new backup tooling was imposed: engine selection (`pg_dump` for
+`NEXUS_DATABASE_URL`, sqlite online-backup otherwise) and the R2 provider chain were
+kept from the repo; `R2Provider.download` already existed, so no `storage/` change was
+needed. Residual (owner-side, task-164): repository secrets for R2 must be configured
+before a real dispatch can prove end-to-end truth in Actions — with validity of the
+pipeline now test-covered, the remaining failure would be loud and typed.
+
+*Rejected alternatives.* (1) rclone/sqlite3 CLI/rsync tooling — rejected *after* reading
+the engine: the repo's own dump primitives and provider already expose download, so new
+dependencies would solve a problem the repo had already solved. (2) Treating a
+successful `upload()` return as proof — that was the reported bug.
+
+## 2026-09-24 — D-0013: one canonical Nagar command + capability contract (Gate 2 reconciliation)
+
+**Status:** Accepted on branch `arena/01a0d43c-nexus-ai-agent` (board task-179);
+contract page
+[`architecture/COMMAND_CAPABILITY_CONTRACT.md`](architecture/COMMAND_CAPABILITY_CONTRACT.md),
+governance record
+[`architecture/adr/0005-canonical-command-capability-contract.md`](architecture/adr/0005-canonical-command-capability-contract.md);
+tests and CI evidence are recorded separately on the contract page.
+
+*Problem.* Two Gate 2 reports claimed incompatible canonical contracts
+(`schema_version = 2` with external id `nagar.command.v1` and a wired bus vs a
+parallel `Command Envelope v2` with canonical `nagar.command.v2`, a new
+package, and ADR 0005–0008), and the existing `CommandBus` returned cached
+results before checking actor, project, capability, schema, references, or
+payload. Neither report could be accepted without reconciliation against the
+live repository.
+
+*Decision.* Keep `nagar.command.v1` as the external protocol identifier, the
+existing `TypedCommand`, registry, reference resolver, pack handlers, and pure
+handler boundary. Evolve the envelope with schema `1|2` (legacy shape vs
+explicit actor/project/provenance claims), inject a trusted project authorizer
+at composition, and derive schema/version/permissions from the installed
+registry, never from client snapshots. Canonical order: parse → envelope +
+operation schema → actor/project grant → capability/version/permissions →
+execution policy (mode + A/B/C/D) → project-scoped references → idempotency
+reservation (project, operation, key) with fingerprint conflict → revision
+preconditions on new work → pure handler and atomic commit. Same key +
+different payload is a deterministic `IdempotencyConflictError`; claim-less
+schema-1 commands without an authorizer keep dispatching under deprecated
+implicit local trust so the runtime-owned call sites work unchanged. No
+second bus, no second resolver, no parallel envelope package, no protocol
+rename, no database migration. The `v2` protocol id is refused at parse and
+banned from `src/` by guard.
+
+*Limits.* The bus reservation is per-bus in-memory: no cross-process,
+cross-instance, or post-restart claim. The durable SQLite queue still returns
+the original job id for a reused key without comparing payloads (lifecycle
+follow-up, board task-182). A project asset record is logical membership, not
+physical file existence. Explicit service grants at the three runtime call
+sites are the runtime owner's follow-up (board task-181); until then the
+implicit local path cannot be retired. Integration with PR#67's
+`required_packs`/lifecycle bus gate is NOT VERIFIED (board task-183; seam at
+stage 4). The `preview` execution mode is reserved surface without an
+implementation.
+
+*Rejected alternatives.* (B) Agent 2's parallel v2 envelope (no bus
+integration, duplicated models, hardcoded operation snapshot, gate
+weakening, no PR); (C) a minimal additive change with unenforced
+authorization; (D) a full `v2` protocol cutover across manifests and logs;
+(A′) PR#68 verbatim (required claims breaking runtime-owned call sites).
+Scored in ADR 0005; salvageable Agent-2 ideas (advisory snapshots,
+fail-closed locality, preview surface, the matrix question) folded into this
+contract, and PR#68's queue hardening plus runtime call-site migrations stay
+valid follow-ups for their lanes.
+
+*Reopens when* an authenticated multi-user project store, a durable
+cross-process reservation adapter, or the PR#67 lifecycle integration lands;
+publish a versioned migration plan and exercise redelivery/crash recovery
+before claiming exactly-once or production-grade durability.
+
+### D-0013 amendment (task-183): lifecycle seam integrated at stage 4b
+
+The *Limits* line above ("Integration with PR#67's `required_packs`/lifecycle
+bus gate is NOT VERIFIED … seam at stage 4") is superseded. PR#67's
+`creative/studio/lifecycle.py` is consumed byte-identical (`9c3a34f`) and
+called exactly once, at sub-stage **4b**: after the actor/project grant and
+capability permissions, before execution policy, reference validation, the
+idempotency reservation, preconditions and the handler. Refusals: unknown,
+`STUB`, `RETIRED`, and `EXPERIMENTAL` without the opt-in.
+
+*Trust boundary.* The opt-in is composition-root state
+(`CommandBus(..., allow_experimental=...)`), never an envelope field and
+never a queue-row field. The render worker, the only production site that
+sets it, derives it from the canonical operation via
+`render_jobs.EXPERIMENTAL_OPT_IN_OPERATIONS`, which is pinned to exactly the
+surface operations on an `EXPERIMENTAL` pack. An earlier revision carried it
+as `CreativeRenderPayload.allow_experimental`. That let whoever wrote the queue
+row choose lifecycle policy, so it was replaced before merge.
+
+*Merge with PR#67.* The merge is semantic, not just textual. Keep stage 4b,
+drop PR#67's stage-3.5 call and its payload/surface flag, and add
+`color.apply_lut` to the opt-in set. The architecture guards and the
+opt-in-completeness test go red on any other resolution.
+
+*Evidence.* `tests/unit/test_gate2_lifecycle_seam.py`,
+`tests/unit/test_gate2_lifecycle_mutations.py`,
+`tests/unit/test_capability_lifecycle.py`,
+`tests/architecture/test_lifecycle_gate_boundary.py`, and the task-183
+trust-boundary tests in `tests/unit/test_creative_render_jobs.py`.
+## 2026-09-24 — Security-boundary truth salvage: PR#58 evidence reconciled onto current main (D-0015)
+
+*Problem.* PR#58 ("Security Boundary hardening — S1–S5") was drafted against base
+`a997aab` and left in DRAFT/CONFLICTING state while main advanced to `035a896`.
+Its claims were never re-verified: on current main, (S1) the access guard raised
+no `ApplicationHandlerStop` — and worse, its `check_update` was `async def` while
+PTB v21/v22 call `check_update` synchronously, so the dispatcher saw a truthy
+coroutine for **every** update: the allow-list was never consulted, authorized
+users received denial UX, and denied users' commands still executed in group 0;
+(S2) `_is_enabled_anywhere_sync` used the Python identity comparison
+`ForceJoinConfig.enabled is True`, which compiles to `WHERE 0 = 1` — the
+force-join gate could never block anyone — and `check_membership` failed **open**
+when the bot was unbound, while the startup `post_init` binds inside a broad
+`try/except` that can swallow a bind failure (no machine guarantee bind precedes
+traffic); (S3) both redaction pipelines missed the `api.telegram.org/bot<token>`
+URL form, bare `?key=`/`&key=` query secrets, and (stdlib/structlog pipeline)
+URL userinfo, and `redact_fields` never considered the *key* a value sat under;
+(S4) four Gemini call sites still sent the API key as `?key=` in the URL; (S5)
+`_download_video_to_temp` fetched the attacker-controlled `video_url` with a raw
+`httpx.AsyncClient(follow_redirects=True)` and no validation or safe transport —
+and `SafeAsyncTransport` itself passed the raw httpcore response stream into
+`httpx.Response`, so any *successful* fetch would have crashed on httpx 0.28's
+`isinstance(response.stream, AsyncByteStream)` assert (unseen because every
+existing test blocked before a response existed).
+
+*Decision.* Recover only the real delta, on a fresh branch from current main,
+with every fix proven at the level where it fails: S1 — sync `check_update` per
+the `BaseHandler` contract **and** `ApplicationHandlerStop` on every denial path
+(silent-drop, callback, message), all proven through the real
+`Application.process_update` group loop (a fake network boundary only — a
+replica loop like PR#58's would have masked the async-`check_update` defect,
+and PR#58's STOP-only fix would have bricked the bot for every user including
+the owner); S2 — `col(ForceJoinConfig.enabled).is_(True)` (SQL `IS true` /
+`IS 1`), and the unbound gate fails **closed** (non-member, uncached) because
+no machine guarantee of bind-before-traffic exists; S3 — redaction widened at
+the *logging boundary* in both pipelines (bot-URL tokens, `?key=`/`?token=`,
+`x-goog-api-key` incl. quoted dict-reprs, userinfo stripping, secret-ish keys
+replaced wholesale in `redact_fields`, nested-structure recursion in the
+structlog processor), asserted against captured rendered log output;
+S4 — all four call sites moved to the `x-goog-api-key` header (matching the
+image-gen adapter, the existing in-repo reference implementation), locked by a
+source-scan inventory test; S5 — fail-fast `validate_url` at job creation (400
+before a job row) plus `SafeAsyncTransport` for the fetch (every connection
+incl. redirect hops re-resolved, re-checked, IP-pinned), temp-file cleanup
+asserted on refusal, and the transport stream wrapped exactly like httpx's own
+default transport. PR#58 remains unmerged as evidence; nothing was blind-merged.
+
+*Rejected alternatives.* (1) *Merge/update PR#58* — its base is 34 commits
+behind, it conflicts, and its S1 test harness reimplements the dispatcher loop
+(`await handler.check_update(...)`) in a way that would stay green while the
+real dispatcher fails; updating it would inherit that proof debt. (2) *STOP-only
+fix as in PR#58* — with the async `check_update` still present it turns the
+fail-open bug into a full self-DoS (every user, including the owner, denied
+and stopped). (3) *Port PR#58's `is_public_ip` IPv4-mapped recursion* — both
+supported Pythons (3.11 sandbox / 3.12 CI) already block every mapped-private
+form (over-blocking `::ffff:8.8.8.8` on 3.11 is fail-closed, not a hole);
+not rebuilt. (4) *Fail-open-unbound + documented bind order* — documentation is
+not a machine guarantee; the broad startup `try/except` stands.
+
+*Evidence.* 9/9 mutation matrix (mutant → RED → restore → GREEN) recorded in
+the PR; full gates `pytest -q` (1973 passed, 20 skipped — all
+requires-PostgreSQL, pre-existing), `pytest -q -m "not slow"`, `ruff check .`,
+`ruff format --check .`, `mypy src` clean; board claim
+`sec-boundary-salvage-01a0d4c7` (zone `security-boundary`) with no overlap
+against PR#67/#70/#71/#72/#73/#74; task-165's delivered-but-unreleased lease
+stewardship-released per the PR#47 precedent with `gh` merge evidence.
+
+*Supersedes the PR#58 gating in* D-0010: the SSRF hardening that decision
+sequenced "after PR#58" is delivered by this decision's branch; the legacy-lane
+removal ratchet ("reopens when PR#58 merges") now reopens on the merge of the
+salvage PR instead.
+
+
+## 2026-09-24 — S3/S5 adversarial closure of the security-boundary salvage (D-0016)
+
+*Problem.* An independent adversarial pass over PR#76's S3/S5 surfaces (rule:
+no evidence is accepted from the previous agent's report alone; every defect
+needs source trace + minimal reproducer + observable bad behavior) proved five
+real defects in the salvage's boundary code that its tests did not reach:
+
+(S3-1) stdlib `exc_info` tracebacks are rendered by `Formatter.format` *after*
+handler filters run, so an exception message carrying a secret reached the
+final log raw — contradicting the module docstring's "exception tracebacks
+… masked" claim (reproduced: `logger.exception` with a bot-token URL leaked
+the raw token into the captured root-handler output);
+(S3-2) `SecretRedactionFilter` assumed `record.args` is a tuple of strings,
+but stdlib also documents a single *mapping* (`logger.warning("%(password)s",
+{...})`): the filter iterated the dict's keys, destroying the record with
+`TypeError: format requires a mapping` (rendered as logging-error spam, record
+lost) or silently corrupting `%s`-dict args into their first key; non-string
+args (`dict`/`list`/object `repr()`) rendered their secrets after the filter
+entirely;
+(S3-3) no rule covered `Basic <base64-credentials>` (RFC 7617) unless an
+`authorization:`-style key prefix happened to be present — reproduced leaking
+through logger args, exception messages, and the `handleError` replay on
+stderr;
+(S5-1) CGNAT `100.64.0.0/10` was absent from the guard's explicit blocked
+list and `ipaddress`' `is_private` does not cover it on all supported runtimes
+— `validate_url("https://100.64.0.1/")` and the Alibaba metadata address
+`100.100.100.100` passed preflight;
+(S5-2) the https-only rule lived only in the preflight `validate_url`: with
+`follow_redirects=True`, a 302 `https→http` was followed and a *second,
+plaintext* connection established and its body consumed (reproduced against
+the scripted transport: `connects == [public:443, public:80]`, downgrade body
+returned).
+
+*Decision.* Close all five at the same boundary the salvage chose, without
+weakening any existing assertion: S3 — the stdlib filter now normalises every
+lazy-rendering surface (mapping args keep their mapping type with key-aware
+wholesale redaction, other args are walked through the recursive redactor,
+`exc_info` is pre-rendered through stdlib's own formatter and stored redacted
+as `exc_text`, `stack_info` likewise), and `RedactingFormatter` wraps each
+handler's formatter as a final rendered-line boundary (format/datefmt/style
+preserved) — with the key/value rule extended to single-quoted dict-repr keys
+(`'password': 'x'`) so object-repr leaks of fresh credentials are masked;
+`Basic <token>` is redacted only when credential-shaped (≥14 chars of the
+base64 alphabet, mixed case, digit or `=` padding) so prose like "basic
+settings here" is untouched. S5 — `100.64.0.0/10` joins the explicit blocked
+networks, and the https-only scheme is enforced inside
+`SafeAsyncTransport.handle_async_request` on *every* request including every
+redirect hop; malformed hosts httpx refuses to parse (octal IPv4) now surface
+as `SSRFBlockError` so the route's 400 contract holds fail-closed.
+
+*Rejected alternatives.* (1) *Redact only at the final formatter* — cannot
+repair a record the mapping corruption has already destroyed; the filter layer
+is required. (2) *Redact only at the filter* — cannot rewrite opaque object
+reprs rendered lazily; the formatter layer is required. The layers are
+complementary by construction (mutation S3-M12: removing both turns the
+traceback tests red; removing either alone is caught by the other). (3)
+*Blanket `str()` of unknown args* — would break `%d`/`%r` positional
+semantics; rejected as non-backward-compatible. (4) *Broaden `Basic` to any
+token after the word* — over-redacts prose ("Basic Authentication flow");
+the credential-shape heuristic is the minimal fail-closed form. (5) *Block
+the http redirect hop inside httpx's redirect machinery* — that would patch
+httpx behavior instead of the transport boundary every request already
+passes through.
+
+*Evidence.* Independent reproducers (real root-handler capture, real loopback
+TCP server, scripted-transport multi-hop) — all red at PR#76 head
+`5b17a709`, all green after the fix; 12/12 mutation matrix (mutant → RED →
+restore → GREEN) incl. per-layer and combined mutants; full gates at the
+closure head: `pytest -q -m "not slow"` 1989 passed / 20 skipped (all
+requires-PostgreSQL, pre-existing), `ruff check .`, `ruff format --check .`,
+`mypy src` clean; real-runtime proofs: loopback refused with 0 server hits,
+same-host DNS rebinding (preflight public → connect-time private) refused at
+connect with 0 connects, real public fetch through `SafeAsyncTransport`
+succeeds (backward compatibility).
+
+*Amends* D-0015's evidence claim: T8's "asserted on captured rendered log
+output" now additionally covers mapping/non-string args, tracebacks and the
+`Basic` scheme; T9's "every connection incl. redirect hops" now additionally
+covers scheme (https-only) and CGNAT. PR#76's claim
+`sec-boundary-salvage-01a0d4c7` is continued by the closure session branch
+(recorded on the board) — same zone, one owner.
+
+### D-0017 — Job success is a verified state, not a handler's word (canonical job lifecycle)
+
+> **ID note (release integration 2026-09-25).** This chain was drafted as
+> `D-0017`/`D-0018`/`D-0019`/`D-0020` on the PR#78→PR#81 line, but `D-0017`, `D-0019`
+> and `D-0020` were already owned on main when this branch merged (`D-0017` = Gate 2
+> command contract, PR#72; `D-0019` = security-boundary salvage, `D-0020` = S3/S5
+> closure, PR#79). To keep every citation unambiguous the whole chain moved to
+> `D-0017`/`D-0018`/`D-0019`/`D-0020` at integration — job-lifecycle `D-0013`→`D-0017`,
+> verification closure `D-0014`→`D-0018`, typed-failure `D-0015`→`D-0019`,
+> execution-fencing `D-0016`→`D-0020`. `JOB_LIFECYCLE.md`, the Gate 5 audits and the
+> board cite the new identifiers. The pre-merge `D-0017`/`D-0019`/`D-0020` readings of
+> these sections are RETRACTED as identifiers (section content unchanged).
+
+*Problem.* The queue completed a job the moment its handler returned a dict: a handler that claimed
+`{"success": true}` with a zero-byte, truncated, stale or wrong-path artifact ended `COMPLETED`, and
+nothing in the job layer ever re-measured the claim (A-side reproduced: `test_ab_...` completes a
+zero-byte claim when the verifier registry is opted out). The worker adapter also deleted its
+destination before re-rendering (`out_path.unlink()` + `overwrite=True`), so a failed retry destroyed
+the previous bytes, and document artifacts (`.srt`/`.otio`) were written non-atomically — a crash
+mid-write left a half file under the final name. Execution success and job success were conflated.
+
+*Decision.* The canonical chain Command → Job → Runtime Execution → Artifact Verification → Result is
+now explicit and enforced. `JobStatus` gains `VERIFYING` (persisted values otherwise unchanged — no
+reasonless rename; canonical aliases `RUNNING≡PROCESSING`, `SUCCEEDED≡COMPLETED` documented in
+`jobs/lifecycle`). The queue owns an independent verification phase for `creative_render` (default
+registry, injectable): exists → size > 0 → expected path per operation → workspace containment →
+sha256 recompute → probe evidence for media (the runtime's own allow-listed-binary probe) →
+structural checks for documents; success requires execution success AND verification success;
+anything else is terminal `failed` with `verification_failed:<code>` — including a crashing verifier
+(fail-closed). Every transition is a guarded, status-conditioned UPDATE with owner+invariant
+(`jobs/lifecycle.TRANSITIONS`); terminal states have no outgoing edges. Idempotency keeps
+first-payload-wins with a structured conflict log; `attempt` counts executions; `get_result_chain`
+assembles the Result (command/job/project/operation ids, attempt, statuses, three identities, sha,
+size, probe, failure reason). The worker no longer deletes-then-renders (atomic rename replaces only
+its own key-scoped previous attempt) and writes documents atomically. Runtime ownership untouched:
+`creative/rendering/*`, `creative/packs/*`, `creative/studio/*`, `creative/slideshow/ffmpeg.py` are
+zero-diff; the runtime's own probe/sha256 functions are the evidence source.
+
+*Rejected alternatives.* (1) Verifier inside the handler — self-attestation, the exact
+"verification uses the write response" anti-pattern. (2) A separate verification worker/queue —
+over-engineered for an in-process SQLite monolith (no broker by architecture). (3) Renaming
+`PROCESSING/COMPLETED` to `RUNNING/SUCCEEDED` in the persisted enum — a compatibility break with no
+behavioral gain; aliases carry the canonical vocabulary instead. (4) Raising on same-key/different-
+payload enqueue — would break the redelivery-collapse contract the Telegram surface depends on;
+first-payload-wins + conflict log is deterministic and observable.
+
+*Evidence.* `tests/integration/test_job_lifecycle_queue.py` (M1–M10, M10b, A/B, VERIFYING
+observability, recovery, attempt accounting, §17 invariant on the real FFmpeg chain) and
+`tests/unit/test_job_lifecycle.py` (transition matrix, invariants, claim dialects). Contract doc:
+`docs/architecture/JOB_LIFECYCLE.md`.
+
+---
+
+## 2026-09-24 — Verification closure on the task-178 contract: every job type verified, gaps recorded honestly (D-0018)
+
+### D-0018 — Gap closure rides the existing registry; verification dialects are per-artifact, never generalized guesses
+
+*Problem.* PR#71 (task-178) proved the canonical lifecycle but shipped the built-in verifier
+registry with only `creative_render`; its own board note listed the handoff GAPs: `slideshow_render`
+had no verifier (a lying/truncated/zero-byte master completed the job), and the legacy `/creative`
+HTTP lane can persist `done` with no artifact measurement. `pdf_extract` completed on a
+`{"message": …}` result with no measurable artifact at all, and `story` returned a bare
+`output_path` with no digest to cross-check.
+
+*Decision.* Close the gaps **on** the task-178 contract — additive registration through the
+existing `register_artifact_verifier` extension point, no lifecycle redesign (VERIFYING,
+transition naming, `render_jobs.py`, runtime engine all untouched; this branch fast-forwards onto
+PR#71's head so its commits are preserved). Each job type gets a verifier matching its **real**
+artifact, measured from the tree: `slideshow_render` → the workspace-contained master `.mp4` at the
+dispatched path (runtime probe); `story` → the Pillow-rendered PNG (Pillow structural decode);
+`pdf_extract` → the extracted text layer, now persisted atomically at the payload-derived
+`<stem>.extracted.txt` (whole-file UTF-8 decode). The RAG ingestion behind `pdf_extract` is an
+external side effect and is deliberately NOT claimed as verified (absent independent evidence ⇒
+not "done"). Consequence accepted: an empty text layer now FAILS (`empty_artifact`) instead of
+reporting success — a removed false success. The legacy HTTP lane is NOT touched: it stays
+frozen+deprecated (D-0010) and GAP-D is recorded with owner, risk, acceptance test and an
+executable tripwire instead of code. An architecture ratchet
+(`tests/architecture/test_verification_registry_ratchet.py`) now fails if any handler lacks a
+verifier — "execution success = job success" cannot come back silently.
+
+*Rejected alternatives.* (1) Porting PR#67's runtime `creative/artifacts.py` into the job layer —
+unmerged branch, cross-ownership duplication (explicitly forbidden), and the job layer already has
+its own evidence seam. (2) A content-addressed artifact store — a publication redesign against the
+frozen expected-path contract and the bot's file-path notifications. (3) A generalized
+"media verifier" for story/pdf — would have probed a PNG with ffprobe and a text file with nothing;
+dialects follow the real artifacts. (4) Fail-closed-registering a verifier for `pdf_extract`
+without persisting an artifact — would have broken a working capability instead of making it
+honest.
+
+*Evidence.* `tests/unit/test_job_verification_gaps.py` (dialects + verifier units),
+`tests/integration/test_verification_gap_closure.py` (real FFmpeg encode for GAP-A; real pypdf for
+GAP-B; zero-double Pillow chain for GAP-C; attacks A–H against the DEFAULT registry),
+`tests/architecture/test_verification_registry_ratchet.py`,
+`tests/architecture/test_legacy_lane_verification_gap.py` (GAP-D evidence, read-only). Mutation
+proofs: verifier bypass (11 red), path-validation bypass (3 red), sha bypass (2 red) — all reverted.
+Reports: `docs/audits/VERIFICATION_GAP_REPORT_2026-09-24.md`,
+`docs/audits/CROSS_PR_TRUTH_2026-09-24.md`, `docs/audits/VERIFICATION_TRUTH_MATRIX.json`.
+
+### D-0019 — A typed failure is a FAILURE of the job: 6-state taxonomy, classified retryability, stage→verify→publish, lifecycle-state notifier truth
+
+*Problem.* Gate 5 reconciliation (task-181) reproduced four defects against the task-178/180 tree.
+(1) A typed user failure (`{"success": false, "error_code": …}`) reached **`completed`** — the
+dialect completed "so the notifier can translate the code", which conflated user-facing copy with
+durable truth (`render_failed` + `success=False → completed`). (2) One undifferentiated `failed`
+state erased retryability: `failed` was terminal for a transient ENOSPC exactly as for invalid
+input, and nothing durable could tell the notifier or a future scheduler which failures are worth
+retrying. (3) The `pdf_extract` lane published its sidecar artifact **before** verification: a
+refused extraction (image-only PDF ⇒ `empty_artifact`) replaced and destroyed a previous valid
+`<stem>.extracted.txt` and left the refused bytes at the destination (reproduced: old artifact
+"OLD VALID EXTRACTION" → `''`). (4) Trace events belonging to a job carried **no `job_id`**
+(`creative_render_start` observed with `job_id` absent — the observability pipeline supports
+`structlog.contextvars` binding but nothing bound it).
+
+*Decision.* (1) The typed dialect is a **failure status**, never `completed` (GAP-A). The queue
+short-circuits it before verification (`typed_failure:<code>` persisted, typed result preserved
+for the notifier), and verifiers refuse a typed result fail-closed (`typed_user_failure`) if one
+ever reaches them — two independent layers (D-0017's "job success is a verified state" now also
+means "job failure is a durable state"). (2) `JobStatus` splits `failed` into
+`failed_retryable` / `failed_terminal` (GAP-B): `jobs/failure_semantics` classifies every failure
+family by one principle — RETRYABLE iff the world can change to make the identical request
+succeed — with per-code/per-errno/per-reason rows and tests (temporary IO, dependency unavailable,
+worker crash → RETRYABLE; invalid input, unsupported operation, permission error, deterministic
+handler defects, `render_failed` → TERMINAL; artifact-measurement disagreements → RETRYABLE;
+unknown codes → TERMINAL, fail-closed toward visibility). Pre-task-181 rows spelling `"failed"`
+read back as `failed_terminal` (`parse_job_status`). **No retry scheduler is built** (explicitly
+outside scope): both failure states are terminal as implemented and the reserved
+`failed_retryable → pending` edge stays out of the transition matrix (fail-closed). (3) The one
+lane with a destination outside the job workspace (`pdf_extract`) gets queue-owned publication
+(`ArtifactPublication`): stage at `<stem>.extracted.txt.staged` → verify → atomic `os.replace`
+publish → **re-probe the published bytes** → persist success; any refusal retracts the staged temp
+and preserves the previous published artifact. Workspace lanes map the same order to delivery-time
+publication. (4) The queue binds `job_id` into `structlog.contextvars` for the whole execution and
+emits explicit lifecycle lines (`job_processing`/`verifying`/`completed`/`failed`) — a lifecycle
+event can never record `job_id = null`. (5) Notifier truth source = durable lifecycle state
+(`completed` ⇒ success; `failed_retryable` ⇒ retryable-failure copy; `failed_terminal` ⇒
+terminal-failure copy; non-terminal ⇒ silent), with `result.success` demoted to a second refusal,
+never the truth source.
+
+*Rejected alternatives.* (1) Keeping the complete-on-typed-failure dialect and only translating
+differently — leaves `render_failed → completed` in the durable truth (the reproduced defect).
+(2) A third "unclassified failure" state — the classifier is total; a catch-all state would hide
+unclassified contract drift instead of failing closed. (3) Backup-then-replace publication — worse
+crash semantics (`.prev` orphan states) than stage-then-swap with a re-probe. (4) Building the
+retry scheduler to "use" `failed_retryable` — no repository requirement demands a scheduler, and
+the mission explicitly forbids new retry infrastructure; classification alone is honest and
+complete. (5) Renaming `completed`/`pending` spellings as well — reasonless migration (D-0017's
+rule stands).
+
+*Evidence.* Reproduction of all four defects on the pre-change tree (audit:
+`docs/audits/GATE5_CLOSURE_2026-09-24.md`). `tests/unit/test_failure_semantics.py` (classification
+table, one named test per failure family), `tests/integration/test_gate5_closure.py` (typed-failure
+regression — never `completed`, notifier never succeeds; notification matrix; refused-publication
+preserves the old artifact and cleans staging; happy-path stage→publish→re-probe; publish-failure
+retraction; trace `job_id`; idempotency matrix incl. duplicates during PROCESSING and after
+terminal failure; crash-after-rename recovery), reconciled M-suite assertions (M10b now pins the
+observed RenderError path — repository behavior wins over its old docstring), plus mutation
+harness `scripts/gate5_mutation_probes.py`: 6/6 probes (remove verification / force COMPLETED on
+typed failure / skip atomic publish / drop job_id / notifier trusts result.success / bypass
+failure_status) each GREEN→RED→restore→SHA-restored→GREEN.
+
+### D-0020 — Execution ownership is a fencing token (`attempt`); worker transitions are fenced CAS; publication keeps the previous artifact recoverable until the durable commit
+
+*Problem.* The final Gate 5 repair (task-181, branch `arena/01a0d5a1-nexus-ai-agent`, base
+`947173c` = main + PR#78) reproduced five defects that the previous closure had either declared
+fixed or filed as "documented limitations": (R1) a refused **re-probe** destroyed the previous
+`<stem>.extracted.txt` (`publish` had already renamed over it; `retract` only knew the staged
+name); (R2) a cancelled worker's `_mark_pending` (`WHERE id = ?`) reopened a job that a newer
+execution had meanwhile **completed**; (R3) `_mark_completed` returned nothing and the ✅ hook
+fired even when the row was no longer ours; (R4) a bare `{"success": false}` (no `error_code`)
+completed; (R5) `_mark_processing` claimed `status IN ('pending','processing')` without checking
+`rowcount`, so two processes on one database both ran the handler for one job. R2/R3/R5 share
+one root cause: **no execution owned a row** — every worker-side UPDATE was conditioned on status
+at best, never on *which execution* was writing. This is the pattern pg-boss fixed in issue #925
+(stale `complete()` settling the newer attempt) and the textbook fencing-token failure (Kleppmann,
+"How to do distributed locking").
+
+*Decision.*
+1. **Who owns a job:** the execution whose `pending → processing` CAS committed. The reservation
+   is `UPDATE … SET status='processing', attempt = attempt + 1 WHERE id = ? AND status = 'pending'`
+   with `rowcount == 1`; the `attempt` it minted is the execution's **fencing token**
+   (`jobs.lifecycle.ExecutionClaim`, `FENCING_COLUMN = "attempt"`). A `processing` row is never
+   re-claimable by a reservation (the `(PROCESSING, PROCESSING)` edge is removed from `TRANSITIONS`).
+2. **Every worker transition is a fenced CAS:** `_mark_verifying/_pending/_completed/_failed` add
+   `AND attempt = ?` to their status-conditioned `UPDATE` and return `rowcount == 1`. A `False`
+   means "not ours any more": the worker logs `job_transition_rejected` and performs **no** state
+   change, notification, publication or retraction. Claim-time structural failures (no handler)
+   use an unfenced PENDING-only CAS (`_fail_unclaimed`) because no execution exists yet.
+3. **Takeover is explicit:** only `resume_pending` moves live `processing/verifying` rows back to
+   `pending` — at startup (rows this process is not itself executing) or expiry-gated
+   (`stale_after=Δ`: rows whose `started_at` is younger than Δ are left to their owner). `attempt`
+   is left untouched; the next reservation mints a new token and fences the previous owner out.
+4. **Notification contract = "never lie":** hooks fire only after the fenced UPDATE committed. A
+   crash between commit and hook loses that notification; durable state remains the truth.
+5. **Publication (F1, option A — backup/restore):** `publish` keeps the previous artifact as
+   `<stem>.extracted.txt.prev` (same-directory `os.link`, `copy2` fallback) before `os.replace`;
+   ownership is re-read immediately before publication (`_owns_execution(claim, VERIFYING)` —
+   the side-effect fencing point); a refused re-probe restores `.prev` by one atomic rename (or
+   removes the refused bytes when no previous artifact existed); `finalize` removes `.prev` only
+   after the fenced `completed` commit. The re-probe is kept — it measures the bytes under the
+   final name (what readers see) and is not a duplicate of the staged-bytes verification.
+6. **Bare `success: false`** is a failure with code `unspecified` (TERMINAL — a retry repeats the
+   same unspecified refusal); `failure_code_of()` is the queue's single "handler said it failed"
+   check.
+
+*Options compared for the fence.* A `attempt` (chosen): minted atomically with the claim, strictly
+monotonic per row, zero schema change, trivially testable, backward compatible (existing rows
+already carry it). B execution UUID: same guarantees but a new column + no ordering (cannot
+tell "older" from "different"). C lease + owner + expiry as the fence: wall-clock dependent, clock
+skew across processes, and still needs a token for the write-side check — kept only as the
+*takeover policy* (`stale_after`). D single-process invariant + fail-closed: no executable
+invariant exists (bot, webhook and CLI each open a queue on the same db path). E hybrid A+C:
+this is what was built (A fences, C-style expiry governs takeover).
+
+*Options compared for publication.* A backup/restore (chosen); B versioned files + pointer
+(new naming contract for every consumer); C stage + verify + atomic replace, drop the re-probe
+(re-probe proven not redundant — it is the only check after the rename); D two-phase journal and
+E "publish transaction" (both more machinery than the guarantee needs). **This supersedes the
+D-0019 rejection of backup-then-replace**: D-0019 feared `.prev` orphans; the lane now removes a
+stray `.prev` before publishing, `finalize` removes it after commit, and the crash between publish
+and commit is covered by `test_t11_crash_between_publish_and_reprobe_recovers`. Stage-then-swap
+alone was proven to destroy the previous artifact on a refused re-probe (R1).
+
+*Rejected.* Transactional outbox for notifications — it solves dual-write *delivery* (DB + broker,
+at-least-once + consumer idempotency); Gate 5 requires only that a success is never announced
+without a committed `completed`, which the fenced CAS result already gives. Token-aware storage to
+close the residual window between the ownership re-read and `os.replace` — out of scope; the
+window is documented in JOB_LIFECYCLE.md §2a and can only be entered by a takeover during that
+interval, never by a concurrent reservation.
+
+*Evidence.* OLD RED on `947173c`: `tests/integration/test_gate5_execution_fencing.py` 19 failed /
+1 passed (R1 `'fresh extraction' == 'OLD VALID EXTRACTION'`, R2 `PENDING is COMPLETED`, R3
+`['me'] == []`, R5 `2 == 1`). NEW GREEN: 21 passed; full `pytest -m "not slow"` green; mutation
+harness `scripts/gate5_mutation_probes.py` 17/17 (M1–M10 + the six D-0019 probes) with
+BASELINE GREEN → MUTANT RED → SHA-restored → GREEN. Sources: pg-boss issue #925; M. Kleppmann,
+"How to do distributed locking" (fencing tokens); Python `sqlite3.Cursor.rowcount`; SQLite
+atomic commit; Python `os.replace` (atomic same-filesystem replace, previous inode not
+preserved); Oban's `fetch_jobs` (available-only claim minting `attempt`) and `Lifeline` rescue
+(expiry-gated takeover) as the mature-implementation reference for options A/E.
+
+### D-0023 — Continuum evidence is a contract, not a report: 95% per pack is a real gate, the snapshot verifier fails closed, and both are defended by an executable threat model and a replayable mutation campaign
+
+*Problem.* Three parallel lineages disagreed about Continuum truth. `main` (`6624a13`)
+shipped a pack-coverage harness with an 85% bar that nothing in CI ran, while the
+roadmap goal was 95%; PR #95 made snapshot verification stricter but was red on the
+Python 3.10 parity leg (a comment-only module's implicit return counted as surface);
+PR #98 healed that leg and claimed mutation results that could not be replayed. The
+committed `.nexus/continuum.json` anchored `52329e6` with an AST-counted
+`test_count_expected` of 649 while pytest collected thousands of cases, and the
+verifier parsed `git status --porcelain -z` through a helper that stripped the
+first record's leading space.
+
+*Decision.*
+1. **Option A — 95% is the acceptance contract.** `ACCEPTANCE_THRESHOLD = 95.0`,
+   per pack, on a canonical run (exactly `DEFAULT_TEST_TARGETS`, derived from
+   `PACK_TEST_TARGETS`, every composed pack, default root) whose measurement is
+   verified (child exit 0; pytest passed, 0 failed/errors/deselected; nonce-bound
+   trace artifact with exact keys; non-empty surfaces; no mapping/orphan issue).
+   Everything else is a *diagnostic* run that exits 1. Option B (a documented
+   difference between the 85% bar and the 95% goal) was rejected because the
+   packs can meet 95% honestly: slideshow was the only pack below it (93.55%) and
+   reached 97.89% through behavioural invariant tests, not exclusions.
+2. **Target integrity is derived, not listed.** `PACK_TEST_TARGETS` must name
+   exactly the composed packs; test modules importing a pack are classified by AST
+   into mapped / declared host-layer importers (`HOST_LAYER_PACK_IMPORTERS`, each
+   with a reason) / orphans. An orphan or stale mapping makes the canonical run
+   unverified.
+3. **The snapshot verifier fails closed** on every row of the threat model in
+   `continuum/snapshot.py`; Git questions it cannot answer (no Git, shallow
+   history, unreachable commit) raise instead of guessing; the test count is the
+   pytest collection count in an isolated environment.
+4. **D-0006 stands for the committed snapshot.** `.nexus/continuum.json` records
+   an interpreter and dependency fingerprint, so it cannot verify on every CI
+   interpreter; it stays a release-cut record, republished with `nexus continuum
+   publish` from a clean checkout. CI gates the **verifier**, not that record:
+   `scripts/continuum_gate.py` publishes a snapshot in a fresh clone of the commit
+   under test, requires `verify` to accept it and to reject 27 attacks with the
+   expected diagnosis, and reports the committed record with `blocking: false`.
+5. **Mutation results must be replayable.** `scripts/continuum_mutations.py`
+   applies every catalogued mutation (81, version-scoped where the line only exists
+   on one interpreter), runs its killing tests in a fresh interpreter, restores the
+   file and checks it by sha256. A survivor fails the run; the answer to a survivor
+   is a stronger test, never a deleted mutation.
+6. **CI enforces it on the exact SHA.** The `continuum-evidence` job (3.10/3.11/3.12,
+   no soft-fail, full history, HEAD == `GITHUB_SHA`, emptied artifact directory)
+   runs coverage, the gate and the campaign twice each with `cmp`, re-checks the
+   coverage artifact with `--verify-artifact`, writes `SHA256SUMS` and uploads
+   `continuum-evidence-<sha>-py<ver>`. The `ci` mutation family attacks this job's
+   own YAML, so softening it is a killed mutation, not a silent edit.
+
+*Rejected.* A `coverage.py` dependency (the stdlib `trace`/`dis` harness already
+measures the compiler's line table; a new dependency buys nothing the contract
+needs). Gating CI on the committed snapshot (every interpreter leg would report
+environment drift by construction). Keeping the 85% bar "for now" (a gate below the
+stated goal is a nominal gate).
+
+*Evidence.* Recorded in the PR that lands this decision with run IDs and artifacts:
+coverage ACCEPTED and byte-identical across two runs; gate control accepted and
+27/27 attacks rejected; mutation campaign with every applicable mutation killed and
+restored.
+
+---
+
+### D-0024 — The causal ledger is evidence, never authority: a hash-chained journal beside the durable queue, and a fail-closed Artifact Passport projection (task-231)
+
+*Problem.* The Foundation-Convergence invariant — one real input, one plan,
+one authorized execution, one real artifact, one independent verification,
+one **durable causal history** — stopped one step short: the durable row and
+the verification block carried the facts, but nothing durably recorded the
+*account* (enqueue → reservation → verification → terminal) or made any
+post-hoc rewrite of that account detectable. Parallel agent-intelligence
+proposals (PRs #126/#127/#150) each grew their own in-memory graph instead —
+exactly the "required durable fact exists only in memory" failure the
+contract forbids.
+
+*Decision.*
+1. **One journal, beside the authority.** `provenance.CausalJournal` is an
+   append-only, hash-chained SQLite sidecar (`*.causal.sqlite3`) recording
+   every durable queue transition AFTER its commit, keyed by the system's own
+   identities (job id, idempotency key, fencing attempt). It never shares the
+   queue's transaction: a shared transaction would let ledger failure veto
+   execution — handing the ledger authority — so that was rejected. The cost
+   (a crash window) is paid honestly: detectable holes, a labeled
+   backfill (`backfilled: true`), and a passport that downgrades, never
+   invents.
+2. **The observer is fail-safe by contract.** `QueueLedgerObserver` records
+   facts, never decisions; its failure is a logged degradation
+   (`causal_ledger_observe_failed`) and can never change a job outcome
+   (proved by `test_broken_ledger_never_breaks_a_job_and_is_visible`).
+3. **The passport fails closed.** `PassportBuilder` is a read-only projection
+   of (verified chain + authoritative row + fresh byte re-measurement via the
+   runtime's own `sha256_file`), typed VERIFIED /
+   VERIFIED_WITH_LIMITATIONS / INCOMPLETE / COMPROMISED, with its
+   reconciliation findings published inside the document. Digests bind to
+   canonical content, hashes are domain-separated, and transition records are
+   exactly-once under (kind, job, attempt).
+4. **Known ceiling, documented.** A fully consistent rewrite of journal + row
+   defeats any local verifier; the published `journal_head` is the anchor a
+   future signed checkpoint closes. Declared, not hidden.
+
+*Rejected alternatives.* A shared-transaction ledger (authority leakage);
+Merkle trees now (single-writer, small logs — the chain is the honest fit;
+ anchoring can add trees later); making the passport a stored document
+(becomes a second source of truth); recording handler-claimed facts
+pre-verification (would journal unverified claims as if they happened).
+
+*Evidence.* `tests/unit/test_provenance_chain.py` (attack matrix),
+`tests/unit/test_provenance_journal.py` (dedupe/crash/corruption),
+`tests/integration/test_provenance_queue_recording.py` (failure proofs:
+duplicate enqueue, payload conflict, crash, broken-ledger fail-safety,
+takeover/fencing, backfill),
+`tests/integration/test_provenance_passport_e2e.py` (real FFmpeg artifact:
+VERIFIED → tamper → COMPROMISED → limitation), and CI on the landing PR's
+exact head SHA. Design view: `architecture/PROVENANCE_LEDGER.md`.
+
+*Hardening (review pass on the same decision, task-231).* Five
+review-driven corrections, each enforced by a named test:
+
+1. **Cross-process serialization.** The head-read → hash → insert sequence
+   now runs inside one `BEGIN IMMEDIATE` write transaction (retry ×3 on
+   `IntegrityError` as defense-in-depth for foreign writers). Two real OS
+   processes appending to one sidecar can no longer read the same head; a
+   real-process storm test proves gapless `seq`, intact `prev_hash` chain,
+   zero lost events under contention, and clean recovery afterwards.
+   `connect_timeout` is a constructor policy and surfaces `sqlite3`
+   busy conditions instead of hiding them.
+2. **Conflict quarantine, never silent absorption.** A redelivery that
+   matches an existing `dedupe_key` but carries different evidence claims
+   (`status`, `error`, `payload_digest`, `result_digest` — timestamp/detail
+   legitimately differ) raises `CausalConflictError`; the rejected claim is
+   quarantined as an `EVENT_CONFLICT` observation quoting the rejected
+   claims and the kept record. The quarantine write is best-effort: if it
+   itself fails (storage loss), the failure is logged and the raised error
+   carries the full rejected event — the conflict is never silent, and the
+   kept truth is never overwritten. Identical redelivery remains an honest
+   duplicate. (Multi-attempt honesty, same pass: a superseded attempt's
+   terminal record is history, never a divergence — the passport
+   cross-checks the live row against the CURRENT attempt only.)
+3. **Takeover truthfulness.** Restart/shutdown re-lists record takeover
+   events only for rows with a real in-flight attempt (fencing token ≥ 1);
+   a pending row that was never owned yields no fabricated ownership
+   transfer (its first-ever reservation is the takeover, honestly).
+4. **Explicit status-unknown degradation.** `get_job_facts` never raises on
+   an unparseable persisted status; facts carry `status_known=False`, the
+   passport reports `COMPROMISED` with `unparseable_row_status`, and
+   backfill reconstructs only the enqueue (nothing it cannot prove).
+5. **Degradation at one policy point.** `provenance.paths.try_open_causal_journal`
+   is the single composition-root entry: corrupt/locked sidecar → `None` +
+   `causal_journal_unavailable` warning; bot/webhook runs observer-less,
+   CLI drain/backfill degrade with echoed reasons, `nexus jobs passport`
+   exits 3 on unreadable evidence. The execution plane never dies because
+   evidence storage failed — and nothing pretends evidence exists.
+6. **No false continuity after a witnessed gap.** When the journal already
+   carries a terminal transition for an attempt but lacks the matching
+   `JOB_RESERVED`, the journal has *affirmatively witnessed later steps and
+   not that one* — the record was never written, not lost. Backfill must
+   therefore refuse to synthesize the reservation (incomplete history stays
+   incomplete; the passport keeps flagging the gap), while the ordinary
+   crash-window case (journal simply silent) is still reconstructed labeled.
+   A journal/row disagreement is evidence, never auto-healed. Also adopted
+   on the drain path: `nexus jobs resume` degrades on `CausalConflictError`
+   with an explicit warning — a refused reconstruction never vetoes
+   execution (regression: `tests/unit/test_backfill_no_false_reservation.py`,
+   `test_resume_survives_journal_evidence_conflict`).
+
+### D-0025 — The Nagar backbone is an intent-first loop; the first vertical slice is the single-project intent loop, and reverse engineering is the first capability over it
+
+*Problem.* A creative-direction proposal argued that reverse engineering a trending reference into
+an editing recipe should be Nagar's first big capability. Measured against the merged tree, that is
+the wrong first slice: the attractive capabilities (reference → recipe, parallel variants, social
+feedback, pack marketplace) are all *projections* of one backbone that did not exist. The merged
+execution chain is proven — `CommandBus`, capability packs, the single FFmpeg lane, measured
+verification, the six-state job lifecycle — but the studio `Project` is pure and in-memory
+(`creative/studio/models.py` recomputes a derived `state_hash` on every construction), the render
+worker builds a throwaway project per job (`creative/render_jobs.py`:
+`project_id=f"shot-{payload.idempotency_key}"`), and nothing bound a measured artifact to an intent
+or a durable project revision. There was no typed intent anywhere in `src/`.
+
+*Decision.*
+1. **The backbone is the loop, not a feature.** `Intent → Creative Graph → Capability Compiler →
+   Policy/Authority → CommandBus → render lane → Verification → Artifact + Lineage → back to the
+   graph`. A proposed capability that is not an entry or exit point of this loop is not ready.
+2. **The first vertical slice is the smallest full loop** — *one asset, one intent, one verified
+   artifact* — over the **already-executing** operation matrix. The slice adds the three missing
+   seams (a typed intent; a creative graph; artifact lineage) and **no new media operation and no
+   new pack**. It is implemented in `src/nexus_ai_agent/creative/spine/`: `Intent` +
+   `RulesIntentResolver`, `RulesCapabilityCompiler` (resolves every operation through the
+   `CapabilityRegistry`, refusing an unknown one *before* dispatch), `GraphIntentPlanner`,
+   `CreativeExecutionSpine` (dispatches through `CommandBus` only, schema-2 actor+provenance when an
+   actor is configured), and the append-only `CreativeGraph` with `ArtifactRecord`/`EvidenceRecord`.
+3. **Reverse engineering is the first capability over the backbone, not the backbone.** It ships as
+   `reference → CreativeRecipe → Intent` behind a `RecipeAnalyzer` port. The only implementation is
+   the deterministic `RulesRecipeAnalyzer`, which derives a recipe from supplied structural hints and
+   abstracts a *strategy* (never a copy); it carries an explicit low confidence and a "do not copy
+   the reference" constraint. Real perceptual analysis is a recorded gap, not a claim.
+4. **Multiverse, closed-loop social feedback, physics/atmosphere packs, the pack marketplace, and
+   creative-intelligence/style-DNA are deferred** with evidence-based triggers, recorded in
+   `docs/architecture/CREATIVE_DIRECTION.md` §6. Each enters as a compiler input, a graph projection,
+   an exit point, or a pack — never as the backbone.
+5. **Evidence-first extends to the graph.** Any statement about *why* an artifact looks the way it
+   does carries a confidence and the evidence it rests on; the D-0017 invariant ("job success is a
+   verified state, not a handler's word") is extended so an artifact node binds its transaction,
+   resulting `state_hash` and evidence, and a refused command produces no artifact at all.
+
+*Rejected.* (a) Reverse engineering first — it had nowhere to attach an extracted recipe and becomes
+a one-shot trick. (b) A new "AI editor" tool surface — the frame is intent and constraints, and a
+tool palette is the thing the frame replaces. (c) Building the graph *and* a new capability in the
+same slice — a slice that changes two things cannot tell you which one broke. (d) Asserting style
+DNA as fact — an unlabeled pattern claim violates the evidence-first rule. (e) A second dispatch path
+for the spine — it reuses `CommandBus`, so Policy and Authority stay authoritative.
+
+*Evidence / confirmation.* The slice's own guards are named and runnable:
+`pytest -q tests/unit/test_creative_spine.py tests/unit/test_spine_mutations.py
+tests/architecture/test_spine_boundary.py` — the loop, lineage, policy-refusal and no-copy cases; the
+spine-is-not-a-second-write-path boundary; and 7/7 mutants killed. The
+`docs/architecture/CREATIVE_DIRECTION.md` §2 table is reproducible from the tree. Honest limits: the
+graph and lineage are **in-memory** (durability is the next trigger in §6), the reference analyzer is
+**heuristic**, and the compiler's rules table is deliberately small. `Intent != Authority`: the spine
+proposes, the bus disposes.
+
+**Amendment — plan atomicity (task-221, 2026-09-30).** The slice's first iteration dispatched a plan
+step by step and committed each step through the bus, so a plan whose *later* step was refused left
+the earlier steps committed (revision advanced, artifact nodes written) — contradicting the
+"refused command produces no artifact" invariant above. A plan is only meaningful as a whole, so the
+run is now **transactional**: on any step failure the spine undoes the steps already applied through
+the bus's own `system.undo` path (never a private write path) and retracts their artifact nodes. A
+failed run leaves the project content unchanged (`state_hash` restored) and no artifact/evidence in
+the graph; the bus's `state_revision` remains monotonic by design, so rollback restores *content
+identity*, not the revision counter. If the rollback itself is refused (e.g. an actor authorized to
+apply but not to undo), the spine raises `SpineRollbackError` loudly rather than masking the
+original failure. Guarded by `test_a_failed_multi_step_run_leaves_no_committed_step`,
+`test_a_successful_multi_step_run_still_commits_every_step`,
+`test_rollback_goes_through_the_bus_and_can_be_refused`, and two new mutants
+(`failed_plan_keeps_the_steps_it_already_committed`,
+`rolled_back_run_keeps_its_artifact_nodes`).
+
+**Amendment — transaction-scoped rollback (task-222, 2026-09-30).** task-221 made the rollback
+"undo the most recent editable transaction", once per applied step. That is only sound if no other
+actor commits in between; under a concurrent interleaving it rewinds a **foreign** actor's committed
+edit and leaves the spine's own half-applied step in place — silent cross-actor corruption (failure
+mode D). The spine now records the transaction id the bus returns for each of its own steps and
+undoes only while the newest editable transaction is one it owns; if a foreign edit is newest, the
+rollback **fails closed** with `SpineRollbackError` instead of touching foreign work. Artifact/evidence
+nodes the failed run wrote are still retracted on every failure path, so a partial rollback leaves no
+orphan node. Two more reliability gaps are closed in the same slice: a duplicate delivery of a
+*successful* intent is replayed from an in-process exactly-once cache (an intent_id reused with
+different content is refused, never re-applied), and step command ids carry the step index so a plan
+that repeats an operation cannot collide on the bus idempotency fingerprint. `studio/` was not
+modified — the fix stays inside the spine's own zone. Guarded by
+`test_failed_run_never_rolls_back_a_foreign_edit`,
+`test_duplicate_delivery_of_an_intent_is_idempotent`,
+`test_duplicate_intent_id_with_different_content_is_refused`,
+`test_a_crash_between_commit_and_graph_write_is_bounded`, and two new mutants
+(`rollback_ignores_transaction_identity`, `duplicate_delivery_reapplies_the_plan`), 9/9 killed.
+
+
+**Amendment — bus-level, transaction-scoped undo (task-223, 2026-10-01).** task-222 moved the
+foreign-edit guard into the *spine*: before each undo it read the bus history and compared the newest
+editable transaction id to its own. That check cannot be atomic — `bus.history` is read under the
+lock, the lock is released, and only then is `system.undo` dispatched, so a foreign actor can commit
+in the gap (classic TOCTOU). Worse, the bus's `system.undo` accepted no transaction identity at all,
+so *any* caller that dispatched it (the spine, a pack, a runtime call site) rewound whatever
+transaction was newest — a foreign edit included. The defect lived in the bus primitive, so the fix
+belongs there.
+
+Decision: **Option A — the identity gate is enforced inside the `system.undo` stage-9 handler**, which
+runs under the same bus lock as the state swap. `UndoCommandInput` gains an optional
+`transaction_id`; when supplied, the handler refuses unless it equals the newest editable
+transaction's id, raising `UndoConflictError` (a `CommandExecutionError`, so no state change is
+committed). Because the check and the snapshot restore are one linearizable critical section, a
+concurrent foreign commit between a caller's read and its dispatch is *seen* by the gate and refused —
+the foreign edit is never rewound. When `transaction_id` is absent the operation is unchanged
+(classic NLE "undo the most recent edit"), so existing runtime/pack call sites that dispatch
+`system.undo` with empty input are unaffected. The spine now passes its recorded transaction id and
+translates `UndoConflictError` into `SpineRollbackError`; its caller-side pre-check is **removed**
+(superseding the task-222 mechanism, which this decision replaces).
+
+Rejected. (b) *Spine stops relying on `system.undo`* — a private spine-side inverse/compensation path
+would become a second write path and bypass the bus's policy/authority checks. (c) *Staged command
+DAG with one final commit* — the largest change; it needs a staging layer, a commit protocol and a
+crash-recovery story, and is justified only once multi-step plans need crash-atomic commit, not for
+undo-scoping. `system.undo` remains a newest-only rewind by design: the full-state snapshot model
+(one `state_before` per transaction) makes an arbitrary-index rewind unsound, so identity is a
+*guard*, not a random-access pointer.
+
+Scope of the guarantee (no overclaiming): the check and the snapshot swap are **atomic within
+one handler run** and **linearizable across threads sharing one `CommandBus` instance** — that
+is the race this closes. Multiple agents are safe only when they share that one instance;
+separate bus instances have separate in-memory history and project, and **no cross-instance
+undo is claimed**. Multiple processes and restart are **NOT VERIFIED**: the bus, its history
+and its snapshots are in-memory and per-instance, so durable/identity-addressed undo across
+processes is a future trigger. No new durable state is added, so the task-222 bounded crash
+divergence (commit present, graph node absent) is unchanged.
+
+Correction to the task-221 amendment's wording: "a failed run leaves the project content
+unchanged" holds only when nothing interleaves. In the concurrent case the run **cannot** undo
+its own already-applied step without rewinding the foreign newest edit, so it fails closed with
+`SpineRollbackError` and that step **remains** in the project (last-writer-wins) — loudly, never
+silently, and the foreign edit is untouched. No artifact node is ever left for work that did not
+complete. `test_failed_run_never_rolls_back_a_foreign_edit` pins both surviving markers.
+
+Guarded by `tests/unit/test_command_capability_contract.py::TestUndoIdentity` (matching identity
+rewinds; stale/unknown identity refused with the foreign edit intact; absent identity still undoes
+the newest; identity on an empty stack is refused; the two-thread
+`test_race_b_identity_closes_the_check_then_act_window`), the spine test
+`test_failed_run_never_rolls_back_a_foreign_edit` (now asserting `__cause__ is UndoConflictError`),
+and `tests/unit/test_undo_contract_mutations.py` — 4 tests, 3 mutants killed (gate disabled; wrong
+field compared; comparison inverted). `docs/architecture/COMMAND_CAPABILITY_CONTRACT.md` §`system.undo`
+records the contract.

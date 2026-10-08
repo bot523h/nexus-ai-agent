@@ -26,16 +26,21 @@ from nexus_ai_agent.creative.packs.caption.formatters import (
 )
 from nexus_ai_agent.creative.packs.caption.models import (
     CAPTION_PACKAGE_ID,
+    OPERATION_ALIGN_WORDS,
     OPERATION_BURN_IN,
+    OPERATION_DIARIZE,
     OPERATION_GENERATE_ASS,
     OPERATION_GENERATE_SRT,
     OPERATION_HIGHLIGHT_WORDS,
     OPERATION_SEARCH_TRANSCRIPT,
     OPERATION_STYLE_VAZIRMATN,
     OPERATION_TRANSCRIBE,
+    OPERATION_TRANSLATE_LOCAL,
+    AlignWordsInput,
     AssStyleConfig,
     BurnInInput,
     CaptionAsset,
+    DiarizeInput,
     GenerateAssInput,
     GenerateSrtInput,
     HighlightWordsInput,
@@ -45,6 +50,7 @@ from nexus_ai_agent.creative.packs.caption.models import (
     TranscribeInput,
     TranscriptRef,
     TranscriptSegment,
+    TranslateLocalInput,
     WordTiming,
 )
 from nexus_ai_agent.creative.packs.caption.operations import (
@@ -54,15 +60,20 @@ from nexus_ai_agent.creative.packs.caption.operations import (
 )
 
 __all__ = [
+    "AlignWordsInput",
     "BurnInInput",
     "CAPTION_PACKAGE_ID",
     "DOMAIN",
+    "DiarizeInput",
+    "OPERATION_ALIGN_WORDS",
     "OPERATION_BURN_IN",
+    "OPERATION_DIARIZE",
     "OPERATION_GENERATE_ASS",
     "OPERATION_GENERATE_SRT",
     "OPERATION_HIGHLIGHT_WORDS",
     "OPERATION_SEARCH_TRANSCRIPT",
     "OPERATION_STYLE_VAZIRMATN",
+    "OPERATION_TRANSLATE_LOCAL",
     "OPERATION_TRANSCRIBE",
     "SearchTranscriptInput",
     "AssStyleConfig",
@@ -73,6 +84,7 @@ __all__ = [
     "SpeakerTurn",
     "StyleVazirmatnInput",
     "TranscribeInput",
+    "TranslateLocalInput",
     "TranscriptRef",
     "TranscriptSegment",
     "WordTiming",

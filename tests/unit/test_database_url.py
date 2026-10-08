@@ -14,7 +14,6 @@ import pytest
 from sqlmodel import select
 
 from nexus_ai_agent.config import settings as settings_module
-from nexus_ai_agent.optional_deps import is_installed
 from nexus_ai_agent.storage import db as db_module
 from nexus_ai_agent.storage.db import (
     decide_sqlite_bootstrap,
@@ -156,19 +155,6 @@ class TestResolveDatabaseUrl:
             resolve_database_url()
 
 
-@pytest.fixture()
-def _pg_driver_present(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Bypass the optional-dependency guard.
-
-    These tests target engine *selection* (asyncpg URL form, pool_pre_ping,
-    per-URL caching), not the [postgres] install check, which is covered in
-    tests/unit/test_packaging.py. Bypassing the guard keeps them meaningful on a
-    core-only install as well as in the extras CI leg.
-    """
-    monkeypatch.setattr(db_module, "require", lambda *args, **kwargs: None)
-
-
-@pytest.mark.usefixtures("_pg_driver_present")
 class TestPgEngineSelection:
     def test_engine_created_with_asyncpg_and_pre_ping(
         self, monkeypatch: pytest.MonkeyPatch
@@ -202,7 +188,6 @@ class TestPgEngineSelection:
         assert first is second
 
     @pytest.mark.asyncio
-    @pytest.mark.skipif(not is_installed("asyncpg"), reason="requires the [postgres] extra")
     async def test_real_engine_builds_without_network(self) -> None:
         # create_async_engine is a pure object build: no connection is opened,
         # so this proves the asyncpg dialect wiring without any server.
@@ -341,7 +326,7 @@ class TestDecideSqliteBootstrap:
         db_path = tmp_path / "managed.sqlite"
         conn = sqlite3.connect(db_path)
         conn.execute("CREATE TABLE alembic_version (version_num VARCHAR(32))")
-        conn.execute("INSERT INTO alembic_version VALUES ('f4a9c2e71b08')")
+        conn.execute("INSERT INTO alembic_version VALUES ('7c2f9d41e8a3')")
         conn.execute("CREATE TABLE chat (id INTEGER PRIMARY KEY)")
         conn.commit()
         conn.close()

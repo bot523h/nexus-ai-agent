@@ -1,0 +1,82 @@
+{
+  "$schema_note": "Task-180 verification truth matrix (task-181 revision applied 2026-09-24: failure semantics + publication order — see docs/audits/GATE5_TRUTH_MATRIX.json for the Gate 5 closure claims). Chain: OPERATION -> COMMAND -> CAPABILITY -> JOB -> RUNTIME -> ARTIFACT -> VERIFIER -> COMPLETED. Status vocabulary is EXACTLY {PASS, MISSING, BLOCKED, NOT_APPLICABLE}. PASS requires executable evidence (named test) — never the mere existence of a command or capability. Generated 2026-09-24 on branch arena/01a0d475-nexus-ai-agent (base: main 035a896 + PR#71 head 9e9c753).",
+  "generated_at": "2026-09-24T18:30:00Z",
+  "status_vocabulary": ["PASS", "MISSING", "BLOCKED", "NOT_APPLICABLE"],
+  "operations": [
+    {
+      "operation": "slideshow.render",
+      "surfaces": ["telegram /slideshow (bot/app.py, bot/handlers.py)", "CLI drain (jobs resume)"],
+      "chain": {
+        "COMMAND": {"status": "PASS", "evidence": "bot enqueues job_type=slideshow_render; tests/integration/test_bot_slideshow_flow.py (payload composition)"},
+        "CAPABILITY": {"status": "PASS", "evidence": "creative/slideshow/worker_adapter.slideshow_render_job registered in worker.default_job_handlers"},
+        "JOB": {"status": "PASS", "evidence": "durable idempotency-keyed row; tests/integration/test_job_lifecycle_queue.py M6/M8 + test_verification_gap_closure.py attacks F/G"},
+        "RUNTIME": {"status": "PASS", "evidence": "real render_from_files -> one FFmpeg process; test_verification_gap_closure.py::test_gap_a_slideshow_chain_completes_only_with_verified_artifact (REAL encode, bundled static ffmpeg)"},
+        "ARTIFACT": {"status": "PASS", "evidence": "master .mp4 at dispatched path, measured sha256/duration/size by the runtime itself"},
+        "VERIFIER": {"status": "PASS", "evidence": "slideshow_render_verifier in default_artifact_verifiers (task-180 GAP-A); architecture ratchet test pins it"},
+        "COMPLETED": {"status": "PASS", "evidence": "queue reaches COMPLETED only with artifact_verification.status=verified; probe facts re-measured by the allow-listed binary probe"}
+      }
+    },
+    {
+      "operation": "pdf.extract",
+      "surfaces": ["telegram document upload -> pdf_extract job", "CLI drain (jobs resume)"],
+      "chain": {
+        "COMMAND": {"status": "PASS", "evidence": "bot document handler enqueues job_type=pdf_extract (bot/handlers.py); tests/unit/test_jobs_cli.py::test_resume_drains_seeded_pdf_job"},
+        "CAPABILITY": {"status": "PASS", "evidence": "worker.process_pdf_job registered in default_job_handlers"},
+        "JOB": {"status": "PASS", "evidence": "durable row + idempotency; tests/integration/test_in_process_job_queue.py"},
+        "RUNTIME": {"status": "PASS", "evidence": "real pypdf text-layer extraction (no mock: dev/test dependency comment in pyproject); RAG ingestion is an external side effect, see NOT_APPLICABLE below"},
+        "ARTIFACT": {"status": "PASS", "evidence": "extracted text STAGED at <stem>.extracted.txt.staged, then published at <stem>.extracted.txt via atomic os.replace AFTER verification + re-probe (task-180 GAP-B, publication order task-181 D-0019); deterministic path derived from the payload alone"},
+        "VERIFIER": {"status": "PASS", "evidence": "pdf_extract_verifier in default_artifact_verifiers (task-180); exists/size/expected-path/containment/sha256/UTF-8 decode"},
+        "COMPLETED": {"status": "PASS", "evidence": "tests/integration/test_verification_gap_closure.py::test_gap_b_pdf_extract_completes_with_verified_text_artifact (real PDF, real extraction, verified block)"}
+      },
+      "notes": [
+        "RAG ingestion (AdvancedRAGEngine.add_document) is an EXTERNAL side effect with no deterministic artifact; it is deliberately NOT claimed as verified (per completion-receipt principle: absent independent evidence => not 'done'). It is doubled in tests; the extraction artifact is measured for real.",
+        "Behavior change (documented): an image-only PDF whose text layer is empty now FAILS (verification_failed:empty_artifact) instead of reporting 'Successfully processed' — false success removed.",
+        "Task-181 revision (D-0019): publication order is now stage -> verify -> publish -> re-probe; a refused publication retracts the staged temp and preserves any previous valid <stem>.extracted.txt (pre-task-181 the lane replaced the previous artifact BEFORE verification). The typed user-failure dialect now lands in failed_retryable/failed_terminal (typed_failure:<code>) — never COMPLETED."
+      ]
+    },
+    {
+      "operation": "story.generate",
+      "surfaces": ["telegram /story", "CLI drain (jobs resume)"],
+      "chain": {
+        "COMMAND": {"status": "PASS", "evidence": "bot /story handler enqueues job_type=story with dispatched output_path (bot/handlers.py)"},
+        "CAPABILITY": {"status": "PASS", "evidence": "worker.generate_story_job registered in default_job_handlers"},
+        "JOB": {"status": "PASS", "evidence": "durable row + idempotency; attacks F/G run on this job type"},
+        "RUNTIME": {"status": "PASS", "evidence": "features/story_gen.AIStoryGenerator — real local Pillow render (deterministic, offline; NOT an LLM call despite the historical name)"},
+        "ARTIFACT": {"status": "PASS", "evidence": "1080x1920 PNG at the dispatched path; handler claims measured sha256+size (task-180 GAP-C)"},
+        "VERIFIER": {"status": "PASS", "evidence": "story_verifier in default_artifact_verifiers (task-180); Pillow structural decode probe (format/width/height/mode)"},
+        "COMPLETED": {"status": "PASS", "evidence": "test_verification_gap_closure.py::test_gap_c_story_completes_with_verified_png (zero doubles in the whole path)"}
+      }
+    },
+    {
+      "operation": "creative.one_shot (/edit /caption /grade)",
+      "surfaces": ["telegram creative surface (bot/creative_surface.py)"],
+      "chain": {
+        "COMMAND": {"status": "PASS", "evidence": "creative_surface enqueues job_type=creative_render"},
+        "CAPABILITY": {"status": "PASS", "evidence": "creative/render_jobs.creative_render_job registered in default_job_handlers"},
+        "JOB": {"status": "PASS", "evidence": "task-178 M1-M10 (tests/integration/test_job_lifecycle_queue.py)"},
+        "RUNTIME": {"status": "PASS", "evidence": "packs registry -> CommandBus -> lane compiler/executor (frozen; untouched by task-180)"},
+        "ARTIFACT": {"status": "PASS", "evidence": "output.mp4 / captions.srt / timeline.otio in the job workspace"},
+        "VERIFIER": {"status": "PASS", "evidence": "creative_render_verifier (task-178, PR#71)"},
+        "COMPLETED": {"status": "PASS", "evidence": "test_succeeded_implies_valid_stable_traceable_artifact (real FFmpeg) — green locally on this branch"}
+      },
+      "notes": ["Contract owned by task-178/PR#71 — frozen for task-180; verified here as the base this branch stacks on."]
+    },
+    {
+      "operation": "legacy.creative.video_edit (HTTP /creative/video-edit)",
+      "surfaces": ["FastAPI api/app.py (NOT the deployed container CMD — the bot is)"],
+      "chain": {
+        "COMMAND": {"status": "PASS", "evidence": "route exists, deprecated=True, fail-closed HMAC gate (tests/architecture/test_legacy_lane_verification_gap.py)"},
+        "CAPABILITY": {"status": "PASS", "evidence": "creative/ffmpeg_executor.execute_ffmpeg_commands invoked by _process_video_edit_job"},
+        "JOB": {"status": "PASS", "evidence": "legacy creative/job_registry.JobRegistry row (separate SQLite from the canonical queue)"},
+        "RUNTIME": {"status": "PASS", "evidence": "real FFmpeg command execution + Gemini analysis path"},
+        "ARTIFACT": {"status": "MISSING", "evidence": "no independent measurement: 'done' is persisted with the handler's own result model; no sha256/probe re-measurement anywhere in the lane"},
+        "VERIFIER": {"status": "MISSING", "evidence": "no verifier concept exists in JobRegistry; characterized (pinned) by test_legacy_registry_can_record_done_without_any_artifact"},
+        "COMPLETED": {"status": "BLOCKED", "evidence": "lane is frozen+deprecated by D-0010 (removal sequenced after PR#58); closing the verification gap requires ownership decision — recorded as GAP-D with owner/risk/acceptance in VERIFICATION_GAP_REPORT_2026-09-24.md"}
+      }
+    }
+  ],
+  "rules": {
+    "no_pass_by_existence": "PASS is only recorded where a named executable test proves the link; a command/capability merely existing never yields PASS downstream.",
+    "gap_semantics": "MISSING = the link does not exist and nothing blocks building it; BLOCKED = closing it requires an ownership/architecture decision owned elsewhere; NOT_APPLICABLE = the link is meaningless for this operation (e.g. external side effects with no deterministic artifact)."
+  }
+}

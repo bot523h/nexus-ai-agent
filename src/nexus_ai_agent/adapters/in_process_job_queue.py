@@ -3,10 +3,60 @@
 The queue deliberately has no broker, worker process, or external service. A
 small SQLite table is the durable hand-off point; execution is scheduled on
 the current asyncio event loop. A new process can call ``resume_pending``
-to continue rows left pending or processing by an earlier process, or
-``resume_pending_jobs`` (CLI/operator entry point) to requeue only rows
-still sitting in ``pending``. Terminal states fan out to an optional,
-strictly fail-safe completion hook (job-finished notifications).
+to continue rows left pending, processing, or verifying by an earlier
+process, or ``resume_pending_jobs`` (CLI/operator entry point) to requeue
+only rows still sitting in ``pending``. Terminal states fan out to an
+optional, strictly fail-safe completion hook (job-finished notifications).
+
+Canonical lifecycle (task-178, failure taxonomy task-181):
+
+    pending → processing → verifying → completed
+                 │             │
+                 ├─────────────┴──→ failed_retryable   (classified RETRYABLE)
+                 ├─────────────┴──→ failed_terminal    (classified TERMINAL)
+                 └─────────────┴──→ pending            (cancel/recover)
+
+Every edge is a guarded, status-conditioned UPDATE (compare-and-set, never a
+blind write) — and, after the reservation, **fenced**: the reservation is a
+PENDING-only CAS that increments ``attempt`` and hands the new value back as
+the execution's fencing token (``jobs.lifecycle.ExecutionClaim``); every
+later worker-owned transition carries ``AND attempt = ?`` and returns
+whether it committed.  A stale execution (cancelled, reclaimed by a takeover,
+or a duplicate claim from a second process over the same sidecar) can no
+longer complete, fail, reopen, publish or notify anything: its CAS returns
+``False`` and the queue stops (``job_transition_rejected``).  Takeover is
+explicit — ``resume_pending`` (startup recovery, optionally expiry-gated)
+resets orphaned rows to ``pending``; there is no ``processing → processing``
+re-claim.
+
+For job types with a registered artifact verifier, a handler
+result is NEVER trusted on its own: the queue moves the row to ``verifying``
+and re-measures the claimed artifact independently (exists, size > 0,
+sha256 recompute, expected-path containment, probe evidence for media).
+Execution success + verification success = success eligibility.  For lanes
+whose artifact destination lives outside the job workspace (``pdf_extract``)
+the order is stage → verify → *ownership re-check* → **publish atomically
+(previous artifact kept as a recoverable backup)** → **re-probe the published
+bytes** → persist success (fenced CAS) → drop the backup (registered
+:class:`ArtifactPublication`).  A refusal before publication retracts only
+the staged temp; a refusal *after* publication (failed re-probe) restores the
+previous published artifact byte-for-byte — or removes the refused bytes when
+there was none — so a refused publication never leaves a worse world behind.
+
+Failure semantics (task-181, GAP-A): a typed user failure
+(``{"success": False, "error_code": ...}``) is a FAILURE of the job — the
+queue classifies it and persists ``failed_retryable``/``failed_terminal``
+with a ``typed_failure:<code>`` error (result payload preserved for the
+notifier/audit).  Verification refusals persist
+``verification_failed:<code>`` in a failure state the same way.  The two
+failure states record the classifier's verdict
+(``jobs/failure_semantics``); there is no retry scheduler — both are
+terminal as implemented.  Rows without a registered verifier keep the
+historical two-phase semantics otherwise unchanged.
+
+Trace (task-181): every event emitted while a job runs is bound to its
+``job_id`` (structlog contextvars — the worker's events carry it
+automatically) and the queue's own lifecycle lines name it explicitly.
 """
 
 from __future__ import annotations
@@ -16,19 +66,132 @@ import json
 import logging
 import sqlite3
 import threading
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
+import structlog
+
 from nexus_ai_agent.application.ports.job_queue import JobStatus
+from nexus_ai_agent.jobs.creative_passport import (
+    CREATIVE_RENDER_JOB_TYPE,
+    CreativeEvidenceTooLargeError,
+    CreativePassportError,
+    CreativeRequestConflictError,
+    FileSnapshot,
+    RequestIdentity,
+    archive_trim_evidence,
+    canonical_json,
+    capture_trim_source,
+    is_timeline_trim_request,
+    passport_json,
+    reverify_stored_passport,
+)
+from nexus_ai_agent.jobs.creative_passport import (
+    attempt_id as creative_attempt_id,
+)
+from nexus_ai_agent.jobs.creative_passport import (
+    request_identity as build_request_identity,
+)
+from nexus_ai_agent.jobs.failure_semantics import (
+    FailureClass,
+    classify_exception,
+    classify_typed_code,
+    classify_verification_reason,
+    failure_code_of,
+    failure_status,
+    typed_failure_error,
+)
+from nexus_ai_agent.jobs.lifecycle import ExecutionClaim, parse_job_status
+from nexus_ai_agent.jobs.verification import VerificationOutcome
+from nexus_ai_agent.provenance.models import (
+    CausalEvent,
+    EventKind,
+    JobFacts,
+    digest_of,
+    sha256_hex,
+)
+from nexus_ai_agent.provenance.observer import CausalObserver
 
 JobHandler = Callable[[dict[str, object]], Awaitable[dict[str, object]]]
 JobCompletionHook = Callable[["JobCompletion"], Awaitable[None]]
 
+#: A verifier re-measures a handler result against the filesystem. It must
+#: be sync (the queue runs it in a worker thread) and side-effect free.
+ArtifactVerifier = Callable[[dict[str, object], dict[str, object]], VerificationOutcome]
+
+
+@dataclass(frozen=True)
+class ArtifactPublication:
+    """Queue-owned publication step for lanes with an external destination.
+
+    Two-phase, recoverable publication (Gate 5 final repair):
+
+    ``publish(payload, result)``
+        atomically moves the verified staged artifact to its final name and
+        returns the result patch (``artifact_path`` → published).  It must
+        keep the *previous* published artifact recoverable (the built-in
+        pdf lane hard-links it to a ``.prev`` sibling before the rename).
+    ``retract(payload, result)``
+        undoes this attempt after a refusal.  Called with the pre-publish
+        result it removes only the staged temp; called with the
+        post-publish result (``artifact_path`` already the published name —
+        i.e. the re-probe refused) it restores the previous artifact from
+        the backup, or removes the refused bytes when there was none.  It
+        never touches an artifact it cannot prove to be this attempt's.
+    ``finalize(payload, result)`` (optional)
+        runs only after the durable ``COMPLETED`` commit was confirmed and
+        drops the backup.  A failure here is logged, never fatal: the
+        published bytes are already the verified ones and a stray backup is
+        cleaned by the next publication.
+
+    All three run in a worker thread and must be idempotent (recovery may
+    re-run them).  The queue calls ``publish`` only for the *current*
+    execution (ownership re-checked right before it) — see
+    ``_publish_and_reprobe``.
+    """
+
+    publish: Callable[[dict[str, object], dict[str, object]], dict[str, object]]
+    retract: Callable[[dict[str, object], dict[str, object]], None]
+    finalize: Callable[[dict[str, object], dict[str, object]], None] | None = None
+
+
+def default_artifact_publications() -> dict[str, ArtifactPublication]:
+    """Built-in publications keyed by job type (task-181).
+
+    Only ``pdf_extract`` — the single lane whose artifact destination
+    (``<stem>.extracted.txt`` sidecar) lives *outside* the job workspace.
+    Workspace-scoped lanes (creative_render / slideshow_render / story) are
+    published at delivery, after verification, by the completion notifier.
+    """
+    from nexus_ai_agent.jobs.feature_verification import (
+        finalize_pdf_text_artifact,
+        publish_pdf_text_artifact,
+        retract_pdf_text_artifact,
+    )
+
+    return {
+        "pdf_extract": ArtifactPublication(
+            publish=publish_pdf_text_artifact,
+            retract=retract_pdf_text_artifact,
+            finalize=finalize_pdf_text_artifact,
+        ),
+    }
+
+
 logger = logging.getLogger(__name__)
+
+#: Queue-owned key under which the verification block is persisted inside
+#: the result payload — the traceability link from Job Result back to the
+#: verified artifact identities.
+VERIFICATION_RESULT_KEY = "artifact_verification"
+
+
+class _AttemptTransitionError(RuntimeError):
+    """A queue CAS succeeded but its matching attempt-ledger CAS did not."""
 
 
 @dataclass(frozen=True)
@@ -47,6 +210,52 @@ class JobCompletion:
     payload: dict[str, object]
 
 
+@dataclass(frozen=True)
+class _EnqueueOutcome:
+    """What the durable insert actually did (idempotency made observable)."""
+
+    job_id: str
+    created: bool
+    payload_conflict: bool
+    payload_digest: str
+    status: str
+    status_known: bool
+    rejected: bool = False
+
+
+def default_artifact_verifiers() -> dict[str, ArtifactVerifier]:
+    """Built-in verifiers keyed by job type.
+
+    Every job type in ``worker.default_job_handlers`` is verified by
+    default (task-178 established the contract with ``creative_render``;
+    task-180 closed the remaining GAPs):
+
+    * ``creative_render`` — the canonical one-shot chain (/edit /caption
+      /grade);
+    * ``slideshow_render`` — the Wave 2.5 render lane (GAP-A);
+    * ``story`` — the locally rendered PNG story image (GAP-C);
+    * ``pdf_extract`` — the persisted extracted-text artifact (GAP-B).
+
+    A lying, stale, truncated or zero-byte artifact can never complete a
+    job. The registry stays additive: ``tests/architecture/
+    test_verification_registry_ratchet.py`` fails if a handler is ever
+    registered without a verifier, so no job type can silently regress to
+    the historical unverified semantics.
+    """
+    from nexus_ai_agent.jobs.creative_verification import (
+        creative_render_verifier,
+        slideshow_render_verifier,
+    )
+    from nexus_ai_agent.jobs.feature_verification import pdf_extract_verifier, story_verifier
+
+    return {
+        "creative_render": creative_render_verifier,
+        "slideshow_render": slideshow_render_verifier,
+        "story": story_verifier,
+        "pdf_extract": pdf_extract_verifier,
+    }
+
+
 class InProcessJobQueue:
     """Persist jobs in SQLite and execute them in the current process."""
 
@@ -56,10 +265,33 @@ class InProcessJobQueue:
         handlers: dict[str, JobHandler] | None = None,
         *,
         on_job_finished: JobCompletionHook | None = None,
+        artifact_verifiers: Mapping[str, ArtifactVerifier] | None = None,
+        artifact_publications: Mapping[str, ArtifactPublication] | None = None,
+        causal_observer: CausalObserver | None = None,
     ) -> None:
         self.db_path = Path(db_path)
         self._sqlite_path = str(db_path)
+        self._artifact_root = Path(f"{self._sqlite_path}.artifacts")
         self._on_job_finished = on_job_finished
+        # task-231-provenance-ledger: optional observer for durable transitions
+        # recorded AFTER commit into the causal journal (the Project Graph
+        # ledger). It has no authority: it receives facts, never decisions,
+        # and its failure is logged degradation — never a job outcome.
+        self._causal_observer = causal_observer
+        # ``artifact_verifiers=None`` installs the built-in registry
+        # (creative_render verified by default); pass ``{}`` to opt out.
+        self._artifact_verifiers: dict[str, ArtifactVerifier] = (
+            dict(default_artifact_verifiers())
+            if artifact_verifiers is None
+            else dict(artifact_verifiers)
+        )
+        # ``artifact_publications=None`` installs the built-in registry
+        # (pdf_extract staged publication); pass ``{}`` to opt out.
+        self._artifact_publications: dict[str, ArtifactPublication] = (
+            dict(default_artifact_publications())
+            if artifact_publications is None
+            else dict(artifact_publications)
+        )
         if self._sqlite_path != ":memory:":
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._handlers: dict[str, JobHandler] = dict(handlers or {})
@@ -78,6 +310,193 @@ class InProcessJobQueue:
             raise ValueError("job_type must not be empty")
         self._handlers[normalized] = handler
 
+    def register_artifact_verifier(self, job_type: str, verifier: ArtifactVerifier) -> None:
+        """Register (or replace) the artifact verifier for ``job_type``."""
+        normalized = job_type.strip()
+        if not normalized:
+            raise ValueError("job_type must not be empty")
+        self._artifact_verifiers[normalized] = verifier
+
+    def register_artifact_publication(
+        self, job_type: str, publication: ArtifactPublication
+    ) -> None:
+        """Register (or replace) the publication step for ``job_type``."""
+        normalized = job_type.strip()
+        if not normalized:
+            raise ValueError("job_type must not be empty")
+        self._artifact_publications[normalized] = publication
+
+    # ------------------------------------------------------------------
+    # Causal recording (task-231-provenance-ledger). Each call follows its
+    # durable queue commit and is strictly fail-safe: the ledger is
+    # evidence, never authority — a broken ledger is logged degradation and
+    # can never change a job outcome.
+    # ------------------------------------------------------------------
+    async def _record(self, event: CausalEvent) -> None:
+        observer = self._causal_observer
+        if observer is None:
+            return
+        try:
+            await asyncio.to_thread(observer.observe, event)
+        except Exception:  # noqa: BLE001 - the ledger must never break a job
+            logger.warning(
+                "causal_ledger_observe_failed job_id=%s kind=%s "
+                "(ledger degraded; the durable job state remains authoritative)",
+                event.job_id,
+                event.kind.value,
+                exc_info=True,
+            )
+
+    def _content_digest(self, raw_json: str | None) -> str | None:
+        """Canonical content digest of a persisted JSON column (never raw bytes)."""
+        if raw_json is None:
+            return None
+        try:
+            return digest_of(json.loads(raw_json))
+        except (TypeError, ValueError):
+            return sha256_hex(raw_json.encode("utf-8"))
+
+    @staticmethod
+    def _artifact_facts(result: Mapping[str, object]) -> dict[str, object]:
+        """The artifact identity the verified result claims (digest evidence)."""
+        facts: dict[str, object] = {}
+        for key in ("artifact_path", "output_path"):
+            value = result.get(key)
+            if isinstance(value, str) and value:
+                facts["artifact_path"] = value
+                break
+        for key in ("sha256", "content_sha256"):
+            value = result.get(key)
+            if isinstance(value, str) and value:
+                facts["artifact_sha256"] = value
+                break
+        size = result.get("size_bytes")
+        if isinstance(size, int):
+            facts["artifact_size_bytes"] = size
+        return facts
+
+    async def get_job_facts_async(self, job_id: str) -> JobFacts | None:
+        """Async wrapper for :meth:`get_job_facts` (thread off the loop)."""
+        return await asyncio.to_thread(self.get_job_facts, job_id)
+
+    def get_job_facts(self, job_id: str) -> JobFacts | None:
+        """The authoritative row as typed facts (the passport's read port).
+
+        This is the one sanctioned way for the provenance plane to read
+        execution truth: the row — not the ledger — is the source of truth
+        for status, attempt, payload and result. ``status`` is the canonical
+        parsed spelling (legacy ``failed`` reads ``failed_terminal``).
+        """
+        with self._db_lock, self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT id, job_type, idempotency_key, payload_json, status, result_json,
+                       error, attempt, created_at, started_at, finished_at, request_id,
+                       request_fingerprint, transaction_id, artifact_passport_json,
+                       attempt_history_json
+                FROM nexus_job_queue WHERE id = ?
+                """,
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        payload_raw = str(row["payload_json"])
+        try:
+            payload_obj = json.loads(payload_raw)
+            payload = (
+                {str(k): v for k, v in payload_obj.items()} if isinstance(payload_obj, dict) else {}
+            )
+        except ValueError:
+            payload = {}
+        result_raw = row["result_json"]
+        result: dict[str, object] | None = None
+        verification: dict[str, object] | None = None
+        if result_raw is not None:
+            try:
+                parsed_result = json.loads(str(result_raw))
+            except ValueError:
+                parsed_result = None
+            if isinstance(parsed_result, dict):
+                result = {str(k): v for k, v in parsed_result.items()}
+        if result is not None:
+            block = result.get(VERIFICATION_RESULT_KEY)
+            if isinstance(block, dict):
+                verification = dict(block)
+
+        attempt_history: list[dict[str, object]] = []
+        attempt_history_known = True
+        raw_history = row["attempt_history_json"]
+        if raw_history is None:
+            attempt_history_known = False
+        else:
+            try:
+                parsed_history = json.loads(str(raw_history))
+            except (TypeError, ValueError):
+                attempt_history_known = False
+            else:
+                if isinstance(parsed_history, list) and all(
+                    isinstance(item, dict) for item in parsed_history
+                ):
+                    attempt_history = [
+                        {str(key): value for key, value in item.items()} for item in parsed_history
+                    ]
+                else:
+                    attempt_history_known = False
+
+        artifact_passport: dict[str, object] | None = None
+        artifact_passport_known = True
+        passport_raw = row["artifact_passport_json"]
+        if passport_raw is not None:
+            try:
+                parsed_passport = json.loads(str(passport_raw))
+            except (TypeError, ValueError):
+                artifact_passport_known = False
+            else:
+                if isinstance(parsed_passport, dict):
+                    artifact_passport = {str(key): value for key, value in parsed_passport.items()}
+                else:
+                    artifact_passport_known = False
+
+        # An unknown persisted spelling is an expected corrupt-row case
+        # (``parse_job_status`` raises ValueError for it, fail-closed): the
+        # raw spelling is surfaced with ``status_known=False`` so the
+        # provenance plane can degrade explicitly instead of crashing —
+        # never a guessed canonical status.
+        try:
+            status = parse_job_status(str(row["status"])).value
+            status_known = True
+        except ValueError:
+            status = str(row["status"])
+            status_known = False
+        return JobFacts(
+            job_id=str(row["id"]),
+            job_type=str(row["job_type"]),
+            idempotency_key=str(row["idempotency_key"] or ""),
+            status=status,
+            attempt=int(row["attempt"] or 0),
+            error=str(row["error"]) if row["error"] is not None else None,
+            created_at=str(row["created_at"]) if row["created_at"] is not None else None,
+            started_at=str(row["started_at"]) if row["started_at"] is not None else None,
+            finished_at=str(row["finished_at"]) if row["finished_at"] is not None else None,
+            payload=payload,
+            payload_digest=self._content_digest(payload_raw),
+            result=result,
+            result_digest=self._content_digest(str(result_raw) if result_raw is not None else None),
+            verification=verification,
+            status_known=status_known,
+            request_id=str(row["request_id"]) if row["request_id"] is not None else None,
+            request_fingerprint=(
+                str(row["request_fingerprint"]) if row["request_fingerprint"] is not None else None
+            ),
+            transaction_id=(
+                str(row["transaction_id"]) if row["transaction_id"] is not None else None
+            ),
+            attempt_history=attempt_history,
+            attempt_history_known=attempt_history_known,
+            artifact_passport=artifact_passport,
+            artifact_passport_known=artifact_passport_known,
+        )
+
     async def enqueue(
         self,
         *,
@@ -85,10 +504,13 @@ class InProcessJobQueue:
         idempotency_key: str,
         payload: dict[str, object],
     ) -> str:
-        """Persist a job and schedule it exactly once for this process.
+        """Persist one request snapshot, observe the commit, then schedule it.
 
-        Reusing an idempotency key returns the original job id and does not
-        create a second effect.
+        Exact duplicate delivery reuses the existing row. Changed creative
+        requests under the same idempotency key are observed and rejected;
+        other legacy job types retain first-payload-wins behavior, with the
+        conflict recorded. The observer sees only post-commit facts and cannot
+        change queue authority.
         """
         normalized = job_type.strip()
         if not normalized:
@@ -96,21 +518,75 @@ class InProcessJobQueue:
         if not idempotency_key.strip():
             raise ValueError("idempotency_key must not be empty")
 
-        job_id = await asyncio.to_thread(
+        # Freeze the caller-owned mapping before yielding to the worker thread.
+        # The exact canonical JSON snapshot below drives persistence, request
+        # identity, and the post-commit observer digest even if the caller
+        # mutates its original dictionary while the insert is in flight.
+        try:
+            payload_json = canonical_json(payload)
+            parsed_payload = json.loads(payload_json)
+        except (TypeError, ValueError) as exc:
+            raise CreativePassportError("queue payload must be canonical JSON") from exc
+        if not isinstance(parsed_payload, dict):
+            raise CreativePassportError("queue payload must serialize to a JSON object")
+        payload_snapshot = {str(key): value for key, value in parsed_payload.items()}
+
+        outcome = await asyncio.to_thread(
             self._insert_or_get,
             normalized,
             idempotency_key,
-            payload,
+            payload_snapshot,
+            payload_json,
         )
-        self._schedule(job_id)
-        return job_id
+        if outcome.created:
+            await self._record(
+                CausalEvent(
+                    kind=EventKind.JOB_ENQUEUED,
+                    job_id=outcome.job_id,
+                    job_type=normalized,
+                    idempotency_key=idempotency_key,
+                    status=outcome.status,
+                    payload_digest=outcome.payload_digest,
+                    occurred_at=_now(),
+                )
+            )
+        else:
+            resolution = (
+                "creative_request_rejected"
+                if outcome.rejected
+                else "first_dispatch_wins"
+                if outcome.payload_conflict
+                else "existing_request_reused"
+            )
+            await self._record(
+                CausalEvent(
+                    kind=EventKind.JOB_ENQUEUE_DUPLICATE,
+                    job_id=outcome.job_id,
+                    job_type=normalized,
+                    idempotency_key=idempotency_key,
+                    status=outcome.status,
+                    payload_digest=outcome.payload_digest,
+                    detail={
+                        "payload_conflict": outcome.payload_conflict,
+                        "resolution": resolution,
+                        "status_known": outcome.status_known,
+                    },
+                    occurred_at=_now(),
+                )
+            )
+        if outcome.rejected:
+            raise CreativeRequestConflictError(
+                "creative idempotency key is already bound to a different request"
+            )
+        self._schedule(outcome.job_id)
+        return outcome.job_id
 
     async def get_status(self, job_id: str) -> JobStatus:
         row = await asyncio.to_thread(self._fetch_row, job_id)
         if row is None:
             raise KeyError(f"unknown job: {job_id}")
         try:
-            return JobStatus(str(row["status"]))
+            return parse_job_status(str(row["status"]))
         except ValueError as exc:
             raise RuntimeError(f"invalid persisted job status for {job_id}") from exc
 
@@ -126,21 +602,151 @@ class InProcessJobQueue:
             raise RuntimeError(f"invalid persisted result for {job_id}")
         return {str(key): value for key, value in result.items()}
 
-    async def resume_pending(self) -> list[str]:
-        """Requeue jobs left unfinished by a previous process."""
-        job_ids = await asyncio.to_thread(self._reset_unfinished)
-        for job_id in job_ids:
+    async def get_request_identity(self, job_id: str) -> dict[str, object]:
+        """Return the durable request and transaction IDs for one queue row."""
+        row = await asyncio.to_thread(self._fetch_row_full, job_id)
+        if row is None:
+            raise KeyError(f"unknown job: {job_id}")
+        identity_fields = ("request_id", "request_fingerprint", "transaction_id")
+        if any(row[field] is None for field in identity_fields):
+            raise RuntimeError(f"request identity is incomplete for job {job_id}")
+        return {
+            "job_id": job_id,
+            "job_type": str(row["job_type"]),
+            "idempotency_key": str(row["idempotency_key"]),
+            "request_id": str(row["request_id"]),
+            "request_fingerprint": str(row["request_fingerprint"]),
+            "transaction_id": str(row["transaction_id"]),
+        }
+
+    async def get_attempt_history(self, job_id: str) -> list[dict[str, object]]:
+        """Read durable execution-attempt records, oldest first."""
+        history = await asyncio.to_thread(self._fetch_attempt_history, job_id)
+        if history is None:
+            raise KeyError(f"unknown job: {job_id}")
+        return history
+
+    async def get_artifact_passport(self, job_id: str) -> dict[str, object]:
+        """Re-measure and return the persisted ``timeline.trim`` evidence passport."""
+        context = await asyncio.to_thread(self._fetch_passport_context, job_id)
+        if context is None:
+            raise KeyError(f"unknown job: {job_id}")
+        queue_record, attempt_record, stored_passport = context
+        verifier = self._artifact_verifiers.get(CREATIVE_RENDER_JOB_TYPE)
+        if verifier is None:
+            raise CreativePassportError("creative passport re-read requires its artifact verifier")
+        result: dict[str, object] | None = None
+        if queue_record["result_json"] is not None:
+            parsed_result = json.loads(str(queue_record["result_json"]))
+            if not isinstance(parsed_result, dict):
+                raise CreativePassportError("queue result attached to passport is malformed")
+            result = {str(key): value for key, value in parsed_result.items()}
+        passport = await asyncio.to_thread(
+            reverify_stored_passport,
+            artifact_root=self._artifact_root,
+            job_record=queue_record,
+            attempt_record=attempt_record,
+            stored_passport_json=stored_passport,
+            verifier=verifier,
+        )
+        if result is not None and result.get("artifact_passport_id") != passport.passport_id:
+            raise CreativePassportError("queue result names a different artifact passport")
+        if result is None and str(queue_record["status"]) == JobStatus.COMPLETED.value:
+            raise CreativePassportError("completed queue result is missing its passport reference")
+        return passport.model_dump(mode="json")
+
+    async def get_result_chain(self, job_id: str) -> dict[str, object]:
+        """The Result end of the canonical chain for one job.
+
+        Assembles a ``jobs.lifecycle.JobResult`` from durable facts only:
+        the row (status, attempt, error) plus the persisted payload and the
+        queue-owned ``artifact_verification`` block. Raises ``KeyError``
+        for unknown jobs, like ``get_status``.
+        """
+        from nexus_ai_agent.jobs.lifecycle import JobResult
+
+        row = await asyncio.to_thread(self._fetch_row_full, job_id)
+        if row is None:
+            raise KeyError(f"unknown job: {job_id}")
+        payload = json.loads(str(row["payload_json"]))
+        result_json = row["result_json"]
+        result = json.loads(str(result_json)) if result_json is not None else None
+        verification = None
+        if isinstance(result, dict) and isinstance(result.get(VERIFICATION_RESULT_KEY), dict):
+            verification = dict(result[VERIFICATION_RESULT_KEY])
+        job_result = JobResult.from_parts(
+            job_id=job_id,
+            payload=payload,
+            result=result,
+            attempt=int(row["attempt"] or 0),
+            execution_status=parse_job_status(str(row["status"])).value,
+            verification=verification,
+            error=str(row["error"]) if row["error"] is not None else None,
+        )
+        chain = job_result.to_dict()
+        chain["request_identity"] = {
+            field: (str(row[field]) if row[field] is not None else None)
+            for field in ("request_id", "request_fingerprint", "transaction_id")
+        }
+        return chain
+
+    async def resume_pending(self, *, stale_after: timedelta | None = None) -> list[str]:
+        """Requeue jobs left unfinished by a previous process (explicit takeover).
+
+        This is the **only** way ownership of an in-flight row changes hands:
+        ``processing``/``verifying`` rows are reset to ``pending`` (attempt
+        untouched) and re-scheduled; the next reservation mints a strictly
+        higher fencing token, so whatever the previous owner still does is
+        rejected by every fenced CAS.
+
+        ``stale_after=None`` (process-startup recovery — the bot's
+        ``post_init``/webhook startup) takes over every orphaned row: the
+        composition roots guarantee one queue-owning process per sidecar, so
+        at startup the previous owner is dead by construction.  With
+        ``stale_after`` set, only in-flight rows whose ``started_at`` is
+        older than the window are taken over (expiry-gated takeover — the
+        safe form when a live peer might still own recent rows); ``pending``
+        rows are always re-scheduled.  Rows this very process is executing
+        are never taken over (that would strand its own live execution).
+        Terminal rows are never touched.
+        """
+        live = {job_id for job_id, task in self._tasks.items() if not task.done()}
+        reset = await asyncio.to_thread(self._reset_unfinished, stale_after, live)
+        for job_id, job_type, attempt in reset:
+            if attempt is not None:
+                # A real ownership transfer: the row was IN FLIGHT with a
+                # minted fencing token that recovery superseded. A row that
+                # merely sat in ``pending`` was never owned — re-listing it
+                # is scheduling, not a takeover, and is not journaled.
+                # Recorded BEFORE scheduling the successor execution: the
+                # causal order (takeover → fresh reservation) must be the
+                # journal order, not a race.
+                await self._record(
+                    CausalEvent(
+                        kind=EventKind.JOB_TAKEOVER,
+                        job_id=job_id,
+                        job_type=job_type,
+                        attempt=attempt,
+                        status=JobStatus.PENDING.value,
+                        detail={
+                            "mode": "expiry_gated" if stale_after is not None else "startup",
+                            "fencing": "previous token superseded by the next reservation",
+                        },
+                        occurred_at=_now(),
+                    )
+                )
             self._schedule(job_id)
-        return job_ids
+        return [job_id for job_id, _, _ in reset]
 
     async def resume_pending_jobs(self) -> list[str]:
         """Requeue jobs currently sitting in ``pending`` and run them here.
 
         Operator/CLI entry point (D1: ``nexus jobs resume``). Unlike
         :meth:`resume_pending` — process-startup recovery, which also claims
-        orphaned ``processing`` rows — this never touches ``processing``
-        rows: a live owner process (usually the bot) may still be executing
-        those, and re-running them here would duplicate side effects.
+        orphaned ``processing``/``verifying`` rows — this never touches
+        in-flight rows: a live owner process (usually the bot) may still be
+        executing those, and re-running them here would duplicate side
+        effects.
         """
         job_ids = await asyncio.to_thread(self._select_pending)
         for job_id in job_ids:
@@ -154,7 +760,21 @@ class InProcessJobQueue:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        await asyncio.to_thread(self._reset_unfinished)
+        reset = await asyncio.to_thread(self._reset_unfinished, None, set())
+        for job_id, job_type, attempt in reset:
+            if attempt is None:
+                continue  # never owned: re-listed pending, not a takeover
+            await self._record(
+                CausalEvent(
+                    kind=EventKind.JOB_TAKEOVER,
+                    job_id=job_id,
+                    job_type=job_type,
+                    attempt=attempt,
+                    status=JobStatus.PENDING.value,
+                    detail={"mode": "shutdown"},
+                    occurred_at=_now(),
+                )
+            )
 
     def _schedule(self, job_id: str) -> None:
         existing = self._tasks.get(job_id)
@@ -164,54 +784,652 @@ class InProcessJobQueue:
         self._tasks[job_id] = task
         task.add_done_callback(lambda _: self._tasks.pop(job_id, None))
 
+    @staticmethod
+    def _is_typed_render_preflight_error(exc: BaseException) -> bool:
+        """Recognize typed failures that the real handler must persist and translate."""
+        try:
+            from nexus_ai_agent.creative.render_jobs import CreativeRenderError
+        except ImportError:
+            return False
+
+        current: BaseException | None = exc
+        seen: set[int] = set()
+        while current is not None and id(current) not in seen:
+            if isinstance(current, CreativeRenderError):
+                return True
+            seen.add(id(current))
+            current = current.__cause__ or current.__context__
+        return False
+
     async def _process_job(self, job_id: str) -> None:
         row = await asyncio.to_thread(self._fetch_row, job_id)
         if row is None:
             return
-        if row["status"] in {JobStatus.COMPLETED.value, JobStatus.FAILED.value}:
+        try:
+            if parse_job_status(str(row["status"])) in {
+                JobStatus.COMPLETED,
+                JobStatus.FAILED_RETRYABLE,
+                JobStatus.FAILED_TERMINAL,
+            }:
+                return
+        except ValueError:
+            return  # unknown durable spelling: never execute it (fail-closed)
+
+        # Trace (task-181): bind the durable job id for everything that runs
+        # under this job — the handler's structlog events (worker) and the
+        # queue's own lifecycle lines all carry it.  Task-local (each
+        # _process_job runs as its own asyncio task), so concurrent jobs can
+        # never cross-bind.
+        structlog.contextvars.bind_contextvars(job_id=job_id)
+        job_type = str(row["job_type"])
+        payload_digest = self._content_digest(str(row["payload_json"]))
+
+        # Claim-time structural failure: PENDING → FAILED_* before any
+        # reservation is useful (no side effect has occurred).  "No handler"
+        # is a deploy-level defect: the identical job cannot succeed until
+        # the code changes ⇒ TERMINAL.  Unowned CAS (PENDING only): if
+        # another process reserved the row meanwhile, nothing is announced.
+        handler = self._handlers.get(job_type)
+        if handler is None:
+            error = f"no handler registered for job type {row['job_type']}"
+            status = failure_status(FailureClass.TERMINAL)
+            if not await asyncio.to_thread(self._fail_unclaimed, job_id, error, status):
+                self._log_rejected(job_id, None, status)
+                return
+            await self._record(
+                CausalEvent(
+                    kind=EventKind.JOB_FAILED,
+                    job_id=job_id,
+                    job_type=job_type,
+                    idempotency_key=str(row["idempotency_key"] or ""),
+                    status=status.value,
+                    error=error,
+                    payload_digest=payload_digest,
+                    detail={"phase": "claim_time_structural"},
+                    occurred_at=_now(),
+                )
+            )
+            logger.info(
+                "job_failed job_id=%s type=%s status=%s error=%r",
+                job_id,
+                job_type,
+                status.value,
+                error,
+            )
+            await self._notify_completion(
+                JobCompletion(
+                    job_id=job_id,
+                    job_type=job_type,
+                    status=status,
+                    result=None,
+                    error=error,
+                    payload={},
+                )
+            )
             return
 
-        await asyncio.to_thread(self._mark_processing, job_id)
-        handler = self._handlers.get(str(row["job_type"]))
-        payload: dict[str, object] = {}
+        # Reservation: the RUNNING boundary and the ownership boundary.  A
+        # PENDING-only CAS mints this execution's fencing token; a row that
+        # is already PROCESSING/VERIFYING belongs to someone else (another
+        # process over the same sidecar, or a live task) and is NOT ours.
         try:
-            if handler is None:
-                raise RuntimeError(f"no handler registered for job type {row['job_type']}")
+            claim = await asyncio.to_thread(self._mark_processing, job_id)
+        except CreativePassportError:
+            # Never execute a row whose queue-owned attempt evidence cannot
+            # be decoded and extended atomically. Recovery leaves it pending
+            # for repair; other jobs continue independently.
+            logger.warning(
+                "job_attempt_history_unreadable job_id=%s; reservation rolled back "
+                "and job remains pending",
+                job_id,
+                exc_info=True,
+            )
+            return
+        if claim is None:
+            logger.info("job_reservation_rejected job_id=%s type=%s", job_id, job_type)
+            return
+        logger.info("job_processing job_id=%s type=%s attempt=%d", job_id, job_type, claim.attempt)
+        await self._record(
+            CausalEvent(
+                kind=EventKind.JOB_RESERVED,
+                job_id=job_id,
+                job_type=job_type,
+                idempotency_key=str(row["idempotency_key"] or ""),
+                attempt=claim.attempt,
+                status=JobStatus.PROCESSING.value,
+                payload_digest=payload_digest,
+                occurred_at=_now(),
+            )
+        )
+        payload: dict[str, object] = {}
+        trim_request = False
+        source_snapshot: FileSnapshot | None = None
+        try:
             parsed = json.loads(str(row["payload_json"]))
             if not isinstance(parsed, dict):
                 raise RuntimeError(f"invalid persisted payload for {job_id}")
             payload = {str(key): value for key, value in parsed.items()}
+            trim_request = job_type == CREATIVE_RENDER_JOB_TYPE and is_timeline_trim_request(
+                payload
+            )
+            if trim_request:
+                if self._artifact_verifiers.get(CREATIVE_RENDER_JOB_TYPE) is None:
+                    await self._fail_owned(
+                        claim,
+                        job_type,
+                        payload,
+                        "creative_passport_requires_artifact_verifier",
+                        JobStatus.FAILED_TERMINAL,
+                        None,
+                    )
+                    return
+                prior = await asyncio.to_thread(self._find_verified_attempt, job_id, claim.attempt)
+                if prior is not None:
+                    if not await asyncio.to_thread(self._mark_verifying, claim):
+                        self._log_rejected(job_id, claim, JobStatus.VERIFYING)
+                        return
+                    await self._record(
+                        CausalEvent(
+                            kind=EventKind.JOB_VERIFICATION_STARTED,
+                            job_id=job_id,
+                            job_type=job_type,
+                            idempotency_key=str(row["idempotency_key"] or ""),
+                            attempt=claim.attempt,
+                            status=JobStatus.VERIFYING.value,
+                            payload_digest=payload_digest,
+                            occurred_at=_now(),
+                        )
+                    )
+                    try:
+                        prior_result, prior_passport, prior_attempt_id = await asyncio.to_thread(
+                            self._reverify_candidate, dict(row), prior
+                        )
+                    except Exception as exc:  # noqa: BLE001 - corrupted evidence fails closed
+                        await self._fail_owned(
+                            claim,
+                            job_type,
+                            payload,
+                            f"creative_passport_reconciliation_failed:{type(exc).__name__}",
+                            JobStatus.FAILED_TERMINAL,
+                            None,
+                        )
+                        return
+                    if not await asyncio.to_thread(
+                        self._mark_completed,
+                        claim,
+                        prior_result,
+                        prior_passport,
+                        "reconciled",
+                        prior_attempt_id,
+                    ):
+                        self._log_rejected(job_id, claim, JobStatus.COMPLETED)
+                        return
+                    await self._record(
+                        CausalEvent(
+                            kind=EventKind.JOB_COMPLETED,
+                            job_id=job_id,
+                            job_type=job_type,
+                            idempotency_key=str(row["idempotency_key"] or ""),
+                            attempt=claim.attempt,
+                            status=JobStatus.COMPLETED.value,
+                            payload_digest=payload_digest,
+                            result_digest=digest_of(prior_result),
+                            detail={
+                                **self._artifact_facts(prior_result),
+                                "reconciled_from_attempt_id": prior_attempt_id,
+                            },
+                            occurred_at=_now(),
+                        )
+                    )
+                    logger.info(
+                        "job_reconciled_from_verified_attempt job_id=%s attempt=%d "
+                        "source_attempt_id=%s",
+                        job_id,
+                        claim.attempt,
+                        prior_attempt_id,
+                    )
+                    await self._notify_completion(
+                        JobCompletion(
+                            job_id=job_id,
+                            job_type=job_type,
+                            status=JobStatus.COMPLETED,
+                            result=prior_result,
+                            error=None,
+                            payload=payload,
+                        )
+                    )
+                    return
+                typed_render_preflight = False
+                try:
+                    source_snapshot = await asyncio.to_thread(capture_trim_source, payload)
+                except Exception as exc:  # noqa: BLE001 - preflight failures fail closed
+                    if self._is_typed_render_preflight_error(exc):
+                        # Preserve the real handler's public typed input failure,
+                        # including its persisted result and translation.
+                        typed_render_preflight = True
+                        logger.info(
+                            "creative_trim_source_typed_failure job_id=%s reason=%s",
+                            job_id,
+                            type(exc).__name__,
+                        )
+                    else:
+                        error = (
+                            typed_failure_error(exc.code)
+                            if isinstance(exc, CreativeEvidenceTooLargeError)
+                            else f"creative_passport_source_unavailable:{type(exc).__name__}"
+                        )
+                        await self._fail_owned(
+                            claim,
+                            job_type,
+                            payload,
+                            error,
+                            JobStatus.FAILED_TERMINAL,
+                            None,
+                        )
+                        return
+                if source_snapshot is None and not typed_render_preflight:
+                    await self._fail_owned(
+                        claim,
+                        job_type,
+                        payload,
+                        "creative_passport_source_unavailable:missing_snapshot",
+                        JobStatus.FAILED_TERMINAL,
+                        None,
+                    )
+                    return
+                if self._sqlite_path == ":memory:" and not typed_render_preflight:
+                    # A memory-only queue cannot durably bind row completion
+                    # to the archived source/output/passport evidence. Reject
+                    # before invoking the real render handler.
+                    await self._fail_owned(
+                        claim,
+                        job_type,
+                        payload,
+                        "creative_passport_requires_file_backed_queue",
+                        JobStatus.FAILED_TERMINAL,
+                        None,
+                    )
+                    return
             result = await handler(payload)
             if not isinstance(result, dict):
                 raise TypeError("job handler must return a dictionary")
-            await asyncio.to_thread(self._mark_completed, job_id, result)
         except asyncio.CancelledError:
             # Cancellation is a process-lifecycle event, not a business
-            # failure. Keep the row recoverable for the next process.
-            await asyncio.to_thread(self._mark_pending, job_id)
+            # failure. Keep the row recoverable for the next process — but
+            # only OUR row: a newer owner's execution (or a terminal row)
+            # must never be reopened by a cancelled predecessor.
+            if not await asyncio.to_thread(self._mark_pending, claim):
+                self._log_rejected(job_id, claim, JobStatus.PENDING)
+            else:
+                await self._record(
+                    CausalEvent(
+                        kind=EventKind.JOB_REOPENED,
+                        job_id=job_id,
+                        job_type=job_type,
+                        idempotency_key=str(row["idempotency_key"] or ""),
+                        attempt=claim.attempt,
+                        status=JobStatus.PENDING.value,
+                        payload_digest=payload_digest,
+                        detail={"phase": "cancellation"},
+                        occurred_at=_now(),
+                    )
+                )
             raise
         except Exception as exc:  # noqa: BLE001 - job failure must be persisted
-            await asyncio.to_thread(self._mark_failed, job_id, str(exc))
-            await self._notify_completion(
-                JobCompletion(
+            # Fail-closed conversion: classify and persist a failure status.
+            status = failure_status(classify_exception(exc))
+            await self._fail_owned(claim, job_type, payload, str(exc), status, None)
+            return
+
+        # GAP-A (task-181) + R4: a handler result that says success=False is
+        # a FAILURE of the job — never COMPLETED, whatever any verifier would
+        # answer about it.  The typed dialect keeps its code; a bare
+        # ``{"success": False}`` is recorded as ``unspecified`` (TERMINAL).
+        # The result payload is preserved so the notifier can translate it
+        # and the audit chain can read it.
+        code = failure_code_of(result)
+        if code is not None:
+            status = failure_status(classify_typed_code(code))
+            await self._fail_owned(
+                claim, job_type, payload, typed_failure_error(code), status, result
+            )
+            return
+
+        verifier = self._artifact_verifiers.get(job_type)
+        publication = self._artifact_publications.get(job_type)
+        if verifier is None:
+            # No verification contract for this job type: historical
+            # semantics — the handler result is the completed result.
+            final_result = result
+            if not await asyncio.to_thread(self._mark_completed, claim, final_result):
+                self._log_rejected(job_id, claim, JobStatus.COMPLETED)
+                return
+            await self._record(
+                CausalEvent(
+                    kind=EventKind.JOB_COMPLETED,
                     job_id=job_id,
-                    job_type=str(row["job_type"]),
-                    status=JobStatus.FAILED,
-                    result=None,
-                    error=str(exc),
-                    payload=payload,
+                    job_type=job_type,
+                    idempotency_key=str(payload.get("idempotency_key") or ""),
+                    attempt=claim.attempt,
+                    status=JobStatus.COMPLETED.value,
+                    payload_digest=payload_digest,
+                    result_digest=digest_of(final_result),
+                    detail=self._artifact_facts(final_result),
+                    occurred_at=_now(),
                 )
             )
         else:
-            await self._notify_completion(
-                JobCompletion(
+            # Execution success ≠ job success: verify the artifact
+            # independently before the row may become terminal-success.
+            if not await asyncio.to_thread(self._mark_verifying, claim):
+                self._log_rejected(job_id, claim, JobStatus.VERIFYING)
+                return  # row was reclaimed/reset elsewhere; not ours anymore
+            logger.info("job_verifying job_id=%s type=%s", job_id, job_type)
+            await self._record(
+                CausalEvent(
+                    kind=EventKind.JOB_VERIFICATION_STARTED,
                     job_id=job_id,
-                    job_type=str(row["job_type"]),
-                    status=JobStatus.COMPLETED,
-                    result=result,
-                    error=None,
-                    payload=payload,
+                    job_type=job_type,
+                    idempotency_key=str(payload.get("idempotency_key") or ""),
+                    attempt=claim.attempt,
+                    status=JobStatus.VERIFYING.value,
+                    payload_digest=payload_digest,
+                    occurred_at=_now(),
                 )
+            )
+            outcome = await self._verify_safely(verifier, payload, result)
+            published = False
+            if outcome.ok and publication is not None:
+                # Stage → verify → **publish atomically** → **re-probe** →
+                # persist success (§4 order, task-181).  Publication is the
+                # irreversible side effect: it runs only for the current
+                # owner (fence re-checked right before it) and keeps the
+                # previous artifact recoverable.
+                result, outcome, published = await self._publish_and_reprobe(
+                    claim, publication, verifier, payload, result
+                )
+            if outcome.ok:
+                stored_passport: str | None = None
+                final_result = {**result, VERIFICATION_RESULT_KEY: outcome.block}
+                if trim_request:
+                    try:
+                        if self._sqlite_path == ":memory:":
+                            raise CreativePassportError(
+                                "timeline.trim passport requires a file-backed SQLite queue"
+                            )
+                        identity = RequestIdentity(
+                            request_id=str(row["request_id"]),
+                            request_fingerprint=str(row["request_fingerprint"]),
+                            transaction_id=str(row["transaction_id"]),
+                        )
+                        archived = await asyncio.to_thread(
+                            archive_trim_evidence,
+                            artifact_root=self._artifact_root,
+                            job_id=job_id,
+                            attempt_number=claim.attempt,
+                            attempt_identifier=creative_attempt_id(job_id, claim.attempt),
+                            identity=identity,
+                            payload=payload,
+                            result=result,
+                            verification=outcome.block,
+                            source_snapshot=source_snapshot,
+                            verifier=verifier,
+                        )
+                        final_result = {
+                            **archived.result,
+                            VERIFICATION_RESULT_KEY: archived.verification,
+                        }
+                        stored_passport = passport_json(archived.passport)
+                        if not await asyncio.to_thread(
+                            self._record_verified_attempt,
+                            claim,
+                            final_result,
+                            archived.verification,
+                            archived.execution_evidence,
+                            stored_passport,
+                        ):
+                            self._log_rejected(job_id, claim, JobStatus.VERIFYING)
+                            return
+                        final_result["artifact_passport_id"] = archived.passport.passport_id
+                    except Exception as exc:  # noqa: BLE001 - evidence persistence fails closed
+                        logger.warning(
+                            "creative_passport_persistence_failed job_id=%s reason=%s",
+                            job_id,
+                            type(exc).__name__,
+                            exc_info=True,
+                        )
+                        error = (
+                            typed_failure_error(exc.code)
+                            if isinstance(exc, CreativeEvidenceTooLargeError)
+                            else f"creative_passport_failed:{type(exc).__name__}"
+                        )
+                        await self._fail_owned(
+                            claim,
+                            job_type,
+                            payload,
+                            error,
+                            JobStatus.FAILED_TERMINAL,
+                            None,
+                        )
+                        return
+                if stored_passport is None:
+                    committed = await asyncio.to_thread(self._mark_completed, claim, final_result)
+                else:
+                    committed = await asyncio.to_thread(
+                        self._mark_completed, claim, final_result, stored_passport
+                    )
+                if not committed:
+                    # Durable commit refused: we are no longer the owner.  No
+                    # notification, no filesystem action — the current owner
+                    # decides the fate of the destination.
+                    self._log_rejected(job_id, claim, JobStatus.COMPLETED)
+                    return
+                await self._record(
+                    CausalEvent(
+                        kind=EventKind.JOB_COMPLETED,
+                        job_id=job_id,
+                        job_type=job_type,
+                        idempotency_key=str(payload.get("idempotency_key") or ""),
+                        attempt=claim.attempt,
+                        status=JobStatus.COMPLETED.value,
+                        payload_digest=payload_digest,
+                        result_digest=digest_of(final_result),
+                        detail=self._artifact_facts(final_result),
+                        occurred_at=_now(),
+                    )
+                )
+                if publication is not None and publication.finalize is not None and published:
+                    await self._finalize_safely(publication, payload, result)
+            else:
+                if publication is not None and outcome.reason_code != "stale_execution":
+                    # A refusal retracts this attempt (staged temp before
+                    # publication; restore of the previous artifact after
+                    # a refused re-probe).  A fenced-off execution retracts
+                    # nothing: the destination is not its to touch.
+                    await asyncio.to_thread(publication.retract, payload, result)
+                reason = str(outcome.reason_code)
+                status = failure_status(classify_verification_reason(reason))
+                await self._fail_owned(
+                    claim, job_type, payload, f"verification_failed:{reason}", status, None
+                )
+                return
+
+        logger.info("job_completed job_id=%s type=%s attempt=%d", job_id, job_type, claim.attempt)
+        await self._notify_completion(
+            JobCompletion(
+                job_id=job_id,
+                job_type=job_type,
+                status=JobStatus.COMPLETED,
+                result=final_result,
+                error=None,
+                payload=payload,
+            )
+        )
+
+    async def _fail_owned(
+        self,
+        claim: ExecutionClaim,
+        job_type: str,
+        payload: dict[str, object],
+        error: str,
+        status: JobStatus,
+        result: dict[str, object] | None,
+    ) -> None:
+        """Persist a classified failure for OUR execution, then announce it.
+
+        The fenced CAS is the durable truth: if it is rejected (the row was
+        taken over or is already terminal), nothing is announced — the
+        current owner reports its own outcome.
+        """
+        if not await asyncio.to_thread(self._mark_failed, claim, error, status, result):
+            self._log_rejected(claim.job_id, claim, status)
+            return
+        await self._record(
+            CausalEvent(
+                kind=EventKind.JOB_FAILED,
+                job_id=claim.job_id,
+                job_type=job_type,
+                idempotency_key=str(payload.get("idempotency_key") or ""),
+                attempt=claim.attempt,
+                status=status.value,
+                error=error,
+                payload_digest=digest_of(payload) if payload else None,
+                result_digest=digest_of(result) if isinstance(result, dict) else None,
+                occurred_at=_now(),
+            )
+        )
+        logger.info(
+            "job_failed job_id=%s type=%s status=%s error=%s attempt=%d",
+            claim.job_id,
+            job_type,
+            status.value,
+            error,
+            claim.attempt,
+        )
+        await self._notify_completion(
+            JobCompletion(
+                job_id=claim.job_id,
+                job_type=job_type,
+                status=status,
+                result=result,
+                error=error,
+                payload=payload,
+            )
+        )
+
+    @staticmethod
+    def _log_rejected(job_id: str, claim: ExecutionClaim | None, target: JobStatus) -> None:
+        logger.warning(
+            "job_transition_rejected job_id=%s attempt=%s target=%s "
+            "(stale execution: row reclaimed, superseded or terminal — no side effect)",
+            job_id,
+            claim.attempt if claim is not None else "unclaimed",
+            target.value,
+        )
+
+    async def _publish_and_reprobe(
+        self,
+        claim: ExecutionClaim,
+        publication: ArtifactPublication,
+        verifier: ArtifactVerifier,
+        payload: dict[str, object],
+        result: dict[str, object],
+    ) -> tuple[dict[str, object], VerificationOutcome, bool]:
+        """Atomic publication + independent re-probe of the published bytes.
+
+        Returns ``(result, outcome, published)``.  Side-effect fencing: the
+        ownership of the row is re-read immediately before ``publish`` (the
+        last check before the irreversible filesystem step); a stale
+        execution gets ``stale_execution`` and publishes nothing.  The
+        residual window between this check and the rename is the classic
+        fencing limit of a plain filesystem (no token-aware storage); it is
+        documented in JOB_LIFECYCLE.md §4 and bounded by the takeover rule
+        (only startup recovery / expiry-gated reclaim can move a live row).
+        """
+        if not await asyncio.to_thread(self._owns_execution, claim, JobStatus.VERIFYING):
+            return (
+                result,
+                VerificationOutcome(
+                    ok=False,
+                    reason_code="stale_execution",
+                    summary={
+                        "status": "failed",
+                        "reason_code": "stale_execution",
+                        "detail": "execution superseded before publication; nothing published",
+                    },
+                ),
+                False,
+            )
+        try:
+            patch = await asyncio.to_thread(publication.publish, payload, result)
+        except Exception as exc:  # noqa: BLE001 - publication failure is a refusal
+            logger.warning("artifact publish failed; keeping staged temp retracted: %s", exc)
+            return (
+                result,
+                VerificationOutcome(
+                    ok=False,
+                    reason_code="publish_failed",
+                    summary={
+                        "status": "failed",
+                        "reason_code": "publish_failed",
+                        "detail": str(exc),
+                    },
+                ),
+                False,
+            )
+        published = {**result, **patch}
+        reprobed = await self._verify_safely(verifier, payload, published)
+        if not reprobed.ok:
+            reason = reprobed.reason_code or "reprobe_failed"
+            return (
+                published,
+                VerificationOutcome(
+                    ok=False,
+                    reason_code="reprobe_failed",
+                    summary={
+                        "status": "failed",
+                        "reason_code": "reprobe_failed",
+                        "detail": f"published artifact failed re-probe ({reason})",
+                    },
+                ),
+                True,
+            )
+        return published, reprobed, True
+
+    async def _finalize_safely(
+        self,
+        publication: ArtifactPublication,
+        payload: dict[str, object],
+        result: dict[str, object],
+    ) -> None:
+        """Drop the publication backup after the durable commit (never fatal)."""
+        assert publication.finalize is not None
+        try:
+            await asyncio.to_thread(publication.finalize, payload, result)
+        except Exception:  # noqa: BLE001 - the job is already durably COMPLETED
+            logger.warning("artifact publication finalize failed (backup left)", exc_info=True)
+
+    async def _verify_safely(
+        self,
+        verifier: ArtifactVerifier,
+        payload: dict[str, object],
+        result: dict[str, object],
+    ) -> VerificationOutcome:
+        """Run the verifier fail-closed: a crashing verifier fails the job.
+
+        The verifier only reads the world (file bytes, probe); it never
+        writes, so re-running verification after recovery is idempotent.
+        """
+        try:
+            return await asyncio.to_thread(verifier, payload, result)
+        except Exception as exc:  # noqa: BLE001 - fail-closed by contract
+            logger.warning(
+                "artifact verifier crashed; failing the job closed: %s", exc, exc_info=True
+            )
+            return VerificationOutcome(
+                ok=False,
+                reason_code="verifier_crashed",
+                summary={"status": "failed", "reason_code": "verifier_crashed"},
             )
 
     async def _notify_completion(self, completion: JobCompletion) -> None:
@@ -233,7 +1451,7 @@ class InProcessJobQueue:
             )
 
     def _initialize_db(self) -> None:
-        """Create only the queue-owned table; no application migration is run."""
+        """Create/migrate only queue-owned tables and backfill derivable identities."""
         with self._connection() as connection:
             connection.execute(
                 """
@@ -251,72 +1469,553 @@ class InProcessJobQueue:
                 )
                 """
             )
+            columns = {
+                str(row[1]) for row in connection.execute("PRAGMA table_info(nexus_job_queue)")
+            }
+            additions = {
+                "attempt": "INTEGER NOT NULL DEFAULT 0",
+                "request_id": "TEXT",
+                "request_fingerprint": "TEXT",
+                "transaction_id": "TEXT",
+                "artifact_passport_json": "TEXT",
+                "attempt_history_json": "TEXT NOT NULL DEFAULT '[]'",
+            }
+            for name, declaration in additions.items():
+                if name not in columns:
+                    connection.execute(
+                        f"ALTER TABLE nexus_job_queue ADD COLUMN {name} {declaration}"
+                    )
+            connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_nexus_job_queue_request_id "
+                "ON nexus_job_queue(request_id)"
+            )
+            connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_nexus_job_queue_transaction_id "
+                "ON nexus_job_queue(transaction_id)"
+            )
+            self._backfill_request_identities(connection)
+            self._backfill_legacy_attempts(connection)
+
+    def _backfill_request_identities(self, connection: sqlite3.Connection) -> None:
+        """Fill stable identities for queue rows written by the previous schema."""
+        rows = connection.execute(
+            """
+            SELECT id, job_type, idempotency_key, payload_json,
+                   request_id, request_fingerprint, transaction_id
+            FROM nexus_job_queue
+            WHERE request_id IS NULL OR request_fingerprint IS NULL OR transaction_id IS NULL
+            ORDER BY created_at, id
+            """
+        ).fetchall()
+        for row in rows:
+            job_id = str(row["id"])
+            try:
+                payload = json.loads(str(row["payload_json"]))
+                if not isinstance(payload, dict):
+                    raise ValueError("payload is not an object")
+                identity = build_request_identity(
+                    str(row["job_type"]), str(row["idempotency_key"]), payload
+                )
+            except Exception as exc:  # noqa: BLE001 - corrupt legacy rows remain unknown
+                logger.warning(
+                    "request_identity_backfill_skipped job_id=%s reason=%s",
+                    job_id,
+                    type(exc).__name__,
+                )
+                continue
+            expected = (
+                identity.request_id,
+                identity.request_fingerprint,
+                identity.transaction_id,
+            )
+            existing = tuple(
+                str(row[column]) if row[column] is not None else None
+                for column in ("request_id", "request_fingerprint", "transaction_id")
+            )
+            if any(
+                value is not None and value != expected[index]
+                for index, value in enumerate(existing)
+            ):
+                raise RuntimeError(f"persisted request identity does not match job {job_id}")
+            if all(value is not None for value in existing):
+                continue
+            connection.execute(
+                """
+                UPDATE nexus_job_queue
+                SET request_id = ?, request_fingerprint = ?, transaction_id = ?
+                WHERE id = ?
+                  AND (request_id IS NULL OR request_fingerprint IS NULL OR transaction_id IS NULL)
+                """,
+                (*expected, job_id),
+            )
+
+    def _backfill_legacy_attempts(self, connection: sqlite3.Connection) -> None:
+        """Record missing latest legacy attempts without inventing older history."""
+        select_missing = """
+            SELECT q.id, q.attempt, q.status, q.started_at, q.finished_at, q.error,
+                   q.result_json, q.artifact_passport_json, q.attempt_history_json
+            FROM nexus_job_queue AS q
+            WHERE q.attempt > 0
+              AND (
+                json_valid(q.attempt_history_json) = 0
+                OR json_type(
+                    CASE WHEN json_valid(q.attempt_history_json)
+                         THEN q.attempt_history_json ELSE 'null' END
+                ) != 'array'
+                OR NOT EXISTS (
+                    SELECT 1
+                    FROM json_each(
+                        CASE
+                            WHEN json_valid(q.attempt_history_json)
+                             AND json_type(q.attempt_history_json) = 'array'
+                            THEN q.attempt_history_json ELSE '[]'
+                        END
+                    ) AS prior
+                    WHERE prior.type = 'object'
+                      AND json_type(
+                          CASE WHEN prior.type = 'object' THEN prior.value ELSE '{}' END,
+                          '$.attempt'
+                      ) = 'integer'
+                      AND json_extract(
+                          CASE WHEN prior.type = 'object' THEN prior.value ELSE '{}' END,
+                          '$.attempt'
+                      ) = q.attempt
+                )
+              )
+            ORDER BY q.created_at, q.id
+        """
+        try:
+            rows = connection.execute(select_missing).fetchall()
+        except sqlite3.OperationalError as exc:
+            if not any(name in str(exc) for name in ("json_valid", "json_type", "json_each")):
+                raise
+            # JSON1 is bundled with supported SQLite builds, but retain a
+            # portable Python filter for builds compiled without the extension.
+            logger.info("sqlite_json1_unavailable; scanning attempt histories in Python")
+            rows = connection.execute(
+                """
+                SELECT id, attempt, status, started_at, finished_at, error, result_json,
+                       artifact_passport_json, attempt_history_json
+                FROM nexus_job_queue WHERE attempt > 0 ORDER BY created_at, id
+                """
+            ).fetchall()
+
+        for row in rows:
+            job_id = str(row["id"])
+            attempt_number = int(row["attempt"])
+            try:
+                history = self._decode_attempt_history(str(row["attempt_history_json"] or "[]"))
+                if any(self._attempt_number(entry) == attempt_number for entry in history):
+                    continue
+            except CreativePassportError as exc:
+                # A malformed queue-owned history is evidence degradation,
+                # not a reason to prevent the entire queue from starting.
+                logger.warning(
+                    "legacy_attempt_history_backfill_skipped job_id=%s reason=%s",
+                    job_id,
+                    type(exc).__name__,
+                )
+                continue
+
+            persisted_status = str(row["status"])
+            if persisted_status == JobStatus.COMPLETED.value:
+                attempt_status = "legacy_observed_completed"
+            elif persisted_status in {
+                JobStatus.FAILED_RETRYABLE.value,
+                JobStatus.FAILED_TERMINAL.value,
+            }:
+                attempt_status = "legacy_observed_failed"
+            else:
+                attempt_status = "interrupted"
+            result_json = str(row["result_json"]) if row["result_json"] is not None else None
+            verification_json: str | None = None
+            if result_json is not None:
+                try:
+                    legacy_result = json.loads(result_json)
+                    verification = (
+                        legacy_result.get(VERIFICATION_RESULT_KEY)
+                        if isinstance(legacy_result, dict)
+                        else None
+                    )
+                    if isinstance(verification, dict):
+                        verification_json = canonical_json(verification)
+                except (TypeError, ValueError):
+                    verification_json = None
+            history.append(
+                {
+                    "attempt": attempt_number,
+                    "attempt_id": creative_attempt_id(job_id, attempt_number),
+                    "status": attempt_status,
+                    "started_at": str(row["started_at"]) if row["started_at"] is not None else None,
+                    "verifying_at": None,
+                    "verified_at": None,
+                    "finished_at": str(row["finished_at"])
+                    if row["finished_at"] is not None
+                    else None,
+                    "error": str(row["error"]) if row["error"] is not None else None,
+                    "execution_result_json": result_json,
+                    "verification_json": verification_json,
+                    "execution_evidence_json": None,
+                    "passport_json": str(row["artifact_passport_json"])
+                    if row["artifact_passport_json"] is not None
+                    else None,
+                    "reconciled_from_attempt_id": None,
+                }
+            )
+            connection.execute(
+                "UPDATE nexus_job_queue SET attempt_history_json = ? WHERE id = ?",
+                (canonical_json(history), job_id),
+            )
 
     def _insert_or_get(
         self,
         job_type: str,
         idempotency_key: str,
         payload: dict[str, object],
-    ) -> str:
-        payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-        job_id = uuid4().hex
+        payload_json: str | None = None,
+    ) -> _EnqueueOutcome:
+        """Insert the frozen request or describe the existing row exactly."""
+        if payload_json is None:
+            payload_json = canonical_json(payload)
+        try:
+            persisted_payload = json.loads(payload_json)
+        except (TypeError, ValueError) as exc:
+            raise CreativePassportError("queue payload is not valid canonical JSON") from exc
+        if not isinstance(persisted_payload, dict):
+            raise CreativePassportError("queue payload must serialize to a JSON object")
+        snapshot = {str(key): value for key, value in persisted_payload.items()}
+        identity = build_request_identity(job_type, idempotency_key, snapshot)
+        payload_digest = digest_of(snapshot)
+        proposed_job_id = uuid4().hex
+
         with self._db_lock, self._connection() as connection:
-            existing = connection.execute(
-                "SELECT id FROM nexus_job_queue WHERE idempotency_key = ?",
-                (idempotency_key,),
-            ).fetchone()
-            if existing is not None:
-                return str(existing[0])
-            connection.execute(
+            cursor = connection.execute(
                 """
                 INSERT INTO nexus_job_queue
-                    (id, job_type, idempotency_key, payload_json, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (id, job_type, idempotency_key, payload_json, status, created_at,
+                     request_id, request_fingerprint, transaction_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(idempotency_key) DO NOTHING
                 """,
                 (
-                    job_id,
+                    proposed_job_id,
                     job_type,
                     idempotency_key,
                     payload_json,
                     JobStatus.PENDING.value,
                     _now(),
+                    identity.request_id,
+                    identity.request_fingerprint,
+                    identity.transaction_id,
                 ),
             )
-        return job_id
+            if cursor.rowcount == 1:
+                return _EnqueueOutcome(
+                    job_id=proposed_job_id,
+                    created=True,
+                    payload_conflict=False,
+                    payload_digest=payload_digest,
+                    status=JobStatus.PENDING.value,
+                    status_known=True,
+                )
+
+            existing = connection.execute(
+                """
+                SELECT id, job_type, idempotency_key, payload_json, status,
+                       request_id, request_fingerprint, transaction_id
+                FROM nexus_job_queue WHERE idempotency_key = ?
+                """,
+                (idempotency_key,),
+            ).fetchone()
+            if existing is None:
+                raise RuntimeError("idempotency conflict occurred without an existing queue row")
+            existing_id = str(existing["id"])
+            existing_type = str(existing["job_type"])
+            try:
+                existing_payload = json.loads(str(existing["payload_json"]))
+                if not isinstance(existing_payload, dict):
+                    raise ValueError("persisted queue payload is not an object")
+                existing_payload = {str(key): value for key, value in existing_payload.items()}
+                existing_identity = build_request_identity(
+                    existing_type, str(existing["idempotency_key"]), existing_payload
+                )
+            except Exception as exc:  # noqa: BLE001 - corrupt durable request fails closed
+                raise RuntimeError(
+                    f"existing request identity is corrupt for job {existing_id}"
+                ) from exc
+            persisted_identity = (
+                str(existing["request_id"]),
+                str(existing["request_fingerprint"]),
+                str(existing["transaction_id"]),
+            )
+            computed_identity = (
+                existing_identity.request_id,
+                existing_identity.request_fingerprint,
+                existing_identity.transaction_id,
+            )
+            if persisted_identity != computed_identity:
+                raise RuntimeError(f"existing request identity is corrupt for job {existing_id}")
+
+            same_request = (
+                existing_type == job_type
+                and existing_identity.request_fingerprint == identity.request_fingerprint
+            )
+            conflict = not same_request
+            rejected = conflict and (
+                job_type == CREATIVE_RENDER_JOB_TYPE or existing_type == CREATIVE_RENDER_JOB_TYPE
+            )
+            if conflict and rejected:
+                logger.warning(
+                    "creative_request_idempotency_conflict: key=%s existing_job=%s; "
+                    "changed creative request rejected",
+                    idempotency_key,
+                    existing_id,
+                )
+            elif conflict:
+                logger.warning(
+                    "job_idempotency_payload_conflict: key=%s existing_job=%s "
+                    "original payload wins",
+                    idempotency_key,
+                    existing_id,
+                )
+
+            raw_status = str(existing["status"])
+            try:
+                status = parse_job_status(raw_status).value
+                status_known = True
+            except ValueError:
+                status = raw_status
+                status_known = False
+            return _EnqueueOutcome(
+                job_id=existing_id,
+                created=False,
+                payload_conflict=conflict,
+                payload_digest=payload_digest,
+                status=status,
+                status_known=status_known,
+                rejected=rejected,
+            )
 
     def _fetch_row(self, job_id: str) -> sqlite3.Row | None:
         with self._db_lock, self._connection() as connection:
             return connection.execute(
-                """
-                SELECT id, job_type, payload_json, status, result_json, error
-                FROM nexus_job_queue WHERE id = ?
-                """,
-                (job_id,),
+                "SELECT * FROM nexus_job_queue WHERE id = ?", (job_id,)
             ).fetchone()
 
-    def _reset_unfinished(self) -> list[str]:
+    def _fetch_row_full(self, job_id: str) -> sqlite3.Row | None:
+        with self._db_lock, self._connection() as connection:
+            return connection.execute(
+                "SELECT * FROM nexus_job_queue WHERE id = ?", (job_id,)
+            ).fetchone()
+
+    def _decode_attempt_history(self, raw: str) -> list[dict[str, object]]:
+        """Decode the queue-owned, row-atomic attempt ledger."""
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise CreativePassportError("persisted attempt history is malformed") from exc
+        if not isinstance(parsed, list) or any(not isinstance(item, dict) for item in parsed):
+            raise CreativePassportError("persisted attempt history is not a list of records")
+        return [{str(key): value for key, value in item.items()} for item in parsed]
+
+    @staticmethod
+    def _attempt_number(record: Mapping[str, object]) -> int:
+        """Read a persisted attempt number without trusting arbitrary JSON types."""
+        value = record.get("attempt")
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise CreativePassportError("persisted attempt number is invalid")
+        return value
+
+    def _fetch_attempt_history(self, job_id: str) -> list[dict[str, object]] | None:
+        with self._db_lock, self._connection() as connection:
+            row = connection.execute(
+                "SELECT attempt_history_json FROM nexus_job_queue WHERE id = ?", (job_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        records = self._decode_attempt_history(str(row["attempt_history_json"] or "[]"))
+        history: list[dict[str, object]] = []
+        for record in records:
+            result_json = record.get("execution_result_json")
+            verification_json = record.get("verification_json")
+            result = json.loads(result_json) if isinstance(result_json, str) else None
+            verification = (
+                json.loads(verification_json) if isinstance(verification_json, str) else None
+            )
+            history.append(
+                {
+                    "attempt_number": self._attempt_number(record),
+                    "attempt_id": str(record["attempt_id"]),
+                    "status": str(record["status"]),
+                    "started_at": record.get("started_at"),
+                    "verifying_at": record.get("verifying_at"),
+                    "verified_at": record.get("verified_at"),
+                    "finished_at": record.get("finished_at"),
+                    "error": record.get("error"),
+                    "result": result,
+                    "verification": verification,
+                    "reconciled_from_attempt_id": record.get("reconciled_from_attempt_id"),
+                }
+            )
+        return history
+
+    def _fetch_passport_context(
+        self, job_id: str
+    ) -> tuple[dict[str, object], dict[str, object], str] | None:
+        with self._db_lock, self._connection() as connection:
+            queue_row = connection.execute(
+                "SELECT * FROM nexus_job_queue WHERE id = ?", (job_id,)
+            ).fetchone()
+            if queue_row is None:
+                return None
+            stored_passport = queue_row["artifact_passport_json"]
+            if stored_passport is None:
+                raise LookupError(f"job {job_id} has no persisted artifact passport")
+            try:
+                passport_obj = json.loads(str(stored_passport))
+                passport_attempt_id = str(passport_obj["attempt"]["attempt_id"])
+            except (TypeError, KeyError, json.JSONDecodeError) as exc:
+                raise CreativePassportError("persisted queue passport is malformed") from exc
+            history = self._decode_attempt_history(str(queue_row["attempt_history_json"] or "[]"))
+            attempt_record = next(
+                (item for item in history if item.get("attempt_id") == passport_attempt_id),
+                None,
+            )
+            if attempt_record is None:
+                raise CreativePassportError("passport's producing attempt is missing")
+        return dict(queue_row), attempt_record, str(stored_passport)
+
+    def _find_verified_attempt(self, job_id: str, before_attempt: int) -> dict[str, object] | None:
+        """Find the newest earlier attempt with a durable verified passport."""
+        with self._db_lock, self._connection() as connection:
+            row = connection.execute(
+                "SELECT attempt_history_json FROM nexus_job_queue WHERE id = ?", (job_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        history = self._decode_attempt_history(str(row["attempt_history_json"] or "[]"))
+        candidates = [
+            entry
+            for entry in history
+            if self._attempt_number(entry) < before_attempt
+            and entry.get("status") in {"verified", "completed"}
+            and isinstance(entry.get("passport_json"), str)
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=self._attempt_number)
+
+    def _reverify_candidate(
+        self, job_record: dict[str, object], attempt_record: dict[str, object]
+    ) -> tuple[dict[str, object], str, str]:
+        """Rebuild a prior attempt's passport from persisted bytes before reuse."""
+        verifier = self._artifact_verifiers.get(CREATIVE_RENDER_JOB_TYPE)
+        stored_passport = attempt_record.get("passport_json")
+        if verifier is None or not isinstance(stored_passport, str):
+            raise CreativePassportError("verified attempt has no reusable passport/verifier")
+        passport = reverify_stored_passport(
+            artifact_root=self._artifact_root,
+            job_record=job_record,
+            attempt_record=attempt_record,
+            stored_passport_json=stored_passport,
+            verifier=verifier,
+        )
+        result_raw = attempt_record.get("execution_result_json")
+        if not isinstance(result_raw, str):
+            raise CreativePassportError("verified attempt has no persisted execution result")
+        result = json.loads(result_raw)
+        if not isinstance(result, dict):
+            raise CreativePassportError("verified attempt result is malformed")
+        result["artifact_passport_id"] = passport.passport_id
+        return (
+            {str(key): value for key, value in result.items()},
+            stored_passport,
+            str(attempt_record["attempt_id"]),
+        )
+
+    def _reset_unfinished(
+        self, stale_after: timedelta | None, exclude: set[str]
+    ) -> list[tuple[str, str, int | None]]:
+        """Reset orphaned rows and return only CAS-confirmed takeovers.
+
+        A pending row is re-listed as ``(job_id, job_type, None)``; it was
+        never owned and is not a takeover. In-flight rows carry their previous
+        attempt only when the status-and-attempt CAS actually commits, so a
+        racing reservation cannot be misreported as superseded.
+        """
+        in_flight = (JobStatus.PROCESSING.value, JobStatus.VERIFYING.value)
+        cutoff = (
+            (datetime.now(timezone.utc) - stale_after).isoformat()
+            if stale_after is not None
+            else None
+        )
         with self._db_lock, self._connection() as connection:
             rows = connection.execute(
                 """
-                SELECT id FROM nexus_job_queue
-                WHERE status IN (?, ?)
+                SELECT id, job_type, status, started_at, attempt, attempt_history_json
+                FROM nexus_job_queue
+                WHERE status IN (?, ?, ?)
                 ORDER BY created_at, id
                 """,
-                (JobStatus.PENDING.value, JobStatus.PROCESSING.value),
+                (JobStatus.PENDING.value, *in_flight),
             ).fetchall()
-            connection.execute(
-                """
-                UPDATE nexus_job_queue
-                SET status = ?, started_at = NULL
-                WHERE status IN (?, ?)
-                """,
-                (
-                    JobStatus.PENDING.value,
-                    JobStatus.PENDING.value,
-                    JobStatus.PROCESSING.value,
-                ),
-            )
-        return [str(row[0]) for row in rows]
+            selected: list[tuple[str, str, int | None]] = []
+            for row in rows:
+                job_id = str(row["id"])
+                job_type = str(row["job_type"])
+                if job_id in exclude:
+                    continue
+                if str(row["status"]) in in_flight:
+                    started_at = row["started_at"]
+                    if cutoff is not None and started_at is not None and started_at >= cutoff:
+                        continue  # a live peer may still own a recent row
+                    current_attempt = int(row["attempt"] or 0)
+                    raw_history = row["attempt_history_json"]
+                    try:
+                        history = self._decode_attempt_history(str(raw_history or "[]"))
+                        for entry in history:
+                            if self._attempt_number(entry) == current_attempt and entry.get(
+                                "status"
+                            ) in {"processing", "verifying"}:
+                                entry["status"] = "interrupted"
+                                entry["finished_at"] = _now()
+                                entry["error"] = entry.get("error") or (
+                                    "process_recovered_before_attempt_checkpoint"
+                                )
+                        history_json = canonical_json(history)
+                    except CreativePassportError as exc:
+                        # The queue row remains the state authority, but its
+                        # corrupt attempt evidence cannot be reconstructed.
+                        # Preserve the raw bytes, release the orphaned in-flight
+                        # state, and let other rows recover independently.
+                        logger.warning(
+                            "attempt_history_unreadable_during_recovery "
+                            "job_id=%s attempt=%s reason=%s; preserving raw history",
+                            job_id,
+                            current_attempt,
+                            type(exc).__name__,
+                        )
+                        history_json = raw_history
+                    cursor = connection.execute(
+                        """
+                        UPDATE nexus_job_queue
+                        SET status = ?, started_at = NULL, attempt_history_json = ?
+                        WHERE id = ? AND status IN (?, ?) AND attempt = ?
+                        """,
+                        (
+                            JobStatus.PENDING.value,
+                            history_json,
+                            job_id,
+                            *in_flight,
+                            current_attempt,
+                        ),
+                    )
+                    if cursor.rowcount != 1:
+                        continue
+                    selected.append((job_id, job_type, current_attempt or None))
+                else:
+                    selected.append((job_id, job_type, None))
+        return selected
 
     def _select_pending(self) -> list[str]:
         """Return ids of rows still in ``pending``, oldest first."""
@@ -331,65 +2030,427 @@ class InProcessJobQueue:
             ).fetchall()
         return [str(row[0]) for row in rows]
 
-    def _mark_processing(self, job_id: str) -> None:
+    def job_ids(self) -> list[str]:
+        """Every durable job id, oldest first (recovery/backfill iteration)."""
         with self._db_lock, self._connection() as connection:
-            connection.execute(
+            rows = connection.execute(
+                "SELECT id FROM nexus_job_queue ORDER BY created_at, id"
+            ).fetchall()
+        return [str(row[0]) for row in rows]
+
+    # ------------------------------------------------------------------
+    # Fenced transitions.  Every method below is a compare-and-set on
+    # (id, expected status[, attempt]) and returns whether it committed.
+    # ``rowcount`` is the proof: 1 = this execution still owned the row.
+    # ------------------------------------------------------------------
+    def _mark_processing(self, job_id: str) -> ExecutionClaim | None:
+        """Reservation: PENDING → PROCESSING, minting the fencing token.
+
+        Source state is PENDING **only** — a PROCESSING/VERIFYING row is
+        owned by a live execution and is never re-reserved (takeover goes
+        through ``resume_pending`` explicitly).  Returns the claim (job id +
+        the attempt value this reservation minted) or ``None`` if the CAS
+        did not commit.
+        """
+        with self._db_lock, self._connection() as connection:
+            cursor = connection.execute(
                 """
                 UPDATE nexus_job_queue
-                SET status = ?, started_at = ?
-                WHERE id = ? AND status IN (?, ?)
+                SET status = ?, started_at = ?, attempt = attempt + 1
+                WHERE id = ? AND status = ?
+                """,
+                (JobStatus.PROCESSING.value, _now(), job_id, JobStatus.PENDING.value),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = connection.execute(
+                "SELECT attempt, attempt_history_json FROM nexus_job_queue WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+            attempt_number = int(row["attempt"])
+            identifier = creative_attempt_id(job_id, attempt_number)
+            history = self._decode_attempt_history(str(row["attempt_history_json"] or "[]"))
+            history.append(
+                {
+                    "attempt": attempt_number,
+                    "attempt_id": identifier,
+                    "status": "processing",
+                    "started_at": _now(),
+                    "verifying_at": None,
+                    "verified_at": None,
+                    "finished_at": None,
+                    "error": None,
+                    "execution_result_json": None,
+                    "verification_json": None,
+                    "execution_evidence_json": None,
+                    "passport_json": None,
+                    "reconciled_from_attempt_id": None,
+                }
+            )
+            ledger_cursor = connection.execute(
+                """
+                UPDATE nexus_job_queue SET attempt_history_json = ?
+                WHERE id = ? AND status = ? AND attempt = ?
                 """,
                 (
-                    JobStatus.PROCESSING.value,
-                    _now(),
+                    canonical_json(history),
                     job_id,
-                    JobStatus.PENDING.value,
                     JobStatus.PROCESSING.value,
+                    attempt_number,
                 ),
             )
+            if ledger_cursor.rowcount != 1:
+                raise RuntimeError("reservation lost before its attempt ledger could be appended")
+            return ExecutionClaim(job_id=job_id, attempt=attempt_number)
 
-    def _mark_pending(self, job_id: str) -> None:
+    def _owns_execution(self, claim: ExecutionClaim, expected: JobStatus) -> bool:
+        """Read-side fence: is the row still ours, in ``expected`` state?"""
         with self._db_lock, self._connection() as connection:
-            connection.execute(
+            row = connection.execute(
+                "SELECT status, attempt FROM nexus_job_queue WHERE id = ?", (claim.job_id,)
+            ).fetchone()
+        return (
+            row is not None
+            and str(row["status"]) == expected.value
+            and int(row["attempt"]) == claim.attempt
+        )
+
+    def _mark_verifying(self, claim: ExecutionClaim) -> bool:
+        """PROCESSING → VERIFYING, atomically advancing the attempt ledger."""
+        try:
+            with self._db_lock, self._connection() as connection:
+                cursor = connection.execute(
+                    """
+                    UPDATE nexus_job_queue SET status = ?
+                    WHERE id = ? AND status = ? AND attempt = ?
+                    """,
+                    (
+                        JobStatus.VERIFYING.value,
+                        claim.job_id,
+                        JobStatus.PROCESSING.value,
+                        claim.attempt,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    return False
+                row = connection.execute(
+                    "SELECT attempt_history_json FROM nexus_job_queue WHERE id = ?",
+                    (claim.job_id,),
+                ).fetchone()
+                history = self._decode_attempt_history(str(row[0] or "[]"))
+                attempt = next(
+                    (
+                        entry
+                        for entry in history
+                        if self._attempt_number(entry) == claim.attempt
+                        and entry.get("status") == "processing"
+                    ),
+                    None,
+                )
+                if attempt is None:
+                    raise _AttemptTransitionError("missing processing attempt ledger record")
+                attempt["status"] = "verifying"
+                attempt["verifying_at"] = _now()
+                ledger_cursor = connection.execute(
+                    """
+                    UPDATE nexus_job_queue SET attempt_history_json = ?
+                    WHERE id = ? AND status = ? AND attempt = ?
+                    """,
+                    (
+                        canonical_json(history),
+                        claim.job_id,
+                        JobStatus.VERIFYING.value,
+                        claim.attempt,
+                    ),
+                )
+                if ledger_cursor.rowcount != 1:
+                    raise _AttemptTransitionError("attempt history transition lost its fence")
+                return True
+        except _AttemptTransitionError:
+            return False
+
+    def _mark_pending(self, claim: ExecutionClaim) -> bool:
+        """PROCESSING/VERIFYING → PENDING for OUR execution only (fenced CAS)."""
+        try:
+            with self._db_lock, self._connection() as connection:
+                row = connection.execute(
+                    """
+                    SELECT attempt_history_json FROM nexus_job_queue
+                    WHERE id = ? AND status IN (?, ?) AND attempt = ?
+                    """,
+                    (
+                        claim.job_id,
+                        JobStatus.PROCESSING.value,
+                        JobStatus.VERIFYING.value,
+                        claim.attempt,
+                    ),
+                ).fetchone()
+                if row is None:
+                    return False
+                history = self._decode_attempt_history(str(row["attempt_history_json"] or "[]"))
+                attempt = next(
+                    (entry for entry in history if self._attempt_number(entry) == claim.attempt),
+                    None,
+                )
+                if attempt is None:
+                    raise _AttemptTransitionError("missing live attempt ledger record")
+                if attempt.get("status") in {"processing", "verifying"}:
+                    attempt["status"] = "interrupted"
+                    attempt["finished_at"] = _now()
+                    attempt["error"] = attempt.get("error") or "worker_cancelled"
+                elif attempt.get("status") != "verified":
+                    raise _AttemptTransitionError("attempt is not recoverable")
+                cursor = connection.execute(
+                    """
+                    UPDATE nexus_job_queue
+                    SET status = ?, started_at = NULL, attempt_history_json = ?
+                    WHERE id = ? AND status IN (?, ?) AND attempt = ?
+                    """,
+                    (
+                        JobStatus.PENDING.value,
+                        canonical_json(history),
+                        claim.job_id,
+                        JobStatus.PROCESSING.value,
+                        JobStatus.VERIFYING.value,
+                        claim.attempt,
+                    ),
+                )
+                return cursor.rowcount == 1
+        except _AttemptTransitionError:
+            return False
+
+    def _record_verified_attempt(
+        self,
+        claim: ExecutionClaim,
+        result: dict[str, object],
+        verification: dict[str, object],
+        execution_evidence: dict[str, object],
+        stored_passport: str,
+    ) -> bool:
+        """Durably checkpoint verified trim bytes before terminal job completion."""
+        result_json = canonical_json(result)
+        verification_json = canonical_json(verification)
+        execution_evidence_json = canonical_json(execution_evidence)
+        with self._db_lock, self._connection() as connection:
+            row = connection.execute(
                 """
-                UPDATE nexus_job_queue
-                SET status = ?, started_at = NULL
-                WHERE id = ?
+                SELECT attempt_history_json FROM nexus_job_queue
+                WHERE id = ? AND status = ? AND attempt = ?
                 """,
-                (JobStatus.PENDING.value, job_id),
+                (claim.job_id, JobStatus.VERIFYING.value, claim.attempt),
+            ).fetchone()
+            if row is None:
+                return False
+            history = self._decode_attempt_history(str(row["attempt_history_json"] or "[]"))
+            attempt = next(
+                (
+                    entry
+                    for entry in history
+                    if self._attempt_number(entry) == claim.attempt
+                    and entry.get("status") == "verifying"
+                ),
+                None,
             )
-
-    def _mark_completed(self, job_id: str, result: dict[str, object]) -> None:
-        with self._db_lock, self._connection() as connection:
-            connection.execute(
+            if attempt is None:
+                return False
+            attempt.update(
+                {
+                    "status": "verified",
+                    "verified_at": _now(),
+                    "execution_result_json": result_json,
+                    "verification_json": verification_json,
+                    "execution_evidence_json": execution_evidence_json,
+                    "passport_json": stored_passport,
+                }
+            )
+            cursor = connection.execute(
                 """
                 UPDATE nexus_job_queue
-                SET status = ?, result_json = ?, error = NULL, finished_at = ?
-                WHERE id = ?
+                SET attempt_history_json = ?, artifact_passport_json = ?
+                WHERE id = ? AND status = ? AND attempt = ?
+                """,
+                (
+                    canonical_json(history),
+                    stored_passport,
+                    claim.job_id,
+                    JobStatus.VERIFYING.value,
+                    claim.attempt,
+                ),
+            )
+            return cursor.rowcount == 1
+
+    def _mark_completed(
+        self,
+        claim: ExecutionClaim,
+        result: dict[str, object],
+        stored_passport: str | None = None,
+        attempt_status: str = "completed",
+        reconciled_from_attempt_id: str | None = None,
+    ) -> bool:
+        """Persist the queue result and its matching attempt state atomically."""
+        if attempt_status not in {"completed", "reconciled"}:
+            raise ValueError("completion attempt status must be completed or reconciled")
+        if attempt_status == "reconciled" and (
+            stored_passport is None or reconciled_from_attempt_id is None
+        ):
+            raise ValueError("reconciliation requires a persisted passport and source attempt")
+        result_json = canonical_json(result)
+        with self._db_lock, self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT attempt_history_json FROM nexus_job_queue
+                WHERE id = ? AND status IN (?, ?) AND attempt = ?
+                """,
+                (
+                    claim.job_id,
+                    JobStatus.PROCESSING.value,
+                    JobStatus.VERIFYING.value,
+                    claim.attempt,
+                ),
+            ).fetchone()
+            if row is None:
+                return False
+            history = self._decode_attempt_history(str(row["attempt_history_json"] or "[]"))
+            attempt = next(
+                (
+                    entry
+                    for entry in history
+                    if self._attempt_number(entry) == claim.attempt
+                    and entry.get("status") in {"processing", "verifying", "verified"}
+                ),
+                None,
+            )
+            if attempt is None:
+                return False
+            now = _now()
+            attempt["status"] = attempt_status
+            attempt["finished_at"] = now
+            attempt["error"] = None
+            if attempt_status == "reconciled":
+                attempt["reconciled_from_attempt_id"] = reconciled_from_attempt_id
+            else:
+                attempt["execution_result_json"] = result_json
+                if stored_passport is not None:
+                    attempt["passport_json"] = stored_passport
+            cursor = connection.execute(
+                """
+                UPDATE nexus_job_queue
+                SET status = ?, result_json = ?, artifact_passport_json = ?,
+                    attempt_history_json = ?, error = NULL, finished_at = ?
+                WHERE id = ? AND status IN (?, ?) AND attempt = ?
                 """,
                 (
                     JobStatus.COMPLETED.value,
-                    json.dumps(result, ensure_ascii=False, sort_keys=True),
-                    _now(),
-                    job_id,
+                    result_json,
+                    stored_passport,
+                    canonical_json(history),
+                    now,
+                    claim.job_id,
+                    JobStatus.PROCESSING.value,
+                    JobStatus.VERIFYING.value,
+                    claim.attempt,
                 ),
             )
+            return cursor.rowcount == 1
 
-    def _mark_failed(self, job_id: str, error: str) -> None:
+    def _mark_failed(
+        self,
+        claim: ExecutionClaim,
+        error: str,
+        status: JobStatus = JobStatus.FAILED_TERMINAL,
+        result: dict[str, object] | None = None,
+    ) -> bool:
+        """PROCESSING/VERIFYING → FAILED_* for OUR execution (fenced CAS).
+
+        ``result`` is stored only for typed user failures (the durable
+        ``{"success": False, "error_code": ...}`` dialect the notifier
+        translates); execution crashes and verification refusals persist no
+        result payload — the ``error`` text is the failure reason.
+        """
+        result_json = canonical_json(result) if result is not None else None
         with self._db_lock, self._connection() as connection:
-            connection.execute(
+            row = connection.execute(
+                """
+                SELECT attempt_history_json FROM nexus_job_queue
+                WHERE id = ? AND status IN (?, ?) AND attempt = ?
+                """,
+                (
+                    claim.job_id,
+                    JobStatus.PROCESSING.value,
+                    JobStatus.VERIFYING.value,
+                    claim.attempt,
+                ),
+            ).fetchone()
+            if row is None:
+                return False
+            history = self._decode_attempt_history(str(row["attempt_history_json"] or "[]"))
+            attempt = next(
+                (
+                    entry
+                    for entry in history
+                    if self._attempt_number(entry) == claim.attempt
+                    and entry.get("status") in {"processing", "verifying", "verified"}
+                ),
+                None,
+            )
+            if attempt is None:
+                return False
+            attempt["status"] = status.value
+            attempt["finished_at"] = _now()
+            attempt["error"] = error
+            if result_json is not None:
+                attempt["execution_result_json"] = result_json
+            cursor = connection.execute(
                 """
                 UPDATE nexus_job_queue
-                SET status = ?, error = ?, finished_at = ?
-                WHERE id = ?
+                SET status = ?, error = ?, result_json = ?,
+                    attempt_history_json = ?, finished_at = ?
+                WHERE id = ? AND status IN (?, ?) AND attempt = ?
                 """,
-                (JobStatus.FAILED.value, error, _now(), job_id),
+                (
+                    status.value,
+                    error,
+                    result_json,
+                    canonical_json(history),
+                    _now(),
+                    claim.job_id,
+                    JobStatus.PROCESSING.value,
+                    JobStatus.VERIFYING.value,
+                    claim.attempt,
+                ),
             )
+            return cursor.rowcount == 1
+
+    def _fail_unclaimed(self, job_id: str, error: str, status: JobStatus) -> bool:
+        """PENDING → FAILED_* (claim-time structural failure; unowned CAS).
+
+        No token exists before a reservation; the CAS on ``status =
+        pending`` is what proves nobody else reserved the row meanwhile.
+        """
+        with self._db_lock, self._connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE nexus_job_queue
+                SET status = ?, error = ?, result_json = NULL, finished_at = ?
+                WHERE id = ? AND status = ?
+                """,
+                (status.value, error, _now(), job_id, JobStatus.PENDING.value),
+            )
+            return cursor.rowcount == 1
+
+    @staticmethod
+    def _enable_durable_sqlite_sync(connection: sqlite3.Connection) -> None:
+        """Require SQLite's strongest synchronous setting before queue I/O."""
+        connection.execute("PRAGMA synchronous = EXTRA")
+        row = connection.execute("PRAGMA synchronous").fetchone()
+        if row is None or int(row[0]) != 3:
+            raise RuntimeError("SQLite refused synchronous=EXTRA for the durable job queue")
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
         if self._memory_connection is not None:
             try:
+                self._enable_durable_sqlite_sync(self._memory_connection)
                 yield self._memory_connection
             except Exception:
                 self._memory_connection.rollback()
@@ -401,6 +2462,7 @@ class InProcessJobQueue:
         connection = sqlite3.connect(self._sqlite_path, timeout=30)
         connection.row_factory = sqlite3.Row
         try:
+            self._enable_durable_sqlite_sync(connection)
             yield connection
         except Exception:
             connection.rollback()

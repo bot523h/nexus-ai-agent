@@ -1,11 +1,16 @@
 """Pure operations for the ``nexus.language.caption`` pack.
 
-Wave 4a registers two operations:
-* ``caption.transcribe`` (Level A, IMMEDIATE): Validates and associates a
-  transcript reference with an audio asset (evidence passed above the bus).
-* ``caption.generate_srt`` (Level B, REVERSIBLE): Pure, deterministic conversion
-  of a transcript into a SubRip (.srt) asset with a WebVTT (.vtt) companion
-  rendition attached to the same asset record.
+Wave 4a registers the core operations (``caption.transcribe``,
+``caption.generate_srt``, ASS/RTL, styling, highlight, search, burn-in); Wave 9
+completes the manifest with three more pure operations:
+* ``caption.align_words`` (Level A, IMMEDIATE): Project word timings onto
+  segment spans (length-proportional, exact microsecond cover).
+* ``caption.diarize`` (Level A, IMMEDIATE): Gap-heuristic speaker turns —
+  merge segments into turns first, *then* stamp speakers (single source of
+  truth, also consumed by the local speech adapter).
+* ``caption.translate_local`` (Level A, IMMEDIATE): Offline glossary/dictionary
+  translation projection with honest coverage stats (the neural engine behind
+  the adapter keeps timings; this is the deterministic substrate).
 """
 
 from __future__ import annotations
@@ -22,22 +27,32 @@ from nexus_ai_agent.creative.packs.caption.formatters import (
 )
 from nexus_ai_agent.creative.packs.caption.models import (
     CAPTION_PACKAGE_ID,
+    OPERATION_ALIGN_WORDS,
     OPERATION_BURN_IN,
+    OPERATION_DIARIZE,
     OPERATION_GENERATE_ASS,
     OPERATION_GENERATE_SRT,
     OPERATION_HIGHLIGHT_WORDS,
     OPERATION_SEARCH_TRANSCRIPT,
     OPERATION_STYLE_VAZIRMATN,
     OPERATION_TRANSCRIBE,
+    OPERATION_TRANSLATE_LOCAL,
+    AlignWordsInput,
     AssStyleConfig,
     BurnInInput,
     CaptionAsset,
+    DiarizeInput,
     GenerateAssInput,
     GenerateSrtInput,
     HighlightWordsInput,
     SearchTranscriptInput,
+    SpeakerTurn,
     StyleVazirmatnInput,
     TranscribeInput,
+    TranscriptRef,
+    TranscriptSegment,
+    TranslateLocalInput,
+    WordTiming,
 )
 from nexus_ai_agent.creative.studio.capabilities import (
     CapabilityRegistry,
@@ -443,6 +458,236 @@ def _burn_in(project: Project, context: OperationContext) -> OperationOutcome:
 
 
 # ---------------------------------------------------------------------------
+# Pure Wave 9 helpers (single source of truth — also consumed by adapters)
+# ---------------------------------------------------------------------------
+
+
+def project_word_timings(text: str, start_us: int, end_us: int) -> tuple[WordTiming, ...]:
+    """Project word timings onto ``[start_us, end_us]`` (pure, deterministic).
+
+    Words share the span proportionally to their character length (minimum
+    weight 1); the largest-remainder method guarantees the words cover the
+    span *exactly* (no drift, no gaps) with deterministic tie-breaking by
+    word index.  A zero-length span stamps every word at ``start_us``.
+    """
+    words = text.split()
+    if not words:
+        return ()
+    if end_us <= start_us:
+        return tuple(WordTiming(word=w, start_us=start_us, end_us=start_us) for w in words)
+    weights = [max(1, len(w)) for w in words]
+    total = sum(weights)
+    span = end_us - start_us
+    floors = [(span * w) // total for w in weights]
+    remainders = [(span * w) % total for w in weights]
+    leftover = span - sum(floors)
+    order = sorted(range(len(words)), key=lambda i: (-remainders[i], i))
+    extra = [0] * len(words)
+    for index in order[:leftover]:
+        extra[index] = 1
+    out: list[WordTiming] = []
+    cursor = start_us
+    for word, base, bump in zip(words, floors, extra, strict=True):
+        nxt = cursor + base + bump
+        out.append(WordTiming(word=word, start_us=cursor, end_us=nxt))
+        cursor = nxt
+    return tuple(out)
+
+
+def merge_segments_by_gap(
+    segments: tuple[TranscriptSegment, ...], gap_threshold_us: int
+) -> tuple[tuple[TranscriptSegment, ...], ...]:
+    """Group consecutive segments into turns (pure, deterministic).
+
+    A segment joins the current turn while the silence gap between the
+    previous segment's end and its start is ``<= gap_threshold_us``; a larger
+    gap opens a new turn.  Overlapping segments (negative gap) never split.
+    """
+    if not segments:
+        return ()
+    turns: list[list[TranscriptSegment]] = [[segments[0]]]
+    for seg in segments[1:]:
+        gap = seg.start_us - turns[-1][-1].end_us
+        if gap > gap_threshold_us:
+            turns.append([seg])
+        else:
+            turns[-1].append(seg)
+    return tuple(tuple(turn) for turn in turns)
+
+
+def assign_speakers(turn_count: int, max_speakers: int) -> tuple[str, ...]:
+    """Assign deterministic speaker labels round-robin (``SPEAKER_00`` …)."""
+    return tuple(f"SPEAKER_{i % max_speakers:02d}" for i in range(turn_count))
+
+
+_GLOSSARY_STRIP = ".,!?;:\"'()[]«»؟،"
+
+
+def apply_glossary(text: str, glossary: dict[str, str]) -> tuple[str, int, int]:
+    """Translate ``text`` word-by-word through ``glossary`` (pure, offline).
+
+    Lookup is case-insensitive on the punctuation-stripped core; surrounding
+    punctuation is preserved and unknown words pass through untouched.
+    Returns ``(translated_text, hits, total_tokens)`` so callers can report
+    honest coverage.  Whitespace is normalized to single spaces.
+    """
+    tokens = text.split()
+    lowered: dict[str, str] = {}
+    for key, value in glossary.items():
+        lowered.setdefault(key.lower(), value)
+    out: list[str] = []
+    hits = 0
+    for token in tokens:
+        core = token.strip(_GLOSSARY_STRIP)
+        if not core:
+            out.append(token)
+            continue
+        start = token.index(core)
+        hit = lowered.get(core.lower())
+        if hit is None:
+            out.append(token)
+            continue
+        hits += 1
+        out.append(token[:start] + hit + token[start + len(core) :])
+    return " ".join(out), hits, len(tokens)
+
+
+def _align_words(project: Project, context: OperationContext) -> OperationOutcome:
+    """Level A (IMMEDIATE) handler for caption.align_words."""
+    payload = AlignWordsInput.model_validate(context.input_data)
+    transcript = payload.transcript
+    aligned: list[TranscriptSegment] = []
+    projected_segments = 0
+    for seg in transcript.segments:
+        if seg.words:
+            clamped = tuple(
+                w.model_copy(
+                    update={
+                        "start_us": min(max(w.start_us, seg.start_us), seg.end_us),
+                        "end_us": min(max(w.end_us, seg.start_us), seg.end_us),
+                    }
+                )
+                for w in seg.words
+            )
+            aligned.append(seg.model_copy(update={"words": clamped}))
+        else:
+            projected_segments += 1
+            aligned.append(
+                seg.model_copy(
+                    update={"words": project_word_timings(seg.text, seg.start_us, seg.end_us)}
+                )
+            )
+    new_ref = TranscriptRef(
+        transcript_id=payload.output_transcript_id or f"{transcript.transcript_id}_aligned",
+        source_asset_id=transcript.source_asset_id,
+        language=transcript.language,
+        segments=tuple(aligned),
+        duration_us=transcript.duration_us,
+        speaker_turns=transcript.speaker_turns,
+    )
+    return OperationOutcome(
+        project,
+        context.history,
+        {
+            "transcript": new_ref.model_dump(mode="json"),
+            "transcript_id": new_ref.transcript_id,
+            "aligned_word_count": sum(len(s.words) for s in aligned),
+            "projected_segment_count": projected_segments,
+        },
+    )
+
+
+def _diarize(project: Project, context: OperationContext) -> OperationOutcome:
+    """Level A (IMMEDIATE) handler for caption.diarize.
+
+    Merge first, stamp second: segments are grouped into turns by the gap
+    heuristic, speakers are assigned per turn, and only then are the labels
+    stamped onto segments *and* their words — so a merged turn can never
+    carry stale per-segment labels.
+    """
+    payload = DiarizeInput.model_validate(context.input_data)
+    transcript = payload.transcript
+    turns = merge_segments_by_gap(transcript.segments, payload.gap_threshold_us)
+    labels = assign_speakers(len(turns), payload.max_speakers)
+    stamped: list[TranscriptSegment] = []
+    speaker_turns: list[SpeakerTurn] = []
+    for turn, label in zip(turns, labels, strict=True):
+        for seg in turn:
+            stamped.append(
+                seg.model_copy(
+                    update={
+                        "speaker": label,
+                        "words": tuple(w.model_copy(update={"speaker": label}) for w in seg.words),
+                    }
+                )
+            )
+        speaker_turns.append(
+            SpeakerTurn(
+                speaker=label,
+                start_us=turn[0].start_us,
+                end_us=turn[-1].end_us,
+                text=" ".join(s.text.strip() for s in turn if s.text.strip()) or None,
+            )
+        )
+    new_ref = TranscriptRef(
+        transcript_id=payload.output_transcript_id or f"{transcript.transcript_id}_diarized",
+        source_asset_id=transcript.source_asset_id,
+        language=transcript.language,
+        segments=tuple(stamped),
+        duration_us=transcript.duration_us,
+        speaker_turns=tuple(speaker_turns),
+    )
+    return OperationOutcome(
+        project,
+        context.history,
+        {
+            "transcript": new_ref.model_dump(mode="json"),
+            "transcript_id": new_ref.transcript_id,
+            "turn_count": len(speaker_turns),
+            "speaker_turns": [t.model_dump(mode="json") for t in speaker_turns],
+        },
+    )
+
+
+def _translate_local(project: Project, context: OperationContext) -> OperationOutcome:
+    """Level A (IMMEDIATE) handler for caption.translate_local."""
+    payload = TranslateLocalInput.model_validate(context.input_data)
+    transcript = payload.transcript
+    translated: list[TranscriptSegment] = []
+    total_hits = 0
+    total_tokens = 0
+    for seg in transcript.segments:
+        text, hits, total = apply_glossary(seg.text, payload.glossary)
+        total_hits += hits
+        total_tokens += total
+        words: list[WordTiming] = []
+        for word in seg.words:
+            w_text, _, _ = apply_glossary(word.word, payload.glossary)
+            words.append(word.model_copy(update={"word": w_text}))
+        translated.append(seg.model_copy(update={"text": text, "words": tuple(words)}))
+    new_ref = TranscriptRef(
+        transcript_id=payload.output_transcript_id or f"{transcript.transcript_id}_t",
+        source_asset_id=transcript.source_asset_id,
+        language=payload.target_language,
+        segments=tuple(translated),
+        duration_us=transcript.duration_us,
+        speaker_turns=transcript.speaker_turns,
+    )
+    return OperationOutcome(
+        project,
+        context.history,
+        {
+            "transcript": new_ref.model_dump(mode="json"),
+            "transcript_id": new_ref.transcript_id,
+            "target_language": payload.target_language,
+            "glossary_hits": total_hits,
+            "glossary_total": total_tokens,
+            "coverage": (total_hits / total_tokens) if total_tokens else 1.0,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # Registration and runtime building
 # ---------------------------------------------------------------------------
 
@@ -461,6 +706,45 @@ def register_caption_operations(registry: CapabilityRegistry) -> CapabilityRegis
             permission_level=PermissionLevel.IMMEDIATE,
             input_model=TranscribeInput,
             handler=_transcribe,
+            required_packs=(CAPTION_PACKAGE_ID,),
+            deterministic=True,
+        ),
+    )
+    registry.register_operation(
+        DOMAIN,
+        "align_words",
+        OperationSpec(
+            operation_id=OPERATION_ALIGN_WORDS,
+            description="Project word timings onto segment spans (level A).",
+            permission_level=PermissionLevel.IMMEDIATE,
+            input_model=AlignWordsInput,
+            handler=_align_words,
+            required_packs=(CAPTION_PACKAGE_ID,),
+            deterministic=True,
+        ),
+    )
+    registry.register_operation(
+        DOMAIN,
+        "diarize",
+        OperationSpec(
+            operation_id=OPERATION_DIARIZE,
+            description="Gap-heuristic speaker turns, merge-then-stamp (level A).",
+            permission_level=PermissionLevel.IMMEDIATE,
+            input_model=DiarizeInput,
+            handler=_diarize,
+            required_packs=(CAPTION_PACKAGE_ID,),
+            deterministic=True,
+        ),
+    )
+    registry.register_operation(
+        DOMAIN,
+        "translate_local",
+        OperationSpec(
+            operation_id=OPERATION_TRANSLATE_LOCAL,
+            description="Offline glossary translation projection with coverage (level A).",
+            permission_level=PermissionLevel.IMMEDIATE,
+            input_model=TranslateLocalInput,
+            handler=_translate_local,
             required_packs=(CAPTION_PACKAGE_ID,),
             deterministic=True,
         ),
@@ -556,13 +840,20 @@ def build_caption_registry() -> CapabilityRegistry:
 
 __all__ = [
     "DOMAIN",
+    "OPERATION_ALIGN_WORDS",
     "OPERATION_BURN_IN",
+    "OPERATION_DIARIZE",
     "OPERATION_GENERATE_ASS",
     "OPERATION_GENERATE_SRT",
     "OPERATION_HIGHLIGHT_WORDS",
     "OPERATION_SEARCH_TRANSCRIPT",
     "OPERATION_STYLE_VAZIRMATN",
+    "OPERATION_TRANSLATE_LOCAL",
     "OPERATION_TRANSCRIBE",
+    "apply_glossary",
+    "assign_speakers",
     "build_caption_registry",
+    "merge_segments_by_gap",
+    "project_word_timings",
     "register_caption_operations",
 ]

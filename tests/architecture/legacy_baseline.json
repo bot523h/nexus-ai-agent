@@ -18,12 +18,6 @@
   "baseline_version": 1,
   "legacy_violations": [
     {
-      "file": "src/nexus_ai_agent/worker.py",
-      "imports": [
-        "telegram"
-      ]
-    },
-    {
       "file": "src/nexus_ai_agent/agent/approval.py",
       "imports": [
         "telegram"
@@ -60,6 +54,12 @@
       ]
     },
     {
+      "file": "src/nexus_ai_agent/bot/access_guard.py",
+      "imports": [
+        "telegram"
+      ]
+    },
+    {
       "file": "src/nexus_ai_agent/bot/agent_handlers.py",
       "imports": [
         "telegram"
@@ -67,6 +67,12 @@
     },
     {
       "file": "src/nexus_ai_agent/bot/app.py",
+      "imports": [
+        "telegram"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/bot/feature_handlers.py",
       "imports": [
         "telegram"
       ]
@@ -253,6 +259,12 @@
       "file": "src/nexus_ai_agent/storage/models.py",
       "imports": [
         "sqlmodel"
+      ]
+    },
+    {
+      "file": "src/nexus_ai_agent/worker.py",
+      "imports": [
+        "telegram"
       ]
     }
   ],

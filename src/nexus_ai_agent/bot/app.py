@@ -6,19 +6,25 @@ are initialized here and passed to handlers via bot_data.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from telegram.ext import Application, ApplicationBuilder
 
+from nexus_ai_agent.application.ports.job_queue import JobStatus
 from nexus_ai_agent.config.settings import Settings
+from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.presence import PresenceStore
 from nexus_ai_agent.storage.ai_storage import AIStorageManager, ProviderConfig
 
 from .handlers import (
     build_handlers,
 )
+
+logger = get_logger(__name__)
 
 
 def _build_default_storage(settings: Settings) -> AIStorageManager:
@@ -47,6 +53,91 @@ def _bot_token(settings: Settings) -> str:
     return os.environ.get("TELEGRAM_BOT_TOKEN", settings.telegram_bot_token)
 
 
+def _failure_class_line(status: Any, lang: str) -> str:
+    """First line of a failure notification: retryable ≠ terminal (task-181).
+
+    Both are *failure* notifications — never success — and they are visibly
+    distinct so a user can tell "transient, may be retried" from "definitive
+    failure".  Inline copy (this grandfathered file's convention) so the
+    i18n catalog's key parity is untouched.
+    """
+    if status is JobStatus.FAILED_RETRYABLE:
+        head = (
+            "⚠️ شکست موقت (قابل تکرار)"
+            if lang.startswith("fa")
+            else "⚠️ Temporary failure (may be retried)"
+        )
+    else:
+        head = "❌ شکست قطعی" if lang.startswith("fa") else "❌ Terminal failure"
+    return head + "\n"
+
+
+async def _notify_creative_completion(completion: Any, token: str) -> None:
+    """task-166 (P0-B): deliver one-shot /edit·/caption·/grade results.
+
+    Translated, typed failures for expected problems; the measured artifact
+    (video or document) for successes; the workspace is owned and cleaned
+    here, exactly like the slideshow notifier. Telegram I/O lives in this
+    grandfathered file (frozen import-boundary test).
+    """
+    from telegram import Bot  # noqa: PLC0415
+
+    from nexus_ai_agent.creative.render_jobs import ERROR_CODES, cleanup_workspace
+    from nexus_ai_agent.i18n import i18n
+    from nexus_ai_agent.jobs.failure_semantics import parse_typed_failure_error
+
+    payload = completion.payload or {}
+    result = completion.result or {}
+    lang = i18n.detect_language(str(payload.get("lang") or "en"))
+    chat_id = int(payload.get("chat_id") or 0)
+    if not chat_id:
+        return
+    bot = Bot(token=token)
+    try:
+        # Source of truth = durable lifecycle state (task-181): success is
+        # announced only for COMPLETED.  ``result.success is False`` stays as
+        # a second, independent refusal — a lying result can never turn a
+        # failure status into a success notification.
+        failed = completion.status is not JobStatus.COMPLETED or result.get("success") is False
+        command = str(payload.get("command", "edit"))
+        operation = str(payload.get("operation", ""))
+        if failed:
+            code = str(
+                result.get("error_code")
+                or parse_typed_failure_error(completion.error)
+                or "internal"
+            )
+            key = f"creative.failed.{code}" if code in ERROR_CODES else "creative.failed.internal"
+            class_line = _failure_class_line(completion.status, lang)
+            text = class_line + i18n.t(
+                key,
+                lang=lang,
+                detail=str(result.get("error_detail") or "—"),
+            )
+            await bot.send_message(chat_id=chat_id, text=text)
+            return
+        caption = i18n.t("creative.completed", lang=lang, command=command, operation=operation)
+        artifact = result.get("artifact_path")
+        if artifact and Path(str(artifact)).exists():
+            path = Path(str(artifact))
+            if result.get("artifact_kind") == "video":
+                duration_us = result.get("duration_us")
+                with path.open("rb") as handle:
+                    await bot.send_video(
+                        chat_id=chat_id,
+                        video=handle,
+                        caption=caption,
+                        duration=int(duration_us / 1_000_000) if duration_us else None,
+                    )
+            else:
+                with path.open("rb") as handle:
+                    await bot.send_document(chat_id=chat_id, document=handle, caption=caption)
+        else:
+            await bot.send_message(chat_id=chat_id, text=caption)
+    finally:
+        cleanup_workspace({**payload, **result})
+
+
 def _build_job_completion_notifier(token: str) -> Any:
     """D4: notify the origin chat when a background job finishes.
 
@@ -64,20 +155,43 @@ def _build_job_completion_notifier(token: str) -> Any:
             return
         from telegram import Bot
 
-        if completion.status is JobStatus.FAILED:
+        # Source of truth = durable lifecycle state (task-181, §14): only
+        # COMPLETED may announce success.  FAILED_RETRYABLE and
+        # FAILED_TERMINAL produce visibly distinct *failure* notifications;
+        # any non-terminal state (VERIFYING at delivery time) stays silent —
+        # a success message is impossible outside COMPLETED.
+        if completion.status is JobStatus.FAILED_RETRYABLE:
             text = (
-                f"❌ پردازش «{completion.job_type}» ناموفق بود.\n"
+                f"⚠️ پردازش «{completion.job_type}» ناموفق بود (قابل تکرار).\n"
                 f"شناسه: {completion.job_id}\n"
                 f"خطا: {completion.error or 'نامشخص'}"
             )
-        else:
+        elif completion.status is JobStatus.FAILED_TERMINAL:
+            text = (
+                f"❌ پردازش «{completion.job_type}» با شکست قطعی پایان یافت.\n"
+                f"شناسه: {completion.job_id}\n"
+                f"خطا: {completion.error or 'نامشخص'}"
+            )
+        elif completion.status is JobStatus.COMPLETED:
             text = f"✅ پردازش «{completion.job_type}» کامل شد.\nشناسه: {completion.job_id}"
+        else:
+            logger.info(
+                "job %s notified in non-terminal state %s — staying silent",
+                completion.job_id,
+                completion.status,
+            )
+            return
         if completion.job_type == "slideshow_render":
             # Wave 2.5 (D4 extension, r7 item 4): deliver the rendered master
             # and own its cleanup; failures arrive as short mapped messages.
             from nexus_ai_agent.bot.slideshow_notify import notify_slideshow_completion
 
             await notify_slideshow_completion(completion, token)
+            return
+        if completion.job_type == "creative_render":
+            # task-166 (P0-B): translated, typed failures; measured artifact
+            # delivery; workspace owned and cleaned by the notifier.
+            await _notify_creative_completion(completion, token)
             return
         bot = Bot(token=token)
         await bot.send_message(chat_id=int(str(raw_chat_id)), text=text)
@@ -105,15 +219,30 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
     # Application-owned background jobs. The queue is a SQLite sidecar owned
     # by this adapter; execution remains on the bot process event loop.
     # D4: finished jobs notify the origin Telegram chat (fail-safe hook).
+    # task-231: the causal journal (Project Graph ledger) records every
+    # durable transition into its own sidecar — evidence, never authority.
+    # Its unavailability DEGRADES EVIDENCE, never the bot: a corrupt, locked
+    # or unwritable sidecar logs ``causal_journal_unavailable``, the queue
+    # runs without an observer, and the passport plane reports the gap.
+    from nexus_ai_agent.provenance import QueueLedgerObserver
+    from nexus_ai_agent.provenance.paths import (
+        causal_journal_db_path,
+        try_open_causal_journal,
+    )
     from nexus_ai_agent.worker import default_job_handlers, job_queue_db_path
 
+    _queue_db = job_queue_db_path(settings.db_path)
+    causal_journal = try_open_causal_journal(causal_journal_db_path(_queue_db))
+    causal_observer = QueueLedgerObserver(causal_journal) if causal_journal is not None else None
     job_queue = InProcessJobQueue(
-        job_queue_db_path(settings.db_path),
+        _queue_db,
         on_job_finished=_build_job_completion_notifier(_bot_token(settings)),
+        causal_observer=causal_observer,
     )
     for job_type, handler in default_job_handlers().items():
         job_queue.register_handler(job_type, handler)
     engines["job_queue"] = job_queue
+    engines["causal_journal"] = causal_journal
 
     # Persistent conversation store
     conv_store = ConversationStore(db_path=settings.db_path)
@@ -164,51 +293,16 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
         internxt_token=settings.internxt_token,
     )
 
+    # Shared feature-engine container (feature-wiring batch). Reuses the
+    # referral instance above so exactly ONE ReferralEngine exists per
+    # process (P0-8: single source of truth for documented engines).
+    from nexus_ai_agent.bot.feature_handlers import build_feature_engines
+
+    engines["feature_engines"] = build_feature_engines(
+        settings, referral=engines["referral_engine"]
+    )
+
     return engines
-
-
-#: PTB group the access gate is registered in. It must run *before* the
-#: handler group (0) that holds every command, so a refused update never
-#: reaches a command callback.
-ACCESS_GATE_GROUP = -1
-
-
-def build_access_gate_handler(settings: Settings) -> Any:
-    """Build the single PTB handler that authorizes *every* incoming update.
-
-    Lives here rather than in ``bot/middleware.py`` because ``middleware.py``
-    must stay ``telegram``-free (see its module docstring) and this file is one
-    of the grandfathered telegram-import sites.
-
-    The gate itself is :class:`BotAccessGate`; this wrapper only translates a
-    refusal into PTB's documented "stop processing this update" signal.
-    """
-    from telegram import Update
-    from telegram.ext import ApplicationHandlerStop, ContextTypes, TypeHandler
-
-    from .middleware import DENIED_MESSAGE, AuthMiddleware, BotAccessGate
-
-    gate = BotAccessGate(AuthMiddleware(settings.allowed_user_ids, settings.owner_telegram_id))
-
-    async def _access_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        decision = gate.decide(update)
-        if decision.allowed:
-            return
-        # Never let a failed notification turn into an unhandled error: the
-        # update is refused either way.
-        try:
-            query = update.callback_query
-            if query is not None:
-                await query.answer(text="⛔ Access denied", show_alert=True)
-            else:
-                message = update.effective_message
-                if message is not None and hasattr(message, "reply_text"):
-                    await message.reply_text(DENIED_MESSAGE)
-        except Exception:  # noqa: BLE001 - the refusal must win over delivery
-            pass
-        raise ApplicationHandlerStop
-
-    return TypeHandler(Update, _access_gate)
 
 
 def build_application(
@@ -229,11 +323,49 @@ def build_application(
     # Initialize all v2.0.0+ engines
     engines = _init_v2_engines(settings)
     job_queue = engines["job_queue"]
+    feature_engines = engines["feature_engines"]
 
-    async def _resume_jobs(_: Any) -> None:
+    async def _post_init(application: Any) -> None:
+        # Bind the runtime bot to the bindable engines (reminders,
+        # force-join, anonymous chat) and restore pending reminders so
+        # a restart does not silently drop them.
+        try:
+            feature_engines.reminders.bind(application.bot)
+            feature_engines.force_join.bind(application.bot)
+            feature_engines.anon.bind(application.bot)
+            await feature_engines.reminders.restore_pending()
+        except Exception:  # noqa: BLE001 — startup wiring must not kill the bot
+            logger.exception("feature_engines_startup_failed")
+        # task-231: close any crash-window holes in the causal journal with
+        # explicitly labeled reconstructions (idempotent, fail-safe). A
+        # degraded (None) journal simply has nothing to backfill into.
+        journal = engines.get("causal_journal")
+        if journal is not None:
+            try:
+                from nexus_ai_agent.provenance.backfill import backfill_journal
+
+                backfill_journal(
+                    journal,
+                    job_queue,
+                    await asyncio.to_thread(job_queue.job_ids),
+                )
+            except Exception:  # noqa: BLE001 — ledger recovery must not kill the bot
+                logger.exception("causal_journal_backfill_failed")
         await job_queue.resume_pending()
 
-    application = ApplicationBuilder().token(token).post_init(_resume_jobs).build()
+    async def _post_shutdown(application: Any) -> None:
+        try:
+            feature_engines.reminders.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    application = (
+        ApplicationBuilder()
+        .token(token)
+        .post_init(_post_init)
+        .post_shutdown(_post_shutdown)
+        .build()
+    )
     application.bot_data["graph"] = graph
     application.bot_data["presence"] = presence_store
     application.bot_data["storage"] = storage_manager
@@ -243,8 +375,11 @@ def build_application(
     for key, value in engines.items():
         application.bot_data[key] = value
 
-    # Single authorization choke point, ahead of every command handler.
-    application.add_handler(build_access_gate_handler(settings), group=ACCESS_GATE_GROUP)
+    # P0-2: global deny-by-default access guard, group -1 = before every
+    # other handler (commands, callbacks, and free text alike).
+    from nexus_ai_agent.bot.access_guard import build_access_guard
+
+    application.add_handler(build_access_guard(settings), group=-1)
 
     for handler in build_handlers(
         graph,
@@ -252,8 +387,19 @@ def build_application(
         settings=settings,
         presence=presence_store,
         storage=storage_manager,
+        feature_engines=feature_engines,
     ):
         application.add_handler(handler)
+
+    # task-166 (P0-B): register the creative studio surface (/edit /caption
+    # /grade) against the same job queue the worker drains, so the canonical
+    # Telegram → queue → registry → bus → lane → artifact chain is live.
+    from telegram.ext import CommandHandler as _CommandHandler
+
+    from nexus_ai_agent.bot.creative_surface import build_creative_handlers
+
+    for _name, _fn in build_creative_handlers(job_queue).items():
+        application.add_handler(_CommandHandler(_name, _fn))
     # Custom command handlers removed as they should be part of build_handlers or imported correctly
     # install_presence_heartbeat(application) # Removed as it was an unawaited mock
     return application

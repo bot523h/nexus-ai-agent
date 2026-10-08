@@ -12,7 +12,8 @@
     "timeline.reverse_segment",
     "timeline.freeze_frame",
     "timeline.attach_b_roll",
-    "timeline.retime_to_music"
+    "timeline.retime_to_music",
+    "timeline.sync_multicam"
   ],
   "runtime": {
     "native": {

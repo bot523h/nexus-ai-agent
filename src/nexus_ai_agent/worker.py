@@ -11,8 +11,6 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-from nexus_ai_agent.optional_deps import from_import_error
-
 JobHandler = Callable[[dict[str, object]], Awaitable[dict[str, object]]]
 
 
@@ -31,6 +29,7 @@ def default_job_handlers() -> dict[str, JobHandler]:
     Composition roots register the full map so a resumed job always finds
     its handler, regardless of which process drains the queue.
     """
+    from nexus_ai_agent.creative.render_jobs import creative_render_job
     from nexus_ai_agent.creative.slideshow.worker_adapter import slideshow_render_job
 
     return {
@@ -38,6 +37,9 @@ def default_job_handlers() -> dict[str, JobHandler]:
         "story": generate_story_job,
         # Wave 2.5: the Nagar slideshow lane reached through the queue, never inline.
         "slideshow_render": slideshow_render_job,
+        # task-166 (P0-B): one-shot /edit, /caption, /grade through the same
+        # canonical chain (registry → CommandBus → lane → measured artifact).
+        "creative_render": creative_render_job,
     }
 
 
@@ -74,14 +76,7 @@ async def process_pdf_task(user_id: int, file_path: str, file_id: str) -> str:
     """
     try:
         text = await extract_pdf_text(file_path)
-        # The RAG lane is an optional extra ([rag] pulls chromadb + flashrank +
-        # sentence-transformers/torch). Translate the import failure so the
-        # durable job record carries the install command instead of a bare
-        # ModuleNotFoundError from deep inside features.rag.
-        try:
-            from nexus_ai_agent.features.rag import AdvancedRAGEngine
-        except ModuleNotFoundError as exc:
-            raise from_import_error(exc) from exc
+        from nexus_ai_agent.features.rag import AdvancedRAGEngine
 
         engine = AdvancedRAGEngine()
         await engine.add_document(user_id, text, {"file_id": file_id})
@@ -103,21 +98,73 @@ async def generate_story_task(user_id: int, text: str, output_path: str) -> str:
 
 
 async def process_pdf_job(payload: dict[str, object]) -> dict[str, object]:
-    result = await process_pdf_task(
-        int(str(payload["user_id"])),
-        str(payload["file_path"]),
-        str(payload["file_id"]),
-    )
-    return {"message": result}
+    """Queue handler for ``pdf_extract`` — with a measurable artifact (task-180).
+
+    The extracted text layer is **staged** next to the source PDF at the
+    deterministic name ``<stem>.extracted.txt.staged`` (single source of
+    truth: ``jobs.feature_verification.pdf_text_staged_path``) via atomic
+    temp→replace into the staging name, and the result carries the artifact
+    claim (staged path + sha256 + size) that the registered ``pdf_extract``
+    verifier re-measures independently. The queue publishes the staged
+    artifact (atomic rename to ``<stem>.extracted.txt``) and re-probes it
+    only after verification succeeded (task-181: stage → verify → publish →
+    re-probe) — a refused extraction never touches a previously published
+    artifact. Extraction/artifact failures raise, so the queue persists a
+    failure status — a job can no longer report success without a
+    verifiable artifact.
+    """
+    user_id = int(str(payload["user_id"]))
+    file_path = str(payload["file_path"])
+    file_id = str(payload["file_id"])
+    try:
+        text = await extract_pdf_text(file_path)
+        from nexus_ai_agent.jobs.feature_verification import (
+            pdf_text_staged_path,
+            publish_text_artifact,
+        )
+
+        artifact = pdf_text_staged_path(Path(file_path))
+        publish_text_artifact(artifact, text)
+
+        from nexus_ai_agent.features.rag import AdvancedRAGEngine
+
+        engine = AdvancedRAGEngine()
+        await engine.add_document(user_id, text, {"file_id": file_id})
+    except Exception as exc:  # noqa: BLE001 - queue owns durable failure mapping
+        raise RuntimeError(f"Error processing {file_id}: {exc}") from exc
+    from nexus_ai_agent.creative.slideshow.ffmpeg import sha256_file
+
+    return {
+        "message": f"Successfully processed {file_id}",
+        "artifact_path": str(artifact),
+        "artifact_kind": "text",
+        "content_sha256": sha256_file(artifact),
+        "size_bytes": artifact.stat().st_size,
+    }
 
 
 async def generate_story_job(payload: dict[str, object]) -> dict[str, object]:
+    """Queue handler for ``story`` — with a measurable artifact (task-180).
+
+    The generator writes a locally rendered PNG to the dispatched
+    ``output_path``; the result now carries the artifact claim (sha256 +
+    size, measured from the written bytes) so the registered ``story``
+    verifier can re-measure it independently.
+    """
     result = await generate_story_task(
         int(str(payload["user_id"])),
         str(payload["text"]),
         str(payload["output_path"]),
     )
-    return {"output_path": result}
+    from nexus_ai_agent.creative.slideshow.ffmpeg import sha256_file
+
+    artifact = Path(result)
+    return {
+        "output_path": result,
+        "artifact_kind": "image",
+        "content_sha256": sha256_file(artifact),
+        "size_bytes": artifact.stat().st_size,
+    }
 
 
 __all__ = [

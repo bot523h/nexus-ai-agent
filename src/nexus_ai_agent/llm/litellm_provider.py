@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from nexus_ai_agent.config.settings import Settings
+from nexus_ai_agent.llm.errors import LLMError
 from nexus_ai_agent.llm.fake_llm import FakeLLMProvider
 from nexus_ai_agent.llm.fallback_provider import FallbackProvider
 from nexus_ai_agent.llm.provider import LLMProvider
@@ -52,13 +53,17 @@ OLLAMA_COOLDOWN_TIME = 300
 OLLAMA_ALLOWED_FAILS = 2
 
 
-class RouterExhaustedError(RuntimeError):
+class RouterExhaustedError(LLMError):
     """Every deployment in the routing chain failed or is cooling down.
 
-    The message deliberately contains the rate-limit keywords matched by
-    ``FallbackProvider`` ("429", "rate limit", "quota", "daily limit") so a
-    drained router degrades to the FakeLLM fallback instead of propagating.
+    A *typed* rate-limit failure (``kind="RATE_LIMIT"``) so ``FallbackProvider``
+    degrades to the FakeLLM fallback by type, not by scanning message text
+    (LAW 10). The message still carries the human-readable rate-limit keywords
+    for logs and operator clarity.
     """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, kind="RATE_LIMIT")
 
 
 @dataclass(frozen=True)
@@ -300,8 +305,9 @@ def build_llm_provider(settings: Settings) -> tuple[LLMProvider, str]:
     Priority:
       1. litellm routing chain (when enabled and ≥1 provider configured),
          wrapped in the existing ``FallbackProvider`` (outer layer → FakeLLM).
-      2. Legacy local GGUF path (unchanged behaviour).
-      3. ``FakeLLMProvider`` when nothing is available.
+      2. llama.cpp server (when ``llama_server_base_url`` is set).
+      3. Legacy local GGUF path (unchanged behaviour).
+      4. ``FakeLLMProvider`` when nothing is available.
 
     Returns ``(provider, human-readable label)``.
     """
@@ -316,6 +322,19 @@ def build_llm_provider(settings: Settings) -> tuple[LLMProvider, str]:
             outer = FallbackProvider(primary=routing, fallback=FakeLLMProvider())
             label = f"litellm routing chain ({' → '.join(routing.chain_names)}) + FakeLLM outer"
             return outer, label
+
+    if settings.llama_server_base_url:
+        from nexus_ai_agent.llm.local_server_provider import (
+            LocalLlamaServerProvider,
+        )
+
+        server = LocalLlamaServerProvider(
+            settings.llama_server_base_url,
+            model=settings.llama_server_model,
+            timeout=float(settings.llama_server_timeout),
+            max_tokens=settings.llama_server_max_tokens,
+        )
+        return server, f"llama.cpp server ({settings.llama_server_base_url})"
 
     model_path = Path(settings.model_path)
     if model_path.exists():

@@ -1,133 +1,175 @@
-"""Force-join gate tests (P0-3).
+"""Force-join gate security semantics (S2).
 
-Two independent defects made the "anti-bypass" gate a no-op:
+Proves, against real SQLModel/SQLAlchemy behaviour (not mocks):
 
-1. ``check_membership`` answered ``True`` when no bot instance was bound, and
-   the handler built ``ForceJoinManager()`` without one — so every visitor was
-   a "member".
-2. ``should_block`` filtered with ``ForceJoinConfig.enabled is True``, a Python
-   identity test that SQLAlchemy compiled to ``WHERE 0`` — so the query never
-   matched and the gate concluded "force-join is not enabled anywhere".
-
-Both are pinned here against a real SQLite table.
+1. the enabled-anywhere predicate is a *SQL* predicate — it compiles to
+   ``enabled IS true`` (SQLite: ``IS 1``) and returns rows on both
+   SQLite and (by compilation shape) Postgres. The historical bug —
+   ``ForceJoinConfig.enabled is True``, a Python identity comparison —
+   compiled to ``WHERE 0 = 1`` and made the gate fail-open for
+   everyone;
+2. an unbound manager (``bot is None``) fails **closed**: the startup
+   wiring binds inside a broad ``try/except`` that can swallow a bind
+   failure, so no machine guarantee exists that traffic only flows
+   after bind — an unbound gate must therefore treat everyone as
+   non-member while force-join is enabled;
+3. public commands (/start, /help, /forcejoin_status) bypass the gate;
+4. membership checks use the real Telegram API when bound, and a
+   failing API call fails closed too.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from sqlalchemy import create_engine
-from sqlmodel import SQLModel
+from sqlalchemy.dialects import postgresql, sqlite
+from sqlmodel import Session, SQLModel, create_engine, select
 
-from nexus_ai_agent.config import settings as settings_module
-from nexus_ai_agent.features import force_join as fj
-from nexus_ai_agent.features.force_join import DEFAULT_CHANNEL, ForceJoinManager
+import nexus_ai_agent.features.force_join as force_join_module
+from nexus_ai_agent.config.settings import Settings
+from nexus_ai_agent.features.force_join import ForceJoinManager
 from nexus_ai_agent.storage.models import ForceJoinConfig
 
 
-class _Member:
-    def __init__(self, status: str) -> None:
-        self.status = status
-
-
 class _FakeBot:
-    """Minimal Telegram bot stand-in for membership lookups."""
+    """Answers get_chat_member from a scripted table."""
 
-    def __init__(self, status: str = "member") -> None:
-        self.status = status
-        self.calls: list[tuple[str, int]] = []
+    def __init__(self, statuses: dict[int, str] | None = None, fail: bool = False) -> None:
+        self._statuses = statuses or {}
+        self._fail = fail
+        self.calls: list[int] = []
 
-    async def get_chat_member(self, chat_id: str, user_id: int) -> _Member:
-        self.calls.append((chat_id, user_id))
-        if self.status == "raise":
-            raise RuntimeError("bot was kicked from the channel")
-        return _Member(self.status)
-
-
-@pytest.fixture(autouse=True)
-def _clean_cache() -> Any:
-    fj._membership_cache.clear()
-    yield
-    fj._membership_cache.clear()
+    async def get_chat_member(self, chat_id: Any, user_id: int) -> Any:
+        self.calls.append(user_id)
+        if self._fail:
+            raise RuntimeError("telegram unavailable")
+        return SimpleNamespace(status=self._statuses.get(user_id, "left"))
 
 
 @pytest.fixture()
-def _db(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    db_path = tmp_path / "app.sqlite"
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
-    monkeypatch.setenv("NEXUS_DB_PATH", str(db_path))
-    settings_module.get_settings.cache_clear()
+def gate_db(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Point the force-join engine at a fresh SQLite file with the table."""
+    db_path = str(tmp_path / "forcejoin-test.db")
+    settings = Settings().model_copy(update={"db_path": db_path})
+    monkeypatch.setattr(force_join_module, "get_settings", lambda: settings)
+    engine = force_join_module._sync_engine(db_path)
+    SQLModel.metadata.create_all(engine)
+    return db_path
+
+
+def _add_enabled_config(db_path: str, enabled: bool = True) -> None:
     engine = create_engine(f"sqlite:///{db_path}")
-    SQLModel.metadata.create_all(engine, tables=[ForceJoinConfig.__table__])
-    engine.dispose()
-    yield db_path
-    settings_module.get_settings.cache_clear()
+    with Session(engine) as session:
+        session.add(ForceJoinConfig(chat_id=-1001234, enabled=enabled))
+        session.commit()
 
 
-@pytest.mark.asyncio
-async def test_membership_without_a_bot_fails_closed(_db: Path) -> None:
-    """The old behaviour returned True here — the gate was wide open."""
+# --------------------------------------------------------------------- #
+# 1. The predicate is SQL, not a Python identity comparison
+# --------------------------------------------------------------------- #
+
+
+def test_enabled_predicate_compiles_to_sql_is_true() -> None:
+    from sqlalchemy import SQLColumnExpression  # noqa: F401
+
+    stmt = select(ForceJoinConfig).where(ForceJoinConfig.enabled.is_(True))
+    sqlite_sql = str(stmt.compile(dialect=sqlite.dialect()))
+    postgres_sql = str(stmt.compile(dialect=postgresql.dialect()))
+    assert "WHERE forcejoinconfig.enabled IS 1" in sqlite_sql
+    assert "WHERE forcejoinconfig.enabled IS true" in postgres_sql
+    # …and it must *not* be the constant-folded ``WHERE 0 = 1`` that the
+    # Python ``is True`` version compiled to.
+    assert "WHERE 0 = 1" not in sqlite_sql
+
+
+async def test_enabled_anywhere_returns_true_when_a_row_exists(gate_db: str) -> None:
+    _add_enabled_config(gate_db, enabled=True)
     manager = ForceJoinManager()
-    assert manager.bot is None
+    assert manager._is_enabled_anywhere_sync() is True
+
+
+async def test_enabled_anywhere_false_when_no_rows_or_disabled(gate_db: str) -> None:
+    manager = ForceJoinManager()
+    assert manager._is_enabled_anywhere_sync() is False
+    _add_enabled_config(gate_db, enabled=False)
+    assert manager._is_enabled_anywhere_sync() is False
+
+
+async def test_gate_blocks_non_member_when_enabled(gate_db: str) -> None:
+    """End-to-end: enabled config + non-member user → blocked."""
+    _add_enabled_config(gate_db, enabled=True)
+    manager = ForceJoinManager(bot=_FakeBot({999: "member"}))
+    # 999 is a member → not blocked; 1001 is not → blocked.
+    assert await manager.should_block(999, "") is False
+    assert await manager.should_block(1001, "") is True
+
+
+async def test_gate_disabled_everywhere_blocks_nobody(gate_db: str) -> None:
+    manager = ForceJoinManager(bot=None)
+    assert await manager.should_block(1001, "") is False
+
+
+# --------------------------------------------------------------------- #
+# 2. Unbound manager fails closed
+# --------------------------------------------------------------------- #
+
+
+async def test_unbound_check_membership_fails_closed(gate_db: str) -> None:
+    manager = ForceJoinManager(bot=None)
     assert await manager.check_membership(1) is False
 
 
-@pytest.mark.asyncio
-async def test_membership_follows_the_real_telegram_answer(_db: Path) -> None:
-    manager = ForceJoinManager(bot=_FakeBot("member"))
-    assert await manager.check_membership(1) is True
+async def test_unbound_manager_blocks_when_gate_enabled(gate_db: str) -> None:
+    """bot is None + force-join enabled → every non-public command blocked.
 
-    fj._membership_cache.clear()
-    left = ForceJoinManager(bot=_FakeBot("left"))
-    assert await left.check_membership(1) is False
-
-
-@pytest.mark.asyncio
-async def test_membership_fails_closed_when_the_api_call_raises(_db: Path) -> None:
-    manager = ForceJoinManager(bot=_FakeBot("raise"))
-    assert await manager.check_membership(1) is False
+    The startup wiring (bot/app.py _post_init) binds inside a broad
+    try/except that swallows failures, so there is no machine guarantee
+    that bind happened before traffic — the gate must fail closed.
+    """
+    _add_enabled_config(gate_db, enabled=True)
+    manager = ForceJoinManager(bot=None)
+    assert await manager.should_block(1001, "/ai") is True
 
 
-@pytest.mark.asyncio
-async def test_should_block_is_false_when_no_chat_enabled_force_join(_db: Path) -> None:
-    manager = ForceJoinManager(bot=_FakeBot("left"))
-    assert await manager.should_block(1, command="ai") is False
+async def test_unbound_result_is_not_cached(gate_db: str) -> None:
+    """An unbound 'not a member' answer must not poison the cache: once
+    the bot binds, the very next check must hit the API."""
+    manager = ForceJoinManager(bot=None)
+    assert await manager.check_membership(7) is False
+    manager.bind(_FakeBot({7: "member"}))
+    assert await manager.check_membership(7) is True
 
 
-@pytest.mark.asyncio
-async def test_should_block_blocks_a_non_member_once_enabled(_db: Path) -> None:
-    """Regression for the ``enabled is True`` query bug: this used to be False."""
-    ForceJoinManager.set_config(-100123, enabled=True, channel_username="@nexus_ai_official")
-    bot = _FakeBot("left")
+async def test_api_failure_fails_closed(gate_db: str) -> None:
+    manager = ForceJoinManager(bot=_FakeBot(fail=True))
+    assert await manager.check_membership(5) is False
+
+
+# --------------------------------------------------------------------- #
+# 3. Public commands bypass the gate
+# --------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("command", ["start", "help", "forcejoin_status"])
+async def test_public_commands_bypass_gate(gate_db: str, command: str) -> None:
+    _add_enabled_config(gate_db, enabled=True)
+    manager = ForceJoinManager(bot=None)
+    assert await manager.should_block(1001, command) is False
+
+
+# --------------------------------------------------------------------- #
+# 4. Bound manager uses the real API path (+ cache)
+# --------------------------------------------------------------------- #
+
+
+async def test_bound_membership_uses_api_and_caches(gate_db: str) -> None:
+    bot = _FakeBot({42: "member"})
     manager = ForceJoinManager(bot=bot)
-    assert await manager.should_block(1, command="ai") is True
-    assert bot.calls == [(DEFAULT_CHANNEL, 1)]
-
-
-@pytest.mark.asyncio
-async def test_should_block_lets_members_through(_db: Path) -> None:
-    ForceJoinManager.set_config(-100123, enabled=True)
-    manager = ForceJoinManager(bot=_FakeBot("administrator"))
-    assert await manager.should_block(1, command="ai") is False
-
-
-@pytest.mark.asyncio
-async def test_public_commands_are_never_blocked(_db: Path) -> None:
-    ForceJoinManager.set_config(-100123, enabled=True)
-    manager = ForceJoinManager(bot=_FakeBot("left"))
-    for command in ("start", "help", "forcejoin_status"):
-        assert await manager.should_block(1, command=command) is False
-
-
-@pytest.mark.asyncio
-async def test_invalidate_cache_forces_a_fresh_check(_db: Path) -> None:
-    bot = _FakeBot("left")
-    manager = ForceJoinManager(bot=bot)
-    assert await manager.check_membership(1) is False
-    assert await manager.check_membership(1) is False
-    assert len(bot.calls) == 1  # served from cache
-    manager.invalidate_cache(1)
-    assert await manager.check_membership(1) is False
-    assert len(bot.calls) == 2
+    assert await manager.check_membership(42) is True
+    assert await manager.check_membership(42) is True
+    assert bot.calls == [42], "second check must be served from the cache"
+    manager.invalidate_cache(42)
+    assert await manager.check_membership(42) is True
+    assert bot.calls == [42, 42]

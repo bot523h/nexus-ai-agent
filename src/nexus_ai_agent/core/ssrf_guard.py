@@ -19,8 +19,12 @@ Defence in depth applied here:
    address (closes the TOCTOU / DNS-rebinding window).
 
 Blocked address ranges: 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12,
-192.168.0.0/16, 169.254.0.0/16 (cloud metadata), 0.0.0.0/8, ::1, fe80::/10,
+192.168.0.0/16, 169.254.0.0/16 (cloud metadata), 0.0.0.0/8,
+100.64.0.0/10 (CGNAT / shared address space), ::1, fe80::/10,
 fc00::/7 — plus the standard private/reserved/loopback/link-local checks.
+The https-only rule is additionally enforced on *every* request at the
+transport boundary, so an https→http redirect downgrade is refused, not
+followed.
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ import asyncio
 import ipaddress
 import socket
 import ssl
+from collections.abc import AsyncIterable
 from typing import Any, cast
 
 import httpcore
@@ -42,6 +47,10 @@ _BLOCKED_NETWORKS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (
     ipaddress.ip_network("192.168.0.0/16"),  # RFC1918
     ipaddress.ip_network("169.254.0.0/16"),  # link-local / cloud metadata
     ipaddress.ip_network("0.0.0.0/8"),  # "this network"
+    ipaddress.ip_network("100.64.0.0/10"),  # CGNAT / shared address space
+    # (carrier-grade NAT — 100.64/10 hosts must not be probed; whether the
+    # stdlib flags it as private is Python-version dependent, so the list
+    # is explicit here.)
     ipaddress.ip_network("::1/128"),  # IPv6 loopback
     ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
     ipaddress.ip_network("fc00::/7"),  # IPv6 unique-local
@@ -58,6 +67,14 @@ def is_public_ip(ip: str) -> bool:
         addr = ipaddress.ip_address(ip)
     except ValueError:
         return False
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        # Check the embedded IPv4 against the IPv4 block list explicitly:
+        # stdlib semantics for mapped addresses (and for CGNAT 100.64/10
+        # specifically) changed across versions (CVE-2024-4032 made
+        # ``100.64.0.0/10`` NOT private on 3.12+, and ``is_private`` of a
+        # mapped address delegates to the embedded IPv4) — normalisation
+        # makes the guard deterministic and fail-closed on every Python.
+        addr = addr.ipv4_mapped
     if (
         addr.is_loopback
         or addr.is_link_local
@@ -94,7 +111,13 @@ def _resolve_public_ip(host: str) -> str:
 
 def validate_url(url: str) -> httpx.URL:
     """Validate *url* before fetching: https-only and public addresses only."""
-    parsed = httpx.URL(url)
+    try:
+        parsed = httpx.URL(url)
+    except httpx.InvalidURL as exc:
+        # Malformed hosts (e.g. octal IPv4 forms httpx refuses to parse)
+        # must fail closed through the contract exception, not leak an
+        # ``InvalidURL`` that route handlers do not catch.
+        raise SSRFBlockError(f"URL rejected: {exc}") from exc
     if parsed.scheme != "https":
         raise SSRFBlockError(f"Only https URLs may be fetched (got scheme {parsed.scheme!r})")
     if not parsed.host:
@@ -156,7 +179,8 @@ class SafeAsyncTransport(httpx.AsyncBaseTransport):
     """httpx transport that only ever connects to public addresses.
 
     Every connection (including every redirect target) is resolved and
-    checked at connect time; blocked targets surface as ``httpx.ConnectError``.
+    checked at connect time, and the https-only scheme rule is re-checked
+    on every request; blocked targets surface as ``httpx.ConnectError``.
     """
 
     def __init__(self, verify: bool = True) -> None:
@@ -166,6 +190,16 @@ class SafeAsyncTransport(httpx.AsyncBaseTransport):
         )
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        # Scheme gate at the transport boundary: validate_url checks the
+        # *initial* URL, but redirect hops arrive here directly — the
+        # https-only policy must hold on every request, not just the first.
+        # (Proven defect: a 302 https→http downgrade was otherwise followed
+        # and a second, plaintext connection established.)
+        if request.url.raw_scheme != b"https":
+            raise httpx.ConnectError(
+                f"Only https URLs may be fetched (got scheme {request.url.scheme!r})",
+                request=request,
+            )
         req = httpcore.Request(
             method=request.method,
             url=httpcore.URL(
@@ -183,10 +217,16 @@ class SafeAsyncTransport(httpx.AsyncBaseTransport):
                 resp = await self._pool.handle_async_request(req)
         except SSRFBlockError as exc:
             raise httpx.ConnectError(str(exc), request=request) from exc
+        # Wrap the httpcore stream exactly like httpx's own default
+        # transport does (AsyncClient asserts the response stream is an
+        # httpx.AsyncByteStream — the raw httpcore stream is not one, so
+        # a *successful* fetch would crash without this wrapper).
         return httpx.Response(
             status_code=resp.status,
             headers=resp.headers,
-            stream=cast(httpx.AsyncByteStream, resp.stream),
+            stream=httpx._transports.default.AsyncResponseStream(
+                cast(AsyncIterable[bytes], resp.stream)
+            ),
             extensions=resp.extensions,
         )
 

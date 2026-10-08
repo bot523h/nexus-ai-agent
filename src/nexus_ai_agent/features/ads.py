@@ -39,7 +39,7 @@ class AdManager:
     def create_campaign(
         chat_id: int,
         text: str,
-        interval_hours: int = 24,
+        interval_hours: float = 24.0,
         max_repeats: int = 0,
         created_by: int = 0,
     ) -> int:
@@ -48,7 +48,11 @@ class AdManager:
         Args:
             chat_id: Target chat for the ad.
             text: Ad text content.
-            interval_hours: Hours between each ad run.
+            interval_hours: Hours between each ad run. A float, because the
+                ``AdCampaign.interval_hours`` column is a Float and the next-run
+                arithmetic is a plain ``timedelta(hours=...)``; the annotation
+                used to say ``int`` while the storage said otherwise, which only
+                mattered once a caller existed (it had none — see D-0009).
             max_repeats: Max times to repeat (0 = unlimited).
             created_by: User ID who created the campaign.
         """

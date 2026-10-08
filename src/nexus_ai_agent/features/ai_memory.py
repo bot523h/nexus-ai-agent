@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime
 
 from sqlmodel import select
@@ -13,23 +14,139 @@ from nexus_ai_agent.storage.models import UserMemory
 
 logger = logging.getLogger(__name__)
 
+# Consent states for ``UserMemory.ai_memory_consent`` (tri-state).
+CONSENT_UNSET = "unset"
+CONSENT_GRANTED = "granted"
+CONSENT_DENIED = "denied"
+
+# Reasons ``update_from_message`` may skip the LLM egress.  Anything other
+# than ``EGRESSED`` is a hard no-egress outcome.
+EGRESSED = "egressed"
+SKIP_DISABLED = "disabled"
+SKIP_NOT_CONSENTED = "not_consented"
+SKIP_RATE_LIMITED = "rate_limited"
+
 
 class AIMemoryEngine:
-    """Engine for analyzing user interactions and maintaining long-term memory."""
+    """Engine for analyzing user interactions and maintaining long-term memory.
 
-    def __init__(self, gemini_provider: GeminiProvider | None = None) -> None:
+    **P0-7 — LLM egress consent gate.** Every call that would send user
+    message text to the external LLM (:meth:`update_from_message`) passes a
+    three-stage gate, in order:
+
+    1. *Global switch* — ``settings.ai_memory_enabled`` (env kill switch).
+    2. *Per-user consent* — ``UserMemory.ai_memory_consent`` must be exactly
+       ``"granted"``; unset or denied users never egress (default-deny).
+    3. *Rate limit* — at most one egress per user per
+       ``settings.ai_memory_min_egress_seconds`` (in-process, per user).
+
+    The gate is enforced *inside* the engine, not at the call sites, so no
+    future caller can bypass it. Local-only operations (``get_context``,
+    ``forget_user``) never touch the network.
+    """
+
+    def __init__(
+        self,
+        gemini_provider: GeminiProvider | None = None,
+        *,
+        min_egress_seconds: float | None = None,
+    ) -> None:
         settings = get_settings()
         self.gemini = gemini_provider or GeminiProvider(api_key=settings.gemini_api_key or "")
+        self.min_egress_seconds = (
+            float(settings.ai_memory_min_egress_seconds)
+            if min_egress_seconds is None
+            else float(min_egress_seconds)
+        )
+        # In-process per-user egress timestamps (rate limit).  Lost on restart,
+        # which only relaxes the limit — it can never admit a non-consenting user.
+        self._last_egress: dict[int, float] = {}
 
-    async def update_from_message(self, user_id: int, message: str) -> None:
-        """Extract important user information from a message."""
+    # ── Consent state (local DB only — never egresses) ───────────────
+
+    async def get_consent(self, user_id: int) -> str:
+        """Return ``"unset"`` | ``"granted"`` | ``"denied"`` for *user_id*."""
+        async with get_session() as session:
+            stmt = select(UserMemory).where(UserMemory.user_id == user_id)
+            memory = (await session.execute(stmt)).scalar_one_or_none()
+            if memory is None or memory.ai_memory_consent is None:
+                return CONSENT_UNSET
+            return memory.ai_memory_consent
+
+    async def has_been_prompted(self, user_id: int) -> bool:
+        """True if the one-time consent question was already shown."""
+        async with get_session() as session:
+            stmt = select(UserMemory).where(UserMemory.user_id == user_id)
+            memory = (await session.execute(stmt)).scalar_one_or_none()
+            return bool(memory is not None and memory.ai_memory_prompted)
+
+    async def set_consent(self, user_id: int, granted: bool) -> str:
+        """Persist the user's vote.  Returns the stored state string."""
+        state = CONSENT_GRANTED if granted else CONSENT_DENIED
+        async with get_session() as session:
+            stmt = select(UserMemory).where(UserMemory.user_id == user_id)
+            memory = (await session.execute(stmt)).scalar_one_or_none()
+            if memory is None:
+                memory = UserMemory(
+                    user_id=user_id,
+                    last_updated=datetime.utcnow(),
+                    ai_memory_consent=state,
+                    ai_memory_consent_at=datetime.utcnow(),
+                    ai_memory_prompted=True,
+                )
+            else:
+                memory.ai_memory_consent = state
+                memory.ai_memory_consent_at = datetime.utcnow()
+                memory.ai_memory_prompted = True
+            session.add(memory)
+            await session.commit()
+        return state
+
+    async def mark_prompted(self, user_id: int) -> None:
+        """Record that the consent question was shown (idempotent)."""
+        async with get_session() as session:
+            stmt = select(UserMemory).where(UserMemory.user_id == user_id)
+            memory = (await session.execute(stmt)).scalar_one_or_none()
+            if memory is None:
+                memory = UserMemory(
+                    user_id=user_id,
+                    last_updated=datetime.utcnow(),
+                    ai_memory_prompted=True,
+                )
+            elif not memory.ai_memory_prompted:
+                memory.ai_memory_prompted = True
+            session.add(memory)
+            await session.commit()
+
+    # ── The gated egress path ─────────────────────────────────────────
+
+    async def update_from_message(self, user_id: int, message: str) -> str:
+        """Extract important user information from a message.
+
+        **Never** sends *message* to the LLM unless the P0-7 gate passes.
+        Returns the outcome: :data:`EGRESSED` or one of the skip reasons.
+        """
+        settings = get_settings()
+        if not settings.ai_memory_enabled:
+            return SKIP_DISABLED
+
+        consent = await self.get_consent(user_id)
+        if consent != CONSENT_GRANTED:
+            return SKIP_NOT_CONSENTED
+
+        now = time.monotonic()
+        last = self._last_egress.get(user_id)
+        if last is not None and (now - last) < self.min_egress_seconds:
+            return SKIP_RATE_LIMITED
+        self._last_egress[user_id] = now
+
         prompt = f"""
         Analyze the following message from a user and extract key personal information.
         Information to look for: Name, Interests, Occupation, Personality traits.
-        
+
         User Message: "{message}"
-        
-        Return ONLY a JSON object with these keys: 
+
+        Return ONLY a JSON object with these keys:
         name, interests (list), occupation, personality_tags (list).
         If no new information is found, return an empty JSON object {{}}.
         """
@@ -47,6 +164,7 @@ class AIMemoryEngine:
                     await self._save_memory(user_id, data)
         except Exception as e:
             logger.error(f"Failed to update AI memory: {e}")
+        return EGRESSED
 
     async def _save_memory(self, user_id: int, data: dict) -> None:
         """Merge new data into persistent UserMemory."""
@@ -77,7 +195,10 @@ class AIMemoryEngine:
             await session.commit()
 
     async def get_context(self, user_id: int) -> str:
-        """Generate a context string for system prompt injection."""
+        """Generate a context string for system prompt injection.
+
+        Local read-only; never egresses.
+        """
         async with get_session() as session:
             stmt = select(UserMemory).where(UserMemory.user_id == user_id)
             memory = (await session.execute(stmt)).scalar_one_or_none()
@@ -102,7 +223,12 @@ class AIMemoryEngine:
             return " | ".join(parts)
 
     async def forget_user(self, user_id: int) -> None:
-        """Wipe all memory for a user."""
+        """Wipe all memory **and the consent record** for a user.
+
+        Forgetting implies revoking: the row (including ``ai_memory_consent``)
+        is deleted, so any future egress requires a fresh explicit vote.
+        """
+        self._last_egress.pop(user_id, None)
         async with get_session() as session:
             stmt = select(UserMemory).where(UserMemory.user_id == user_id)
             memory = (await session.execute(stmt)).scalar_one_or_none()

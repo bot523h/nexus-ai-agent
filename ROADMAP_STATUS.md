@@ -1,4 +1,4 @@
-# ROADMAP_STATUS — NEXUS AI agent (as of 2026-09-21, v3.13.0 hardening batch, Phase 6)
+# ROADMAP_STATUS — NEXUS AI agent (as of 2026-09-21, v3.12.0 housekeeping, Phase 6)
 
 Header: **No hidden migration. No hidden mutation. No implicit repair.**
 Phase 6 adds: **packs are data; commands carry evidence; only the last step
@@ -22,39 +22,13 @@ Phases 0–5 are complete on `main`.
 | Release 3.11.0 | Housekeeping cut after Waves 2a–2c | **MERGED** | PR#24 `8b27625` |
 | **Wave 2.5** | Telegram `/slideshow` surface → `JobQueuePort` → existing render lane → completion delivery; five-image/30-second limits and typed failures | **MERGED** | PR#25 `316ed33` |
 | Wave 3 — image generation | Isolated `ImageGenProvider`, Pollinations default and fail-closed paid Gemini; bounded retry/cache, `/imagine`, opt-in slideshow autofill, cost/consent/cleanup tests and import-boundary checks | **MERGED** | PR#26 `52329e6` |
-| Release 3.12.0 | Version lock-step and release notes for Wave 2.5 + Wave 3 image generation; refresh README, roadmap, continuum and decision log | **MERGED** — PR#30 shipped it together with the coordination protocol and the audit report | `5e5009a` |
+| Release 3.12.0 | Version lock-step and release notes for Wave 2.5 + Wave 3 image generation; refresh README, roadmap, continuum and decision log | **THIS PR** — separate release commit, pending merge | base `52329e6` |
 | Wave 3 — local upscale | Optional local stage, not the main render path; contract and owner approval required before implementation | **DEFERRED / NOT IMPLEMENTED** | decision log r6 and release-scope decision 2026-09-21 |
 | Other 60 TDD operations | Each still needs its own contract, ownership boundary and decision entry | NOT STARTED | — |
 
 Telegram now exposes `/slideshow` and `/imagine`; the latter and slideshow
 `--fill` enforce owner/allowlist access. Plain slideshow rendering remains
 upload-only. No new HTTP API surface or local upscale stage is part of this cut.
-
-## Active workstream: product-surface hardening (v3.13.0)
-
-The 2026-09-21 audit (`AUDIT_REPORT_2026-09-21.md`) scored the repo **B−**:
-the Phase 0–6 core is A-grade engineering, the Telegram product shell was
-largely simulated, and authorization existed on 2 of ~80 commands.  PR#30
-merged the audit and the multi-agent protocol but **none of the code** in the
-`P0-security-batch` scope; the board claim said otherwise.
-
-| Item | Audit ref | State | Evidence |
-|---|---|---|---|
-| Single authorization choke point for every update | P0-2 | **DONE** on `arena/01a0c3aa-nexus-ai-agent` | `bot/middleware.py::BotAccessGate`, `bot/app.py` group `-1`, `tests/unit/test_access_gate.py` |
-| Dashboard PII removal (+ optional bearer lock) | P0-5 | **DONE** | `api/dashboard.py`, `tests/unit/test_dashboard_privacy.py` |
-| `/cloud` + `/download` path traversal and handle leak | P0-6 | **DONE** | `core/paths.py`, `tests/unit/test_safe_paths.py` |
-| Force-join always-accepts | P0-3 | **DONE** (+ the `enabled is True` query bug) | `features/force_join.py`, `tests/unit/test_force_join_gate.py` |
-| Dead engines wired (`tools`, games, referral, anon chat) | P0-1, P0-4, P0-10 | **DONE** for `/calc` `/convert` `/tr` `/remind` `/wordle` `/guess*` `/poll` `/quiz` `/leaderboard` `/daily` `/xp_leaderboard` `/achievements` `/start ref_` | `tests/unit/test_wired_commands.py` |
-| Per-message AIMemory egress without consent | P0-7 | **OPEN** | `handlers.py:on_message` still spawns `AIMemoryEngine` per message |
-| Engines constructed twice, `bot_data` ignored | P0-8 | **OPEN** | `bot/app.py::_init_v2_engines` vs `build_handlers` |
-| `LongTermMemory.store` never called (empty vector memory) | P0-9 | **OPEN** | no caller in `src` |
-| Channel management / moderation / RAG stubs | P0-1 | **OPEN** — documented, not faked | README "Command status" table |
-
-Bugs found while testing the above, all fixed in the same branch:
-`get_session()` ignoring `NEXUS_DB_PATH`; six `AsyncSession.exec()` call sites
-that crashed **every free-text message**; a first-time user never being able to
-claim `/daily`; and `features/onboarding.py` swallowing its own `AttributeError`
-so every user looked first-time.
 
 ## Checkpoint lifecycle workstream (Phases 4–5) — complete
 
@@ -82,29 +56,46 @@ maintenance) completed with v3.9.0 (`994a509`).
 
 ## Continuum
 
-`.nexus/continuum.json` (schema v2) now anchors the merged feature state at
-**`52329e6`** (PR#26). Wave 2.5 is corrected from stale `in_review` to merged,
-Wave 3 image generation is recorded separately from local upscale, and the
-v3.12.0 metadata cut remains `in_review` until its own PR merges.
+The Continuum evidence foundation is a contract (DECISION_LOG D-0023), enforced on
+every push and pull request by the CI `continuum-evidence` job on Python 3.10, 3.11
+and 3.12:
 
-The verifier counts **test functions** using an AST walk, not parametrized
-pytest cases. The refreshed `test_count_expected` is **649**; pytest reports
-**742 passed / 20 skipped** locally. The previous snapshot's 656 was stale.
-The environment fingerprint (Python 3.11.2, Alembic 1.20.0, SQLAlchemy 2.0.54)
-is intentionally machine-specific; a different interpreter reports drift rather
-than silently rewriting the snapshot.
+* **Pack coverage — a real 95% gate.** `python scripts/pack_coverage.py` accepts a
+  report only when the run is canonical (27 targets derived from
+  `PACK_TEST_TARGETS`, all 7 units, default root, bar 95.0), the measurement is
+  verified (child exit 0, 0 failed / 0 errors / 0 deselected, nonce-bound trace
+  artifact, no orphaned or stale mapping) and every pack is ≥ 95%. Measured at the
+  PR head (`f68757e`) on Python 3.11.2: TOTAL 97.37%, weakest pack core 95.89%, slideshow
+  97.89% (was 93.55% under the old 85% bar). The artifact is canonical and
+  byte-reproducible.
+* **Snapshot verification fails closed.** `nexus continuum verify` exits 1 on an
+  unreachable/abbreviated/symbolic step, later committed source drift, a dirty,
+  untracked or ignored-but-importable file, test-count drift (pytest collection in
+  an isolated environment, no longer an AST function count), environment drift,
+  malformed/non-canonical/extra/missing/mistyped keys, and when Git cannot answer
+  (no Git, shallow history). `python scripts/continuum_gate.py` proves it in a
+  fresh clone: the control is accepted and 27 attacks are rejected with the
+  expected diagnosis.
+* **Replayable mutation campaign.** `python scripts/continuum_mutations.py` applies
+  81 catalogued mutations (including the CI job itself); the run fails on any survivor and checks every
+  restoration by sha256.
+
+`.nexus/continuum.json` is a machine-bound release-cut record (D-0006): it carries
+the interpreter and dependency fingerprint of the machine that published it, so CI
+reports it (`committed_snapshot`, `blocking: false`) instead of gating on it. It is
+republished with `nexus continuum publish` from a clean checkout; `nexus continuum
+verify` reports STALE as soon as a later commit changes an evidence root.
 
 ## Quality gates (reverified 2026-09-21 on PR#26 head `471803c`)
 
 The working tree was verified byte-for-byte against the requested commit, with
 a fresh local virtualenv and disabled Ruff/mypy/pytest caches before merging.
 
-| Gate | Result (v3.13.0 branch, re-run locally 2026-09-21) |
+| Gate | Result |
 |------|--------|
-| `ruff check . && ruff format --check .` | green — 318 files already formatted |
-| `mypy src` | green — 194 source files |
-| `pytest -q -m "not slow"` | green — **837 passed, 20 skipped** in ~45 s (742 test functions), one upstream Starlette/AnyIO deprecation warning |
-| `nexus continuum verify` | green — snapshot matches the checkout |
+| `make lint` | green — 295 files already formatted |
+| `make types` | green — 184 source files |
+| `make test` | green — **742 passed, 20 skipped**, one upstream Starlette/AnyIO deprecation warning |
 | GitHub `test` | **SUCCESS**, both `push` and `pull_request` runs on `471803c` |
 | GitHub `migrate-postgres` | **SUCCESS**, both runs; real PostgreSQL service-container verification |
 
@@ -146,3 +137,54 @@ genuine encode on any machine; production uses the system FFmpeg
   item.
 - ~~`docs/architecture/DATA_LIFECYCLE.md` described a `nexus_operation_journal`
   table~~ — resolved earlier; the journal table remains forbidden until Stage 3.
+
+## Appendix — 2026-09-21, color/exposure lane (session `arena/01a0c58e-nexus-ai-agent`)
+
+Appended, not rewritten: the tables above remain the record of Waves 1–3 and the
+lifecycle line. This appendix records one wave plus a forensic correction.
+
+**Baseline this wave started from.** `main` at `b422512` (the PR#42 merge,
+`ci(task-113)` lint-fast rail). Measured on that base before any edit:
+`pytest -q -m "not slow"` → **1181 passed, 20 skipped**; `ruff check .` → 0
+errors; `ruff format --check .` → nothing to reformat; `mypy src` → clean, 221
+source files.
+
+**What this wave added.**
+
+| Item | Content | State |
+|---|---|---|
+| `exposure` lane op | `ExposureOp` in `creative/rendering/ir.py` — the executable twin of the pack op `color.adjust_exposure`. Photometric `gamma = clamp(2**EV, 0.1, 10.0)`, contrast pass-through, `temperature_k` 1000–40000 (6500 = the filter's own neutral), `tint/50 → colorbalance gm`, explicit `pl` | **IMPLEMENTED** |
+| Compiler stage | `_exposure_stage()` in `creative/rendering/compiler.py`: `eq` in YUV, then at most one shared `yuv420p → rgb24 → yuv420p` round trip for the RGB-only filters; both RGB stages elided at neutral; audio-only lane with an exposure op is a `LaneError` | **IMPLEMENTED** |
+| Golden pins | `tests/unit/test_rendering_lane_exposure.py` — 16 cases, including both clamp ends as contracts against FFmpeg's declared ranges | **IMPLEMENTED** |
+| Algebra property guard | `tests/unit/test_lane_duration_algebra.py` — 162 cases: 40 seeded random lanes × 4 invariants + 2 structural guards; duration algebra restated independently, argv `-t` cross-checked, byte-identical recompile | **IMPLEMENTED** |
+| Decisions | D-0005 (no `SplitOp`), D-0006 (continuum only at a release cut), D-0007 (EV mapping + every colour bound sourced from FFmpeg's filter code), D-0008 (no `tonemap=hable` yet) | **RECORDED** in `docs/DECISION_LOG.md` |
+| Runbook | `docs/ops/COLOR_LANE.md` — mapping table, seven hard contracts, FFmpeg-free validation command, troubleshooting table | **ADDED** |
+
+Gates after the wave: **1359 passed, 20 skipped** (+178, no new skips, no
+regressions); `ruff check .` 0 errors; `ruff format --check .` nothing to
+reformat; `mypy src` clean.
+
+**Numbering warning.** "Wave 8" is overloaded in this repository. PR#36 shipped
+*"wave 8 apply lane"* (the lane itself). This wave is the colour/exposure stage
+*inside* that lane and is deliberately labelled by session id rather than by a
+second "wave 8". The same hazard applies to the decision ids: `D-0007` is not
+the historical `D7`.
+
+**Forensic correction — a reported wave that left no artifact.** A prior session
+reported six committed "wave 5–8" commits (`ae1b9ef`), 1228 passing tests, a
+`docs/ops/COLOR_LANE.md`, `docs/audits/WAVE5..WAVE7`, decisions D-0005..D-0008,
+and a pending `git push` + `gh pr create` from `arena/01a0c506-nexus-ai-agent`.
+None of that is in this repository:
+
+- `git cat-file -t ae1b9ef` → `fatal: Not a valid object name` (checked against
+  all 292 commits of `main` *and* the remote tip of that branch, `f265995`);
+- `arena/01a0c506-nexus-ai-agent` is **already an ancestor of `main`** — it was
+  merged as **PR#41** on 2026-09-21 18:38Z, so pushing it again is a no-op and
+  opening a PR from it is impossible;
+- at this base commit `ExposureOp`, `colortemperature`, `deband` and `SplitOp`
+  had **zero** occurrences under `src/` and `tests/`, and no `COLOR_LANE.md` or
+  `WAVE5..7` audit existed;
+- the reported test count did not match either: the real base was 1181.
+
+The substance was therefore rebuilt here from the FFmpeg sources rather than
+restored. Everything above is verifiable in this working tree.

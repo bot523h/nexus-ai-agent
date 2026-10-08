@@ -12,7 +12,7 @@ def sample():
     return ContinuumSnapshot(
         2,
         "C2",
-        "recorded-head",
+        "0123456789abcdef0123456789abcdef01234567",
         "next",
         [{"id": "D8", "status": "reverted"}],
         22,

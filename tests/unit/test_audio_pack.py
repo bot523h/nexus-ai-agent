@@ -58,7 +58,7 @@ def _setup_audio_bus() -> tuple[Project, CommandBus]:
     timeline = Timeline(timeline_id="tl_audio", duration_us=10_000_000)
     project = new_project("test_audio_proj", "Audio Studio Test", timeline)
     project = project.model_copy(update={"assets": [audio_rec, voice_rec, clip_1, clip_2]})
-    bus = CommandBus(project, registry=registry)
+    bus = CommandBus(project, registry=registry, allow_experimental=True)
     return project, bus
 
 

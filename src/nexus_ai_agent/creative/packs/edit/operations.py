@@ -9,6 +9,7 @@ This module implements the Nagar Command Bus operations for non-destructive time
 * ``timeline.freeze_frame`` (Level B, REVERSIBLE): Extract and hold a single frame for duration.
 * ``timeline.attach_b_roll`` (Level B, REVERSIBLE): Attach an overlay B-roll track segment.
 * ``timeline.retime_to_music`` (Level B, REVERSIBLE): Align clip boundaries to musical tempo beats.
+* ``timeline.sync_multicam`` (Level A, IMMEDIATE): Offset map for a multicam clip set.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from nexus_ai_agent.creative.packs.edit.models import (
     OPERATION_REVERSE_SEGMENT,
     OPERATION_RIPPLE_DELETE,
     OPERATION_SPEED_RAMP,
+    OPERATION_SYNC_MULTICAM,
     OPERATION_TRIM,
     AttachBRollInput,
     FreezeFrameInput,
@@ -33,6 +35,7 @@ from nexus_ai_agent.creative.packs.edit.models import (
     ReverseSegmentInput,
     RippleDeleteInput,
     SpeedRampInput,
+    SyncMulticamInput,
     TrimInput,
 )
 from nexus_ai_agent.creative.studio.capabilities import (
@@ -375,6 +378,76 @@ def _retime_to_music(project: Project, context: OperationContext) -> OperationOu
     )
 
 
+def _sync_multicam(project: Project, context: OperationContext) -> OperationOutcome:
+    """Level A (IMMEDIATE) handler for timeline.sync_multicam.
+
+    Picks a reference clip by policy, converts every measured anchor into an
+    offset relative to that reference (clamped to ``max_offset_us``) and reports a
+    confidence that degrades linearly with the widest residual offset.  Level A
+    means read-only: the project state is returned untouched.
+    """
+    payload = SyncMulticamInput.model_validate(context.input_data)
+    known = _asset_index(project)
+
+    clips: dict[str, AssetRecord] = {}
+    for clip_id in payload.clip_asset_ids:
+        if clip_id not in known:
+            raise CommandValidationError(
+                f"{OPERATION_SYNC_MULTICAM} references unknown clip: {clip_id!r}"
+            )
+        record = known[clip_id]
+        if record.media_kind != "video":
+            raise CommandValidationError(
+                f"{OPERATION_SYNC_MULTICAM} requires video clips, got "
+                f"{record.media_kind!r} for {clip_id!r}"
+            )
+        clips[clip_id] = record
+
+    if payload.anchor_policy == "explicit":
+        reference_id = payload.reference_clip_id
+    elif payload.anchor_policy == "longest_clip":
+        reference_id = max(payload.clip_asset_ids, key=lambda clip: clips[clip].duration_us)
+    else:  # first_clip
+        reference_id = payload.clip_asset_ids[0]
+    assert reference_id is not None  # guaranteed by the model validator
+
+    anchors = {anchor.clip_asset_id: anchor.anchor_us for anchor in payload.anchors}
+    reference_anchor = anchors[reference_id]
+
+    offset_map: list[dict[str, object]] = []
+    widest = 0
+    for clip_id in payload.clip_asset_ids:
+        raw_offset = anchors[clip_id] - reference_anchor
+        offset = max(-payload.max_offset_us, min(payload.max_offset_us, raw_offset))
+        widest = max(widest, abs(offset))
+        offset_map.append(
+            {
+                "clip_asset_id": clip_id,
+                "raw_offset_us": raw_offset,
+                "offset_us": offset,
+                "clamped": offset != raw_offset,
+                "is_reference": clip_id == reference_id,
+            }
+        )
+
+    confidence = round(max(0.0, 1.0 - widest / payload.max_offset_us), 4)
+
+    return OperationOutcome(
+        project,
+        context.history,
+        {
+            "reference_clip_id": reference_id,
+            "anchor_policy": payload.anchor_policy,
+            "clip_count": len(payload.clip_asset_ids),
+            "offset_map": offset_map,
+            "max_offset_us": payload.max_offset_us,
+            "widest_offset_us": widest,
+            "clamped_clips": [entry["clip_asset_id"] for entry in offset_map if entry["clamped"]],
+            "confidence": confidence,
+        },
+    )
+
+
 def register_edit_operations(registry: CapabilityRegistry) -> None:
     """Register all timeline editing operations with the capability registry."""
     registry.register_operation(
@@ -477,6 +550,19 @@ def register_edit_operations(registry: CapabilityRegistry) -> None:
             permission_level=PermissionLevel.REVERSIBLE,
             input_model=RetimeToMusicInput,
             handler=_retime_to_music,
+            required_packs=(EDIT_PACKAGE_ID,),
+            deterministic=True,
+        ),
+    )
+    registry.register_operation(
+        DOMAIN,
+        "sync_multicam",
+        OperationSpec(
+            operation_id=OPERATION_SYNC_MULTICAM,
+            description="Compute a multicam offset map with confidence from anchors (Level A).",
+            permission_level=PermissionLevel.IMMEDIATE,
+            input_model=SyncMulticamInput,
+            handler=_sync_multicam,
             required_packs=(EDIT_PACKAGE_ID,),
             deterministic=True,
         ),

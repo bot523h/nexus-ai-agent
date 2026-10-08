@@ -65,11 +65,12 @@ class ReferralEngine:
 
     def __init__(self, db_path: str = "data/app.sqlite") -> None:
         self._db_path = db_path
+        self._engine: Any | None = None
         self._ensure_tables()
 
     def _ensure_tables(self) -> None:
         """Create tables if they don't exist."""
-        engine = _ce(f"sqlite:///{self._db_path}", echo=False)
+        engine = self._sync_engine()
         with engine.begin() as conn:
             conn.execute(
                 _text(
@@ -98,7 +99,20 @@ class ReferralEngine:
             )
 
     def _sync_engine(self) -> Any:
-        return _ce(f"sqlite:///{self._db_path}", echo=False)
+        """Cached synchronous engine.
+
+        P1-2: the referral call-sites (``/start`` deep-link, ``/referral``,
+        ``/referral_board``) run in worker threads via ``asyncio.to_thread``
+        at the handler layer, so the engine is created with
+        ``check_same_thread=False`` and cached instead of rebuilt per call.
+        """
+        if self._engine is None:
+            self._engine = _ce(
+                f"sqlite:///{self._db_path}",
+                echo=False,
+                connect_args={"check_same_thread": False},
+            )
+        return self._engine
 
     @staticmethod
     def generate_code(user_id: int) -> str:

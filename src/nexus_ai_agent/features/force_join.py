@@ -10,7 +10,9 @@ channel member.
 
 from __future__ import annotations
 
+import asyncio
 import time
+from functools import lru_cache
 from typing import Any
 
 from sqlmodel import Session, col, select
@@ -32,12 +34,22 @@ _CACHE_TTL = 300.0  # 5 minutes
 _PUBLIC_COMMANDS = frozenset({"start", "help", "forcejoin_status"})
 
 
-def _sync_engine() -> Any:
-    """Return a synchronous SQLAlchemy engine for feature CRUD."""
+@lru_cache(maxsize=8)
+def _sync_engine(db_path: str) -> Any:
+    """Return a (cached) synchronous SQLAlchemy engine for feature CRUD.
+
+    P1-2: the gate's DB read runs in worker threads (``asyncio.to_thread``),
+    so the engine is created with ``check_same_thread=False``; caching it
+    per path also removes the per-message engine churn of the old
+    create-per-call behaviour.
+    """
     from sqlalchemy import create_engine as _ce
 
-    settings = get_settings()
-    return _ce(f"sqlite:///{settings.db_path}", echo=False)
+    return _ce(
+        f"sqlite:///{db_path}",
+        echo=False,
+        connect_args={"check_same_thread": False},
+    )
 
 
 class ForceJoinManager:
@@ -46,6 +58,21 @@ class ForceJoinManager:
     def __init__(self, bot: Any | None = None) -> None:
         self.bot = bot
 
+    def bind(self, bot: Any) -> None:
+        """Attach (or replace) the Telegram bot (called at startup).
+
+        Without a bot, :meth:`check_membership` cannot verify membership
+        and fails **closed** (treats the user as not-a-member): the
+        startup wiring binds inside a broad ``try/except`` that may
+        swallow a bind failure, so an unbound gate must never widen the
+        boundary to "everyone is a member".
+        """
+        self.bot = bot
+
+    @property
+    def is_bound(self) -> bool:
+        return self.bot is not None
+
     # ------------------------------------------------------------------
     # Configuration
     # ------------------------------------------------------------------
@@ -53,7 +80,7 @@ class ForceJoinManager:
     @staticmethod
     def get_config(chat_id: int) -> ForceJoinConfig | None:
         """Return the force-join config for *chat_id*, or None."""
-        engine = _sync_engine()
+        engine = _sync_engine(get_settings().db_path)
         with Session(engine) as session:
             return session.exec(
                 select(ForceJoinConfig).where(ForceJoinConfig.chat_id == chat_id)
@@ -68,7 +95,7 @@ class ForceJoinManager:
         welcome_message: str = "",
     ) -> ForceJoinConfig:
         """Create or update force-join config for *chat_id*."""
-        engine = _sync_engine()
+        engine = _sync_engine(get_settings().db_path)
         with Session(engine) as session:
             existing = session.exec(
                 select(ForceJoinConfig).where(ForceJoinConfig.chat_id == chat_id)
@@ -102,8 +129,6 @@ class ForceJoinManager:
         """Check if *user_id* is a member of *channel*.
 
         Uses a 5-minute cache to avoid hitting the API on every message.
-        **Fail-closed**: without a bound bot instance, or when the Telegram
-        call fails, the answer is "not a member".
         """
         ch = channel or DEFAULT_CHANNEL
         now = time.monotonic()
@@ -115,16 +140,11 @@ class ForceJoinManager:
             if now - ts < _CACHE_TTL:
                 return is_member
 
-        # Ask Telegram API. Fail CLOSED when there is no bot: answering True
-        # here (as this did until v3.13.0) turned the gate into an always-open
-        # door, the exact opposite of "anti-bypass".
+        # Ask Telegram API — an unbound manager cannot verify anyone, so
+        # it fails closed (not a member). The unbound state is *not*
+        # cached: once the bot binds, the next check must hit the API.
         if self.bot is None:
-            logger.warning(
-                "forcejoin_unverifiable",
-                user_id=user_id,
-                channel=ch,
-                reason="no bot instance bound to ForceJoinManager",
-            )
+            logger.warning("forcejoin_unverified_bot_unbound", user_id=user_id, channel=ch)
             return False
         try:
             member = await self.bot.get_chat_member(chat_id=ch, user_id=user_id)
@@ -155,21 +175,31 @@ class ForceJoinManager:
             return False
 
         # Check if force-join is enabled anywhere.
-        # NOTE: this was `ForceJoinConfig.enabled is True`, which is a Python
-        # identity test on an instrumented attribute — it evaluates to False
-        # and SQLAlchemy compiled it to `WHERE 0`, so the query never matched
-        # and should_block() always answered "do not block".
-        engine = _sync_engine()
-        with Session(engine) as session:
-            enabled_configs = session.exec(
-                select(ForceJoinConfig).where(col(ForceJoinConfig.enabled).is_(True))
-            ).first()
-            if enabled_configs is None:
-                return False  # force-join not enabled anywhere
+        # P1-2: this runs on every message — the sync DB read goes to a
+        # worker thread so it can never stall the event loop.
+        if not await asyncio.to_thread(self._is_enabled_anywhere_sync):
+            return False  # force-join not enabled anywhere
 
         # Check membership
         channel = DEFAULT_CHANNEL
         return not await self.check_membership(user_id, channel)
+
+    def _is_enabled_anywhere_sync(self) -> bool:
+        """Synchronous DB core for :meth:`should_block` (worker thread)."""
+        engine = _sync_engine(get_settings().db_path)
+        with Session(engine) as session:
+            # ColumnElement.is_() builds a SQL ``enabled IS true`` (SQLite:
+            # ``enabled IS 1``) predicate. A Python ``is`` comparison here
+            # would evaluate to ``False`` at expression-build time and
+            # compile to ``WHERE 0 = 1`` — the gate would never block
+            # anyone (fail-open). ``col()`` tells both SQLModel and the
+            # type-checker that ``enabled`` is a column expression.
+            return (
+                session.exec(
+                    select(ForceJoinConfig).where(col(ForceJoinConfig.enabled).is_(True))
+                ).first()
+                is not None
+            )
 
     # ------------------------------------------------------------------
     # UI helpers

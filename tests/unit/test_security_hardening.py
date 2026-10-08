@@ -184,6 +184,146 @@ def test_hmac_key_empty_string_fails_closed(
     assert "Security configuration incomplete" in empty.json()["detail"]
 
 
+# ── Legacy job-status endpoint (P0-A hardening) ─────────────────────────
+#
+# ``GET /creative/jobs/{job_id}`` returned the full job row — including local
+# filesystem paths and source URLs — to ANY unsigned caller before task-165.
+# It now sits behind the same fail-closed HMAC gate as the POST (one shared
+# operator key: signature over ``{timestamp}:`` + empty body).
+
+
+def _seed_job(api_client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path) -> str:
+    import asyncio
+
+    monkeypatch.setenv("NEXUS_CREATIVE_TEMP_DIR", str(tmp_path))
+    settings_module.get_settings.cache_clear()
+    import nexus_ai_agent.api.app as api_app_module
+
+    api_app_module._creative_registry = None  # point the singleton at tmp_path
+
+    async def _create() -> str:
+        registry = api_app_module.get_creative_registry()
+        return await registry.create_job("video_edit", {"path": "/tmp/secret.mp4"})
+
+    return asyncio.run(_create())
+
+
+@pytest.fixture()
+def _registry_isolation(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """Give each test a private job-registry sqlite and restore the singleton."""
+    import nexus_ai_agent.api.app as api_app_module
+
+    monkeypatch.setenv("NEXUS_CREATIVE_TEMP_DIR", str(tmp_path))
+    settings_module.get_settings.cache_clear()
+    previous = api_app_module._creative_registry
+    api_app_module._creative_registry = None
+    yield
+    api_app_module._creative_registry = previous
+
+
+def test_get_job_requires_auth_key_configured(
+    api_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    _registry_isolation,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("NEXUS_API_HMAC_KEY", "test-key")
+    settings_module.get_settings.cache_clear()
+    job_id = _seed_job(api_client, monkeypatch, tmp_path)
+
+    unsigned = api_client.get(f"/creative/jobs/{job_id}")
+    assert unsigned.status_code == 401
+    assert "input_data" not in unsigned.text
+
+    stale = api_client.get(
+        f"/creative/jobs/{job_id}",
+        headers=_signed_headers("test-key", str(int(time.time()) - 4000), b""),
+    )
+    assert stale.status_code == 401
+
+    wrong = api_client.get(
+        f"/creative/jobs/{job_id}",
+        headers=_signed_headers("attacker-key", str(int(time.time())), b""),
+    )
+    assert wrong.status_code == 401
+
+
+def test_get_job_fails_closed_without_key(
+    api_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    _registry_isolation,
+    tmp_path,
+) -> None:
+    """No key configured ⇒ the read endpoint is disabled outright (503)."""
+    monkeypatch.delenv("NEXUS_API_HMAC_KEY", raising=False)
+    settings_module.get_settings.cache_clear()
+    job_id = _seed_job(api_client, monkeypatch, tmp_path)
+
+    res = api_client.get(f"/creative/jobs/{job_id}")
+    assert res.status_code == 503
+    assert "Security configuration incomplete" in res.json()["detail"]
+
+
+def test_get_job_signed_caller_reads_own_registry(
+    api_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    _registry_isolation,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("NEXUS_API_HMAC_KEY", "test-key")
+    settings_module.get_settings.cache_clear()
+    job_id = _seed_job(api_client, monkeypatch, tmp_path)
+    headers = _signed_headers("test-key", str(int(time.time())), b"")
+
+    ok = api_client.get(f"/creative/jobs/{job_id}", headers=headers)
+    assert ok.status_code == 200
+    assert ok.json()["id"] == job_id
+
+    missing = api_client.get("/creative/jobs/does-not-exist", headers=headers)
+    assert missing.status_code == 404
+
+
+def test_upload_larger_than_cap_rejected_413(
+    api_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Resource limit: a multipart body beyond the cap dies before the job row."""
+    import nexus_ai_agent.api.app as api_app_module
+
+    monkeypatch.setenv("NEXUS_API_HMAC_KEY", "test-key")
+    monkeypatch.setenv("NEXUS_CREATIVE_TEMP_DIR", str(tmp_path))
+    settings_module.get_settings.cache_clear()
+    api_app_module._creative_registry = None
+    # Shrink the cap so the test body stays tiny; the production constant is
+    # asserted to exist and stay positive.
+    monkeypatch.setattr(api_app_module, "_MAX_UPLOAD_BYTES", 1024)
+
+    body = b"\r\n".join(
+        [
+            b"--boundary",
+            b'Content-Disposition: form-data; name="file"; filename="big.mp4"',
+            b"Content-Type: video/mp4",
+            b"",
+            b"X" * 2048,
+            b"--boundary--",
+            b"",
+        ]
+    )
+    headers = _signed_headers("test-key", str(int(time.time())), body)
+    headers["Content-Type"] = "multipart/form-data; boundary=boundary"
+    headers["Content-Length"] = str(len(body))
+
+    res = api_client.post("/creative/video-edit", content=body, headers=headers)
+    assert res.status_code == 413
+    # The rejected partial upload was cleaned up and no job row was created:
+    # the registry sqlite only materializes when get_creative_registry() runs.
+    import glob
+
+    assert not glob.glob(str(tmp_path / "creative-upload-*"))
+    assert not (tmp_path / "creative_jobs.sqlite3").exists()
+
+
 # ── Telegram webhook stays fail-closed ─────────────────────────────────
 
 

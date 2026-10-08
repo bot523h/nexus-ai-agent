@@ -145,6 +145,24 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("NEXUS_GEMINI_MAX_DAILY", "GEMINI_MAX_DAILY"),
     )
 
+    # ── P0-7: AI Memory LLM-egress consent gate ───────────────────────
+    # Master kill switch for the AIMemory feature. Egress of user message
+    # text to the external LLM additionally requires the per-user consent
+    # vote (default-deny) — disabling here also stops the consent prompt.
+    ai_memory_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("NEXUS_AI_MEMORY_ENABLED", "AI_MEMORY_ENABLED"),
+    )
+    # Rate limit: at most one consented egress per user per this many
+    # seconds (in-process). Keeps one message flood from burning the
+    # Gemini quota.
+    ai_memory_min_egress_seconds: float = Field(
+        default=120.0,
+        validation_alias=AliasChoices(
+            "NEXUS_AI_MEMORY_MIN_EGRESS_SECONDS", "AI_MEMORY_MIN_EGRESS_SECONDS"
+        ),
+    )
+
     # v2.0.0: Bot username for referral links
     bot_username: str = Field(
         default="nexus_ai_agent_bot",
@@ -244,6 +262,32 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("NEXUS_OPENROUTER_MODEL", "OPENROUTER_MODEL"),
     )
 
+    # ── Unreleased: llama.cpp server (local, optional) ───────────────
+    # Points the engine at a locally running `llama-server` (OpenAI-compatible
+    # HTTP API) via LocalLlamaServerProvider. Empty (default) disables it and
+    # keeps the legacy priority: routing chain → GGUF file → FakeLLM.
+    # No extra install needed (plain httpx); start a server e.g. with:
+    #   llama-server -m models/model.gguf --port 8080 --ctx-size 4096
+    llama_server_base_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("NEXUS_LLAMA_SERVER_BASE_URL", "LLAMA_SERVER_BASE_URL"),
+    )
+    # Model name sent in API payloads; llama-server serves its loaded model
+    # regardless, but the OpenAI API requires the field.
+    llama_server_model: str = Field(
+        default="local-model",
+        validation_alias=AliasChoices("NEXUS_LLAMA_SERVER_MODEL", "LLAMA_SERVER_MODEL"),
+    )
+    # Local inference can be slow on CPU — default higher than the cloud cap.
+    llama_server_timeout: int = Field(
+        default=120,
+        validation_alias=AliasChoices("NEXUS_LLAMA_SERVER_TIMEOUT", "LLAMA_SERVER_TIMEOUT"),
+    )
+    llama_server_max_tokens: int = Field(
+        default=512,
+        validation_alias=AliasChoices("NEXUS_LLAMA_SERVER_MAX_TOKENS", "LLAMA_SERVER_MAX_TOKENS"),
+    )
+
     # ── v3.8.0: Telegram webhook mode (scale-to-zero deployments) ─────
     # "polling" (default) keeps the legacy always-on long-poll loop;
     # "webhook" serves Telegram updates over HTTP for web-type services
@@ -284,13 +328,15 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="NEXUS_API_HMAC_KEY",
     )
-    # Optional bearer token for the read-only dashboard router
-    # (/api/dashboard/*). Unset (default) keeps the router open but it only
-    # serves aggregate counts and masked labels — no telegram_id, no username.
-    # When set, every request needs "Authorization: Bearer <token>".
+    # Bearer token for the dashboard API (P0-5). When set, every
+    # /api/dashboard/* request must send "Authorization: Bearer <token>"
+    # (constant-time comparison). When unset the API is open — the
+    # deployment MUST keep the port private (docker-compose binds
+    # 127.0.0.1 by default). Generate with:
+    #   python -c "import secrets; print(secrets.token_urlsafe(32))"
     api_dashboard_token: str | None = Field(
         default=None,
-        validation_alias="NEXUS_API_DASHBOARD_TOKEN",
+        validation_alias="NEXUS_DASHBOARD_TOKEN",
     )
     creative_gemini_api_key: str | None = Field(
         default=None,
@@ -350,7 +396,7 @@ class Settings(BaseSettings):
 
     # ── v3.9.0: Cloudflare R2 — technical blob tier (DB backups, heavy RAG docs) ──
     # Not part of the user-file round-robin. Create an R2 API token scoped to a
-    # single bucket (Object Read & Write); see docs/r2-storage.md.
+    # single bucket (Object Read & Write); see docs/ops/r2-storage.md.
     r2_account_id: str | None = Field(
         default=None,
         validation_alias=AliasChoices("R2_ACCOUNT_ID", "NEXUS_R2_ACCOUNT_ID"),

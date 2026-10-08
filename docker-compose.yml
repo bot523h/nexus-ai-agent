@@ -14,5 +14,7 @@ services:
     command: uvicorn nexus_ai_agent.api.app:app --host 0.0.0.0 --port 8000
     env_file: .env
     ports:
-      - "8000:8000"
+      # P0-5: host-only bind by default. Exposing port 8000 publicly
+      # requires BOTH a reverse proxy and NEXUS_DASHBOARD_TOKEN set.
+      - "127.0.0.1:8000:8000"
     restart: unless-stopped

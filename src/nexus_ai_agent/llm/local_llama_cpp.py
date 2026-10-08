@@ -39,7 +39,16 @@ class LocalLlamaCppProvider(LLMProvider):
 
     async def embed(self, text: str) -> list[float]:
         if not hasattr(self, "_st"):
-            from sentence_transformers import SentenceTransformer
+            try:
+                from sentence_transformers import SentenceTransformer
+            except ImportError as exc:
+                raise ImportError(
+                    "LocalLlamaCppProvider.embed needs the "
+                    "'sentence-transformers' package "
+                    "(pip install sentence-transformers), or use "
+                    "LocalLlamaServerProvider with "
+                    "`llama-server --embedding` instead."
+                ) from exc
 
             self._st = SentenceTransformer("all-MiniLM-L6-v2")
 

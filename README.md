@@ -2,7 +2,7 @@
 
 **Telegram AI platform** — multi-provider conversations, cloud storage, 15-language support, image generation, speech synthesis, and the Nagar creative studio. Local/free paths are available; optional hosted services may require credentials and incur charges.
 
-> **Version: v3.12.0** (see `VERSION` and [the changelog](CHANGELOG.md)). Nagar Wave 2.5 and Wave 3 image generation; local upscaling remains deferred.
+> **Version: v3.13.0** (see `VERSION` and [the changelog](CHANGELOG.md)). Nagar Wave 2.5 and Wave 3 image generation; local upscaling remains deferred.
 
 ---
 
@@ -10,21 +10,21 @@
 
 ### Core (v1.0–v1.2)
 - 💬 **AI Chat** — Multi-persona conversations with auto-routing (Qwen, Gemma, Phi)
-- 👤 **Anonymous Chat** — Random queue-based pairing with report system
-- 🎮 **Games** — Quiz, number guessing, Persian Wordle, quick polls
-- 🛠️ **Tools** — Reminders, translation, unit conversion, calculator
-- 📢 **Channel Management** — Post, schedule, ban, welcome, pin, stats
+- 👤 **Anonymous Chat** — Random queue-based pairing, live message delivery, report system
+- 🎮 **Games** — Quiz, number guessing, Persian Wordle, quick polls (all real, stateful engines)
+- 🛠️ **Tools** — Reminders (persistent, cancellable, restart-safe), translation, unit conversion, safe calculator (no `eval`)
+- 📢 **Channel Management** — ⚠️ *simulated replies; see "Real vs. Simulated" table below*
 - 📋 **Inline Menu System** — Full interactive keyboard navigation
 
 ### Community OS (v1.3.0)
 - 👑 **Owner Control** — Admin dashboard, broadcast, system status, admin logs
-- 📢 **Force Join** — Channel membership verification with cached checks and anti-bypass
+- 📢 **Force Join** — Real channel membership verification (bot-injected `get_chat_member`), 5-minute cache, verify button, and a message-flow gate while enabled
 - 🎭 **AI Personalities** — 10 distinct personalities with per-group config and persistence
 - 💬 **Auto Engagement** — Ice breakers, jokes, challenges, daily questions, events with rate limiting
-- 🔥 **Viral Engine** — Auto viral post generation, scoring, hashtags, scheduling, duplicate prevention
-- 📢 **Ad System** — Scheduled ads with repeat intervals, campaigns, pause/resume/delete lifecycle
-- 🛡️ **Smart Moderation** — Anti-spam, flood, link filter, Persian profanity filter, warnings, reputation
-- 🏆 **Gamification** — XP, 16 levels with Persian titles, daily rewards, streaks, 8 achievements, leaderboard
+- 🔥 **Viral Engine** — Real post generation/scoring/storage via `/viral_now`; preview/stats/post views are ⚠️ *simulated*
+- 📢 **Ad System** — ⚠️ *simulated replies; no persistence yet*
+- 🛡️ **Smart Moderation** — Config on/off is real; warn/mute/unmute/reputation are ⚠️ *simulated*
+- 🏆 **Gamification** — ⚠️ *simulated at the command level* (quiz scoring is real)
 - 📊 **Analytics** — Active users, engagement rate, peak hours, cohort retention, command usage, dashboard
 - 🎨 **Advanced UI** — 6-row main menu, nested submenus, admin dashboard panel
 
@@ -72,7 +72,7 @@
 
 ---
 
-## Nagar image generation and slideshow (v3.12.0)
+## Nagar image generation and slideshow (v3.13.0)
 
 ### `/imagine`: text to image
 
@@ -229,68 +229,8 @@ for filenames, ownership boundaries and the cleanup policy.
 ```bash
 git clone https://github.com/bot523h/nexus-ai-agent.git
 cd nexus-ai-agent
-make setup          # pip install -e ".[dev]"
+make setup
 ```
-
-#### Core vs capability extras (v3.13.0)
-
-The core install is deliberately small: **bot + API + database + slideshow +
-creative packs**, with no torch, no ChromaDB and no llama.cpp. Anything that
-needs a model download, a native build or a paid-adjacent service is an opt-in
-extra. Measured on this repo, same interpreter, warm cache:
-
-| Install | site-packages | Install time |
-|---|---|---|
-| before the split (`pip install .`, v3.12.0) | **6.5 GB** | 7 min 50 s |
-| core only, `pip install .` (v3.13.0) | **520 MB** | 43 s |
-| core only, `uv pip install .` | **389 MB** | **2.6 s** |
-
-That is a **12.5×** smaller install and — with [uv](https://docs.astral.sh/uv/)
-(free, Rust-based) — a **16×** faster one.
-
-```bash
-pip install .                                  # core: boots the bot
-pip install --group dev                        # dev tools (PEP 735, pip >= 25.1 / uv)
-pip install -e ".[dev]"                        # same list, legacy spelling
-pip install '.[rag,speech,pdf,media]'          # only what you need
-uv pip install --system .                      # faster core install
-```
-
-| Extra | Enables | Packages |
-|---|---|---|
-| `[rag]` | document Q&A over uploaded files | chromadb, flashrank, sqlite-vec, sentence-transformers (pulls torch ≈ 2 GB) |
-| `[local-llm]` | on-device inference | llama-cpp-python (C++ build) |
-| `[speech]` | `/tts` text-to-speech | gTTS |
-| `[media]` | `/slideshow` + Nagar renders without a system FFmpeg | imageio-ffmpeg (static binary) |
-| `[r2]` | Cloudflare R2 storage tier | boto3 |
-| `[pdf]` | PDF text extraction for the RAG lane | pypdf |
-| `[postgres]` | PostgreSQL/Neon backend instead of SQLite | psycopg[binary,pool], asyncpg, langgraph-checkpoint-postgres |
-| `[otio]` | real OpenTimelineIO round-trip validation | opentimelineio |
-| `[all]` | every extra above | — |
-
-Every extra is imported lazily and guarded by `nexus_ai_agent.optional_deps`, so
-a missing extra **fails closed with the exact install command** instead of a
-`ModuleNotFoundError` traceback — in the Telegram reply, in the durable job
-record, or on the CLI. `tests/unit/test_packaging.py` enforces the contract: no
-heavy package in core, no core entry point importing an extra at module scope,
-and the whole startup path booting in a fresh interpreter with **every** extra
-blocked.
-
-#### Docker
-
-Two runtime targets; `slim` is the default:
-
-```bash
-docker build -t nexus-slim .                          # core only (default target)
-docker build --target full -t nexus-full .            # every extra + system FFmpeg
-docker build --build-arg NEXUS_EXTRAS=rag,media -t nexus-rag .
-```
-
-The default image carries no torch, no ChromaDB and no llama.cpp: the Python
-layer is the **389–520 MB** measured above on top of `python:3.12-slim`
-(≈ 45 MB), i.e. roughly **0.43–0.57 GB** — against a pre-split image that could
-not stay under 7 GB. Both targets resolve dependencies with `uv` in a builder
-stage, so nothing is compiled at runtime.
 
 ### 2) Configure environment
 
@@ -316,7 +256,32 @@ PCLOUD_TOKEN=            # https://www.pcloud.com/developers
 INTERNXT_TOKEN=          # https://developer.internxt.com
 MEGA_EMAIL=              # MEGA account email
 MEGA_PASSWORD=           # MEGA account password
+
+# v3.13.0: Security — the bot is DENY-BY-DEFAULT. Only the owner
+# (NEXUS_OWNER_TELEGRAM_ID) and explicitly allowed user ids can use it.
+NEXUS_OWNER_TELEGRAM_ID=your_telegram_id
+NEXUS_ALLOWED_USER_IDS=12345,67890     # optional extra users
+
+# v3.13.0: Dashboard API bearer token. Set this whenever the dashboard
+# port is reachable beyond localhost. Responses are PII-free; the token
+# gates access.
+NEXUS_DASHBOARD_TOKEN=                 # python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
+
+> **Security (v3.13.0):** a global deny-by-default access guard now
+> runs before every command, callback and free message. Unlisted users
+> get one rate-limited denial and nothing else — this closes the hole
+> where only `/ai`-family and `/imagine` were checked. The dashboard
+> API no longer returns `telegram_id`/`username`, is bearer-token gated
+> when `NEXUS_DASHBOARD_TOKEN` is set, and docker-compose binds port
+> 8000 to `127.0.0.1` by default. `/cloud` and `/download` sanitize
+> file names (no path traversal). **AIMemory egress (P0-7)** is
+> default-deny: `/memory` extraction only sends text to the external
+> Gemini model after an explicit per-user consent vote via inline keyboard
+> (`aimem:grant`/`aimem:deny`); see `NEXUS_AI_MEMORY_ENABLED` and
+> `NEXUS_AI_MEMORY_MIN_EGRESS_SECONDS` below. **Event-loop non-blocking
+> (P1-2):** all sync-DB feature engines (reminders, referrals, force-join,
+> anon chat) are offloaded to worker threads via `asyncio.to_thread`.
 
 ### 3) Initialize DB
 
@@ -332,32 +297,22 @@ make run
 
 ---
 
-## Command status — what actually runs
+## Commands Reference
 
-Honesty rule for this repo: a command is **real** only when its callback reaches
-an engine, a database row or an external API. Everything else is listed here as a
-stub instead of being advertised above. Verified against `bot/handlers.py` on
-v3.13.0 (`tests/unit/test_wired_commands.py` fails if a wired command regresses).
+### ✅ Real vs. Simulated — status honesty (v3.13.0)
+
+This bot has been caught overselling before; this table is the
+source of truth. **Real** = wired to a working engine with tests.
+**Simulated** = replies with a canned message; no backend effect.
 
 | Status | Commands |
 |---|---|
-| ✅ **Real (wired + tested)** | `/ai` `/ask` `/code` `/translate` `/summarize` · `/image` `/imagine` `/slideshow` · `/tts` `/stt` · `/cloud` `/myfiles` `/download` `/cloud_status` · `/referral` `/referral_board` and the `/start ref_<code>` deep link · `/quiz` `/leaderboard` `/guess_start` `/guess_stop` `/wordle` `/wordle_stop` `/poll` · `/remind` `/tr` `/convert` `/calc` · `/profile` `/daily` `/xp_leaderboard` `/achievements` · `/anon_start` `/anon_stop` `/anon_report` plus in-session message forwarding · `/language` · `/analytics*` `/track` · `/forcejoin_*` · `/personality` `/engagement_*` `/viral_*` `/ad_*` `/mod_on` `/mod_off` `/mod_config` · `/agents` `/myagent` `/memory` `/forget_me` · `/health` `/approve` `/reject` `/version` `/update` · `/story` (queued) |
-| ⚠️ **Stub — replies without doing the work** | `/post` `/schedule` `/ban` `/unban` (channel management, "(simulated)") · `/stats` (hard-coded member counts) · `/welcome` `/pin` · `/vision` (fixed description string) · `/newchat` (clears nothing) · `/warn` `/mute` `/unmute` `/reputation` · `/docs` `/doc_delete` `/chat_with_doc` (demo text; the RAG engine exists but is not attached) · `/story_style` · `/storage` `/model` (no reply at all) |
+| ✅ Real | `/ai`, `/ask`, `/code`, `/translate`, `/summarize`, `/image`, `/imagine`, `/slideshow`, `/tts`, `/stt`, `/cloud`, `/myfiles`, `/download`, `/cloud_status`, `/referral`, `/referral_board`, `/start` (referral deep-link), `/calc`, `/remind`, `/cancel_remind`, `/reminds`, `/tr`, `/convert`, `/quiz`, `/guess_start`, `/guess`, `/guess_stop`, `/wordle`, `/wordle_stop`, `/poll`, `/anon_start`, `/anon_stop`, `/anon_report` (plus live anonymous delivery), force-join (`/forcejoin_on` + verify gate), `/owner`, `/system`, `/broadcast`, `/admin_logs`, `/personality`, `/engagement_*`, `/joke`, `/challenge`, `/analytics*`, `/track`, `/viral_now`, `/health`, `/agents`, `/myagent`, `/memory`, `/forget_me`, `/newchat` (drops the chat's checkpoint thread), `/story` |
+| ⚠️ Simulated | `/vision` (canned image description), `/post`, `/schedule`, `/ban`, `/unban`, `/stats`, `/welcome`, `/pin`, `/leaderboard`, `/daily`, `/xp_leaderboard`, `/achievements`, `/docs`, `/doc_delete`, `/chat_with_doc`, `/ad_*`, `/mod_config`, `/warn`, `/mute`, `/unmute`, `/reputation`, `/viral_preview`, `/viral_stats`, `/viral_post`, `/companion`, `/analyze` |
 
-`/start`, `/help` and `/status` are intentionally static text.
-
-### Access control
-
-Since v3.13.0 every update passes one gate before any handler runs
-(`bot/middleware.py::BotAccessGate`, registered by `bot/app.py` in PTB group
-`-1`). With `NEXUS_OWNER_TELEGRAM_ID` or `NEXUS_ALLOWED_USER_IDS` configured the
-bot is allow-list-only and a stranger gets a refusal instead of reaching `/ai`,
-`/imagine`, `/cloud`, `/tts`, … . Without either variable the bot stays public —
-an unconfigured bot must not lock its own owner out. `/start`, `/help`,
-`/language` and `/forcejoin_status` stay reachable so a refused user can learn
-why.
-
-## Commands Reference
+Simulated commands reply with "(simulated)" or a canned string; they
+are on the roadmap (see `AUDIT_REPORT_2026-09-21.md` §12) but should
+not be treated as working features.
 
 ### 🤖 AI (v2.0.0)
 | Command | Description |
@@ -398,6 +353,7 @@ why.
 |---------|-------------|
 | `/referral` | Your referral code & stats |
 | `/referral_board` | Global referral leaderboard |
+| `/start ref_<code>` | Deep-link: records the referral + rewards on first start |
 
 ### 🌐 Language (v2.0.0)
 | Command | Description |
@@ -424,18 +380,25 @@ why.
 ### 🎮 Games
 | Command | Description |
 |---------|-------------|
-| `/quiz` | Start quiz |
+| `/quiz` | Start quiz (real engine, inline answers) |
 | `/guess_start` | Number guessing game |
-| `/wordle` | Persian Wordle |
-| `/poll Q \| A \| B` | Quick poll |
+| `/guess <n>` | Submit a guess |
+| `/guess_stop` | Stop number guessing |
+| `/wordle` | Persian Wordle (start) |
+| `/wordle <5-letter>` | Submit a Wordle guess |
+| `/wordle_stop` | Stop Wordle |
+| `/poll Q \| A \| B` | Quick poll with inline votes + results |
 
 ### 🛠️ Tools
 | Command | Description |
 |---------|-------------|
-| `/remind 30m text` | Set reminder |
+| `/remind 30m text` | Set reminder (30m / 2h / 1d; fires into this chat) |
+| `/reminds` | List your pending reminders |
+| `/cancel_remind <id>` | Cancel one of your reminders |
 | `/tr text` | Translate (fa→en) |
-| `/convert 100 usd to irt` | Unit conversion |
-| `/calc expression` | Calculator |
+| `/tr <from> <to> text` | Translate between any pair, e.g. `/tr en fa سلام` |
+| `/convert 100 usd irt` | Unit conversion (currency / length / weight / temp) |
+| `/calc expression` | Real safe calculator (e.g. `/calc 2+2*3`, `/calc sqrt(144)`) |
 
 ### 👑 Owner (admin only)
 | Command | Description |
@@ -536,44 +499,44 @@ make types       # mypy
 
 ```
 src/nexus_ai_agent/
-├── bot/
-│   ├── handlers.py          # All Telegram command/callback handlers
-│   └── middleware.py        # Auth + rate limiting
-├── config/
-│   └── settings.py          # pydantic-settings configuration
-├── features/
-│   ├── ads.py               # Advertisement system
-│   ├── analytics.py         # Analytics engine
-│   ├── anonymous_chat.py    # Anonymous chat pairing
-│   ├── ai_chat.py           # v2.0.0: Gemini 2.0 Flash integration
-│   ├── channel_manager.py   # Channel/group management
-│   ├── engagement.py        # Community engagement
-│   ├── force_join.py        # Force join verification
-│   ├── games.py             # Quiz, Wordle, polls
-│   ├── gamification.py      # XP, levels, achievements
-│   ├── image_gen.py         # v2.0.0: Pollinations.ai image generation
-│   ├── moderation.py        # Smart moderation
-│   ├── owner_control.py     # Owner control system
-│   ├── personality.py       # AI personality engine
-│   ├── referral.py          # v2.0.0: Referral viral loop system
-│   ├── speech.py            # v2.0.0: gTTS + Gemini STT
-│   ├── summarizer.py        # v2.0.0: Smart content summarizer
-│   ├── tools.py             # Calculator, translator, etc.
-│   └── viral_engine.py      # Viral content engine
-├── i18n/
-│   ├── __init__.py          # v2.0.0: I18n manager (15 languages)
-│   └── loader.py            # v2.0.0: Language loader
-├── orchestration/
-│   ├── graph.py             # LangGraph StateGraph
-│   └── state.py             # NexusState definition
-├── storage/
-│   ├── models.py            # All SQLModel tables (including v2.0.0 models)
-│   ├── unified_cloud.py     # v2.0.0: Unified cloud storage orchestrator
-│   └── providers/           # Storage backends
-├── observability/
-│   └── logging.py           # structlog setup
-└── presence.py              # Online presence tracking
+├── adapters/                # Out-of-band adapters (caption unavailable shim, in-process job queue)
+├── agent/                   # Governance: approval, feedback, self-monitor, updater
+├── agents/                  # Persona agents (planner/executor/chat + model-tuned variants) & agent store
+├── api/                     # FastAPI dashboard app
+├── application/             # Hexagon core: image-generation app service + ports/ (typed seams)
+├── bot/                     # Telegram surface: handlers, middleware, access guard, rate limiter
+├── config/                  # pydantic-settings configuration (env aliases, fail-closed defaults)
+├── continuum/               # Continuum snapshot state (.nexus/continuum.json contract)
+├── core/                    # Hardened primitives: async DB, HTTP client w/ SSRF guard, instrumentation
+├── creative/                # Nagar creative studio: capability packs (data-only manifests), slideshow
+│   │                        #   render lane, image generation, caption/audio/edit/motion/delivery packs
+├── domain/                  # Pure domain: glossary, retention/lifecycle/reconciler policies
+├── features/                # Product feature engines (chat, games, referral, moderation, RAG, ...)
+├── i18n/                    # 15-locale message catalogs
+├── infrastructure/          # Observability: metrics, structured events, log redaction
+├── integrations/            # Free third-party tool integrations
+├── knowledge/               # Knowledge manager + web/Wikipedia trainers
+├── llm/                     # LLM providers: litellm router, Gemini, local llama.cpp, fallback, fake
+├── maintenance/             # R2 backups + scheduled housekeeping
+├── memory/                  # Short-term + long-term memory stores
+├── observability/           # structlog setup
+├── orchestration/           # LangGraph StateGraph, router, NexusState
+├── personality/             # Personality engine
+├── storage/                 # SQLModel tables, checkpoint lifecycle, cloud providers (R2, HF, MEGA)
+├── tools/                   # Sandboxed tool registry (files, shell)
+├── cli.py                   # Single CLI entrypoint (`nexus ...`)
+└── worker.py                # Job-queue worker entrypoint
 ```
+
+## Documentation Map
+
+Everything lives under `docs/` (index: [`docs/README.md`](docs/README.md)):
+
+- `docs/DECISION_LOG.md` — the authoritative architecture decision log
+- `docs/architecture.md` + `docs/architecture/` — current architecture & data lifecycle
+- `docs/audits/` — dated audits and handoff analyses
+- `docs/history/` — archived plans from the v1/v2 era (kept for traceability only)
+- `docs/ops/` — deployment & operations runbooks (Koyeb, Neon, R2)
 
 ## License
 

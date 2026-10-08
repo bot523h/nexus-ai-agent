@@ -74,7 +74,7 @@ def test_migrate_is_idempotent(cli_env: Path) -> None:
 
     conn = sqlite3.connect(cli_env)
     alembic_version = conn.execute("SELECT version_num FROM alembic_version").fetchone()
-    assert alembic_version == ("f4a9c2e71b08",)
+    assert alembic_version == ("7c2f9d41e8a3",)
     conn.close()
 
 

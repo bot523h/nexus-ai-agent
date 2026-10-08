@@ -83,9 +83,10 @@ async def analyze_video_with_gemini(video_path_or_url: str, api_key: str) -> Vid
         raise ValueError("Gemini API key is required for creative video analysis")
 
     settings = get_settings()
+    # API key in the x-goog-api-key header, never in the URL query.
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{settings.gemini_model}:generateContent?key={api_key}"
+        f"{settings.gemini_model}:generateContent"
     )
     payload = {
         "contents": [
@@ -101,7 +102,7 @@ async def analyze_video_with_gemini(video_path_or_url: str, api_key: str) -> Vid
     }
 
     async with httpx.AsyncClient(timeout=60.0) as client:
-        response = await client.post(url, json=payload)
+        response = await client.post(url, json=payload, headers={"x-goog-api-key": api_key})
         if response.is_error:
             response.raise_for_status()
         body = response.json()
