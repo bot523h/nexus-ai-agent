@@ -15,14 +15,16 @@
 |---|---|
 | Repository | `bot523h/nexus-ai-agent` |
 | `origin/main` | `48f280c5a1f1f595aa713100f73724651944c871` |
-| Current PR head at evidence capture | `edcdc733e3485a478bb4fe396c07527696b66631` |
+| Current PR head at evidence capture | `44b93221e5fb6aa97e6abe00cc72c78ac3c1f217` |
 | Branch | `arena/execution-core-v1-nexus-ai-agent` |
 | Base | `main` at `48f280c5a1f1f595aa713100f73724651944c871` |
 | PR state | Open, not merged, not closed |
 | Merge state | `MERGEABLE`; merge blocked while required checks are pending |
 | Working tree | Clean after fast-forwarding to the live branch before this report-only update |
 
-The current head is newer than the earlier `525cb29d…` evidence. The intervening commit is:
+The current head is the report-only publication head `44b9322…`; the implementation parent used for the current-head technical evidence is `edcdc733…`. The report-only commit changes documentation only.
+
+The immediately preceding implementation commit was:
 
 - `edcdc733` — align cancellation race tests with cancellation-reschedule semantics.
 
@@ -166,14 +168,11 @@ The harness restores the source after each mutation and leaves the tree clean.
 | Ruff | passed |
 | Ruff format check | passed |
 | Mypy | `Success: no issues found in 289 source files` |
-| Full non-slow local suite | Earlier run reached `3839 passed, 31 skipped` but had one unrelated SQLite schema-change failure; no full-suite result has yet been established for `edcdc733` |
+| Full non-slow local suite | Earlier run reached `3839 passed, 31 skipped` but had one unrelated SQLite schema-change failure; `3841 passed, 31 skipped, 194 warnings` on `44b93221e5fb6aa97e6abe00cc72c78ac3c1f217` |
 
 ## 8. Exact-SHA CI
 
-The current PR head is `edcdc733e3485a478bb4fe396c07527696b66631`. GitHub has two CI runs for that exact SHA:
-
-- `37837109886` — in progress;
-- `37837114870` — queued.
+The current PR head is `44b93221e5fb6aa97e6abe00cc72c78ac3c1f217`. GitHub runs `37837927074` and `37837934842` were created for that exact SHA but were cancelled before required jobs completed; the PR currently reports the corresponding required checks as pending.
 
 At evidence capture, the current-head required checks are not terminal: the PR reports pending continuum-evidence, test, parity, extras, lint, migration, and mutation jobs. Therefore `CURRENT_PR_HEAD == CI_TESTED_SHA` is known, but **current-head CI is not yet green and terminal**.
 
@@ -187,9 +186,9 @@ The latest completed CodeRabbit review record is:
 - reviewed commit `a50d87428bd3c6e2081ce94aa01fec1bc003df55`;
 - state `CHANGES_REQUESTED`.
 
-A valid inline finding on current commit `edcdc733` remains on this report at line 27: the phrase “full 4-commit history” was ambiguous because the report listed seven pre-report commits. The finding is actionable and has not been dismissed. A later CodeRabbit status is `Review paused`, but there is no newly submitted review record for `edcdc733` proving zero actionable findings.
+A valid inline finding on the prior report commit `edcdc733` remained on the report at line 27: the phrase “full 4-commit history” was ambiguous because the report listed seven pre-report commits. The finding is actionable and has not been dismissed. A later CodeRabbit status is `Review paused`, but there is no newly submitted review record for `44b93221e5fb6aa97e6abe00cc72c78ac3c1f217` proving zero actionable findings.
 
-This report rewrite addresses the finding by explicitly listing the complete commit history and removing the ambiguous phrase. A fresh CodeRabbit review is still required after the report update commit.
+This report rewrite addresses the finding by explicitly listing the complete commit history and removing the ambiguous phrase. A fresh CodeRabbit review is still required for the current report head.
 
 ## 10. Governance
 
@@ -210,7 +209,7 @@ Only these evidence-backed blockers remain:
 1. exact-SHA CI for the live head is queued/in progress rather than terminal green;
 2. the current-head CodeRabbit review has no newly submitted review record proving zero actionable findings, and the previously valid report-thread finding required this rewrite;
 3. board governance has no valid live `gates_owner`, and the referee is fail-closed on that precondition;
-4. the full non-slow suite has not yet been established on `edcdc733`; the earlier run had one unrelated intermittent SQLite schema-change failure.
+4. full non-slow is now green locally on current evidence (`3841 passed, 31 skipped`); GitHub exact-SHA CI remains pending/cancelled.
 
 ## 12. Final verdict
 
