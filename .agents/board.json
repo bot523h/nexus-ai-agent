@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-06T23:20:00Z",
+  "updated_at": "2026-10-08T08:37:45Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -940,7 +940,7 @@
       "title_fa": "کوچک‌سازی PR#33 به بخش‌های یکتا",
       "zone": "packaging+interop",
       "priority": "P0",
-      "status": "assigned_to_E_pr33",
+      "status": "active",
       "scope": "بخش امنیت/سیم‌کشی #33 با #34 لندشده هم‌پوشانی دارد؛ فقط بسته‌بندی، OTIO، conv-store و داک بماند.",
       "scope_fa": "بخش امنیت/سیم‌کشی #33 با #34 لندشده هم‌پوشانی دارد؛ فقط بسته‌بندی، OTIO، conv-store و داک بماند.",
       "prerequisites": [],
@@ -955,10 +955,12 @@
       ],
       "exclusive_paths": [],
       "owner_hint": "شاخه 3aa (کار خودش)",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/01a0c3aa-nexus-ai-agent",
+      "claimed_at": "2026-10-08T08:37:45Z",
       "ttl_hours": 24,
-      "gates_owner": false
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
     },
     {
       "task": "task-124",
