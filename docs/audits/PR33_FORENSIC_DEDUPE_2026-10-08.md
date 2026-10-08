@@ -177,10 +177,47 @@ The store implementation itself was **not** modified: this is a verifier fix, de
 to keep the branch's regression claim honest rather than ignored as "environment
 flakiness".
 
-## 9. Residual risk / limitations
+## 9. Discovered during verification: `nexus continuum verify` is red on live main (GOVERNANCE BUG, not fixable from this sandbox)
+
+**Evidence (pristine `origin/main` @ `460f4d7`, clean detached worktree,
+`PYTHONPATH=/tmp/mainwt/src` so the worktree's code is the code that runs):**
+
+```
+✗ state loss detected: recorded good commit 1f8b552f055b895f9ac86464c4aa698d9558496d
+  is not reachable from HEAD 460f4d7aef54a3bfe01a146f054f0f5aa3968b6e
+✗ test count mismatch: expected 3252, found 3717
+✗ environment fingerprint mismatch: expected {'python': '3.13.15', ...},
+  found {'python': '3.10.12', ...}
+```
+
+**Classification: `GOVERNANCE BUG` (pre-existing on main, reproducible without this
+branch) + `ENVIRONMENT LIMITATION` (for the repair).** The committed release-cut
+record's `step` (`1f8b552`, 2026-10-06) is an *orphan*: `git merge-base --is-ancestor
+1f8b552 origin/main` fails, so main's own fail-closed verifier reports "state loss"
+on a clean main checkout. The recorded `test_count_expected` (3252) is also stale
+against main's own tree (3717 collected).
+
+**Why this branch does not repair it (no fake evidence).** `.nexus/continuum.json` is
+a machine-bound release-cut record (DECISION_LOG D-0006/D-0023); republishing it from
+this sandbox would pin *this* interpreter (CPython 3.10.12) where the release record
+was cut on 3.13.15, and would set `step` to a branch head rather than the post-merge
+main. The honest repair needs a clean checkout of the merged `main` on the release
+Python — that environment is **not available to this session**, so the repair is
+recorded `BLOCKED` here with its exact prerequisite instead of being approximated.
+
+**Blast radius today:** none for CI — the `continuum-evidence` job publishes a fresh
+snapshot for the SHA under test and reports the committed copy **non-blocking**
+(`.github/workflows/ci.yml`, "machine-bound release-cut record"). The red is an
+operator-facing truth gap, which is why it is recorded rather than ignored. The board
+sequence already owns this work: `task-135-lockstep-residue` (README/continuum
+lockstep extension) is explicitly marked *"OWNED BY PR#33 UNTIL MERGED — claim after
+PR#33 lands"*, so it is a follow-up on this very vehicle, not an unowned surprise.
+
+## 10. Residual risk / limitations
 
 * The merge of PR#33 stays an owner/gates decision (no merge performed — forbidden by the claim).
 * `[rag]` and `[local-llm]` extras-matrix legs were validated by `extras_matrix.py check` and local installs of their guard paths; the full CI legs for those two (torch / llama.cpp builds) have not executed in this sandbox.
 * `.env.example` was not inspected or modified (env-file access filtered); the corresponding settings fields exist in `config/settings.py`, and the README documents the required variables.
 * Two README measurements (pre-split 6.5 GB, core 520 MB/389 MB) are the numbers measured when the split was authored (2026-09-21, Python 3.11.2) and are labelled as such; they were not re-measured here.
-* `.nexus/continuum.json` is deliberately **not** republished on this branch: the CI `continuum-evidence` job publishes a snapshot for the SHA under test and reports the committed copy as a non-blocking machine-bound release-cut record, so a branch-local snapshot would pin this sandbox's interpreter/library versions as if they were evidence.
+* `.nexus/continuum.json` is deliberately **not** republished on this branch: the CI `continuum-evidence` job publishes a snapshot for the SHA under test and reports the committed copy as a non-blocking machine-bound release-cut record, so a branch-local snapshot would pin this sandbox's interpreter/library versions as if they were evidence. Section 9 records the pre-existing red `nexus continuum verify` on main with its exact prerequisite.
+* Delivery status vocabulary: this work is **`BRANCH_PROVEN`** until the push recorded in the task-123 board note lands and GitHub recomputes the PR diff; `MAIN_PROVEN` requires the merge, which this claim does not perform.
