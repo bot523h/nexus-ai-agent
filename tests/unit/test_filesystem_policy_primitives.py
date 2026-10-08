@@ -226,3 +226,37 @@ def test_write_bytes_rejects_parent_replaced_with_symlink_after_validation(
     assert (outside / "marker").read_bytes() == b"untouched"
     assert not (outside / "attempt").exists()
     assert (ws.root / "job.saved" / "attempt" / "staging").is_dir()
+
+
+def test_remove_tree_wraps_parent_reopen_symlink_race_as_boundary_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A parent swap after recursive removal stays a typed boundary failure."""
+    ws = _ws(tmp_path)
+    target = ws.root / "job" / "target"
+    (target / "nested").mkdir(parents=True)
+    (target / "nested" / "file.bin").write_bytes(b"inside")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "marker").write_bytes(b"untouched")
+    original_parent_fd = ws._parent_fd
+    calls = 0
+
+    @contextmanager
+    def swap_before_parent_reopen(parts: tuple[str, ...], *, create: bool = False):
+        nonlocal calls
+        if parts == ("job", "target"):
+            calls += 1
+            if calls == 2:  # after _remove_tree_fd, before the final rmdir
+                (ws.root / "job").rename(ws.root / "job.saved")
+                os.symlink(outside, ws.root / "job")
+        with original_parent_fd(parts, create=create) as opened:
+            yield opened
+
+    monkeypatch.setattr(ws, "_parent_fd", swap_before_parent_reopen)
+    with pytest.raises(FilesystemBoundaryError):
+        ws.remove_tree("job/target")
+    assert calls == 2
+    assert (outside / "marker").read_bytes() == b"untouched"
+    assert (ws.root / "job.saved" / "target").is_dir()
+    assert not (ws.root / "job.saved" / "target" / "nested").exists()

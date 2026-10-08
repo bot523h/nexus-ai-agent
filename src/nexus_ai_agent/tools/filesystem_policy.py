@@ -396,14 +396,19 @@ class WorkspaceFilesystem:
             self._remove_tree_fd(fd)
         finally:
             os.close(fd)
-        with self._parent_fd(parts) as (parent_fd, name):
-            assert name is not None
-            try:
-                os.rmdir(name, dir_fd=parent_fd)
-            except FileNotFoundError:
-                pass
-            except OSError as exc:
-                raise FilesystemBoundaryError("directory could not be removed safely") from exc
+        try:
+            with self._parent_fd(parts) as (parent_fd, name):
+                assert name is not None
+                try:
+                    os.rmdir(name, dir_fd=parent_fd)
+                except FileNotFoundError:
+                    pass
+        except FilesystemBoundaryError:
+            raise
+        except OSError as exc:
+            # The parent can be swapped after the tree fd is closed; never let
+            # that late failure escape as an untyped filesystem exception.
+            raise FilesystemBoundaryError("directory could not be removed safely") from exc
 
     def _remove_tree_fd(self, dir_fd: int) -> None:
         try:

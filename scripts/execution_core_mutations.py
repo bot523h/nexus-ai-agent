@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ruff: noqa: E501  (the anchors/mutants are verbatim source lines, kept intact)
-"""NEXUS V1 execution-core mutation probes (M1–M12).
+"""NEXUS V1 execution-core mutation probes (M1–M13).
 
 A targeted mutation harness in the same shape as the established
 ``scripts/gate5_mutation_probes.py``: for each correctness property this
@@ -21,6 +21,7 @@ M9    lost mkdir race becomes a boundary error         concurrent-create toleran
 M10   quarantine boundary errors are swallowed         hostile-destination refusal
 M11   shutdown resets by job id, not local attempt     peer-takeover race
 M12   staging write follows a swapped ancestor         outside-root write race
+M13   remove_tree leaks parent-reopen OSError           cleanup race typing
 ====  ================================================  =========================
 
 Layered-defense note: M5 replaces the whole quarantine move (both the
@@ -428,6 +429,36 @@ PROBES: tuple[Probe, ...] = (
             "                handle.write(data)"
         ),
         tests=(f"{STAGING_T}test_write_rejects_ancestor_symlink_swap_after_path_checks",),
+    ),
+    Probe(
+        name="M13 remove_tree leaks post-removal parent-reopen OSError",
+        target=FS,
+        anchor=(
+            "        try:\n"
+            "            with self._parent_fd(parts) as (parent_fd, name):\n"
+            "                assert name is not None\n"
+            "                try:\n"
+            "                    os.rmdir(name, dir_fd=parent_fd)\n"
+            "                except FileNotFoundError:\n"
+            "                    pass\n"
+            "        except FilesystemBoundaryError:\n"
+            "            raise\n"
+            "        except OSError as exc:\n"
+            "            # The parent can be swapped after the tree fd is closed; never let\n"
+            "            # that late failure escape as an untyped filesystem exception.\n"
+            '            raise FilesystemBoundaryError("directory could not be removed safely") from exc'
+        ),
+        mutant=(
+            "        with self._parent_fd(parts) as (parent_fd, name):\n"
+            "            assert name is not None\n"
+            "            try:\n"
+            "                os.rmdir(name, dir_fd=parent_fd)\n"
+            "            except FileNotFoundError:\n"
+            "                pass\n"
+            "            except OSError as exc:\n"
+            '                raise FilesystemBoundaryError("directory could not be removed safely") from exc'
+        ),
+        tests=(f"{FS_T}test_remove_tree_wraps_parent_reopen_symlink_race_as_boundary_error",),
     ),
 )
 
