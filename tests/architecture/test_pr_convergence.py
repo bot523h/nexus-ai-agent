@@ -690,3 +690,132 @@ def test_the_cli_reports_blocked_when_the_ref_payload_is_malformed(
     board = tmp_path / "board.json"
     board.write_text(json.dumps({"schema": 2, "claims": []}), encoding="utf-8")
     assert conv.main(["--repo", "o/r", "--board", str(board)]) == conv.EXIT_BLOCKED
+
+
+# --------------------------------------------------------------------------- #
+# temporal determinism — `--as-of` must own the clock
+# --------------------------------------------------------------------------- #
+# Reproduced pre-fix: BoardIndex.build called agent_board._claim_live, which
+# compares against _now().  With identical inputs and an identical --as-of,
+# moving only the wall clock changed the classification of a PR from ACTIVE to
+# ORPHANED, and the report was no longer byte-identical.
+def test_the_same_as_of_is_byte_identical_across_wall_clocks(
+    conv: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The core determinism contract: `--as-of` freezes the whole report."""
+    import agent_board as ab
+
+    def report_at(wall_clock: datetime) -> str:
+        monkeypatch.setattr(ab, "_now", lambda: wall_clock)
+        return json.dumps(
+            conv.analyze(
+                [conv.pr_from_record(_pr(1, branch="arena/owner-1", files=TEMPORAL))],
+                _board(),
+                live_main_sha=MAIN_SHA,
+                now=NOW,
+            ),
+            sort_keys=True,
+            default=str,
+        )
+
+    first = report_at(NOW)
+    # A year of wall clock passes; the snapshot does not move.
+    assert report_at(NOW + timedelta(days=365)) == first
+    assert report_at(NOW - timedelta(days=365)) == first
+
+
+def test_a_prs_classification_does_not_drift_with_the_wall_clock(
+    conv: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exact drift that was reproduced: ACTIVE at T1, ORPHANED at T1+48h."""
+    import agent_board as ab
+
+    def classes_at(wall_clock: datetime) -> dict:
+        monkeypatch.setattr(ab, "_now", lambda: wall_clock)
+        return _report(conv, [_pr(1, branch="arena/owner-1", files=TEMPORAL)])["class_summary"]
+
+    assert classes_at(NOW) == classes_at(NOW + timedelta(hours=48))
+
+
+def test_claim_liveness_is_decided_at_the_moment_not_at_now(conv: ModuleType) -> None:
+    """The board's own rule, restated against the report's moment (§8)."""
+    claimed = {"task": "t", "status": "active", "claimed_at": _iso(NOW), "ttl_hours": 24}
+
+    assert conv.claim_live_at(claimed, NOW) is True
+    assert conv.claim_live_at(claimed, NOW + timedelta(hours=23, minutes=59)) is True
+    # expired: past claimed_at + ttl
+    assert conv.claim_live_at(claimed, NOW + timedelta(hours=24, minutes=1)) is False
+    # not an active status
+    for status in ("expired", "released", "deferred", "queued", "done"):
+        assert conv.claim_live_at({**claimed, "status": status}, NOW) is False
+    # active_in_review is a live lease (agent_board.ACTIVE_STATUSES)
+    assert conv.claim_live_at({**claimed, "status": "active_in_review"}, NOW) is True
+    # an unparseable or absent claimed_at can never fence
+    assert conv.claim_live_at({**claimed, "claimed_at": None}, NOW) is False
+    assert conv.claim_live_at({**claimed, "claimed_at": "not-a-timestamp"}, NOW) is False
+
+
+def test_liveness_uses_the_same_active_statuses_as_the_board_cli(conv: ModuleType) -> None:
+    """One definition of "active", so the two authorities cannot drift."""
+    import agent_board as ab
+
+    assert conv.ACTIVE_STATUSES is ab.ACTIVE_STATUSES
+
+
+def test_an_expired_claim_does_not_own_its_branch_at_the_moment(conv: ModuleType) -> None:
+    board = _board()
+    board["claims"][0]["claimed_at"] = _iso(NOW - timedelta(hours=30))  # ttl is 24
+    index = conv.BoardIndex.build(board, NOW)
+    assert index.live_claims_for("arena/owner-1") == []
+    # the same claim is live at a moment inside its lease
+    index_earlier = conv.BoardIndex.build(board, NOW - timedelta(hours=12))
+    assert len(index_earlier.live_claims_for("arena/owner-1")) == 1
+
+
+def test_build_requires_a_moment(conv: ModuleType) -> None:
+    """No implicit "now" default: that default was the bug."""
+    import inspect
+
+    params = inspect.signature(conv.BoardIndex.build).parameters
+    assert params["moment"].default is inspect.Parameter.empty
+
+
+def test_main_does_not_gc_against_the_wall_clock_when_as_of_is_given(
+    conv: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§10: the report snapshot and the GC decision must share one clock.
+
+    `gc_expired` rewrites claim status using `_now()`.  Running it while the
+    report is pinned to an earlier `--as-of` would let a wall-clock decision
+    contradict the snapshot the report describes.
+    """
+    calls: list[dict] = []
+    monkeypatch.setattr(conv, "gc_expired", lambda board: calls.append(board) or [])
+    board_file = tmp_path / "board.json"
+    board_file.write_text(json.dumps(_board()), encoding="utf-8")
+    records = tmp_path / "prs.json"
+    records.write_text(
+        json.dumps([_pr(7, branch="arena/owner-1", files=TEMPORAL)]), encoding="utf-8"
+    )
+
+    conv.main(
+        [
+            "--prs-json",
+            str(records),
+            "--board",
+            str(board_file),
+            "--main-sha",
+            MAIN_SHA,
+            "--as-of",
+            _iso(NOW),
+            "--json",
+        ]
+    )
+    assert calls == [], "gc_expired must not run when the report is pinned to --as-of"
+
+    # Without --as-of the report moment *is* the wall clock, so GC is consistent.
+    calls.clear()
+    conv.main(
+        ["--prs-json", str(records), "--board", str(board_file), "--main-sha", MAIN_SHA, "--json"]
+    )
+    assert len(calls) == 1, "gc_expired must run when the report moment is now"

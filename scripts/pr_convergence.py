@@ -45,7 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # them (rather than re-implementing a fetcher) is what keeps this from becoming
 # a second coordinator.
 from agent_board import (  # noqa: E402
-    _claim_live,
+    ACTIVE_STATUSES,
     _gh_get,
     _parse,
     gc_expired,
@@ -196,6 +196,26 @@ def pr_from_record(record: dict) -> PR:
 # --------------------------------------------------------------------------- #
 
 
+def claim_live_at(claim: dict, moment: datetime) -> bool:
+    """Whether ``claim`` fences its paths *at ``moment``*, not at the wall clock.
+
+    ``agent_board._claim_live`` compares against ``_now()``, which silently
+    coupled the report to the machine clock: the same board, the same PR data and
+    the same ``--as-of`` produced different classifications as time passed
+    (reproduced — one PR read ACTIVE at T1 and ORPHANED at T1+48h with an
+    identical ``--as-of``).  The rule is the board's own, restated against the
+    report's moment: an active status, a parseable ``claimed_at``, and
+    ``moment <= claimed_at + ttl``.  ``ACTIVE_STATUSES`` and ``_parse`` are still
+    taken from ``agent_board`` so the definition of "active" cannot drift.
+    """
+    if claim.get("status") not in ACTIVE_STATUSES:
+        return False
+    claimed = _parse(claim.get("claimed_at"))
+    if claimed is None:
+        return False
+    return moment <= claimed + timedelta(hours=int(claim.get("ttl_hours", 24)))
+
+
 @dataclass
 class BoardIndex:
     """Live board claims indexed by branch and by task."""
@@ -205,14 +225,20 @@ class BoardIndex:
     claims: list[dict] = field(default_factory=list)
 
     @classmethod
-    def build(cls, board: dict) -> BoardIndex:
+    def build(cls, board: dict, moment: datetime) -> BoardIndex:
+        """Index the claims that are live *at ``moment``*.
+
+        ``moment`` is required, not defaulted: a default of "now" is exactly the
+        wall-clock coupling this replaces, and an implicit default would let a
+        future caller reintroduce it silently.
+        """
         index = cls(claims=list(board.get("claims", [])))
         for claim in index.claims:
             task = claim.get("task")
             if task:
                 index.by_task[str(task)] = claim
             branch = claim.get("agent_branch")
-            if branch and _claim_live(claim):
+            if branch and claim_live_at(claim, moment):
                 index.by_branch.setdefault(str(branch), []).append(claim)
         return index
 
@@ -624,7 +650,7 @@ def analyze(
     """The whole convergence analysis, as a pure function of its inputs."""
     th = thresholds or Thresholds()
     moment = now or datetime.now(timezone.utc)
-    index = BoardIndex.build(board)
+    index = BoardIndex.build(board, moment)
     by_number = {pr.number: pr for pr in prs}
     numbers = sorted(by_number)
 
@@ -1040,7 +1066,17 @@ def main(argv: list[str] | None = None) -> int:
         board = json.loads(board_path.read_text(encoding="utf-8"))
     else:
         board = load_board()
-    gc_expired(board)  # in-memory only: this tool never writes the board
+
+    # One temporal contract.  `gc_expired` releases leases against the wall
+    # clock and mutates their status; running it while the report is pinned to an
+    # earlier `--as-of` would let a wall-clock decision (this lease is expired)
+    # contradict the snapshot the report is actually describing (at `as_of` it
+    # was still live).  So it runs only when the report moment *is* the wall
+    # clock.  Liveness inside the report is always decided by `claim_live_at`
+    # against the report's own moment, so skipping GC changes no classification.
+    report_moment = _dt(args.as_of) if args.as_of else datetime.now(timezone.utc)
+    if not args.as_of:
+        gc_expired(board)  # in-memory only: this tool never writes the board
 
     if args.prs_json:
         try:
@@ -1070,7 +1106,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             return EXIT_BLOCKED
 
-    now = _dt(args.as_of) if args.as_of else datetime.now(timezone.utc)
+    now = report_moment
     if now is None:
         print(f"pr-convergence: unparsable --as-of {args.as_of!r}", file=sys.stderr)
         return EXIT_BLOCKED
