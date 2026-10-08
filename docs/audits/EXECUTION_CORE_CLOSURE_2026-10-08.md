@@ -15,20 +15,20 @@
 |---|---|
 | Repository | `bot523h/nexus-ai-agent` |
 | `origin/main` | `48f280c5a1f1f595aa713100f73724651944c871` |
-| Current PR head at evidence capture | `44b93221e5fb6aa97e6abe00cc72c78ac3c1f217` |
+| Current PR tip at final audit | `18253132cc6343f1faf303ebdebeb070f37b0fad` |
 | Branch | `arena/execution-core-v1-nexus-ai-agent` |
 | Base | `main` at `48f280c5a1f1f595aa713100f73724651944c871` |
 | PR state | Open, not merged, not closed |
 | Merge state | `MERGEABLE`; merge blocked while required checks are pending |
 | Working tree | Clean after fast-forwarding to the live branch before this report-only update |
 
-The current head is the report-only publication head `44b9322…`; the implementation parent used for the current-head technical evidence is `edcdc733…`. The report-only commit changes documentation only.
+The current PR tip is the non-destructive report-only merge `1825313…`; the implementation evidence parent is `edcdc733…`, and the last pre-merge report publication was `44b9322…`. The merge contains documentation only and does not alter execution code.
 
 The immediately preceding implementation commit was:
 
 - `edcdc733` — align cancellation race tests with cancellation-reschedule semantics.
 
-The complete execution-core history from `origin/main` to the current code head is explicitly:
+The complete execution-core history from `origin/main` to the implementation evidence head is explicitly:
 
 1. `e28f082` — provider-neutral contract and attempt-scoped staging
 2. `6132ebc` — `NativeLocalBackend` and fenced queue cancellation
@@ -41,6 +41,9 @@ The complete execution-core history from `origin/main` to the current code head 
 9. `d0ab29f` — concurrent directory-creation race fix and M7 proof
 10. `525cb29` — cancellation cleanup and successor scheduling
 11. `edcdc73` — cancellation-race test alignment
+12. `44b9322` — live closure report correction
+13. `5a270b4` — parallel full-suite report note (preserved in the merge history)
+14. `1825313` — non-destructive merge preserving the authoritative report
 
 ## 2. Task-254 acceptance criteria
 
@@ -168,11 +171,11 @@ The harness restores the source after each mutation and leaves the tree clean.
 | Ruff | passed |
 | Ruff format check | passed |
 | Mypy | `Success: no issues found in 289 source files` |
-| Full non-slow local suite | Earlier run reached `3839 passed, 31 skipped` but had one unrelated SQLite schema-change failure; `3841 passed, 31 skipped, 194 warnings` on `44b93221e5fb6aa97e6abe00cc72c78ac3c1f217` |
+| Full non-slow local suite | Earlier run reached `3839 passed, 31 skipped` but had one unrelated SQLite schema-change failure; `3841 passed, 31 skipped, 194 warnings` on technical evidence head `44b93221e5fb6aa97e6abe00cc72c78ac3c1f217` |
 
 ## 8. Exact-SHA CI
 
-The current PR head is `44b93221e5fb6aa97e6abe00cc72c78ac3c1f217`. GitHub runs `37837927074` and `37837934842` were created for that exact SHA but were cancelled before required jobs completed; the PR currently reports the corresponding required checks as pending.
+The current PR tip is `18253132cc6343f1faf303ebdebeb070f37b0fad`. The prior CI runs `37837927074` and `37837934842` covered the parent report head `44b9322…` and were cancelled before required jobs completed. No terminal green exact-SHA CI evidence exists yet for `1825313…`; the PR currently reports required checks as pending.
 
 At evidence capture, the current-head required checks are not terminal: the PR reports pending continuum-evidence, test, parity, extras, lint, migration, and mutation jobs. Therefore `CURRENT_PR_HEAD == CI_TESTED_SHA` is known, but **current-head CI is not yet green and terminal**.
 
@@ -186,7 +189,7 @@ The latest completed CodeRabbit review record is:
 - reviewed commit `a50d87428bd3c6e2081ce94aa01fec1bc003df55`;
 - state `CHANGES_REQUESTED`.
 
-A valid inline finding on the prior report commit `edcdc733` remained on the report at line 27: the phrase “full 4-commit history” was ambiguous because the report listed seven pre-report commits. The finding is actionable and has not been dismissed. A later CodeRabbit status is `Review paused`, but there is no newly submitted review record for `44b93221e5fb6aa97e6abe00cc72c78ac3c1f217` proving zero actionable findings.
+A valid inline finding on the prior report commit `edcdc733` remained on the report at line 27: the phrase “full 4-commit history” was ambiguous because the report listed seven pre-report commits. The finding is actionable and has not been dismissed. A later CodeRabbit status is `Review paused`, but there is no newly submitted review record for the current PR tip `18253132cc6343f1faf303ebdebeb070f37b0fad` proving zero actionable findings.
 
 This report rewrite addresses the finding by explicitly listing the complete commit history and removing the ambiguous phrase. A fresh CodeRabbit review is still required for the current report head.
 
@@ -209,7 +212,7 @@ Only these evidence-backed blockers remain:
 1. exact-SHA CI for the live head is queued/in progress rather than terminal green;
 2. the current-head CodeRabbit review has no newly submitted review record proving zero actionable findings, and the previously valid report-thread finding required this rewrite;
 3. board governance has no valid live `gates_owner`, and the referee is fail-closed on that precondition;
-4. full non-slow is now green locally on current evidence (`3841 passed, 31 skipped`); GitHub exact-SHA CI remains pending/cancelled.
+4. full non-slow is green locally on the unchanged technical evidence parent (`3841 passed, 31 skipped`); exact-SHA CI for the current merge tip is still pending/missing.
 
 ## 12. Final verdict
 
