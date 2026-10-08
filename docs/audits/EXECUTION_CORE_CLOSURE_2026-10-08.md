@@ -166,7 +166,7 @@ The harness restores the source after each mutation and leaves the tree clean.
 | Ruff | passed |
 | Ruff format check | passed |
 | Mypy | `Success: no issues found in 289 source files` |
-| Full non-slow local suite | Earlier run reached `3839 passed, 31 skipped` but had one unrelated SQLite schema-change failure; no full-suite result has yet been established for `edcdc733` |
+| Full non-slow local suite | `pytest -q -m "not slow"` on code head `edcdc733`: `3841 passed, 31 skipped, 0 failed` (306.68s) |
 
 ## 8. Exact-SHA CI
 
