@@ -165,14 +165,45 @@ excluded by default (they are not live descendants) but remain reachable with
 
 | Operation | Semantics |
 |---|---|
-| `backup(path)` | SQLite **online backup API**, not a file copy — consistent under concurrent readers |
-| `restore(path)` | wholesale replacement of the graph's contents |
+| `backup(path)` | SQLite **online backup API**, not a file copy — consistent under concurrent readers. Captures the **whole file**, journal included if shared |
+| `restore(path, *, whole_database=False)` | **whole-file** replacement — see the scope contract below |
 | `integrity_check()` | `GRAPH010`–`GRAPH013` node kind/status/payload/identity digests, `GRAPH020`–`GRAPH022` edge relation/endpoints/digest, `GRAPH030` every node has history |
 | `rebuild_from_journal(records, replace=True)` | from-scratch rebuild in **one transaction**; terminal nodes are skipped and reported in `skipped_terminal` |
 
 `restore` takes the in-process writer lock and uses a dedicated connection:
 `Connection.backup` cannot target a connection inside an open transaction, which
 is why it does not use the `BEGIN IMMEDIATE` wrapper.
+
+### The restore scope contract
+
+The SQLite backup API cannot target a subset of tables, so `backup`/`restore`
+operate on the **whole database file** — not just the graph projection. That is
+coherent for disaster recovery (one backup, one restore, journal included) and
+dangerous if aimed at the wrong file: the projection is designed to share its
+file with the causal journal, which is the authority the graph is rebuilt FROM.
+A projection restore must never overwrite the authority by accident —
+reproduced before the guard: `graph.restore(backup)` on a shared file silently
+rewound the ledger from 6 events to 3.
+
+The guard therefore enforces:
+
+- **Source validation** — the source must contain the graph schema tables; a
+  foreign file is refused.
+- **Destination scope** — if the destination file holds any table beyond the
+  graph's own (`GRAPH_TABLES`), `restore` refuses by default and names the
+  foreign tables. `whole_database=True` is the explicit acknowledgement that
+  the caller owns the entire file and wants it all replaced.
+- A graph-only file restores with no acknowledgement, as before.
+
+### Concurrency contract
+
+Every read and write takes the in-process lock. On `:memory:` there is one
+shared connection, so without this a reader sampling mid-rebuild would see the
+writer's uncommitted rows — reproduced before the fix: a reader observed
+`{nodes: 120, edges: 119, history: 121}`, a state that is neither the old nor
+the new committed graph. The lock is reentrant because composite reads
+(`traverse`, `lineage`, `integrity_check`) hold it across the leaf readers they
+call; a multi-step read therefore cannot straddle a rebuild either.
 
 Cross-process write safety comes from **SQLite's write lock**, not the in-process
 mutex: `put_node`/`put_edge` run inside `BEGIN IMMEDIATE`, so a second process

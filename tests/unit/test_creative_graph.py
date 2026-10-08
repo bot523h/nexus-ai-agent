@@ -882,3 +882,174 @@ def test_a_concurrent_reader_never_observes_a_partial_rebuild(
         f"(old={old_counts}/{sorted(old_edges)} new={new_counts}/{sorted(new_edges)})"
     )
     assert graph.integrity_check().ok
+
+
+# --------------------------------------------------------------------------- #
+# R5 — the restore scope boundary
+# --------------------------------------------------------------------------- #
+# Reproduced pre-fix: restore() is a WHOLE-FILE replacement (the SQLite backup
+# API cannot target a subset of tables).  On a file shared with the causal
+# journal — the authority the graph is a projection OF — a projection restore
+# silently rewound the ledger from 6 events to 3.  The graph must never
+# overwrite the authority by accident.
+def _shared_file(tmp_path: Path, *, journal_events: int = 3) -> tuple:
+    """One file holding a causal journal, a graph projection, and a marker."""
+    import sqlite3
+
+    from nexus_ai_agent.provenance.journal import CausalJournal
+    from nexus_ai_agent.provenance.models import CausalEvent, EventKind
+
+    shared = tmp_path / "shared.sqlite"
+    journal = CausalJournal(shared)
+    for i in range(journal_events):
+        journal.append(
+            CausalEvent(
+                kind=EventKind.JOB_COMPLETED,
+                job_id=f"job-{i}",
+                job_type="creative.render",
+                idempotency_key=f"key-{i}",
+                attempt=1,
+                status="completed",
+                result_digest="d" * 64,
+                occurred_at="2026-10-07T00:00:00Z",
+            )
+        )
+    graph = CreativeGraph(shared)
+    graph.put_node("ARTIFACT", {"job_id": "job-0", "result_digest": "d" * 64}, {"bytes": 1})
+    marker = sqlite3.connect(str(shared))
+    marker.execute("CREATE TABLE independent_marker (id INTEGER PRIMARY KEY, note TEXT)")
+    marker.execute("INSERT INTO independent_marker (note) VALUES ('do-not-touch')")
+    marker.commit()
+    marker.close()
+
+    def counts() -> tuple[int, int, int]:
+        connection = sqlite3.connect(str(shared))
+        try:
+            journal_rows = connection.execute(
+                "SELECT COUNT(*) FROM nexus_causal_journal"
+            ).fetchone()[0]
+            marker_rows = connection.execute("SELECT COUNT(*) FROM independent_marker").fetchone()[
+                0
+            ]
+            graph_rows = connection.execute("SELECT COUNT(*) FROM nexus_graph_node").fetchone()[0]
+            return journal_rows, marker_rows, graph_rows
+        finally:
+            connection.close()
+
+    return graph, counts
+
+
+def test_restore_refuses_to_overwrite_a_shared_file_by_default(tmp_path: Path) -> None:
+    """The reproduced hazard: a projection restore must not rewind the ledger."""
+    from nexus_ai_agent.provenance.models import CausalEvent, EventKind
+
+    graph, counts = _shared_file(tmp_path, journal_events=3)
+    backup = graph.backup(tmp_path / "backup.sqlite")
+    before = counts()
+
+    # the world moves on: three more ledger events the backup does not have
+    from nexus_ai_agent.provenance.journal import CausalJournal
+
+    journal = CausalJournal(tmp_path / "shared.sqlite")
+    for i in range(3, 6):
+        journal.append(
+            CausalEvent(
+                kind=EventKind.JOB_COMPLETED,
+                job_id=f"job-{i}",
+                job_type="creative.render",
+                idempotency_key=f"key-{i}",
+                attempt=1,
+                status="completed",
+                result_digest="d" * 64,
+                occurred_at="2026-10-07T00:00:00Z",
+            )
+        )
+    assert counts() == (6, 1, 1)
+
+    with pytest.raises(GraphStateError, match="nexus_causal_journal"):
+        graph.restore(backup)
+
+    # the refusal changed nothing: the ledger kept its newer events
+    assert counts() == (6, 1, 1), "a refused restore must not touch the file"
+    assert before == (3, 1, 1)
+
+
+def test_restore_with_whole_database_replaces_exactly_the_whole_file(
+    tmp_path: Path,
+) -> None:
+    """Explicit acknowledgement: WHAT is replaced is the entire file, nothing less.
+
+    The independent marker table was created BEFORE the backup, so a whole-file
+    restore brings its old row back; a marker row created AFTER the backup is
+    destroyed.  Both halves prove the scope is the file, not the projection.
+    """
+    import sqlite3
+
+    graph, counts = _shared_file(tmp_path, journal_events=3)
+    backup = graph.backup(tmp_path / "backup.sqlite")
+
+    connection = sqlite3.connect(str(tmp_path / "shared.sqlite"))
+    connection.execute("INSERT INTO independent_marker (note) VALUES ('after-backup')")
+    connection.commit()
+    connection.close()
+    assert counts() == (3, 2, 1)
+
+    graph.restore(backup, whole_database=True)
+    # journal rewound to the backup, the post-backup marker row destroyed
+    assert counts() == (3, 1, 1)
+
+
+def test_restore_refuses_a_source_that_is_not_a_graph_backup(tmp_path: Path) -> None:
+    """Source validation: a foreign file is refused, not half-restored."""
+    import sqlite3
+
+    graph = CreativeGraph(tmp_path / "graph.sqlite")
+    graph.put_node("ARTIFACT", {"n": 1}, {"i": 1})
+
+    foreign = tmp_path / "foreign.sqlite"
+    connection = sqlite3.connect(str(foreign))
+    connection.execute("CREATE TABLE something_else (id INTEGER PRIMARY KEY)")
+    connection.commit()
+    connection.close()
+
+    with pytest.raises(GraphStateError, match="not a graph backup"):
+        graph.restore(foreign)
+    # the destination is untouched
+    assert graph.counts() == {"nodes": 1, "edges": 0, "history": 1}
+
+
+def test_restore_on_a_graph_only_file_needs_no_acknowledgement(tmp_path: Path) -> None:
+    """The ordinary case is unchanged: a graph-only file restores directly."""
+    graph = CreativeGraph(tmp_path / "graph.sqlite")
+    ids = build_slice(graph)
+    before = graph.counts()
+    backup = graph.backup(tmp_path / "backup.sqlite")
+    with graph._write_connection() as connection:  # noqa: SLF001 - the test is the attacker
+        connection.execute("DELETE FROM nexus_graph_edge")
+    graph.restore(backup)
+    assert graph.counts() == before
+    assert graph.lineage(ids["ARTIFACT"])["complete"] is True
+
+
+def test_restore_refuses_to_overwrite_a_shared_memory_graph() -> None:
+    """The :memory: path has the same scope contract as the file path."""
+    import tempfile
+
+    graph = CreativeGraph(":memory:")
+    graph.put_node("ARTIFACT", {"n": 1}, {"i": 1})
+    # something non-graph lives in the same in-memory database
+    graph._memory_connection.execute(  # noqa: SLF001 - the test is the fixture
+        "CREATE TABLE independent_marker (id INTEGER PRIMARY KEY)"
+    )
+    graph._memory_connection.commit()
+
+    other = CreativeGraph(":memory:")
+    other.put_node("ARTIFACT", {"n": 2}, {"i": 2})
+    backup_path = Path(tempfile.mkdtemp()) / "backup.sqlite"
+    other.backup(backup_path)
+
+    with pytest.raises(GraphStateError, match="independent_marker"):
+        graph.restore(backup_path)
+    assert graph.counts() == {"nodes": 1, "edges": 0, "history": 1}
+    graph.restore(backup_path, whole_database=True)
+    assert graph.counts() == {"nodes": 1, "edges": 0, "history": 1}  # other's slice

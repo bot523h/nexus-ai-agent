@@ -106,6 +106,26 @@ LINEAGE_ATTACHMENTS: tuple[str, ...] = ("ARTIFACT_VERIFIED_BY", "ARTIFACT_HAS_PA
 #: the rest are recorded so the past stays readable.
 STATUSES: tuple[str, ...] = ("active", "superseded", "invalidated", "revoked")
 
+#: The graph projection's own tables.  Anything else in the database file is NOT
+#: the projection — most importantly the causal journal, which is the authority
+#: this graph is a rebuildable projection OF.  ``backup``/``restore`` operate on
+#: the WHOLE file (the SQLite backup API cannot target a subset), so these names
+#: are the boundary the restore guard checks.
+GRAPH_TABLES: frozenset[str] = frozenset(
+    {"nexus_graph_node", "nexus_graph_edge", "nexus_graph_node_history"}
+)
+
+
+def _tables(connection: sqlite3.Connection) -> set[str]:
+    """Every user table in the database behind ``connection``."""
+    return {
+        str(row[0])
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        )
+    }
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS nexus_graph_node (
     node_id TEXT PRIMARY KEY,
@@ -786,7 +806,14 @@ class CreativeGraph:
         return report
 
     def backup(self, target: Path | str) -> Path:
-        """A consistent online backup (SQLite backup API, not a file copy)."""
+        """A consistent online backup (SQLite backup API, not a file copy).
+
+        SCOPE: this captures the WHOLE database file, not just the graph tables.
+        If the file is shared with the causal journal, the backup includes the
+        journal too — which is what makes a whole-file restore a coherent
+        disaster-recovery operation, and what makes it dangerous if pointed at
+        the wrong file.  See ``restore`` for the matching scope contract.
+        """
         destination = Path(target)
         destination.parent.mkdir(parents=True, exist_ok=True)
         output = sqlite3.connect(str(destination))
@@ -797,22 +824,64 @@ class CreativeGraph:
             output.close()
         return destination
 
-    def restore(self, source: Path | str) -> None:
-        """Replace this graph's contents from a backup.
+    def restore(self, source: Path | str, *, whole_database: bool = False) -> None:
+        """Replace this graph's database from a backup — a WHOLE-FILE operation.
 
-        ``Connection.backup`` overwrites the destination wholesale, but it
-        cannot target a connection that is inside an open transaction, so this
-        takes the in-process writer lock and uses a dedicated connection rather
-        than the ``BEGIN IMMEDIATE`` wrapper.
+        SCOPE CONTRACT — read before calling:
+
+        * WHAT is restored: every table in the source file, via the SQLite
+          backup API.  The API cannot target a subset of tables.
+        * WHAT is destroyed/replaced: every table in the destination file,
+          graph tables AND anything else that lives there.
+        * The hazard this guard exists for: the projection is designed to share
+          its file with the causal journal — the authority it is rebuilt FROM.
+          A restore silently rewinds or deletes journal rows (reproduced: a
+          projection restore rewound the ledger from 6 events to 3).  The
+          projection must never overwrite the authority by accident.
+        * WHAT the caller must own: when the destination file contains any
+          table beyond the graph's own, the caller must pass
+          ``whole_database=True`` — an explicit acknowledgement that the whole
+          file, journal included, is being replaced.  The default refuses.
+        * WHAT validation exists: the source must contain the graph schema
+          (a foreign file is refused), and the destination's foreign tables are
+          named in the refusal.
+
+        ``Connection.backup`` cannot target a connection that is inside an open
+        transaction, so this takes the in-process writer lock and uses a
+        dedicated connection rather than the ``BEGIN IMMEDIATE`` wrapper.
         """
         origin = sqlite3.connect(str(Path(source)))
         try:
+            missing = GRAPH_TABLES - _tables(origin)
+            if missing:
+                raise GraphStateError(
+                    f"restore source {source} is not a graph backup: "
+                    f"missing table(s) {sorted(missing)}"
+                )
             with self._lock:
                 if self._memory_connection is not None:
+                    foreign = _tables(self._memory_connection) - GRAPH_TABLES
+                    if foreign and not whole_database:
+                        raise GraphStateError(
+                            f"restore would replace the WHOLE in-memory database, which "
+                            f"holds non-graph table(s) {sorted(foreign)} — including the "
+                            "causal journal if this file is shared. The graph is a "
+                            "projection; restoring it must not overwrite the authority. "
+                            "Pass whole_database=True only if you own the entire file."
+                        )
                     origin.backup(self._memory_connection)
                     return
                 connection = sqlite3.connect(self._sqlite_path, timeout=self._connect_timeout)
                 try:
+                    foreign = _tables(connection) - GRAPH_TABLES
+                    if foreign and not whole_database:
+                        raise GraphStateError(
+                            f"restore would replace the WHOLE database {self._sqlite_path}, "
+                            f"which holds non-graph table(s) {sorted(foreign)} — including "
+                            "the causal journal if this file is shared. The graph is a "
+                            "projection; restoring it must not overwrite the authority. "
+                            "Pass whole_database=True only if you own the entire file."
+                        )
                     origin.backup(connection)
                     connection.commit()
                 finally:
