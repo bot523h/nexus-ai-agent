@@ -1018,6 +1018,55 @@ def test_restore_refuses_a_source_that_is_not_a_graph_backup(tmp_path: Path) -> 
     assert graph.counts() == {"nodes": 1, "edges": 0, "history": 1}
 
 
+def test_restore_refuses_a_source_that_is_not_readable(tmp_path: Path) -> None:
+    """A file that is not a database at all fails closed, not with a raw error."""
+    graph = CreativeGraph(tmp_path / "graph.sqlite")
+    graph.put_node("ARTIFACT", {"n": 1}, {"i": 1})
+
+    garbage = tmp_path / "garbage.sqlite"
+    garbage.write_bytes(b"this is not a database file " * 64)
+
+    with pytest.raises(GraphStateError, match="not a readable database"):
+        graph.restore(garbage)
+    assert graph.counts() == {"nodes": 1, "edges": 0, "history": 1}
+
+
+def test_restore_refuses_a_structurally_corrupt_source(tmp_path: Path) -> None:
+    """Table names alone are not proof: a corrupt b-tree must be rejected too.
+
+    The schema page can stay readable while a data page is malformed, so the
+    name check passes and ``Connection.backup`` would copy the corruption over
+    the (possibly journal-bearing) destination.  ``PRAGMA integrity_check`` is
+    the structural gate that catches it.
+    """
+    graph = CreativeGraph(tmp_path / "graph.sqlite")
+    graph.put_node("ARTIFACT", {"n": 1}, {"i": 1})
+
+    damaged = tmp_path / "damaged.sqlite"
+    connection = sqlite3.connect(str(damaged))
+    for table in ("nexus_graph_node", "nexus_graph_edge", "nexus_graph_node_history"):
+        connection.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, blob TEXT)")
+    for row in range(8000):
+        connection.execute("INSERT INTO nexus_graph_node VALUES (?, ?)", (row, "y" * 300))
+    connection.commit()
+    connection.close()
+
+    # Flip bytes in a data page, leaving the schema (page 1) intact.
+    payload = bytearray(damaged.read_bytes())
+    for offset in range(4096 * 5 + 200, 4096 * 5 + 600):
+        payload[offset] ^= 0xFF
+    damaged.write_bytes(bytes(payload))
+    # The table names are still readable — that is exactly why the name check
+    # alone is insufficient.
+    probe = sqlite3.connect(str(damaged))
+    assert probe.execute("SELECT name FROM sqlite_master").fetchall()
+    probe.close()
+
+    with pytest.raises(GraphStateError, match="integrity_check"):
+        graph.restore(damaged)
+    assert graph.counts() == {"nodes": 1, "edges": 0, "history": 1}
+
+
 def test_restore_on_a_graph_only_file_needs_no_acknowledgement(tmp_path: Path) -> None:
     """The ordinary case is unchanged: a graph-only file restores directly."""
     graph = CreativeGraph(tmp_path / "graph.sqlite")

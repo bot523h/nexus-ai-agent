@@ -852,12 +852,27 @@ class CreativeGraph:
         """
         origin = sqlite3.connect(str(Path(source)))
         try:
-            missing = GRAPH_TABLES - _tables(origin)
+            # A malformed source can still expose the schema table names and be
+            # copied by ``Connection.backup`` without error, so the name check is
+            # not enough: prove SQLite can read the file's b-tree/index/page
+            # structure before it can replace the destination (which, with
+            # ``whole_database=True``, includes the causal journal).  This covers
+            # structural corruption only; application-level payload/identity/digest
+            # tampering is ``integrity_check``'s job after the restore.
+            try:
+                missing = GRAPH_TABLES - _tables(origin)
+                check = origin.execute("PRAGMA integrity_check").fetchone()
+            except sqlite3.DatabaseError as exc:
+                raise GraphStateError(
+                    f"restore source {source} is not a readable database"
+                ) from exc
             if missing:
                 raise GraphStateError(
                     f"restore source {source} is not a graph backup: "
                     f"missing table(s) {sorted(missing)}"
                 )
+            if check is None or str(check[0]) != "ok":
+                raise GraphStateError(f"restore source {source} failed PRAGMA integrity_check")
             with self._lock:
                 if self._memory_connection is not None:
                     foreign = _tables(self._memory_connection) - GRAPH_TABLES

@@ -170,7 +170,9 @@ excluded by default (they are not live descendants) but remain reachable with
 | `integrity_check()` | `GRAPH010`–`GRAPH013` node kind/status/payload/identity digests, `GRAPH020`–`GRAPH022` edge relation/endpoints/digest, `GRAPH030` every node has history |
 | `rebuild_from_journal(records, replace=True)` | from-scratch rebuild in **one transaction**; terminal nodes are skipped and reported in `skipped_terminal` |
 
-`restore` takes the in-process writer lock and uses a dedicated connection:
+`restore` takes the in-process writer lock. For `:memory:`, it backs up into the
+shared connection (there is no path on disk to reopen); for file-backed
+databases, it uses a dedicated destination connection.
 `Connection.backup` cannot target a connection inside an open transaction, which
 is why it does not use the `BEGIN IMMEDIATE` wrapper.
 

@@ -637,6 +637,61 @@ def test_gov023_passes_every_condition_that_genuinely_runs_on_pull_request(
         assert severity == "ok", f"{condition!r} genuinely runs for pull_request"
 
 
+def test_gov023_examines_every_conjunct_not_just_a_matching_substring(
+    guard: ModuleType,
+) -> None:
+    """A whitelisted comparison must not mask a blocking sibling in an ``&&``.
+
+    Reproduced on the pre-fix guard: ``_PR_PRESERVING.search`` matched anywhere in
+    the condition, so each case below read as ``ok`` even though the job would not
+    run for a pull request (or could never run at all).
+    """
+    # A variable conjunct that may be unset — cannot be proven to keep pull_request.
+    for condition in (
+        "github.event_name == 'pull_request' && vars.ENABLE == 'yes'",
+        "always() && vars.X == 'y'",
+        "github.event_name == 'pull_request' && github.ref == 'refs/heads/main'",
+    ):
+        severity, reason = guard.classify_pr_condition(condition)
+        assert severity == "unknown", f"{condition!r}: {reason}"
+
+    # A conjunction of two different event equalities can never be true.
+    severity, reason = guard.classify_pr_condition(
+        "github.event_name == 'pull_request' && github.event_name == 'push'"
+    )
+    assert severity == "violation", reason
+    # A constant false anywhere in an `&&` chain dominates.
+    severity, reason = guard.classify_pr_condition("github.event_name == 'pull_request' && false")
+    assert severity == "violation", reason
+
+    # A disjunction runs if any branch runs.
+    severity, _ = guard.classify_pr_condition(
+        "vars.X == 'y' || github.event_name == 'pull_request'"
+    )
+    assert severity == "ok"
+    # ... and is only a violation when *every* branch is excluded.
+    severity, _ = guard.classify_pr_condition(
+        "github.event_name == 'push' || github.event_name == 'schedule'"
+    )
+    assert severity == "violation"
+
+
+def test_gov023_operators_inside_quotes_or_parens_are_not_top_level(
+    guard: ModuleType,
+) -> None:
+    """`&&` in a quoted string is data; a redundant wrapper is unwrapped."""
+    # The quoted `&&` is data: the real conjunct is the undecidable variable.
+    severity, _ = guard.classify_pr_condition(
+        "github.event_name == 'pull_request' && vars.X == 'a && b'"
+    )
+    assert severity == "unknown"
+    # A whole-term wrapper is unwrapped, so the inner disjunction is analysed.
+    severity, _ = guard.classify_pr_condition(
+        "(github.event_name == 'pull_request' || github.event_name == 'push')"
+    )
+    assert severity == "ok"
+
+
 def test_the_live_repository_condition_is_accepted() -> None:
     """The fix must not break the workflow this repository actually ships."""
     proc = _run("check-offline")

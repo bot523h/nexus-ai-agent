@@ -335,66 +335,150 @@ def classify_pr_condition(condition: str) -> tuple[str, str]:
     *prove* preserves ``pull_request`` is reported ``unknown``, which the Report
     turns into BLOCKED rather than VERIFIED.  Failing closed is the point: an
     undecidable condition must never count as a pass.
+
+    The condition is split on its **top-level** ``||`` then ``&&`` operators and
+    each term is classified on its own.  Matching a whitelisted form anywhere in
+    the text was the earlier hole: a blocking sibling in an ``&&`` chain went
+    unexamined, so ``... == 'pull_request' && vars.ENABLE == 'yes'`` and even the
+    impossible ``... == 'pull_request' && ... == 'push'`` read as ``ok``.
     """
     cond = (condition or "").strip()
     if not cond:
         return "ok", "has no condition, so it runs on every subscribed event"
+    return _classify_boolean(cond.lower(), condition)
 
-    low = cond.lower()
-    # Quoted text is data, not logic: `vars.X == 'false'` is not a constant-false
-    # condition.  Blank the strings out before reasoning about the expression.
-    unquoted = re.sub(r"'[^']*'|\"[^\"]*\"", " ", low)
 
-    # A condition that can never be true never runs, whatever else it mentions.
-    # `false` is caught on either side of `&&`, so `false && <anything>` cannot
-    # reach the positive branch below just because it names pull_request.
-    if unquoted.strip() in ("false", "!true") or re.search(
-        r"(?:^|&&)\s*false\s*(?:&&|$)", unquoted
+def _split_top_level(expr: str, op: str) -> list[str]:
+    """Split ``expr`` on ``op`` occurrences outside parentheses or quotes.
+
+    ``&&`` inside ``'a && b'`` is data, and one nested in ``( ... )`` belongs to
+    a deeper precedence level; neither is a top-level operator.
+    """
+    parts: list[str] = []
+    depth = 0
+    quote: str | None = None
+    start = 0
+    i = 0
+    while i < len(expr):
+        ch = expr[i]
+        if quote is not None:
+            if ch == quote:
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0 and expr.startswith(op, i):
+            parts.append(expr[start:i])
+            i += len(op)
+            start = i
+            continue
+        i += 1
+    parts.append(expr[start:])
+    return parts
+
+
+#: Status functions that are true in an ordinary run and so neither add nor
+#: remove ``pull_request``: a benign extra conjunct.
+_NEUTRAL_FUNCTIONS = re.compile(r"^(?:always|success|cancelled)\s*\(\s*\)$")
+
+
+def _strip_outer_parens(text: str) -> str:
+    """Remove parentheses that wrap the *whole* term, e.g. ``(a || b)`` → ``a || b``.
+
+    Only a pair that encloses the entire term is stripped; an inner group such as
+    ``contains(...)`` or ``(a) && b`` is left intact, so a function call is never
+    mistaken for a redundant wrapper.
+    """
+    t = text.strip()
+    while len(t) >= 2 and t.startswith("(") and t.endswith(")"):
+        depth = 0
+        wraps_all = True
+        for index, ch in enumerate(t):
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0 and index != len(t) - 1:
+                    wraps_all = False
+                    break
+        if not wraps_all:
+            break
+        t = t[1:-1].strip()
+    return t
+
+
+def _term_runs_on_pr(term: str) -> str:
+    """Classify one conjunction term: ``ok``, ``unknown`` or ``violation``."""
+    text = _strip_outer_parens(term)
+    if not text:
+        return "ok"
+    low = text.lower()
+    unquoted = re.sub(r"'[^']*'|\"[^\"]*\"", " ", low).strip()
+    # A term that can never be true can never run.
+    if unquoted in ("false", "!true"):
+        return "violation"
+    # `!= 'pull_request'` / `!contains(...)` is a proven exclusion, before the
+    # general negation test which would otherwise only say ``unknown``.
+    if re.search(r"!=\s*['\"]?pull_request", low) or re.search(
+        r"!\s*contains\s*\(|\bnot\s+contains\s*\(", low
     ):
-        return "violation", f"condition {condition!r} can never be true, so it never runs"
-
-    # `pull_request` named only to be excluded.
-    if re.search(r"!=\s*['\"]?pull_request", low) or (
-        "pull_request" in low and re.search(r"!\s*contains\s*\(|\bnot\s+contains\s*\(", low)
-    ):
-        return "violation", f"condition {condition!r} excludes pull_request"
-
-    # Any *other* negation means we cannot prove pull_request survives, even when
-    # the name appears: `!(github.event_name == 'pull_request')` mentions it and
-    # still never runs.  Fail closed rather than trusting the mention.
+        return "violation"
+    if _NEUTRAL_FUNCTIONS.match(unquoted):
+        return "ok"
+    # Any other negation means we cannot prove this term keeps pull_request: e.g.
+    # `!(github.event_name == 'pull_request')` names it and still never runs.
     if "!" in unquoted.replace("!=", " ") or re.search(r"\bnot\b", unquoted):
-        return (
-            "unknown",
-            f"condition {condition!r} contains a negation this guard cannot decide — "
-            "recorded as BLOCKED, never as a pass",
-        )
-
-    # Naming other events by equality, with no pull_request among them, excludes it.
+        return "unknown"
+    # A comparison that positively selects pull_request is evidence.
+    if _PR_PRESERVING.search(low):
+        return "ok"
+    # A term naming a *different* event by equality never runs for pull_request.
     events = _EVENT_EQUALITY.findall(low)
     if events and "pull_request" not in events:
-        return (
-            "violation",
-            f"condition {condition!r} fires only for {sorted(set(events))}, never pull_request",
-        )
+        return "violation"
+    # Anything else — a mention, a variable, an undecidable negation — is not a
+    # proof that this term keeps pull_request, so it fails closed.
+    return "unknown"
 
-    # Positive acceptance is a WHITELIST of forms this guard can actually prove
-    # select the pull_request event.  The previous branch tested
-    # `"pull_request" in low`, i.e. a raw substring of the quoted-inclusive text,
-    # so any *mention* passed: `vars.X == 'pull_request'`, a bare `'pull_request'`
-    # literal, `format('pull_request')`, `contains(vars.LIST, 'pull_request')` and
-    # even `# pull_request` in a comment all reported ok while the job never ran
-    # for a pull request.  A mention is data; only a comparison against
-    # `github.event_name` is evidence.
-    if _PR_PRESERVING.search(low):
-        return "ok", "condition selects the pull_request event via github.event_name"
-    if re.search(r"\balways\s*\(\s*\)", low):
-        return "ok", "condition is always(), which keeps every subscribed event"
 
+def _classify_boolean(low: str, original: str) -> tuple[str, str]:
+    """Combine per-term verdicts over the top-level ``||`` then ``&&`` operators."""
+    or_groups = _split_top_level(low, "||")
+    if len(or_groups) > 1:
+        verdicts = [_combine_and(group) for group in or_groups]
+        # A disjunction runs if *any* branch runs.
+        if "ok" in verdicts:
+            return "ok", f"condition {original!r} has a branch that runs on pull_request"
+        if "unknown" in verdicts:
+            return (
+                "unknown",
+                f"condition {original!r} has no branch provably running on pull_request — "
+                "recorded as BLOCKED, never as a pass",
+            )
+        return "violation", f"condition {original!r} never runs on pull_request"
+    verdict = _combine_and(low)
+    if verdict == "ok":
+        return "ok", f"condition {original!r} runs on pull_request under every term"
+    if verdict == "violation":
+        return "violation", f"condition {original!r} can never run on pull_request"
     return (
         "unknown",
-        f"condition {condition!r} cannot be shown to preserve pull_request — "
-        "recorded as BLOCKED, never as a pass",
+        f"condition {original!r} has a term that cannot be shown to preserve "
+        "pull_request — recorded as BLOCKED, never as a pass",
     )
+
+
+def _combine_and(expr: str) -> str:
+    """A conjunction runs only if every term runs; violation dominates."""
+    verdicts = [_term_runs_on_pr(term) for term in _split_top_level(expr, "&&")]
+    if "violation" in verdicts:
+        return "violation"
+    if "unknown" in verdicts:
+        return "unknown"
+    return "ok"
 
 
 def check_offline(root: Path) -> Report:
