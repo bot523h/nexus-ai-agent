@@ -819,3 +819,128 @@ def test_main_does_not_gc_against_the_wall_clock_when_as_of_is_given(
         ["--prs-json", str(records), "--board", str(board_file), "--main-sha", MAIN_SHA, "--json"]
     )
     assert len(calls) == 1, "gc_expired must run when the report moment is now"
+
+
+# --------------------------------------------------------------------------- #
+# R3 closure — the full two-clock matrix
+# --------------------------------------------------------------------------- #
+# The contract has two clocks and they must stay distinct:
+#
+#   * the ANALYSIS SNAPSHOT (`--as-of`, or the wall clock when omitted) decides
+#     every classification in the report, through `claim_live_at(claim, moment)`;
+#   * the REAL BOARD MUTATION (`agent_board.gc_expired`) is deliberately bound
+#     to the wall clock, because releasing an expired lease is something that
+#     happens *now*, not something the report describes.
+#
+# The earlier tests proved the snapshot ignores the wall clock.  These prove the
+# other direction: the snapshot VALUE drives the outcome, GC is wall-clock-bound
+# on purpose, and a malformed snapshot is refused rather than guessed.
+def test_the_snapshot_value_itself_drives_the_classification(conv: ModuleType) -> None:
+    """snapshot T1 / wall clock A vs snapshot T2 / wall clock A.
+
+    A claim made at NOW with a 24h TTL is live at T1 = NOW but expired at
+    T2 = NOW + 48h.  Same PR data, same board, same wall clock — only the
+    snapshot moves, and the classification must follow it.  This is what makes
+    `--as-of` a snapshot rather than a no-op.
+    """
+    pr = _pr(1, branch="arena/owner-1", files=TEMPORAL)
+    at_t1 = _report(conv, [pr], now=NOW)
+    at_t2 = _report(conv, [pr], now=NOW + timedelta(hours=48))
+
+    assert _class_of(at_t1, 1) == "ACTIVE"
+    assert _class_of(at_t2, 1) == "ORPHANED"
+
+
+def test_real_gc_is_deliberately_wall_clock_bound(conv: ModuleType) -> None:
+    """`gc_expired` is a real mutation happening *now* — not a frozen read.
+
+    Pinning the board's clock must change which leases GC frees: a claim whose
+    TTL has run out at the pinned "now" is released, the same claim at an
+    earlier "now" is not.  If GC were accidentally frozen to the snapshot this
+    would fail — and freezing it would be a bug, because an expired lease is
+    expired in reality regardless of what the report describes.
+    """
+    import agent_board as ab
+
+    claimed = _iso(NOW - timedelta(hours=30))  # 30h old, ttl 24h -> expired
+    board = {
+        "schema": 2,
+        "updated_at": claimed,
+        "zones": [],
+        "claims": [
+            {
+                "task": "task-gc",
+                "status": "active",
+                "zone": "temporal",
+                "agent_branch": "arena/owner-1",
+                "claimed_at": claimed,
+                "ttl_hours": 24,
+                "gates_owner": True,
+                "exclusive_paths": [],
+                "prerequisites": [],
+            }
+        ],
+    }
+
+    # "now" = 31h after the claim: the lease is expired, GC must free it.
+    ab_now = NOW - timedelta(hours=30) + timedelta(hours=31)
+    original = ab._now
+    ab._now = lambda: ab_now
+    try:
+        freed = ab.gc_expired(board)
+    finally:
+        ab._now = original
+    assert freed == ["task-gc"]
+    assert board["claims"][0]["status"] == "expired"
+    assert board["claims"][0]["gates_owner"] is False
+    assert "auto-released by gc" in board["claims"][0]["release_reason"]
+
+    # "now" = 1h after the claim: the lease is still live, GC frees nothing.
+    board["claims"][0].update(status="active", gates_owner=True, claimed_at=claimed)
+    board["claims"][0].pop("release_reason", None)
+    live_now = NOW - timedelta(hours=30) + timedelta(hours=1)
+    ab._now = lambda: live_now
+    try:
+        freed = ab.gc_expired(board)
+    finally:
+        ab._now = original
+    assert freed == []
+    assert board["claims"][0]["status"] == "active"
+    assert board["claims"][0]["gates_owner"] is True
+
+
+def test_a_malformed_as_of_is_blocked_not_guessed(
+    conv: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """An unparsable snapshot timestamp must fail closed, never be guessed.
+
+    `_dt` returns None for anything it cannot parse; `main` must turn that into
+    EXIT_BLOCKED rather than silently running "now" and presenting the result as
+    the requested snapshot.
+    """
+    board_file = tmp_path / "board.json"
+    board_file.write_text(json.dumps(_board()), encoding="utf-8")
+    records = tmp_path / "prs.json"
+    records.write_text(
+        json.dumps([_pr(7, branch="arena/owner-1", files=TEMPORAL)]), encoding="utf-8"
+    )
+    # GC must not run either: the report never got a valid moment.
+    calls: list[dict] = []
+    monkeypatch.setattr(conv, "gc_expired", lambda board: calls.append(board) or [])
+
+    exit_code = conv.main(
+        [
+            "--prs-json",
+            str(records),
+            "--board",
+            str(board_file),
+            "--main-sha",
+            MAIN_SHA,
+            "--as-of",
+            "not-a-timestamp",
+            "--json",
+        ]
+    )
+    assert exit_code == conv.EXIT_BLOCKED
+    assert calls == []
+    assert "unparsable --as-of" in capsys.readouterr().err
