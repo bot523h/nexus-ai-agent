@@ -309,6 +309,57 @@ def parse_workflow(text: str) -> Workflow:
 # --------------------------------------------------------------------------- #
 
 
+#: A condition naming an event by equality, e.g. ``github.event_name == 'push'``.
+_EVENT_EQUALITY = re.compile(r"github\.event_name\s*==\s*['\"]([A-Za-z_]+)['\"]")
+
+
+def classify_pr_condition(condition: str) -> tuple[str, str]:
+    """Decide whether a job's ``if:`` still lets it run on ``pull_request``.
+
+    Three outcomes, not two.  A binary check is exactly what produced the false
+    green this replaces: ``if: false`` and ``if: github.event_name == 'push'``
+    both silently reported ``ok``, so the merge-base gate — and with it law R18 —
+    could be switched off without the guard noticing.  A condition we cannot
+    *prove* preserves ``pull_request`` is reported ``unknown``, which the Report
+    turns into BLOCKED rather than VERIFIED.  Failing closed is the point: an
+    undecidable condition must never count as a pass.
+    """
+    cond = (condition or "").strip()
+    if not cond:
+        return "ok", "has no condition, so it runs on every subscribed event"
+
+    low = cond.lower()
+
+    # A condition that can never be true never runs, whatever else it mentions.
+    if low in ("false", "!true") or re.search(r"&&\s*false\b", low):
+        return "violation", f"condition {condition!r} can never be true, so it never runs"
+
+    # `pull_request` named only under negation excludes it.
+    if re.search(r"!=\s*['\"]?pull_request", low) or (
+        "pull_request" in low and re.search(r"!\s*contains\s*\(|\bnot\s+contains\s*\(", low)
+    ):
+        return "violation", f"condition {condition!r} excludes pull_request"
+
+    # Naming other events by equality, with no pull_request among them, excludes it.
+    events = _EVENT_EQUALITY.findall(low)
+    if events and "pull_request" not in events:
+        return (
+            "violation",
+            f"condition {condition!r} fires only for {sorted(set(events))}, never pull_request",
+        )
+
+    if "pull_request" in low:
+        return "ok", "condition references pull_request"
+    if re.search(r"\balways\s*\(\s*\)", low):
+        return "ok", "condition is always(), which keeps every subscribed event"
+
+    return (
+        "unknown",
+        f"condition {condition!r} cannot be shown to preserve pull_request — "
+        "recorded as BLOCKED, never as a pass",
+    )
+
+
 def check_offline(root: Path) -> Report:
     report = Report("offline")
     path = root / ".github" / "workflows" / "ci.yml"
@@ -444,20 +495,13 @@ def check_offline(root: Path) -> Report:
                 )
 
     # GOV023 — the job must actually run for pull requests.
-    if "pull_request" in guard.condition and guard.condition.strip().startswith("always()"):
-        report.add(
-            "GOV023",
-            "violation",
-            f"job {guard.key!r} condition {guard.condition!r} never evaluates for pull_request",
-            f".github/workflows/ci.yml job {guard.key}",
-        )
-    else:
-        report.add(
-            "GOV023",
-            "ok",
-            f"job {guard.key!r} runs for pull_request events",
-            f"if: {guard.condition or '(none)'}",
-        )
+    severity, reason = classify_pr_condition(guard.condition)
+    report.add(
+        "GOV023",
+        severity,
+        f"job {guard.key!r} {reason}",
+        f".github/workflows/ci.yml job {guard.key}: if: {guard.condition or '(none)'}",
+    )
 
     # GOV030 — retarget protection.  Moving a PR's base is an `edited` event;
     # without it the previous green check is reused and R18 is bypassed.

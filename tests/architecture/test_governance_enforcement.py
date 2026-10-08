@@ -502,3 +502,93 @@ def test_the_committed_live_witness_matches_the_declared_policy() -> None:
     ]
     assert data["live_required_contexts"] == data["declared_required_contexts"]
     assert data["protected"] is True
+
+
+# --------------------------------------------------------------------------- #
+# GOV023 — a condition that stops the gate running for pull requests
+# --------------------------------------------------------------------------- #
+# Reproduced on the pre-fix guard: every one of the mutations below reported
+# GOV023=ok, including `if: false`.  The old check only fired when the condition
+# *mentioned* pull_request and started with `always()`, so it rejected almost
+# nothing — a required check that never runs leaves the merge pending while the
+# guard reports VERIFIED.
+GUARD_IF = "    if: github.event_name == 'pull_request'\n"
+
+
+@pytest.mark.parametrize(
+    ("replacement", "expected_exit"),
+    [
+        # 1. the condition disappears: the job runs on every subscribed event.
+        ("", EXIT_VERIFIED),
+        # 2. a constant-false condition never runs.
+        ("    if: false\n", EXIT_VIOLATION),
+        # 3. an event-exclusive condition that omits pull_request.
+        ("    if: github.event_name == 'push'\n", EXIT_VIOLATION),
+        # 4. an unrelated condition we cannot prove preserves pull_request.
+        ("    if: vars.ENABLE_GUARD == 'yes'\n", EXIT_BLOCKED),
+        # 5. pull_request mentioned, but only to be negated.
+        ("    if: github.event_name != 'pull_request'\n", EXIT_VIOLATION),
+        ("    if: \"!contains(github.event_name, 'pull_request')\"\n", EXIT_VIOLATION),
+        # 6. a conjunction that really does exclude pull_request.
+        ("    if: always() && false\n", EXIT_VIOLATION),
+        # a condition that keeps pull_request alongside another event is fine.
+        (
+            "    if: github.event_name == 'pull_request' || github.event_name == 'push'\n",
+            EXIT_VERIFIED,
+        ),
+        # always() keeps every subscribed event.
+        ("    if: always()\n", EXIT_VERIFIED),
+    ],
+)
+def test_gov023_classifies_the_pull_request_condition(
+    workflow_root: Path, replacement: str, expected_exit: int
+) -> None:
+    _mutate(workflow_root, GUARD_IF, replacement)
+    proc = _run("check-offline", "--root", str(workflow_root))
+    assert proc.returncode == expected_exit, proc.stdout
+    assert "GOV023" in proc.stdout, "the condition must be reported by GOV023 either way"
+    if expected_exit == EXIT_VERIFIED:
+        assert "[OK       ] GOV023" in proc.stdout, proc.stdout
+    else:
+        assert "[OK       ] GOV023" not in proc.stdout, (
+            "a condition that stops the gate running must not be reported ok"
+        )
+
+
+def test_gov023_never_passes_a_condition_it_cannot_decide(guard: ModuleType) -> None:
+    """The fail-closed direction, stated as a property rather than a case list.
+
+    Any condition that neither names pull_request positively nor is empty/always
+    must be `unknown` (BLOCKED) or a violation — never `ok`.
+    """
+    for condition in (
+        "vars.ENABLE_GUARD == 'yes'",
+        "github.event_name != 'push'",
+        "github.ref == 'refs/heads/main'",
+        "inputs.run_guard",
+        "success() && github.actor == 'dependabot[bot]'",
+    ):
+        severity, _ = guard.classify_pr_condition(condition)
+        assert severity != "ok", f"{condition!r} must not be reported ok"
+
+
+def test_gov023_passes_every_condition_that_genuinely_runs_on_pull_request(
+    guard: ModuleType,
+) -> None:
+    for condition in (
+        "",
+        "always()",
+        "github.event_name == 'pull_request'",
+        "github.event_name == 'pull_request' || github.event_name == 'push'",
+        "contains(github.event_name, 'pull_request')",
+        "success() && github.event_name == 'pull_request'",
+    ):
+        severity, _ = guard.classify_pr_condition(condition)
+        assert severity == "ok", f"{condition!r} genuinely runs for pull_request"
+
+
+def test_the_live_repository_condition_is_accepted() -> None:
+    """The fix must not break the workflow this repository actually ships."""
+    proc = _run("check-offline")
+    assert proc.returncode == EXIT_VERIFIED, proc.stdout
+    assert "GOV023" in proc.stdout
