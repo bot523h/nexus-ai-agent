@@ -289,6 +289,39 @@ async def test_observe_unknown_job_is_unknown_not_failed(tmp_path: Path) -> None
     assert not observation.failure.is_terminal_business_failure
 
 
+@pytest.mark.asyncio
+async def test_observe_and_reconcile_bind_identity_to_durable_idempotency_key(
+    tmp_path: Path,
+) -> None:
+    """A caller's placeholder key must not be paired with the row's real fence."""
+    db = tmp_path / "jobs.sqlite3"
+    gate = _Gate()
+    queue, _ = _queues(db, gate)
+    backend = NativeLocalBackend(queue)
+    submitted = await backend.submit(_request("durable-key"))
+    await _wait_status(queue, submitted.job_id, JobStatus.PROCESSING)
+    with sqlite3.connect(db) as connection:
+        connection.execute(
+            "UPDATE nexus_job_queue SET request_id = NULL WHERE id = ?",
+            (submitted.job_id,),
+        )
+
+    caller_identity = ExecutionIdentity(
+        request_id="caller-request",
+        idempotency_key="caller-placeholder",
+        job_id=submitted.job_id,
+    )
+    observed = await backend.observe(caller_identity)
+    assert observed.identity.idempotency_key == "durable-key"
+    assert observed.identity.request_id == submitted.request_id
+    reconciled = await backend.reconcile(caller_identity)
+    assert reconciled.identity.idempotency_key == "durable-key"
+    assert reconciled.identity.request_id == submitted.request_id
+
+    gate.event(1).set()
+    await _drain(queue, submitted.job_id)
+
+
 # --------------------------------------------------------------------------- #
 # I5 — a provider run id is never authority
 # --------------------------------------------------------------------------- #

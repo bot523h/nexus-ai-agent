@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ruff: noqa: E501  (the anchors/mutants are verbatim source lines, kept intact)
-"""NEXUS V1 execution-core mutation probes (M1–M16).
+"""NEXUS V1 execution-core mutation probes (M1–M17).
 
 A targeted mutation harness in the same shape as the established
 ``scripts/gate5_mutation_probes.py``: for each correctness property this
@@ -25,6 +25,7 @@ M13   remove_tree leaks parent-reopen OSError           cleanup race typing
 M14   backend ignores required-verification policy      fail-closed submit
 M15   shutdown drops a late reservation claim            cancellation race
 M16   require_regular_file leaks parent-walk OSError      typed boundary error
+M17   caller idempotency overrides durable identity       identity binding
 ====  ================================================  =========================
 
 Layered-defense note: M5 replaces the whole quarantine move (both the
@@ -504,6 +505,16 @@ PROBES: tuple[Probe, ...] = (
             "            raise exc  # MUTATION: raw parent-walk error escapes"
         ),
         tests=(f"{FS_T}test_require_regular_file_wraps_a_missing_parent_as_boundary_error",),
+    ),
+    Probe(
+        name="M17 caller idempotency overrides the durable identity",
+        target=BACKEND,
+        anchor=(
+            '        durable_key = getattr(facts, "idempotency_key", None)\n'
+            "        bound_key = str(durable_key) if durable_key else idempotency_key"
+        ),
+        mutant="        bound_key = idempotency_key  # MUTATION: trust the caller over the row",
+        tests=(f"{BACKEND_T}test_observe_and_reconcile_bind_identity_to_durable_idempotency_key",),
     ),
 )
 

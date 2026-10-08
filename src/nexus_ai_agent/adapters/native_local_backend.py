@@ -87,17 +87,19 @@ class NativeLocalBackend:
                 backend=self._backend_name,
                 worker_id=self._worker_id,
             )
+        durable_key = getattr(facts, "idempotency_key", None)
+        bound_key = str(durable_key) if durable_key else idempotency_key
         request_id = getattr(facts, "request_id", None)
         if not request_id:
             request_id = _request_identity(
                 str(getattr(facts, "job_type", "")),
-                idempotency_key,
+                bound_key,
                 dict(getattr(facts, "payload", {}) or {}),
             ).request_id
         attempt = int(getattr(facts, "attempt", 0) or 0)
         return ExecutionIdentity(
             request_id=str(request_id),
-            idempotency_key=idempotency_key,
+            idempotency_key=bound_key,
             job_id=job_id,
             attempt_id=_attempt_id(job_id, attempt) if attempt >= 1 else None,
             fencing_token=attempt if attempt >= 1 else None,
