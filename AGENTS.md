@@ -76,7 +76,7 @@ silent, not `BLOCKED`. Verify with `python scripts/agent_board.py show`.
 | `task-253` owner identity gate fails closed when unconfigured | `features-owner-control` | merged | `done` (PR#184) |
 | `task-131` documentation & architecture suite + board rewrite | `docs-architecture` | — | `done` |
 | `ci-gates-steward` interim gates stewardship | `ci-quality` | — | `completed_released` |
-| `task-254` governance enforcement plane (law R19) | `nagar-foundation-waves` | `arena/79164857-nexus-ai-agent` | `active` — **live `gates_owner`** |
+| `task-254` governance enforcement plane (law R19) + `task-255` PR convergence (R20) + `task-256` durable creative graph (R21) — PR #189, closure cycle D-0029 (R22) | `nagar-foundation-waves` | `arena/79164857-nexus-ai-agent` | `active_in_review` — **live `gates_owner`** |
 | `task-122` PR#32 rebase + dedupe | `feature-wiring` | عامل B | `assigned_to_B` (stale lease) |
 | `task-123` PR#33 slim-down | `packaging+interop` | شاخه 3aa | `assigned_to_E_pr33` (stale lease) |
 | `task-124` P0-8 single wiring + P0-9 graph memory | `audit-remainder` | free | `available_sequenced_post_32_33` — **P0** |
