@@ -87,6 +87,15 @@ async def _wait_status(queue: InProcessJobQueue, job_id: str, wanted: JobStatus)
     raise AssertionError(f"job never reached {wanted}: {await queue.get_status(job_id)}")
 
 
+async def _drain(queue: InProcessJobQueue, job_id: str) -> JobStatus:
+    for _ in range(500):
+        status = await queue.get_status(job_id)
+        if status in TERMINAL:
+            return status
+        await asyncio.sleep(0.01)
+    raise AssertionError("job did not finish")
+
+
 def _two_queues(
     db: Path, handler: Any, *, hook_b: Any = None
 ) -> tuple[InProcessJobQueue, InProcessJobQueue]:
@@ -241,10 +250,15 @@ async def test_cancellation_wins_then_completion_is_refused(tmp_path: Path) -> N
     bound = identity.with_attempt(attempt_id="a#1", fencing_token=1)
     assert await backend.cancel(bound) is True
 
+    # Deterministic durable read (no event-loop yield): the cancellation reset
+    # the row to pending under attempt 1, so attempt 1's later completion loses
+    # the CAS and the row is never COMPLETED by it.
+    assert _row(db, identity.job_id)["status"] == JobStatus.PENDING.value
     claim = ExecutionClaim(job_id=identity.job_id, attempt=1)
     assert queue._mark_completed(claim, {"winner": "late"}) is False
-    assert await queue.get_status(identity.job_id) is JobStatus.PENDING
+    assert _row(db, identity.job_id)["status"] != JobStatus.COMPLETED.value
     gate.event(1).set()
+    gate.event(2).set()  # release any successor so shutdown is clean
     await queue.shutdown()
 
 
@@ -300,8 +314,13 @@ async def test_current_identity_can_cancel_its_own_attempt(tmp_path: Path) -> No
     await _wait_status(queue, identity.job_id, JobStatus.PROCESSING)
     current = identity.with_attempt(attempt_id="a#1", fencing_token=1)
     assert await backend.cancel(current) is True
-    assert await queue.get_status(identity.job_id) is JobStatus.PENDING
-    gate.event(1).set()
+    # The reset is attempt-scoped and durable: the row is handed to a successor
+    # attempt under a strictly higher fencing token (cancellation reschedules).
+    await _wait_status(queue, identity.job_id, JobStatus.PROCESSING)
+    assert _row(db, identity.job_id)["attempt"] == 2
+    gate.event(2).set()
+    assert await _drain(queue, identity.job_id) is JobStatus.COMPLETED
+    gate.event(1).set()  # the cancelled worker's late finish is refused
     await queue.shutdown()
 
 
