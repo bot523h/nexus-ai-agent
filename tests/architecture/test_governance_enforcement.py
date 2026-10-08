@@ -700,6 +700,92 @@ def test_the_live_repository_condition_is_accepted() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# GOV024 — a *step* condition can switch the gate off while the job stays green
+# --------------------------------------------------------------------------- #
+# Reproduced on the pre-fix guard: `parse_workflow` kept only job-level `if:`
+# values, so a guard step carrying `if: false` was skipped while GOV020/GOV021
+# still found the command and GOV023 examined only the job condition — all three
+# read ok, and the required context went green without the merge-base decision.
+GUARD_STEP = "      - name: A main-bound merge requires base == main\n"
+
+
+@pytest.mark.parametrize(
+    ("replacement", "expected_exit"),
+    [
+        # The shipped step has no `if:` at all: it always runs.
+        (GUARD_STEP, EXIT_VERIFIED),
+        # A constant-false step never runs even though the job does.
+        (
+            GUARD_STEP + "        if: false\n",
+            EXIT_VIOLATION,
+        ),
+        # An event-exclusive step condition omits pull_request.
+        (
+            GUARD_STEP + "        if: github.event_name == 'push'\n",
+            EXIT_VIOLATION,
+        ),
+        # An undecidable step condition cannot be proven to keep pull_request.
+        (
+            GUARD_STEP + "        if: vars.RUN_GUARD == 'yes'\n",
+            EXIT_BLOCKED,
+        ),
+        # pull_request mentioned only inside string data is still undecidable.
+        (
+            GUARD_STEP + "        if: vars.X == 'pull_request'\n",
+            EXIT_BLOCKED,
+        ),
+    ],
+)
+def test_gov024_classifies_the_guard_step_condition(
+    workflow_root: Path, replacement: str, expected_exit: int
+) -> None:
+    _mutate(workflow_root, GUARD_STEP, replacement)
+    proc = _run("check-offline", "--root", str(workflow_root))
+    assert proc.returncode == expected_exit, proc.stdout
+    assert "GOV024" in proc.stdout, "the step condition must be reported by GOV024 either way"
+    if expected_exit == EXIT_VERIFIED:
+        assert "[OK       ] GOV024" in proc.stdout, proc.stdout
+    else:
+        assert "[OK       ] GOV024" not in proc.stdout, (
+            "a step condition that stops the gate running must not be reported ok"
+        )
+
+
+def test_gov024_ignores_a_step_that_does_not_run_the_guard(workflow_root: Path) -> None:
+    """Only the step executing the guard is gated; an unrelated step may be conditional."""
+    anchor = (
+        "      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0\n"
+    )
+    assert anchor in CI_WORKFLOW.read_text(encoding="utf-8")
+    # Disable an unrelated setup step; the guard step is untouched and still runs.
+    _mutate(workflow_root, anchor, anchor + "        if: false\n")
+    proc = _run("check-offline", "--root", str(workflow_root))
+    assert proc.returncode == EXIT_VERIFIED, proc.stdout
+
+
+def test_the_reader_keeps_each_steps_condition_separate(guard: ModuleType) -> None:
+    """The parser must attribute a step `if:` to its own step, not to the job."""
+    workflow = guard.parse_workflow(
+        "jobs:\n"
+        "  g:\n"
+        "    name: gate\n"
+        "    if: github.event_name == 'pull_request'\n"
+        "    steps:\n"
+        "      - uses: actions/checkout@v4\n"
+        "      - name: run\n"
+        "        if: false\n"
+        "        run: |\n"
+        "          python scripts/merge_base_guard.py check-event --base x\n"
+    )
+    job = workflow.jobs["g"]
+    assert job.condition == "github.event_name == 'pull_request'"
+    assert len(job.steps) == 2
+    assert job.steps[0].condition == ""
+    assert job.steps[1].condition == "false"
+    assert "scripts/merge_base_guard.py" in job.steps[1].runs[0]
+
+
+# --------------------------------------------------------------------------- #
 # GOV050–GOV054 — readability is not assurance
 # --------------------------------------------------------------------------- #
 # Reproduced: with every endpoint answering HTTP 200, the pre-fix guard reported

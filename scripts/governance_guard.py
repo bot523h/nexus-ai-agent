@@ -163,12 +163,19 @@ class Report:
 
 
 @dataclass
+class Step:
+    condition: str
+    runs: list[str]
+
+
+@dataclass
 class Job:
     key: str
     name: str
     condition: str
     runs: list[str]
     soft_fail: bool
+    steps: list[Step] = field(default_factory=list)
 
     @property
     def context(self) -> str:
@@ -219,6 +226,7 @@ def parse_workflow(text: str) -> Workflow:
     collecting_run: list[str] | None = None
     run_indent = 0
     trigger_event = ""
+    current_step: Step | None = None
 
     for raw in lines:
         if collecting_run is not None:
@@ -230,6 +238,8 @@ def parse_workflow(text: str) -> Workflow:
                 continue
             assert current_job is not None
             current_job.runs.append("\n".join(collecting_run))
+            if current_step is not None:
+                current_step.runs.append("\n".join(collecting_run))
             collecting_run = None
 
         if not raw.strip() or raw.lstrip().startswith("#"):
@@ -238,6 +248,7 @@ def parse_workflow(text: str) -> Workflow:
 
         if indent == 0:
             current_job = None
+            current_step = None
             trigger_event = ""
             key, _, inline = raw.partition(":")
             key = key.strip()
@@ -276,31 +287,56 @@ def parse_workflow(text: str) -> Workflow:
             if not match:
                 continue
             current_job = Job(key=match.group(1), name="", condition="", runs=[], soft_fail=False)
+            current_step = None
             jobs[current_job.key] = current_job
             continue
 
         if current_job is None:
             continue
 
+        # A `steps:` item begins with `- ` at the steps list indentation.  Each
+        # step keeps its own `if:` so the guard can refuse a gate that a step
+        # condition switches off (GOV024): the job's `if:` alone is not proof.
+        if raw.lstrip().startswith("-"):
+            current_step = Step(condition="", runs=[])
+            current_job.steps.append(current_step)
+
         match = _SCALAR.match(raw)
         if not match:
             continue
         key, value = match.group(1), match.group(2)
-        if key == "name" and indent == 4 and not current_job.name:
-            current_job.name = _strip_quotes(value)
-        elif key == "if" and indent == 4:
-            current_job.condition = _strip_quotes(value)
-        elif key == "continue-on-error" and _strip_quotes(value).lower() == "true":
-            current_job.soft_fail = True
-        elif key == "run":
-            if value in ("|", "|-", ">", ">-"):
-                collecting_run = []
-                run_indent = indent + 2
-            elif value:
-                current_job.runs.append(_strip_quotes(value))
+        if current_step is None:
+            if key == "name" and indent == 4 and not current_job.name:
+                current_job.name = _strip_quotes(value)
+            elif key == "if" and indent == 4:
+                current_job.condition = _strip_quotes(value)
+            elif key == "continue-on-error" and _strip_quotes(value).lower() == "true":
+                current_job.soft_fail = True
+            elif key == "run":
+                if value in ("|", "|-", ">", ">-"):
+                    collecting_run = []
+                    run_indent = indent + 2
+                elif value:
+                    current_job.runs.append(_strip_quotes(value))
+        else:
+            if key == "if":
+                current_step.condition = _strip_quotes(value)
+            elif key == "continue-on-error" and _strip_quotes(value).lower() == "true":
+                # A step-level continue-on-error can mask that step's failure
+                # (including the guard step's), so it still marks the job soft.
+                current_job.soft_fail = True
+            elif key == "run":
+                if value in ("|", "|-", ">", ">-"):
+                    collecting_run = []
+                    run_indent = indent + 2
+                elif value:
+                    current_step.runs.append(_strip_quotes(value))
+                    current_job.runs.append(_strip_quotes(value))
 
     if collecting_run is not None and current_job is not None:
         current_job.runs.append("\n".join(collecting_run))
+        if current_step is not None:
+            current_step.runs.append("\n".join(collecting_run))
 
     return Workflow(triggers=triggers, jobs=jobs)
 
@@ -635,6 +671,31 @@ def check_offline(root: Path) -> Report:
         f"job {guard.key!r} {reason}",
         f".github/workflows/ci.yml job {guard.key}: if: {guard.condition or '(none)'}",
     )
+
+    # GOV024 — the *step* that runs the guard must also run for pull requests.
+    # A job-level `if:` is not enough: a step carrying `if: false` (or an
+    # event-exclusive condition) is skipped while the job stays green, so the
+    # required context reports success without the merge-base decision ever being
+    # made.  Reproduced pre-fix: GOV020/GOV021 see the command in a skipped step
+    # and GOV023 examines only the job condition, so all three read ok.
+    guard_steps = [s for s in guard.steps if any(BASE_GUARD_SCRIPT in r for r in s.runs)]
+    if not guard_steps:
+        report.add(
+            "GOV024",
+            "ok",
+            f"job {guard.key!r} runs {BASE_GUARD_SCRIPT} inline in the job (no step condition "
+            "to switch it off)",
+            f".github/workflows/ci.yml job {guard.key}",
+        )
+    else:
+        for step in guard_steps:
+            step_severity, step_reason = classify_pr_condition(step.condition)
+            report.add(
+                "GOV024",
+                step_severity,
+                f"the step in job {guard.key!r} that runs {BASE_GUARD_SCRIPT} {step_reason}",
+                f".github/workflows/ci.yml job {guard.key}: step if: {step.condition or '(none)'}",
+            )
 
     # GOV030 — retarget protection.  Moving a PR's base is an `edited` event;
     # without it the previous green check is reused and R18 is bypassed.
