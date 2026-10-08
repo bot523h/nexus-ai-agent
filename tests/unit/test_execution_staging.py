@@ -307,6 +307,103 @@ def test_quarantine_rejects_a_symlinked_quarantine_job_directory(tmp_path: Path)
         staging.quarantine("failed")
 
 
+# --------------------------------------------------------------------------- #
+# Outside-the-root preservation proofs: a refused operation must leave every
+# external byte untouched (the mission's "prove nothing outside was mutated")
+# --------------------------------------------------------------------------- #
+def test_quarantine_rejects_a_symlinked_destination_leaf(tmp_path: Path) -> None:
+    """A destination leaf pointing outside is *rejected*, not replaced."""
+    outside = _outside(tmp_path)
+    staging = _staging(tmp_path)
+    staging.write("a.bin", b"x")
+    destination = tmp_path / "staging_root" / "_quarantine" / "job-1"
+    destination.mkdir(parents=True)
+    os.symlink(outside, destination / f"{ATTEMPT_1}.failed")
+    with pytest.raises(StagingBoundaryError):
+        staging.quarantine("failed")
+    assert (outside / "marker").read_bytes() == b"outside"
+    assert sorted(os.listdir(outside)) == ["marker"]  # nothing landed outside
+    assert not (outside / f"{ATTEMPT_1}.failed").exists()
+
+
+def test_quarantine_source_symlink_never_moves_an_external_tree(tmp_path: Path) -> None:
+    outside = _outside(tmp_path)
+    (outside / "deep").mkdir()
+    (outside / "deep" / "victim.txt").write_bytes(b"victim")
+    root = tmp_path / "staging_root"
+    (root / "job-1").mkdir(parents=True)
+    os.symlink(outside / "deep", root / "job-1" / ATTEMPT_1)
+    staging = _staging(tmp_path)
+    with pytest.raises(StagingBoundaryError):
+        staging.quarantine("failed")
+    assert (outside / "deep" / "victim.txt").read_bytes() == b"victim"
+    assert not (root / "_quarantine" / "job-1").exists()  # refused before any mutation
+
+
+def test_cleanup_never_deletes_outside_root_content(tmp_path: Path) -> None:
+    outside = _outside(tmp_path)
+    root = tmp_path / "staging_root"
+    (root / "job-1").mkdir(parents=True)
+    os.symlink(outside, root / "job-1" / ATTEMPT_1)
+    staging = _staging(tmp_path)
+    with pytest.raises(StagingBoundaryError):
+        staging.cleanup()
+    assert (outside / "marker").read_bytes() == b"outside"  # outside survived
+
+
+def test_cleanup_unlinks_leaf_symlinks_without_following_them(tmp_path: Path) -> None:
+    outside = _outside(tmp_path)
+    staging = _staging(tmp_path)
+    staging.write("a.bin", b"x")
+    os.symlink(outside / "marker", staging.staging_dir / "link.bin")
+    staging.cleanup()
+    assert (outside / "marker").read_bytes() == b"outside"  # the target survived
+    assert not (tmp_path / "staging_root" / "job-1" / ATTEMPT_1).exists()
+
+
+def test_publish_never_touches_a_symlinked_source_target(tmp_path: Path) -> None:
+    outside = _outside(tmp_path)
+    final = tmp_path / "final_root"
+    staging = _staging(tmp_path, final=final)
+    staging.prepare()
+    os.symlink(outside / "marker", staging.staging_dir / "a.bin")
+    with pytest.raises(StagingBoundaryError):
+        staging.publish(staging.staging_dir / "a.bin", "a.bin")
+    assert (outside / "marker").read_bytes() == b"outside"  # secret never moved
+    assert not (final / "a.bin").exists()
+
+
+def test_remove_destination_refuses_a_symlinked_destination(tmp_path: Path) -> None:
+    """The pre-removal step itself fails closed on a hostile destination: a
+    security boundary error must raise, never be silently swallowed."""
+    outside = _outside(tmp_path)
+    staging = _staging(tmp_path)
+    staging.prepare()
+    dest_parent = tmp_path / "staging_root" / "_quarantine" / "job-1"
+    dest_parent.mkdir(parents=True)
+    os.symlink(outside, dest_parent / "hostile.dest")
+    with pytest.raises(StagingBoundaryError):
+        staging._remove_destination("_quarantine/job-1/hostile.dest")
+    assert (outside / "marker").read_bytes() == b"outside"
+    assert sorted(os.listdir(outside)) == ["marker"]
+
+
+def test_cleanup_malformed_attempt_path_fails_closed(tmp_path: Path) -> None:
+    """A directory-valued ``rmtree`` target cannot escape: malformed relative
+    paths are refused by the boundary, never interpreted."""
+    from nexus_ai_agent.tools.filesystem_policy import FilesystemBoundaryError, WorkspaceFilesystem
+
+    outside = _outside(tmp_path)
+    root = tmp_path / "staging_root"
+    root.mkdir()
+    fs = WorkspaceFilesystem(root)
+    with pytest.raises(FilesystemBoundaryError):
+        fs.remove_tree("../outside")
+    with pytest.raises(FilesystemBoundaryError):
+        fs.remove_tree("job-1/../../outside")
+    assert (outside / "marker").read_bytes() == b"outside"
+
+
 @pytest.mark.parametrize("bad", ["a\\..\\b", "..\\evil", "a/../../b", "\\abs", "a\x00b"])
 def test_publish_rejects_mixed_separator_and_nul_targets(tmp_path: Path, bad: str) -> None:
     final = tmp_path / "final_root"

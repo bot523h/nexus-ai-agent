@@ -249,16 +249,28 @@ class AttemptStaging:
             raise StagingBoundaryError(str(exc)) from exc
 
     def _remove_destination(self, rel: str) -> None:
-        """Remove an existing quarantine destination (dir or file), safely."""
+        """Remove an existing quarantine destination (dir or file), safely.
+
+        Absence is fine (there is nothing to remove); a boundary violation is
+        **never** silently swallowed — a malicious destination (symlink leaf or
+        ancestor, escaping component) is rejected outright, not quietly worked
+        around.  The component check is re-run immediately before the
+        destructive step so a swap between the caller's validation and this
+        removal is refused too.
+        """
+        _assert_no_symlink_components(self.root, tuple(rel.split("/")))
         try:
             self._fs.remove_tree(rel)
-        except FilesystemBoundaryError:
-            pass
+        except FilesystemBoundaryError as exc:
+            raise StagingBoundaryError(str(exc)) from exc
         try:
             self._fs.require_regular_file(rel)
         except FilesystemBoundaryError:
-            return
-        self._fs.unlink(rel)
+            return  # absent (or already removed above)
+        try:
+            self._fs.unlink(rel)
+        except FilesystemBoundaryError as exc:
+            raise StagingBoundaryError(str(exc)) from exc
 
     def quarantine(self, reason: str) -> Path:
         """Move this attempt's staging tree aside under ``_quarantine``.
@@ -270,9 +282,12 @@ class AttemptStaging:
         component = _safe_component(reason, field_name="quarantine reason")
         dest_rel = f"_quarantine/{self.job_id}/{self.attempt_id}.{component}"
         # 3C: validate the source components and the complete destination
-        # components before creating/removing/replacing anything.
+        # components (including the destination leaf) before creating,
+        # removing or replacing anything.
         _assert_no_symlink_components(self.root, (self.job_id, self.attempt_id))
-        _assert_no_symlink_components(self.root, ("_quarantine", self.job_id))
+        _assert_no_symlink_components(
+            self.root, ("_quarantine", self.job_id, f"{self.attempt_id}.{component}")
+        )
         try:
             self.root.mkdir(parents=True, exist_ok=True)
             self._fs.ensure_directory(f"_quarantine/{self.job_id}")
