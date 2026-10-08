@@ -313,6 +313,17 @@ def parse_workflow(text: str) -> Workflow:
 #: A condition naming an event by equality, e.g. ``github.event_name == 'push'``.
 _EVENT_EQUALITY = re.compile(r"github\.event_name\s*==\s*['\"]([A-Za-z_]+)['\"]")
 
+#: The only forms that *prove* a job selects the pull_request event.  Each one
+#: compares the literal against ``github.event_name`` itself, so a
+#: ``pull_request`` appearing anywhere else — a variable's value, a bare string,
+#: a comment, an unrelated ``contains`` haystack — is deliberately not matched.
+#: Quotation style is accepted either way because GitHub allows both.
+_PR_PRESERVING = re.compile(
+    r"github\.event_name\s*==\s*['\"]pull_request['\"]"
+    r"|['\"]pull_request['\"]\s*==\s*github\.event_name"
+    r"|contains\s*\(\s*github\.event_name\s*,\s*['\"]pull_request['\"]\s*\)",
+)
+
 
 def classify_pr_condition(condition: str) -> tuple[str, str]:
     """Decide whether a job's ``if:`` still lets it run on ``pull_request``.
@@ -366,8 +377,16 @@ def classify_pr_condition(condition: str) -> tuple[str, str]:
             f"condition {condition!r} fires only for {sorted(set(events))}, never pull_request",
         )
 
-    if "pull_request" in low:
-        return "ok", "condition references pull_request"
+    # Positive acceptance is a WHITELIST of forms this guard can actually prove
+    # select the pull_request event.  The previous branch tested
+    # `"pull_request" in low`, i.e. a raw substring of the quoted-inclusive text,
+    # so any *mention* passed: `vars.X == 'pull_request'`, a bare `'pull_request'`
+    # literal, `format('pull_request')`, `contains(vars.LIST, 'pull_request')` and
+    # even `# pull_request` in a comment all reported ok while the job never ran
+    # for a pull request.  A mention is data; only a comparison against
+    # `github.event_name` is evidence.
+    if _PR_PRESERVING.search(low):
+        return "ok", "condition selects the pull_request event via github.event_name"
     if re.search(r"\balways\s*\(\s*\)", low):
         return "ok", "condition is always(), which keeps every subscribed event"
 

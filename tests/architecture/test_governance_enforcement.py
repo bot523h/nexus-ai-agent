@@ -797,3 +797,119 @@ def test_every_markdown_table_row_in_the_governance_doc_is_well_formed() -> None
             in_table = False
         elif not stripped:
             in_table = False
+
+
+# --------------------------------------------------------------------------- #
+# GOV023 — a mention of pull_request is not evidence of pull_request execution
+# --------------------------------------------------------------------------- #
+# Reproduced: the positive branch tested `"pull_request" in low`, a raw substring
+# of the quoted-inclusive text, so every one of these reported ok while the job
+# would never run for a pull request:
+#   vars.X == 'pull_request' · env.X == "pull_request" · format('pull_request')
+#   'pull_request' · "pull_request" · # pull_request
+#   contains(vars.LIST, 'pull_request')
+@pytest.mark.parametrize(
+    ("condition", "expected"),
+    [
+        # --- provably preserves pull_request ---
+        ("", "ok"),
+        ("github.event_name == 'pull_request'", "ok"),
+        ('github.event_name == "pull_request"', "ok"),
+        ("contains(github.event_name, 'pull_request')", "ok"),
+        ("'pull_request' == github.event_name", "ok"),
+        ("success() && github.event_name == 'pull_request'", "ok"),
+        ("always()", "ok"),
+        (
+            "github.event_name == 'pull_request' || github.event_name == 'push'",
+            "ok",
+        ),
+        # --- provably excludes it ---
+        ("github.event_name == 'push'", "violation"),
+        ("github.event_name == 'workflow_dispatch'", "violation"),
+        ("false", "violation"),
+        ("false && github.event_name == 'pull_request'", "violation"),
+        ("github.event_name == 'pull_request' && false", "violation"),
+        ("github.event_name != 'pull_request'", "violation"),
+        ("!contains(github.event_name, 'pull_request')", "violation"),
+        # --- a mere mention: data, not logic ---
+        ("'pull_request'", "unknown"),
+        ('"pull_request"', "unknown"),
+        ("# pull_request", "unknown"),
+        ("vars.X == 'pull_request'", "unknown"),
+        ('env.X == "pull_request"', "unknown"),
+        ("contains(vars.LIST, 'pull_request')", "unknown"),
+        ("format('pull_request')", "unknown"),
+        # --- undecidable structure ---
+        ("!(github.event_name == 'pull_request')", "unknown"),
+        ("not (github.event_name == 'pull_request')", "unknown"),
+        ("vars.ENABLE == 'yes'", "unknown"),
+        ("github.event_name != 'push'", "unknown"),
+        ("github.event_name ==", "unknown"),
+    ],
+)
+def test_gov023_separates_semantics_from_a_textual_mention(
+    guard: ModuleType, condition: str, expected: str
+) -> None:
+    severity, reason = guard.classify_pr_condition(condition)
+    assert severity == expected, f"{condition!r}: {reason}"
+    # Nothing outside the whitelist may be accepted, whatever it mentions.
+    if severity == "ok":
+        assert (
+            condition.strip() == ""
+            or guard._PR_PRESERVING.search(condition.lower())
+            or ("always" in condition.lower())
+        ), f"{condition!r} was accepted without a provable event selection"
+
+
+def test_gov023_accepts_only_conditions_comparing_against_event_name(
+    guard: ModuleType,
+) -> None:
+    """The structural property behind the matrix above.
+
+    Anything accepted as ok must either be empty/always(), or match the
+    whitelist that compares the literal against `github.event_name`.  A condition
+    can therefore never be accepted just for containing the token.
+    """
+
+    for condition in (
+        "",
+        "always()",
+        "github.event_name == 'pull_request'",
+        "contains(github.event_name, 'pull_request')",
+    ):
+        assert guard.classify_pr_condition(condition)[0] == "ok"
+
+    # Every condition that mentions pull_request but is NOT in the whitelist must
+    # be refused.  Generated, not enumerated, so a new shape cannot slip through.
+    refusals = [
+        f"{prefix}'pull_request'{suffix}"
+        for prefix in ("vars.X == ", "env.X == ", "", "contains(vars.L, ", "format(")
+        for suffix in ("", ")")
+    ] + ["# pull_request", "pull_request"]
+    for condition in refusals:
+        if guard._PR_PRESERVING.search(condition.lower()):
+            continue  # genuinely whitelisted
+        assert guard.classify_pr_condition(condition)[0] != "ok", (
+            f"{condition!r} mentions pull_request but proves nothing about the event"
+        )
+
+
+def test_the_pr_preserving_whitelist_never_matches_a_bare_mention(
+    guard: ModuleType,
+) -> None:
+    """Directly pin the regex, so it cannot be loosened back to a substring."""
+    for text in (
+        "pull_request",
+        "'pull_request'",
+        "# pull_request",
+        "vars.X == 'pull_request'",
+        "contains(vars.LIST, 'pull_request')",
+    ):
+        assert guard._PR_PRESERVING.search(text) is None, f"{text!r} must not match"
+    for text in (
+        "github.event_name == 'pull_request'",
+        'github.event_name == "pull_request"',
+        "contains(github.event_name, 'pull_request')",
+        "'pull_request' == github.event_name",
+    ):
+        assert guard._PR_PRESERVING.search(text) is not None, f"{text!r} must match"
