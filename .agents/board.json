@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-08T08:25:25Z",
+  "updated_at": "2026-10-08T09:29:30Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3455,13 +3455,13 @@
       "ttl_hours": 72,
       "gates_owner": true,
       "delivered": {
-        "at": "2026-10-08T08:25:25Z",
+        "at": "2026-10-08T09:29:30Z",
         "branch": "arena/79164857-nexus-ai-agent",
         "pr": "https://github.com/bot523h/nexus-ai-agent/pull/189",
         "base": "main",
         "status": "open, not merged; exact-SHA CI is re-run on the final head before delivery"
       },
-      "note": "Delivered on arena/79164857-nexus-ai-agent as PR #189 (base=main, one PR because this session is pinned to a single branch; NOT stacked). Hardening: nine CodeRabbit findings across two review rounds, each reproduced before fixing and each with a mutation that goes red without the fix. Closure cycle then closed five more in-scope defects: GOV023 accepted a textual mention of pull_request as proof of event selection (now a whitelist of forms that compare against github.event_name); the live protection check now evaluates the readable branch-protection fallback and records the ruleset plane (GOV043) instead of ignoring both; the temporal contract's snapshot/GC test matrix is complete; concurrent readers on the shared :memory: connection can no longer observe a partial rebuild (all reads take the lock); restore is a guarded whole-file operation that refuses to overwrite a shared file by default. Gates deferred to the gates owner (task-254 holds the single role); nothing merged, nothing closed, no branch deleted.",
+      "note": "Delivered on arena/79164857-nexus-ai-agent as PR #189 (base=main, one PR because this session is pinned to a single branch; NOT stacked). Hardening: nine CodeRabbit findings across two review rounds, each reproduced before fixing and each with a mutation that goes red without the fix. Closure cycle then closed five more in-scope defects (GOV023 mention-vs-semantics; protection fallback + ruleset plane; temporal matrix; concurrent reader isolation; restore scope guard). An external commit d28588e (openhands) then landed on this branch: reviewed, its two claims verified real (GOV023 matched a whitelisted comparison anywhere, so a blocking &&-sibling went unexamined; restore accepted a structurally corrupt source), its per-term rewrite kept, and two holes it introduced were closed on top (cancelled() is not a neutral conjunct — it is false on a normal PR run; malformed conditions with an empty &&/|| branch now fail closed). Nothing merged, nothing closed, no branch deleted. Gates deferred to the gates owner (task-254 holds the single role).",
       "generation": 1
     },
     {
@@ -3499,13 +3499,13 @@
       "ttl_hours": 72,
       "gates_owner": false,
       "delivered": {
-        "at": "2026-10-08T08:25:25Z",
+        "at": "2026-10-08T09:29:30Z",
         "branch": "arena/79164857-nexus-ai-agent",
         "pr": "https://github.com/bot523h/nexus-ai-agent/pull/189",
         "base": "main",
         "status": "open, not merged; exact-SHA CI is re-run on the final head before delivery"
       },
-      "note": "Delivered on arena/79164857-nexus-ai-agent as PR #189 (base=main, one PR because this session is pinned to a single branch; NOT stacked). Hardening: nine CodeRabbit findings across two review rounds, each reproduced before fixing and each with a mutation that goes red without the fix. Closure cycle then closed five more in-scope defects: GOV023 accepted a textual mention of pull_request as proof of event selection (now a whitelist of forms that compare against github.event_name); the live protection check now evaluates the readable branch-protection fallback and records the ruleset plane (GOV043) instead of ignoring both; the temporal contract's snapshot/GC test matrix is complete; concurrent readers on the shared :memory: connection can no longer observe a partial rebuild (all reads take the lock); restore is a guarded whole-file operation that refuses to overwrite a shared file by default. Gates deferred to the gates owner (task-254 holds the single role); nothing merged, nothing closed, no branch deleted.",
+      "note": "Delivered on arena/79164857-nexus-ai-agent as PR #189 (base=main, one PR because this session is pinned to a single branch; NOT stacked). Hardening: nine CodeRabbit findings across two review rounds, each reproduced before fixing and each with a mutation that goes red without the fix. Closure cycle then closed five more in-scope defects (GOV023 mention-vs-semantics; protection fallback + ruleset plane; temporal matrix; concurrent reader isolation; restore scope guard). An external commit d28588e (openhands) then landed on this branch: reviewed, its two claims verified real (GOV023 matched a whitelisted comparison anywhere, so a blocking &&-sibling went unexamined; restore accepted a structurally corrupt source), its per-term rewrite kept, and two holes it introduced were closed on top (cancelled() is not a neutral conjunct — it is false on a normal PR run; malformed conditions with an empty &&/|| branch now fail closed). Nothing merged, nothing closed, no branch deleted. Gates deferred to the gates owner (task-254 holds the single role).",
       "generation": 1
     },
     {
@@ -3545,13 +3545,13 @@
       "ttl_hours": 72,
       "gates_owner": false,
       "delivered": {
-        "at": "2026-10-08T08:25:25Z",
+        "at": "2026-10-08T09:29:30Z",
         "branch": "arena/79164857-nexus-ai-agent",
         "pr": "https://github.com/bot523h/nexus-ai-agent/pull/189",
         "base": "main",
         "status": "open, not merged; exact-SHA CI is re-run on the final head before delivery"
       },
-      "note": "Delivered on arena/79164857-nexus-ai-agent as PR #189 (base=main, one PR because this session is pinned to a single branch; NOT stacked). Hardening: nine CodeRabbit findings across two review rounds, each reproduced before fixing and each with a mutation that goes red without the fix. Closure cycle then closed five more in-scope defects: GOV023 accepted a textual mention of pull_request as proof of event selection (now a whitelist of forms that compare against github.event_name); the live protection check now evaluates the readable branch-protection fallback and records the ruleset plane (GOV043) instead of ignoring both; the temporal contract's snapshot/GC test matrix is complete; concurrent readers on the shared :memory: connection can no longer observe a partial rebuild (all reads take the lock); restore is a guarded whole-file operation that refuses to overwrite a shared file by default. Gates deferred to the gates owner (task-254 holds the single role); nothing merged, nothing closed, no branch deleted.",
+      "note": "Delivered on arena/79164857-nexus-ai-agent as PR #189 (base=main, one PR because this session is pinned to a single branch; NOT stacked). Hardening: nine CodeRabbit findings across two review rounds, each reproduced before fixing and each with a mutation that goes red without the fix. Closure cycle then closed five more in-scope defects (GOV023 mention-vs-semantics; protection fallback + ruleset plane; temporal matrix; concurrent reader isolation; restore scope guard). An external commit d28588e (openhands) then landed on this branch: reviewed, its two claims verified real (GOV023 matched a whitelisted comparison anywhere, so a blocking &&-sibling went unexamined; restore accepted a structurally corrupt source), its per-term rewrite kept, and two holes it introduced were closed on top (cancelled() is not a neutral conjunct — it is false on a normal PR run; malformed conditions with an empty &&/|| branch now fail closed). Nothing merged, nothing closed, no branch deleted. Gates deferred to the gates owner (task-254 holds the single role).",
       "generation": 1
     }
   ],
