@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-06T23:20:00Z",
+  "updated_at": "2026-10-09T00:09:45Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -779,6 +779,28 @@
         "src/nexus_ai_agent/features/owner_control.py",
         "tests/unit/test_owner_gate_fail_closed.py"
       ]
+    },
+    {
+      "id": "linux-python-foundation",
+      "description": "Canonical Ubuntu 26.04 + Python 3.14 runtime, reproducible bootstrap, container and CI parity",
+      "paths": [
+        "Dockerfile",
+        "docker-compose.yml",
+        "pyproject.toml",
+        "Makefile",
+        "scripts/bootstrap_dev.sh",
+        "scripts/bootstrap_env.py",
+        "scripts/check_runtime.py",
+        "scripts/runtime_receipt.py",
+        ".github/workflows/ci.yml",
+        ".github/workflows/maintenance.yml",
+        "docs/ops/LINUX_PYTHON_FOUNDATION.md",
+        "tests/unit/test_runtime_foundation.py",
+        ".github/DEPENDENCY_MATRIX.md",
+        "scripts/extras_matrix.py",
+        "uv.lock"
+      ],
+      "note": "Created for the Linux foundation + Python runtime closure mission; no application feature work."
     }
   ],
   "claims": [
@@ -3402,6 +3424,55 @@
       "gates_owner": false,
       "delivered": false,
       "note": "| RECONCILE: MERGED in #184 (main b733fb0). is_owner() now fails closed when owner_telegram_id is unset (0 is no longer a valid identity)."
+    },
+    {
+      "task": "task-260-linux-python-foundation",
+      "title": "Canonical Ubuntu 26.04 Linux foundation and Python 3.14 runtime closure",
+      "title_fa": "بستن foundation لینوکس Ubuntu 26.04 و runtime رسمی Python 3.14",
+      "zone": "linux-python-foundation",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Foundation hardening only: define and exercise a reproducible Ubuntu 26.04 + Python 3.14 runtime across developer bootstrap, container, CI, security and evidence; preserve application architecture and avoid feature expansion.",
+      "scope_fa": "فقط سخت‌سازی foundation: تعریف و اجرای runtime بازتولیدپذیر Ubuntu 26.04 + Python 3.14 در bootstrap، container، CI، امنیت و شواهد؛ حفظ معماری application و بدون feature جدید.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "A single documented canonical runtime contract names Ubuntu 26.04.1 LTS and a verified Python 3.14 patch version.",
+        "Developer bootstrap, Docker build contract, CI jobs and runtime receipt use the same baseline without duplicate undocumented state.",
+        "Python remains the application runtime and no Java/Go/Rust core migration or feature expansion is introduced.",
+        "Install, import, initialize/health smoke, relevant tests, CI parity and security checks are executed or their real blocker is recorded.",
+        "Final evidence is bound to the final commit SHA and documentation makes no unproven claims."
+      ],
+      "evidence_required": [
+        "live main/branch/tree/PR/check-run transcript",
+        "official Ubuntu and Python release references plus compatibility decision",
+        "exact runtime receipt with OS/Python/package/application/SHA",
+        "targeted tests and final gate outputs",
+        "CI exact-head result or explicit external blocker with reproduction"
+      ],
+      "exclusive_paths": [
+        "Dockerfile",
+        "docker-compose.yml",
+        "pyproject.toml",
+        "Makefile",
+        "scripts/bootstrap_dev.sh",
+        "scripts/bootstrap_env.py",
+        "scripts/check_runtime.py",
+        "scripts/runtime_receipt.py",
+        ".github/workflows/ci.yml",
+        ".github/workflows/maintenance.yml",
+        "docs/ops/LINUX_PYTHON_FOUNDATION.md",
+        "tests/unit/test_runtime_foundation.py",
+        ".github/DEPENDENCY_MATRIX.md",
+        "scripts/extras_matrix.py",
+        "uv.lock"
+      ],
+      "owner_hint": "session branch arena/linux-python-foundation-20261008",
+      "agent_branch": "arena/linux-python-foundation-20261008",
+      "claimed_at": "2026-10-08T21:02:30Z",
+      "ttl_hours": 24,
+      "gates_owner": true,
+      "note": "",
+      "generation": 1
     }
   ],
   "deferred_log": [

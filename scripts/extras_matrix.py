@@ -71,7 +71,7 @@ PARITY_JOB = "python-parity"
 #: The Python the full ``test``/``lint`` jobs run on.  The parity matrix must
 #: include it, and every literal python-version in the workflow must be either
 #: this or a parity leg.
-PRIMARY_PYTHON = "3.12"
+PRIMARY_PYTHON = "3.14"
 
 #: Skip reasons that mean "a real test declined to run because of a missing
 #: dependency".  ``pytest.importorskip`` reports "could not import"; the

@@ -79,7 +79,7 @@ def _fixture_workflow_parity_missing_floor() -> str:
 
 def _fixture_workflow_uncovered_python() -> str:
     """A job pinned to a python the parity matrix never tests."""
-    return WORKFLOW_TEXT.replace('python-version: "3.12"', 'python-version: "3.13"', 1)
+    return WORKFLOW_TEXT.replace('python-version: "3.14"', 'python-version: "3.13"', 1)
 
 
 # --------------------------------------------------------------------------- #
