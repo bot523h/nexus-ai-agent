@@ -759,28 +759,77 @@ def check_live(repo: str, branch: str, token: str | None) -> Report:
             "GOV042", "unknown", "enforcement_level is absent from the live payload", "protection"
         )
 
+    # GOV043 — rulesets are the *other* GitHub mechanism that can enforce this
+    # policy, and unlike the protection sub-settings they ARE readable with a
+    # metadata-only token.  Recording them is real live evidence rather than a
+    # guess: an empty list means classic branch protection is the only
+    # enforcement path, so the sub-settings above are the whole story.  A non-empty
+    # list means a second mechanism exists that this guard does not yet evaluate,
+    # which is governance drift and must not read as green.
+    rules, rules_err, _ = _api_get(f"{base}/rules/branches/{branch}", token)
+    if rules_err:
+        report.add(
+            "GOV043",
+            "unknown",
+            f"ruleset metadata unreadable ({rules_err}) — recorded as BLOCKED, never a pass",
+            f"GET {base}/rules/branches/{branch}",
+        )
+    elif isinstance(rules, list) and not rules:
+        report.add(
+            "GOV043",
+            "ok",
+            f"no ruleset applies to {branch!r} — classic branch protection is the only "
+            "enforcement path",
+            f"GET {base}/rules/branches/{branch} -> []",
+        )
+    else:
+        report.add(
+            "GOV043",
+            "violation",
+            f"{len(rules) if isinstance(rules, list) else 'an unknown number of'} ruleset "
+            f"rule(s) apply to {branch!r}; this guard evaluates classic branch protection "
+            "only, so the enforced policy is not fully covered",
+            f"GET {base}/rules/branches/{branch}",
+        )
+
     # Sub-settings: each is either verified, contradicted, or unreadable.  An
     # unreadable sub-setting can never contribute to a VERIFIED verdict.
     for policy in _DETAIL_ENDPOINTS:
         url = f"{base}/branches/{branch}/protection/{policy.endpoint}"
         payload, err, status = _api_get(url, token)
-        if err:
-            report.add(
-                policy.code,
-                "unknown",
-                f"{policy.label}: source unreadable ({err}) — recorded as BLOCKED, never as a pass",
-                f"GET {url}",
-            )
-            continue
-        if not isinstance(payload, dict):
-            report.add(
-                policy.code,
-                "unknown",
-                f"{policy.label}: HTTP {status} returned {type(payload).__name__}, not an "
-                "object — ambiguous, so BLOCKED rather than a pass",
-                f"GET {url}",
-            )
-            continue
+        source = f"GET {url}"
+        if err or not isinstance(payload, dict):
+            # The dedicated endpoint is unreadable: 403 with a metadata-only token,
+            # and the allow_*/conversation endpoints answer a misleading 404
+            # "Branch not found", which must never be read as "the setting is off".
+            # Before giving up, fall back to the same-named field inside the
+            # `protection` object that GET /branches/{branch} already returned — a
+            # second, repository-supported source for the same truth.  It is
+            # evaluated with the exact same predicates, so it can only produce the
+            # same three outcomes; an absent or null field there stays BLOCKED.
+            fallback = protection.get(policy.endpoint)
+            if isinstance(fallback, dict):
+                payload = fallback
+                status = 200
+                source = f"GET {base}/branches/{branch} -> protection.{policy.endpoint}"
+            elif err:
+                report.add(
+                    policy.code,
+                    "unknown",
+                    f"{policy.label}: source unreadable ({err}) and absent from the branch "
+                    "protection object — recorded as BLOCKED, never as a pass",
+                    source,
+                )
+                continue
+            else:
+                report.add(
+                    policy.code,
+                    "unknown",
+                    f"{policy.label}: HTTP {status} returned {type(payload).__name__}, not "
+                    "an object — ambiguous, so BLOCKED rather than a pass",
+                    source,
+                )
+                continue
         # Every declared expectation must hold on the *value*, not on readability.
         for field_name, holds, expectation in policy.expectations:
             if field_name not in payload or payload[field_name] is None:
@@ -789,7 +838,7 @@ def check_live(repo: str, branch: str, token: str | None) -> Report:
                     "unknown",
                     f"{policy.label}: {field_name} is absent or null — ambiguous, so "
                     "BLOCKED rather than a pass",
-                    f"GET {url}",
+                    source,
                 )
                 continue
             actual = payload[field_name]
@@ -799,14 +848,14 @@ def check_live(repo: str, branch: str, token: str | None) -> Report:
                     policy.code,
                     "ok",
                     f"{policy.label}: {field_name} is {actual!r} (expected {expectation})",
-                    f"HTTP {status} {json.dumps(payload)[:160]}",
+                    f"HTTP {status} {json.dumps(payload)[:160]} via {source}",
                 )
             elif verdict == "violation":
                 report.add(
                     policy.code,
                     "violation",
                     f"{policy.label}: {field_name} is {actual!r}, expected {expectation}",
-                    f"HTTP {status} {json.dumps(payload)[:160]}",
+                    f"HTTP {status} {json.dumps(payload)[:160]} via {source}",
                 )
             else:
                 report.add(
@@ -814,7 +863,7 @@ def check_live(repo: str, branch: str, token: str | None) -> Report:
                     "unknown",
                     f"{policy.label}: {field_name} is {type(actual).__name__} {actual!r}, "
                     f"not a decidable value (expected {expectation}) — BLOCKED, never a pass",
-                    f"HTTP {status} {json.dumps(payload)[:160]}",
+                    f"HTTP {status} {json.dumps(payload)[:160]} via {source}",
                 )
 
     return report

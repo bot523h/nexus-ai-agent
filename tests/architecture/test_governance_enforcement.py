@@ -271,12 +271,27 @@ def test_an_unreadable_workflow_is_blocked_not_green(tmp_path: Path) -> None:
 # the live plane — an unreadable governance source is never a pass
 # --------------------------------------------------------------------------- #
 def _stub_api(monkeypatch: pytest.MonkeyPatch, guard: ModuleType, responses: dict[str, object]):
+    """Stub ``_api_get`` with suffix matching.
+
+    Needles are matched LONGEST FIRST: ``rules/branches/main`` also ends with
+    ``branches/main``, so in dict order the branch fixture would otherwise swallow
+    the ruleset request.  When a test does not stub the ruleset plane at all it
+    defaults to ``[]`` — the live repository's state — so pre-GOV043 tests keep
+    their verdicts; tests that care about rulesets stub it explicitly.
+    """
+
     def fake(url: str, token: str | None):
-        for needle, value in responses.items():
+        is_rules = url.endswith("rules/branches/main")
+        for needle in sorted(responses, key=len, reverse=True):
+            if needle == "branches/main" and is_rules:
+                continue  # the ruleset URL is not the branch object
             if url.endswith(needle):
+                value = responses[needle]
                 if isinstance(value, tuple):
                     return value
                 return value, None, 200
+        if is_rules:
+            return [], None, 200
         return None, "HTTP 404: Not Found", 404
 
     monkeypatch.setattr(guard, "_api_get", fake)
@@ -913,3 +928,158 @@ def test_the_pr_preserving_whitelist_never_matches_a_bare_mention(
         "'pull_request' == github.event_name",
     ):
         assert guard._PR_PRESERVING.search(text) is not None, f"{text!r} must match"
+
+
+# --------------------------------------------------------------------------- #
+# GOV050–GOV054 — the readable fallback, and GOV043 rulesets
+# --------------------------------------------------------------------------- #
+# Probed live: with a metadata-only token the dedicated sub-endpoints answer 403,
+# and allow_force_pushes / allow_deletions / required_conversation_resolution
+# answer a misleading 404 "Branch not found".  That 404 must never be read as
+# "the setting is off".  But GET /branches/main is readable and carries a
+# `protection` object with the same-named fields, so it is a second,
+# repository-supported source for the same truth.
+def _plane_with_protection(guard: ModuleType, protection: dict) -> dict[str, object]:
+    checks = {
+        "contexts": list(guard.REQUIRED_CONTEXTS),
+        "enforcement_level": "everyone",
+    }
+    extra = dict(protection)
+    if isinstance(extra.get("required_status_checks"), dict):
+        # merge, not replace: GOV041 reads `contexts` from this same object
+        checks.update(extra.pop("required_status_checks"))
+    responses: dict[str, object] = {
+        "branches/main": {
+            "name": "main",
+            "protected": True,
+            "protection": {"required_status_checks": checks, **extra},
+        },
+        "rules/branches/main": [],
+    }
+    responses.update(_SECURE_DETAIL_PAYLOADS)
+    return responses
+
+
+def test_the_readable_fallback_is_evaluated_on_its_values(
+    guard: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A dedicated endpoint that 403s must not hide an insecure value we CAN read."""
+    responses = _plane_with_protection(guard, {"allow_force_pushes": {"enabled": True}})
+    # The dedicated endpoint is refused; only the branch object is readable.
+    responses["protection/allow_force_pushes"] = (None, "HTTP 403: Forbidden", 403)
+    _stub_api(monkeypatch, guard, responses)
+
+    report = guard.check_live("o/r", "main", "token")
+    gov052 = [f for f in report.findings if f.code == "GOV052"]
+    assert len(gov052) == 1
+    assert gov052[0].severity == "violation", gov052[0].to_dict()
+    assert "protection.allow_force_pushes" in gov052[0].witness, (
+        "the witness must name the source that actually produced the value"
+    )
+
+
+def test_a_null_value_in_the_fallback_stays_blocked(
+    guard: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fallback can never upgrade an unknown to a pass.
+
+    This is the live shape of this repository: `protection.required_status_checks`
+    is readable but its `strict` is null.
+    """
+    responses = _plane_with_protection(guard, {"required_status_checks": {"strict": None}})
+    responses["protection/required_status_checks"] = (None, "HTTP 403: Forbidden", 403)
+    _stub_api(monkeypatch, guard, responses)
+
+    report = guard.check_live("o/r", "main", "token")
+    assert report.verdict() == "BLOCKED", [f.to_dict() for f in report.findings]
+    gov054 = [f for f in report.findings if f.code == "GOV054"]
+    assert gov054 and gov054[0].severity == "unknown"
+    assert "absent or null" in gov054[0].message
+
+
+def test_a_secure_value_in_the_fallback_is_accepted(
+    guard: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fallback is evidence, not a placeholder: a real value counts."""
+    responses = _plane_with_protection(
+        guard,
+        {
+            "allow_force_pushes": {"enabled": False},
+            "allow_deletions": {"enabled": False},
+            "required_conversation_resolution": {"enabled": True},
+            "required_pull_request_reviews": {
+                "required_approving_review_count": 1,
+                "dismiss_stale_reviews": True,
+            },
+            "required_status_checks": {"strict": True},
+        },
+    )
+    for endpoint in (
+        "allow_force_pushes",
+        "allow_deletions",
+        "required_conversation_resolution",
+        "required_pull_request_reviews",
+        "required_status_checks",
+    ):
+        responses[f"protection/{endpoint}"] = (None, "HTTP 403: Forbidden", 403)
+    _stub_api(monkeypatch, guard, responses)
+
+    report = guard.check_live("o/r", "main", "token")
+    assert report.verdict() == "VERIFIED", [f.to_dict() for f in report.findings]
+
+
+def test_an_unreadable_setting_absent_everywhere_is_blocked_not_off(
+    guard: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The 404 'Branch not found' shape: unreadable, and nothing to fall back to."""
+    responses = _plane_with_protection(guard, {})
+    for endpoint in (
+        "allow_force_pushes",
+        "allow_deletions",
+        "required_conversation_resolution",
+        "required_pull_request_reviews",
+        "required_status_checks",
+    ):
+        responses[f"protection/{endpoint}"] = (None, "HTTP 404: Not Found", 404)
+    _stub_api(monkeypatch, guard, responses)
+
+    report = guard.check_live("o/r", "main", "token")
+    assert report.verdict() == "BLOCKED"
+    assert {f.code for f in report.findings if f.severity == "unknown"} == {
+        "GOV050",
+        "GOV051",
+        "GOV052",
+        "GOV053",
+        "GOV054",
+    }
+
+
+@pytest.mark.parametrize(
+    ("rules", "expected_severity"),
+    [
+        ([], "ok"),
+        ([{"type": "deletion"}], "violation"),
+        ((None, "HTTP 403: Forbidden", 403), "unknown"),
+    ],
+)
+def test_gov043_records_the_ruleset_plane(
+    guard: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    rules: object,
+    expected_severity: str,
+) -> None:
+    """Rulesets are readable with a metadata-only token, so they are evidence.
+
+    An empty list proves classic branch protection is the only enforcement path.
+    A non-empty list means a second mechanism this guard does not evaluate, which
+    must not read as green.
+    """
+    responses = _plane_with_protection(guard, {})
+    responses.update(_SECURE_DETAIL_PAYLOADS)
+    responses["rules/branches/main"] = rules
+    _stub_api(monkeypatch, guard, responses)
+
+    report = guard.check_live("o/r", "main", "token")
+    gov043 = [f for f in report.findings if f.code == "GOV043"]
+    assert len(gov043) == 1, [f.to_dict() for f in report.findings]
+    assert gov043[0].severity == expected_severity
