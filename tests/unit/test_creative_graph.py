@@ -15,6 +15,7 @@ backup / restore / integrity.
 from __future__ import annotations
 
 import json
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -469,3 +470,199 @@ def test_two_processes_can_write_the_same_graph(tmp_path: Path) -> None:
     for stdout, stderr in outs:
         assert stdout.strip().splitlines()[-1] == "25", stderr
     assert CreativeGraph(db).counts()["nodes"] == 25, "no lost write and no duplicate"
+
+
+# --------------------------------------------------------------------------- #
+# rebuild atomicity and terminal-state safety
+# --------------------------------------------------------------------------- #
+# Reproduced pre-fix: (a) a rebuild after a caller invalidated a projected node
+# raised GraphStateError partway through, and (b) `replace=True` deleted the old
+# projection in one transaction and wrote the new one in many, so a crash in
+# between left an observer looking at 1 node / 0 edges where a healthy
+# 5 nodes / 3 edges projection had stood.
+def _journal_for(tmp_path, *, digest: str = "d" * 64):
+    from nexus_ai_agent.provenance.journal import CausalJournal
+    from nexus_ai_agent.provenance.models import CausalEvent, EventKind
+
+    journal = CausalJournal(tmp_path / "ledger.sqlite")
+    for kind, attempt, status, result in (
+        (EventKind.JOB_ENQUEUED, None, "pending", None),
+        (EventKind.JOB_RESERVED, 1, "processing", None),
+        (EventKind.JOB_VERIFICATION_STARTED, 1, "verifying", None),
+        (EventKind.JOB_COMPLETED, 1, "completed", digest),
+    ):
+        journal.append(
+            CausalEvent(
+                kind=kind,
+                job_id="job_rebuild",
+                job_type="creative.render",
+                idempotency_key="key-rebuild",
+                attempt=attempt,
+                status=status,
+                result_digest=result,
+                occurred_at="2026-10-07T00:00:00Z",
+            )
+        )
+    return journal.all_records(), digest
+
+
+def test_a_rebuild_skips_a_node_a_caller_invalidated(tmp_path: Path) -> None:
+    """An explicit lifecycle decision outranks the projection."""
+    records, digest = _journal_for(tmp_path)
+    graph = CreativeGraph(tmp_path / "graph.sqlite")
+    graph.rebuild_from_journal(records)
+    artifact_id = node_identity("ARTIFACT", {"job_id": "job_rebuild", "result_digest": digest})
+    graph.set_status(artifact_id, "invalidated")
+    history_before = graph.counts()["history"]
+
+    report = graph.rebuild_from_journal(records)
+
+    assert [s["node_id"] for s in report["skipped_terminal"]] == [artifact_id]
+    assert report["skipped_terminal"][0]["status"] == "invalidated"
+    # the terminal state survived, and no synthetic history was appended
+    assert (
+        graph.find("ARTIFACT", {"job_id": "job_rebuild", "result_digest": digest}).status
+        == "invalidated"
+    )
+    assert graph.counts()["history"] == history_before
+
+
+def test_a_rebuild_skips_a_revoked_node_too(tmp_path: Path) -> None:
+    records, digest = _journal_for(tmp_path)
+    graph = CreativeGraph(tmp_path / "graph.sqlite")
+    graph.rebuild_from_journal(records)
+    artifact_id = node_identity("ARTIFACT", {"job_id": "job_rebuild", "result_digest": digest})
+    graph.set_status(artifact_id, "revoked")
+
+    report = graph.rebuild_from_journal(records)
+    assert [s["status"] for s in report["skipped_terminal"]] == ["revoked"]
+    assert (
+        graph.find("ARTIFACT", {"job_id": "job_rebuild", "result_digest": digest}).status
+        == "revoked"
+    )
+
+
+def test_replace_mode_does_not_undo_an_invalidation(tmp_path: Path) -> None:
+    """A from-scratch rebuild of the projection is not a licence to revive."""
+    records, digest = _journal_for(tmp_path)
+    graph = CreativeGraph(tmp_path / "graph.sqlite")
+    graph.rebuild_from_journal(records)
+    artifact_id = node_identity("ARTIFACT", {"job_id": "job_rebuild", "result_digest": digest})
+    graph.set_status(artifact_id, "invalidated")
+
+    report = graph.rebuild_from_journal(records, replace=True)
+    assert [s["node_id"] for s in report["skipped_terminal"]] == [artifact_id]
+    assert (
+        graph.find("ARTIFACT", {"job_id": "job_rebuild", "result_digest": digest}).status
+        == "invalidated"
+    )
+
+
+@pytest.mark.parametrize("crash_after", [0, 1, 2, 3])
+def test_a_crash_mid_rebuild_never_publishes_a_partial_projection(
+    tmp_path: Path, crash_after: int
+) -> None:
+    """§14 crash injection: all-or-nothing, observed from a NEW process.
+
+    Either the previous healthy projection stands, or the new generation stands
+    whole.  A half-built projection that looks healthy is the failure this kills.
+    """
+    records, _ = _journal_for(tmp_path)
+    db = tmp_path / "graph.sqlite"
+    graph = CreativeGraph(db)
+    first = graph.rebuild_from_journal(records)
+    healthy = graph.counts()
+    assert first["projected_nodes"]["ARTIFACT"] == 1
+
+    calls = {"n": 0}
+    real_put = CreativeGraph._put_node_tx
+
+    def exploding(self, connection, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] > crash_after:
+            raise RuntimeError("injected crash mid-rebuild")
+        return real_put(self, connection, *args, **kwargs)
+
+    CreativeGraph._put_node_tx = exploding
+    try:
+        with pytest.raises(RuntimeError, match="injected crash"):
+            CreativeGraph(db).rebuild_from_journal(records, replace=True)
+    finally:
+        CreativeGraph._put_node_tx = real_put
+
+    # A separate object reopens the file, as a new process would.
+    observer = CreativeGraph(db)
+    assert observer.counts() == healthy, (
+        "the transaction must roll back; a partial projection was observable"
+    )
+    assert observer.integrity_check().ok, "the surviving projection must still be sound"
+
+
+def test_rebuild_is_stable_across_repeated_runs(tmp_path: Path) -> None:
+    """§15: 1x, 2x, 3x — idempotent, with no synthetic history growth."""
+    records, _ = _journal_for(tmp_path)
+    graph = CreativeGraph(tmp_path / "graph.sqlite")
+    snapshots = []
+    for _ in range(3):
+        graph.rebuild_from_journal(records)
+        snapshots.append(graph.counts())
+    assert snapshots[0] == snapshots[1] == snapshots[2], snapshots
+
+    replace_snapshots = []
+    for _ in range(3):
+        graph.rebuild_from_journal(records, replace=True)
+        replace_snapshots.append(graph.counts())
+    assert replace_snapshots[0] == replace_snapshots[1] == replace_snapshots[2]
+    assert replace_snapshots[0] == snapshots[0], "replace must converge to the same graph"
+
+
+def test_rebuild_never_manufactures_causal_history(tmp_path: Path) -> None:
+    """§16: the projection is reconstructed; history is only ever appended.
+
+    The pre-fix defect replayed every ledger transition, so one replay grew the
+    history log (7 -> 10) — a rebuild that was really an append in disguise.
+    """
+    records, _ = _journal_for(tmp_path)
+    graph = CreativeGraph(tmp_path / "graph.sqlite")
+    graph.rebuild_from_journal(records)
+    counts_after_first = graph.counts()
+
+    def all_history() -> dict:
+        connection = sqlite3.connect(tmp_path / "graph.sqlite")
+        try:
+            ids = [
+                r[0]
+                for r in connection.execute(
+                    "SELECT node_id FROM nexus_graph_node WHERE source = 'causal_journal'"
+                )
+            ]
+        finally:
+            connection.close()
+        return {node_id: graph.history(node_id) for node_id in sorted(ids)}
+
+    history_after_first = all_history()
+
+    graph.rebuild_from_journal(records)
+    assert graph.counts() == counts_after_first, "a plain replay must add nothing"
+    assert all_history() == history_after_first, "a plain replay must not append history"
+
+    graph.rebuild_from_journal(records, replace=True)
+    assert graph.counts() == counts_after_first, "a replace rebuild must add nothing"
+    assert all_history() == history_after_first, "a replace rebuild must not append history"
+
+    # Every projected node keeps exactly its creation record: a rebuild
+    # reconstructs the projection, it does not manufacture causal history.
+    connection = sqlite3.connect(tmp_path / "graph.sqlite")
+    try:
+        node_ids = [
+            r[0]
+            for r in connection.execute(
+                "SELECT node_id FROM nexus_graph_node WHERE source = 'causal_journal'"
+            )
+        ]
+    finally:
+        connection.close()
+    assert node_ids, "the projection should contain nodes"
+    for node_id in node_ids:
+        rows = graph.history(node_id)
+        assert len(rows) == 1, f"{node_id} carries {len(rows)} history rows, expected 1"

@@ -327,73 +327,93 @@ class CreativeGraph:
           ``nexus_graph_node_history`` and marked ``superseded``;
         * a node already ``invalidated``/``revoked`` is never silently revived.
         """
+        with self._lock, self._write_connection() as connection:
+            return self._put_node_tx(
+                connection, kind, identity, payload, source=source, source_seq=source_seq
+            )
+
+    def _put_node_tx(
+        self,
+        connection: sqlite3.Connection,
+        kind: str,
+        identity: dict[str, Any],
+        payload: dict[str, Any] | None = None,
+        *,
+        source: str = "direct",
+        source_seq: int | None = None,
+    ) -> WriteResult:
+        """The node write itself, on a caller-owned transaction.
+
+        ``rebuild_from_journal`` drives many of these inside one
+        ``BEGIN IMMEDIATE`` so a failed rebuild cannot publish half a
+        projection.  Every write path reachable from a rebuild must go through
+        here rather than re-opening its own transaction."""
         node_id = node_identity(kind, identity)
         body = dict(payload or {})
         body_digest = digest_of(body)
         stamp = _now()
-        with self._lock, self._write_connection() as connection:
-            row = connection.execute(
-                "SELECT payload_digest, status, revision_count, created_at FROM nexus_graph_node"
-                " WHERE node_id = ?",
-                (node_id,),
-            ).fetchone()
-            if row is not None:
-                previous_digest, previous_status = str(row[0]), str(row[1])
-                if previous_digest == body_digest and previous_status == "active":
-                    return WriteResult(node=self._node(connection, node_id), unchanged=True)
-                if previous_status in ("invalidated", "revoked"):
-                    raise GraphStateError(
-                        f"node {node_id} is {previous_status}; a write must supersede it "
-                        "explicitly, never overwrite it"
-                    )
-                connection.execute(
-                    "UPDATE nexus_graph_node SET payload_json = ?, payload_digest = ?,"
-                    " status = 'active', superseded_by = NULL, source = ?, source_seq = ?,"
-                    " revision_count = revision_count + 1, updated_at = ? WHERE node_id = ?",
-                    (
-                        canonical_json(body),
-                        body_digest,
-                        source,
-                        source_seq,
-                        stamp,
-                        node_id,
-                    ),
+        row = connection.execute(
+            "SELECT payload_digest, status, revision_count, created_at FROM nexus_graph_node"
+            " WHERE node_id = ?",
+            (node_id,),
+        ).fetchone()
+        if row is not None:
+            previous_digest, previous_status = str(row[0]), str(row[1])
+            if previous_digest == body_digest and previous_status == "active":
+                return WriteResult(node=self._node(connection, node_id), unchanged=True)
+            if previous_status in ("invalidated", "revoked"):
+                raise GraphStateError(
+                    f"node {node_id} is {previous_status}; a write must supersede it "
+                    "explicitly, never overwrite it"
                 )
-                # The history log records every state the node has *established*,
-                # oldest first: the create row is still there, so the previous
-                # truth stays readable and the new one is appended after it.
-                connection.execute(
-                    "INSERT INTO nexus_graph_node_history"
-                    " (node_id, payload_json, payload_digest, status, recorded_at)"
-                    " VALUES (?, ?, ?, 'active', ?)",
-                    (node_id, canonical_json(body), body_digest, stamp),
-                )
-                return WriteResult(node=self._node(connection, node_id), superseded_previous=True)
             connection.execute(
-                "INSERT INTO nexus_graph_node (node_id, kind, identity_json, identity_digest,"
-                " payload_json, payload_digest, status, superseded_by, source, source_seq,"
-                " revision_count, created_at, updated_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, 'active', NULL, ?, ?, 1, ?, ?)",
+                "UPDATE nexus_graph_node SET payload_json = ?, payload_digest = ?,"
+                " status = 'active', superseded_by = NULL, source = ?, source_seq = ?,"
+                " revision_count = revision_count + 1, updated_at = ? WHERE node_id = ?",
                 (
-                    node_id,
-                    kind,
-                    canonical_json(identity),
-                    digest_of(identity),
                     canonical_json(body),
                     body_digest,
                     source,
                     source_seq,
                     stamp,
-                    stamp,
+                    node_id,
                 ),
             )
+            # The history log records every state the node has *established*,
+            # oldest first: the create row is still there, so the previous
+            # truth stays readable and the new one is appended after it.
             connection.execute(
                 "INSERT INTO nexus_graph_node_history"
                 " (node_id, payload_json, payload_digest, status, recorded_at)"
                 " VALUES (?, ?, ?, 'active', ?)",
                 (node_id, canonical_json(body), body_digest, stamp),
             )
-            return WriteResult(node=self._node(connection, node_id), created=True)
+            return WriteResult(node=self._node(connection, node_id), superseded_previous=True)
+        connection.execute(
+            "INSERT INTO nexus_graph_node (node_id, kind, identity_json, identity_digest,"
+            " payload_json, payload_digest, status, superseded_by, source, source_seq,"
+            " revision_count, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, 'active', NULL, ?, ?, 1, ?, ?)",
+            (
+                node_id,
+                kind,
+                canonical_json(identity),
+                digest_of(identity),
+                canonical_json(body),
+                body_digest,
+                source,
+                source_seq,
+                stamp,
+                stamp,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO nexus_graph_node_history"
+            " (node_id, payload_json, payload_digest, status, recorded_at)"
+            " VALUES (?, ?, ?, 'active', ?)",
+            (node_id, canonical_json(body), body_digest, stamp),
+        )
+        return WriteResult(node=self._node(connection, node_id), created=True)
 
     def put_edge(
         self,
@@ -406,55 +426,72 @@ class CreativeGraph:
         source_seq: int | None = None,
     ) -> WriteResult:
         """Create one edge. Both endpoints must exist; an edge is idempotent."""
+        with self._lock, self._write_connection() as connection:
+            return self._put_edge_tx(
+                connection, relation, src, dst, payload, source=source, source_seq=source_seq
+            )
+
+    def _put_edge_tx(
+        self,
+        connection: sqlite3.Connection,
+        relation: str,
+        src: str,
+        dst: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        source: str = "direct",
+        source_seq: int | None = None,
+    ) -> WriteResult:
+        """The edge write itself, on a caller-owned transaction.
+
+        A rebuild reaches edges through here too, so the terminal-edge guard
+        (a revoked edge is never silently re-asserted) holds inside it."""
         edge_id = edge_identity(relation, src, dst)
         body = dict(payload or {})
         stamp = _now()
-        with self._lock, self._write_connection() as connection:
-            for endpoint in (src, dst):
-                if (
-                    connection.execute(
-                        "SELECT 1 FROM nexus_graph_node WHERE node_id = ?", (endpoint,)
-                    ).fetchone()
-                    is None
-                ):
-                    raise GraphStateError(
-                        f"cannot link {relation}: endpoint {endpoint} does not exist"
-                    )
-            existing = connection.execute(
-                "SELECT payload_digest, status FROM nexus_graph_edge WHERE edge_id = ?",
-                (edge_id,),
-            ).fetchone()
-            if existing is not None:
-                if str(existing[0]) == digest_of(body) and str(existing[1]) == "active":
-                    return WriteResult(edge=self._edge(connection, edge_id), unchanged=True)
-                if str(existing[1]) == "revoked":
-                    raise GraphStateError(
-                        f"edge {edge_id} is revoked; re-asserting it needs an explicit revoke"
-                        " reversal, not a silent write"
-                    )
+        for endpoint in (src, dst):
+            if (
                 connection.execute(
-                    "UPDATE nexus_graph_edge SET payload_json = ?, payload_digest = ?,"
-                    " status = 'active', source = ?, source_seq = ? WHERE edge_id = ?",
-                    (canonical_json(body), digest_of(body), source, source_seq, edge_id),
+                    "SELECT 1 FROM nexus_graph_node WHERE node_id = ?", (endpoint,)
+                ).fetchone()
+                is None
+            ):
+                raise GraphStateError(f"cannot link {relation}: endpoint {endpoint} does not exist")
+        existing = connection.execute(
+            "SELECT payload_digest, status FROM nexus_graph_edge WHERE edge_id = ?",
+            (edge_id,),
+        ).fetchone()
+        if existing is not None:
+            if str(existing[0]) == digest_of(body) and str(existing[1]) == "active":
+                return WriteResult(edge=self._edge(connection, edge_id), unchanged=True)
+            if str(existing[1]) == "revoked":
+                raise GraphStateError(
+                    f"edge {edge_id} is revoked; re-asserting it needs an explicit revoke"
+                    " reversal, not a silent write"
                 )
-                return WriteResult(edge=self._edge(connection, edge_id))
             connection.execute(
-                "INSERT INTO nexus_graph_edge (edge_id, relation, src, dst, payload_json,"
-                " payload_digest, status, source, source_seq, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)",
-                (
-                    edge_id,
-                    relation,
-                    src,
-                    dst,
-                    canonical_json(body),
-                    digest_of(body),
-                    source,
-                    source_seq,
-                    stamp,
-                ),
+                "UPDATE nexus_graph_edge SET payload_json = ?, payload_digest = ?,"
+                " status = 'active', source = ?, source_seq = ? WHERE edge_id = ?",
+                (canonical_json(body), digest_of(body), source, source_seq, edge_id),
             )
-            return WriteResult(edge=self._edge(connection, edge_id), created=True)
+            return WriteResult(edge=self._edge(connection, edge_id))
+        connection.execute(
+            "INSERT INTO nexus_graph_edge (edge_id, relation, src, dst, payload_json,"
+            " payload_digest, status, source, source_seq, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)",
+            (
+                edge_id,
+                relation,
+                src,
+                dst,
+                canonical_json(body),
+                digest_of(body),
+                source,
+                source_seq,
+                stamp,
+            ),
+        )
+        return WriteResult(edge=self._edge(connection, edge_id), created=True)
 
     def set_status(
         self, node_id: str, status: str, *, superseded_by: str | None = None
@@ -778,18 +815,6 @@ class CreativeGraph:
         intermediate transition. Pass ``replace=True`` to drop the previously
         projected rows first (a true from-scratch rebuild).
         """
-        if replace:
-            # Order matters: the history purge reads the node rows it is about to
-            # drop. A rebuild that kept the old history would grow the log on
-            # every run, which is not a rebuild — it is an append in disguise.
-            with self._lock, self._write_connection() as connection:
-                connection.execute(
-                    "DELETE FROM nexus_graph_node_history WHERE node_id IN"
-                    " (SELECT node_id FROM nexus_graph_node WHERE source = 'causal_journal')"
-                )
-                connection.execute("DELETE FROM nexus_graph_edge WHERE source = 'causal_journal'")
-                connection.execute("DELETE FROM nexus_graph_node WHERE source = 'causal_journal'")
-
         executions: dict[str, dict[str, Any]] = {}
         artifacts: dict[str, dict[str, Any]] = {}
         verifications: dict[str, dict[str, Any]] = {}
@@ -846,85 +871,120 @@ class CreativeGraph:
 
         projected = {"EXECUTION": 0, "ARTIFACT": 0, "VERIFICATION": 0, "PASSPORT": 0}
         edges = 0
-        for key in sorted(set(order), key=lambda k: executions[k]["seq"]):
-            spec = executions[key]
-            if self.put_node(
-                "EXECUTION",
-                spec["identity"],
-                spec["payload"],
-                source="causal_journal",
-                source_seq=spec["seq"],
-            ).created:
-                projected["EXECUTION"] += 1
-        for key in sorted(verifications, key=lambda k: verifications[k]["seq"]):
-            spec = verifications[key]
-            if self.put_node(
-                "VERIFICATION",
-                spec["identity"],
-                spec["payload"],
-                source="causal_journal",
-                source_seq=spec["seq"],
-            ).created:
-                projected["VERIFICATION"] += 1
-        for key in sorted(artifacts, key=lambda k: artifacts[k]["seq"]):
-            artifact = artifacts[key]
-            node = self.put_node(
-                "ARTIFACT",
-                artifact["identity"],
-                artifact["payload"],
-                source="causal_journal",
-                source_seq=artifact["seq"],
-            )
-            if node.created:
-                projected["ARTIFACT"] += 1
-            if node.node is None:
-                continue
-            execution_id = node_identity("EXECUTION", executions[artifact["execution"]]["identity"])
-            if self.put_edge(
-                "EXECUTION_PRODUCED_ARTIFACT",
-                execution_id,
-                node.node.node_id,
-                {"ledger_seq": artifact["seq"]},
-                source="causal_journal",
-                source_seq=artifact["seq"],
-            ).created:
-                edges += 1
-            if artifact["verification"] in verifications:
-                verification_id = node_identity(
-                    "VERIFICATION", verifications[artifact["verification"]]["identity"]
+        skipped_terminal: list[dict[str, str]] = []
+
+        # One transaction for the whole rebuild.  The previous version deleted the
+        # old projection in one transaction and then wrote every node and edge in
+        # its own, so a crash in between left an observer looking at a half-built
+        # graph that looked healthy (reproduced: 5 nodes/3 edges became 1 node/0
+        # edges).  Nothing is observable until this commits: either the previous
+        # projection stands, or the new generation stands whole.
+        with self._lock, self._write_connection() as connection:
+
+            def terminal(node_id: str) -> str | None:
+                row = connection.execute(
+                    "SELECT status FROM nexus_graph_node WHERE node_id = ?", (node_id,)
+                ).fetchone()
+                status = str(row[0]) if row is not None else ""
+                return status if status in ("invalidated", "revoked") else None
+
+            def project(kind: str, spec: dict[str, Any]) -> WriteResult | None:
+                """Write one projected node, unless it is already terminal.
+
+                A caller's explicit invalidation or revocation is a decision the
+                ledger does not contain, so a rebuild must not overwrite it.  It
+                is skipped, reported, and left exactly as the caller left it.
+                """
+                node_id = node_identity(kind, spec["identity"])
+                status = terminal(node_id)
+                if status is not None:
+                    skipped_terminal.append({"kind": kind, "node_id": node_id, "status": status})
+                    return None
+                return self._put_node_tx(
+                    connection,
+                    kind,
+                    spec["identity"],
+                    spec["payload"],
+                    source="causal_journal",
+                    source_seq=spec["seq"],
                 )
-                if self.put_edge(
-                    "ARTIFACT_VERIFIED_BY",
-                    node.node.node_id,
-                    verification_id,
+
+            if replace:
+                # Order matters: the history purge reads the node rows it is about
+                # to drop.  A rebuild that kept the old history would grow the log
+                # on every run, which is not a rebuild — it is an append in
+                # disguise.  Terminal nodes are kept: a from-scratch rebuild of
+                # the *projection* must not undo an explicit lifecycle decision.
+                connection.execute(
+                    "DELETE FROM nexus_graph_node_history WHERE node_id IN"
+                    " (SELECT node_id FROM nexus_graph_node WHERE source = 'causal_journal'"
+                    " AND status NOT IN ('invalidated', 'revoked'))"
+                )
+                connection.execute("DELETE FROM nexus_graph_edge WHERE source = 'causal_journal'")
+                connection.execute(
+                    "DELETE FROM nexus_graph_node WHERE source = 'causal_journal'"
+                    " AND status NOT IN ('invalidated', 'revoked')"
+                )
+
+            for key in sorted(set(order), key=lambda k: executions[k]["seq"]):
+                result = project("EXECUTION", executions[key])
+                if result is not None and result.created:
+                    projected["EXECUTION"] += 1
+            for key in sorted(verifications, key=lambda k: verifications[k]["seq"]):
+                result = project("VERIFICATION", verifications[key])
+                if result is not None and result.created:
+                    projected["VERIFICATION"] += 1
+            for key in sorted(artifacts, key=lambda k: artifacts[k]["seq"]):
+                artifact = artifacts[key]
+                node = project("ARTIFACT", artifact)
+                if node is not None and node.created:
+                    projected["ARTIFACT"] += 1
+                artifact_id = node_identity("ARTIFACT", artifact["identity"])
+                execution_id = node_identity(
+                    "EXECUTION", executions[artifact["execution"]]["identity"]
+                )
+                if self._put_edge_tx(
+                    connection,
+                    "EXECUTION_PRODUCED_ARTIFACT",
+                    execution_id,
+                    artifact_id,
                     {"ledger_seq": artifact["seq"]},
                     source="causal_journal",
                     source_seq=artifact["seq"],
                 ).created:
                     edges += 1
-            passport = passports[key]
-            result = self.put_node(
-                "PASSPORT",
-                passport["identity"],
-                passport["payload"],
-                source="causal_journal",
-                source_seq=passport["seq"],
-            )
-            if result.created:
-                projected["PASSPORT"] += 1
-            if (
-                result.node
-                and self.put_edge(
-                    "ARTIFACT_HAS_PASSPORT",
-                    node.node.node_id,
-                    result.node.node_id,
-                    {"ledger_seq": passport["seq"]},
-                    source="causal_journal",
-                    source_seq=passport["seq"],
-                ).created
-            ):
-                edges += 1
+                if artifact["verification"] in verifications:
+                    verification_id = node_identity(
+                        "VERIFICATION", verifications[artifact["verification"]]["identity"]
+                    )
+                    if self._put_edge_tx(
+                        connection,
+                        "ARTIFACT_VERIFIED_BY",
+                        artifact_id,
+                        verification_id,
+                        {"ledger_seq": artifact["seq"]},
+                        source="causal_journal",
+                        source_seq=artifact["seq"],
+                    ).created:
+                        edges += 1
+                passport = passports[key]
+                passport_result = project("PASSPORT", passport)
+                if passport_result is not None and passport_result.created:
+                    projected["PASSPORT"] += 1
+                if passport_result is not None and passport_result.node is not None:
+                    if self._put_edge_tx(
+                        connection,
+                        "ARTIFACT_HAS_PASSPORT",
+                        artifact_id,
+                        passport_result.node.node_id,
+                        {"ledger_seq": passport["seq"]},
+                        source="causal_journal",
+                        source_seq=passport["seq"],
+                    ).created:
+                        edges += 1
+
         return {
+            "skipped_terminal": skipped_terminal,
             "records_read": len(records),
             "projected_nodes": projected,
             "projected_edges": edges,
