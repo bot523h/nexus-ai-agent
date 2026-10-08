@@ -41,10 +41,13 @@ async def is_first_time_user(user_id: int, db_session_factory: Any) -> bool:
         from nexus_ai_agent.storage.models import UserLanguage
 
         async with db_session_factory() as session:
-            existing = (
-                await session.exec(_sel(UserLanguage).where(UserLanguage.user_id == user_id))
-            ).first()
-            return existing is None
+            # ``get_session`` yields a plain SQLAlchemy AsyncSession, which has
+            # no SQLModel ``.exec()``; the broad except below used to swallow
+            # that AttributeError and report *every* user as first-time.
+            result = await session.execute(
+                _sel(UserLanguage).where(UserLanguage.user_id == user_id)
+            )
+            return result.scalars().first() is None
     except Exception:
         # If we can't check, assume first time (better to onboard than not)
         return True

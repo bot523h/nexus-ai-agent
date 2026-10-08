@@ -1,38 +1,96 @@
-FROM python:3.12-slim
+# syntax=docker/dockerfile:1
+#
+# Multi-stage image with two runtime targets (task-107):
+#
+#   docker build -t nexus-slim .                    → core only (DEFAULT target)
+#   docker build --target full -t nexus-full .      → every capability extra
+#   docker build --build-arg NEXUS_EXTRAS=rag,media → exactly the extras you need
+#
+# Dependency resolution runs in a builder stage with uv (free, Rust-based);
+# nothing is compiled in the runtime stages. Measured core install: 520 MB of
+# site-packages versus 6.5 GB before the extras split (no torch / ChromaDB /
+# llama.cpp in the default image). See README.md → "Install & extras".
+
+ARG PYTHON_VERSION=3.12
+# Comma-separated extras for the `slim` target; empty means core only.
+ARG NEXUS_EXTRAS=
+
+# ── builder: resolve and install the core dependencies into a prefix ─────────
+FROM python:${PYTHON_VERSION}-slim AS builder
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    UV_LINK_MODE=copy
+
+RUN pip install --no-cache-dir --upgrade pip uv
 
 WORKDIR /app
 
-# Install system dependencies.
-# `ffmpeg` is the single declared external binary of the slideshow pack
-# (ROADMAP_STATUS.md, "Dependencies"): the shipped /slideshow surface (Wave 2.5)
-# and `nexus slideshow render` resolve the encoder as NEXUS_FFMPEG_BIN -> PATH
-# -> imageio-ffmpeg wheel, and the imageio-ffmpeg fallback is a [dev] extra
-# that this core-only image does not install — without this package every
-# encode fails with FfmpegUnavailableError (task-163).
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    ffmpeg \
-    libmagic1 \
-    libgl1 \
-    fonts-liberation \
+# Only the metadata + package source is needed to install; copying the rest of
+# the repo later keeps this layer cached across documentation/test changes.
+COPY pyproject.toml README.md LICENSE ./
+COPY src ./src
+
+ARG NEXUS_EXTRAS
+RUN --mount=type=cache,target=/root/.cache/uv \
+    if [ -n "$NEXUS_EXTRAS" ]; then SPEC=".[$NEXUS_EXTRAS]"; else SPEC="."; fi \
+    && echo "installing $SPEC" \
+    && uv pip install --prefix=/install "$SPEC"
+
+# ── builder-full: the same, plus every capability extra ──────────────────────
+FROM builder AS builder-full
+
+# llama-cpp-python needs a C++ toolchain; it is installed here and only here, so
+# the compiler never reaches a runtime image.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy assets and code
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --prefix=/install ".[rag,local-llm,speech,r2,pdf,translate,postgres,otio,media]"
+
+# ── full: every extra ────────────────────────────────────────────────────────
+FROM python:${PYTHON_VERSION}-slim AS full
+
+WORKDIR /app
+
+# ffmpeg: the single declared external binary of the render lane
+# (ROADMAP_STATUS.md, "Dependencies"): the shipped /slideshow surface and the
+# Nagar lane resolve the encoder as NEXUS_FFMPEG_BIN -> PATH -> the
+# imageio-ffmpeg wheel, and the wheel fallback lives in the [media] extra that
+# a core-only *site-packages* install may not have (task-163). Shipping the real
+# binary keeps every encode working with zero Python-side extras. The former
+# build-essential / libmagic1 / libgl1 / fonts-liberation apt packages are no
+# longer installed: nothing in `src/` imports magic or cv2, and the Persian font
+# ships in-repo at assets/fonts/Vazirmatn.ttf.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder-full /install /usr/local
 COPY . .
 
-# Install dependencies
-RUN pip install --no-cache-dir .
-
-# Create necessary directories
 RUN mkdir -p data/chroma data/cache assets/fonts
-
-# Initialize database (optional during build, better at runtime)
-# RUN export PYTHONPATH=$PYTHONPATH:$(pwd)/src && python -m nexus_ai_agent.cli migrate
 
 EXPOSE 8000
 
-# Default command runs the bot.
 # NEXUS_RUN_MODE selects the run mode (see bot/webhook.py); "polling" is the
-# default so existing always-on (worker-type) deployments keep working
-# unchanged. Set NEXUS_RUN_MODE=webhook for scale-to-zero web deployments.
+# default so existing always-on (worker-type) deployments keep working unchanged.
+CMD ["sh", "-c", "python -m nexus_ai_agent.cli run-bot --mode ${NEXUS_RUN_MODE:-polling}"]
+
+# ── slim: core only (DEFAULT target) ─────────────────────────────────────────
+FROM python:${PYTHON_VERSION}-slim AS slim
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /install /usr/local
+COPY . .
+
+RUN mkdir -p data/cache assets/fonts
+
+EXPOSE 8000
+
 CMD ["sh", "-c", "python -m nexus_ai_agent.cli run-bot --mode ${NEXUS_RUN_MODE:-polling}"]

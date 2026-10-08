@@ -69,7 +69,7 @@ def _fixture_workflow_with_continue_on_error() -> str:
 
 def _fixture_workflow_with_unknown_leg() -> str:
     return WORKFLOW_TEXT.replace(
-        "          - leg: core\n", "          - leg: core\n          - leg: otio\n", 1
+        "          - leg: core\n", "          - leg: core\n          - leg: fake-leg\n", 1
     )
 
 
@@ -105,7 +105,7 @@ def test_red_proof_removing_a_leg_is_detected() -> None:
 
 def test_red_proof_an_unknown_leg_is_detected() -> None:
     problems = extras_matrix.matrix_problems(PYPROJECT_TEXT, _fixture_workflow_with_unknown_leg())
-    assert any("otio" in problem for problem in problems), problems
+    assert any("fake-leg" in problem for problem in problems), problems
 
 
 def test_red_proof_continue_on_error_is_detected() -> None:
@@ -117,17 +117,21 @@ def test_red_proof_continue_on_error_is_detected() -> None:
 
 def test_red_proof_a_new_pyproject_extra_without_a_leg_is_detected() -> None:
     """Add a fake extra to pyproject: the missing leg must be named."""
-    mutated = PYPROJECT_TEXT.replace("pdf = [", 'otio = ["fake-otio>=1.0"]\npdf = [', 1)
+    mutated = PYPROJECT_TEXT.replace("pdf = [", 'fakextra = ["fake-dep>=1.0"]\npdf = [', 1)
     problems = extras_matrix.matrix_problems(mutated, WORKFLOW_TEXT)
-    assert any("otio" in problem and "LEG_DEFINITIONS" in problem for problem in problems), problems
+    assert any("fakextra" in problem and "LEG_DEFINITIONS" in problem for problem in problems), (
+        problems
+    )
 
 
 def test_red_proof_a_new_extra_with_a_definition_but_no_leg_is_detected() -> None:
     """Definition added, CI leg forgotten — the workflow side must report it."""
-    mutated_pyproject = PYPROJECT_TEXT.replace("pdf = [", 'otio = ["fake-otio>=1.0"]\npdf = [', 1)
+    mutated_pyproject = PYPROJECT_TEXT.replace(
+        "pdf = [", 'fakextra = ["fake-dep>=1.0"]\npdf = [', 1
+    )
     mutated_script_extras = dict(extras_matrix.LEG_DEFINITIONS)
-    mutated_script_extras["otio"] = extras_matrix.LegDefinition(
-        extra="otio", requirements=("fake-otio>=1.0",), import_modules=("fake_otio",)
+    mutated_script_extras["fakextra"] = extras_matrix.LegDefinition(
+        extra="fakextra", requirements=("fake-dep>=1.0",), import_modules=("fake_dep",)
     )
     original = extras_matrix.LEG_DEFINITIONS
     extras_matrix.LEG_DEFINITIONS = mutated_script_extras
@@ -135,7 +139,7 @@ def test_red_proof_a_new_extra_with_a_definition_but_no_leg_is_detected() -> Non
         problems = extras_matrix.matrix_problems(mutated_pyproject, WORKFLOW_TEXT)
     finally:
         extras_matrix.LEG_DEFINITIONS = original
-    assert any("leg: otio" in problem for problem in problems), problems
+    assert any("leg: fakextra" in problem for problem in problems), problems
 
 
 # --------------------------------------------------------------------------- #
@@ -205,7 +209,7 @@ def test_no_inflation_on_clean_logs() -> None:
 
 
 def test_red_proof_an_unknown_leg_is_rejected_by_the_skip_audit() -> None:
-    assert extras_matrix.skip_inflation_problems("", "otio") != []
+    assert extras_matrix.skip_inflation_problems("", "fake-leg") != []
 
 
 # --------------------------------------------------------------------------- #

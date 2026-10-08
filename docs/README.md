@@ -112,6 +112,7 @@ placeholder text.
 | [audits/EXECUTION_PLAN_2026-09-27.md](audits/EXECUTION_PLAN_2026-09-27.md) | Phased implementation plan with dependencies, verification/CI strategy, operational gates, and Definition of Done. |
 | [audits/FORENSIC_MAINLINE_RECOVERY_2026-10-06.md](audits/FORENSIC_MAINLINE_RECOVERY_2026-10-06.md) | Exact-SHA mainline truth audit: release-metadata defects (README version, lockstep guard, Continuum snapshot) with the delivered fixes and honest production limitations. |
 | [audits/2026-09-28-master-forensic-evolution.md](audits/2026-09-28-master-forensic-evolution.md) | Storage/R2 forensic evolution report: live truth, governance, four unified-cloud fixes, two R2 fail-closed fixes, mutation evidence, and residual handoffs. |
+| [audits/PR33_FORENSIC_DEDUPE_2026-10-08.md](audits/PR33_FORENSIC_DEDUPE_2026-10-08.md) | Task-123 PR#33 slim-down: 52-file reconciliation table (superseded/conflicting/unique), removed and retained hunks with witnesses, RED→GREEN and mutation evidence, exact SHAs. |
 
 ## History (archived — read-only, never a source of truth)
 

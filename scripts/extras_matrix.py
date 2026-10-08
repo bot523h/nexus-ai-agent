@@ -104,6 +104,41 @@ class LegDefinition:
 #: The leg registry.  ``core`` is implicit (it is not an extra).  Keys must be
 #: exactly the shipping extras of pyproject — ``check`` proves it.
 LEG_DEFINITIONS: dict[str, LegDefinition] = {
+    "rag": LegDefinition(
+        extra="rag",
+        requirements=(
+            "chromadb>=0.5",
+            "flashrank>=0.2",
+            "sqlite-vec>=0.1",
+            "sentence-transformers>=3.0",
+        ),
+        import_modules=("chromadb", "flashrank", "sqlite_vec", "sentence_transformers"),
+        focused_tests=(
+            "tests/unit/test_rag_chunking.py (pure retrieval core)",
+            "tests/unit/test_rag_eval.py (recall harness arithmetic)",
+        ),
+    ),
+    "local-llm": LegDefinition(
+        extra="local-llm",
+        requirements=("llama-cpp-python>=0.2",),
+        import_modules=("llama_cpp",),
+        focused_tests=("tests/unit/test_local_server_provider.py (provider stays lazy)",),
+    ),
+    "speech": LegDefinition(
+        extra="speech",
+        requirements=("faster-whisper>=1.0,<2", "gtts>=2.5"),
+        import_modules=("faster_whisper", "gtts"),
+        focused_tests=(
+            "tests/unit/test_caption_engine_adapters.py (faster-whisper adapter)",
+            "tests/architecture/test_caption_substrate_boundary.py",
+        ),
+    ),
+    "r2": LegDefinition(
+        extra="r2",
+        requirements=("boto3==1.43.98",),
+        import_modules=("boto3", "botocore"),
+        focused_tests=("tests/unit/test_r2_provider.py (offline stub contract)",),
+    ),
     "pdf": LegDefinition(
         extra="pdf",
         requirements=("pypdf>=5.1",),
@@ -113,20 +148,36 @@ LEG_DEFINITIONS: dict[str, LegDefinition] = {
             "tests/unit/test_jobs_cli.py (pdf job CLI path)",
         ),
     ),
-    "speech": LegDefinition(
-        extra="speech",
-        requirements=("faster-whisper>=1.0,<2",),
-        import_modules=("faster_whisper",),
-        focused_tests=(
-            "tests/unit/test_caption_engine_adapters.py (faster-whisper adapter)",
-            "tests/architecture/test_caption_substrate_boundary.py",
-        ),
-    ),
     "translate": LegDefinition(
         extra="translate",
         requirements=("argostranslate>=1.9,<2",),
         import_modules=("argostranslate",),
         focused_tests=("tests/unit/test_caption_engine_adapters.py (argos adapter)",),
+    ),
+    "postgres": LegDefinition(
+        extra="postgres",
+        requirements=(
+            "psycopg[binary,pool]==3.3.5",
+            "asyncpg==0.31.0",
+            "langgraph-checkpoint-postgres==3.1.2",
+        ),
+        import_modules=("psycopg", "asyncpg", "langgraph.checkpoint.postgres"),
+        focused_tests=(
+            "tests/unit/test_postgres_checkpointer.py (fake saver factory)",
+            "tests/unit/test_database_url.py (asyncpg engine wiring)",
+        ),
+    ),
+    "otio": LegDefinition(
+        extra="otio",
+        requirements=("opentimelineio>=0.17",),
+        import_modules=("opentimelineio",),
+        focused_tests=("tests/unit/test_otio_interop.py (real round-trip)",),
+    ),
+    "media": LegDefinition(
+        extra="media",
+        requirements=("imageio-ffmpeg>=0.5",),
+        import_modules=("imageio_ffmpeg",),
+        focused_tests=("tests/unit/test_slideshow_render.py (real encode)",),
     ),
 }
 
@@ -164,8 +215,27 @@ def _optional_dependencies_text_scan(pyproject_text: str) -> dict[str, list[str]
     for match in re.finditer(r"^([A-Za-z0-9_.-]+)\s*=\s*\[", body, re.MULTILINE):
         name = match.group(1)
         tail = body[match.end() :]
-        end = tail.find("]")
-        chunk = tail if end < 0 else tail[:end]
+        # The closing bracket is the first ``]`` *outside* a quoted requirement:
+        # a requirement may legitimately contain one (``psycopg[binary,pool]``),
+        # and stopping at it would truncate the list (and lose every entry).
+        quote: str | None = None
+        end: int | None = None
+        index = 0
+        while index < len(tail):
+            char = tail[index]
+            if quote is not None:
+                if char == "\\":
+                    index += 2
+                    continue
+                if char == quote:
+                    quote = None
+            elif char in "\"'":
+                quote = char
+            elif char == "]":
+                end = index
+                break
+            index += 1
+        chunk = tail if end is None else tail[:end]
         extras[name] = re.findall(r'["\']([^"\']+)["\']', chunk)
     return extras
 
@@ -381,7 +451,8 @@ def matrix_markdown(pyproject_text: str, workflow_text: str) -> str:
     )
     lines.append("")
     lines.append(
-        "- every optional module (`pypdf`, `faster_whisper`, `argostranslate`) is **absent**;"
+        "- every optional module of every shipping extra (the `Import smoke` column "
+        "above) is **absent**;"
     )
     lines.append("- `nexus --help` and `nexus run-bot --help` run (CLI/startup import tree);")
     lines.append(

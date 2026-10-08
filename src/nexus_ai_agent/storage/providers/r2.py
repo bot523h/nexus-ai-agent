@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from nexus_ai_agent.config.settings import Settings
+from nexus_ai_agent.optional_deps import require
 
 from .base import ProviderUnavailable, StorageError
 
@@ -70,7 +71,7 @@ class R2Provider:
         if self._client is None:
             if not self.is_configured():
                 raise ProviderUnavailable("R2 credentials are not configured")
-            import boto3
+            boto3 = require("boto3")
             from botocore.config import Config
 
             self._client = boto3.client(
