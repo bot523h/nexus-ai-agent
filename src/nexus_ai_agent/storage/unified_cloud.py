@@ -14,6 +14,8 @@ Total: ~57GB+ unified virtual storage, transparent to the user.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -61,7 +63,35 @@ class CloudProviderInfo:
     def usage_percent(self) -> float:
         if self.free_gb == 0:
             return 0
-        return min(100, (self.used_gb / (self.free_gb * 1024**3)) * 100)
+        return min(100, (self.used_bytes / (self.free_gb * 1024**3)) * 100)
+
+
+def _validate_remote_key(remote_key: str) -> str:
+    """Validate a provider-neutral key before it reaches a cloud API.
+
+    The unified cloud namespace is a relative, slash-separated object key under
+    the NEXUS provider prefix.  Providers may serialize it into JSON headers,
+    HTTP parameters, or provider paths; fail closed before any network call if a
+    key could escape that namespace or corrupt a protocol envelope.
+    """
+    if not isinstance(remote_key, str) or not remote_key:
+        raise StorageError("remote_key must be a non-empty string")
+    if any(ord(char) < 32 or char == "\x7f" for char in remote_key):
+        raise StorageError("remote_key must not contain control characters")
+    if remote_key.startswith("/") or remote_key.endswith("/"):
+        raise StorageError("remote_key must be relative and must not end with '/'")
+    parts = remote_key.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise StorageError("remote_key must not contain empty, '.', or '..' segments")
+    return remote_key
+
+
+def _nexus_path(remote_key: str) -> str:
+    return f"/NEXUS/{_validate_remote_key(remote_key)}"
+
+
+def _remote_key_fingerprint(remote_key: str) -> str:
+    return hashlib.sha256(_validate_remote_key(remote_key).encode("utf-8")).hexdigest()
 
 
 class _DropboxProvider:
@@ -79,12 +109,16 @@ class _DropboxProvider:
         if not self._token:
             raise ProviderUnavailable("Dropbox token not configured")
         url = "https://content.dropboxapi.com/2/files/upload"
+        api_arg = {
+            "path": _nexus_path(remote_key),
+            "mode": "add",
+            "autorename": True,
+            "mute": False,
+        }
         headers = {
             "Authorization": f"Bearer {self._token}",
             "Content-Type": "application/octet-stream",
-            "Dropbox-API-Arg": (
-                f'{{"path":"/NEXUS/{remote_key}","mode":"add","autorename":true,"mute":false}}'
-            ),
+            "Dropbox-API-Arg": json.dumps(api_arg, separators=(",", ":")),
         }
         data = local_path.read_bytes()
         async with httpx.AsyncClient(timeout=120.0) as client:
@@ -98,7 +132,7 @@ class _DropboxProvider:
         url = "https://content.dropboxapi.com/2/files/download"
         headers = {
             "Authorization": f"Bearer {self._token}",
-            "Dropbox-API-Arg": f'{{"path":"/NEXUS/{remote_key}"}}',
+            "Dropbox-API-Arg": json.dumps({"path": _nexus_path(remote_key)}, separators=(",", ":")),
         }
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(url, headers=headers)
@@ -175,7 +209,7 @@ class _PcloudProvider:
         data = local_path.read_bytes()
         params = {
             "auth": self._token,
-            "path": f"/NEXUS/{remote_key}",
+            "path": _nexus_path(remote_key),
             "nopartial": "1",
         }
         async with httpx.AsyncClient(timeout=120.0) as client:
@@ -187,7 +221,7 @@ class _PcloudProvider:
         if not self._token:
             raise ProviderUnavailable("pCloud token not configured")
         url = "https://api.pcloud.com/getfilelink"
-        params = {"auth": self._token, "path": f"/NEXUS/{remote_key}"}
+        params = {"auth": self._token, "path": _nexus_path(remote_key)}
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.get(url, params=params)
             if resp.status_code != 200:
@@ -238,10 +272,11 @@ class _InternxtProvider:
         if not self._token:
             raise ProviderUnavailable("Internxt token not configured")
         # Internxt uses a custom API; simplified upload
+        key = _validate_remote_key(remote_key)
         url = "https://api.internxt.com/drive/storage/upload"
         headers = {"Authorization": f"Bearer {self._token}"}
         data = local_path.read_bytes()
-        files = {"file": (remote_key, data)}
+        files = {"file": (key, data)}
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(url, headers=headers, files=files)
             if resp.status_code not in (200, 201):
@@ -372,7 +407,19 @@ class UnifiedCloudStorage:
             }
 
         size = local_path.stat().st_size
-        key = remote_key or local_path.name
+        # Only default the key when it is absent; an explicit empty string is
+        # an invalid key and must be rejected, not silently replaced.
+        key = local_path.name if remote_key is None else remote_key
+        try:
+            key = _validate_remote_key(key)
+        except StorageError as exc:
+            return {
+                "success": False,
+                "provider": None,
+                "remote_key": None,
+                "size": size,
+                "error": f"❌ invalid remote_key: {exc}",
+            }
         provider = self._select_provider(size)
 
         if provider is None:
@@ -392,29 +439,47 @@ class UnifiedCloudStorage:
             try:
                 await p.upload(local_path=local_path, remote_key=key)
                 self._file_map[key] = p.name
-                log.info("cloud_upload_ok", provider=p.name, key=key, size=size)
+                key_fingerprint = _remote_key_fingerprint(key)
+                log.info(
+                    "cloud_upload_ok",
+                    provider=p.name,
+                    remote_key_sha256=key_fingerprint,
+                    size=size,
+                )
                 return {
                     "success": True,
                     "provider": p.name,
                     "remote_key": key,
+                    "remote_key_sha256": key_fingerprint,
                     "size": size,
                     "error": None,
                 }
             except (ProviderUnavailable, StorageError) as e:
                 last_err = e
-                log.warning("cloud_upload_fallback", provider=p.name, error=str(e))
+                log.warning(
+                    "cloud_upload_fallback",
+                    provider=p.name,
+                    remote_key_sha256=_remote_key_fingerprint(key),
+                    error_type=type(e).__name__,
+                )
                 continue
 
+        error_type = type(last_err).__name__ if last_err is not None else "StorageError"
         return {
             "success": False,
             "provider": None,
             "remote_key": None,
+            "remote_key_sha256": _remote_key_fingerprint(key),
             "size": size,
-            "error": f"❌ آپلود ناموفق: {last_err}",
+            "error": f"❌ آپلود ناموفق: {error_type}",
         }
 
     async def download_file(self, remote_key: str, local_path: Path) -> dict[str, Any]:
         """Download a file from cloud. Tries all providers until found."""
+        try:
+            remote_key = _validate_remote_key(remote_key)
+        except StorageError as exc:
+            return {"success": False, "provider": None, "error": f"❌ invalid remote_key: {exc}"}
         # Check our mapping first
         preferred = self._file_map.get(remote_key)
         candidates = list(self._providers)
