@@ -192,7 +192,7 @@ The latest completed CodeRabbit review record is:
 - reviewed commit `a50d87428bd3c6e2081ce94aa01fec1bc003df55`;
 - state `CHANGES_REQUESTED`.
 
-A valid inline finding on the prior report commit `edcdc733` remained on the report at line 27: the phrase “full 4-commit history” was ambiguous because the report listed seven pre-report commits. The finding is actionable and has not been dismissed. A later CodeRabbit status is `Review paused`, but there is no newly submitted review record for the current PR tip `118af102c0d7ff5fef76d27a99c5e5c839b1ed2b` proving zero actionable findings.
+A valid inline finding on the prior report commit `edcdc733` remained on the report at line 27: the historical commit-count wording was ambiguous because the report listed seven pre-report commits. The finding is actionable and has not been dismissed. A later CodeRabbit status is `Review paused`, but there is no newly submitted review record for the current PR tip `118af102c0d7ff5fef76d27a99c5e5c839b1ed2b` proving zero actionable findings.
 
 This report rewrite addresses the finding by explicitly listing the complete commit history and removing the ambiguous phrase. A fresh CodeRabbit review is still required for the current report head.
 
