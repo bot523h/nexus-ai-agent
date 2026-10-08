@@ -35,6 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Dropped as superseded, with the witness that already holds it:** PR#33's
   access guard, dashboard PII/bearer handling, path containment, force-join
   predicate, gamification and middleware redesign — all live on `main`.
+- **Found red while proving the above:** the checkpoint-lifecycle lock-removal
+  mutation probe was scheduling-dependent — it asserted a *probabilistic*
+  user-visible failure and failed **6/10 runs on a pristine `origin/main`
+  tree** (test bug, not a product defect: the store does hold its lock). The
+  probe now measures the invariant itself — exclusive entry into the shared
+  connection's write critical section, with a forced hold window — and catches
+  the neutered-lock mutation **10/10** times where the old one caught it ~4/10.
+  Store code unchanged (byte-identical to main).
 
 ### Feature — truth doctor: one authority for repository truth (law R16, session `arena/runtime-truth-tooling`)
 

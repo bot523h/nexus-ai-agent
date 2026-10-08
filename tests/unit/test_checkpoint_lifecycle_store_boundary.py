@@ -197,6 +197,18 @@ def test_cleanup_lock_is_unrelated_to_per_instance_lock(tmp_path) -> None:
 # ─────────────────────────────────────────────────────────────────────────
 
 
+#: Writers queued while the first critical-section entrant is parked.
+_WRITE_LOAD = 40
+#: Entrants that must meet on the barrier (two is what proves overlap).
+_PARK_PARTIES = 2
+#: Hold window with the production lock intact: long enough that a queued
+#: writer provably tries to enter during it, short enough to stay cheap.
+_BASELINE_PARK_SECONDS = 0.75
+#: Safety valve for the neutered-lock phase (it trips the moment writer two
+#: arrives, so this only bounds a pathological thread-pool stall).
+_MUTATION_PARK_SECONDS = 10.0
+
+
 class _NoopLock:
     """A lock whose acquire/release/__exit__/context-manager protocol all no-op."""
 
@@ -213,29 +225,118 @@ class _NoopLock:
         return None
 
 
+class _ParkedCriticalSection:
+    """Instrument ``store._write_transaction`` and park its first arrivals.
+
+    Entry is counted **after** ``_original().__enter__()`` so only callers that
+    actually hold the production lock are counted (a caller blocked on the lock
+    must not inflate the number), and the count is dropped **before** the lock
+    is released for the mirror-image reason.  The first ``_PARK_PARTIES``
+    entrants then park on a barrier while holding the lock, which turns "did
+    anybody else get in?" from a scheduling race into a measurement with a
+    guaranteed hold window.
+    """
+
+    def __init__(self, store: SQLiteCheckpointLifecycleStore, *, park_seconds: float) -> None:
+        self.peak = 0
+        self._current = 0
+        self._arrivals = 0
+        self._counter = threading.Lock()
+        self._barrier = threading.Barrier(_PARK_PARTIES, timeout=park_seconds)
+        self._original = store._write_transaction
+        store._write_transaction = self._instrumented  # type: ignore[assignment]
+
+    @contextmanager
+    def _instrumented(self):
+        manager = self._original()
+        connection = manager.__enter__()  # acquires the production lock
+        with self._counter:
+            self._current += 1
+            self._arrivals += 1
+            arrival = self._arrivals
+            self.peak = max(self.peak, self._current)
+        try:
+            if arrival <= _PARK_PARTIES:
+                try:
+                    self._barrier.wait()
+                except threading.BrokenBarrierError:
+                    pass
+            yield connection
+        except BaseException as operation_error:
+            with self._counter:
+                self._current -= 1
+            manager.__exit__(type(operation_error), operation_error, operation_error.__traceback__)
+            raise
+        else:
+            with self._counter:
+                self._current -= 1
+            manager.__exit__(None, None, None)
+
+
+async def _drive_concurrent_writes(adapter: SQLiteCheckpointLifecycleAdapter, load: int) -> None:
+    """Queue ``load`` writers so a parked critical section always has a waiter."""
+    created_at = datetime.now(timezone.utc)
+    await asyncio.gather(
+        *(
+            adapter.record_checkpoint("thread", f"checkpoint-{index}", created_at=created_at)
+            for index in range(load)
+        ),
+        return_exceptions=True,
+    )
+
+
 @pytest.mark.asyncio
 async def test_concurrency_suite_catches_lock_removal(tmp_path) -> None:
-    """Replace the per-instance lock with a no-op and confirm 500 concurrent
-    writes reproduce the interleaved-failure defect (RED reproduction)."""
-    path = tmp_path / "no-lock.sqlite"
-    store = SQLiteCheckpointLifecycleStore(str(path))
-    store._lock = _NoopLock()  # type: ignore[assignment]
-    adapter = SQLiteCheckpointLifecycleAdapter(store)
-    created_at = datetime.now(timezone.utc)
-    operations = [
-        adapter.record_checkpoint("thread", f"checkpoint-{index}", created_at=created_at)
-        for index in range(500)
-    ]
-    outcomes = await asyncio.gather(*operations, return_exceptions=True)
-    failures = [o for o in outcomes if isinstance(o, BaseException)]
-    store.close()
-    reopened = SQLiteCheckpointLifecycleStore(str(path))
-    try:
-        rows = len(reopened.records())
-    finally:
-        reopened.close()
-    assert failures or rows < 500, (
-        f"mutation probe did not reproduce the defect: failures={len(failures)}, rows={rows}"
+    """Deterministic RED reproduction: lock removal makes the critical section
+    observable as concurrent, so removing the production lock fails this test
+    on every run.
+
+    Two phases, both driven by the same parked-hold measurement:
+
+    * **Phase 1 (production lock intact):** the first writer parks *while
+      holding* the lock for ``_BASELINE_PARK_SECONDS``; any second writer
+      waiting on the lock cannot be inside the section, so ``peak`` must stay
+      ``1``.  Deleting the lock from ``checkpoint_lifecycle_store.py`` lets a
+      waiter straight in during that window → ``peak >= 2`` → red.
+    * **Phase 2 (lock neutered by the probe):** with ``_NoopLock`` installed the
+      same park admits a second entrant, so ``peak >= 2`` — the proof that the
+      measurement really does see lock removal rather than passing vacuously.
+
+    Why the rewrite (honesty record): the previous version asserted a
+    *probabilistic* user-visible failure (``failures or rows < 500``) over 500
+    writers, which only holds when two ``asyncio.to_thread`` writers happen to
+    interleave on the shared connection.  Measured on a pristine ``origin/main``
+    tree at ``460f4d7`` (this file byte-identical to there): **6 of 10 runs
+    failed** the old assertion — a timing-dependent test bug, not a product
+    defect (the shipped store does hold the lock).  The new probe measures the
+    invariant the lock exists to provide — exclusive entry into the
+    shared connection's execute+commit — with a forced hold window instead of a
+    scheduling lottery.
+    """
+    # Phase 1: production lock intact — exclusivity must be observable.
+    intact_path = tmp_path / "lock-intact-parked.sqlite"
+    intact_store = SQLiteCheckpointLifecycleStore(str(intact_path))
+    intact_probe = _ParkedCriticalSection(intact_store, park_seconds=_BASELINE_PARK_SECONDS)
+    await _drive_concurrent_writes(SQLiteCheckpointLifecycleAdapter(intact_store), _WRITE_LOAD)
+    intact_peak = intact_probe.peak
+    intact_store.close()
+    assert intact_peak == 1, (
+        "the production lock must give exclusive entry into the write critical "
+        f"section: observed {intact_peak} concurrent entrants"
+    )
+
+    # Phase 2: the probe neuters the lock — the same measurement must now see
+    # overlap, otherwise the probe would pass even with no lock at all.
+    mutant_path = tmp_path / "no-lock.sqlite"
+    mutant_store = SQLiteCheckpointLifecycleStore(str(mutant_path))
+    mutant_store._lock = _NoopLock()  # type: ignore[assignment]
+    mutant_probe = _ParkedCriticalSection(mutant_store, park_seconds=_MUTATION_PARK_SECONDS)
+    await _drive_concurrent_writes(SQLiteCheckpointLifecycleAdapter(mutant_store), _WRITE_LOAD)
+    mutant_peak = mutant_probe.peak
+    mutant_store.close()
+    assert mutant_peak >= 2, (
+        "with the per-instance lock removed a second writer must be able to enter "
+        f"the shared-connection critical section: observed peak {mutant_peak}"
     )
 
 

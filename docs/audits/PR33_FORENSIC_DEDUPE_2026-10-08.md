@@ -127,7 +127,57 @@ Classification: **S** = superseded on live main (dropped), **U** = unique (porte
 * **M2 (async session):** reverting *one* `execute().scalars()` call site to `.exec` → behavior test + source ratchet = **2 failed**; restored → 290 passed.
 * **M3 (extras governance, standing):** `tests/unit/test_ci_extras_parity.py` proves the guard goes red for a missing/unknown leg, a pyproject extra without a definition, and a stale committed matrix.
 
-## 8. Residual risk / limitations
+## 8. Discovered during full regression: a pre-existing flaky mutation probe (fixed here)
+
+**Observed.** The first full `pytest -q -m "not slow"` run of this branch came back
+`1 failed, 1809 passed` — `tests/unit/test_checkpoint_lifecycle_store_boundary.py::
+test_concurrency_suite_catches_lock_removal`. Isolated re-runs were inconsistent
+(`14 passed` with the whole file, then `15/20` and `9/12` failures for that one test).
+
+**Isolation proof (not caused by this branch).** `git diff origin/main` over the test
+and the four modules it imports is **empty**, and a detached worktree of pristine
+`origin/main` (`460f4d7`) run through the same interpreter (`PYTHONPATH=/tmp/mainwt/src`,
+verified by printing `checkpoint_lifecycle_store.__file__`) failed **6 of 10** runs.
+
+**Classification: `TEST BUG`** (a scheduling-dependent mutation probe), **not a product
+defect.** The shipped store *does* hold `self._lock` across `execute`+`commit`, and the
+intact-lock counterpart (`test_lock_intact_baseline_yields_zero_failures`) passes
+reliably.
+
+**Root cause.** The old probe asserted `failures or rows < 500`: it *hoped* that two of
+500 `asyncio.to_thread` writers would interleave on the one shared `sqlite3` connection
+and produce an error or a lost row. Whether that overlap happens is pure scheduling
+luck, so on a machine where the writes finish before the next thread arrives the probe
+sees `failures=0, rows=500` and fails *its own* assertion — a red build caused by the
+verifier, not the code under test.
+
+**Fix (deterministic, stronger — not weaker).** The probe now measures the invariant the
+lock exists to provide, with a forced hold window instead of a lottery:
+
+1. **Phase 1 (production lock intact):** `_ParkedCriticalSection` instruments
+   `_write_transaction`, counting entrants *after* the lock is acquired and decrementing
+   *before* it is released; the first writer parks inside the critical section for
+   `_BASELINE_PARK_SECONDS` (0.75 s). Any waiter blocked on the lock cannot be counted,
+   so `peak == 1` must hold. Deleting the lock lets a waiter in during that window →
+   `peak >= 2` → red on every run.
+2. **Phase 2 (lock neutered by the probe itself, `_NoopLock`):** the same park must now
+   admit a second entrant (`peak >= 2`), proving the measurement is not vacuous.
+
+**Evidence.**
+
+| Step | Command | Result |
+|---|---|---|
+| RED (the test bug) | pristine `origin/main` @ `460f4d7`, 10 isolated runs of the *old* probe | **6/10 failed** |
+| GREEN (fixed probe) | 15 isolated runs + full file | **0/15 failures**, `14 passed in ~2.9 s` |
+| Mutation M3 (production lock neutered: `with self._lock:` → `with threading.Lock():`) | 10 isolated runs | **10/10 red** — `observed 5 concurrent entrants` (old probe: ~4/10 detection) |
+| Restore | `git diff origin/main -- src/.../checkpoint_lifecycle_store.py` | **empty** (byte-identical) + `14 passed` |
+| Static | `ruff check` / `ruff format --check` on the test | clean |
+
+The store implementation itself was **not** modified: this is a verifier fix, delivered
+to keep the branch's regression claim honest rather than ignored as "environment
+flakiness".
+
+## 9. Residual risk / limitations
 
 * The merge of PR#33 stays an owner/gates decision (no merge performed — forbidden by the claim).
 * `[rag]` and `[local-llm]` extras-matrix legs were validated by `extras_matrix.py check` and local installs of their guard paths; the full CI legs for those two (torch / llama.cpp builds) have not executed in this sandbox.
