@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ruff: noqa: E501  (the anchors/mutants are verbatim source lines, kept intact)
-"""NEXUS V1 execution-core mutation probes (M1–M6).
+"""NEXUS V1 execution-core mutation probes (M1–M10).
 
 A targeted mutation harness in the same shape as the established
 ``scripts/gate5_mutation_probes.py``: for each correctness property this
@@ -8,14 +8,25 @@ closure added, a mutant is applied to the exact source line, the targeted
 tests must flip GREEN -> RED, the source bytes are restored, and the tests
 must be GREEN again.  The run is idempotent and leaves the tree byte-identical.
 
-====  ============================================  ============================
-M1    drop the attempt fence from the final commit  double-commit / stale races
-M2    make stale cancel ignore the fencing token    stale-cancel test
-M3    reconcile uses unscoped startup takeover      reconcile isolation tests
-M4    publish through a symlinked staged source     staging security tests
-M5    quarantine through a symlinked destination    quarantine boundary tests
-M6    notify success before the durable commit      notification ordering test
-====  ============================================  ============================
+====  ================================================  =========================
+M1    drop the attempt fence from the final commit     double-commit / stale races
+M2    make stale cancel ignore the fencing token       stale-cancel test
+M3    reconcile uses unscoped startup takeover         reconcile isolation tests
+M4    publish through a symlinked staged source        staging security tests
+M5    quarantine through a symlinked destination       quarantine boundary tests
+M6    notify success before the durable commit         notification ordering test
+M7    unbound identity gains cancel authority          unbound-cancel refusal
+M8    unproven staleness is taken over (fail-open)     reconcile staleness proofs
+M9    lost mkdir race becomes a boundary error         concurrent-create tolerance
+M10   quarantine boundary errors are swallowed         hostile-destination refusal
+====  ================================================  =========================
+
+Layered-defense note: M5 replaces the whole quarantine move (both the
+component asserts and the descriptor-relative rename) and M7 breaks the
+unbound-cancel refusal in *both* the backend and the queue.  Removing only
+one of the standing layers is survivable *by design* — the property holds
+while either layer stands; the tests kill the mutant only when the property
+itself is broken.
 
 Usage:  .venv/bin/python scripts/execution_core_mutations.py
 """
@@ -34,10 +45,12 @@ PYTEST = [sys.executable, "-m", "pytest", "-q", "-p", "no:warnings", "--tb=no"]
 QUEUE = REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py"
 BACKEND = REPO / "src/nexus_ai_agent/adapters/native_local_backend.py"
 STAGING = REPO / "src/nexus_ai_agent/execution/staging.py"
+FS = REPO / "src/nexus_ai_agent/tools/filesystem_policy.py"
 
 RACES = "tests/integration/test_execution_races.py::"
 BACKEND_T = "tests/integration/test_execution_native_backend.py::"
 STAGING_T = "tests/unit/test_execution_staging.py::"
+FS_T = "tests/unit/test_filesystem_policy_primitives.py::"
 
 
 @dataclass(frozen=True)
@@ -47,6 +60,11 @@ class Probe:
     anchor: str
     mutant: str
     tests: tuple[str, ...]
+    # Optional second file mutation for layered-defense properties (one probe
+    # must break *every* standing layer before the tests may turn red).
+    target2: Path | None = None
+    anchor2: str | None = None
+    mutant2: str | None = None
 
 
 PROBES: tuple[Probe, ...] = (
@@ -176,7 +194,7 @@ PROBES: tuple[Probe, ...] = (
     Probe(
         name="M2 stale cancel ignores the fencing token",
         target=QUEUE,
-        anchor="        if expected_attempt is not None and attempt != expected_attempt:",
+        anchor="        if attempt != expected_attempt:",
         mutant="        if False:  # MUTATION: stale identity cancels a newer attempt",
         tests=(
             f"{RACES}test_stale_identity_cannot_cancel_a_newer_attempt",
@@ -251,7 +269,9 @@ PROBES: tuple[Probe, ...] = (
         target=STAGING,
         anchor=(
             "        _assert_no_symlink_components(self.root, (self.job_id, self.attempt_id))\n"
-            '        _assert_no_symlink_components(self.root, ("_quarantine", self.job_id))\n'
+            "        _assert_no_symlink_components(\n"
+            '            self.root, ("_quarantine", self.job_id, f"{self.attempt_id}.{component}")\n'
+            "        )\n"
             "        try:\n"
             "            self.root.mkdir(parents=True, exist_ok=True)\n"
             '            self._fs.ensure_directory(f"_quarantine/{self.job_id}")\n'
@@ -303,6 +323,76 @@ PROBES: tuple[Probe, ...] = (
             f"{RACES}test_success_notification_only_after_the_commit",
         ),
     ),
+    Probe(
+        name="M7 unbound identity gains cancellation authority (both layers)",
+        target=BACKEND,
+        anchor=(
+            "        if not identity.has_fencing_token:\n"
+            "            return False  # fail closed: job_id alone is not cancellation authority"
+        ),
+        mutant="        if False:  # MUTATION: job_id alone cancels the current attempt\n            pass",
+        target2=QUEUE,
+        anchor2="        if attempt != expected_attempt:",
+        mutant2="        if False:  # MUTATION: the queue accepts a token-less cancellation",
+        tests=(
+            f"{BACKEND_T}test_cancel_without_a_fencing_token_is_refused",
+            f"{BACKEND_T}test_repeated_cancel_is_safe_and_idempotent",
+        ),
+    ),
+    Probe(
+        name="M8 unproven staleness is taken over (fail-open)",
+        target=QUEUE,
+        anchor=(
+            "                    if cutoff is not None:\n"
+            "                        # Expiry-gated mode: staleness must be *proven*.  A row\n"
+            "                        # whose age cannot be established (missing ``started_at``)\n"
+            "                        # is ambiguous, and ambiguity fails closed — only rows\n"
+            "                        # strictly older than the window are eligible; a recent\n"
+            "                        # (or unproven) row may still be owned by a live peer.\n"
+            "                        if started_at is None or started_at >= cutoff:\n"
+            "                            continue"
+        ),
+        mutant=(
+            "                    if cutoff is not None and started_at is not None:\n"
+            "                        # MUTATION: unproven age counts as stale (fail-open)\n"
+            "                        if started_at >= cutoff:\n"
+            "                            continue"
+        ),
+        tests=(
+            f"{BACKEND_T}test_reconcile_refuses_an_in_flight_row_whose_age_is_unprovable",
+            f"{BACKEND_T}test_reconcile_with_policy_never_steals_a_fresh_live_job",
+        ),
+    ),
+    Probe(
+        name="M9 lost mkdir race becomes a boundary error",
+        target=FS,
+        anchor=(
+            "                    try:\n"
+            "                        os.mkdir(name, mode=0o700, dir_fd=parent_fd)\n"
+            "                    except FileExistsError:\n"
+            "                        pass  # a concurrent creator won; the no-follow open re-validates\n"
+        ),
+        mutant="                    os.mkdir(name, mode=0o700, dir_fd=parent_fd)\n",
+        tests=(f"{FS_T}test_ensure_directory_tolerates_a_lost_creation_race",),
+    ),
+    Probe(
+        name="M10 quarantine destination boundary errors are swallowed",
+        target=STAGING,
+        anchor=(
+            '        _assert_no_symlink_components(self.root, tuple(rel.split("/")))\n'
+            "        try:\n"
+            "            self._fs.remove_tree(rel)\n"
+            "        except FilesystemBoundaryError as exc:\n"
+            "            raise StagingBoundaryError(str(exc)) from exc"
+        ),
+        mutant=(
+            "        try:\n"
+            "            self._fs.remove_tree(rel)\n"
+            "        except FilesystemBoundaryError:\n"
+            "            pass  # MUTATION: boundary error swallowed"
+        ),
+        tests=(f"{STAGING_T}test_remove_destination_refuses_a_symlinked_destination",),
+    ),
 )
 
 
@@ -319,6 +409,14 @@ def _apply(probe: Probe) -> None:
             f"{text.count(probe.anchor)} matches"
         )
     probe.target.write_text(text.replace(probe.anchor, probe.mutant))
+    if probe.target2 is not None and probe.anchor2 is not None and probe.mutant2 is not None:
+        text2 = probe.target2.read_text()
+        if text2.count(probe.anchor2) != 1:
+            raise SystemExit(
+                f"anchor2 for {probe.name} is not unique in {probe.target2}: "
+                f"{text2.count(probe.anchor2)} matches"
+            )
+        probe.target2.write_text(text2.replace(probe.anchor2, probe.mutant2))
 
 
 def main() -> int:
@@ -327,6 +425,7 @@ def main() -> int:
     for probe in PROBES:
         original = probe.target.read_bytes()
         before_sha = hashlib.sha256(original).hexdigest()
+        original2 = probe.target2.read_bytes() if probe.target2 is not None else None
         print(f"\n=== {probe.name} ({probe.target.relative_to(REPO)})")
 
         baseline = _run_tests(probe.tests)
@@ -342,11 +441,21 @@ def main() -> int:
             mutated = _run_tests(probe.tests)
         finally:
             probe.target.write_bytes(original)
+            if probe.target2 is not None and original2 is not None:
+                probe.target2.write_bytes(original2)
         after_sha = hashlib.sha256(probe.target.read_bytes()).hexdigest()
         if after_sha != before_sha:
             failures.append(f"{probe.name}: source not restored byte-identically")
             print("  restore: FAILED (bytes differ)")
             continue
+        if probe.target2 is not None and original2 is not None:
+            if (
+                hashlib.sha256(probe.target2.read_bytes()).hexdigest()
+                != hashlib.sha256(original2).hexdigest()
+            ):
+                failures.append(f"{probe.name}: source2 not restored byte-identically")
+                print("  restore: FAILED (target2 bytes differ)")
+                continue
 
         if mutated == 0:
             failures.append(f"{probe.name}: mutation NOT caught (tests stayed GREEN)")
