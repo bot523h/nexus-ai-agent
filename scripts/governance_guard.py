@@ -227,6 +227,7 @@ def parse_workflow(text: str) -> Workflow:
     run_indent = 0
     trigger_event = ""
     current_step: Step | None = None
+    in_steps = False
 
     for raw in lines:
         if collecting_run is not None:
@@ -249,6 +250,7 @@ def parse_workflow(text: str) -> Workflow:
         if indent == 0:
             current_job = None
             current_step = None
+            in_steps = False
             trigger_event = ""
             key, _, inline = raw.partition(":")
             key = key.strip()
@@ -288,23 +290,37 @@ def parse_workflow(text: str) -> Workflow:
                 continue
             current_job = Job(key=match.group(1), name="", condition="", runs=[], soft_fail=False)
             current_step = None
+            in_steps = False
             jobs[current_job.key] = current_job
             continue
 
         if current_job is None:
             continue
 
-        # A `steps:` item begins with `- ` at the steps list indentation.  Each
-        # step keeps its own `if:` so the guard can refuse a gate that a step
-        # condition switches off (GOV024): the job's `if:` alone is not proof.
-        if raw.lstrip().startswith("-"):
-            current_step = Step(condition="", runs=[])
-            current_job.steps.append(current_step)
-
         match = _SCALAR.match(raw)
         if not match:
             continue
         key, value = match.group(1), match.group(2)
+
+        # Job-level keys (indent 4) open or close the steps block.  Tracking it
+        # matters: a list-valued job key such as `needs:` also has `- ` items, and
+        # without the block state those items would capture a later job-level
+        # `if:` as a phantom step's condition, leaving the JOB condition empty —
+        # which GOV023 reads as "runs on every event" (reproduced: a push-only
+        # job with a `needs:` list classified ok).
+        if indent == 4:
+            in_steps = key == "steps"
+            current_step = None
+
+        # A step item begins with `- ` inside the steps block.  Each step keeps
+        # its own `if:` so the guard can refuse a gate that a step condition
+        # switches off (GOV024): the job's `if:` alone is not proof.
+        if in_steps and raw.lstrip().startswith("-"):
+            current_step = Step(condition="", runs=[])
+            current_job.steps.append(current_step)
+            # No `continue`: an inline scalar on the item line (`- if: false`,
+            # `- name: x`) must still be parsed into the step below.
+
         if current_step is None:
             if key == "name" and indent == 4 and not current_job.name:
                 current_job.name = _strip_quotes(value)
@@ -381,7 +397,10 @@ def classify_pr_condition(condition: str) -> tuple[str, str]:
     cond = (condition or "").strip()
     if not cond:
         return "ok", "has no condition, so it runs on every subscribed event"
-    return _classify_boolean(cond.lower(), condition)
+    # Strip a wrapper around the WHOLE condition before splitting: in
+    # `(A || B)` the `||` is not top-level until the wrapper is gone, and the
+    # disjunction would otherwise be classified as one undecidable term.
+    return _classify_boolean(_strip_outer_parens(cond.lower()), condition)
 
 
 def _split_top_level(expr: str, op: str) -> list[str]:
@@ -473,8 +492,12 @@ def _term_runs_on_pr(term: str) -> str:
     # `!(github.event_name == 'pull_request')` names it and still never runs.
     if "!" in unquoted.replace("!=", " ") or re.search(r"\bnot\b", unquoted):
         return "unknown"
-    # A comparison that positively selects pull_request is evidence.
-    if _PR_PRESERVING.search(low):
+    # A comparison that positively selects pull_request is evidence — but only
+    # as the WHOLE term.  A substring match let an inverting wrapper launder a
+    # whitelisted comparison: `github.event_name == 'pull_request' == false` is
+    # `(event == 'pull_request') == false` (left-associative), which is FALSE on
+    # a pull request — reproduced: it classified ok.
+    if _PR_PRESERVING.fullmatch(low):
         return "ok"
     # A term naming a *different* event by equality never runs for pull_request.
     events = _EVENT_EQUALITY.findall(low)

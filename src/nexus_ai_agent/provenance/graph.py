@@ -384,7 +384,11 @@ class CreativeGraph:
             previous_digest, previous_status = str(row[0]), str(row[1])
             if previous_digest == body_digest and previous_status == "active":
                 return WriteResult(node=self._node(connection, node_id), unchanged=True)
-            if previous_status in ("invalidated", "revoked"):
+            if previous_status in ("invalidated", "revoked", "superseded"):
+                # A superseded node is an explicit lifecycle decision too: writing
+                # to it would reactivate it and wipe its superseded_by link,
+                # silently undoing the decision (reproduced: put_node on a
+                # superseded node returned it to active with superseded_by NULL).
                 raise GraphStateError(
                     f"node {node_id} is {previous_status}; a write must supersede it "
                     "explicitly, never overwrite it"
@@ -736,6 +740,21 @@ class CreativeGraph:
     # ------------------------------------------------------------------ #
     # integrity, recovery, rebuild
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _safe_json(raw: object) -> dict[str, Any] | None:
+        """Parse a stored JSON column; ``None`` means the row is malformed.
+
+        ``integrity_check`` exists to *report* damage, so a corrupt payload must
+        surface as a finding, never as an exception escaping the check
+        (reproduced: a row with ``payload_json = '{not json'`` made
+        ``integrity_check`` raise ``JSONDecodeError`` instead of reporting).
+        """
+        try:
+            value = json.loads(str(raw))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+        return value if isinstance(value, dict) else None
+
     def integrity_check(self) -> IntegrityReport:
         """Every edge endpoint exists, every digest matches, history is ordered."""
         report = IntegrityReport()
@@ -765,11 +784,25 @@ class CreativeGraph:
                 report.findings.append(
                     IntegrityFinding("GRAPH011", "error", "unknown node status", node_id)
                 )
-            if digest_of(json.loads(str(row[2]))) != str(row[3]):
+            payload = self._safe_json(row[2])
+            if payload is None:
+                report.findings.append(
+                    IntegrityFinding(
+                        "GRAPH012", "error", "payload_json is not a JSON object", node_id
+                    )
+                )
+            elif digest_of(payload) != str(row[3]):
                 report.findings.append(
                     IntegrityFinding("GRAPH012", "error", "payload digest mismatch", node_id)
                 )
-            if digest_of(json.loads(str(row[5]))) != str(row[6]):
+            identity = self._safe_json(row[5])
+            if identity is None:
+                report.findings.append(
+                    IntegrityFinding(
+                        "GRAPH013", "error", "identity_json is not a JSON object", node_id
+                    )
+                )
+            elif digest_of(identity) != str(row[6]):
                 report.findings.append(
                     IntegrityFinding("GRAPH013", "error", "identity digest mismatch", node_id)
                 )
@@ -789,7 +822,14 @@ class CreativeGraph:
                             f"{edge_id}->{endpoint}",
                         )
                     )
-            if digest_of(json.loads(str(row[4]))) != str(row[5]):
+            edge_payload = self._safe_json(row[4])
+            if edge_payload is None:
+                report.findings.append(
+                    IntegrityFinding(
+                        "GRAPH022", "error", "edge payload_json is not a JSON object", edge_id
+                    )
+                )
+            elif digest_of(edge_payload) != str(row[5]):
                 report.findings.append(
                     IntegrityFinding("GRAPH022", "error", "edge digest mismatch", edge_id)
                 )
@@ -988,11 +1028,15 @@ class CreativeGraph:
         with self._lock, self._write_connection() as connection:
 
             def terminal(node_id: str) -> str | None:
+                # Protected statuses: the explicit lifecycle decisions a rebuild
+                # must not undo.  Superseded is one of them — reproduced: a
+                # replace=True rebuild re-projected a superseded node back to
+                # active and destroyed its supersede history row.
                 row = connection.execute(
                     "SELECT status FROM nexus_graph_node WHERE node_id = ?", (node_id,)
                 ).fetchone()
                 status = str(row[0]) if row is not None else ""
-                return status if status in ("invalidated", "revoked") else None
+                return status if status in ("invalidated", "revoked", "superseded") else None
 
             def project(kind: str, spec: dict[str, Any]) -> WriteResult | None:
                 """Write one projected node, unless it is already terminal.
@@ -1019,17 +1063,20 @@ class CreativeGraph:
                 # Order matters: the history purge reads the node rows it is about
                 # to drop.  A rebuild that kept the old history would grow the log
                 # on every run, which is not a rebuild — it is an append in
-                # disguise.  Terminal nodes are kept: a from-scratch rebuild of
-                # the *projection* must not undo an explicit lifecycle decision.
+                # disguise.  Lifecycle-decided nodes are kept: a from-scratch
+                # rebuild of the *projection* must not undo an explicit lifecycle
+                # decision — invalidated, revoked AND superseded (reproduced: the
+                # old filter deleted a superseded node's history and the node
+                # itself whenever the journal did not re-project it).
                 connection.execute(
                     "DELETE FROM nexus_graph_node_history WHERE node_id IN"
                     " (SELECT node_id FROM nexus_graph_node WHERE source = 'causal_journal'"
-                    " AND status NOT IN ('invalidated', 'revoked'))"
+                    " AND status NOT IN ('invalidated', 'revoked', 'superseded'))"
                 )
                 connection.execute("DELETE FROM nexus_graph_edge WHERE source = 'causal_journal'")
                 connection.execute(
                     "DELETE FROM nexus_graph_node WHERE source = 'causal_journal'"
-                    " AND status NOT IN ('invalidated', 'revoked')"
+                    " AND status NOT IN ('invalidated', 'revoked', 'superseded')"
                 )
 
             for key in sorted(set(order), key=lambda k: executions[k]["seq"]):

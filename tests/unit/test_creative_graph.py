@@ -1102,3 +1102,102 @@ def test_restore_refuses_to_overwrite_a_shared_memory_graph() -> None:
     assert graph.counts() == {"nodes": 1, "edges": 0, "history": 1}
     graph.restore(backup_path, whole_database=True)
     assert graph.counts() == {"nodes": 1, "edges": 0, "history": 1}  # other's slice
+
+
+# --------------------------------------------------------------------------- #
+# CodeRabbit round 3 (10:25Z) — superseded is an explicit lifecycle decision
+# --------------------------------------------------------------------------- #
+# Reproduced pre-fix, three facets of one defect:
+#   a. put_node on a SUPERSEDED node reactivated it (status -> active,
+#      superseded_by -> NULL), undoing the decision.
+#   b. rebuild_from_journal(replace=True) re-projected a superseded
+#      journal-sourced node back to active and destroyed its supersede
+#      history row.
+#   c. the replace-mode delete filters excluded only invalidated/revoked, so a
+#      superseded node the journal does not re-project was deleted together
+#      with its history.
+def test_a_write_must_not_reactivate_a_superseded_node(tmp_path: Path) -> None:
+    graph = CreativeGraph(tmp_path / "graph.sqlite")
+    node_id = graph.put_node("ARTIFACT", {"n": 1}, {"v": 1}).node.node_id
+    graph.set_status(node_id, "superseded", superseded_by="successor")
+    with pytest.raises(GraphStateError, match="superseded"):
+        graph.put_node("ARTIFACT", {"n": 1}, {"v": 2})
+    node = graph.get_node(node_id)
+    assert node is not None
+    assert node.status == "superseded", "the lifecycle decision must survive the write"
+    assert node.superseded_by == "successor"
+
+
+def test_a_rebuild_preserves_a_superseded_node_and_its_history(tmp_path: Path) -> None:
+    records, _digest = _journal_for(tmp_path)
+    graph = CreativeGraph(tmp_path / "graph.sqlite")
+    graph.rebuild_from_journal(records)
+    node_id = graph.find("ARTIFACT", {"job_id": "job_rebuild", "result_digest": "d" * 64})
+    assert node_id is not None
+    node_id = node_id.node_id
+    graph.set_status(node_id, "superseded", superseded_by="successor")
+    history_before = len(graph.history(node_id))
+
+    report = graph.rebuild_from_journal(records, replace=True)
+
+    node = graph.get_node(node_id)
+    assert node is not None, "a superseded node must survive a from-scratch rebuild"
+    assert node.status == "superseded", "the rebuild must not reactivate it"
+    assert node.superseded_by == "successor"
+    assert len(graph.history(node_id)) == history_before, "its history must be kept"
+    assert any(
+        entry.get("status") == "superseded" and entry.get("node_id") == node_id
+        for entry in report.get("skipped_terminal", [])
+    ), "the skip must be reported, not silent"
+
+
+def test_a_rebuild_does_not_delete_a_superseded_node_the_journal_cannot_reproject(
+    tmp_path: Path,
+) -> None:
+    """Facet c: the replace-mode delete filters must keep superseded nodes."""
+    graph = CreativeGraph(tmp_path / "graph.sqlite")
+    node_id = graph.put_node("ARTIFACT", {"n": 7}, {"v": 1}).node.node_id
+    # mark the row as journal-sourced so the replace-mode filters apply to it
+    with graph._write_connection() as connection:  # noqa: SLF001 - the test is the fixture
+        connection.execute(
+            "UPDATE nexus_graph_node SET source = 'causal_journal' WHERE node_id = ?",
+            (node_id,),
+        )
+    graph.set_status(node_id, "superseded", superseded_by="successor")
+
+    graph.rebuild_from_journal([], replace=True)  # an empty journal re-projects nothing
+
+    node = graph.get_node(node_id)
+    assert node is not None, "a superseded node must not be deleted by a rebuild"
+    assert node.status == "superseded"
+    assert len(graph.history(node_id)) >= 1, "its history must not be purged"
+
+
+def test_integrity_check_reports_malformed_json_instead_of_raising(
+    tmp_path: Path,
+) -> None:
+    """A corrupt row is a FINDING, never an exception escaping the check.
+
+    Reproduced pre-fix: `payload_json = '{not json'` made integrity_check
+    raise JSONDecodeError instead of reporting GRAPH012.
+    """
+    graph = CreativeGraph(tmp_path / "graph.sqlite")
+    ids = build_slice(graph)
+    with graph._write_connection() as connection:  # noqa: SLF001 - the test is the attacker
+        connection.execute(
+            "UPDATE nexus_graph_node SET payload_json = '{not json' WHERE node_id = ?",
+            (ids["ARTIFACT"],),
+        )
+        connection.execute(
+            "UPDATE nexus_graph_node SET identity_json = '[]' WHERE node_id = ?",
+            (ids["PLAN"],),
+        )
+
+    report = graph.integrity_check()  # must not raise
+
+    assert not report.ok
+    codes = {f.code for f in report.findings}
+    assert "GRAPH012" in codes, "malformed payload_json must be reported"
+    assert "GRAPH013" in codes, "a non-object identity_json must be reported"
+    messages = {f.message for f in report.findings}
+    assert any("not a JSON object" in m for m in messages)

@@ -1297,3 +1297,89 @@ def test_gov023_malformed_input_never_reads_as_ok(guard: ModuleType) -> None:
         assert guard.classify_pr_condition(condition)[0] != "ok", (
             f"{condition!r} is malformed and must never pass"
         )
+
+
+# --------------------------------------------------------------------------- #
+# CodeRabbit round 3 (10:25Z) — two parser/classifier holes, both reproduced
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    ("condition", "expected"),
+    [
+        # an inverting wrapper must not launder a whitelisted comparison:
+        # `==` is left-associative, so `X == 'pull_request' == false` is FALSE
+        # on a pull request — reproduced: it classified ok pre-fix
+        ("github.event_name == 'pull_request' == false", "unknown"),
+        ("github.event_name == 'pull_request' == true", "unknown"),
+        ("true == (github.event_name == 'pull_request')", "unknown"),
+        # the whitelisted forms themselves must keep passing, anchored or not
+        ("github.event_name == 'pull_request'", "ok"),
+        ('github.event_name == "pull_request"', "ok"),
+        ("github.event_name=='pull_request'", "ok"),
+        ("(github.event_name == 'pull_request')", "ok"),
+        ("contains(github.event_name, 'pull_request')", "ok"),
+        ("'pull_request' == github.event_name", "ok"),
+    ],
+)
+def test_gov023_the_whitelist_matches_the_whole_term_not_a_substring(
+    guard: ModuleType, condition: str, expected: str
+) -> None:
+    severity, reason = guard.classify_pr_condition(condition)
+    assert severity == expected, f"{condition!r}: {reason}"
+
+
+def test_the_parser_reads_a_job_level_if_after_a_needs_list(
+    guard: ModuleType,
+) -> None:
+    """A `needs:` list must not capture the job-level `if:`.
+
+    Reproduced: the `- lint` item became a phantom step, the job-level
+    `if: github.event_name == 'push'` landed on that phantom step, and the JOB
+    condition stayed empty — which GOV023 reads as "runs on every event" (ok).
+    The merge-base gate could be switched to push-only with no finding.
+    """
+    workflow = guard.parse_workflow(
+        "on: [pull_request]\n"
+        "jobs:\n"
+        "  merge-base-guard:\n"
+        "    name: merge-base-guard (base == main)\n"
+        "    needs:\n"
+        "      - lint\n"
+        "    if: github.event_name == 'push'\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - name: guard\n"
+        "        run: |\n"
+        "          python scripts/merge_base_guard.py check-event\n"
+    )
+    job = workflow.jobs["merge-base-guard"]
+    assert job.condition == "github.event_name == 'push'", (
+        f"the job-level if: was captured by a phantom step: {job.condition!r}, "
+        f"steps={[(s.condition, len(s.runs)) for s in job.steps]}"
+    )
+    # the phantom step must not exist: needs: items are not steps
+    assert [s for s in job.steps if s.condition] == [
+        s for s in job.steps if "merge_base_guard.py" in "\n".join(s.runs)
+    ] or all(not s.condition or s.runs for s in job.steps)
+    # and the classification must fail closed on the real condition
+    assert guard.classify_pr_condition(job.condition)[0] == "violation"
+
+
+def test_the_parser_still_reads_an_inline_condition_on_a_step_item(
+    guard: ModuleType,
+) -> None:
+    """`- if: false` (condition inline on the item line) must still be captured."""
+    workflow = guard.parse_workflow(
+        "on: [pull_request]\n"
+        "jobs:\n"
+        "  merge-base-guard:\n"
+        "    if: github.event_name == 'pull_request'\n"
+        "    steps:\n"
+        "      - if: false\n"
+        "        name: guard\n"
+        "        run: |\n"
+        "          python scripts/merge_base_guard.py check-event\n"
+    )
+    job = workflow.jobs["merge-base-guard"]
+    guard_steps = [s for s in job.steps if "merge_base_guard.py" in "\n".join(s.runs)]
+    assert len(guard_steps) == 1
+    assert guard_steps[0].condition == "false"
