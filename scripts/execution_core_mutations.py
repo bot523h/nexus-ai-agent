@@ -15,6 +15,7 @@ M3    reconcile uses unscoped startup takeover      reconcile isolation tests
 M4    publish through a symlinked staged source     staging security tests
 M5    quarantine through a symlinked destination    quarantine boundary tests
 M6    notify success before the durable commit      notification ordering test
+M7    ensure_directory fails closed on a create race concurrent-create idempotence
 ====  ============================================  ============================
 
 Usage:  .venv/bin/python scripts/execution_core_mutations.py
@@ -34,10 +35,12 @@ PYTEST = [sys.executable, "-m", "pytest", "-q", "-p", "no:warnings", "--tb=no"]
 QUEUE = REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py"
 BACKEND = REPO / "src/nexus_ai_agent/adapters/native_local_backend.py"
 STAGING = REPO / "src/nexus_ai_agent/execution/staging.py"
+FSPATH = REPO / "src/nexus_ai_agent/tools/filesystem_policy.py"
 
 RACES = "tests/integration/test_execution_races.py::"
 BACKEND_T = "tests/integration/test_execution_native_backend.py::"
 STAGING_T = "tests/unit/test_execution_staging.py::"
+FS_T = "tests/unit/test_filesystem_policy_primitives.py::"
 
 
 @dataclass(frozen=True)
@@ -302,6 +305,18 @@ PROBES: tuple[Probe, ...] = (
             f"{RACES}test_refused_commit_emits_no_success_notification",
             f"{RACES}test_success_notification_only_after_the_commit",
         ),
+    ),
+    Probe(
+        name="M7 ensure_directory fails closed on a concurrent-create race",
+        target=FSPATH,
+        anchor=(
+            "                    try:\n"
+            "                        os.mkdir(name, mode=0o700, dir_fd=parent_fd)\n"
+            "                    except FileExistsError:\n"
+            "                        pass  # a concurrent creator won; the no-follow open re-validates it\n"
+        ),
+        mutant=("                    os.mkdir(name, mode=0o700, dir_fd=parent_fd)\n"),
+        tests=(f"{FS_T}test_ensure_directory_tolerates_a_concurrent_creator",),
     ),
 )
 

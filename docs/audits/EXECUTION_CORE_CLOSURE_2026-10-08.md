@@ -69,6 +69,7 @@ than rewriting it. The full 4-commit history is preserved.
 | 4 | `prepare`/`cleanup` ancestor symlink boundary | true | `_assert_no_symlink_components` before **and** after creation; cleanup validates | `test_prepare_rejects_a_symlinked_*` / `test_cleanup_never_follows_*` | closed |
 | 5 | `publish` staged-source symlink/regular-file validation | true | lexical containment + descriptor-relative `require_regular_file` (lstat, no-follow) | `test_publish_rejects_a_symlinked_staged_source`, `..._symlink_substitution_...`, `..._non_regular_...` | closed |
 | 6 | `quarantine` source/destination symlink boundary | true | source + full destination component checks pre-mutation | `test_quarantine_rejects_a_symlinked_quarantine_root/_job_directory` | closed |
+| 7 | `ensure_directory`/`_parent_fd` concurrent-create race turns `FileExistsError` into a boundary failure | true | tolerate `FileExistsError` on the losing side; the no-follow re-open still validates the winner (symlink still rejected) | `test_ensure_directory_tolerates_a_concurrent_creator`, `test_ensure_directory_still_rejects_a_symlink_in_the_race_window` | closed |
 
 ## 5. Atomic fencing
 
@@ -196,7 +197,8 @@ M3 reconcile uses unscoped startup takeover         -> CAUGHT (exit 1); restored
 M4 publish follows a symlinked staged source        -> CAUGHT (exit 1); restored GREEN
 M5 quarantine crosses a symlinked destination       -> CAUGHT (exit 1); restored GREEN
 M6 success notification before the durable commit   -> CAUGHT (exit 1); restored GREEN
-summary: 6/6 mutations caught
+M7 ensure_directory fails closed on a create race   -> CAUGHT (exit 1); restored GREEN
+summary: 7/7 mutations caught
 ```
 
 The working tree finishes byte-identical (`git status` clean).
@@ -207,7 +209,7 @@ The working tree finishes byte-identical (`git status` clean).
 |---|---|
 | `pytest -q tests/unit/test_execution_contract.py` | `33 passed` |
 | `pytest -q tests/unit/test_execution_staging.py` | `43 passed` |
-| `pytest -q tests/unit/test_filesystem_policy_primitives.py` | `14 passed` |
+| `pytest -q tests/unit/test_filesystem_policy_primitives.py` | `16 passed` |
 | `pytest -q tests/integration/test_execution_native_backend.py` | `17 passed` |
 | `pytest -q tests/integration/test_execution_races.py` | `9 passed` |
 | `pytest -q tests/integration/test_execution_crash_matrix.py` | `8 passed` |
@@ -218,7 +220,7 @@ The working tree finishes byte-identical (`git status` clean).
 | `mypy src` | `Success: no issues found in 289 source files` |
 | `python -m nexus_ai_agent.diagnostics.truth` | `OK — no findings` |
 | `python scripts/check_version_lockstep.py` | `version lock-step ok: 3.13.0` |
-| `pytest -q -m "not slow"` (local) | `3838 passed, 31 skipped` |
+| `pytest -q -m "not slow"` (local) | `3840 passed, 31 skipped` |
 
 ## 18. CI results (exact, this SHA)
 

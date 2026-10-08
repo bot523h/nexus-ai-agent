@@ -38,6 +38,49 @@ def test_ensure_directory_rejects_a_symlinked_component(tmp_path: Path) -> None:
     assert not (outside / "b").exists()
 
 
+def test_ensure_directory_tolerates_a_concurrent_creator(tmp_path: Path) -> None:
+    """Two racing creators must both succeed (idempotent), not fail closed."""
+    ws = _ws(tmp_path)
+    target = ws.root / "a/b/c"
+    # Simulate the losing side of the race: the leaf appears between the failed
+    # no-follow open and the os.mkdir (which then raises FileExistsError).
+    real_mkdir = os.mkdir
+
+    def racing_mkdir(name, *args, **kwargs):
+        real_mkdir(name, *args, **kwargs)
+        raise FileExistsError(name)
+
+    os.mkdir = racing_mkdir  # type: ignore[assignment]
+    try:
+        created = ws.ensure_directory("a/b/c")
+    finally:
+        os.mkdir = real_mkdir  # type: ignore[assignment]
+    assert created == target
+    assert target.is_dir()
+
+
+def test_ensure_directory_still_rejects_a_symlink_in_the_race_window(tmp_path: Path) -> None:
+    """Tolerating the concurrent-create race must not weaken no-follow."""
+    ws = _ws(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (ws.root / "a").mkdir()
+    real_mkdir = os.mkdir
+
+    def racing_mkdir(name, *args, **kwargs):
+        # A concurrent creator wins the name with a *symlink*, not a directory.
+        os.symlink(outside, ws.root / "a" / name)
+        raise FileExistsError(name)
+
+    os.mkdir = racing_mkdir  # type: ignore[assignment]
+    try:
+        with pytest.raises(FilesystemBoundaryError):
+            ws.ensure_directory("a/b")
+    finally:
+        os.mkdir = real_mkdir  # type: ignore[assignment]
+    assert not (outside / "b").exists()
+
+
 def test_require_regular_file_accepts_a_regular_file(tmp_path: Path) -> None:
     ws = _ws(tmp_path)
     (ws.root / "f.bin").write_bytes(b"x")

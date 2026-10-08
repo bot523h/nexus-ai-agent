@@ -124,7 +124,10 @@ class WorkspaceFilesystem:
                 except FileNotFoundError:
                     if not create:
                         raise
-                    os.mkdir(part, mode=0o700, dir_fd=fd)
+                    try:
+                        os.mkdir(part, mode=0o700, dir_fd=fd)
+                    except FileExistsError:
+                        pass  # a concurrent creator won; the no-follow open re-validates it
                     child = os.open(
                         part,
                         os.O_RDONLY | _DIRECTORY | _NOFOLLOW | _CLOEXEC,
@@ -264,7 +267,10 @@ class WorkspaceFilesystem:
                 except FileNotFoundError:
                     if not create:
                         raise FilesystemBoundaryError("directory does not exist") from None
-                    os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+                    try:
+                        os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+                    except FileExistsError:
+                        pass  # a concurrent creator won; the no-follow open re-validates it
                     fd = os.open(
                         name, os.O_RDONLY | _DIRECTORY | _NOFOLLOW | _CLOEXEC, dir_fd=parent_fd
                     )
