@@ -30,10 +30,13 @@ from nexus_ai_agent.adapters.native_local_backend import NativeLocalBackend
 from nexus_ai_agent.application.ports.job_queue import JobStatus
 from nexus_ai_agent.execution.contract import (
     ExecutionIdentity,
+    ExecutionPolicy,
     ExecutionRequest,
     FailureDisposition,
     ObservationState,
+    RetryPolicy,
 )
+from nexus_ai_agent.jobs.verification import VerificationOutcome
 
 pytestmark = pytest.mark.integration
 
@@ -120,7 +123,14 @@ def _queues(
 
 
 def _request(key: str = "k") -> ExecutionRequest:
-    return ExecutionRequest(job_type="fenced", idempotency_key=key, payload={})
+    # These queue-protocol tests intentionally opt out of artifact proof; the
+    # default contract policy requires a registered verifier.
+    return ExecutionRequest(
+        job_type="fenced",
+        idempotency_key=key,
+        payload={},
+        policy=ExecutionPolicy(requires_verification=False),
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -141,6 +151,85 @@ async def test_submit_returns_the_authoritative_identity(tmp_path: Path) -> None
 
     gate.event(1).set()
     assert await _drain(queue, identity.job_id) is JobStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_submit_rejects_default_verification_policy_without_queue_verifier(
+    tmp_path: Path,
+) -> None:
+    """Reproduce the contract gap: default policy requires independent proof."""
+    db = tmp_path / "jobs.sqlite3"
+    gate = _Gate()
+    queue, _ = _queues(db, gate)  # deliberately no verifier for ``fenced``
+    backend = NativeLocalBackend(queue)
+    request = ExecutionRequest(job_type="fenced", idempotency_key="needs-proof", payload={})
+    assert request.policy.requires_verification is True
+
+    try:
+        with pytest.raises(ValueError, match="verif"):
+            await backend.submit(request)
+    finally:
+        gate.event(1).set()
+        await queue.shutdown()
+
+    with sqlite3.connect(db) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM nexus_job_queue").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(
+    ("policy", "message"),
+    [
+        (ExecutionPolicy(timeout_seconds=1.0, requires_verification=False), "timeout"),
+        (
+            ExecutionPolicy(retry=RetryPolicy(max_attempts=2), requires_verification=False),
+            "retry",
+        ),
+        (
+            ExecutionPolicy(retry=RetryPolicy(backoff_seconds=0.5), requires_verification=False),
+            "retry",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_submit_rejects_unsupported_policy_before_enqueue(
+    tmp_path: Path, policy: ExecutionPolicy, message: str
+) -> None:
+    db = tmp_path / "jobs.sqlite3"
+    queue_a, queue_b = _queues(db, _Gate())
+    backend = NativeLocalBackend(queue_a)
+    request = ExecutionRequest(
+        job_type="fenced", idempotency_key="unsupported-policy", policy=policy
+    )
+    with pytest.raises(ValueError, match=message):
+        await backend.submit(request)
+    with sqlite3.connect(db) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM nexus_job_queue").fetchone()[0] == 0
+    await queue_a.shutdown()
+    await queue_b.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_default_verification_policy_is_enforced_by_the_registered_queue_verifier(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "jobs.sqlite3"
+    gate = _Gate()
+    queue_a, queue_b = _queues(db, gate)
+
+    def verifier(payload: dict[str, object], result: dict[str, object]) -> VerificationOutcome:
+        return VerificationOutcome(ok=True, reason_code=None, summary={"status": "verified"})
+
+    queue_a.register_artifact_verifier("fenced", verifier)
+    backend = NativeLocalBackend(queue_a)
+    request = ExecutionRequest(job_type="fenced", idempotency_key="verified-policy")
+    assert request.policy.requires_verification is True
+    identity = await backend.submit(request)
+    gate.event(1).set()
+    assert await _drain(queue_a, identity.job_id) is JobStatus.COMPLETED
+    facts = await queue_a.get_job_facts_async(identity.job_id)
+    assert facts is not None and facts.verification is not None
+    await queue_a.shutdown()
+    await queue_b.shutdown()
 
 
 @pytest.mark.asyncio
@@ -584,10 +673,20 @@ async def test_reconcile_of_one_job_never_touches_an_unrelated_job(tmp_path: Pat
     backend_a = NativeLocalBackend(queue_a, worker_id="A")
 
     job_a = await backend_a.submit(
-        ExecutionRequest(job_type="fenced", idempotency_key="A", payload={"tag": "A"})
+        ExecutionRequest(
+            job_type="fenced",
+            idempotency_key="A",
+            payload={"tag": "A"},
+            policy=ExecutionPolicy(requires_verification=False),
+        )
     )
     job_b = await backend_a.submit(
-        ExecutionRequest(job_type="fenced", idempotency_key="B", payload={"tag": "B"})
+        ExecutionRequest(
+            job_type="fenced",
+            idempotency_key="B",
+            payload={"tag": "B"},
+            policy=ExecutionPolicy(requires_verification=False),
+        )
     )
     await _wait_status(queue_a, job_a.job_id, JobStatus.PROCESSING)
     await _wait_status(queue_a, job_b.job_id, JobStatus.PROCESSING)

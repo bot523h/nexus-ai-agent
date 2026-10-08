@@ -33,6 +33,7 @@ from nexus_ai_agent.adapters.native_local_backend import NativeLocalBackend
 from nexus_ai_agent.application.ports.job_queue import JobStatus
 from nexus_ai_agent.execution.contract import (
     ExecutionIdentity,
+    ExecutionPolicy,
     ExecutionRequest,
     FailureDisposition,
     ObservationState,
@@ -110,7 +111,14 @@ def _queues(
 
 
 def _request(key: str = "k") -> ExecutionRequest:
-    return ExecutionRequest(job_type="fenced", idempotency_key=key, payload={})
+    # These queue-protocol tests intentionally opt out of artifact proof; the
+    # default contract policy requires a registered verifier.
+    return ExecutionRequest(
+        job_type="fenced",
+        idempotency_key=key,
+        payload={},
+        policy=ExecutionPolicy(requires_verification=False),
+    )
 
 
 # --------------------------------------------------------------------------- #

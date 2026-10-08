@@ -107,6 +107,19 @@ class NativeLocalBackend:
 
     # -- verbs ----------------------------------------------------------- #
     async def submit(self, request: ExecutionRequest) -> ExecutionIdentity:
+        # Do not silently drop declarative policy at the adapter boundary.
+        # This queue has no request timeout or automatic retry scheduler; those
+        # policies must be refused before enqueue (and before a worker can run).
+        policy = request.policy
+        if policy.timeout_seconds is not None:
+            raise ValueError("NativeLocalBackend cannot enforce timeout_seconds")
+        if policy.retry.max_attempts > 1 or policy.retry.backoff_seconds > 0:
+            raise ValueError("NativeLocalBackend cannot enforce automatic retry policy")
+        if policy.requires_verification and not self._queue.has_artifact_verifier(request.job_type):
+            raise ValueError(
+                "verification is required but the queue has no artifact verifier "
+                f"for {request.job_type!r}"
+            )
         job_id = await self._queue.enqueue(
             job_type=request.job_type,
             idempotency_key=request.idempotency_key,

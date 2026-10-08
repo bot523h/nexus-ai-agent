@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ruff: noqa: E501  (the anchors/mutants are verbatim source lines, kept intact)
-"""NEXUS V1 execution-core mutation probes (M1–M13).
+"""NEXUS V1 execution-core mutation probes (M1–M14).
 
 A targeted mutation harness in the same shape as the established
 ``scripts/gate5_mutation_probes.py``: for each correctness property this
@@ -22,6 +22,7 @@ M10   quarantine boundary errors are swallowed         hostile-destination refus
 M11   shutdown resets by job id, not local attempt     peer-takeover race
 M12   staging write follows a swapped ancestor         outside-root write race
 M13   remove_tree leaks parent-reopen OSError           cleanup race typing
+M14   backend ignores required-verification policy      fail-closed submit
 ====  ================================================  =========================
 
 Layered-defense note: M5 replaces the whole quarantine move (both the
@@ -459,6 +460,27 @@ PROBES: tuple[Probe, ...] = (
             '                raise FilesystemBoundaryError("directory could not be removed safely") from exc'
         ),
         tests=(f"{FS_T}test_remove_tree_wraps_parent_reopen_symlink_race_as_boundary_error",),
+    ),
+    Probe(
+        name="M14 backend ignores required-verification policy",
+        target=BACKEND,
+        anchor=(
+            "        if policy.requires_verification and not self._queue.has_artifact_verifier(request.job_type):\n"
+            "            raise ValueError(\n"
+            '                "verification is required but the queue has no artifact verifier "\n'
+            '                f"for {request.job_type!r}"\n'
+            "            )"
+        ),
+        mutant=(
+            "        if False:  # MUTATION: required verification is ignored\n"
+            '            raise ValueError("unreachable")'
+        ),
+        target2=QUEUE,
+        anchor2="        return self._artifact_verifiers.get(job_type) is not None",
+        mutant2="        return True  # MUTATION: every job type pretends to have a verifier",
+        tests=(
+            f"{BACKEND_T}test_submit_rejects_default_verification_policy_without_queue_verifier",
+        ),
     ),
 )
 

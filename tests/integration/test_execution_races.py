@@ -30,7 +30,7 @@ from nexus_ai_agent.adapters.in_process_job_queue import (
 )
 from nexus_ai_agent.adapters.native_local_backend import NativeLocalBackend
 from nexus_ai_agent.application.ports.job_queue import JobStatus
-from nexus_ai_agent.execution.contract import ExecutionRequest
+from nexus_ai_agent.execution.contract import ExecutionPolicy, ExecutionRequest
 from nexus_ai_agent.jobs.lifecycle import ExecutionClaim
 
 pytestmark = pytest.mark.integration
@@ -98,7 +98,14 @@ def _two_queues(
 
 
 def _request(key: str = "k") -> ExecutionRequest:
-    return ExecutionRequest(job_type="fenced", idempotency_key=key, payload={})
+    # These queue-protocol tests intentionally opt out of artifact proof; the
+    # default contract policy requires a registered verifier.
+    return ExecutionRequest(
+        job_type="fenced",
+        idempotency_key=key,
+        payload={},
+        policy=ExecutionPolicy(requires_verification=False),
+    )
 
 
 # --------------------------------------------------------------------------- #

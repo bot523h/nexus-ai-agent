@@ -321,6 +321,16 @@ class InProcessJobQueue:
             raise ValueError("job_type must not be empty")
         self._artifact_verifiers[normalized] = verifier
 
+    def has_artifact_verifier(self, job_type: str) -> bool:
+        """Whether this queue can independently verify ``job_type`` results.
+
+        Public policy query for provider-neutral adapters. The queue retains
+        ownership of the verifier registry; callers need not inspect its
+        private mapping, and a missing verifier is never inferred from a
+        handler's success result.
+        """
+        return self._artifact_verifiers.get(job_type) is not None
+
     def register_artifact_publication(
         self, job_type: str, publication: ArtifactPublication
     ) -> None:
