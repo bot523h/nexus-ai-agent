@@ -15,6 +15,7 @@ executable with the bare interpreter (``test_scripts_import_boundary.py``).
 from __future__ import annotations
 
 import ast
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -50,6 +51,13 @@ def test_a_feature_branch_base_fails_closed() -> None:
     proc = _run("check", "--base", "arena/01a0f986-nexus-ai-agent")
     assert proc.returncode == 1, proc.stdout
     assert "#143" in proc.stderr
+
+
+def test_missing_base_fails_closed() -> None:
+    """The no-network command must reject an omitted base source."""
+    proc = _run("check")
+    assert proc.returncode == 2, proc.stdout
+    assert "cannot verify" in proc.stderr
 
 
 def test_case_variant_is_not_main() -> None:
@@ -92,6 +100,12 @@ def test_pull_request_event_without_a_base_is_unreadable_not_pass() -> None:
     assert proc.returncode == 2, proc.stdout
 
 
+def test_pull_request_target_event_without_a_base_is_unreadable_not_pass() -> None:
+    """Every PR event variant must reject an omitted base source."""
+    proc = _run("check-event", "--event", "pull_request_target")
+    assert proc.returncode == 2, proc.stdout
+
+
 # --------------------------------------------------------------------------- #
 # the guard cannot rot silently
 # --------------------------------------------------------------------------- #
@@ -109,12 +123,18 @@ def test_guard_is_pure_stdlib() -> None:
 
 
 def test_guard_is_wired_into_ci() -> None:
-    """A guard CI never runs is not a guard (this workflow ships with every PR)."""
+    """The CI job, event coverage, and executable invocation are structural contracts."""
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
-    assert "scripts/merge_base_guard.py" in workflow, (
+    assert re.search(r"^\s+merge-base-guard:\s*$", workflow, re.MULTILINE)
+    assert "if: github.event_name == 'pull_request'" in workflow
+    assert "types: [opened, synchronize, reopened, edited]" in workflow
+    assert "python scripts/merge_base_guard.py check-event" in workflow
+    assert '--event "${{ github.event_name }}"' in workflow
+    assert '--base "${{ github.base_ref }}"' in workflow, (
         "ci.yml does not run the merge-base guard — the #143 wrong-base merge "
         "would again be invisible"
     )
+    assert (SCRIPT.stat().st_mode & 0o111) == 0
 
 
 def test_guard_names_the_incident_it_closes() -> None:
