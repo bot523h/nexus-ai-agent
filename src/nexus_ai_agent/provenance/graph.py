@@ -294,7 +294,10 @@ class CreativeGraph:
         self.db_path = Path(db_path)
         self._sqlite_path = str(db_path)
         self._connect_timeout = connect_timeout
-        self._lock = threading.Lock()
+        # Reentrant: a composite read (traverse, lineage, integrity_check) holds
+        # the lock for its whole multi-step walk and calls the leaf readers, which
+        # take the same lock.  A plain Lock would deadlock on that nesting.
+        self._lock = threading.RLock()
         self._memory_connection: sqlite3.Connection | None = None
         if self._sqlite_path == ":memory:":
             self._memory_connection = sqlite3.connect(":memory:", check_same_thread=False)
@@ -527,14 +530,14 @@ class CreativeGraph:
     # reads
     # ------------------------------------------------------------------ #
     def get_node(self, node_id: str) -> GraphNode | None:
-        with self._connection() as connection:
+        with self._lock, self._connection() as connection:
             return self._node(connection, node_id)
 
     def find(self, kind: str, identity: dict[str, Any]) -> GraphNode | None:
         return self.get_node(node_identity(kind, identity))
 
     def history(self, node_id: str) -> list[dict[str, Any]]:
-        with self._connection() as connection:
+        with self._lock, self._connection() as connection:
             rows = connection.execute(
                 "SELECT history_seq, payload_json, payload_digest, status, recorded_at"
                 " FROM nexus_graph_node_history WHERE node_id = ? ORDER BY history_seq",
@@ -561,7 +564,7 @@ class CreativeGraph:
             sql += " AND relation = ?"
             params.append(relation)
         sql += " ORDER BY edge_id"
-        with self._connection() as connection:
+        with self._lock, self._connection() as connection:
             rows = connection.execute(sql, params).fetchall()
             return [self._edge(connection, str(row[0])) for row in rows]  # type: ignore[misc]
 
@@ -580,6 +583,17 @@ class CreativeGraph:
         two runs over the same graph produce the same answer.
         """
         allowed = set(relations) if relations else None
+        with self._lock:
+            return self._traverse_locked(start, direction, allowed, max_depth, include_inactive)
+
+    def _traverse_locked(
+        self,
+        start: str,
+        direction: str,
+        allowed: set[str] | None,
+        max_depth: int,
+        include_inactive: bool,
+    ) -> list[dict[str, Any]]:
         seen: dict[str, int] = {start: 0}
         queue: deque[tuple[str, int, str]] = deque()
         for edge in self.edges(start, direction=direction):
@@ -623,6 +637,10 @@ class CreativeGraph:
         reported as an empty ``found`` list, never invented, and ``complete``
         says whether the walk reached a PROJECT.
         """
+        with self._lock:
+            return self._lineage_locked(artifact_node_id)
+
+    def _lineage_locked(self, artifact_node_id: str) -> dict[str, Any]:
         node = self.get_node(artifact_node_id)
         if node is None:
             raise GraphStateError(f"unknown artifact node {artifact_node_id}")
@@ -701,7 +719,7 @@ class CreativeGraph:
     def integrity_check(self) -> IntegrityReport:
         """Every edge endpoint exists, every digest matches, history is ordered."""
         report = IntegrityReport()
-        with self._connection() as connection:
+        with self._lock, self._connection() as connection:
             nodes = connection.execute(
                 "SELECT node_id, kind, payload_json, payload_digest, status, identity_json,"
                 " identity_digest, revision_count FROM nexus_graph_node"
@@ -1019,7 +1037,7 @@ class CreativeGraph:
         return node_identity("ARTIFACT", {"job_id": job_id, "result_digest": digest})
 
     def counts(self) -> dict[str, int]:
-        with self._connection() as connection:
+        with self._lock, self._connection() as connection:
             nodes = connection.execute("SELECT COUNT(*) FROM nexus_graph_node").fetchone()
             edges = connection.execute("SELECT COUNT(*) FROM nexus_graph_edge").fetchone()
             history = connection.execute("SELECT COUNT(*) FROM nexus_graph_node_history").fetchone()

@@ -751,3 +751,134 @@ def test_an_in_memory_rebuild_is_atomic_too(tmp_path: Path) -> None:
         CreativeGraph._put_node_tx = real_put
 
     assert graph.counts() == healthy, "a partial in-memory projection was observable"
+
+
+# --------------------------------------------------------------------------- #
+# R4 — concurrent reader isolation on the shared :memory: connection
+# --------------------------------------------------------------------------- #
+# Reproduced pre-fix: the WRITE paths hold ``_lock`` for the whole transaction,
+# but the READ paths (``counts`` / ``edges`` / ``get_node`` / ``history`` /
+# ``integrity_check``) did not — and on ``:memory:`` there is ONE shared
+# connection.  A SELECT issued while ``rebuild_from_journal(replace=True)`` was
+# mid-transaction therefore ran on that same connection and saw the writer's
+# UNCOMMITTED deletes and half-written rows: a partial projection, a zero-edge
+# intermediate state, a half-written graph.
+#
+# The pause below is test-side timing control (a monkeypatched ``_put_node_tx``
+# that parks the writer mid-transaction), so the reader's sample point is
+# deterministic, not a lucky race.
+def test_a_concurrent_reader_never_observes_a_partial_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tempfile
+    import threading
+
+    from nexus_ai_agent.provenance.journal import CausalJournal
+    from nexus_ai_agent.provenance.models import CausalEvent, EventKind
+
+    graph = CreativeGraph(":memory:")
+
+    # A healthy old state: a chain of 120 nodes / 119 edges.
+    old_ids = [graph.put_node("ARTIFACT", {"n": i}, {"i": i}).node.node_id for i in range(120)]
+    for i in range(119):
+        graph.put_edge("ARTIFACT_DERIVED_FROM", old_ids[i], old_ids[i + 1])
+    old_counts = graph.counts()
+    old_edges = {e.edge_id for e in graph.edges(old_ids[0])}
+    assert old_counts == {"nodes": 120, "edges": 119, "history": 120}
+    assert len(old_edges) == 1
+
+    # A journal that rebuilds into a DIFFERENT complete state.
+    with tempfile.TemporaryDirectory() as tmp:
+        journal = CausalJournal(Path(tmp) / "ledger.sqlite")
+        digest = "e" * 64
+        for j in range(100):
+            for kind, attempt, status, result in (
+                (EventKind.JOB_ENQUEUED, None, "pending", None),
+                (EventKind.JOB_RESERVED, 1, "processing", None),
+                (EventKind.JOB_VERIFICATION_STARTED, 1, "verifying", None),
+                (EventKind.JOB_COMPLETED, 1, "completed", digest),
+            ):
+                journal.append(
+                    CausalEvent(
+                        kind=kind,
+                        job_id=f"job-{j}",
+                        job_type="creative.render",
+                        idempotency_key=f"key-{j}",
+                        attempt=attempt,
+                        status=status,
+                        result_digest=result,
+                        occurred_at="2026-10-07T00:00:00Z",
+                    )
+                )
+        records = journal.all_records()
+
+        # Park the writer at a controlled point INSIDE its transaction: the
+        # replace-deletes have run, the first node write is about to happen.
+        mid_transaction = threading.Event()
+        release_writer = threading.Event()
+        real_put = graph._put_node_tx
+        state = {"calls": 0}
+
+        def pausing_put(connection, kind, identity, payload=None, **kwargs):
+            state["calls"] += 1
+            if state["calls"] == 1:
+                mid_transaction.set()
+                assert release_writer.wait(15), "reader never released the writer"
+            return real_put(connection, kind, identity, payload, **kwargs)
+
+        monkeypatch.setattr(graph, "_put_node_tx", pausing_put)
+
+        barrier = threading.Barrier(2)
+        done = threading.Event()
+        observations: list[tuple[dict, set, object]] = []
+        errors: list[BaseException] = []
+
+        def writer() -> None:
+            barrier.wait()
+            graph.rebuild_from_journal(records, replace=True)
+            done.set()
+
+        def reader() -> None:
+            barrier.wait()
+            # Wait until the writer is provably mid-transaction, then sample.
+            assert mid_transaction.wait(15), "writer never reached mid-transaction"
+            release_writer.set()
+            while not done.is_set():
+                try:
+                    observations.append(
+                        (
+                            graph.counts(),
+                            {e.edge_id for e in graph.edges(old_ids[0])},
+                            graph.get_node(old_ids[0]),
+                        )
+                    )
+                except BaseException as exc:  # noqa: BLE001 - any raise is an anomaly
+                    errors.append(exc)
+                if len(observations) >= 5:
+                    break
+
+        w = threading.Thread(target=writer)
+        r = threading.Thread(target=reader)
+        w.start()
+        r.start()
+        w.join(60)
+        r.join(60)
+        assert not w.is_alive(), "writer hung"
+        assert not r.is_alive(), "reader hung"
+        assert not errors, f"reader raised: {errors[:3]}"
+        assert observations, "reader never sampled"
+
+    new_counts = graph.counts()
+    new_edges = {e.edge_id for e in graph.edges(old_ids[0])}
+    assert new_counts != old_counts, "the rebuild did not actually replace the state"
+
+    bad = [
+        obs
+        for obs in observations
+        if obs[0] not in (old_counts, new_counts) or obs[1] not in (old_edges, new_edges)
+    ]
+    assert not bad, (
+        f"the reader observed a partial rebuild: {bad[:3]} "
+        f"(old={old_counts}/{sorted(old_edges)} new={new_counts}/{sorted(new_edges)})"
+    )
+    assert graph.integrity_check().ok
