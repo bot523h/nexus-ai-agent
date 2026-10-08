@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -605,3 +605,129 @@ async def test_reconcile_of_one_job_never_touches_an_unrelated_job(tmp_path: Pat
     assert await _drain(queue_b, job_a.job_id) is JobStatus.COMPLETED
     assert await _drain(queue_a, job_b.job_id) is JobStatus.COMPLETED
     assert (await queue_a.get_result(job_b.job_id) or {})["who"] == "B"
+
+
+# --------------------------------------------------------------------------- #
+# P0-2 continued — staleness must be *proven*; ambiguity fails closed
+# --------------------------------------------------------------------------- #
+def _set_started_at(db: Path, job_id: str, value: str | None) -> None:
+    with sqlite3.connect(db) as connection:
+        connection.execute(
+            "UPDATE nexus_job_queue SET started_at = ? WHERE id = ?",
+            (value, job_id),
+        )
+
+
+@pytest.mark.asyncio
+async def test_reconcile_with_policy_never_steals_a_fresh_live_job(tmp_path: Path) -> None:
+    """A live peer's *fresh* in-flight row is never taken over — even when the
+    reconciling backend carries an explicit stale window (the window is the
+    staleness proof; a fresh row is by definition not stale)."""
+    db = tmp_path / "jobs.sqlite3"
+    gate = _Gate()
+    queue_a, queue_b = _queues(db, gate)
+    backend_a = NativeLocalBackend(queue_a, worker_id="A")
+    backend_b = NativeLocalBackend(queue_b, worker_id="B", stale_after=timedelta(hours=1))
+
+    identity = await backend_a.submit(_request())
+    await _wait_status(queue_a, identity.job_id, JobStatus.PROCESSING)
+
+    observation = await backend_b.reconcile(identity)
+    assert observation.state is ObservationState.PROCESSING
+    assert _row(db, identity.job_id)["attempt"] == 1
+    assert _row(db, identity.job_id)["status"] == JobStatus.PROCESSING.value
+    assert gate.calls == 1, "a live job must never be re-executed by reconcile"
+
+    gate.event(1).set()
+    assert await _drain(queue_a, identity.job_id) is JobStatus.COMPLETED
+    assert (await queue_a.get_result(identity.job_id) or {})["who"] == "worker-1"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_refuses_an_in_flight_row_whose_age_is_unprovable(tmp_path: Path) -> None:
+    """Ambiguity fails closed: a row missing ``started_at`` cannot *prove* it is
+    stale, so an expiry-gated reconcile must refuse to take it over."""
+    db = tmp_path / "jobs.sqlite3"
+    gate = _Gate()
+    queue_a, queue_b = _queues(db, gate)
+    backend_a = NativeLocalBackend(queue_a, worker_id="A")
+    backend_b = NativeLocalBackend(queue_b, worker_id="B", stale_after=timedelta(hours=1))
+
+    identity = await backend_a.submit(_request())
+    await _wait_status(queue_a, identity.job_id, JobStatus.PROCESSING)
+    _set_started_at(db, identity.job_id, None)  # unprovable age
+
+    observation = await backend_b.reconcile(identity)
+    assert observation.state is ObservationState.PROCESSING
+    assert _row(db, identity.job_id)["attempt"] == 1
+    assert _row(db, identity.job_id)["status"] == JobStatus.PROCESSING.value
+    assert await queue_b.recover_job(identity.job_id, stale_after=timedelta(hours=1)) == []
+    assert gate.calls == 1
+
+    gate.event(1).set()
+    assert await _drain(queue_a, identity.job_id) is JobStatus.COMPLETED
+    assert (await queue_a.get_result(identity.job_id) or {})["who"] == "worker-1"
+
+
+@pytest.mark.asyncio
+async def test_recover_job_respects_the_stale_window_boundary(tmp_path: Path) -> None:
+    """The stale window is a strict boundary: younger-or-equal rows are live,
+    strictly-older rows are recoverable."""
+    db = tmp_path / "jobs.sqlite3"
+    gate = _Gate()
+    queue_a, queue_b = _queues(db, gate)
+    backend_a = NativeLocalBackend(queue_a, worker_id="A")
+
+    identity = await backend_a.submit(_request())
+    await _wait_status(queue_a, identity.job_id, JobStatus.PROCESSING)
+
+    # Inside the window (started 30 minutes ago; window is one hour): live.
+    _set_started_at(
+        db, identity.job_id, (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+    )
+    assert await queue_b.recover_job(identity.job_id, stale_after=timedelta(hours=1)) == []
+    assert _row(db, identity.job_id)["attempt"] == 1
+
+    # Strictly past the window (started two hours ago): provably stale.
+    _set_started_at(
+        db, identity.job_id, (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    )
+    assert await queue_b.recover_job(identity.job_id, stale_after=timedelta(hours=1)) == [
+        identity.job_id
+    ]
+    await _wait_status(queue_b, identity.job_id, JobStatus.PROCESSING)
+    assert _row(db, identity.job_id)["attempt"] == 2
+
+    gate.event(1).set()
+    gate.event(2).set()
+    assert await _drain(queue_b, identity.job_id) is JobStatus.COMPLETED
+    assert (await queue_b.get_result(identity.job_id) or {})["who"] == "worker-2"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_racing_the_live_owner_duplicates_nothing(tmp_path: Path) -> None:
+    """Race: reconcile fires while the live worker is still executing *and*
+    finishing.  Exactly one handler execution, exactly one authoritative
+    completion, and the reconciler never fabricates a second run."""
+    db = tmp_path / "jobs.sqlite3"
+    gate = _Gate()
+    queue_a, queue_b = _queues(db, gate)
+    backend_a = NativeLocalBackend(queue_a, worker_id="A")
+    backend_b = NativeLocalBackend(queue_b, worker_id="B", stale_after=timedelta(hours=1))
+
+    identity = await backend_a.submit(_request())
+    await _wait_status(queue_a, identity.job_id, JobStatus.PROCESSING)
+
+    gate.event(1).set()  # let the live worker finish...
+    observation, _ = await asyncio.gather(
+        backend_b.reconcile(identity),
+        _drain(queue_a, identity.job_id),
+    )
+    assert gate.calls == 1, "the handler must run exactly once"
+    assert observation.state in {
+        ObservationState.PROCESSING,
+        ObservationState.VERIFYING,
+        ObservationState.SUCCEEDED,
+    }
+    assert await queue_a.get_status(identity.job_id) is JobStatus.COMPLETED
+    assert _row(db, identity.job_id)["attempt"] == 1  # no successor was minted

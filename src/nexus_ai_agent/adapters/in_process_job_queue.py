@@ -704,11 +704,13 @@ class InProcessJobQueue:
         composition roots guarantee one queue-owning process per sidecar, so
         at startup the previous owner is dead by construction.  With
         ``stale_after`` set, only in-flight rows whose ``started_at`` is
-        older than the window are taken over (expiry-gated takeover — the
-        safe form when a live peer might still own recent rows); ``pending``
-        rows are always re-scheduled.  Rows this very process is executing
-        are never taken over (that would strand its own live execution).
-        Terminal rows are never touched.
+        strictly older than the window are taken over (expiry-gated takeover —
+        the safe form when a live peer might still own recent rows); a row
+        whose age cannot be proven (missing ``started_at``) is refused exactly
+        like a fresh one (ambiguity fails closed).  ``pending`` rows are always
+        re-scheduled.  Rows this very process is executing are never taken over
+        (that would strand its own live execution).  Terminal rows are never
+        touched.
         """
         live = {job_id for job_id, task in self._tasks.items() if not task.done()}
         reset = await asyncio.to_thread(self._reset_unfinished, stale_after, live)
@@ -764,7 +766,8 @@ class InProcessJobQueue:
         call observes only and takes nothing over (a runtime caller must pass
         an explicit stale window, otherwise a live peer could still own the
         row).  When a window is supplied, only a row whose ``started_at`` is
-        older than it is taken over.
+        strictly older than it is taken over; a row whose age cannot be proven
+        (missing ``started_at``) is refused exactly like a fresh one.
 
         Returns the list of job ids actually recovered (empty when nothing was
         eligible).  Terminal rows are never touched.
@@ -2080,8 +2083,14 @@ class InProcessJobQueue:
                     continue  # job-scoped sweep: never touch unrelated rows
                 if str(row["status"]) in in_flight:
                     started_at = row["started_at"]
-                    if cutoff is not None and started_at is not None and started_at >= cutoff:
-                        continue  # a live peer may still own a recent row
+                    if cutoff is not None:
+                        # Expiry-gated mode: staleness must be *proven*.  A row
+                        # whose age cannot be established (missing ``started_at``)
+                        # is ambiguous, and ambiguity fails closed — only rows
+                        # strictly older than the window are eligible; a recent
+                        # (or unproven) row may still be owned by a live peer.
+                        if started_at is None or started_at >= cutoff:
+                            continue
                     current_attempt = int(row["attempt"] or 0)
                     raw_history = row["attempt_history_json"]
                     try:
