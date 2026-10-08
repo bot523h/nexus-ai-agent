@@ -779,9 +779,66 @@
         "src/nexus_ai_agent/features/owner_control.py",
         "tests/unit/test_owner_gate_fail_closed.py"
       ]
+    },
+    {
+      "id": "execution-fabric",
+      "description": "Provider-agnostic Execution Fabric contract + the Hatchet workflow-execution adapter. Hatchet owns workflow execution ONLY; the Nexus queue keeps the fenced/atomic commit, verifier, passport and lineage.",
+      "paths": [
+        "src/nexus_ai_agent/integrations/execution/",
+        "src/nexus_ai_agent/integrations/hatchet/",
+        "tests/unit/test_execution_contract.py",
+        "tests/architecture/test_execution_fabric_boundary.py",
+        "tests/integration/test_hatchet_adapter.py",
+        "tests/integration/test_hatchet_embedded_e2e.py",
+        "docs/architecture/EXECUTION_FABRIC.md",
+        "docs/README.md",
+        "pyproject.toml"
+      ]
     }
   ],
   "claims": [
+    {
+      "task": "task-255-hatchet-execution-fabric",
+      "title": "Provider-agnostic Execution Fabric contract + Hatchet workflow-execution adapter (no execution authority)",
+      "title_fa": "قرارداد Execution Fabric مستقل از ارائه‌دهنده + آداپتور اجرای گردش‌کار Hatchet (بدون اختیار اجرا)",
+      "zone": "execution-fabric",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Introduce a tiny provider-neutral Execution Fabric contract (ExecutionRequest/ExecutionAttempt/ExecutionResult/ExecutionFailure + provider_run_ref) and a thin Hatchet adapter that hands a CANONICAL, already-fenced Nexus request to Hatchet for workflow execution and returns a raw staged witness. Hatchet mints no Nexus authority: no artifact commit, no passport, no lineage, no idempotency, no authorization. Provider retries are metadata, never Nexus try/fencing. Stale/unknown provider results fail closed and cannot commit. Embedded Hatchet is dev/CI proof only, never imported by product entrypoints.",
+      "scope_fa": "قرارداد کوچک و مستقل از ارائه‌دهنده (ExecutionRequest/ExecutionAttempt/ExecutionResult/ExecutionFailure) + آداپتور نازک Hatchet که یک درخواست canonical و ازپیشfenceشدهٔ Nexus را برای اجرای گردش‌کار به Hatchet می‌سپارد و شاهد خام staged برمی‌گرداند. Hatchet هیچ اختیار Nexus نمی‌سازد. تلاش مجدد ارائه‌دهنده فقط فراداده است. نتیجهٔ کهنه/ناشناخته fail-closed و بدون commit. embedded فقط برای dev/CI.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Contract is provider-neutral: no provider import in contract/port modules; provider fields live only in metadata/witness",
+        "Identity separation enforced: request_id, idempotency_key, job_id, try_id, fencing_token, backend, provider_run_id are distinct and the provider never sets a Nexus authority field",
+        "Provider retry count never overrides Nexus try/fencing (explicit mapping test)",
+        "Stale attempt result is rejected (fencing mismatch -> fail-closed, no commit)",
+        "Unknown/missing provider result reconciles fail-closed and cannot commit a duplicate",
+        "Verification failure path returns a typed failure; verification stays in Nexus",
+        "No authority import in the fabric/adapter (CommandBus/verifier/passport/provenance/queue) via an architecture boundary test",
+        "Embedded Hatchet is not reachable from product code (guarded)"
+      ],
+      "evidence_required": [
+        "pytest output for the contract/boundary/adapter tests",
+        "git diff --stat against origin/main",
+        "grep proof that contract modules import no provider and no authority module",
+        "embedded E2E run ids (or an explicit skip reason)"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/integrations/execution/",
+        "src/nexus_ai_agent/integrations/hatchet/",
+        "tests/unit/test_execution_contract.py",
+        "tests/architecture/test_execution_fabric_boundary.py",
+        "tests/integration/test_hatchet_adapter.py",
+        "tests/integration/test_hatchet_embedded_e2e.py",
+        "docs/architecture/EXECUTION_FABRIC.md",
+        "docs/README.md",
+        "pyproject.toml"
+      ],
+      "owner_hint": "execution-fabric",
+      "agent_branch": "integrations/hatchet-execution-fabric",
+      "claimed_at": "2026-10-07T17:30:00Z",
+      "ttl_hours": 24
+    },
     {
       "task": "task-131",
       "title": "Architecture & documentation suite + board rewrite",
