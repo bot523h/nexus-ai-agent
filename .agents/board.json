@@ -3463,7 +3463,7 @@
       "claimed_at": "2026-10-08T18:49:26Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "NEXUS V1 forensic closure: cancel attempt-fencing (P0-1), reconcile safety + job-scoped recover_job (P0-2), staging symlink boundaries reusing WorkspaceFilesystem (P0-3), same-attempt double-commit + completion/cancel races (P0-4/5), invariant proofs I1-I10 (P0-6), crash matrix C1-C8 (P0-7), mutations M1-M6.",
+      "note": "NEXUS V1 forensic closure: cancel attempt-fencing (P0-1), reconcile safety + job-scoped recover_job (P0-2), staging symlink boundaries reusing WorkspaceFilesystem (P0-3), same-attempt double-commit + completion/cancel races (P0-4/5), invariant proofs I1-I10 (P0-6), crash matrix C1-C8 (P0-7), mutations M1-M7.",
       "generation": 1
     }
   ],
