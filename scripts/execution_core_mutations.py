@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ruff: noqa: E501  (the anchors/mutants are verbatim source lines, kept intact)
-"""NEXUS V1 execution-core mutation probes (M1–M10).
+"""NEXUS V1 execution-core mutation probes (M1–M12).
 
 A targeted mutation harness in the same shape as the established
 ``scripts/gate5_mutation_probes.py``: for each correctness property this
@@ -19,6 +19,8 @@ M7    unbound identity gains cancel authority          unbound-cancel refusal
 M8    unproven staleness is taken over (fail-open)     reconcile staleness proofs
 M9    lost mkdir race becomes a boundary error         concurrent-create tolerance
 M10   quarantine boundary errors are swallowed         hostile-destination refusal
+M11   shutdown resets by job id, not local attempt     peer-takeover race
+M12   staging write follows a swapped ancestor         outside-root write race
 ====  ================================================  =========================
 
 Layered-defense note: M5 replaces the whole quarantine move (both the
@@ -327,7 +329,7 @@ PROBES: tuple[Probe, ...] = (
         name="M7 unbound identity gains cancellation authority (both layers)",
         target=BACKEND,
         anchor=(
-            "        if not identity.has_fencing_token:\n"
+            "        if identity.fencing_token is None:\n"
             "            return False  # fail closed: job_id alone is not cancellation authority"
         ),
         mutant="        if False:  # MUTATION: job_id alone cancels the current attempt\n            pass",
@@ -392,6 +394,40 @@ PROBES: tuple[Probe, ...] = (
             "            pass  # MUTATION: boundary error swallowed"
         ),
         tests=(f"{STAGING_T}test_remove_destination_refuses_a_symlinked_destination",),
+    ),
+    Probe(
+        name="M11 shutdown resets by job id instead of the local attempt",
+        target=QUEUE,
+        anchor=(
+            "        for job_id, claim in local_claims.items():\n"
+            "            if not await asyncio.to_thread(self._mark_pending, claim):\n"
+            "                continue  # already settled, terminal, or superseded by a peer"
+        ),
+        mutant=(
+            "        for job_id, claim in local_claims.items():\n"
+            "            current_row = await asyncio.to_thread(self._fetch_row, job_id)\n"
+            "            if current_row is None:\n"
+            "                continue\n"
+            "            current_claim = ExecutionClaim(\n"
+            '                job_id=job_id, attempt=int(current_row["attempt"] or 0)\n'
+            "            )\n"
+            "            if not await asyncio.to_thread(self._mark_pending, current_claim):\n"
+            "                continue  # MUTATION: inferred current owner from job_id"
+        ),
+        tests=(f"{BACKEND_T}test_shutdown_cannot_reset_a_peer_takeover_of_its_own_job_id",),
+    ),
+    Probe(
+        name="M12 staging write follows a swapped ancestor",
+        target=STAGING,
+        anchor=(
+            '            self._fs.write_bytes(f"{self._staging_rel()}/{component}", data, create_parents=False)'
+        ),
+        mutant=(
+            "            # MUTATION: path-based write follows a replaced ancestor\n"
+            '            with (self.staging_dir / component).open("wb") as handle:\n'
+            "                handle.write(data)"
+        ),
+        tests=(f"{STAGING_T}test_write_rejects_ancestor_symlink_swap_after_path_checks",),
     ),
 )
 

@@ -100,9 +100,9 @@ class _Gate:
 
 
 def _queues(
-    db: Path, handler: Any, *, hook_b: Any = None
+    db: Path, handler: Any, *, hook_a: Any = None, hook_b: Any = None
 ) -> tuple[InProcessJobQueue, InProcessJobQueue]:
-    queue_a = InProcessJobQueue(db, artifact_verifiers={})
+    queue_a = InProcessJobQueue(db, artifact_verifiers={}, on_job_finished=hook_a)
     queue_b = InProcessJobQueue(db, artifact_verifiers={}, on_job_finished=hook_b)
     queue_a.register_handler("fenced", handler)
     queue_b.register_handler("fenced", handler)
@@ -326,7 +326,12 @@ async def test_c7_late_stale_worker_is_refused_without_a_success_notice(tmp_path
     async def hook(completion: JobCompletion) -> None:
         notices.append(completion.status)
 
-    queue_a, queue_b = _queues(db, gate, hook_b=hook)
+    stale_notices: list[JobStatus] = []
+
+    async def stale_hook(completion: JobCompletion) -> None:
+        stale_notices.append(completion.status)
+
+    queue_a, queue_b = _queues(db, gate, hook_a=stale_hook, hook_b=hook)
 
     job_id = await queue_a.enqueue(job_type="fenced", idempotency_key="k", payload={})
     await _wait_status(queue_a, job_id, JobStatus.PROCESSING)
@@ -337,12 +342,16 @@ async def test_c7_late_stale_worker_is_refused_without_a_success_notice(tmp_path
     # and no stale success notification.
     gate.event(1).set()
     await asyncio.sleep(0.05)
+    assert stale_notices == [], "queue A must not publish stale attempt completion"
     assert notices == []
     assert _row(db, job_id)["status"] == JobStatus.PROCESSING.value
 
     gate.event(2).set()
     assert await _drain(queue_b, job_id) is JobStatus.COMPLETED
     assert notices == [JobStatus.COMPLETED]
+    assert stale_notices == []
+    await queue_a.shutdown()
+    await queue_b.shutdown()
 
 
 # --------------------------------------------------------------------------- #

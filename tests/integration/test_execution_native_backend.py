@@ -110,9 +110,9 @@ class _Recorder:
 
 
 def _queues(
-    db: Path, handler: Any, *, hook_b: Any = None
+    db: Path, handler: Any, *, hook_a: Any = None, hook_b: Any = None
 ) -> tuple[InProcessJobQueue, InProcessJobQueue]:
-    queue_a = InProcessJobQueue(db, artifact_verifiers={})
+    queue_a = InProcessJobQueue(db, artifact_verifiers={}, on_job_finished=hook_a)
     queue_b = InProcessJobQueue(db, artifact_verifiers={}, on_job_finished=hook_b)
     queue_a.register_handler("fenced", handler)
     queue_b.register_handler("fenced", handler)
@@ -406,15 +406,18 @@ async def test_cancel_never_emits_a_success_notification(tmp_path: Path) -> None
     db = tmp_path / "jobs.sqlite3"
     gate = _Gate()
     recorder = _Recorder()
-    queue_a, queue_b = _queues(db, gate, hook_b=recorder)
+    queue_a, queue_b = _queues(db, gate, hook_a=recorder)
     backend = NativeLocalBackend(queue_a)
 
     identity = await backend.submit(_request())
     await _wait_status(queue_a, identity.job_id, JobStatus.PROCESSING)
     current = identity.with_attempt(attempt_id="a#1", fencing_token=1)
     assert await backend.cancel(current) is True
+    gate.event(1).set()  # let any uncancelled worker reach its completion path
     await asyncio.sleep(0.05)
     assert recorder.successes() == []
+    await queue_a.shutdown()
+    await queue_b.shutdown()
 
 
 # --------------------------------------------------------------------------- #
@@ -725,6 +728,40 @@ async def test_shutdown_never_resets_a_peer_process_live_row(tmp_path: Path) -> 
     gate.event(1).set()
     assert await _drain(queue_b, identity.job_id) is JobStatus.COMPLETED
     assert (await queue_b.get_result(identity.job_id) or {})["who"] == "worker-1"
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cannot_reset_a_peer_takeover_of_its_own_job_id(tmp_path: Path) -> None:
+    """A's shutdown must be fenced by attempt 1 after B owns attempt 2."""
+    db = tmp_path / "jobs.sqlite3"
+    gate = _Gate()
+    queue_a, queue_b = _queues(db, gate)
+    backend_a = NativeLocalBackend(queue_a, worker_id="A")
+
+    identity = await backend_a.submit(_request())
+    await _wait_status(queue_a, identity.job_id, JobStatus.PROCESSING)
+    assert _row(db, identity.job_id)["attempt"] == 1
+
+    # Simulate expiry-proven recovery while A's slow worker is still alive.
+    _set_started_at(db, identity.job_id, "2000-01-01T00:00:00+00:00")
+    assert await queue_b.recover_job(identity.job_id, stale_after=timedelta(hours=1)) == [
+        identity.job_id
+    ]
+    await _wait_status(queue_b, identity.job_id, JobStatus.PROCESSING)
+    assert _row(db, identity.job_id)["attempt"] == 2
+    assert gate.calls == 2
+
+    # A's cancelled worker carries claim #1; shutdown may not reset B's #2.
+    await queue_a.shutdown()
+    row = _row(db, identity.job_id)
+    assert row["status"] == JobStatus.PROCESSING.value
+    assert row["attempt"] == 2
+
+    gate.event(2).set()
+    assert await _drain(queue_b, identity.job_id) is JobStatus.COMPLETED
+    assert _row(db, identity.job_id)["attempt"] == 2
+    assert (await queue_b.get_result(identity.job_id) or {})["who"] == "worker-2"
+    await queue_b.shutdown()
 
 
 @pytest.mark.asyncio

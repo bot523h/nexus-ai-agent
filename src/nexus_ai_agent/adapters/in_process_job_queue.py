@@ -296,6 +296,10 @@ class InProcessJobQueue:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._handlers: dict[str, JobHandler] = dict(handlers or {})
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        # Active task -> reserved attempt.  Shutdown snapshots these exact
+        # fencing tokens before cancelling tasks, so it can never infer an
+        # attempt from a job id and accidentally reset a peer's newer work.
+        self._local_claims: dict[str, tuple[asyncio.Task[None], ExecutionClaim]] = {}
         self._db_lock = threading.Lock()
         self._memory_connection: sqlite3.Connection | None = None
         if self._sqlite_path == ":memory:":
@@ -862,31 +866,38 @@ class InProcessJobQueue:
         return True
 
     async def shutdown(self) -> None:
-        """Cancel local tasks and leave them recoverable as pending jobs.
+        """Cancel local tasks and leave their own attempts recoverable.
 
-        Recovery is scoped to **this process's own rows** (the job ids it had
-        scheduled, captured before the tasks are cancelled): a peer process's
-        live in-flight row must never be reset here — that would duplicate its
-        work on the next reservation.  An anomalous row left in flight by an
-        already-popped local task is out of scope by design (the DB has no
-        process owner); process-startup ``resume_pending`` owns that sweep.
+        Snapshot each live task's *reserved attempt* before cancellation.
+        The worker's ``CancelledError`` path normally reopens that same fenced
+        attempt; this fallback handles cancellation in the small pre-handler
+        window.  Both paths use the original ``ExecutionClaim`` CAS, never a
+        job-id-only sweep, so if another process has taken over the row, its
+        newer attempt remains untouched.  A task cancelled during the
+        reservation thread (before a claim is returned) is left for the
+        explicit process-startup recovery policy rather than guessed at here.
         """
         tasks = list(self._tasks.values())
-        own_jobs = set(self._tasks)  # capture first: done-callbacks pop entries
+        task_set = set(tasks)
+        local_claims = {
+            job_id: claim
+            for job_id, (owner, claim) in self._local_claims.items()
+            if owner in task_set
+        }
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        reset = await asyncio.to_thread(self._reset_unfinished, None, set(), own_jobs)
-        for job_id, job_type, attempt in reset:
-            if attempt is None:
-                continue  # never owned: re-listed pending, not a takeover
+        for job_id, claim in local_claims.items():
+            if not await asyncio.to_thread(self._mark_pending, claim):
+                continue  # already settled, terminal, or superseded by a peer
+            row = await asyncio.to_thread(self._fetch_row, job_id)
             await self._record(
                 CausalEvent(
-                    kind=EventKind.JOB_TAKEOVER,
+                    kind=EventKind.JOB_REOPENED,
                     job_id=job_id,
-                    job_type=job_type,
-                    attempt=attempt,
+                    job_type=str(row["job_type"]) if row is not None else "",
+                    attempt=claim.attempt,
                     status=JobStatus.PENDING.value,
                     detail={"mode": "shutdown"},
                     occurred_at=_now(),
@@ -899,7 +910,15 @@ class InProcessJobQueue:
             return
         task = asyncio.create_task(self._process_job(job_id))
         self._tasks[job_id] = task
-        task.add_done_callback(lambda _: self._tasks.pop(job_id, None))
+
+        def forget_task(completed: asyncio.Task[None]) -> None:
+            if self._tasks.get(job_id) is completed:
+                self._tasks.pop(job_id, None)
+            local = self._local_claims.get(job_id)
+            if local is not None and local[0] is completed:
+                self._local_claims.pop(job_id, None)
+
+        task.add_done_callback(forget_task)
 
     @staticmethod
     def _is_typed_render_preflight_error(exc: BaseException) -> bool:
@@ -1005,6 +1024,10 @@ class InProcessJobQueue:
         if claim is None:
             logger.info("job_reservation_rejected job_id=%s type=%s", job_id, job_type)
             return
+        owner = asyncio.current_task()
+        if owner is None:  # private worker entry point must be task-owned
+            raise RuntimeError("job processing requires an asyncio task")
+        self._local_claims[job_id] = (owner, claim)
         logger.info("job_processing job_id=%s type=%s attempt=%d", job_id, job_type, claim.attempt)
         await self._record(
             CausalEvent(

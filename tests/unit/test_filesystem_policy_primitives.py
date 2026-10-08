@@ -8,6 +8,7 @@ test drives a real temporary filesystem; symlinks are the attack surface.
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -191,3 +192,37 @@ def test_remove_tree_rejects_the_root(tmp_path: Path) -> None:
     ws = _ws(tmp_path)
     with pytest.raises(FilesystemBoundaryError):
         ws.remove_tree(".")
+
+
+def test_write_bytes_round_trips_inside_the_workspace(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    written = ws.write_bytes("nested/artifact.bin", b"\x00payload")
+    assert written == ws.root / "nested" / "artifact.bin"
+    assert written.read_bytes() == b"\x00payload"
+
+
+def test_write_bytes_rejects_parent_replaced_with_symlink_after_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A swap in the resolve/open gap is refused by the descriptor walk."""
+    ws = _ws(tmp_path)
+    (ws.root / "job" / "attempt" / "staging").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "marker").write_bytes(b"untouched")
+    original_parent_fd = ws._parent_fd
+
+    @contextmanager
+    def swap_before_descriptor_walk(parts: tuple[str, ...], *, create: bool = False):
+        if parts == ("job", "attempt", "staging", "victim.bin"):
+            (ws.root / "job").rename(ws.root / "job.saved")
+            os.symlink(outside, ws.root / "job")
+        with original_parent_fd(parts, create=create) as opened:
+            yield opened
+
+    monkeypatch.setattr(ws, "_parent_fd", swap_before_descriptor_walk)
+    with pytest.raises(FilesystemBoundaryError):
+        ws.write_bytes("job/attempt/staging/victim.bin", b"outside-write", create_parents=False)
+    assert (outside / "marker").read_bytes() == b"untouched"
+    assert not (outside / "attempt").exists()
+    assert (ws.root / "job.saved" / "attempt" / "staging").is_dir()

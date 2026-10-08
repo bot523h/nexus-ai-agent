@@ -51,9 +51,6 @@ from nexus_ai_agent.tools.filesystem_policy import FilesystemBoundaryError, Work
 
 __all__ = ["AttemptStaging", "StagingBoundaryError"]
 
-_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
-_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
-
 #: A single path component must be a conservative token: no separators, no
 #: traversal, no NUL.  This is deliberately stricter than a filesystem allows.
 _SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -185,20 +182,14 @@ class AttemptStaging:
         return self.staging_dir / component
 
     def write(self, name: str, data: bytes) -> Path:
-        """Write bytes into staging with ``O_NOFOLLOW`` (no leaf swap)."""
+        """Write bytes through a descriptor-relative, no-follow parent chain."""
         component = _safe_component(name, field_name="staged file name")
         self.prepare()
         _assert_no_symlink_components(self.staging_dir, (component,))
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | _NOFOLLOW | _CLOEXEC
         try:
-            fd = os.open(self.staging_dir / component, flags, 0o600)
-        except OSError as exc:  # pragma: no cover - platform dependent
-            raise StagingBoundaryError("staged file could not be opened safely") from exc
-        try:
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(data)
-        except OSError as exc:  # pragma: no cover - platform dependent
-            raise StagingBoundaryError("staged file could not be written") from exc
+            self._fs.write_bytes(f"{self._staging_rel()}/{component}", data, create_parents=False)
+        except (FilesystemBoundaryError, OSError) as exc:
+            raise StagingBoundaryError("staged file could not be written safely") from exc
         return self.staging_dir / component
 
     # -- publication ----------------------------------------------------- #

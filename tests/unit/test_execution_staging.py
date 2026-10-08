@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from nexus_ai_agent.execution import staging as staging_module
 from nexus_ai_agent.execution.staging import AttemptStaging, StagingBoundaryError
 
 ATTEMPT_1 = "attempt_1a2b3c"
@@ -449,3 +450,29 @@ def test_quarantine_replaces_an_existing_destination(tmp_path: Path) -> None:
     second = staging.quarantine("failed")
     assert second == first
     assert (second / "staging" / "a.bin").read_bytes() == b"second"
+
+
+def test_write_rejects_ancestor_symlink_swap_after_path_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real write remains contained if a checked ancestor is swapped."""
+    staging = _staging(tmp_path)
+    staging.prepare()
+    outside = _outside(tmp_path)
+    (outside / ATTEMPT_1 / "staging").mkdir(parents=True)
+    original_assert = staging_module._assert_no_symlink_components
+
+    def swap_after_component_check(base: Path, parts: tuple[str, ...]) -> None:
+        original_assert(base, parts)
+        if base == staging.staging_dir and parts == ("victim.bin",):
+            (staging.root / "job-1").rename(staging.root / "job-1.saved")
+            os.symlink(outside, staging.root / "job-1")
+
+    # Attack in the precise gap after AttemptStaging's ancestor/leaf check but
+    # before its filesystem mutation. A path-based open would write outside.
+    monkeypatch.setattr(staging_module, "_assert_no_symlink_components", swap_after_component_check)
+    with pytest.raises(StagingBoundaryError):
+        staging.write("victim.bin", b"outside-write")
+    assert (outside / "marker").read_bytes() == b"outside"
+    assert not (outside / ATTEMPT_1 / "staging" / "victim.bin").exists()
+    assert (staging.root / "job-1.saved" / ATTEMPT_1 / "staging").is_dir()

@@ -172,6 +172,39 @@ class WorkspaceFilesystem:
                 raise FilesystemBoundaryError("file could not be written") from exc
         return resolved
 
+    def write_bytes(self, raw: str, content: bytes, *, create_parents: bool = True) -> Path:
+        """Write bytes via a no-follow leaf open relative to a pinned parent fd.
+
+        The parent chain is opened one component at a time with ``O_NOFOLLOW``
+        after the lexical/canonical validation.  A concurrent replacement of
+        any ancestor with a symlink therefore fails closed instead of
+        redirecting the write outside this workspace.
+        """
+        parts = _validate_relative(raw)
+        resolved = self.resolve(raw)
+        try:
+            with self._parent_fd(parts, create=create_parents) as (parent_fd, name):
+                assert name is not None
+                flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | _NOFOLLOW | _CLOEXEC
+                try:
+                    fd = os.open(name, flags, mode=0o600, dir_fd=parent_fd)
+                except OSError as exc:
+                    raise FilesystemBoundaryError(
+                        "file could not be opened for safe writing"
+                    ) from exc
+                try:
+                    with os.fdopen(fd, "wb") as handle:
+                        handle.write(content)
+                except OSError as exc:
+                    raise FilesystemBoundaryError("file could not be written safely") from exc
+        except FilesystemBoundaryError:
+            raise
+        except OSError as exc:
+            # Includes a component swapped to a symlink between resolve() and
+            # opening the descriptor-relative parent chain.
+            raise FilesystemBoundaryError("parent path could not be opened safely") from exc
+        return resolved
+
     def list_names(self, raw: str = ".") -> list[str]:
         parts = _validate_relative(raw, allow_root=True) if raw != "." else ()
         self.resolve(raw, allow_root=True)
