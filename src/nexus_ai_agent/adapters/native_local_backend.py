@@ -149,7 +149,7 @@ class NativeLocalBackend:
         # bound identity cancels only its own attempt: a stale token (older
         # attempt) is rejected at the queue's fenced CAS and can never cancel
         # the current attempt.
-        if not identity.has_fencing_token:
+        if identity.fencing_token is None:
             return False  # fail closed: job_id alone is not cancellation authority
         return await self._queue.cancel(identity.job_id, expected_attempt=identity.fencing_token)
 
