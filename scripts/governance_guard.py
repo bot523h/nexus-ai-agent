@@ -381,8 +381,11 @@ def _split_top_level(expr: str, op: str) -> list[str]:
 
 
 #: Status functions that are true in an ordinary run and so neither add nor
-#: remove ``pull_request``: a benign extra conjunct.
-_NEUTRAL_FUNCTIONS = re.compile(r"^(?:always|success|cancelled)\s*\(\s*\)$")
+#: remove ``pull_request``: a benign extra conjunct.  ``cancelled()`` is NOT one
+#: of them — it is true only when the workflow run was *cancelled*, so a job
+#: gated on it never runs on a normal pull_request execution.  ``failure()`` is
+#: likewise false on an ordinary run.  Both must fail closed to ``unknown``.
+_NEUTRAL_FUNCTIONS = re.compile(r"^(?:always|success)\s*\(\s*\)$")
 
 
 def _strip_outer_parens(text: str) -> str:
@@ -414,7 +417,9 @@ def _term_runs_on_pr(term: str) -> str:
     """Classify one conjunction term: ``ok``, ``unknown`` or ``violation``."""
     text = _strip_outer_parens(term)
     if not text:
-        return "ok"
+        # A leading, trailing or doubled operator is malformed input, and a
+        # malformed condition is not a proof of anything: fail closed.
+        return "unknown"
     low = text.lower()
     unquoted = re.sub(r"'[^']*'|\"[^\"]*\"", " ", low).strip()
     # A term that can never be true can never run.
@@ -447,6 +452,13 @@ def _term_runs_on_pr(term: str) -> str:
 def _classify_boolean(low: str, original: str) -> tuple[str, str]:
     """Combine per-term verdicts over the top-level ``||`` then ``&&`` operators."""
     or_groups = _split_top_level(low, "||")
+    if any(not group.strip() for group in or_groups):
+        # A leading, trailing or doubled `||` is malformed input; the "any branch
+        # may pass" rule must not let a well-formed branch launder it.
+        return (
+            "unknown",
+            f"condition {original!r} has an empty branch — malformed, never a pass",
+        )
     if len(or_groups) > 1:
         verdicts = [_combine_and(group) for group in or_groups]
         # A disjunction runs if *any* branch runs.

@@ -1138,3 +1138,76 @@ def test_gov043_records_the_ruleset_plane(
     gov043 = [f for f in report.findings if f.code == "GOV043"]
     assert len(gov043) == 1, [f.to_dict() for f in report.findings]
     assert gov043[0].severity == expected_severity
+
+
+# --------------------------------------------------------------------------- #
+# GOV023 — review of the per-term rewrite (commit d28588e, external) found two
+# new holes in it, fixed here:
+#   1. `cancelled()` was listed as a NEUTRAL conjunct.  It is true only when the
+#      workflow run was cancelled, so `X && cancelled()` — and a bare
+#      `if: cancelled()` — never run on a normal pull_request execution.
+#      Reproduced against the rewritten classifier: both reported ok.
+#   2. An empty term (a trailing/leading/doubled operator) returned ok, so
+#      malformed input like `... == 'pull_request' && ` was accepted.
+#      Reproduced: it reported ok.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    ("condition", "expected"),
+    [
+        # a blocking sibling in a && chain must be examined (the external fix)
+        ("github.event_name == 'pull_request' && vars.X == 'y'", "unknown"),
+        ("github.event_name == 'pull_request' && github.event_name == 'push'", "violation"),
+        ("(github.event_name == 'pull_request') && success()", "ok"),
+        ("github.event_name == 'pull_request' || vars.X == 'y'", "ok"),
+        # cancelled()/failure() are NOT true on an ordinary PR run: never neutral
+        ("cancelled()", "unknown"),
+        ("failure()", "unknown"),
+        ("github.event_name == 'pull_request' && cancelled()", "unknown"),
+        ("github.event_name == 'pull_request' && failure()", "unknown"),
+        # malformed input (empty term) fails closed, never ok
+        ("github.event_name == 'pull_request' && ", "unknown"),
+        ("&& github.event_name == 'pull_request'", "unknown"),
+        ("github.event_name == 'pull_request' || ", "unknown"),
+    ],
+)
+def test_gov023_per_term_semantics_and_its_two_new_holes(
+    guard: ModuleType, condition: str, expected: str
+) -> None:
+    severity, reason = guard.classify_pr_condition(condition)
+    assert severity == expected, f"{condition!r}: {reason}"
+
+
+def test_gov023_a_status_function_that_is_false_on_a_normal_run_is_not_neutral(
+    guard: ModuleType,
+) -> None:
+    """Pin the neutral set: only functions true on an ordinary run may pass.
+
+    `always()` and `success()` are true on a normal pull_request execution.
+    `cancelled()` is true only when the run was cancelled and `failure()` only
+    when something failed — a job gated on either does not run normally, so
+    neither may be a benign conjunct.
+    """
+    for neutral in ("always()", "success()"):
+        assert (
+            guard.classify_pr_condition(f"github.event_name == 'pull_request' && {neutral}")[0]
+            == "ok"
+        ), neutral
+    for not_neutral in ("cancelled()", "failure()"):
+        assert (
+            guard.classify_pr_condition(f"github.event_name == 'pull_request' && {not_neutral}")[0]
+            == "unknown"
+        ), not_neutral
+        assert guard.classify_pr_condition(not_neutral)[0] == "unknown", not_neutral
+
+
+def test_gov023_malformed_input_never_reads_as_ok(guard: ModuleType) -> None:
+    """An empty term is a malformed condition; malformed is not a proof."""
+    for condition in (
+        "github.event_name == 'pull_request' && ",
+        " && github.event_name == 'pull_request'",
+        "github.event_name == 'pull_request' || ",
+        "|| github.event_name == 'pull_request'",
+    ):
+        assert guard.classify_pr_condition(condition)[0] != "ok", (
+            f"{condition!r} is malformed and must never pass"
+        )
