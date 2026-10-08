@@ -112,6 +112,7 @@ placeholder text.
 | [audits/EXECUTION_PLAN_2026-09-27.md](audits/EXECUTION_PLAN_2026-09-27.md) | Phased implementation plan with dependencies, verification/CI strategy, operational gates, and Definition of Done. |
 | [audits/FORENSIC_MAINLINE_RECOVERY_2026-10-06.md](audits/FORENSIC_MAINLINE_RECOVERY_2026-10-06.md) | Exact-SHA mainline truth audit: release-metadata defects (README version, lockstep guard, Continuum snapshot) with the delivered fixes and honest production limitations. |
 | [audits/2026-09-28-master-forensic-evolution.md](audits/2026-09-28-master-forensic-evolution.md) | Storage/R2 forensic evolution report: live truth, governance, four unified-cloud fixes, two R2 fail-closed fixes, mutation evidence, and residual handoffs. |
+| [audits/EXECUTION_CORE_CLOSURE_2026-10-08.md](audits/EXECUTION_CORE_CLOSURE_2026-10-08.md) | NEXUS V1 execution-core forensic closure (PR #191): attempt-scoped cancel/reconcile, staging symlink hardening, invariant table I1–I10, crash matrix C1–C8, deterministic race tests, and 6/6 caught security/correctness mutations at an exact SHA. |
 
 ## History (archived — read-only, never a source of truth)
 
