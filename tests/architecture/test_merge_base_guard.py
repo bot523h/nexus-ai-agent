@@ -127,7 +127,7 @@ def test_guard_is_wired_into_ci() -> None:
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
     assert re.search(r"^\s+merge-base-guard:\s*$", workflow, re.MULTILINE)
     assert "if: github.event_name == 'pull_request'" in workflow
-    assert "types: [opened, synchronize, reopened, edited]" in workflow
+    assert "types: [opened, synchronize, reopened, edited, ready_for_review]" in workflow
     assert "python scripts/merge_base_guard.py check-event" in workflow
     assert '--event "${{ github.event_name }}"' in workflow
     assert '--base "${{ github.base_ref }}"' in workflow, (
