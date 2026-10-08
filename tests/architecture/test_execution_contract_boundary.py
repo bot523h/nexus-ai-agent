@@ -154,6 +154,8 @@ def test_backend_does_not_define_a_queue_or_persistence_class() -> None:
 # Invariant table — each invariant maps to enforcement + a proving test
 # --------------------------------------------------------------------------- #
 #: invariant -> (enforcing symbol as "module:qualname", proving test node id)
+#: Each proof is a *behavioral* test over the real queue/staging, not a mere
+#: field/attribute check (the mission's P0-6 requirement).
 INVARIANT_ENFORCEMENT: dict[str, tuple[str, str]] = {
     "I1": (
         "nexus_ai_agent.adapters.in_process_job_queue:InProcessJobQueue.enqueue",
@@ -161,8 +163,9 @@ INVARIANT_ENFORCEMENT: dict[str, tuple[str, str]] = {
         "test_submit_returns_the_authoritative_identity",
     ),
     "I2": (
-        "nexus_ai_agent.execution.contract:ExecutionIdentity",
-        "tests/unit/test_execution_contract.py::test_identity_keeps_every_identity_distinct",
+        "nexus_ai_agent.adapters.native_local_backend:NativeLocalBackend.observe",
+        "tests/integration/test_execution_native_backend.py::"
+        "test_provider_retry_never_mints_a_new_nexus_attempt",
     ),
     "I3": (
         "nexus_ai_agent.adapters.in_process_job_queue:InProcessJobQueue._mark_completed",
@@ -170,9 +173,9 @@ INVARIANT_ENFORCEMENT: dict[str, tuple[str, str]] = {
         "test_stale_attempt_cannot_complete_after_takeover",
     ),
     "I4": (
-        "nexus_ai_agent.adapters.in_process_job_queue:InProcessJobQueue._mark_pending",
-        "tests/integration/test_execution_native_backend.py::"
-        "test_cancel_running_job_is_fenced_and_recoverable",
+        "nexus_ai_agent.adapters.in_process_job_queue:InProcessJobQueue._mark_completed",
+        "tests/integration/test_execution_crash_matrix.py::"
+        "test_c7_late_stale_worker_is_refused_without_a_success_notice",
     ),
     "I5": (
         "nexus_ai_agent.adapters.native_local_backend:NativeLocalBackend.observe",
@@ -180,8 +183,9 @@ INVARIANT_ENFORCEMENT: dict[str, tuple[str, str]] = {
         "test_provider_run_id_never_changes_observed_truth",
     ),
     "I6": (
-        "nexus_ai_agent.execution.contract:ExecutionResult",
-        "tests/unit/test_execution_contract.py::test_result_carries_independent_verification_evidence",
+        "nexus_ai_agent.adapters.in_process_job_queue:InProcessJobQueue._verify_safely",
+        "tests/integration/test_execution_native_backend.py::"
+        "test_handler_success_without_independent_verification_is_not_job_success",
     ),
     "I7": (
         "nexus_ai_agent.execution.contract:FailureDisposition.is_terminal_business_failure",
@@ -200,8 +204,8 @@ INVARIANT_ENFORCEMENT: dict[str, tuple[str, str]] = {
     ),
     "I10": (
         "nexus_ai_agent.adapters.in_process_job_queue:InProcessJobQueue._notify_completion",
-        "tests/integration/test_execution_native_backend.py::"
-        "test_cancel_never_emits_a_success_notification",
+        "tests/integration/test_execution_races.py::"
+        "test_success_notification_only_after_the_commit",
     ),
 }
 

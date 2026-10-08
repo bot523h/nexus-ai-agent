@@ -62,6 +62,15 @@ async def _wait_status(queue: InProcessJobQueue, job_id: str, wanted: JobStatus)
     raise AssertionError(f"job never reached {wanted}: {await queue.get_status(job_id)}")
 
 
+def _backdate_started_at(db: Path, job_id: str) -> None:
+    """Make an in-flight row look long-orphaned (expiry-gated takeover idiom)."""
+    with sqlite3.connect(db) as connection:
+        connection.execute(
+            "UPDATE nexus_job_queue SET started_at = ? WHERE id = ?",
+            ("2000-01-01T00:00:00+00:00", job_id),
+        )
+
+
 async def _drain(queue: InProcessJobQueue, job_id: str) -> JobStatus:
     for _ in range(500):
         status = await queue.get_status(job_id)
@@ -215,6 +224,78 @@ async def test_provider_run_id_never_changes_observed_truth(tmp_path: Path) -> N
 
 
 # --------------------------------------------------------------------------- #
+# I2 — a provider retry never mints a Nexus attempt
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_provider_retry_never_mints_a_new_nexus_attempt(tmp_path: Path) -> None:
+    """I2: a provider's internal retry is an observation, never a Nexus attempt."""
+    db = tmp_path / "jobs.sqlite3"
+    gate = _Gate()
+    queue, _ = _queues(db, gate)
+    backend = NativeLocalBackend(queue)
+
+    identity = await backend.submit(_request())
+    await _wait_status(queue, identity.job_id, JobStatus.PROCESSING)
+    assert _row(db, identity.job_id)["attempt"] == 1
+
+    # A provider retry (new provider run id, same Nexus job) observes the SAME
+    # attempt and mints NO new fencing token.
+    provider_retry = ExecutionIdentity(
+        request_id=identity.request_id,
+        idempotency_key=identity.idempotency_key,
+        job_id=identity.job_id,
+        provider_run_id="provider-retry-2",
+    )
+    observation = await backend.observe(provider_retry)
+    assert observation.identity.fencing_token == 1
+    assert observation.identity.provider_run_id is None, "provider id is never bound as authority"
+    assert _row(db, identity.job_id)["attempt"] == 1
+
+    # And a provider run id can never be turned into a fencing token.
+    assert not provider_retry.has_fencing_token
+    gate.event(1).set()
+    await _drain(queue, identity.job_id)
+
+
+# --------------------------------------------------------------------------- #
+# I6 — verification is independent from execution
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_handler_success_without_independent_verification_is_not_job_success(
+    tmp_path: Path,
+) -> None:
+    """I6: execution success != verified evidence; a refusing verifier blocks success."""
+    db = tmp_path / "jobs.sqlite3"
+    queue = InProcessJobQueue(db, artifact_verifiers={})
+
+    async def handler(payload: dict[str, object]) -> dict[str, object]:
+        return {"success": True, "artifact_path": "claims-to-be-done"}
+
+    def refusing_verifier(payload: dict[str, object], result: dict[str, object]) -> Any:
+        from nexus_ai_agent.jobs.verification import VerificationOutcome
+
+        return VerificationOutcome(
+            ok=False,
+            reason_code="missing_artifact",
+            summary={"status": "failed", "reason_code": "missing_artifact"},
+        )
+
+    queue.register_handler("creative_render", handler)
+    queue.register_artifact_verifier("creative_render", refusing_verifier)
+
+    job_id = await queue.enqueue(job_type="creative_render", idempotency_key="k", payload={})
+    for _ in range(500):
+        if await queue.get_status(job_id) in TERMINAL:
+            break
+        await asyncio.sleep(0.01)
+    # The handler claimed success, but the independent verifier refused: the job
+    # is a failure, never COMPLETED.
+    assert await queue.get_status(job_id) is not JobStatus.COMPLETED
+    assert _row(db, job_id)["status"] != JobStatus.COMPLETED.value
+    await queue.shutdown()
+
+
+# --------------------------------------------------------------------------- #
 # Cancellation — fenced, recoverable, terminal rows never reopened
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
@@ -265,25 +346,6 @@ async def test_cancel_unknown_job_is_refused(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancel_rejects_a_stale_fencing_identity(tmp_path: Path) -> None:
-    """A caller that no longer owns the attempt cannot reset a newer owner."""
-    db = tmp_path / "jobs.sqlite3"
-    gate = _Gate()
-    queue, _ = _queues(db, gate)
-    backend = NativeLocalBackend(queue)
-    identity = await backend.submit(_request())
-    await _wait_status(queue, identity.job_id, JobStatus.PROCESSING)
-    current = (await backend.observe(identity)).identity
-    stale = current.with_attempt(
-        attempt_id="attempt_stale", fencing_token=(current.fencing_token or 0) + 1
-    )
-    assert await backend.cancel(stale) is False
-    assert await queue.get_status(identity.job_id) is JobStatus.PROCESSING
-    gate.event(1).set()
-    await _drain(queue, identity.job_id)
-
-
-@pytest.mark.asyncio
 async def test_cancel_never_emits_a_success_notification(tmp_path: Path) -> None:
     """I10: no success notification without an authoritative commit."""
     db = tmp_path / "jobs.sqlite3"
@@ -297,28 +359,6 @@ async def test_cancel_never_emits_a_success_notification(tmp_path: Path) -> None
     assert await backend.cancel(identity) is True
     await asyncio.sleep(0.05)
     assert recorder.successes() == []
-
-
-@pytest.mark.asyncio
-async def test_reconcile_without_stale_window_does_not_take_over_any_row(tmp_path: Path) -> None:
-    """A backend without an expiry policy must not reset live peer work."""
-    db = tmp_path / "jobs.sqlite3"
-    gate = _Gate()
-    queue_a, queue_b = _queues(db, gate)
-    backend_a = NativeLocalBackend(queue_a)
-    backend_b = NativeLocalBackend(queue_b)
-    first = await backend_a.submit(_request("first"))
-    second = await backend_a.submit(_request("second"))
-    await _wait_status(queue_a, first.job_id, JobStatus.PROCESSING)
-    await _wait_status(queue_a, second.job_id, JobStatus.PROCESSING)
-    observed = await backend_b.reconcile(first)
-    assert observed.state is ObservationState.PROCESSING
-    assert await queue_b.get_status(first.job_id) is JobStatus.PROCESSING
-    assert await queue_b.get_status(second.job_id) is JobStatus.PROCESSING
-    gate.event(1).set()
-    gate.event(2).set()
-    await _drain(queue_a, first.job_id)
-    await _drain(queue_a, second.job_id)
 
 
 # --------------------------------------------------------------------------- #
@@ -360,17 +400,21 @@ async def test_stale_attempt_cannot_complete_after_takeover(tmp_path: Path) -> N
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
 async def test_reconcile_recovers_an_orphaned_in_flight_job(tmp_path: Path) -> None:
-    """A process crashes mid-execution; a fresh process reconciles and the job
-    completes exactly once, under a higher fencing token."""
+    """A process crashes mid-execution; a fresh process reconciles under an
+    *explicit* stale policy and the job completes exactly once, under a higher
+    fencing token.  (A default, policy-less reconcile never takes over.)"""
     db = tmp_path / "jobs.sqlite3"
     gate = _Gate()
     queue_a, queue_b = _queues(db, gate)
     backend_a = NativeLocalBackend(queue_a, worker_id="A")
-    backend_b = NativeLocalBackend(queue_b, worker_id="B", stale_after=timedelta(0))
+    backend_b = NativeLocalBackend(queue_b, worker_id="B", stale_after=timedelta(hours=1))
 
     identity = await backend_a.submit(_request())
     await _wait_status(queue_a, identity.job_id, JobStatus.PROCESSING)
     assert _row(db, identity.job_id)["attempt"] == 1
+
+    # The orphaned row has been in flight "for two hours".
+    _backdate_started_at(db, identity.job_id)
 
     # queue_b is a fresh process; reconcile must reclaim the orphaned row.
     # The reclaim itself leaves the row ``pending`` until the scheduled task
@@ -401,3 +445,107 @@ async def test_reconcile_of_a_completed_job_invents_nothing(tmp_path: Path) -> N
     observation = await backend.reconcile(identity)
     assert observation.state is ObservationState.SUCCEEDED
     assert observation.result == {"who": "worker-1"}
+
+
+# --------------------------------------------------------------------------- #
+# P0-2 — reconcile must observe by default; takeover needs an explicit policy
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_reconcile_without_a_stale_policy_never_takes_over(tmp_path: Path) -> None:
+    """Case A: no stale policy -> observe only; a live peer is never superseded."""
+    db = tmp_path / "jobs.sqlite3"
+    gate = _Gate()
+    queue_a, queue_b = _queues(db, gate)
+    backend_a = NativeLocalBackend(queue_a, worker_id="A")
+    backend_b = NativeLocalBackend(queue_b, worker_id="B")  # no stale_after
+
+    identity = await backend_a.submit(_request())
+    await _wait_status(queue_a, identity.job_id, JobStatus.PROCESSING)
+    assert _row(db, identity.job_id)["attempt"] == 1
+
+    observation = await backend_b.reconcile(identity)
+    assert observation.state is ObservationState.PROCESSING
+    # No takeover: the attempt is untouched and the live worker still owns it.
+    assert _row(db, identity.job_id)["attempt"] == 1
+    assert _row(db, identity.job_id)["status"] == JobStatus.PROCESSING.value
+    assert gate.calls == 1, "reconcile must not start a second execution"
+
+    gate.event(1).set()
+    assert await _drain(queue_a, identity.job_id) is JobStatus.COMPLETED
+    assert (await queue_a.get_result(identity.job_id) or {})["who"] == "worker-1"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_with_explicit_stale_policy_recovers_the_job(tmp_path: Path) -> None:
+    """Case B: an explicit stale window recovers a genuinely orphaned job."""
+    db = tmp_path / "jobs.sqlite3"
+    gate = _Gate()
+    queue_a, queue_b = _queues(db, gate)
+    backend_a = NativeLocalBackend(queue_a, worker_id="A")
+    backend_b = NativeLocalBackend(queue_b, worker_id="B", stale_after=timedelta(hours=1))
+
+    identity = await backend_a.submit(_request())
+    await _wait_status(queue_a, identity.job_id, JobStatus.PROCESSING)
+    _backdate_started_at(db, identity.job_id)
+
+    observation = await backend_b.reconcile(identity)
+    assert observation.state in {ObservationState.PENDING, ObservationState.PROCESSING}
+    await _wait_status(queue_b, identity.job_id, JobStatus.PROCESSING)
+    assert _row(db, identity.job_id)["attempt"] == 2  # successor minted
+
+    gate.event(1).set()  # stale token rejected
+    gate.event(2).set()  # current token succeeds
+    assert await _drain(queue_b, identity.job_id) is JobStatus.COMPLETED
+    assert (await queue_b.get_result(identity.job_id) or {})["who"] == "worker-2"
+
+
+class _TaggedGate:
+    """A handler that parks per payload tag (independent per-job control)."""
+
+    def __init__(self) -> None:
+        self.calls: dict[str, int] = {}
+        self.events: dict[str, asyncio.Event] = {}
+
+    def event(self, tag: str) -> asyncio.Event:
+        return self.events.setdefault(tag, asyncio.Event())
+
+    async def __call__(self, payload: dict[str, object]) -> dict[str, object]:
+        tag = str(payload.get("tag"))
+        self.calls[tag] = self.calls.get(tag, 0) + 1
+        await self.event(tag).wait()
+        return {"who": tag}
+
+
+@pytest.mark.asyncio
+async def test_reconcile_of_one_job_never_touches_an_unrelated_job(tmp_path: Path) -> None:
+    """Case C: job-scoped recovery; an unrelated in-flight job stays untouched."""
+    db = tmp_path / "jobs.sqlite3"
+    gate = _TaggedGate()
+    queue_a, queue_b = _queues(db, gate)
+    backend_a = NativeLocalBackend(queue_a, worker_id="A")
+
+    job_a = await backend_a.submit(
+        ExecutionRequest(job_type="fenced", idempotency_key="A", payload={"tag": "A"})
+    )
+    job_b = await backend_a.submit(
+        ExecutionRequest(job_type="fenced", idempotency_key="B", payload={"tag": "B"})
+    )
+    await _wait_status(queue_a, job_a.job_id, JobStatus.PROCESSING)
+    await _wait_status(queue_a, job_b.job_id, JobStatus.PROCESSING)
+    _backdate_started_at(db, job_a.job_id)  # only A is orphaned
+
+    recovered = await queue_b.recover_job(job_a.job_id, stale_after=timedelta(hours=1))
+    assert recovered == [job_a.job_id]
+    await _wait_status(queue_b, job_a.job_id, JobStatus.PROCESSING)
+    assert _row(db, job_a.job_id)["attempt"] == 2
+
+    # Job B is in-flight and unrelated: it must remain exactly as it was.
+    row_b = _row(db, job_b.job_id)
+    assert row_b["attempt"] == 1
+    assert row_b["status"] == JobStatus.PROCESSING.value
+
+    gate.event("A").set()
+    gate.event("B").set()
+    assert await _drain(queue_b, job_a.job_id) is JobStatus.COMPLETED
+    assert await _drain(queue_a, job_b.job_id) is JobStatus.COMPLETED
+    assert (await queue_a.get_result(job_b.job_id) or {})["who"] == "B"

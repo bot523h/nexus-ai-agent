@@ -19,12 +19,15 @@ Verb mapping
     ``queue.cancel`` (the additive, fenced cancellation primitive): an
     in-flight attempt is reset to ``pending`` under its current fencing token,
     so the cancelled attempt's later completion is rejected by the fenced CAS.
-    A terminal row is never reopened.
+    A terminal row is never reopened.  When the identity carries a fencing
+    token, cancellation is **attempt-scoped** (``expected_attempt``): a stale
+    identity can never cancel a newer attempt.
 ``reconcile``
-    observe; if the row is in-flight and an expiry window is configured,
-    reclaim only that row via ``queue.resume_pending`` (the only sanctioned
-    ownership transfer) and observe again.  Reconciliation never invents
-    success.
+    observe only by default — reconciliation never invents success and never
+    takes over a live peer.  A takeover happens **only** when this backend was
+    constructed with an explicit ``stale_after`` window, and then only for the
+    one ``identity.job_id`` (via ``queue.recover_job``); unrelated in-flight
+    jobs are never reset.
 """
 
 from __future__ import annotations
@@ -139,16 +142,25 @@ class NativeLocalBackend:
         return ExecutionObservation(identity=bound, state=state, result=result, failure=failure)
 
     async def cancel(self, identity: ExecutionIdentity) -> bool:
+        # Attempt-scoped when the identity carries a fencing token: a stale
+        # identity must never mutate (cancel) a newer execution.  Only a
+        # token-less identity keeps the historical job-level behaviour.
         return await self._queue.cancel(identity.job_id, expected_attempt=identity.fencing_token)
 
     async def reconcile(self, identity: ExecutionIdentity) -> ExecutionObservation:
+        """Observe the durable truth; take over only under an explicit policy.
+
+        By default ``reconcile`` observes only — it never takes over a live
+        peer and never increments the attempt.  A takeover requires that this
+        backend was constructed with an explicit ``stale_after`` window, and
+        even then it is **job-scoped**: ``queue.recover_job`` can only touch
+        ``identity.job_id``, so an unrelated in-flight job is never reset.
+        """
         observation = await self.observe(identity)
         if observation.state in _IN_FLIGHT and self._stale_after is not None:
-            # The only sanctioned ownership transfer: reclaim orphaned rows,
-            # which mints a strictly higher fencing token on the next
-            # reservation and rejects the stale attempt's later completion.
-            await self._queue.resume_pending(
-                stale_after=self._stale_after, only_job_id=identity.job_id
-            )
+            # Expiry-gated, job-scoped recovery: the only sanctioned ownership
+            # transfer at runtime.  It mints a strictly higher fencing token on
+            # the next reservation and rejects the stale attempt's completion.
+            await self._queue.recover_job(identity.job_id, stale_after=self._stale_after)
             observation = await self.observe(identity)
         return observation

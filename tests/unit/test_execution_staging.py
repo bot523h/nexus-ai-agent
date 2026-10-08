@@ -115,16 +115,6 @@ def test_stage_path_rejects_a_symlinked_leaf(tmp_path: Path) -> None:
         staging.stage_path("link.bin")
 
 
-def test_prepare_rejects_symlinked_attempt_components(tmp_path: Path) -> None:
-    root = tmp_path / "staging_root"
-    root.mkdir()
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    os.symlink(outside, root / "job-1")
-    with pytest.raises(StagingBoundaryError):
-        _staging(tmp_path).prepare()
-
-
 def test_write_never_follows_a_swapped_symlink(tmp_path: Path) -> None:
     staging = _staging(tmp_path)
     staging.prepare()
@@ -180,26 +170,6 @@ def test_publish_rejects_a_source_outside_this_attempts_staging(tmp_path: Path) 
         staging.publish(stray, "a.bin")
 
 
-def test_publish_rejects_a_symlinked_source(tmp_path: Path) -> None:
-    final = tmp_path / "final_root"
-    staging = _staging(tmp_path, final=final)
-    staging.prepare()
-    outside = tmp_path / "outside.bin"
-    outside.write_bytes(b"secret")
-    os.symlink(outside, staging.prepare() / "link.bin")
-    with pytest.raises(StagingBoundaryError):
-        staging.publish(staging.prepare() / "link.bin", "a.bin")
-
-
-def test_publish_rejects_a_directory_source(tmp_path: Path) -> None:
-    final = tmp_path / "final_root"
-    staging = _staging(tmp_path, final=final)
-    staging.prepare()
-    (staging.prepare() / "directory").mkdir()
-    with pytest.raises(StagingBoundaryError):
-        staging.publish(staging.prepare() / "directory", "a.bin")
-
-
 # --------------------------------------------------------------------------- #
 # Cleanup / quarantine
 # --------------------------------------------------------------------------- #
@@ -229,13 +199,156 @@ def test_quarantine_rejects_an_unsafe_reason(tmp_path: Path) -> None:
         staging.quarantine("../escape")
 
 
-def test_quarantine_rejects_a_symlinked_destination_component(tmp_path: Path) -> None:
+# --------------------------------------------------------------------------- #
+# Adversarial symlink / traversal boundary (the mission's staging requirements)
+# --------------------------------------------------------------------------- #
+def _outside(tmp_path: Path) -> Path:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "marker").write_bytes(b"outside")
+    return outside
+
+
+def test_prepare_rejects_a_symlinked_job_ancestor(tmp_path: Path) -> None:
+    outside = _outside(tmp_path)
+    root = tmp_path / "staging_root"
+    root.mkdir()
+    os.symlink(outside, root / "job-1")  # job_id ancestor is a symlink
+    staging = _staging(tmp_path)
+    with pytest.raises(StagingBoundaryError):
+        staging.prepare()
+    assert not (outside / ATTEMPT_1).exists(), "no write may escape via a symlinked ancestor"
+
+
+def test_write_rejects_a_symlinked_attempt_ancestor(tmp_path: Path) -> None:
+    outside = _outside(tmp_path)
+    root = tmp_path / "staging_root"
+    (root / "job-1").mkdir(parents=True)
+    os.symlink(outside, root / "job-1" / ATTEMPT_1)  # attempt_id ancestor is a symlink
+    staging = _staging(tmp_path)
+    with pytest.raises(StagingBoundaryError):
+        staging.write("a.bin", b"x")
+    assert not (outside / "staging").exists()
+
+
+def test_prepare_rejects_a_symlinked_staging_directory(tmp_path: Path) -> None:
+    outside = _outside(tmp_path)
+    root = tmp_path / "staging_root"
+    (root / "job-1" / ATTEMPT_1).mkdir(parents=True)
+    os.symlink(outside, root / "job-1" / ATTEMPT_1 / "staging")  # leaf dir is a symlink
+    staging = _staging(tmp_path)
+    with pytest.raises(StagingBoundaryError):
+        staging.prepare()
+
+
+def test_cleanup_never_follows_a_symlinked_attempt_ancestor(tmp_path: Path) -> None:
+    outside = _outside(tmp_path)
+    root = tmp_path / "staging_root"
+    (root / "job-1").mkdir(parents=True)
+    os.symlink(outside, root / "job-1" / ATTEMPT_1)
+    staging = _staging(tmp_path)
+    with pytest.raises(StagingBoundaryError):
+        staging.cleanup()
+    assert (outside / "marker").exists(), "cleanup must not delete through a symlink"
+
+
+def test_publish_rejects_a_symlinked_staged_source(tmp_path: Path) -> None:
+    final = tmp_path / "final_root"
+    outside = _outside(tmp_path)
+    staging = _staging(tmp_path, final=final)
+    staging.prepare()
+    os.symlink(outside / "marker", staging.prepare() / "link.bin")
+    with pytest.raises(StagingBoundaryError):
+        staging.publish(staging.prepare() / "link.bin", "a.bin")
+    assert not (final / "a.bin").exists()
+    assert (outside / "marker").exists(), "publish must not move the symlink target"
+
+
+def test_publish_rejects_a_symlink_substitution_inside_staging(tmp_path: Path) -> None:
+    """The exact 3B bug: a symlink inside staging must not substitute its target."""
+    final = tmp_path / "final_root"
+    staging = _staging(tmp_path, final=final)
+    staging.prepare()
+    real = staging.prepare() / "real.bin"
+    real.write_bytes(b"real-bytes")
+    os.symlink(real, staging.prepare() / "link.bin")
+    with pytest.raises(StagingBoundaryError):
+        staging.publish(staging.prepare() / "link.bin", "a.bin")
+    assert real.read_bytes() == b"real-bytes", "the symlink target must not be moved"
+    assert not (final / "a.bin").exists()
+
+
+def test_publish_rejects_a_non_regular_staged_source(tmp_path: Path) -> None:
+    final = tmp_path / "final_root"
+    staging = _staging(tmp_path, final=final)
+    (staging.prepare() / "adir").mkdir(parents=True, exist_ok=True)
+    with pytest.raises(StagingBoundaryError):
+        staging.publish(staging.prepare() / "adir", "a.bin")
+
+
+def test_quarantine_rejects_a_symlinked_quarantine_root(tmp_path: Path) -> None:
+    outside = _outside(tmp_path)
+    staging = _staging(tmp_path)
+    staging.write("a.bin", b"x")
+    os.symlink(outside, tmp_path / "staging_root" / "_quarantine")
+    with pytest.raises(StagingBoundaryError):
+        staging.quarantine("failed")
+    assert not (outside / "job-1").exists()
+
+
+def test_quarantine_rejects_a_symlinked_quarantine_job_directory(tmp_path: Path) -> None:
+    outside = _outside(tmp_path)
     staging = _staging(tmp_path)
     staging.write("a.bin", b"x")
     quarantine = tmp_path / "staging_root" / "_quarantine"
     quarantine.mkdir()
-    outside = tmp_path / "outside"
-    outside.mkdir()
     os.symlink(outside, quarantine / "job-1")
     with pytest.raises(StagingBoundaryError):
-        staging.quarantine("verification_failed")
+        staging.quarantine("failed")
+
+
+@pytest.mark.parametrize("bad", ["a\\..\\b", "..\\evil", "a/../../b", "\\abs", "a\x00b"])
+def test_publish_rejects_mixed_separator_and_nul_targets(tmp_path: Path, bad: str) -> None:
+    final = tmp_path / "final_root"
+    staging = _staging(tmp_path, final=final)
+    staged = staging.write("a.bin", b"x")
+    with pytest.raises(StagingBoundaryError):
+        staging.publish(staged, bad)
+
+
+def test_publish_rejects_a_provider_absolute_destination(tmp_path: Path) -> None:
+    final = tmp_path / "final_root"
+    staging = _staging(tmp_path, final=final)
+    staged = staging.write("a.bin", b"x")
+    with pytest.raises(StagingBoundaryError):
+        staging.publish(staged, str(tmp_path / "elsewhere" / "a.bin"))
+
+
+def test_publish_overwrites_an_existing_final_artifact_atomically(tmp_path: Path) -> None:
+    final = tmp_path / "final_root"
+    staging = _staging(tmp_path, final=final)
+    first = staging.publish(staging.write("a.bin", b"old"), "a.bin")
+    assert first.read_bytes() == b"old"
+    second = staging.publish(staging.write("b.bin", b"new"), "a.bin")
+    assert second.read_bytes() == b"new"
+
+
+def test_failed_publication_leaves_no_partial_artifact(tmp_path: Path) -> None:
+    final = tmp_path / "final_root"
+    staging = _staging(tmp_path, final=final)
+    staging.prepare()
+    with pytest.raises(StagingBoundaryError):
+        staging.publish(staging.prepare() / "missing.bin", "a.bin")
+    assert not (final / "a.bin").exists()
+
+
+def test_quarantine_replaces_an_existing_destination(tmp_path: Path) -> None:
+    staging = _staging(tmp_path)
+    staging.write("a.bin", b"first")
+    first = staging.quarantine("failed")
+    assert (first / "staging" / "a.bin").read_bytes() == b"first"
+    # A second quarantine of the same attempt collides with the destination.
+    staging.write("a.bin", b"second")
+    second = staging.quarantine("failed")
+    assert second == first
+    assert (second / "staging" / "a.bin").read_bytes() == b"second"

@@ -20,7 +20,9 @@ Isolation guarantees (each is tested in
 * **Path-traversal protection** — every component is validated; absolute
   paths, ``..``, separators inside a name, and NUL bytes are rejected.
 * **Symlink handling** — no path component may be a symlink, and files are
-  opened with ``O_NOFOLLOW`` so a swapped leaf cannot redirect a write.
+  opened with ``O_NOFOLLOW`` so a swapped leaf cannot redirect a write.  The
+  ancestor (``job_id`` / ``attempt_id`` / ``staging``), the staged source, and
+  every quarantine source/destination component are validated too.
 * **No provider-controlled final path** — a publish target must be a relative
   path contained in the *declared* ``final_root``; a caller (or provider)
   cannot name an arbitrary absolute destination.
@@ -30,18 +32,22 @@ Isolation guarantees (each is tested in
 * **Cleanup / quarantine** — a finished or failed attempt is removed or moved
   aside, never left to be mistaken for a published artifact.
 
-The low-level symlink/traversal checks mirror
-:class:`nexus_ai_agent.tools.filesystem_policy.WorkspaceFilesystem`; this module
-adds the attempt-scoped layout and the publish/quarantine lifecycle on top.
+The mutation primitives (create/rename/remove) are the additive, generic
+capabilities of :class:`nexus_ai_agent.tools.filesystem_policy.WorkspaceFilesystem`;
+this module adds the attempt-scoped layout and the publish/quarantine
+lifecycle on top of that one security boundary rather than defining a second,
+competing one.  The path-component validation below is the shared lexical
+gate both layers use.
 """
 
 from __future__ import annotations
 
 import os
 import re
-import shutil
 import stat
 from pathlib import Path
+
+from nexus_ai_agent.tools.filesystem_policy import FilesystemBoundaryError, WorkspaceFilesystem
 
 __all__ = ["AttemptStaging", "StagingBoundaryError"]
 
@@ -91,6 +97,7 @@ def _relative_parts(raw: str) -> tuple[str, ...]:
 
 
 def _assert_no_symlink_components(base: Path, parts: tuple[str, ...]) -> None:
+    """Reject any existing path component under ``base`` that is a symlink."""
     current = base
     for part in parts:
         current = current / part
@@ -125,14 +132,50 @@ class AttemptStaging:
             None if final_root is None else Path(final_root).expanduser().resolve(strict=False)
         )
         self.staging_dir = self.root / self.job_id / self.attempt_id / "staging"
+        # The one filesystem security boundary (descriptor-relative, no-follow).
+        self._fs = WorkspaceFilesystem(self.root)
+        self._final_fs = None if self.final_root is None else WorkspaceFilesystem(self.final_root)
+
+    # -- layout helpers --------------------------------------------------- #
+    def _attempt_rel(self) -> str:
+        return f"{self.job_id}/{self.attempt_id}"
+
+    def _staging_rel(self) -> str:
+        return f"{self._attempt_rel()}/staging"
+
+    def _source_relative(self, staged: str | Path) -> str:
+        """Return the contained source path relative to this attempt's staging.
+
+        Lexical containment only (no symlink resolution): the physical
+        symlink check is done descriptor-relative by ``require_regular_file``.
+        """
+        candidate = Path(staged)
+        if not candidate.is_absolute():
+            candidate = self.staging_dir / candidate
+        normalized = Path(os.path.normpath(str(candidate)))
+        if not normalized.is_relative_to(self.staging_dir):
+            raise StagingBoundaryError("staged source must live inside this attempt's staging dir")
+        rel_parts = normalized.relative_to(self.staging_dir).parts
+        if not rel_parts:
+            raise StagingBoundaryError("staged source must name a file")
+        for part in rel_parts:
+            _safe_component(part, field_name="staged source component")
+        return f"{self._staging_rel()}/" + "/".join(rel_parts)
 
     # -- staging --------------------------------------------------------- #
     def prepare(self) -> Path:
         """Create (idempotently) this attempt's staging directory."""
-        parts = (self.job_id, self.attempt_id, "staging")
-        _assert_no_symlink_components(self.root, parts)
-        self.staging_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        _assert_no_symlink_components(self.root, parts)
+        # Ancestors before creation: a symlinked job_id/attempt_id/staging
+        # must be refused, not followed.  (The root itself is operator-declared.)
+        _assert_no_symlink_components(self.root, (self.job_id, self.attempt_id, "staging"))
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+            self._fs.ensure_directory(self._attempt_rel())
+            self._fs.ensure_directory(self._staging_rel())
+        except (FilesystemBoundaryError, OSError) as exc:
+            raise StagingBoundaryError(str(exc)) from exc
+        # And after creation: the freshly created directories are real.
+        _assert_no_symlink_components(self.root, (self.job_id, self.attempt_id, "staging"))
         return self.staging_dir
 
     def stage_path(self, name: str) -> Path:
@@ -163,28 +206,20 @@ class AttemptStaging:
         """Atomically move a staged file to a contained final location.
 
         The target is a *relative* path inside the declared ``final_root``; the
-        staged source must be inside this attempt's staging directory.  The
-        move is a single ``os.replace`` (atomic on one filesystem).
+        staged source must be a regular file inside this attempt's staging
+        directory (never a symlink, never a directory).  The move is a single
+        descriptor-relative ``os.rename`` (atomic on one filesystem) that
+        cannot be redirected by a symlinked component on either side.
         """
-        if self.final_root is None:
+        if self.final_root is None or self._final_fs is None:
             raise StagingBoundaryError("publishing requires a declared final_root")
-        source = Path(staged)
+        # 3B: validate the source lexically, then prove it is a regular file
+        # descriptor-relative (rejects every symlinked ancestor and leaf).
+        source_rel = self._source_relative(staged)
         try:
-            source_parts = source.absolute().relative_to(self.staging_dir.absolute()).parts
-        except ValueError as exc:
-            raise StagingBoundaryError(
-                "staged source must live inside this attempt's staging dir"
-            ) from exc
-        _assert_no_symlink_components(self.staging_dir, source_parts)
-        try:
-            source_mode = source.lstat().st_mode
-        except FileNotFoundError as exc:
-            raise StagingBoundaryError("staged source does not exist") from exc
-        if not stat.S_ISREG(source_mode):
-            raise StagingBoundaryError("staged source must be a regular file")
-        resolved_source = source.resolve(strict=False)
-        if not resolved_source.is_relative_to(self.staging_dir.resolve(strict=False)):
-            raise StagingBoundaryError("staged source must live inside this attempt's staging dir")
+            self._fs.require_regular_file(source_rel)
+        except FilesystemBoundaryError as exc:
+            raise StagingBoundaryError(str(exc)) from exc
         parts = _relative_parts(target_rel)
         destination = self.final_root.joinpath(*parts)
         resolved_destination = destination.resolve(strict=False)
@@ -193,18 +228,37 @@ class AttemptStaging:
         if resolved_destination.is_relative_to(self.root):
             raise StagingBoundaryError("publish target must not be inside the staging root")
         _assert_no_symlink_components(self.final_root, parts)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        _assert_no_symlink_components(self.final_root, parts)
-        os.replace(source, destination)
-        return destination
+        dest_rel = "/".join(parts)
+        try:
+            self.final_root.mkdir(parents=True, exist_ok=True)
+            if len(parts) > 1:
+                self._final_fs.ensure_directory("/".join(parts[:-1]))
+            self._fs.rename_into(self._final_fs, source_rel, dest_rel)
+        except (FilesystemBoundaryError, OSError) as exc:
+            raise StagingBoundaryError(str(exc)) from exc
+        return resolved_destination
 
     # -- lifecycle ------------------------------------------------------- #
     def cleanup(self) -> None:
         """Remove this attempt's staging tree (best-effort, symlink-safe)."""
-        attempt_dir = self.root / self.job_id / self.attempt_id
+        # 3A cleanup: refuse to follow a symlinked job_id/attempt_id ancestor.
         _assert_no_symlink_components(self.root, (self.job_id, self.attempt_id))
-        if attempt_dir.exists():
-            shutil.rmtree(attempt_dir, ignore_errors=True)
+        try:
+            self._fs.remove_tree(self._attempt_rel())
+        except FilesystemBoundaryError as exc:
+            raise StagingBoundaryError(str(exc)) from exc
+
+    def _remove_destination(self, rel: str) -> None:
+        """Remove an existing quarantine destination (dir or file), safely."""
+        try:
+            self._fs.remove_tree(rel)
+        except FilesystemBoundaryError:
+            pass
+        try:
+            self._fs.require_regular_file(rel)
+        except FilesystemBoundaryError:
+            return
+        self._fs.unlink(rel)
 
     def quarantine(self, reason: str) -> Path:
         """Move this attempt's staging tree aside under ``_quarantine``.
@@ -214,15 +268,16 @@ class AttemptStaging:
         authoritative artifact.
         """
         component = _safe_component(reason, field_name="quarantine reason")
-        attempt_dir = self.root / self.job_id / self.attempt_id
-        destination = self.root / "_quarantine" / self.job_id / f"{self.attempt_id}.{component}"
+        dest_rel = f"_quarantine/{self.job_id}/{self.attempt_id}.{component}"
+        # 3C: validate the source components and the complete destination
+        # components before creating/removing/replacing anything.
         _assert_no_symlink_components(self.root, (self.job_id, self.attempt_id))
-        quarantine_parts = ("_quarantine", self.job_id, f"{self.attempt_id}.{component}")
-        _assert_no_symlink_components(self.root, quarantine_parts)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        _assert_no_symlink_components(self.root, quarantine_parts)
-        if attempt_dir.exists():
-            if destination.exists():
-                shutil.rmtree(destination, ignore_errors=True)
-            os.replace(attempt_dir, destination)
-        return destination
+        _assert_no_symlink_components(self.root, ("_quarantine", self.job_id))
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+            self._fs.ensure_directory(f"_quarantine/{self.job_id}")
+            self._remove_destination(dest_rel)
+            self._fs.rename_within(self._attempt_rel(), dest_rel)
+        except (FilesystemBoundaryError, OSError) as exc:
+            raise StagingBoundaryError(str(exc)) from exc
+        return self.root / "_quarantine" / self.job_id / f"{self.attempt_id}.{component}"

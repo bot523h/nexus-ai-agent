@@ -690,12 +690,7 @@ class InProcessJobQueue:
         }
         return chain
 
-    async def resume_pending(
-        self,
-        *,
-        stale_after: timedelta | None = None,
-        only_job_id: str | None = None,
-    ) -> list[str]:
+    async def resume_pending(self, *, stale_after: timedelta | None = None) -> list[str]:
         """Requeue jobs left unfinished by a previous process (explicit takeover).
 
         This is the **only** way ownership of an in-flight row changes hands:
@@ -716,7 +711,7 @@ class InProcessJobQueue:
         Terminal rows are never touched.
         """
         live = {job_id for job_id, task in self._tasks.items() if not task.done()}
-        reset = await asyncio.to_thread(self._reset_unfinished, stale_after, live, only_job_id)
+        reset = await asyncio.to_thread(self._reset_unfinished, stale_after, live)
         for job_id, job_type, attempt in reset:
             if attempt is not None:
                 # A real ownership transfer: the row was IN FLIGHT with a
@@ -758,6 +753,45 @@ class InProcessJobQueue:
             self._schedule(job_id)
         return job_ids
 
+    async def recover_job(self, job_id: str, *, stale_after: timedelta | None = None) -> list[str]:
+        """Recover **one** orphaned job (job-scoped, expiry-gated takeover).
+
+        Unlike :meth:`resume_pending` (whole-sidecar startup recovery), this is
+        the small, precise primitive an arbitrary runtime reconciliation may
+        use: it can only ever touch ``job_id``, so recovering one job can never
+        reset an unrelated in-flight row.  It is **never** the silent
+        ``stale_after=None`` startup takeover: with ``stale_after=None`` the
+        call observes only and takes nothing over (a runtime caller must pass
+        an explicit stale window, otherwise a live peer could still own the
+        row).  When a window is supplied, only a row whose ``started_at`` is
+        older than it is taken over.
+
+        Returns the list of job ids actually recovered (empty when nothing was
+        eligible).  Terminal rows are never touched.
+        """
+        if stale_after is None:
+            return []  # observe-only: a runtime reconcile must opt in explicitly
+        live = {jid for jid, task in self._tasks.items() if not task.done()}
+        reset = await asyncio.to_thread(self._reset_unfinished, stale_after, live, {job_id})
+        for jid, job_type, attempt in reset:
+            if attempt is not None:
+                await self._record(
+                    CausalEvent(
+                        kind=EventKind.JOB_TAKEOVER,
+                        job_id=jid,
+                        job_type=job_type,
+                        attempt=attempt,
+                        status=JobStatus.PENDING.value,
+                        detail={
+                            "mode": "job_scoped",
+                            "fencing": "previous token superseded by the next reservation",
+                        },
+                        occurred_at=_now(),
+                    )
+                )
+            self._schedule(jid)
+        return [jid for jid, _, _ in reset]
+
     async def cancel(self, job_id: str, *, expected_attempt: int | None = None) -> bool:
         """Request cancellation of an in-flight job (fenced, additive primitive).
 
@@ -769,6 +803,13 @@ class InProcessJobQueue:
         ``(PROCESSING/VERIFYING, PENDING)`` documented in
         ``jobs.lifecycle.TRANSITIONS`` (owner: *"queue (cancellation /
         shutdown)"*) and the ``JOB_REOPENED`` event kind.
+
+        ``expected_attempt`` binds the cancellation to one specific execution:
+        when supplied (a caller that holds an attempt-scoped identity passes its
+        fencing token), the reset commits **only if the row is still that
+        attempt** — a stale identity can therefore never cancel a newer attempt.
+        When ``None`` the historical job-level behaviour is kept (cancel
+        whatever attempt currently owns the row).
 
         Returns ``True`` iff an in-flight attempt was affected.  A terminal row
         is never reopened, and a row that was never owned (``pending``) is not
@@ -790,7 +831,9 @@ class InProcessJobQueue:
         if attempt < 1:
             return False  # an in-flight row always carries a minted token
         if expected_attempt is not None and attempt != expected_attempt:
-            return False  # the caller no longer owns the observed attempt
+            # A stale identity (or a lost race): the current owner is a newer
+            # attempt.  Never mutate a newer execution on behalf of an older one.
+            return False
         claim = ExecutionClaim(job_id=job_id, attempt=attempt)
         reset = await asyncio.to_thread(self._mark_pending, claim)
         if not reset:
@@ -1998,7 +2041,7 @@ class InProcessJobQueue:
         self,
         stale_after: timedelta | None,
         exclude: set[str],
-        only_job_id: str | None = None,
+        only: set[str] | None = None,
     ) -> list[tuple[str, str, int | None]]:
         """Reset orphaned rows and return only CAS-confirmed takeovers.
 
@@ -2006,6 +2049,9 @@ class InProcessJobQueue:
         never owned and is not a takeover. In-flight rows carry their previous
         attempt only when the status-and-attempt CAS actually commits, so a
         racing reservation cannot be misreported as superseded.
+
+        ``only`` restricts the sweep to a specific set of job ids (the
+        job-scoped recovery primitive); ``None`` sweeps the whole sidecar.
         """
         in_flight = (JobStatus.PROCESSING.value, JobStatus.VERIFYING.value)
         cutoff = (
@@ -2014,23 +2060,23 @@ class InProcessJobQueue:
             else None
         )
         with self._db_lock, self._connection() as connection:
-            query = """
+            rows = connection.execute(
+                """
                 SELECT id, job_type, status, started_at, attempt, attempt_history_json
                 FROM nexus_job_queue
                 WHERE status IN (?, ?, ?)
-            """
-            params: tuple[object, ...] = (JobStatus.PENDING.value, *in_flight)
-            if only_job_id is not None:
-                query += " AND id = ?"
-                params += (only_job_id,)
-            query += " ORDER BY created_at, id"
-            rows = connection.execute(query, params).fetchall()
+                ORDER BY created_at, id
+                """,
+                (JobStatus.PENDING.value, *in_flight),
+            ).fetchall()
             selected: list[tuple[str, str, int | None]] = []
             for row in rows:
                 job_id = str(row["id"])
                 job_type = str(row["job_type"])
                 if job_id in exclude:
                     continue
+                if only is not None and job_id not in only:
+                    continue  # job-scoped sweep: never touch unrelated rows
                 if str(row["status"]) in in_flight:
                     started_at = row["started_at"]
                     if cutoff is not None and started_at is not None and started_at >= cutoff:
