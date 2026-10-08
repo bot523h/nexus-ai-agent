@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-08T14:38:16Z",
+  "updated_at": "2026-10-08T18:49:26Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3448,7 +3448,7 @@
         "tests/architecture/test_execution_contract_boundary.py"
       ],
       "agent_branch": "arena/execution-core-v1-nexus-ai-agent",
-      "claimed_at": "2026-10-08T14:38:16Z",
+      "claimed_at": "2026-10-08T18:49:26Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
