@@ -260,3 +260,36 @@ def test_remove_tree_wraps_parent_reopen_symlink_race_as_boundary_error(
     assert (outside / "marker").read_bytes() == b"untouched"
     assert (ws.root / "job.saved" / "target").is_dir()
     assert not (ws.root / "job.saved" / "target" / "nested").exists()
+
+
+def test_require_regular_file_wraps_a_missing_parent_as_boundary_error(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    with pytest.raises(FilesystemBoundaryError):
+        ws.require_regular_file("missing/child.bin")
+
+
+def test_require_regular_file_wraps_parent_symlink_swap_as_boundary_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ws = _ws(tmp_path)
+    target = ws.root / "job" / "attempt" / "artifact.bin"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"inside")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "marker").write_bytes(b"untouched")
+    original_parent_fd = ws._parent_fd
+
+    @contextmanager
+    def swap_before_descriptor_walk(parts: tuple[str, ...], *, create: bool = False):
+        if parts == ("job", "attempt", "artifact.bin"):
+            (ws.root / "job").rename(ws.root / "job.saved")
+            os.symlink(outside, ws.root / "job")
+        with original_parent_fd(parts, create=create) as opened:
+            yield opened
+
+    monkeypatch.setattr(ws, "_parent_fd", swap_before_descriptor_walk)
+    with pytest.raises(FilesystemBoundaryError):
+        ws.require_regular_file("job/attempt/artifact.bin")
+    assert (outside / "marker").read_bytes() == b"untouched"
+    assert (ws.root / "job.saved" / "attempt" / "artifact.bin").read_bytes() == b"inside"

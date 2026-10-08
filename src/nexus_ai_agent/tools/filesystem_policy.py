@@ -316,14 +316,20 @@ class WorkspaceFilesystem:
         """Prove ``raw`` is a contained *regular* file (never a symlink/dir)."""
         parts = _validate_relative(raw)
         resolved = self.resolve(raw)
-        with self._parent_fd(parts) as (parent_fd, name):
-            assert name is not None
-            try:
-                info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-            except FileNotFoundError:
-                raise FilesystemBoundaryError("file does not exist") from None
-            except OSError as exc:
-                raise FilesystemBoundaryError("file could not be inspected safely") from exc
+        try:
+            with self._parent_fd(parts) as (parent_fd, name):
+                assert name is not None
+                try:
+                    info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    raise FilesystemBoundaryError("file does not exist") from None
+                except OSError as exc:
+                    raise FilesystemBoundaryError("file could not be inspected safely") from exc
+        except FilesystemBoundaryError:
+            raise
+        except OSError as exc:
+            # Includes a missing or swapped ancestor while opening parent_fd.
+            raise FilesystemBoundaryError("file could not be inspected safely") from exc
         if not stat.S_ISREG(info.st_mode):
             raise FilesystemBoundaryError("path is not a regular file")
         return resolved

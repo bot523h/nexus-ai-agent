@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-08T22:53:30Z",
+  "updated_at": "2026-10-08T23:06:18Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3463,7 +3463,7 @@
       "claimed_at": "2026-10-08T20:09:44Z",
       "ttl_hours": 24,
       "gates_owner": true,
-      "note": "NEXUS V1 forensic closure remains ACTIVE on arena/290bc0d6-nexus-ai-agent. Scope: AC-1..AC-7, findings 1-6, T1/T2, I1-I10, C1-C8; no second queue/authority. SALVAGE-TAKEOVER 2026-10-08T20:09:44Z is recorded in takeover_log; PR #191 is superseded by #192. Closed and adversarially proved: attempt-fenced cancel/reconcile, fail-closed staging/publish/cleanup/quarantine, stale completion/shutdown takeover fencing, cancellation-during-reservation shield/reopen, request-policy enforcement, and name-level passport import boundary. Mutation campaign M1-M15: 15/15 caught. Latest local full regression: 3871 passed / 31 skipped / 0 failed; Ruff+format clean; mypy clean (289 source files); test-definition audit: 0 removed. Board local check only (--no-remote), not a global verdict. Fresh exact-SHA CI/review on the next pushed head and formal merge authority remain pending; do NOT terminalize or merge yet. gates_owner=true (sole full gate runner for main-bound work).",
+      "note": "NEXUS V1 forensic closure remains ACTIVE on arena/290bc0d6-nexus-ai-agent. Scope: AC-1..AC-7, findings 1-6, T1/T2, I1-I10, C1-C8; no second queue/authority. SALVAGE-TAKEOVER 2026-10-08T20:09:44Z is recorded in takeover_log; PR #191 is superseded by #192. Closed and adversarially proved: attempt-fenced cancel/reconcile; staging symlink/write boundaries; publish/cleanup/quarantine and typed parent-walk errors; stale completion/shutdown takeover fencing; shielded reservation cancellation with fenced reopen; fail-closed request-policy enforcement; name-level passport import boundary. Mutation campaign M1-M16: 16/16 caught. Latest local full regression: 3874 passed / 31 skipped / 0 failed; Ruff+format clean; mypy clean (289 source files); test-definition audit: 0 removed. Board local check only (--no-remote), not a global verdict. Fresh exact-SHA CI/review on the next pushed head and formal merge authority remain pending; do NOT terminalize or merge yet. gates_owner=true (sole full gate runner for main-bound work).",
       "generation": 2
     }
   ],
@@ -3631,7 +3631,7 @@
       "zone": "ci-quality",
       "title": "Run scripts/execution_core_mutations.py as a CI mutation job",
       "title_fa": "اجرای کمپین mutation هستهٔ اجرا به‌عنوان job رسمی CI",
-      "why_fa": "کمپین M1-M15 امروز دستی اجرا می‌شود؛ بدون job رسمی، regression آیندهٔ تست‌ها بی‌صدا می‌میرد.",
+      "why_fa": "کمپین M1-M16 امروز دستی اجرا می‌شود؛ بدون job رسمی، regression آیندهٔ تست‌ها بی‌صدا می‌میرد.",
       "acceptance_criteria": [
         "CI job runs the campaign on PRs touching execution-core paths; red on any surviving mutant",
         "runtime budgeted (<= ~2 min); parity with the trust-mutations job pattern"

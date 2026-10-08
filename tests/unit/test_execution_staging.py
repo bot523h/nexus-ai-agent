@@ -476,3 +476,16 @@ def test_write_rejects_ancestor_symlink_swap_after_path_checks(
     assert (outside / "marker").read_bytes() == b"outside"
     assert not (outside / ATTEMPT_1 / "staging" / "victim.bin").exists()
     assert (staging.root / "job-1.saved" / ATTEMPT_1 / "staging").is_dir()
+
+
+def test_publish_after_cleanup_wraps_missing_source_parent_as_staging_error(
+    tmp_path: Path,
+) -> None:
+    """Publishing after cleanup must not leak a raw parent-walk OSError."""
+    final = tmp_path / "final_root"
+    staging = _staging(tmp_path, final=final)
+    staging.prepare()
+    staging.cleanup()
+    with pytest.raises(StagingBoundaryError):
+        staging.publish(staging.staging_dir / "missing.bin", "artifact.bin")
+    assert not (final / "artifact.bin").exists()
