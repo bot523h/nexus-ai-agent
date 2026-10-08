@@ -290,7 +290,7 @@ jobs:
       - name: Install canonical system substrate
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends ca-certificates python3.14 python3.14-venv python3-pip ffmpeg
+          apt-get install -y --no-install-recommends ca-certificates git python3.14 python3.14-venv python3-pip ffmpeg
           ln -sf /usr/bin/python3.14 /usr/local/bin/python
       - name: Verify runtime contract
         run: python scripts/check_runtime.py

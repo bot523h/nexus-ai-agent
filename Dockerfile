@@ -13,6 +13,7 @@ RUN apt-get update \
         ca-certificates \
         ffmpeg \
         fonts-liberation \
+        git \
         libgl1 \
         libmagic1 \
         python3.14 \

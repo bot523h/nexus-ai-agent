@@ -87,6 +87,7 @@ placeholder text.
 | [ops/COLOR_LANE.md](ops/COLOR_LANE.md) | Color/exposure lane runbook: EV→filter mapping, hard contracts, FFmpeg-free validation, troubleshooting. |
 | [ops/PACK_RUNTIME.md](ops/PACK_RUNTIME.md) | Unified pack runtime (wave 5): composition, activation gate, op-gap ledger, composition checklist for new packs. |
 | [ops/RUNBOOK_HARDENING.md](ops/RUNBOOK_HARDENING.md) | Runbook hardening pass (wave-4 step 8): boundary conditions, failure modes, operator knobs. |
+| [ops/LINUX_PYTHON_FOUNDATION.md](ops/LINUX_PYTHON_FOUNDATION.md) | Canonical Ubuntu 26.04 + Python 3.14 runtime contract, bootstrap, container, CI parity and evidence. |
 
 ## Audits (dated, immutable records)
 
