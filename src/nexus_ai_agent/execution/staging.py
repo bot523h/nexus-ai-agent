@@ -129,7 +129,10 @@ class AttemptStaging:
     # -- staging --------------------------------------------------------- #
     def prepare(self) -> Path:
         """Create (idempotently) this attempt's staging directory."""
+        parts = (self.job_id, self.attempt_id, "staging")
+        _assert_no_symlink_components(self.root, parts)
         self.staging_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        _assert_no_symlink_components(self.root, parts)
         return self.staging_dir
 
     def stage_path(self, name: str) -> Path:
@@ -166,11 +169,22 @@ class AttemptStaging:
         if self.final_root is None:
             raise StagingBoundaryError("publishing requires a declared final_root")
         source = Path(staged)
+        try:
+            source_parts = source.absolute().relative_to(self.staging_dir.absolute()).parts
+        except ValueError as exc:
+            raise StagingBoundaryError(
+                "staged source must live inside this attempt's staging dir"
+            ) from exc
+        _assert_no_symlink_components(self.staging_dir, source_parts)
+        try:
+            source_mode = source.lstat().st_mode
+        except FileNotFoundError as exc:
+            raise StagingBoundaryError("staged source does not exist") from exc
+        if not stat.S_ISREG(source_mode):
+            raise StagingBoundaryError("staged source must be a regular file")
         resolved_source = source.resolve(strict=False)
         if not resolved_source.is_relative_to(self.staging_dir.resolve(strict=False)):
             raise StagingBoundaryError("staged source must live inside this attempt's staging dir")
-        if not resolved_source.is_file():
-            raise StagingBoundaryError("staged source does not exist")
         parts = _relative_parts(target_rel)
         destination = self.final_root.joinpath(*parts)
         resolved_destination = destination.resolve(strict=False)
@@ -180,14 +194,16 @@ class AttemptStaging:
             raise StagingBoundaryError("publish target must not be inside the staging root")
         _assert_no_symlink_components(self.final_root, parts)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(resolved_source, resolved_destination)
-        return resolved_destination
+        _assert_no_symlink_components(self.final_root, parts)
+        os.replace(source, destination)
+        return destination
 
     # -- lifecycle ------------------------------------------------------- #
     def cleanup(self) -> None:
         """Remove this attempt's staging tree (best-effort, symlink-safe)."""
         attempt_dir = self.root / self.job_id / self.attempt_id
-        if attempt_dir.exists() and not attempt_dir.is_symlink():
+        _assert_no_symlink_components(self.root, (self.job_id, self.attempt_id))
+        if attempt_dir.exists():
             shutil.rmtree(attempt_dir, ignore_errors=True)
 
     def quarantine(self, reason: str) -> Path:
@@ -200,8 +216,12 @@ class AttemptStaging:
         component = _safe_component(reason, field_name="quarantine reason")
         attempt_dir = self.root / self.job_id / self.attempt_id
         destination = self.root / "_quarantine" / self.job_id / f"{self.attempt_id}.{component}"
+        _assert_no_symlink_components(self.root, (self.job_id, self.attempt_id))
+        quarantine_parts = ("_quarantine", self.job_id, f"{self.attempt_id}.{component}")
+        _assert_no_symlink_components(self.root, quarantine_parts)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        if attempt_dir.exists() and not attempt_dir.is_symlink():
+        _assert_no_symlink_components(self.root, quarantine_parts)
+        if attempt_dir.exists():
             if destination.exists():
                 shutil.rmtree(destination, ignore_errors=True)
             os.replace(attempt_dir, destination)

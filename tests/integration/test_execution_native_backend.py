@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -264,6 +265,25 @@ async def test_cancel_unknown_job_is_refused(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancel_rejects_a_stale_fencing_identity(tmp_path: Path) -> None:
+    """A caller that no longer owns the attempt cannot reset a newer owner."""
+    db = tmp_path / "jobs.sqlite3"
+    gate = _Gate()
+    queue, _ = _queues(db, gate)
+    backend = NativeLocalBackend(queue)
+    identity = await backend.submit(_request())
+    await _wait_status(queue, identity.job_id, JobStatus.PROCESSING)
+    current = (await backend.observe(identity)).identity
+    stale = current.with_attempt(
+        attempt_id="attempt_stale", fencing_token=(current.fencing_token or 0) + 1
+    )
+    assert await backend.cancel(stale) is False
+    assert await queue.get_status(identity.job_id) is JobStatus.PROCESSING
+    gate.event(1).set()
+    await _drain(queue, identity.job_id)
+
+
+@pytest.mark.asyncio
 async def test_cancel_never_emits_a_success_notification(tmp_path: Path) -> None:
     """I10: no success notification without an authoritative commit."""
     db = tmp_path / "jobs.sqlite3"
@@ -277,6 +297,28 @@ async def test_cancel_never_emits_a_success_notification(tmp_path: Path) -> None
     assert await backend.cancel(identity) is True
     await asyncio.sleep(0.05)
     assert recorder.successes() == []
+
+
+@pytest.mark.asyncio
+async def test_reconcile_without_stale_window_does_not_take_over_any_row(tmp_path: Path) -> None:
+    """A backend without an expiry policy must not reset live peer work."""
+    db = tmp_path / "jobs.sqlite3"
+    gate = _Gate()
+    queue_a, queue_b = _queues(db, gate)
+    backend_a = NativeLocalBackend(queue_a)
+    backend_b = NativeLocalBackend(queue_b)
+    first = await backend_a.submit(_request("first"))
+    second = await backend_a.submit(_request("second"))
+    await _wait_status(queue_a, first.job_id, JobStatus.PROCESSING)
+    await _wait_status(queue_a, second.job_id, JobStatus.PROCESSING)
+    observed = await backend_b.reconcile(first)
+    assert observed.state is ObservationState.PROCESSING
+    assert await queue_b.get_status(first.job_id) is JobStatus.PROCESSING
+    assert await queue_b.get_status(second.job_id) is JobStatus.PROCESSING
+    gate.event(1).set()
+    gate.event(2).set()
+    await _drain(queue_a, first.job_id)
+    await _drain(queue_a, second.job_id)
 
 
 # --------------------------------------------------------------------------- #
@@ -324,7 +366,7 @@ async def test_reconcile_recovers_an_orphaned_in_flight_job(tmp_path: Path) -> N
     gate = _Gate()
     queue_a, queue_b = _queues(db, gate)
     backend_a = NativeLocalBackend(queue_a, worker_id="A")
-    backend_b = NativeLocalBackend(queue_b, worker_id="B")
+    backend_b = NativeLocalBackend(queue_b, worker_id="B", stale_after=timedelta(0))
 
     identity = await backend_a.submit(_request())
     await _wait_status(queue_a, identity.job_id, JobStatus.PROCESSING)

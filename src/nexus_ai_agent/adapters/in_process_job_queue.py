@@ -690,7 +690,12 @@ class InProcessJobQueue:
         }
         return chain
 
-    async def resume_pending(self, *, stale_after: timedelta | None = None) -> list[str]:
+    async def resume_pending(
+        self,
+        *,
+        stale_after: timedelta | None = None,
+        only_job_id: str | None = None,
+    ) -> list[str]:
         """Requeue jobs left unfinished by a previous process (explicit takeover).
 
         This is the **only** way ownership of an in-flight row changes hands:
@@ -711,7 +716,7 @@ class InProcessJobQueue:
         Terminal rows are never touched.
         """
         live = {job_id for job_id, task in self._tasks.items() if not task.done()}
-        reset = await asyncio.to_thread(self._reset_unfinished, stale_after, live)
+        reset = await asyncio.to_thread(self._reset_unfinished, stale_after, live, only_job_id)
         for job_id, job_type, attempt in reset:
             if attempt is not None:
                 # A real ownership transfer: the row was IN FLIGHT with a
@@ -753,7 +758,7 @@ class InProcessJobQueue:
             self._schedule(job_id)
         return job_ids
 
-    async def cancel(self, job_id: str) -> bool:
+    async def cancel(self, job_id: str, *, expected_attempt: int | None = None) -> bool:
         """Request cancellation of an in-flight job (fenced, additive primitive).
 
         Cancellation is a **process-lifecycle** event, never a business
@@ -784,6 +789,8 @@ class InProcessJobQueue:
         attempt = int(row["attempt"] or 0)
         if attempt < 1:
             return False  # an in-flight row always carries a minted token
+        if expected_attempt is not None and attempt != expected_attempt:
+            return False  # the caller no longer owns the observed attempt
         claim = ExecutionClaim(job_id=job_id, attempt=attempt)
         reset = await asyncio.to_thread(self._mark_pending, claim)
         if not reset:
@@ -1988,7 +1995,10 @@ class InProcessJobQueue:
         )
 
     def _reset_unfinished(
-        self, stale_after: timedelta | None, exclude: set[str]
+        self,
+        stale_after: timedelta | None,
+        exclude: set[str],
+        only_job_id: str | None = None,
     ) -> list[tuple[str, str, int | None]]:
         """Reset orphaned rows and return only CAS-confirmed takeovers.
 
@@ -2004,15 +2014,17 @@ class InProcessJobQueue:
             else None
         )
         with self._db_lock, self._connection() as connection:
-            rows = connection.execute(
-                """
+            query = """
                 SELECT id, job_type, status, started_at, attempt, attempt_history_json
                 FROM nexus_job_queue
                 WHERE status IN (?, ?, ?)
-                ORDER BY created_at, id
-                """,
-                (JobStatus.PENDING.value, *in_flight),
-            ).fetchall()
+            """
+            params: tuple[object, ...] = (JobStatus.PENDING.value, *in_flight)
+            if only_job_id is not None:
+                query += " AND id = ?"
+                params += (only_job_id,)
+            query += " ORDER BY created_at, id"
+            rows = connection.execute(query, params).fetchall()
             selected: list[tuple[str, str, int | None]] = []
             for row in rows:
                 job_id = str(row["id"])

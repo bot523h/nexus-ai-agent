@@ -9,7 +9,7 @@ Two pieces, one authority:
 * :mod:`nexus_ai_agent.execution.staging` — attempt-scoped staging isolation,
   the filesystem half of the two-phase publication the queue already enforces.
 
-The concrete backend lives in ``adapters/native_local_execution.py`` and
+The concrete backend lives in ``adapters/native_local_backend.py`` and
 delegates to the single execution authority (``InProcessJobQueue``).
 """
 

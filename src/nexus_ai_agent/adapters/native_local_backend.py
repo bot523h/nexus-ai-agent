@@ -21,9 +21,10 @@ Verb mapping
     so the cancelled attempt's later completion is rejected by the fenced CAS.
     A terminal row is never reopened.
 ``reconcile``
-    observe; if the row is in-flight, reclaim orphaned rows via
-    ``queue.resume_pending`` (the only sanctioned ownership transfer) and
-    observe again.  Reconciliation never invents success.
+    observe; if the row is in-flight and an expiry window is configured,
+    reclaim only that row via ``queue.resume_pending`` (the only sanctioned
+    ownership transfer) and observe again.  Reconciliation never invents
+    success.
 """
 
 from __future__ import annotations
@@ -138,14 +139,16 @@ class NativeLocalBackend:
         return ExecutionObservation(identity=bound, state=state, result=result, failure=failure)
 
     async def cancel(self, identity: ExecutionIdentity) -> bool:
-        return await self._queue.cancel(identity.job_id)
+        return await self._queue.cancel(identity.job_id, expected_attempt=identity.fencing_token)
 
     async def reconcile(self, identity: ExecutionIdentity) -> ExecutionObservation:
         observation = await self.observe(identity)
-        if observation.state in _IN_FLIGHT:
+        if observation.state in _IN_FLIGHT and self._stale_after is not None:
             # The only sanctioned ownership transfer: reclaim orphaned rows,
             # which mints a strictly higher fencing token on the next
             # reservation and rejects the stale attempt's later completion.
-            await self._queue.resume_pending(stale_after=self._stale_after)
+            await self._queue.resume_pending(
+                stale_after=self._stale_after, only_job_id=identity.job_id
+            )
             observation = await self.observe(identity)
         return observation

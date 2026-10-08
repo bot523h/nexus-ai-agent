@@ -115,6 +115,16 @@ def test_stage_path_rejects_a_symlinked_leaf(tmp_path: Path) -> None:
         staging.stage_path("link.bin")
 
 
+def test_prepare_rejects_symlinked_attempt_components(tmp_path: Path) -> None:
+    root = tmp_path / "staging_root"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    os.symlink(outside, root / "job-1")
+    with pytest.raises(StagingBoundaryError):
+        _staging(tmp_path).prepare()
+
+
 def test_write_never_follows_a_swapped_symlink(tmp_path: Path) -> None:
     staging = _staging(tmp_path)
     staging.prepare()
@@ -170,6 +180,26 @@ def test_publish_rejects_a_source_outside_this_attempts_staging(tmp_path: Path) 
         staging.publish(stray, "a.bin")
 
 
+def test_publish_rejects_a_symlinked_source(tmp_path: Path) -> None:
+    final = tmp_path / "final_root"
+    staging = _staging(tmp_path, final=final)
+    staging.prepare()
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"secret")
+    os.symlink(outside, staging.prepare() / "link.bin")
+    with pytest.raises(StagingBoundaryError):
+        staging.publish(staging.prepare() / "link.bin", "a.bin")
+
+
+def test_publish_rejects_a_directory_source(tmp_path: Path) -> None:
+    final = tmp_path / "final_root"
+    staging = _staging(tmp_path, final=final)
+    staging.prepare()
+    (staging.prepare() / "directory").mkdir()
+    with pytest.raises(StagingBoundaryError):
+        staging.publish(staging.prepare() / "directory", "a.bin")
+
+
 # --------------------------------------------------------------------------- #
 # Cleanup / quarantine
 # --------------------------------------------------------------------------- #
@@ -197,3 +227,15 @@ def test_quarantine_rejects_an_unsafe_reason(tmp_path: Path) -> None:
     staging.prepare()
     with pytest.raises(StagingBoundaryError):
         staging.quarantine("../escape")
+
+
+def test_quarantine_rejects_a_symlinked_destination_component(tmp_path: Path) -> None:
+    staging = _staging(tmp_path)
+    staging.write("a.bin", b"x")
+    quarantine = tmp_path / "staging_root" / "_quarantine"
+    quarantine.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    os.symlink(outside, quarantine / "job-1")
+    with pytest.raises(StagingBoundaryError):
+        staging.quarantine("verification_failed")
