@@ -5,6 +5,8 @@
 **Branch:** `arena/execution-core-v1-nexus-ai-agent`
 **Evidence capture:** 2026-10-08
 
+> This record captures the live PR state at tip `118af102…` immediately before this report-only publication commit; the publication commit changes documentation only.
+
 > **Verdict at capture:** `HARDENED_BUT_NOT_COMPLETE`
 >
 > The execution-core implementation and local proofs are hardened and green, but this record does **not** claim final closure: the current-head GitHub CI is still pending, CodeRabbit has no newly submitted review record for the current head, and the repository board has no valid live `gates_owner`.
@@ -15,14 +17,14 @@
 |---|---|
 | Repository | `bot523h/nexus-ai-agent` |
 | `origin/main` | `48f280c5a1f1f595aa713100f73724651944c871` |
-| Current PR tip at final audit | `18253132cc6343f1faf303ebdebeb070f37b0fad` |
+| Current PR tip at final audit | `118af102c0d7ff5fef76d27a99c5e5c839b1ed2b` |
 | Branch | `arena/execution-core-v1-nexus-ai-agent` |
 | Base | `main` at `48f280c5a1f1f595aa713100f73724651944c871` |
 | PR state | Open, not merged, not closed |
 | Merge state | `MERGEABLE`; merge blocked while required checks are pending |
 | Working tree | Clean after fast-forwarding to the live branch before this report-only update |
 
-The current PR tip is the non-destructive report-only merge `1825313…`; the implementation evidence parent is `edcdc733…`, and the last pre-merge report publication was `44b9322…`. The merge contains documentation only and does not alter execution code.
+The current PR tip at capture is `118af10…`; it is report-only history after the unchanged technical evidence parent `44b9322…`. It does not alter execution code.
 
 The immediately preceding implementation commit was:
 
@@ -42,8 +44,9 @@ The complete execution-core history from `origin/main` to the implementation evi
 10. `525cb29` — cancellation cleanup and successor scheduling
 11. `edcdc73` — cancellation-race test alignment
 12. `44b9322` — live closure report correction
-13. `5a270b4` — parallel full-suite report note (preserved in the merge history)
+13. `5a270b4` — parallel full-suite report note
 14. `1825313` — non-destructive merge preserving the authoritative report
+15. `118af10` — final live closure evidence report publication
 
 ## 2. Task-254 acceptance criteria
 
@@ -175,7 +178,7 @@ The harness restores the source after each mutation and leaves the tree clean.
 
 ## 8. Exact-SHA CI
 
-The current PR tip is `18253132cc6343f1faf303ebdebeb070f37b0fad`. The prior CI runs `37837927074` and `37837934842` covered the parent report head `44b9322…` and were cancelled before required jobs completed. No terminal green exact-SHA CI evidence exists yet for `1825313…`; the PR currently reports required checks as pending.
+The current PR tip at capture is `118af102c0d7ff5fef76d27a99c5e5c839b1ed2b`. Its exact-SHA CI runs are still incomplete: the PR currently reports 11 successful checks, 1 skipped check, and 27 pending checks. No terminal green exact-SHA CI evidence exists yet.
 
 At evidence capture, the current-head required checks are not terminal: the PR reports pending continuum-evidence, test, parity, extras, lint, migration, and mutation jobs. Therefore `CURRENT_PR_HEAD == CI_TESTED_SHA` is known, but **current-head CI is not yet green and terminal**.
 
@@ -189,7 +192,7 @@ The latest completed CodeRabbit review record is:
 - reviewed commit `a50d87428bd3c6e2081ce94aa01fec1bc003df55`;
 - state `CHANGES_REQUESTED`.
 
-A valid inline finding on the prior report commit `edcdc733` remained on the report at line 27: the phrase “full 4-commit history” was ambiguous because the report listed seven pre-report commits. The finding is actionable and has not been dismissed. A later CodeRabbit status is `Review paused`, but there is no newly submitted review record for the current PR tip `18253132cc6343f1faf303ebdebeb070f37b0fad` proving zero actionable findings.
+A valid inline finding on the prior report commit `edcdc733` remained on the report at line 27: the phrase “full 4-commit history” was ambiguous because the report listed seven pre-report commits. The finding is actionable and has not been dismissed. A later CodeRabbit status is `Review paused`, but there is no newly submitted review record for the current PR tip `118af102c0d7ff5fef76d27a99c5e5c839b1ed2b` proving zero actionable findings.
 
 This report rewrite addresses the finding by explicitly listing the complete commit history and removing the ambiguous phrase. A fresh CodeRabbit review is still required for the current report head.
 
@@ -212,7 +215,7 @@ Only these evidence-backed blockers remain:
 1. exact-SHA CI for the live head is queued/in progress rather than terminal green;
 2. the current-head CodeRabbit review has no newly submitted review record proving zero actionable findings, and the previously valid report-thread finding required this rewrite;
 3. board governance has no valid live `gates_owner`, and the referee is fail-closed on that precondition;
-4. full non-slow is green locally on the unchanged technical evidence parent (`3841 passed, 31 skipped`); exact-SHA CI for the current merge tip is still pending/missing.
+4. full non-slow is green locally on the unchanged technical evidence parent (`3841 passed, 31 skipped`); exact-SHA CI for the captured live tip is still pending.
 
 ## 12. Final verdict
 
