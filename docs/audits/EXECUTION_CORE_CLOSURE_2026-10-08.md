@@ -17,14 +17,16 @@
 |---|---|
 | Repository | `bot523h/nexus-ai-agent` |
 | `origin/main` | `48f280c5a1f1f595aa713100f73724651944c871` |
-| Current PR tip at final audit | `118af102c0d7ff5fef76d27a99c5e5c839b1ed2b` |
+| Current PR tip at final audit | `3cd735b64a95b6a30938f6f60148b7a3237a494b` |
 | Branch | `arena/execution-core-v1-nexus-ai-agent` |
 | Base | `main` at `48f280c5a1f1f595aa713100f73724651944c871` |
 | PR state | Open, not merged, not closed |
-| Merge state | `MERGEABLE`; merge blocked while required checks are pending |
+| Merge state | `MERGEABLE`; exact-SHA CI terminal green (see §8) |
 | Working tree | Clean after fast-forwarding to the live branch before this report-only update |
 
-The current PR tip at capture is `118af10…`; it is report-only history after the unchanged technical evidence parent `44b9322…`. It does not alter execution code.
+The current PR tip `3cd735b…` is report-only history: since the unchanged
+technical evidence parent `edcdc733…` the only non-doc change is the board
+claim note (M1–M6 → M1–M7). No execution code changed.
 
 The immediately preceding implementation commit was:
 
@@ -174,15 +176,30 @@ The harness restores the source after each mutation and leaves the tree clean.
 | Ruff | passed |
 | Ruff format check | passed |
 | Mypy | `Success: no issues found in 289 source files` |
-| Full non-slow local suite | Earlier run reached `3839 passed, 31 skipped` but had one unrelated SQLite schema-change failure; `3841 passed, 31 skipped, 194 warnings` on technical evidence head `44b93221e5fb6aa97e6abe00cc72c78ac3c1f217` |
+| Full non-slow local suite | `pytest -q -m "not slow"` on the unchanged code head `edcdc733`: `3841 passed, 31 skipped, 0 failed` (306.68s) |
 
 ## 8. Exact-SHA CI
 
-The current PR tip at capture is `118af102c0d7ff5fef76d27a99c5e5c839b1ed2b`. Its exact-SHA CI runs are still incomplete: the PR currently reports 11 successful checks, 1 skipped check, and 27 pending checks. No terminal green exact-SHA CI evidence exists yet.
+The exact PR tip `3cd735b64a95b6a30938f6f60148b7a3237a494b` has **terminal
+green** CI on both triggering events:
 
-At evidence capture, the current-head required checks are not terminal: the PR reports pending continuum-evidence, test, parity, extras, lint, migration, and mutation jobs. Therefore `CURRENT_PR_HEAD == CI_TESTED_SHA` is known, but **current-head CI is not yet green and terminal**.
+- push run `37841306966` — **success**;
+- pull_request run `37841316342` — **success**.
 
-Earlier green checks on `525cb29`, `a50d874`, `08060d5`, or older SHAs are not accepted as evidence for the current head.
+`gh pr checks 191` reports 0 pending / 0 failing; every job is `pass` (or the
+by-design `skipping` of `merge-base-guard` on the `push` event).
+
+`test (pytest -m "not slow")` job `113531088191` (push run) observed:
+
+```text
+3842 passed, 30 skipped, 194 warnings in 262.27s (0:04:22)
+```
+
+Lint (`ruff + mypy + version lockstep`), `lint-fast`, `python-parity`
+(3.10/3.11/3.12), `extras-matrix` (core/pdf/speech/translate),
+`continuum-evidence` (3.10/3.11/3.12), `migrate-postgres`, `release-lineage`,
+and the mutation jobs (`trust`, `temporal`, `remote-key`) all passed for the
+same SHA. Earlier SHAs' green runs are not used as evidence here.
 
 ## 9. CodeRabbit closure
 
@@ -210,17 +227,35 @@ Task-254 remains `active` on the board:
 
 ## 11. Remaining limitations and blockers
 
-Only these evidence-backed blockers remain:
+Evidence-backed limitations that remain:
 
-1. exact-SHA CI for the live head is queued/in progress rather than terminal green;
-2. the current-head CodeRabbit review has no newly submitted review record proving zero actionable findings, and the previously valid report-thread finding required this rewrite;
-3. board governance has no valid live `gates_owner`, and the referee is fail-closed on that precondition;
-4. full non-slow is green locally on the unchanged technical evidence parent (`3841 passed, 31 skipped`); exact-SHA CI for the captured live tip is still pending.
+1. **Governance (not a correctness gap):** the board has no live `gates_owner`,
+   and `agent_board.py check` is fail-closed on that precondition. Per AGENTS.md
+   §1.4, only the single `gates_owner` runs the full gates on main-bound work;
+   this session's green CI/local gates are diagnostic, not the gate. Release
+   authority remains governed — the PR is **not merged**.
+2. **Fresh review record:** all 8 review threads (6 original + `filesystem_policy`
+   + docs) are `RESOLVED`, and the latest CodeRabbit check is `pass`
+   (`Review paused`); there is no newly *submitted* CodeRabbit review for the
+   exact tip `3cd735b` proving zero findings at review time.
+3. **Crash model:** the crash matrix simulates a process restart as a fresh
+   `InProcessJobQueue` over the same SQLite sidecar (the bot/CLI model); it does
+   not kill an OS process or exercise a hostile filesystem concurrently with a
+   live writer.
+4. **Clock/sidecar scope:** `recover_job`'s expiry-gated takeover assumes a
+   single-host SQLite sidecar and monotonic-ish `started_at`; cross-host clock
+   skew is out of scope for V1.
 
 ## 12. Final verdict
 
-**`HARDENED_BUT_NOT_COMPLETE`**
+**`VERIFIED_WITH_LIMITATIONS`** — for the execution-core implementation.
 
-The Task-254 implementation satisfies the acceptance criteria and executable local proofs on the current code head, but Task-254 is **not yet finally closed** because exact-head CI, fresh CodeRabbit review closure, full current-head non-slow evidence, and governance ownership are not all simultaneously proven.
+Every V1 property (ONE CONTRACT, ONE QUEUE, ONE AUTHORITY, ONE FENCING MODEL,
+ONE VERIFIED COMPLETION PATH) has a live-code enforcement symbol, an executable
+proof, and a passing mutation probe; the full non-slow suite is green locally
+(`3841 passed, 31 skipped`) and in exact-SHA CI (`3842 passed, 30 skipped`).
 
-No PR was merged or closed, no branch was deleted, no force-push was used, and no unrelated feature or architecture was changed.
+The limitations in §11 are governance/scope, not unproven correctness. The PR
+is left **open, unmerged, unclosed**; no branch was deleted, no force-push was
+used, no history was rewritten, and no unrelated feature or architecture was
+changed.
