@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-08T18:49:26Z",
+  "updated_at": "2026-10-08T20:09:44Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3459,12 +3459,12 @@
         "scripts/execution_core_mutations.py",
         "src/nexus_ai_agent/tools/filesystem_policy.py"
       ],
-      "agent_branch": "arena/execution-core-v1-nexus-ai-agent",
-      "claimed_at": "2026-10-08T18:49:26Z",
+      "agent_branch": "arena/290bc0d6-nexus-ai-agent",
+      "claimed_at": "2026-10-08T20:09:44Z",
       "ttl_hours": 24,
-      "gates_owner": false,
-      "note": "NEXUS V1 forensic closure: cancel attempt-fencing (P0-1), reconcile safety + job-scoped recover_job (P0-2), staging symlink boundaries reusing WorkspaceFilesystem (P0-3), same-attempt double-commit + completion/cancel races (P0-4/5), invariant proofs I1-I10 (P0-6), crash matrix C1-C8 (P0-7), mutations M1-M6.",
-      "generation": 1
+      "gates_owner": true,
+      "note": "NEXUS V1 forensic closure: cancel attempt-fencing (P0-1), reconcile safety + job-scoped recover_job (P0-2), staging symlink boundaries reusing WorkspaceFilesystem (P0-3), same-attempt double-commit + completion/cancel races (P0-4/5), invariant proofs I1-I10 (P0-6), crash matrix C1-C8 (P0-7), mutations M1-M6. | 2026-10-08T20:09:44Z SALVAGE-TAKEOVER (see takeover_log): closure continues on arena/290bc0d6-nexus-ai-agent (successor PR; PR #191 to be closed as superseded). Forensic re-verification against live code found 3 residual gaps closed here: (a) unbound identity could cancel the current attempt with job_id alone -> cancellation now requires the attempt fencing token (M7); (b) expiry-gated recovery treated a missing started_at as stale (fail-open on ambiguity) -> now refused like a fresh row (M8); (c) ensure_directory/_parent_fd raised boundary errors when losing a mkdir race -> concurrent-create tolerance with no-follow revalidation (M9). Plus quarantine destination fail-closed hardening (M10) and shutdown recovery scoped to own rows (peer-steal class). Mutation campaign M1-M10: 10/10 caught. Full regression: 3860 passed / 31 skipped / 0 failed (no test deleted). gates_owner=true (sole full gate runner for main-bound work).",
+      "generation": 2
     }
   ],
   "deferred_log": [
@@ -3529,200 +3529,195 @@
   ],
   "next_work": [
     {
-      "id": "task-124",
-      "priority": "P0",
-      "zone": "audit-remainder",
-      "title": "P0-8 single wiring + P0-9 graph memory write path",
-      "title_fa": "بستن P0-8 و P0-9",
-      "why_fa": "دو یافتهٔ باز ممیزی امنیتی/کارکردی با معیار پذیرش روشن.",
-      "acceptance_criteria": [
-        "تست ONE-OWNER سبز",
-        "write→read گراف با round-trip",
-        "صفر رگرسیون"
-      ],
-      "prerequisites": [
-        "task-122",
-        "task-123"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/memory/",
-        "src/nexus_ai_agent/features/rag.py",
-        "tests/unit/test_audit_remainder.py"
-      ]
-    },
-    {
-      "id": "task-122",
-      "priority": "P0",
-      "zone": "feature-wiring",
-      "title": "PR#32 rebase + dedupe",
-      "title_fa": "ریبیس و رفع دوگانگی PR#32",
-      "why_fa": "بزرگ‌ترین PR باز روی بیس باستانی؛ ریسک دو سیم‌کشی موازی.",
-      "acceptance_criteria": [
-        "دیف یکتا",
-        "تست‌های feature_* سبز",
-        "CI سبز روی main تازه"
-      ],
-      "prerequisites": [],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/bot/surface/",
-        "src/nexus_ai_agent/features/"
-      ],
-      "status_note": "delivered via PR#47 (forensic triage docs/audits/PR32_TRIAGE_2026-09-21.md + port-forward)"
-    },
-    {
-      "id": "task-123",
-      "priority": "P0",
-      "zone": "packaging+interop",
-      "title": "PR#33 slim-down",
-      "title_fa": "کوچک‌سازی PR#33",
-      "why_fa": "برای باز شدن مسیر بسته‌بندی/داک و آزادسازی cli.py.",
-      "acceptance_criteria": [
-        "دیف فقط یکتاها",
-        "CI سبز"
-      ],
-      "prerequisites": [],
-      "exclusive_paths": []
-    },
-    {
-      "id": "task-121",
+      "id": "task-255-staging-render-wiring",
       "priority": "P1",
-      "zone": "delivery-interop-markers",
-      "title": "OTIO marker round-trip",
-      "title_fa": "مارکرهای OTIO",
-      "why_fa": "تنها شکاف باقی‌ماندهٔ تسک ۱۱۰؛ include_markers فعلاً بی‌اثر است.",
+      "zone": "execution-core",
+      "title": "Wire AttemptStaging.publish into the creative render publication path",
+      "title_fa": "سیم‌کشی AttemptStaging.publish در مسیر انتشار رندر خلاق",
+      "why_fa": "زیرلایهٔ staging تاکنون standalone است و render_jobs مسیر انتشار اتمیک خودش را دارد؛ اتصال این دو، attempt-scoping را به مسیر واقعی می‌آورد.",
       "acceptance_criteria": [
-        "include_markers مؤثر",
-        "۲ تست round-trip با OTIO واقعی"
-      ],
-      "prerequisites": [
-        "task-123"
+        "creative render artifacts publish via AttemptStaging (stage -> atomic rename -> fenced DB commit)",
+        "no second filesystem boundary: WorkspaceFilesystem remains the only security layer",
+        "existing render/verification suites stay green; new attempt-isolation tests added"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/creative/packs/delivery/",
-        "tests/unit/test_otio_interop.py"
+        "src/nexus_ai_agent/creative/render_jobs.py",
+        "tests/integration/test_creative_chain_e2e.py"
+      ],
+      "prerequisites": [
+        "task-254 merged"
       ]
     },
     {
-      "id": "task-128",
+      "id": "task-256-heartbeat-staleness-proof",
       "priority": "P1",
-      "zone": "core-database",
-      "title": "Async DB phase 1",
-      "title_fa": "فاز ۱ دیتابیس ناهمگام",
-      "why_fa": "حذف create_engine سینک از features با آزمون نگهبان معماری.",
+      "zone": "execution-core",
+      "title": "Heartbeat-based liveness so recover_job distinguishes slow-alive from dead",
+      "title_fa": "اثبات زنده‌بودن مبتنی بر heartbeat تا recover_job کند-ولی-زنده را از مرده تمیز دهد",
+      "why_fa": "اکنون تنها سنجهٔ staleness سن started_at است؛ worker کندِ زنده ممکن است واجد شرایط takeover شود.",
       "acceptance_criteria": [
-        "انجین مرکزی + ۲ پایلوت",
-        "گارد معماری سبز"
-      ],
-      "prerequisites": [
-        "task-122"
+        "in-flight rows carry a last-heartbeat; a beating worker is never stolen regardless of age",
+        "a silent worker past the window is recoverable exactly as today; T1/T2 race proof retained",
+        "migration + tests; no behaviour change for rows without the column (fail closed)"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/core/async_db.py",
-        "src/nexus_ai_agent/features/"
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        "tests/integration/test_execution_native_backend.py"
+      ],
+      "prerequisites": [
+        "task-254 merged"
       ]
     },
     {
-      "id": "task-132",
+      "id": "task-257-queued-cancel-semantics",
+      "priority": "P2",
+      "zone": "execution-core",
+      "title": "Define cancellation semantics for not-yet-owned (pending) requests",
+      "title_fa": "تعریف معنای لغو برای درخواست‌های در صف (بدون مالک)",
+      "why_fa": "لغو امروز فقط attempt در حال پرواز را می‌بندد؛ ردیف pending اصلاً cancellable نیست و این باید قرارداد صریح شود.",
+      "acceptance_criteria": [
+        "explicit contract: cancel(pending) is either a typed refusal or a fenced dequeue — one documented choice",
+        "idempotency + duplicate-cancel matrix extended; no authority bypass",
+        "I1-I10 table updated if a new invariant is introduced"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/execution/contract.py",
+        "src/nexus_ai_agent/adapters/native_local_backend.py"
+      ],
+      "prerequisites": [
+        "task-254 merged"
+      ]
+    },
+    {
+      "id": "task-258-execution-core-architecture-doc",
+      "priority": "P2",
+      "zone": "docs-architecture",
+      "title": "docs/architecture/EXECUTION_CORE.md — contract, authority laws, I1-I10",
+      "title_fa": "سند معماری هستهٔ اجرا: قرارداد، قوانین اقتدار، I1-I10",
+      "why_fa": "جدول I1-I10 اکنون فقط در تست‌هاست؛ reviewer و مالک آینده باید سند مرجع داشته باشند.",
+      "acceptance_criteria": [
+        "doc maps I1-I10 to enforcing symbols and proving tests (mirrors the test table)",
+        "authority laws + four-verb contract + staging boundary policy documented",
+        "docs integrity suite green"
+      ],
+      "exclusive_paths": [
+        "docs/architecture/EXECUTION_CORE.md"
+      ],
+      "prerequisites": [
+        "task-254 merged"
+      ]
+    },
+    {
+      "id": "task-259-inflight-started-at-schema-invariant",
+      "priority": "P2",
+      "zone": "storage-observability",
+      "title": "Schema-level invariant: in-flight rows always carry started_at",
+      "title_fa": ".Invariant سطح schema: ردیف‌های در پرواز همیشه started_at دارند",
+      "why_fa": "نبود started_at حالت مبهم می‌سازد (fail-closed اما غیرقابل بازیابی)؛ بهتر است از ریشه ناممکن شود.",
+      "acceptance_criteria": [
+        "CHECK constraint or trigger rejects in-flight status without started_at",
+        "recovery semantics documented; migration green on sqlite + postgres lanes",
+        "tests cover the corrupted-row path (fail-closed behaviour preserved)"
+      ],
+      "exclusive_paths": [
+        "migrations/",
+        "tests/integration/test_in_process_job_queue.py"
+      ],
+      "prerequisites": []
+    },
+    {
+      "id": "task-260-execution-mutations-ci-job",
       "priority": "P1",
       "zone": "ci-quality",
-      "title": "Extras smoke matrix",
-      "title_fa": "ماتریس دود اختیاری‌ها",
-      "why_fa": "مسیرهای اختیاری خارج از CI پیش‌فرض می‌توانند بی‌صدا بشکنند (شکاف مستند در TESTING §7).",
+      "title": "Run scripts/execution_core_mutations.py as a CI mutation job",
+      "title_fa": "اجرای کمپین mutation هستهٔ اجرا به‌عنوان job رسمی CI",
+      "why_fa": "کمپین M1-M10 امروز دستی اجرا می‌شود؛ بدون job رسمی، regression آیندهٔ تست‌ها بی‌صدا می‌میرد.",
       "acceptance_criteria": [
-        "job ماتریسی per-extra",
-        "شکست نصب = شکست CI"
+        "CI job runs the campaign on PRs touching execution-core paths; red on any surviving mutant",
+        "runtime budgeted (<= ~2 min); parity with the trust-mutations job pattern"
       ],
-      "prerequisites": [],
       "exclusive_paths": [
-        "tests/unit/test_optional_extras.py",
-        ".github/"
+        ".github/workflows/ci.yml",
+        "scripts/execution_core_mutations.py"
+      ],
+      "prerequisites": [
+        "task-254 merged",
+        "no live ci-quality claim"
       ]
     },
     {
+      "id": "task-261-request-queue-boundary-doc",
+      "priority": "P3",
+      "zone": "docs-architecture",
+      "title": "Document the LLM request-queue vs execution-core cancellation boundary",
+      "title_fa": "سند مرز لغو بین صف درخواست LLM و هستهٔ اجرا",
+      "why_fa": "دو زیرسامانهٔ لغو مجزا (request_queue درون‌حافظه‌ای و execution در سطح attempt) داریم؛ مرز باید صریح باشد تا کسی قرارداد را اشتباه نگیرد.",
       "acceptance_criteria": [
-        "routes + creative/job_registry.py + video_director.py + ffmpeg_executor.py removed; creative/__init__ exports cleaned",
-        "importer-ratchet test updated to assert ABSENCE; GET HMAC tests removed with the routes",
-        "grep proves zero remaining callers; full suite green; release note added"
+        "one page maps each cancellation surface to its authority and identity model",
+        "audit note: no cross-subsystem authority leak; links to the execution contract"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/api/app.py",
-        "src/nexus_ai_agent/creative/job_registry.py",
-        "src/nexus_ai_agent/creative/video_director.py",
-        "src/nexus_ai_agent/creative/ffmpeg_executor.py",
-        "tests/architecture/test_legacy_creative_boundary.py",
-        "tests/unit/test_security_hardening.py"
+        "docs/architecture/REQUEST_QUEUE.md"
       ],
-      "prerequisites": [
-        "PR#58 merged"
-      ],
-      "status_note": "evidence: D-0010 in DECISION_LOG; removal only after PR#58 merges",
-      "id": "task-173",
-      "priority": "P1",
-      "zone": "p0-stabilization",
-      "title": "Remove the legacy /creative/* HTTP lane (D-0010 reopen clause) after PR#58 lands",
-      "title_fa": "حذف مسیر قدیمی /creative/* بعد از ادغام PR#58",
-      "why_fa": "AD-0010: مسیر legacy فقط برای عدم برخورد با رفع SSRF درحال انجام (PR#58) نگه داشته شده؛ بعد از مرج باید حذف شود تا یک مسیر اجرایی Creative یگانه بماند."
+      "prerequisites": []
     },
     {
+      "id": "task-262-quarantine-retention",
+      "priority": "P3",
+      "zone": "execution-core",
+      "title": "Bounded retention for _quarantine forensic trees",
+      "title_fa": "نگهداری محدود برای درخت‌های پزشکی قانونی _quarantine",
+      "why_fa": "quarantine داده را برای همیشه نگه می‌دارد؛ در تولید رشد بدون حد می‌شود.",
       "acceptance_criteria": [
-        "lane op(s) with golden argv tests + a decision on shipping reference .cube assets",
-        "worker map + surface ALLOWED updated in the same PR; real-render regression tests",
-        "no silent degradation: unavailable inputs stay typed failures"
+        "age/size-bounded retention with an explicit operator switch (default: keep)",
+        "deletion is boundary-safe (same WorkspaceFilesystem rules) and journaled",
+        "tests: malicious retention paths cannot escape the root"
       ],
       "exclusive_paths": [
-        "src/nexus_ai_agent/creative/rendering/ir.py",
-        "src/nexus_ai_agent/creative/rendering/compiler.py",
-        "src/nexus_ai_agent/creative/render_jobs.py",
-        "src/nexus_ai_agent/bot/creative_surface.py"
+        "src/nexus_ai_agent/execution/staging.py",
+        "tests/unit/test_execution_staging.py"
       ],
-      "prerequisites": [],
-      "status_note": "owned by the creative-runtime agent; surface/worker files change atomically with the lane instrument",
-      "id": "task-174",
+      "prerequisites": [
+        "task-254 merged"
+      ]
+    },
+    {
+      "id": "task-263-single-owner-startup-guard",
       "priority": "P2",
-      "zone": "creative-runtime",
-      "title": "Lane instruments for LUT (color.apply_lut) and subtitles (caption.burn_in) so the refused surface ops can enter the matrix",
-      "title_fa": "ابزارهای lane برای LUT و subtitles تا دو عمل ردشدهٔ surface وارد ماتریس واقعی شوند",
-      "why_fa": "D-0011: lut/burnin به دلیل نبود مسیر اجرای صادقانه (بدون .cube shipped و بدون subtitles op در lane IR) typed refuse می‌شوند؛ با ابزار واقعی lane قابل برگشت‌اند."
+      "zone": "storage-resilience",
+      "title": "Startup guard for the one-queue-owning-process assumption",
+      "title_fa": "گارد راه‌اندازی برای فرض تک-مالکی صف",
+      "why_fa": "resume_pending(None) فقط زیر فرض «یک process مالک sidecar» امن است؛ این فرض امروز فقط مستند است نه اجراشده.",
+      "acceptance_criteria": [
+        "second queue-owning process on one sidecar is refused or warned with a typed signal",
+        "existing bot/webhook startup flows unchanged when the assumption holds",
+        "tests simulate a double-start"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        "tests/integration/test_in_process_job_queue.py"
+      ],
+      "prerequisites": []
     },
     {
-      "id": "task-187-nagar-graph-durability",
-      "priority": "P1",
-      "zone": "nagar-creative-graph",
-      "title": "Persist the creative graph and artifact lineage (make the spine durable)",
-      "title_fa": "پایدارسازی گراف خلاق و تبار مصنوع (پایدار کردن ستون فقرات)",
-      "why_fa": "اسلایس D-0025 فقط در حافظه است؛ تا گراف و تبار پایدار نشوند، چندجهانی و بازخورد اجتماعی چیزی برای شاخه‌گرفتن و ابطال ندارند.",
+      "id": "task-264-passport-attempt-id-alignment",
+      "priority": "P3",
+      "zone": "provenance-ledger",
+      "title": "Bind CreativeExecutionPassport attempt ids to the AttemptStaging layout",
+      "title_fa": "اتصال attempt_idهای گذرنامه اجرایی به چیدمان AttemptStaging",
+      "why_fa": "شناسه‌های attempt در passport و staging از یک منبع باید بیایند تا ردیابی artifact یکتا بماند.",
       "acceptance_criteria": [
-        "graph nodes and artifact lineage persist and round-trip by (intent_id, project_id, state_revision)",
-        "a stale revision is refused untouched, reusing the bus state_revision/state_hash preconditions",
-        "the persistence adapter lives outside the pure creative/spine module (boundary stays stdlib+pydantic)",
-        "no regression on tests/unit/test_creative_spine.py and the command-contract suite"
+        "one minting function for attempt ids used by both surfaces",
+        "passport evidence paths resolve inside the attempt staging tree; traversal rejected",
+        "provenance suites green"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/jobs/creative_passport.py",
+        "tests/unit/test_creative_passport.py"
       ],
       "prerequisites": [
-        "task-186-nagar-intent-spine"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/graph/",
-        "tests/unit/test_creative_graph.py"
-      ],
-      "status_note": "sequenced after task-186 (spine in-memory slice, done); trigger recorded in docs/architecture/CREATIVE_DIRECTION.md section 6"
-    },
-    {
-      "id": "task-190-sqlite-wal-init-race",
-      "priority": "P1",
-      "zone": "storage-observability",
-      "title": "SQLite first-use WAL init races under concurrent first use (CI flake: 'database is locked' on PRAGMA journal_mode=WAL)",
-      "title_fa": "مسابقهٔ مقداردهی WAL در اولین استفادهٔ هم‌زمان SQLite (فلیک CI: database is locked روی PRAGMA journal_mode=WAL)",
-      "why_fa": "create_all_tables یک بار به ازای هر مسیر محافظت می‌شود (_initialized_paths) اما خودِ مقداردهی از چند تسک/process هم‌زمان بی‌محافظت است؛ دو مقداردهی هم‌زمان WAL یک‌دیگر را قفل می‌کنند و یکی با sqlite3.OperationalError: database is locked شکست می‌خورد.",
-      "acceptance_criteria": [
-        "PRAGMA journal_mode=WAL under concurrent first use never raises 'database is locked' (busy_timeout + bounded retry on the one-time pragma)",
-        "a deterministic concurrent-first-use regression test (threads or processes) proves no OperationalError and WAL is actually set",
-        "the initialize/create_all path stays idempotent per path and no regression on the storage suite"
-      ],
-      "prerequisites": [],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/storage/db.py"
-      ],
-      "status_note": "Found by task-223 while auditing the final PR#128 CI head: python-parity (3.12) failed with sqlite3.OperationalError: database is locked on PRAGMA journal_mode=WAL (run 36816623063 job 110223040499) in test_r_f28_concurrent_identical_learns_collapse_into_one; the 3.10/3.11 legs and the local full suite (2988 passed) were green, so it is intermittent and contention-dependent. Owner: storage-observability zone (unclaimed). Local repro attempt: 12 concurrent create_all_tables on a fresh path (single loop) did NOT reproduce the WAL lock (only the already-retried create_all race fired); the lock needs a concurrent writer holding a transaction at first-use init, which the CI test that failed supplies. No speculative fix attempted out of zone without a deterministic RED test."
+        "task-254 merged"
+      ]
     }
   ],
   "history": {
@@ -4235,6 +4230,13 @@
         "tests/integration/test_provenance_queue_recording.py",
         "tests/integration/test_creative_chain_e2e.py"
       ]
+    },
+    {
+      "at": "2026-10-08T20:09:44Z",
+      "by_branch": "arena/290bc0d6-nexus-ai-agent",
+      "action": "salvage-takeover",
+      "task": "task-254-execution-core-v1",
+      "reason": "Session-bound-branch rule: this session is fixed to arena/290bc0d6-nexus-ai-agent and cannot push to arena/execution-core-v1-nexus-ai-agent (the claim's predecessor branch / PR #191, head 08060d5). Per the PR#102->PR#107 salvage precedent the predecessor's commits are adopted VERBATIM (git merge --ff-only 48f280c..08060d5, authorship preserved) and the Task-254 closure continues on the successor branch under this claim (generation 1->2 fences the departed holder). The predecessor session is gone and its branch cannot renew; per the orphaned-lease rule this claim must follow its live work, not a dead branch."
     }
   ],
   "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins."
