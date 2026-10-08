@@ -98,6 +98,30 @@ same graph byte for byte instead of re-archiving every intermediate transition.
 Every projected node carries `source = "causal_journal"` and the `source_seq` of
 the ledger record it came from.
 
+Two further properties are enforced, because a rebuild that can corrupt the
+projection is worse than no rebuild:
+
+* **Terminal state survives a rebuild.** A node a caller marked `invalidated` or
+  `revoked` is *skipped*, never rewritten: that decision is not in the ledger, so
+  the ledger cannot license undoing it. Each skip is reported in the result's
+  `skipped_terminal` list with `kind`, `node_id` and `status`. `replace=True`
+  keeps terminal nodes too — a from-scratch rebuild of the *projection* is not a
+  licence to revive a revoked truth. Without this, one caller invalidation made
+  the whole rebuild throw `GraphStateError` partway through, leaving earlier
+  records projected and later ones not.
+* **A rebuild is atomic.** The delete (in `replace` mode) and every node and edge
+  write happen inside one `BEGIN IMMEDIATE`. Nothing is observable until it
+  commits, so an observer either sees the previous healthy projection or the new
+  generation whole — never a half-built graph that looks healthy. This is why
+  `put_node`/`put_edge` are split into `_put_node_tx`/`_put_edge_tx`: the rebuild
+  drives those on a caller-owned connection, and the public methods are unchanged
+  wrappers. Crash-injection tests reopen the file from a separate object at four
+  injection points and require the previous projection plus a passing
+  `integrity_check`.
+
+`GRAPH030` ("every node has history") answers from a membership set built once,
+so the check is O(nodes + history) rather than a history scan per node.
+
 ### What the ledger cannot witness is declared, not guessed
 
 ```
@@ -144,7 +168,7 @@ excluded by default (they are not live descendants) but remain reachable with
 | `backup(path)` | SQLite **online backup API**, not a file copy — consistent under concurrent readers |
 | `restore(path)` | wholesale replacement of the graph's contents |
 | `integrity_check()` | `GRAPH010`–`GRAPH013` node kind/status/payload/identity digests, `GRAPH020`–`GRAPH022` edge relation/endpoints/digest, `GRAPH030` every node has history |
-| `rebuild_from_journal(records, replace=True)` | from-scratch rebuild from the canonical source |
+| `rebuild_from_journal(records, replace=True)` | from-scratch rebuild in **one transaction**; terminal nodes are skipped and reported in `skipped_terminal` |
 
 `restore` takes the in-process writer lock and uses a dedicated connection:
 `Connection.backup` cannot target a connection inside an open transaction, which

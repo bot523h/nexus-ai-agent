@@ -62,7 +62,10 @@ pins; a renamed job means GitHub would require a context that can never report.
 | GOV020 | that job actually executes `merge_base_guard.py check-event` |
 | GOV021 | it passes both `--event` and `--base` |
 | GOV022 | no job producing a required context carries `continue-on-error: true` |
-| GOV023 | the job's `if:` does not exclude `pull_request` |
+| GOV023 | the job's `if:` provably still runs for `pull_request` — an empty
+  condition, `always()`, or a positive reference passes; a constant-false,
+  negated, or event-exclusive condition is a `VIOLATION`; anything undecidable
+  is `unknown` (`BLOCKED`), never a pass |
 | GOV030 | the workflow re-runs on every base-changing PR activity type |
 
 `python scripts/governance_guard.py check-live --repo bot523h/nexus-ai-agent`:
@@ -72,10 +75,12 @@ pins; a renamed job means GitHub would require a context that can never report.
 | GOV040 | `main` is protected — otherwise `VIOLATION` |
 | GOV041 | the live required contexts **equal** the declared ones (missing *or* extra is drift) |
 | GOV042 | required checks are enforced for `everyone` |
-| GOV050–GOV054 | review requirement, conversation resolution, force-push, deletion, status-check detail: each readable, or recorded `UNKNOWN` |
+| GOV050–GOV054 | review requirement, conversation resolution, force-push, deletion, status-check detail — each checked on its **value**, not on readability: `required_approving_review_count >= 1`, `dismiss_stale_reviews true`, conversation resolution `true`, force-push `enabled false`, deletion `enabled false`, `strict true`. A contradicting value is `VIOLATION`; an absent, null or wrongly typed field is `unknown` (`BLOCKED`), never a pass |
 
 Exit codes: `0` VERIFIED · `1` VIOLATION · `2` BLOCKED (a source was unreadable).
-**An unreadable governance source is never a pass**, mirroring
+**An unreadable governance source is never a pass**, and neither is a readable one
+whose values do not hold: a plane answering HTTP 200 to everything while allowing
+force-pushes is a `VIOLATION`, not a `VERIFIED`.  Mirroring
 ADR 0007 (the multisource referee reports unverifiable data as exit 2).
 
 ## 4. Verdict vocabulary
