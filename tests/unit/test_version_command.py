@@ -189,6 +189,29 @@ def test_pyproject_version_is_parseable() -> None:
     assert re.fullmatch(r"\d+\.\d+\.\d+", ver)
 
 
+def test_roadmap_status_version_matches_the_release_files() -> None:
+    """`ROADMAP_STATUS.md` is a living view: it must name the shipped version.
+
+    Reproduced before this guard: VERSION was 3.13.0 while ROADMAP_STATUS.md's
+    title still read "v3.12.0 ... as of 2026-09-21" and its release row said
+    "THIS PR — pending merge" for a cut that had long since merged (c25f7fe).
+    A stale living view is exactly the silent drift the doc contract forbids, so
+    pin the title's version to VERSION mechanically rather than by review.
+    """
+    readme = (REPO_ROOT / "ROADMAP_STATUS.md").read_text(encoding="utf-8")
+    title = readme.splitlines()[0]
+    sentinel = re.search(r"v\d+\.\d+\.\d+", title)
+    assert sentinel is not None, f"ROADMAP_STATUS.md title names no version: {title!r}"
+    version = (REPO_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    assert sentinel.group() == f"v{version}", (
+        f"ROADMAP_STATUS.md title says {sentinel.group()!r} but VERSION is {version!r}"
+    )
+    # The 3.12.0 row must not still claim its release is an unmerged "THIS PR".
+    assert not re.search(r"^\| Release 3\.12\.0 \|.*THIS PR", readme, re.MULTILINE), (
+        "ROADMAP_STATUS.md still reports the 3.12.0 cut as pending merge"
+    )
+
+
 def test_lockstep_fails_on_mismatched_fixture(tmp_path: Path) -> None:
     """A mismatched fixture must be demonstrably red (the guard works)."""
     # Arrange a minimal repo layout in tmp_path with intentional drift

@@ -1902,3 +1902,294 @@ the newest; identity on an empty stack is refused; the two-thread
 and `tests/unit/test_undo_contract_mutations.py` — 4 tests, 3 mutants killed (gate disabled; wrong
 field compared; comparison inverted). `docs/architecture/COMMAND_CAPABILITY_CONTRACT.md` §`system.undo`
 records the contract.
+
+## 2026-10-07 — Governance enforcement plane: the gates must be *required*, not merely present (D-0026)
+
+### D-0026 — Law R19: GitHub's required status contexts are bound mechanically to the CI jobs that actually run the gates, and an unreadable governance source is BLOCKED
+
+**Status:** Accepted and implemented (board `task-254-governance-enforcement-plane`).
+**Measured on:** `main` @ `6122c9bfa99db0a31c57e782959deb1e7ad12269`, 2026-10-07.
+
+**Context.** R18 (D-adjacent, incident #143) made `base == main` a fail-closed *decision*.
+Three properties of the *enforcement of that decision* were unprotected, and each was
+measured rather than assumed:
+
+1. **The required checks lived only in GitHub.** `GET /repos/bot523h/nexus-ai-agent/branches/main`
+   returned `protected: true` with exactly three contexts — `lint (ruff + mypy + version
+   lockstep)`, `test (pytest -m "not slow")`, `merge-base-guard (base == main)`. No file in the
+   repository named them, so un-requiring one in the settings page left the whole suite green.
+2. **The CI-wiring assertion was vacuous.** `test_merge_base_guard.py::test_guard_is_wired_into_ci`
+   asserted only that the string `scripts/merge_base_guard.py` appears in `ci.yml`; the workflow's
+   own prose comment contains that string. **Reproduced:** the job's `run:` step was deleted and
+   the suite still reported **12 passed**. The mutation survived, so by the repository's own rule
+   the invariant was not proven.
+3. **Retargeting bypassed R18.** `ci.yml` declared `on: [push, pull_request]`. GitHub's default
+   `pull_request` activity types are `opened`/`synchronize`/`reopened`; changing a PR's base is an
+   `edited` event. A PR opened against `main`, allowed to go green, then retargeted to `arena/*`
+   reused its previous green check against the new base.
+
+**Decision.** Add `scripts/governance_guard.py` — stdlib-only, like `merge_base_guard.py`, so it
+runs before `pip install` — with two planes:
+
+* `check-offline`: every declared required context is produced by exactly one real CI job; the
+  merge-base context's job actually executes `merge_base_guard.py check-event` with `--event` and
+  `--base`; no producer carries `continue-on-error: true`; and the workflow re-runs on every
+  base-changing PR activity type (`opened`, `synchronize`, `reopened`, `edited`,
+  `ready_for_review`).
+* `check-live`: `main` is protected, the live required contexts **equal** the declared ones (in
+  both directions — an undeclared required context is drift, not silence), and enforcement is
+  `everyone`. Each protection sub-setting is either read or recorded `UNKNOWN`.
+
+Exit codes: `0` VERIFIED, `1` VIOLATION, `2` BLOCKED. **An unreadable governance source is never a
+pass** (the ADR 0007 discipline, applied to the governance plane). Verdict vocabulary is restricted
+to VERIFIED / VERIFIED_WITH_LIMITATIONS / HARDENED_BUT_NOT_COMPLETE / BLOCKED / DEFERRED.
+
+**Rejected alternatives.**
+
+* *A second truth-doctor check.* R16 makes `diagnostics/truth.py` the single repo-truth authority,
+  and it must stay offline. A governance check that needs the network does not belong there; the
+  law→test resolver (R16, unmodified) already enforces that R19 names a real test.
+* *A ruleset instead of branch protection.* `GET /rulesets` returned `[]` and `POST /rulesets`
+  returned `403`; migrating the enforcement mechanism was neither possible nor necessary.
+* *Growing R18 into a freshness/merge coordinator.* Freshness (`base == main` but behind `main`)
+  is a different invariant and belongs to GitHub's `strict` required checks / merge queue.
+  `check-pr` keeps reporting a stale base SHA as a loud `REBASE_REQUIRED`, not a red gate.
+* *Extending `test_merge_base_guard.py`.* PR #188 (`governance/phase1-hardening-20261007`, open,
+  base `main`) already rewrites that test and fixes the guard's `_report(None, …)` fail-open and
+  the same `edited` gap. Duplicating it would have created two owners of one file. This decision
+  therefore adds an *independent* witness (`governance_guard.py`) that kills the surviving mutation
+  without touching that PR's lines, and records the overlap explicitly.
+
+**Evidence.**
+
+* `tests/architecture/test_governance_enforcement.py` — 26 tests: 11 mutation attacks (invocation
+  deleted, `--base`/`--event` dropped, wrong subcommand, `continue-on-error`, job renamed, job
+  deleted, `edited` dropped, flow-form trigger, zero-job workflow, unreadable workflow), the live
+  plane under a stubbed transport, and the parser's own contract.
+* `tests/architecture/` — 214 passed. Truth doctor: exit 0, 0 errors, 0 warnings.
+* Live snapshot: `.agents/evidence/GOVERNANCE_GITHUB_2026-10-07.json`, verdict **BLOCKED**
+  (14 affirmative checks, 0 violations, 5 unreadable sub-settings).
+
+**Honest limitations (recorded, not explained away).** The available credential carried
+`X-OAuth-Scopes:` (empty) and `X-Accepted-GitHub-Permissions: metadata=read`. Therefore:
+
+* invariants A/F/G/H/I/R are `VERIFIED` or `VERIFIED_WITH_LIMITATIONS` from live GitHub;
+* invariants B (PR required), C (≥1 approval), D (stale approvals dismissed), E (conversation
+  resolution), J (strict / up-to-date), K (force push blocked), L (branch deletion blocked) are
+  `UNKNOWN` — the sub-endpoints returned 403/404. They are **not** claimed to be off.
+* `PUT /branches/main/protection` → `403` and `POST /rulesets` → `403`; the protection state
+  re-read afterwards was unchanged. Applying B–E and J–L is `BLOCKED` for this session and needs
+  a token with the `administration` permission.
+* **No zero-bypass claim is made.** GitHub lets an owner bypass required checks, and the
+  admin-enforcement sub-setting was unreadable here.
+
+## 2026-10-07 — PR convergence: a deterministic read-only graph over the open-PR queue (D-0027)
+
+### D-0027 — Law R20: convergence discovers, classifies, correlates, detects, ranks and recommends — and never mutates
+
+**Status:** Accepted and implemented (board `task-255-pr-convergence-graph`).
+**Measured on:** `main` @ `6122c9bfa99db0a31c57e782959deb1e7ad12269`, 2026-10-07.
+
+**Context.** The queue was unreadable: **49 open pull requests**, all based on `main`, across
+**13 distinct base SHAs**, from three authors, 967 changed-file entries, and **zero live board
+leases** for any of the 49 head branches. **36** of the 49 touch `.agents/board.json`, 19 touch
+`docs/README.md`, and **783 pairs** of open PRs share at least one changed path — so nearly every
+merge needs a manual conflict resolution and nobody can say which PR should land first.
+
+**Decision.** Add `scripts/pr_convergence.py`, a stdlib-only, read-only analyser with a pure core
+(`analyze(prs, board, live_main_sha, now, thresholds)`) and a thin collection adapter. It:
+
+* classifies every open PR into one primary class (`BLOCKED`, `DUPLICATE`, `CANONICAL`,
+  `SUPERSEDING`, `STALE`, `ORPHANED`, `DEPENDENT`, `ACTIVE`) while recording *every* matched
+  condition in `signals`, so a PR that is both unowned and superseded reports both facts;
+* detects duplicates from weighted signals (identical `head_sha`, tiered change-set overlap,
+  shared board task/zone, subtree-concentrated architectural objective, title tokens) and emits
+  **confidence plus witnesses carrying the measured values**, so a reviewer can re-derive the
+  verdict by hand;
+* records supersession as a **relationship** (explicit from the board, or derived from change-set
+  containment) and never closes the superseded PR;
+* builds `conflicts_with` / `duplicates` / `supersedes` / `depends_on` / `blocks` / `unlocks`
+  edges, refuses to create an edge for a prerequisite no open PR owns, and reports dependency
+  cycles instead of ordering around them;
+* measures per-PR evidence freshness (`FRESH` / `PARTIAL` / `UNVERIFIABLE`) against the live
+  `main` head, so evidence recorded against an old SHA is never generalised to a new one;
+* emits a deterministic recommended merge order (Kahn over declared dependencies, tie-broken by
+  class rank → unlocks → conflict pressure → scope → freshness → PR number).
+
+**It is not a second coordinator.** The board, its leases, fencing and the GitHub transport stay
+in `scripts/agent_board.py`; this module imports `_claim_live`, `_gh_get`, `gc_expired` and
+`load_board`. Read-only-ness is a *checked* property, not a promise: the source is scanned for
+HTTP write verbs, mutating `gh pr` subcommands and board writes, and the board handed to
+`analyze` is asserted byte-identical afterwards.
+
+**Rejected alternatives.**
+
+* *Auto-merge / auto-close / auto-delete.* Rejected outright. With 783 conflict pairs and 18
+  unowned-but-real PRs, an automated disposition would destroy work. Mutation stays with the owner.
+* *A runtime model deciding merge order.* Rejected: an order decided by a model at runtime is not
+  auditable. The order here is a pure function of the evidence and reproduces byte for byte.
+* *A new graph database or a second PR store.* Rejected: the analysis is a pure function over the
+  live PR list and the existing board; nothing new is persisted except a dated evidence snapshot.
+* *Duplicating the open-PR fetcher.* Rejected in favour of importing `agent_board._gh_get`.
+
+**Two calibration defects found by measuring, not by reasoning.**
+
+1. The first weight table found **zero** duplicates on a queue that contained one: PR#140 and
+   PR#144 shared 9 paths in `creative/temporal/` + `delivery/operations.py` at jaccard `0.82`,
+   with #140's change set a strict subset of #144's, and scored below the floor because only
+   board-correlation signals could push past it. The change-set signal is now tiered and a
+   subtree-concentration signal (S5) was added.
+2. The staleness composite first marked **41 of 49** PRs stale, because base drift and
+   "a newer PR touches the same file" are each true for most of the queue. Inactivity is now a
+   *necessary* condition with one corroborating signal, which yields 28 — all genuinely untouched
+   for ≥ 7 days.
+
+A third defect was caught by the tests rather than by measurement: the topological sort wired
+`depends_on` backwards, so a prerequisite was placed *after* its dependent.
+
+**Evidence.** `tests/architecture/test_pr_convergence.py` — 30 tests: one positive test per class,
+the dependency graph (real, invented, removed, cyclic), evidence freshness, determinism under
+input reordering, completeness (no input PR silently ignored), threshold sensitivity, and six
+mutation attacks (duplicate detector disabled, supersession edge removed, stale evidence
+accepted, unknown PR dropped, invented dependency, removed dependency). Live snapshot:
+`.agents/evidence/PR_CONVERGENCE_2026-10-07.json`. Determinism verified by digesting two runs
+over the live inventory: identical.
+
+**Honest limitations.** No patch-level diff comparison (change *sets* only, the conservative
+direction); `ORPHANED` describes the board, not the value of the work; CI and review state are
+not read, so "stale CI" is approximated by base drift and inactivity and labelled as such; the
+recommended order is advisory and knows nothing a reviewer knows.
+
+## 2026-10-07 — Durable creative archive: the graph is a rebuildable projection, not a fourth authority (D-0028)
+
+### D-0028 — Law R21: a typed node/edge projection over the existing causal ledger, with deterministic identity, append-only history, and lineage/invalidation queries
+
+**Status:** Accepted and implemented (board `task-256-durable-creative-graph`).
+**Measured on:** `main` @ `6122c9bfa99db0a31c57e782959deb1e7ad12269`, 2026-10-07.
+
+**Context.** The repository already had three durable authorities and none could answer the
+archive's central question. `nexus_job_queue` owns one job's state (R14); `nexus_causal_journal`
+is an append-only hash-chained record of committed transitions and is *evidence, never authority*
+(D-0024); `ArtifactPassport` is a read-only projection of one artifact. **"Where did this artifact
+come from, and if its intent changes what else is affected?"** required scanning the whole ledger
+by hand.
+
+**Decision.** Add `src/nexus_ai_agent/provenance/graph.py`: a typed node/edge projection in three
+indexed SQLite tables (`nexus_graph_node`, `nexus_graph_edge`, `nexus_graph_node_history`) that
+shares the `CausalJournal`'s connection discipline (`BEGIN IMMEDIATE`, busy timeout, in-process
+writer lock, `:memory:` support) so it can live in the same file as the ledger it is rebuilt from.
+
+* **Identity** is `f"{kind}:{sha256(canonical_json(identity))}"` — deterministic, stable, scoped by
+  kind, auditable (`identity_json`/`identity_digest` are stored and re-checked). Creating the same
+  logical state twice is one node reporting `unchanged`, so two runs cannot produce two
+  contradictory truths.
+* **History is appended, never rewritten.** A changed payload archives the new state after the
+  old one and increments `revision_count`; `invalidate`/`revoke`/`supersede` are explicit
+  transitions; a node already `invalidated`/`revoked` **refuses** a write (`GraphStateError`)
+  rather than being silently revived. There is no `UPDATE history = new_truth` path.
+* **Lineage** walks the declared chain with per-relation direction, reports attachments
+  (verification, passport) separately, and on a broken chain reports *where it stopped*
+  (`complete: False`, `deepest_kind` = last resolved) instead of guessing.
+* **Invalidation** is a descendants query grouped by kind: intent → revision → plan → command →
+  execution → artifact → verification → passport.
+* **Recovery** is backup (SQLite online backup API, not a file copy), restore, `integrity_check`
+  (`GRAPH010`–`GRAPH030`), and `rebuild_from_journal`.
+
+**Rejected alternatives.**
+
+* *Neo4j or any graph database.* Rejected: the queries needed (typed traversal by relation,
+  indexed by endpoint) are served by three indexed tables beside the ledger, and no measured
+  query need justified an operational dependency.
+* *A new event log.* Rejected: the causal journal already **is** an append-only hash-chained
+  record. A second one would have been a second authority.
+* *A parallel passport.* Rejected: `provenance/passport.py` is unchanged. The graph stores the
+  **link** (`ARTIFACT_HAS_PASSPORT`) and the identity, never a second copy of the judgement.
+* *Event sourcing "for a nicer audit trail".* Rejected on the evidence: immutable ledger rows +
+  revision rows + the passport already cover the audit need.
+* *A twelfth relation `ARTIFACT_DEPENDS_ON`.* Rejected: `ARTIFACT_DERIVED_FROM` already expresses
+  it, and two names for one fact is how a graph acquires contradictory truths.
+
+**Five defects found by tests, not by review.**
+
+1. `lineage` walked every relation in one direction; the chain's relations point *downstream*, so
+   the artifact→execution step follows an **incoming** edge. The symptom was not a crash — it was
+   a permanently "unknown" answer, which is why a direction-pinning test now exists.
+2. `integrity_check` compared `revision_count` against the status vocabulary (wrong column index),
+   so it reported a false `GRAPH011` on every healthy graph.
+3. Superseding a node archived the **old** payload a second time and never recorded the new one,
+   so `history()` returned `["v1", "v1"]` for a node whose truth was `v2`.
+4. `rebuild_from_journal` replayed every ledger transition, so replaying the same ledger grew the
+   history log (`7 → 10`) — a rebuild that is really an append. It now collapses each identity to
+   the state the last record establishes, and `replace=True` purges the projected rows *and* their
+   history first.
+5. `restore` targeted a connection inside an open `BEGIN IMMEDIATE` transaction;
+   `Connection.backup` refuses that ("destination database is in use").
+
+**Evidence.** `tests/unit/test_creative_graph.py` (23 tests) +
+`tests/architecture/test_creative_graph_boundary.py` (6 tests) — 29 passed. `mypy
+src/nexus_ai_agent/provenance/` → *Success: no issues found in 8 source files*. The acceptance
+test `test_the_graph_survives_a_closed_process` runs two real processes: the first builds
+Project → Intent → Revision → Plan → Command → Execution → Artifact → Verification → Passport and
+exits; the second opens the file and answers `complete: True`, `deepest_kind: "PROJECT"`, chain
+`EXECUTION ← COMMAND ← PLAN ← REVISION ← INTENT ← PROJECT`. `test_two_processes_can_write_the_same_graph`
+runs two concurrent writers against one file with no lost write and no duplicate.
+
+**Honest limitations — the real remaining gap, named rather than papered over.**
+
+* **Levels above `EXECUTION` have no canonical durable source yet.** The spine holds
+  intent/revision/plan in memory per instance and the `CommandBus` holds command state in memory
+  (D-0025's own note: "no cross-instance undo is claimed", "Multiple processes and restart are NOT
+  VERIFIED"). `rebuild_from_journal` therefore reports `PROJECT`, `INTENT`, `REVISION`, `PLAN`,
+  `COMMAND`, `DECISION` and `ACTOR` as `UNMIGRATED` with the reason. Those levels can be *written*
+  by a caller today, but they are not yet *rebuildable* — so Wave 3's vertical slice is durable
+  from `EXECUTION` upward and honest about the rest.
+* **`DECISION` and `ACTOR` nodes have no writer.** They exist in the vocabulary because the domain
+  has them; nothing records them today.
+* **No cross-process linearization is claimed for the spine**, only for the graph file itself.
+
+## 2026-10-08 — PR #189 closure cycle: five in-scope defects closed with mutation proofs (D-0029)
+
+### D-0029 — Law R22: a mention is not semantics, an unreadable source is not a pass, a projection must not overwrite its authority, and a shared connection must not leak partial state
+
+**Status:** Accepted and implemented (PR #189, board `task-254/255/256`).
+**Measured on:** `main` @ `440d29036c2df3e4f67b9d3f34e686930ea1e8a4`, 2026-10-08.
+
+**Context.** After two CodeRabbit review rounds (nine findings, all fixed with
+mutation proofs), a closure cycle re-read the whole PR diff hunting for
+remaining defects and found five.
+
+**Decisions.**
+
+1. **GOV023 acceptance is a whitelist, not a substring test** (R1). The positive
+   branch tested `"pull_request" in low`, so `vars.X == 'pull_request'`, a bare
+   `'pull_request'` literal, `format('pull_request')`, an unrelated `contains`
+   haystack and even `# pull_request` in a comment all reported `ok`. Accepted
+   forms are now only those that compare the literal against `github.event_name`;
+   every other mention falls through to `unknown` (BLOCKED).
+2. **The live protection check reads every repository-supported source** (R2).
+   `GET /branches/main` is readable with a metadata-only token and carries a
+   `protection` object with the same-named fields as the dedicated sub-endpoints
+   that 403; the guard now falls back to it, evaluated with the same predicates,
+   and the witness names the source used. Rulesets are readable too, so GOV043
+   records that plane: `[]` proves classic protection is the only path, a
+   non-empty list is drift, unreadable is BLOCKED. LOGIC VERIFIED still does not
+   become LIVE POLICY VERIFIED: B–E and J–L remain BLOCKED on this token.
+3. **The temporal contract is test-pinned in both directions** (R3). The snapshot
+   value drives classification; GC is deliberately wall-clock-bound; a malformed
+   `--as-of` exits BLOCKED and never runs GC.
+4. **Every graph read takes the in-process lock** (R4). On `:memory:` there is
+   one shared connection, so an unlocked reader could observe a writer's
+   uncommitted rows — reproduced: a reader saw `{nodes: 120, edges: 119,
+   history: 121}`, neither committed state. The lock is reentrant because
+   composite reads hold it across the leaf readers.
+5. **`restore` is a guarded whole-file operation** (R5). The SQLite backup API
+   cannot target a subset of tables, and the projection is designed to share its
+   file with the causal journal — the authority. Reproduced: a projection restore
+   silently rewound the ledger from 6 events to 3. The guard validates the source
+   and refuses to replace a destination holding non-graph tables unless the
+   caller explicitly passes `whole_database=True`.
+
+**Consequences.** All five have targeted tests, and each fix was mutation-proven
+(red without the fix, green with it). The board claims for task-254/255/256 were
+synced with the delivered truth (R6); exactly one live gates_owner is held, by
+this branch's task-254. Nothing was merged, closed, or deleted.

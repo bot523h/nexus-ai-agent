@@ -1,4 +1,4 @@
-# ROADMAP_STATUS — NEXUS AI agent (as of 2026-09-21, v3.12.0 housekeeping, Phase 6)
+# ROADMAP_STATUS — NEXUS AI agent (as of 2026-10-08, v3.13.0, Phase 6)
 
 Header: **No hidden migration. No hidden mutation. No implicit repair.**
 Phase 6 adds: **packs are data; commands carry evidence; only the last step
@@ -22,7 +22,8 @@ Phases 0–5 are complete on `main`.
 | Release 3.11.0 | Housekeeping cut after Waves 2a–2c | **MERGED** | PR#24 `8b27625` |
 | **Wave 2.5** | Telegram `/slideshow` surface → `JobQueuePort` → existing render lane → completion delivery; five-image/30-second limits and typed failures | **MERGED** | PR#25 `316ed33` |
 | Wave 3 — image generation | Isolated `ImageGenProvider`, Pollinations default and fail-closed paid Gemini; bounded retry/cache, `/imagine`, opt-in slideshow autofill, cost/consent/cleanup tests and import-boundary checks | **MERGED** | PR#26 `52329e6` |
-| Release 3.12.0 | Version lock-step and release notes for Wave 2.5 + Wave 3 image generation; refresh README, roadmap, continuum and decision log | **THIS PR** — separate release commit, pending merge | base `52329e6` |
+| Release 3.12.0 | Version lock-step and release notes for Wave 2.5 + Wave 3 image generation; refresh README, roadmap, continuum and decision log | **MERGED** (`92dcb47`) | PR#26 `52329e6` |
+| **v3.13.0** | P0 Week-1 security batch (global auth, dashboard PII, path traversal, README honesty) + feature-engine wiring; repo-wide cleanup and 3.13.0 release alignment | **MERGED** (`c25f7fe`) | PR#37 (supersedes the #33 lineage) |
 | Wave 3 — local upscale | Optional local stage, not the main render path; contract and owner approval required before implementation | **DEFERRED / NOT IMPLEMENTED** | decision log r6 and release-scope decision 2026-09-21 |
 | Other 60 TDD operations | Each still needs its own contract, ownership boundary and decision entry | NOT STARTED | — |
 

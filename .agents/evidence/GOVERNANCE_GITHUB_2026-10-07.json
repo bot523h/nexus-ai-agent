@@ -1,0 +1,241 @@
+{
+  "witness": "GOVERNANCE_GITHUB",
+  "captured_at_utc": "2026-10-07T21:05:00Z",
+  "captured_by": "scripts/governance_guard.py check-live --repo bot523h/nexus-ai-agent",
+  "note": "Dated historical snapshot, NOT live state. Re-run the command to re-measure. BLOCKED here means the detailed branch-protection sub-settings could not be read with the available token; it is explicitly not a pass.",
+  "verdict": "BLOCKED",
+  "exit_code": 2,
+  "repo": "bot523h/nexus-ai-agent",
+  "branch": "main",
+  "main_head_sha": "6122c9bfa99db0a31c57e782959deb1e7ad12269",
+  "token_observed": {
+    "x_oauth_scopes": "",
+    "x_accepted_github_permissions": "metadata=read",
+    "consequence": "branch-protection sub-endpoints return 403/404; writes to branch protection and rulesets are refused (403)"
+  },
+  "protected": true,
+  "declared_required_contexts": [
+    "lint (ruff + mypy + version lockstep)",
+    "test (pytest -m \"not slow\")",
+    "merge-base-guard (base == main)"
+  ],
+  "live_required_contexts": [
+    "lint (ruff + mypy + version lockstep)",
+    "test (pytest -m \"not slow\")",
+    "merge-base-guard (base == main)"
+  ],
+  "enforcement_level": "everyone",
+  "rulesets": [],
+  "invariants": {
+    "A_main_protection_on": {
+      "state": "VERIFIED",
+      "source": "GET /branches/main -> protected=true"
+    },
+    "F_required_checks_required": {
+      "state": "VERIFIED",
+      "source": "GET /branches/main -> protection.required_status_checks.contexts"
+    },
+    "G_merge_base_guard_required": {
+      "state": "VERIFIED",
+      "source": "context 'merge-base-guard (base == main)' present"
+    },
+    "H_lint_required": {
+      "state": "VERIFIED",
+      "source": "context 'lint (ruff + mypy + version lockstep)' present"
+    },
+    "I_test_required": {
+      "state": "VERIFIED",
+      "source": "context 'test (pytest -m \"not slow\")' present"
+    },
+    "B_pr_required": {
+      "state": "UNKNOWN",
+      "source": "GET /branches/main/protection/required_pull_request_reviews -> 403"
+    },
+    "C_required_review_count_1": {
+      "state": "UNKNOWN",
+      "source": "GET /branches/main/protection/required_pull_request_reviews -> 403"
+    },
+    "D_stale_approvals_dismissed": {
+      "state": "UNKNOWN",
+      "source": "GET /branches/main/protection/required_pull_request_reviews -> 403"
+    },
+    "E_conversation_resolution": {
+      "state": "UNKNOWN",
+      "source": "GET /branches/main/protection/required_conversation_resolution -> 404"
+    },
+    "J_strict_up_to_date": {
+      "state": "UNKNOWN",
+      "source": "GET /branches/main/protection/required_status_checks -> 403"
+    },
+    "K_force_push_blocked": {
+      "state": "UNKNOWN",
+      "source": "GET /branches/main/protection/allow_force_pushes -> 404"
+    },
+    "L_branch_deletion_blocked": {
+      "state": "UNKNOWN",
+      "source": "GET /branches/main/protection/allow_deletions -> 404"
+    },
+    "R_github_confirms_policy": {
+      "state": "VERIFIED_WITH_LIMITATIONS",
+      "source": "required checks confirmed live; review/freshness/force-push sub-settings unreadable"
+    }
+  },
+  "write_probe_evidence": {
+    "PUT /branches/main/protection": "403 Resource not accessible by integration",
+    "POST /rulesets": "403 Resource not accessible by integration",
+    "post_probe_state_unchanged": true
+  },
+  "guard_report": {
+    "scope": "offline+live",
+    "verdict": "BLOCKED",
+    "violations": [],
+    "unknowns": [
+      {
+        "code": "GOV050",
+        "severity": "unknown",
+        "message": "review requirement (>=1 approval, stale reviews dismissed): source unreadable (HTTP 403: Forbidden) \u2014 recorded as BLOCKED, never as a pass",
+        "witness": "GET https://api.github.com/repos/bot523h/nexus-ai-agent/branches/main/protection/required_pull_request_reviews"
+      },
+      {
+        "code": "GOV051",
+        "severity": "unknown",
+        "message": "conversation resolution requirement: source unreadable (HTTP 404: Not Found) \u2014 recorded as BLOCKED, never as a pass",
+        "witness": "GET https://api.github.com/repos/bot523h/nexus-ai-agent/branches/main/protection/required_conversation_resolution"
+      },
+      {
+        "code": "GOV052",
+        "severity": "unknown",
+        "message": "force-push prohibition: source unreadable (HTTP 404: Not Found) \u2014 recorded as BLOCKED, never as a pass",
+        "witness": "GET https://api.github.com/repos/bot523h/nexus-ai-agent/branches/main/protection/allow_force_pushes"
+      },
+      {
+        "code": "GOV053",
+        "severity": "unknown",
+        "message": "branch-deletion prohibition: source unreadable (HTTP 404: Not Found) \u2014 recorded as BLOCKED, never as a pass",
+        "witness": "GET https://api.github.com/repos/bot523h/nexus-ai-agent/branches/main/protection/allow_deletions"
+      },
+      {
+        "code": "GOV054",
+        "severity": "unknown",
+        "message": "required-status-check detail (incl. strict): source unreadable (HTTP 403: Forbidden) \u2014 recorded as BLOCKED, never as a pass",
+        "witness": "GET https://api.github.com/repos/bot523h/nexus-ai-agent/branches/main/protection/required_status_checks"
+      }
+    ],
+    "checks": [
+      {
+        "code": "GOV002",
+        "severity": "ok",
+        "message": "parsed 12 CI job(s)",
+        "witness": "continuum-evidence, extras-matrix, lint, lint-fast, merge-base-guard, migrate-postgres, python-parity, release-lineage, remote-key-mutations, temporal-mutations, test, trust-mutations"
+      },
+      {
+        "code": "GOV010",
+        "severity": "ok",
+        "message": "required check 'lint (ruff + mypy + version lockstep)' is produced by job 'lint'",
+        "witness": ".github/workflows/ci.yml"
+      },
+      {
+        "code": "GOV010",
+        "severity": "ok",
+        "message": "required check 'test (pytest -m \"not slow\")' is produced by job 'test'",
+        "witness": ".github/workflows/ci.yml"
+      },
+      {
+        "code": "GOV010",
+        "severity": "ok",
+        "message": "required check 'merge-base-guard (base == main)' is produced by job 'merge-base-guard'",
+        "witness": ".github/workflows/ci.yml"
+      },
+      {
+        "code": "GOV020",
+        "severity": "ok",
+        "message": "job 'merge-base-guard' executes scripts/merge_base_guard.py check-event",
+        "witness": ".github/workflows/ci.yml job merge-base-guard"
+      },
+      {
+        "code": "GOV021",
+        "severity": "ok",
+        "message": "job 'merge-base-guard' passes --event and --base",
+        "witness": ".github/workflows/ci.yml job merge-base-guard"
+      },
+      {
+        "code": "GOV022",
+        "severity": "ok",
+        "message": "job 'lint' (required check 'lint (ruff + mypy + version lockstep)') is blocking",
+        "witness": ".github/workflows/ci.yml job lint"
+      },
+      {
+        "code": "GOV022",
+        "severity": "ok",
+        "message": "job 'test' (required check 'test (pytest -m \"not slow\")') is blocking",
+        "witness": ".github/workflows/ci.yml job test"
+      },
+      {
+        "code": "GOV022",
+        "severity": "ok",
+        "message": "job 'merge-base-guard' (required check 'merge-base-guard (base == main)') is blocking",
+        "witness": ".github/workflows/ci.yml job merge-base-guard"
+      },
+      {
+        "code": "GOV023",
+        "severity": "ok",
+        "message": "job 'merge-base-guard' runs for pull_request events",
+        "witness": "if: github.event_name == 'pull_request'"
+      },
+      {
+        "code": "GOV030",
+        "severity": "ok",
+        "message": "every base-changing PR activity type re-runs the workflow",
+        "witness": "on: pull_request types=['opened', 'synchronize', 'reopened', 'edited', 'ready_for_review']"
+      },
+      {
+        "code": "GOV040",
+        "severity": "ok",
+        "message": "branch 'main' is protected",
+        "witness": "GET https://api.github.com/repos/bot523h/nexus-ai-agent/branches/main"
+      },
+      {
+        "code": "GOV041",
+        "severity": "ok",
+        "message": "live required contexts equal the declared policy",
+        "witness": "live contexts=['lint (ruff + mypy + version lockstep)', 'test (pytest -m \"not slow\")', 'merge-base-guard (base == main)']"
+      },
+      {
+        "code": "GOV042",
+        "severity": "ok",
+        "message": "required checks apply to everyone",
+        "witness": "everyone"
+      },
+      {
+        "code": "GOV050",
+        "severity": "unknown",
+        "message": "review requirement (>=1 approval, stale reviews dismissed): source unreadable (HTTP 403: Forbidden) \u2014 recorded as BLOCKED, never as a pass",
+        "witness": "GET https://api.github.com/repos/bot523h/nexus-ai-agent/branches/main/protection/required_pull_request_reviews"
+      },
+      {
+        "code": "GOV051",
+        "severity": "unknown",
+        "message": "conversation resolution requirement: source unreadable (HTTP 404: Not Found) \u2014 recorded as BLOCKED, never as a pass",
+        "witness": "GET https://api.github.com/repos/bot523h/nexus-ai-agent/branches/main/protection/required_conversation_resolution"
+      },
+      {
+        "code": "GOV052",
+        "severity": "unknown",
+        "message": "force-push prohibition: source unreadable (HTTP 404: Not Found) \u2014 recorded as BLOCKED, never as a pass",
+        "witness": "GET https://api.github.com/repos/bot523h/nexus-ai-agent/branches/main/protection/allow_force_pushes"
+      },
+      {
+        "code": "GOV053",
+        "severity": "unknown",
+        "message": "branch-deletion prohibition: source unreadable (HTTP 404: Not Found) \u2014 recorded as BLOCKED, never as a pass",
+        "witness": "GET https://api.github.com/repos/bot523h/nexus-ai-agent/branches/main/protection/allow_deletions"
+      },
+      {
+        "code": "GOV054",
+        "severity": "unknown",
+        "message": "required-status-check detail (incl. strict): source unreadable (HTTP 403: Forbidden) \u2014 recorded as BLOCKED, never as a pass",
+        "witness": "GET https://api.github.com/repos/bot523h/nexus-ai-agent/branches/main/protection/required_status_checks"
+      }
+    ]
+  }
+}

@@ -157,16 +157,55 @@ def test_state_hash_excludes_revision_and_recorded_history_is_immutable() -> Non
     assert fingerprint()[: len(recorded)] == recorded
 
 
+#: A mention of the ledger table is not a write to it.  Splitting the two makes
+#: this gate strictly stronger than the substring version it replaces: a write
+#: from a second module is still caught, and a *new mention* anywhere in the tree
+#: is still caught — it just has to be declared here with a reason.
+_LEDGER_WRITE = re.compile(
+    r"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM|CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?)\s+"
+    r"nexus_causal_journal\b",
+    re.IGNORECASE,
+)
+
+#: Modules allowed to *name* the ledger table without writing it, with the reason.
+_LEDGER_READERS: dict[str, str] = {
+    "provenance/graph.py": (
+        "rebuilds the creative-graph projection FROM ledger records it is handed; "
+        "it never writes the ledger (law R21)"
+    ),
+}
+
+
 def test_exactly_one_module_writes_the_durable_ledger() -> None:
-    ledger_writers = sorted(
-        str(path.relative_to(SRC))
-        for path in SRC.rglob("*.py")
-        if "nexus_causal_journal" in path.read_text(encoding="utf-8")
-    )
-    assert ledger_writers == ["provenance/journal.py"], (
+    writers: list[str] = []
+    mentioners: list[str] = []
+    for path in sorted(SRC.rglob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        if "nexus_causal_journal" not in text:
+            continue
+        relative = str(path.relative_to(SRC)).replace("\\", "/")
+        mentioners.append(relative)
+        if _LEDGER_WRITE.search(text):
+            writers.append(relative)
+
+    assert writers == ["provenance/journal.py"], (
         "the durable causal ledger has exactly one writer (one authority per identity); "
-        f"found: {ledger_writers}"
+        f"found: {writers}"
     )
+    undeclared = sorted(set(mentioners) - set(_LEDGER_READERS) - {"provenance/journal.py"})
+    assert not undeclared, (
+        "these modules name the ledger table without being declared readers or the writer: "
+        f"{undeclared} — declare them in _LEDGER_READERS with a reason, or stop mentioning it"
+    )
+
+
+def test_the_declared_ledger_readers_really_are_read_only() -> None:
+    """The allow-list above is a claim; this is its proof."""
+    for relative in _LEDGER_READERS:
+        text = (SRC / relative).read_text(encoding="utf-8")
+        assert not _LEDGER_WRITE.search(text), (
+            f"{relative} is declared a reader but contains a ledger write statement"
+        )
 
 
 def test_the_passport_builds_without_writing_to_the_ledger(tmp_path: Path) -> None:

@@ -524,6 +524,20 @@ def check_fail_open_defaults(root: Path) -> list[Finding]:
 # --------------------------------------------------------------------------- #
 
 
+#: Statuses under which a lease is *live* — and therefore allowed to hold the
+#: single ``gates_owner`` role.  This mirrors
+#: ``scripts/agent_board.py::ACTIVE_STATUSES``, which is the board's own
+#: authority: ``active_in_review`` is a live lease because an open PR can still
+#: conflict even though its author has stopped coding.  The truth doctor cannot
+#: import the unpackaged CLI (it must stay pure-stdlib and run before
+#: ``pip install``), so the two are kept equal mechanically by
+#: ``tests/unit/test_truth_doctor.py::test_live_lease_statuses_match_the_board_cli``.
+#: Checking the literal ``"active"`` here was a real defect: it flagged a
+#: delivered-but-unmerged PR as a governance error the moment its claim moved to
+#: review.
+LIVE_LEASE_STATUSES = frozenset({"active", "active_in_review"})
+
+
 def check_board_truth(root: Path) -> list[Finding]:
     """The board is a truth surface: its zones, leases and references must be real.
 
@@ -568,7 +582,7 @@ def check_board_truth(root: Path) -> list[Finding]:
             )
 
     for claim in claims:
-        if claim.get("gates_owner") and claim.get("status") != "active":
+        if claim.get("gates_owner") and claim.get("status") not in LIVE_LEASE_STATUSES:
             findings.append(
                 Finding(
                     "TRUTH041",
