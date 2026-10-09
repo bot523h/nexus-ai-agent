@@ -157,7 +157,13 @@ def _assert_input_ref_expression(
             assert isinstance(asset_ids.func, ast.Name) and asset_ids.func.id == "tuple"
             assert len(asset_ids.args) == 1
             asset_ids = asset_ids.args[0]
-        assert isinstance(asset_ids, ast.Tuple) or isinstance(asset_ids, ast.GeneratorExp)
+        assert isinstance(asset_ids, (ast.Tuple, ast.GeneratorExp))
+        if isinstance(asset_ids, ast.Tuple):
+            # A literal empty tuple (``()`` or ``tuple(())``) declares no owned
+            # source refs, which is exactly the claim-less shape this guard exists
+            # to reject. Generator expressions are not checked for emptiness here:
+            # their cardinality is a runtime property, out of this AST scope.
+            assert asset_ids.elts, "_asset_refs must receive at least one asset id"
         return
     if isinstance(node, ast.Tuple):
         assert node.elts, "input_refs must not be an empty tuple"
@@ -357,3 +363,36 @@ def test_real_bus_rejects_foreign_project_input_refs_before_handler() -> None:
     foreign_ref = InputRef(ref_type="asset", project_id="other-project", ref_id="asset-1")
     with pytest.raises(InputReferenceError):
         bus.dispatch(_command("proj-runtime", actor, (foreign_ref,)))
+
+
+def _resolve_input_refs(expression: str) -> None:
+    """Parse a single expression and resolve it exactly as the guard resolves ``input_refs``."""
+    tree = ast.parse(expression, mode="exec")
+    _assert_input_ref_expression(tree, tree.body[0].value, project_names={"project_id"})
+
+
+def test_empty_asset_ref_tuple_is_rejected() -> None:
+    # A literal empty tuple owns no source refs -- the exact claim-less shape the
+    # guard exists to reject. Independent from the ``tuple(...)`` form below.
+    with pytest.raises(AssertionError, match="at least one asset id"):
+        _resolve_input_refs("_asset_refs(project_id, ())")
+
+
+def test_empty_asset_ref_tuple_inside_tuple_call_is_rejected() -> None:
+    # ``tuple(())`` unwraps to the same empty literal, so the guard must reject it
+    # after the unwrap, not merely accept any ``ast.Tuple``.
+    with pytest.raises(AssertionError, match="at least one asset id"):
+        _resolve_input_refs("_asset_refs(project_id, tuple(()))")
+
+
+def test_non_empty_asset_ref_tuple_is_accepted() -> None:
+    _resolve_input_refs('_asset_refs(project_id, ("asset-1",))')
+
+
+def test_asset_refs_tuple_call_with_generator_is_accepted() -> None:
+    # The real service.py binding: ``_asset_refs(project_id, tuple(x.asset_id
+    # for x in project.assets))``. A generator's cardinality is a runtime property,
+    # so the AST guard must keep accepting it (no false positive on live code).
+    _resolve_input_refs(
+        "_asset_refs(project_id, tuple(asset.asset_id for asset in project.assets))"
+    )
