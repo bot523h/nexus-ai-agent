@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-08T23:30:19Z",
+  "updated_at": "2026-10-09T00:17:05Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3428,7 +3428,7 @@
       "title_fa": "هستهٔ اجرای بومی NEXUS V1: قرارداد اجرای مستقل از provider، NativeLocalBackend، staging در محدودهٔ attempt، تست‌های نگاشت‌شده به invariantها",
       "zone": "execution-core",
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "scope": "Add a provider-neutral execution contract (submit/observe/cancel/reconcile, no execute) that is only an intent/contract, never an authority. Add a thin NativeLocalBackend over the existing InProcessJobQueue (one queue, one authority) plus a small additive public cancel primitive. Add attempt-scoped staging isolation with traversal/symlink protection. Reuse the existing queue-owned atomic fenced commit, independent verification, passport and provenance unchanged. Prove invariants I1-I10 with executable tests including the required stale-attempt race.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -3459,12 +3459,12 @@
         "scripts/execution_core_mutations.py",
         "src/nexus_ai_agent/tools/filesystem_policy.py"
       ],
-      "agent_branch": "arena/290bc0d6-nexus-ai-agent",
-      "claimed_at": "2026-10-08T20:09:44Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
-      "gates_owner": true,
-      "note": "NEXUS V1 forensic closure remains ACTIVE on arena/290bc0d6-nexus-ai-agent. Scope: AC-1..AC-7, findings 1-6, T1/T2, I1-I10, C1-C8; no second queue/authority. SALVAGE-TAKEOVER 2026-10-08T20:09:44Z is recorded in takeover_log; PR #191 is superseded by #192. Closed and adversarially proved: attempt-fenced cancel/reconcile; staging symlink/write boundaries; publish/cleanup/quarantine and typed parent-walk errors; stale completion/shutdown takeover fencing; shielded reservation cancellation with fenced reopen; fail-closed request-policy enforcement; durable idempotency-key identity binding; name-level passport import boundary. Mutation campaign M1-M17: 17/17 caught. Latest local full regression: 3875 passed / 31 skipped / 0 failed; Ruff+format clean; mypy clean (289 source files); test-definition audit: 0 removed. Board local check only (--no-remote), not a global verdict. Fresh exact-SHA CI/review on the next pushed head and formal merge authority remain pending; do NOT terminalize or merge yet. gates_owner=true (sole full gate runner for main-bound work).",
-      "generation": 2
+      "gates_owner": false,
+      "note": "TASK-254 CLOSED after formal merge. PR #192 MERGED 2026-10-09T00:15:53Z at main merge commit a48326ded85bbe4e0972d645ee0ea6e877935362 (head 0e8d97f9ecd34e14b8e2e4388510595c51277d93); superseded PR #191 was closed afterward. AC-1..AC-7 and all six original findings were re-verified and closed; the follow-up review findings (mutation harness restoration/M7 anchor, shutdown takeover and reservation-cancel races, staging write and filesystem exception boundaries, notification recorder wiring, ExecutionPolicy enforcement, passport import assertion, durable idempotency identity binding) were fixed with regression tests. Evidence: exact PR-head CI run 37859836226 all required checks PASS; fresh CodeRabbit review APPROVED on 0e8d97f; all review threads resolved; local regression 3875 passed / 31 skipped / 0 failed; Ruff+format clean; mypy clean (289 files); M1-M17 17/17 caught; board tests 71/71; no test definitions removed. Task terminalized after merge evidence; exclusive execution-core zone released at generation 3.",
+      "generation": 3
     }
   ],
   "deferred_log": [
