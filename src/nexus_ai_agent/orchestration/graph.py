@@ -27,9 +27,19 @@ async def _router_node(state: NexusState) -> NexusState:
 
 
 async def _memory_reader(long_term_memory: LongTermMemory, state: NexusState) -> NexusState:
-    last = state["messages"][-1]["content"] if state.get("messages") else ""
+    # task-211: query the last USER message, exactly as _memory_writer stores it.
+    # `messages[-1]` was wrong whenever a turn can legitimately end on the
+    # assistant's own reply - a resumed conversation replaying history does, and
+    # so does the graph's own output state. Searching with the model's prose
+    # retrieves turns whose *answer* resembles it rather than what the user
+    # *said*, which fails recall in a way that looks like a weak index.
+    messages = state.get("messages", [])
+    last_user = next(
+        (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
+        "",
+    )
     try:
-        results = await long_term_memory.search(state["thread_id"], last, top_k=3)
+        results = await long_term_memory.search(state["thread_id"], last_user, top_k=3)
         state["memory_context"] = await long_term_memory.format_context(results)
     except Exception:
         state.setdefault("memory_context", "")
@@ -213,9 +223,10 @@ def compile_graph(
         intent = state.get("intent", "chat")
         if intent == "task":
             return "memory_reader_task"
-        if intent == "memory":
-            return "memory_reader_chat"
-        return "route_persona"
+        # H1: every remaining intent is a conversational turn, and a
+        # conversational turn is exactly the one that asks "what did I tell
+        # you?".  Route it through the reader before the persona agent.
+        return "memory_reader_chat"
 
     def route_persona(state: NexusState) -> str:
         p = state.get("active_persona", "gemma")
