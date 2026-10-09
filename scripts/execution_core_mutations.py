@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ruff: noqa: E501  (the anchors/mutants are verbatim source lines, kept intact)
-"""NEXUS V1 execution-core mutation probes (M1–M17).
+"""NEXUS V1 execution-core mutation probes (M1–M25).
 
 A targeted mutation harness in the same shape as the established
 ``scripts/gate5_mutation_probes.py``: for each correctness property this
@@ -26,6 +26,15 @@ M14   backend ignores required-verification policy      fail-closed submit
 M15   shutdown drops a late reservation claim            cancellation race
 M16   require_regular_file leaks parent-walk OSError      typed boundary error
 M17   caller idempotency overrides durable identity       identity binding
+----  ------------------------------------------------  -------------------------
+M18   enqueue never arms the one authoritative job       I1 submit identity
+M19   observe presents a provider run id as authority     I2/I5 provider identity
+M20   execution success bypasses independent verify       I6 verifier independence
+M21   any disposition becomes a terminal failure          I7 UNKNOWN != FAILED
+M22   backend fabricates a second authority              I9 one-queue boundary
+M23   observe launders a missing job to a verdict         I7 UNKNOWN != FAILED
+M24   observe launders an unreadable status to a verdict  I7 UNKNOWN != FAILED
+M25   dedup insert discards the durable idempotency key   I8 Nexus-owned dedup
 ====  ================================================  =========================
 
 Layered-defense note: M5 replaces the whole quarantine move (both the
@@ -53,11 +62,15 @@ QUEUE = REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py"
 BACKEND = REPO / "src/nexus_ai_agent/adapters/native_local_backend.py"
 STAGING = REPO / "src/nexus_ai_agent/execution/staging.py"
 FS = REPO / "src/nexus_ai_agent/tools/filesystem_policy.py"
+CONTRACT = REPO / "src/nexus_ai_agent/execution/contract.py"
 
 RACES = "tests/integration/test_execution_races.py::"
+CRASH_T = "tests/integration/test_execution_crash_matrix.py::"
 BACKEND_T = "tests/integration/test_execution_native_backend.py::"
 STAGING_T = "tests/unit/test_execution_staging.py::"
 FS_T = "tests/unit/test_filesystem_policy_primitives.py::"
+ARCH_T = "tests/architecture/test_execution_contract_boundary.py::"
+ARCH_ENF_T = "tests/architecture/test_execution_boundary_enforcement.py::"
 
 
 @dataclass(frozen=True)
@@ -196,6 +209,9 @@ PROBES: tuple[Probe, ...] = (
         tests=(
             f"{RACES}test_same_attempt_double_commit_has_exactly_one_winner",
             f"{BACKEND_T}test_stale_attempt_cannot_complete_after_takeover",
+            # I4's proving test: the late stale worker must be refused without a
+            # success notice (crash matrix C7).
+            f"{CRASH_T}test_c7_late_stale_worker_is_refused_without_a_success_notice",
         ),
     ),
     Probe(
@@ -515,6 +531,105 @@ PROBES: tuple[Probe, ...] = (
         ),
         mutant="        bound_key = idempotency_key  # MUTATION: trust the caller over the row",
         tests=(f"{BACKEND_T}test_observe_and_reconcile_bind_identity_to_durable_idempotency_key",),
+    ),
+    # --- I1/I2/I5/I6/I7/I9: negative probes tying each invariant to a real
+    # correctness property (the AC-5 gap PR #195 reopened).  Each targets the
+    # enforcement symbol named in the invariant table, not a nearby field.
+    Probe(
+        name="M18 enqueue never arms the authoritative job (I1)",
+        target=QUEUE,
+        anchor=("        self._schedule(outcome.job_id)\n        return outcome.job_id"),
+        mutant=("        return outcome.job_id  # MUTATION: one request never arms its one job"),
+        tests=(f"{BACKEND_T}test_submit_returns_the_authoritative_identity",),
+    ),
+    Probe(
+        name="M19 observe presents a provider run id as authority (I2/I5)",
+        target=BACKEND,
+        anchor=(
+            "        bound = self._identity_from_facts(identity.job_id, identity.idempotency_key, facts)"
+        ),
+        mutant=("        bound = identity  # MUTATION: a provider run id is taken as the truth"),
+        tests=(
+            f"{BACKEND_T}test_provider_run_id_never_changes_observed_truth",
+            f"{BACKEND_T}test_provider_retry_never_mints_a_new_nexus_attempt",
+        ),
+    ),
+    Probe(
+        name="M20 execution success bypasses independent verification (I6)",
+        target=QUEUE,
+        # The I6 enforcement symbol is ``InProcessJobQueue._verify_safely``: the
+        # mutation must break the *verification decision itself*, not merely the
+        # branch that consumes it.  Returning a forced-ok outcome from the
+        # verifier call makes execution success stand in for verified evidence.
+        anchor="            return await asyncio.to_thread(verifier, payload, result)",
+        mutant=(
+            "            return VerificationOutcome(  # MUTATION: execution success is taken as evidence\n"
+            "                ok=True,\n"
+            '                reason_code="forced_ok",\n'
+            '                summary={"status": "verified"},\n'
+            "            )"
+        ),
+        tests=(
+            f"{BACKEND_T}test_handler_success_without_independent_verification_is_not_job_success",
+        ),
+    ),
+    Probe(
+        name="M21 any disposition is a terminal business failure (I7)",
+        target=CONTRACT,
+        anchor="        return self is FailureDisposition.NON_RETRYABLE",
+        mutant="        return True  # MUTATION: UNKNOWN/CANCELLED/STALE become terminal",
+        tests=(f"{BACKEND_T}test_observe_unknown_job_is_unknown_not_failed",),
+    ),
+    Probe(
+        name="M22 backend fabricates a second authority when none is injected (I9)",
+        target=BACKEND,
+        anchor='        if queue is None:\n            raise ValueError("NativeLocalBackend requires an existing job queue")',
+        mutant=(
+            "        if queue is None:\n"
+            "            from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue as _Q  # MUTATION\n"
+            '            queue = _Q(":memory:", artifact_verifiers={})'
+        ),
+        tests=(
+            f"{ARCH_T}test_backend_never_constructs_a_queue",
+            f"{ARCH_ENF_T}test_backend_never_constructs_a_queue_at_runtime",
+        ),
+    ),
+    Probe(
+        name="M23 observe launders a missing job into a known verdict (I7)",
+        target=BACKEND,
+        anchor=(
+            "            return ExecutionObservation(\n"
+            "                identity=identity,\n"
+            "                state=ObservationState.UNKNOWN,\n"
+            '                failure=unknown_failure("job_not_found", f"no durable row for {identity.job_id}"),\n'
+            "            )"
+        ),
+        mutant="            pass  # MUTATION: missing job falls through to a known verdict",
+        tests=(f"{BACKEND_T}test_observe_unknown_job_is_unknown_not_failed",),
+    ),
+    Probe(
+        name="M24 observe launders an unreadable status into a known verdict (I7)",
+        target=BACKEND,
+        anchor=(
+            "                state=ObservationState.UNKNOWN,\n"
+            "                failure=unknown_failure(\n"
+            '                    "status_unreadable", f"unreadable status {getattr(facts, \'status\', None)!r}"\n'
+            "                ),"
+        ),
+        mutant=(
+            "                state=ObservationState.SUCCEEDED,  # MUTATION: unreadable status -> success\n"
+            "                failure=unknown_failure(\n"
+            '                    "status_unreadable", f"unreadable status {getattr(facts, \'status\', None)!r}"\n'
+            "                ),"
+        ),
+        tests=(f"{BACKEND_T}test_observe_corrupt_status_is_unknown_not_failed",),
+    ),
+    Probe(
+        name="M25 the dedup insert ignores the durable idempotency key (I8)",
+        target=QUEUE,
+        anchor="            if cursor.rowcount == 1:",
+        mutant="            if True:  # MUTATION: idempotency key conflict is discarded",
+        tests=(f"{BACKEND_T}test_submit_is_idempotent_on_the_nexus_key",),
     ),
 )
 

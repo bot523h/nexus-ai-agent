@@ -19,6 +19,7 @@ from __future__ import annotations
 import ast
 import importlib
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).parents[2]
 CONTRACT = ROOT / "src/nexus_ai_agent/execution/contract.py"
@@ -193,7 +194,9 @@ INVARIANT_ENFORCEMENT: dict[str, tuple[str, str]] = {
         "test_observe_unknown_job_is_unknown_not_failed",
     ),
     "I8": (
-        "nexus_ai_agent.adapters.in_process_job_queue:InProcessJobQueue.enqueue",
+        # The dedup semantics live in ``_insert_or_get`` (the ``ON CONFLICT
+        # (idempotency_key) DO NOTHING`` insert), which ``enqueue`` delegates to.
+        "nexus_ai_agent.adapters.in_process_job_queue:InProcessJobQueue._insert_or_get",
         "tests/integration/test_execution_native_backend.py::"
         "test_submit_is_idempotent_on_the_nexus_key",
     ),
@@ -203,7 +206,10 @@ INVARIANT_ENFORCEMENT: dict[str, tuple[str, str]] = {
         "test_backend_never_constructs_a_queue",
     ),
     "I10": (
-        "nexus_ai_agent.adapters.in_process_job_queue:InProcessJobQueue._notify_completion",
+        # Ordering ("notification strictly after the durable CAS") is enforced
+        # in ``_process_job`` at the ``_mark_completed`` call site — the
+        # ``_notify_completion`` method is the callee, not the ordering guard.
+        "nexus_ai_agent.adapters.in_process_job_queue:InProcessJobQueue._process_job",
         "tests/integration/test_execution_races.py::"
         "test_success_notification_only_after_the_commit",
     ),
@@ -229,3 +235,104 @@ def test_every_invariant_maps_to_an_existing_test() -> None:
 
 def test_invariant_table_covers_i1_through_i10() -> None:
     assert set(INVARIANT_ENFORCEMENT) == {f"I{n}" for n in range(1, 11)}
+
+
+# --------------------------------------------------------------------------- #
+# Invariant -> negative mutation — the AC-5 closure.
+#
+# Each invariant must be tied to a *named* mutation in the execution-core
+# harness (``scripts/execution_core_mutations.py``) whose mutant is applied to
+# that invariant's enforcement symbol and whose targeted tests include the
+# invariant's proving test.  A mere GREEN proving test is not enough: the
+# invariant's guard must be provably *killable*.
+# --------------------------------------------------------------------------- #
+#: invariant -> mutation probe name in scripts/execution_core_mutations.py
+INVARIANT_MUTATION: dict[str, str] = {
+    "I1": "M18 enqueue never arms the authoritative job",
+    "I2": "M19 observe presents a provider run id as authority",
+    "I3": "M1 final completion CAS ignores the attempt fence",
+    "I4": "M1 final completion CAS ignores the attempt fence",
+    "I5": "M19 observe presents a provider run id as authority",
+    "I6": "M20 execution success bypasses independent verification",
+    "I7": "M21 any disposition is a terminal business failure",
+    "I8": "M25 the dedup insert ignores the durable idempotency key",
+    "I9": "M22 backend fabricates a second authority when none is injected",
+    "I10": "M6 success notification before the durable commit",
+}
+
+
+def _load_probes() -> dict[str, Any]:
+    harness = ROOT / "scripts/execution_core_mutations.py"
+    source = harness.read_text(encoding="utf-8")
+    namespace: dict[str, Any] = {"__file__": str(harness)}
+    # The harness is a script, not a package; exec it far enough to read PROBES.
+    head = source.rsplit("def _run_tests", 1)[0]
+    exec(compile(head, "execution_core_mutations", "exec"), namespace)
+    return {probe.name: probe for probe in namespace["PROBES"]}
+
+
+def _enclosing_qualname(source: str, anchor: str) -> str | None:
+    """Return ``Class.method`` enclosing ``anchor`` in ``source`` (or ``None``).
+
+    A file-level check is not enough: two guards in the same module (e.g. the
+    ``_mark_completed`` call site inside ``_process_job`` vs. the
+    ``_notify_completion`` callee) share a file, so the mutation must be proven
+    to land *inside the enforcement method itself*.
+    """
+    tree = ast.parse(source)
+    index = source.find(anchor)
+    if index < 0:
+        return None
+    line = source.count("\n", 0, index) + 1
+    # Two different classes may define a method with the same name, so resolve
+    # the *class* that actually contains the enclosing method — never a global
+    # name map (which would map a duplicated name to the wrong class).
+    best: tuple[str, str] | None = None
+    best_lineno = -1
+    for cls in ast.walk(tree):
+        if not isinstance(cls, ast.ClassDef):
+            continue
+        for node in cls.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if (
+                node.lineno <= line <= (node.end_lineno or node.lineno)
+                and node.lineno >= best_lineno
+            ):
+                best = (cls.name, node.name)
+                best_lineno = node.lineno
+    if best is None:
+        return None
+    return f"{best[0]}.{best[1]}"
+
+
+def test_every_invariant_is_killable_by_a_named_mutation() -> None:
+    probes = _load_probes()
+    for invariant, mutation_name in INVARIANT_MUTATION.items():
+        probe = next(
+            (p for name, p in probes.items() if name.startswith(mutation_name)),
+            None,
+        )
+        assert probe is not None, f"{invariant}: mutation not found: {mutation_name}"
+        # The mutation must break the invariant's *enforcement symbol*...
+        symbol, proving_test = INVARIANT_ENFORCEMENT[invariant]
+        module_name, _, qualname = symbol.partition(":")
+        enforcing_file = Path(importlib.import_module(module_name).__file__ or "").resolve()
+        assert probe.target.resolve() == enforcing_file, (
+            f"{invariant}: mutation {mutation_name} targets {probe.target} "
+            f"not the enforcement symbol's file {enforcing_file}"
+        )
+        # ... *inside the enforcement method* (not merely the same file) ...
+        enclosing = _enclosing_qualname(probe.target.read_text(encoding="utf-8"), probe.anchor)
+        assert enclosing == qualname, (
+            f"{invariant}: mutation {mutation_name} anchors at {enclosing} "
+            f"but the enforcement symbol is {qualname}"
+        )
+        # ... and must run the invariant's proving test.
+        assert proving_test in probe.tests, (
+            f"{invariant}: mutation {mutation_name} does not run {proving_test}"
+        )
+
+
+def test_invariant_mutation_table_covers_i1_through_i10() -> None:
+    assert set(INVARIANT_MUTATION) == {f"I{n}" for n in range(1, 11)}
