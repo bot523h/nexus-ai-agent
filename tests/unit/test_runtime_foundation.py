@@ -22,6 +22,9 @@ def test_dockerfile_uses_ubuntu_and_python_314() -> None:
     assert "FROM ubuntu:26.04" in text
     assert "python3.14" in text
     assert "python3.14-venv" in text
+    assert "build-essential" in text
+    assert "cmake" in text
+    assert "3.14.8" in text
     assert "ffmpeg" in text
     assert "USER nexus" in text
 
@@ -37,6 +40,9 @@ def test_ci_exercises_canonical_python_and_runtime_contract() -> None:
     assert 'python-version: "3.14"' in text
     assert "runtime-foundation" in text
     assert "scripts/check_runtime.py" in text
+    assert "build-essential" in text
+    assert "cmake" in text
+    assert "python_patch" in _text("pyproject.toml")
 
 
 def test_bootstrap_and_makefile_expose_one_canonical_path() -> None:

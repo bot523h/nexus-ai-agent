@@ -12,6 +12,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
+        cmake \
         ffmpeg \
         fonts-liberation \
         git \
@@ -23,7 +24,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/python3.14 /usr/local/bin/python \
     && python -m venv /opt/venv \
-    && python --version
+    && python --version \
+    && python -c "import platform; assert platform.python_version() == '3.14.8', platform.python_version()"
 
 COPY pyproject.toml README.md LICENSE VERSION CHANGELOG.md ./
 COPY src ./src

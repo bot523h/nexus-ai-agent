@@ -32,13 +32,13 @@ def _read_contract() -> dict[str, object]:
 
 def main() -> int:
     contract = _read_contract()
-    expected_py = str(contract["python"])
+    expected_patch = str(contract["python_patch"])
     expected_os = str(contract["os"])
     actual_py = platform.python_version()
     actual_os = platform.freedesktop_os_release().get("VERSION_ID", "unknown")
     failures: list[str] = []
-    if not actual_py.startswith(expected_py + ".") and actual_py != expected_py:
-        failures.append(f"Python {actual_py} does not satisfy {expected_py}.x")
+    if actual_py != expected_patch:
+        failures.append(f"Python {actual_py} does not satisfy exact contract {expected_patch}")
     if expected_os not in actual_os and not (expected_os == "26.04" and actual_os == "26.04.1"):
         failures.append(f"OS {actual_os} does not satisfy Ubuntu {expected_os}")
     if shutil.which("ffmpeg") is None:

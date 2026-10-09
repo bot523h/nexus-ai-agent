@@ -64,6 +64,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 COMMITTED_MATRIX_DOC = REPO_ROOT / ".github" / "DEPENDENCY_MATRIX.md"
+LOCKFILE = REPO_ROOT / "uv.lock"
 LEG_TEST_FILE = "tests/unit/test_optional_extras.py"
 
 MATRIX_JOB = "extras-matrix"
@@ -86,6 +87,7 @@ _PYTHON_MATRIX = re.compile(r"python-version:\s*\[([^\]]+)\]")
 _LITERAL_PYTHON = re.compile(r'python-version:\s*"(\d+\.\d+)"')
 _CONTINUE_ON_ERROR = re.compile(r"continue-on-error")
 _REQUIRES_PYTHON = re.compile(r'requires-python\s*=\s*">=\s*(\d+\.\d+)"')
+_LOCK_REQUIRES_PYTHON = re.compile(r'^requires-python\s*=\s*"(>=\d+\.\d+)"\s*$', re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -177,6 +179,13 @@ def requires_python_floor(pyproject_text: str) -> str:
     return match.group(1)
 
 
+def lock_requires_python(lock_text: str) -> str:
+    match = _LOCK_REQUIRES_PYTHON.search(lock_text)
+    if match is None:
+        raise ValueError("uv.lock has no top-level requires-python declaration")
+    return match.group(1)
+
+
 def _version_tuple(version: str) -> tuple[int, int]:
     major, minor = version.split(".")[:2]
     return (int(major), int(minor))
@@ -227,6 +236,20 @@ def literal_job_pythons(workflow: str) -> list[str]:
 def matrix_problems(pyproject_text: str, workflow_text: str) -> list[str]:
     """Every disagreement between pyproject, the workflow matrix and this script."""
     problems: list[str] = []
+    floor = requires_python_floor(pyproject_text)
+    if not LOCKFILE.is_file():
+        problems.append("uv.lock is missing; regenerate it with `uv lock`")
+    else:
+        try:
+            locked_floor = lock_requires_python(LOCKFILE.read_text(encoding="utf-8"))
+        except ValueError as exc:
+            problems.append(str(exc))
+        else:
+            if locked_floor != f">={floor}":
+                problems.append(
+                    f"uv.lock requires-python {locked_floor!r} disagrees with "
+                    f"pyproject floor >= {floor}"
+                )
     extras = _optional_dependencies(pyproject_text)
     shipping = {name for name in extras if name != DEV_EXTRA}
     declared = set(LEG_DEFINITIONS)
@@ -321,6 +344,8 @@ def matrix_markdown(pyproject_text: str, workflow_text: str) -> str:
     """The deterministic dependency-matrix document (regenerate → compare guard)."""
     extras = _requirement_pins(pyproject_text)
     floor = requires_python_floor(pyproject_text)
+    lock_text = LOCKFILE.read_text(encoding="utf-8") if LOCKFILE.is_file() else ""
+    lock_floor = lock_requires_python(lock_text) if lock_text else "missing"
     pythons = parity_pythons(workflow_text)
     legs = matrix_legs(workflow_text)
     dev_requirements = extras.get(DEV_EXTRA, [])
@@ -340,6 +365,7 @@ def matrix_markdown(pyproject_text: str, workflow_text: str) -> str:
     lines.append("| Declaration | Value | Source |")
     lines.append("|---|---|---|")
     lines.append(f"| `requires-python` floor | `{floor}` | `pyproject.toml` |")
+    lines.append(f"| uv lock resolution | `{lock_floor}` | `uv.lock` |")
     lines.append(f"| Primary CI Python | `{PRIMARY_PYTHON}` | `test`/`lint` jobs |")
     lines.append(
         f"| Python parity matrix | {', '.join(f'`{p}`' for p in pythons) or '**missing**'} "
