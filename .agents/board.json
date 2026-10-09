@@ -2319,7 +2319,12 @@
         "an architecture guard requires authorizer= at those call sites (Gate 2 guard deliberately does not, to avoid owning runtime files)",
         "full suite green; no contract-layer change needed"
       ],
-      "exclusive_paths": [],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/slideshow/service.py",
+        "src/nexus_ai_agent/creative/slideshow/upscale.py",
+        "src/nexus_ai_agent/creative/render_jobs.py",
+        "tests/architecture/test_runtime_service_grants.py"
+      ],
       "owner_hint": "Gate 2 follow-up; fence set at claim time",
       "agent_branch": "phase1-pr196-guard-20261009",
       "claimed_at": "2026-10-09T19:35:09Z",
