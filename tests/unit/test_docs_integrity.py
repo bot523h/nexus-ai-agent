@@ -327,3 +327,71 @@ def test_conflict_marker_scanner_detects_a_real_conflict() -> None:
     # A Setext H1 underline of exactly seven ``=`` is legitimate Markdown and must
     # not be mistaken for a conflict separator.
     assert not _has_conflict_marker("Title\n=======\n\nbody\n")
+
+
+# --------------------------------------------------------------------------- #
+# 8. The EXECUTION_CORE.md invariant mirror stays in lockstep with its source
+# --------------------------------------------------------------------------- #
+EXECUTION_CORE = DOCS / "architecture" / "EXECUTION_CORE.md"
+EXECUTION_BOUNDARY_TEST = REPO_ROOT / "tests/architecture/test_execution_contract_boundary.py"
+
+#: One table row: ``| I1 | invariant | `symbol` | `test` |``.
+_INVARIANT_ROW = re.compile(
+    r"^\|\s*(I\d+)\s*\|[^|]*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|\s*$",
+    re.MULTILINE,
+)
+
+
+def _load_invariant_enforcement() -> dict[str, tuple[str, str]]:
+    """Import the canonical I1–I10 table from its enforcing test module."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "_execution_contract_boundary", EXECUTION_BOUNDARY_TEST
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return dict(module.INVARIANT_ENFORCEMENT)
+
+
+def _execution_core_rows() -> dict[str, tuple[str, str]]:
+    return {
+        invariant: (symbol, test)
+        for invariant, symbol, test in _INVARIANT_ROW.findall(
+            EXECUTION_CORE.read_text(encoding="utf-8")
+        )
+    }
+
+
+def test_execution_core_doc_mirrors_the_invariant_table() -> None:
+    """The doc's I1–I10 matrix must equal the enforcing table, symbol-for-symbol.
+
+    ``docs/architecture/EXECUTION_CORE.md`` restates the invariant table that is
+    canonically defined in ``tests/architecture/test_execution_contract_boundary.py``.
+    A restated table can silently drift from the code that enforces it, so this
+    check pins the copy to its source: same invariants, same enforcing symbols,
+    same proving tests. No invariant may be added, dropped, or re-pointed in one
+    place only.
+    """
+    canonical = _load_invariant_enforcement()
+    documented = _execution_core_rows()
+    missing = sorted(set(canonical) - set(documented))
+    extra = sorted(set(documented) - set(canonical))
+    changed = sorted(k for k in set(canonical) & set(documented) if canonical[k] != documented[k])
+    assert documented == canonical, (
+        "EXECUTION_CORE.md drifted from "
+        "tests/architecture/test_execution_contract_boundary.py: "
+        f"missing={missing} extra={extra} changed={changed}"
+    )
+
+
+def test_execution_core_invariant_scanner_detects_a_missing_row() -> None:
+    """Positive control (vacuity guard): a dropped row must be caught."""
+    canonical = _load_invariant_enforcement()
+    text = EXECUTION_CORE.read_text(encoding="utf-8")
+    truncated = _INVARIANT_ROW.sub(lambda m: "" if m.group(1) == "I10" else m.group(0), text)
+    documented = {
+        invariant: (symbol, test) for invariant, symbol, test in _INVARIANT_ROW.findall(truncated)
+    }
+    assert documented != canonical, "the mirror check would not catch a missing invariant"
