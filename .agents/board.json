@@ -3493,6 +3493,27 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "generation": 1
+    },
+    {
+      "task": "task-265-flaky-cancel-identity-race",
+      "title": "Flaky race in NativeLocalBackend.submit identity binding (unbound assert)",
+      "title_fa": "",
+      "zone": "execution-core",
+      "priority": "P2",
+      "status": "queued",
+      "scope": "test_execution_native_backend.py::test_cancel_without_a_fencing_token_is_refused failed once in a full-suite run (1 failed,3878 passed) and passed on immediate rerun (3879 passed,31 skipped). submit() reads facts after a to_thread yield, so the worker can reserve (attempt=1) before the facts read, binding a fencing_token; the test assumes a fresh submit is unbound. Make the assertion robust or gate the reservation deterministically.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "the isolated race test is deterministic across >=20 full-suite-equivalent runs",
+        "either submit binds identity without a scheduling race, or the test asserts the durable truth instead of the fresh-submit assumption",
+        "no behaviour change to the fenced CAS or reservation semantics"
+      ],
+      "exclusive_paths": [
+        "tests/integration/test_execution_native_backend.py",
+        "src/nexus_ai_agent/adapters/native_local_backend.py"
+      ],
+      "note": "Discovered during task-258 full-suite evidence run. Evidence: run1 /tmp/fullsuite.log FAILED test_cancel_without_a_fencing_token_is_refused (identity.fencing_token==1, expected None); run2 /tmp/fullsuite2.log green. Related to task-256."
     }
   ],
   "deferred_log": [
