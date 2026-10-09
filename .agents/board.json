@@ -796,7 +796,8 @@
         "tests/architecture/test_execution_boundary_enforcement.py",
         "tests/unit/test_filesystem_policy_primitives.py",
         "scripts/execution_core_mutations.py",
-        "src/nexus_ai_agent/tools/filesystem_policy.py"
+        "src/nexus_ai_agent/tools/filesystem_policy.py",
+        "tests/integration/test_execution_process_crash.py"
       ]
     }
   ],
@@ -3457,13 +3458,14 @@
         "tests/architecture/test_execution_boundary_enforcement.py",
         "tests/unit/test_filesystem_policy_primitives.py",
         "scripts/execution_core_mutations.py",
-        "src/nexus_ai_agent/tools/filesystem_policy.py"
+        "src/nexus_ai_agent/tools/filesystem_policy.py",
+        "tests/integration/test_execution_process_crash.py"
       ],
       "agent_branch": "arena/290bc0d6-nexus-ai-agent",
       "claimed_at": "2026-10-09T01:02:44Z",
       "ttl_hours": 24,
       "gates_owner": true,
-      "note": "AC-5 evidence follow-up reopened after post-merge independent audit. The merged I1-I10 table named enforcement symbols and proving tests, but did not tie every invariant to a negative mutation. Add explicit M18-M23 probes for I1, I2, I5, I6, I7, I9; rerun all mutations, full regression, exact-SHA CI and fresh review. Implementation remains merged by PR #192; this claim is only for completing the missing adversarial proof and truthful final AC-5 closure. Generation 4, gates_owner=true; do not release until the follow-up merge and evidence.",
+      "note": "AC-5 evidence follow-up (reopened after post-merge independent audit). Closed: I1-I10 each maps to a named negative mutation (M18-M25 added; M1 extended for I4), plus a real OS-process SIGKILL crash-recovery test (tests/integration/test_execution_process_crash.py). Mutation campaign M1-M25: 25/25 caught. Full suite green. Implementation merged by PR #192; this claim completes the mutation-proof gap only.",
       "generation": 4
     }
   ],

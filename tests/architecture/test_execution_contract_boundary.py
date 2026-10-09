@@ -19,6 +19,7 @@ from __future__ import annotations
 import ast
 import importlib
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).parents[2]
 CONTRACT = ROOT / "src/nexus_ai_agent/execution/contract.py"
@@ -229,3 +230,63 @@ def test_every_invariant_maps_to_an_existing_test() -> None:
 
 def test_invariant_table_covers_i1_through_i10() -> None:
     assert set(INVARIANT_ENFORCEMENT) == {f"I{n}" for n in range(1, 11)}
+
+
+# --------------------------------------------------------------------------- #
+# Invariant -> negative mutation — the AC-5 closure.
+#
+# Each invariant must be tied to a *named* mutation in the execution-core
+# harness (``scripts/execution_core_mutations.py``) whose mutant is applied to
+# that invariant's enforcement symbol and whose targeted tests include the
+# invariant's proving test.  A mere GREEN proving test is not enough: the
+# invariant's guard must be provably *killable*.
+# --------------------------------------------------------------------------- #
+#: invariant -> mutation probe name in scripts/execution_core_mutations.py
+INVARIANT_MUTATION: dict[str, str] = {
+    "I1": "M18 enqueue never arms the authoritative job",
+    "I2": "M19 observe presents a provider run id as authority",
+    "I3": "M1 final completion CAS ignores the attempt fence",
+    "I4": "M1 final completion CAS ignores the attempt fence",
+    "I5": "M19 observe presents a provider run id as authority",
+    "I6": "M20 execution success bypasses independent verification",
+    "I7": "M21 any disposition is a terminal business failure",
+    "I8": "M25 the dedup insert ignores the durable idempotency key",
+    "I9": "M22 backend fabricates a second authority when none is injected",
+    "I10": "M6 success notification before the durable commit",
+}
+
+
+def _load_probes() -> dict[str, Any]:
+    harness = ROOT / "scripts/execution_core_mutations.py"
+    source = harness.read_text(encoding="utf-8")
+    namespace: dict[str, Any] = {"__file__": str(harness)}
+    # The harness is a script, not a package; exec it far enough to read PROBES.
+    head = source.rsplit("def _run_tests", 1)[0]
+    exec(compile(head, "execution_core_mutations", "exec"), namespace)
+    return {probe.name: probe for probe in namespace["PROBES"]}
+
+
+def test_every_invariant_is_killable_by_a_named_mutation() -> None:
+    probes = _load_probes()
+    for invariant, mutation_name in INVARIANT_MUTATION.items():
+        probe = next(
+            (p for name, p in probes.items() if name.startswith(mutation_name)),
+            None,
+        )
+        assert probe is not None, f"{invariant}: mutation not found: {mutation_name}"
+        # The mutation must break the invariant's *enforcement symbol*...
+        symbol, proving_test = INVARIANT_ENFORCEMENT[invariant]
+        module_name, _, qualname = symbol.partition(":")
+        enforcing_file = Path(importlib.import_module(module_name).__file__ or "").resolve()
+        assert probe.target.resolve() == enforcing_file, (
+            f"{invariant}: mutation {mutation_name} targets {probe.target} "
+            f"not the enforcement symbol's file {enforcing_file}"
+        )
+        # ... and must run the invariant's proving test.
+        assert proving_test in probe.tests, (
+            f"{invariant}: mutation {mutation_name} does not run {proving_test}"
+        )
+
+
+def test_invariant_mutation_table_covers_i1_through_i10() -> None:
+    assert set(INVARIANT_MUTATION) == {f"I{n}" for n in range(1, 11)}

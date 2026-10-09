@@ -290,6 +290,42 @@ async def test_observe_unknown_job_is_unknown_not_failed(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
+async def test_observe_corrupt_status_is_unknown_not_failed(tmp_path: Path) -> None:
+    """I7 (2): an unreadable/corrupt persisted status is UNKNOWN, never FAILED.
+
+    ``parse_job_status`` fail-closes on an unknown spelling; the backend must
+    surface that as an *unreadable* UNKNOWN observation, not launder it into a
+    canonical success or a terminal business failure.
+    """
+    db = tmp_path / "jobs.sqlite3"
+    gate = _Gate()
+    queue, _ = _queues(db, gate)
+    backend = NativeLocalBackend(queue)
+
+    submitted = await backend.submit(_request("corrupt-status"))
+    await _wait_status(queue, submitted.job_id, JobStatus.PROCESSING)
+    with sqlite3.connect(db) as connection:
+        connection.execute(
+            "UPDATE nexus_job_queue SET status = 'not-a-real-status' WHERE id = ?",
+            (submitted.job_id,),
+        )
+
+    identity = ExecutionIdentity(
+        request_id=submitted.request_id,
+        idempotency_key=submitted.idempotency_key,
+        job_id=submitted.job_id,
+    )
+    observation = await backend.observe(identity)
+    assert observation.state is ObservationState.UNKNOWN
+    assert observation.failure is not None
+    assert observation.failure.disposition is FailureDisposition.UNKNOWN
+    assert not observation.failure.is_terminal_business_failure
+
+    gate.event(1).set()
+    await queue.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_observe_and_reconcile_bind_identity_to_durable_idempotency_key(
     tmp_path: Path,
 ) -> None:
