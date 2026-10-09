@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from nexus_ai_agent.creative.packs.slideshow.operations import build_slideshow_registry
 from nexus_ai_agent.creative.studio.authorization import ProjectAccess
 from nexus_ai_agent.creative.studio.bus import CommandBus
 from nexus_ai_agent.creative.studio.models import (
@@ -232,7 +231,9 @@ def _bus_with_access(project_id: str = "proj-runtime") -> tuple[CommandBus, Acto
     access = ProjectAccess(
         actor=actor, project_id=project_id, permissions=frozenset(EXPECTED_PERMISSIONS)
     )
-    return CommandBus(project, registry=build_slideshow_registry(), authorizer=access), actor
+    # The core studio registry (the bus default) implements ``system.undo``,
+    # so this host-boundary test needs no pack dependency.
+    return CommandBus(project, authorizer=access), actor
 
 
 def _command(
