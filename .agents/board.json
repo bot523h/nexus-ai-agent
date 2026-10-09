@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-09T00:17:05Z",
+  "updated_at": "2026-10-09T05:41:43Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2308,7 +2308,7 @@
       "title_fa": "",
       "zone": "nagar-runtime-call-sites",
       "priority": "P1",
-      "status": "queued",
+      "status": "active",
       "scope": "After Gate 2, claim-less schema-1 dispatches run under deprecated implicit local trust; the runtime owner must inject authorizer= with service grants at the three in-process call sites, then the implicit path can be retired.",
       "scope_fa": "",
       "prerequisites": [
@@ -2320,7 +2320,13 @@
         "full suite green; no contract-layer change needed"
       ],
       "exclusive_paths": [],
-      "owner_hint": "Gate 2 follow-up; fence set at claim time"
+      "owner_hint": "Gate 2 follow-up; fence set at claim time",
+      "agent_branch": "arena/manus-task-181-service-grants-20261009",
+      "claimed_at": "2026-10-09T05:41:43Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
     },
     {
       "task": "task-182-durable-idempotency-conflict",
