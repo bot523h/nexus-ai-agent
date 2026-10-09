@@ -3527,6 +3527,14 @@
       "reason_fa": "در حلقهٔ task-223 کشف شد اما خارج از ناحیهٔ claim من است و رفع آن یک PR چهارم پشت سه PR باز می‌سازد؛ به‌جای گسترش دامنه، با شواهد ثبت شد.",
       "reason_en": "Found during the task-223 loop but out of my claim's zone; fixing it would open a 4th PR stacked behind three open PRs. Recorded with reproduction instead of widening scope.",
       "resume_when": "next storage-observability window (after #126/#127/#128 merge)"
+    },
+    {
+      "task": "task-254-execution-core-v1",
+      "deferred_by_branch": "arena/290bc0d6-nexus-ai-agent",
+      "at": "2026-10-09T02:30:00Z",
+      "reason_fa": "سیم‌کشی job جدید CI برای هارنس mutation هستهٔ اجرا (.github/workflows/ci.yml) ممکن نشد چون آن فایل در lease فعال task-260-linux-python-foundation است (agent_board check → overlap, exit 1). طبق قانون ۲ آن کار push نشد.",
+      "reason_en": "Wiring a CI job for scripts/execution_core_mutations.py in .github/workflows/ci.yml is blocked: the file is under the active lease of task-260-linux-python-foundation (agent_board check --files .github/workflows/ci.yml -> overlap, exit 1). Per rule 2 the change was not pushed. The harness itself is proven locally (25/25 caught) and by the arch tests; only CI wiring remains.",
+      "resume_when": "task-260-linux-python-foundation releases .github/workflows/ci.yml (PR #193 merged/closed), or a ci-quality window opens"
     }
   ],
   "next_work": [
