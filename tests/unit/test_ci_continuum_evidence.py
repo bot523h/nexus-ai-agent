@@ -37,7 +37,7 @@ def test_the_job_is_blocking_on_every_supported_interpreter() -> None:
     body = _commands()
     assert "continue-on-error" not in body
     assert "fail-fast: false" in body
-    assert 'python-version: ["3.10", "3.11", "3.12", "3.14"]' in body
+    assert 'python-version: ["3.10", "3.11", "3.12"]' in body
     assert "if: always()" in body  # only on the artifact upload, never on a verdict step
     for line in _job_lines():
         if line.strip().startswith("if:"):

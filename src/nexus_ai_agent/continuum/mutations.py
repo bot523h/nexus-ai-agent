@@ -835,10 +835,10 @@ CATALOG: tuple[Mutation, ...] = (
         "CI5",
         "ci",
         _CI,
-        '        python-version: ["3.10", "3.11", "3.12", "3.14"]\n    steps:\n'
+        '        python-version: ["3.10", "3.11", "3.12"]\n    steps:\n'
         "      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2\n"
         "        with:\n          # full history: snapshot",
-        '        python-version: ["3.11", "3.12", "3.14"]\n    steps:\n'
+        '        python-version: ["3.11", "3.12"]\n    steps:\n'
         "      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2\n"
         "        with:\n          # full history: snapshot",
         [f"{_CI_GUARD}::test_the_job_is_blocking_on_every_supported_interpreter"],

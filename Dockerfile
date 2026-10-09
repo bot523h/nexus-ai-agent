@@ -3,7 +3,8 @@ FROM ubuntu:26.04
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PATH="/opt/venv/bin:${PATH}"
 
 WORKDIR /app
 
@@ -21,6 +22,7 @@ RUN apt-get update \
         python3-pip \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/python3.14 /usr/local/bin/python \
+    && python -m venv /opt/venv \
     && python --version
 
 COPY pyproject.toml README.md LICENSE VERSION CHANGELOG.md ./
