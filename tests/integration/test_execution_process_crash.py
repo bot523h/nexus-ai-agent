@@ -57,12 +57,17 @@ async def handler(payload):
             "SELECT id, started_at, attempt FROM nexus_job_queue "
             "WHERE status = 'processing' ORDER BY created_at DESC LIMIT 1"
         ).fetchone()
-    marker.write_text(json.dumps({{
+    # Write to a temp file and atomically rename: the parent must never observe
+    # (and try to parse) a partially written marker.
+    payload = json.dumps({{
         "job_id": row["id"],
         "pid": os.getpid(),
         "started_at": row["started_at"],
         "attempt": row["attempt"],
-    }}))
+    }})
+    tmp = marker.with_suffix(".tmp")
+    tmp.write_text(payload)
+    os.replace(tmp, marker)
     signal.pause()  # park forever — the parent will SIGKILL us here
     return {{"ok": True}}
 

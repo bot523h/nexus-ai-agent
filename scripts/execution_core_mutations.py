@@ -557,10 +557,17 @@ PROBES: tuple[Probe, ...] = (
     Probe(
         name="M20 execution success bypasses independent verification (I6)",
         target=QUEUE,
-        anchor=("            if outcome.ok:\n                stored_passport: str | None = None"),
+        # The I6 enforcement symbol is ``InProcessJobQueue._verify_safely``: the
+        # mutation must break the *verification decision itself*, not merely the
+        # branch that consumes it.  Returning a forced-ok outcome from the
+        # verifier call makes execution success stand in for verified evidence.
+        anchor="            return await asyncio.to_thread(verifier, payload, result)",
         mutant=(
-            "            if True:  # MUTATION: handler success is taken as job success\n"
-            "                stored_passport: str | None = None"
+            "            return VerificationOutcome(  # MUTATION: execution success is taken as evidence\n"
+            "                ok=True,\n"
+            '                reason_code="forced_ok",\n'
+            '                summary={"status": "verified"},\n'
+            "            )"
         ),
         tests=(
             f"{BACKEND_T}test_handler_success_without_independent_verification_is_not_job_success",
