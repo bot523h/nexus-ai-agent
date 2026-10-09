@@ -111,21 +111,51 @@ def _assignments(tree: ast.AST) -> dict[str, ast.AST]:
     return result
 
 
+def _function_scope(tree: ast.AST, node: ast.AST) -> ast.AST | None:
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    current: ast.AST | None = node
+    while current is not None:
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            return current
+        current = parents.get(current)
+    return None
+
+
+def _assignments_in_scope(tree: ast.AST, node: ast.AST) -> dict[str, ast.AST]:
+    """Resolve aliases only in the function containing the inspected call."""
+    scope = _function_scope(tree, node)
+    result: dict[str, ast.AST] = {}
+    for candidate in ast.walk(tree):
+        if (
+            isinstance(candidate, ast.Assign)
+            and len(candidate.targets) == 1
+            and isinstance(candidate.targets[0], ast.Name)
+            and _function_scope(tree, candidate) is scope
+        ):
+            result[candidate.targets[0].id] = candidate.value
+    return result
+
+
 def _assert_input_ref_expression(
     tree: ast.AST,
     node: ast.AST,
     *,
     project_names: set[str],
     seen: set[str] | None = None,
+    bindings: dict[str, ast.AST] | None = None,
 ) -> None:
     """Resolve the actual refs binding; names bound to ``()`` must fail."""
-    bindings = _assignments(tree)
+    bindings = _assignments_in_scope(tree, node) if bindings is None else bindings
     seen = set() if seen is None else seen
     if isinstance(node, ast.Name):
         assert node.id not in seen, f"cyclic input_refs binding: {node.id}"
         assert node.id in bindings, f"unresolved input_refs binding: {node.id}"
         _assert_input_ref_expression(
-            tree, bindings[node.id], project_names=project_names, seen=seen | {node.id}
+            tree,
+            bindings[node.id],
+            project_names=project_names,
+            seen=seen | {node.id},
+            bindings=bindings,
         )
         return
     if isinstance(node, ast.Call):
@@ -140,7 +170,11 @@ def _assert_input_ref_expression(
             assert isinstance(fields["ref_type"], ast.Constant)
             assert fields["ref_type"].value == "asset"
             project_id = fields["project_id"]
-            assert isinstance(project_id, ast.Attribute) and project_id.attr == "project_id"
+            assert (
+                isinstance(project_id, ast.Attribute)
+                and project_id.attr == "project_id"
+                and ast.unparse(project_id) in project_names
+            )
             ref_id = fields["ref_id"]
             assert isinstance(ref_id, ast.Attribute) and ref_id.attr == "asset_id"
             return
@@ -153,6 +187,12 @@ def _assert_input_ref_expression(
         else:
             assert isinstance(project_arg, ast.Name) and project_arg.id in project_names
         asset_ids = node.args[1]
+        asset_seen: set[str] = set()
+        while isinstance(asset_ids, ast.Name):
+            assert asset_ids.id not in asset_seen, f"cyclic asset_ids binding: {asset_ids.id}"
+            assert asset_ids.id in bindings, f"unresolved asset_ids binding: {asset_ids.id}"
+            asset_seen.add(asset_ids.id)
+            asset_ids = bindings[asset_ids.id]
         if isinstance(asset_ids, ast.Call):
             assert isinstance(asset_ids.func, ast.Name) and asset_ids.func.id == "tuple"
             assert len(asset_ids.args) == 1
@@ -182,7 +222,7 @@ def _assert_input_ref_expression(
         assert "project_id" in fields
         project_id = fields["project_id"]
         if isinstance(project_id, ast.Attribute):
-            assert project_id.attr == "project_id"
+            assert project_id.attr == "project_id" and ast.unparse(project_id) in project_names
         else:
             assert isinstance(project_id, ast.Name) and project_id.id in project_names
         assert "ref_id" in fields
@@ -256,7 +296,11 @@ def _assert_direct_bus(source: Path, *, actor_name: str, actor_id: str, access_n
         if isinstance(operation, ast.Name) and operation.id.endswith("SCAN"):
             continue
         refs = _keyword(call, "input_refs").value
-        _assert_input_ref_expression(tree, refs, project_names={"project_id"})
+        _assert_input_ref_expression(
+            tree,
+            refs,
+            project_names={"project_id", ast.unparse(project_id)},
+        )
 
 
 def test_direct_slideshow_buses_require_non_null_scoped_service_grants() -> None:
@@ -320,7 +364,83 @@ def test_each_runtime_command_declares_the_correct_target_and_post_scan_refs() -
             if isinstance(operation, ast.Name) and operation.id.endswith("SCAN"):
                 continue
             refs = _keyword(call, "input_refs").value
-            _assert_input_ref_expression(tree, refs, project_names={"project_id"})
+            _assert_input_ref_expression(
+                tree,
+                refs,
+                project_names={"project_id", ast.unparse(target)},
+            )
+
+
+def _synthetic_input_refs(source: str) -> tuple[ast.Module, ast.AST]:
+    tree = ast.parse(source)
+    call = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and any(item.arg == "input_refs" for item in node.keywords)
+    )
+    return tree, _keyword(call, "input_refs").value
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def build(project_id):\n    return _command(input_refs=_asset_refs(project_id, ()))",
+        (
+            "def build(project_id):\n"
+            "    return _command(input_refs=_asset_refs(project_id, tuple(())))"
+        ),
+        (
+            "def build(project_id):\n"
+            "    empty = ()\n"
+            "    return _command(input_refs=_asset_refs(project_id, empty))"
+        ),
+        "def build(project_id):\n    input_refs = ()\n    return _command(input_refs=input_refs)",
+    ],
+)
+def test_input_ref_guard_rejects_empty_or_unresolved_shapes(source: str) -> None:
+    tree, refs = _synthetic_input_refs(source)
+    with pytest.raises(AssertionError):
+        _assert_input_ref_expression(tree, refs, project_names={"project_id"})
+
+
+def test_input_ref_guard_does_not_import_aliases_from_another_function() -> None:
+    tree, refs = _synthetic_input_refs(
+        "def unrelated():\n"
+        "    refs = (InputRef(ref_type='asset', project_id=project_id, ref_id=asset_id),)\n"
+        "def build(project_id):\n"
+        "    refs = ()\n"
+        "    return _command(input_refs=refs)\n"
+    )
+    with pytest.raises(AssertionError):
+        _assert_input_ref_expression(tree, refs, project_names={"project_id"})
+
+
+def test_input_ref_guard_rejects_a_foreign_project_expression() -> None:
+    tree, refs = _synthetic_input_refs(
+        "def build(project):\n"
+        "    return _command(input_refs=(InputRef(ref_type='asset', "
+        "project_id=other_project.project_id, ref_id=asset_id),))\n"
+    )
+    with pytest.raises(AssertionError):
+        _assert_input_ref_expression(
+            tree,
+            refs,
+            project_names={"project.project_id"},
+        )
+
+
+def test_input_ref_guard_accepts_a_non_empty_owned_asset_expression() -> None:
+    tree, refs = _synthetic_input_refs(
+        "def build(project):\n"
+        "    asset_ids = ('asset-1',)\n"
+        "    refs = _asset_refs(project.project_id, asset_ids)\n"
+        "    return _command(input_refs=refs)\n"
+    )
+    _assert_input_ref_expression(
+        tree,
+        refs,
+        project_names={"project.project_id"},
+    )
 
 
 def _bus_with_access(project_id: str = "proj-runtime") -> tuple[CommandBus, ActorIdentity]:
