@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-09T01:02:54Z",
+  "updated_at": "2026-10-09T06:49:39Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3429,7 +3429,7 @@
       "title_fa": "هستهٔ اجرای بومی NEXUS V1: قرارداد اجرای مستقل از provider، NativeLocalBackend، staging در محدودهٔ attempt، تست‌های نگاشت‌شده به invariantها",
       "zone": "execution-core",
       "priority": "P0",
-      "status": "active",
+      "status": "deferred",
       "scope": "Add a provider-neutral execution contract (submit/observe/cancel/reconcile, no execute) that is only an intent/contract, never an authority. Add a thin NativeLocalBackend over the existing InProcessJobQueue (one queue, one authority) plus a small additive public cancel primitive. Add attempt-scoped staging isolation with traversal/symlink protection. Reuse the existing queue-owned atomic fenced commit, independent verification, passport and provenance unchanged. Prove invariants I1-I10 with executable tests including the required stale-attempt race.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -3462,11 +3462,11 @@
         "tests/integration/test_execution_process_crash.py"
       ],
       "agent_branch": "arena/290bc0d6-nexus-ai-agent",
-      "claimed_at": "2026-10-09T01:02:44Z",
+      "claimed_at": null,
       "ttl_hours": 24,
-      "gates_owner": true,
+      "gates_owner": false,
       "note": "AC-5 evidence follow-up (reopened after post-merge independent audit). Closed: I1-I10 each maps to a named negative mutation (M18-M25 added; M1 extended for I4), plus a real OS-process SIGKILL crash-recovery test (tests/integration/test_execution_process_crash.py). Mutation campaign M1-M25: 25/25 caught. Full suite green. Implementation merged by PR #192; this claim completes the mutation-proof gap only.",
-      "generation": 4
+      "generation": 5
     }
   ],
   "deferred_log": [
@@ -3531,9 +3531,9 @@
     {
       "task": "task-254-execution-core-v1",
       "deferred_by_branch": "arena/290bc0d6-nexus-ai-agent",
-      "at": "2026-10-09T02:30:00Z",
-      "reason_fa": "سیم‌کشی job جدید CI برای هارنس mutation هستهٔ اجرا (.github/workflows/ci.yml) ممکن نشد چون آن فایل در lease فعال task-260-linux-python-foundation است (agent_board check → overlap, exit 1). طبق قانون ۲ آن کار push نشد.",
-      "reason_en": "Wiring a CI job for scripts/execution_core_mutations.py in .github/workflows/ci.yml is blocked: the file is under the active lease of task-260-linux-python-foundation (agent_board check --files .github/workflows/ci.yml -> overlap, exit 1). Per rule 2 the change was not pushed. The harness itself is proven locally (25/25 caught) and by the arch tests; only CI wiring remains.",
+      "at": "2026-10-09T06:49:39Z",
+      "reason_fa": "بستن شواهد AC-5 کامل شد؛ تنها مورد باقی‌مانده سیم‌کشی job جدید CI در .github/workflows/ci.yml است که در lease فعال task-260 قرار دارد.",
+      "reason_en": "Mutation-proof closure (AC-5) is complete: I1-I10 each map to a named killable mutation + proving test, campaign M1-M25 25/25 caught, full suite 3879 passed/31 skipped, plus a real OS-process SIGKILL crash test. The ONLY remaining item is wiring an execution-core-mutations CI job into .github/workflows/ci.yml, which is under the active lease of task-260-linux-python-foundation (agent_board check --files .github/workflows/ci.yml -> exit 1 overlap). Per AGENTS.md rule 2 that change was not pushed.",
       "resume_when": "task-260-linux-python-foundation releases .github/workflows/ci.yml (PR #193 merged/closed), or a ci-quality window opens"
     }
   ],
