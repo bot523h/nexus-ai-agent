@@ -111,6 +111,100 @@ def _assignments(tree: ast.AST) -> dict[str, ast.AST]:
     return result
 
 
+def _assert_input_ref_expression(
+    tree: ast.AST,
+    node: ast.AST,
+    *,
+    project_names: set[str],
+    seen: set[str] | None = None,
+) -> None:
+    """Resolve the actual refs binding; names bound to ``()`` must fail."""
+    bindings = _assignments(tree)
+    seen = set() if seen is None else seen
+    if isinstance(node, ast.Name):
+        assert node.id not in seen, f"cyclic input_refs binding: {node.id}"
+        assert node.id in bindings, f"unresolved input_refs binding: {node.id}"
+        _assert_input_ref_expression(
+            tree, bindings[node.id], project_names=project_names, seen=seen | {node.id}
+        )
+        return
+    if isinstance(node, ast.Call):
+        if isinstance(node.func, ast.Name) and node.func.id == "tuple":
+            assert len(node.args) == 1 and isinstance(node.args[0], ast.GeneratorExp)
+            generator = node.args[0]
+            assert generator.generators, "input_refs generator must have a source"
+            element = generator.elt
+            assert isinstance(element, ast.Call)
+            assert isinstance(element.func, ast.Name) and element.func.id == "InputRef"
+            fields = {item.arg: item.value for item in element.keywords}
+            assert isinstance(fields["ref_type"], ast.Constant)
+            assert fields["ref_type"].value == "asset"
+            project_id = fields["project_id"]
+            assert isinstance(project_id, ast.Attribute) and project_id.attr == "project_id"
+            ref_id = fields["ref_id"]
+            assert isinstance(ref_id, ast.Attribute) and ref_id.attr == "asset_id"
+            return
+        assert isinstance(node.func, ast.Name) and node.func.id == "_asset_refs"
+        assert len(node.args) == 2
+        project_arg = node.args[0]
+        if isinstance(project_arg, ast.Attribute):
+            assert project_arg.attr == "project_id"
+            project_names.add(ast.unparse(project_arg))
+        else:
+            assert isinstance(project_arg, ast.Name) and project_arg.id in project_names
+        asset_ids = node.args[1]
+        if isinstance(asset_ids, ast.Call):
+            assert isinstance(asset_ids.func, ast.Name) and asset_ids.func.id == "tuple"
+            assert len(asset_ids.args) == 1
+            asset_ids = asset_ids.args[0]
+        assert isinstance(asset_ids, ast.Tuple) or isinstance(asset_ids, ast.GeneratorExp)
+        return
+    if isinstance(node, ast.Tuple):
+        assert node.elts, "input_refs must not be an empty tuple"
+        elements = node.elts
+    elif isinstance(node, ast.GeneratorExp):
+        elements = [node.elt]
+        assert node.generators, "input_refs generator must have a source"
+    else:
+        pytest.fail(f"input_refs must resolve to concrete InputRef values: {ast.dump(node)}")
+    for element in elements:
+        assert isinstance(element, ast.Call)
+        assert isinstance(element.func, ast.Name) and element.func.id == "InputRef"
+        fields = {item.arg: item.value for item in element.keywords}
+        ref_type = fields.get("ref_type")
+        assert isinstance(ref_type, ast.Constant) and ref_type.value == "asset"
+        assert "project_id" in fields
+        project_id = fields["project_id"]
+        if isinstance(project_id, ast.Attribute):
+            assert project_id.attr == "project_id"
+        else:
+            assert isinstance(project_id, ast.Name) and project_id.id in project_names
+        assert "ref_id" in fields
+        ref_id = fields["ref_id"]
+        assert isinstance(ref_id, (ast.Name, ast.Attribute))
+
+
+def _assert_asset_ref_helper(tree: ast.AST) -> None:
+    function = next(
+        (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "_asset_refs"
+        ),
+        None,
+    )
+    assert function is not None
+    refs = [node for node in ast.walk(function) if isinstance(node, ast.Call)]
+    input_ref_calls = [
+        node for node in refs if isinstance(node.func, ast.Name) and node.func.id == "InputRef"
+    ]
+    assert len(input_ref_calls) == 1
+    fields = {item.arg: item.value for item in input_ref_calls[0].keywords}
+    assert isinstance(fields["ref_type"], ast.Constant) and fields["ref_type"].value == "asset"
+    assert isinstance(fields["project_id"], ast.Name) and fields["project_id"].id == "project_id"
+    assert isinstance(fields["ref_id"], ast.Name) and fields["ref_id"].id == "asset_id"
+
+
 def _assert_service_identity(tree: ast.AST, *, actor_name: str, actor_id: str) -> None:
     assignments = _assignments(tree)
     actor_value = assignments[actor_name]
@@ -123,6 +217,8 @@ def _assert_service_identity(tree: ast.AST, *, actor_name: str, actor_id: str) -
 
 def _assert_direct_bus(source: Path, *, actor_name: str, actor_id: str, access_name: str) -> None:
     tree = _tree(source)
+    if source == SERVICE_FILE:
+        _assert_asset_ref_helper(tree)
     _assert_service_identity(tree, actor_name=actor_name, actor_id=actor_id)
     assignments = _assignments(tree)
     access_value = assignments.get(access_name)
@@ -154,9 +250,7 @@ def _assert_direct_bus(source: Path, *, actor_name: str, actor_id: str, access_n
         if isinstance(operation, ast.Name) and operation.id.endswith("SCAN"):
             continue
         refs = _keyword(call, "input_refs").value
-        assert not (isinstance(refs, ast.Tuple) and not refs.elts), (
-            f"post-scan command at line {call.lineno} must carry owned input_refs"
-        )
+        _assert_input_ref_expression(tree, refs, project_names={"project_id"})
 
 
 def test_direct_slideshow_buses_require_non_null_scoped_service_grants() -> None:
@@ -220,7 +314,7 @@ def test_each_runtime_command_declares_the_correct_target_and_post_scan_refs() -
             if isinstance(operation, ast.Name) and operation.id.endswith("SCAN"):
                 continue
             refs = _keyword(call, "input_refs").value
-            assert not (isinstance(refs, ast.Tuple) and not refs.elts)
+            _assert_input_ref_expression(tree, refs, project_names={"project_id"})
 
 
 def _bus_with_access(project_id: str = "proj-runtime") -> tuple[CommandBus, ActorIdentity]:
