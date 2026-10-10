@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-09T19:35:09Z",
+  "updated_at": "2026-10-10T18:42:23Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -484,6 +484,13 @@
         "src/nexus_ai_agent/creative/slideshow/service.py",
         "src/nexus_ai_agent/creative/slideshow/upscale.py",
         "src/nexus_ai_agent/creative/render_jobs.py"
+      ]
+    },
+    {
+      "id": "runtime-service-grant-guard",
+      "description": "Architecture ratchet for the runtime service-grant contract: the guard test that proves the three in-process bus call sites pass explicit authorizer= service grants + project-bound source InputRefs (task-181 acceptance criterion 2). Declared 2026-10-10 because no existing zone covered tests/architecture/test_runtime_service_grants.py; the runtime zone deliberately does not carry test paths.",
+      "paths": [
+        "tests/architecture/test_runtime_service_grants.py"
       ]
     },
     {
@@ -2326,7 +2333,7 @@
       ],
       "owner_hint": "Gate 2 follow-up; fence set at claim time",
       "agent_branch": "phase1-pr196-guard-20261009",
-      "claimed_at": "2026-10-09T19:35:09Z",
+      "claimed_at": "2026-10-10T18:42:23Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
@@ -3475,6 +3482,100 @@
       "gates_owner": false,
       "note": "TASK-254 CLOSED after formal merge. PR #192 MERGED 2026-10-09T00:15:53Z at main merge commit a48326ded85bbe4e0972d645ee0ea6e877935362 (head 0e8d97f9ecd34e14b8e2e4388510595c51277d93); superseded PR #191 was closed afterward. AC-1..AC-7 and all six original findings were re-verified and closed; the follow-up review findings (mutation harness restoration/M7 anchor, shutdown takeover and reservation-cancel races, staging write and filesystem exception boundaries, notification recorder wiring, ExecutionPolicy enforcement, passport import assertion, durable idempotency identity binding) were fixed with regression tests. Evidence: exact PR-head CI run 37859836226 all required checks PASS; fresh CodeRabbit review APPROVED on 0e8d97f; all review threads resolved; local regression 3875 passed / 31 skipped / 0 failed; Ruff+format clean; mypy clean (289 files); M1-M17 17/17 caught; board tests 71/71; no test definitions removed. Task terminalized after merge evidence; exclusive execution-core zone released at generation 3.",
       "generation": 3
+    },
+    {
+      "task": "task-181-runtime-service-grant-guard",
+      "title": "RUNTIME GUARD (task-181 artifact): semantic architecture guard for explicit service grants + owned source refs",
+      "title_fa": "",
+      "zone": "runtime-service-grant-guard",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Own and publish the architecture ratchet proving the three in-process bus call sites pass explicit service principals, project-scoped grants and project-bound InputRefs. Split from task-181-runtime-service-grants because the runtime zone deliberately does not cover test paths and the guard must not be forced into it.",
+      "scope_fa": "",
+      "prerequisites": [
+        "task-179-gate2-command-reconciliation"
+      ],
+      "acceptance_criteria": [
+        "the guard fails closed on authorizer=None, missing/empty input_refs, empty asset tuples (literal, tuple-wrapped and aliased), unresolved/cyclic/scope-unrelated aliases and foreign-project InputRef expressions - each case observed RED under mutation and restored",
+        "the guard accepts the live call sites' real expression shapes (including generator asset ids) and the true project-expression target",
+        "pytest -q tests/architecture/test_runtime_service_grants.py green on the exact head"
+      ],
+      "evidence_required": [
+        "pytest output for tests/architecture/test_runtime_service_grants.py",
+        "mutation log with restoration verified (baseline GREEN -> mutant RED -> restore -> GREEN)",
+        "exact-SHA CI run URL and conclusion"
+      ],
+      "exclusive_paths": [
+        "tests/architecture/test_runtime_service_grants.py"
+      ],
+      "owner_hint": "runtime-lane guard artifact (task-181 acceptance criterion 2)",
+      "agent_branch": "phase1-pr196-guard-20261009",
+      "claimed_at": "2026-10-10T18:42:23Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
+    },
+    {
+      "task": "nexus-stabilization-handoff",
+      "title": "Dated stabilization handoff (PR #196/#197 closure record): exact-SHA CI truth, open-PR inventory snapshot, blockers",
+      "title_fa": "",
+      "zone": "docs-architecture",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Own docs/audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md and its docs/README index row. Separated from the runtime task because documentation is not a runtime-zone path; the record states exact-SHA CI evidence with run ids and observation times and must not conflate it with the full-gates role or the overall stabilization status.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "handoff distinguishes exact-SHA CI records (run id + SHA + observed time) from the overall stabilization status and from the full-gates role",
+        "stale QUEUED/IN_PROGRESS rows are historicalised; live heads refreshed at the observation time",
+        "pytest -q tests/unit/test_docs_integrity.py green on the exact head"
+      ],
+      "evidence_required": [
+        "docs-integrity pytest output on the exact head",
+        "the exact run ids, SHAs and observation times recorded inline"
+      ],
+      "exclusive_paths": [
+        "docs/audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md",
+        "docs/README.md"
+      ],
+      "owner_hint": "PR #197 closure documentation",
+      "agent_branch": "phase1-pr196-guard-20261009",
+      "claimed_at": "2026-10-10T18:42:23Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
+    },
+    {
+      "task": "ci-gates-steward-closure",
+      "title": "GATES STEWARDSHIP (epoch 2026-10-10): single live full-gates owner for the #196/#197 closure validation",
+      "title_fa": "",
+      "zone": "ci-quality",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Exactly one live gates_owner while the closure validation runs: the referee fails closed (exit 2) for every agent while no live gates owner exists, and main-bound closure work needs the full gates executed by their holder. Runs make lint / make types / make test against the closure head and records the results bound to the exact SHA.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "exactly one live gates_owner present on this board while the epoch is active",
+        "full gates (ruff check ., ruff format --check ., mypy src, pytest -q -m 'not slow') executed and recorded against the exact head SHA, with any environment-forced deviation classified explicitly"
+      ],
+      "evidence_required": [
+        "ruff/mypy/pytest outputs bound to the closure head SHA",
+        "the epoch record (claim, results, expiry/release)"
+      ],
+      "exclusive_paths": [
+        "Makefile",
+        ".github/"
+      ],
+      "owner_hint": "successor of ci-gates-steward / task-145-ci-gates-handoff-refresh",
+      "agent_branch": "phase1-pr196-guard-20261009",
+      "claimed_at": "2026-10-10T18:42:23Z",
+      "ttl_hours": 24,
+      "gates_owner": true,
+      "note": "",
+      "generation": 1
     }
   ],
   "deferred_log": [
