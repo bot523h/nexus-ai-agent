@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-10T04:06:31Z",
+  "updated_at": "2026-10-10T04:11:29Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -814,8 +814,10 @@
         "tests/unit/test_stt_identity.py",
         "tests/unit/test_gemini_ask_quota.py",
         "tests/unit/test_memory_scope_isolation.py",
-        "tests/unit/test_memory_consent_scope.py"
-      ]
+        "tests/unit/test_memory_consent_scope.py",
+        "tests/unit/test_graph_memory.py"
+      ],
+      "note": "2026-10-10: zone extended to tests/unit/test_graph_memory.py — the graph-write-key contract moves from conversation thread to personal scope (task-p1a-memory-scope), so that test is updated in-stream."
     }
   ],
   "claims": [
@@ -3574,14 +3576,15 @@
         "src/nexus_ai_agent/orchestration/graph.py",
         "src/nexus_ai_agent/orchestration/state.py",
         "src/nexus_ai_agent/memory/long_term.py",
-        "tests/unit/test_memory_scope_isolation.py"
+        "tests/unit/test_memory_scope_isolation.py",
+        "tests/unit/test_graph_memory.py"
       ],
       "owner_hint": "",
       "agent_branch": "arena/c5efc6a3-nexus-ai-agent",
       "claimed_at": "2026-10-10T04:06:31Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "",
+      "note": "exclusive_paths extended to tests/unit/test_graph_memory.py before editing it: the write-key contract change requires updating its long_term.search(thread_id) assertion to the personal scope key.",
       "generation": 1
     },
     {
