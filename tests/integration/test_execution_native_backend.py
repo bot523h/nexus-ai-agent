@@ -471,15 +471,18 @@ async def test_cancel_without_a_fencing_token_is_refused(tmp_path: Path) -> None
     # truth (exactly one active attempt) instead of a per-run timing.
     attempt = _row(db, identity.job_id)["attempt"]
     assert attempt == 1
-    if identity.fencing_token is None:
-        # Unbound job handle: it holds no cancellation authority (fail closed).
-        assert await backend.cancel(identity) is False
-        row = _row(db, identity.job_id)
-        assert row["status"] == JobStatus.PROCESSING.value  # the attempt is untouched
-        assert not worker.cancelled()
-    else:
-        # The race won: the returned handle already names the current attempt.
-        assert identity.fencing_token == attempt
+
+    # Deterministic: a bare job handle (no fencing token) never cancels, whether
+    # or not the submit-time handle happened to bind during the enqueue window.
+    bare = ExecutionIdentity(
+        request_id=identity.request_id,
+        idempotency_key=identity.idempotency_key,
+        job_id=identity.job_id,
+    )
+    assert await backend.cancel(bare) is False
+    row = _row(db, identity.job_id)
+    assert row["status"] == JobStatus.PROCESSING.value  # the attempt is untouched
+    assert not worker.cancelled()
 
     # The same job, presented with its current fencing token, cancels cleanly.
     current = identity.with_attempt(attempt_id="a#1", fencing_token=attempt)
