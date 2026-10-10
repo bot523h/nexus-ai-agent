@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-10T19:23:11Z",
+  "updated_at": "2026-10-10T20:37:27Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3584,7 +3584,7 @@
       "title_fa": "P1-A: جداسازی scope حافظهٔ بلندمدت شخصی از هویت مکالمهٔ گروهی",
       "zone": "p1-privacy-identity",
       "priority": "P1",
-      "status": "active",
+      "status": "deferred",
       "scope": "thread_id = tg:{chat_id} keys personal memory for every group member (cross-user leak). Introduce a typed per-user memory scope used by _memory_reader/_memory_writer and LongTermMemory; keep the checkpointer thread_id (conversation identity) unchanged; fail closed on missing identity; never serve legacy shared-key rows to personal reads and never copy them to all members.",
       "scope_fa": "کلید tg:{chat_id} حافظهٔ شخصی همهٔ اعضای گروه را مشترک می‌کند (نشت بین کاربران). scope شخصی per-user و typed برای خواندن/نوشتن حافظه ساخته شود؛ thread_id مکالمه دست‌نخورده بماند؛ در نبود هویت fail closed؛ دادهٔ قدیمی مشترک به هیچ کاربری تحویل داده یا کپی نشود.",
       "prerequisites": [],
@@ -3608,11 +3608,11 @@
       ],
       "owner_hint": "",
       "agent_branch": "arena/c5efc6a3-nexus-ai-agent",
-      "claimed_at": "2026-10-10T19:23:11Z",
+      "claimed_at": null,
       "ttl_hours": 24,
-      "gates_owner": true,
+      "gates_owner": false,
       "note": "",
-      "generation": 5
+      "generation": 6
     },
     {
       "task": "task-p1d-consent-scope",
@@ -3772,6 +3772,14 @@
       "reason_fa": "فاز ۵.۳ مأموریت نهایی کامل شد: متن رضایت ۵ مفهوم را مجزا نگه می‌دارد از جمله دامنهٔ مخاطب؛ استقلال حریم گروه از رضایت اثبات شد (7d7c075). mutation های D1/D2 کشته شد. سیاست B همچنان BLOCKED (مالک محصول). منتظر گیت رسمی.",
       "reason_en": "Final-mission phase 5.3 done: consent copy keeps 5 concepts distinct incl. audience scope; group privacy != consent proven (7d7c075). Mutations D1/D2 killed. Policy B remains BLOCKED on product owner (documented). Awaiting official gates.",
       "resume_when": "product owner decides Policy B; gates owner runs make lint && make types && make test"
+    },
+    {
+      "task": "task-p1a-memory-scope",
+      "deferred_by_branch": "arena/c5efc6a3-nexus-ai-agent",
+      "at": "2026-10-10T20:37:27Z",
+      "reason_fa": "گیت‌های رسمی زیر این claim فعال روی head 0816976 اجرا شد: lint صفر؛ types=2 (۳ خطای صرفاً محیطی، همگی در base موجود)؛ test=2 (۳۹۱۳ گذشت/۱۷ شکست — همه در base بازتولید شدند). CI دو بار SUCCESS. CodeRabbit تأیید کرد. هیچ کار بازی روی کد نیست؛ merge به دستور صریح کاربر نیاز دارد.",
+      "reason_en": "Official gates run under this --gates claim on head 0816976: make lint exit 0; make types exit 2 (3 env-only errors: chromadb forbidden, imageio-ffmpeg stubs — all 3 exist at base 6b94f3d); make test exit 2 (3913 passed/31 skipped/17 failed — all 17 reproduce at base 6b94f3d). CI on 0816976 = 2x SUCCESS (18 success + 1 skipped each). CodeRabbit APPROVED; both findings fixed (fbf193a/6ac1989/0816976). Nothing pending on code; merge decision is the user's explicit order.",
+      "resume_when": "user orders merge, or product owner decides Policy B / legacy-memory migration"
     }
   ],
   "next_work": [
