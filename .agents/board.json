@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-09T00:17:05Z",
+  "updated_at": "2026-10-10T04:06:31Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -797,6 +797,24 @@
         "tests/unit/test_filesystem_policy_primitives.py",
         "scripts/execution_core_mutations.py",
         "src/nexus_ai_agent/tools/filesystem_policy.py"
+      ]
+    },
+    {
+      "id": "p1-privacy-identity",
+      "description": "P1 privacy & identity remediation (Arena 2026-10-10): /stt user identity, GeminiEngine.ask() quota accounting, personal long-term memory scope, consent copy accuracy. Declared additively for the four task-p1* claims; paths listed verbatim from those claims' exclusive_paths.",
+      "paths": [
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/bot/memory_handlers.py",
+        "src/nexus_ai_agent/features/speech.py",
+        "src/nexus_ai_agent/features/ai_chat.py",
+        "src/nexus_ai_agent/features/ai_memory.py",
+        "src/nexus_ai_agent/orchestration/graph.py",
+        "src/nexus_ai_agent/orchestration/state.py",
+        "src/nexus_ai_agent/memory/long_term.py",
+        "tests/unit/test_stt_identity.py",
+        "tests/unit/test_gemini_ask_quota.py",
+        "tests/unit/test_memory_scope_isolation.py",
+        "tests/unit/test_memory_consent_scope.py"
       ]
     }
   ],
@@ -3465,6 +3483,141 @@
       "gates_owner": false,
       "note": "TASK-254 CLOSED after formal merge. PR #192 MERGED 2026-10-09T00:15:53Z at main merge commit a48326ded85bbe4e0972d645ee0ea6e877935362 (head 0e8d97f9ecd34e14b8e2e4388510595c51277d93); superseded PR #191 was closed afterward. AC-1..AC-7 and all six original findings were re-verified and closed; the follow-up review findings (mutation harness restoration/M7 anchor, shutdown takeover and reservation-cancel races, staging write and filesystem exception boundaries, notification recorder wiring, ExecutionPolicy enforcement, passport import assertion, durable idempotency identity binding) were fixed with regression tests. Evidence: exact PR-head CI run 37859836226 all required checks PASS; fresh CodeRabbit review APPROVED on 0e8d97f; all review threads resolved; local regression 3875 passed / 31 skipped / 0 failed; Ruff+format clean; mypy clean (289 files); M1-M17 17/17 caught; board tests 71/71; no test definitions removed. Task terminalized after merge evidence; exclusive execution-core zone released at generation 3.",
       "generation": 3
+    },
+    {
+      "task": "task-p1c-stt-identity",
+      "title": "P1-C: carry the real Telegram user identity through /stt to the Gemini metering layer",
+      "title_fa": "P1-C: انتقال هویت واقعی کاربر تلگرام در مسیر /stt تا لایهٔ مصرف Gemini",
+      "zone": "p1-privacy-identity",
+      "priority": "P1",
+      "status": "active",
+      "scope": "stt_cmd extracts the caller id but drops it before speech_to_text(); vision() then meters the request in shared bucket 0. Thread the real user id through speech_to_text() to vision(); fail closed when no valid identity exists; do not change /stt behaviour, output shape or MIME handling.",
+      "scope_fa": "stt_cmd شناسهٔ کاربر را می‌گیرد اما قبل از speech_to_text() رها می‌کند و vision() درخواست را به سطل مشترک 0 می‌شمارد. شناسهٔ واقعی تا vision() منتقل و در نبود هویت معتبر fail closed شود؛ رفتار /stt تغییر نکند.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "stt_cmd passes the effective user id explicitly into speech_to_text()",
+        "speech_to_text() forwards the same id to gemini_engine.vision(); no silent user_id=0 default is reached for a real-user request",
+        "a /stt request from user 424242 charges the limiter bucket of 424242 and never bucket 0 (behavioural dispatch-level test, network stubbed only)",
+        "missing/invalid user identity aborts before any provider call (fail closed; no anonymous bucket)",
+        "existing STT success and failure behaviour (result dict shape, MIME mapping, error strings) is unchanged"
+      ],
+      "evidence_required": [
+        "tests/unit/test_stt_identity.py (RED before the fix, GREEN after — recorded)"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/features/speech.py",
+        "tests/unit/test_stt_identity.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/c5efc6a3-nexus-ai-agent",
+      "claimed_at": "2026-10-10T04:06:31Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
+    },
+    {
+      "task": "task-p1b-ask-quota",
+      "title": "P1-B: record quota usage on the GeminiEngine.ask() success path exactly once",
+      "title_fa": "P1-B: ثبت دقیق مصرف سهمیه در مسیر موفق GeminiEngine.ask() دقیقاً یک بار",
+      "zone": "p1-privacy-identity",
+      "priority": "P1",
+      "status": "active",
+      "scope": "ask() consults is_allowed() but never calls record(), so the per-user quota is never consumed on that path (contrast: chat/translate/summarize/code all record). Record on success only, once for both the direct and the queued path; provider errors must not count; blocked requests must not count; no limiter redesign.",
+      "scope_fa": "ask() محدودیت را بررسی اما record() نمی‌کند؛ سهمیه در این مسیر مصرف نمی‌شود. ثبت فقط برای پاسخ موفق، یک بار در مسیر مستقیم و صف؛ خطای provider و درخواست مسدودشده شمرده نشود؛ بدون بازطراحی لیمیتر.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "with max_daily=1 the first successful ask() is recorded and the second is rejected",
+        "a provider failure leaves the quota unchanged (no fake success)",
+        "the queued path and the direct path each count exactly once (explicit no-double-count test)",
+        "a blocked request creates no count",
+        "the Telegram /ask command still routes through chat() and its routing test stays green"
+      ],
+      "evidence_required": [
+        "tests/unit/test_gemini_ask_quota.py (RED before the fix, GREEN after — recorded)"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/features/ai_chat.py",
+        "tests/unit/test_gemini_ask_quota.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/c5efc6a3-nexus-ai-agent",
+      "claimed_at": "2026-10-10T04:06:31Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
+    },
+    {
+      "task": "task-p1a-memory-scope",
+      "title": "P1-A: personal long-term memory scoped per user, separated from group conversation identity",
+      "title_fa": "P1-A: جداسازی scope حافظهٔ بلندمدت شخصی از هویت مکالمهٔ گروهی",
+      "zone": "p1-privacy-identity",
+      "priority": "P1",
+      "status": "active",
+      "scope": "thread_id = tg:{chat_id} keys personal memory for every group member (cross-user leak). Introduce a typed per-user memory scope used by _memory_reader/_memory_writer and LongTermMemory; keep the checkpointer thread_id (conversation identity) unchanged; fail closed on missing identity; never serve legacy shared-key rows to personal reads and never copy them to all members.",
+      "scope_fa": "کلید tg:{chat_id} حافظهٔ شخصی همهٔ اعضای گروه را مشترک می‌کند (نشت بین کاربران). scope شخصی per-user و typed برای خواندن/نوشتن حافظه ساخته شود؛ thread_id مکالمه دست‌نخورده بماند؛ در نبود هویت fail closed؛ دادهٔ قدیمی مشترک به هیچ کاربری تحویل داده یا کپی نشود.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "user A's write in a shared chat is not retrievable from user B's personal memory read (behavioural round-trip through the real graph nodes)",
+        "user A can still retrieve their own memory on a later request (stable deterministic scope)",
+        "group conversation/checkpoint identity is unchanged: chat history and checkpointer semantics keep working as before",
+        "missing identity (0/None) fails closed: no personal read and no personal write; no fallback to a shared scope",
+        "legacy rows stored under the old shared key are never served to a personal read (no silent migration, no deletion, no copy-to-all)"
+      ],
+      "evidence_required": [
+        "tests/unit/test_memory_scope_isolation.py (RED before the fix, GREEN after — recorded)",
+        "tests/unit/test_graph_memory.py + tests/unit/test_memory_recall.py stay green (conversation semantics preserved)"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/orchestration/graph.py",
+        "src/nexus_ai_agent/orchestration/state.py",
+        "src/nexus_ai_agent/memory/long_term.py",
+        "tests/unit/test_memory_scope_isolation.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/c5efc6a3-nexus-ai-agent",
+      "claimed_at": "2026-10-10T04:06:31Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
+    },
+    {
+      "task": "task-p1d-consent-scope",
+      "title": "P1-D: consent copy states its true scope; memory egress paths proven and gated",
+      "title_fa": "P1-D: متن رضایت دامنهٔ واقعی خود را بگوید؛ مسیرهای egress حافظه اثبات و کنترل شوند",
+      "zone": "p1-privacy-identity",
+      "priority": "P1",
+      "status": "active",
+      "scope": "The deny/grant copy promises 'message text never sent to the cloud AI model' while explicit AI commands and the chat path egress by design (product function). Remove the false absolute promise and scope the copy to the AI-memory feature exactly as the gate behaves; prove unset/denied/disabled never egress memory operations and that explicit AI use is unaffected; document the Policy A-vs-B owner decision as blocked if no policy document settles it.",
+      "scope_fa": "متن رد/قبول وعدهٔ مطلق «هرگز ارسال نمی‌شود» می‌دهد در حالی که فرمان‌های صریح AI و مسیر چت ذاتاً egress می‌کنند. وعدهٔ غلط حذف و متن دقیقاً به دامنهٔ ویژگی حافظه محدود شود؛ رفتارهای unset/denied/granted/disabled با تست اثبات شود؛ تصمیم سیاست A/B در صورت نبود سند، BLOCKED ثبت شود.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "no user-facing consent text makes an absolute no-egress promise the code does not keep for ALL cloud paths",
+        "consent copy states exactly what the memory consent gates (extraction/storage of AI memory) and what it does not (explicit AI commands)",
+        "unset and denied users: no memory egress; granted+enabled: allowed; disabled: none (behavioural tests)",
+        "an explicitly requested AI reply is not blocked by memory-consent state (existing product behaviour preserved)",
+        "graph memory write path creates no ungated memory egress (no generate() call on store/search; embedding locality proven)",
+        "Policy A vs Policy B for gating all cloud egress: BLOCKED with owner decision recorded, not silently chosen"
+      ],
+      "evidence_required": [
+        "tests/unit/test_memory_consent_scope.py (copy/behaviour contract)",
+        "tests/unit/test_ai_memory_consent.py stays green"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/memory_handlers.py",
+        "src/nexus_ai_agent/features/ai_memory.py",
+        "tests/unit/test_memory_consent_scope.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/c5efc6a3-nexus-ai-agent",
+      "claimed_at": "2026-10-10T04:06:31Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
     }
   ],
   "deferred_log": [
