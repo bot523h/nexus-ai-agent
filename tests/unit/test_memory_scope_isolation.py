@@ -104,14 +104,26 @@ async def test_user_still_reads_their_own_memory_later(settings_override) -> Non
     graph, _long_term = _build_graph()
     chat = -100123
 
+    # A group turn is still preserved in the OWNER's personal scope …
     state_a = _state(111, chat, SECRET)
     await graph.ainvoke(state_a, config={"configurable": {"thread_id": f"tg:{chat}"}})
 
-    # Same user, a later request (same chat): their own memory must be there.
-    later = _state(111, chat, "What did I tell you?")
+    # … and the owner reads it back later in their own private chat
+    # (audience rule: memory is disclosed only to chat_id == user_id).
+    later = _state(111, 111, "What did I tell you?")
     result = await graph.ainvoke(later, config={"configurable": {"thread_id": later["thread_id"]}})
     ctx = result.get("memory_context") or ""
     assert "ALPHA-42" in ctx, f"user 111 lost access to their own personal memory: context={ctx!r}"
+
+    # Same group chat later: no disclosure (personal memory is never
+    # group-visible — most restrictive safe default).
+    group_later = _state(111, chat, "What did I tell you?")
+    group_result = await graph.ainvoke(
+        group_later, config={"configurable": {"thread_id": f"tg:{chat}-later"}}
+    )
+    assert "ALPHA-42" not in (group_result.get("memory_context") or ""), (
+        "personal memory was disclosed to a group audience"
+    )
 
 
 async def test_personal_write_round_trip_is_per_user(settings_override) -> None:

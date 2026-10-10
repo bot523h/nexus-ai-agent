@@ -225,7 +225,9 @@ async def test_graph_memory_write_and_read_do_not_egress(mem_db) -> None:
     # Write + personal read through the real graph nodes.
     state = {
         "thread_id": f"tg:{uuid.uuid4().hex[:8]}",
-        "chat_id": -1,
+        # Private audience (chat_id == user_id): the reader only discloses
+        # personal memory in a provable 1:1 chat (see failclosed suite).
+        "chat_id": 77,
         "user_id": 77,
         "correlation_id": "c",
         "messages": [{"role": "user", "content": "remember this secret"}],

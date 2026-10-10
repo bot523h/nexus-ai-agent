@@ -20,6 +20,21 @@ def memory_scope_id(user_id: int | None) -> str | None:
     return f"mem:u:{int(user_id)}"
 
 
+def is_private_audience(chat_id: int | None, user_id: int | None) -> bool:
+    """True only for a provable 1:1 chat (Telegram private chat_id == user_id).
+
+    Group and unknown audiences are not private: the prompt context is shared
+    by every member of a group, so personal memory must never be injected
+    there (most restrictive safe default).  A missing/0 identity is never a
+    private audience.
+    """
+    if chat_id is None or user_id is None:
+        return False
+    if chat_id == 0 or user_id == 0:
+        return False
+    return chat_id == user_id
+
+
 class LongTermMemory:
     DIM = 384
 

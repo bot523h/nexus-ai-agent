@@ -8,7 +8,7 @@ from nexus_ai_agent.agents.gemma_agent import GemmaAgent
 from nexus_ai_agent.agents.phi_agent import PhiAgent
 from nexus_ai_agent.agents.qwen_agent import QwenAgent
 from nexus_ai_agent.llm.provider import LLMProvider
-from nexus_ai_agent.memory.long_term import LongTermMemory, memory_scope_id
+from nexus_ai_agent.memory.long_term import LongTermMemory, is_private_audience, memory_scope_id
 from nexus_ai_agent.orchestration.router import classify_intent, select_persona
 from nexus_ai_agent.orchestration.state import NexusState
 from nexus_ai_agent.tools.registry import ToolRegistry
@@ -23,22 +23,35 @@ async def _router_node(state: NexusState) -> NexusState:
         "intent": intent,
         "active_persona": persona,
         "turn_count": int(state.get("turn_count", 0)) + 1,
+        # Every turn re-derives memory_context from scratch: values supplied by
+        # the caller, a checkpoint replay or a resume must never survive into a
+        # prompt.  The reader (when it runs) overwrites this explicitly; if it
+        # fails or is not authorized, the context stays empty — fail closed.
+        "memory_context": "",
     }
 
 
 async def _memory_reader(long_term_memory: LongTermMemory, state: NexusState) -> NexusState:
     last = state["messages"][-1]["content"] if state.get("messages") else ""
+    # Default is empty: only a successful, audience-authorized read fills the
+    # context.  Always overwrite — never setdefault — so a hydrated value from
+    # the checkpointer cannot survive any failure branch (CodeRabbit 4236380409).
+    state["memory_context"] = ""
     try:
         # Personal long-term memory is scoped per user — never by the shared
         # conversation key.  A missing identity fails closed (empty context).
+        # Disclosure additionally requires a provable private audience: in a
+        # group the prompt context is shared by every member, so personal
+        # memory is never injected there.
         scope = memory_scope_id(state.get("user_id"))
-        if scope is None:
-            state["memory_context"] = ""
-        else:
-            results = await long_term_memory.search(scope, last, top_k=3)
-            state["memory_context"] = await long_term_memory.format_context(results)
+        if scope is None or not is_private_audience(state.get("chat_id"), state.get("user_id")):
+            return state
+        results = await long_term_memory.search(scope, last, top_k=3)
+        state["memory_context"] = await long_term_memory.format_context(results)
     except Exception:
-        state.setdefault("memory_context", "")
+        # Store failure, bad identity data, format error — anything — leaves
+        # the context empty.  Never the previous turn's value.
+        state["memory_context"] = ""
     return state
 
 
