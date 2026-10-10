@@ -261,8 +261,10 @@ def _assert_service_identity(tree: ast.AST, *, actor_name: str, actor_id: str) -
     assert isinstance(fields["actor_id"], ast.Constant) and fields["actor_id"].value == actor_id
 
 
-def _assert_direct_bus(source: Path, *, actor_name: str, actor_id: str, access_name: str) -> None:
-    tree = _tree(source)
+def _assert_direct_bus(
+    source: Path | str, *, actor_name: str, actor_id: str, access_name: str
+) -> None:
+    tree = _tree(source) if isinstance(source, Path) else ast.parse(source)
     if source == SERVICE_FILE:
         _assert_asset_ref_helper(tree)
     _assert_service_identity(tree, actor_name=actor_name, actor_id=actor_id)
@@ -415,6 +417,34 @@ def test_input_ref_guard_does_not_import_aliases_from_another_function() -> None
         _assert_input_ref_expression(tree, refs, project_names={"project_id"})
 
 
+def test_input_ref_guard_ignores_aliases_declared_after_the_inspected_call() -> None:
+    # Scope-awareness must not depend on statement order: a same-named, resolvable
+    # binding in an unrelated function declared later in the file must never be
+    # imported into this call's resolution.
+    tree, refs = _synthetic_input_refs(
+        "def build(project_id):\n"
+        "    refs = ()\n"
+        "    return _command(input_refs=refs)\n"
+        "def unrelated(project_id, asset_id):\n"
+        "    refs = (InputRef(ref_type='asset', project_id=project_id, ref_id=asset_id),)\n"
+    )
+    with pytest.raises(AssertionError):
+        _assert_input_ref_expression(tree, refs, project_names={"project_id"})
+
+
+def test_input_ref_guard_rejects_cyclic_alias_bindings() -> None:
+    # A cycle can never resolve to owned refs, so the resolver must fail closed with
+    # a clear assertion instead of recursing until the interpreter gives up.
+    tree, refs = _synthetic_input_refs(
+        "def build(project_id):\n"
+        "    refs = other\n"
+        "    other = refs\n"
+        "    return _command(input_refs=refs)\n"
+    )
+    with pytest.raises(AssertionError, match="cyclic input_refs binding"):
+        _assert_input_ref_expression(tree, refs, project_names={"project_id"})
+
+
 def test_input_ref_guard_rejects_a_foreign_project_expression() -> None:
     tree, refs = _synthetic_input_refs(
         "def build(project):\n"
@@ -488,7 +518,9 @@ def test_real_bus_rejects_foreign_project_input_refs_before_handler() -> None:
 def _resolve_input_refs(expression: str) -> None:
     """Parse a single expression and resolve it exactly as the guard resolves ``input_refs``."""
     tree = ast.parse(expression, mode="exec")
-    _assert_input_ref_expression(tree, tree.body[0].value, project_names={"project_id"})
+    statement = tree.body[0]
+    assert isinstance(statement, ast.Expr)
+    _assert_input_ref_expression(tree, statement.value, project_names={"project_id"})
 
 
 def test_empty_asset_ref_tuple_is_rejected() -> None:
@@ -516,3 +548,109 @@ def test_asset_refs_tuple_call_with_generator_is_accepted() -> None:
     _resolve_input_refs(
         "_asset_refs(project_id, tuple(asset.asset_id for asset in project.assets))"
     )
+
+
+# ---------------------------------------------------------------------------
+# Negative controls for the guard itself: each test below pins one assertion of
+# the guard and is proven to fail when that assertion is weakened (mutation
+# campaign recorded in the stabilization handoff ledger).
+# ---------------------------------------------------------------------------
+
+
+def test_input_ref_guard_rejects_unresolved_alias_bindings() -> None:
+    # A name with no binding at all can never be a resolved InputRef tuple, so the
+    # resolver must fail closed instead of raising a bare ``KeyError``.
+    tree, refs = _synthetic_input_refs(
+        "def build(project_id):\n    return _command(input_refs=missing_refs)\n"
+    )
+    with pytest.raises(AssertionError, match="unresolved input_refs binding"):
+        _assert_input_ref_expression(tree, refs, project_names={"project_id"})
+
+
+def test_input_ref_guard_rejects_cyclic_asset_ids_bindings() -> None:
+    # ``asset_ids`` aliases itself in a cycle: without the cycle assertion the
+    # resolver cannot terminate, so this property is pinned here as well.
+    tree, refs = _synthetic_input_refs(
+        "def build(project_id):\n"
+        "    asset_ids = other_ids\n"
+        "    other_ids = asset_ids\n"
+        "    return _command(input_refs=_asset_refs(project_id, asset_ids))\n"
+    )
+    with pytest.raises(AssertionError, match="cyclic asset_ids binding"):
+        _assert_input_ref_expression(tree, refs, project_names={"project_id"})
+
+
+def test_input_ref_guard_rejects_non_asset_ref_types() -> None:
+    # Only ``asset`` refs are owned by a project; a track/scene ref would escape
+    # the project-scope proof, so any other ref_type must be refused. ``ref_id`` is
+    # a genuine name so the refusal can only come from the ref_type assertion.
+    with pytest.raises(AssertionError):
+        _resolve_input_refs('(InputRef(ref_type="track", project_id=project_id, ref_id=asset_id),)')
+
+
+def test_service_identity_guard_rejects_a_mismatched_actor_id() -> None:
+    # The guard must pin the exact service actor_id, not merely "some service actor".
+    with pytest.raises(AssertionError):
+        _assert_service_identity(
+            _tree(SERVICE_FILE), actor_name="_SERVICE_ACTOR", actor_id="some-other-runtime"
+        )
+
+
+def _synthetic_direct_bus(*, authorizer: str) -> str:
+    """A minimal upscale-shaped module: full scaffolding with an injectable authorizer."""
+    return (
+        '_SERVICE_ACTOR = ActorIdentity(kind="service", actor_id="slideshow-upscale-runtime")\n'
+        "def go(project):\n"
+        "    access = ProjectAccess(\n"
+        "        actor=_SERVICE_ACTOR,\n"
+        "        project_id=project.project_id,\n"
+        '        permissions=frozenset({"project:read", "project:write"}),\n'
+        "    )\n"
+        "    bus = CommandBus(project, registry=build_registry(), "
+        f"authorizer={authorizer})\n"
+        "    return bus.dispatch(\n"
+        "        _command(\n"
+        '            "op.upscale",\n'
+        "            {},\n"
+        "            project_id=project.project_id,\n"
+        "            input_refs=_asset_refs(\n"
+        "                project.project_id, tuple(asset.asset_id for asset in project.assets)\n"
+        "            ),\n"
+        "        )\n"
+        "    )\n"
+    )
+
+
+def test_direct_bus_guard_accepts_a_scoped_grant_control() -> None:
+    # Positive control: the synthetic module is valid scaffolding, so the negative
+    # test below fails for the authorizer reason and nothing else.
+    _assert_direct_bus(
+        _synthetic_direct_bus(authorizer="access"),
+        actor_name="_SERVICE_ACTOR",
+        actor_id="slideshow-upscale-runtime",
+        access_name="access",
+    )
+
+
+def test_direct_bus_guard_rejects_a_null_authorizer() -> None:
+    # ``authorizer=None`` is the implicit-authorization shape the guard exists to
+    # reject; a bare ``CommandBus`` must never be accepted as a granted call site.
+    with pytest.raises(AssertionError):
+        _assert_direct_bus(
+            _synthetic_direct_bus(authorizer="None"),
+            actor_name="_SERVICE_ACTOR",
+            actor_id="slideshow-upscale-runtime",
+            access_name="access",
+        )
+
+
+def test_direct_bus_guard_rejects_an_unscoped_authorizer_binding() -> None:
+    # The bus must carry the very grant the call site declared: any *other* access
+    # object is an unscoped/foreign authorization and must fail closed.
+    with pytest.raises(AssertionError):
+        _assert_direct_bus(
+            _synthetic_direct_bus(authorizer="other_access"),
+            actor_name="_SERVICE_ACTOR",
+            actor_id="slideshow-upscale-runtime",
+            access_name="access",
+        )

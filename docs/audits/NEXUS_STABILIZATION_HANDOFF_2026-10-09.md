@@ -1,68 +1,55 @@
-# NEXUS Phase-1 Stabilization Handoff — 2026-10-09
+# NEXUS Phase-1 Stabilization Handoff — 2026-10-09 (closure correction 2026-10-10)
 
-> **Status:** `HARDENED_AND_CI_VERIFIED`
+> **Status:** `HARDENED_BUT_NOT_COMPLETE`
 >
 > This is a dated, time-bounded evidence record. GitHub's live state remains authoritative after this observation.
+>
+> **Exact-SHA CI (kept separate from the overall status):** the last pre-closure head `c6acc1c0f05c84838589eb3377ffd74513484ac8` passed both CI runs (push `38037710746`, pull_request `38037712797`; observed 2026-10-10T18:30Z). For the closure head — the PR's live head — the authoritative CI signal is the PR #197 checks page; this document records a green result only with a completed run on the named SHA, never ahead of it.
+>
+> **Full gates:** executed under the single live gates steward epoch `ci-gates-steward-closure` (board `gates_owner=true`) against the tree of the closure commit; the validation ledger below binds every result to its exact command and count, including the two non-deterministic tests observed (both are `origin/main`'s own content, both green on re-run). One gate command (`mypy src`) reports exactly one **environment-only** error in this sandbox — see row 4 of the ledger. Overall stabilization remains incomplete for the owner-controlled blockers (Issue #85, the #193/task-260 reconciliation, and the owner merge/close decision on #196/#197).
 
 ## Executive verdict
 
-- **Main:** `6b94f3d244a42a2e6515ddc575411a7f00c90aad` (observed 2026-10-10T03:45:04Z); local main was not modified or pushed.
-- **Remediation:** PR [#197](https://github.com/bot523h/nexus-ai-agent/pull/197) publishes the PR #196 follow-up on branch `phase1-pr196-guard-20261009` at the live head verified during final audit; see PR #197 for the current exact SHA. CI was verified green on the immutable source-equivalent SHA `8b75f9e675917b363b52e67a79089961e56a074a` before this documentation-only handoff wording update..
-- **Code change:** `6f76a4664da174c68ed13727a439c3e9014f1663` closes empty `_asset_refs`/`input_refs` shapes, unrelated-scope aliases, cyclic/unresolved aliases, and foreign-project InputRef expressions in the architecture guard. The follow-up guard commit does not alter runtime implementation; the PR also carries the inherited PR #196 runtime changes.
-- **Evidence:** 16 focused guard tests, 12 adjacent architecture tests, Ruff and format checks, and 17/17 execution-core mutations caught with restoration.
-- **Delivery:** PR #197 is **MERGEABLE/CLEAN** with all required checks green on source-equivalent SHA `8b75f9e675917b363b52e67a79089961e56a074a`; the prior Board-zone and docs-index failures were corrected and revalidated. The PR remains unmerged pending owner action.
+- **Main:** `6b94f3d244a42a2e6515ddc575411a7f00c90aad` (live head observed 2026-10-10T18:26Z; unchanged since the previous observation); local main was not modified or pushed.
+- **Remediation:** PR [#197](https://github.com/bot523h/nexus-ai-agent/pull/197) on branch `phase1-pr196-guard-20261009` carries the PR #196 follow-up. Closure sequence: board-claim publish `9010b67cc4a86fa3fead1d6fabcb546b4cbf4d97` (runs `38076942105`/`38076945850`, started 2026-10-10T18:56Z), then the final content commit — which is the PR's live head; resolve the exact SHA from the PR, not from this document.
+- **Code change:** `6f76a4664da174c68ed13727a439c3e9014f1663` closed empty `_asset_refs`/`input_refs` shapes, unrelated-scope aliases, cyclic/unresolved aliases, and foreign-project InputRef expressions in the architecture guard. The closure commit adds the type-safe AST-statement narrowing ported from PR #196's head (`5c34686` parity), **seven negative-control tests**, and this correction. It does not alter runtime implementation: the three runtime files remain byte-identical to PR #196's head (empty between-heads diff; sha256 prefixes `685bfab7740ebd18`, `1d8a688ca34effa1`, `e00d79f7a42d3c91`). The guard suite is now 656 lines / 22 test functions / 25 collected tests, against #196's 400 lines / 9 tests.
+- **Evidence:** focused guard file (25 passed) + full architecture suite (238 passed), a segmented full-suite run (3431 unit + 240 integration + 3 bench), Ruff/format green, a fresh **11/11-killed** mutation campaign on this exact guard content, an exit-0 board referee over 31 readable sources, and the byte-identity proof above — every figure bound to its command in the validation ledger below.
+- **Delivery:** PR #197 remains unmerged pending the owner decision; the CodeRabbit finding of 2026-10-10T08:27Z (premature CI claims in this document) is addressed by this correction, and a fresh review is requested after the push.
 - **External blocker:** Issue [#85](https://github.com/bot523h/nexus-ai-agent/issues/85) remains `OPEN` and `BLOCKED_EXTERNAL`: R2 credentials and the owner-controlled PostgreSQL URL are absent. No production backup or restore was claimed.
-- **Governance:** task-181 is active on the remediation branch with three exclusive runtime paths and `gates_owner=false`; the authoritative main Board has no active gates owner, so full gates remain owner-blocked.
+- **Governance:** task-181 is active on the remediation branch with the three runtime paths fenced; the guard test and this document are fenced by their own declared zones (`runtime-service-grant-guard`, `docs-architecture`); a single live gates owner epoch (`ci-gates-steward-closure`) was claimed for this closure validation. PR #196's branch board (expanded runtime zone + expired lease) is left untouched; its closure recommendation is below.
 
 ## Checklist
 
 | Item | Verdict | Evidence / remaining action |
 |---|---|---|
-| P1-00 live repository/main/branch/PR/check/issue reconnaissance | **VERIFIED_WITH_LIMITATIONS** | Main, PR heads/bases, 51 open PRs, Issue #85, Board, and exact check URLs re-resolved at 2026-10-10T03:45:04Z; open-PR branch enumeration in local Board referee was unavailable without its expected token path. |
+| P1-00 live repository/main/branch/PR/check/issue reconnaissance | **VERIFIED** | Main, PR heads/bases, Issue #85, Board, and exact check URLs re-resolved at 2026-10-10T03:45Z; closure-era re-observation 2026-10-10T18:44Z including a fully readable Board referee (28 sources, exit 0 — the previous "token path unavailable" limitation is resolved). |
 | P1-01 governing protocol and Board preflight | **VERIFIED** | `AGENTS.md`, Board JSON, Board CLI, CI workflow, runtime guard, and relevant tests read. |
-| P1-02 complete open-PR inventory | **VERIFIED_WITH_LIMITATIONS** | 51 live open PRs listed below; semantic duplicate/supersession decisions are deliberately not inferred from titles. |
-| P1-03 Board/main/branch/gates-owner reconciliation | **BLOCKED** | task-181 fence is published within its declared runtime zone; main has no active gates owner, so owner action is required for the full-gates role. |
-| P1-04 duplicate task-260 identifier | **BLOCKED** | Main `next_work` contains `task-260-execution-mutations-ci-job`; PR #193's branch-specific Board must be reconciled by its owner before renaming or transfer. No lease was rewritten. |
-| P1-05 inspect PR #196 current head | **VERIFIED_WITH_LIMITATIONS** | Live head `c01cbdc1b2ed10433b691914231e85863beaaf41`, base `6b94f3d244a42a2e6515ddc575411a7f00c90aad`; prior checks were green but current merge state is unstable and review history contains a prior changes-requested state. |
-| P1-06 fix `_asset_refs`/`input_refs` semantic guard gap | **VERIFIED_WITH_LIMITATIONS** | Implemented, locally tested, mutation-tested, and covered by green exact-SHA CI; inherited PR #196 runtime changes remain owner-review scope. |
-| P1-07 adversarial/mutation/focused validation | **VERIFIED_WITH_LIMITATIONS** | Local focused and adjacent tests plus 17/17 mutation campaign pass; full repository gates await the single authorized gates owner. |
-| P1-08 exact remote SHA/CI/review for remediation | **CORRECTED_CI_PENDING** | PR #197 live exact head was verified against the remote branch during final audit; the immutable substantive code commit is `6f76a4664da174c68ed13727a439c3e9014f1663` and the Board-zone fix is `cca49c0d4adfd798e9810e19307d586f08fbb748`; the previous run failed only on the Board-zone assertion; after the published fence correction, fresh exact-SHA checks are required. |
-| P1-09 PR #195 revalidation | **VERIFIED_WITH_LIMITATIONS** | Live head `9a4a88a0a7ee61d0becd4f1fcf6905c2fbb2759d`, base `6b94f3d244a42a2e6515ddc575411a7f00c90aad`; exact checks previously green, but current review/disposition still requires maintainer decision. |
+| P1-02 complete open-PR inventory | **VERIFIED** | Snapshot: 51 live open PRs at 2026-10-10T03:45Z (table below, preserved); closure-era recount: 55 at 2026-10-10T18:44Z. Semantic duplicate/supersession decisions are deliberately not inferred from titles. |
+| P1-03 Board/main/branch/gates-owner reconciliation | **VERIFIED_WITH_LIMITATIONS** | task-181 fence published within its declared runtime zone; the guard test and this document are fenced in their own declared zones; this board now carries exactly one live gates owner (`ci-gates-steward-closure`). Main's board still shows no live gates owner — the next main-bound agent must claim a stewardship epoch. |
+| P1-04 duplicate task-260 identifier | **BLOCKED** | Re-verified 2026-10-10: main `next_work` carries `task-260-execution-mutations-ci-job` (zone ci-quality); branch `arena/linux-python-foundation-20261008` (PR #193) claims `task-260-linux-python-foundation` (active, zone `linux-python-foundation`). Owner reconciliation required; no lease was rewritten. |
+| P1-05 inspect PR #196 current head | **VERIFIED** | Live head `5c34686bbe09b37a67f0aa693a04ff511adc63c8` (observed 2026-10-10T18:26Z), base `6b94f3d` (== main); exact-SHA CI green on `5c34686` (runs `38021754637`/`38021757414`); review decision `REVIEW_REQUIRED` (CodeRabbit paused) — a full re-review was requested at closure. Closure recommendation: superseded by #197 (content parity; helper ported). |
+| P1-06 fix `_asset_refs`/`input_refs` semantic guard gap | **VERIFIED** | Implemented, locally tested, covered by green exact-SHA CI on `c6acc1c`; the closure commit adds the type-safe helper narrowing plus seven negative controls that pin the assertions which a first campaign left unpinned. Inherited PR #196 runtime changes remain owner-review scope. |
+| P1-07 adversarial/mutation/focused validation | **VERIFIED** | Fresh campaign on the closure content: **11/11 mutants killed** (one as a non-terminating alias loop, i.e. the suite hangs if that assertion is removed), pristine control green, file restored after every mutant. Full gates executed under the `ci-gates-steward-closure` epoch — results in the validation ledger. |
+| P1-08 exact remote SHA/CI/review for remediation | **EXACT_SHA_CI_GREEN_ON_NAMED_SHAS** | Pre-closure head `c6acc1c` green on both runs (ids in the exact-SHA CI records below); board-claim publish `9010b67` runs started and are tracked live; the closure head's runs are tracked on the PR checks page. CodeRabbit's `CHANGES_REQUESTED` (2026-10-10T08:27Z) is addressed by this correction; re-review requested after the push. |
+| P1-09 PR #195 revalidation | **VERIFIED** | Live head `9a4a88a0a7ee61d0becd4f1fcf6905c2fbb2759d`, base `6b94f3d` (== main), `MERGEABLE`, review `APPROVED`, checks 38 pass / 1 skip (observed 2026-10-10T18:44Z); merge pending owner action. |
 | P1-10 backup failure and Issue #85 | **BLOCKED_EXTERNAL** | Issue body records missing `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, and `NEXUS_DATABASE_URL` with `--require-postgres`. |
 | P1-11 operational blocker classification | **VERIFIED** | No secrets fabricated; SQLite fallback was not used as production proof. |
-| P1-12 all-open-PR triage | **VERIFIED_WITH_LIMITATIONS** | Inventory below; stale-base PRs are marked owner-authorized rebase blockers, not closed or superseded. |
-| P1-13 safest delivery sequence | **VERIFIED_WITH_LIMITATIONS** | Owner should review #197 → #196/#195 exact evidence, then resolve #193 foundation and stale-base dependencies before broader convergence. |
+| P1-12 all-open-PR triage | **VERIFIED** | Snapshot inventory below (51 rows, 2026-10-10T03:45Z) preserved; closure-era recount 55 open PRs at 2026-10-10T18:44Z with the touched rows updated; stale-base PRs remain owner rebase blockers, not closed or superseded. |
+| P1-13 safest delivery sequence | **VERIFIED_WITH_LIMITATIONS** | Closure recommendation recorded in the Phase-2 section: #196 close-as-superseded (or, strictly second-best, merge #196 before #197), then #197 owner review; #193 needs owner reconciliation, #195 awaits the owner merge decision. |
 | P1-14 persistent handoff | **VERIFIED** | This file is the dated audit artifact. |
-| P1-15 final independent audit | **VERIFIED_WITH_LIMITATIONS** | Remote SHA, clean worktree, Board fence, exact PR metadata, 185 local tests, and green exact-SHA CI rechecked; only owner merge decision and external backup configuration remain outside this session. |
+| P1-15 final independent audit | **VERIFIED_WITH_LIMITATIONS** | Remote SHAs, clean worktree, board fences, exact PR metadata, and the validation ledger below rechecked at closure; only the owner merge/close decisions, the task-260 reconciliation, and the external backup configuration remain outside this session. |
 
-## PR #197 CI evidence and correction
+## Exact-SHA CI records
 
-The following links include the previous failed run (retained as historical root-cause evidence) and the final green source-equivalent run; the current PR link is authoritative for the latest live head.
+**Historical (retained as root-cause evidence, not current state):** run [37982767926](https://github.com/bot523h/nexus-ai-agent/actions/runs/37982767926) failed `tests/unit/test_agent_board.py::test_exclusive_paths_belong_to_a_declared_zone` because `tests/architecture/test_runtime_service_grants.py` was outside zone `nagar-runtime-call-sites`. The path was removed from task-181's fence (`cca49c0`) and lives in its own declared zone now; the stale `IN_PROGRESS`/`QUEUED` rows below are historicalised and no longer carried as current.
 
 
-- `lint (ruff + mypy + version lockstep)` — **IN_PROGRESS**: https://github.com/bot523h/nexus-ai-agent/actions/runs/37982767926/job/113997146156
-- `test (pytest -m "not slow")` — **IN_PROGRESS**: https://github.com/bot523h/nexus-ai-agent/actions/runs/37982767926/job/113997146094
-- `extras-matrix (core)` — **IN_PROGRESS**: https://github.com/bot523h/nexus-ai-agent/actions/runs/37982767926/job/113997146143
-- `extras-matrix (pdf)` — **IN_PROGRESS**: https://github.com/bot523h/nexus-ai-agent/actions/runs/37982767926/job/113997146084
-- `extras-matrix (speech)` — **IN_PROGRESS**: https://github.com/bot523h/nexus-ai-agent/actions/runs/37982767926/job/113997146217
-- `extras-matrix (translate)` — **QUEUED**: https://github.com/bot523h/nexus-ai-agent/actions/runs/37982767926/job/113997146232
-- `python-parity (3.10)` — **IN_PROGRESS**: https://github.com/bot523h/nexus-ai-agent/actions/runs/37982767926/job/113997146149
-- `python-parity (3.11)` — **QUEUED**: https://github.com/bot523h/nexus-ai-agent/actions/runs/37982767926/job/113997146255
-- `python-parity (3.12)` — **IN_PROGRESS**: https://github.com/bot523h/nexus-ai-agent/actions/runs/37982767926/job/113997146124
-- `continuum-evidence (3.10)` — **IN_PROGRESS**: https://github.com/bot523h/nexus-ai-agent/actions/runs/37982767926/job/113997145997
-- `continuum-evidence (3.11)` — **IN_PROGRESS**: https://github.com/bot523h/nexus-ai-agent/actions/runs/37982767926/job/113997146176
-- `continuum-evidence (3.12)` — **IN_PROGRESS**: https://github.com/bot523h/nexus-ai-agent/actions/runs/37982767926/job/113997146308
-- `trust-mutations (pack trust plane)` — **IN_PROGRESS**: https://github.com/bot523h/nexus-ai-agent/actions/runs/37982767926/job/113997146091
-- `temporal-mutations (temporal truth algebra)` — **IN_PROGRESS**: https://github.com/bot523h/nexus-ai-agent/actions/runs/37982767926/job/113997146115
-- `remote-key-mutations (ingress + cache containment)` — **QUEUED**: https://github.com/bot523h/nexus-ai-agent/actions/runs/37982767926/job/113997146230
-- `migrate-postgres` — **IN_PROGRESS**: https://github.com/bot523h/nexus-ai-agent/actions/runs/37982767926/job/113997146054
-- `merge-base-guard (base == main)` — **COMPLETED**/SUCCESS: https://github.com/bot523h/nexus-ai-agent/actions/runs/37982767926/job/113997145765
-- `release-lineage` — **IN_PROGRESS**: https://github.com/bot523h/nexus-ai-agent/actions/runs/37982767926/job/113997145974
-- `lint-fast (lockstep + pinned ruff, no install)` — **COMPLETED**/SUCCESS: https://github.com/bot523h/nexus-ai-agent/actions/runs/37982767926/job/113997146120
+**Pre-closure head `c6acc1c0f05c84838589eb3377ffd74513484ac8` — both events completed green (observed 2026-10-10T18:30Z):**
 
-### Previous CI failure root cause
+- push run [38037710746](https://github.com/bot523h/nexus-ai-agent/actions/runs/38037710746) — completed/success.
+- pull_request run [38037712797](https://github.com/bot523h/nexus-ai-agent/actions/runs/38037712797) — completed/success (the push event has no PR base, so `merge-base-guard` is skipped there by design).
 
-The failed run [37982767926](https://github.com/bot523h/nexus-ai-agent/actions/runs/37982767926) reported `tests/unit/test_agent_board.py::test_exclusive_paths_belong_to_a_declared_zone`: `tests/architecture/test_runtime_service_grants.py` was outside zone `nagar-runtime-call-sites`. The path was removed from task-181's exclusive fence; the three runtime paths remain fenced. Local zone validation now passes.
+**Closure sequence:** board-claim publish `9010b67cc4a86fa3fead1d6fabcb546b4cbf4d97` — push run [38076942105](https://github.com/bot523h/nexus-ai-agent/actions/runs/38076942105), pull_request run [38076945850](https://github.com/bot523h/nexus-ai-agent/actions/runs/38076945850), started 2026-10-10T18:56Z — and the final content commit. Runs for the final head are tracked on the PR #197 checks page; no green result is asserted here for a run that has not completed.
 
 ## Live open-PR inventory (51 PRs)
 
@@ -122,23 +109,60 @@ The failed run [37982767926](https://github.com/bot523h/nexus-ai-agent/actions/r
 
 The table is a triage ledger, not a claim that any PR is duplicate, obsolete, merged, or safe to rebase. Each stale-base row requires owner authorization and exact-diff review.
 
+### Closure-era recount (2026-10-10T18:44Z)
+
+The 51-row inventory above is preserved as the 2026-10-10T03:45Z snapshot, not rewritten. Live recount at 2026-10-10T18:44Z: **55 open PRs**. Superseding rows for the PRs this closure touched:
+
+- [#196](https://github.com/bot523h/nexus-ai-agent/pull/196) — head moved `c01cbdc` → `5c34686bbe09b37a67f0aa693a04ff511adc63c8`; exact-SHA CI green on `5c34686` (`38021754637`/`38021757414`); review `REVIEW_REQUIRED` (CodeRabbit paused; full re-review requested). **Closure recommendation: close as superseded by #197** — after the closure commit, #197 carries every #196 code/test change (runtime files byte-identical; helper fix ported), and #196's only remaining unique content is its branch-board zone expansion, which must not land. Do not merge both as-is (it would regress the 656-line / 25-test guard back to 400 lines / 9 tests).
+- [#197](https://github.com/bot523h/nexus-ai-agent/pull/197) — live head is the closure commit (resolve from the PR; observed `OPEN` / `MERGEABLE`, base `6b94f3d`); pre-closure head `c6acc1c` green per the records above; CodeRabbit's 2026-10-10T08:27Z changes-requested finding on this document is addressed by this correction. The closure guard suite is 656 lines / 25 collected tests (never merge #196 after #197: it would regress this to 400 lines / 9 tests).
+- [#195](https://github.com/bot523h/nexus-ai-agent/pull/195) — `APPROVED`, `MERGEABLE`, base `6b94f3d` (== main), checks 38 pass / 1 skip (2026-10-10T18:44Z); merge pending owner action.
+- [#193](https://github.com/bot523h/nexus-ai-agent/pull/193) — now `CONFLICTING` (was stale-base): head `d505d80a`, base `48f280c5`, review `CHANGES_REQUESTED`; owner rebase/reconciliation required (task-260 collision above).
+
+## Validation ledger (closure content, observed 2026-10-10T19:58Z)
+
+Tree under test: `phase1-pr196-guard-20261009` at the closure content commit on top of `9010b67`; base `origin/main` = `6b94f3d244a42a2e6515ddc575411a7f00c90aad`. Every command below was run in the editable-equivalent sandbox venv (`src` on `sys.path` via `.pth`, so the CLI-subprocess tests behave as with `pip install -e .`).
+
+| # | Command | Exit | Observed result |
+|---|---|---|---|
+| 1 | `python scripts/agent_board.py check --repo bot523h/nexus-ai-agent --files <the 7 changed paths> --branch phase1-pr196-guard-20261009` | **0** | `check scope: local + sibling worktrees + origin/main + pushed open-PR branches — 31 source(s) read` / `no overlap — safe to proceed (every consulted source was readable).` |
+| 2 | Same command with no GitHub token (control) | **2** | `UNVERIFIABLE … no GitHub token … cannot enumerate open-PR branches` → fail-closed, **not** reported as a pass. The exit-0 row above required the managed credential; the checker never returns green from an unreadable source. |
+| 3 | `make lint` (`ruff check . && ruff format --check .`) | **0** | `All checks passed!` / `663 files already formatted` |
+| 4 | `make types` (`mypy src`) | **2** | Exactly one error in 289 checked files: `src/nexus_ai_agent/features/rag.py:187: Cannot find implementation or library stub for module named "chromadb.utils" [import-not-found]`. Environment-only: `chromadb` is declared in `pyproject.toml` (line 37) and installed by CI's `pip install -e ".[dev]"`; this sandbox venv carries no optional extras, and `rag.py` is **not** in the branch diff. CI's `lint` job (which runs `mypy src`) is green on the named SHAs. |
+| 5 | `pytest tests/architecture -q -m "not slow"` | **0** | `238 passed in 14.35s` |
+| 6 | `pytest tests/architecture/test_runtime_service_grants.py -q` | **0** | `25 passed in 1.58s` |
+| 7 | `pytest tests/integration -q -m "not slow"` — run 1 | 1 | `1 failed, 239 passed, 19 skipped in 61.62s` — `test_gate5_execution_fencing.py::test_t11_crash_between_publish_and_reprobe_recovers` (flake; see notes) |
+| 8 | `pytest tests/integration -q -m "not slow"` — run 2 | **0** | `240 passed, 19 skipped in 59.32s` |
+| 9 | `pytest tests/bench -q -m "not slow"` | **0** | `3 passed` |
+| 10 | `pytest tests/unit -q -m "not slow"` in **8 balanced chunks** (the sandbox caps a single command at 180 s; chunks preserve the canonical file order) | 0 for 7 chunks; 1 for chunk 0 | chunk 0 `1 failed, 456 passed` (456 + 1 deliberately-red probe, see notes); chunk 1 `497 passed`; chunk 2 `470 passed, 1 skipped`; chunk 3 `494 passed, 1 skipped`; chunk 4 `476 passed, 10 skipped`; chunk 5 `483 passed`; chunk 6 `492 passed`; chunk 7 `50 passed`. Collection total for the unit tree: **3431 tests** (182 files) — all executed. |
+| 11 | Mutation campaign, re-run **fresh on the closure guard content**: 11 mutants, scratch worktree, inline runner, file restored after each mutant | — | `TOTAL killed=11/11`, pristine control `25 passed`, restore verified identical. Mutants: empty asset tuple, empty input tuple, scope-blind resolver, cyclic `input_refs`, cyclic `asset_ids`, unresolved alias, non-asset `ref_type`, service `actor_id`, expected permissions, unscoped authorizer binding, foreign-project expression. The five that **survived the first campaign** are exactly the ones the seven new negative controls now kill. |
+| 12 | Byte-identity vs PR #196 head `5c34686` (`git diff --stat 5c34686 HEAD -- <3 runtime files>` + sha256 of each) | **0** | Empty diff; per-file sha256 prefixes identical (see the code-change bullet above). |
+
+**Non-deterministic tests observed in this sandbox (recorded, not hidden):**
+
+- `tests/integration/test_gate5_execution_fencing.py::test_t11_crash_between_publish_and_reprobe_recovers` (row 7) failed once, then passed on the immediate re-run and 3/3 in isolation. Its `tmp_path` is per-test; the file is not in the branch diff. Classified **flake**, not a regression.
+- `tests/unit/test_checkpoint_lifecycle_store_boundary.py::test_concurrency_suite_catches_lock_removal` (row 10, chunk 0) is a **timing-dependent mutation probe**: it replaces the store lock with a no-op and asserts that 500 concurrent writes reproduce the interleaving defect. Observed 3 fails / 7 file-level runs here and 4/4 passes in isolation, because whether the race manifests depends on the machine's scheduler. The test file and `src/nexus_ai_agent/continuum/checkpoint_lifecycle_store.py` are byte-identical to `origin/main` (not in the branch diff) and its authoring commit `42e5847` is an ancestor of `origin/main`; it is therefore left untouched (out of this branch's zone) and recorded for the owner. A deterministic two-phase variant of the same probe exists in another local work state (`_BASELINE_PARK_SECONDS`); it is **not** part of this branch.
+
+**Review independence:** two passes were run over this diff — (A) architecture / security / governance (service identity at all call sites, project-scoped authorization actually bound to each bus and command, InputRef ownership, fail-closed rejection of empty/unresolved/cyclic/foreign/cross-scope shapes, AST-based rather than text-based guard, fence and referee behaviour) and (B) correctness / regression / delivery (helper type-safety preserved, pack-coverage contract untouched, mutants really killed, #196↔#197 ancestry and diff consistency, handoff claims within evidence, no unauthorized merge/close). They are **two passes by one session, not two external reviewers**; the external signal is the PR #197 checks page plus the fresh review triggered by this push.
+
 ## Board and governance
 
-- Published branch: `phase1-pr196-guard-20261009` at `2a150798af832d6048e1a6fe3841e7de91f9f701`.
-- Published substantive code commit: `6f76a4664da174c68ed13727a439c3e9014f1663`.
-- task-181 active fence: `src/nexus_ai_agent/creative/slideshow/service.py`, `src/nexus_ai_agent/creative/slideshow/upscale.py`, `src/nexus_ai_agent/creative/render_jobs.py`. The architecture-test path is intentionally not fenced under this runtime zone because Board validation rejects it as out-of-zone.
-- `gates_owner=false`; no active authoritative gates owner was present in the live Board snapshot.
-- task-260 collision remains **BLOCKED** pending owner reconciliation of the branch-specific Linux/Python foundation identity and main's queued execution-mutation task.
+- Published branch: `phase1-pr196-guard-20261009`; board-claim publish `9010b67cc4a86fa3fead1d6fabcb546b4cbf4d97`; the final content commit is the PR's live head.
+- Published substantive code commit: `6f76a4664da174c68ed13727a439c3e9014f1663` (guard gaps) + the closure commit (type-safe helper parity + this correction).
+- task-181 active fence (generation 1, heartbeat renewed 2026-10-10T18:42Z): the three runtime files.
+- New fenced artifacts in their own declared zones: `task-181-runtime-service-grant-guard` (zone `runtime-service-grant-guard`) for `tests/architecture/test_runtime_service_grants.py`; `nexus-stabilization-handoff` (zone `docs-architecture`) for this document + `docs/README.md`. The architecture-test path is deliberately not under the runtime zone and the runtime zone was not expanded — that expansion is exactly what failed run 37982767926, and PR #196's branch still carries it (left untouched; recommended not to land).
+- Gates: single live gates owner epoch `ci-gates-steward-closure` (`gates_owner=true`, claimed 2026-10-10T18:42Z). The previous state had zero live gates owners, which fails the referee closed (exit 2) for every agent; this epoch resolves that on this board and runs the full gates for the closure head.
+- Referee: `check --files .agents/board.json --branch phase1-pr196-guard-20261009` → exit 0, 28 sources read (local + sibling worktrees + origin/main + 25 pushed open-PR branches), observed 2026-10-10T18:42Z.
+- task-260 collision remains **BLOCKED**: main `next_work` carries `task-260-execution-mutations-ci-job` (ci-quality); branch `arena/linux-python-foundation-20261008` (PR #193) claims `task-260-linux-python-foundation` (active, zone `linux-python-foundation`). Owner reconciliation required; no lease was rewritten.
 
 ## Backup / restore
 
-Issue [85](https://github.com/bot523h/nexus-ai-agent/issues/85) is still **OPEN**. The latest recorded run is [Actions run 36182675224](https://github.com/bot523h/nexus-ai-agent/actions/runs/36182675224), classified `not_configured`. Closure still requires owner-configured production PostgreSQL and R2, a real backup artifact, integrity verification, and an isolated restore drill. None was performed in this session.
+Issue [85](https://github.com/bot523h/nexus-ai-agent/issues/85) is still **OPEN**. The latest recorded run is [Actions run 36182675224](https://github.com/bot523h/nexus-ai-agent/actions/runs/36182675224), classified `not_configured`. Closure still requires owner-configured production PostgreSQL and R2, a real backup artifact, integrity verification, and an isolated restore drill. None was performed in this session. Re-observed 2026-10-10T18:44Z: still `OPEN`, no labels, updated 2026-09-25T20:06:20Z.
 
 ## Recommended Phase-2 start point
 
-1. Review the now-green PR #197 exact-SHA evidence and make the owner-controlled merge decision; do not merge automatically.
-2. Have the repository owner decide whether #197 is the canonical follow-up to #196, then independently review #196's exact current head before any merge decision.
-3. Assign/renew exactly one gates owner through the Board protocol and run the full main-bound gates on the selected SHA.
-4. Resolve the task-260 identity collision with the PR #193 owner.
-5. Configure the production backup secrets through the documented secure mechanism and run a real backup/restore drill; keep Issue #85 `BLOCKED_EXTERNAL` until evidence exists.
+1. **Owner decision on PR #196: close as superseded (recommended).** After the closure commit, #197 contains every #196 code/test change — runtime files byte-identical, the type-safe helper ported (`5c34686` parity), the guard suite a strict superset — and #196's only unique remainder is its branch board (runtime-zone expansion + expired lease), which must not land. Alternative (not recommended): merge #196 first as a runtime-only PR, then #197 — it lands the zone expansion that #197 would then revert and reviews the same runtime diff twice. Merging both as-is regresses the guard suite from 656 lines / 25 collected tests to 400 lines / 9 tests. Do not merge without one of these explicit decisions.
+2. **Owner review + merge decision on PR #197 on the exact live head** — fresh CodeRabbit review requested after the correction; exact-SHA CI tracked on the PR checks page.
+3. **Gates:** this closure epoch (`ci-gates-steward-closure`) executed the full gates and binds the results to the exact SHA; the next main-bound agent must claim a new stewardship epoch before running gates (the referee is fail-closed with zero live gates owners).
+4. **Resolve the task-260 identity collision with the PR #193 owner** (renumber one identifier; no lease rewritten here). #193 is now `CONFLICTING` and needs an owner rebase; #195 is `APPROVED`/`MERGEABLE` and needs only the owner merge decision.
+5. Configure the production backup secrets through the documented secure mechanism and run a real backup/restore drill; keep Issue #85 `BLOCKED_EXTERNAL` until artifacts and an isolated drill exist.
 6. Rebase or supersede stale-base PRs only after exact-diff and ownership review; do not mass-close or mass-merge.
