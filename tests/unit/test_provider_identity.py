@@ -186,3 +186,31 @@ def test_no_user_id_zero_sentinel_in_identity_surface() -> None:
     assert offenders == [], (
         "the user_id=0 sentinel survived in the identity surface:\n" + "\n".join(offenders)
     )
+
+
+@pytest.mark.asyncio
+async def test_moderate_forwards_caller_identity() -> None:
+    """Moderation runs per user turn — it must bill that user, not the system.
+
+    (CodeRabbit 4238943208: dropping the identity here meters user turns on
+    the shared system principal.)
+    """
+    from nexus_ai_agent.agents.phi_agent import PhiAgent
+
+    class _IdSpy(FakeLLMProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.ids: list[int | None] = []
+
+        async def generate(self, prompt: str, system: str = "", **kwargs: Any) -> str:
+            self.ids.append(kwargs.get("user_id"))
+            return '{"safe": true, "reason": "ok"}'
+
+    llm = _IdSpy()
+    phi = PhiAgent(llm)
+    await phi.moderate("hello", user_id=4242)
+    assert llm.ids == [4242], f"moderate() dropped the caller identity: {llm.ids!r}"
+    await phi.moderate("hello")
+    assert llm.ids[-1] is None, (
+        f"identity-less moderate() must map to the system principal: {llm.ids!r}"
+    )

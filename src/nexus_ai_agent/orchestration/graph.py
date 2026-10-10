@@ -226,7 +226,7 @@ def compile_graph(
         resp = state.get("response", "")
         if not resp:
             return {**state, "moderation_passed": True}
-        result = await phi.moderate(resp)
+        result = await phi.moderate(resp, user_id=state.get("user_id") or None)
         if not result.get("safe", True):
             return {**state, "response": "I cannot respond to that.", "moderation_passed": False}
         return {**state, "moderation_passed": True}
