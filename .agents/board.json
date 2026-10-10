@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-10T18:23:22Z",
+  "updated_at": "2026-10-10T20:22:43Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -880,7 +880,7 @@
       "title_fa": "نگهبان موقت گیت‌ها",
       "zone": "ci-quality",
       "priority": "P0",
-      "status": "completed_released",
+      "status": "active",
       "scope": "عامل E (شاخه 460) تا ادغام #33 یا بازگشت عامل A، مالک اجرای گیت‌ها روی main است.",
       "scope_fa": "عامل E (شاخه 460) تا ادغام #33 یا بازگشت عامل A، مالک اجرای گیت‌ها روی main است.",
       "prerequisites": [],
@@ -891,11 +891,12 @@
       "evidence_required": [],
       "exclusive_paths": [],
       "owner_hint": "",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/nexus-night-task261-request-queue-doc",
+      "claimed_at": "2026-10-10T20:22:43Z",
       "ttl_hours": 24,
-      "gates_owner": false,
-      "note": "lease expired 2026-09-22T15:21:39Z without renewal; stewardship transferred via task-145 claim (arena/01a0c992) with full handoff note"
+      "gates_owner": true,
+      "note": "",
+      "generation": 1
     },
     {
       "task": "feature-wiring-batch",
