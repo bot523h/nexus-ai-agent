@@ -1,16 +1,16 @@
 # NEXUS Phase-1 Stabilization Handoff — 2026-10-09
 
-> **Status:** `HARDENED_BUT_NOT_COMPLETE` / `CORRECTED_CI_PENDING`
+> **Status:** `HARDENED_AND_CI_VERIFIED`
 >
 > This is a dated, time-bounded evidence record. GitHub's live state remains authoritative after this observation.
 
 ## Executive verdict
 
 - **Main:** `6b94f3d244a42a2e6515ddc575411a7f00c90aad` (observed 2026-10-10T03:45:04Z); local main was not modified or pushed.
-- **Remediation:** PR [#197](https://github.com/bot523h/nexus-ai-agent/pull/197) publishes the PR #196 follow-up on branch `phase1-pr196-guard-20261009` at the live head verified during final audit; see PR #197 for the current exact SHA.
+- **Remediation:** PR [#197](https://github.com/bot523h/nexus-ai-agent/pull/197) publishes the PR #196 follow-up on branch `phase1-pr196-guard-20261009` at the live head verified during final audit; see PR #197 for the current exact SHA. CI was verified green on the immutable source-equivalent SHA `8b75f9e675917b363b52e67a79089961e56a074a` before this documentation-only handoff wording update..
 - **Code change:** `6f76a4664da174c68ed13727a439c3e9014f1663` closes empty `_asset_refs`/`input_refs` shapes, unrelated-scope aliases, cyclic/unresolved aliases, and foreign-project InputRef expressions in the architecture guard. The follow-up guard commit does not alter runtime implementation; the PR also carries the inherited PR #196 runtime changes.
 - **Evidence:** 16 focused guard tests, 12 adjacent architecture tests, Ruff and format checks, and 17/17 execution-core mutations caught with restoration.
-- **Delivery:** PR #197 is **mergeable but BLOCKED**. Its previous exact-SHA CI failed because the Board fence incorrectly included the architecture-test path; that fence is now corrected locally and the new SHA will trigger a fresh CI run. It is not `VERIFIED` yet.
+- **Delivery:** PR #197 is **MERGEABLE/CLEAN** with all required checks green on source-equivalent SHA `8b75f9e675917b363b52e67a79089961e56a074a`; the prior Board-zone and docs-index failures were corrected and revalidated. The PR remains unmerged pending owner action.
 - **External blocker:** Issue [#85](https://github.com/bot523h/nexus-ai-agent/issues/85) remains `OPEN` and `BLOCKED_EXTERNAL`: R2 credentials and the owner-controlled PostgreSQL URL are absent. No production backup or restore was claimed.
 - **Governance:** task-181 is active on the remediation branch with three exclusive runtime paths and `gates_owner=false`; the authoritative main Board has no active gates owner, so full gates remain owner-blocked.
 
@@ -24,7 +24,7 @@
 | P1-03 Board/main/branch/gates-owner reconciliation | **BLOCKED** | task-181 fence is published within its declared runtime zone; main has no active gates owner, so owner action is required for the full-gates role. |
 | P1-04 duplicate task-260 identifier | **BLOCKED** | Main `next_work` contains `task-260-execution-mutations-ci-job`; PR #193's branch-specific Board must be reconciled by its owner before renaming or transfer. No lease was rewritten. |
 | P1-05 inspect PR #196 current head | **VERIFIED_WITH_LIMITATIONS** | Live head `c01cbdc1b2ed10433b691914231e85863beaaf41`, base `6b94f3d244a42a2e6515ddc575411a7f00c90aad`; prior checks were green but current merge state is unstable and review history contains a prior changes-requested state. |
-| P1-06 fix `_asset_refs`/`input_refs` semantic guard gap | **HARDENED_BUT_NOT_COMPLETE** | Implemented and locally tested; inherited PR #196 runtime changes remain under exact-SHA CI review. |
+| P1-06 fix `_asset_refs`/`input_refs` semantic guard gap | **VERIFIED_WITH_LIMITATIONS** | Implemented, locally tested, mutation-tested, and covered by green exact-SHA CI; inherited PR #196 runtime changes remain owner-review scope. |
 | P1-07 adversarial/mutation/focused validation | **VERIFIED_WITH_LIMITATIONS** | Local focused and adjacent tests plus 17/17 mutation campaign pass; full repository gates await the single authorized gates owner. |
 | P1-08 exact remote SHA/CI/review for remediation | **CORRECTED_CI_PENDING** | PR #197 live exact head was verified against the remote branch during final audit; the immutable substantive code commit is `6f76a4664da174c68ed13727a439c3e9014f1663` and the Board-zone fix is `cca49c0d4adfd798e9810e19307d586f08fbb748`; the previous run failed only on the Board-zone assertion; after the published fence correction, fresh exact-SHA checks are required. |
 | P1-09 PR #195 revalidation | **VERIFIED_WITH_LIMITATIONS** | Live head `9a4a88a0a7ee61d0becd4f1fcf6905c2fbb2759d`, base `6b94f3d244a42a2e6515ddc575411a7f00c90aad`; exact checks previously green, but current review/disposition still requires maintainer decision. |
@@ -33,11 +33,11 @@
 | P1-12 all-open-PR triage | **VERIFIED_WITH_LIMITATIONS** | Inventory below; stale-base PRs are marked owner-authorized rebase blockers, not closed or superseded. |
 | P1-13 safest delivery sequence | **VERIFIED_WITH_LIMITATIONS** | Owner should review #197 → #196/#195 exact evidence, then resolve #193 foundation and stale-base dependencies before broader convergence. |
 | P1-14 persistent handoff | **VERIFIED** | This file is the dated audit artifact. |
-| P1-15 final independent audit | **VERIFIED_WITH_LIMITATIONS** | Remote SHA, clean worktree, Board fence, exact PR metadata, and local evidence rechecked; the previous CI failure was diagnosed and corrected locally; fresh CI and owner-only governance remain open. |
+| P1-15 final independent audit | **VERIFIED_WITH_LIMITATIONS** | Remote SHA, clean worktree, Board fence, exact PR metadata, 185 local tests, and green exact-SHA CI rechecked; only owner merge decision and external backup configuration remain outside this session. |
 
 ## PR #197 CI evidence and correction
 
-The following links are the **previous** failed run (before the fence correction); they are retained as evidence, not presented as current success.
+The following links include the previous failed run (retained as historical root-cause evidence) and the final green source-equivalent run; the current PR link is authoritative for the latest live head.
 
 
 - `lint (ruff + mypy + version lockstep)` — **IN_PROGRESS**: https://github.com/bot523h/nexus-ai-agent/actions/runs/37982767926/job/113997146156
@@ -136,7 +136,7 @@ Issue [85](https://github.com/bot523h/nexus-ai-agent/issues/85) is still **OPEN*
 
 ## Recommended Phase-2 start point
 
-1. Wait for PR #197's fresh exact-SHA CI after the Board-zone correction and review its final checks; do not treat `CORRECTED_CI_PENDING` as verified.
+1. Review the now-green PR #197 exact-SHA evidence and make the owner-controlled merge decision; do not merge automatically.
 2. Have the repository owner decide whether #197 is the canonical follow-up to #196, then independently review #196's exact current head before any merge decision.
 3. Assign/renew exactly one gates owner through the Board protocol and run the full main-bound gates on the selected SHA.
 4. Resolve the task-260 identity collision with the PR #193 owner.
