@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-10T19:12:15Z",
+  "updated_at": "2026-10-10T19:23:11Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3584,7 +3584,7 @@
       "title_fa": "P1-A: جداسازی scope حافظهٔ بلندمدت شخصی از هویت مکالمهٔ گروهی",
       "zone": "p1-privacy-identity",
       "priority": "P1",
-      "status": "deferred",
+      "status": "active",
       "scope": "thread_id = tg:{chat_id} keys personal memory for every group member (cross-user leak). Introduce a typed per-user memory scope used by _memory_reader/_memory_writer and LongTermMemory; keep the checkpointer thread_id (conversation identity) unchanged; fail closed on missing identity; never serve legacy shared-key rows to personal reads and never copy them to all members.",
       "scope_fa": "کلید tg:{chat_id} حافظهٔ شخصی همهٔ اعضای گروه را مشترک می‌کند (نشت بین کاربران). scope شخصی per-user و typed برای خواندن/نوشتن حافظه ساخته شود؛ thread_id مکالمه دست‌نخورده بماند؛ در نبود هویت fail closed؛ دادهٔ قدیمی مشترک به هیچ کاربری تحویل داده یا کپی نشود.",
       "prerequisites": [],
@@ -3608,11 +3608,11 @@
       ],
       "owner_hint": "",
       "agent_branch": "arena/c5efc6a3-nexus-ai-agent",
-      "claimed_at": null,
+      "claimed_at": "2026-10-10T19:23:11Z",
       "ttl_hours": 24,
-      "gates_owner": false,
+      "gates_owner": true,
       "note": "",
-      "generation": 4
+      "generation": 5
     },
     {
       "task": "task-p1d-consent-scope",
