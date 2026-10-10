@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-10T18:24:36Z",
+  "updated_at": "2026-10-10T18:50:01Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3539,7 +3539,7 @@
       "title_fa": "P1-B: ثبت دقیق مصرف سهمیه در مسیر موفق GeminiEngine.ask() دقیقاً یک بار",
       "zone": "p1-privacy-identity",
       "priority": "P1",
-      "status": "deferred",
+      "status": "active",
       "scope": "ask() consults is_allowed() but never calls record(), so the per-user quota is never consumed on that path (contrast: chat/translate/summarize/code all record). Record on success only, once for both the direct and the queued path; provider errors must not count; blocked requests must not count; no limiter redesign.",
       "scope_fa": "ask() محدودیت را بررسی اما record() نمی‌کند؛ سهمیه در این مسیر مصرف نمی‌شود. ثبت فقط برای پاسخ موفق، یک بار در مسیر مستقیم و صف؛ خطای provider و درخواست مسدودشده شمرده نشود؛ بدون بازطراحی لیمیتر.",
       "prerequisites": [],
@@ -3572,11 +3572,11 @@
       ],
       "owner_hint": "",
       "agent_branch": "arena/c5efc6a3-nexus-ai-agent",
-      "claimed_at": null,
+      "claimed_at": "2026-10-10T18:50:01Z",
       "ttl_hours": 24,
-      "gates_owner": false,
+      "gates_owner": true,
       "note": "",
-      "generation": 2
+      "generation": 3
     },
     {
       "task": "task-p1a-memory-scope",
@@ -3584,7 +3584,7 @@
       "title_fa": "P1-A: جداسازی scope حافظهٔ بلندمدت شخصی از هویت مکالمهٔ گروهی",
       "zone": "p1-privacy-identity",
       "priority": "P1",
-      "status": "active",
+      "status": "deferred",
       "scope": "thread_id = tg:{chat_id} keys personal memory for every group member (cross-user leak). Introduce a typed per-user memory scope used by _memory_reader/_memory_writer and LongTermMemory; keep the checkpointer thread_id (conversation identity) unchanged; fail closed on missing identity; never serve legacy shared-key rows to personal reads and never copy them to all members.",
       "scope_fa": "کلید tg:{chat_id} حافظهٔ شخصی همهٔ اعضای گروه را مشترک می‌کند (نشت بین کاربران). scope شخصی per-user و typed برای خواندن/نوشتن حافظه ساخته شود؛ thread_id مکالمه دست‌نخورده بماند؛ در نبود هویت fail closed؛ دادهٔ قدیمی مشترک به هیچ کاربری تحویل داده یا کپی نشود.",
       "prerequisites": [],
@@ -3608,11 +3608,11 @@
       ],
       "owner_hint": "",
       "agent_branch": "arena/c5efc6a3-nexus-ai-agent",
-      "claimed_at": "2026-10-10T18:24:36Z",
+      "claimed_at": null,
       "ttl_hours": 24,
-      "gates_owner": true,
+      "gates_owner": false,
       "note": "",
-      "generation": 3
+      "generation": 4
     },
     {
       "task": "task-p1d-consent-scope",
@@ -3740,6 +3740,14 @@
       "reason_fa": "متن رضایت دقیق‌سازی شد (وعدهٔ غلط حذف) و قرارداد رفتاری با تست ثبت شد (00539f9). سیاست B (گیت همهٔ egressهای ابری) نیازمند تصمیم مالک محصول است و عمداً انتخاب نشد؛ BLOCKED ثبت شد. منتظر گیت رسمی gates owner.",
       "reason_en": "Consent copy corrected to the documented Policy A scope (commit 00539f9, tests/unit/test_memory_consent_scope.py). Policy B (gate ALL cloud egress) is explicitly BLOCKED on a product-owner decision and was not chosen unilaterally. Awaiting the official gates run.",
       "resume_when": "a gates owner runs the full gates on the PR and a product owner rules on Policy A-vs-B"
+    },
+    {
+      "task": "task-p1a-memory-scope",
+      "deferred_by_branch": "arena/c5efc6a3-nexus-ai-agent",
+      "at": "2026-10-10T18:49:57Z",
+      "reason_fa": "فازهای ۱ و ۲ مأموریت نهایی کامل شد: fail-closed در همهٔ شاخه‌های شکست (بدون setdefault)، پاک‌سازی در router، گیت مخاطب خصوصی؛ تست‌های prompt-level با ۳ mutation کشته‌شده (fbf193a). منتظر گیت رسمی gates owner.",
+      "reason_en": "Final-mission phases 1-2 done: fail-closed memory_context on every branch (no setdefault), router-level clear, private-audience disclosure gate (chat_id==user_id); prompt-level suite with 3 killed mutations (fbf193a). Awaiting official gates by the gates owner.",
+      "resume_when": "gates owner runs make lint && make types && make test on the PR"
     }
   ],
   "next_work": [
