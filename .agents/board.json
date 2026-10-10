@@ -2326,6 +2326,12 @@
         "an architecture guard requires authorizer= at those call sites (Gate 2 guard deliberately does not, to avoid owning runtime files)",
         "full suite green; no contract-layer change needed"
       ],
+      "evidence_required": [
+        "tests/architecture/test_runtime_service_grants.py green on the claim head (25 passed) plus the committed harness scripts/runtime_service_grant_guard_mutations.py reporting 11/11 mutations caught with a byte-identical restore",
+        "the three fenced runtime files byte-identical to PR #196 head 5c34686 (git diff --stat empty; sha256 prefixes 685bfab7740ebd18 / 1d8a688ca34effa1 / e00d79f7a42d3c91)",
+        "full suite green: pytest -q -m \"not slow\" segmented per the sandbox command cap, with ruff check/format clean; the exact commands, counts and the two non-deterministic origin/main tests are recorded in docs/audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md (Validation ledger)",
+        "python scripts/agent_board.py check --repo bot523h/nexus-ai-agent --files <changed paths> --branch phase1-pr196-guard-20261009 exits 0 with every source readable"
+      ],
       "exclusive_paths": [
         "src/nexus_ai_agent/creative/slideshow/service.py",
         "src/nexus_ai_agent/creative/slideshow/upscale.py",
