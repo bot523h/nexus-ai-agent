@@ -368,7 +368,9 @@ def test_real_bus_rejects_foreign_project_input_refs_before_handler() -> None:
 def _resolve_input_refs(expression: str) -> None:
     """Parse a single expression and resolve it exactly as the guard resolves ``input_refs``."""
     tree = ast.parse(expression, mode="exec")
-    _assert_input_ref_expression(tree, tree.body[0].value, project_names={"project_id"})
+    statement = tree.body[0]
+    assert isinstance(statement, ast.Expr)
+    _assert_input_ref_expression(tree, statement.value, project_names={"project_id"})
 
 
 def test_empty_asset_ref_tuple_is_rejected() -> None:
