@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-10T19:05:16Z",
+  "updated_at": "2026-10-10T19:09:08Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3506,7 +3506,7 @@
       "title_fa": "P1-C: انتقال هویت واقعی کاربر تلگرام در مسیر /stt تا لایهٔ مصرف Gemini",
       "zone": "p1-privacy-identity",
       "priority": "P1",
-      "status": "active",
+      "status": "deferred",
       "scope": "stt_cmd extracts the caller id but drops it before speech_to_text(); vision() then meters the request in shared bucket 0. Thread the real user id through speech_to_text() to vision(); fail closed when no valid identity exists; do not change /stt behaviour, output shape or MIME handling.",
       "scope_fa": "stt_cmd شناسهٔ کاربر را می‌گیرد اما قبل از speech_to_text() رها می‌کند و vision() درخواست را به سطل مشترک 0 می‌شمارد. شناسهٔ واقعی تا vision() منتقل و در نبود هویت معتبر fail closed شود؛ رفتار /stt تغییر نکند.",
       "prerequisites": [],
@@ -3527,11 +3527,11 @@
       ],
       "owner_hint": "",
       "agent_branch": "arena/c5efc6a3-nexus-ai-agent",
-      "claimed_at": "2026-10-10T19:05:16Z",
+      "claimed_at": null,
       "ttl_hours": 24,
-      "gates_owner": true,
+      "gates_owner": false,
       "note": "",
-      "generation": 3
+      "generation": 4
     },
     {
       "task": "task-p1b-ask-quota",
@@ -3620,7 +3620,7 @@
       "title_fa": "P1-D: متن رضایت دامنهٔ واقعی خود را بگوید؛ مسیرهای egress حافظه اثبات و کنترل شوند",
       "zone": "p1-privacy-identity",
       "priority": "P1",
-      "status": "deferred",
+      "status": "active",
       "scope": "The deny/grant copy promises 'message text never sent to the cloud AI model' while explicit AI commands and the chat path egress by design (product function). Remove the false absolute promise and scope the copy to the AI-memory feature exactly as the gate behaves; prove unset/denied/disabled never egress memory operations and that explicit AI use is unaffected; document the Policy A-vs-B owner decision as blocked if no policy document settles it.",
       "scope_fa": "متن رد/قبول وعدهٔ مطلق «هرگز ارسال نمی‌شود» می‌دهد در حالی که فرمان‌های صریح AI و مسیر چت ذاتاً egress می‌کنند. وعدهٔ غلط حذف و متن دقیقاً به دامنهٔ ویژگی حافظه محدود شود؛ رفتارهای unset/denied/granted/disabled با تست اثبات شود؛ تصمیم سیاست A/B در صورت نبود سند، BLOCKED ثبت شود.",
       "prerequisites": [],
@@ -3643,11 +3643,11 @@
       ],
       "owner_hint": "",
       "agent_branch": "arena/c5efc6a3-nexus-ai-agent",
-      "claimed_at": null,
+      "claimed_at": "2026-10-10T19:09:08Z",
       "ttl_hours": 24,
-      "gates_owner": false,
+      "gates_owner": true,
       "note": "",
-      "generation": 2
+      "generation": 3
     }
   ],
   "deferred_log": [
@@ -3755,6 +3755,14 @@
       "at": "2026-10-10T19:05:16Z",
       "reason_fa": "فازهای ۳ و ۵.۱ مأموریت نهایی کامل شد: قرارداد هویت generate(user_id=) در همهٔ پیاده‌سازی‌ها و فراخوان‌ها، SYSTEM_PRINCIPAL_ID=-1، رد sentinel صفر؛ پاکت‌های خطا quota ثبت نمی‌کنند؛ ترتیب وقایع اثبات شد (db2be26). منتظر گیت رسمی.",
       "reason_en": "Final-mission phases 3+5.1 done: LLMProvider.generate(user_id=) threaded across ABC+6 impls+callers, SYSTEM_PRINCIPAL_ID=-1, user_id=0 raises; error envelopes never book quota; event-order proven (db2be26). Mutations B1/B2/B3 killed. Awaiting official gates.",
+      "resume_when": "gates owner runs make lint && make types && make test on the PR"
+    },
+    {
+      "task": "task-p1c-stt-identity",
+      "deferred_by_branch": "arena/c5efc6a3-nexus-ai-agent",
+      "at": "2026-10-10T19:09:08Z",
+      "reason_fa": "بازبینی و سخت‌سازی: زنجیرهٔ /stt سالم؛ فرمان‌های /ai و /code و /translate بدون هویت fail-closed شدند (or-0 حذف، 008e70d). mutation های C1/C2 کشته شد. منتظر گیت رسمی.",
+      "reason_en": "Re-verified + hardened: /stt chain intact; /ai /code /translate fail closed without identity (or-0 removed, 008e70d). Mutations C1/C2 killed. Awaiting official gates.",
       "resume_when": "gates owner runs make lint && make types && make test on the PR"
     }
   ],
