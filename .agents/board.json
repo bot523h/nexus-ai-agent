@@ -815,9 +815,23 @@
         "tests/unit/test_gemini_ask_quota.py",
         "tests/unit/test_memory_scope_isolation.py",
         "tests/unit/test_memory_consent_scope.py",
-        "tests/unit/test_graph_memory.py"
+        "tests/unit/test_graph_memory.py",
+        "src/nexus_ai_agent/memory/eval.py",
+        "src/nexus_ai_agent/llm/provider.py",
+        "src/nexus_ai_agent/llm/fake_llm.py",
+        "src/nexus_ai_agent/llm/fallback_provider.py",
+        "src/nexus_ai_agent/llm/gemini_provider.py",
+        "src/nexus_ai_agent/llm/litellm_provider.py",
+        "src/nexus_ai_agent/llm/local_llama_cpp.py",
+        "src/nexus_ai_agent/llm/local_server_provider.py",
+        "src/nexus_ai_agent/agents/chat_agent.py",
+        "src/nexus_ai_agent/agents/phi_agent.py",
+        "src/nexus_ai_agent/agents/qwen_agent.py",
+        "src/nexus_ai_agent/agents/gemma_agent.py",
+        "src/nexus_ai_agent/agents/store/base_agent.py",
+        "tests/unit/test_memory_context_failclosed.py"
       ],
-      "note": "2026-10-10: zone extended to tests/unit/test_graph_memory.py — the graph-write-key contract moves from conversation thread to personal scope (task-p1a-memory-scope), so that test is updated in-stream."
+      "note": "2026-10-10: zone extended to tests/unit/test_graph_memory.py — the graph-write-key contract moves from conversation thread to personal scope (task-p1a-memory-scope), so that test is updated in-stream. | 2026-10-10 final mission: zone extended to llm/* (LLMProvider.generate user_id contract), persona/chat agents (caller updates), memory/eval.py stub, and the new tests/unit/test_memory_context_failclosed.py (PHASE 1 stale-context + PHASE 2 audience tests)."
     }
   ],
   "claims": [
@@ -3541,6 +3555,19 @@
       ],
       "exclusive_paths": [
         "src/nexus_ai_agent/features/ai_chat.py",
+        "src/nexus_ai_agent/memory/eval.py",
+        "src/nexus_ai_agent/llm/provider.py",
+        "src/nexus_ai_agent/llm/fake_llm.py",
+        "src/nexus_ai_agent/llm/fallback_provider.py",
+        "src/nexus_ai_agent/llm/gemini_provider.py",
+        "src/nexus_ai_agent/llm/litellm_provider.py",
+        "src/nexus_ai_agent/llm/local_llama_cpp.py",
+        "src/nexus_ai_agent/llm/local_server_provider.py",
+        "src/nexus_ai_agent/agents/chat_agent.py",
+        "src/nexus_ai_agent/agents/phi_agent.py",
+        "src/nexus_ai_agent/agents/qwen_agent.py",
+        "src/nexus_ai_agent/agents/gemma_agent.py",
+        "src/nexus_ai_agent/agents/store/base_agent.py",
         "tests/unit/test_gemini_ask_quota.py"
       ],
       "owner_hint": "",
@@ -3574,9 +3601,9 @@
       ],
       "exclusive_paths": [
         "src/nexus_ai_agent/orchestration/graph.py",
-        "src/nexus_ai_agent/orchestration/state.py",
         "src/nexus_ai_agent/memory/long_term.py",
         "tests/unit/test_memory_scope_isolation.py",
+        "tests/unit/test_memory_context_failclosed.py",
         "tests/unit/test_graph_memory.py"
       ],
       "owner_hint": "",
