@@ -9,7 +9,7 @@ as well as directly via handlers.
 from __future__ import annotations
 
 from nexus_ai_agent.features.ai_chat import GeminiEngine
-from nexus_ai_agent.llm.provider import LLMProvider
+from nexus_ai_agent.llm.provider import SYSTEM_PRINCIPAL_ID, LLMProvider
 from nexus_ai_agent.observability.logging import get_logger
 
 log = get_logger(__name__)
@@ -48,17 +48,27 @@ class GeminiProvider(LLMProvider):
         """Access the underlying GeminiEngine for advanced features (vision, code, etc.)."""
         return self._engine
 
-    async def generate(self, prompt: str, system: str = "") -> str:
+    async def generate(self, prompt: str, system: str = "", *, user_id: int | None = None) -> str:
         """Generate a response using Gemini chat.
 
         If *system* is provided it is prepended as a directive so the
         model follows the system instruction even though we use the
         simple ``ask()`` path (no conversation memory).
+
+        The authenticated caller identity is threaded to ``ask()``'s per-user
+        quota seam.  Identity-less system work uses ``SYSTEM_PRINCIPAL_ID``;
+        an explicit ``0`` is the removed shared-bucket sentinel and is
+        rejected (never metered, never silently dropped).
         """
+        if user_id == 0:
+            raise ValueError(
+                "user_id=0 is not an identity; pass the real user id or None for system work"
+            )
+        principal = SYSTEM_PRINCIPAL_ID if user_id is None else int(user_id)
         text = prompt
         if system:
             text = f"[System: {system}]\n\n{prompt}"
-        result = await self._engine.ask(text, user_id=0)
+        result = await self._engine.ask(text, user_id=principal)
         return result
 
     async def embed(self, text: str) -> list[float]:

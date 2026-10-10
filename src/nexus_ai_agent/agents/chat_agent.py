@@ -10,5 +10,7 @@ class ChatAgent(BaseAgent):
         memory_context = state.get("memory_context", "")
         prompt = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
         system = f"You are NEXUS, a helpful AI assistant.\nContext from memory: {memory_context}"
-        state["response"] = await self.llm.generate(prompt=prompt, system=system)
+        state["response"] = await self.llm.generate(
+            prompt=prompt, system=system, user_id=state.get("user_id") or None
+        )
         return state

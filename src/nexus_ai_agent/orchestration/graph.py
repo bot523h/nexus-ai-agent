@@ -8,7 +8,7 @@ from nexus_ai_agent.agents.gemma_agent import GemmaAgent
 from nexus_ai_agent.agents.phi_agent import PhiAgent
 from nexus_ai_agent.agents.qwen_agent import QwenAgent
 from nexus_ai_agent.llm.provider import LLMProvider
-from nexus_ai_agent.memory.long_term import LongTermMemory
+from nexus_ai_agent.memory.long_term import LongTermMemory, is_private_audience, memory_scope_id
 from nexus_ai_agent.orchestration.router import classify_intent, select_persona
 from nexus_ai_agent.orchestration.state import NexusState
 from nexus_ai_agent.tools.registry import ToolRegistry
@@ -23,16 +23,34 @@ async def _router_node(state: NexusState) -> NexusState:
         "intent": intent,
         "active_persona": persona,
         "turn_count": int(state.get("turn_count", 0)) + 1,
+        # Every turn re-derives memory_context from scratch: values supplied by
+        # the caller, a checkpoint replay or a resume must never survive into a
+        # prompt.  The reader (when it runs) overwrites this explicitly; if it
+        # fails or is not authorized, the context stays empty — fail closed.
+        "memory_context": "",
     }
 
 
 async def _memory_reader(long_term_memory: LongTermMemory, state: NexusState) -> NexusState:
     last = state["messages"][-1]["content"] if state.get("messages") else ""
     try:
-        results = await long_term_memory.search(state["thread_id"], last, top_k=3)
+        # Personal long-term memory is scoped per user — never by the shared
+        # conversation key.  A missing identity fails closed (empty context).
+        # Disclosure additionally requires a provable private audience: in a
+        # group the prompt context is shared by every member, so personal
+        # memory is never injected there.
+        scope = memory_scope_id(state.get("user_id"))
+        if scope is None or not is_private_audience(state.get("chat_id"), state.get("user_id")):
+            state["memory_context"] = ""
+            return state
+        results = await long_term_memory.search(scope, last, top_k=3)
         state["memory_context"] = await long_term_memory.format_context(results)
     except Exception:
-        state.setdefault("memory_context", "")
+        # Store failure, bad identity data, format error — anything — leaves
+        # the context empty.  Every branch OVERWRITES the incoming value (never
+        # setdefault): a checkpoint-hydrated or caller-supplied context must not
+        # survive any failure (CodeRabbit 4236380409).
+        state["memory_context"] = ""
     return state
 
 
@@ -153,15 +171,19 @@ async def _memory_writer(
     if response:
         state["messages"] = state.get("messages", []) + [{"role": "assistant", "content": response}]
 
-    # Store turn into durable long-term memory for semantic recall across sessions
-    thread_id = state.get("thread_id")
+    # Store turn into durable long-term memory for semantic recall across
+    # sessions — scoped to the speaking user's personal memory.  The shared
+    # conversation key (thread_id) is never a memory scope: in a group chat it
+    # would hand one member's turns to every other member.  No valid identity
+    # ⇒ fail closed (no write, no shared fallback).
+    scope = memory_scope_id(state.get("user_id"))
     messages = state.get("messages", [])
-    if long_term_memory and thread_id and len(messages) >= 2:
+    if long_term_memory and scope and len(messages) >= 2:
         last_user = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
         if last_user and response:
             try:
                 turn_text = f"User: {last_user}\nAssistant: {response}"
-                await long_term_memory.store(thread_id, turn_text)
+                await long_term_memory.store(scope, turn_text)
             except Exception:
                 pass  # Fail-safe: memory write failures never abort the conversation
     return state
@@ -204,7 +226,7 @@ def compile_graph(
         resp = state.get("response", "")
         if not resp:
             return {**state, "moderation_passed": True}
-        result = await phi.moderate(resp)
+        result = await phi.moderate(resp, user_id=state.get("user_id") or None)
         if not result.get("safe", True):
             return {**state, "response": "I cannot respond to that.", "moderation_passed": False}
         return {**state, "moderation_passed": True}

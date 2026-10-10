@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-09T00:17:05Z",
+  "updated_at": "2026-10-10T20:37:27Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -798,6 +798,40 @@
         "scripts/execution_core_mutations.py",
         "src/nexus_ai_agent/tools/filesystem_policy.py"
       ]
+    },
+    {
+      "id": "p1-privacy-identity",
+      "description": "P1 privacy & identity remediation (Arena 2026-10-10): /stt user identity, GeminiEngine.ask() quota accounting, personal long-term memory scope, consent copy accuracy. Declared additively for the four task-p1* claims; paths listed verbatim from those claims' exclusive_paths.",
+      "paths": [
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/bot/memory_handlers.py",
+        "src/nexus_ai_agent/features/speech.py",
+        "src/nexus_ai_agent/features/ai_chat.py",
+        "src/nexus_ai_agent/features/ai_memory.py",
+        "src/nexus_ai_agent/orchestration/graph.py",
+        "src/nexus_ai_agent/orchestration/state.py",
+        "src/nexus_ai_agent/memory/long_term.py",
+        "tests/unit/test_stt_identity.py",
+        "tests/unit/test_gemini_ask_quota.py",
+        "tests/unit/test_memory_scope_isolation.py",
+        "tests/unit/test_memory_consent_scope.py",
+        "tests/unit/test_graph_memory.py",
+        "src/nexus_ai_agent/memory/eval.py",
+        "src/nexus_ai_agent/llm/provider.py",
+        "src/nexus_ai_agent/llm/fake_llm.py",
+        "src/nexus_ai_agent/llm/fallback_provider.py",
+        "src/nexus_ai_agent/llm/gemini_provider.py",
+        "src/nexus_ai_agent/llm/litellm_provider.py",
+        "src/nexus_ai_agent/llm/local_llama_cpp.py",
+        "src/nexus_ai_agent/llm/local_server_provider.py",
+        "src/nexus_ai_agent/agents/chat_agent.py",
+        "src/nexus_ai_agent/agents/phi_agent.py",
+        "src/nexus_ai_agent/agents/qwen_agent.py",
+        "src/nexus_ai_agent/agents/gemma_agent.py",
+        "src/nexus_ai_agent/agents/store/base_agent.py",
+        "tests/unit/test_memory_context_failclosed.py"
+      ],
+      "note": "2026-10-10: zone extended to tests/unit/test_graph_memory.py — the graph-write-key contract moves from conversation thread to personal scope (task-p1a-memory-scope), so that test is updated in-stream. | 2026-10-10 final mission: zone extended to llm/* (LLMProvider.generate user_id contract), persona/chat agents (caller updates), memory/eval.py stub, and the new tests/unit/test_memory_context_failclosed.py (PHASE 1 stale-context + PHASE 2 audience tests)."
     }
   ],
   "claims": [
@@ -3465,6 +3499,155 @@
       "gates_owner": false,
       "note": "TASK-254 CLOSED after formal merge. PR #192 MERGED 2026-10-09T00:15:53Z at main merge commit a48326ded85bbe4e0972d645ee0ea6e877935362 (head 0e8d97f9ecd34e14b8e2e4388510595c51277d93); superseded PR #191 was closed afterward. AC-1..AC-7 and all six original findings were re-verified and closed; the follow-up review findings (mutation harness restoration/M7 anchor, shutdown takeover and reservation-cancel races, staging write and filesystem exception boundaries, notification recorder wiring, ExecutionPolicy enforcement, passport import assertion, durable idempotency identity binding) were fixed with regression tests. Evidence: exact PR-head CI run 37859836226 all required checks PASS; fresh CodeRabbit review APPROVED on 0e8d97f; all review threads resolved; local regression 3875 passed / 31 skipped / 0 failed; Ruff+format clean; mypy clean (289 files); M1-M17 17/17 caught; board tests 71/71; no test definitions removed. Task terminalized after merge evidence; exclusive execution-core zone released at generation 3.",
       "generation": 3
+    },
+    {
+      "task": "task-p1c-stt-identity",
+      "title": "P1-C: carry the real Telegram user identity through /stt to the Gemini metering layer",
+      "title_fa": "P1-C: انتقال هویت واقعی کاربر تلگرام در مسیر /stt تا لایهٔ مصرف Gemini",
+      "zone": "p1-privacy-identity",
+      "priority": "P1",
+      "status": "deferred",
+      "scope": "stt_cmd extracts the caller id but drops it before speech_to_text(); vision() then meters the request in shared bucket 0. Thread the real user id through speech_to_text() to vision(); fail closed when no valid identity exists; do not change /stt behaviour, output shape or MIME handling.",
+      "scope_fa": "stt_cmd شناسهٔ کاربر را می‌گیرد اما قبل از speech_to_text() رها می‌کند و vision() درخواست را به سطل مشترک 0 می‌شمارد. شناسهٔ واقعی تا vision() منتقل و در نبود هویت معتبر fail closed شود؛ رفتار /stt تغییر نکند.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "stt_cmd passes the effective user id explicitly into speech_to_text()",
+        "speech_to_text() forwards the same id to gemini_engine.vision(); no silent user_id=0 default is reached for a real-user request",
+        "a /stt request from user 424242 charges the limiter bucket of 424242 and never bucket 0 (behavioural dispatch-level test, network stubbed only)",
+        "missing/invalid user identity aborts before any provider call (fail closed; no anonymous bucket)",
+        "existing STT success and failure behaviour (result dict shape, MIME mapping, error strings) is unchanged"
+      ],
+      "evidence_required": [
+        "tests/unit/test_stt_identity.py (RED before the fix, GREEN after — recorded)"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/features/speech.py",
+        "tests/unit/test_stt_identity.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/c5efc6a3-nexus-ai-agent",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 4
+    },
+    {
+      "task": "task-p1b-ask-quota",
+      "title": "P1-B: record quota usage on the GeminiEngine.ask() success path exactly once",
+      "title_fa": "P1-B: ثبت دقیق مصرف سهمیه در مسیر موفق GeminiEngine.ask() دقیقاً یک بار",
+      "zone": "p1-privacy-identity",
+      "priority": "P1",
+      "status": "deferred",
+      "scope": "ask() consults is_allowed() but never calls record(), so the per-user quota is never consumed on that path (contrast: chat/translate/summarize/code all record). Record on success only, once for both the direct and the queued path; provider errors must not count; blocked requests must not count; no limiter redesign.",
+      "scope_fa": "ask() محدودیت را بررسی اما record() نمی‌کند؛ سهمیه در این مسیر مصرف نمی‌شود. ثبت فقط برای پاسخ موفق، یک بار در مسیر مستقیم و صف؛ خطای provider و درخواست مسدودشده شمرده نشود؛ بدون بازطراحی لیمیتر.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "with max_daily=1 the first successful ask() is recorded and the second is rejected",
+        "a provider failure leaves the quota unchanged (no fake success)",
+        "the queued path and the direct path each count exactly once (explicit no-double-count test)",
+        "a blocked request creates no count",
+        "the Telegram /ask command still routes through chat() and its routing test stays green"
+      ],
+      "evidence_required": [
+        "tests/unit/test_gemini_ask_quota.py (RED before the fix, GREEN after — recorded)"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/features/ai_chat.py",
+        "src/nexus_ai_agent/memory/eval.py",
+        "src/nexus_ai_agent/llm/provider.py",
+        "src/nexus_ai_agent/llm/fake_llm.py",
+        "src/nexus_ai_agent/llm/fallback_provider.py",
+        "src/nexus_ai_agent/llm/gemini_provider.py",
+        "src/nexus_ai_agent/llm/litellm_provider.py",
+        "src/nexus_ai_agent/llm/local_llama_cpp.py",
+        "src/nexus_ai_agent/llm/local_server_provider.py",
+        "src/nexus_ai_agent/agents/chat_agent.py",
+        "src/nexus_ai_agent/agents/phi_agent.py",
+        "src/nexus_ai_agent/agents/qwen_agent.py",
+        "src/nexus_ai_agent/agents/gemma_agent.py",
+        "src/nexus_ai_agent/agents/store/base_agent.py",
+        "tests/unit/test_gemini_ask_quota.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/c5efc6a3-nexus-ai-agent",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 4
+    },
+    {
+      "task": "task-p1a-memory-scope",
+      "title": "P1-A: personal long-term memory scoped per user, separated from group conversation identity",
+      "title_fa": "P1-A: جداسازی scope حافظهٔ بلندمدت شخصی از هویت مکالمهٔ گروهی",
+      "zone": "p1-privacy-identity",
+      "priority": "P1",
+      "status": "deferred",
+      "scope": "thread_id = tg:{chat_id} keys personal memory for every group member (cross-user leak). Introduce a typed per-user memory scope used by _memory_reader/_memory_writer and LongTermMemory; keep the checkpointer thread_id (conversation identity) unchanged; fail closed on missing identity; never serve legacy shared-key rows to personal reads and never copy them to all members.",
+      "scope_fa": "کلید tg:{chat_id} حافظهٔ شخصی همهٔ اعضای گروه را مشترک می‌کند (نشت بین کاربران). scope شخصی per-user و typed برای خواندن/نوشتن حافظه ساخته شود؛ thread_id مکالمه دست‌نخورده بماند؛ در نبود هویت fail closed؛ دادهٔ قدیمی مشترک به هیچ کاربری تحویل داده یا کپی نشود.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "user A's write in a shared chat is not retrievable from user B's personal memory read (behavioural round-trip through the real graph nodes)",
+        "user A can still retrieve their own memory on a later request (stable deterministic scope)",
+        "group conversation/checkpoint identity is unchanged: chat history and checkpointer semantics keep working as before",
+        "missing identity (0/None) fails closed: no personal read and no personal write; no fallback to a shared scope",
+        "legacy rows stored under the old shared key are never served to a personal read (no silent migration, no deletion, no copy-to-all)"
+      ],
+      "evidence_required": [
+        "tests/unit/test_memory_scope_isolation.py (RED before the fix, GREEN after — recorded)",
+        "tests/unit/test_graph_memory.py + tests/unit/test_memory_recall.py stay green (conversation semantics preserved)"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/orchestration/graph.py",
+        "src/nexus_ai_agent/memory/long_term.py",
+        "tests/unit/test_memory_scope_isolation.py",
+        "tests/unit/test_memory_context_failclosed.py",
+        "tests/unit/test_graph_memory.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/c5efc6a3-nexus-ai-agent",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 6
+    },
+    {
+      "task": "task-p1d-consent-scope",
+      "title": "P1-D: consent copy states its true scope; memory egress paths proven and gated",
+      "title_fa": "P1-D: متن رضایت دامنهٔ واقعی خود را بگوید؛ مسیرهای egress حافظه اثبات و کنترل شوند",
+      "zone": "p1-privacy-identity",
+      "priority": "P1",
+      "status": "deferred",
+      "scope": "The deny/grant copy promises 'message text never sent to the cloud AI model' while explicit AI commands and the chat path egress by design (product function). Remove the false absolute promise and scope the copy to the AI-memory feature exactly as the gate behaves; prove unset/denied/disabled never egress memory operations and that explicit AI use is unaffected; document the Policy A-vs-B owner decision as blocked if no policy document settles it.",
+      "scope_fa": "متن رد/قبول وعدهٔ مطلق «هرگز ارسال نمی‌شود» می‌دهد در حالی که فرمان‌های صریح AI و مسیر چت ذاتاً egress می‌کنند. وعدهٔ غلط حذف و متن دقیقاً به دامنهٔ ویژگی حافظه محدود شود؛ رفتارهای unset/denied/granted/disabled با تست اثبات شود؛ تصمیم سیاست A/B در صورت نبود سند، BLOCKED ثبت شود.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "no user-facing consent text makes an absolute no-egress promise the code does not keep for ALL cloud paths",
+        "consent copy states exactly what the memory consent gates (extraction/storage of AI memory) and what it does not (explicit AI commands)",
+        "unset and denied users: no memory egress; granted+enabled: allowed; disabled: none (behavioural tests)",
+        "an explicitly requested AI reply is not blocked by memory-consent state (existing product behaviour preserved)",
+        "graph memory write path creates no ungated memory egress (no generate() call on store/search; embedding locality proven)",
+        "Policy A vs Policy B for gating all cloud egress: BLOCKED with owner decision recorded, not silently chosen"
+      ],
+      "evidence_required": [
+        "tests/unit/test_memory_consent_scope.py (copy/behaviour contract)",
+        "tests/unit/test_ai_memory_consent.py stays green"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/memory_handlers.py",
+        "src/nexus_ai_agent/features/ai_memory.py",
+        "tests/unit/test_memory_consent_scope.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/c5efc6a3-nexus-ai-agent",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 4
     }
   ],
   "deferred_log": [
@@ -3525,6 +3708,78 @@
       "reason_fa": "در حلقهٔ task-223 کشف شد اما خارج از ناحیهٔ claim من است و رفع آن یک PR چهارم پشت سه PR باز می‌سازد؛ به‌جای گسترش دامنه، با شواهد ثبت شد.",
       "reason_en": "Found during the task-223 loop but out of my claim's zone; fixing it would open a 4th PR stacked behind three open PRs. Recorded with reproduction instead of widening scope.",
       "resume_when": "next storage-observability window (after #126/#127/#128 merge)"
+    },
+    {
+      "task": "task-p1c-stt-identity",
+      "deferred_by_branch": "arena/c5efc6a3-nexus-ai-agent",
+      "at": "2026-10-10T04:20:02Z",
+      "reason_fa": "اصلاح کامل و شواهد RED→GREEN روی شاخه push شد (92ffdbc)؛ منتظر اجرای رسمی گیت‌ها توسط gates owner روی PR. گیت کامل (make lint/types/test) به‌دلیل نبود gates_owner روی برد deferred است.",
+      "reason_en": "Fix + RED->GREEN evidence pushed (commit 92ffdbc, tests/unit/test_stt_identity.py). Awaiting the official gates run by the gates owner on the PR; board has 0 gates_owner so the full gate is deferred per AGENTS.md rule 4.",
+      "resume_when": "a gates owner runs make lint && make types && make test on the PR"
+    },
+    {
+      "task": "task-p1b-ask-quota",
+      "deferred_by_branch": "arena/c5efc6a3-nexus-ai-agent",
+      "at": "2026-10-10T04:20:02Z",
+      "reason_fa": "اصلاح کامل و شواهد RED→GREEN + کنترل mutation روی شاخه push شد (840b612)؛ منتظر گیت رسمی gates owner.",
+      "reason_en": "Fix + RED->GREEN evidence + mutation control pushed (commit 840b612, tests/unit/test_gemini_ask_quota.py). Awaiting the official gates run.",
+      "resume_when": "a gates owner runs make lint && make types && make test on the PR"
+    },
+    {
+      "task": "task-p1a-memory-scope",
+      "deferred_by_branch": "arena/c5efc6a3-nexus-ai-agent",
+      "at": "2026-10-10T04:20:02Z",
+      "reason_fa": "اصلاح کامل، شواهد رفتاری round-trip و کنترل mutation push شد (27d8f0b)؛ دادهٔ قدیمی دست‌نخورده و خارج از خواندن شخصی است. منتظر گیت رسمی gates owner.",
+      "reason_en": "Fix + behavioural round-trip evidence + mutation control pushed (commit 27d8f0b, tests/unit/test_memory_scope_isolation.py). Legacy rows preserved and never served. Awaiting the official gates run.",
+      "resume_when": "a gates owner runs make lint && make types && make test on the PR"
+    },
+    {
+      "task": "task-p1d-consent-scope",
+      "deferred_by_branch": "arena/c5efc6a3-nexus-ai-agent",
+      "at": "2026-10-10T04:20:02Z",
+      "reason_fa": "متن رضایت دقیق‌سازی شد (وعدهٔ غلط حذف) و قرارداد رفتاری با تست ثبت شد (00539f9). سیاست B (گیت همهٔ egressهای ابری) نیازمند تصمیم مالک محصول است و عمداً انتخاب نشد؛ BLOCKED ثبت شد. منتظر گیت رسمی gates owner.",
+      "reason_en": "Consent copy corrected to the documented Policy A scope (commit 00539f9, tests/unit/test_memory_consent_scope.py). Policy B (gate ALL cloud egress) is explicitly BLOCKED on a product-owner decision and was not chosen unilaterally. Awaiting the official gates run.",
+      "resume_when": "a gates owner runs the full gates on the PR and a product owner rules on Policy A-vs-B"
+    },
+    {
+      "task": "task-p1a-memory-scope",
+      "deferred_by_branch": "arena/c5efc6a3-nexus-ai-agent",
+      "at": "2026-10-10T18:49:57Z",
+      "reason_fa": "فازهای ۱ و ۲ مأموریت نهایی کامل شد: fail-closed در همهٔ شاخه‌های شکست (بدون setdefault)، پاک‌سازی در router، گیت مخاطب خصوصی؛ تست‌های prompt-level با ۳ mutation کشته‌شده (fbf193a). منتظر گیت رسمی gates owner.",
+      "reason_en": "Final-mission phases 1-2 done: fail-closed memory_context on every branch (no setdefault), router-level clear, private-audience disclosure gate (chat_id==user_id); prompt-level suite with 3 killed mutations (fbf193a). Awaiting official gates by the gates owner.",
+      "resume_when": "gates owner runs make lint && make types && make test on the PR"
+    },
+    {
+      "task": "task-p1b-ask-quota",
+      "deferred_by_branch": "arena/c5efc6a3-nexus-ai-agent",
+      "at": "2026-10-10T19:05:16Z",
+      "reason_fa": "فازهای ۳ و ۵.۱ مأموریت نهایی کامل شد: قرارداد هویت generate(user_id=) در همهٔ پیاده‌سازی‌ها و فراخوان‌ها، SYSTEM_PRINCIPAL_ID=-1، رد sentinel صفر؛ پاکت‌های خطا quota ثبت نمی‌کنند؛ ترتیب وقایع اثبات شد (db2be26). منتظر گیت رسمی.",
+      "reason_en": "Final-mission phases 3+5.1 done: LLMProvider.generate(user_id=) threaded across ABC+6 impls+callers, SYSTEM_PRINCIPAL_ID=-1, user_id=0 raises; error envelopes never book quota; event-order proven (db2be26). Mutations B1/B2/B3 killed. Awaiting official gates.",
+      "resume_when": "gates owner runs make lint && make types && make test on the PR"
+    },
+    {
+      "task": "task-p1c-stt-identity",
+      "deferred_by_branch": "arena/c5efc6a3-nexus-ai-agent",
+      "at": "2026-10-10T19:09:08Z",
+      "reason_fa": "بازبینی و سخت‌سازی: زنجیرهٔ /stt سالم؛ فرمان‌های /ai و /code و /translate بدون هویت fail-closed شدند (or-0 حذف، 008e70d). mutation های C1/C2 کشته شد. منتظر گیت رسمی.",
+      "reason_en": "Re-verified + hardened: /stt chain intact; /ai /code /translate fail closed without identity (or-0 removed, 008e70d). Mutations C1/C2 killed. Awaiting official gates.",
+      "resume_when": "gates owner runs make lint && make types && make test on the PR"
+    },
+    {
+      "task": "task-p1d-consent-scope",
+      "deferred_by_branch": "arena/c5efc6a3-nexus-ai-agent",
+      "at": "2026-10-10T19:12:15Z",
+      "reason_fa": "فاز ۵.۳ مأموریت نهایی کامل شد: متن رضایت ۵ مفهوم را مجزا نگه می‌دارد از جمله دامنهٔ مخاطب؛ استقلال حریم گروه از رضایت اثبات شد (7d7c075). mutation های D1/D2 کشته شد. سیاست B همچنان BLOCKED (مالک محصول). منتظر گیت رسمی.",
+      "reason_en": "Final-mission phase 5.3 done: consent copy keeps 5 concepts distinct incl. audience scope; group privacy != consent proven (7d7c075). Mutations D1/D2 killed. Policy B remains BLOCKED on product owner (documented). Awaiting official gates.",
+      "resume_when": "product owner decides Policy B; gates owner runs make lint && make types && make test"
+    },
+    {
+      "task": "task-p1a-memory-scope",
+      "deferred_by_branch": "arena/c5efc6a3-nexus-ai-agent",
+      "at": "2026-10-10T20:37:27Z",
+      "reason_fa": "گیت‌های رسمی زیر این claim فعال روی head 0816976 اجرا شد: lint صفر؛ types=2 (۳ خطای صرفاً محیطی، همگی در base موجود)؛ test=2 (۳۹۱۳ گذشت/۱۷ شکست — همه در base بازتولید شدند). CI دو بار SUCCESS. CodeRabbit تأیید کرد. هیچ کار بازی روی کد نیست؛ merge به دستور صریح کاربر نیاز دارد.",
+      "reason_en": "Official gates run under this --gates claim on head 0816976: make lint exit 0; make types exit 2 (3 env-only errors: chromadb forbidden, imageio-ffmpeg stubs — all 3 exist at base 6b94f3d); make test exit 2 (3913 passed/31 skipped/17 failed — all 17 reproduce at base 6b94f3d). CI on 0816976 = 2x SUCCESS (18 success + 1 skipped each). CodeRabbit APPROVED; both findings fixed (fbf193a/6ac1989/0816976). Nothing pending on code; merge decision is the user's explicit order.",
+      "resume_when": "user orders merge, or product owner decides Policy B / legacy-memory migration"
     }
   ],
   "next_work": [
