@@ -89,6 +89,10 @@ class _RateLimiter:
         }
 
 
+ERROR_ENVELOPE_PREFIX = "❌"
+_INVALID_IDENTITY_MSG = "❌ هویت کاربر نامعتبر است؛ این درخواست انجام نشد."
+
+
 class GeminiEngine:
     """Google Gemini 2.0 Flash API client with rate limiting and conversation memory.
 
@@ -200,6 +204,8 @@ class GeminiEngine:
         mode: str = "chat",
     ) -> str:
         """Send a chat message and get AI response."""
+        if user_id == 0:
+            return _INVALID_IDENTITY_MSG
         if not self._limiter.is_allowed(user_id):
             rem = self._limiter.remaining(user_id)
             return (
@@ -240,11 +246,16 @@ class GeminiEngine:
         self._append_to_history(conv_id, user_part)
         assistant_part = {"role": "model", "parts": [{"text": response}]}
         self._append_to_history(conv_id, assistant_part)
-        self._limiter.record(user_id)
+        self._record_success(user_id, response)
         return response
 
     async def ask(self, text: str, *, user_id: int) -> str:
         """One-shot question — no conversation memory."""
+        if user_id == 0:
+            raise ValueError(
+                "user_id=0 is not an identity; pass the real user id "
+                "(or SYSTEM_PRINCIPAL_ID for system work)"
+            )
         if not self._limiter.is_allowed(user_id):
             return "⏳ محدودیت درخواست. لطفاً کمی صبر کنید."
 
@@ -269,11 +280,13 @@ class GeminiEngine:
         """
         contents = [{"role": "user", "parts": [{"text": text}]}]
         response = await self._call_gemini(contents, system_instruction=system)
-        self._limiter.record(user_id)
+        self._record_success(user_id, response)
         return response
 
     async def translate(self, text: str, *, target_lang: str, user_id: int) -> str:
         """Translate text to target language."""
+        if user_id == 0:
+            return _INVALID_IDENTITY_MSG
         if not self._limiter.is_allowed(user_id):
             return "⏳ محدودیت درخواست."
         prompt = f"Translate the following text to {target_lang}:\n\n{text}"
@@ -281,11 +294,13 @@ class GeminiEngine:
         response = await self._call_gemini(
             contents, system_instruction=_SYSTEM_PROMPTS["translate"]
         )
-        self._limiter.record(user_id)
+        self._record_success(user_id, response)
         return response
 
     async def summarize(self, text: str, *, user_id: int) -> str:
         """Summarize text."""
+        if user_id == 0:
+            return _INVALID_IDENTITY_MSG
         if not self._limiter.is_allowed(user_id):
             return "⏳ محدودیت درخواست."
         prompt = f"Summarize the following text:\n\n{text}"
@@ -293,27 +308,31 @@ class GeminiEngine:
         response = await self._call_gemini(
             contents, system_instruction=_SYSTEM_PROMPTS["summarize"]
         )
-        self._limiter.record(user_id)
+        self._record_success(user_id, response)
         return response
 
     async def code(self, prompt: str, *, user_id: int) -> str:
         """Generate code from prompt."""
+        if user_id == 0:
+            return _INVALID_IDENTITY_MSG
         if not self._limiter.is_allowed(user_id):
             return "⏳ محدودیت درخواست."
         contents = [{"role": "user", "parts": [{"text": prompt}]}]
         response = await self._call_gemini(contents, system_instruction=_SYSTEM_PROMPTS["code"])
-        self._limiter.record(user_id)
+        self._record_success(user_id, response)
         return response
 
     async def vision(
         self,
         image_bytes: bytes,
         *,
+        user_id: int,
         question: str = "Describe this image in detail.",
-        user_id: int = 0,
         mime_type: str = "image/jpeg",
     ) -> str:
         """Analyze an image with Gemini Vision."""
+        if user_id == 0:
+            return _INVALID_IDENTITY_MSG
         if not self._limiter.is_allowed(user_id):
             return "⏳ محدودیت درخواست."
         import base64
@@ -334,8 +353,22 @@ class GeminiEngine:
             }
         ]
         response = await self._call_gemini(contents, system_instruction=_SYSTEM_PROMPTS["vision"])
-        self._limiter.record(user_id)
+        self._record_success(user_id, response)
         return response
+
+    def _record_success(self, user_id: int, response: str) -> None:
+        """Book quota for a successful user request — exactly once per call.
+
+        ``_call_gemini`` returns error envelopes (``❌ ...``) as text on API
+        failures instead of raising; those are failures and are never booked
+        as successful usage.  Blocked requests never reach a recording site,
+        and a raised provider exception propagates before it — so there is no
+        fake success and no double count (direct and queued paths share this
+        one point).
+        """
+        if response.startswith(ERROR_ENVELOPE_PREFIX):
+            return
+        self._limiter.record(user_id)
 
     def get_status(self) -> str:
         """Get engine status info."""

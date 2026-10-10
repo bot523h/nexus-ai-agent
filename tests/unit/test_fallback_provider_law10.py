@@ -37,7 +37,7 @@ class _StubProvider(LLMProvider):
         self._raises = raises
         self.calls = 0
 
-    async def generate(self, prompt: str, system: str = "") -> str:
+    async def generate(self, prompt: str, system: str = "", *, user_id: int | None = None) -> str:
         self.calls += 1
         if self._raises is not None:
             raise self._raises

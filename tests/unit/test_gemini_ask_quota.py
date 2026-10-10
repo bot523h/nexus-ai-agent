@@ -10,6 +10,10 @@ all record).  The contract asserted here:
 * a provider failure leaves the quota untouched (no fake success);
 * a blocked request creates no count;
 * the queued path and the direct path each count exactly once — no double count;
+* a provider error ENVELOPE (``❌ ...`` returned instead of raised) is a
+  failure — it must not be recorded as a successful request;
+* event order on the success path is check → provider → record, and the final
+  quota state is decremented exactly once (order matters, not call counts);
 * the Telegram ``/ask`` command still routes through the recorded ``chat()``
   path (the engine-level ``ask()`` is reached via ``LLMProvider.generate()``).
 """
@@ -196,3 +200,99 @@ async def test_telegram_ask_command_still_routes_through_chat(
     assert seen.get("path") == "chat", (
         f"/ask must route through chat() (the recorded path); observed {seen}"
     )
+
+
+# ── error envelopes and event order ───────────────────────────────────
+
+
+async def test_error_envelope_is_not_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``_call_gemini`` returns ❌ envelopes on non-200 — that is a failure.
+
+    The request must not be booked as a successful use of the free-tier quota
+    (the queue's attempt-capacity layer already accounts attempts).
+    """
+    eng = GeminiEngine(api_key="test-key", max_rpm=5, max_daily=5)
+
+    async def _error_envelope(contents: Any, system_instruction: str = "") -> str:
+        return "❌ خطای API (429): لطفاً بعداً تلاش کنید."
+
+    monkeypatch.setattr(eng, "_call_gemini", _error_envelope)
+    resp = await eng.ask("one", user_id=42)
+    assert resp.startswith("❌"), "sanity: the error envelope was returned"
+    rem = eng._limiter.remaining(42)
+    assert rem["daily_remaining"] == 5 and rem["rpm_remaining"] == 5, (
+        f"an error envelope must not count as a successful request: remaining={rem}"
+    )
+
+
+async def test_success_event_order_is_check_provider_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exactly-once with ORDER: is_allowed → provider call → record → response."""
+    eng = GeminiEngine(api_key="test-key", max_rpm=2, max_daily=2)
+    events: list[str] = []
+
+    orig_is_allowed = eng._limiter.is_allowed
+    orig_record = eng._limiter.record
+
+    def _spy_is_allowed(user_id: int) -> bool:
+        events.append(f"is_allowed:{user_id}")
+        return orig_is_allowed(user_id)
+
+    def _spy_record(user_id: int) -> None:
+        events.append(f"record:{user_id}")
+        orig_record(user_id)
+
+    async def _fake_call(contents: Any, system_instruction: str = "") -> str:
+        events.append("provider")
+        return "OK"
+
+    monkeypatch.setattr(eng._limiter, "is_allowed", _spy_is_allowed)
+    monkeypatch.setattr(eng._limiter, "record", _spy_record)
+    monkeypatch.setattr(eng, "_call_gemini", _fake_call)
+
+    resp = await eng.ask("one", user_id=42)
+    assert resp == "OK"
+    assert events == ["is_allowed:42", "provider", "record:42"], (
+        f"event order must be check → provider → record: {events!r}"
+    )
+    rem = eng._limiter.remaining(42)
+    assert rem["daily_remaining"] == 1 and rem["rpm_remaining"] == 1, (
+        f"final quota state must reflect exactly one record: {rem}"
+    )
+
+
+async def test_blocked_event_order_skips_provider_and_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A blocked request must reach neither the provider nor record()."""
+    eng = GeminiEngine(api_key="test-key", max_rpm=1, max_daily=1)
+    events: list[str] = []
+
+    orig_is_allowed = eng._limiter.is_allowed
+    orig_record = eng._limiter.record
+
+    def _spy_is_allowed(user_id: int) -> bool:
+        events.append(f"is_allowed:{user_id}")
+        return orig_is_allowed(user_id)
+
+    def _spy_record(user_id: int) -> None:
+        events.append(f"record:{user_id}")
+        orig_record(user_id)
+
+    async def _fake_call(contents: Any, system_instruction: str = "") -> str:
+        events.append("provider")
+        return "OK"
+
+    monkeypatch.setattr(eng._limiter, "is_allowed", _spy_is_allowed)
+    monkeypatch.setattr(eng._limiter, "record", _spy_record)
+    monkeypatch.setattr(eng, "_call_gemini", _fake_call)
+
+    await eng.ask("one", user_id=42)  # consumes the single unit
+    events.clear()
+    await eng.ask("two", user_id=42)  # blocked
+    assert events == ["is_allowed:42"], (
+        f"blocked request must not touch provider/record: {events!r}"
+    )
+    rem = eng._limiter.remaining(42)
+    assert rem["daily_remaining"] == 0, f"final quota state must stay at 0: {rem}"

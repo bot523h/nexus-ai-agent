@@ -22,6 +22,7 @@ egresses by design.  The user-facing copy must therefore match the code:
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 import pytest
 
@@ -88,7 +89,7 @@ class _RecordingGemini:
         self.reply = reply
         self.calls: list[str] = []
 
-    async def generate(self, prompt: str, system: str = "") -> str:
+    async def generate(self, prompt: str, system: str = "", **kwargs: Any) -> str:
         self.calls.append(prompt)
         return self.reply
 
@@ -162,7 +163,7 @@ async def test_explicit_ai_reply_is_not_blocked_by_memory_consent(
         def __init__(self) -> None:
             self.prompts: list[str] = []
 
-        async def generate(self, prompt: str, system: str = "") -> str:
+        async def generate(self, prompt: str, system: str = "", **kwargs: Any) -> str:
             self.prompts.append(prompt)
             return "answer"
 
@@ -208,7 +209,7 @@ class _EgressTripwire(FakeLLMProvider):
         self.embed_calls.append(text)
         return await super().embed(text)
 
-    async def generate(self, prompt: str, system: str = "") -> str:
+    async def generate(self, prompt: str, system: str = "", **kwargs: Any) -> str:
         self.generate_calls.append(prompt)
         raise AssertionError(
             "memory store/search must never call generate() — that would be an "
