@@ -33,10 +33,6 @@ async def _router_node(state: NexusState) -> NexusState:
 
 async def _memory_reader(long_term_memory: LongTermMemory, state: NexusState) -> NexusState:
     last = state["messages"][-1]["content"] if state.get("messages") else ""
-    # Default is empty: only a successful, audience-authorized read fills the
-    # context.  Always overwrite — never setdefault — so a hydrated value from
-    # the checkpointer cannot survive any failure branch (CodeRabbit 4236380409).
-    state["memory_context"] = ""
     try:
         # Personal long-term memory is scoped per user — never by the shared
         # conversation key.  A missing identity fails closed (empty context).
@@ -45,12 +41,15 @@ async def _memory_reader(long_term_memory: LongTermMemory, state: NexusState) ->
         # memory is never injected there.
         scope = memory_scope_id(state.get("user_id"))
         if scope is None or not is_private_audience(state.get("chat_id"), state.get("user_id")):
+            state["memory_context"] = ""
             return state
         results = await long_term_memory.search(scope, last, top_k=3)
         state["memory_context"] = await long_term_memory.format_context(results)
     except Exception:
         # Store failure, bad identity data, format error — anything — leaves
-        # the context empty.  Never the previous turn's value.
+        # the context empty.  Every branch OVERWRITES the incoming value (never
+        # setdefault): a checkpoint-hydrated or caller-supplied context must not
+        # survive any failure (CodeRabbit 4236380409).
         state["memory_context"] = ""
     return state
 
