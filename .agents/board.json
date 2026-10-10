@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-10T18:50:01Z",
+  "updated_at": "2026-10-10T19:05:16Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3506,7 +3506,7 @@
       "title_fa": "P1-C: انتقال هویت واقعی کاربر تلگرام در مسیر /stt تا لایهٔ مصرف Gemini",
       "zone": "p1-privacy-identity",
       "priority": "P1",
-      "status": "deferred",
+      "status": "active",
       "scope": "stt_cmd extracts the caller id but drops it before speech_to_text(); vision() then meters the request in shared bucket 0. Thread the real user id through speech_to_text() to vision(); fail closed when no valid identity exists; do not change /stt behaviour, output shape or MIME handling.",
       "scope_fa": "stt_cmd شناسهٔ کاربر را می‌گیرد اما قبل از speech_to_text() رها می‌کند و vision() درخواست را به سطل مشترک 0 می‌شمارد. شناسهٔ واقعی تا vision() منتقل و در نبود هویت معتبر fail closed شود؛ رفتار /stt تغییر نکند.",
       "prerequisites": [],
@@ -3527,11 +3527,11 @@
       ],
       "owner_hint": "",
       "agent_branch": "arena/c5efc6a3-nexus-ai-agent",
-      "claimed_at": null,
+      "claimed_at": "2026-10-10T19:05:16Z",
       "ttl_hours": 24,
-      "gates_owner": false,
+      "gates_owner": true,
       "note": "",
-      "generation": 2
+      "generation": 3
     },
     {
       "task": "task-p1b-ask-quota",
@@ -3539,7 +3539,7 @@
       "title_fa": "P1-B: ثبت دقیق مصرف سهمیه در مسیر موفق GeminiEngine.ask() دقیقاً یک بار",
       "zone": "p1-privacy-identity",
       "priority": "P1",
-      "status": "active",
+      "status": "deferred",
       "scope": "ask() consults is_allowed() but never calls record(), so the per-user quota is never consumed on that path (contrast: chat/translate/summarize/code all record). Record on success only, once for both the direct and the queued path; provider errors must not count; blocked requests must not count; no limiter redesign.",
       "scope_fa": "ask() محدودیت را بررسی اما record() نمی‌کند؛ سهمیه در این مسیر مصرف نمی‌شود. ثبت فقط برای پاسخ موفق، یک بار در مسیر مستقیم و صف؛ خطای provider و درخواست مسدودشده شمرده نشود؛ بدون بازطراحی لیمیتر.",
       "prerequisites": [],
@@ -3572,11 +3572,11 @@
       ],
       "owner_hint": "",
       "agent_branch": "arena/c5efc6a3-nexus-ai-agent",
-      "claimed_at": "2026-10-10T18:50:01Z",
+      "claimed_at": null,
       "ttl_hours": 24,
-      "gates_owner": true,
+      "gates_owner": false,
       "note": "",
-      "generation": 3
+      "generation": 4
     },
     {
       "task": "task-p1a-memory-scope",
@@ -3747,6 +3747,14 @@
       "at": "2026-10-10T18:49:57Z",
       "reason_fa": "فازهای ۱ و ۲ مأموریت نهایی کامل شد: fail-closed در همهٔ شاخه‌های شکست (بدون setdefault)، پاک‌سازی در router، گیت مخاطب خصوصی؛ تست‌های prompt-level با ۳ mutation کشته‌شده (fbf193a). منتظر گیت رسمی gates owner.",
       "reason_en": "Final-mission phases 1-2 done: fail-closed memory_context on every branch (no setdefault), router-level clear, private-audience disclosure gate (chat_id==user_id); prompt-level suite with 3 killed mutations (fbf193a). Awaiting official gates by the gates owner.",
+      "resume_when": "gates owner runs make lint && make types && make test on the PR"
+    },
+    {
+      "task": "task-p1b-ask-quota",
+      "deferred_by_branch": "arena/c5efc6a3-nexus-ai-agent",
+      "at": "2026-10-10T19:05:16Z",
+      "reason_fa": "فازهای ۳ و ۵.۱ مأموریت نهایی کامل شد: قرارداد هویت generate(user_id=) در همهٔ پیاده‌سازی‌ها و فراخوان‌ها، SYSTEM_PRINCIPAL_ID=-1، رد sentinel صفر؛ پاکت‌های خطا quota ثبت نمی‌کنند؛ ترتیب وقایع اثبات شد (db2be26). منتظر گیت رسمی.",
+      "reason_en": "Final-mission phases 3+5.1 done: LLMProvider.generate(user_id=) threaded across ABC+6 impls+callers, SYSTEM_PRINCIPAL_ID=-1, user_id=0 raises; error envelopes never book quota; event-order proven (db2be26). Mutations B1/B2/B3 killed. Awaiting official gates.",
       "resume_when": "gates owner runs make lint && make types && make test on the PR"
     }
   ],
