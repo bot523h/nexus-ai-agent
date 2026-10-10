@@ -521,6 +521,7 @@ def build_handlers(
                 tmp_path,
                 lang="fa",
                 gemini_engine=gemini_engine,
+                user_id=user_id,
             )
             import os
 

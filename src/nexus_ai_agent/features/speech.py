@@ -97,10 +97,16 @@ class SpeechEngine:
         *,
         lang: str = "fa",
         gemini_engine: Any = None,
+        user_id: int | None = None,
     ) -> dict[str, Any]:
         """Transcribe audio file using Gemini.
 
         Returns dict with: success, text, lang, error.
+
+        ``user_id`` is the real caller identity and is forwarded to the
+        Gemini metering layer.  A missing or invalid identity (``None`` or
+        ``0``) fails closed *before* any provider call — an anonymous request
+        is never charged to the shared bucket ``0``.
         """
         filepath = Path(audio_path)
         if not filepath.exists():
@@ -109,6 +115,15 @@ class SpeechEngine:
                 "text": "",
                 "lang": lang,
                 "error": "❌ فایل صوتی یافت نشد.",
+            }
+
+        if user_id is None or user_id == 0:
+            # Fail closed: no valid identity ⇒ no provider call, no shared bucket.
+            return {
+                "success": False,
+                "text": "",
+                "lang": lang,
+                "error": "❌ شناسهٔ کاربر معتبر نیست.",
             }
 
         if gemini_engine is None or not gemini_engine.is_configured:
@@ -141,6 +156,7 @@ class SpeechEngine:
                 audio_bytes,
                 question=prompt,
                 mime_type=mime_type,
+                user_id=user_id,
             )
             return {
                 "success": True,
