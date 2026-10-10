@@ -252,17 +252,24 @@ class GeminiEngine:
             from nexus_ai_agent.features.request_queue import Priority
 
             return await self._queue.submit(
-                lambda: self._do_one_shot(text, system=_SYSTEM_PROMPTS["chat"]),
+                lambda: self._do_one_shot(text, system=_SYSTEM_PROMPTS["chat"], user_id=user_id),
                 user_id=user_id,
                 priority=Priority.NORMAL,
             )
 
-        return await self._do_one_shot(text, system=_SYSTEM_PROMPTS["chat"])
+        return await self._do_one_shot(text, system=_SYSTEM_PROMPTS["chat"], user_id=user_id)
 
-    async def _do_one_shot(self, text: str, *, system: str) -> str:
-        """Internal: one-shot Gemini call."""
+    async def _do_one_shot(self, text: str, *, system: str, user_id: int) -> str:
+        """Internal: one-shot Gemini call; records quota on success (once).
+
+        Mirrors ``_do_chat``: the record lives inside the internal call so the
+        direct and queued paths share one accounting point — a provider error
+        raises before ``record()`` and is never counted, and a request blocked
+        by ``is_allowed`` never reaches this method at all.
+        """
         contents = [{"role": "user", "parts": [{"text": text}]}]
         response = await self._call_gemini(contents, system_instruction=system)
+        self._limiter.record(user_id)
         return response
 
     async def translate(self, text: str, *, target_lang: str, user_id: int) -> str:
