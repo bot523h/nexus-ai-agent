@@ -7,7 +7,7 @@
 ## Executive verdict
 
 - **Main:** `6b94f3d244a42a2e6515ddc575411a7f00c90aad` (observed 2026-10-10T03:45:04Z); local main was not modified or pushed.
-- **Remediation:** PR [#197](https://github.com/bot523h/nexus-ai-agent/pull/197) publishes the PR #196 follow-up on branch `phase1-pr196-guard-20261009` at exact head `a153c2c85693a62a3f373ed8064edb0799e04f8f`.
+- **Remediation:** PR [#197](https://github.com/bot523h/nexus-ai-agent/pull/197) publishes the PR #196 follow-up on branch `phase1-pr196-guard-20261009` at the live head verified during final audit; see PR #197 for the current exact SHA.
 - **Code change:** `6f76a4664da174c68ed13727a439c3e9014f1663` closes empty `_asset_refs`/`input_refs` shapes, unrelated-scope aliases, cyclic/unresolved aliases, and foreign-project InputRef expressions in the architecture guard. The follow-up guard commit does not alter runtime implementation; the PR also carries the inherited PR #196 runtime changes.
 - **Evidence:** 16 focused guard tests, 12 adjacent architecture tests, Ruff and format checks, and 17/17 execution-core mutations caught with restoration.
 - **Delivery:** PR #197 is **mergeable but BLOCKED**. Its previous exact-SHA CI failed because the Board fence incorrectly included the architecture-test path; that fence is now corrected locally and the new SHA will trigger a fresh CI run. It is not `VERIFIED` yet.
@@ -26,7 +26,7 @@
 | P1-05 inspect PR #196 current head | **VERIFIED_WITH_LIMITATIONS** | Live head `c01cbdc1b2ed10433b691914231e85863beaaf41`, base `6b94f3d244a42a2e6515ddc575411a7f00c90aad`; prior checks were green but current merge state is unstable and review history contains a prior changes-requested state. |
 | P1-06 fix `_asset_refs`/`input_refs` semantic guard gap | **HARDENED_BUT_NOT_COMPLETE** | Implemented and locally tested; inherited PR #196 runtime changes remain under exact-SHA CI review. |
 | P1-07 adversarial/mutation/focused validation | **VERIFIED_WITH_LIMITATIONS** | Local focused and adjacent tests plus 17/17 mutation campaign pass; full repository gates await the single authorized gates owner. |
-| P1-08 exact remote SHA/CI/review for remediation | **CORRECTED_CI_PENDING** | PR #197 exact head `a153c2c85693a62a3f373ed8064edb0799e04f8f`; the previous run failed only on the Board-zone assertion; after the published fence correction, fresh exact-SHA checks are required. |
+| P1-08 exact remote SHA/CI/review for remediation | **CORRECTED_CI_PENDING** | PR #197 live exact head was verified against the remote branch during final audit; the immutable substantive code commit is `6f76a4664da174c68ed13727a439c3e9014f1663` and the Board-zone fix is `cca49c0d4adfd798e9810e19307d586f08fbb748`; the previous run failed only on the Board-zone assertion; after the published fence correction, fresh exact-SHA checks are required. |
 | P1-09 PR #195 revalidation | **VERIFIED_WITH_LIMITATIONS** | Live head `9a4a88a0a7ee61d0becd4f1fcf6905c2fbb2759d`, base `6b94f3d244a42a2e6515ddc575411a7f00c90aad`; exact checks previously green, but current review/disposition still requires maintainer decision. |
 | P1-10 backup failure and Issue #85 | **BLOCKED_EXTERNAL** | Issue body records missing `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, and `NEXUS_DATABASE_URL` with `--require-postgres`. |
 | P1-11 operational blocker classification | **VERIFIED** | No secrets fabricated; SQLite fallback was not used as production proof. |
