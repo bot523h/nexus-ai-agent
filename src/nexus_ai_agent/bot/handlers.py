@@ -347,7 +347,10 @@ def build_handlers(
         if not text:
             await _reply(update, "❌ Usage: /ai <your message>")
             return
-        user_id = _user_id(update) or 0
+        user_id = _user_id(update)
+        if user_id is None:
+            await _reply(update, "❌ هویت کاربر در دسترس نیست؛ این درخواست انجام نشد.")
+            return
         conv_id = f"tg:{_chat_id(update)}"
         result = await gemini_engine.chat(text, conv_id=conv_id, user_id=user_id)
         await _reply(update, f"🤖 {result}")
@@ -360,7 +363,10 @@ def build_handlers(
             await _reply(update, "❌ Gemini AI not configured.")
             return
         text = " ".join(context.args) if context.args else ""
-        user_id = _user_id(update) or 0
+        user_id = _user_id(update)
+        if user_id is None:
+            await _reply(update, "❌ هویت کاربر در دسترس نیست؛ این درخواست انجام نشد.")
+            return
         result = await gemini_engine.code(text, user_id=user_id)
         await _reply(update, f"👨‍💻 Code:\n\n```python\n{result}\n```", parse_mode="Markdown")
 
@@ -369,7 +375,10 @@ def build_handlers(
             await _reply(update, "❌ Gemini AI not configured.")
             return
         text = " ".join(context.args) if context.args else ""
-        user_id = _user_id(update) or 0
+        user_id = _user_id(update)
+        if user_id is None:
+            await _reply(update, "❌ هویت کاربر در دسترس نیست؛ این درخواست انجام نشد.")
+            return
         result = await gemini_engine.translate(text, target_lang="Persian", user_id=user_id)
         await _reply(update, f"🌐 {result}")
 

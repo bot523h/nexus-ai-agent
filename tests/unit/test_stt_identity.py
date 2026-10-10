@@ -18,6 +18,7 @@ handler, the speech layer, ``vision()`` and the real ``_RateLimiter`` run.
 from __future__ import annotations
 
 import inspect
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -231,3 +232,110 @@ async def test_stt_dispatch_fails_closed_for_anonymous_update(
     assert not any("Transcription" in r for r in replies), (
         f"anonymous update must not be transcribed: {replies}"
     )
+
+
+# ── human quota paths: handler-level fail-closed (no or-0 sentinel) ───
+
+
+async def test_ai_code_translate_handlers_fail_closed_without_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """/ai, /code, /translate must not reach the engine without a real user id.
+
+    The ``_user_id(update) or 0`` fallback is the shared-bucket sentinel: it
+    must never book quota or touch the provider.  A missing identity fails
+    closed at the handler with an error reply (same policy as /stt).
+    """
+    calls: list[str] = []
+
+    async def _boom_chat(self, text, **kwargs):
+        calls.append(f"chat:{kwargs.get('user_id')!r}")
+        return "should-not-happen"
+
+    async def _boom_code(self, prompt, **kwargs):
+        calls.append(f"code:{kwargs.get('user_id')!r}")
+        return "should-not-happen"
+
+    async def _boom_translate(self, text, **kwargs):
+        calls.append(f"translate:{kwargs.get('user_id')!r}")
+        return "should-not-happen"
+
+    monkeypatch.setattr(GeminiEngine, "chat", _boom_chat)
+    monkeypatch.setattr(GeminiEngine, "code", _boom_code)
+    monkeypatch.setattr(GeminiEngine, "translate", _boom_translate)
+
+    os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test")
+    handlers = build_handlers(
+        object(),
+        lambda: None,
+        Settings(gemini_api_key="test-key"),
+        PresenceStore(),
+        object(),
+    )
+    wanted = {"ai", "code", "translate"}
+    callbacks = {}
+    for h in handlers:
+        cmds = getattr(h, "commands", set())
+        for name in wanted:
+            if name in cmds:
+                callbacks[name] = h.callback
+    assert set(callbacks) == wanted, f"missing handlers: {wanted - set(callbacks)}"
+
+    replies: list[str] = []
+
+    async def _reply_text(text, **kwargs):
+        replies.append(text)
+
+    msg = SimpleNamespace(text="/ai hello", reply_text=_reply_text)
+    update = SimpleNamespace(
+        effective_user=None,
+        effective_chat=SimpleNamespace(id=1),
+        message=msg,
+        edited_message=None,
+        callback_query=None,
+    )
+    for cb in callbacks.values():
+        await cb(update, SimpleNamespace(args=["hello"]))
+    assert calls == [], (
+        f"identity-less updates reached the engine layer with {calls!r} — the or-0 sentinel is back"
+    )
+    assert any("هویت" in r or "identity" in r.lower() for r in replies), (
+        f"fail-closed must tell the user, not silently drop: {replies!r}"
+    )
+
+
+async def test_ai_handler_with_real_identity_still_works(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sanity: a real identity still flows through /ai (no over-blocking)."""
+    seen: list[int | None] = []
+
+    async def _chat(self, text, **kwargs):
+        seen.append(kwargs.get("user_id"))
+        return "answer"
+
+    monkeypatch.setattr(GeminiEngine, "chat", _chat)
+    os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test")
+    handlers = build_handlers(
+        object(),
+        lambda: None,
+        Settings(gemini_api_key="test-key"),
+        PresenceStore(),
+        object(),
+    )
+    cb = next(h.callback for h in handlers if "ai" in getattr(h, "commands", set()))
+    replies: list[str] = []
+
+    async def _reply_text(text, **kwargs):
+        replies.append(text)
+
+    msg = SimpleNamespace(text="/ai hello", reply_text=_reply_text)
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=REAL_USER),
+        effective_chat=SimpleNamespace(id=REAL_USER),
+        message=msg,
+        edited_message=None,
+        callback_query=None,
+    )
+    await cb(update, SimpleNamespace(args=["hello"]))
+    assert seen == [REAL_USER], f"/ai must pass the real identity: {seen!r}"
