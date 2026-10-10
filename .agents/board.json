@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-09T20:04:12Z",
+  "updated_at": "2026-10-10T17:59:46Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3489,7 +3489,7 @@
       ],
       "note": " | sync test lives in tests/unit/test_docs_integrity.py (zone-listed)",
       "agent_branch": "arena/nexus-night-task258-exec-core-doc",
-      "claimed_at": "2026-10-09T20:04:12Z",
+      "claimed_at": "2026-10-10T17:59:46Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "generation": 1
