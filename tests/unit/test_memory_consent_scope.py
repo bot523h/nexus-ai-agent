@@ -259,3 +259,68 @@ async def test_graph_memory_write_and_read_do_not_egress(mem_db) -> None:
     await _memory_reader(long_term, state2)  # type: ignore[arg-type]
     assert "secret" in (state2.get("memory_context") or "")
     assert llm.generate_calls == [], "the memory reader must not egress"
+
+
+# ── P1-D final mission: concept 5 (audience) + group privacy ≠ consent ──
+
+
+def test_consent_prompt_scopes_memory_use_to_private_audience() -> None:
+    """The copy must keep the audience concept distinct and accurate.
+
+    Five concepts stay separate: (1) explicit AI commands, (2) memory
+    extraction, (3) memory storage, (4) retrieval/use in answers, (5) the
+    audience — personal memory feeds answers in PRIVATE chats only and is
+    never part of group-visible responses.
+    """
+    text = AIMEMORY_CONSENT_PROMPT
+    assert "خصوصی" in text, (
+        f"the copy must state the audience scope of memory use (private chats): {text!r}"
+    )
+    assert "گروه" in text, (
+        f"the copy must state that group-visible responses never carry personal memory: {text!r}"
+    )
+
+
+async def test_group_privacy_is_independent_of_personal_consent(mem_db) -> None:
+    """Granting memory consent must NOT unlock group disclosure.
+
+    Group privacy (audience gate) and personal consent (egress gate) are
+    distinct controls: consent granted + memory stored still yields zero
+    personal context in a group audience.
+    """
+    from nexus_ai_agent.features.ai_memory import AIMemoryEngine
+
+    llm = _EgressTripwire()
+    long_term = LongTermMemory(":memory:", llm)
+    scope = memory_scope_id(5)
+    assert scope is not None
+
+    gem = _RecordingGemini()
+    engine = AIMemoryEngine(gemini_provider=gem, min_egress_seconds=0)  # type: ignore[arg-type]
+    await engine.set_consent(5, True)
+
+    # Personal memory exists for user 5 …
+    await long_term.store(scope, "User: my secret code is PERSONAL-77\nAssistant: ok")
+
+    # … and a group turn by user 5 must see none of it, consent notwithstanding.
+    state = {
+        "thread_id": "tg:-100999",
+        "chat_id": -100999,
+        "user_id": 5,
+        "correlation_id": "c",
+        "messages": [{"role": "user", "content": "what is my secret code?"}],
+        "intent": "memory",
+        "active_persona": "gemma",
+        "current_task": None,
+        "tool_results": [],
+        "memory_context": "PERSONAL-77",
+        "response": "",
+        "error": None,
+        "turn_count": 0,
+        "moderation_passed": True,
+    }
+    await _memory_reader(long_term, state)  # type: ignore[arg-type]
+    assert "PERSONAL-77" not in (state.get("memory_context") or ""), (
+        "group disclosure happened despite the audience gate — consent and "
+        "audience are distinct controls and consent must not unlock groups"
+    )
