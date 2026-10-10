@@ -33,14 +33,25 @@ plane for provider calls**, not a job authority.
 ### LLM request queue (`features/request_queue.py`)
 
 `submit(...)` (`:178`) queues a coroutine and waits on a shielded future. When the
-caller's timeout or an outer cancellation fires, `_cancel_request(...)` (`:681`)
-settles the request:
+caller's deadline or an outer cancellation fires, the queue settles the request and
+records **two distinct counters** — operators must not read one for the other:
 
-- **not yet started** — the coroutine factory is never invoked and the queued item
-  is removed (`_logical_cancelled` is incremented, `:644`/`:694`);
-- **provider call in flight** — the local provider coroutine is cancelled, and the
-  queue **cannot prove the remote provider stopped** (module docstring, lines 8-10,
-  and `close()` at `:297`). The remote outcome may be *unknown*.
+- **timeout** (the caller's `asyncio.wait_for` deadline expires, or the worker
+  detects the deadline) — `_cancel_request(req, timed_out=True)` at `:248` (and the
+  worker path `_settle_timed_out` at `:620`) increments **`_logical_timed_out`**
+  (`:629`/`:691`), never `_logical_cancelled`;
+- **cancellation** (an outer `asyncio.CancelledError` reaches `submit`) —
+  `_cancel_request(req, timed_out=False)` (`:259`) increments
+  **`_logical_cancelled`** (`:694`);
+- **queue close** — `close()` (`:297`) settles queued/in-flight work as
+  `_logical_closed`.
+
+In every case: **not yet started** — the coroutine factory is never invoked and the
+queued item is removed; **provider call in flight** — the local provider coroutine
+is cancelled, and the queue **cannot prove the remote provider stopped** (module
+docstring, lines 8-10, and `close()` at `:297`). The remote outcome may be
+*unknown*. `get_status()` (`:270`) exposes both `logical_timed_out` and
+`logical_cancelled` separately.
 
 There is **no durable record** and **no fencing token** here. A cancelled request
 leaves no job row; a retried provider call is a new request, unrelated to any
