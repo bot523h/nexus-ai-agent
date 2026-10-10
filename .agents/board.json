@@ -2322,8 +2322,7 @@
       "exclusive_paths": [
         "src/nexus_ai_agent/creative/slideshow/service.py",
         "src/nexus_ai_agent/creative/slideshow/upscale.py",
-        "src/nexus_ai_agent/creative/render_jobs.py",
-        "tests/architecture/test_runtime_service_grants.py"
+        "src/nexus_ai_agent/creative/render_jobs.py"
       ],
       "owner_hint": "Gate 2 follow-up; fence set at claim time",
       "agent_branch": "phase1-pr196-guard-20261009",
