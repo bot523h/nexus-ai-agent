@@ -8,7 +8,7 @@ from nexus_ai_agent.agents.gemma_agent import GemmaAgent
 from nexus_ai_agent.agents.phi_agent import PhiAgent
 from nexus_ai_agent.agents.qwen_agent import QwenAgent
 from nexus_ai_agent.llm.provider import LLMProvider
-from nexus_ai_agent.memory.long_term import LongTermMemory
+from nexus_ai_agent.memory.long_term import LongTermMemory, memory_scope_id
 from nexus_ai_agent.orchestration.router import classify_intent, select_persona
 from nexus_ai_agent.orchestration.state import NexusState
 from nexus_ai_agent.tools.registry import ToolRegistry
@@ -29,8 +29,14 @@ async def _router_node(state: NexusState) -> NexusState:
 async def _memory_reader(long_term_memory: LongTermMemory, state: NexusState) -> NexusState:
     last = state["messages"][-1]["content"] if state.get("messages") else ""
     try:
-        results = await long_term_memory.search(state["thread_id"], last, top_k=3)
-        state["memory_context"] = await long_term_memory.format_context(results)
+        # Personal long-term memory is scoped per user — never by the shared
+        # conversation key.  A missing identity fails closed (empty context).
+        scope = memory_scope_id(state.get("user_id"))
+        if scope is None:
+            state["memory_context"] = ""
+        else:
+            results = await long_term_memory.search(scope, last, top_k=3)
+            state["memory_context"] = await long_term_memory.format_context(results)
     except Exception:
         state.setdefault("memory_context", "")
     return state
@@ -153,15 +159,19 @@ async def _memory_writer(
     if response:
         state["messages"] = state.get("messages", []) + [{"role": "assistant", "content": response}]
 
-    # Store turn into durable long-term memory for semantic recall across sessions
-    thread_id = state.get("thread_id")
+    # Store turn into durable long-term memory for semantic recall across
+    # sessions — scoped to the speaking user's personal memory.  The shared
+    # conversation key (thread_id) is never a memory scope: in a group chat it
+    # would hand one member's turns to every other member.  No valid identity
+    # ⇒ fail closed (no write, no shared fallback).
+    scope = memory_scope_id(state.get("user_id"))
     messages = state.get("messages", [])
-    if long_term_memory and thread_id and len(messages) >= 2:
+    if long_term_memory and scope and len(messages) >= 2:
         last_user = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
         if last_user and response:
             try:
                 turn_text = f"User: {last_user}\nAssistant: {response}"
-                await long_term_memory.store(thread_id, turn_text)
+                await long_term_memory.store(scope, turn_text)
             except Exception:
                 pass  # Fail-safe: memory write failures never abort the conversation
     return state

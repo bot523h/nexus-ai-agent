@@ -7,6 +7,19 @@ from pathlib import Path
 from nexus_ai_agent.llm.provider import LLMProvider
 
 
+def memory_scope_id(user_id: int | None) -> str | None:
+    """Return the deterministic personal-memory scope for a user.
+
+    The scope is stable across requests (``mem:u:<id>``) and belongs to exactly
+    one user — it is never a shared or group scope.  A missing or invalid
+    identity (``None`` or ``0``) returns ``None``, which callers must treat as
+    *fail closed*: no personal read, no personal write, no shared fallback.
+    """
+    if user_id is None or user_id == 0:
+        return None
+    return f"mem:u:{int(user_id)}"
+
+
 class LongTermMemory:
     DIM = 384
 
