@@ -30,6 +30,7 @@ placeholder text.
 | [architecture/OBSERVABILITY.md](architecture/OBSERVABILITY.md) | Structured events, metric policy, health semantics, inspection commands, the short alert list. |
 | [architecture/TESTING.md](architecture/TESTING.md) | Test taxonomy, the four gates, determinism rules, baseline numbers, honest gaps. |
 | [architecture/PORTS.md](architecture/PORTS.md) | The six hexagonal ports, their invariants and their signature tests. |
+| [architecture/REQUEST_QUEUE.md](architecture/REQUEST_QUEUE.md) | The cancellation boundary between the in-memory LLM request queue and the durable execution core: each surface's authority and identity model, and the no-cross-subsystem-leak audit note. |
 | [architecture/REFERENCES.md](architecture/REFERENCES.md) | The external standards followed (C4, arc42, MADR 4.0, fitness functions, docs-as-code, STRIDE) and what was deliberately not adopted. |
 | [architecture/DATA_LIFECYCLE.md](architecture/DATA_LIFECYCLE.md) | Data lifecycle contract: stages, retention, checkpoint schemas, the forbidden operation journal. |
 | [architecture/RETENTION_DECISION.md](architecture/RETENTION_DECISION.md) | Retention policy decision record (30-day resumability window, circuit breaker). |

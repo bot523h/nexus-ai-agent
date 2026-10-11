@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-09T00:17:05Z",
+  "updated_at": "2026-10-10T20:22:43Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -880,9 +880,9 @@
       "title_fa": "نگهبان موقت گیت‌ها",
       "zone": "ci-quality",
       "priority": "P0",
-      "status": "completed_released",
-      "scope": "عامل E (شاخه 460) تا ادغام #33 یا بازگشت عامل A، مالک اجرای گیت‌ها روی main است.",
-      "scope_fa": "عامل E (شاخه 460) تا ادغام #33 یا بازگشت عامل A، مالک اجرای گیت‌ها روی main است.",
+      "status": "active",
+      "scope": "Temporary CI-gates stewardship is held through the active, unexpired claim on branch arena/nexus-night-task261-request-queue-doc (no exclusive code paths). This claim lives on this PR branch's board; origin/main must be inspected independently and must NOT be reported as globally restored until the authorized change is integrated. Stewardship ends on lease expiry or an earlier official CLI release/transfer. Revalidate the claim before every main-bound gate run.",
+      "scope_fa": "نگهبانی موقت گیت‌های CI از طریق claim فعال و منقضی‌نشده روی شاخه arena/nexus-night-task261-request-queue-doc است (بدون هیچ مسیر انحصاری کد). این claim روی برد همین شاخهٔ PR است؛ origin/main باید مستقل بررسی شود و تا زمانی که تغییر مجاز ادغام نشده، نباید به‌عنوان بازیابی سراسری گزارش شود. نگهبانی با انقضای lease یا آزادسازی/انتقال رسمی زودتر از طریق CLI پایان می‌یابد. پیش از هر اجرای گیتِ main-bound، claim را مجدداً اعتبارسنجی کن.",
       "prerequisites": [],
       "acceptance_criteria": [
         "گیت‌های branch و main خوانده و ثبت شوند",
@@ -891,11 +891,12 @@
       "evidence_required": [],
       "exclusive_paths": [],
       "owner_hint": "",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/nexus-night-task261-request-queue-doc",
+      "claimed_at": "2026-10-10T20:22:43Z",
       "ttl_hours": 24,
-      "gates_owner": false,
-      "note": "lease expired 2026-09-22T15:21:39Z without renewal; stewardship transferred via task-145 claim (arena/01a0c992) with full handoff note"
+      "gates_owner": true,
+      "note": "",
+      "generation": 1
     },
     {
       "task": "feature-wiring-batch",
@@ -3465,6 +3466,30 @@
       "gates_owner": false,
       "note": "TASK-254 CLOSED after formal merge. PR #192 MERGED 2026-10-09T00:15:53Z at main merge commit a48326ded85bbe4e0972d645ee0ea6e877935362 (head 0e8d97f9ecd34e14b8e2e4388510595c51277d93); superseded PR #191 was closed afterward. AC-1..AC-7 and all six original findings were re-verified and closed; the follow-up review findings (mutation harness restoration/M7 anchor, shutdown takeover and reservation-cancel races, staging write and filesystem exception boundaries, notification recorder wiring, ExecutionPolicy enforcement, passport import assertion, durable idempotency identity binding) were fixed with regression tests. Evidence: exact PR-head CI run 37859836226 all required checks PASS; fresh CodeRabbit review APPROVED on 0e8d97f; all review threads resolved; local regression 3875 passed / 31 skipped / 0 failed; Ruff+format clean; mypy clean (289 files); M1-M17 17/17 caught; board tests 71/71; no test definitions removed. Task terminalized after merge evidence; exclusive execution-core zone released at generation 3.",
       "generation": 3
+    },
+    {
+      "task": "task-261-request-queue-boundary-doc",
+      "title": "Document the LLM request-queue vs execution-core cancellation boundary",
+      "zone": "docs-architecture",
+      "priority": "P3",
+      "status": "active",
+      "agent_branch": "arena/nexus-night-task261-request-queue-doc",
+      "claimed_at": "2026-10-10T18:23:22Z",
+      "gates_owner": false,
+      "generation": 1,
+      "exclusive_paths": [
+        "docs/architecture/REQUEST_QUEUE.md"
+      ],
+      "acceptance_criteria": [
+        "one page maps each cancellation surface to its authority and identity model",
+        "audit note: no cross-subsystem authority leak; links to the execution contract"
+      ],
+      "evidence_required": [
+        "exact commands + observed results for docs integrity tests"
+      ],
+      "prerequisites": [],
+      "ttl_hours": 24,
+      "note": ""
     }
   ],
   "deferred_log": [
