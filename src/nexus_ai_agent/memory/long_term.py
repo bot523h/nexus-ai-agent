@@ -9,14 +9,19 @@ from nexus_ai_agent.llm.provider import LLMProvider
 
 
 def _test_extension_capability(conn: Any) -> bool:
-    """Test if an SQLite connection actually supports enable_load_extension."""
+    """Test if an SQLite connection supports enable_load_extension safely."""
     if not hasattr(conn, "enable_load_extension"):
         return False
     try:
         conn.enable_load_extension(True)
+    except Exception:
+        return False
+
+    try:
         conn.enable_load_extension(False)
         return True
     except Exception:
+        # Disabling failed — do not return connection in unknown extension state
         return False
 
 
@@ -81,8 +86,14 @@ class LongTermMemory:
                     self._use_vec = True
                 finally:
                     conn.enable_load_extension(False)
-            except Exception:
+            except (ImportError, sqlite3.OperationalError, AttributeError):
                 self._use_vec = False
+            except Exception as exc:
+                err_msg = str(exc).lower()
+                if "sqlite_vec" in err_msg or "extension" in err_msg or "symbol" in err_msg:
+                    self._use_vec = False
+                else:
+                    raise
         else:
             self._use_vec = False
 

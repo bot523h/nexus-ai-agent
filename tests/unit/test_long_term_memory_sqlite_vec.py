@@ -7,7 +7,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from nexus_ai_agent.llm.fake_llm import FakeLLMProvider
-from nexus_ai_agent.memory.long_term import LongTermMemory, _open_sqlite_connection
+from nexus_ai_agent.memory.long_term import (
+    LongTermMemory,
+    _open_sqlite_connection,
+    _test_extension_capability,
+)
 
 
 def test_standard_sqlite3_preferred_when_load_extension_supported(tmp_path: Path) -> None:
@@ -33,6 +37,18 @@ def test_standard_sqlite3_preferred_when_load_extension_supported(tmp_path: Path
             assert type(conn).__module__.startswith("pysqlite3")
     finally:
         conn.close()
+
+
+def test_test_extension_capability_fails_if_disable_raises() -> None:
+    """If enable_load_extension(False) raises, _test_extension_capability returns False."""
+    mock_conn = MagicMock()
+
+    def mock_enable(state: bool) -> None:
+        if not state:
+            raise RuntimeError("disable failed")
+
+    mock_conn.enable_load_extension.side_effect = mock_enable
+    assert _test_extension_capability(mock_conn) is False
 
 
 def test_pysqlite3_fallback_when_stdlib_enable_load_extension_raises(tmp_path: Path) -> None:
@@ -135,9 +151,28 @@ async def test_persistence_and_reopening_vector_capability(tmp_path: Path) -> No
     await mem1.store("thread-1", "Vector search with sqlite-vec")
     assert mem1._conn is not None
 
+    driver_module = type(mem1._conn).__module__
+    assert driver_module.startswith("sqlite3") or driver_module.startswith("pysqlite3")
+
     # Phase 2: Reopen and search
     mem2 = LongTermMemory(db_file, provider)
     results = await mem2.search("thread-1", "sqlite-vec", top_k=2)
     assert mem2._use_vec == mem1._use_vec
     assert len(results) > 0
     assert any("sqlite-vec" in r or "testing" in r for r in results)
+
+
+@pytest.mark.asyncio
+async def test_non_vector_fallback_search(tmp_path: Path) -> None:
+    """When _use_vec is False, search uses recency-based ordering."""
+    db_file = str(tmp_path / "recency.sqlite")
+    provider = FakeLLMProvider()
+
+    mem = LongTermMemory(db_file, provider)
+    mem._use_vec = False
+
+    await mem.store("thread-1", "first note")
+    await mem.store("thread-1", "second note")
+
+    results = await mem.search("thread-1", "note", top_k=2)
+    assert results == ["second note", "first note"]
