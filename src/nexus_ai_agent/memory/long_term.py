@@ -8,6 +8,18 @@ from typing import Any
 from nexus_ai_agent.llm.provider import LLMProvider
 
 
+def _test_extension_capability(conn: Any) -> bool:
+    """Test if an SQLite connection actually supports enable_load_extension."""
+    if not hasattr(conn, "enable_load_extension"):
+        return False
+    try:
+        conn.enable_load_extension(True)
+        conn.enable_load_extension(False)
+        return True
+    except Exception:
+        return False
+
+
 def _open_sqlite_connection(path: str) -> tuple[Any, bool]:
     """Open an SQLite connection, preferring standard library sqlite3.
 
@@ -19,10 +31,10 @@ def _open_sqlite_connection(path: str) -> tuple[Any, bool]:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(path, check_same_thread=False)
 
-    if hasattr(conn, "enable_load_extension"):
+    if _test_extension_capability(conn):
         return conn, True
 
-    # Standard sqlite3 lacks enable_load_extension; attempt pysqlite3 fallback if available.
+    # Standard sqlite3 lacks or fails extension loading; attempt pysqlite3 fallback
     try:
         import pysqlite3  # type: ignore[import-untyped]
 
@@ -32,7 +44,7 @@ def _open_sqlite_connection(path: str) -> tuple[Any, bool]:
         else:
             fallback_conn = pysqlite3.connect(path, check_same_thread=False)
 
-        if hasattr(fallback_conn, "enable_load_extension"):
+        if _test_extension_capability(fallback_conn):
             return fallback_conn, True
         return fallback_conn, False
     except ImportError:
@@ -140,12 +152,18 @@ class LongTermMemory:
                 (thread_id, blob, top_k),
             ).fetchall()
             return [r[0] for r in rows]
-        except Exception:
-            rows = conn.execute(
-                "SELECT content FROM memories WHERE thread_id=? ORDER BY id DESC LIMIT ?",
-                (thread_id, top_k),
-            ).fetchall()
-            return [r[0] for r in rows]
+        except Exception as exc:
+            err_msg = str(exc).lower()
+            if (
+                "no such function: vec_distance_cosine" in err_msg
+                or "unknown function: vec_distance_cosine" in err_msg
+            ):
+                rows = conn.execute(
+                    "SELECT content FROM memories WHERE thread_id=? ORDER BY id DESC LIMIT ?",
+                    (thread_id, top_k),
+                ).fetchall()
+                return [r[0] for r in rows]
+            raise
 
     async def format_context(self, results: list[str]) -> str:
         if not results:

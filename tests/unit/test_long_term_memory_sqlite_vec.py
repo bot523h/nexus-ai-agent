@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import sys
+import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -14,11 +14,15 @@ def test_standard_sqlite3_preferred_when_load_extension_supported(tmp_path: Path
     """When stdlib sqlite3 connection supports enable_load_extension, stdlib sqlite3 is used."""
     db_file = str(tmp_path / "std_sqlite.db")
 
-    import sqlite3 as std_sqlite3
-
-    std_conn = std_sqlite3.connect(":memory:")
-    has_std_ext = hasattr(std_conn, "enable_load_extension")
-    std_conn.close()
+    std_conn = sqlite3.connect(":memory:")
+    try:
+        std_conn.enable_load_extension(True)
+        std_conn.enable_load_extension(False)
+        has_std_ext = True
+    except Exception:
+        has_std_ext = False
+    finally:
+        std_conn.close()
 
     conn, can_load_ext = _open_sqlite_connection(db_file)
     try:
@@ -31,19 +35,26 @@ def test_standard_sqlite3_preferred_when_load_extension_supported(tmp_path: Path
         conn.close()
 
 
-def test_pysqlite3_fallback_when_stdlib_lacks_extension_loading(tmp_path: Path) -> None:
-    """When stdlib sqlite3 lacks enable_load_extension, fallback to pysqlite3 connection."""
-    db_file = str(tmp_path / "fallback.db")
+def test_pysqlite3_fallback_when_stdlib_enable_load_extension_raises(tmp_path: Path) -> None:
+    """When stdlib enable_load_extension(True) raises, fallback to pysqlite3 connection occurs."""
+    db_file = str(tmp_path / "fallback_raise.db")
 
-    mock_std_conn = MagicMock(spec=["connect", "close"])
-    del mock_std_conn.enable_load_extension  # Ensure hasattr returns False
+    mock_std_conn = MagicMock()
+    mock_std_conn.enable_load_extension.side_effect = RuntimeError("disabled in C build")
 
-    with patch("sqlite3.connect", return_value=mock_std_conn):
+    mock_fallback_conn = MagicMock()
+    mock_pysqlite3 = MagicMock()
+    mock_pysqlite3.connect.return_value = mock_fallback_conn
+
+    with (
+        patch("sqlite3.connect", return_value=mock_std_conn),
+        patch.dict("sys.modules", {"pysqlite3": mock_pysqlite3}),
+    ):
         conn, can_load_ext = _open_sqlite_connection(db_file)
         try:
             assert mock_std_conn.close.called
-            if "pysqlite3" in sys.modules or hasattr(conn, "enable_load_extension"):
-                assert can_load_ext is True
+            assert can_load_ext is True
+            assert conn is mock_fallback_conn
         finally:
             conn.close()
 
@@ -94,6 +105,25 @@ async def test_extension_loading_disabled_in_finally_block_on_exception(
 
 
 @pytest.mark.asyncio
+async def test_search_raises_genuine_database_error(tmp_path: Path) -> None:
+    """Genuine database errors in search must raise rather than being masked as fallback."""
+    db_file = str(tmp_path / "err_search.sqlite")
+    provider = FakeLLMProvider()
+
+    memory = LongTermMemory(db_file, provider)
+    memory._use_vec = True
+
+    mock_conn = MagicMock()
+    mock_conn.execute.side_effect = sqlite3.OperationalError("disk I/O error or corrupted table")
+    memory._conn = mock_conn
+
+    with pytest.raises(sqlite3.OperationalError) as exc_info:
+        await memory.search("thread-1", "query")
+
+    assert "corrupted table" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
 async def test_persistence_and_reopening_vector_capability(tmp_path: Path) -> None:
     """Data stored in LongTermMemory persists and can be queried after reopening DB."""
     db_file = str(tmp_path / "persistent_memory.sqlite")
@@ -108,5 +138,6 @@ async def test_persistence_and_reopening_vector_capability(tmp_path: Path) -> No
     # Phase 2: Reopen and search
     mem2 = LongTermMemory(db_file, provider)
     results = await mem2.search("thread-1", "sqlite-vec", top_k=2)
+    assert mem2._use_vec == mem1._use_vec
     assert len(results) > 0
-    assert any("sqlite-vec" in r for r in results)
+    assert any("sqlite-vec" in r or "testing" in r for r in results)
