@@ -253,14 +253,30 @@ def _dispatch(
     The bus's EXPERIMENTAL opt-in is derived from the canonical operation via
     the server-controlled ``EXPERIMENTAL_OPT_IN_OPERATIONS``; no caller (and no
     queue row) can pass it in."""
-    from nexus_ai_agent.creative.studio.models import TargetRef, TypedCommand
+    from nexus_ai_agent.creative.studio.authorization import ProjectAccess
+    from nexus_ai_agent.creative.studio.models import (
+        ActorIdentity,
+        InputRef,
+        TargetRef,
+        TypedCommand,
+    )
 
-    bus = build_job_bus(project, operation=operation)
+    service_actor = ActorIdentity(kind="service", actor_id="creative-render-runtime")
+    service_access = ProjectAccess(
+        actor=service_actor,
+        project_id=project.project_id,
+        permissions=frozenset({"project:read", "project:write"}),
+    )
+    bus = build_job_bus(project, operation=operation, authorizer=service_access)
     command = TypedCommand(
         command_id=f"cmd-{idempotency_key}-{operation}",
         operation=operation,
         input=input_data,
         target=TargetRef(project_id=project.project_id, track_id="main"),
+        actor=service_actor,
+        input_refs=(
+            InputRef(ref_type="asset", project_id=project.project_id, ref_id=SOURCE_ASSET_ID),
+        ),
         idempotency_key=idempotency_key,
     )
     try:
