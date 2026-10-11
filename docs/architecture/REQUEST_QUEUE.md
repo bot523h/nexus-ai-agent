@@ -47,10 +47,11 @@ records **two distinct counters** — operators must not read one for the other:
   `_logical_closed`.
 
 In every case: **not yet started** — the coroutine factory is never invoked and the
-queued item is removed; **provider call in flight** — the local provider coroutine
-is cancelled, and the queue **cannot prove the remote provider stopped** (module
-docstring, lines 8-10, and `close()` at `:297`). The remote outcome may be
-*unknown*. `get_status()` (`:270`) exposes both `logical_timed_out` and
+queued item is removed; **provider call in flight** — the queue *requests*
+cancellation of the local provider task, the coroutine may keep running if it
+suppresses `CancelledError`, and the queue **cannot prove the remote provider
+stopped** (module docstring, lines 8-10, and `close()` at `:297`). The remote
+outcome may be *unknown*. `get_status()` (`:270`) exposes both `logical_timed_out` and
 `logical_cancelled` separately.
 
 There is **no durable record** and **no fencing token** here. A cancelled request
