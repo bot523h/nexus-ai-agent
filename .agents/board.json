@@ -811,15 +811,15 @@
       "description": "Nagar Asset Library V1 — content-addressed blob store, durable asset metadata, scoped idempotency, explicit ingest recovery (first-party, framework-independent).",
       "paths": [
         "src/nexus_ai_agent/creative/assets/",
+        "src/nexus_ai_agent/tools/filesystem_policy.py",
+        "src/nexus_ai_agent/storage/models.py",
+        "migrations/versions/",
         "tests/unit/test_asset_library_models.py",
+        "tests/unit/test_asset_library_blob_store.py",
         "tests/unit/test_asset_library_service.py",
         "tests/integration/test_asset_library_persistence.py",
         "tests/integration/test_asset_library_recovery.py",
-        "tests/architecture/test_asset_library_boundary.py",
-        "migrations/versions/",
-        "src/nexus_ai_agent/storage/migration_metadata.py",
-        "src/nexus_ai_agent/tools/filesystem_policy.py",
-        "tests/unit/test_asset_library_blob_store.py"
+        "tests/architecture/test_asset_library_boundary.py"
       ]
     }
   ],
@@ -3627,22 +3627,22 @@
       ],
       "exclusive_paths": [
         "src/nexus_ai_agent/creative/assets/",
+        "src/nexus_ai_agent/tools/filesystem_policy.py",
+        "src/nexus_ai_agent/storage/models.py",
+        "migrations/versions/",
         "tests/unit/test_asset_library_models.py",
+        "tests/unit/test_asset_library_blob_store.py",
         "tests/unit/test_asset_library_service.py",
         "tests/integration/test_asset_library_persistence.py",
         "tests/integration/test_asset_library_recovery.py",
-        "tests/architecture/test_asset_library_boundary.py",
-        "migrations/versions/",
-        "src/nexus_ai_agent/storage/migration_metadata.py",
-        "src/nexus_ai_agent/tools/filesystem_policy.py",
-        "tests/unit/test_asset_library_blob_store.py"
+        "tests/architecture/test_asset_library_boundary.py"
       ],
       "owner_hint": "",
       "agent_branch": "arena/nagar-asset-library-v1",
       "claimed_at": "2026-10-11T14:27:20Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Cross-zone additive extension of WorkspaceFilesystem (tools/filesystem_policy.py): a generic streaming atomic write + read_bytes, so the Asset Library reuses the ONE existing filesystem security boundary instead of creating a second one. Not live-claimed.",
+      "note": "Asset tables are added to the existing storage/models.py (SQLModel) — the single persistence layer — rather than a second metadata owner, so no new sqlmodel-importing module and no second database. Domain/ports/service live in creative/assets/. The only shared-boundary edit is an additive streaming/atomic capability on WorkspaceFilesystem.",
       "generation": 1
     }
   ],
