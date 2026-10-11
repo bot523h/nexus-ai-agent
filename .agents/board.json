@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-10T18:42:23Z",
+  "updated_at": "2026-10-11T10:16:23Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3582,6 +3582,82 @@
       "gates_owner": true,
       "note": "",
       "generation": 1
+    },
+    {
+      "task": "task-266-gate-bootstrap-integrity",
+      "title": "P0 GOVERNANCE GAP: `claim --gates` silently no-ops on a live own lease (heartbeat path) -> the board can never reach exactly one gates_owner by the documented route",
+      "title_fa": "شکاف P0 حاکمیتی: `claim --gates` روی اجارهٔ زندهٔ خودِ عامل بی‌صدا بی‌اثر است، پس برد از مسیر مستند هرگز به «دقیقاً یک مالک گیت» نمی‌رسد.",
+      "zone": "coordination-referee",
+      "priority": "P0",
+      "status": "active",
+      "scope": "scripts/agent_board.py::_claim_locked honours --gates on the fresh/takeover path only; the same-owner heartbeat path (line ~346-361) never reads the flag yet still prints `renewed lease ... generation N` and exits 0. AGENTS.md §1/§4 route an arriving agent through `next` -> `claim <task> --branch BR` (which cmd_next prints WITHOUT --gates) and then `claim ... --gates` to own the CI gate; that second command takes the heartbeat path, so the board stays at zero gates owners while the agent believes it holds the gate, and every other agent's non---no-remote `check` keeps returning exit 2. Proven RED: heartbeat + --gates on a live gate-less own lease -> exit 0, gates_owner still False, live owners 0. Related but NOT in scope (already covered by open PRs, recorded as deferred): TRUTH041 vs ACTIVE_STATUSES divergence (PR#189) and a repo-level `validate` gate invariant (PR#137). Review closure (2026-10-11): paginate the open-PR listing and fail closed on any page error; preserve each PR head repository/ref/SHA and fetch only that exact source; a same-name origin branch must never substitute. Keep scope to the existing referee files; task-268 CI wiring and Dockerfile hardening remain deferred.",
+      "scope_fa": "بستن یافته‌های بازبین PR #202 با خواندن همهٔ صفحه‌ها، نگه‌داشت هویت مخزن/شاخه/SHA سرشاخهٔ PR، و fail-closed در هر خطای API یا اعتبارسنجی. گسترش به CI یا Dockerfile ممنوع است.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "heartbeat (`claim <task> --branch <own> --gates --expected-generation N`) on a live gate-less own lease sets gates_owner=True and leaves exactly one live owner, clearing any other holder",
+        "the same command when the caller already holds the gate is idempotent: still exactly one owner, board otherwise unchanged",
+        "a heartbeat WITHOUT --gates leaves gates_owner unchanged (never silently drops the gate)",
+        "a stale generation with --gates is still refused with exit 2 and the board stays byte-identical",
+        "the success line reports the resulting gate state (no success message without the effect)",
+        "the referee's fail-closed contract is covered by tests at zero owners and at two owners (currently untested)",
+        "scripts/board_referee_mutations.py kills every new guard (N/N)",
+        "scripts/agent_board.py, tests/unit/test_agent_board.py, scripts/board_referee_mutations.py, docs/MULTI_AGENT_PROTOCOL.md only",
+        "Finding A: _open_pr_branches reads every page (including page 2 for 101+ PRs); any fetch, JSON, or schema error on any page causes check to be unverifiable (exit 2), never a partial success.",
+        "Finding B: preserve each PR head repository full_name, ref, and expected SHA; fetch the head from that repository/ref and verify the fetched SHA; no origin-ref fallback or branch-name-only deduplication.",
+        "A fork head named main is never replaced by origin/main; two repositories using the same head ref remain distinct; an inaccessible or mismatched head causes check exit 2.",
+        "Hermetic regressions cover 101+ PRs, page-2 failure, fork-main-vs-origin-main, identical refs from different repositories, and SHA mismatch.",
+        "Each new guard is independently mutated in an isolated test copy; a mutant counts killed only when the designated invariant assertion fails (not import/syntax/collection); baseline tests pass and byte-identical restore is proved.",
+        "Do not modify task-268 CI paths or Dockerfile; keep both deferred until path ownership is free."
+      ],
+      "evidence_required": [
+        "RED reproduction of the silent no-op before the fix (command + observed output)",
+        "pytest --noconftest -q tests/unit/test_agent_board.py green after the fix",
+        "python scripts/board_referee_mutations.py -> N/N killed, exit 0",
+        "make lint && make types && make test on the final SHA",
+        "python scripts/agent_board.py check --files <changed> --branch <branch> with the exit code interpreted (2 is not a pass)",
+        "pytest --noconftest -q tests/unit/test_agent_board.py with the new pagination and identity regression tests",
+        "python scripts/board_referee_mutations.py: baseline green, each new mutant assertion-killed, byte-identical restore and final green",
+        "official agent_board.py check over every live source, with all page/head identities readable and no overlap",
+        "exact-SHA CI checks on the final PR head; record review-thread state without marking findings resolved prematurely"
+      ],
+      "exclusive_paths": [
+        "scripts/agent_board.py",
+        "tests/unit/test_agent_board.py",
+        "scripts/board_referee_mutations.py",
+        "docs/MULTI_AGENT_PROTOCOL.md",
+        ".agents/evidence/PHASE0_REVIEW_CLOSURE_2026-10-11.md"
+      ],
+      "owner_hint": "unclaimed; zone coordination-referee",
+      "agent_branch": "arena/5faf8704-nexus-ai-agent",
+      "claimed_at": "2026-10-11T10:16:23Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 3,
+      "evidence": "RED before the fix (stdlib import-by-path, temp board copy): `claim synthetic-dir-claim --branch arena/111-someone-else --gates` on a live gate-less own lease -> exit 0, \"renewed lease … generation 0\", gates_owner still False, live owners 0. GREEN after: same command -> gates_owner: True (taken now), exactly one live owner. Referee coverage, live: `check --files scripts/agent_board.py,tests/unit/test_agent_board.py --branch arena/b561a2be-nexus-ai-agent` reported 27 source(s) read before the fix and 55 after (53 open-PR branches + local + origin/main); with 53 open PRs the old cap dropped 28 pushed boards while still printing 'no overlap — safe to proceed' (exit 0). Adversarial proof: each of the four new guards re-introduced in isolation -> the NEW test fails on the assertion (not on an import error): 4/4 killed. Permanent campaign: `python scripts/board_referee_mutations.py` -> 18/18 killed, exit 0 (was 13/14 on the pristine tree, exit 1: `foreign_worktree_boards_skipped` survived because the test asserted only the exit code, which the gates fail-closed branch also produced). Full gates as the live gates owner: `make lint` / `make types` / `make version-check` clean, `pytest -q -m \"not slow\"` -> 3881 passed, 31 skipped in 210.85s. Gate-invariant coverage added after the first push: check is now tested at ZERO and at TWO live gate holders (both exit 2 with the reason asserted) plus a permanent mutant (exactly_one_gate_owner_ignored) -> campaign 19/19.",
+      "ci_evidence": "Local full gates (run as the live gates owner, before release): make lint clean; make types -> 289 files; make version-check ok; pytest -q -m 'not slow' -> 3883 passed, 31 skipped in 195.70s. Mutation campaign: 19/19 killed, exit 0. Referee: check on the five changed files -> 55 source(s) read, no overlap, exit 0. GitHub Actions on the final pushed SHA is the record for CI; see the PR checks.",
+      "pr_url": "https://github.com/bot523h/nexus-ai-agent/pull/202",
+      "previous_note": "task-266 delivers two proven defects in ONE PR on purpose: both are unfounded success verdicts in the same file/zone (scripts/agent_board.py), and two PRs on one file from one session would collide with each other. (1) `claim --gates` silently no-oped on the heartbeat path; (2) the referee capped its open-PR source set at 25 and still returned a clean pass. Deferred, with evidence, because an open PR already covers each: TRUTH041 vs ACTIVE_STATUSES divergence -> PR#189 (LIVE_LEASE_STATUSES + cross-module equality test); a repo-level 'at most one gate' invariant -> PR#137 (`validate`). Neither file was touched here."
+    },
+    {
+      "task": "task-268-board-referee-mutation-campaign-in-ci",
+      "title": "P1 EVIDENCE GAP: the board-referee mutation campaign is not wired into CI, and one of its mutants survived unnoticed",
+      "title_fa": "",
+      "zone": "ci-quality",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "scripts/board_referee_mutations.py is the adversarial proof for the coordination referee, but no CI job runs it: grep 'board_referee_mutations' .github/workflows/ci.yml -> nothing (continuum/temporal/trust/remote-key campaigns ARE wired). Measured on the pristine main tree (isolated archive copy): 13/14 killed, EXIT 1 — `foreign_worktree_boards_skipped` survived because test_check_unreliable_worktree_enumeration_is_exit_2 asserted only the exit code, and the zero-gates-owner fail-closed branch produced exit 2 as well. task-266 made that test falsifiable (18/18 killed) but the campaign still has no CI rail, so the next survivor will be invisible again.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "a CI job runs scripts/board_referee_mutations.py and fails the build when any mutant survives",
+        "the job is pinned to a full commit SHA like the other mutation rails",
+        "a deliberately weak assertion is shown to turn the rail red (the rail is not a rubber stamp)"
+      ],
+      "exclusive_paths": [
+        ".github/workflows/ci.yml"
+      ],
+      "owner_hint": "unclaimed; recorded by task-266 so it is not forgotten"
     }
   ],
   "deferred_log": [
@@ -3642,6 +3718,22 @@
       "reason_fa": "در حلقهٔ task-223 کشف شد اما خارج از ناحیهٔ claim من است و رفع آن یک PR چهارم پشت سه PR باز می‌سازد؛ به‌جای گسترش دامنه، با شواهد ثبت شد.",
       "reason_en": "Found during the task-223 loop but out of my claim's zone; fixing it would open a 4th PR stacked behind three open PRs. Recorded with reproduction instead of widening scope.",
       "resume_when": "next storage-observability window (after #126/#127/#128 merge)"
+    },
+    {
+      "task": "task-268-board-referee-mutation-campaign-in-ci",
+      "deferred_by_branch": "arena/b561a2be-nexus-ai-agent",
+      "at": "2026-10-11T06:59:28Z",
+      "reason_fa": "ریل CI در .github/workflows/ci.yml است که بیرون از مسیرهای انحصاری این تسک است؛ به‌جای گسترش دامنه، یافته با اندازه‌گیری ثبت شد.",
+      "reason_en": "The CI rail lives in .github/workflows/ci.yml, which is outside this task's exclusive_paths (zone ci-quality, 8 open PRs touch it). Recorded with the measurement instead of widening scope into another agent's zone.",
+      "resume_when": "a session holds the ci-quality zone and can add one mutation job"
+    },
+    {
+      "task": "task-dockerfile-nonroot-hardening",
+      "deferred_by_branch": "arena/5faf8704-nexus-ai-agent",
+      "at": "2026-10-11T10:16:23Z",
+      "reason_fa": "سخت‌سازی non-root در Dockerfile خارج از این تسک است؛ PR #193 همچنان باز است و Dockerfile را تغییر می‌دهد. برای جلوگیری از برخورد، فایل دست‌نخورده می‌ماند تا مسیر و مالکیت صریحاً آزاد شود.",
+      "reason_en": "Non-root Dockerfile hardening is outside task-266. PR #193 is still open and changes Dockerfile; leave the file untouched until the path and task ownership are explicitly free.",
+      "resume_when": "Dockerfile is no longer fenced by active work and a dedicated exclusive task/lease owns the hardening slice."
     }
   ],
   "next_work": [
