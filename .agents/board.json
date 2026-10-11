@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-11T10:20:25Z",
+  "updated_at": "2026-10-11T10:41:57Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3589,7 +3589,7 @@
       "title_fa": "شکاف P0 حاکمیتی: `claim --gates` روی اجارهٔ زندهٔ خودِ عامل بی‌صدا بی‌اثر است، پس برد از مسیر مستند هرگز به «دقیقاً یک مالک گیت» نمی‌رسد.",
       "zone": "coordination-referee",
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "scope": "DELIVERED (PR#202) + REVIEW CLOSURE in progress. Delivered: the heartbeat `--gates` grant, and the referee reading every pushed open-PR head. Review closure (two CodeRabbit findings, both reproduced RED first): (A) `_open_pr_heads` now walks every page of the listing and treats a failed or malformed page, an over-long listing and a head without repository identity as unverifiable; (B) PR heads are read by full identity — (repository, ref) — fetched from their own repository into their own ref namespace, with the URL derived from the validated owner/name rather than any payload URL, and dedupe by identity so two forks sharing a ref name stay two sources.",
       "scope_fa": "",
       "prerequisites": [],
@@ -3622,12 +3622,12 @@
         "docs/MULTI_AGENT_PROTOCOL.md"
       ],
       "owner_hint": "unclaimed; zone coordination-referee",
-      "agent_branch": "arena/b561a2be-nexus-ai-agent",
-      "claimed_at": "2026-10-11T10:20:25Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
-      "generation": 3,
+      "generation": 4,
       "evidence": "RED before the fix (stdlib import-by-path, temp board copy): `claim synthetic-dir-claim --branch arena/111-someone-else --gates` on a live gate-less own lease -> exit 0, \"renewed lease … generation 0\", gates_owner still False, live owners 0. GREEN after: same command -> gates_owner: True (taken now), exactly one live owner. Referee coverage, live: `check --files scripts/agent_board.py,tests/unit/test_agent_board.py --branch arena/b561a2be-nexus-ai-agent` reported 27 source(s) read before the fix and 55 after (53 open-PR branches + local + origin/main); with 53 open PRs the old cap dropped 28 pushed boards while still printing 'no overlap — safe to proceed' (exit 0). Adversarial proof: each of the four new guards re-introduced in isolation -> the NEW test fails on the assertion (not on an import error): 4/4 killed. Permanent campaign: `python scripts/board_referee_mutations.py` -> 18/18 killed, exit 0 (was 13/14 on the pristine tree, exit 1: `foreign_worktree_boards_skipped` survived because the test asserted only the exit code, which the gates fail-closed branch also produced). Full gates as the live gates owner: `make lint` / `make types` / `make version-check` clean, `pytest -q -m \"not slow\"` -> 3881 passed, 31 skipped in 210.85s. Gate-invariant coverage added after the first push: check is now tested at ZERO and at TWO live gate holders (both exit 2 with the reason asserted) plus a permanent mutant (exactly_one_gate_owner_ignored) -> campaign 19/19. | REVIEW CLOSURE: RED probes (5/5 red before, all green after): 101-PR listing with the conflict on page two -> exit 0 before / exit 1 after; page-2 fetch failure -> exit 0 before / exit 2 after; fork PR named `main` -> origin/main read before (exit 0) / fork read after (exit 1); two forks sharing `release` -> deduped to nothing before / two sources after. Mutation campaign 26/26 killed, exit 0, no survivor and no drifted mutant (a survivor was found first: the read used a hard-coded ref while the test only asserted the fetch — the assertion now pins the `git show` ref too). Targeted suites 200 passed; ruff + mypy clean. A self-inflicted regression was caught before pushing: the first version of the head type was a dataclass, which raises AttributeError under the by-path module loading used by two sibling referee test files; it is a NamedTuple now.",
       "ci_evidence": "Local full gates (run as the live gates owner, before release): make lint clean; make types -> 289 files; make version-check ok; pytest -q -m 'not slow' -> 3883 passed, 31 skipped in 195.70s. Mutation campaign: 19/19 killed, exit 0. Referee: check on the five changed files -> 55 source(s) read, no overlap, exit 0. GitHub Actions on the final pushed SHA is the record for CI; see the PR checks.",
       "pr_url": "https://github.com/bot523h/nexus-ai-agent/pull/202"
