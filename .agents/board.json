@@ -819,7 +819,13 @@
         "tests/unit/test_asset_library_service.py",
         "tests/integration/test_asset_library_persistence.py",
         "tests/integration/test_asset_library_recovery.py",
-        "tests/architecture/test_asset_library_boundary.py"
+        "tests/architecture/test_asset_library_boundary.py",
+        "tests/unit/test_migrations.py",
+        "tests/unit/test_ai_memory_consent.py",
+        "tests/unit/test_core_fingerprint.py",
+        "tests/integration/test_migrate_race_condition.py",
+        "tests/integration/test_migrate_adoption.py",
+        "tests/integration/test_migrate_cli.py"
       ]
     }
   ],
@@ -3635,7 +3641,13 @@
         "tests/unit/test_asset_library_service.py",
         "tests/integration/test_asset_library_persistence.py",
         "tests/integration/test_asset_library_recovery.py",
-        "tests/architecture/test_asset_library_boundary.py"
+        "tests/architecture/test_asset_library_boundary.py",
+        "tests/unit/test_migrations.py",
+        "tests/unit/test_ai_memory_consent.py",
+        "tests/unit/test_core_fingerprint.py",
+        "tests/integration/test_migrate_race_condition.py",
+        "tests/integration/test_migrate_adoption.py",
+        "tests/integration/test_migrate_cli.py"
       ],
       "owner_hint": "",
       "agent_branch": "arena/nagar-asset-library-v1",

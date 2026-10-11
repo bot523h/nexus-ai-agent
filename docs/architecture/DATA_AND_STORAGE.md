@@ -46,12 +46,13 @@ flowchart LR
 ## 2. Schema management
 
 - **Alembic is the only schema authority.** The stopgap `create_all` path was retired (D7); startup either verifies head or runs the chain under a migration lock.
-- Chain (3 revisions, current head `7c2f9d41e8a3`):
+- Chain (4 revisions, current head `e575469d90b9`):
 
 ```text
 47903d282ede  initial schema
    └── f4a9c2e71b08  nexus_checkpoint_lifecycle (PostgreSQL only)
-          └── 7c2f9d41e8a3  ai-memory consent columns on usermemory  ← HEAD
+          └── 7c2f9d41e8a3  ai-memory consent columns on usermemory
+                 └── e575469d90b9  nagar asset library v1 (assets/versions/links/ingests)  ← HEAD
 ```
 
 - **URL normalisation** accepts `postgresql://`, `postgres://`, `postgresql+asyncpg://` and rejects everything else with a clear error (`storage/db.py::normalize_database_url`).

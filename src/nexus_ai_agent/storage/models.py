@@ -343,3 +343,70 @@ class DocumentChunk(SQLModel, table=True):
     chunk_text: str
     chunk_index: int
     embedding: str  # JSON list of floats
+
+
+# ── Nagar Asset Library V1 (task-266) ────────────────────────────────
+# Durable metadata for the first-party Asset Library.  The bytes live in the
+# content-addressed blob store; these tables are the authoritative record of
+# *logical* asset identity, immutable content versions and project association.
+# A logical asset is independent of its file version; each version carries the
+# measured digest, so "the same asset" and "the same bytes" are distinct.
+
+
+class Asset(SQLModel, table=True):
+    """Stable logical identity of a media asset, independent of any version."""
+
+    asset_id: str = Field(primary_key=True)
+    media_kind: str = Field(index=True)  # "image" | "audio" | "video"
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+class AssetVersion(SQLModel, table=True):
+    """One immutable content version of an asset (its own measured identity)."""
+
+    version_id: str = Field(primary_key=True)
+    asset_id: str = Field(foreign_key="asset.asset_id", index=True)
+    content_sha256: str = Field(index=True)
+    size_bytes: int
+    media_kind: str
+    media_type: str
+    blob_key: str
+    original_filename: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+class ProjectAssetLink(SQLModel, table=True):
+    """Durable association of an asset version with an authorized project."""
+
+    link_id: str = Field(primary_key=True)
+    project_id: str = Field(index=True)
+    asset_id: str = Field(foreign_key="asset.asset_id", index=True)
+    version_id: str = Field(foreign_key="assetversion.version_id", index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+class AssetIngest(SQLModel, table=True):
+    """Identity and recoverable state of one ingest attempt (idempotency key)."""
+
+    ingest_id: str = Field(primary_key=True)
+    idempotency_key: str = Field(index=True)
+    project_id: str = Field(index=True)
+    request_fingerprint: str = Field(index=True)
+    # STAGING -> READY, or FAILED when safe recovery is no longer possible.
+    state: str = Field(default="STAGING", index=True)
+    # Media classification is only known after the leading bytes are read, so
+    # these are unknown (NULL) until the ingest has been staged.
+    media_kind: str | None = Field(default=None)
+    media_type: str | None = Field(default=None)
+    original_filename: str = ""
+    content_sha256: str | None = Field(default=None, index=True)
+    size_bytes: int | None = Field(default=None)
+    blob_key: str | None = Field(default=None)
+    # The staging path is a trusted, server-derived relative key (never a
+    # caller-supplied path); it is cleared once the ingest is READY/FAILED.
+    staging_key: str | None = Field(default=None)
+    asset_id: str | None = Field(default=None, index=True)
+    version_id: str | None = Field(default=None, index=True)
+    error_code: str | None = Field(default=None)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, index=True)
