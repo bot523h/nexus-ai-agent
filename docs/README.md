@@ -113,7 +113,6 @@ placeholder text.
 | [audits/FORENSIC_MAINLINE_RECOVERY_2026-10-06.md](audits/FORENSIC_MAINLINE_RECOVERY_2026-10-06.md) | Exact-SHA mainline truth audit: release-metadata defects (README version, lockstep guard, Continuum snapshot) with the delivered fixes and honest production limitations. |
 | [audits/2026-09-28-master-forensic-evolution.md](audits/2026-09-28-master-forensic-evolution.md) | Storage/R2 forensic evolution report: live truth, governance, four unified-cloud fixes, two R2 fail-closed fixes, mutation evidence, and residual handoffs. |
 | [audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md](audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md) | Dated Phase-1 stabilization handoff: live PR inventory, exact-SHA remediation evidence, Board fence correction, CI blockers, and backup/restore limits. |
-| [audits/PROJECT_WIDE_FORENSIC_CHECKUP_2026-10-11.md](audits/PROJECT_WIDE_FORENSIC_CHECKUP_2026-10-11.md) | Full-repository checkup & forensic audit: sqlite-vec fallback, strategy constraints, 100% green verification evidence. |
 
 ## History (archived — read-only, never a source of truth)
 

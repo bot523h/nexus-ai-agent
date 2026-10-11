@@ -27,7 +27,7 @@ dependencies = [
     "llama-cpp-python>=0.2",
     "structlog>=24.0",
     "sqlite-vec>=0.1",
-    "pysqlite3-binary>=0.5",
+    "pysqlite3-binary>=0.5; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "typer>=0.12",
     "httpx==0.28.1",  # pinned: core/ssrf_guard.py uses a private httpx API
     "python-multipart>=0.0.9",

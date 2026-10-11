@@ -1,13 +1,42 @@
 from __future__ import annotations
 
-try:
-    import pysqlite3 as sqlite3  # type: ignore[import-untyped]
-except ImportError:
-    import sqlite3
+import sqlite3
 import struct
 from pathlib import Path
+from typing import Any
 
 from nexus_ai_agent.llm.provider import LLMProvider
+
+
+def _open_sqlite_connection(path: str) -> tuple[Any, bool]:
+    """Open an SQLite connection, preferring standard library sqlite3.
+
+    Returns (connection, supports_extension_loading).
+    """
+    if path == ":memory:":
+        conn = sqlite3.connect(":memory:", check_same_thread=False)
+    else:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(path, check_same_thread=False)
+
+    if hasattr(conn, "enable_load_extension"):
+        return conn, True
+
+    # Standard sqlite3 lacks enable_load_extension; attempt pysqlite3 fallback if available.
+    try:
+        import pysqlite3  # type: ignore[import-untyped]
+
+        conn.close()
+        if path == ":memory:":
+            fallback_conn = pysqlite3.connect(":memory:", check_same_thread=False)
+        else:
+            fallback_conn = pysqlite3.connect(path, check_same_thread=False)
+
+        if hasattr(fallback_conn, "enable_load_extension"):
+            return fallback_conn, True
+        return fallback_conn, False
+    except ImportError:
+        return conn, False
 
 
 class LongTermMemory:
@@ -16,12 +45,11 @@ class LongTermMemory:
     def __init__(self, vector_path: str, llm: LLMProvider) -> None:
         self._path = vector_path
         self._llm = llm
-        self._conn: sqlite3.Connection | None = None
+        self._conn: Any | None = None
         self._use_vec: bool = False
 
-    def _conn_(self) -> sqlite3.Connection:
-        """
-        Create/open the sqlite store and best-effort enable sqlite-vec.
+    def _conn_(self) -> Any:
+        """Create/open the sqlite store and best-effort enable sqlite-vec.
 
         This module must be offline-safe:
           - If sqlite-vec can't be loaded, we still store content and allow basic retrieval.
@@ -29,20 +57,21 @@ class LongTermMemory:
         if self._conn is not None:
             return self._conn
 
-        if self._path == ":memory:":
-            conn = sqlite3.connect(":memory:", check_same_thread=False)
+        conn, can_load_ext = _open_sqlite_connection(self._path)
+
+        if can_load_ext:
+            try:
+                import sqlite_vec
+
+                conn.enable_load_extension(True)
+                try:
+                    sqlite_vec.load(conn)
+                    self._use_vec = True
+                finally:
+                    conn.enable_load_extension(False)
+            except Exception:
+                self._use_vec = False
         else:
-            Path(self._path).parent.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(self._path, check_same_thread=False)
-
-        try:
-            import sqlite_vec
-
-            conn.enable_load_extension(True)
-            sqlite_vec.load(conn)
-            conn.enable_load_extension(False)
-            self._use_vec = True
-        except Exception:
             self._use_vec = False
 
         conn.execute(
