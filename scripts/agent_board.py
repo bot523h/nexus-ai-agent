@@ -21,7 +21,10 @@ Commands
   check --files a,b,c --branch BRANCH [--no-remote] [--repo owner/name]
                                 Multi-source referee over the claim board, every
                                 *other* live git worktree's board, origin/main's
-                                board, and every open-PR branch's pushed board.
+                                board, and every open PR's pushed head board —
+                                read by full head identity (repository + ref),
+                                across *every* page of the listing, so a fork PR
+                                and PR number 101+ are sources too, not gaps.
                                 Exit 0 when every source is readable and there
                                 is no overlap, 1 on a proven overlap, 2 when a
                                 source (this board, a worktree, origin/main, or
@@ -63,6 +66,7 @@ import argparse
 import contextlib
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -70,6 +74,7 @@ import urllib.request
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import NamedTuple
 
 ROOT = Path(__file__).resolve().parents[1]
 BOARD = ROOT / ".agents" / "board.json"
@@ -618,112 +623,284 @@ def _read_remote_board() -> tuple[dict | None, str]:
 _REMOTE_BRANCH_FETCH_LIMIT = 25
 
 
-def _open_pr_branches(repo: str, token: str | None) -> tuple[list[str], str]:
-    """Head branch names of every open PR. ``([], reason)`` when unavailable.
+class PrHead(NamedTuple):
+    """Identity of a pull request's head: the repository it lives in and its ref.
+
+    ``head.ref`` alone is **not** an identity. A fork PR whose branch is called
+    ``main`` would otherwise be resolved through whatever ``main`` this clone's
+    ``origin`` happens to point at — a different repository, a different commit,
+    a different board — and the referee would report on that object as if it were
+    the PR's lease (task-266 review finding B). GitHub identifies a PR head by
+    (repository, ref); so does the referee.
+
+    A ``NamedTuple`` rather than a dataclass on purpose: this CLI is loaded *by
+    path* by its own tests (``spec.loader.exec_module`` without registering the
+    module in ``sys.modules``), and ``dataclasses`` introspects
+    ``sys.modules[cls.__module__]`` for ``KW_ONLY`` annotations — which raises
+    ``AttributeError`` under exactly that idiom. A tuple type has no such
+    environment requirement, so the referee stays loadable however it is loaded.
+    """
+
+    repo_full_name: str
+    ref: str
+    number: int = 0
+
+
+#: Characters/sequences git forbids in a ref name (``git check-ref-format``), plus
+#: the leading/trailing shapes that make a ref ambiguous. A branch name reaches
+#: this tool from an API payload, so it is validated before it is interpolated
+#: into a refspec or a ``git show`` argument.
+_REF_FORBIDDEN = (" ", "\t", "~", "^", ":", "?", "*", "[", "\\", "..", "@{", "//")
+_REPO_PART = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_SLUG_SAFE = re.compile(r"[^A-Za-z0-9._-]")
+
+#: One page of open PRs; ``_open_pr_heads`` walks every page it is given.
+_OPEN_PR_PAGE_SIZE = 100
+#: Refuse (never truncate) beyond this many pages. A listing that long means the
+#: pagination contract itself is suspect; a partial list must not look complete.
+_OPEN_PR_MAX_PAGES = 100
+
+
+def _is_valid_ref(ref: object) -> bool:
+    """True when *ref* is a plausible git branch name (safe to use as a ref)."""
+    if not isinstance(ref, str) or not ref or len(ref) > 255:
+        return False
+    if ref.startswith(("-", "/", ".")) or ref.endswith(("/", ".", ".lock")):
+        return False
+    return not any(bad in ref for bad in _REF_FORBIDDEN)
+
+
+def _is_valid_repo_full_name(full_name: object) -> bool:
+    """True for ``owner/name`` with exactly two well-formed, traversal-free parts."""
+    if not isinstance(full_name, str) or not full_name or len(full_name) > 200:
+        return False
+    parts = full_name.split("/")
+    if len(parts) != 2:
+        return False
+    return all(_REPO_PART.match(part) and part not in (".", "..") for part in parts)
+
+
+def _head_key(head: PrHead) -> str:
+    """The identity key used for dedupe and for the freshness set."""
+    return f"{head.repo_full_name}#{head.ref}"
+
+
+def _head_source_ref(head: PrHead, coordination_repo: str) -> str:
+    """The local git ref this run must have written before the head may be read.
+
+    A head in the coordination repository is fetched into the ordinary
+    ``refs/remotes/origin/<ref>`` tracking ref; a head in *another* repository
+    (a fork) is fetched into a dedicated ``refs/nexus-referee/`` namespace, so a
+    same-named branch of ``origin`` can never be mistaken for it.
+    """
+    if head.repo_full_name == coordination_repo:
+        return f"refs/remotes/origin/{head.ref}"
+    slug = head.number if head.number > 0 else _SLUG_SAFE.sub("_", _head_key(head))[:60]
+    return f"refs/nexus-referee/pr-{slug}"
+
+
+def _head_source_label(head: PrHead, coordination_repo: str) -> str:
+    """Human-readable provenance for a consulted source."""
+    if head.repo_full_name == coordination_repo:
+        return f"branch:{head.ref}"
+    return f"pr-head:{head.repo_full_name}#{head.ref}"
+
+
+def _head_fetch_url(head: PrHead) -> str | None:
+    """The URL to fetch a foreign head from, or ``None`` when it cannot be trusted.
+
+    The URL is **derived from the validated identity**, never taken from the API
+    payload's ``clone_url``: a payload (or a compromised token) must not be able
+    to point this tool's ``git fetch`` at an arbitrary host.
+    """
+    if not _is_valid_repo_full_name(head.repo_full_name):
+        return None
+    return f"https://github.com/{head.repo_full_name}.git"
+
+
+def _open_pr_heads(repo: str, token: str | None) -> tuple[list[PrHead], str]:
+    """Identities of every open PR's head. ``([], reason)`` when unavailable.
 
     A claim is real once pushed, so a lease that lives *only* on a pushed branch
     with an open PR is a real lease — yet such a branch is invisible to every
     other source: it is not in the local tree, not a sibling worktree, and not
-    ``origin/main``. The open-PR list is how the referee learns those branch
-    names. It is a *required* source: an unreadable list degrades to exit 2,
-    never to a clean pass.
+    ``origin/main``. The open-PR listing is how the referee learns those heads.
+
+    Every page is read: a single request returns one page, so with more than
+    ``_OPEN_PR_PAGE_SIZE`` open PRs a page-one-only listing silently hides a
+    lease and ``check`` still exits 0 (task-266 review finding A). A page that
+    cannot be fetched or parsed — and every entry whose head identity is missing
+    (a deleted fork, for instance) — makes the whole listing *unverifiable*: this
+    is a required source, so it degrades to exit 2, never to a clean pass.
     """
     if "/" not in repo:
-        return [], "GITHUB_REPOSITORY unset and --repo not given (cannot enumerate PR branches)"
+        return [], "GITHUB_REPOSITORY unset and --repo not given (cannot enumerate PR heads)"
     if not token:
-        return [], "no GitHub token in the environment (cannot enumerate open-PR branches)"
-    try:
-        pulls = _gh_get(f"https://api.github.com/repos/{repo}/pulls?state=open&per_page=100", token)
-    except (urllib.error.URLError, OSError, ValueError) as exc:
-        return [], f"open-PR API unavailable ({exc})"
-    if not isinstance(pulls, list):
-        return [], "open-PR API returned an unexpected payload"
-    branches: list[str] = []
-    for pr in pulls:
-        head = (pr.get("head") or {}).get("ref") if isinstance(pr, dict) else None
-        if isinstance(head, str) and head:
-            branches.append(head)
-    return branches, ""
+        return [], "no GitHub token in the environment (cannot enumerate open-PR heads)"
+    heads: list[PrHead] = []
+    page = 1
+    while True:
+        if page > _OPEN_PR_MAX_PAGES:
+            return [], (
+                f"open-PR listing exceeds {_OPEN_PR_MAX_PAGES} pages of "
+                f"{_OPEN_PR_PAGE_SIZE} — refusing to treat a truncated list as complete"
+            )
+        url = (
+            f"https://api.github.com/repos/{repo}/pulls"
+            f"?state=open&per_page={_OPEN_PR_PAGE_SIZE}&page={page}"
+        )
+        try:
+            rows = _gh_get(url, token)
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            return [], f"open-PR API page {page} unavailable ({exc})"
+        if not isinstance(rows, list):
+            return [], f"open-PR API page {page} returned an unexpected payload"
+        for pr in rows:
+            if not isinstance(pr, dict):
+                return [], f"open-PR API page {page} carried a malformed entry"
+            number = pr.get("number")
+            head = pr.get("head")
+            repo_obj = head.get("repo") if isinstance(head, dict) else None
+            ref = head.get("ref") if isinstance(head, dict) else None
+            full_name = repo_obj.get("full_name") if isinstance(repo_obj, dict) else None
+            if not _is_valid_ref(ref) or not _is_valid_repo_full_name(full_name):
+                return [], (
+                    f"open-PR #{number if isinstance(number, int) else '?'}: head "
+                    "repository/ref is missing or malformed (deleted fork?) — cannot "
+                    "verify which branch holds its lease"
+                )
+            heads.append(
+                PrHead(
+                    repo_full_name=full_name,
+                    ref=ref,
+                    number=number if isinstance(number, int) else 0,
+                )
+            )
+        if len(rows) < _OPEN_PR_PAGE_SIZE:
+            return heads, ""
+        page += 1
 
 
 def _remote_branch_boards(
-    branches: list[str], exclude_branch: str = ""
+    heads: list[PrHead],
+    coordination_repo: str = "",
+    exclude_branch: str = "",
 ) -> tuple[list[tuple[str, dict]], list[str]]:
-    """Read the board of each *pushed* branch (read-only).
+    """Read the board of every *pushed* PR head (read-only), by its full identity.
 
-    Each branch is fetched with an explicit refspec into its own
-    ``refs/remotes/origin/<branch>`` tracking ref (a ref write that never
-    touches the working tree) and its board is read with ``git show``. A board
-    is read **only** when that branch's fetch succeeded in this invocation, so a
-    stale ref left by an earlier run can never masquerade as fresh. A branch
-    that cannot be fetched, or whose board cannot be parsed, is *unverifiable*,
-    never skipped.
+    A head in the coordination repository is fetched with an explicit refspec
+    into its own ``refs/remotes/origin/<ref>`` tracking ref; a head in another
+    repository (a fork PR) is fetched from *that repository's* URL into a
+    ``refs/nexus-referee/`` ref. A board is read **only** when the fetch for
+    exactly that identity succeeded in this invocation, so a stale ref left by an
+    earlier run — or a same-named branch of ``origin`` — can never masquerade as
+    the PR's head. A head that cannot be fetched, or whose board cannot be
+    parsed, is *unverifiable*, never skipped.
     """
-    targets: list[str] = []
-    for branch in branches:
-        if branch and branch != exclude_branch and branch not in targets:
-            targets.append(branch)
-    # Batches, not a cap. This used to truncate the source list to the first
-    # ``_REMOTE_BRANCH_FETCH_LIMIT`` branches and then report a clean
-    # "no overlap — safe to proceed" for the rest: with 53 open PRs the referee
-    # dropped 28 pushed boards and still exited 0, which is a false pass on a
-    # *required* source (task-266). Every open-PR branch is consulted now; the
-    # constant only bounds how many refspecs one ``git fetch`` carries.
+    targets: list[PrHead] = []
+    seen: set[str] = set()
+    for head in heads:
+        if not isinstance(head, PrHead):  # a caller passing bare strings is a bug, not a source
+            continue
+        if not head.ref or not head.repo_full_name:
+            continue
+        key = _head_key(head)
+        if key in seen:
+            continue
+        # Self-exclusion is by identity: another repository's branch that merely
+        # shares this caller's branch name is a different source, not "me".
+        if (
+            exclude_branch
+            and head.repo_full_name == coordination_repo
+            and head.ref == exclude_branch
+        ):
+            continue
+        seen.add(key)
+        targets.append(head)
+    # Batches, not a cap. Truncating the source list to the first
+    # ``_REMOTE_BRANCH_FETCH_LIMIT`` entries once made the referee report a clean
+    # "no overlap — safe to proceed" for 28 boards it never read (task-266); every
+    # listed head is consulted now and the constant only bounds one fetch call.
     if not targets:
         return [], []
 
+    local = [h for h in targets if h.repo_full_name == coordination_repo]
+    foreign = [h for h in targets if h.repo_full_name != coordination_repo]
+
     unreadable: list[str] = []
     fresh: set[str] = set()
-    # One batched round trip per group is the fast path; a single dead ref
-    # (e.g. a branch deleted between the PR list and the fetch) fails its whole
-    # batch, so fall back to per-branch fetches rather than losing every other
-    # branch in it.
-    for start in range(0, len(targets), _REMOTE_BRANCH_FETCH_LIMIT):
-        batch_targets = targets[start : start + _REMOTE_BRANCH_FETCH_LIMIT]
+
+    # Local heads: one batched round trip per group is the fast path; a single
+    # dead ref (e.g. a branch deleted between the listing and the fetch) fails its
+    # whole batch, so fall back to per-branch fetches rather than losing every
+    # other branch in it.
+    for start in range(0, len(local), _REMOTE_BRANCH_FETCH_LIMIT):
+        batch_targets = local[start : start + _REMOTE_BRANCH_FETCH_LIMIT]
         batch = _git(
             [
                 "fetch",
                 "--quiet",
                 "origin",
-                *[f"+refs/heads/{b}:refs/remotes/origin/{b}" for b in batch_targets],
+                *[f"+refs/heads/{h.ref}:refs/remotes/origin/{h.ref}" for h in batch_targets],
             ],
             ROOT,
         )
         if batch is not None and batch.returncode == 0:
-            fresh.update(batch_targets)
+            fresh.update(_head_key(h) for h in batch_targets)
             continue
-        for branch in batch_targets:
+        for head in batch_targets:
             fetched = _git(
                 [
                     "fetch",
                     "--quiet",
                     "origin",
-                    f"+refs/heads/{branch}:refs/remotes/origin/{branch}",
+                    f"+refs/heads/{head.ref}:refs/remotes/origin/{head.ref}",
                 ],
                 ROOT,
             )
             if fetched is not None and fetched.returncode == 0:
-                fresh.add(branch)
+                fresh.add(_head_key(head))
             else:
-                unreadable.append(f"pushed branch {branch}: git fetch failed (unreachable?)")
+                unreadable.append(f"pushed branch {head.ref}: git fetch failed (unreachable?)")
+
+    # Foreign heads (fork PRs): fetch from the PR head's own repository. The URL
+    # is derived from the validated identity, and a head whose repository cannot
+    # be named or read is unverifiable — never resolved through a same-named
+    # branch of ``origin``.
+    for head in foreign:
+        url = _head_fetch_url(head)
+        if url is None:
+            unreadable.append(f"pr-head {_head_key(head)}: unusable repository identity")
+            continue
+        refspec = f"+refs/heads/{head.ref}:{_head_source_ref(head, coordination_repo)}"
+        fetched = _git(["fetch", "--quiet", "--no-tags", url, refspec], ROOT)
+        if fetched is not None and fetched.returncode == 0:
+            fresh.add(_head_key(head))
+        else:
+            unreadable.append(
+                f"pr-head {_head_key(head)}: git fetch from {url} failed "
+                "(fork deleted, private, or unreachable?)"
+            )
 
     boards: list[tuple[str, dict]] = []
-    for branch in targets:
-        if branch not in fresh:
+    for head in targets:
+        if _head_key(head) not in fresh:
             continue
-        show = _git(["show", f"refs/remotes/origin/{branch}:.agents/board.json"], ROOT)
+        source_ref = _head_source_ref(head, coordination_repo)
+        label = _head_source_label(head, coordination_repo)
+        show = _git(["show", f"{source_ref}:.agents/board.json"], ROOT)
         if show is None or show.returncode != 0:
-            unreadable.append(f"pushed branch {branch}: no readable .agents/board.json")
+            unreadable.append(f"pushed {label}: no readable .agents/board.json")
             continue
         try:
             data = json.loads(show.stdout)
         except json.JSONDecodeError:
-            unreadable.append(f"pushed branch {branch}: board is not valid JSON")
+            unreadable.append(f"pushed {label}: board is not valid JSON")
             continue
         if not isinstance(data, dict) or not isinstance(data.get("claims", []), list):
-            unreadable.append(f"pushed branch {branch}: board is not a claim board")
+            unreadable.append(f"pushed {label}: board is not a claim board")
             continue
-        boards.append((f"branch:{branch}", data))
+        boards.append((label, data))
     return boards, unreadable
 
 
@@ -761,7 +938,9 @@ def cmd_check(args: argparse.Namespace) -> int:
     if no_remote:
         scope = "local (--no-remote: local board only; NOT a global pass)"
     else:
-        scope = "local + sibling worktrees + origin/main + pushed open-PR branches"
+        scope = (
+            "local + sibling worktrees + origin/main + every pushed open-PR head (origin + forks)"
+        )
         worktree_boards, reliable = _worktree_boards(exclude=ROOT)
         if not reliable:
             unreadable.append("git worktree enumeration (git unavailable or not a repository)")
@@ -777,16 +956,18 @@ def cmd_check(args: argparse.Namespace) -> int:
             sources.append(("origin/main", remote_board))
 
         # A lease can live *only* on a pushed branch with an open PR (not in
-        # main, not a worktree). That source is required: if the open-PR list or
-        # any branch board cannot be read, exit 2 — never a false clear.
+        # main, not a worktree). That source is required: if the listing or any
+        # head's board cannot be read, exit 2 — never a false clear.
         repo = getattr(args, "repo", "") or os.environ.get("GITHUB_REPOSITORY", "")
         token = getattr(args, "token", "") or os.environ.get("GITHUB_TOKEN", "")
-        pr_branches, pr_reason = _open_pr_branches(repo, token)
+        pr_heads, pr_reason = _open_pr_heads(repo, token)
         if pr_reason:
-            unreadable.append(f"open-PR branches: {pr_reason}")
+            unreadable.append(f"open-PR heads: {pr_reason}")
         else:
             branch_boards, branch_unreadable = _remote_branch_boards(
-                pr_branches, exclude_branch=args.branch or ""
+                pr_heads,
+                coordination_repo=repo,
+                exclude_branch=args.branch or "",
             )
             sources.extend(branch_boards)
             unreadable.extend(branch_unreadable)

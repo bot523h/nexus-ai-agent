@@ -94,10 +94,23 @@ python scripts/agent_board.py check --files "src/a.py" --branch BR --no-remote  
 ```
 
 `check` is a **multi-source referee**. It reads the local board, every sibling
-git worktree's board, `origin/main`'s board, and **every** open-PR branch's pushed
-board (fetched in bounded batches; a batch size is not a cap on coverage — a
-source set that was narrowed silently once produced a clean `0` for 28 unread
-boards), then exits:
+git worktree's board, `origin/main`'s board, and **every** open PR's pushed head
+board — across **every page** of the listing, and read by each head's **full
+identity** (repository + ref), so a fork PR and PR number 101+ are sources too.
+The reader is deliberately literal about that:
+
+* a page that cannot be fetched or interpreted makes the whole listing
+  **unverifiable** — a partial list is never presented as a complete one, and a
+  listing longer than the page bound is refused rather than truncated;
+* a head is fetched **from its own repository** into its own ref namespace and the
+  board is read from exactly that ref: a fork PR whose branch is called `main`
+  must never be resolved through this clone's `origin/main` (a different
+  repository, a different commit, a different board);
+* the fetch target is derived from the validated `owner/name` identity, never
+  from a URL supplied in the API payload;
+* a same-named branch in two repositories is **two** sources, not one.
+
+then exits:
 
 | exit | meaning |
 |---|---|

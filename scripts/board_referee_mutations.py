@@ -113,19 +113,19 @@ MUTATIONS: tuple[Mutation, ...] = (
     ),
     Mutation(
         "pr_only_lease_source_skipped",
-        "        pr_branches, pr_reason = _open_pr_branches(repo, token)",
-        '        pr_branches, pr_reason = [], ""  # mutation: skip the pushed open-PR branch source',
-        "a lease living only on a pushed PR branch must be seen, not skipped",
+        "        pr_heads, pr_reason = _open_pr_heads(repo, token)",
+        '        pr_heads, pr_reason = [], ""  # mutation: skip the pushed open-PR head source',
+        "a lease living only on a pushed PR head must be seen, not skipped",
     ),
     Mutation(
         "pr_branch_self_exclusion_removed",
-        "        if branch and branch != exclude_branch and branch not in targets:",
-        "        if branch and branch not in targets:  # mutation: no self-exclusion",
-        "a branch must not conflict with its own pushed lease",
+        "            and head.ref == exclude_branch",
+        "            and False  # mutation: no self-exclusion by identity",
+        "a branch must not conflict with its own pushed lease (exclusion is by identity)",
     ),
     Mutation(
         "stale_pr_branch_ref_read_as_fresh",
-        "        if branch not in fresh:\n            continue",
+        "        if _head_key(head) not in fresh:\n            continue",
         "        if False:  # mutation: read stale tracking refs as fresh\n            continue",
         "a tracking ref not fetched in this run must never be read as a live lease",
     ),
@@ -148,6 +148,48 @@ MUTATIONS: tuple[Mutation, ...] = (
         "a heartbeat without --gates must not silently drop the gate (task-266)",
     ),
     Mutation(
+        "open_pr_listing_stops_at_page_one",
+        '        if len(rows) < _OPEN_PR_PAGE_SIZE:\n            return heads, ""\n        page += 1',
+        '        return heads, ""  # mutation: page one is the whole listing\n        page += 1',
+        "with more than one page of open PRs, a page-one-only listing hides every later lease (task-266 review A)",
+    ),
+    Mutation(
+        "failed_listing_page_degrades_to_a_partial_list",
+        '            return [], f"open-PR API page {page} unavailable ({exc})"',
+        "            break  # mutation: keep the pages already read and call it complete",
+        "a page that cannot be read must make the whole listing unverifiable, never partial (task-266 review A)",
+    ),
+    Mutation(
+        "repo_identity_validation_disabled",
+        '    return all(_REPO_PART.match(part) and part not in (".", "..") for part in parts)',
+        "    return True  # mutation: accept any repository name",
+        "the fetch URL is derived from this identity, so it must be a plausible owner/name (task-266 review B)",
+    ),
+    Mutation(
+        "ref_validation_disabled",
+        "    return not any(bad in ref for bad in _REF_FORBIDDEN)",
+        "    return True  # mutation: accept any ref name",
+        "a ref reaches a refspec and git show, so it is validated first (task-266 review B)",
+    ),
+    Mutation(
+        "fork_head_resolved_through_origin",
+        "        source_ref = _head_source_ref(head, coordination_repo)\n        label = _head_source_label(head, coordination_repo)",
+        '        source_ref = f"refs/remotes/origin/{head.ref}"  # mutation: resolve a fork head via origin\n        label = _head_source_label(head, coordination_repo)',
+        "a fork's head must be read from the fork's own ref namespace, never from a same-named origin branch (task-266 review B)",
+    ),
+    Mutation(
+        "foreign_head_fetched_from_origin",
+        "        url = _head_fetch_url(head)",
+        '        url = "origin"  # mutation: fetch a foreign head from the local default remote',
+        "a foreign PR head is fetched from its own repository; origin is never a substitute (task-266 review B)",
+    ),
+    Mutation(
+        "open_pr_heads_deduped_by_ref_name",
+        "        key = _head_key(head)",
+        "        key = head.ref  # mutation: dedupe by branch name, ignoring the repository",
+        "two forks sharing a ref name are two sources, not one (task-266 review B)",
+    ),
+    Mutation(
         "exactly_one_gate_owner_ignored",
         "    if not no_remote and (malformed_owners or len(owners) != 1):",
         "    if False:  # mutation: ignore the exactly-one-gates-owner invariant\n        pass\n    if not no_remote and (malformed_owners or len(owners) != 1) and False:",
@@ -155,9 +197,9 @@ MUTATIONS: tuple[Mutation, ...] = (
     ),
     Mutation(
         "open_pr_source_set_truncated",
-        "    for start in range(0, len(targets), _REMOTE_BRANCH_FETCH_LIMIT):",
-        "    for start in range(0, min(len(targets), _REMOTE_BRANCH_FETCH_LIMIT), _REMOTE_BRANCH_FETCH_LIMIT):  # mutation: cap the source set",
-        "every open-PR branch must be consulted; a capped source set is a false clean pass (task-266)",
+        "    for start in range(0, len(local), _REMOTE_BRANCH_FETCH_LIMIT):",
+        "    for start in range(0, min(len(local), _REMOTE_BRANCH_FETCH_LIMIT), _REMOTE_BRANCH_FETCH_LIMIT):  # mutation: cap the source set",
+        "every open-PR head must be consulted; a capped source set is a false clean pass (task-266)",
     ),
 )
 

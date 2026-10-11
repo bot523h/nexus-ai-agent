@@ -476,7 +476,7 @@ def test_check_consults_sibling_worktree_boards(
     monkeypatch.setattr(board_module, "_read_remote_board", lambda: (None, "test: remote offline"))
     # Isolate the worktree source: the open-PR branch source is readable-and-empty
     # so this test still proves the *worktree* conflict (not a blanket exit 2).
-    monkeypatch.setattr(board_module, "_open_pr_branches", lambda repo, token: ([], ""))
+    monkeypatch.setattr(board_module, "_open_pr_heads", lambda repo, token: ([], ""))
     code = board_module.cmd_check(
         type(
             "A",
@@ -510,7 +510,7 @@ def test_check_unreliable_worktree_enumeration_is_exit_2(
     # origin/main is readable and clean, but the worktree enumeration was not.
     monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, ""))
     # Isolate the worktree source from the open-PR branch source.
-    monkeypatch.setattr(board_module, "_open_pr_branches", lambda repo, token: ([], ""))
+    monkeypatch.setattr(board_module, "_open_pr_heads", lambda repo, token: ([], ""))
 
     code = board_module.cmd_check(
         type(
@@ -540,7 +540,7 @@ def _check_with_clean_sources(board_module: ModuleType, monkeypatch: pytest.Monk
     """
     monkeypatch.setattr(board_module, "_worktree_boards", lambda exclude: ([], True))
     monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, ""))
-    monkeypatch.setattr(board_module, "_open_pr_branches", lambda repo, token: ([], ""))
+    monkeypatch.setattr(board_module, "_open_pr_heads", lambda repo, token: ([], ""))
     return board_module.cmd_check(
         type(
             "A",
@@ -762,7 +762,9 @@ def test_check_sees_a_lease_that_lives_only_on_a_pushed_branch(
     monkeypatch.setattr(board_module, "_git", _fake_git)
     monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, ""))
     monkeypatch.setattr(
-        board_module, "_open_pr_branches", lambda repo, token: (["arena/999-pr-only"], "")
+        board_module,
+        "_open_pr_heads",
+        lambda repo, token: ([_pr_head(board_module, "o/r", "arena/999-pr-only", 1)], ""),
     )
     code = board_module.cmd_check(
         type(
@@ -782,38 +784,44 @@ def test_check_sees_a_lease_that_lives_only_on_a_pushed_branch(
     assert code == 1, "a lease that lives only on a pushed PR branch must be seen"
 
 
-def test_check_excludes_its_own_branch_from_the_pr_source(
+def test_self_exclusion_is_by_identity_not_by_branch_name(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A branch never conflicts with its own pushed lease (self-exclusion)."""
-    board = _synthetic_directory_claim_board()
-    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
-    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+    """The caller's own head is skipped; another repo's same-named head is not.
 
-    seen_branches: list[list[str]] = []
+    Excluding by bare branch name would drop a *different* repository's PR head
+    that merely shares this caller's branch name — a source silently lost — so the
+    exclusion is applied to (repository, ref) exactly (task-266 review finding B).
+    """
+    fetched: list[str] = []
 
-    def _spy(branches: list[str], exclude_branch: str = "") -> object:
-        seen_branches.append(list(branches))
-        return [], []
+    def _fake_git(args: list[str], cwd: Path) -> object:
+        if args[0] == "fetch":
+            fetched.extend(
+                refspec.split(":")[-1] for refspec in args if refspec.startswith("+refs/heads/")
+            )
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        if args[0] == "show":
+            return subprocess.CompletedProcess(
+                args, 0, stdout=json.dumps(_synthetic_directory_claim_board()), stderr=""
+            )
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
 
-    monkeypatch.setattr(board_module, "_git", _no_git)
-    monkeypatch.setattr(board_module, "_read_remote_board", lambda: (None, "test: offline"))
-    monkeypatch.setattr(board_module, "_open_pr_branches", lambda repo, token: (["arena/mine"], ""))
-    monkeypatch.setattr(board_module, "_remote_branch_boards", _spy)
-    board_module.cmd_check(
-        type(
-            "A",
-            (),
-            {
-                "files": "docs/x.md",
-                "branch": "arena/mine",
-                "no_remote": False,
-                "repo": "o/r",
-                "token": "t",
-            },
-        )()
+    monkeypatch.setattr(board_module, "_git", _fake_git)
+    boards, _unreadable = board_module._remote_branch_boards(
+        [
+            _pr_head(board_module, "o/r", "arena/mine"),  # this caller's own head
+            _pr_head(
+                board_module, "fork/nexus-ai-agent", "arena/mine"
+            ),  # a different repo, same ref
+        ],
+        coordination_repo="o/r",
+        exclude_branch="arena/mine",
     )
-    assert seen_branches == [["arena/mine"]]
+    assert "refs/remotes/origin/arena/mine" not in fetched, "own head must be self-excluded"
+    assert len(fetched) == 1, "the foreign same-named head is a different source, not 'me'"
+    assert "nexus-referee" in fetched[0], "a foreign head is fetched into its own namespace"
+    assert "pr-head:fork/nexus-ai-agent#arena/mine" in [name for name, _ in boards]
 
 
 def test_remote_branch_boards_reads_only_freshly_fetched_branches(
@@ -822,7 +830,11 @@ def test_remote_branch_boards_reads_only_freshly_fetched_branches(
     """A stale tracking ref must not be read as a live lease."""
     good_board = _synthetic_directory_claim_board()
 
+    _shows: list[list[str]] = []
+
     def _fake_git(args: list[str], cwd: Path) -> object:
+        if args[0] == "show":
+            _shows.append(args)
         refspecs = args[3:] if args[0] == "fetch" else []
         if len(refspecs) > 1:  # batched fetch: one dead ref fails the batch
             return subprocess.CompletedProcess(args, 128, stdout="", stderr="dead ref")
@@ -836,10 +848,14 @@ def test_remote_branch_boards_reads_only_freshly_fetched_branches(
 
     monkeypatch.setattr(board_module, "_git", _fake_git)
     boards, unreadable = board_module._remote_branch_boards(
-        ["arena/good", "arena/dead"], exclude_branch=""
+        [_pr_head(board_module, "o/r", "arena/good"), _pr_head(board_module, "o/r", "arena/dead")],
+        "o/r",
     )
     assert [name for name, _ in boards] == ["branch:arena/good"]
     assert any("arena/dead" in reason for reason in unreadable)
+    assert all(cmd[1].startswith("refs/remotes/origin/arena/good:") for cmd in _shows), (
+        "a local head is read from its own freshly fetched tracking ref"
+    )
 
 
 def test_remote_branch_boards_excludes_the_callers_own_branch(
@@ -860,7 +876,9 @@ def test_remote_branch_boards_excludes_the_callers_own_branch(
 
     monkeypatch.setattr(board_module, "_git", _fake_git)
     boards, _unreadable = board_module._remote_branch_boards(
-        ["arena/mine", "arena/other"], exclude_branch="arena/mine"
+        [_pr_head(board_module, "o/r", "arena/mine"), _pr_head(board_module, "o/r", "arena/other")],
+        coordination_repo="o/r",
+        exclude_branch="arena/mine",
     )
     assert [name for name, _ in boards] == ["branch:arena/other"]
     assert all("arena/mine" not in cmd for cmd in fetched)
@@ -879,7 +897,9 @@ def test_remote_branch_boards_consults_every_open_pr_branch(
     leases are most likely to still fence a zone (task-266).
     """
     limit = board_module._REMOTE_BRANCH_FETCH_LIMIT
-    branches = [f"arena/branch-{index:03d}" for index in range(limit + 3)]
+    heads = [
+        _pr_head(board_module, "o/r", f"arena/branch-{index:03d}") for index in range(limit + 3)
+    ]
     fetched: list[str] = []
 
     def _fake_git(args: list[str], cwd: Path) -> object:
@@ -893,10 +913,10 @@ def test_remote_branch_boards_consults_every_open_pr_branch(
         return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
 
     monkeypatch.setattr(board_module, "_git", _fake_git)
-    boards, unreadable = board_module._remote_branch_boards(branches)
+    boards, unreadable = board_module._remote_branch_boards(heads, "o/r")
     assert unreadable == [], "every branch is fetchable in this scenario"
-    assert sorted(fetched) == sorted(branches), "no open-PR branch may be skipped"
-    assert [name for name, _ in boards] == [f"branch:{branch}" for branch in branches]
+    assert sorted(fetched) == sorted(head.ref for head in heads), "no open-PR head may be skipped"
+    assert [name for name, _ in boards] == [f"branch:{head.ref}" for head in heads]
 
 
 def test_a_batch_boundary_never_hides_a_branch_failure(
@@ -912,7 +932,7 @@ def test_a_batch_boundary_never_hides_a_branch_failure(
     limit = board_module._REMOTE_BRANCH_FETCH_LIMIT
     readable = [f"arena/ok-{index:03d}" for index in range(limit)]
     dead = "arena/dead-beyond-the-first-batch"
-    branches = [*readable, dead]
+    heads = [_pr_head(board_module, "o/r", ref) for ref in [*readable, dead]]
 
     def _fake_git(args: list[str], cwd: Path) -> object:
         if args[0] == "fetch":
@@ -928,29 +948,342 @@ def test_a_batch_boundary_never_hides_a_branch_failure(
         return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
 
     monkeypatch.setattr(board_module, "_git", _fake_git)
-    boards, unreadable = board_module._remote_branch_boards(branches)
-    assert [name for name, _ in boards] == [f"branch:{branch}" for branch in readable]
+    boards, unreadable = board_module._remote_branch_boards(heads, "o/r")
+    assert [name for name, _ in boards] == [f"branch:{ref}" for ref in readable]
     assert any(dead in reason for reason in unreadable), "a dead branch must be loud"
 
 
-def test_open_pr_branches_requires_repo_and_token(
+def _pr_head(board_module: ModuleType, repo: str, ref: str, number: int = 0) -> object:
+    """A PR head identity, built by the module under test.
+
+    Built by *that* module (not by a second import of the script): the reader
+    type-checks its input, and a class object from another module instance is a
+    different class — the same trap a caller would hit by re-importing the tool.
+    """
+    return board_module.PrHead(repo, ref, number)
+
+
+def _paginated_gh_get(page_one: int = 100, page_two: list | None = None, *, repo: str = "o/r"):
+    """Fake GitHub listing: ``page_one`` PRs, then ``page_two`` (or a final short page)."""
+
+    def _fake(url: str, token: object) -> object:
+        if "page=2" in url:
+            if page_two is None:
+                raise AssertionError(f"unexpected second page request: {url}")
+            return page_two
+        return [
+            {
+                "number": index,
+                "head": {
+                    "ref": f"arena/harmless-{index}",
+                    "repo": {"full_name": repo, "clone_url": f"https://github.com/{repo}.git"},
+                },
+            }
+            for index in range(1, page_one + 1)
+        ]
+
+    return _fake
+
+
+def test_open_pr_heads_walks_every_page(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    branches, reason = board_module._open_pr_branches("", "")
-    assert branches == [] and reason
-    branches, reason = board_module._open_pr_branches("o/r", "")
-    assert branches == [] and reason
+    """A listing longer than one page must be read in full, not capped at page one.
+
+    GitHub returns one page per request, so a page-one-only listing hides every PR
+    past ``_OPEN_PR_PAGE_SIZE`` — with 101 open PRs, PR #101's pushed lease was
+    invisible while ``check`` still reported a clean pass (task-266 review finding A).
+    """
+    monkeypatch.setattr(
+        board_module,
+        "_gh_get",
+        _paginated_gh_get(
+            100,
+            [
+                {
+                    "number": 101,
+                    "head": {
+                        "ref": "arena/first-pr-on-page-two",
+                        "repo": {"full_name": "o/r", "clone_url": "https://github.com/o/r.git"},
+                    },
+                }
+            ],
+        ),
+    )
+    heads, reason = board_module._open_pr_heads("o/r", "t")
+    assert reason == ""
+    assert len(heads) == 101, "every page must contribute its PRs"
+    assert heads[-1].ref == "arena/first-pr-on-page-two"
+    assert heads[-1].repo_full_name == "o/r"
 
 
-def test_open_pr_branches_degrades_on_api_error(
+def test_open_pr_heads_fails_closed_when_a_later_page_is_unreachable(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A page that cannot be fetched makes the whole listing unverifiable.
+
+    Page one alone is 100 readable boards and one silent gap; returning it would
+    let ``check`` certify a source set it never finished reading.
+    """
+
+    def _fake(url: str, token: object) -> object:
+        if "page=2" in url:
+            raise OSError("connection reset by peer")
+        return _paginated_gh_get()(url, token)
+
+    monkeypatch.setattr(board_module, "_gh_get", _fake)
+    heads, reason = board_module._open_pr_heads("o/r", "t")
+    assert heads == [], "a partial listing must not be returned as the source set"
+    assert "page 2" in reason and "unavailable" in reason
+
+
+def test_open_pr_heads_fails_closed_on_a_malformed_page(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unexpected payload is a failure to interpret the page, not an empty page."""
+
+    def _fake(url: str, token: object) -> object:
+        if "page=2" in url:
+            return {"message": "rate limited"}
+        return _paginated_gh_get()(url, token)
+
+    monkeypatch.setattr(board_module, "_gh_get", _fake)
+    heads, reason = board_module._open_pr_heads("o/r", "t")
+    assert heads == [] and "unexpected payload" in reason
+
+
+def test_open_pr_heads_refuses_a_listing_beyond_the_page_bound(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A listing that never ends is refused loudly, never truncated silently."""
+
+    def _always_full(url: str, token: object) -> object:
+        return [
+            {
+                "number": index,
+                "head": {
+                    "ref": f"arena/harmless-{index}",
+                    "repo": {"full_name": "o/r", "clone_url": "https://github.com/o/r.git"},
+                },
+            }
+            for index in range(1, board_module._OPEN_PR_PAGE_SIZE + 1)
+        ]
+
+    monkeypatch.setattr(board_module, "_gh_get", _always_full)
+    heads, reason = board_module._open_pr_heads("o/r", "t")
+    assert heads == []
+    assert "refusing to treat a truncated list as complete" in reason
+
+
+def test_open_pr_heads_refuses_a_head_without_repository_identity(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deleted fork leaves no repository to read: that head is unverifiable."""
+
+    def _fake(url: str, token: object) -> object:
+        return [{"number": 5, "head": {"ref": "main", "repo": None}}]
+
+    monkeypatch.setattr(board_module, "_gh_get", _fake)
+    heads, reason = board_module._open_pr_heads("o/r", "t")
+    assert heads == []
+    assert "#5" in reason and "deleted fork" in reason
+
+
+def test_open_pr_heads_refuses_a_malformed_ref(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ref is interpolated into a refspec, so it is validated before use."""
+
+    def _fake(url: str, token: object) -> object:
+        return [
+            {
+                "number": 6,
+                "head": {
+                    "ref": "arena/../main",
+                    "repo": {"full_name": "o/r", "clone_url": "https://github.com/o/r.git"},
+                },
+            }
+        ]
+
+    monkeypatch.setattr(board_module, "_gh_get", _fake)
+    heads, reason = board_module._open_pr_heads("o/r", "t")
+    assert heads == [] and "malformed" in reason
+
+
+def test_a_repository_whose_name_escapes_the_github_shape_is_never_fetched(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fetch URL is derived from the identity, and only for a safe ``owner/name``.
+
+    The API payload's ``clone_url`` must never steer ``git fetch``: a compromised
+    token (or a fork named to look like a URL) could otherwise point this tool at
+    an arbitrary host.
+    """
+    called: list[list[str]] = []
+
+    def _fake_git(args: list[str], cwd: Path) -> object:
+        called.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout=json.dumps({"claims": []}), stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _fake_git)
+    # Names that are not a plausible GitHub "owner/name": a third path segment, a
+    # traversal, a query string, a missing owner.
+    for repo_name in ("o/r/extra", "../etc/passwd", "o/r?x=1", "/r", "o/", ".."):
+        head = _pr_head(board_module, repo_name, "main")
+        boards, unreadable = board_module._remote_branch_boards([head], coordination_repo="o/r")
+        assert boards == [], f"{repo_name!r} must not be fetched"
+        assert any("unusable repository identity" in reason for reason in unreadable)
+    assert called == [], "no git command may run for an unusable identity"
+
+
+def test_every_derived_fetch_url_stays_on_github(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fetch target is computed from the identity and always points at github.com.
+
+    ``clone_url`` from the payload never steers ``git fetch``: a payload cannot
+    move this tool to another host, whatever it claims the repository's URL is.
+    """
+    for repo_name in ("o/r", "evil.example.com/x", "owner/repo.name", "Owner_1/repo-2"):
+        head = _pr_head(board_module, repo_name, "main")
+        url = board_module._head_fetch_url(head)
+        assert url == f"https://github.com/{repo_name}.git", url
+        assert url.startswith("https://github.com/")
+        assert "gitlab" not in url and "http://" not in url
+
+
+def test_head_fetch_url_ignores_a_payload_clone_url(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``clone_url`` from the API is not the source of truth; the identity is."""
+
+    def _fake(url: str, token: object) -> object:
+        return [
+            {
+                "number": 9,
+                "head": {
+                    "ref": "release",
+                    "repo": {
+                        "full_name": "fork/nexus-ai-agent",
+                        "clone_url": "https://gitlab.example.com/fork/nexus-ai-agent.git",
+                    },
+                },
+            }
+        ]
+
+    monkeypatch.setattr(board_module, "_gh_get", _fake)
+    heads, reason = board_module._open_pr_heads("o/r", "t")
+    assert reason == "" and len(heads) == 1
+    assert board_module._head_fetch_url(heads[0]) == "https://github.com/fork/nexus-ai-agent.git"
+
+
+def test_remote_branch_boards_reads_a_fork_from_its_own_repository(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fork head is fetched from the fork, never from a same-named origin branch.
+
+    The dangerous shape is a fork PR whose branch is ``main``: resolving by ref
+    name alone reads this clone's ``origin/main`` — a different repository, a
+    different commit, a different board — and reports on it as if it were the
+    PR's lease (task-266 review finding B).
+    """
+    commands: list[list[str]] = []
+
+    def _fake_git(args: list[str], cwd: Path) -> object:
+        commands.append(args)
+        if args[0] == "show":
+            return subprocess.CompletedProcess(
+                args, 0, stdout=json.dumps({"claims": []}), stderr=""
+            )
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _fake_git)
+    boards, unreadable = board_module._remote_branch_boards(
+        [_pr_head(board_module, "attacker/nexus-ai-agent", "main", 7)],
+        coordination_repo="o/r",
+    )
+    fetches = [cmd for cmd in commands if cmd[0] == "fetch"]
+    assert unreadable == [] and len(boards) == 1
+    assert boards[0][0] == "pr-head:attacker/nexus-ai-agent#main"
+    assert fetches and "https://github.com/attacker/nexus-ai-agent.git" in fetches[0]
+    assert not any("origin" in cmd for cmd in fetches), "origin must not be used for a foreign head"
+    assert fetches[0][-1] == "+refs/heads/main:refs/nexus-referee/pr-7"
+    # …and the board is read from exactly that ref: fetching the fork and then
+    # reading a same-named branch of origin would be the same defect wearing a
+    # different hat (it survived the first mutation campaign for this reason).
+    shows = [cmd for cmd in commands if cmd[0] == "show"]
+    assert len(shows) == 1
+    assert shows[0][1] == "refs/nexus-referee/pr-7:.agents/board.json", shows[0]
+
+
+def test_a_fork_head_that_cannot_be_fetched_is_unverifiable(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the true head cannot be read, the referee must not fall back to origin."""
+
+    def _fake_git(args: list[str], cwd: Path) -> object:
+        if args[0] == "fetch":
+            return subprocess.CompletedProcess(args, 128, stdout="", stderr="repository not found")
+        return subprocess.CompletedProcess(args, 0, stdout=json.dumps({"claims": []}), stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _fake_git)
+    boards, unreadable = board_module._remote_branch_boards(
+        [_pr_head(board_module, "attacker/nexus-ai-agent", "main", 7)], coordination_repo="o/r"
+    )
+    assert boards == [], "origin must never stand in for an unreadable fork head"
+    assert any("attacker/nexus-ai-agent#main" in reason for reason in unreadable)
+
+
+def test_two_forks_sharing_a_ref_name_are_two_sources(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Dedupe is by (repository, ref): the same ref name in two repos is two heads."""
+    commands: list[list[str]] = []
+
+    def _fake_git(args: list[str], cwd: Path) -> object:
+        commands.append(args)
+        if args[0] == "show":
+            return subprocess.CompletedProcess(
+                args, 0, stdout=json.dumps({"claims": []}), stderr=""
+            )
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _fake_git)
+    boards, unreadable = board_module._remote_branch_boards(
+        [
+            _pr_head(board_module, "forka/nexus-ai-agent", "release", 8),
+            _pr_head(board_module, "forkb/nexus-ai-agent", "release", 9),
+        ],
+        coordination_repo="o/r",
+    )
+    urls = [cmd[3] for cmd in commands if cmd[0] == "fetch"]
+    assert "https://github.com/forka/nexus-ai-agent.git" in urls
+    assert "https://github.com/forkb/nexus-ai-agent.git" in urls
+    assert sorted(name for name, _ in boards) == [
+        "pr-head:forka/nexus-ai-agent#release",
+        "pr-head:forkb/nexus-ai-agent#release",
+    ]
+    assert unreadable == []
+
+
+def test_open_pr_heads_requires_repo_and_token(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    heads, reason = board_module._open_pr_heads("", "")
+    assert heads == [] and reason
+    heads, reason = board_module._open_pr_heads("o/r", "")
+    assert heads == [] and reason
+
+
+def test_open_pr_heads_degrades_on_api_error(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def _boom(url: str, token: object) -> object:
         raise OSError("connection reset")
 
     monkeypatch.setattr(board_module, "_gh_get", _boom)
-    branches, reason = board_module._open_pr_branches("o/r", "t")
-    assert branches == [] and "unavailable" in reason
+    heads, reason = board_module._open_pr_heads("o/r", "t")
+    assert heads == [] and "unavailable" in reason
 
 
 # --------------------------------------------------------------------------- #
