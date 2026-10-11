@@ -129,6 +129,30 @@ MUTATIONS: tuple[Mutation, ...] = (
         "        if False:  # mutation: read stale tracking refs as fresh\n            continue",
         "a tracking ref not fetched in this run must never be read as a live lease",
     ),
+    Mutation(
+        "heartbeat_ignores_the_gates_flag",
+        '            if args.gates:\n                took_gate = not claim.get("gates_owner")\n                _take_gate(board, claim)',
+        '            if False:  # mutation: a heartbeat ignores --gates (the original defect)\n                took_gate = not claim.get("gates_owner")\n                _take_gate(board, claim)',
+        "`claim --gates` on a live own lease must take the gate, not print success (task-266)",
+    ),
+    Mutation(
+        "gate_grant_does_not_clear_the_other_holders",
+        '    for other in board.get("claims", []):\n        if other.get("task") != claim.get("task") and other.get("gates_owner"):\n            other["gates_owner"] = False',
+        '    for other in []:  # mutation: leave every other holder in place\n        other["gates_owner"] = False',
+        "granting the gate must clear every other holder: at most one live gate (task-266)",
+    ),
+    Mutation(
+        "heartbeat_releases_the_gate",
+        "            else:\n                took_gate = False",
+        '            else:\n                took_gate = False\n                claim["gates_owner"] = False  # mutation: renewing releases the gate',
+        "a heartbeat without --gates must not silently drop the gate (task-266)",
+    ),
+    Mutation(
+        "open_pr_source_set_truncated",
+        "    for start in range(0, len(targets), _REMOTE_BRANCH_FETCH_LIMIT):",
+        "    for start in range(0, min(len(targets), _REMOTE_BRANCH_FETCH_LIMIT), _REMOTE_BRANCH_FETCH_LIMIT):  # mutation: cap the source set",
+        "every open-PR branch must be consulted; a capped source set is a false clean pass (task-266)",
+    ),
 )
 
 

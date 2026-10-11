@@ -338,6 +338,21 @@ def cmd_show(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _take_gate(board: dict, claim: dict) -> None:
+    """Make *claim* the single gates owner, clearing every other holder.
+
+    ``gates_owner`` is exclusive (AGENTS.md rule 4), so *every* path that grants
+    it must clear the other claims — the fresh claim, the takeover, and the
+    heartbeat renewal. One implementation, used by all of them, is what keeps
+    "at most one live gate holder" a property of the tool instead of a property
+    of the path the caller happened to take (task-266).
+    """
+    for other in board.get("claims", []):
+        if other.get("task") != claim.get("task") and other.get("gates_owner"):
+            other["gates_owner"] = False
+    claim["gates_owner"] = True
+
+
 def cmd_claim(args: argparse.Namespace) -> int:
     with board_lock():
         return _claim_locked(args)
@@ -361,10 +376,26 @@ def _claim_locked(args: argparse.Namespace) -> int:
                 print(refusal)
                 return 2
             claim["claimed_at"] = _iso(_now())  # renewal (heartbeat)
+            # `--gates` on a renewal means "hold the gate now". It used to be
+            # ignored here while the command still printed success and exited 0,
+            # so the documented loop (claim, then `claim --gates` to own the CI
+            # gate) left the board at ZERO owners while the caller believed it
+            # held the gate — and every other agent's `check` stayed at exit 2.
+            # A heartbeat *without* the flag must not silently drop a gate the
+            # owner already holds, so the flag is only ever additive (task-266).
+            if args.gates:
+                took_gate = not claim.get("gates_owner")
+                _take_gate(board, claim)
+            else:
+                took_gate = False
             save_board(board)
             print(
                 f"renewed lease for {args.task} (owner: {args.branch}, "
                 f"generation {_generation(claim)} — heartbeat keeps the epoch)"
+            )
+            print(
+                f"gates_owner: {bool(claim.get('gates_owner'))}"
+                + (" (taken now)" if took_gate else "")
             )
             return 0
         print(
@@ -389,7 +420,9 @@ def _claim_locked(args: argparse.Namespace) -> int:
         agent_branch=args.branch,
         claimed_at=_iso(_now()),
         ttl_hours=int(args.ttl),
-        gates_owner=bool(args.gates),
+        # The gate is granted in exactly one place: ``_take_gate`` below. Keeping
+        # a second grantor here is how the heartbeat path drifted out of sync.
+        gates_owner=False,
         note="",
     )
     # Fencing epoch: strictly monotonic across every (re)claim. A brand-new or
@@ -398,13 +431,11 @@ def _claim_locked(args: argparse.Namespace) -> int:
     # a second session sharing the same branch name.
     claim["generation"] = _generation(claim) + 1
     if args.gates:
-        for other in board["claims"]:
-            if other["task"] != args.task and other.get("gates_owner"):
-                other["gates_owner"] = False
+        _take_gate(board, claim)
     save_board(board)
     print(
-        f"CLAIMED {args.task} for {args.branch} (ttl {args.ttl}h, gates_owner={args.gates}, "
-        f"generation {claim['generation']})"
+        f"CLAIMED {args.task} for {args.branch} (ttl {args.ttl}h, "
+        f"gates_owner={bool(claim.get('gates_owner'))}, generation {claim['generation']})"
     )
     print("NOW: git add .agents/board.json && git commit && git push IMMEDIATELY —")
     print("an unpushed claim does not exist for the other sandbox.")
@@ -580,6 +611,10 @@ def _read_remote_board() -> tuple[dict | None, str]:
     return data, ""
 
 
+#: Refspecs per ``git fetch`` invocation when consulting pushed open-PR branch
+#: boards. A *batch* size, never a cap on how many branches are consulted: a cap
+#: silently narrowed the referee's source set and let it report a clean pass for
+#: branches it never read (task-266).
 _REMOTE_BRANCH_FETCH_LIMIT = 25
 
 
@@ -628,28 +663,36 @@ def _remote_branch_boards(
     for branch in branches:
         if branch and branch != exclude_branch and branch not in targets:
             targets.append(branch)
-    targets = targets[:_REMOTE_BRANCH_FETCH_LIMIT]
+    # Batches, not a cap. This used to truncate the source list to the first
+    # ``_REMOTE_BRANCH_FETCH_LIMIT`` branches and then report a clean
+    # "no overlap — safe to proceed" for the rest: with 53 open PRs the referee
+    # dropped 28 pushed boards and still exited 0, which is a false pass on a
+    # *required* source (task-266). Every open-PR branch is consulted now; the
+    # constant only bounds how many refspecs one ``git fetch`` carries.
     if not targets:
         return [], []
 
     unreadable: list[str] = []
-    # One batched round trip is the fast path; a single dead ref (e.g. a branch
-    # deleted between the PR list and the fetch) fails the whole batch, so fall
-    # back to per-branch fetches rather than losing every other branch.
-    batch = _git(
-        [
-            "fetch",
-            "--quiet",
-            "origin",
-            *[f"+refs/heads/{b}:refs/remotes/origin/{b}" for b in targets],
-        ],
-        ROOT,
-    )
-    if batch is not None and batch.returncode == 0:
-        fresh = set(targets)
-    else:
-        fresh = set()
-        for branch in targets:
+    fresh: set[str] = set()
+    # One batched round trip per group is the fast path; a single dead ref
+    # (e.g. a branch deleted between the PR list and the fetch) fails its whole
+    # batch, so fall back to per-branch fetches rather than losing every other
+    # branch in it.
+    for start in range(0, len(targets), _REMOTE_BRANCH_FETCH_LIMIT):
+        batch_targets = targets[start : start + _REMOTE_BRANCH_FETCH_LIMIT]
+        batch = _git(
+            [
+                "fetch",
+                "--quiet",
+                "origin",
+                *[f"+refs/heads/{b}:refs/remotes/origin/{b}" for b in batch_targets],
+            ],
+            ROOT,
+        )
+        if batch is not None and batch.returncode == 0:
+            fresh.update(batch_targets)
+            continue
+        for branch in batch_targets:
             fetched = _git(
                 [
                     "fetch",

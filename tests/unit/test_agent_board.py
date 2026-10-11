@@ -489,10 +489,15 @@ def test_check_consults_sibling_worktree_boards(
 
 
 def test_check_unreliable_worktree_enumeration_is_exit_2(
-    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    board_module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
 ) -> None:
     """If sibling worktrees cannot be enumerated, the absence of overlap is unproven."""
     board = _synthetic_directory_claim_board()
+    # One live gate holder, so the gates fail-closed branch cannot be the cause
+    # of the exit code under test (see the assertion comment below).
+    board["claims"][0]["gates_owner"] = True
     board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
     _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
 
@@ -506,6 +511,7 @@ def test_check_unreliable_worktree_enumeration_is_exit_2(
     monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, ""))
     # Isolate the worktree source from the open-PR branch source.
     monkeypatch.setattr(board_module, "_open_pr_branches", lambda repo, token: ([], ""))
+
     code = board_module.cmd_check(
         type(
             "A",
@@ -514,6 +520,16 @@ def test_check_unreliable_worktree_enumeration_is_exit_2(
         )()
     )
     assert code == 2, "unreliable worktree enumeration must not be a clean pass"
+    # …and exit 2 must be *this* reason. Asserting the code alone let the
+    # mutation campaign's ``foreign_worktree_boards_skipped`` mutant survive: with
+    # zero gate holders on the board the separate gates fail-closed branch also
+    # returned 2, so the assertion passed while the guard it names was gone. The
+    # board below therefore carries exactly one live gate holder, leaving the
+    # unenumerable worktree source as the only possible cause — and the printed
+    # reason is asserted, not just the exit code (task-266).
+    out = capsys.readouterr().out
+    assert "git worktree enumeration" in out, out
+    assert "exactly one active, unexpired gates_owner" not in out, out
 
 
 def test_check_proven_conflict_wins_over_unreadable_remote(
@@ -784,6 +800,73 @@ def test_remote_branch_boards_excludes_the_callers_own_branch(
     assert all("arena/mine" not in cmd for cmd in fetched)
 
 
+def test_remote_branch_boards_consults_every_open_pr_branch(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Batching must never narrow the source set: a clean pass is a claim about *read* data.
+
+    The referee used to truncate the open-PR branch list to the first
+    ``_REMOTE_BRANCH_FETCH_LIMIT`` entries and still print "no overlap — safe to
+    proceed".  On this repository (53 open PRs) that silently dropped 28 pushed
+    boards while exiting 0 — a false clean verdict on a *required* source, and
+    the oldest branches it dropped are exactly the long-lived PRs whose pushed
+    leases are most likely to still fence a zone (task-266).
+    """
+    limit = board_module._REMOTE_BRANCH_FETCH_LIMIT
+    branches = [f"arena/branch-{index:03d}" for index in range(limit + 3)]
+    fetched: list[str] = []
+
+    def _fake_git(args: list[str], cwd: Path) -> object:
+        if args[0] == "fetch":
+            fetched.extend(refspec.split(":refs/remotes/origin/")[1] for refspec in args[3:])
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        if args[0] == "show":
+            return subprocess.CompletedProcess(
+                args, 0, stdout=json.dumps(_synthetic_directory_claim_board()), stderr=""
+            )
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _fake_git)
+    boards, unreadable = board_module._remote_branch_boards(branches)
+    assert unreadable == [], "every branch is fetchable in this scenario"
+    assert sorted(fetched) == sorted(branches), "no open-PR branch may be skipped"
+    assert [name for name, _ in boards] == [f"branch:{branch}" for branch in branches]
+
+
+def test_a_batch_boundary_never_hides_a_branch_failure(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A branch past the first batch must still be fetched and, if dead, reported.
+
+    The batched ``git fetch`` is a fast path, not a coverage strategy: when it
+    fails, the per-branch fallback has to run for *every* branch — including the
+    ones in later batches — so an unreachable board degrades to exit 2 instead of
+    disappearing from the verdict.
+    """
+    limit = board_module._REMOTE_BRANCH_FETCH_LIMIT
+    readable = [f"arena/ok-{index:03d}" for index in range(limit)]
+    dead = "arena/dead-beyond-the-first-batch"
+    branches = [*readable, dead]
+
+    def _fake_git(args: list[str], cwd: Path) -> object:
+        if args[0] == "fetch":
+            if len(args[3:]) > 1:  # the batched fast path fails for the whole group
+                return subprocess.CompletedProcess(args, 128, stdout="", stderr="dead ref")
+            if "refs/heads/arena/ok-" in args[-1]:
+                return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+            return subprocess.CompletedProcess(args, 128, stdout="", stderr="dead")
+        if args[0] == "show":
+            return subprocess.CompletedProcess(
+                args, 0, stdout=json.dumps(_synthetic_directory_claim_board()), stderr=""
+            )
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _fake_git)
+    boards, unreadable = board_module._remote_branch_boards(branches)
+    assert [name for name, _ in boards] == [f"branch:{branch}" for branch in readable]
+    assert any(dead in reason for reason in unreadable), "a dead branch must be loud"
+
+
 def test_open_pr_branches_requires_repo_and_token(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1035,6 +1118,174 @@ def test_claim_renews_its_own_lease(
     # Documented behaviour: `claim` on an existing lease is a heartbeat — it refreshes the
     # clock and keeps the original TTL (the --ttl flag only applies when the lease is taken).
     assert renewed["ttl_hours"] == active["ttl_hours"]
+
+
+def _heartbeat(
+    board_module: ModuleType, task: str, branch: str, *, gates: bool, generation: int
+) -> int:
+    """Run the heartbeat (same-owner renewal) path of ``claim``."""
+    return board_module.cmd_claim(
+        type(
+            "A",
+            (),
+            {
+                "task": task,
+                "branch": branch,
+                "ttl": 24,
+                "gates": gates,
+                "expected_generation": generation,
+            },
+        )()
+    )
+
+
+def _claims_of(board_module: ModuleType) -> list[dict]:
+    return json.loads(board_module.BOARD.read_text(encoding="utf-8"))["claims"]
+
+
+def _live_gate_holders(board_module: ModuleType) -> list[str]:
+    owners, malformed = board_module._active_gates_owners({"claims": _claims_of(board_module)})
+    assert not malformed, malformed
+    return [owner["task"] for owner in owners]
+
+
+def _hermetic_gate_board(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> tuple[dict, dict]:
+    """A one-lease board of its own, so gate assertions cannot read the live board.
+
+    The ``board_module`` fixture mirrors the **real** board, which may hold a live
+    gates owner (a session working right now) — and any lease whose ``claimed_at``
+    lies in the future relative to a pinned clock is *live* by the referee's own
+    arithmetic, so "exactly one gate holder" would silently depend on other
+    agents' work and on the calendar.  The gate tests describe their own board
+    (``_synthetic_directory_claim_board``) and pin the clock inside its lease.
+    """
+    board = _synthetic_directory_claim_board()
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    active = board["claims"][0]
+    _pin_clock_inside_lease(monkeypatch, board_module, active)
+    return board, active
+
+
+def test_heartbeat_with_gates_takes_the_gate_on_a_live_own_lease(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """``claim --gates`` on a live own lease must take the gate, not just print success.
+
+    The documented onboarding loop is ``next`` -> ``claim <task> --branch BR`` and
+    then ``claim … --gates`` to own the CI gate (AGENTS.md §1 rule 4).  The second
+    command lands on the *heartbeat* path, which used to ignore the flag entirely
+    while still printing "renewed lease …" and exiting 0 — the board stayed at
+    **zero** gates owners, every other agent's ``check`` kept returning exit 2, and
+    the caller's "I own the gates" was false.  A success line without the effect is
+    exactly what this pins (task-266).
+    """
+    _, active = _hermetic_gate_board(board_module, monkeypatch)
+    assert active["gates_owner"] is False, "precondition: this lease holds no gate"
+
+    code = _heartbeat(
+        board_module,
+        active["task"],
+        active["agent_branch"],
+        gates=True,
+        generation=_generation_of(board_module, active["task"]),
+    )
+    assert code == 0
+    renewed = next(c for c in _claims_of(board_module) if c["task"] == active["task"])
+    assert renewed["gates_owner"] is True, "the gate must actually be held after --gates"
+    assert _live_gate_holders(board_module) == [active["task"]]
+    # the operator must be able to read the resulting state off the command's output
+    assert "gates_owner: True" in capsys.readouterr().out
+
+
+def test_heartbeat_with_gates_is_idempotent_and_leaves_one_holder(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A duplicated gate (survived a bad merge) must collapse to the caller alone.
+
+    Asserting exclusivity across *every* granting path is the point: the fresh
+    claim, the takeover and the heartbeat all clear the other holders through one
+    implementation, so "at most one live gate holder" is a property of the tool
+    rather than of the path the caller happened to take.
+    """
+    board, active = _hermetic_gate_board(board_module, monkeypatch)
+    board["claims"].append(
+        {
+            "task": "task-9999-other-gate-holder",
+            "status": "active",
+            "zone": active["zone"],
+            "agent_branch": "arena/999-other-gate-holder",
+            "claimed_at": active["claimed_at"],
+            "ttl_hours": 24,
+            "gates_owner": True,
+            "exclusive_paths": [],
+        }
+    )
+    active["gates_owner"] = True  # both hold it: the inconsistent board
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+
+    code = _heartbeat(
+        board_module,
+        active["task"],
+        active["agent_branch"],
+        gates=True,
+        generation=_generation_of(board_module, active["task"]),
+    )
+    assert code == 0
+    assert _live_gate_holders(board_module) == [active["task"]]
+    others = [c for c in _claims_of(board_module) if c["task"] == "task-9999-other-gate-holder"]
+    assert others[0]["gates_owner"] is False, "the other holder must lose the gate"
+
+
+def test_a_heartbeat_without_the_flag_never_drops_the_gate(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Renewing a lease must not silently release a gate the owner still holds.
+
+    The flag is additive: absent means "keep whatever I have".  Dropping it on
+    every heartbeat would make the single-gate role expire faster than the lease
+    it is attached to, with no message saying so.
+    """
+    board, active = _hermetic_gate_board(board_module, monkeypatch)
+    active["gates_owner"] = True
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+
+    code = _heartbeat(
+        board_module,
+        active["task"],
+        active["agent_branch"],
+        gates=False,
+        generation=_generation_of(board_module, active["task"]),
+    )
+    assert code == 0
+    renewed = next(c for c in _claims_of(board_module) if c["task"] == active["task"])
+    assert renewed["gates_owner"] is True
+    assert _live_gate_holders(board_module) == [active["task"]]
+
+
+def test_a_stale_heartbeat_cannot_take_the_gate(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """The gate is fenced by the lease epoch: a superseded owner cannot seize it.
+
+    ``--gates`` is not a way around the fencing token, otherwise a resumed stale
+    session could take the single CI gate while another branch works the zone.
+    """
+    board, active = _hermetic_gate_board(board_module, monkeypatch)
+    task = active["task"]
+    stale = _generation_of(board_module, task)
+
+    # another session took the zone over (or released it): the epoch advanced
+    next(c for c in board["claims"] if c["task"] == task)["generation"] = stale + 1
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    before = board_module.BOARD.read_text(encoding="utf-8")
+
+    code = _heartbeat(board_module, task, active["agent_branch"], gates=True, generation=stale)
+    assert code == 2, "a stale token must be refused, never honoured"
+    assert "REFUSED" in capsys.readouterr().out
+    assert board_module.BOARD.read_text(encoding="utf-8") == before, "board must be untouched"
+    assert _live_gate_holders(board_module) == [], "a refused heartbeat grants nothing"
 
 
 def test_mutating_an_existing_lease_without_a_token_is_refused(
