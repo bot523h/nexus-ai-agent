@@ -148,6 +148,12 @@ MUTATIONS: tuple[Mutation, ...] = (
         "a heartbeat without --gates must not silently drop the gate (task-266)",
     ),
     Mutation(
+        "exactly_one_gate_owner_ignored",
+        "    if not no_remote and (malformed_owners or len(owners) != 1):",
+        "    if False:  # mutation: ignore the exactly-one-gates-owner invariant\n        pass\n    if not no_remote and (malformed_owners or len(owners) != 1) and False:",
+        "the referee must refuse to certify anything without exactly one live gate holder",
+    ),
+    Mutation(
         "open_pr_source_set_truncated",
         "    for start in range(0, len(targets), _REMOTE_BRANCH_FETCH_LIMIT):",
         "    for start in range(0, min(len(targets), _REMOTE_BRANCH_FETCH_LIMIT), _REMOTE_BRANCH_FETCH_LIMIT):  # mutation: cap the source set",

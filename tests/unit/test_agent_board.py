@@ -532,6 +532,72 @@ def test_check_unreliable_worktree_enumeration_is_exit_2(
     assert "exactly one active, unexpired gates_owner" not in out, out
 
 
+def _check_with_clean_sources(board_module: ModuleType, monkeypatch: pytest.MonkeyPatch) -> int:
+    """Run ``check`` with every non-local source readable and disjoint.
+
+    Leaves the *local board* as the only variable, so the verdict is decided by
+    the gate-ownership contract rather than by a source that could not be read.
+    """
+    monkeypatch.setattr(board_module, "_worktree_boards", lambda exclude: ([], True))
+    monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, ""))
+    monkeypatch.setattr(board_module, "_open_pr_branches", lambda repo, token: ([], ""))
+    return board_module.cmd_check(
+        type(
+            "A",
+            (),
+            {"files": "docs/not-owned.md", "branch": "arena/999-me", "no_remote": False},
+        )()
+    )
+
+
+def test_check_fails_closed_with_no_gate_owner(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Zero live gate holders is not "no one is running the gates" — it is unverifiable.
+
+    The gate is lease-scoped, so an idle board legitimately holds none; the
+    referee must then refuse to certify anything (exit 2), because nobody is
+    accountable for the full gates.  Asserting the *reason*, not just the code,
+    is what keeps this honest (see the worktree-source test above for the failure
+    mode that creates: the same exit code from an unrelated branch).
+    """
+    board = _synthetic_directory_claim_board()
+    board["claims"][0]["gates_owner"] = False
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+
+    code = _check_with_clean_sources(board_module, monkeypatch)
+    assert code == 2, "zero gate holders must be fail-closed"
+    assert "exactly one active, unexpired gates_owner" in capsys.readouterr().out
+
+
+def test_check_fails_closed_with_two_gate_owners(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """The invariant is *exactly* one: a second live holder is a refusal, not a tie-break."""
+    board = _synthetic_directory_claim_board()
+    first = board["claims"][0]
+    first["gates_owner"] = True
+    board["claims"].append(
+        {
+            "task": "task-9999-second-gate-holder",
+            "status": "active",
+            "zone": first["zone"],
+            "agent_branch": "arena/999-second-gate-holder",
+            "claimed_at": first["claimed_at"],
+            "ttl_hours": 24,
+            "gates_owner": True,
+            "exclusive_paths": [],
+        }
+    )
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, first)
+
+    code = _check_with_clean_sources(board_module, monkeypatch)
+    assert code == 2, "two live gate holders must be fail-closed"
+    assert "exactly one active, unexpired gates_owner" in capsys.readouterr().out
+
+
 def test_check_proven_conflict_wins_over_unreadable_remote(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
