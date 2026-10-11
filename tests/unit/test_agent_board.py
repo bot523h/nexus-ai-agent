@@ -1975,3 +1975,110 @@ def test_show_garbage_collects_an_expired_lease(board_module: ModuleType) -> Non
     # gc records *why* it released the lease, and never clobbers the owner's note.
     assert "stale active lease" in freed["release_reason"]
     assert freed["note"] == handoff
+
+
+def test_an_unreadable_fork_head_makes_the_verdict_unverifiable(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Nothing conflicts, but one fork head cannot be fetched → exit 2, never 0.
+
+    Asserted on the *verdict*, not on the mechanism: a referee that counts a
+    failed fetch as "attempted, therefore seen" would answer 0 here — the exact
+    false clear this source exists to prevent (task-266 review finding B, second
+    round: an unreadable source must never be traded for a clean pass).
+    """
+    board = _synthetic_directory_claim_board()
+    board["claims"][0]["gates_owner"] = True  # exactly one live gate owner
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+
+    def _fake_git(args: list[str], cwd: Path) -> object:
+        if args[:2] == ["worktree", "list"]:
+            return subprocess.CompletedProcess(args, 0, stdout=f"worktree {REPO_ROOT}\n", stderr="")
+        if args[0] == "fetch":
+            return subprocess.CompletedProcess(args, 128, stdout="", stderr="repository not found")
+        # origin/main is readable and clean
+        return subprocess.CompletedProcess(args, 0, stdout=json.dumps({"claims": []}), stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _fake_git)
+    monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, ""))
+    monkeypatch.setattr(
+        board_module,
+        "_open_pr_heads",
+        lambda repo, token: ([_pr_head(board_module, "forkb/nexus-ai-agent", "release", 9)], ""),
+    )
+    code = board_module.cmd_check(
+        type(
+            "A",
+            (),
+            {
+                "files": "docs/anything.md",
+                "branch": "arena/999-me",
+                "no_remote": False,
+                "repo": "o/r",
+                "token": "t",
+            },
+        )()
+    )
+    captured = capsys.readouterr().out
+    assert code == 2, "an unreadable fork head must make the whole verdict unverifiable"
+    assert "forkb/nexus-ai-agent" in captured, "the unreadable source must be named to the caller"
+
+
+def test_a_proven_conflict_survives_an_unreadable_fork_head(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """A conflict proven in a readable fork is exit 1 even if another head is unreadable.
+
+    Deliberate precedence, pinned so it stays a decision: the confirmed conflict is
+    reported (hiding it behind exit 2 would be worse), *and* the unreadable source
+    is still surfaced — never silently dropped.
+    """
+    board = _synthetic_directory_claim_board()
+    board["claims"][0]["gates_owner"] = True
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+
+    conflict = _synthetic_directory_claim_board()
+    conflict["claims"][0]["agent_branch"] = "arena/999-fork"
+    conflict["claims"][0]["exclusive_paths"] = ["docs/anything.md"]
+
+    def _fake_git(args: list[str], cwd: Path) -> object:
+        if args[:2] == ["worktree", "list"]:
+            return subprocess.CompletedProcess(args, 0, stdout=f"worktree {REPO_ROOT}\n", stderr="")
+        if args[0] == "fetch":
+            ok = "forka" in " ".join(args)  # forka readable, forkb not
+            return subprocess.CompletedProcess(args, 0 if ok else 128, stdout="", stderr="")
+        if args[0] == "show" and "pr-8" in args[1]:
+            return subprocess.CompletedProcess(args, 0, stdout=json.dumps(conflict), stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout=json.dumps({"claims": []}), stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _fake_git)
+    monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, ""))
+    monkeypatch.setattr(
+        board_module,
+        "_open_pr_heads",
+        lambda repo, token: (
+            [
+                _pr_head(board_module, "forka/nexus-ai-agent", "release", 8),
+                _pr_head(board_module, "forkb/nexus-ai-agent", "release", 9),
+            ],
+            "",
+        ),
+    )
+    code = board_module.cmd_check(
+        type(
+            "A",
+            (),
+            {
+                "files": "docs/anything.md",
+                "branch": "arena/999-me",
+                "no_remote": False,
+                "repo": "o/r",
+                "token": "t",
+            },
+        )()
+    )
+    captured = capsys.readouterr().out
+    assert code == 1, "a proven conflict is exit 1, even next to an unreadable source"
+    assert "forkb/nexus-ai-agent" in captured, "the unreadable source must not be hidden"

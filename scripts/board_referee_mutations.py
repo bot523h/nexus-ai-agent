@@ -184,6 +184,18 @@ MUTATIONS: tuple[Mutation, ...] = (
         "a foreign PR head is fetched from its own repository; origin is never a substitute (task-266 review B)",
     ),
     Mutation(
+        "failed_fork_fetch_counted_as_readable",
+        "        if fetched is not None and fetched.returncode == 0:\n"
+        "            fresh.add(_head_key(head))\n"
+        "        else:\n"
+        '            unreadable.append(\n                f"pr-head {_head_key(head)}: git fetch from {url} failed "',
+        "        if True:  # mutation: a failed fork fetch still counts as readable\n"
+        "            fresh.add(_head_key(head))\n"
+        "        else:\n"
+        '            unreadable.append(\n                f"pr-head {_head_key(head)}: git fetch from {url} failed "',
+        "a fork head that could not be fetched must not be read: its verdict is unverifiable (task-266 review B, round 2)",
+    ),
+    Mutation(
         "open_pr_heads_deduped_by_ref_name",
         "        key = _head_key(head)",
         "        key = head.ref  # mutation: dedupe by branch name, ignoring the repository",
