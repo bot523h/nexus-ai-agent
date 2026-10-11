@@ -16,7 +16,7 @@ lint:
 	ruff check . && ruff format --check .
 
 types:
-	mypy src
+	python3 -m mypy src
 
 test:
 	pytest -q -m "not slow"
