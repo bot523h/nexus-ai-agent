@@ -219,11 +219,20 @@ seen, git_both = _two_fork_git()
 c, _ = run("cmd_check", gh_two, git_both)
 foreign = [f for f in seen if "forka" in " ".join(f) or "forkb" in " ".join(f)]
 shows = [f for f in SEEN_SHOWS if "nexus-referee" in " ".join(f)]
-ok_fetched = len(foreign) >= 2
+# A count is not evidence: two fetches of the *same* fork would satisfy ">= 2".
+# Each fork's own repository URL must appear, and each fork's board must be read.
+fork_urls = {f[3] for f in foreign if len(f) > 3}
+want_urls = {
+    "https://github.com/forka/nexus-ai-agent.git",
+    "https://github.com/forkb/nexus-ai-agent.git",
+}
+missing = sorted(want_urls - fork_urls)
+ok_fetched = not missing
 ok_read = any("pr-8:" in " ".join(x) for x in shows) and any("pr-9:" in " ".join(x) for x in shows)
 print(
-    f"    two forks fetched as separate sources: {ok_fetched} ({len(foreign)} fetch(es)); "
-    f"both fork boards read: {ok_read} ({len(shows)} read(s))"
+    f"    each fork fetched from its own repository: {ok_fetched} ({len(fork_urls)} URL(s))"
+    + (f" — missing {missing}" if missing else "")
+    + f"; both fork boards read: {ok_read} ({len(shows)} read(s))"
 )
 want("B2a", c, 1, "a conflict inside one of two same-named fork heads was not found")
 if not ok_fetched:
