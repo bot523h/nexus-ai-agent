@@ -91,3 +91,15 @@ Permanent rails added for the same class (`tests/unit/test_agent_board.py`):
 the real file: with the "failed fetch still counts as readable" mutation applied they
 fail with assertion errors naming the violated invariant; with the file restored they
 pass. The mutation campaign is **27/27 killed, exit 0, no survivor, no drift**.
+
+## Round 3 — one finding, the same class a third time
+
+| # | Finding | Fix (commit `0953b1c2a6858af6d480b3367da8d80d9ec47ecf` on this branch) | Result |
+|---|---|---|---|
+| D3 | `len(foreign) >= 2` is satisfied by two fetches of the *same* fork, so B2a could report success while `forkb` was never fetched | the assertion now requires each fork's own repository URL among the fetch targets and names the missing ones | probe reports `1 URL(s) — missing https://github.com/forkb/...` when the code dedupes by ref name, and two URLs when it is correct |
+
+Falsified against the real file before being trusted: with `key = head.ref` applied
+to `scripts/agent_board.py`, the probe goes RED (five findings, the missing URL named);
+with the file restored it is green. A count is not evidence — each source has to be
+named. This is the third finding of the same shape (`A`, `B2`, `D3`), which is worth
+saying plainly rather than reporting as three unrelated incidents.
