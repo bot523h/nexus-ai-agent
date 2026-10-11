@@ -817,7 +817,9 @@
         "tests/integration/test_asset_library_recovery.py",
         "tests/architecture/test_asset_library_boundary.py",
         "migrations/versions/",
-        "src/nexus_ai_agent/storage/migration_metadata.py"
+        "src/nexus_ai_agent/storage/migration_metadata.py",
+        "src/nexus_ai_agent/tools/filesystem_policy.py",
+        "tests/unit/test_asset_library_blob_store.py"
       ]
     }
   ],
@@ -3631,14 +3633,16 @@
         "tests/integration/test_asset_library_recovery.py",
         "tests/architecture/test_asset_library_boundary.py",
         "migrations/versions/",
-        "src/nexus_ai_agent/storage/migration_metadata.py"
+        "src/nexus_ai_agent/storage/migration_metadata.py",
+        "src/nexus_ai_agent/tools/filesystem_policy.py",
+        "tests/unit/test_asset_library_blob_store.py"
       ],
       "owner_hint": "",
       "agent_branch": "arena/nagar-asset-library-v1",
       "claimed_at": "2026-10-11T14:27:20Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "",
+      "note": "Cross-zone additive extension of WorkspaceFilesystem (tools/filesystem_policy.py): a generic streaming atomic write + read_bytes, so the Asset Library reuses the ONE existing filesystem security boundary instead of creating a second one. Not live-claimed.",
       "generation": 1
     }
   ],
