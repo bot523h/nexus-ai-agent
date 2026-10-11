@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-11T07:04:34Z",
+  "updated_at": "2026-10-11T07:06:38Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -484,6 +484,13 @@
         "src/nexus_ai_agent/creative/slideshow/service.py",
         "src/nexus_ai_agent/creative/slideshow/upscale.py",
         "src/nexus_ai_agent/creative/render_jobs.py"
+      ]
+    },
+    {
+      "id": "runtime-service-grant-guard",
+      "description": "Architecture ratchet for the runtime service-grant contract: the guard test that proves the three in-process bus call sites pass explicit authorizer= service grants + project-bound source InputRefs (task-181 acceptance criterion 2). Declared 2026-10-10 because no existing zone covered tests/architecture/test_runtime_service_grants.py; the runtime zone deliberately does not carry test paths.",
+      "paths": [
+        "tests/architecture/test_runtime_service_grants.py"
       ]
     },
     {
@@ -2308,7 +2315,7 @@
       "title_fa": "",
       "zone": "nagar-runtime-call-sites",
       "priority": "P1",
-      "status": "queued",
+      "status": "active",
       "scope": "After Gate 2, claim-less schema-1 dispatches run under deprecated implicit local trust; the runtime owner must inject authorizer= with service grants at the three in-process call sites, then the implicit path can be retired.",
       "scope_fa": "",
       "prerequisites": [
@@ -2319,8 +2326,24 @@
         "an architecture guard requires authorizer= at those call sites (Gate 2 guard deliberately does not, to avoid owning runtime files)",
         "full suite green; no contract-layer change needed"
       ],
-      "exclusive_paths": [],
-      "owner_hint": "Gate 2 follow-up; fence set at claim time"
+      "evidence_required": [
+        "tests/architecture/test_runtime_service_grants.py green on the claim head (25 passed) plus the committed harness scripts/runtime_service_grant_guard_mutations.py reporting 11/11 mutations caught with a byte-identical restore",
+        "the three fenced runtime files byte-identical to PR #196 head 5c34686 (git diff --stat empty; sha256 prefixes 685bfab7740ebd18 / 1d8a688ca34effa1 / e00d79f7a42d3c91)",
+        "full suite green: pytest -q -m \"not slow\" segmented per the sandbox command cap, with ruff check/format clean; the exact commands, counts and the two non-deterministic origin/main tests are recorded in docs/audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md (Validation ledger)",
+        "python scripts/agent_board.py check --repo bot523h/nexus-ai-agent --files <changed paths> --branch phase1-pr196-guard-20261009 exits 0 with every source readable"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/slideshow/service.py",
+        "src/nexus_ai_agent/creative/slideshow/upscale.py",
+        "src/nexus_ai_agent/creative/render_jobs.py"
+      ],
+      "owner_hint": "Gate 2 follow-up; fence set at claim time",
+      "agent_branch": "phase1-pr196-guard-20261009",
+      "claimed_at": "2026-10-10T18:42:23Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
     },
     {
       "task": "task-182-durable-idempotency-conflict",
@@ -3467,6 +3490,100 @@
       "generation": 3
     },
     {
+      "task": "task-181-runtime-service-grant-guard",
+      "title": "RUNTIME GUARD (task-181 artifact): semantic architecture guard for explicit service grants + owned source refs",
+      "title_fa": "",
+      "zone": "runtime-service-grant-guard",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Own and publish the architecture ratchet proving the three in-process bus call sites pass explicit service principals, project-scoped grants and project-bound InputRefs. Split from task-181-runtime-service-grants because the runtime zone deliberately does not cover test paths and the guard must not be forced into it.",
+      "scope_fa": "",
+      "prerequisites": [
+        "task-179-gate2-command-reconciliation"
+      ],
+      "acceptance_criteria": [
+        "the guard fails closed on authorizer=None, missing/empty input_refs, empty asset tuples (literal, tuple-wrapped and aliased), unresolved/cyclic/scope-unrelated aliases and foreign-project InputRef expressions - each case observed RED under mutation and restored",
+        "the guard accepts the live call sites' real expression shapes (including generator asset ids) and the true project-expression target",
+        "pytest -q tests/architecture/test_runtime_service_grants.py green on the exact head"
+      ],
+      "evidence_required": [
+        "pytest output for tests/architecture/test_runtime_service_grants.py",
+        "mutation log with restoration verified (baseline GREEN -> mutant RED -> restore -> GREEN)",
+        "exact-SHA CI run URL and conclusion"
+      ],
+      "exclusive_paths": [
+        "tests/architecture/test_runtime_service_grants.py"
+      ],
+      "owner_hint": "runtime-lane guard artifact (task-181 acceptance criterion 2)",
+      "agent_branch": "phase1-pr196-guard-20261009",
+      "claimed_at": "2026-10-10T18:42:23Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
+    },
+    {
+      "task": "nexus-stabilization-handoff",
+      "title": "Dated stabilization handoff (PR #196/#197 closure record): exact-SHA CI truth, open-PR inventory snapshot, blockers",
+      "title_fa": "",
+      "zone": "docs-architecture",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Own docs/audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md and its docs/README index row. Separated from the runtime task because documentation is not a runtime-zone path; the record states exact-SHA CI evidence with run ids and observation times and must not conflate it with the full-gates role or the overall stabilization status.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "handoff distinguishes exact-SHA CI records (run id + SHA + observed time) from the overall stabilization status and from the full-gates role",
+        "stale QUEUED/IN_PROGRESS rows are historicalised; live heads refreshed at the observation time",
+        "pytest -q tests/unit/test_docs_integrity.py green on the exact head"
+      ],
+      "evidence_required": [
+        "docs-integrity pytest output on the exact head",
+        "the exact run ids, SHAs and observation times recorded inline"
+      ],
+      "exclusive_paths": [
+        "docs/audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md",
+        "docs/README.md"
+      ],
+      "owner_hint": "PR #197 closure documentation",
+      "agent_branch": "phase1-pr196-guard-20261009",
+      "claimed_at": "2026-10-10T18:42:23Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
+    },
+    {
+      "task": "ci-gates-steward-closure",
+      "title": "GATES STEWARDSHIP (epoch 2026-10-10): single live full-gates owner for the #196/#197 closure validation",
+      "title_fa": "",
+      "zone": "ci-quality",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Exactly one live gates_owner while the closure validation runs: the referee fails closed (exit 2) for every agent while no live gates owner exists, and main-bound closure work needs the full gates executed by their holder. Runs make lint / make types / make test against the closure head and records the results bound to the exact SHA.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "exactly one live gates_owner present on this board while the epoch is active",
+        "full gates (ruff check ., ruff format --check ., mypy src, pytest -q -m 'not slow') executed and recorded against the exact head SHA, with any environment-forced deviation classified explicitly"
+      ],
+      "evidence_required": [
+        "ruff/mypy/pytest outputs bound to the closure head SHA",
+        "the epoch record (claim, results, expiry/release)"
+      ],
+      "exclusive_paths": [
+        "Makefile",
+        ".github/"
+      ],
+      "owner_hint": "successor of ci-gates-steward / task-145-ci-gates-handoff-refresh",
+      "agent_branch": "phase1-pr196-guard-20261009",
+      "claimed_at": "2026-10-10T18:42:23Z",
+      "ttl_hours": 24,
+      "gates_owner": true,
+      "note": "",
+      "generation": 1
+    },
+    {
       "task": "task-266-gate-bootstrap-integrity",
       "title": "P0 GOVERNANCE GAP: `claim --gates` silently no-ops on a live own lease (heartbeat path) -> the board can never reach exactly one gates_owner by the documented route",
       "title_fa": "شکاف P0 حاکمیتی: `claim --gates` روی اجارهٔ زندهٔ خودِ عامل بی‌صدا بی‌اثر است، پس برد از مسیر مستند هرگز به «دقیقاً یک مالک گیت» نمی‌رسد.",
@@ -4155,7 +4272,8 @@
         "id": "undo-contract-plan-collision",
         "what": "PR#128 (task-223 identity-addressable system.undo, arena/01a0181931-task223-undo-contract) and PR#129 (task-221 staged plan atomicity, jules-...) both rewrite the same system.undo handler in src/nexus_ai_agent/creative/studio/capabilities.py. An independent 3-way merge (main + #129 diff + #128 diff) shows three conflicting hunks inside that one handler: UndoCommandInput.transaction_id (plain field vs validated Field+validator), the identity-guard vs plan-selection branch, and the OperationOutcome keys (undone_plan_id vs requested_transaction_id). #128 has no UndoConflictError and #129 has no identity guard (grep: absent in both directions).",
         "resolution": "Recorded for the merge order (AGENTS.md §6). #128 is green and merges first; #129 must be rebased onto it and its undo handler reconciled so the identity gate and plan selection coexist -- a wholesale 'ours/theirs' resolution silently drops either the TOCTOU guard (re-opening the check-then-act window) or plan-undo atomicity. #129 is additionally red independently: test_command_idempotency_inside_plan_does_not_index_error fails (idempotency dedupe not applied inside dispatch_plan)."
-      }
+      },
+      "2026-10-11 board conflict: PR#197 merged to main while PR#202 (task-266) was open; both branches had edited .agents/board.json. Resolved by union merge (no force-push; 4 live claims preserved)."
     ],
     "board_revisions": [
       {
@@ -4341,5 +4459,6 @@
       "reason": "Session-bound-branch rule: this session is fixed to arena/290bc0d6-nexus-ai-agent and cannot push to arena/execution-core-v1-nexus-ai-agent (the claim's predecessor branch / PR #191, head 08060d5). Per the PR#102->PR#107 salvage precedent the predecessor's commits are adopted VERBATIM (git merge --ff-only 48f280c..08060d5, authorship preserved) and the Task-254 closure continues on the successor branch under this claim (generation 1->2 fences the departed holder). The predecessor session is gone and its branch cannot renew; per the orphaned-lease rule this claim must follow its live work, not a dead branch."
     }
   ],
-  "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins."
+  "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins.",
+  "merge_resolution_note": "2026-10-11: arena/b561a2be-nexus-ai-agent merged origin/main (df3c9d1, PR#197) into its task-266 branch. Only .agents/board.json conflicted. Resolution is a UNION, not 'newest wins': main's board is the base (preserving phase1-pr196-guard-20261009's four live claims incl. ci-gates-steward-closure with the single gates_owner, task-181-runtime-service-grant-guard and nexus-stabilization-handoff), then the three task-266 records and its two deferral notes are re-applied on top. No claim, note or deferral of another agent was modified or dropped. Schema-2 tests and the truth doctor pass on the merged file."
 }
