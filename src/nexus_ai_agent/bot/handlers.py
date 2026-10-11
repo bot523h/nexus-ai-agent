@@ -192,6 +192,9 @@ def _base_state(update: Update, text: str) -> NexusState:
         "error": None,
         "turn_count": 0,
         "moderation_passed": True,
+        # Fail-closed default: only ``on_message`` may raise this to True, and
+        # only from the live P0-7 decision (explicit grant + feature enabled).
+        "memory_consent": False,
     }
 
 
@@ -944,6 +947,13 @@ def build_handlers(
             state = _base_state(update, update.message.text)
             state["correlation_id"] = correlation_id
             state["intent"] = "unknown"
+            # P1-E: carry the effective P0-7 decision into the graph.  Only an
+            # explicit grant with the feature enabled authorizes a personal
+            # long-term-memory write; unset/denied stays fail closed and the
+            # AI reply itself is unaffected.
+            state["memory_consent"] = bool(settings.ai_memory_enabled) and (
+                memory_consent == CONSENT_GRANTED
+            )
 
             result = await graph.ainvoke(state, config={"configurable": {"thread_id": thread_id}})
             await _reply(update, result.get("response") or "")

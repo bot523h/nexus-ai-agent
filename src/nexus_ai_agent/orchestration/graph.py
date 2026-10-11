@@ -7,6 +7,7 @@ from langgraph.graph import END, START, StateGraph
 from nexus_ai_agent.agents.gemma_agent import GemmaAgent
 from nexus_ai_agent.agents.phi_agent import PhiAgent
 from nexus_ai_agent.agents.qwen_agent import QwenAgent
+from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.llm.provider import LLMProvider
 from nexus_ai_agent.memory.long_term import LongTermMemory, is_private_audience, memory_scope_id
 from nexus_ai_agent.orchestration.router import classify_intent, select_persona
@@ -178,7 +179,18 @@ async def _memory_writer(
     # ⇒ fail closed (no write, no shared fallback).
     scope = memory_scope_id(state.get("user_id"))
     messages = state.get("messages", [])
-    if long_term_memory and scope and len(messages) >= 2:
+    # P1-E consent gate: the effective per-user decision travels in the state
+    # from the message handler (P0-7).  Only an explicit ``True`` with the live
+    # feature switch on may store; an absent, denied or malformed value fails
+    # closed, and a stale/checkpointed granted value cannot write while
+    # ``NEXUS_AI_MEMORY_ENABLED`` is false.
+    if (
+        long_term_memory
+        and scope
+        and state.get("memory_consent") is True
+        and get_settings().ai_memory_enabled
+        and len(messages) >= 2
+    ):
         last_user = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
         if last_user and response:
             try:

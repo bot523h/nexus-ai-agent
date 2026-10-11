@@ -56,6 +56,9 @@ def _state(user_id: int | None, chat_id: int, text: str) -> dict:
         "error": None,
         "turn_count": 0,
         "moderation_passed": True,
+        # P1-E: these tests model a consented user — the writer only stores
+        # turns after the handler carried an explicit grant into the state.
+        "memory_consent": True,
     }
 
 

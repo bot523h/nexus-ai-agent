@@ -48,6 +48,8 @@ async def test_long_term_memory_written_on_turn_end(settings_override) -> None:
         "error": None,
         "turn_count": 0,
         "moderation_passed": True,
+        # P1-E: the writer stores only with an explicit consent decision.
+        "memory_consent": True,
     }
 
     result = await graph.ainvoke(state, config={"configurable": {"thread_id": thread_id}})

@@ -34,7 +34,7 @@ from nexus_ai_agent.features.ai_memory import (
 )
 from nexus_ai_agent.llm.fake_llm import FakeLLMProvider
 from nexus_ai_agent.memory.long_term import LongTermMemory, memory_scope_id
-from nexus_ai_agent.orchestration.graph import _memory_reader, compile_graph
+from nexus_ai_agent.orchestration.graph import _memory_reader, _memory_writer, compile_graph
 from nexus_ai_agent.storage.langgraph_checkpoint import get_checkpointer
 from nexus_ai_agent.tools.registry import ToolRegistry
 
@@ -324,3 +324,130 @@ async def test_group_privacy_is_independent_of_personal_consent(mem_db) -> None:
         "group disclosure happened despite the audience gate — consent and "
         "audience are distinct controls and consent must not unlock groups"
     )
+
+
+# ── P1-E — the graph writer must honour the effective consent decision ──
+#
+# The P0-7 gate (features/ai_memory.py) covers the extraction egress, but the
+# LangGraph ``_memory_writer`` stores every turn into personal long-term memory
+# with no consent check at all.  The effective decision must travel from the
+# message handler through ``NexusState.memory_consent``; anything but an
+# explicit ``True`` — absent key, denied vote, malformed value — is denied, and
+# the live feature switch is consulted too (a stale granted value cannot write
+# while NEXUS_AI_MEMORY_ENABLED is false).  Every test spies at the real
+# ``LongTermMemory.store`` boundary, not at the state flag.
+
+
+class _StoreSpy(LongTermMemory):
+    """Real store + call recording at the ``LongTermMemory.store`` boundary."""
+
+    def __init__(self, llm: FakeLLMProvider) -> None:
+        super().__init__(":memory:", llm)
+        self.store_calls: list[tuple[str, str]] = []
+
+    async def store(self, thread_id: str, text: str, metadata: dict | None = None) -> None:
+        self.store_calls.append((thread_id, text))
+        await super().store(thread_id, text, metadata)
+
+
+def _writer_state(user_id: int, memory_consent: bool | None = None) -> dict[str, Any]:
+    state: dict[str, Any] = {
+        "thread_id": f"tg:{user_id}",
+        "chat_id": user_id,
+        "user_id": user_id,
+        "correlation_id": "p1e",
+        "messages": [{"role": "user", "content": "my secret code is WRITE-42"}],
+        "intent": "chat",
+        "active_persona": "gemma",
+        "current_task": None,
+        "tool_results": [],
+        "memory_context": "",
+        "response": "acknowledged",
+        "error": None,
+        "turn_count": 1,
+        "moderation_passed": True,
+    }
+    if memory_consent is not None:
+        state["memory_consent"] = memory_consent
+    return state
+
+
+async def test_writer_missing_consent_yields_zero_writes(mem_db) -> None:
+    """Absent consent is denied: the writer must not reach the store."""
+    mem = _StoreSpy(FakeLLMProvider())
+    await _memory_writer(_writer_state(101), long_term_memory=mem)
+    assert mem.store_calls == [], (
+        "the writer stored a turn although no consent decision was carried in state"
+    )
+
+
+async def test_writer_denied_consent_yields_zero_writes(mem_db) -> None:
+    """An explicit deny keeps the user's turns out of long-term memory."""
+    mem = _StoreSpy(FakeLLMProvider())
+    await _memory_writer(_writer_state(102, memory_consent=False), long_term_memory=mem)
+    assert mem.store_calls == [], "a denied user's turn was stored in long-term memory"
+
+
+async def test_writer_malformed_consent_yields_zero_writes(mem_db) -> None:
+    """Unproven shapes (e.g. the string ``"granted"``) never count as proof."""
+    state = _writer_state(103)
+    state["memory_consent"] = "granted"
+    mem = _StoreSpy(FakeLLMProvider())
+    await _memory_writer(state, long_term_memory=mem)
+    assert mem.store_calls == [], "a malformed consent value was treated as proof"
+
+
+async def test_writer_granted_consent_with_memory_enabled_stores_the_turn(mem_db) -> None:
+    """Positive control: grant + enabled feature writes, in the personal scope."""
+    mem = _StoreSpy(FakeLLMProvider())
+    state = _writer_state(104, memory_consent=True)
+    await _memory_writer(state, long_term_memory=mem)
+    assert len(mem.store_calls) == 1, "a consented turn was not stored"
+    scope, text = mem.store_calls[0]
+    assert scope == memory_scope_id(104), f"write must keep the personal scope: {scope!r}"
+    assert "WRITE-42" in text and "acknowledged" in text
+    hits = await mem.search("mem:u:104", "WRITE-42", top_k=3)
+    assert any("WRITE-42" in h for h in hits), "the stored turn is not readable (round-trip)"
+
+
+async def test_writer_feature_disabled_blocks_even_a_granted_consent_value(
+    mem_db, monkeypatch
+) -> None:
+    """A stale/checkpointed granted value cannot beat the live kill switch."""
+    from nexus_ai_agent.config import settings as settings_module
+
+    monkeypatch.setenv("NEXUS_AI_MEMORY_ENABLED", "false")
+    settings_module.get_settings.cache_clear()
+    mem = _StoreSpy(FakeLLMProvider())
+    await _memory_writer(_writer_state(105, memory_consent=True), long_term_memory=mem)
+    assert mem.store_calls == [], "the writer stored while the memory feature was disabled"
+
+
+async def test_unset_or_denied_consent_still_answers_via_the_full_graph(mem_db) -> None:
+    """Policy A: the ordinary AI reply is independent of memory consent.
+
+    End-to-end through the compiled graph (router → persona → moderation →
+    writer): both an unset and a denied user get a reply, and the writer
+    performs zero long-term-memory writes in both cases.
+    """
+    for label, consent in (("unset", None), ("denied", False)):
+        llm = FakeLLMProvider()
+        mem = _StoreSpy(llm)
+        graph = compile_graph(
+            llm,
+            get_checkpointer(":memory:"),
+            mem,  # type: ignore[arg-type]
+            ToolRegistry(enable_shell=False, workspace_root="."),
+        )
+        state = _writer_state(300)
+        state["thread_id"] = f"tg:300-{label}"
+        state["response"] = ""
+        if consent is None:
+            state.pop("memory_consent", None)
+        else:
+            state["memory_consent"] = consent
+        result = await graph.ainvoke(
+            state, config={"configurable": {"thread_id": state["thread_id"]}}
+        )
+        assert result.get("response"), f"{label}: the AI reply must not depend on consent"
+        assert mem.store_calls == [], f"{label}: the graph still wrote long-term memory"

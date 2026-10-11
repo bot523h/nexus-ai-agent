@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-11T13:12:47Z",
+  "updated_at": "2026-10-11T13:18:27Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3686,7 +3686,7 @@
       "claimed_at": "2026-10-11T13:12:47Z",
       "ttl_hours": 24,
       "gates_owner": true,
-      "note": "2026-10-11 Freebuff-session continuation on the existing PR#198 vehicle (branch identity arena/c5efc6a3-nexus-ai-agent; base head dd5badc2). Live preflight: main=df3c9d1; all four task-p1* claims deferred (no live lease); no live gates_owner; referee check over the six intended files = exit 0 (27 sources read, no overlap). Mission: close the LangGraph long-term-memory writer consent bypass — carry the effective consent decision into NexusState; store only on explicit grant + ai_memory_enabled; absent/malformed consent = denied; explicit AI replies unaffected. Fix + RED→GREEN + mutation evidence follow in the next commit on this branch.",
+      "note": "P1-E evidence (2026-10-11, official gates under this --gates claim). RED on the unmodified writer: pytest -q tests/unit/test_memory_consent_scope.py = 5 failed / 12 passed — every negative case proves a store call at the LongTermMemory.store boundary. Fix: NexusState gains an optional memory_consent key (total=False subclass; absent/malformed = denied); on_message carries the effective P0-7 decision (granted AND ai_memory_enabled); _memory_writer stores only on `is True` AND the live kill switch; scope/audience/message-count/exception handling unchanged. GREEN: consent suite + test_graph_memory + test_memory_scope_isolation + test_memory_context_failclosed + test_ai_memory{,_consent} + integration/test_graph = 57 passed; test_agent_board.py = 49 passed; ruff check/format clean; mypy src = 1 pre-existing env-only chromadb-stub error, none in changed files. Mutation: consent clause removed -> missing-consent regression test fails; restored -> green. Fix + tests are in the commit that carries this note (base head 2fd0e3c); PR#198 remains open (conflicted vs main@df3c9d1, owner rebase/review pending).",
       "generation": 1
     }
   ],
