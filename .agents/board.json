@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-10T20:37:27Z",
+  "updated_at": "2026-10-11T13:12:47Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3648,6 +3648,46 @@
       "gates_owner": false,
       "note": "",
       "generation": 4
+    },
+    {
+      "task": "task-p1e-memory-consent-bypass",
+      "title": "LangGraph long-term-memory writer honours the effective consent decision",
+      "title_fa": "گیت رضایت در نویسندهٔ حافظهٔ بلندمدت گراف",
+      "zone": "p1-privacy-identity",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Close the consent bypass in the LangGraph long-term-memory writer: carry the effective per-user memory-consent decision from the Telegram message handler into NexusState and make _memory_writer refuse LongTermMemory.store unless the state explicitly carries a granted decision AND settings.ai_memory_enabled is true. Absent/malformed consent stays denied; scope, audience, message-count and failure handling are preserved; explicit AI replies stay functional.",
+      "scope_fa": "بستن دورزدن رضایت در نویسندهٔ حافظهٔ بلندمدت گراف: تصمیم مؤثر رضایت از هندلر تلگرام به NexusState منتقل می‌شود و _memory_writer تا زمانی که رضایت صریح و فعال بودن ویژگی حافظه اثبات نشود LongTermMemory.store را فراخوانی نمی‌کند؛ نبود یا بدشکل بودن رضایت = رد؛ دامنهٔ کاربری، مخاطب خصوصی، شرط تعداد پیام و رفتار ایمن خطا حفظ می‌شود.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "missing consent → zero LongTermMemory.store calls (spy at the store boundary)",
+        "explicitly denied consent → zero writes",
+        "granted consent + NEXUS_AI_MEMORY_ENABLED=true → the turn is stored (round-trip readable)",
+        "NEXUS_AI_MEMORY_ENABLED=false with a granted/stale consent value → zero writes",
+        "unset/denied user still receives the ordinary AI reply (full graph)",
+        "existing memory scope/audience/consent suites stay green"
+      ],
+      "evidence_required": [
+        "RED: pytest -q tests/unit/test_memory_consent_scope.py against the unmodified writer",
+        "GREEN: same command after the fix + neighbouring suites (test_graph_memory.py, test_memory_scope_isolation.py, test_memory_context_failclosed.py, test_ai_memory*.py)",
+        "mutation: guard removed → regression test fails; guard restored → green",
+        "referee: agent_board.py check exit code + exact base/final SHAs"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/orchestration/state.py",
+        "src/nexus_ai_agent/orchestration/graph.py",
+        "src/nexus_ai_agent/bot/handlers.py",
+        "tests/unit/test_memory_consent_scope.py",
+        "tests/unit/test_graph_memory.py",
+        "tests/unit/test_memory_scope_isolation.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/c5efc6a3-nexus-ai-agent",
+      "claimed_at": "2026-10-11T13:12:47Z",
+      "ttl_hours": 24,
+      "gates_owner": true,
+      "note": "2026-10-11 Freebuff-session continuation on the existing PR#198 vehicle (branch identity arena/c5efc6a3-nexus-ai-agent; base head dd5badc2). Live preflight: main=df3c9d1; all four task-p1* claims deferred (no live lease); no live gates_owner; referee check over the six intended files = exit 0 (27 sources read, no overlap). Mission: close the LangGraph long-term-memory writer consent bypass — carry the effective consent decision into NexusState; store only on explicit grant + ai_memory_enabled; absent/malformed consent = denied; explicit AI replies unaffected. Fix + RED→GREEN + mutation evidence follow in the next commit on this branch.",
+      "generation": 1
     }
   ],
   "deferred_log": [
