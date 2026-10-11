@@ -145,6 +145,15 @@ class SqlAssetRepository:
         )
         return [_as_ingest(row) for row in result.scalars().all()]
 
+    async def set_staging_key(self, ingest_id: str, staging_key: str) -> None:
+        """Record a staged-bytes key on an already-durable STAGING row."""
+        row = await self._session.get(orm.AssetIngest, ingest_id)
+        if row is None:
+            raise LookupError(ingest_id)
+        row.staging_key = staging_key
+        row.updated_at = datetime.utcnow()
+        await self._session.flush()
+
     async def mark_staged(
         self,
         ingest_id: str,

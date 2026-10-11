@@ -30,12 +30,14 @@ from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from typing import BinaryIO
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexus_ai_agent.creative.assets.blob_store import LocalContentAddressedBlobStore
 from nexus_ai_agent.creative.assets.errors import (
     AssetNotFound,
     ContentIntegrityError,
+    ContentTooLarge,
     EmptyContent,
     IdempotencyConflict,
     IngestNotFound,
@@ -135,7 +137,7 @@ class AssetLibraryService:
 
             existing = await repo.find_ingest_by_key(project_id, request.idempotency_key)
             if existing is not None:
-                return await self._resolve_existing(repo, session, existing, fingerprint)
+                return await self._resolve_existing(repo, session, existing, fingerprint, stream)
 
             ingest_id = uuid.uuid4().hex
             staging_key = self._blob_store.new_staging_key()
@@ -147,7 +149,17 @@ class AssetLibraryService:
                 staging_key=staging_key,
                 original_filename=request.original_filename,
             )
-            await session.commit()  # Tx1: durable STAGING row before any fs effect
+            try:
+                await session.commit()  # Tx1: durable STAGING row before any fs effect
+            except IntegrityError:
+                # A concurrent same-key ingest won the UNIQUE(project_id,
+                # idempotency_key) race.  Drop our row and resolve against theirs
+                # instead of creating a second asset.
+                await session.rollback()
+                existing = await repo.find_ingest_by_key(project_id, request.idempotency_key)
+                if existing is None:
+                    raise
+                return await self._resolve_existing(repo, session, existing, fingerprint, stream)
             self._fault("after_ingest_row")
 
             content_sha256, size_bytes = self._blob_store.stage_to(
@@ -217,18 +229,52 @@ class AssetLibraryService:
         session: AsyncSession,
         existing: IngestRecord,
         fingerprint: str,
+        stream: BinaryIO,
     ) -> IngestResult:
+        """Resolve a replayed idempotency key against the existing ingest.
+
+        The replay is only honoured when the incoming bytes are the *same
+        content*: the stream is staged (or, for a READY record, hashed without a
+        filesystem effect) and its measured digest is compared with the stored
+        digest.  A reused key with different bytes is a typed conflict, never a
+        silent successful return of the earlier result.
+        """
         if existing.request_fingerprint != fingerprint:
             raise IdempotencyConflict("idempotency key was reused with a different request payload")
+
         if existing.state is IngestState.READY:
+            observed = self._blob_store.hash_stream(stream, max_bytes=self._max_bytes)
+            if observed != (existing.content_sha256, existing.size_bytes):
+                raise IdempotencyConflict("idempotency key was reused with different content")
             return _result_from(existing, reused=True)
+
         if existing.state is IngestState.STAGING:
-            report = await reconcile_ingest(repo, self._blob_store, existing)
+            # Stage the replay and fold it into the interrupts' staged identity
+            # so reconcile can complete or explicitly fail it.  A digest that
+            # disagrees with an already-measured staged identity is a conflict.
+            staging_key = existing.staging_key or self._blob_store.new_staging_key()
+            try:
+                replay_sha, replay_size = self._blob_store.stage_to(
+                    staging_key, stream, max_bytes=self._max_bytes
+                )
+            except ContentTooLarge:
+                raise IdempotencyConflict(
+                    "idempotency key was reused with content larger than the stored attempt"
+                ) from None
+            if replay_size != 0 and existing.content_sha256 is not None:
+                if (replay_sha, replay_size) != (existing.content_sha256, existing.size_bytes):
+                    self._blob_store.remove_staging(staging_key)
+                    raise IdempotencyConflict("idempotency key was reused with different content")
+            if existing.staging_key is None and replay_size != 0:
+                await repo.set_staging_key(existing.ingest_id, staging_key)
+            refreshed = await repo.get_ingest(existing.ingest_id)
+            assert refreshed is not None
+            report = await reconcile_ingest(repo, self._blob_store, refreshed)
             await session.commit()
             if report.state is IngestState.READY:
-                refreshed = await repo.get_ingest(existing.ingest_id)
-                assert refreshed is not None
-                return _result_from(refreshed, reused=True)
+                final = await repo.get_ingest(existing.ingest_id)
+                assert final is not None
+                return _result_from(final, reused=True)
             raise RecoveryError(f"interrupted ingest could not be completed: {report.outcome}")
         raise RecoveryError("this idempotency key belongs to a failed ingest; use a new key")
 

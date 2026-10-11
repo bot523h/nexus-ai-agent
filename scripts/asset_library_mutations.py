@@ -37,9 +37,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FS_POLICY = ROOT / "src" / "nexus_ai_agent" / "tools" / "filesystem_policy.py"
 BLOB_STORE = ROOT / "src" / "nexus_ai_agent" / "creative" / "assets" / "blob_store.py"
+MODELS = ROOT / "src" / "nexus_ai_agent" / "storage" / "models.py"
+SERVICE = ROOT / "src" / "nexus_ai_agent" / "creative" / "assets" / "service.py"
 TESTS = (
     "tests/unit/test_asset_library_blob_store.py",
     "tests/integration/test_asset_library_filesystem_security.py",
+    "tests/integration/test_asset_library_persistence.py",
+    "tests/unit/test_asset_library_service.py",
 )
 
 
@@ -98,6 +102,22 @@ MUTATIONS: tuple[Mutation, ...] = (
         "                        if False:",
         "the bounded streaming write must reject an oversize stream; removing the "
         "check lets an unbounded stream exhaust disk",
+    ),
+    Mutation(
+        "unique_constraint_removed",
+        MODELS,
+        '        UniqueConstraint("project_id", "idempotency_key", name="uq_assetingest_project_idem"),',
+        "        # mutated: scoped idempotency UNIQUE constraint removed",
+        "scoped idempotency must be backed by a database UNIQUE constraint; without "
+        "it concurrent same-key ingests create two independent assets",
+    ),
+    Mutation(
+        "replay_digest_check_bypassed",
+        SERVICE,
+        "            if observed != (existing.content_sha256, existing.size_bytes):",
+        "            if False:",
+        "a reused idempotency key must be compared against the measured content "
+        "digest; skipping it silently returns the earlier asset for different bytes",
     ),
 )
 

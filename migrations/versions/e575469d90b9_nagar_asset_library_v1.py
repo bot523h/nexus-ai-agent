@@ -125,6 +125,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.PrimaryKeyConstraint("ingest_id"),
+        sa.UniqueConstraint("project_id", "idempotency_key", name="uq_assetingest_project_idem"),
     )
     with op.batch_alter_table("assetingest", schema=None) as batch_op:
         batch_op.create_index(batch_op.f("ix_assetingest_asset_id"), ["asset_id"], unique=False)

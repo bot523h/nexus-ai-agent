@@ -35,6 +35,10 @@ class BlobStore(Protocol):
         """Return the deterministic content key for a 64-hex digest."""
         ...
 
+    def hash_stream(self, source: BinaryIO, *, max_bytes: int) -> tuple[str, int]:
+        """Measure ``(sha256, size)`` of a stream with no filesystem effect."""
+        ...
+
     def store(self, staging_key: str, blob_key: str) -> tuple[str, int, bool]:
         """Atomically publish staged bytes; return ``(sha256, size, deduplicated)``."""
         ...
@@ -84,6 +88,8 @@ class AssetRepository(Protocol):
     async def list_pending_ingests(self) -> list[IngestRecord]: ...
 
     async def mark_failed(self, ingest_id: str, *, error_code: str) -> None: ...
+
+    async def set_staging_key(self, ingest_id: str, staging_key: str) -> None: ...
 
     async def complete_ingest(
         self,

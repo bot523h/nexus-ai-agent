@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 
@@ -387,6 +388,13 @@ class ProjectAssetLink(SQLModel, table=True):
 
 class AssetIngest(SQLModel, table=True):
     """Identity and recoverable state of one ingest attempt (idempotency key)."""
+
+    # The scoped idempotency key is authoritative for dedup: a database UNIQUE
+    # constraint makes concurrent same-key ingests collapse to one row instead
+    # of racing SELECT-then-INSERT into two independent assets.
+    __table_args__ = (
+        UniqueConstraint("project_id", "idempotency_key", name="uq_assetingest_project_idem"),
+    )
 
     ingest_id: str = Field(primary_key=True)
     idempotency_key: str = Field(index=True)

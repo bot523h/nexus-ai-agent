@@ -267,6 +267,9 @@ class WorkspaceFilesystem:
                     src_dir_fd=parent_fd,
                     dst_dir_fd=parent_fd,
                 )
+                # Persist the directory entry itself: fsync of the file content
+                # does not guarantee the rename survives a power loss.
+                os.fsync(parent_fd)
             except BaseException:
                 try:
                     os.unlink(staging_name, dir_fd=parent_fd)

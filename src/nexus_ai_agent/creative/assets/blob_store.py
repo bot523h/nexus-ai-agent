@@ -74,6 +74,24 @@ class LocalContentAddressedBlobStore:
         sha256, size = self.stage_to(staging_key, source, max_bytes=max_bytes)
         return staging_key, sha256, size
 
+    def hash_stream(self, source: BinaryIO, *, max_bytes: int) -> tuple[str, int]:
+        """Measure ``(sha256, size)`` of a stream without any filesystem effect.
+
+        Used to prove a replayed idempotency key carries the same content; the
+        bounded read makes it safe against an unbounded or hostile stream.
+        """
+        digest = hashlib.sha256()
+        size = 0
+        while True:
+            chunk = source.read(1 << 20)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > max_bytes:
+                raise ContentTooLarge(f"stream exceeds the {max_bytes}-byte limit")
+            digest.update(chunk)
+        return digest.hexdigest(), size
+
     def store(self, staging_key: str, blob_key: str) -> tuple[str, int, bool]:
         """Publish staged bytes to ``blob_key``; return ``(sha256, size, dedup)``.
 

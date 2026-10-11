@@ -130,7 +130,7 @@ async def test_unauthorized_actor_is_refused_before_any_effect(tmp_path: Path) -
         )
     # No blob and no row were created: the blob root may exist, but it is empty.
     root = tmp_path / "blobs"
-    assert not any(root.rglob("*.*"))
+    assert not any(p.is_file() for p in root.rglob("*"))
 
 
 @pytest.mark.asyncio

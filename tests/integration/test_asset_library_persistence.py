@@ -154,7 +154,7 @@ async def test_unauthorized_actor_creates_no_side_effect(tmp_path: Path) -> None
         )
     # No blob, no metadata row: authorization precedes every write-side effect.
     blobs_dir = tmp_path / "blobs" / "blobs"
-    assert not blobs_dir.exists() or not any(blobs_dir.rglob("*.*"))
+    assert not blobs_dir.exists() or not any(p.is_file() for p in blobs_dir.rglob("*"))
     async with get_session(str(tmp_path / "library.sqlite")) as session:
         from sqlalchemy import func, select
 
@@ -214,6 +214,75 @@ async def test_reused_key_with_different_payload_is_a_conflict(tmp_path: Path) -
             request=IngestRequest(idempotency_key="conf", original_filename="other.jpg"),
             stream=io.BytesIO(JPEG),
         )
+
+
+@pytest.mark.asyncio
+async def test_reused_key_different_bytes_same_filename_is_a_conflict(tmp_path: Path) -> None:
+    """The idempotency fingerprint includes the measured content digest.
+
+    Same filename and declared type, but different bytes: the replay must be a
+    typed conflict rather than a silent return of the earlier asset.
+    """
+    service = _new_service(tmp_path)
+    request = IngestRequest(idempotency_key="bytes", original_filename="pic.png")
+    await service.ingest(
+        actor_kind="user",
+        actor_id=ACTOR,
+        project_id=PROJECT_A,
+        request=request,
+        stream=io.BytesIO(PNG),
+    )
+    with pytest.raises(IdempotencyConflict):
+        await service.ingest(
+            actor_kind="user",
+            actor_id=ACTOR,
+            project_id=PROJECT_A,
+            request=request,
+            stream=io.BytesIO(PNG + b"different"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_same_key_second_insert_hits_the_unique_constraint(tmp_path: Path) -> None:
+    """A database UNIQUE(project_id, idempotency_key) backs scoped idempotency.
+
+    Two inserts in distinct sessions over the same file; the second must fail at
+    commit, so concurrent same-key ingests cannot create two asset rows.
+    """
+    from sqlalchemy import func, select
+    from sqlalchemy.exc import IntegrityError
+
+    from nexus_ai_agent.creative.assets.repository import SqlAssetRepository
+
+    db = str(tmp_path / "library.sqlite")
+    async with get_session(db) as session:
+        repo = SqlAssetRepository(session)
+        await repo.create_ingest(
+            ingest_id="ing-a",
+            idempotency_key="race",
+            project_id=PROJECT_A,
+            request_fingerprint="fp",
+            staging_key="staging/a",
+        )
+        await session.commit()
+
+    with pytest.raises(IntegrityError):
+        async with get_session(db) as session:
+            repo = SqlAssetRepository(session)
+            await repo.create_ingest(
+                ingest_id="ing-b",
+                idempotency_key="race",
+                project_id=PROJECT_A,
+                request_fingerprint="fp",
+                staging_key="staging/b",
+            )
+            await session.commit()
+
+    async with get_session(db) as session:
+        count = (
+            await session.execute(select(func.count()).select_from(orm.AssetIngest))
+        ).scalar_one()
+    assert count == 1
 
 
 @pytest.mark.asyncio
