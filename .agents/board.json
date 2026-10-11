@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-11T06:59:28Z",
+  "updated_at": "2026-10-11T07:04:34Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3472,7 +3472,7 @@
       "title_fa": "شکاف P0 حاکمیتی: `claim --gates` روی اجارهٔ زندهٔ خودِ عامل بی‌صدا بی‌اثر است، پس برد از مسیر مستند هرگز به «دقیقاً یک مالک گیت» نمی‌رسد.",
       "zone": "coordination-referee",
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "scope": "scripts/agent_board.py::_claim_locked honours --gates on the fresh/takeover path only; the same-owner heartbeat path (line ~346-361) never reads the flag yet still prints `renewed lease ... generation N` and exits 0. AGENTS.md §1/§4 route an arriving agent through `next` -> `claim <task> --branch BR` (which cmd_next prints WITHOUT --gates) and then `claim ... --gates` to own the CI gate; that second command takes the heartbeat path, so the board stays at zero gates owners while the agent believes it holds the gate, and every other agent's non---no-remote `check` keeps returning exit 2. Proven RED: heartbeat + --gates on a live gate-less own lease -> exit 0, gates_owner still False, live owners 0. Related but NOT in scope (already covered by open PRs, recorded as deferred): TRUTH041 vs ACTIVE_STATUSES divergence (PR#189) and a repo-level `validate` gate invariant (PR#137).",
       "scope_fa": "",
       "prerequisites": [],
@@ -3500,15 +3500,15 @@
         "docs/MULTI_AGENT_PROTOCOL.md"
       ],
       "owner_hint": "unclaimed; zone coordination-referee",
-      "agent_branch": "arena/b561a2be-nexus-ai-agent",
-      "claimed_at": "2026-10-11T06:48:58Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
-      "gates_owner": true,
+      "gates_owner": false,
       "note": "task-266 delivers two proven defects in ONE PR on purpose: both are unfounded success verdicts in the same file/zone (scripts/agent_board.py), and two PRs on one file from one session would collide with each other. (1) `claim --gates` silently no-oped on the heartbeat path; (2) the referee capped its open-PR source set at 25 and still returned a clean pass. Deferred, with evidence, because an open PR already covers each: TRUTH041 vs ACTIVE_STATUSES divergence -> PR#189 (LIVE_LEASE_STATUSES + cross-module equality test); a repo-level 'at most one gate' invariant -> PR#137 (`validate`). Neither file was touched here.",
-      "generation": 1,
-      "evidence": "RED before the fix (stdlib import-by-path, temp board copy): `claim synthetic-dir-claim --branch arena/111-someone-else --gates` on a live gate-less own lease -> exit 0, \"renewed lease … generation 0\", gates_owner still False, live owners 0. GREEN after: same command -> gates_owner: True (taken now), exactly one live owner. Referee coverage, live: `check --files scripts/agent_board.py,tests/unit/test_agent_board.py --branch arena/b561a2be-nexus-ai-agent` reported 27 source(s) read before the fix and 55 after (53 open-PR branches + local + origin/main); with 53 open PRs the old cap dropped 28 pushed boards while still printing 'no overlap — safe to proceed' (exit 0). Adversarial proof: each of the four new guards re-introduced in isolation -> the NEW test fails on the assertion (not on an import error): 4/4 killed. Permanent campaign: `python scripts/board_referee_mutations.py` -> 18/18 killed, exit 0 (was 13/14 on the pristine tree, exit 1: `foreign_worktree_boards_skipped` survived because the test asserted only the exit code, which the gates fail-closed branch also produced). Full gates as the live gates owner: `make lint` / `make types` / `make version-check` clean, `pytest -q -m \"not slow\"` -> 3881 passed, 31 skipped in 210.85s.",
-      "ci_evidence": "see pr_url once CI runs on the final SHA",
-      "pr_url": ""
+      "generation": 2,
+      "evidence": "RED before the fix (stdlib import-by-path, temp board copy): `claim synthetic-dir-claim --branch arena/111-someone-else --gates` on a live gate-less own lease -> exit 0, \"renewed lease … generation 0\", gates_owner still False, live owners 0. GREEN after: same command -> gates_owner: True (taken now), exactly one live owner. Referee coverage, live: `check --files scripts/agent_board.py,tests/unit/test_agent_board.py --branch arena/b561a2be-nexus-ai-agent` reported 27 source(s) read before the fix and 55 after (53 open-PR branches + local + origin/main); with 53 open PRs the old cap dropped 28 pushed boards while still printing 'no overlap — safe to proceed' (exit 0). Adversarial proof: each of the four new guards re-introduced in isolation -> the NEW test fails on the assertion (not on an import error): 4/4 killed. Permanent campaign: `python scripts/board_referee_mutations.py` -> 18/18 killed, exit 0 (was 13/14 on the pristine tree, exit 1: `foreign_worktree_boards_skipped` survived because the test asserted only the exit code, which the gates fail-closed branch also produced). Full gates as the live gates owner: `make lint` / `make types` / `make version-check` clean, `pytest -q -m \"not slow\"` -> 3881 passed, 31 skipped in 210.85s. Gate-invariant coverage added after the first push: check is now tested at ZERO and at TWO live gate holders (both exit 2 with the reason asserted) plus a permanent mutant (exactly_one_gate_owner_ignored) -> campaign 19/19.",
+      "ci_evidence": "Local full gates (run as the live gates owner, before release): make lint clean; make types -> 289 files; make version-check ok; pytest -q -m 'not slow' -> 3883 passed, 31 skipped in 195.70s. Mutation campaign: 19/19 killed, exit 0. Referee: check on the five changed files -> 55 source(s) read, no overlap, exit 0. GitHub Actions on the final pushed SHA is the record for CI; see the PR checks.",
+      "pr_url": "https://github.com/bot523h/nexus-ai-agent/pull/202"
     },
     {
       "task": "task-267-truth041-live-lease-alignment",
