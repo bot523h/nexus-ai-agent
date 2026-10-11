@@ -1,0 +1,29 @@
+baseline ... GREEN
+unreadable_source_becomes_a_pass: killed
+no_remote_flag_ignored: killed
+foreign_worktree_boards_skipped: killed
+proven_conflict_downgraded_to_unverifiable: killed
+unreadable_local_board_becomes_empty_pass: killed
+generation_fencing_guard_ignored: killed
+mandatory_token_guard_removed: killed
+claim_takeover_does_not_advance_generation: killed
+release_does_not_advance_generation: killed
+expired_lease_keeps_the_gate: killed
+gc_overwrites_the_owners_note: killed
+pr_only_lease_source_skipped: killed
+pr_branch_self_exclusion_removed: killed
+stale_pr_branch_ref_read_as_fresh: killed
+heartbeat_ignores_the_gates_flag: killed
+gate_grant_does_not_clear_the_other_holders: killed
+heartbeat_releases_the_gate: killed
+open_pr_listing_stops_at_page_one: killed
+failed_listing_page_degrades_to_a_partial_list: killed
+repo_identity_validation_disabled: killed
+ref_validation_disabled: killed
+fork_head_resolved_through_origin: killed
+foreign_head_fetched_from_origin: killed
+open_pr_heads_deduped_by_ref_name: killed
+exactly_one_gate_owner_ignored: killed
+open_pr_source_set_truncated: killed
+restored baseline ... GREEN
+26/26 killed
