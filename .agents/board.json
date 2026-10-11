@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-11T13:12:56Z",
+  "updated_at": "2026-10-11T20:55:58Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -805,6 +805,14 @@
         "scripts/execution_core_mutations.py",
         "src/nexus_ai_agent/tools/filesystem_policy.py",
         "tests/integration/test_job_queue_heartbeat.py"
+      ]
+    },
+    {
+      "id": "cognition-quality-evaluation",
+      "description": "Offline, deterministic Cognition quality evaluation harness; measures proposal validity, authorization-boundary resistance, refusal correctness, verification separation, and provider/model failure handling without changing execution authority.",
+      "paths": [
+        "scripts/cognition_quality_eval.py",
+        "tests/unit/test_cognition_quality_eval.py"
       ]
     }
   ],
@@ -3617,6 +3625,46 @@
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
+      "generation": 0
+    },
+    {
+      "task": "task-269-cognition-quality-evaluation",
+      "title": "Cognition quality evaluation harness",
+      "title_fa": "هارنس ارزیابی کیفیت شناخت Nagar",
+      "zone": "cognition-quality-evaluation",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "Build only a local deterministic evaluation harness over existing Cognition contracts. Cover valid and malformed output, unauthorized operations, authority/prompt-injection attempts, explicit refusal, provider failure, no-model state, and proposal-vs-independent-verification separation. No router, provider, policy, CommandBus, verifier, CI, or blocked LLM file changes; no raw prompt/response logging.",
+      "scope_fa": "فقط هارنس قطعی و محلی برای ارزیابی قراردادهای موجود Cognition؛ بدون Router، Provider، Policy، CommandBus، Verification، CI یا فایل‌های مسدودشدهٔ LLM.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "The harness uses existing TypedProposal, Refusal, ProposalSchema, and current Cognition boundary contracts without introducing runtime authority.",
+        "Default execution is deterministic, local, network-free, and requires no API keys.",
+        "Tests cover valid output, malformed output, out-of-scope operation, authority-field injection, prompt-injection-shaped input, explicit refusal, provider failure, no-model state, and invalid output.",
+        "Proposal acceptance is measured separately from independent verification success; a proposal never counts as execution success.",
+        "Synthetic fixtures and any optional real-model evidence are reported in separate channels with no raw sensitive prompt or response logging.",
+        "Repeatability and latency are measured from bounded synthetic fixtures, and unsupported multi-model claims are reported as insufficient evidence.",
+        "Only the two exclusive paths in this claim are changed and the existing execution authority remains in Policy, CommandBus, and Verification."
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_cognition_quality_eval.py",
+        "ruff check scripts/cognition_quality_eval.py tests/unit/test_cognition_quality_eval.py",
+        "ruff format --check scripts/cognition_quality_eval.py tests/unit/test_cognition_quality_eval.py",
+        "synthetic fixture result table with counts, repeatability, latency, and verification separation",
+        "adversarial or mutation evidence showing malformed and unauthorized proposals are rejected",
+        "agent_board.py check on the exact changed files with exit code 0",
+        "CI result bound to the exact tested SHA; full gates run only by the single gates_owner"
+      ],
+      "exclusive_paths": [
+        "scripts/cognition_quality_eval.py",
+        "tests/unit/test_cognition_quality_eval.py"
+      ],
+      "owner_hint": "Independent cognition evaluation lane; claim only after this coordination entry lands and exactly one gates_owner is established.",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Registered as a board-only coordination entry on top of PR#203 so PR#203 is not overwritten. Implementation must wait for this entry to land on main, then claim through the official CLI before coding.",
       "generation": 0
     }
   ],
