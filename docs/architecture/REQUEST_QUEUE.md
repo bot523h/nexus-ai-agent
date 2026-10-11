@@ -111,8 +111,10 @@ The two paths **never meet**:
 
 - **No shared identity.** The request queue's `request_id` and the execution core's
   `ExecutionIdentity.request_id` are distinct namespaces; nothing maps one to the
-  other. `GeminiRequestQueue` increments `self._request_id` locally (`:238`);
-  `ExecutionIdentity` is constructed by the backend from the durable row.
+  other. `GeminiRequestQueue` increments `self._request_id` locally inside
+  `submit()` (`request_queue.py:221`); the later `_ready_event.set()` (`:237`) is a
+  readiness signal, not the ID-allocation site. `ExecutionIdentity` is constructed
+  by the backend from the durable row.
 - **No shared store.** The request queue is in-memory only; the execution core's
   authority is the SQLite row (`InProcessJobQueue`, `_mark_processing` /
   `_mark_completed`). A cancelled provider call cannot write a job row.

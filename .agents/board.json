@@ -881,8 +881,8 @@
       "zone": "ci-quality",
       "priority": "P0",
       "status": "active",
-      "scope": "عامل E (شاخه 460) تا ادغام #33 یا بازگشت عامل A، مالک اجرای گیت‌ها روی main است.",
-      "scope_fa": "عامل E (شاخه 460) تا ادغام #33 یا بازگشت عامل A، مالک اجرای گیت‌ها روی main است.",
+      "scope": "Temporary CI-gates stewardship is held through the active, unexpired claim on branch arena/nexus-night-task261-request-queue-doc (no exclusive code paths). This claim lives on this PR branch's board; origin/main must be inspected independently and must NOT be reported as globally restored until the authorized change is integrated. Stewardship ends on lease expiry or an earlier official CLI release/transfer. Revalidate the claim before every main-bound gate run.",
+      "scope_fa": "نگهبانی موقت گیت‌های CI از طریق claim فعال و منقضی‌نشده روی شاخه arena/nexus-night-task261-request-queue-doc است (بدون هیچ مسیر انحصاری کد). این claim روی برد همین شاخهٔ PR است؛ origin/main باید مستقل بررسی شود و تا زمانی که تغییر مجاز ادغام نشده، نباید به‌عنوان بازیابی سراسری گزارش شود. نگهبانی با انقضای lease یا آزادسازی/انتقال رسمی زودتر از طریق CLI پایان می‌یابد. پیش از هر اجرای گیتِ main-bound، claim را مجدداً اعتبارسنجی کن.",
       "prerequisites": [],
       "acceptance_criteria": [
         "گیت‌های branch و main خوانده و ثبت شوند",
