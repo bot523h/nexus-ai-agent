@@ -56,3 +56,38 @@ across 55 readable sources first. Locally: ruff clean (665 files), mypy clean
 (289 files), 200 tests across referee, truth-doctor, docs-integrity and
 scripts-boundary suites. CI on the pushed SHA is the authoritative full run —
 recorded in the PR, per SHA.
+
+## Round 2 — three further findings, on this evidence artifact
+
+The reviewer's next pass (after the closure commit) raised three findings, all on
+`.agents/evidence/TASK266_REVIEW_CLOSURE_red_probe.py` — i.e. on the proof, not on
+the fix. All three were valid and are fixed in `69e4b8fe961b7d9e5f1be52850c387c1ad5e3122`.
+
+| # | Finding | Fix | Result |
+|---|---|---|---|
+| A2 | `REPO` hardcoded to `/home/user/nexus-ai-agent` — the evidence cannot be reproduced in another checkout | `REPO = Path(__file__).resolve().parents[2]` | the probe loads `scripts/agent_board.py` from wherever the repository is checked out |
+| B2 | fixed `/tmp/probe` fixture path — a symlink planted there would be followed by `write_text` (CWE-59/377) | `tempfile.TemporaryDirectory(prefix="task266-red-probe-")` (random name, mode 0700, removed on exit) | no shared, predictable write target anywhere in the probe |
+| C2 | the two-fork probe passed on *two fetch attempts* regardless of the exit code — it could have accepted a referee that treats an unreadable fork as clean | split into three outcome-asserting fixtures (below) + two permanent `cmd_check`-level tests + a new mutant `failed_fork_fetch_counted_as_readable` | the probe now fails if the verdict is wrong, not just if the fetch loop is short |
+
+The third finding is the important one: it is the same defect class as the original
+findings — *asserting the mechanism instead of the outcome*. The rewritten fixtures:
+
+* **B2a** — both forks readable → exit 1, **both** fork boards read (asserted on the
+  `git show` refs, not just on the fetch refspecs).
+* **B2b** — nothing conflicts, one fork unreachable → **exit 2**, the unreadable head
+  named in the output, and no fallback to `origin`'s same-named branch.
+* **B2c** — a proven conflict in a readable fork *and* an unreadable fork → **exit 1**
+  by deliberate design (a confirmed conflict outranks an unreadable source; hiding it
+  behind exit 2 would be worse), with the unreadable source still surfaced.
+
+Writing B2b first asserted exit 2 for the *conflicting* fixture and reported RED —
+the probe was wrong, not the code: `cmd_check` documents and prints this precedence
+("a *proven* conflict is exit 1 even when another source is unreadable"). Both
+behaviours are now pinned, as decisions rather than accidents.
+
+Permanent rails added for the same class (`tests/unit/test_agent_board.py`):
+`test_an_unreadable_fork_head_makes_the_verdict_unverifiable` and
+`test_a_proven_conflict_survives_an_unreadable_fork_head`. Both were checked against
+the real file: with the "failed fetch still counts as readable" mutation applied they
+fail with assertion errors naming the violated invariant; with the file restored they
+pass. The mutation campaign is **27/27 killed, exit 0, no survivor, no drift**.
