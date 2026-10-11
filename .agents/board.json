@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-10T18:42:23Z",
+  "updated_at": "2026-10-11T14:27:20Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -804,6 +804,20 @@
         "tests/unit/test_filesystem_policy_primitives.py",
         "scripts/execution_core_mutations.py",
         "src/nexus_ai_agent/tools/filesystem_policy.py"
+      ]
+    },
+    {
+      "id": "nagar-asset-library",
+      "description": "Nagar Asset Library V1 — content-addressed blob store, durable asset metadata, scoped idempotency, explicit ingest recovery (first-party, framework-independent).",
+      "paths": [
+        "src/nexus_ai_agent/creative/assets/",
+        "tests/unit/test_asset_library_models.py",
+        "tests/unit/test_asset_library_service.py",
+        "tests/integration/test_asset_library_persistence.py",
+        "tests/integration/test_asset_library_recovery.py",
+        "tests/architecture/test_asset_library_boundary.py",
+        "migrations/versions/",
+        "src/nexus_ai_agent/storage/migration_metadata.py"
       ]
     }
   ],
@@ -3580,6 +3594,50 @@
       "claimed_at": "2026-10-10T18:42:23Z",
       "ttl_hours": 24,
       "gates_owner": true,
+      "note": "",
+      "generation": 1
+    },
+    {
+      "task": "task-266-asset-library-v1",
+      "title": "Nagar Asset Library V1: secure ingest, immutable content identity, durable project link, restart-proven recovery",
+      "title_fa": "کتابخانه دارایی ناگار نسخه ۱: دریافت امن، هویت تغییرناپذیر محتوا، اتصال پایدار پروژه و اثبات بازیابی پس از راه‌اندازی مجدد",
+      "zone": "nagar-asset-library",
+      "priority": "P1",
+      "status": "active",
+      "scope": "First-party, framework-independent Asset Library capability under src/nexus_ai_agent/creative/assets/: a content-addressed local blob store that reuses WorkspaceFilesystem as the single filesystem security boundary; durable SQLModel metadata (asset identity, immutable versions, project links, ingest recovery state); scoped idempotency; and an explicit STAGING->READY/FAILED recovery state machine. Authorization reuses the existing ProjectAuthorizer seam. Adds NO second queue, graph, ledger, passport, verifier or authorization authority, and does not touch the Telegram surface.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "a supported real-media fixture ingests; asset has a stable logical id and an immutable version with a measured SHA-256 + byte size",
+        "the physical blob is stored under a deterministic content-derived key, never the caller filename; the local adapter is composed explicitly",
+        "authorized callers list/retrieve; a different project cannot access the asset without a grant; authorization happens before any write-side effect",
+        "reinitializing the service/repository/session (new instances) preserves asset, version, project link and content hash",
+        "a crash between blob publication and the final metadata commit is recoverable or explicitly failed; READY is never reported unless content size+digest match and the DB row is committed",
+        "repeated ingest with the same scoped idempotency key resolves to one logical result; a reused key with different content fails with a typed conflict",
+        "filename/MIME spoofing, oversize and unsupported inputs fail closed; traversal/symlink paths cannot redirect storage",
+        "no duplicated graph/ledger/queue/authorization; existing DB+Alembic conventions respected; new migration covered by tests"
+      ],
+      "evidence_required": [
+        "exact pytest commands with exit codes for the focused asset-library suites",
+        "a restart/recovery test that uses newly constructed service+repository+session instances",
+        "at least four mutation probes (guard removed -> its test turns RED), each reverted",
+        "agent_board.py check result on the changed files and the final CI status on the exact head SHA"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/assets/",
+        "tests/unit/test_asset_library_models.py",
+        "tests/unit/test_asset_library_service.py",
+        "tests/integration/test_asset_library_persistence.py",
+        "tests/integration/test_asset_library_recovery.py",
+        "tests/architecture/test_asset_library_boundary.py",
+        "migrations/versions/",
+        "src/nexus_ai_agent/storage/migration_metadata.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/nagar-asset-library-v1",
+      "claimed_at": "2026-10-11T14:27:20Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
       "note": "",
       "generation": 1
     }
