@@ -3651,10 +3651,10 @@
       ],
       "owner_hint": "",
       "agent_branch": "arena/nagar-asset-library-v1",
-      "claimed_at": "2026-10-11T14:27:20Z",
+      "claimed_at": "2026-10-11T15:31:30Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Asset tables are added to the existing storage/models.py (SQLModel) — the single persistence layer — rather than a second metadata owner, so no new sqlmodel-importing module and no second database. Domain/ports/service live in creative/assets/. The only shared-boundary edit is an additive streaming/atomic capability on WorkspaceFilesystem.",
+      "note": "Closure evidence (PR #205, branch arena/nagar-asset-library-v1, head commit fc86c09). Focused suites (real SQLite + real bytes, no mocks): tests/architecture/test_asset_library_boundary.py 6 passed; tests/unit/test_asset_library_service.py 10 passed; tests/integration/test_asset_library_recovery.py 8 passed; tests/integration/test_asset_library_filesystem_security.py 13 passed; tests/unit/test_asset_library_blob_store.py 11 passed. Mutation harness scripts/asset_library_mutations.py: 6/6 mutants killed (containment, NUL, key-shape, dedup-verify, open-verify, bounded-read). Full suite python -m pytest -q -m \"not slow\": 3964 passed, 31 skipped. ruff check+format clean; mypy src: 299 files clean; truth doctor OK. agent_board.py check on changed files: exit 0 (no overlap). Restart/recovery tests use newly constructed service+repository+session instances.",
       "generation": 1
     }
   ],
