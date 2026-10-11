@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-10T18:42:23Z",
+  "updated_at": "2026-10-11T13:12:56Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -803,7 +803,8 @@
         "tests/architecture/test_execution_boundary_enforcement.py",
         "tests/unit/test_filesystem_policy_primitives.py",
         "scripts/execution_core_mutations.py",
-        "src/nexus_ai_agent/tools/filesystem_policy.py"
+        "src/nexus_ai_agent/tools/filesystem_policy.py",
+        "tests/integration/test_job_queue_heartbeat.py"
       ]
     }
   ],
@@ -3582,6 +3583,41 @@
       "gates_owner": true,
       "note": "",
       "generation": 1
+    },
+    {
+      "task": "task-256-heartbeat-staleness-proof",
+      "title": "Heartbeat-based liveness so recover_job distinguishes slow-alive from dead",
+      "title_fa": "اثبات زنده‌بودن مبتنی بر heartbeat تا recover_job کند-ولی-زنده را از مرده تمیز دهد",
+      "why_fa": "اکنون تنها سنجهٔ staleness سن started_at است؛ worker کندِ زنده ممکن است واجد شرایط takeover شود.",
+      "zone": "execution-core",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "Measure liveness by silence, not only by age. An in-flight queue row carries a queue-owned last-heartbeat fact that a working worker refreshes, and the staleness decision (recover_job / takeover-candidate filtering, the ``stale_after`` window) consults it: a beating row is never a takeover candidate however old ``started_at`` is, while a row silent past the window is recovered exactly as today. Fail closed: a row whose heartbeat cannot be proven is treated as fresh and refused, never stolen. The column is queue-owned and additive — ``InProcessJobQueue._initialize_db`` already backfills missing columns through its ``additions`` map — so no alembic migration under ``migrations/`` is required, and ``migrations/`` stays out of scope (it is task-259's declared surface). New test file ``tests/integration/test_job_queue_heartbeat.py`` carries the proof; ``tests/integration/test_execution_native_backend.py`` is explicitly NOT in scope for this task and must be read, not edited.",
+      "prerequisites": [
+        "task-254-execution-core-v1"
+      ],
+      "acceptance_criteria": [
+        "in-flight rows carry a last-heartbeat; a beating worker is never stolen regardless of age",
+        "a silent worker past the window is recoverable exactly as today; T1/T2 race proof retained",
+        "migration + tests; no behaviour change for rows without the column (fail closed)"
+      ],
+      "evidence_required": [
+        "tests/integration/test_job_queue_heartbeat.py green on the claim head, proving: (a) a beating in-flight row is never a takeover/recover candidate regardless of started_at age, (b) a row silent past the window is recovered with today's exact semantics, (c) a row whose heartbeat cannot be proven fails closed and is never stolen",
+        "the retained T1/T2 stale-attempt race proof: tests/integration/test_execution_native_backend.py, test_execution_races.py and test_in_process_job_queue.py stay green UNEDITED (read-only for this task)",
+        "mutation probe: removing the heartbeat freshness check turns the new test RED, restoring it returns GREEN with the tree byte-identical (git diff --stat empty)",
+        "exact commands + observed results in the PR body ('tests pass' without a command is not evidence), and `python scripts/agent_board.py check --files <changed> --branch <branch>` exit 0 with every source readable; full lint/types/test deferred to the single gates owner"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        "tests/integration/test_job_queue_heartbeat.py"
+      ],
+      "owner_hint": "ARENA-A is the exclusive Task-256 implementation agent. This record is a registration, not an assignment: the lease is empty and ARENA-A takes it itself through the official CLI.",
+      "note": "REGISTERED UNCLAIMED (board-only coordination fix, ARENA-B). Root cause of the rejection: ``scripts/agent_board.py`` resolves a task only through ``claims`` (``_find``), while Task-256 existed solely in ``next_work``; ``claim`` therefore refused it with 'task not found' and exit 2, and ``next`` never offered it. The lease fields are deliberately empty — status queued, agent_branch '', claimed_at null, generation 0 — so ARENA-A claims it itself: at generation 0 a fresh lease needs no ``--expected-generation`` token (task-219 fencing semantics) and the claim advances the epoch to 1. No lease, owner or gate is asserted on anyone's behalf here. PATH CHOICE: the dedicated heartbeat test replaces ``test_execution_native_backend.py`` in this task's exclusive paths by owner direction, and the choice is mechanically justified — open PR #200 carries an ACTIVE task-265 lease on exactly that file (arena/nexus-night-task265-cancel-identity-flake, generation 1), so the multi-source referee would have proven an overlap for this task. Neither of the two in-scope paths overlaps any live lease on main or on any pushed open-PR branch. PREREQUISITE TRUTH (task-254): satisfied for implementation purposes — ``task-254-execution-core-v1`` is ``done``/merged on main through PR #192 (merge commit a48326ded85bbe4e0972d645ee0ea6e877935362, claim generation 3). The Task-254 AC-5 negative-mutation evidence follow-up is a SEPARATE matter and is NOT declared complete by this record: PR #195 (arena/290bc0d6-nexus-ai-agent @ 9a4a88a0a7ee61d0becd4f1fcf6905c2fbb2759d) is still OPEN and CONFLICTING against main. Task-256 does not wait on that follow-up, but #195/#200 also edit ``.agents/board.json`` and the execution-core test surface, so whoever lands second rebases; the board rule for ``.agents/board.json`` conflicts is newest-state-wins with schema 2 still passing. GOVERNANCE: ``.agents/board.json`` is the shared coordination medium (COORDINATION_FILES in the CLI) and is intentionally NOT an exclusive path of this claim; ``scripts/agent_board.py`` was not touched to work around the missing record. Full gates remain the single ``gates_owner``'s job (currently ``ci-gates-steward-closure`` on branch phase1-pr196-guard-20261009, live until 2026-10-11T18:42:23Z).",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 0
     }
   ],
   "deferred_log": [
@@ -3679,7 +3715,7 @@
       ],
       "exclusive_paths": [
         "src/nexus_ai_agent/adapters/in_process_job_queue.py",
-        "tests/integration/test_execution_native_backend.py"
+        "tests/integration/test_job_queue_heartbeat.py"
       ],
       "prerequisites": [
         "task-254 merged"
