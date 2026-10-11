@@ -3587,13 +3587,13 @@
       "task": "task-264-passport-attempt-id-alignment",
       "title": "Bind CreativeExecutionPassport attempt ids to the AttemptStaging layout",
       "title_fa": "اتصال attempt_idهای گذرنامه اجرایی به چیدمان AttemptStaging",
-      "zone": "provenance-ledger",
+      "zone": "durable-creative-queue-evidence",
       "priority": "P3",
       "status": "active",
       "scope": "Align CreativeExecutionPassport attempt identity and evidence storage with the existing AttemptStaging attempt-scoped contract; change only the passport implementation and its unit tests.",
       "scope_fa": "شناسه‌های attempt در passport و staging از یک منبع باید بیایند تا ردیابی artifact یکتا بماند.",
       "prerequisites": [
-        "task-254 merged"
+        "task-254-execution-core-v1"
       ],
       "acceptance_criteria": [
         "one minting function for attempt ids used by both surfaces",
