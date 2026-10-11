@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-11T06:48:58Z",
+  "updated_at": "2026-10-11T06:59:28Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3504,8 +3504,53 @@
       "claimed_at": "2026-10-11T06:48:58Z",
       "ttl_hours": 24,
       "gates_owner": true,
-      "note": "",
-      "generation": 1
+      "note": "task-266 delivers two proven defects in ONE PR on purpose: both are unfounded success verdicts in the same file/zone (scripts/agent_board.py), and two PRs on one file from one session would collide with each other. (1) `claim --gates` silently no-oped on the heartbeat path; (2) the referee capped its open-PR source set at 25 and still returned a clean pass. Deferred, with evidence, because an open PR already covers each: TRUTH041 vs ACTIVE_STATUSES divergence -> PR#189 (LIVE_LEASE_STATUSES + cross-module equality test); a repo-level 'at most one gate' invariant -> PR#137 (`validate`). Neither file was touched here.",
+      "generation": 1,
+      "evidence": "RED before the fix (stdlib import-by-path, temp board copy): `claim synthetic-dir-claim --branch arena/111-someone-else --gates` on a live gate-less own lease -> exit 0, \"renewed lease … generation 0\", gates_owner still False, live owners 0. GREEN after: same command -> gates_owner: True (taken now), exactly one live owner. Referee coverage, live: `check --files scripts/agent_board.py,tests/unit/test_agent_board.py --branch arena/b561a2be-nexus-ai-agent` reported 27 source(s) read before the fix and 55 after (53 open-PR branches + local + origin/main); with 53 open PRs the old cap dropped 28 pushed boards while still printing 'no overlap — safe to proceed' (exit 0). Adversarial proof: each of the four new guards re-introduced in isolation -> the NEW test fails on the assertion (not on an import error): 4/4 killed. Permanent campaign: `python scripts/board_referee_mutations.py` -> 18/18 killed, exit 0 (was 13/14 on the pristine tree, exit 1: `foreign_worktree_boards_skipped` survived because the test asserted only the exit code, which the gates fail-closed branch also produced). Full gates as the live gates owner: `make lint` / `make types` / `make version-check` clean, `pytest -q -m \"not slow\"` -> 3881 passed, 31 skipped in 210.85s.",
+      "ci_evidence": "see pr_url once CI runs on the final SHA",
+      "pr_url": ""
+    },
+    {
+      "task": "task-267-truth041-live-lease-alignment",
+      "title": "P1 GOVERNANCE GAP (covered by open PR#189): the truth doctor and the referee disagree about what a live lease is",
+      "title_fa": "",
+      "zone": "runtime-truth-tooling",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "truth.py::check_board_truth flags `gates_owner and status != \"active\"` while scripts/agent_board.py ACTIVE_STATUSES treats active_in_review as a live lease and _active_gates_owners counts it as the one valid gate holder — two validators, one invariant, opposite verdicts. Direction 2 is also uncovered: a claim with status=active but an EXPIRED lease keeps gates_owner while the referee already treats the board as holding zero owners, and TRUTH041 stays silent. tests/architecture/test_repo_truth_consistency.py runs the doctor against the real tree in CI, so direction 1 is a red main for a state the referee accepts. NOT duplicated here: open PR#189 already implements LIVE_LEASE_STATUSES + test_live_lease_statuses_match_the_board_cli + the two negative tests.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "TRUTH041 uses the referee's live-lease predicate (status in ACTIVE_STATUSES AND unexpired)",
+        "a board-level test pins the doctor's status set equal to scripts/agent_board.py::ACTIVE_STATUSES",
+        "an active-but-expired gates_owner IS reported (the direction that is silent today)",
+        "reconcile with PR#189 rather than shipping a second implementation"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/diagnostics/truth.py",
+        "tests/unit/test_truth_doctor.py"
+      ],
+      "owner_hint": "unclaimed; recorded by task-266 so it is not forgotten"
+    },
+    {
+      "task": "task-268-board-referee-mutation-campaign-in-ci",
+      "title": "P1 EVIDENCE GAP: the board-referee mutation campaign is not wired into CI, and one of its mutants survived unnoticed",
+      "title_fa": "",
+      "zone": "ci-quality",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "scripts/board_referee_mutations.py is the adversarial proof for the coordination referee, but no CI job runs it: grep 'board_referee_mutations' .github/workflows/ci.yml -> nothing (continuum/temporal/trust/remote-key campaigns ARE wired). Measured on the pristine main tree (isolated archive copy): 13/14 killed, EXIT 1 — `foreign_worktree_boards_skipped` survived because test_check_unreliable_worktree_enumeration_is_exit_2 asserted only the exit code, and the zero-gates-owner fail-closed branch produced exit 2 as well. task-266 made that test falsifiable (18/18 killed) but the campaign still has no CI rail, so the next survivor will be invisible again.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "a CI job runs scripts/board_referee_mutations.py and fails the build when any mutant survives",
+        "the job is pinned to a full commit SHA like the other mutation rails",
+        "a deliberately weak assertion is shown to turn the rail red (the rail is not a rubber stamp)"
+      ],
+      "exclusive_paths": [
+        ".github/workflows/ci.yml"
+      ],
+      "owner_hint": "unclaimed; recorded by task-266 so it is not forgotten"
     }
   ],
   "deferred_log": [
@@ -3566,6 +3611,22 @@
       "reason_fa": "در حلقهٔ task-223 کشف شد اما خارج از ناحیهٔ claim من است و رفع آن یک PR چهارم پشت سه PR باز می‌سازد؛ به‌جای گسترش دامنه، با شواهد ثبت شد.",
       "reason_en": "Found during the task-223 loop but out of my claim's zone; fixing it would open a 4th PR stacked behind three open PRs. Recorded with reproduction instead of widening scope.",
       "resume_when": "next storage-observability window (after #126/#127/#128 merge)"
+    },
+    {
+      "task": "task-267-truth041-live-lease-alignment",
+      "deferred_by_branch": "arena/b561a2be-nexus-ai-agent",
+      "at": "2026-10-11T06:59:28Z",
+      "reason_fa": "این کار قبلاً در PR باز #189 پیاده‌سازی شده است؛ تکرار آن روی همان دو فایل، همان تداخلی را می‌ساخت که این پروتکل از آن جلوگیری می‌کند.",
+      "reason_en": "Covered by open PR#189 (LIVE_LEASE_STATUSES + the equality and negative tests). Duplicating it here would collide with that PR on src/nexus_ai_agent/diagnostics/truth.py and tests/unit/test_truth_doctor.py, both of which this task deliberately did not touch.",
+      "resume_when": "PR#189 merges (take its version) or is closed (re-implement from this record)"
+    },
+    {
+      "task": "task-268-board-referee-mutation-campaign-in-ci",
+      "deferred_by_branch": "arena/b561a2be-nexus-ai-agent",
+      "at": "2026-10-11T06:59:28Z",
+      "reason_fa": "ریل CI در .github/workflows/ci.yml است که بیرون از مسیرهای انحصاری این تسک است؛ به‌جای گسترش دامنه، یافته با اندازه‌گیری ثبت شد.",
+      "reason_en": "The CI rail lives in .github/workflows/ci.yml, which is outside this task's exclusive_paths (zone ci-quality, 8 open PRs touch it). Recorded with the measurement instead of widening scope into another agent's zone.",
+      "resume_when": "a session holds the ci-quality zone and can add one mutation job"
     }
   ],
   "next_work": [
