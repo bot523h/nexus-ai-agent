@@ -26,6 +26,7 @@ Running
 -------
 pytest -q tests/unit/test_conversation_store_contract.py
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -44,6 +45,7 @@ def store(tmp_path: Path) -> ConversationStore:
 # 1. Basic append and retrieval -- ordering guarantee
 # ---------------------------------------------------------------------------
 
+
 def test_empty_history_returns_empty_list(store: ConversationStore) -> None:
     assert store.get_history("tg:unknown") == []
 
@@ -61,8 +63,7 @@ def test_messages_returned_in_chronological_order(store: ConversationStore) -> N
     for i in range(5):
         store.append(
             "tg:2",
-            {"role": "user" if i % 2 == 0 else "model",
-             "parts": [{"text": str(i)}]},
+            {"role": "user" if i % 2 == 0 else "model", "parts": [{"text": str(i)}]},
         )
     texts = [h["parts"][0]["text"] for h in store.get_history("tg:2", limit=5)]
     assert texts == ["0", "1", "2", "3", "4"]
@@ -80,6 +81,7 @@ def test_limit_returns_most_recent(store: ConversationStore) -> None:
 # 2. conv_id isolation
 # ---------------------------------------------------------------------------
 
+
 def test_separate_conv_ids_are_isolated(store: ConversationStore) -> None:
     store.append("tg:A", {"role": "user", "parts": [{"text": "from A"}]})
     store.append("tg:B", {"role": "user", "parts": [{"text": "from B"}]})
@@ -90,6 +92,7 @@ def test_separate_conv_ids_are_isolated(store: ConversationStore) -> None:
 # ---------------------------------------------------------------------------
 # 3. append_batch
 # ---------------------------------------------------------------------------
+
 
 def test_append_batch_inserts_all_messages(store: ConversationStore) -> None:
     msgs = [
@@ -118,6 +121,7 @@ def test_append_batch_empty_list_is_noop(store: ConversationStore) -> None:
 # 4. clear
 # ---------------------------------------------------------------------------
 
+
 def test_clear_removes_all_messages(store: ConversationStore) -> None:
     store.append("tg:clear", {"role": "user", "parts": [{"text": "x"}]})
     store.clear("tg:clear")
@@ -140,6 +144,7 @@ def test_clear_nonexistent_conv_is_noop(store: ConversationStore) -> None:
 # ---------------------------------------------------------------------------
 # 5. trim_to_limit
 # ---------------------------------------------------------------------------
+
 
 def test_trim_to_limit_removes_oldest(store: ConversationStore) -> None:
     for i in range(10):
@@ -168,6 +173,7 @@ def test_trim_to_limit_zero_clears_all(store: ConversationStore) -> None:
 # 6. active_conversations counter
 # ---------------------------------------------------------------------------
 
+
 def test_active_conversations_empty_store(store: ConversationStore) -> None:
     assert store.active_conversations() == 0
 
@@ -189,6 +195,7 @@ def test_active_conversations_decrements_after_clear(store: ConversationStore) -
 # ---------------------------------------------------------------------------
 # 7. Boundary and edge-case inputs
 # ---------------------------------------------------------------------------
+
 
 def test_message_with_empty_parts_list(store: ConversationStore) -> None:
     store.append("tg:edge", {"role": "user", "parts": []})
@@ -227,6 +234,7 @@ def test_very_long_content_stored_without_truncation(store: ConversationStore) -
 # 8. Data-format compatibility -- multi-part and nested dicts
 # ---------------------------------------------------------------------------
 
+
 def test_multi_part_message_roundtrip(store: ConversationStore) -> None:
     parts = [
         {"text": "part1"},
@@ -246,6 +254,7 @@ def test_nested_dict_parts_roundtrip(store: ConversationStore) -> None:
 # ---------------------------------------------------------------------------
 # 9. Persistence across instances (restart simulation)
 # ---------------------------------------------------------------------------
+
 
 def test_data_persists_across_store_instances(tmp_path: Path) -> None:
     db = str(tmp_path / "persist.sqlite")
