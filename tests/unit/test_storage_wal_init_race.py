@@ -194,3 +194,51 @@ def test_separate_processes_initialising_one_path_all_succeed(tmp_path: Path) ->
     bad = [(rc, err[-400:]) for rc, err in outputs if rc != 0]
     assert bad == [], f"cross-process first use failed: {bad}"
     assert _journal_mode(db_path) == "wal"
+
+
+@pytest.mark.parametrize(
+    ("message", "is_conflict"),
+    [
+        ("table user already exists", True),
+        ("database schema has changed", True),
+        ("no such table: user", False),
+        ("database disk image is malformed", False),
+        ('near "X": syntax error', False),
+        ("database is locked", False),
+    ],
+)
+def test_only_benign_race_signatures_count_as_create_conflicts(
+    message: str, is_conflict: bool
+) -> None:
+    """The retry classifier must stay narrow: real schema/DDL errors are not races."""
+    from sqlalchemy.exc import OperationalError
+
+    exc = OperationalError("stmt", {}, Exception(message))
+    assert db_module._is_concurrent_create_conflict(exc) is is_conflict
+
+
+@pytest.mark.asyncio
+async def test_persistent_schema_changed_is_bounded_then_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A conflict that never resolves is not a race: it raises after the bound."""
+    from sqlalchemy import MetaData
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    monkeypatch.setattr(db_module, "_CREATE_ALL_ATTEMPTS", 3)
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'p.sqlite'}")
+    attempts = 0
+
+    class _AlwaysStale(MetaData):
+        def create_all(self, *args: object, **kwargs: object) -> None:  # type: ignore[override]
+            nonlocal attempts
+            attempts += 1
+            raise OperationalError("stmt", {}, Exception("database schema has changed"))
+
+    try:
+        with pytest.raises(OperationalError):
+            await db_module.create_all_metadata(engine, _AlwaysStale())
+    finally:
+        await engine.dispose()
+    assert attempts == 3
