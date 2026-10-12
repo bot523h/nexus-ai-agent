@@ -13,6 +13,7 @@ still rejects absolute paths, traversal, and symlinks before operating.
 
 from __future__ import annotations
 
+import errno
 import ntpath
 import os
 import stat
@@ -28,6 +29,23 @@ class FilesystemBoundaryError(ValueError):
 _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 _CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+
+
+def _open_directory(name: str | Path, *, dir_fd: int | None = None) -> int:
+    """Open a directory without allowing a final symlink to be followed.
+
+    Linux follows a symlink to a directory when ``O_DIRECTORY`` is combined
+    with ``O_NOFOLLOW``.  Open without ``O_DIRECTORY`` and verify the inode
+    after the no-follow open instead.
+    """
+    fd = os.open(name, os.O_RDONLY | _NOFOLLOW | _CLOEXEC, dir_fd=dir_fd)
+    try:
+        if not stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise NotADirectoryError(errno.ENOTDIR, "not a directory", name)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
 
 
 def _validate_relative(raw: str, *, allow_root: bool = False) -> tuple[str, ...]:
@@ -92,10 +110,7 @@ class WorkspaceFilesystem:
             raise FilesystemBoundaryError(f"workspace root does not exist: {self.root}")
         if os.name == "posix":
             try:
-                return os.open(
-                    self.root,
-                    os.O_RDONLY | _DIRECTORY | _NOFOLLOW | _CLOEXEC,
-                )
+                return _open_directory(self.root)
             except OSError as exc:
                 raise FilesystemBoundaryError(
                     f"workspace root could not be opened safely: {self.root}"
@@ -116,11 +131,7 @@ class WorkspaceFilesystem:
         try:
             for part in parts[:-1]:
                 try:
-                    child = os.open(
-                        part,
-                        os.O_RDONLY | _DIRECTORY | _NOFOLLOW | _CLOEXEC,
-                        dir_fd=fd,
-                    )
+                    child = _open_directory(part, dir_fd=fd)
                 except FileNotFoundError:
                     if not create:
                         raise
@@ -128,11 +139,7 @@ class WorkspaceFilesystem:
                         os.mkdir(part, mode=0o700, dir_fd=fd)
                     except FileExistsError:
                         pass  # a concurrent creator won; the no-follow open re-validates
-                    child = os.open(
-                        part,
-                        os.O_RDONLY | _DIRECTORY | _NOFOLLOW | _CLOEXEC,
-                        dir_fd=fd,
-                    )
+                    child = _open_directory(part, dir_fd=fd)
                 os.close(fd)
                 fd = child
             yield fd, (parts[-1] if parts else None)
@@ -218,11 +225,7 @@ class WorkspaceFilesystem:
         with self._parent_fd(parts) as (parent_fd, name):
             assert name is not None
             try:
-                directory_fd = os.open(
-                    name,
-                    os.O_RDONLY | _DIRECTORY | _NOFOLLOW | _CLOEXEC,
-                    dir_fd=parent_fd,
-                )
+                directory_fd = _open_directory(name, dir_fd=parent_fd)
             except OSError as exc:
                 raise FilesystemBoundaryError("directory could not be opened safely") from exc
             try:
@@ -278,9 +281,7 @@ class WorkspaceFilesystem:
         try:
             with self._parent_fd(parts) as (parent_fd, name):
                 assert name is not None
-                return os.open(
-                    name, os.O_RDONLY | _DIRECTORY | _NOFOLLOW | _CLOEXEC, dir_fd=parent_fd
-                )
+                return _open_directory(name, dir_fd=parent_fd)
         except OSError as exc:
             raise FilesystemBoundaryError("directory could not be opened safely") from exc
 
@@ -294,9 +295,7 @@ class WorkspaceFilesystem:
             with self._parent_fd(parts, create=create) as (parent_fd, name):
                 assert name is not None
                 try:
-                    fd = os.open(
-                        name, os.O_RDONLY | _DIRECTORY | _NOFOLLOW | _CLOEXEC, dir_fd=parent_fd
-                    )
+                    fd = _open_directory(name, dir_fd=parent_fd)
                 except FileNotFoundError:
                     if not create:
                         raise FilesystemBoundaryError("directory does not exist") from None
@@ -304,9 +303,7 @@ class WorkspaceFilesystem:
                         os.mkdir(name, mode=0o700, dir_fd=parent_fd)
                     except FileExistsError:
                         pass  # a concurrent creator won; the no-follow open re-validates
-                    fd = os.open(
-                        name, os.O_RDONLY | _DIRECTORY | _NOFOLLOW | _CLOEXEC, dir_fd=parent_fd
-                    )
+                    fd = _open_directory(name, dir_fd=parent_fd)
                 os.close(fd)
         except OSError as exc:
             raise FilesystemBoundaryError("directory could not be created safely") from exc
@@ -431,9 +428,7 @@ class WorkspaceFilesystem:
                 continue
             if stat.S_ISDIR(info.st_mode):
                 try:
-                    child = os.open(
-                        name, os.O_RDONLY | _DIRECTORY | _NOFOLLOW | _CLOEXEC, dir_fd=dir_fd
-                    )
+                    child = _open_directory(name, dir_fd=dir_fd)
                 except OSError:
                     # A symlink or an unreadable entry: unlink it, never recurse.
                     try:
