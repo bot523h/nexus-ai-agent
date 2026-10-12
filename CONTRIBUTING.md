@@ -27,6 +27,11 @@ make test           # pytest -q -m "not slow"
   `make version-check` locally), so a drifted `VERSION` / `pyproject.toml` /
   `CHANGELOG.md` is reported in about a second instead of after a full dependency
   install.
+* **A corrupt coordination board fails before the install.**
+  `scripts/check_board_integrity.py` is standard-library only and runs in both the
+  required `lint` job and `lint-fast` (and as `make board-check` locally). It rejects an
+  empty, base64-encoded, truncated, wrong-schema or duplicate-task `.agents/board.json`
+  (the failure PR #207 shipped) in about a second, before any dependency install.
 
 ## Multi-agent coordination (required reading for AI agents)
 
