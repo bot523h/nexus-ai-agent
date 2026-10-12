@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-10T18:42:23Z",
+  "updated_at": "2026-10-12T21:07:18Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2315,7 +2315,7 @@
       "title_fa": "",
       "zone": "nagar-runtime-call-sites",
       "priority": "P1",
-      "status": "active",
+      "status": "expired",
       "scope": "After Gate 2, claim-less schema-1 dispatches run under deprecated implicit local trust; the runtime owner must inject authorizer= with service grants at the three in-process call sites, then the implicit path can be retired.",
       "scope_fa": "",
       "prerequisites": [
@@ -2343,7 +2343,8 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
-      "generation": 1
+      "generation": 1,
+      "release_reason": "auto-released by gc at 2026-10-12T21:07:18Z (stale active lease)"
     },
     {
       "task": "task-182-durable-idempotency-conflict",
@@ -3495,7 +3496,7 @@
       "title_fa": "",
       "zone": "runtime-service-grant-guard",
       "priority": "P1",
-      "status": "active",
+      "status": "expired",
       "scope": "Own and publish the architecture ratchet proving the three in-process bus call sites pass explicit service principals, project-scoped grants and project-bound InputRefs. Split from task-181-runtime-service-grants because the runtime zone deliberately does not cover test paths and the guard must not be forced into it.",
       "scope_fa": "",
       "prerequisites": [
@@ -3520,7 +3521,8 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
-      "generation": 1
+      "generation": 1,
+      "release_reason": "auto-released by gc at 2026-10-12T21:07:18Z (stale active lease)"
     },
     {
       "task": "nexus-stabilization-handoff",
@@ -3528,7 +3530,7 @@
       "title_fa": "",
       "zone": "docs-architecture",
       "priority": "P1",
-      "status": "active",
+      "status": "expired",
       "scope": "Own docs/audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md and its docs/README index row. Separated from the runtime task because documentation is not a runtime-zone path; the record states exact-SHA CI evidence with run ids and observation times and must not conflate it with the full-gates role or the overall stabilization status.",
       "scope_fa": "",
       "prerequisites": [],
@@ -3551,7 +3553,8 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
-      "generation": 1
+      "generation": 1,
+      "release_reason": "auto-released by gc at 2026-10-12T21:07:18Z (stale active lease)"
     },
     {
       "task": "ci-gates-steward-closure",
@@ -3576,12 +3579,13 @@
         ".github/"
       ],
       "owner_hint": "successor of ci-gates-steward / task-145-ci-gates-handoff-refresh",
-      "agent_branch": "phase1-pr196-guard-20261009",
-      "claimed_at": "2026-10-10T18:42:23Z",
+      "agent_branch": "arena/claude-5-5-night-governance-20261013",
+      "claimed_at": "2026-10-12T21:07:18Z",
       "ttl_hours": 24,
       "gates_owner": true,
       "note": "",
-      "generation": 1
+      "generation": 2,
+      "release_reason": "auto-released by gc at 2026-10-12T21:07:18Z (stale active lease)"
     }
   ],
   "deferred_log": [
