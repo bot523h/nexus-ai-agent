@@ -29,6 +29,7 @@ class FilesystemBoundaryError(ValueError):
 _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 _CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
 
 
 def _open_directory(name: str | Path, *, dir_fd: int | None = None) -> int:
@@ -37,8 +38,13 @@ def _open_directory(name: str | Path, *, dir_fd: int | None = None) -> int:
     Linux follows a symlink to a directory when ``O_DIRECTORY`` is combined
     with ``O_NOFOLLOW``.  Open without ``O_DIRECTORY`` and verify the inode
     after the no-follow open instead.
+
+    ``O_NONBLOCK`` is mandatory: without it, opening a FIFO that has no writer
+    blocks forever *before* the ``fstat`` type check can reject it, letting
+    anyone who can plant a FIFO in the workspace stall the caller (CWE-400).
+    The flag is a no-op for real directories.
     """
-    fd = os.open(name, os.O_RDONLY | _NOFOLLOW | _CLOEXEC, dir_fd=dir_fd)
+    fd = os.open(name, os.O_RDONLY | _NOFOLLOW | _CLOEXEC | _NONBLOCK, dir_fd=dir_fd)
     try:
         if not stat.S_ISDIR(os.fstat(fd).st_mode):
             raise NotADirectoryError(errno.ENOTDIR, "not a directory", name)
@@ -102,6 +108,11 @@ class WorkspaceFilesystem:
                 mode = current.lstat().st_mode
             except FileNotFoundError:
                 return
+            except NotADirectoryError as exc:
+                # ``file/child``: an ancestor is not a directory.  Surface the
+                # typed boundary error rather than a raw OSError so callers
+                # that fail closed on FilesystemBoundaryError cannot miss it.
+                raise FilesystemBoundaryError("path component is not a directory") from exc
             if stat.S_ISLNK(mode):
                 raise FilesystemBoundaryError("symlinks are not allowed in workspace paths")
 

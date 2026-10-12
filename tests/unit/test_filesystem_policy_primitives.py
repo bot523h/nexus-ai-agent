@@ -293,3 +293,96 @@ def test_require_regular_file_wraps_parent_symlink_swap_as_boundary_error(
         ws.require_regular_file("job/attempt/artifact.bin")
     assert (outside / "marker").read_bytes() == b"untouched"
     assert (ws.root / "job.saved" / "attempt" / "artifact.bin").read_bytes() == b"inside"
+
+
+def _run_with_deadline(ws: WorkspaceFilesystem, call: str, seconds: float = 5.0) -> str:
+    """Run ``ws.<call>`` in a child process so a regression hangs the child, not pytest."""
+    import subprocess
+    import sys
+
+    code = (
+        "import sys\n"
+        "from nexus_ai_agent.tools.filesystem_policy import (\n"
+        "    FilesystemBoundaryError, WorkspaceFilesystem)\n"
+        f"ws = WorkspaceFilesystem({str(ws.root)!r})\n"
+        "try:\n"
+        f"    ws.{call}\n"
+        "    print('OK')\n"
+        "except FilesystemBoundaryError:\n"
+        "    print('BOUNDARY')\n"
+    )
+    try:
+        done = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, timeout=seconds
+        )
+    except subprocess.TimeoutExpired:
+        return "HANG"
+    return done.stdout.strip() or done.stderr.strip()[-300:]
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFOs need POSIX")
+@pytest.mark.parametrize(
+    "call",
+    ['list_names("pipe")', 'ensure_directory("pipe")', 'remove_tree("pipe")'],
+)
+def test_a_fifo_in_the_workspace_never_blocks_directory_opens(tmp_path: Path, call: str) -> None:
+    """DoS contract (CWE-400): a planted FIFO is refused promptly, never waited on."""
+    ws = _ws(tmp_path)
+    os.mkfifo(ws.root / "pipe")
+    outcome = _run_with_deadline(ws, call)
+    assert outcome != "HANG", f"{call} blocked on a FIFO"
+    assert outcome in {"BOUNDARY", "OK"}, outcome
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFOs need POSIX")
+def test_a_fifo_as_an_intermediate_component_never_blocks(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    os.mkfifo(ws.root / "pipe")
+    assert _run_with_deadline(ws, 'list_names("pipe/child")') == "BOUNDARY"
+
+
+def test_a_path_through_a_regular_file_is_a_typed_boundary_error(tmp_path: Path) -> None:
+    """``file/child`` must raise FilesystemBoundaryError, not a raw NotADirectoryError."""
+    ws = _ws(tmp_path)
+    (ws.root / "f.txt").write_text("x")
+    for call in (
+        lambda: ws.list_names("f.txt/child"),
+        lambda: ws.ensure_directory("f.txt/child"),
+        lambda: ws.write_text("f.txt/child", "x"),
+        lambda: ws.read_text("f.txt/child"),
+    ):
+        with pytest.raises(FilesystemBoundaryError):
+            call()
+
+
+def test_final_symlink_to_a_directory_is_refused_by_every_directory_primitive(
+    tmp_path: Path,
+) -> None:
+    """The O_DIRECTORY|O_NOFOLLOW hole: a final symlink to a dir must not be followed."""
+    ws = _ws(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "victim.txt").write_text("v")
+    os.symlink(outside, ws.root / "link")
+    with pytest.raises(FilesystemBoundaryError):
+        ws.list_names("link")
+    with pytest.raises(FilesystemBoundaryError):
+        ws.ensure_directory("link")
+    # Every primitive rejects the symlink at resolve() before any open happens,
+    # so nothing outside the workspace is ever reached.
+    with pytest.raises(FilesystemBoundaryError):
+        ws.remove_tree("link")
+    assert (outside / "victim.txt").read_text() == "v"
+
+
+def test_intermediate_symlink_and_traversal_are_refused(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    os.symlink(outside, ws.root / "mid")
+    with pytest.raises(FilesystemBoundaryError):
+        ws.ensure_directory("mid/child")
+    assert not (outside / "child").exists()
+    for bad in ("../escape", "a/../../escape", "/abs"):
+        with pytest.raises(FilesystemBoundaryError):
+            ws.ensure_directory(bad)
