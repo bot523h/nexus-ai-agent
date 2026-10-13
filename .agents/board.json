@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-10T18:42:23Z",
+  "updated_at": "2026-10-11T07:05:03Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -888,8 +888,8 @@
       "zone": "ci-quality",
       "priority": "P0",
       "status": "completed_released",
-      "scope": "عامل E (شاخه 460) تا ادغام #33 یا بازگشت عامل A، مالک اجرای گیت‌ها روی main است.",
-      "scope_fa": "عامل E (شاخه 460) تا ادغام #33 یا بازگشت عامل A، مالک اجرای گیت‌ها روی main است.",
+      "scope": "SUPERSEDED (historical). This stewardship ended 2026-09-22 when its lease expired without renewal; it was handed off via task-145-ci-gates-handoff-refresh and later superseded by the ci-gates-steward-closure epoch. No live role, no exclusive paths.",
+      "scope_fa": "منسوخ (تاریخی). این نگهبانی در ۲۰۲۶-۰۹-۲۲ با انقضای lease بدون تمدید پایان یافت؛ از طریق task-145-ci-gates-handoff-refresh تحویل و سپس با epoch «ci-gates-steward-closure» جایگزین شد. بدون نقش فعال و بدون مسیر انحصاری.",
       "prerequisites": [],
       "acceptance_criteria": [
         "گیت‌های branch و main خوانده و ثبت شوند",
@@ -3582,6 +3582,30 @@
       "gates_owner": true,
       "note": "",
       "generation": 1
+    },
+    {
+      "task": "task-261-request-queue-boundary-doc",
+      "title": "Document the LLM request-queue vs execution-core cancellation boundary",
+      "zone": "docs-architecture",
+      "priority": "P3",
+      "status": "active",
+      "agent_branch": "arena/nexus-night-task261-request-queue-doc",
+      "claimed_at": "2026-10-10T18:23:22Z",
+      "gates_owner": false,
+      "generation": 1,
+      "exclusive_paths": [
+        "docs/architecture/REQUEST_QUEUE.md"
+      ],
+      "acceptance_criteria": [
+        "one page maps each cancellation surface to its authority and identity model",
+        "audit note: no cross-subsystem authority leak; links to the execution contract"
+      ],
+      "evidence_required": [
+        "exact commands + observed results for docs integrity tests"
+      ],
+      "prerequisites": [],
+      "ttl_hours": 24,
+      "note": ""
     }
   ],
   "deferred_log": [
