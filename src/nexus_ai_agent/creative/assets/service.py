@@ -93,10 +93,8 @@ def _replay_lock_for(session: AsyncSession, ingest_id: str) -> asyncio.Lock:
     if registry is None:
         registry = {}
         _replay_locks[loop] = registry
-    try:
-        database = str(session.bind.url) if session.bind is not None else "unknown"
-    except AttributeError:
-        database = "unknown"
+    bind = session.bind
+    database = str(getattr(bind, "url", "unknown")) if bind is not None else "unknown"
     key = f"{database}:{ingest_id}"
     lock = registry.get(key)
     if lock is None:
