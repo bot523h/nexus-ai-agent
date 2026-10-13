@@ -1325,3 +1325,73 @@ def test_show_garbage_collects_an_expired_lease(board_module: ModuleType) -> Non
     # gc records *why* it released the lease, and never clobbers the owner's note.
     assert "stale active lease" in freed["release_reason"]
     assert freed["note"] == handoff
+
+
+def _expire_first_active(board_module: ModuleType) -> str:
+    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    stale = next(c for c in board["claims"] if c["status"] == "active")
+    stale["claimed_at"] = _iso(datetime.now(timezone.utc) - timedelta(hours=48))
+    stale["ttl_hours"] = 1
+    board_module.BOARD.write_text(json.dumps(board, indent=2, ensure_ascii=False), encoding="utf-8")
+    return str(stale["task"])
+
+
+def test_takeover_of_a_gc_released_lease_clears_the_stale_release_reason(
+    board_module: ModuleType,
+) -> None:
+    """An ACTIVE lease must not claim to have been released (review on PR #211).
+
+    gc stamps ``release_reason`` on the expired record; a later takeover reuses
+    that record, so the reason has to be retired — kept only as history.
+    """
+    task = _expire_first_active(board_module)
+    assert board_module.cmd_show(type("A", (), {})()) == 0
+    expired = _claim(board_module, task)
+    assert "stale active lease" in expired["release_reason"]
+    generation = int(expired.get("generation") or 0)  # legacy records have none
+
+    args = type(
+        "A",
+        (),
+        {
+            "task": task,
+            "branch": "arena/new-owner",
+            "ttl": 24,
+            "gates": False,
+            "expected_generation": generation or None,
+        },
+    )()
+    assert board_module.cmd_claim(args) == 0
+
+    taken = _claim(board_module, task)
+    assert taken["status"] == "active"
+    assert "release_reason" not in taken or not taken["release_reason"]
+    assert "stale active lease" in taken["previous_release_reason"], "history is retained"
+    assert taken["generation"] == generation + 1, "takeover must advance the fencing epoch"
+
+
+def test_a_claim_that_was_never_released_gets_no_history_field(
+    board_module: ModuleType,
+) -> None:
+    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    free = next(c for c in board["claims"] if c["status"] == "queued")
+    args = type(
+        "A",
+        (),
+        {
+            "task": free["task"],
+            "branch": "arena/x",
+            "ttl": 24,
+            "gates": False,
+            "expected_generation": free.get("generation"),
+        },
+    )()
+    assert board_module.cmd_claim(args) == 0
+    after = _claim(board_module, free["task"])
+    assert "previous_release_reason" not in after
+    assert not after.get("release_reason")
+
+
+def _claim(board_module: ModuleType, task: str) -> dict:
+    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    return next(c for c in board["claims"] if c["task"] == task)
