@@ -38,12 +38,14 @@ ROOT = Path(__file__).resolve().parents[1]
 FS_POLICY = ROOT / "src" / "nexus_ai_agent" / "tools" / "filesystem_policy.py"
 BLOB_STORE = ROOT / "src" / "nexus_ai_agent" / "creative" / "assets" / "blob_store.py"
 MODELS = ROOT / "src" / "nexus_ai_agent" / "storage" / "models.py"
+DB = ROOT / "src" / "nexus_ai_agent" / "storage" / "db.py"
 SERVICE = ROOT / "src" / "nexus_ai_agent" / "creative" / "assets" / "service.py"
 TESTS = (
     "tests/unit/test_asset_library_blob_store.py",
     "tests/integration/test_asset_library_filesystem_security.py",
     "tests/integration/test_asset_library_persistence.py",
     "tests/unit/test_asset_library_service.py",
+    "tests/unit/test_storage_wal_init_race.py",
 )
 
 
@@ -118,6 +120,34 @@ MUTATIONS: tuple[Mutation, ...] = (
         "            if False:",
         "a reused idempotency key must be compared against the measured content "
         "digest; skipping it silently returns the earlier asset for different bytes",
+    ),
+    Mutation(
+        "schema_changed_no_longer_retryable",
+        DB,
+        '    return "already exists" in message or "schema has changed" in message',
+        '    return "already exists" in message',
+        "a concurrent first-use DDL stampede can surface SQLITE_SCHEMA "
+        "(database schema has changed); if the retry predicate no longer "
+        "recognises it the loser propagates instead of reloading the schema",
+    ),
+    Mutation(
+        "first_use_init_lock_removed",
+        DB,
+        """    lock = _init_locks.setdefault(normalized_path, asyncio.Lock())
+    async with lock:
+        if normalized_path in _initialized_paths:
+            return
+        engine = _get_engine(normalized_path)
+        await _set_wal_mode(engine)
+        await create_all_metadata(engine, SQLModel.metadata)
+        _initialized_paths.add(normalized_path)""",
+        """    engine = _get_engine(normalized_path)
+    await _set_wal_mode(engine)
+    await create_all_metadata(engine, SQLModel.metadata)
+    _initialized_paths.add(normalized_path)""",
+        "the per-path init lock serialises first-use DDL; without it every "
+        "concurrent caller runs create_all and their DDL invalidates each "
+        "other's schema snapshot",
     ),
 )
 

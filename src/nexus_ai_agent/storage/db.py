@@ -22,6 +22,13 @@ _engine: Any | None = None
 _engine_path: str | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 _initialized_paths: set[str] = set()
+# Per-path lock serialising first-use schema initialisation.  ``_initialized_paths``
+# is only populated *after* the DDL completes, so several callers arriving
+# together all pass the membership check and all run ``create_all`` — a
+# duplicate-DDL stampede whose loser can surface SQLITE_SCHEMA.  The lock turns
+# that into one creator plus waiters that re-check the guard and return.  Built
+# lazily because an ``asyncio.Lock`` must be constructed inside a running loop.
+_init_locks: dict[str, asyncio.Lock] = {}
 # Seconds a SQLite connection waits for a competing lock before raising
 # SQLITE_BUSY. The default (5s in the sqlite3 stdlib) is applied only to the
 # database lock; it does not cover the one-time ``PRAGMA journal_mode=WAL``
@@ -233,16 +240,24 @@ _CREATE_ALL_ATTEMPTS = 6
 
 
 def _is_concurrent_create_conflict(exc: Exception) -> bool:
-    """Whether ``exc`` is another process having just created the same object.
+    """Whether ``exc`` is a benign race with another creator of the same schema.
 
-    ``MetaData.create_all`` runs with ``checkfirst=True``, so it asks whether a
-    table exists and *then* emits ``CREATE TABLE``.  Two processes booting
-    together both see "does not exist", both emit the DDL, and the loser gets
-    ``table … already exists``.  That is a benign race, not a broken schema —
-    the winner did exactly the work the loser was about to do.
+    Two shapes are benign and retryable:
+
+    * ``table … already exists`` — ``MetaData.create_all`` runs with
+      ``checkfirst=True``, so it asks whether a table exists and *then* emits
+      ``CREATE TABLE``.  Two processes booting together both see "does not
+      exist", both emit the DDL, and the loser gets ``table … already exists``.
+    * ``database schema has changed`` (SQLITE_SCHEMA) — a *second* connection
+      on the same fresh SQLite file ran DDL while this connection held a schema
+      snapshot from its own ``checkfirst`` probe; SQLite invalidates the stale
+      snapshot and raises.  Re-running the transaction reloads the schema.
+
+    Both are the winner having done exactly the work the loser was about to do.
+    Anything else propagates on the first attempt.
     """
     message = str(getattr(exc, "orig", exc)).lower()
-    return "already exists" in message
+    return "already exists" in message or "schema has changed" in message
 
 
 async def create_all_metadata(engine: Any, metadata: MetaData) -> None:
@@ -315,13 +330,21 @@ async def create_all_tables(db_path: str = "data/app.sqlite") -> None:
     """Create all SQLModel tables for the selected database, exactly once per path."""
     await _dispose_replaced_engines()
     normalized_path = str(Path(db_path).expanduser())
+    # ``_get_engine`` (re)creates the session factory and must run even when the
+    # schema is already initialised -- the fast path below returns without it.
     engine = _get_engine(normalized_path)
     if normalized_path in _initialized_paths:
         return
-
-    await _set_wal_mode(engine)
-    await create_all_metadata(engine, SQLModel.metadata)
-    _initialized_paths.add(normalized_path)
+    # Serialise first use of this path: without the lock every concurrent caller
+    # passes the guard above (it is set only *after* the DDL) and runs its own
+    # ``create_all``, so their DDL invalidates each other's schema snapshot.
+    lock = _init_locks.setdefault(normalized_path, asyncio.Lock())
+    async with lock:
+        if normalized_path in _initialized_paths:
+            return
+        await _set_wal_mode(engine)
+        await create_all_metadata(engine, SQLModel.metadata)
+        _initialized_paths.add(normalized_path)
 
 
 def _get_pg_engine(url: str) -> Any:

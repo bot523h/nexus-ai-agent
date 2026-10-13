@@ -120,3 +120,77 @@ async def test_wal_retry_absorbs_contention_longer_than_the_busy_timeout(
         await create_all_tables(str(db_path))
 
     assert _journal_mode(db_path) == "wal"
+
+
+async def test_concurrent_first_use_serialises_to_a_single_creator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """First use of one fresh path must run the DDL exactly once.
+
+    ``_initialized_paths`` is populated only *after* the DDL, so without a
+    per-path lock every concurrent caller passes the membership guard and runs
+    its own ``create_all``.  Those duplicate DDLs invalidate each other's schema
+    snapshot (SQLITE_SCHEMA / ``database schema has changed``).  This spies on
+    ``create_all_metadata`` to count how many creators actually ran: the lock
+    makes it exactly one; removing the lock turns this red.
+    """
+    db_path = tmp_path / "single-creator.sqlite"
+    normalized = str(db_path)
+    db_module._initialized_paths.discard(normalized)
+    sqlite3.connect(db_path).close()
+
+    calls = 0
+    original = db_module.create_all_metadata
+
+    async def counting(engine: object, metadata: object) -> None:
+        nonlocal calls
+        calls += 1
+        await original(engine, metadata)
+
+    monkeypatch.setattr(db_module, "create_all_metadata", counting)
+
+    await asyncio.gather(*[create_all_tables(normalized) for _ in range(6)])
+
+    assert calls == 1, f"first use ran the DDL {calls} times, expected exactly 1"
+
+
+async def test_concurrent_first_use_of_a_fresh_path_all_succeeds(tmp_path: Path) -> None:
+    """End-to-end: six concurrent ``get_session`` callers on a fresh path.
+
+    This is the real-DDL companion to the counting test above — every caller
+    must obtain a working session and the file must end in WAL mode, with no
+    ``database schema has changed`` escaping.
+    """
+    db_path = tmp_path / "stampede-session.sqlite"
+    normalized = str(db_path)
+    db_module._initialized_paths.discard(normalized)
+    sqlite3.connect(db_path).close()
+
+    async def one() -> None:
+        async with get_session(normalized) as session:
+            await session.execute(text("SELECT 1"))
+
+    results = await asyncio.gather(*[one() for _ in range(6)], return_exceptions=True)
+    errors = [repr(r) for r in results if isinstance(r, BaseException)]
+    assert errors == [], f"concurrent get_session failed: {errors}"
+    assert _journal_mode(db_path) == "wal"
+
+
+def test_schema_changed_is_a_retryable_create_conflict() -> None:
+    """``database schema has changed`` must be treated as a benign create race.
+
+    The DDL transaction re-runs and reloads the schema; the predicate must
+    recognise the SQLite ``SQLITE_SCHEMA`` error, not only ``already exists``.
+    """
+    from sqlalchemy.exc import OperationalError
+
+    schema_changed = OperationalError(
+        "CREATE TABLE x", {}, sqlite3.OperationalError("database schema has changed")
+    )
+    already_exists = OperationalError(
+        "CREATE TABLE x", {}, sqlite3.OperationalError("table x already exists")
+    )
+    unrelated = OperationalError("CREATE TABLE x", {}, sqlite3.OperationalError("disk I/O error"))
+    assert db_module._is_concurrent_create_conflict(schema_changed) is True
+    assert db_module._is_concurrent_create_conflict(already_exists) is True
+    assert db_module._is_concurrent_create_conflict(unrelated) is False
