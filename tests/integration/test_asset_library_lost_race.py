@@ -181,10 +181,10 @@ async def test_publish_and_commit_raises_when_it_loses_the_compare_and_set(
 
 
 @pytest.mark.asyncio
-async def test_an_adopted_replay_that_loses_the_race_is_reclaimed(
+async def test_a_replay_that_loses_before_adoption_leaves_no_orphan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Original staged file lost -> replay adopted -> a rival completes first -> no orphan."""
+    """Original lost -> a rival completes while the replay stages -> adoption refused."""
     await _crash_after_stage(tmp_path, FIRST, "k1")
     (row,) = await _rows(tmp_path)
     assert row.staging_key
@@ -196,7 +196,45 @@ async def test_an_adopted_replay_that_loses_the_race_is_reclaimed(
     assert calls
     assert result.state is IngestState.READY
     assert await _count(tmp_path, orm.Asset) == 1
-    assert _staging_files(tmp_path) == []  # the adopted replay file did not leak
+    assert _staging_files(tmp_path) == []
+
+
+@pytest.mark.asyncio
+async def test_a_lost_race_reclaims_the_replay_file_this_call_adopted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cleanup contract of ``_reconcile_committing``, pinned directly.
+
+    The end-to-end window (adoption succeeds, then a rival completes before publish)
+    cannot occur on SQLite: adoption's UPDATE holds the single write lock until the
+    loser commits, so a rival cannot interleave.  It can on PostgreSQL (row locks),
+    which is NOT available in this environment, so that window is NOT VERIFIED
+    end-to-end.  What is verified: when reconciliation reports a lost race, the file
+    this call adopted is removed and a file it does not own is left alone.
+    """
+    from nexus_ai_agent.creative.assets import service as service_module
+    from nexus_ai_agent.creative.assets.repository import SqlAssetRepository
+
+    await _crash_after_stage(tmp_path, FIRST, "k1")
+    (row,) = await _rows(tmp_path)
+    service = _service(tmp_path)
+    store = service._blob_store
+    adopted = store.new_staging_key()
+    store.stage_to(adopted, io.BytesIO(SECOND), max_bytes=1 << 20)
+    assert (tmp_path / "blobs" / adopted).is_file()
+
+    async def lose(*_a: Any, **_k: Any) -> Any:
+        raise IngestAlreadyResolved(row.ingest_id)
+
+    monkeypatch.setattr(service_module, "reconcile_ingest", lose)
+    async with get_session(str(tmp_path / "library.sqlite")) as session:
+        repo = SqlAssetRepository(session)
+        record = await repo.get_ingest_fresh(row.ingest_id)
+        assert record is not None
+        await service._reconcile_committing(session, repo, record, owned_staging_key=adopted)
+
+    assert not (tmp_path / "blobs" / adopted).exists()  # the adopted file was reclaimed
+    assert row.staging_key and (tmp_path / "blobs" / row.staging_key).is_file()  # not ours: kept
 
 
 @pytest.mark.asyncio
