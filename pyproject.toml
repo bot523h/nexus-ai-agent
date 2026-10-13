@@ -13,7 +13,7 @@ authors = [{ name = "NEXUS AI" }]
 dependencies = [
   "python-telegram-bot>=21.0",
   "langgraph>=0.2",
-  "langgraph-checkpoint-sqlite>=1.0",
+  "langgraph-checkpoint-sqlite==3.1.1",
   "langchain-community>=0.2",
   "sqlmodel==0.0.42",
   "sqlalchemy==2.0.54",
