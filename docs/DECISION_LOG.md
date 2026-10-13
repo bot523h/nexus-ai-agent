@@ -1939,5 +1939,8 @@ distinguish it.
 
 Scope (no overclaiming): this classifies by container signature only; it is not a safety scan and
 does not parse the stream. QuickTime, HEIF/AVIF and 3GPP are *refused*, not supported. Concurrent
-same-key replays are serialized by the `UNIQUE(project_id, idempotency_key)` constraint at Tx1, but
-two simultaneous replays of an *interrupted* ingest are not separately stress-tested here.
+same-key replays are serialized by the `UNIQUE(project_id, idempotency_key)` constraint at Tx1.
+Within one process, `_replay_lock_for` serializes interrupted-ingest recovery per database and
+idempotency key; the replay safety suite covers matching and conflicting concurrent replays, including
+32 repeated two-different-replay rounds. Cross-process serialization and PostgreSQL row-lock behavior
+are not verified here and remain **DEFERRED** pending the independent real-PostgreSQL interleaving test.
