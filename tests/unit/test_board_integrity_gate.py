@@ -122,3 +122,37 @@ def test_cli_exit_codes(tmp_path: Path) -> None:
     done = run("--board", str(bad))
     assert done.returncode == 1 and "FAIL" in done.stderr
     assert run("--board", str(tmp_path / "missing.json")).returncode == 1
+
+
+@pytest.mark.parametrize("field", ["status", "zone"])
+@pytest.mark.parametrize(
+    "bad",
+    [1, 0, True, 1.5, ["x"], {"a": 1}, "", "   ", None],
+    ids=["int", "zero", "bool", "float", "list", "dict", "empty", "blank", "none"],
+)
+def test_claim_status_and_zone_must_be_non_empty_strings(field: str, bad: object) -> None:
+    """Truthiness is not validation: ``status: 1`` must not pass (review on PR #211)."""
+    board = _good()
+    board["claims"][0][field] = bad
+    problems = _problems(board)
+    assert any(field in p for p in problems), problems
+
+
+@pytest.mark.parametrize("field", ["status", "zone"])
+def test_missing_status_or_zone_is_still_rejected(field: str) -> None:
+    board = _good()
+    del board["claims"][0][field]
+    assert any(field in p for p in _problems(board))
+
+
+@pytest.mark.parametrize("bad_task", [1, "", "  ", None, ["t"]])
+def test_claim_task_must_be_a_non_empty_string(bad_task: object) -> None:
+    board = _good()
+    board["claims"][0]["task"] = bad_task
+    assert _problems(board)
+
+
+def test_valid_string_status_and_zone_still_pass() -> None:
+    board = _good()
+    board["claims"][0].update(status="active", zone="ci-quality")
+    assert _problems(board) == []

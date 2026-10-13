@@ -27,6 +27,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import TypeGuard
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BOARD = ROOT / ".agents" / "board.json"
@@ -44,6 +45,11 @@ ACTIVE = frozenset({"active", "active_in_review"})
 # treated as truncated, not as legitimate pruning.
 MAX_SHRINK = 0.5
 _BASE64_LINE = re.compile(r"^[A-Za-z0-9+/=\s]+$")
+
+
+def _is_text(value: object) -> TypeGuard[str]:
+    """A real, non-blank string. ``bool``/``int``/``list`` are not text (no truthiness)."""
+    return isinstance(value, str) and bool(value.strip())
 
 
 def validate(raw: bytes, baseline_claims: int | None = None) -> list[str]:
@@ -89,15 +95,18 @@ def validate(raw: bytes, baseline_claims: int | None = None) -> list[str]:
                 problems.append(f"claims[{index}] is not an object")
                 continue
             task = claim.get("task")
-            if not isinstance(task, str) or not task:
-                problems.append(f"claims[{index}] has no 'task'")
+            if not _is_text(task):
+                problems.append(f"claims[{index}] 'task' must be a non-empty string, got {task!r}")
                 continue
             if task in seen:
                 problems.append(f"duplicate claim task {task!r}")
             seen.add(task)
             for field in ("status", "zone"):
-                if not claim.get(field):
-                    problems.append(f"claim {task!r} lacks {field!r}")
+                if not _is_text(claim.get(field)):
+                    problems.append(
+                        f"claim {task!r} {field!r} must be a non-empty string, "
+                        f"got {claim.get(field)!r}"
+                    )
         owners = [
             c.get("task")
             for c in claims
