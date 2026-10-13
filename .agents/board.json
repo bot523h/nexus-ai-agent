@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-13T10:03:17Z",
+  "updated_at": "2026-10-13T14:31:59Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3584,7 +3584,7 @@
       "title_fa": "",
       "zone": "ci-quality",
       "priority": "P0",
-      "status": "expired",
+      "status": "active",
       "scope": "Exactly one live gates_owner while the closure validation runs: the referee fails closed (exit 2) for every agent while no live gates owner exists, and main-bound closure work needs the full gates executed by their holder. Runs make lint / make types / make test against the closure head and records the results bound to the exact SHA.",
       "scope_fa": "",
       "prerequisites": [],
@@ -3601,12 +3601,12 @@
         ".github/"
       ],
       "owner_hint": "successor of ci-gates-steward / task-145-ci-gates-handoff-refresh",
-      "agent_branch": "phase1-pr196-guard-20261009",
-      "claimed_at": "2026-10-10T18:42:23Z",
+      "agent_branch": "arena/superagent-asset-hardening-20261013",
+      "claimed_at": "2026-10-13T14:31:59Z",
       "ttl_hours": 24,
-      "gates_owner": false,
+      "gates_owner": true,
       "note": "",
-      "generation": 1,
+      "generation": 2,
       "release_reason": "auto-released by gc at 2026-10-13T10:02:48Z (stale active lease)"
     },
     {
@@ -3657,7 +3657,7 @@
       "agent_branch": "arena/superagent-asset-hardening-20261013",
       "claimed_at": "2026-10-13T10:03:17Z",
       "ttl_hours": 24,
-      "gates_owner": true,
+      "gates_owner": false,
       "note": "",
       "generation": 2,
       "release_reason": "auto-released by gc at 2026-10-13T10:02:48Z (stale active lease)"
