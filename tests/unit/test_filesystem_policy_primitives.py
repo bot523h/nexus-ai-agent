@@ -8,6 +8,7 @@ test drives a real temporary filesystem; symlinks are the attack surface.
 from __future__ import annotations
 
 import os
+import stat
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -322,16 +323,30 @@ def _run_with_deadline(ws: WorkspaceFilesystem, call: str, seconds: float = 5.0)
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFOs need POSIX")
 @pytest.mark.parametrize(
-    "call",
-    ['list_names("pipe")', 'ensure_directory("pipe")', 'remove_tree("pipe")'],
+    ("call", "expected"),
+    [
+        # A FIFO is not a directory: opening it as one must be refused (fail closed).
+        ('list_names("pipe")', "BOUNDARY"),
+        ('ensure_directory("pipe")', "BOUNDARY"),
+        # remove_tree is documented best-effort cleanup: it skips a target it cannot
+        # safely open as a directory and returns normally, leaving the FIFO alone.
+        ('remove_tree("pipe")', "OK"),
+    ],
 )
-def test_a_fifo_in_the_workspace_never_blocks_directory_opens(tmp_path: Path, call: str) -> None:
-    """DoS contract (CWE-400): a planted FIFO is refused promptly, never waited on."""
+def test_a_fifo_in_the_workspace_never_blocks_directory_opens(
+    tmp_path: Path, call: str, expected: str
+) -> None:
+    """DoS contract (CWE-400): a planted FIFO is refused promptly, never waited on.
+
+    The outcome is asserted exactly per primitive so that losing the descriptor
+    type check (which would let ``ensure_directory`` return OK) fails the test.
+    """
     ws = _ws(tmp_path)
     os.mkfifo(ws.root / "pipe")
     outcome = _run_with_deadline(ws, call)
     assert outcome != "HANG", f"{call} blocked on a FIFO"
-    assert outcome in {"BOUNDARY", "OK"}, outcome
+    assert outcome == expected, f"{call}: expected {expected}, got {outcome}"
+    assert stat.S_ISFIFO(os.lstat(ws.root / "pipe").st_mode), "the FIFO must be left untouched"
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFOs need POSIX")
