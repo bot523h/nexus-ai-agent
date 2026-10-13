@@ -1903,10 +1903,10 @@ and `tests/unit/test_undo_contract_mutations.py` — 4 tests, 3 mutants killed (
 field compared; comparison inverted). `docs/architecture/COMMAND_CAPABILITY_CONTRACT.md` §`system.undo`
 records the contract.
 
-### D-0026 — Asset Library: the closed MIME allowlist is decided by the ISO-BMFF *major brand*, and a replay never touches the original's staging file (task-266)
+### D-0026 — Asset Library: MIME decided by the ISO-BMFF *major brand*; a replay never touches the original's staging file; ingest completion is an exclusive compare-and-set (task-266)
 
-Two defects in the Asset Library ingest path, found on the PR #210 head (`a6154a4`) by review and
-reproduced here before fixing.
+Defects in the Asset Library ingest path, found on the PR #210 head (`a6154a4`) by review and each
+reproduced before fixing.
 
 **1. `ftyp` is a container signature, not a media type.** `detect_media_type` returned `video/mp4`
 for any header with `ftyp` at offset 4. HEIC/HEIF and AVIF stills, QuickTime movies, 3GPP/3GPP2
@@ -1920,24 +1920,86 @@ live ingest and the crash-recovery re-classification, so one fix covers both.
 
 **2. A replay overwrote the only recoverable copy.** `_resolve_existing` staged the replay stream
 onto `existing.staging_key` and compared afterwards. `os.replace` had already destroyed the
-original by then: an empty replay wiped it (then failed `AssetVersion.size_bytes >= 1`), and a
-replay arriving before Tx2 (no recorded digest) silently *became* the asset. Decision: the replay
-is staged under a **fresh key**, compared with the original's identity, and removed on every exit
-path. The reference identity is, in order: the digest/size recorded by Tx2; a fresh measurement of
-the intact original staged file; nothing (original lost), in which case a non-empty replay is
-adopted as the new staged original and an empty one is refused. Any mismatch is a typed
-`IdempotencyConflict` and the original stays recoverable.
+original by then: an empty replay wiped it, and a replay arriving before Tx2 (no recorded digest)
+silently *became* the asset. Decision: the replay is staged under a **fresh key**, compared with
+the original's identity, and removed on every exit path. The reference identity is, in order: the
+digest/size recorded by Tx2; a fresh measurement of the intact original staged file; nothing
+(original lost), in which case a non-empty replay is adopted as the new staged original and an
+empty one is refused. Any mismatch is a typed `IdempotencyConflict`.
 
-Reproduced first: 14 of 26 brand tests and 6 of 10 replay tests failed on the unfixed code.
-Guarded by `tests/unit/test_asset_library_mime_brands.py` (39 tests) and
-`tests/integration/test_asset_library_replay_safety.py` (15 tests, including the live-ingest and
-crash-recovery HEIC refusals). Mutation proofs: all five replay mutants killed (replay staged on the
-original's key; comparison disabled; cleanup removed; empty-body guard removed; recorded Tx2 identity
-ignored); of three MIME mutants two are killed and the third (`len(header) >= 8` instead of `>= 12`)
-is an **equivalent mutant** - a short slice can never equal an allow-listed brand - so no test can
-distinguish it.
+**3. Concurrent retries of one interrupted ingest were not safe (found while closing the claim
+"not stress-tested" that the first version of this entry made).** Two simultaneous replays of an
+interrupted ingest produced **duplicate assets** (2 assets / 2 versions / 2 links in 3 of 4 runs on
+`a6154a4`) or downgraded a successfully completed ingest to `FAILED`. Root causes, each proven by
+instrumentation rather than assumed:
 
-Scope (no overclaiming): this classifies by container signature only; it is not a safety scan and
-does not parse the stream. QuickTime, HEIF/AVIF and 3GPP are *refused*, not supported. Concurrent
-same-key replays are serialized by the `UNIQUE(project_id, idempotency_key)` constraint at Tx1, but
-two simultaneous replays of an *interrupted* ingest are not separately stress-tested here.
+- `complete_ingest`, `mark_failed` and `set_staging_key` were unconditional writes. Decision: each
+  is now one `UPDATE ... WHERE state='STAGING'` returning whether it won. A lost compare-and-set
+  raises `IngestAlreadyResolved`; the loser rolls back its whole graph and serves the winner.
+  `downgrade_ready_to_failed` is the only `READY -> FAILED` path and only for a proven-missing blob.
+- Adoption of a replay was a check-then-act (read state, then write the key). It is now the single
+  conditional UPDATE above. A leaked staging file in 13 of 15 runs fell to 0 of 30.
+- **A recovered ingest was left `READY` with `content_sha256 = NULL`.** `complete_ingest` did not
+  record the digest it had just published, so a later reconcile verified against an empty digest
+  and demoted a good ingest to `FAILED/blob_missing`. It now records digest and size; a `READY`
+  row always carries its content identity.
+- A replay with *different* bytes that lost the race to a matching replay was returned a success
+  result. It is now refused with `IdempotencyConflict`.
+- A rival winning during the loser's publish consumed the staged file, and the loser crashed with
+  an unhandled `BlobStoreError`. `_reconcile_committing` now treats a vanished staged file as a lost
+  race only when the row is no longer `STAGING`; otherwise it re-raises (a real storage fault).
+- `recover_all` shared one transaction across all ingests, so one lost race rolled back the others.
+  It now commits per ingest.
+
+Corrected diagnosis, kept on record: an early hypothesis that `Session.get` returned a stale cached
+row was **not reproduced** (the session reloads after commit). `get_ingest_fresh` is retained as a
+defensive read, and no test or comment asserts that mechanism.
+
+Evidence. Guarded by `tests/unit/test_asset_library_mime_brands.py`,
+`tests/integration/test_asset_library_replay_safety.py` (including an 8-round matching-vs-differing
+replay race), `test_asset_library_ingest_cas.py` (each compare-and-set pinned directly) and
+`test_asset_library_lost_race.py` (the race forced deterministically by running the rival inside the
+loser's file step). `scripts/asset_library_mutation_check.py` applies nine one-edit mutants to the
+real sources and restores them; **9 of 9 killed** at `cf00821`, tree verified intact. The first
+run killed 6 of 9 and the survivors drove three of the tests above.
+
+Scope and honest limits:
+
+- Classification is by container signature only; it is not a safety scan. QuickTime, HEIF/AVIF and
+  3GPP are *refused*, not supported.
+- The window "adoption succeeds, then a rival completes before publish" cannot occur on SQLite (the
+  adoption UPDATE holds the single write lock until the loser commits). It can on PostgreSQL, which
+  is not available in this environment, so that interleaving is **not verified end-to-end**. Only
+  the cleanup contract (`_reconcile_committing` removes the file it adopted when it loses) is pinned,
+  directly.
+- Remote CI at `cf00821` was red for a reason unrelated to this change; see D-0027.
+
+### D-0027 — `langgraph-checkpoint-sqlite` is pinned to the release the schema golden was generated from (task-266)
+
+On 2026-10-13 remote CI went red on `test (pytest -m "not slow")` and `python-parity (3.10/3.11/3.12)`
+with the same six failures, none in the Asset Library:
+`test_checkpoint_adapter.py::test_setup_schema_matches_golden`,
+`test_lifecycle_adversarial.py::test_apply_under_lock_contention_fails_safe` and four in
+`test_reconciler.py`. The same six failed on `4b63fe8` (a board-only commit with no code change), so
+they predate this work; they passed locally.
+
+Root cause, reproduced rather than assumed. `pyproject.toml` declared `langgraph-checkpoint-sqlite>=1.0`.
+Version 3.1.2 was published on 2026-10-12 and adds `writes.task_path TEXT NOT NULL DEFAULT ''`, which
+changes the DDL fingerprint (`538d8b20...` expected, `3bb6888c...` actual). The committed `schema-v1`
+golden is documented in `docs/architecture/DATA_LIFECYCLE.md` as captured from 3.1.1. CI installs the
+newest release, so it compared a 3.1.2 schema with a 3.1.1 golden; the local environment still had
+3.1.1. Installing 3.1.2 into a copy of the passing environment reproduced exactly the six failures
+and nothing else.
+
+Decision: pin `langgraph-checkpoint-sqlite==3.1.1`, the same way `langgraph-checkpoint-postgres` is
+already pinned `==3.1.2`. A floating range checked against a fixed golden fails whenever upstream
+releases, so the failure had nothing to do with any change under review.
+
+Deliberately **not** done: regenerating the golden. The accepted decision "Human-triggered golden
+updates" (above, under the lifecycle decisions) makes that an explicit human decision, and it is a real one: a 3.1.2 database has an extra column that
+databases created by 3.1.1 do not, so moving the pin needs a migration/compatibility call. That
+decision is left open for the owner.
+
+Verified: a fresh virtualenv resolved only from `pyproject.toml` installs 3.1.1 and the six tests
+pass. This is a local reproduction; it is not proof of the remote result, which is recorded
+separately once CI reports on the final SHA.
