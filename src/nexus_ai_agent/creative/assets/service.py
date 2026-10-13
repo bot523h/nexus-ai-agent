@@ -24,8 +24,10 @@ or explicitly fail.  ``READY`` is returned only after Tx3 succeeds.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import uuid
+import weakref
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from typing import BinaryIO
@@ -72,6 +74,41 @@ PERMISSION_READ = "project:read"
 
 SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 FaultHook = Callable[[str], None]
+
+
+# Recovery of one interrupted ingest is serialized per database identity inside
+# a process. SQLite has no row-locking equivalent for this path, and separate
+# service instances can otherwise observe a temporarily missing staged file
+# while another resolver is publishing it. The database CAS remains the
+# authority across processes; this closes the same-process SQLite interleaving.
+_replay_locks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]] = (
+    weakref.WeakKeyDictionary()
+)
+_MAX_REPLAY_LOCKS = 512
+
+
+def _replay_lock_for(session: AsyncSession, ingest_id: str) -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    registry = _replay_locks.get(loop)
+    if registry is None:
+        registry = {}
+        _replay_locks[loop] = registry
+    try:
+        database = str(session.bind.url) if session.bind is not None else "unknown"
+    except AttributeError:
+        database = "unknown"
+    key = f"{database}:{ingest_id}"
+    lock = registry.get(key)
+    if lock is None:
+        if len(registry) >= _MAX_REPLAY_LOCKS:
+            for idle_key, candidate in list(registry.items()):
+                if not candidate.locked():
+                    registry.pop(idle_key, None)
+                    if len(registry) < _MAX_REPLAY_LOCKS - 64:
+                        break
+        lock = asyncio.Lock()
+        registry[key] = lock
+    return lock
 
 
 def _request_fingerprint(request: IngestRequest) -> str:
@@ -252,7 +289,29 @@ class AssetLibraryService:
             return _result_from(existing, reused=True)
 
         if existing.state is IngestState.STAGING:
-            return await self._resolve_interrupted(repo, session, existing, stream)
+            # Re-read after acquiring the guard. A concurrent resolver may have
+            # completed the row while this caller waited; using the old snapshot
+            # could mistake a temporarily absent staging file for a lost original.
+            async with _replay_lock_for(session, existing.ingest_id):
+                current = await repo.get_ingest_fresh(existing.ingest_id)
+                if current is None:
+                    raise IngestNotFound(existing.ingest_id)
+                if current.request_fingerprint != fingerprint:
+                    raise IdempotencyConflict(
+                        "idempotency key was reused with a different request payload"
+                    )
+                if current.state is IngestState.READY:
+                    observed = self._blob_store.hash_stream(stream, max_bytes=self._max_bytes)
+                    if observed != (current.content_sha256, current.size_bytes):
+                        raise IdempotencyConflict(
+                            "idempotency key was reused with different content"
+                        )
+                    return _result_from(current, reused=True)
+                if current.state is not IngestState.STAGING:
+                    raise RecoveryError(
+                        "this idempotency key belongs to a failed ingest; use a new key"
+                    )
+                return await self._resolve_interrupted(repo, session, current, stream)
         raise RecoveryError("this idempotency key belongs to a failed ingest; use a new key")
 
     async def _resolve_interrupted(

@@ -354,7 +354,14 @@ async def test_concurrent_matching_and_conflicting_replays_cannot_corrupt_the_or
         return_exceptions=True,
     )
 
-    # Whatever order they ran in, only the original's content may ever become the asset.
+    # Validate each caller's contract before aggregate invariants, so a race
+    # cannot hide which replay failed or why.
+    assert len(outcomes) == 3, f"unexpected replay outcomes: {outcomes!r}"
+    assert not isinstance(outcomes[0], BaseException), f"matching replay: {outcomes!r}"
+    assert isinstance(outcomes[1], IdempotencyConflict), f"different replay: {outcomes!r}"
+    assert isinstance(outcomes[2], IdempotencyConflict), f"empty replay: {outcomes!r}"
+    # Whatever order the filesystem operations used, only the original's
+    # content may ever become the asset.
     assert await _counts(tmp_path) == (1, 1, 1)
     async with get_session(str(tmp_path / "library.sqlite")) as session:
         version = (await session.execute(select(orm.AssetVersion))).scalars().one()
@@ -366,7 +373,7 @@ async def test_concurrent_matching_and_conflicting_replays_cannot_corrupt_the_or
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("round_", range(8))
+@pytest.mark.parametrize("round_", range(32))
 async def test_two_different_replays_race_only_the_original_content_survives(
     tmp_path: Path, round_: int
 ) -> None:
@@ -388,8 +395,12 @@ async def test_two_different_replays_race_only_the_original_content_survives(
         return_exceptions=True,
     )
 
-    assert not isinstance(matching, BaseException), matching
-    assert isinstance(differing, IdempotencyConflict), differing
+    assert not isinstance(
+        matching, BaseException
+    ), f"matching replay: {matching!r}; differing={differing!r}"
+    assert isinstance(
+        differing, IdempotencyConflict
+    ), f"differing replay: {differing!r}; matching={matching!r}"
     assert await _counts(tmp_path) == (1, 1, 1)
     async with get_session(str(tmp_path / "library.sqlite")) as session:
         version = (await session.execute(select(orm.AssetVersion))).scalars().one()
