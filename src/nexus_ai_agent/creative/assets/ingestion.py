@@ -22,7 +22,11 @@ import uuid
 from dataclasses import dataclass
 from enum import Enum
 
-from nexus_ai_agent.creative.assets.errors import BlobStoreError, ContentIntegrityError
+from nexus_ai_agent.creative.assets.errors import (
+    BlobStoreError,
+    ContentIntegrityError,
+    IngestAlreadyResolved,
+)
 from nexus_ai_agent.creative.assets.mime import HEADER_BYTES, detect_media_type
 from nexus_ai_agent.creative.assets.models import (
     SUPPORTED_MEDIA_TYPES,
@@ -96,14 +100,17 @@ async def publish_and_commit(
         asset_id=asset_id,
         version_id=version_id,
     )
-    await repo.complete_ingest(
+    if not await repo.complete_ingest(
         ingest_id,
         asset_id=asset_id,
         version_id=version_id,
         blob_key=blob_key,
+        content_sha256=content_sha256,
+        size_bytes=size_bytes,
         media_kind=media_kind,
         media_type=media_type,
-    )
+    ):
+        raise IngestAlreadyResolved(ingest_id)
     return asset_id, version_id, deduplicated
 
 
@@ -123,7 +130,7 @@ async def reconcile_ingest(
                 ingest.ingest_id, IngestState.READY, RecoveryOutcome.ALREADY_READY
             )
         # A READY row whose bytes are gone must never stay falsely READY.
-        await repo.mark_failed(ingest.ingest_id, error_code="blob_missing")
+        await repo.downgrade_ready_to_failed(ingest.ingest_id, error_code="blob_missing")
         return IngestRecoveryReport(
             ingest.ingest_id,
             IngestState.FAILED,
@@ -152,7 +159,10 @@ async def reconcile_ingest(
                 header = blob_store.read_staging_header(ingest.staging_key, HEADER_BYTES)
                 detected = detect_media_type(header) if header else None
                 if detected is None or detected not in SUPPORTED_MEDIA_TYPES:
-                    await repo.mark_failed(ingest.ingest_id, error_code="unsupported_media_type")
+                    if not await repo.mark_failed(
+                        ingest.ingest_id, error_code="unsupported_media_type"
+                    ):
+                        raise IngestAlreadyResolved(ingest.ingest_id)
                     return IngestRecoveryReport(
                         ingest.ingest_id, IngestState.FAILED, RecoveryOutcome.FAILED
                     )
@@ -197,23 +207,28 @@ async def reconcile_ingest(
                 asset_id=asset_id,
                 version_id=version_id,
             )
-            await repo.complete_ingest(
+            if not await repo.complete_ingest(
                 ingest.ingest_id,
                 asset_id=asset_id,
                 version_id=version_id,
                 blob_key=blob_key,
+                content_sha256=ingest.content_sha256,
+                size_bytes=ingest.size_bytes,
                 media_kind=media_kind,
                 media_type=ingest.media_type,
-            )
+            ):
+                raise IngestAlreadyResolved(ingest.ingest_id)
             return IngestRecoveryReport(
                 ingest.ingest_id, IngestState.READY, RecoveryOutcome.COMPLETED
             )
-        await repo.mark_failed(ingest.ingest_id, error_code="blob_missing")
+        if not await repo.mark_failed(ingest.ingest_id, error_code="blob_missing"):
+            raise IngestAlreadyResolved(ingest.ingest_id)
         return IngestRecoveryReport(
             ingest.ingest_id, IngestState.FAILED, RecoveryOutcome.MISSING_BLOB
         )
 
-    await repo.mark_failed(ingest.ingest_id, error_code="staging_lost")
+    if not await repo.mark_failed(ingest.ingest_id, error_code="staging_lost"):
+        raise IngestAlreadyResolved(ingest.ingest_id)
     return IngestRecoveryReport(
         ingest.ingest_id, IngestState.FAILED, RecoveryOutcome.FAILED, "no recoverable content"
     )

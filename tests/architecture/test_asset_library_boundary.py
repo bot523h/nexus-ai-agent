@@ -23,6 +23,7 @@ ASSETS = ROOT / "src" / "nexus_ai_agent" / "creative" / "assets"
 #: Top-level modules the library may import: stdlib + pydantic + nexus itself.
 ALLOWED_TOP_LEVEL = {
     "__future__",
+    "asyncio",
     "collections",
     "contextlib",
     "dataclasses",
@@ -35,6 +36,7 @@ ALLOWED_TOP_LEVEL = {
     "stat",
     "typing",
     "uuid",
+    "weakref",
     "pydantic",
     "sqlalchemy",
     "nexus_ai_agent",

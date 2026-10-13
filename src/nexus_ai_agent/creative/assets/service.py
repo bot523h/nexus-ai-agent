@@ -24,8 +24,10 @@ or explicitly fail.  ``READY`` is returned only after Tx3 succeeds.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import uuid
+import weakref
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from typing import BinaryIO
@@ -36,16 +38,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nexus_ai_agent.creative.assets.blob_store import LocalContentAddressedBlobStore
 from nexus_ai_agent.creative.assets.errors import (
     AssetNotFound,
+    BlobStoreError,
     ContentIntegrityError,
     ContentTooLarge,
     EmptyContent,
     IdempotencyConflict,
+    IngestAlreadyResolved,
     IngestNotFound,
     RecoveryError,
     UnsupportedMediaType,
 )
 from nexus_ai_agent.creative.assets.ingestion import (
     IngestRecoveryReport,
+    RecoveryOutcome,
     publish_and_commit,
     reconcile_ingest,
 )
@@ -69,6 +74,41 @@ PERMISSION_READ = "project:read"
 
 SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 FaultHook = Callable[[str], None]
+
+
+# Recovery of one interrupted ingest is serialized per database identity inside
+# a process. SQLite has no row-locking equivalent for this path, and separate
+# service instances can otherwise observe a temporarily missing staged file
+# while another resolver is publishing it. The database CAS remains the
+# authority across processes; this closes the same-process SQLite interleaving.
+_replay_locks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]] = (
+    weakref.WeakKeyDictionary()
+)
+_MAX_REPLAY_LOCKS = 512
+
+
+def _replay_lock_for(session: AsyncSession, ingest_id: str) -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    registry = _replay_locks.get(loop)
+    if registry is None:
+        registry = {}
+        _replay_locks[loop] = registry
+    try:
+        database = str(session.bind.url) if session.bind is not None else "unknown"
+    except AttributeError:
+        database = "unknown"
+    key = f"{database}:{ingest_id}"
+    lock = registry.get(key)
+    if lock is None:
+        if len(registry) >= _MAX_REPLAY_LOCKS:
+            for idle_key, candidate in list(registry.items()):
+                if not candidate.locked():
+                    registry.pop(idle_key, None)
+                    if len(registry) < _MAX_REPLAY_LOCKS - 64:
+                        break
+        lock = asyncio.Lock()
+        registry[key] = lock
+    return lock
 
 
 def _request_fingerprint(request: IngestRequest) -> str:
@@ -249,34 +289,109 @@ class AssetLibraryService:
             return _result_from(existing, reused=True)
 
         if existing.state is IngestState.STAGING:
-            # Stage the replay and fold it into the interrupts' staged identity
-            # so reconcile can complete or explicitly fail it.  A digest that
-            # disagrees with an already-measured staged identity is a conflict.
-            staging_key = existing.staging_key or self._blob_store.new_staging_key()
+            # Re-read after acquiring the guard. A concurrent resolver may have
+            # completed the row while this caller waited; using the old snapshot
+            # could mistake a temporarily absent staging file for a lost original.
+            async with _replay_lock_for(session, existing.ingest_id):
+                current = await repo.get_ingest_fresh(existing.ingest_id)
+                if current is None:
+                    raise IngestNotFound(existing.ingest_id)
+                if current.request_fingerprint != fingerprint:
+                    raise IdempotencyConflict(
+                        "idempotency key was reused with a different request payload"
+                    )
+                if current.state is IngestState.READY:
+                    observed = self._blob_store.hash_stream(stream, max_bytes=self._max_bytes)
+                    if observed != (current.content_sha256, current.size_bytes):
+                        raise IdempotencyConflict(
+                            "idempotency key was reused with different content"
+                        )
+                    return _result_from(current, reused=True)
+                if current.state is not IngestState.STAGING:
+                    raise RecoveryError(
+                        "this idempotency key belongs to a failed ingest; use a new key"
+                    )
+                return await self._resolve_interrupted(repo, session, current, stream)
+        raise RecoveryError("this idempotency key belongs to a failed ingest; use a new key")
+
+    async def _resolve_interrupted(
+        self,
+        repo: SqlAssetRepository,
+        session: AsyncSession,
+        existing: IngestRecord,
+        stream: BinaryIO,
+    ) -> IngestResult:
+        """Resolve a replay against an ingest interrupted while STAGING.
+
+        The original staged file is the *only* recoverable copy of the caller's
+        upload, so a replay is **never** staged onto ``existing.staging_key``:
+        doing so would overwrite those bytes before they could be compared (an
+        empty or different replay would silently replace or wipe the original).
+
+        The replay is staged under a brand-new key (never the original's) and
+        compared with the original's identity, taken from, in order:
+
+        1. the digest/size recorded by Tx2, when the crash happened after it;
+        2. a fresh measurement of the original staged file, when it is intact;
+        3. nothing, when the original is gone - only then is the replay adopted
+           as the staged original.
+
+        Any mismatch, including an empty replay, is an ``IdempotencyConflict``;
+        the original is untouched and still recoverable, and the replay's own
+        staging file is removed on every exit path.
+        """
+        replay_key = self._blob_store.new_staging_key()
+        adopted = False
+        try:
             try:
                 replay_sha, replay_size = self._blob_store.stage_to(
-                    staging_key, stream, max_bytes=self._max_bytes
+                    replay_key, stream, max_bytes=self._max_bytes
                 )
             except ContentTooLarge:
                 raise IdempotencyConflict(
                     "idempotency key was reused with content larger than the stored attempt"
                 ) from None
-            if replay_size != 0 and existing.content_sha256 is not None:
-                if (replay_sha, replay_size) != (existing.content_sha256, existing.size_bytes):
-                    self._blob_store.remove_staging(staging_key)
+
+            original: tuple[str, int] | None
+            if existing.content_sha256 is not None and existing.size_bytes is not None:
+                original = (existing.content_sha256, existing.size_bytes)
+            elif existing.staging_key is not None:
+                try:
+                    original = self._blob_store.stage_identity(existing.staging_key)
+                except BlobStoreError:
+                    original = None  # the original staged file is gone
+            else:
+                original = None
+
+            if original is not None:
+                if (replay_sha, replay_size) != original:
                     raise IdempotencyConflict("idempotency key was reused with different content")
-            if existing.staging_key is None and replay_size != 0:
-                await repo.set_staging_key(existing.ingest_id, staging_key)
-            refreshed = await repo.get_ingest(existing.ingest_id)
-            assert refreshed is not None
-            report = await reconcile_ingest(repo, self._blob_store, refreshed)
-            await session.commit()
-            if report.state is IngestState.READY:
-                final = await repo.get_ingest(existing.ingest_id)
-                assert final is not None
-                return _result_from(final, reused=True)
-            raise RecoveryError(f"interrupted ingest could not be completed: {report.outcome}")
-        raise RecoveryError("this idempotency key belongs to a failed ingest; use a new key")
+            elif replay_size == 0:
+                raise IdempotencyConflict("idempotency key was reused with an empty body")
+            else:
+                # ``existing`` is a snapshot: a concurrent replay may have completed
+                # the ingest and consumed the original since it was read.  Only a row
+                # that is *still* STAGING may adopt this replay as its staged original.
+                adopted = await repo.set_staging_key(existing.ingest_id, replay_key)
+        finally:
+            if not adopted:
+                self._blob_store.remove_staging(replay_key)
+
+        refreshed = await repo.get_ingest_fresh(existing.ingest_id)
+        assert refreshed is not None
+        report = await self._reconcile_committing(
+            session, repo, refreshed, owned_staging_key=replay_key if adopted else None
+        )
+        if report.state is IngestState.READY:
+            final = await repo.get_ingest_fresh(existing.ingest_id)
+            assert final is not None
+            # Serve the ingest only to a caller whose bytes ARE the published bytes.
+            # A replay with different content that merely lost the race to a matching
+            # replay must be refused, never told its upload succeeded.
+            if (replay_sha, replay_size) != (final.content_sha256, final.size_bytes):
+                raise IdempotencyConflict("idempotency key was reused with different content")
+            return _result_from(final, reused=True)
+        raise RecoveryError(f"interrupted ingest could not be completed: {report.outcome}")
 
     # -- retrieval ------------------------------------------------------ #
     async def get_asset(
@@ -339,9 +454,48 @@ class AssetLibraryService:
             record = await repo.get_ingest(ingest_id)
             if record is None:
                 raise IngestNotFound(ingest_id)
+            return await self._reconcile_committing(session, repo, record)
+
+    async def _reconcile_committing(
+        self,
+        session: AsyncSession,
+        repo: SqlAssetRepository,
+        record: IngestRecord,
+        *,
+        owned_staging_key: str | None = None,
+    ) -> IngestRecoveryReport:
+        """Reconcile one ingest and commit; if a concurrent actor won, report theirs.
+
+        A lost compare-and-set means another session already moved the row out of
+        STAGING.  This session's uncommitted asset/version/link rows are discarded
+        by rollback, and the report is derived from the winner's committed row, so
+        a loser can neither duplicate the asset nor downgrade a READY ingest.
+        """
+        try:
             report = await reconcile_ingest(repo, self._blob_store, record)
             await session.commit()
             return report
+        except (IngestAlreadyResolved, BlobStoreError) as exc:
+            await session.rollback()
+            winner = await repo.get_ingest_fresh(record.ingest_id)
+            if isinstance(exc, BlobStoreError) and (
+                winner is None or winner.state is IngestState.STAGING
+            ):
+                # The staged file vanished but nobody resolved the row: a genuine
+                # storage fault, not a lost race.  Never paper over it.
+                raise
+            if owned_staging_key is not None:
+                # This call adopted its own replay as the staged original, then lost
+                # the race: that file is referenced by no row any more.
+                self._blob_store.remove_staging(owned_staging_key)
+            assert winner is not None
+            if winner.state is IngestState.READY:
+                return IngestRecoveryReport(
+                    winner.ingest_id, IngestState.READY, RecoveryOutcome.ALREADY_READY
+                )
+            return IngestRecoveryReport(
+                winner.ingest_id, winner.state, RecoveryOutcome.FAILED, "resolved concurrently"
+            )
 
     async def recover_all(self) -> list[IngestRecoveryReport]:
         """Reconcile every durable STAGING ingest; never invents success."""
@@ -350,8 +504,9 @@ class AssetLibraryService:
             pending = await repo.list_pending_ingests()
             reports: list[IngestRecoveryReport] = []
             for record in pending:
-                reports.append(await reconcile_ingest(repo, self._blob_store, record))
-            await session.commit()
+                # One commit per ingest: a lost race on one record must not roll
+                # back the progress already made on the others.
+                reports.append(await self._reconcile_committing(session, repo, record))
             return reports
 
 
