@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import cast
 
-from sqlalchemy import Table, func, literal_column, select
+from sqlalchemy import Table, func, literal_column, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexus_ai_agent.creative.assets.models import (
@@ -122,6 +122,24 @@ class SqlAssetRepository:
         row = await self._session.get(orm.AssetIngest, ingest_id)
         return _as_ingest(row) if row else None
 
+    async def get_ingest_fresh(self, ingest_id: str) -> IngestRecord | None:
+        """Read the ingest row from the database, bypassing the session's identity map.
+
+        ``get_ingest`` (``Session.get``) returns the cached object for a primary
+        key, so a session that already loaded the row keeps seeing its old state
+        after a concurrent session commits.  Anything that decides *because the
+        row might have changed* (adopting a replay, serving a winner's result)
+        must read through this method.
+        """
+        row = (
+            await self._session.execute(
+                select(orm.AssetIngest)
+                .where(orm.AssetIngest.ingest_id == ingest_id)  # type: ignore[arg-type]
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        return _as_ingest(row) if row else None
+
     async def find_ingest_by_key(
         self, project_id: str, idempotency_key: str
     ) -> IngestRecord | None:
@@ -145,14 +163,24 @@ class SqlAssetRepository:
         )
         return [_as_ingest(row) for row in result.scalars().all()]
 
-    async def set_staging_key(self, ingest_id: str, staging_key: str) -> None:
-        """Record a staged-bytes key on an already-durable STAGING row."""
-        row = await self._session.get(orm.AssetIngest, ingest_id)
-        if row is None:
-            raise LookupError(ingest_id)
-        row.staging_key = staging_key
-        row.updated_at = datetime.utcnow()
+    async def set_staging_key(self, ingest_id: str, staging_key: str) -> bool:
+        """Record a staged-bytes key on a STAGING row, as one conditional UPDATE.
+
+        Returns ``False`` (changing nothing) when the row has left STAGING, so a
+        check-then-act race with a concurrent completer can never leave a staged
+        file referenced by a row that no longer owns it.
+        """
+        result = await self._session.execute(
+            update(orm.AssetIngest)
+            .where(
+                orm.AssetIngest.ingest_id == ingest_id,  # type: ignore[arg-type]
+                orm.AssetIngest.state == IngestState.STAGING.value,  # type: ignore[arg-type]
+            )
+            .values(staging_key=staging_key, updated_at=datetime.utcnow())
+            .execution_options(synchronize_session="fetch")
+        )
         await self._session.flush()
+        return bool(getattr(result, "rowcount", 0))
 
     async def mark_staged(
         self,
@@ -175,15 +203,45 @@ class SqlAssetRepository:
         row.updated_at = datetime.utcnow()
         await self._session.flush()
 
-    async def mark_failed(self, ingest_id: str, *, error_code: str) -> None:
-        row = await self._session.get(orm.AssetIngest, ingest_id)
-        if row is None:
-            return
-        row.state = IngestState.FAILED.value
-        row.error_code = error_code
-        row.staging_key = None
-        row.updated_at = datetime.utcnow()
+    async def mark_failed(self, ingest_id: str, *, error_code: str) -> bool:
+        """STAGING -> FAILED, as one conditional UPDATE.
+
+        Returns ``False`` (and changes nothing) when the row is no longer STAGING,
+        so a concurrent completer's READY row can never be downgraded to FAILED.
+        """
+        result = await self._session.execute(
+            update(orm.AssetIngest)
+            .where(
+                orm.AssetIngest.ingest_id == ingest_id,  # type: ignore[arg-type]
+                orm.AssetIngest.state == IngestState.STAGING.value,  # type: ignore[arg-type]
+            )
+            .values(
+                state=IngestState.FAILED.value,
+                error_code=error_code,
+                staging_key=None,
+                updated_at=datetime.utcnow(),
+            )
+            .execution_options(synchronize_session="fetch")
+        )
         await self._session.flush()
+        return bool(getattr(result, "rowcount", 0))
+
+    async def downgrade_ready_to_failed(self, ingest_id: str, *, error_code: str) -> bool:
+        """READY -> FAILED, only for a row whose recorded blob was independently
+        proven missing or tampered.  Never touches a STAGING or FAILED row."""
+        result = await self._session.execute(
+            update(orm.AssetIngest)
+            .where(
+                orm.AssetIngest.ingest_id == ingest_id,  # type: ignore[arg-type]
+                orm.AssetIngest.state == IngestState.READY.value,  # type: ignore[arg-type]
+            )
+            .values(
+                state=IngestState.FAILED.value, error_code=error_code, updated_at=datetime.utcnow()
+            )
+            .execution_options(synchronize_session="fetch")
+        )
+        await self._session.flush()
+        return bool(getattr(result, "rowcount", 0))
 
     async def complete_ingest(
         self,
@@ -194,23 +252,36 @@ class SqlAssetRepository:
         blob_key: str,
         media_kind: MediaKind,
         media_type: str,
-    ) -> None:
-        """The single terminal transition that makes an ingest READY."""
-        row = await self._session.get(orm.AssetIngest, ingest_id)
-        if row is None:
-            raise LookupError(ingest_id)
-        row.state = IngestState.READY.value
-        row.asset_id = asset_id
-        row.version_id = version_id
-        row.blob_key = blob_key
-        # Recovery finalises an ingest whose Tx2 never committed, so the
-        # classification is (re)written here too — never left NULL on a READY row.
-        row.media_kind = media_kind.value
-        row.media_type = media_type
-        row.staging_key = None
-        row.error_code = None
-        row.updated_at = datetime.utcnow()
+    ) -> bool:
+        """The single terminal transition that makes an ingest READY.
+
+        A conditional ``UPDATE ... WHERE state='STAGING'``: exactly one concurrent
+        completer wins (``True``).  A loser gets ``False`` and must discard its
+        uncommitted asset/version/link rows instead of committing a duplicate.
+        """
+        result = await self._session.execute(
+            update(orm.AssetIngest)
+            .where(
+                orm.AssetIngest.ingest_id == ingest_id,  # type: ignore[arg-type]
+                orm.AssetIngest.state == IngestState.STAGING.value,  # type: ignore[arg-type]
+            )
+            .values(
+                state=IngestState.READY.value,
+                asset_id=asset_id,
+                version_id=version_id,
+                blob_key=blob_key,
+                # Recovery finalises an ingest whose Tx2 never committed, so the
+                # classification is (re)written here too, never left NULL on READY.
+                media_kind=media_kind.value,
+                media_type=media_type,
+                staging_key=None,
+                error_code=None,
+                updated_at=datetime.utcnow(),
+            )
+            .execution_options(synchronize_session="fetch")
+        )
         await self._session.flush()
+        return bool(getattr(result, "rowcount", 0))
 
     # -- asset / version / link ----------------------------------------- #
     async def add_asset(self, *, asset_id: str, media_kind: MediaKind) -> AssetIdentity:
