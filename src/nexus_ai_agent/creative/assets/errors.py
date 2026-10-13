@@ -72,3 +72,12 @@ class RecoveryError(AssetLibraryError):
     """An interrupted ingest could not be safely completed or failed."""
 
     code = "recovery_error"
+
+
+class IngestAlreadyResolved(AssetLibraryError):
+    """A concurrent actor already moved this ingest out of STAGING.
+
+    Raised by the completion path when its compare-and-set loses.  The caller
+    must discard its uncommitted writes and serve the winner's committed state;
+    it is never a user-facing failure.
+    """

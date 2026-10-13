@@ -41,12 +41,14 @@ from nexus_ai_agent.creative.assets.errors import (
     ContentTooLarge,
     EmptyContent,
     IdempotencyConflict,
+    IngestAlreadyResolved,
     IngestNotFound,
     RecoveryError,
     UnsupportedMediaType,
 )
 from nexus_ai_agent.creative.assets.ingestion import (
     IngestRecoveryReport,
+    RecoveryOutcome,
     publish_and_commit,
     reconcile_ingest,
 )
@@ -308,19 +310,21 @@ class AssetLibraryService:
             elif replay_size == 0:
                 raise IdempotencyConflict("idempotency key was reused with an empty body")
             else:
-                # The original is unrecoverable; the replay becomes the staged original.
-                await repo.set_staging_key(existing.ingest_id, replay_key)
-                adopted = True
+                # ``existing`` is a snapshot: a concurrent replay may have completed
+                # the ingest and consumed the original since it was read.  Only a row
+                # that is *still* STAGING may adopt this replay as its staged original.
+                adopted = await repo.set_staging_key(existing.ingest_id, replay_key)
         finally:
             if not adopted:
                 self._blob_store.remove_staging(replay_key)
 
-        refreshed = await repo.get_ingest(existing.ingest_id)
+        refreshed = await repo.get_ingest_fresh(existing.ingest_id)
         assert refreshed is not None
-        report = await reconcile_ingest(repo, self._blob_store, refreshed)
-        await session.commit()
+        report = await self._reconcile_committing(
+            session, repo, refreshed, owned_staging_key=replay_key if adopted else None
+        )
         if report.state is IngestState.READY:
-            final = await repo.get_ingest(existing.ingest_id)
+            final = await repo.get_ingest_fresh(existing.ingest_id)
             assert final is not None
             return _result_from(final, reused=True)
         raise RecoveryError(f"interrupted ingest could not be completed: {report.outcome}")
@@ -386,9 +390,42 @@ class AssetLibraryService:
             record = await repo.get_ingest(ingest_id)
             if record is None:
                 raise IngestNotFound(ingest_id)
+            return await self._reconcile_committing(session, repo, record)
+
+    async def _reconcile_committing(
+        self,
+        session: AsyncSession,
+        repo: SqlAssetRepository,
+        record: IngestRecord,
+        *,
+        owned_staging_key: str | None = None,
+    ) -> IngestRecoveryReport:
+        """Reconcile one ingest and commit; if a concurrent actor won, report theirs.
+
+        A lost compare-and-set means another session already moved the row out of
+        STAGING.  This session's uncommitted asset/version/link rows are discarded
+        by rollback, and the report is derived from the winner's committed row, so
+        a loser can neither duplicate the asset nor downgrade a READY ingest.
+        """
+        try:
             report = await reconcile_ingest(repo, self._blob_store, record)
             await session.commit()
             return report
+        except IngestAlreadyResolved:
+            await session.rollback()
+            if owned_staging_key is not None:
+                # This call adopted its own replay as the staged original, then lost
+                # the race: that file is referenced by no row any more.
+                self._blob_store.remove_staging(owned_staging_key)
+            winner = await repo.get_ingest_fresh(record.ingest_id)
+            assert winner is not None
+            if winner.state is IngestState.READY:
+                return IngestRecoveryReport(
+                    winner.ingest_id, IngestState.READY, RecoveryOutcome.ALREADY_READY
+                )
+            return IngestRecoveryReport(
+                winner.ingest_id, winner.state, RecoveryOutcome.FAILED, "resolved concurrently"
+            )
 
     async def recover_all(self) -> list[IngestRecoveryReport]:
         """Reconcile every durable STAGING ingest; never invents success."""
@@ -397,8 +434,9 @@ class AssetLibraryService:
             pending = await repo.list_pending_ingests()
             reports: list[IngestRecoveryReport] = []
             for record in pending:
-                reports.append(await reconcile_ingest(repo, self._blob_store, record))
-            await session.commit()
+                # One commit per ingest: a lost race on one record must not roll
+                # back the progress already made on the others.
+                reports.append(await self._reconcile_committing(session, repo, record))
             return reports
 
 
