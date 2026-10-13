@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-11T17:55:20Z",
+  "updated_at": "2026-10-13T09:11:03Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -2337,7 +2337,7 @@
       "title_fa": "",
       "zone": "nagar-runtime-call-sites",
       "priority": "P1",
-      "status": "active",
+      "status": "expired",
       "scope": "After Gate 2, claim-less schema-1 dispatches run under deprecated implicit local trust; the runtime owner must inject authorizer= with service grants at the three in-process call sites, then the implicit path can be retired.",
       "scope_fa": "",
       "prerequisites": [
@@ -2365,7 +2365,8 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
-      "generation": 1
+      "generation": 1,
+      "release_reason": "auto-released by gc at 2026-10-13T09:11:03Z (stale active lease)"
     },
     {
       "task": "task-182-durable-idempotency-conflict",
@@ -3517,7 +3518,7 @@
       "title_fa": "",
       "zone": "runtime-service-grant-guard",
       "priority": "P1",
-      "status": "active",
+      "status": "expired",
       "scope": "Own and publish the architecture ratchet proving the three in-process bus call sites pass explicit service principals, project-scoped grants and project-bound InputRefs. Split from task-181-runtime-service-grants because the runtime zone deliberately does not cover test paths and the guard must not be forced into it.",
       "scope_fa": "",
       "prerequisites": [
@@ -3542,7 +3543,8 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
-      "generation": 1
+      "generation": 1,
+      "release_reason": "auto-released by gc at 2026-10-13T09:11:03Z (stale active lease)"
     },
     {
       "task": "nexus-stabilization-handoff",
@@ -3550,7 +3552,7 @@
       "title_fa": "",
       "zone": "docs-architecture",
       "priority": "P1",
-      "status": "active",
+      "status": "expired",
       "scope": "Own docs/audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md and its docs/README index row. Separated from the runtime task because documentation is not a runtime-zone path; the record states exact-SHA CI evidence with run ids and observation times and must not conflate it with the full-gates role or the overall stabilization status.",
       "scope_fa": "",
       "prerequisites": [],
@@ -3573,7 +3575,8 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
-      "generation": 1
+      "generation": 1,
+      "release_reason": "auto-released by gc at 2026-10-13T09:11:03Z (stale active lease)"
     },
     {
       "task": "ci-gates-steward-closure",
@@ -3581,7 +3584,7 @@
       "title_fa": "",
       "zone": "ci-quality",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "scope": "Exactly one live gates_owner while the closure validation runs: the referee fails closed (exit 2) for every agent while no live gates owner exists, and main-bound closure work needs the full gates executed by their holder. Runs make lint / make types / make test against the closure head and records the results bound to the exact SHA.",
       "scope_fa": "",
       "prerequisites": [],
@@ -3601,9 +3604,10 @@
       "agent_branch": "phase1-pr196-guard-20261009",
       "claimed_at": "2026-10-10T18:42:23Z",
       "ttl_hours": 24,
-      "gates_owner": true,
+      "gates_owner": false,
       "note": "",
-      "generation": 1
+      "generation": 1,
+      "release_reason": "auto-released by gc at 2026-10-13T09:11:03Z (stale active lease)"
     },
     {
       "task": "task-266-asset-library-v1",
@@ -3650,12 +3654,13 @@
         "tests/integration/test_migrate_cli.py"
       ],
       "owner_hint": "",
-      "agent_branch": "arena/nagar-asset-library-v1",
-      "claimed_at": "2026-10-11T17:55:20Z",
+      "agent_branch": "arena/nexus-superagent-asset-recovery-20261013",
+      "claimed_at": "2026-10-13T09:11:03Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Closure evidence v3 (PR #205, branch arena/nagar-asset-library-v1, head 906b0a2). 4 CodeRabbit findings closed: (1) replay digest check via BlobStore.hash_stream -> IdempotencyConflict; (2) UNIQUE(project_id, idempotency_key) on assetingest + migration e575469d90b9; (3) parent-fd fsync after os.replace; (4) de-vacuumed rglob assertions. Focused suites (exact, exit 0): tests/architecture/test_asset_library_boundary.py 6 passed; tests/unit/test_asset_library_service.py 10 passed; tests/unit/test_asset_library_models.py 10 passed; tests/unit/test_asset_library_blob_store.py 10 passed; tests/integration/test_asset_library_recovery.py 8 passed; tests/integration/test_asset_library_filesystem_security.py 12 passed; tests/integration/test_asset_library_persistence.py 10 passed; combined 66 passed. Mutation harness scripts/asset_library_mutations.py: 8/8 killed (containment, NUL, key-shape, dedup-verify, open-verify, bounded-read, unique-constraint, replay-digest). Full suite python -m pytest -q -m \"not slow\": 3966 passed, 31 skipped (local); CI test job on 906b0a2/e27e6f0: 3967 passed, 30 skipped, 0 failed. CI on 906b0a2: push run 38161719742 success (a1); PR run 38161723606 success (a2, after one pre-existing SQLite WAL-init-race rerun). ruff check+format clean; mypy src 299 files clean; truth doctor OK. agent_board.py check on changed files: exit 0 (no overlap). Known unrelated flake: SQLite WAL-init race (test_concurrent_first_use_sets_wal_without_error).",
-      "generation": 1
+      "note": "",
+      "generation": 2,
+      "release_reason": "auto-released by gc at 2026-10-13T09:11:03Z (stale active lease)"
     }
   ],
   "deferred_log": [
