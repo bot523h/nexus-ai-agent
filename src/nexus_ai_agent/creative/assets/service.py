@@ -416,13 +416,19 @@ class AssetLibraryService:
             report = await reconcile_ingest(repo, self._blob_store, record)
             await session.commit()
             return report
-        except IngestAlreadyResolved:
+        except (IngestAlreadyResolved, BlobStoreError) as exc:
             await session.rollback()
+            winner = await repo.get_ingest_fresh(record.ingest_id)
+            if isinstance(exc, BlobStoreError) and (
+                winner is None or winner.state is IngestState.STAGING
+            ):
+                # The staged file vanished but nobody resolved the row: a genuine
+                # storage fault, not a lost race.  Never paper over it.
+                raise
             if owned_staging_key is not None:
                 # This call adopted its own replay as the staged original, then lost
                 # the race: that file is referenced by no row any more.
                 self._blob_store.remove_staging(owned_staging_key)
-            winner = await repo.get_ingest_fresh(record.ingest_id)
             assert winner is not None
             if winner.state is IngestState.READY:
                 return IngestRecoveryReport(
