@@ -476,7 +476,7 @@ def test_check_consults_sibling_worktree_boards(
     monkeypatch.setattr(board_module, "_read_remote_board", lambda: (None, "test: remote offline"))
     # Isolate the worktree source: the open-PR branch source is readable-and-empty
     # so this test still proves the *worktree* conflict (not a blanket exit 2).
-    monkeypatch.setattr(board_module, "_open_pr_branches", lambda repo, token: ([], ""))
+    monkeypatch.setattr(board_module, "_open_pr_heads", lambda repo, token: ([], ""))
     code = board_module.cmd_check(
         type(
             "A",
@@ -489,10 +489,15 @@ def test_check_consults_sibling_worktree_boards(
 
 
 def test_check_unreliable_worktree_enumeration_is_exit_2(
-    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    board_module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
 ) -> None:
     """If sibling worktrees cannot be enumerated, the absence of overlap is unproven."""
     board = _synthetic_directory_claim_board()
+    # One live gate holder, so the gates fail-closed branch cannot be the cause
+    # of the exit code under test (see the assertion comment below).
+    board["claims"][0]["gates_owner"] = True
     board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
     _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
 
@@ -505,7 +510,8 @@ def test_check_unreliable_worktree_enumeration_is_exit_2(
     # origin/main is readable and clean, but the worktree enumeration was not.
     monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, ""))
     # Isolate the worktree source from the open-PR branch source.
-    monkeypatch.setattr(board_module, "_open_pr_branches", lambda repo, token: ([], ""))
+    monkeypatch.setattr(board_module, "_open_pr_heads", lambda repo, token: ([], ""))
+
     code = board_module.cmd_check(
         type(
             "A",
@@ -514,6 +520,82 @@ def test_check_unreliable_worktree_enumeration_is_exit_2(
         )()
     )
     assert code == 2, "unreliable worktree enumeration must not be a clean pass"
+    # …and exit 2 must be *this* reason. Asserting the code alone let the
+    # mutation campaign's ``foreign_worktree_boards_skipped`` mutant survive: with
+    # zero gate holders on the board the separate gates fail-closed branch also
+    # returned 2, so the assertion passed while the guard it names was gone. The
+    # board below therefore carries exactly one live gate holder, leaving the
+    # unenumerable worktree source as the only possible cause — and the printed
+    # reason is asserted, not just the exit code (task-266).
+    out = capsys.readouterr().out
+    assert "git worktree enumeration" in out, out
+    assert "exactly one active, unexpired gates_owner" not in out, out
+
+
+def _check_with_clean_sources(board_module: ModuleType, monkeypatch: pytest.MonkeyPatch) -> int:
+    """Run ``check`` with every non-local source readable and disjoint.
+
+    Leaves the *local board* as the only variable, so the verdict is decided by
+    the gate-ownership contract rather than by a source that could not be read.
+    """
+    monkeypatch.setattr(board_module, "_worktree_boards", lambda exclude: ([], True))
+    monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, ""))
+    monkeypatch.setattr(board_module, "_open_pr_heads", lambda repo, token: ([], ""))
+    return board_module.cmd_check(
+        type(
+            "A",
+            (),
+            {"files": "docs/not-owned.md", "branch": "arena/999-me", "no_remote": False},
+        )()
+    )
+
+
+def test_check_fails_closed_with_no_gate_owner(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Zero live gate holders is not "no one is running the gates" — it is unverifiable.
+
+    The gate is lease-scoped, so an idle board legitimately holds none; the
+    referee must then refuse to certify anything (exit 2), because nobody is
+    accountable for the full gates.  Asserting the *reason*, not just the code,
+    is what keeps this honest (see the worktree-source test above for the failure
+    mode that creates: the same exit code from an unrelated branch).
+    """
+    board = _synthetic_directory_claim_board()
+    board["claims"][0]["gates_owner"] = False
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+
+    code = _check_with_clean_sources(board_module, monkeypatch)
+    assert code == 2, "zero gate holders must be fail-closed"
+    assert "exactly one active, unexpired gates_owner" in capsys.readouterr().out
+
+
+def test_check_fails_closed_with_two_gate_owners(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """The invariant is *exactly* one: a second live holder is a refusal, not a tie-break."""
+    board = _synthetic_directory_claim_board()
+    first = board["claims"][0]
+    first["gates_owner"] = True
+    board["claims"].append(
+        {
+            "task": "task-9999-second-gate-holder",
+            "status": "active",
+            "zone": first["zone"],
+            "agent_branch": "arena/999-second-gate-holder",
+            "claimed_at": first["claimed_at"],
+            "ttl_hours": 24,
+            "gates_owner": True,
+            "exclusive_paths": [],
+        }
+    )
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, first)
+
+    code = _check_with_clean_sources(board_module, monkeypatch)
+    assert code == 2, "two live gate holders must be fail-closed"
+    assert "exactly one active, unexpired gates_owner" in capsys.readouterr().out
 
 
 def test_check_proven_conflict_wins_over_unreadable_remote(
@@ -680,7 +762,9 @@ def test_check_sees_a_lease_that_lives_only_on_a_pushed_branch(
     monkeypatch.setattr(board_module, "_git", _fake_git)
     monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, ""))
     monkeypatch.setattr(
-        board_module, "_open_pr_branches", lambda repo, token: (["arena/999-pr-only"], "")
+        board_module,
+        "_open_pr_heads",
+        lambda repo, token: ([_pr_head(board_module, "o/r", "arena/999-pr-only", 1)], ""),
     )
     code = board_module.cmd_check(
         type(
@@ -700,38 +784,44 @@ def test_check_sees_a_lease_that_lives_only_on_a_pushed_branch(
     assert code == 1, "a lease that lives only on a pushed PR branch must be seen"
 
 
-def test_check_excludes_its_own_branch_from_the_pr_source(
+def test_self_exclusion_is_by_identity_not_by_branch_name(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A branch never conflicts with its own pushed lease (self-exclusion)."""
-    board = _synthetic_directory_claim_board()
-    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
-    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+    """The caller's own head is skipped; another repo's same-named head is not.
 
-    seen_branches: list[list[str]] = []
+    Excluding by bare branch name would drop a *different* repository's PR head
+    that merely shares this caller's branch name — a source silently lost — so the
+    exclusion is applied to (repository, ref) exactly (task-266 review finding B).
+    """
+    fetched: list[str] = []
 
-    def _spy(branches: list[str], exclude_branch: str = "") -> object:
-        seen_branches.append(list(branches))
-        return [], []
+    def _fake_git(args: list[str], cwd: Path) -> object:
+        if args[0] == "fetch":
+            fetched.extend(
+                refspec.split(":")[-1] for refspec in args if refspec.startswith("+refs/heads/")
+            )
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        if args[0] == "show":
+            return subprocess.CompletedProcess(
+                args, 0, stdout=json.dumps(_synthetic_directory_claim_board()), stderr=""
+            )
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
 
-    monkeypatch.setattr(board_module, "_git", _no_git)
-    monkeypatch.setattr(board_module, "_read_remote_board", lambda: (None, "test: offline"))
-    monkeypatch.setattr(board_module, "_open_pr_branches", lambda repo, token: (["arena/mine"], ""))
-    monkeypatch.setattr(board_module, "_remote_branch_boards", _spy)
-    board_module.cmd_check(
-        type(
-            "A",
-            (),
-            {
-                "files": "docs/x.md",
-                "branch": "arena/mine",
-                "no_remote": False,
-                "repo": "o/r",
-                "token": "t",
-            },
-        )()
+    monkeypatch.setattr(board_module, "_git", _fake_git)
+    boards, _unreadable = board_module._remote_branch_boards(
+        [
+            _pr_head(board_module, "o/r", "arena/mine"),  # this caller's own head
+            _pr_head(
+                board_module, "fork/nexus-ai-agent", "arena/mine"
+            ),  # a different repo, same ref
+        ],
+        coordination_repo="o/r",
+        exclude_branch="arena/mine",
     )
-    assert seen_branches == [["arena/mine"]]
+    assert "refs/remotes/origin/arena/mine" not in fetched, "own head must be self-excluded"
+    assert len(fetched) == 1, "the foreign same-named head is a different source, not 'me'"
+    assert "nexus-referee" in fetched[0], "a foreign head is fetched into its own namespace"
+    assert "pr-head:fork/nexus-ai-agent#arena/mine" in [name for name, _ in boards]
 
 
 def test_remote_branch_boards_reads_only_freshly_fetched_branches(
@@ -740,7 +830,11 @@ def test_remote_branch_boards_reads_only_freshly_fetched_branches(
     """A stale tracking ref must not be read as a live lease."""
     good_board = _synthetic_directory_claim_board()
 
+    _shows: list[list[str]] = []
+
     def _fake_git(args: list[str], cwd: Path) -> object:
+        if args[0] == "show":
+            _shows.append(args)
         refspecs = args[3:] if args[0] == "fetch" else []
         if len(refspecs) > 1:  # batched fetch: one dead ref fails the batch
             return subprocess.CompletedProcess(args, 128, stdout="", stderr="dead ref")
@@ -754,10 +848,14 @@ def test_remote_branch_boards_reads_only_freshly_fetched_branches(
 
     monkeypatch.setattr(board_module, "_git", _fake_git)
     boards, unreadable = board_module._remote_branch_boards(
-        ["arena/good", "arena/dead"], exclude_branch=""
+        [_pr_head(board_module, "o/r", "arena/good"), _pr_head(board_module, "o/r", "arena/dead")],
+        "o/r",
     )
     assert [name for name, _ in boards] == ["branch:arena/good"]
     assert any("arena/dead" in reason for reason in unreadable)
+    assert all(cmd[1].startswith("refs/remotes/origin/arena/good:") for cmd in _shows), (
+        "a local head is read from its own freshly fetched tracking ref"
+    )
 
 
 def test_remote_branch_boards_excludes_the_callers_own_branch(
@@ -778,30 +876,414 @@ def test_remote_branch_boards_excludes_the_callers_own_branch(
 
     monkeypatch.setattr(board_module, "_git", _fake_git)
     boards, _unreadable = board_module._remote_branch_boards(
-        ["arena/mine", "arena/other"], exclude_branch="arena/mine"
+        [_pr_head(board_module, "o/r", "arena/mine"), _pr_head(board_module, "o/r", "arena/other")],
+        coordination_repo="o/r",
+        exclude_branch="arena/mine",
     )
     assert [name for name, _ in boards] == ["branch:arena/other"]
     assert all("arena/mine" not in cmd for cmd in fetched)
 
 
-def test_open_pr_branches_requires_repo_and_token(
+def test_remote_branch_boards_consults_every_open_pr_branch(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    branches, reason = board_module._open_pr_branches("", "")
-    assert branches == [] and reason
-    branches, reason = board_module._open_pr_branches("o/r", "")
-    assert branches == [] and reason
+    """Batching must never narrow the source set: a clean pass is a claim about *read* data.
+
+    The referee used to truncate the open-PR branch list to the first
+    ``_REMOTE_BRANCH_FETCH_LIMIT`` entries and still print "no overlap — safe to
+    proceed".  On this repository (53 open PRs) that silently dropped 28 pushed
+    boards while exiting 0 — a false clean verdict on a *required* source, and
+    the oldest branches it dropped are exactly the long-lived PRs whose pushed
+    leases are most likely to still fence a zone (task-266).
+    """
+    limit = board_module._REMOTE_BRANCH_FETCH_LIMIT
+    heads = [
+        _pr_head(board_module, "o/r", f"arena/branch-{index:03d}") for index in range(limit + 3)
+    ]
+    fetched: list[str] = []
+
+    def _fake_git(args: list[str], cwd: Path) -> object:
+        if args[0] == "fetch":
+            fetched.extend(refspec.split(":refs/remotes/origin/")[1] for refspec in args[3:])
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        if args[0] == "show":
+            return subprocess.CompletedProcess(
+                args, 0, stdout=json.dumps(_synthetic_directory_claim_board()), stderr=""
+            )
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _fake_git)
+    boards, unreadable = board_module._remote_branch_boards(heads, "o/r")
+    assert unreadable == [], "every branch is fetchable in this scenario"
+    assert sorted(fetched) == sorted(head.ref for head in heads), "no open-PR head may be skipped"
+    assert [name for name, _ in boards] == [f"branch:{head.ref}" for head in heads]
 
 
-def test_open_pr_branches_degrades_on_api_error(
+def test_a_batch_boundary_never_hides_a_branch_failure(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A branch past the first batch must still be fetched and, if dead, reported.
+
+    The batched ``git fetch`` is a fast path, not a coverage strategy: when it
+    fails, the per-branch fallback has to run for *every* branch — including the
+    ones in later batches — so an unreachable board degrades to exit 2 instead of
+    disappearing from the verdict.
+    """
+    limit = board_module._REMOTE_BRANCH_FETCH_LIMIT
+    readable = [f"arena/ok-{index:03d}" for index in range(limit)]
+    dead = "arena/dead-beyond-the-first-batch"
+    heads = [_pr_head(board_module, "o/r", ref) for ref in [*readable, dead]]
+
+    def _fake_git(args: list[str], cwd: Path) -> object:
+        if args[0] == "fetch":
+            if len(args[3:]) > 1:  # the batched fast path fails for the whole group
+                return subprocess.CompletedProcess(args, 128, stdout="", stderr="dead ref")
+            if "refs/heads/arena/ok-" in args[-1]:
+                return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+            return subprocess.CompletedProcess(args, 128, stdout="", stderr="dead")
+        if args[0] == "show":
+            return subprocess.CompletedProcess(
+                args, 0, stdout=json.dumps(_synthetic_directory_claim_board()), stderr=""
+            )
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _fake_git)
+    boards, unreadable = board_module._remote_branch_boards(heads, "o/r")
+    assert [name for name, _ in boards] == [f"branch:{ref}" for ref in readable]
+    assert any(dead in reason for reason in unreadable), "a dead branch must be loud"
+
+
+def _pr_head(board_module: ModuleType, repo: str, ref: str, number: int = 0) -> object:
+    """A PR head identity, built by the module under test.
+
+    Built by *that* module (not by a second import of the script): the reader
+    type-checks its input, and a class object from another module instance is a
+    different class — the same trap a caller would hit by re-importing the tool.
+    """
+    return board_module.PrHead(repo, ref, number)
+
+
+def _paginated_gh_get(page_one: int = 100, page_two: list | None = None, *, repo: str = "o/r"):
+    """Fake GitHub listing: ``page_one`` PRs, then ``page_two`` (or a final short page)."""
+
+    def _fake(url: str, token: object) -> object:
+        if "page=2" in url:
+            if page_two is None:
+                raise AssertionError(f"unexpected second page request: {url}")
+            return page_two
+        return [
+            {
+                "number": index,
+                "head": {
+                    "ref": f"arena/harmless-{index}",
+                    "repo": {"full_name": repo, "clone_url": f"https://github.com/{repo}.git"},
+                },
+            }
+            for index in range(1, page_one + 1)
+        ]
+
+    return _fake
+
+
+def test_open_pr_heads_walks_every_page(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A listing longer than one page must be read in full, not capped at page one.
+
+    GitHub returns one page per request, so a page-one-only listing hides every PR
+    past ``_OPEN_PR_PAGE_SIZE`` — with 101 open PRs, PR #101's pushed lease was
+    invisible while ``check`` still reported a clean pass (task-266 review finding A).
+    """
+    monkeypatch.setattr(
+        board_module,
+        "_gh_get",
+        _paginated_gh_get(
+            100,
+            [
+                {
+                    "number": 101,
+                    "head": {
+                        "ref": "arena/first-pr-on-page-two",
+                        "repo": {"full_name": "o/r", "clone_url": "https://github.com/o/r.git"},
+                    },
+                }
+            ],
+        ),
+    )
+    heads, reason = board_module._open_pr_heads("o/r", "t")
+    assert reason == ""
+    assert len(heads) == 101, "every page must contribute its PRs"
+    assert heads[-1].ref == "arena/first-pr-on-page-two"
+    assert heads[-1].repo_full_name == "o/r"
+
+
+def test_open_pr_heads_fails_closed_when_a_later_page_is_unreachable(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A page that cannot be fetched makes the whole listing unverifiable.
+
+    Page one alone is 100 readable boards and one silent gap; returning it would
+    let ``check`` certify a source set it never finished reading.
+    """
+
+    def _fake(url: str, token: object) -> object:
+        if "page=2" in url:
+            raise OSError("connection reset by peer")
+        return _paginated_gh_get()(url, token)
+
+    monkeypatch.setattr(board_module, "_gh_get", _fake)
+    heads, reason = board_module._open_pr_heads("o/r", "t")
+    assert heads == [], "a partial listing must not be returned as the source set"
+    assert "page 2" in reason and "unavailable" in reason
+
+
+def test_open_pr_heads_fails_closed_on_a_malformed_page(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unexpected payload is a failure to interpret the page, not an empty page."""
+
+    def _fake(url: str, token: object) -> object:
+        if "page=2" in url:
+            return {"message": "rate limited"}
+        return _paginated_gh_get()(url, token)
+
+    monkeypatch.setattr(board_module, "_gh_get", _fake)
+    heads, reason = board_module._open_pr_heads("o/r", "t")
+    assert heads == [] and "unexpected payload" in reason
+
+
+def test_open_pr_heads_refuses_a_listing_beyond_the_page_bound(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A listing that never ends is refused loudly, never truncated silently."""
+
+    def _always_full(url: str, token: object) -> object:
+        return [
+            {
+                "number": index,
+                "head": {
+                    "ref": f"arena/harmless-{index}",
+                    "repo": {"full_name": "o/r", "clone_url": "https://github.com/o/r.git"},
+                },
+            }
+            for index in range(1, board_module._OPEN_PR_PAGE_SIZE + 1)
+        ]
+
+    monkeypatch.setattr(board_module, "_gh_get", _always_full)
+    heads, reason = board_module._open_pr_heads("o/r", "t")
+    assert heads == []
+    assert "refusing to treat a truncated list as complete" in reason
+
+
+def test_open_pr_heads_refuses_a_head_without_repository_identity(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deleted fork leaves no repository to read: that head is unverifiable."""
+
+    def _fake(url: str, token: object) -> object:
+        return [{"number": 5, "head": {"ref": "main", "repo": None}}]
+
+    monkeypatch.setattr(board_module, "_gh_get", _fake)
+    heads, reason = board_module._open_pr_heads("o/r", "t")
+    assert heads == []
+    assert "#5" in reason and "deleted fork" in reason
+
+
+def test_open_pr_heads_refuses_a_malformed_ref(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ref is interpolated into a refspec, so it is validated before use."""
+
+    def _fake(url: str, token: object) -> object:
+        return [
+            {
+                "number": 6,
+                "head": {
+                    "ref": "arena/../main",
+                    "repo": {"full_name": "o/r", "clone_url": "https://github.com/o/r.git"},
+                },
+            }
+        ]
+
+    monkeypatch.setattr(board_module, "_gh_get", _fake)
+    heads, reason = board_module._open_pr_heads("o/r", "t")
+    assert heads == [] and "malformed" in reason
+
+
+def test_a_repository_whose_name_escapes_the_github_shape_is_never_fetched(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fetch URL is derived from the identity, and only for a safe ``owner/name``.
+
+    The API payload's ``clone_url`` must never steer ``git fetch``: a compromised
+    token (or a fork named to look like a URL) could otherwise point this tool at
+    an arbitrary host.
+    """
+    called: list[list[str]] = []
+
+    def _fake_git(args: list[str], cwd: Path) -> object:
+        called.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout=json.dumps({"claims": []}), stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _fake_git)
+    # Names that are not a plausible GitHub "owner/name": a third path segment, a
+    # traversal, a query string, a missing owner.
+    for repo_name in ("o/r/extra", "../etc/passwd", "o/r?x=1", "/r", "o/", ".."):
+        head = _pr_head(board_module, repo_name, "main")
+        boards, unreadable = board_module._remote_branch_boards([head], coordination_repo="o/r")
+        assert boards == [], f"{repo_name!r} must not be fetched"
+        assert any("unusable repository identity" in reason for reason in unreadable)
+    assert called == [], "no git command may run for an unusable identity"
+
+
+def test_every_derived_fetch_url_stays_on_github(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fetch target is computed from the identity and always points at github.com.
+
+    ``clone_url`` from the payload never steers ``git fetch``: a payload cannot
+    move this tool to another host, whatever it claims the repository's URL is.
+    """
+    for repo_name in ("o/r", "evil.example.com/x", "owner/repo.name", "Owner_1/repo-2"):
+        head = _pr_head(board_module, repo_name, "main")
+        url = board_module._head_fetch_url(head)
+        assert url == f"https://github.com/{repo_name}.git", url
+        assert url.startswith("https://github.com/")
+        assert "gitlab" not in url and "http://" not in url
+
+
+def test_head_fetch_url_ignores_a_payload_clone_url(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``clone_url`` from the API is not the source of truth; the identity is."""
+
+    def _fake(url: str, token: object) -> object:
+        return [
+            {
+                "number": 9,
+                "head": {
+                    "ref": "release",
+                    "repo": {
+                        "full_name": "fork/nexus-ai-agent",
+                        "clone_url": "https://gitlab.example.com/fork/nexus-ai-agent.git",
+                    },
+                },
+            }
+        ]
+
+    monkeypatch.setattr(board_module, "_gh_get", _fake)
+    heads, reason = board_module._open_pr_heads("o/r", "t")
+    assert reason == "" and len(heads) == 1
+    assert board_module._head_fetch_url(heads[0]) == "https://github.com/fork/nexus-ai-agent.git"
+
+
+def test_remote_branch_boards_reads_a_fork_from_its_own_repository(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fork head is fetched from the fork, never from a same-named origin branch.
+
+    The dangerous shape is a fork PR whose branch is ``main``: resolving by ref
+    name alone reads this clone's ``origin/main`` — a different repository, a
+    different commit, a different board — and reports on it as if it were the
+    PR's lease (task-266 review finding B).
+    """
+    commands: list[list[str]] = []
+
+    def _fake_git(args: list[str], cwd: Path) -> object:
+        commands.append(args)
+        if args[0] == "show":
+            return subprocess.CompletedProcess(
+                args, 0, stdout=json.dumps({"claims": []}), stderr=""
+            )
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _fake_git)
+    boards, unreadable = board_module._remote_branch_boards(
+        [_pr_head(board_module, "attacker/nexus-ai-agent", "main", 7)],
+        coordination_repo="o/r",
+    )
+    fetches = [cmd for cmd in commands if cmd[0] == "fetch"]
+    assert unreadable == [] and len(boards) == 1
+    assert boards[0][0] == "pr-head:attacker/nexus-ai-agent#main"
+    assert fetches and "https://github.com/attacker/nexus-ai-agent.git" in fetches[0]
+    assert not any("origin" in cmd for cmd in fetches), "origin must not be used for a foreign head"
+    assert fetches[0][-1] == "+refs/heads/main:refs/nexus-referee/pr-7"
+    # …and the board is read from exactly that ref: fetching the fork and then
+    # reading a same-named branch of origin would be the same defect wearing a
+    # different hat (it survived the first mutation campaign for this reason).
+    shows = [cmd for cmd in commands if cmd[0] == "show"]
+    assert len(shows) == 1
+    assert shows[0][1] == "refs/nexus-referee/pr-7:.agents/board.json", shows[0]
+
+
+def test_a_fork_head_that_cannot_be_fetched_is_unverifiable(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the true head cannot be read, the referee must not fall back to origin."""
+
+    def _fake_git(args: list[str], cwd: Path) -> object:
+        if args[0] == "fetch":
+            return subprocess.CompletedProcess(args, 128, stdout="", stderr="repository not found")
+        return subprocess.CompletedProcess(args, 0, stdout=json.dumps({"claims": []}), stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _fake_git)
+    boards, unreadable = board_module._remote_branch_boards(
+        [_pr_head(board_module, "attacker/nexus-ai-agent", "main", 7)], coordination_repo="o/r"
+    )
+    assert boards == [], "origin must never stand in for an unreadable fork head"
+    assert any("attacker/nexus-ai-agent#main" in reason for reason in unreadable)
+
+
+def test_two_forks_sharing_a_ref_name_are_two_sources(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Dedupe is by (repository, ref): the same ref name in two repos is two heads."""
+    commands: list[list[str]] = []
+
+    def _fake_git(args: list[str], cwd: Path) -> object:
+        commands.append(args)
+        if args[0] == "show":
+            return subprocess.CompletedProcess(
+                args, 0, stdout=json.dumps({"claims": []}), stderr=""
+            )
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _fake_git)
+    boards, unreadable = board_module._remote_branch_boards(
+        [
+            _pr_head(board_module, "forka/nexus-ai-agent", "release", 8),
+            _pr_head(board_module, "forkb/nexus-ai-agent", "release", 9),
+        ],
+        coordination_repo="o/r",
+    )
+    urls = [cmd[3] for cmd in commands if cmd[0] == "fetch"]
+    assert "https://github.com/forka/nexus-ai-agent.git" in urls
+    assert "https://github.com/forkb/nexus-ai-agent.git" in urls
+    assert sorted(name for name, _ in boards) == [
+        "pr-head:forka/nexus-ai-agent#release",
+        "pr-head:forkb/nexus-ai-agent#release",
+    ]
+    assert unreadable == []
+
+
+def test_open_pr_heads_requires_repo_and_token(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    heads, reason = board_module._open_pr_heads("", "")
+    assert heads == [] and reason
+    heads, reason = board_module._open_pr_heads("o/r", "")
+    assert heads == [] and reason
+
+
+def test_open_pr_heads_degrades_on_api_error(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def _boom(url: str, token: object) -> object:
         raise OSError("connection reset")
 
     monkeypatch.setattr(board_module, "_gh_get", _boom)
-    branches, reason = board_module._open_pr_branches("o/r", "t")
-    assert branches == [] and "unavailable" in reason
+    heads, reason = board_module._open_pr_heads("o/r", "t")
+    assert heads == [] and "unavailable" in reason
 
 
 # --------------------------------------------------------------------------- #
@@ -1035,6 +1517,174 @@ def test_claim_renews_its_own_lease(
     # Documented behaviour: `claim` on an existing lease is a heartbeat — it refreshes the
     # clock and keeps the original TTL (the --ttl flag only applies when the lease is taken).
     assert renewed["ttl_hours"] == active["ttl_hours"]
+
+
+def _heartbeat(
+    board_module: ModuleType, task: str, branch: str, *, gates: bool, generation: int
+) -> int:
+    """Run the heartbeat (same-owner renewal) path of ``claim``."""
+    return board_module.cmd_claim(
+        type(
+            "A",
+            (),
+            {
+                "task": task,
+                "branch": branch,
+                "ttl": 24,
+                "gates": gates,
+                "expected_generation": generation,
+            },
+        )()
+    )
+
+
+def _claims_of(board_module: ModuleType) -> list[dict]:
+    return json.loads(board_module.BOARD.read_text(encoding="utf-8"))["claims"]
+
+
+def _live_gate_holders(board_module: ModuleType) -> list[str]:
+    owners, malformed = board_module._active_gates_owners({"claims": _claims_of(board_module)})
+    assert not malformed, malformed
+    return [owner["task"] for owner in owners]
+
+
+def _hermetic_gate_board(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> tuple[dict, dict]:
+    """A one-lease board of its own, so gate assertions cannot read the live board.
+
+    The ``board_module`` fixture mirrors the **real** board, which may hold a live
+    gates owner (a session working right now) — and any lease whose ``claimed_at``
+    lies in the future relative to a pinned clock is *live* by the referee's own
+    arithmetic, so "exactly one gate holder" would silently depend on other
+    agents' work and on the calendar.  The gate tests describe their own board
+    (``_synthetic_directory_claim_board``) and pin the clock inside its lease.
+    """
+    board = _synthetic_directory_claim_board()
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    active = board["claims"][0]
+    _pin_clock_inside_lease(monkeypatch, board_module, active)
+    return board, active
+
+
+def test_heartbeat_with_gates_takes_the_gate_on_a_live_own_lease(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """``claim --gates`` on a live own lease must take the gate, not just print success.
+
+    The documented onboarding loop is ``next`` -> ``claim <task> --branch BR`` and
+    then ``claim … --gates`` to own the CI gate (AGENTS.md §1 rule 4).  The second
+    command lands on the *heartbeat* path, which used to ignore the flag entirely
+    while still printing "renewed lease …" and exiting 0 — the board stayed at
+    **zero** gates owners, every other agent's ``check`` kept returning exit 2, and
+    the caller's "I own the gates" was false.  A success line without the effect is
+    exactly what this pins (task-266).
+    """
+    _, active = _hermetic_gate_board(board_module, monkeypatch)
+    assert active["gates_owner"] is False, "precondition: this lease holds no gate"
+
+    code = _heartbeat(
+        board_module,
+        active["task"],
+        active["agent_branch"],
+        gates=True,
+        generation=_generation_of(board_module, active["task"]),
+    )
+    assert code == 0
+    renewed = next(c for c in _claims_of(board_module) if c["task"] == active["task"])
+    assert renewed["gates_owner"] is True, "the gate must actually be held after --gates"
+    assert _live_gate_holders(board_module) == [active["task"]]
+    # the operator must be able to read the resulting state off the command's output
+    assert "gates_owner: True" in capsys.readouterr().out
+
+
+def test_heartbeat_with_gates_is_idempotent_and_leaves_one_holder(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A duplicated gate (survived a bad merge) must collapse to the caller alone.
+
+    Asserting exclusivity across *every* granting path is the point: the fresh
+    claim, the takeover and the heartbeat all clear the other holders through one
+    implementation, so "at most one live gate holder" is a property of the tool
+    rather than of the path the caller happened to take.
+    """
+    board, active = _hermetic_gate_board(board_module, monkeypatch)
+    board["claims"].append(
+        {
+            "task": "task-9999-other-gate-holder",
+            "status": "active",
+            "zone": active["zone"],
+            "agent_branch": "arena/999-other-gate-holder",
+            "claimed_at": active["claimed_at"],
+            "ttl_hours": 24,
+            "gates_owner": True,
+            "exclusive_paths": [],
+        }
+    )
+    active["gates_owner"] = True  # both hold it: the inconsistent board
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+
+    code = _heartbeat(
+        board_module,
+        active["task"],
+        active["agent_branch"],
+        gates=True,
+        generation=_generation_of(board_module, active["task"]),
+    )
+    assert code == 0
+    assert _live_gate_holders(board_module) == [active["task"]]
+    others = [c for c in _claims_of(board_module) if c["task"] == "task-9999-other-gate-holder"]
+    assert others[0]["gates_owner"] is False, "the other holder must lose the gate"
+
+
+def test_a_heartbeat_without_the_flag_never_drops_the_gate(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Renewing a lease must not silently release a gate the owner still holds.
+
+    The flag is additive: absent means "keep whatever I have".  Dropping it on
+    every heartbeat would make the single-gate role expire faster than the lease
+    it is attached to, with no message saying so.
+    """
+    board, active = _hermetic_gate_board(board_module, monkeypatch)
+    active["gates_owner"] = True
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+
+    code = _heartbeat(
+        board_module,
+        active["task"],
+        active["agent_branch"],
+        gates=False,
+        generation=_generation_of(board_module, active["task"]),
+    )
+    assert code == 0
+    renewed = next(c for c in _claims_of(board_module) if c["task"] == active["task"])
+    assert renewed["gates_owner"] is True
+    assert _live_gate_holders(board_module) == [active["task"]]
+
+
+def test_a_stale_heartbeat_cannot_take_the_gate(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """The gate is fenced by the lease epoch: a superseded owner cannot seize it.
+
+    ``--gates`` is not a way around the fencing token, otherwise a resumed stale
+    session could take the single CI gate while another branch works the zone.
+    """
+    board, active = _hermetic_gate_board(board_module, monkeypatch)
+    task = active["task"]
+    stale = _generation_of(board_module, task)
+
+    # another session took the zone over (or released it): the epoch advanced
+    next(c for c in board["claims"] if c["task"] == task)["generation"] = stale + 1
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    before = board_module.BOARD.read_text(encoding="utf-8")
+
+    code = _heartbeat(board_module, task, active["agent_branch"], gates=True, generation=stale)
+    assert code == 2, "a stale token must be refused, never honoured"
+    assert "REFUSED" in capsys.readouterr().out
+    assert board_module.BOARD.read_text(encoding="utf-8") == before, "board must be untouched"
+    assert _live_gate_holders(board_module) == [], "a refused heartbeat grants nothing"
 
 
 def test_mutating_an_existing_lease_without_a_token_is_refused(
@@ -1325,3 +1975,110 @@ def test_show_garbage_collects_an_expired_lease(board_module: ModuleType) -> Non
     # gc records *why* it released the lease, and never clobbers the owner's note.
     assert "stale active lease" in freed["release_reason"]
     assert freed["note"] == handoff
+
+
+def test_an_unreadable_fork_head_makes_the_verdict_unverifiable(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Nothing conflicts, but one fork head cannot be fetched → exit 2, never 0.
+
+    Asserted on the *verdict*, not on the mechanism: a referee that counts a
+    failed fetch as "attempted, therefore seen" would answer 0 here — the exact
+    false clear this source exists to prevent (task-266 review finding B, second
+    round: an unreadable source must never be traded for a clean pass).
+    """
+    board = _synthetic_directory_claim_board()
+    board["claims"][0]["gates_owner"] = True  # exactly one live gate owner
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+
+    def _fake_git(args: list[str], cwd: Path) -> object:
+        if args[:2] == ["worktree", "list"]:
+            return subprocess.CompletedProcess(args, 0, stdout=f"worktree {REPO_ROOT}\n", stderr="")
+        if args[0] == "fetch":
+            return subprocess.CompletedProcess(args, 128, stdout="", stderr="repository not found")
+        # origin/main is readable and clean
+        return subprocess.CompletedProcess(args, 0, stdout=json.dumps({"claims": []}), stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _fake_git)
+    monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, ""))
+    monkeypatch.setattr(
+        board_module,
+        "_open_pr_heads",
+        lambda repo, token: ([_pr_head(board_module, "forkb/nexus-ai-agent", "release", 9)], ""),
+    )
+    code = board_module.cmd_check(
+        type(
+            "A",
+            (),
+            {
+                "files": "docs/anything.md",
+                "branch": "arena/999-me",
+                "no_remote": False,
+                "repo": "o/r",
+                "token": "t",
+            },
+        )()
+    )
+    captured = capsys.readouterr().out
+    assert code == 2, "an unreadable fork head must make the whole verdict unverifiable"
+    assert "forkb/nexus-ai-agent" in captured, "the unreadable source must be named to the caller"
+
+
+def test_a_proven_conflict_survives_an_unreadable_fork_head(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """A conflict proven in a readable fork is exit 1 even if another head is unreadable.
+
+    Deliberate precedence, pinned so it stays a decision: the confirmed conflict is
+    reported (hiding it behind exit 2 would be worse), *and* the unreadable source
+    is still surfaced — never silently dropped.
+    """
+    board = _synthetic_directory_claim_board()
+    board["claims"][0]["gates_owner"] = True
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+
+    conflict = _synthetic_directory_claim_board()
+    conflict["claims"][0]["agent_branch"] = "arena/999-fork"
+    conflict["claims"][0]["exclusive_paths"] = ["docs/anything.md"]
+
+    def _fake_git(args: list[str], cwd: Path) -> object:
+        if args[:2] == ["worktree", "list"]:
+            return subprocess.CompletedProcess(args, 0, stdout=f"worktree {REPO_ROOT}\n", stderr="")
+        if args[0] == "fetch":
+            ok = "forka" in " ".join(args)  # forka readable, forkb not
+            return subprocess.CompletedProcess(args, 0 if ok else 128, stdout="", stderr="")
+        if args[0] == "show" and "pr-8" in args[1]:
+            return subprocess.CompletedProcess(args, 0, stdout=json.dumps(conflict), stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout=json.dumps({"claims": []}), stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _fake_git)
+    monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, ""))
+    monkeypatch.setattr(
+        board_module,
+        "_open_pr_heads",
+        lambda repo, token: (
+            [
+                _pr_head(board_module, "forka/nexus-ai-agent", "release", 8),
+                _pr_head(board_module, "forkb/nexus-ai-agent", "release", 9),
+            ],
+            "",
+        ),
+    )
+    code = board_module.cmd_check(
+        type(
+            "A",
+            (),
+            {
+                "files": "docs/anything.md",
+                "branch": "arena/999-me",
+                "no_remote": False,
+                "repo": "o/r",
+                "token": "t",
+            },
+        )()
+    )
+    captured = capsys.readouterr().out
+    assert code == 1, "a proven conflict is exit 1, even next to an unreadable source"
+    assert "forkb/nexus-ai-agent" in captured, "the unreadable source must not be hidden"

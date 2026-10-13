@@ -46,7 +46,18 @@ queued ──claim──▶ active (lease: owner + TTL + exclusive_paths)
 * **TTL / stale takeover** — every lease has `ttl_hours` (default 24). `gc` (run
   automatically inside `show`/`next`) flips expired leases to `expired`, making
   the task claimable again. An agent that is still working re-runs `claim` to
-  renew its own lease (heartbeat).
+  renew its own lease (heartbeat). A renewal is a *mutation of a live lease*, so
+  it carries `--expected-generation N`; a superseded owner is refused.
+* **the single gate (`--gates`)** — `claim … --gates` **ensures the caller holds
+  the one `gates_owner` role**, on every path that can grant it: a fresh claim, a
+  takeover of an expired lease, and the heartbeat renewal of a lease the caller
+  already owns. It is exclusive, so taking it clears every other holder (a board
+  that somehow carries two holders collapses to the caller), and it is
+  *additive*: renewing **without** `--gates` never drops a gate the owner already
+  holds. `show` and the claim output state the resulting flag, so the operator
+  reads the effect rather than the request. Because the gate is lease-scoped, the
+  board legitimately holds **zero** gates owners while nobody is running the full
+  gates.
 * **defer** — the "stop politely" primitive. Writes a permanent entry to
   `deferred_log` with both a Persian and English note (the Persian template is the
   canonical one from `AGENTS.md`) plus a `resume_when` condition. A deferred task
@@ -83,13 +94,29 @@ python scripts/agent_board.py check --files "src/a.py" --branch BR --no-remote  
 ```
 
 `check` is a **multi-source referee**. It reads the local board, every sibling
-git worktree's board, and `origin/main`'s board, then exits:
+git worktree's board, `origin/main`'s board, and **every** open PR's pushed head
+board — across **every page** of the listing, and read by each head's **full
+identity** (repository + ref), so a fork PR and PR number 101+ are sources too.
+The reader is deliberately literal about that:
+
+* a page that cannot be fetched or interpreted makes the whole listing
+  **unverifiable** — a partial list is never presented as a complete one, and a
+  listing longer than the page bound is refused rather than truncated;
+* a head is fetched **from its own repository** into its own ref namespace and the
+  board is read from exactly that ref: a fork PR whose branch is called `main`
+  must never be resolved through this clone's `origin/main` (a different
+  repository, a different commit, a different board);
+* the fetch target is derived from the validated `owner/name` identity, never
+  from a URL supplied in the API payload;
+* a same-named branch in two repositories is **two** sources, not one.
+
+then exits:
 
 | exit | meaning |
 |---|---|
 | `0` | no overlap **and** every consulted source was readable |
 | `1` | a proven overlap with another branch's active `exclusive_paths` |
-| `2` | a source could not be read (git/remote/worktree unavailable) — **not** a pass |
+| `2` | a source could not be read (git/remote/worktree/branch unavailable) — **not** a pass |
 
 Exit `2` is the honesty gate: "no overlap" is only claimed when the data was
 actually read. `--no-remote` narrows the check to the local board and says so
