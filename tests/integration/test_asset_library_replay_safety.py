@@ -395,12 +395,12 @@ async def test_two_different_replays_race_only_the_original_content_survives(
         return_exceptions=True,
     )
 
-    assert not isinstance(
-        matching, BaseException
-    ), f"matching replay: {matching!r}; differing={differing!r}"
-    assert isinstance(
-        differing, IdempotencyConflict
-    ), f"differing replay: {differing!r}; matching={matching!r}"
+    assert not isinstance(matching, BaseException), (
+        f"matching replay: {matching!r}; differing={differing!r}"
+    )
+    assert isinstance(differing, IdempotencyConflict), (
+        f"differing replay: {differing!r}; matching={matching!r}"
+    )
     assert await _counts(tmp_path) == (1, 1, 1)
     async with get_session(str(tmp_path / "library.sqlite")) as session:
         version = (await session.execute(select(orm.AssetVersion))).scalars().one()
