@@ -250,6 +250,8 @@ class SqlAssetRepository:
         asset_id: str,
         version_id: str,
         blob_key: str,
+        content_sha256: str,
+        size_bytes: int,
         media_kind: MediaKind,
         media_type: str,
     ) -> bool:
@@ -270,6 +272,11 @@ class SqlAssetRepository:
                 asset_id=asset_id,
                 version_id=version_id,
                 blob_key=blob_key,
+                # A READY row always carries the identity of the bytes it published;
+                # recovery of an ingest whose Tx2 never committed would otherwise
+                # leave NULLs that a later reconcile mistakes for a missing blob.
+                content_sha256=content_sha256,
+                size_bytes=size_bytes,
                 # Recovery finalises an ingest whose Tx2 never committed, so the
                 # classification is (re)written here too, never left NULL on READY.
                 media_kind=media_kind.value,

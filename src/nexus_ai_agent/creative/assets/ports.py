@@ -102,6 +102,8 @@ class AssetRepository(Protocol):
         asset_id: str,
         version_id: str,
         blob_key: str,
+        content_sha256: str,
+        size_bytes: int,
         media_kind: MediaKind,
         media_type: str,
     ) -> bool: ...

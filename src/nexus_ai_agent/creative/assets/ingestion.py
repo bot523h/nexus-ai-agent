@@ -105,6 +105,8 @@ async def publish_and_commit(
         asset_id=asset_id,
         version_id=version_id,
         blob_key=blob_key,
+        content_sha256=content_sha256,
+        size_bytes=size_bytes,
         media_kind=media_kind,
         media_type=media_type,
     ):
@@ -210,6 +212,8 @@ async def reconcile_ingest(
                 asset_id=asset_id,
                 version_id=version_id,
                 blob_key=blob_key,
+                content_sha256=ingest.content_sha256,
+                size_bytes=ingest.size_bytes,
                 media_kind=media_kind,
                 media_type=ingest.media_type,
             ):
