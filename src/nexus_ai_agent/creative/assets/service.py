@@ -326,6 +326,11 @@ class AssetLibraryService:
         if report.state is IngestState.READY:
             final = await repo.get_ingest_fresh(existing.ingest_id)
             assert final is not None
+            # Serve the ingest only to a caller whose bytes ARE the published bytes.
+            # A replay with different content that merely lost the race to a matching
+            # replay must be refused, never told its upload succeeded.
+            if (replay_sha, replay_size) != (final.content_sha256, final.size_bytes):
+                raise IdempotencyConflict("idempotency key was reused with different content")
             return _result_from(final, reused=True)
         raise RecoveryError(f"interrupted ingest could not be completed: {report.outcome}")
 

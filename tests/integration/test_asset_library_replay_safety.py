@@ -363,3 +363,37 @@ async def test_concurrent_matching_and_conflicting_replays_cannot_corrupt_the_or
     assert version.content_sha256 == hashlib.sha256(ORIGINAL).hexdigest()
     assert isinstance(outcomes[1], IdempotencyConflict) or isinstance(outcomes[1], BaseException)
     assert isinstance(outcomes[2], BaseException)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("round_", range(8))
+async def test_two_different_replays_race_only_the_original_content_survives(
+    tmp_path: Path, round_: int
+) -> None:
+    """A matching replay and a differing replay race on one interrupted ingest.
+
+    Whatever the interleaving: exactly one asset exists, it holds the ORIGINAL
+    bytes, the differing replay is refused with a typed conflict (or, if it lost
+    the race to completion, also a typed conflict - never a success), and no
+    staging file is left owned by nobody.
+    """
+    import asyncio
+    import hashlib
+
+    await _crash_at(tmp_path, "after_stage")
+
+    matching, differing = await asyncio.gather(
+        _ingest(_service(tmp_path), ORIGINAL),
+        _ingest(_service(tmp_path), DIFFERENT),
+        return_exceptions=True,
+    )
+
+    assert not isinstance(matching, BaseException), matching
+    assert isinstance(differing, IdempotencyConflict), differing
+    assert await _counts(tmp_path) == (1, 1, 1)
+    async with get_session(str(tmp_path / "library.sqlite")) as session:
+        version = (await session.execute(select(orm.AssetVersion))).scalars().one()
+        ingest = (await session.execute(select(orm.AssetIngest))).scalars().one()
+    assert version.content_sha256 == hashlib.sha256(ORIGINAL).hexdigest()
+    assert ingest.state == "READY" and ingest.staging_key is None
+    assert _staging_files(tmp_path) == []
