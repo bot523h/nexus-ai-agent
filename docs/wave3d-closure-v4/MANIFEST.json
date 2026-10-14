@@ -402,5 +402,25 @@
     "reproduce.sh removes its work directory before starting; reusing a dirty work directory produces spurious 'patch does not apply' failures.",
     "The privacy and dispatch modules chdir into a temporary directory and create the CWD-relative ambient database *after* the feature-engine container has imported its model modules; without that order the force-join gate reads a table that does not exist yet.",
     "Every patch in patches/ was checked with `git apply --check` against the main, #198, #210 and #211 trees; all apply everywhere, and each leg still applies its patch to the declared base (apply-everywhere means context-compatible, not validated-on)."
-  ]
+  ],
+  "publication": {
+    "branch": "arena/aa451c49-nexus-ai-agent",
+    "path": "docs/wave3d-closure-v4",
+    "artifact_commit": "f99ab1c653ec7fe038412306110baa200f154935",
+    "verification": "cloned from https://github.com/bot523h/nexus-ai-agent.git and compared sha256 of every file: 45/45 identical (200-10-14)",
+    "durability_limitation": "a git branch is mutable and there is no independent archive or tag; this is recoverable publication, not immutable storage",
+    "verification_evidence": "evidence/handoff_download_verification.txt"
+  },
+  "docs": {
+    "CLOSURE_REPORT.md": "9dc898b45810502b5b432fd0288448d9275a18ba80155b3173dbb5e5b4fba359",
+    "INTEGRATION_MATRIX.md": "b3f6a5991159dcbe734c9459141a0f241c9b834f4585e4244b45bb901f17de34",
+    "POSTGRES_LIMITATIONS.md": "ad819126e87466bed63bfda84a23f9b9dfb4fb55892135bdad9e38f3d1d42fc1",
+    "PR211_OWNER_ACTION_PACKET.md": "5b8aaf679b3d79922faf5125b59c11abde24cefaa282a8214de7a66df1f66a06",
+    "SOURCE_TRUTH_MATRIX.md": "4b0a571a071bb146d101a73f6d7f13c9dde41d1c6dc7f8bca525bca5660dd300"
+  },
+  "evidence_added": {
+    "step16_main.log": "1992c4001a4c4d16419a32cb64188e7aabdf36ad6c9dbd93a908a54b9aeb185e",
+    "step16_candidate.log": "bd70764d6e03dc9f98e2ba97de4e75b0760eeed80086ae8871b1a7fe558efb7c",
+    "handoff_download_verification.txt": "c5a368135f5059cb7ab2be12a596626d0644b7e9461a3f39dc92c993e5877408"
+  }
 }
