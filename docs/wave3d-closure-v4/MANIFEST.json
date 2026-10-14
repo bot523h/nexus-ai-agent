@@ -420,10 +420,14 @@
   "publication": {
     "branch": "arena/aa451c49-nexus-ai-agent",
     "path": "docs/wave3d-closure-v4",
-    "artifact_commit": "f99ab1c653ec7fe038412306110baa200f154935",
-    "verification": "cloned from https://github.com/bot523h/nexus-ai-agent.git and compared sha256 of every file: 45/45 identical (200-10-14)",
-    "durability_limitation": "a git branch is mutable and there is no independent archive or tag; this is recoverable publication, not immutable storage",
-    "verification_evidence": "evidence/handoff_download_verification.txt"
+    "commits": {
+      "bundle": "f99ab1c653ec7fe038412306110baa200f154935",
+      "docs_and_report": "54c83f12c57bbffe51f862cde3f0adda4d7e7d16",
+      "final_sync": "584e3077f87fbdf17bc2544d07d034d724e0ab7e"
+    },
+    "verification": "each commit was re-cloned from https://github.com/bot523h/nexus-ai-agent.git and every file compared by sha256: 45/45, 47/47 and 48/48 identical, zero mismatches",
+    "verification_evidence": "evidence/handoff_download_verification.txt",
+    "durability_limitation": "a git branch is mutable and there is no independent archive or tag; this is recoverable publication, not immutable storage"
   },
   "docs": {
     "CLOSURE_REPORT.md": "9dc898b45810502b5b432fd0288448d9275a18ba80155b3173dbb5e5b4fba359",
@@ -449,7 +453,7 @@
     "dispatch_ordering_composed.log": "efd5ccc2d727cdfdbf1cf982f9a8a7a4714c708be45eb95186d7f616a0caaaf9",
     "dispatch_ordering_patchb_only.log": "81dae724cba8e5b3b2987c4cd18aa85e18aa5851a3925c2bcb177ca26cd3297a",
     "dispatch_ordering_ruff.log": "b55a15a18a1ea234f7b205b754b1ce8f698d25d732bb90da1cdb1a19c52c634a",
-    "handoff_download_verification.txt": "c5a368135f5059cb7ab2be12a596626d0644b7e9461a3f39dc92c993e5877408",
+    "handoff_download_verification.txt": "8f0b7127d8c3e2ccb5f72c6b4c3bcca205d133e5d3cd927c72991bc5235f6b5e",
     "patch_a_mypy.log": "5d4b6d285b77932e3d08212c3b4974d0a803f98ec60408ac6ccf6a063fa6c19e",
     "patch_a_patched.log": "cb500723ddc6481a29c980e1485c95422ebe64c9d431a61d536c9c9e5a2fff13",
     "patch_a_ruff.log": "b55a15a18a1ea234f7b205b754b1ce8f698d25d732bb90da1cdb1a19c52c634a",
