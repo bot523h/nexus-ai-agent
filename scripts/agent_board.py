@@ -67,7 +67,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -580,7 +580,31 @@ def _read_remote_board() -> tuple[dict | None, str]:
     return data, ""
 
 
-_REMOTE_BRANCH_FETCH_LIMIT = 25
+# Inventory bounds. These cap the *command size* and the *pagination loop*, never
+# the inventory itself: every open PR and every pushed branch must be consulted,
+# so a cap that silently drops rows is a false-clear bug, not an optimisation.
+_PR_PAGE_SIZE = 100
+# An API that keeps answering "100 more" forever must abort loudly instead of
+# spinning; the referee reports exit 2 rather than a partial inventory.
+_MAX_PR_PAGES = 200
+# Refspecs per `git fetch` call. 25 keeps one command's argv small; the
+# inventory is unlimited because the fetch is repeated in bounded batches.
+_REMOTE_BRANCH_FETCH_BATCH = 25
+
+
+def _dedupe(values: Iterable[str]) -> list[str]:
+    """Order-preserving de-duplication.
+
+    Branch names repeat across open PRs (one branch can carry several), and a
+    repeated name must not cost a second fetch or a second board read.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        if value and value not in seen:
+            seen.add(value)
+            out.append(value)
+    return out
 
 
 def _open_pr_branches(repo: str, token: str | None) -> tuple[list[str], str]:
@@ -592,23 +616,47 @@ def _open_pr_branches(repo: str, token: str | None) -> tuple[list[str], str]:
     ``origin/main``. The open-PR list is how the referee learns those branch
     names. It is a *required* source: an unreadable list degrades to exit 2,
     never to a clean pass.
+
+    The list is **paginated**: a repository with more open PRs than one page
+    holds (this one already has more) otherwise hides every branch past the
+    first page, and a lease on such a branch is exactly the false clear the
+    referee exists to prevent. Any page that cannot be read aborts the whole
+    enumeration — a partial inventory is reported as unreadable, never as a
+    smaller complete one.
     """
     if "/" not in repo:
         return [], "GITHUB_REPOSITORY unset and --repo not given (cannot enumerate PR branches)"
     if not token:
         return [], "no GitHub token in the environment (cannot enumerate open-PR branches)"
-    try:
-        pulls = _gh_get(f"https://api.github.com/repos/{repo}/pulls?state=open&per_page=100", token)
-    except (urllib.error.URLError, OSError, ValueError) as exc:
-        return [], f"open-PR API unavailable ({exc})"
-    if not isinstance(pulls, list):
-        return [], "open-PR API returned an unexpected payload"
     branches: list[str] = []
-    for pr in pulls:
-        head = (pr.get("head") or {}).get("ref") if isinstance(pr, dict) else None
-        if isinstance(head, str) and head:
-            branches.append(head)
-    return branches, ""
+    page = 1
+    while True:
+        url = (
+            f"https://api.github.com/repos/{repo}/pulls"
+            f"?state=open&per_page={_PR_PAGE_SIZE}&page={page}"
+        )
+        try:
+            pulls = _gh_get(url, token)
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            return [], f"open-PR API unavailable (page {page}: {exc})"
+        if not isinstance(pulls, list):
+            return [], f"open-PR API returned an unexpected payload (page {page})"
+        for pr in pulls:
+            head = (pr.get("head") or {}).get("ref") if isinstance(pr, dict) else None
+            if isinstance(head, str) and head:
+                branches.append(head)
+        # A short (or empty) page is the terminal page: GitHub returns fewer than
+        # ``per_page`` rows once the collection is exhausted.
+        if len(pulls) < _PR_PAGE_SIZE:
+            break
+        page += 1
+        if page > _MAX_PR_PAGES:
+            return [], (
+                f"open-PR enumeration exceeded {_MAX_PR_PAGES} pages "
+                f"({len(branches)} rows read) — refusing to treat a partial "
+                f"inventory as complete"
+            )
+    return _dedupe(branches), ""
 
 
 def _remote_branch_boards(
@@ -623,34 +671,39 @@ def _remote_branch_boards(
     stale ref left by an earlier run can never masquerade as fresh. A branch
     that cannot be fetched, or whose board cannot be parsed, is *unverifiable*,
     never skipped.
+
+    The branch list is de-duplicated and then fetched in bounded batches of
+    ``_REMOTE_BRANCH_FETCH_BATCH`` refspecs. The batch bound caps one command's
+    argv; it never caps the inventory — a repository with hundreds of open-PR
+    branches is fully consulted, so the referee can never report a clean pass
+    while an unread lease sits past a batch boundary.
     """
-    targets: list[str] = []
-    for branch in branches:
-        if branch and branch != exclude_branch and branch not in targets:
-            targets.append(branch)
-    targets = targets[:_REMOTE_BRANCH_FETCH_LIMIT]
+    targets = _dedupe([branch for branch in branches if branch != exclude_branch])
     if not targets:
         return [], []
 
     unreadable: list[str] = []
-    # One batched round trip is the fast path; a single dead ref (e.g. a branch
-    # deleted between the PR list and the fetch) fails the whole batch, so fall
-    # back to per-branch fetches rather than losing every other branch.
-    batch = _git(
-        [
-            "fetch",
-            "--quiet",
-            "origin",
-            *[f"+refs/heads/{b}:refs/remotes/origin/{b}" for b in targets],
-        ],
-        ROOT,
-    )
-    if batch is not None and batch.returncode == 0:
-        fresh = set(targets)
-    else:
-        fresh = set()
-        for branch in targets:
-            fetched = _git(
+    fresh: set[str] = set()
+    for start in range(0, len(targets), _REMOTE_BRANCH_FETCH_BATCH):
+        batch = targets[start : start + _REMOTE_BRANCH_FETCH_BATCH]
+        # One batched round trip per slice is the fast path; a single dead ref
+        # (e.g. a branch deleted between the PR list and the fetch) fails its
+        # whole batch, so fall back to per-branch fetches rather than losing
+        # every other branch that shared the batch.
+        fetched = _git(
+            [
+                "fetch",
+                "--quiet",
+                "origin",
+                *[f"+refs/heads/{b}:refs/remotes/origin/{b}" for b in batch],
+            ],
+            ROOT,
+        )
+        if fetched is not None and fetched.returncode == 0:
+            fresh.update(batch)
+            continue
+        for branch in batch:
+            single = _git(
                 [
                     "fetch",
                     "--quiet",
@@ -659,7 +712,7 @@ def _remote_branch_boards(
                 ],
                 ROOT,
             )
-            if fetched is not None and fetched.returncode == 0:
+            if single is not None and single.returncode == 0:
                 fresh.add(branch)
             else:
                 unreadable.append(f"pushed branch {branch}: git fetch failed (unreachable?)")
