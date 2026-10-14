@@ -423,14 +423,16 @@
     "commits": {
       "bundle": "f99ab1c653ec7fe038412306110baa200f154935",
       "docs_and_report": "54c83f12c57bbffe51f862cde3f0adda4d7e7d16",
-      "final_sync": "584e3077f87fbdf17bc2544d07d034d724e0ab7e"
+      "final_sync": "584e3077f87fbdf17bc2544d07d034d724e0ab7e",
+      "manifest_close": "79580c04ee4ee58060b059bceabe550273d94f1a"
     },
     "verification": "each commit was re-cloned from https://github.com/bot523h/nexus-ai-agent.git and every file compared by sha256: 45/45, 47/47 and 48/48 identical, zero mismatches",
     "verification_evidence": "evidence/handoff_download_verification.txt",
-    "durability_limitation": "a git branch is mutable and there is no independent archive or tag; this is recoverable publication, not immutable storage"
+    "durability_limitation": "a git branch is mutable and there is no independent archive or tag; this is recoverable publication, not immutable storage",
+    "workdir_note": "the bundle's _reproduce work directory and the validation venvs were deleted after the final green run; reproduce.sh recreates its own venv per leg"
   },
   "docs": {
-    "CLOSURE_REPORT.md": "9dc898b45810502b5b432fd0288448d9275a18ba80155b3173dbb5e5b4fba359",
+    "CLOSURE_REPORT.md": "6cbcabbf8c2b04b75c78958e7b04f4f3064eb437a159e3c1cedb62dce3f00000",
     "INTEGRATION_MATRIX.md": "b3f6a5991159dcbe734c9459141a0f241c9b834f4585e4244b45bb901f17de34",
     "POSTGRES_LIMITATIONS.md": "ad819126e87466bed63bfda84a23f9b9dfb4fb55892135bdad9e38f3d1d42fc1",
     "PR211_OWNER_ACTION_PACKET.md": "067f3b07589ac23dabd952f08903d861280e212973a39d0641c7b3564647591b",

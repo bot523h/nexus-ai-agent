@@ -1,7 +1,7 @@
 # NEXUS — Wave 3D closure report
 
 Session branch `arena/aa451c49-nexus-ai-agent` · report prepared **2026-10-14** (UTC)
-Bundle: `wave3d/v4` (workspace) = `docs/wave3d-closure-v4` on the branch, verified by re-download.
+Bundle: `wave3d/v4` (workspace, 48 files) = `docs/wave3d-closure-v4` on the branch; three successive commits (`f99ab1c`, `54c83f1`, `584e307`, then the manifest-closing commit) were each re-downloaded from GitHub and every file hash-compared: identical every time.
 
 **Headline: the wave is reconciled and reproducible, but it is NOT closed.** The governance gate
 (PR #211) is still blocked by its owner, the /forget_me defect is repaired in a validated patch but
@@ -14,7 +14,7 @@ any contributor's branch, or edited a governance record.
 |---|---|
 | Baseline `main` | `6b398565cc1ce0c51fac77d7623350b299c3938f` (tree `90e7fc2b6480fa1b550d0f4ed57baaf61d937409`) |
 | Candidate branch head | `b2aebdb` (checker v3) — tree `023842458329e5304b078e1a82573f1dc64e6c74` |
-| Bundle publication commit | `f99ab1c653ec7fe038412306110baa200f154935` (branch `arena/aa451c49-nexus-ai-agent`) |
+| Bundle publication commits | `f99ab1c` (bundle) → `54c83f1` (report+evidence) → `584e307` (final sync) → `79580c0` (handoff record), branch `arena/aa451c49-nexus-ai-agent` |
 | Bundle manifest | `MANIFEST.json` sha256 in that file's `bundle` section (self-hash recorded in `DOCS.md`/commit) |
 | Patches | checker_v3 `a54daffa…` · tiso01 `b0d17ea4…` · patch_a `aa4feb40…` · patch_a_tests `b3221743…` · patch_b `0240c551…` · patch_b_tests `59e3acc6…` · dispatch `74aa97ff…` |
 | PR heads | #198 `25c4965b` · #210 `1d7390cc` · #211 `878842b6` · #213 `29ca3d66`(short) · #118 `d5a205f4`(short) |
@@ -46,7 +46,7 @@ remote CI result is presented as production verification.
 | 16 | Targeted final regression | **VERIFIED** — baseline `71 passed` (3 board modules) → candidate `110 passed` = 71 + 39 new; no duplicate counting; no skips/xfails introduced; ruff+mypy clean; `git status` empty and tree hash unchanged before/after on both trees |
 | 17 | #211 six-test requirement on a new owner head | **BLOCKED** — no new head exists; owner action named (§5) |
 | 18 | Rebuild v4 bundle | **VERIFIED** — `MANIFEST.json` + `reproduce.sh`; every patch re-applied from the bundle's own copies; `reproduce.sh` exits 0 with all six legs matching the manifest |
-| 19 | Durable handoff | **VERIFIED_WITH_LIMITATIONS** — bundle committed and pushed to the session branch, then **re-downloaded from GitHub and byte-compared: 45/45 files identical** at `f99ab1c`. Limitation: GitHub branch history is mutable and there is no independent archive/tag; durability is "recoverable while the branch exists" |
+| 19 | Durable handoff | **VERIFIED_WITH_LIMITATIONS** — bundle committed and pushed to the session branch, then **re-downloaded from GitHub and byte-compared at every commit: 45/45, 47/47 and 48/48 files identical** (latest `79580c0`). Limitation: GitHub branch history is mutable and there is no independent archive/tag; durability is "recoverable while the branch exists" |
 | 20 | This closure report | **DONE** |
 
 ## 3. What reproduces, exactly
@@ -108,9 +108,9 @@ post SHA + run ID in the PR. Details: `docs/PR211_OWNER_ACTION_PACKET.md`.
 
 ## 7. Durability, and what is deliberately not claimed
 
-* Bundle in the workspace: `/home/user/wave3d/v4/` (≈330 KB without `_reproduce`), plus
-  `docs/wave3d-closure-v4/` on the session branch (commit `f99ab1c`), re-downloaded and
-  hash-verified.
+* Bundle in the workspace: `/home/user/wave3d/v4/` (48 files, ≈520 KB; its `_reproduce` work directory and the
+  validation venvs were removed after the final run — `reproduce.sh` rebuilds them), plus
+  `docs/wave3d-closure-v4/` on the session branch (latest commit `79580c0`), re-downloaded and hash-verified.
 * **Not claimed:** that v1–v3 were restored; that any of this is merged; that remote CI passed;
   that PostgreSQL works; that the governance gate is satisfied; that artifacts are archived
   immutably.
