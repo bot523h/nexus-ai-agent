@@ -137,12 +137,10 @@ MUTATIONS: tuple[Mutation, ...] = (
     async with lock:
         if normalized_path in _initialized_paths:
             return
-        engine = _get_engine(normalized_path)
         await _set_wal_mode(engine)
         await create_all_metadata(engine, SQLModel.metadata)
         _initialized_paths.add(normalized_path)""",
-        """    engine = _get_engine(normalized_path)
-    await _set_wal_mode(engine)
+        """    await _set_wal_mode(engine)
     await create_all_metadata(engine, SQLModel.metadata)
     _initialized_paths.add(normalized_path)""",
         "the per-path init lock serialises first-use DDL; without it every "
