@@ -54,6 +54,9 @@ fail() { printf 'FAIL %s\n' "$*"; FAILED=1; }
 
 rm -rf "$WORK"
 mkdir -p "$WORK" "$EVID"
+# Each run rewrites the leg logs so they always describe exactly this run.
+: > "$EVID/reproduce_leg3.txt"; : > "$EVID/reproduce_leg5.txt"; : > "$EVID/reproduce_leg8.txt"
+: > "$EVID/reproduce_leg9.txt"; : > "$EVID/reproduce_leg10.txt"; : > "$EVID/reproduce_leg11.txt"
 cd "$WORK" || exit 99
 
 # ---------------------------------------------------------------- clone helper

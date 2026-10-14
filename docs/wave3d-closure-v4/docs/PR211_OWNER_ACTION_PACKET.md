@@ -10,8 +10,8 @@ request to the PR owner; it is not an authorization and it is not a merge.
 | Head SHA | `878842b6557eb95b00b1c9d1fdf14d444acfbe43` (tree `a7d6fd4e9a72eda337cd4db11aa122e53a610f67`) |
 | Branch | `arena/claude-5-5-night-governance-20261013` |
 | Base | `main` @ `6b398565cc1ce0c51fac77d7623350b299c3938f`; **1 commit behind** (merge-base `e69ddb0c1ec2`), state `BEHIND` |
-| Remote CI | **FAILED** — run `38351719390` on the head above |
-| Review | bot-approval present, `APPROVED`; **no human approval** recorded |
+| Remote CI | **FAILED** — run `38351719390` on the head above; the failing job is `test (pytest -m "not slow")` (twice: push + PR), while `lint` and `extras-matrix (core)` succeed |
+| Review | bot-approval present, `APPROVED`; **no human approval** recorded (re-checked 2026-10-14, head unchanged since 16:46Z) |
 | Mergeable | `MERGEABLE` (GitHub-side), but the governance gate is blocked |
 | Dependency pin in the branch | `langgraph-checkpoint-sqlite>=1.0` (main pins `==3.1.1`) |
 

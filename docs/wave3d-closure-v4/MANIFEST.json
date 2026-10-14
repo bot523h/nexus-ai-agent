@@ -2,12 +2,25 @@
   "bundle": {
     "name": "NEXUS Wave 3D closure - v4 bundle",
     "version": "4.0.0",
-    "created_utc": "2026-10-14T20:51:24Z",
+    "created_utc": "2026-10-14T20:57:24Z",
     "entrypoint": "reproduce.sh",
     "usage": "bash reproduce.sh [/path/to/workdir]",
     "exit_code_semantics": "0 == every leg reproduced the declared numbers; any other code == the bundle is stale",
     "provenance_note": "Wave 3D v1-v3 bundles are LOST (no bytes present anywhere in the workspace). This bundle is a functional reconstruction: it reproduces every claim from the exact upstream trees, but its artifact hashes are NOT the previously reported ones (see lost_artifacts).",
-    "generator": "Arena agent session, branch arena/aa451c49-nexus-ai-agent"
+    "generator": "Arena agent session, branch arena/aa451c49-nexus-ai-agent",
+    "last_full_run": {
+      "exit_code": 0,
+      "result": "REPRODUCED \u2014 every leg matches MANIFEST.json",
+      "run_at_utc": "2026-10-14T20:57:24Z",
+      "legs": [
+        3,
+        5,
+        8,
+        9,
+        10,
+        11
+      ]
+    }
   },
   "baseline": {
     "repository": "https://github.com/bot523h/nexus-ai-agent",
@@ -401,7 +414,8 @@
   "harness_notes": [
     "reproduce.sh removes its work directory before starting; reusing a dirty work directory produces spurious 'patch does not apply' failures.",
     "The privacy and dispatch modules chdir into a temporary directory and create the CWD-relative ambient database *after* the feature-engine container has imported its model modules; without that order the force-join gate reads a table that does not exist yet.",
-    "Every patch in patches/ was checked with `git apply --check` against the main, #198, #210 and #211 trees; all apply everywhere, and each leg still applies its patch to the declared base (apply-everywhere means context-compatible, not validated-on)."
+    "Every patch in patches/ was checked with `git apply --check` against the main, #198, #210 and #211 trees; all apply everywhere, and each leg still applies its patch to the declared base (apply-everywhere means context-compatible, not validated-on).",
+    "Each reproduce.sh run truncates its evidence/reproduce_leg*.txt files, so those logs always describe the run that produced them; the curated step logs (evidence/step3_*.log, patch_*.log, dispatch_ordering_*.log, step16_*.log) are written by the individual validation steps."
   ],
   "publication": {
     "branch": "arena/aa451c49-nexus-ai-agent",
@@ -415,12 +429,47 @@
     "CLOSURE_REPORT.md": "9dc898b45810502b5b432fd0288448d9275a18ba80155b3173dbb5e5b4fba359",
     "INTEGRATION_MATRIX.md": "b3f6a5991159dcbe734c9459141a0f241c9b834f4585e4244b45bb901f17de34",
     "POSTGRES_LIMITATIONS.md": "ad819126e87466bed63bfda84a23f9b9dfb4fb55892135bdad9e38f3d1d42fc1",
-    "PR211_OWNER_ACTION_PACKET.md": "5b8aaf679b3d79922faf5125b59c11abde24cefaa282a8214de7a66df1f66a06",
+    "PR211_OWNER_ACTION_PACKET.md": "067f3b07589ac23dabd952f08903d861280e212973a39d0641c7b3564647591b",
+    "README.md": "8a99fd86fdab41d762126588b6aad179ec92dc900cf1ce6114edf1d576d3721c",
     "SOURCE_TRUTH_MATRIX.md": "4b0a571a071bb146d101a73f6d7f13c9dde41d1c6dc7f8bca525bca5660dd300"
   },
   "evidence_added": {
     "step16_main.log": "1992c4001a4c4d16419a32cb64188e7aabdf36ad6c9dbd93a908a54b9aeb185e",
     "step16_candidate.log": "bd70764d6e03dc9f98e2ba97de4e75b0760eeed80086ae8871b1a7fe558efb7c",
     "handoff_download_verification.txt": "c5a368135f5059cb7ab2be12a596626d0644b7e9461a3f39dc92c993e5877408"
+  },
+  "scripts": {
+    "reproduce.sh": "1f0c78734ff962294b96ca22e289edd947abab762c3fea1cd794e882744b9694"
+  },
+  "evidence_manifest": {
+    "checker_v3_board_suite.log": "580f66955f5d2d522f56056de34fc4328dbd6f8a234a4c75e03ab0eb6ad64375",
+    "checker_v3_mypy.log": "78c63ebad3c34e91d7264fa7a2f00dd8e8b949cc6358e0567d795af3bc26714c",
+    "checker_v3_ruff.log": "b43b50a1d166c208431474a68e25b52171215c0fe24901b35ec1051a969fce33",
+    "dispatch_ordering_base.log": "d5536fb85d089be65b58b7df1ad2ec996ad935ea174a940188cbc430db676e89",
+    "dispatch_ordering_composed.log": "efd5ccc2d727cdfdbf1cf982f9a8a7a4714c708be45eb95186d7f616a0caaaf9",
+    "dispatch_ordering_patchb_only.log": "81dae724cba8e5b3b2987c4cd18aa85e18aa5851a3925c2bcb177ca26cd3297a",
+    "dispatch_ordering_ruff.log": "b55a15a18a1ea234f7b205b754b1ce8f698d25d732bb90da1cdb1a19c52c634a",
+    "handoff_download_verification.txt": "c5a368135f5059cb7ab2be12a596626d0644b7e9461a3f39dc92c993e5877408",
+    "patch_a_mypy.log": "5d4b6d285b77932e3d08212c3b4974d0a803f98ec60408ac6ccf6a063fa6c19e",
+    "patch_a_patched.log": "cb500723ddc6481a29c980e1485c95422ebe64c9d431a61d536c9c9e5a2fff13",
+    "patch_a_ruff.log": "b55a15a18a1ea234f7b205b754b1ce8f698d25d732bb90da1cdb1a19c52c634a",
+    "patch_a_unpatched.log": "6b4deefa43e77adf9278bdf47d5bd7d563e2ea4e0875dd841bd77615e7f475ff",
+    "patch_b_base.log": "6f31ae799c86e6249a658367de65c34d6d0d9353531e8d54ff7b1bae49995f3b",
+    "patch_b_composed.log": "03decf4fe4823624774f823d870a489a2e5039606eb2fba93c337bdbb5d458f9",
+    "patch_b_mypy.log": "78c63ebad3c34e91d7264fa7a2f00dd8e8b949cc6358e0567d795af3bc26714c",
+    "patch_b_repair_only.log": "2fe604d68d3959d5970187ae67f138febf3b05a319ae0f229dfaa02eec2b38e7",
+    "patch_b_ruff.log": "b55a15a18a1ea234f7b205b754b1ce8f698d25d732bb90da1cdb1a19c52c634a",
+    "reproduce_leg10.txt": "8155b70f9a0c2a3923b45e6ea25fde91256c4b8335f0c705989d0c48252a71e2",
+    "reproduce_leg11.txt": "d27798ea6e33dd2d52195fec46893e589f8efeca07c1e14e86b0d89859472889",
+    "reproduce_leg3.txt": "a061b41ba36e2317a79cb9271188b467bddc89713b3320781319ddf8472aebf2",
+    "reproduce_leg5.txt": "ab447f9144e19663a46c925ef8136f11c1401062e7f95c867e30af4cb52a402f",
+    "reproduce_leg8.txt": "0a19fda6085c0dbc059d4de483fada344e884d8a41676f3c509ad82fa411d8a2",
+    "reproduce_leg9.txt": "739c17f2473be8e01db7582743bf8149282097536916b4b015edcc3101a2258e",
+    "step16_candidate.log": "bd70764d6e03dc9f98e2ba97de4e75b0760eeed80086ae8871b1a7fe558efb7c",
+    "step16_main.log": "1992c4001a4c4d16419a32cb64188e7aabdf36ad6c9dbd93a908a54b9aeb185e",
+    "step3_ab_311.log": "22d4d9355f050a5a7eaa24d0fb73fa0345220f47501dbe138ccbad67a806c8c5",
+    "step3_ab_312.log": "0ff9b5334da15bb4c27c35bda51146b18df41bf5e43eafa744a563ecc7b95a23",
+    "tiso01_patched_pristine.log": "42e521d42c0c7e8ba806605e98d76e53fcfe5c015f5bf5ffcd81d90be427d279",
+    "tiso01_unpatched_corrupt_ambient.log": "cd43dc2330897506a9c5106845fcdbe7eedccca7c905e48864e96303e6373cd6"
   }
 }

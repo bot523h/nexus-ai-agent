@@ -1,160 +1,20 @@
-3.1.2 -> 6 failed, 108 passed, 19 skipped in 8.32s
-3.1.1 -> 114 passed, 19 skipped in 8.08s
+3.1.2 -> 6 failed, 108 passed, 19 skipped in 8.74s
+3.1.1 -> 114 passed, 19 skipped in 8.35s
 tests/integration/test_checkpoint_adapter.py::test_setup_schema_matches_golden
-  3.1.2: 1 failed in 0.36s
+  3.1.2: 1 failed in 0.37s
   3.1.1: 1 passed in 0.35s
 tests/unit/test_lifecycle_adversarial.py::test_apply_under_lock_contention_fails_safe
-  3.1.2: 1 failed in 0.38s
-  3.1.1: 1 passed in 0.49s
-tests/unit/test_reconciler.py::test_apply_backfills_missing_with_protected_age
-  3.1.2: 1 failed in 0.49s
-  3.1.1: 1 passed in 0.51s
-tests/unit/test_reconciler.py::test_purge_eligible_orphan_is_applied
-  3.1.2: 1 failed in 0.83s
-  3.1.1: 1 passed in 0.70s
-tests/unit/test_reconciler.py::test_scan_error_disables_apply
-  3.1.2: 1 failed in 0.59s
-  3.1.1: 1 passed in 0.53s
-tests/unit/test_reconciler.py::test_cli_reconcile_apply_requires_flag
-  3.1.2: 1 failed in 0.73s
-  3.1.1: 1 passed in 0.77s
-3.1.2 -> 6 failed, 108 passed, 19 skipped in 8.08s
-3.1.1 -> 114 passed, 19 skipped in 7.55s
-tests/integration/test_checkpoint_adapter.py::test_setup_schema_matches_golden
-  3.1.2: 1 failed in 0.31s
-  3.1.1: 1 passed in 0.30s
-tests/unit/test_lifecycle_adversarial.py::test_apply_under_lock_contention_fails_safe
-  3.1.2: 1 failed in 0.45s
-  3.1.1: 1 passed in 0.38s
-tests/unit/test_reconciler.py::test_apply_backfills_missing_with_protected_age
-  3.1.2: 1 failed in 0.48s
-  3.1.1: 1 passed in 0.52s
-tests/unit/test_reconciler.py::test_purge_eligible_orphan_is_applied
-  3.1.2: 1 failed in 0.73s
-  3.1.1: 1 passed in 0.83s
-tests/unit/test_reconciler.py::test_scan_error_disables_apply
-  3.1.2: 1 failed in 0.53s
-  3.1.1: 1 passed in 0.51s
-tests/unit/test_reconciler.py::test_cli_reconcile_apply_requires_flag
-  3.1.2: 1 failed in 0.77s
-  3.1.1: 1 passed in 0.74s
-3.1.2 -> 6 failed, 108 passed, 19 skipped in 8.05s
-3.1.1 -> 114 passed, 19 skipped in 8.00s
-tests/integration/test_checkpoint_adapter.py::test_setup_schema_matches_golden
-  3.1.2: 1 failed in 0.34s
-  3.1.1: 1 passed in 0.29s
-tests/unit/test_lifecycle_adversarial.py::test_apply_under_lock_contention_fails_safe
-  3.1.2: 1 failed in 0.44s
-  3.1.1: 1 passed in 0.44s
-tests/unit/test_reconciler.py::test_apply_backfills_missing_with_protected_age
-  3.1.2: 1 failed in 0.48s
-  3.1.1: 1 passed in 0.49s
-tests/unit/test_reconciler.py::test_purge_eligible_orphan_is_applied
-  3.1.2: 1 failed in 0.77s
-  3.1.1: 1 passed in 0.67s
-tests/unit/test_reconciler.py::test_scan_error_disables_apply
   3.1.2: 1 failed in 0.52s
-  3.1.1: 1 passed in 0.48s
-tests/unit/test_reconciler.py::test_cli_reconcile_apply_requires_flag
-  3.1.2: 1 failed in 0.67s
-  3.1.1: 1 passed in 0.73s
-3.1.2 -> 6 failed, 108 passed, 19 skipped in 8.49s
-3.1.1 -> 114 passed, 19 skipped in 7.98s
-tests/integration/test_checkpoint_adapter.py::test_setup_schema_matches_golden
-  3.1.2: 1 failed in 0.32s
-  3.1.1: 1 passed in 0.29s
-tests/unit/test_lifecycle_adversarial.py::test_apply_under_lock_contention_fails_safe
-  3.1.2: 1 failed in 0.47s
-  3.1.1: 1 passed in 0.46s
-tests/unit/test_reconciler.py::test_apply_backfills_missing_with_protected_age
-  3.1.2: 1 failed in 0.49s
-  3.1.1: 1 passed in 0.50s
-tests/unit/test_reconciler.py::test_purge_eligible_orphan_is_applied
-  3.1.2: 1 failed in 0.80s
-  3.1.1: 1 passed in 0.76s
-tests/unit/test_reconciler.py::test_scan_error_disables_apply
-  3.1.2: 1 failed in 0.53s
   3.1.1: 1 passed in 0.47s
-tests/unit/test_reconciler.py::test_cli_reconcile_apply_requires_flag
-  3.1.2: 1 failed in 0.78s
-  3.1.1: 1 passed in 0.81s
-3.1.2 -> 6 failed, 108 passed, 19 skipped in 8.15s
-3.1.1 -> 114 passed, 19 skipped in 8.13s
-tests/integration/test_checkpoint_adapter.py::test_setup_schema_matches_golden
-  3.1.2: 1 failed in 0.35s
-  3.1.1: 1 passed in 0.35s
-tests/unit/test_lifecycle_adversarial.py::test_apply_under_lock_contention_fails_safe
-  3.1.2: 1 failed in 0.45s
-  3.1.1: 1 passed in 0.44s
 tests/unit/test_reconciler.py::test_apply_backfills_missing_with_protected_age
-  3.1.2: 1 failed in 0.52s
-  3.1.1: 1 passed in 0.54s
+  3.1.2: 1 failed in 0.47s
+  3.1.1: 1 passed in 0.58s
 tests/unit/test_reconciler.py::test_purge_eligible_orphan_is_applied
-  3.1.2: 1 failed in 0.72s
-  3.1.1: 1 passed in 0.72s
-tests/unit/test_reconciler.py::test_scan_error_disables_apply
-  3.1.2: 1 failed in 0.55s
-  3.1.1: 1 passed in 0.48s
-tests/unit/test_reconciler.py::test_cli_reconcile_apply_requires_flag
-  3.1.2: 1 failed in 0.76s
-  3.1.1: 1 passed in 0.77s
-3.1.2 -> 6 failed, 108 passed, 19 skipped in 8.01s
-3.1.1 -> 114 passed, 19 skipped in 7.49s
-tests/integration/test_checkpoint_adapter.py::test_setup_schema_matches_golden
-  3.1.2: 1 failed in 0.32s
-  3.1.1: 1 passed in 0.34s
-tests/unit/test_lifecycle_adversarial.py::test_apply_under_lock_contention_fails_safe
-  3.1.2: 1 failed in 0.43s
-  3.1.1: 1 passed in 0.45s
-tests/unit/test_reconciler.py::test_apply_backfills_missing_with_protected_age
-  3.1.2: 1 failed in 0.48s
-  3.1.1: 1 passed in 0.51s
-tests/unit/test_reconciler.py::test_purge_eligible_orphan_is_applied
-  3.1.2: 1 failed in 0.74s
-  3.1.1: 1 passed in 0.70s
+  3.1.2: 1 failed in 0.82s
+  3.1.1: 1 passed in 0.93s
 tests/unit/test_reconciler.py::test_scan_error_disables_apply
   3.1.2: 1 failed in 0.50s
-  3.1.1: 1 passed in 0.47s
+  3.1.1: 1 passed in 0.46s
 tests/unit/test_reconciler.py::test_cli_reconcile_apply_requires_flag
-  3.1.2: 1 failed in 0.75s
-  3.1.1: 1 passed in 0.81s
-3.1.2 -> 6 failed, 108 passed, 19 skipped in 8.40s
-3.1.1 -> 114 passed, 19 skipped in 8.29s
-tests/integration/test_checkpoint_adapter.py::test_setup_schema_matches_golden
-  3.1.2: 1 failed in 0.33s
-  3.1.1: 1 passed in 0.35s
-tests/unit/test_lifecycle_adversarial.py::test_apply_under_lock_contention_fails_safe
-  3.1.2: 1 failed in 0.48s
-  3.1.1: 1 passed in 0.39s
-tests/unit/test_reconciler.py::test_apply_backfills_missing_with_protected_age
-  3.1.2: 1 failed in 0.53s
-  3.1.1: 1 passed in 0.52s
-tests/unit/test_reconciler.py::test_purge_eligible_orphan_is_applied
-  3.1.2: 1 failed in 0.75s
-  3.1.1: 1 passed in 0.79s
-tests/unit/test_reconciler.py::test_scan_error_disables_apply
-  3.1.2: 1 failed in 0.59s
-  3.1.1: 1 passed in 0.50s
-tests/unit/test_reconciler.py::test_cli_reconcile_apply_requires_flag
-  3.1.2: 1 failed in 0.82s
-  3.1.1: 1 passed in 0.72s
-3.1.2 -> 6 failed, 108 passed, 19 skipped in 8.15s
-3.1.1 -> 114 passed, 19 skipped in 9.63s
-tests/integration/test_checkpoint_adapter.py::test_setup_schema_matches_golden
-  3.1.2: 1 failed in 0.32s
-  3.1.1: 1 passed in 0.37s
-tests/unit/test_lifecycle_adversarial.py::test_apply_under_lock_contention_fails_safe
-  3.1.2: 1 failed in 0.45s
-  3.1.1: 1 passed in 0.45s
-tests/unit/test_reconciler.py::test_apply_backfills_missing_with_protected_age
-  3.1.2: 1 failed in 0.55s
-  3.1.1: 1 passed in 0.53s
-tests/unit/test_reconciler.py::test_purge_eligible_orphan_is_applied
-  3.1.2: 1 failed in 0.78s
-  3.1.1: 1 passed in 0.83s
-tests/unit/test_reconciler.py::test_scan_error_disables_apply
-  3.1.2: 1 failed in 0.57s
-  3.1.1: 1 passed in 0.56s
-tests/unit/test_reconciler.py::test_cli_reconcile_apply_requires_flag
-  3.1.2: 1 failed in 0.83s
-  3.1.1: 1 passed in 0.74s
+  3.1.2: 1 failed in 0.85s
+  3.1.1: 1 passed in 0.77s
