@@ -1,0 +1,16 @@
+unpatched -> 3 failed, 2 passed in 1.48s
+patched -> 38 passed, 3 warnings in 6.21s
+unpatched -> 5 passed in 1.25s
+patched -> 38 passed, 3 warnings in 5.63s
+unpatched -> 3 failed, 2 passed in 1.40s
+patched -> 38 passed, 3 warnings in 5.61s
+unpatched -> 3 failed, 2 passed in 1.44s
+patched -> 38 passed, 3 warnings in 5.75s
+unpatched -> 3 failed, 2 passed in 1.54s
+patched -> 38 passed, 3 warnings in 5.59s
+unpatched -> 3 failed, 2 passed in 1.40s
+patched -> 38 passed, 3 warnings in 5.50s
+unpatched -> 3 failed, 2 passed in 1.51s
+patched -> 38 passed, 3 warnings in 5.98s
+unpatched -> 3 failed, 2 passed in 1.58s
+patched -> 38 passed, 3 warnings in 6.39s

@@ -1,0 +1,97 @@
+FF....                                                                   [100%]/home/user/wave3d/v4/_reproduce/venv/lib/python3.11/site-packages/_pytest/threadexception.py:58: PytestUnhandledThreadExceptionWarning: Exception in thread Thread-6 (_connection_worker_thread)
+
+Traceback (most recent call last):
+  File "/home/user/wave3d/v4/_reproduce/venv/lib/python3.11/site-packages/aiosqlite/core.py", line 66, in _connection_worker_thread
+    future.get_loop().call_soon_threadsafe(set_result, future, result)
+  File "/usr/lib/python3.11/asyncio/base_events.py", line 806, in call_soon_threadsafe
+    self._check_closed()
+  File "/usr/lib/python3.11/asyncio/base_events.py", line 519, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/usr/lib/python3.11/threading.py", line 1038, in _bootstrap_inner
+    self.run()
+  File "/usr/lib/python3.11/threading.py", line 975, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/user/wave3d/v4/_reproduce/venv/lib/python3.11/site-packages/aiosqlite/core.py", line 75, in _connection_worker_thread
+    future.get_loop().call_soon_threadsafe(set_exception, future, e)
+  File "/usr/lib/python3.11/asyncio/base_events.py", line 806, in call_soon_threadsafe
+    self._check_closed()
+  File "/usr/lib/python3.11/asyncio/base_events.py", line 519, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
+
+Enable tracemalloc to get traceback where the object was allocated.
+See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+  warnings.warn(pytest.PytestUnhandledThreadExceptionWarning(msg))
+/home/user/wave3d/v4/_reproduce/venv/lib/python3.11/site-packages/_pytest/threadexception.py:58: PytestUnhandledThreadExceptionWarning: Exception in thread Thread-5 (_connection_worker_thread)
+
+Traceback (most recent call last):
+  File "/home/user/wave3d/v4/_reproduce/venv/lib/python3.11/site-packages/aiosqlite/core.py", line 66, in _connection_worker_thread
+    future.get_loop().call_soon_threadsafe(set_result, future, result)
+  File "/usr/lib/python3.11/asyncio/base_events.py", line 806, in call_soon_threadsafe
+    self._check_closed()
+  File "/usr/lib/python3.11/asyncio/base_events.py", line 519, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/usr/lib/python3.11/threading.py", line 1038, in _bootstrap_inner
+    self.run()
+  File "/usr/lib/python3.11/threading.py", line 975, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/user/wave3d/v4/_reproduce/venv/lib/python3.11/site-packages/aiosqlite/core.py", line 75, in _connection_worker_thread
+    future.get_loop().call_soon_threadsafe(set_exception, future, e)
+  File "/usr/lib/python3.11/asyncio/base_events.py", line 806, in call_soon_threadsafe
+    self._check_closed()
+  File "/usr/lib/python3.11/asyncio/base_events.py", line 519, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
+
+Enable tracemalloc to get traceback where the object was allocated.
+See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+  warnings.warn(pytest.PytestUnhandledThreadExceptionWarning(msg))
+/home/user/wave3d/v4/_reproduce/venv/lib/python3.11/site-packages/_pytest/threadexception.py:58: PytestUnhandledThreadExceptionWarning: Exception in thread Thread-3 (_connection_worker_thread)
+
+Traceback (most recent call last):
+  File "/home/user/wave3d/v4/_reproduce/venv/lib/python3.11/site-packages/aiosqlite/core.py", line 66, in _connection_worker_thread
+    future.get_loop().call_soon_threadsafe(set_result, future, result)
+  File "/usr/lib/python3.11/asyncio/base_events.py", line 806, in call_soon_threadsafe
+    self._check_closed()
+  File "/usr/lib/python3.11/asyncio/base_events.py", line 519, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/usr/lib/python3.11/threading.py", line 1038, in _bootstrap_inner
+    self.run()
+  File "/usr/lib/python3.11/threading.py", line 975, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/user/wave3d/v4/_reproduce/venv/lib/python3.11/site-packages/aiosqlite/core.py", line 75, in _connection_worker_thread
+    future.get_loop().call_soon_threadsafe(set_exception, future, e)
+  File "/usr/lib/python3.11/asyncio/base_events.py", line 806, in call_soon_threadsafe
+    self._check_closed()
+  File "/usr/lib/python3.11/asyncio/base_events.py", line 519, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
+
+Enable tracemalloc to get traceback where the object was allocated.
+See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+  warnings.warn(pytest.PytestUnhandledThreadExceptionWarning(msg))
+
+=================================== FAILURES ===================================
+E   AttributeError: 'AsyncSession' object has no attribute 'exec'
+/tmp/dispatch_probe/src/nexus_ai_agent/bot/handlers.py:130: AttributeError: 'AsyncSession' object has no attribute 'exec'
+E   AttributeError: 'AsyncSession' object has no attribute 'exec'
+/tmp/dispatch_probe/src/nexus_ai_agent/bot/handlers.py:130: AttributeError: 'AsyncSession' object has no attribute 'exec'
+=========================== short test summary info ============================
+FAILED tests/unit/test_registered_dispatch.py::test_direct_dispatch_reaches_the_graph
+FAILED tests/unit/test_registered_dispatch.py::test_direct_dispatch_persists_the_sender_and_chat
+2 failed, 4 passed in 2.47s

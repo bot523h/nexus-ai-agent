@@ -1,0 +1,406 @@
+{
+  "bundle": {
+    "name": "NEXUS Wave 3D closure - v4 bundle",
+    "version": "4.0.0",
+    "created_utc": "2026-10-14T20:51:24Z",
+    "entrypoint": "reproduce.sh",
+    "usage": "bash reproduce.sh [/path/to/workdir]",
+    "exit_code_semantics": "0 == every leg reproduced the declared numbers; any other code == the bundle is stale",
+    "provenance_note": "Wave 3D v1-v3 bundles are LOST (no bytes present anywhere in the workspace). This bundle is a functional reconstruction: it reproduces every claim from the exact upstream trees, but its artifact hashes are NOT the previously reported ones (see lost_artifacts).",
+    "generator": "Arena agent session, branch arena/aa451c49-nexus-ai-agent"
+  },
+  "baseline": {
+    "repository": "https://github.com/bot523h/nexus-ai-agent",
+    "main_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f",
+    "main_tree": "90e7fc2b6480fa1b550d0f4ed57baaf61d937409",
+    "observed_at_utc": "2026-10-14",
+    "prs": {
+      "198": {
+        "head_sha": "25c4965b7bfb751cfa9fd60b09962ee27d8bad80",
+        "tree": "8eeb853e44f2b68a081d91b6a1e0e8d0ea322067",
+        "branch": "arena/c5efc6a3-nexus-ai-agent"
+      },
+      "210": {
+        "head_sha": "1d7390cc870ab102b4875442b9cfb1230c6416be",
+        "tree": "225500038fa2fa83a962a8e8480416a3d6e04948",
+        "branch": "arena/claude-5-5-sqlite-init-serialize-20261012"
+      },
+      "211": {
+        "head_sha": "878842b6557eb95b00b1c9d1fdf14d444acfbe43",
+        "tree": "a7d6fd4e9a72eda337cd4db11aa122e53a610f67",
+        "branch": "arena/claude-5-5-night-governance-20261013"
+      },
+      "212": {
+        "state": "MERGED",
+        "merge_commit": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+      },
+      "213": {
+        "head_sha": "29ca3d669126",
+        "state": "OPEN",
+        "merge_state": "DIRTY"
+      }
+    }
+  },
+  "runtime": {
+    "python": "3.11.2",
+    "pytest": "9.1.1",
+    "ruff": "0.17.0",
+    "mypy": "2.4.0",
+    "note": "reproduce.sh builds its own venv per leg; the A/B legs install langgraph-checkpoint-sqlite 3.1.2 vs 3.1.1 into separate venvs."
+  },
+  "patches": {
+    "checker_v3": {
+      "path": "patches/checker_v3.patch",
+      "sha256": "a54daffae7b2da9cc9e1a3f232b8a51dd8ea257790da5d689b8796884e6cab3f",
+      "required_base": {
+        "ref": "main",
+        "sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+      },
+      "files": [
+        "scripts/agent_board.py",
+        "tests/unit/test_agent_board_pr_inventory.py"
+      ],
+      "source_sha256_before": {
+        "scripts/agent_board.py": "50ba9efe2aafeae0b3995cc5a41052ce2b205a967c4270fa6f36ae1dcfa07674"
+      },
+      "source_sha256_after": {
+        "scripts/agent_board.py": "b43cda742e26ce00fcdef60eb6247bd0abf018a10e7dce0d9ec55b443a0f5410",
+        "tests/unit/test_agent_board_pr_inventory.py": "aec325fa12a7ca3c3961be224bb038c2b94289153c9c7a15d38d079adc8c7121"
+      },
+      "status": "RECONSTRUCTED",
+      "committed_locally_as": "b2aebdb (branch arena/aa451c49-nexus-ai-agent)",
+      "keep_separate_from": [
+        "PR #210",
+        "PR #211"
+      ]
+    },
+    "patch_a_async_session": {
+      "path": "patches/patch_a_async_session.patch",
+      "sha256": "aa4feb405aabfc09df58a3b23994c7e05f8cdb1cad03c05a41252e2d63d3f944",
+      "required_base": {
+        "ref": "PR #210",
+        "sha": "1d7390cc870ab102b4875442b9cfb1230c6416be",
+        "tree": "225500038fa2fa83a962a8e8480416a3d6e04948"
+      },
+      "files": [
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/features/onboarding.py"
+      ],
+      "source_sha256_before": {
+        "src/nexus_ai_agent/bot/handlers.py": "f9eb99991201f47b8782e247fcc4e93b35666c27403e92283fa236a7b25c28ab",
+        "src/nexus_ai_agent/features/onboarding.py": "05954a2d13c445d726ed8121824192f32e1010627a00bcc628b888cb7cb0ea01"
+      },
+      "source_sha256_after": {
+        "src/nexus_ai_agent/bot/handlers.py": "b2fabbac8a2834cb2b3a7d2d246cec0fb3778c1442d13a10d66278d3d73546f5",
+        "src/nexus_ai_agent/features/onboarding.py": "4f2c4823fa8e2b4a2f06120eb3e56fc5a98ff859b44878ffaa59e518350a867a"
+      },
+      "status": "RECONSTRUCTED",
+      "compat_note": "composes with Patch B on the #198 tree (leg 10) in full: `bot/handlers.py` applies with an offset, `features/onboarding.py` cleanly. Earlier 'patch does not apply' reports were caused by a stale work directory being reused (the clone helper keeps an existing directory), not by a tree difference; reproduce.sh now removes the work directory before it starts."
+    },
+    "patch_a_tests": {
+      "path": "patches/patch_a_tests.patch",
+      "sha256": "b3221743e0a2ee7525c4e149dd41a6dd71be494ee74f4233dc66550870fad64f",
+      "required_base": {
+        "ref": "PR #210 (+ patch_a_async_session)",
+        "sha": "1d7390cc870ab102b4875442b9cfb1230c6416be"
+      },
+      "files": [
+        "tests/unit/test_async_session_api_boundary.py"
+      ],
+      "source_sha256_after": {
+        "tests/unit/test_async_session_api_boundary.py": "422aacbaef7eac0e409ed631cd46f84213404ec9b0df2814cfdc2a5788cfc8f1"
+      },
+      "status": "RECONSTRUCTED"
+    },
+    "patch_b_prompt_placement": {
+      "path": "patches/patch_b_prompt_placement.patch",
+      "sha256": "0240c551369e32733e9a0aa34fa83c34427102570ecde04694d5e41b9f66dd57",
+      "required_base": {
+        "ref": "PR #198",
+        "sha": "25c4965b7bfb751cfa9fd60b09962ee27d8bad80",
+        "tree": "8eeb853e44f2b68a081d91b6a1e0e8d0ea322067"
+      },
+      "files": [
+        "src/nexus_ai_agent/orchestration/graph.py"
+      ],
+      "source_sha256_before": {
+        "src/nexus_ai_agent/orchestration/graph.py": "bcd78620b1dd8842c0f0b4ed255334f8440d8ec67eec961beec458e9f6a5adc0"
+      },
+      "source_sha256_after": {
+        "src/nexus_ai_agent/orchestration/graph.py": "a32a3a253cd06982b92ba10e081dff6f641dfbbf714fb728f6d1d6c07e5346b4"
+      },
+      "status": "RECONSTRUCTED"
+    },
+    "patch_b_tests": {
+      "path": "patches/patch_b_tests.patch",
+      "sha256": "4438a14535472a1bd81a53d6085fbcc8d3e94af2ed4024bc8f0247c2852e68ea",
+      "required_base": {
+        "ref": "PR #198",
+        "sha": "25c4965b7bfb751cfa9fd60b09962ee27d8bad80"
+      },
+      "files": [
+        "tests/unit/test_memory_privacy_adversarial.py"
+      ],
+      "source_sha256_after": {
+        "tests/unit/test_memory_privacy_adversarial.py": "0c81860c99cf14f798fa1ff07bf36afb1c5f8109feeadcaead2ac85814c01eeb"
+      },
+      "status": "RECONSTRUCTED",
+      "regenerated_reason": "the first revision of the module built the feature-engine container before the chdir/tmp-database setup, so it only passed inside the development clone (which carries a repository-relative data/ directory); the shipped revision chdirs into tmp_path first and creates the ambient tables after the container import."
+    },
+    "tiso01_approval_isolation": {
+      "path": "patches/tiso01_approval_isolation.patch",
+      "sha256": "b0d17ea48f0effeb876f996030853916f0f405ffab6a0a34e8902a6e6cb3b52a",
+      "required_base": {
+        "ref": "main",
+        "sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+      },
+      "files": [
+        "tests/unit/test_approval.py"
+      ],
+      "source_sha256_before": {
+        "tests/unit/test_approval.py": "6124e16ed91633880fb97734af5a025e5c1d60a1cd1010504cd0b62e9c6332e2"
+      },
+      "source_sha256_after": {
+        "tests/unit/test_approval.py": "02667198641a96bfbbfe3ffa253b8fd1df17fc509bf64c1edbe44f5449b6144e"
+      },
+      "status": "RECONSTRUCTED",
+      "keep_separate_from": [
+        "Patch B"
+      ]
+    },
+    "dispatch_async_session_repair": {
+      "path": "patches/dispatch_async_session_repair.patch",
+      "sha256": "74aa97fff7c22e7ca3e64fbbbc8ddc6ce41212fee6a2b8e37760f3cf44a20a71",
+      "required_base": {
+        "ref": "PR #198",
+        "sha": "25c4965b7bfb751cfa9fd60b09962ee27d8bad80",
+        "tree": "8eeb853e44f2b68a081d91b6a1e0e8d0ea322067"
+      },
+      "files": [
+        "src/nexus_ai_agent/bot/handlers.py"
+      ],
+      "source_sha256_before": {
+        "src/nexus_ai_agent/bot/handlers.py": "b700334b43fe4a68837e2736cc19212bb784e31fa48e61833673756df9ca7a20"
+      },
+      "source_sha256_after": {
+        "src/nexus_ai_agent/bot/handlers.py": "a9917b3c4015eb983e327f6c47c661ceada1ad6b54bdad0e58d2e3214578a1b5"
+      },
+      "status": "RECONSTRUCTED",
+      "content_note": "exactly the six `bot/handlers.py` hunks of patch_a_async_session.patch, extracted for the #198 dispatch path; no other change",
+      "apply_matrix": {
+        "main": "applies",
+        "pr198": "applies",
+        "pr210": "applies",
+        "pr211": "applies"
+      }
+    }
+  },
+  "tests": {
+    "tests/patch_a_tests/tests/unit/test_async_session_api_boundary.py": "422aacbaef7eac0e409ed631cd46f84213404ec9b0df2814cfdc2a5788cfc8f1",
+    "tests/patch_b_tests/tests/unit/test_memory_privacy_adversarial.py": "0c81860c99cf14f798fa1ff07bf36afb1c5f8109feeadcaead2ac85814c01eeb",
+    "tests/tiso01_tests/unit/test_approval.py": "02667198641a96bfbbfe3ffa253b8fd1df17fc509bf64c1edbe44f5449b6144e",
+    "tests/dispatch_tests/tests/unit/test_registered_dispatch.py": "d3bccfb12c860cd30afa54c9c5e9e2f07690f836b2bfd2bb9d65c11bed2dcfee"
+  },
+  "legs": [
+    {
+      "leg": 3,
+      "title": "six-test SQLite A/B on the exact PR #211 tree",
+      "base": {
+        "sha": "878842b6557eb95b00b1c9d1fdf14d444acfbe43",
+        "tree": "a7d6fd4e9a72eda337cd4db11aa122e53a610f67"
+      },
+      "command": "per node ID: pytest -q -p no:randomly <node> in a venv with langgraph-checkpoint-sqlite==3.1.2 vs ==3.1.1",
+      "expected": "each of the six node IDs: 1 failed under 3.1.2, 1 passed under 3.1.1",
+      "evidence": [
+        "evidence/step3_ab_312.log",
+        "evidence/step3_ab_311.log",
+        "evidence/reproduce_leg3.txt"
+      ],
+      "result": "REPRODUCED"
+    },
+    {
+      "leg": 5,
+      "title": "checker v3 on the exact current main",
+      "base": {
+        "sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+      },
+      "command": "git apply patches/checker_v3.patch && pytest -q tests/unit/test_agent_board_pr_inventory.py tests/unit/test_agent_board.py tests/unit/test_agent_board_pr_visibility.py tests/unit/test_agent_board_active_in_review.py && ruff check && mypy",
+      "expected": "patch applies; scripts/agent_board.py == b43cda74...; 110 passed; ruff clean; mypy clean",
+      "evidence": [
+        "evidence/checker_v3_board_suite.log",
+        "evidence/checker_v3_ruff.log",
+        "evidence/checker_v3_mypy.log",
+        "evidence/reproduce_leg5.txt"
+      ],
+      "result": "REPRODUCED"
+    },
+    {
+      "leg": 8,
+      "title": "T-ISO-01 test isolation",
+      "base": {
+        "sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+      },
+      "command": "copy tests/tiso01_tests/unit/test_approval.py over the module, run it (a) pristine (b) with a corrupt ambient data/app.sqlite, then run the unpatched module against the corrupt ambient database",
+      "expected": "patched: 5 passed; no ambient data/app.sqlite created; corrupt-ambient patched: 5 passed; unpatched on corrupt ambient: 1 failed",
+      "evidence": [
+        "evidence/tiso01_patched_pristine.log",
+        "evidence/tiso01_unpatched_corrupt_ambient.log",
+        "evidence/reproduce_leg8.txt"
+      ],
+      "result": "REPRODUCED"
+    },
+    {
+      "leg": 9,
+      "title": "Patch A on the exact PR #210 tree",
+      "base": {
+        "sha": "1d7390cc870ab102b4875442b9cfb1230c6416be",
+        "tree": "225500038fa2fa83a962a8e8480416a3d6e04948"
+      },
+      "command": "pytest -q tests/unit/test_async_session_api_boundary.py unpatched; apply patches/patch_a_async_session.patch + patch_a_tests.patch; pytest -q the same file plus the six adjacent suites",
+      "expected": "unpatched: 3 failed, 2 passed (AsyncSession has no .exec); patched: 38 passed",
+      "evidence": [
+        "evidence/patch_a_unpatched.log",
+        "evidence/patch_a_patched.log",
+        "evidence/patch_a_ruff.log",
+        "evidence/patch_a_mypy.log",
+        "evidence/reproduce_leg9.txt"
+      ],
+      "result": "REPRODUCED"
+    },
+    {
+      "leg": 10,
+      "title": "Patch B + Patch A composed on the exact PR #198 tree",
+      "base": {
+        "sha": "25c4965b7bfb751cfa9fd60b09962ee27d8bad80",
+        "tree": "8eeb853e44f2b68a081d91b6a1e0e8d0ea322067"
+      },
+      "command": "privacy module alone on the base (27 tests) -> apply patch_b_prompt_placement -> rerun -> apply the bot/handlers.py half of Patch A -> run the privacy module plus its six sibling suites (82 tests)",
+      "expected": "base: 5 failed, 22 passed; patch B only: 3 failed, 24 passed; composed: 1 failed, 81 passed where the single failure is the documented /forget_me transcript-erasure finding",
+      "evidence": [
+        "evidence/patch_b_base.log",
+        "evidence/patch_b_repair_only.log",
+        "evidence/patch_b_composed.log",
+        "evidence/patch_b_ruff.log",
+        "evidence/patch_b_mypy.log",
+        "evidence/reproduce_leg10.txt"
+      ],
+      "result": "REPRODUCED"
+    },
+    {
+      "leg": 11,
+      "title": "dispatch ordering: Patch B, then the dispatch-scoped session repair",
+      "base": {
+        "sha": "25c4965b7bfb751cfa9fd60b09962ee27d8bad80",
+        "tree": "8eeb853e44f2b68a081d91b6a1e0e8d0ea322067"
+      },
+      "command": "run tests/unit/test_registered_dispatch.py on the base; apply patch_b_prompt_placement and rerun; apply dispatch_async_session_repair and rerun",
+      "expected": "base: 2 failed, 4 passed; after Patch B: unchanged 2 failed, 4 passed (Patch B does not repair the boundary); after the dispatch repair: 6 passed",
+      "evidence": [
+        "evidence/dispatch_ordering_base.log",
+        "evidence/dispatch_ordering_patchb_only.log",
+        "evidence/dispatch_ordering_composed.log",
+        "evidence/dispatch_ordering_ruff.log",
+        "evidence/reproduce_leg11.txt"
+      ],
+      "result": "REPRODUCED"
+    }
+  ],
+  "results": {
+    "ab_verdict": {
+      "verdict": "CONFIRMED on the exact #211 tree",
+      "detail": "the six node IDs pass under langgraph-checkpoint-sqlite==3.1.1 and fail under ==3.1.2 on byte-identical sources; #211 pins sqlite>=1.0 while main pins ==3.1.1, and 3.1.2 adds writes.task_path to the schema golden.",
+      "node_ids": [
+        "tests/integration/test_checkpoint_adapter.py::test_setup_schema_matches_golden",
+        "tests/unit/test_reconciler.py::test_apply_backfills_missing_with_protected_age",
+        "tests/unit/test_reconciler.py::test_purge_eligible_orphan_is_applied",
+        "tests/unit/test_reconciler.py::test_scan_error_disables_apply",
+        "tests/unit/test_reconciler.py::test_cli_reconcile_apply_requires_flag",
+        "tests/unit/test_lifecycle_adversarial.py::test_apply_under_lock_contention_fails_safe"
+      ],
+      "pin_recommendation": "keep 3.1.1; do not change the pin without contrary controlled evidence"
+    },
+    "checker_v3": {
+      "suite": "110 passed",
+      "mutation_matrix": "39-test pagination/batching module, 15F/9F/3F across the mutation rounds before it went green",
+      "lint": "ruff clean, mypy clean"
+    },
+    "tiso01": {
+      "patched": "5 passed, no ambient data/app.sqlite",
+      "unpatched_on_corrupt_ambient": "1 failed",
+      "known_limitation": "a read-only CWD still fails at config/settings.py:447 by design (pre-existing, out of scope for this wave)"
+    },
+    "patch_a": {
+      "unpatched": "3 failed, 2 passed",
+      "patched": "38 passed",
+      "defect": "the async session factories and the injected get_session yield a plain SQLAlchemy AsyncSession (no .exec), while bot/handlers.py called session.exec at 6 sites and features/onboarding.py at 1 -> every free-text message died in _upsert_user before the graph ran"
+    },
+    "patch_b": {
+      "base": "5 failed, 22 passed (privacy module alone)",
+      "repair_only": "3 failed, 24 passed",
+      "composed": "1 failed, 81 passed",
+      "defect": "_chat_agent interpolated long-term memory into the system prompt, giving stored (attacker-influenceable) text instruction authority; the repair moves it into the user-data position inside [UNTRUSTED STORED MEMORY] ... [END UNTRUSTED STORED MEMORY]"
+    },
+    "dispatch_ordering": {
+      "module": "tests/unit/test_registered_dispatch.py (2 direct dispatch + 4 hardening)",
+      "base": "2 failed, 4 passed \u2014 both direct dispatch tests die in _upsert_user with AttributeError: 'AsyncSession' object has no attribute 'exec' (bot/handlers.py:130)",
+      "patch_b_only": "2 failed, 4 passed \u2014 Patch B changes the prompt the graph builds, not the session boundary",
+      "patch_b_then_dispatch_repair": "6 passed",
+      "reverse_order_tested": "dispatch repair then Patch B also gives 6 passed (the two patches touch disjoint files), so there is no order hazard; the dependency is that the dispatch repair is required",
+      "structural_property": "exactly one MessageHandler(filters.TEXT & ~filters.COMMAND, on_message) is registered and it sits after every CommandHandler, so commands are not swallowed",
+      "evidence": "evidence/dispatch_ordering_*.log"
+    }
+  },
+  "lost_artifacts": {
+    "status": "LOST",
+    "searched_utc": "2026-10-14",
+    "reported_prefixes": {
+      "tiso01": "7214f6dd",
+      "patch_a": "abeef86e",
+      "patch_b": "6b5975d7",
+      "dispatch": "e5ec6175",
+      "checker": "1d28dde9",
+      "v4": "597d112f"
+    },
+    "finding": "none of these six prefixes occurs in any file present in the workspace (.agents/evidence/ holds six unrelated files); the bytes are gone, so byte-identical restoration is impossible and no claim of restoration is made.",
+    "consequence": "every artifact in this bundle is labelled RECONSTRUCTED with its own measured sha256; the previously reported hashes cannot be matched by these artifacts and must not be compared to them."
+  },
+  "open_findings": [
+    {
+      "id": "W3D-F1",
+      "severity": "high",
+      "artifact": "Patch B / PR #198",
+      "summary": "/forget_me tells the user all long-term memory is erased but the turn transcript (persona session store) is still retrievable and still injectable into later turns; canary CANARY-ALPHA-9f3c1d survives",
+      "reproduce": "bundled test tests/unit/test_memory_privacy_adversarial.py::test_forget_me_erases_the_long_term_transcript_store_too (part of leg 10; currently the only failing test in the composed run)",
+      "next_action": "the persona-session store needs a scoped delete (a delete_scope()/delete_for_user() API does not exist yet); implement it in a separate patch on PR #198's tree, then re-run leg 10 expecting 0 failed / 82 passed",
+      "owner": "PR #198 author"
+    },
+    {
+      "id": "W3D-F2",
+      "severity": "blocker",
+      "artifact": "PR #211",
+      "summary": "the governance gate is blocked: #211 is 1 commit behind main, its remote CI failed (run 38351719390) and the required human approval is not in place; the local A/B does not substitute for either",
+      "next_action": "the named owner updates the branch onto current main, re-pins sqlite to ==3.1.1, and re-runs remote CI on the new SHA; see owner action packet",
+      "owner": "PR #211 owner (human)"
+    },
+    {
+      "id": "W3D-F3",
+      "severity": "medium",
+      "artifact": "PR #210",
+      "summary": "PR #210 is CHANGES_REQUESTED/BLOCKED at 1d7390cc; Patch A is validated on that exact tree but is intentionally unintegrated until the authorized path is valid",
+      "next_action": "keep Patch A isolated; re-validate after the owner's next head and only integrate through the authorized route",
+      "owner": "PR #210 owner (human)"
+    }
+  ],
+  "limitations": [
+    "PostgreSQL checkpointing is DEFERRED: no postgres service was available, so the #211 A/B covers the SQLite checkpointer only; the acceptance plan is reproducible but unexecuted.",
+    "The A/B, checker v3, T-ISO-01 and Patch A/B results are local runs on exact upstream trees; they are not remote CI and not production verification.",
+    "No artifact in this bundle has been published to a durable external location; durability today == this workspace path plus the sha256 values recorded here.",
+    "The '44-test suite' mentioned in the originating report has no identified composition in the repository and is therefore not claimed.",
+    "The dispatch and privacy legs were verified against PR #198's head only; a future head change invalidates them (re-run reproduce.sh)."
+  ],
+  "harness_notes": [
+    "reproduce.sh removes its work directory before starting; reusing a dirty work directory produces spurious 'patch does not apply' failures.",
+    "The privacy and dispatch modules chdir into a temporary directory and create the CWD-relative ambient database *after* the feature-engine container has imported its model modules; without that order the force-join gate reads a table that does not exist yet.",
+    "Every patch in patches/ was checked with `git apply --check` against the main, #198, #210 and #211 trees; all apply everywhere, and each leg still applies its patch to the declared base (apply-everywhere means context-compatible, not validated-on)."
+  ]
+}

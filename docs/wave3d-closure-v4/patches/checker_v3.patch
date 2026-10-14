@@ -1,0 +1,890 @@
+diff --git a/scripts/agent_board.py b/scripts/agent_board.py
+index 8d00b05..00035bf 100755
+--- a/scripts/agent_board.py
++++ b/scripts/agent_board.py
+@@ -67,7 +67,7 @@ import subprocess
+ import sys
+ import urllib.error
+ import urllib.request
+-from collections.abc import Iterator
++from collections.abc import Iterable, Iterator
+ from datetime import datetime, timedelta, timezone
+ from pathlib import Path
+ 
+@@ -580,7 +580,31 @@ def _read_remote_board() -> tuple[dict | None, str]:
+     return data, ""
+ 
+ 
+-_REMOTE_BRANCH_FETCH_LIMIT = 25
++# Inventory bounds. These cap the *command size* and the *pagination loop*, never
++# the inventory itself: every open PR and every pushed branch must be consulted,
++# so a cap that silently drops rows is a false-clear bug, not an optimisation.
++_PR_PAGE_SIZE = 100
++# An API that keeps answering "100 more" forever must abort loudly instead of
++# spinning; the referee reports exit 2 rather than a partial inventory.
++_MAX_PR_PAGES = 200
++# Refspecs per `git fetch` call. 25 keeps one command's argv small; the
++# inventory is unlimited because the fetch is repeated in bounded batches.
++_REMOTE_BRANCH_FETCH_BATCH = 25
++
++
++def _dedupe(values: Iterable[str]) -> list[str]:
++    """Order-preserving de-duplication.
++
++    Branch names repeat across open PRs (one branch can carry several), and a
++    repeated name must not cost a second fetch or a second board read.
++    """
++    seen: set[str] = set()
++    out: list[str] = []
++    for value in values:
++        if value and value not in seen:
++            seen.add(value)
++            out.append(value)
++    return out
+ 
+ 
+ def _open_pr_branches(repo: str, token: str | None) -> tuple[list[str], str]:
+@@ -592,23 +616,47 @@ def _open_pr_branches(repo: str, token: str | None) -> tuple[list[str], str]:
+     ``origin/main``. The open-PR list is how the referee learns those branch
+     names. It is a *required* source: an unreadable list degrades to exit 2,
+     never to a clean pass.
++
++    The list is **paginated**: a repository with more open PRs than one page
++    holds (this one already has more) otherwise hides every branch past the
++    first page, and a lease on such a branch is exactly the false clear the
++    referee exists to prevent. Any page that cannot be read aborts the whole
++    enumeration — a partial inventory is reported as unreadable, never as a
++    smaller complete one.
+     """
+     if "/" not in repo:
+         return [], "GITHUB_REPOSITORY unset and --repo not given (cannot enumerate PR branches)"
+     if not token:
+         return [], "no GitHub token in the environment (cannot enumerate open-PR branches)"
+-    try:
+-        pulls = _gh_get(f"https://api.github.com/repos/{repo}/pulls?state=open&per_page=100", token)
+-    except (urllib.error.URLError, OSError, ValueError) as exc:
+-        return [], f"open-PR API unavailable ({exc})"
+-    if not isinstance(pulls, list):
+-        return [], "open-PR API returned an unexpected payload"
+     branches: list[str] = []
+-    for pr in pulls:
+-        head = (pr.get("head") or {}).get("ref") if isinstance(pr, dict) else None
+-        if isinstance(head, str) and head:
+-            branches.append(head)
+-    return branches, ""
++    page = 1
++    while True:
++        url = (
++            f"https://api.github.com/repos/{repo}/pulls"
++            f"?state=open&per_page={_PR_PAGE_SIZE}&page={page}"
++        )
++        try:
++            pulls = _gh_get(url, token)
++        except (urllib.error.URLError, OSError, ValueError) as exc:
++            return [], f"open-PR API unavailable (page {page}: {exc})"
++        if not isinstance(pulls, list):
++            return [], f"open-PR API returned an unexpected payload (page {page})"
++        for pr in pulls:
++            head = (pr.get("head") or {}).get("ref") if isinstance(pr, dict) else None
++            if isinstance(head, str) and head:
++                branches.append(head)
++        # A short (or empty) page is the terminal page: GitHub returns fewer than
++        # ``per_page`` rows once the collection is exhausted.
++        if len(pulls) < _PR_PAGE_SIZE:
++            break
++        page += 1
++        if page > _MAX_PR_PAGES:
++            return [], (
++                f"open-PR enumeration exceeded {_MAX_PR_PAGES} pages "
++                f"({len(branches)} rows read) — refusing to treat a partial "
++                f"inventory as complete"
++            )
++    return _dedupe(branches), ""
+ 
+ 
+ def _remote_branch_boards(
+@@ -623,34 +671,39 @@ def _remote_branch_boards(
+     stale ref left by an earlier run can never masquerade as fresh. A branch
+     that cannot be fetched, or whose board cannot be parsed, is *unverifiable*,
+     never skipped.
++
++    The branch list is de-duplicated and then fetched in bounded batches of
++    ``_REMOTE_BRANCH_FETCH_BATCH`` refspecs. The batch bound caps one command's
++    argv; it never caps the inventory — a repository with hundreds of open-PR
++    branches is fully consulted, so the referee can never report a clean pass
++    while an unread lease sits past a batch boundary.
+     """
+-    targets: list[str] = []
+-    for branch in branches:
+-        if branch and branch != exclude_branch and branch not in targets:
+-            targets.append(branch)
+-    targets = targets[:_REMOTE_BRANCH_FETCH_LIMIT]
++    targets = _dedupe([branch for branch in branches if branch != exclude_branch])
+     if not targets:
+         return [], []
+ 
+     unreadable: list[str] = []
+-    # One batched round trip is the fast path; a single dead ref (e.g. a branch
+-    # deleted between the PR list and the fetch) fails the whole batch, so fall
+-    # back to per-branch fetches rather than losing every other branch.
+-    batch = _git(
+-        [
+-            "fetch",
+-            "--quiet",
+-            "origin",
+-            *[f"+refs/heads/{b}:refs/remotes/origin/{b}" for b in targets],
+-        ],
+-        ROOT,
+-    )
+-    if batch is not None and batch.returncode == 0:
+-        fresh = set(targets)
+-    else:
+-        fresh = set()
+-        for branch in targets:
+-            fetched = _git(
++    fresh: set[str] = set()
++    for start in range(0, len(targets), _REMOTE_BRANCH_FETCH_BATCH):
++        batch = targets[start : start + _REMOTE_BRANCH_FETCH_BATCH]
++        # One batched round trip per slice is the fast path; a single dead ref
++        # (e.g. a branch deleted between the PR list and the fetch) fails its
++        # whole batch, so fall back to per-branch fetches rather than losing
++        # every other branch that shared the batch.
++        fetched = _git(
++            [
++                "fetch",
++                "--quiet",
++                "origin",
++                *[f"+refs/heads/{b}:refs/remotes/origin/{b}" for b in batch],
++            ],
++            ROOT,
++        )
++        if fetched is not None and fetched.returncode == 0:
++            fresh.update(batch)
++            continue
++        for branch in batch:
++            single = _git(
+                 [
+                     "fetch",
+                     "--quiet",
+@@ -659,7 +712,7 @@ def _remote_branch_boards(
+                 ],
+                 ROOT,
+             )
+-            if fetched is not None and fetched.returncode == 0:
++            if single is not None and single.returncode == 0:
+                 fresh.add(branch)
+             else:
+                 unreadable.append(f"pushed branch {branch}: git fetch failed (unreachable?)")
+diff --git a/tests/unit/test_agent_board_pr_inventory.py b/tests/unit/test_agent_board_pr_inventory.py
+new file mode 100644
+index 0000000..3377627
+--- /dev/null
++++ b/tests/unit/test_agent_board_pr_inventory.py
+@@ -0,0 +1,707 @@
++"""Source-inventory regressions for the coordination referee (checker v3).
++
++The referee's promise is *"no overlap" is only said about data that was actually
++read*. Two silent caps used to break that promise for this repository, which
++already carries more than one page of open PRs:
++
++* ``_open_pr_branches`` made exactly **one** GitHub request (``per_page=100``),
++  so every branch past the first page of open PRs was invisible;
++* ``_remote_branch_boards`` sliced its target list to ``25`` and reported nothing
++  about the discarded branches, so a live lease on branch #26 produced a clean
++  ``exit 0`` — a false clear, the worst possible outcome for a gate.
++
++These tests pin the repaired contract: the inventory is **complete** (paginated,
++de-duplicated, batched but never truncated), the fetch batches are **bounded**
++at 25 refspecs, only refs fetched in this very invocation are read, and every
++failure mode degrades to *unreadable* (``exit 2``), never to a pass.
++
++Two harness rules keep the tests honest:
++
++* fakes parse the request URL **structurally** (``urllib.parse`` + ``parse_qsl``)
++  — substring matching would let ``"page=1"`` match ``"per_page=100"`` and hide
++  a pagination bug behind passing tests;
++* every test runs under a bounded watchdog (:func:`_bounded_test_runtime`), so a
++  regression that loops forever fails in seconds with a readable message
++  instead of hanging CI.
++"""
++
++from __future__ import annotations
++
++import importlib.util
++import json
++import signal
++import subprocess
++import urllib.parse
++from collections.abc import Mapping
++from pathlib import Path
++from types import ModuleType
++
++import pytest
++
++REPO_ROOT = Path(__file__).parents[2]
++SCRIPT = REPO_ROOT / "scripts" / "agent_board.py"
++API_ORIGIN = "https://api.github.com"
++PULLS_PATH = "/repos/o/r/pulls"
++
++_TEST_RUNTIME_BOUND_SECONDS = 20.0
++
++
++def _load_board_module() -> ModuleType:
++    spec = importlib.util.spec_from_file_location("agent_board_inventory", SCRIPT)
++    assert spec is not None and spec.loader is not None
++    module = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(module)
++    return module
++
++
++@pytest.fixture(scope="module")
++def board_module() -> ModuleType:
++    return _load_board_module()
++
++
++@pytest.fixture(autouse=True)
++def _bounded_test_runtime() -> object:
++    """Fail loudly in seconds if a pagination loop regresses into a hang.
++
++    ``signal.setitimer`` is armed for the duration of every test in this module;
++    a test that exceeds the bound fails with the test's own name and the bound
++    instead of stalling the whole suite until the CI job is killed.
++    """
++    if not hasattr(signal, "SIGALRM"):  # pragma: no cover - non-POSIX platform
++        yield
++        return
++
++    def _expired(signum: int, frame: object) -> None:
++        raise AssertionError(
++            f"test exceeded the {_TEST_RUNTIME_BOUND_SECONDS:g}s bounded runtime — "
++            "a pagination/batch loop is not terminating; inspect the fake's call log"
++        )
++
++    previous = signal.signal(signal.SIGALRM, _expired)
++    signal.setitimer(signal.ITIMER_REAL, _TEST_RUNTIME_BOUND_SECONDS)
++    try:
++        yield
++    finally:
++        signal.setitimer(signal.ITIMER_REAL, 0)
++        signal.signal(signal.SIGALRM, previous)
++
++
++# --------------------------------------------------------------------------- #
++# structural fakes
++# --------------------------------------------------------------------------- #
++class FakeGitHub:
++    """A paginated ``/repos/o/r/pulls`` endpoint that records structural queries.
++
++    ``prs`` is the full open-PR collection. The fake serves it in ``per_page``
++    slices and records every request as ``(path, page, per_page)`` *parsed from
++    the URL* — never matched as a substring, so a request that asks for
++    ``per_page=100&page=1`` can never be mistaken for ``page=1``.
++    """
++
++    def __init__(self, prs: list[dict]) -> None:
++        self.prs = prs
++        self.requests: list[tuple[str, int | None, int | None]] = []
++        self.fail_pages: dict[int, Exception] = {}
++        self.malformed_pages: dict[int, object] = {}
++
++    def __call__(self, url: str, token: str | None) -> object:
++        parsed = urllib.parse.urlsplit(url)
++        query = dict(urllib.parse.parse_qsl(parsed.query))
++        page = int(query["page"]) if "page" in query else None
++        per_page = int(query["per_page"]) if "per_page" in query else None
++        self.requests.append((parsed.path, page, per_page))
++        assert query.get("state") == "open", f"the referee must ask for open PRs, got {url!r}"
++        if page in self.fail_pages:
++            raise self.fail_pages[page]
++        if page in self.malformed_pages:
++            return self.malformed_pages[page]
++        size = per_page if per_page is not None else 30
++        start = ((page or 1) - 1) * size
++        return self.prs[start : start + size]
++
++    def pages_requested(self) -> list[int]:
++        return [page for _path, page, _per in self.requests if page is not None]
++
++    def per_page_values(self) -> set[int | None]:
++        return {per for _path, _page, per in self.requests}
++
++
++def _pr(number: int, branch: str) -> dict:
++    return {"number": number, "head": {"ref": branch}, "title": f"pr-{number}"}
++
++
++def _branch_prs(count: int, prefix: str = "arena/b") -> list[dict]:
++    return [_pr(index + 1, f"{prefix}{index}") for index in range(count)]
++
++
++class FakeGit:
++    """A ``git`` double that records every command and answers by command shape.
++
++    ``fetch_ok`` decides per-refspec whether a *per-branch* fetch succeeds;
++    ``batch_fails`` forces every multi-refspec (batch) fetch to fail, which is
++    how a branch deleted between the PR list and the fetch behaves in practice.
++    ``show`` answers from ``boards``; an absent key is a missing board file.
++    """
++
++    def __init__(
++        self,
++        boards: Mapping[str, dict | str | None] | None = None,
++        *,
++        batch_fails: bool = False,
++        fetch_fails: set[str] | None = None,
++    ) -> None:
++        self.boards: dict[str, dict | str | None] = dict(boards or {})
++        self.batch_fails = batch_fails
++        self.fetch_fails = fetch_fails or set()
++        self.fetches: list[list[str]] = []
++        self.shows: list[str] = []
++
++    def __call__(self, args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
++        if args and args[0] == "fetch":
++            refspecs = [arg for arg in args if arg.startswith("+refs/heads/")]
++            self.fetches.append(refspecs)
++            targets = [spec.split("refs/heads/", 1)[1].split(":", 1)[0] for spec in refspecs]
++            if len(refspecs) > 1 and self.batch_fails:
++                return subprocess.CompletedProcess(args, 128, stdout="", stderr="dead ref")
++            if any(target in self.fetch_fails for target in targets):
++                return subprocess.CompletedProcess(args, 128, stdout="", stderr="unreachable")
++            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
++        if args and args[0] == "show":
++            ref = args[1]
++            self.shows.append(ref)
++            branch = ref.split("refs/remotes/origin/", 1)[1].split(":", 1)[0]
++            payload = self.boards.get(branch)
++            if payload is None:
++                return subprocess.CompletedProcess(args, 128, stdout="", stderr="no board")
++            text = payload if isinstance(payload, str) else json.dumps(payload)
++            return subprocess.CompletedProcess(args, 0, stdout=text, stderr="")
++        return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
++
++    def batch_calls(self) -> list[list[str]]:
++        return [call for call in self.fetches if len(call) > 1]
++
++    def single_calls(self) -> list[list[str]]:
++        return [call for call in self.fetches if len(call) == 1]
++
++
++def _leased_board(task: str, path: str, branch: str) -> dict:
++    return {
++        "schema": 2,
++        "protocol": {"protocol_version": 2},
++        "claims": [
++            {
++                "task": task,
++                "zone": "synthetic",
++                "status": "active",
++                "agent_branch": branch,
++                "claimed_at": "2026-10-01T00:00:00Z",
++                "ttl_hours": 100000,
++                "gates_owner": False,
++                "exclusive_paths": [path],
++            }
++        ],
++    }
++
++
++# --------------------------------------------------------------------------- #
++# _open_pr_branches: pagination, de-duplication, fail-closed
++# --------------------------------------------------------------------------- #
++@pytest.mark.parametrize(
++    ("pr_count", "expected_pages"),
++    [
++        (0, [1]),
++        (1, [1]),
++        (99, [1]),
++        (100, [1, 2]),
++        (101, [1, 2]),
++        (200, [1, 2, 3]),
++        (250, [1, 2, 3]),
++    ],
++)
++def test_open_pr_branches_paginates_the_whole_inventory(
++    board_module: ModuleType,
++    monkeypatch: pytest.MonkeyPatch,
++    pr_count: int,
++    expected_pages: list[int],
++) -> None:
++    """Every open PR is enumerated; the page count follows ``ceil(n / 100)``.
++
++    ``100`` and ``200`` are the exact-multiple boundaries: the API answers with a
++    full page and the terminal page is *empty*, so a loop that stops on
++    ``len(page) < per_page`` must still issue the extra request.
++    """
++    fake = FakeGitHub(_branch_prs(pr_count))
++    monkeypatch.setattr(board_module, "_gh_get", fake)
++
++    branches, reason = board_module._open_pr_branches("o/r", "token")
++
++    assert reason == "", f"a readable, complete inventory must not report {reason!r}"
++    assert branches == [f"arena/b{index}" for index in range(pr_count)]
++    assert fake.pages_requested() == expected_pages
++    assert fake.per_page_values() == {100}, "pagination must always ask for a full page"
++
++
++def test_open_pr_branches_deduplicates_head_branch_names(
++    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """Several open PRs may share one head branch; it is one branch, not three."""
++    fake = FakeGitHub(
++        [
++            _pr(1, "arena/shared"),
++            _pr(2, "arena/other"),
++            _pr(3, "arena/shared"),
++            _pr(4, "arena/shared"),
++        ]
++    )
++    monkeypatch.setattr(board_module, "_gh_get", fake)
++
++    branches, reason = board_module._open_pr_branches("o/r", "token")
++
++    assert reason == ""
++    assert branches == ["arena/shared", "arena/other"], "order-preserving de-duplication"
++
++
++def test_open_pr_branches_deduplicates_across_a_page_boundary(
++    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """De-duplication spans pages — the same branch may appear on both."""
++    prs = _branch_prs(99)  # arena/b0 … arena/b98
++    prs.append(_pr(100, "arena/b0"))  # page 1, slot 100: duplicates slot 1
++    prs.append(_pr(101, "arena/cross"))  # page 2
++    prs.append(_pr(102, "arena/b0"))  # page 2: duplicates a page-1 branch
++    fake = FakeGitHub(prs)
++    monkeypatch.setattr(board_module, "_gh_get", fake)
++
++    branches, reason = board_module._open_pr_branches("o/r", "token")
++
++    assert reason == ""
++    assert fake.pages_requested() == [1, 2], "102 rows => page 1 full, page 2 short"
++    assert branches.count("arena/b0") == 1, "a duplicate on page 2 is still a duplicate"
++    assert len(branches) == 100  # arena/b0 … arena/b98 plus arena/cross
++
++
++def test_open_pr_branches_fails_closed_when_a_later_page_fails(
++    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """A page failure must not be reported as a smaller complete inventory."""
++    fake = FakeGitHub(_branch_prs(250))
++    fake.fail_pages[3] = OSError("connection reset by peer")
++    monkeypatch.setattr(board_module, "_gh_get", fake)
++
++    branches, reason = board_module._open_pr_branches("o/r", "token")
++
++    assert branches == [], "a partial inventory must never be returned as complete"
++    assert "page 3" in reason
++    assert "unavailable" in reason
++    assert fake.pages_requested() == [1, 2, 3], "it must stop at the failed page"
++
++
++def test_open_pr_branches_fails_closed_on_a_malformed_later_page(
++    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """A non-list payload on any page is unreadable, not an empty page."""
++    fake = FakeGitHub(_branch_prs(250))
++    fake.malformed_pages[2] = {"message": "rate limited"}
++    monkeypatch.setattr(board_module, "_gh_get", fake)
++
++    branches, reason = board_module._open_pr_branches("o/r", "token")
++
++    assert branches == []
++    assert "unexpected payload" in reason and "page 2" in reason
++
++
++def test_open_pr_branches_fails_closed_on_a_malformed_first_page(
++    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """The pre-existing contract is preserved: a bad first page is unreadable."""
++    fake = FakeGitHub([])
++    fake.malformed_pages[1] = ["not", "a", "dict", "list", "of", "prs"]
++    monkeypatch.setattr(board_module, "_gh_get", fake)
++
++    branches, reason = board_module._open_pr_branches("o/r", "token")
++
++    assert branches == []
++    # A list of non-dict rows is a *readable* list with nothing usable in it —
++    # the referee still reports zero branches rather than inventing names.
++    assert reason == ""
++
++
++def test_open_pr_branches_aborts_a_never_ending_pagination(
++    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """An API that always answers "100 more" must abort, not spin forever."""
++    monkeypatch.setattr(board_module, "_MAX_PR_PAGES", 4)
++
++    class _Endless(FakeGitHub):
++        def __call__(self, url: str, token: str | None) -> object:
++            parsed = urllib.parse.urlsplit(url)
++            query = dict(urllib.parse.parse_qsl(parsed.query))
++            page = int(query["page"])
++            self.requests.append((parsed.path, page, int(query["per_page"])))
++            return _branch_prs(100, prefix=f"arena/p{page}/")
++
++    fake = _Endless([])
++    monkeypatch.setattr(board_module, "_gh_get", fake)
++
++    branches, reason = board_module._open_pr_branches("o/r", "token")
++
++    assert branches == []
++    assert "exceeded" in reason and "partial" in reason
++    assert fake.pages_requested() == [1, 2, 3, 4]
++
++
++# --------------------------------------------------------------------------- #
++# _remote_branch_boards: bounded batches, no truncation
++# --------------------------------------------------------------------------- #
++@pytest.mark.parametrize(
++    ("branch_count", "expected_batches"),
++    [
++        (0, 0),
++        (1, 1),
++        (24, 1),
++        (25, 1),
++        (26, 2),
++        (49, 2),
++        (50, 2),
++        (51, 3),
++        (200, 8),
++        (201, 9),
++    ],
++)
++def test_remote_branch_boards_reads_every_branch_in_bounded_batches(
++    board_module: ModuleType,
++    monkeypatch: pytest.MonkeyPatch,
++    branch_count: int,
++    expected_batches: int,
++) -> None:
++    """No inventory cap: n branches => ceil(n/25) batches of at most 25 refspecs."""
++    branches = [f"arena/b{index}" for index in range(branch_count)]
++    fake = FakeGit(
++        boards={branch: _leased_board(f"t-{branch}", "src/x/", branch) for branch in branches}
++    )
++    monkeypatch.setattr(board_module, "_git", fake)
++
++    boards, unreadable = board_module._remote_branch_boards(branches)
++
++    assert unreadable == []
++    assert [name for name, _board in boards] == [f"branch:{branch}" for branch in branches]
++    # Every batch succeeded, so every `git fetch` in the log *is* a batch: one
++    # call per slice. A silent inventory cap shows up here as fewer calls.
++    assert len(fake.fetches) == expected_batches, (
++        f"{branch_count} branches must take {expected_batches} bounded fetch(es), "
++        f"got {len(fake.fetches)}: {fake.fetches!r}"
++    )
++    oversized = [call for call in fake.fetches if len(call) > 25]
++    assert oversized == [], f"a fetch exceeded the 25-refspec bound: {oversized}"
++
++
++@pytest.mark.parametrize("branch_count", [0, 1, 25, 26, 51])
++def test_remote_branch_boards_deduplicates_before_fetching(
++    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, branch_count: int
++) -> None:
++    """A branch name repeated across PRs is fetched exactly once."""
++    unique = [f"arena/b{index}" for index in range(branch_count)]
++    doubled = [branch for pair in ((b, b) for b in unique) for branch in pair]
++    fake = FakeGit(
++        boards={branch: _leased_board(f"t-{branch}", "src/x/", branch) for branch in unique}
++    )
++    monkeypatch.setattr(board_module, "_git", fake)
++
++    boards, unreadable = board_module._remote_branch_boards(doubled)
++
++    assert unreadable == []
++    assert [name for name, _board in boards] == [f"branch:{branch}" for branch in unique]
++    refspecs = [spec for call in fake.fetches for spec in call]
++    assert len(refspecs) == len(set(refspecs)) == branch_count
++
++
++def test_remote_branch_boards_keeps_batching_past_the_old_25_branch_cap(
++    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """The regression that mattered: branch #26 used to be dropped silently.
++
++    Under the old implementation the target list was sliced to 25 and the 26th
++    branch was neither fetched nor reported — an unreadable lease became a clean
++    pass. It must now be fetched, read, and returned.
++    """
++    branches = [f"arena/b{index}" for index in range(26)]
++    fake = FakeGit(
++        boards={branch: _leased_board(f"t-{branch}", "src/x/", branch) for branch in branches}
++    )
++    monkeypatch.setattr(board_module, "_git", fake)
++
++    boards, unreadable = board_module._remote_branch_boards(branches)
++
++    assert unreadable == []
++    assert "branch:arena/b25" in [name for name, _board in boards]
++    assert len(boards) == 26
++
++
++# --------------------------------------------------------------------------- #
++# fetch failures: per-branch fallback, disappearance, fresh-only reads
++# --------------------------------------------------------------------------- #
++def test_remote_branch_boards_recovers_a_failed_batch_per_branch(
++    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """One dead ref fails its batch; the healthy branches must still be read."""
++    fake = FakeGit(
++        boards={"arena/good": _leased_board("t-good", "src/x/", "arena/good")},
++        batch_fails=True,
++        fetch_fails={"arena/dead"},
++    )
++    monkeypatch.setattr(board_module, "_git", fake)
++
++    boards, unreadable = board_module._remote_branch_boards(["arena/good", "arena/dead"])
++
++    assert [name for name, _board in boards] == ["branch:arena/good"]
++    assert len(fake.batch_calls()) == 1
++    assert sorted(
++        call[0].split("refs/heads/", 1)[1].split(":", 1)[0] for call in fake.single_calls()
++    ) == [
++        "arena/dead",
++        "arena/good",
++    ]
++    assert any("arena/dead" in reason and "fetch failed" in reason for reason in unreadable)
++
++
++def test_remote_branch_boards_fallback_is_bounded_by_its_own_batch(
++    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """A failed batch only degrades *that* batch; the others stay fast-path."""
++    branches = [f"arena/b{index}" for index in range(30)]
++
++    class _OneBadBatch(FakeGit):
++        def __call__(self, args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
++            if args and args[0] == "fetch" and len(args) > 4:
++                refspecs = [arg for arg in args if arg.startswith("+refs/heads/")]
++                targets = [spec.split("refs/heads/", 1)[1].split(":", 1)[0] for spec in refspecs]
++                # The second batch contains a branch deleted after enumeration.
++                if "arena/b29" in targets:
++                    self.fetches.append(refspecs)
++                    return subprocess.CompletedProcess(args, 128, stdout="", stderr="dead ref")
++            return super().__call__(args, cwd)
++
++    fake = _OneBadBatch(
++        boards={branch: _leased_board(f"t-{branch}", "src/x/", branch) for branch in branches},
++        fetch_fails={"arena/b29"},
++    )
++    monkeypatch.setattr(board_module, "_git", fake)
++
++    boards, unreadable = board_module._remote_branch_boards(branches)
++
++    assert len(boards) == 29, "a branch deleted after enumeration costs only that branch"
++    assert "branch:arena/b28" in [name for name, _board in boards]
++    assert "branch:arena/b29" not in [name for name, _board in boards]
++    assert any("arena/b29" in reason for reason in unreadable)
++
++
++def test_remote_branch_boards_reports_an_unrecoverable_branch(
++    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """A branch that fails both the batch and the fallback is unreadable."""
++    fake = FakeGit(batch_fails=True, fetch_fails={"arena/gone"})
++    monkeypatch.setattr(board_module, "_git", fake)
++
++    boards, unreadable = board_module._remote_branch_boards(["arena/gone"])
++
++    assert boards == []
++    assert len(unreadable) == 1
++    assert "arena/gone" in unreadable[0] and "fetch failed" in unreadable[0]
++
++
++def test_remote_branch_boards_reads_only_freshly_fetched_refs(
++    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """A stale tracking ref left by an earlier run is not current evidence.
++
++    The fetch of ``arena/stale`` fails (branch deleted), yet its
++    ``refs/remotes/origin/arena/stale`` ref is still resolvable locally. Reading
++    it would resurrect a lease that no longer exists on the remote.
++    """
++    fake = FakeGit(
++        boards={
++            "arena/fresh": _leased_board("t-fresh", "src/x/", "arena/fresh"),
++            "arena/stale": _leased_board("t-stale", "src/y/", "arena/stale"),
++        },
++        batch_fails=True,
++        fetch_fails={"arena/stale"},
++    )
++    monkeypatch.setattr(board_module, "_git", fake)
++
++    boards, unreadable = board_module._remote_branch_boards(["arena/fresh", "arena/stale"])
++
++    assert [name for name, _board in boards] == ["branch:arena/fresh"]
++    assert not any("arena/stale" in ref for ref in fake.shows), (
++        f"a stale tracking ref must never be read; shows={fake.shows!r}"
++    )
++    assert any("arena/stale" in reason for reason in unreadable)
++
++
++def test_remote_branch_boards_reports_a_board_that_is_unreadable_late(
++    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """An unreadable board in a later batch is unreadable, not absent."""
++    branches = [f"arena/b{index}" for index in range(30)]
++    boards: dict[str, dict | str | None] = {
++        branch: _leased_board(f"t-{branch}", "src/x/", branch) for branch in branches
++    }
++    boards["arena/b27"] = "{not json"  # valid fetch, corrupt board, batch 2
++    del boards["arena/b26"]  # valid fetch, no board file, batch 2
++    fake = FakeGit(boards=boards)
++    monkeypatch.setattr(board_module, "_git", fake)
++
++    boards_out, unreadable = board_module._remote_branch_boards(branches)
++
++    names = [name for name, _board in boards_out]
++    assert "branch:arena/b25" in names, "batch 1 is unaffected"
++    assert "branch:arena/b26" not in names and "branch:arena/b27" not in names
++    assert any("arena/b26" in reason and "no readable" in reason for reason in unreadable)
++    assert any("arena/b27" in reason and "not valid JSON" in reason for reason in unreadable)
++    assert len(boards_out) == len(branches) - 2
++
++
++def test_remote_branch_boards_excludes_the_callers_own_branch(
++    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """The caller's branch is never fetched or read as a foreign lease."""
++    branches = [f"arena/b{index}" for index in range(30)]
++    fake = FakeGit(
++        boards={branch: _leased_board(f"t-{branch}", "src/x/", branch) for branch in branches}
++    )
++    monkeypatch.setattr(board_module, "_git", fake)
++
++    boards, unreadable = board_module._remote_branch_boards(branches, exclude_branch="arena/b27")
++
++    assert unreadable == []
++    assert len(boards) == 29
++    assert "branch:arena/b27" not in [name for name, _board in boards]
++    every_refspec = " ".join(spec for call in fake.fetches for spec in call)
++    assert "arena/b27:" not in every_refspec
++
++
++# --------------------------------------------------------------------------- #
++# end-to-end referee: no false clear, ever
++# --------------------------------------------------------------------------- #
++def _check_args(**overrides: object) -> object:
++    defaults: dict[str, object] = {
++        "files": "src/exclusive/x.py",
++        "branch": "arena/me",
++        "no_remote": False,
++        "repo": "o/r",
++        "token": "t",
++    }
++    defaults.update(overrides)
++    return type("A", (), defaults)()
++
++
++@pytest.fixture()
++def _local_board(board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
++    """Point the referee at a throwaway board holding no leases."""
++    board_path = tmp_path / "board.json"
++    board_path.write_text(
++        json.dumps({"schema": 2, "protocol": {"protocol_version": 2}, "claims": []}),
++        encoding="utf-8",
++    )
++    monkeypatch.setattr(board_module, "BOARD", board_path)
++    monkeypatch.setattr(board_module, "_worktree_boards", lambda exclude: ([], True))
++    return board_path
++
++
++def test_check_sees_a_lease_beyond_the_old_25_branch_boundary(
++    board_module: ModuleType,
++    monkeypatch: pytest.MonkeyPatch,
++    _local_board: Path,
++    capsys: pytest.CaptureFixture[str],
++) -> None:
++    """The false-clear regression, end to end.
++
++    A conflicting lease lives on branch #60 of 80 — far past the old 25-branch
++    slice. The referee must return ``1`` (a proven overlap). Under the old
++    implementation the branch was never fetched, so the referee returned ``0``:
++    a green gate over a live conflict.
++    """
++    branches = [f"arena/b{index}" for index in range(80)]
++    intruder = "arena/b60"
++    fake_api = FakeGitHub([_pr(index + 1, branch) for index, branch in enumerate(branches)])
++    monkeypatch.setattr(board_module, "_gh_get", fake_api)
++    monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, ""))
++
++    boards = {
++        branch: _leased_board(f"t-{branch}", f"src/exclusive/{branch}/", branch)
++        for branch in branches
++    }
++    boards[intruder] = _leased_board("task-intruder", "src/exclusive/", intruder)
++    monkeypatch.setattr(board_module, "_git", FakeGit(boards=boards))
++
++    code = board_module.cmd_check(_check_args())
++
++    assert code == 1, "a lease on branch #60 is a real conflict and must be seen"
++    assert "task-intruder" in capsys.readouterr().out
++
++
++def test_check_fails_closed_when_a_later_pr_page_is_unreadable(
++    board_module: ModuleType,
++    monkeypatch: pytest.MonkeyPatch,
++    _local_board: Path,
++    capsys: pytest.CaptureFixture[str],
++) -> None:
++    """An incomplete PR inventory is exit 2, never exit 0."""
++    fake_api = FakeGitHub(_branch_prs(150))
++    fake_api.fail_pages[2] = OSError("tls handshake timeout")
++    monkeypatch.setattr(board_module, "_gh_get", fake_api)
++    monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, {}))
++    monkeypatch.setattr(board_module, "_git", FakeGit())
++
++    code = board_module.cmd_check(_check_args())
++
++    assert code == 2, "an unreadable required source must never produce a pass"
++    out = capsys.readouterr().out
++    assert "UNVERIFIABLE" in out and "page 2" in out
++
++
++def test_check_fails_closed_when_one_branch_of_a_later_batch_is_unreadable(
++    board_module: ModuleType,
++    monkeypatch: pytest.MonkeyPatch,
++    _local_board: Path,
++    capsys: pytest.CaptureFixture[str],
++) -> None:
++    """One unrecoverable branch in batch 3 keeps the gate shut."""
++    branches = [f"arena/b{index}" for index in range(60)]
++    fake_api = FakeGitHub([_pr(index + 1, branch) for index, branch in enumerate(branches)])
++    monkeypatch.setattr(board_module, "_gh_get", fake_api)
++    monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, {}))
++    fake_git = FakeGit(
++        boards={branch: _leased_board(f"t-{branch}", "src/x/", branch) for branch in branches},
++        batch_fails=True,
++        fetch_fails={"arena/b55"},
++    )
++    monkeypatch.setattr(board_module, "_git", fake_git)
++
++    code = board_module.cmd_check(_check_args())
++
++    assert code == 2
++    out = capsys.readouterr().out
++    assert "arena/b55" in out
++    assert "no overlap" not in out
++
++
++def test_check_proves_overlap_and_still_reports_the_unreadable_source(
++    board_module: ModuleType,
++    monkeypatch: pytest.MonkeyPatch,
++    _local_board: Path,
++    capsys: pytest.CaptureFixture[str],
++) -> None:
++    """A proven conflict is exit 1 even when another source stayed unreadable."""
++    branches = [f"arena/b{index}" for index in range(30)]
++    fake_api = FakeGitHub([_pr(index + 1, branch) for index, branch in enumerate(branches)])
++    monkeypatch.setattr(board_module, "_gh_get", fake_api)
++    monkeypatch.setattr(board_module, "_read_remote_board", lambda: (None, "test: offline"))
++    boards = {branch: _leased_board(f"t-{branch}", "src/x/", branch) for branch in branches}
++    boards["arena/b27"] = _leased_board("task-late", "src/exclusive/", "arena/b27")
++    monkeypatch.setattr(board_module, "_git", FakeGit(boards=boards))
++
++    code = board_module.cmd_check(_check_args())
++
++    assert code == 1
++    out = capsys.readouterr().out
++    assert "task-late" in out and "UNVERIFIABLE sources" in out

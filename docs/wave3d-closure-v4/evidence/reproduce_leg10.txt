@@ -1,0 +1,24 @@
+base -> 7 failed, 20 passed, 1 warning in 3.27s
+patch B only -> 5 failed, 22 passed in 2.21s
+composed (A+B) -> 5 failed, 77 passed in 8.27s
+base -> 3 failed, 24 passed, 1 warning in 2.61s
+patch B only -> 3 failed, 24 passed in 1.84s
+composed (A+B) -> 3 failed, 79 passed in 7.77s
+base -> 7 failed, 20 passed, 2 warnings in 3.27s
+patch B only -> 5 failed, 22 passed in 2.11s
+composed (A+B) -> 5 failed, 77 passed in 7.63s
+base -> 7 failed, 20 passed in 3.16s
+patch B only -> 5 failed, 22 passed in 1.90s
+composed (A+B) -> 5 failed, 77 passed in 7.94s
+base -> 5 failed, 22 passed in 2.69s
+patch B only -> 3 failed, 24 passed in 2.61s
+composed (A+B) -> 1 failed, 81 passed in 7.88s
+base -> 5 failed, 22 passed in 2.62s
+patch B only -> 3 failed, 24 passed in 2.63s
+composed (A+B) -> 1 failed, 81 passed in 8.54s
+base -> 5 failed, 22 passed in 2.90s
+patch B only -> 3 failed, 24 passed in 2.78s
+composed (A+B) -> 1 failed, 81 passed in 8.64s
+base -> 5 failed, 22 passed in 3.11s
+patch B only -> 3 failed, 24 passed in 2.65s
+composed (A+B) -> 1 failed, 81 passed in 8.40s

@@ -1,0 +1,11 @@
+.....................F.................................................. [ 87%]
+..........                                                               [100%]
+=================================== FAILURES ===================================
+E   AssertionError: /forget_me answered the user that all long-term memory was erased, but the turn transcript is still retrievable and still injectable: ['User: my favourite is blue CANARY-ALPHA-9f3c1d']
+    assert not True
+     +  where True = any(<generator object test_forget_me_erases_the_long_term_transcript_store_too.<locals>.<genexpr> at 0x7f77467dcba0>)
+/home/user/wave3d/v4/_reproduce/pb/tests/unit/test_memory_privacy_adversarial.py:401: AssertionError: /forget_me answered the user that all long-term memory was erased, but the turn transcript is still retrievable and still injectable: ['User: my favourite is blue CANARY-ALPHA-9f3c1d']
+=========================== short test summary info ============================
+FAILED tests/unit/test_memory_privacy_adversarial.py::test_forget_me_erases_the_long_term_transcript_store_too
+1 failed, 81 passed in 8.11s
+exit=1
