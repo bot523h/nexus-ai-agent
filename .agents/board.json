@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-15T12:36:15Z",
+  "updated_at": "2026-10-10T18:42:23Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -143,8 +143,10 @@
     },
     {
       "id": "core-database",
-      "description": "Async-only database access (the former core/async_db.py helper was never imported and was removed in the 2026-10-15 remediation, A-10; the central synchronous engine now lives in storage/db.py sync_engine)",
+      "description": "Async-only database access",
       "paths": [
+        "src/nexus_ai_agent/core/async_db.py",
+        "tests/unit/test_async_db_harmonization.py",
         "src/nexus_ai_agent/features/"
       ]
     },
@@ -803,31 +805,6 @@
         "scripts/execution_core_mutations.py",
         "src/nexus_ai_agent/tools/filesystem_policy.py"
       ]
-    },
-    {
-      "id": "full-audit-remediation",
-      "description": "Repository-wide remediation of the 2026-10-15 full audit (A-01…A-16) under the owner mandate: storage, bot surface, API, CI, docs, packaging. Single-agent lease; dissolves on release.",
-      "paths": [
-        "src/",
-        "tests/",
-        "scripts/",
-        "docs/",
-        ".github/",
-        "migrations/",
-        ".agents/",
-        "pyproject.toml",
-        "README.md",
-        "AGENTS.md",
-        "CHANGELOG.md",
-        "VERSION",
-        "Makefile",
-        "Dockerfile",
-        "docker-compose.yml",
-        "koyeb.yaml",
-        ".env.example",
-        ".pre-commit-config.yaml",
-        ".dockerignore"
-      ]
     }
   ],
   "claims": [
@@ -1112,7 +1089,7 @@
         "صفر رگرسیون تست‌های DB"
       ],
       "evidence_required": [
-        "pytest tests/unit/test_sync_engine_resolution.py"
+        "pytest tests/unit/test_async_db_harmonization.py"
       ],
       "exclusive_paths": [],
       "owner_hint": "",
@@ -1120,7 +1097,7 @@
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "exclusive_paths released with terminal status during schema-2 merge (history in scope) | 2026-10-15: central engine delivered as storage.db.sync_engine (A-02, D-0026); the async-session migration of the feature engines remains the open scope"
+      "note": "exclusive_paths released with terminal status during schema-2 merge (history in scope)"
     },
     {
       "task": "task-127",
@@ -2338,7 +2315,7 @@
       "title_fa": "",
       "zone": "nagar-runtime-call-sites",
       "priority": "P1",
-      "status": "expired",
+      "status": "active",
       "scope": "After Gate 2, claim-less schema-1 dispatches run under deprecated implicit local trust; the runtime owner must inject authorizer= with service grants at the three in-process call sites, then the implicit path can be retired.",
       "scope_fa": "",
       "prerequisites": [
@@ -2366,8 +2343,7 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
-      "generation": 1,
-      "release_reason": "auto-released by gc at 2026-10-15T11:11:11Z (stale active lease)"
+      "generation": 1
     },
     {
       "task": "task-182-durable-idempotency-conflict",
@@ -3519,7 +3495,7 @@
       "title_fa": "",
       "zone": "runtime-service-grant-guard",
       "priority": "P1",
-      "status": "expired",
+      "status": "active",
       "scope": "Own and publish the architecture ratchet proving the three in-process bus call sites pass explicit service principals, project-scoped grants and project-bound InputRefs. Split from task-181-runtime-service-grants because the runtime zone deliberately does not cover test paths and the guard must not be forced into it.",
       "scope_fa": "",
       "prerequisites": [
@@ -3544,8 +3520,7 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
-      "generation": 1,
-      "release_reason": "auto-released by gc at 2026-10-15T11:11:11Z (stale active lease)"
+      "generation": 1
     },
     {
       "task": "nexus-stabilization-handoff",
@@ -3553,7 +3528,7 @@
       "title_fa": "",
       "zone": "docs-architecture",
       "priority": "P1",
-      "status": "expired",
+      "status": "active",
       "scope": "Own docs/audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md and its docs/README index row. Separated from the runtime task because documentation is not a runtime-zone path; the record states exact-SHA CI evidence with run ids and observation times and must not conflate it with the full-gates role or the overall stabilization status.",
       "scope_fa": "",
       "prerequisites": [],
@@ -3576,8 +3551,7 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
-      "generation": 1,
-      "release_reason": "auto-released by gc at 2026-10-15T11:11:11Z (stale active lease)"
+      "generation": 1
     },
     {
       "task": "ci-gates-steward-closure",
@@ -3585,7 +3559,7 @@
       "title_fa": "",
       "zone": "ci-quality",
       "priority": "P0",
-      "status": "expired",
+      "status": "active",
       "scope": "Exactly one live gates_owner while the closure validation runs: the referee fails closed (exit 2) for every agent while no live gates owner exists, and main-bound closure work needs the full gates executed by their holder. Runs make lint / make types / make test against the closure head and records the results bound to the exact SHA.",
       "scope_fa": "",
       "prerequisites": [],
@@ -3605,60 +3579,9 @@
       "agent_branch": "phase1-pr196-guard-20261009",
       "claimed_at": "2026-10-10T18:42:23Z",
       "ttl_hours": 24,
-      "gates_owner": false,
-      "note": "",
-      "generation": 1,
-      "release_reason": "auto-released by gc at 2026-10-15T11:11:11Z (stale active lease)"
-    },
-    {
-      "task": "task-270-full-audit-remediation",
-      "title": "OWNER-MANDATED FULL REMEDIATION (2026-10-15): fix audit findings A-01..A-16 on main, triage every open PR, prune dead branches",
-      "title_fa": "اصلاح کامل به دستور مالک (۱۴۰۵/۰۷/۲۳): رفع یافته‌های ممیزی A-01 تا A-16 روی main، تعیین تکلیف همهٔ PRهای باز، حذف شاخه‌های مرده",
-      "zone": "full-audit-remediation",
-      "priority": "P0",
-      "status": "active",
-      "scope": "Sole active agent with explicit repository-owner authority (no other agent active; last foreign push 2026-10-14T21:30Z). Implements the engineered remedies published in PR #198 comments 6190228525/6190229601, with regression tests and mutation proof per fix; merges reviewed PRs, closes superseded ones with a written rationale, deletes their branches.",
-      "scope_fa": "تنها عامل فعال با اختیار صریح مالک مخزن. پیاده‌سازی درمان‌های مهندسی‌شدهٔ گزارش ممیزی (#198) با تست رگرسیون و اثبات mutation؛ ادغام PRهای بازبینی‌شده، بستن موارد منسوخ با دلیل مکتوب، حذف شاخه‌های آن‌ها.",
-      "prerequisites": [],
-      "exclusive_paths": [
-        "src/",
-        "tests/",
-        "scripts/",
-        "docs/",
-        ".github/",
-        "migrations/",
-        ".agents/",
-        "pyproject.toml",
-        "README.md",
-        "AGENTS.md",
-        "CHANGELOG.md",
-        "VERSION",
-        "Makefile",
-        "Dockerfile",
-        "docker-compose.yml",
-        "koyeb.yaml",
-        ".env.example",
-        ".pre-commit-config.yaml",
-        ".dockerignore"
-      ],
-      "acceptance_criteria": [
-        "make lint / make types / make test green on the final SHA",
-        "each A-xx fix carries a discriminating regression test",
-        "PR-by-PR disposition table published with rationale",
-        "no open PR left without a recorded decision"
-      ],
-      "evidence_required": [
-        "CI run on the merge commit",
-        "pytest log",
-        "PR disposition table"
-      ],
-      "owner_hint": "repository owner mandate (chat, 2026-10-15)",
-      "agent_branch": "arena/26f7d958-nexus-ai-agent",
-      "claimed_at": "2026-10-15T12:36:15Z",
-      "ttl_hours": 24,
       "gates_owner": true,
-      "generation": 3,
-      "note": ""
+      "note": "",
+      "generation": 1
     }
   ],
   "deferred_log": [

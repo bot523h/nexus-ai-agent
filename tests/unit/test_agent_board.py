@@ -53,10 +53,16 @@ def _hermetic_pr_env(monkeypatch: pytest.MonkeyPatch) -> None:
     branches over the network inside a unit test (the same leak class that once
     turned ``praudit`` red). The explicit ``--repo``/``--token`` arguments stay
     available for the tests that exercise the new source directly.
+
+    ``NEXUS_BOARD_STORE=tree`` pins these tests to the frozen tree file: the
+    production default is the coordination ref (protocol 11, audit A-04), which
+    would otherwise ``git fetch`` from origin.  The ref store has its own suite,
+    ``tests/unit/test_agent_board_ref.py``, against a local bare origin.
     """
     monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv("NEXUS_BOARD_STORE", "tree")
 
 
 LEGAL_STATUSES = {

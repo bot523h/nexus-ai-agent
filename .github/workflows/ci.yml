@@ -488,6 +488,11 @@ jobs:
           python scripts/merge_base_guard.py check-event \
             --event "${{ github.event_name }}" \
             --base "${{ github.base_ref }}"
+      # ADR 0012 / audit A-04: the live claim board is refs/nexus/board; the tree
+      # copy is a frozen archive.  A PR that edits it is carrying board state on
+      # the merge path again — red, with the one-line fix printed by the guard.
+      - name: Board archive is frozen (claims live on refs/nexus/board)
+        run: python scripts/agent_board.py guard --print
 
   # ── Release lineage (machine-checked, reported — never assumed) ─────────────
   # VERSION → commit → CI → tag → GitHub Release → CHANGELOG.  Gaps are OPEN

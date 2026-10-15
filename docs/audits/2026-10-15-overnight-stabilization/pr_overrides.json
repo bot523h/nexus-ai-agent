@@ -1,0 +1,10 @@
+{
+  "209": {
+    "state": "SUPERSEDED_BY_VERIFIED_CHANGE_PENDING_MERGE",
+    "reason": "Valid remainder (typed FilesystemBoundaryError for file/child + its 5 tests) integrated into PR #218 commit 7bfd628 with Co-authored-by; the O_DIRECTORY removal was rejected because its kernel rationale does not reproduce on Linux 6.1 (PR #209 comments 6197534460, 6200796802). Close only after #218 is on main."
+  },
+  "118": {
+    "state": "DEFERRED",
+    "reason": "Draft; Wave 3-C compat repair kept distinct by owner instruction; never described as fixed before authorized integration."
+  }
+}

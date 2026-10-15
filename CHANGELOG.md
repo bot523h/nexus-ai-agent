@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — A-04 the claim board leaves the merge path (ADR 0012; board `task-270`)
+
+- The live multi-agent claim board now lives on the coordination ref **`refs/nexus/board`**
+  (`board.json` in that ref's tree). `scripts/agent_board.py claim|release|defer` fetch the ref,
+  apply the mutation in memory and publish it with `git push --force-with-lease=<ref>:<tip>`
+  (compare-and-swap): a lost race is redone from a fresh read (≤3 attempts) and a now-live foreign
+  lease or stale generation is refused as before; an unreadable ref is exit 2, never a pass.
+  `check` consults only the ref — worktrees, `origin/main` and PR-branch boards are no longer
+  sources (`--no-remote`/`--repo`/`--token` apply to `--store tree` fixtures only).
+- `.agents/board.json` is now a **frozen archive** (content of `main@6b398565`, sha256-pinned by
+  `FROZEN_BOARD_SHA256`); new `guard` command fails when it differs and runs in CI
+  (`merge-base-guard` job). Rebasing an open PR: `git checkout origin/main -- .agents/board.json`.
+- New `init-ref` command bootstraps the ref once and refuses to overwrite an existing one;
+  `--store {ref,tree}` / `NEXUS_BOARD_STORE` select the store (`ref` is the default).
+- Tests: `tests/unit/test_agent_board_ref.py` (local bare origin + clones; CAS race, bounded retry,
+  real `--force-with-lease` rejection, expired takeover with fencing token, stale generation,
+  unreachable origin, schema≠2, planted tree board, world-fence paths, two/zero live gates owners,
+  tree store cannot write the authority, guard/init-ref). `tests/unit/test_agent_board.py` is pinned
+  to `NEXUS_BOARD_STORE=tree` and unchanged otherwise.
+- `scripts/pr_census.py`: repeatable census of all open PRs (head/base SHA, mergeability, files,
+  CI on head, overlap with a reference PR, board-only dirtiness) feeding
+  `docs/audits/2026-10-15-overnight-stabilization/pr_census.{json,csv}`.
+
 ### Fix — filesystem boundary typing (re-scoped remainder of PR #209)
 
 - `tools.filesystem_policy`: a path that passes *through* a regular file or FIFO

@@ -2046,3 +2046,27 @@ the live loop), and a production ordering bug: `create_all_tables` drained `_rep
 Decision: dispose immediately after the lookup (same coroutine, same loop) rather than adding a
 finaliser or a background task — the loop that created the connections is the only one that can close
 them cleanly. Rule kept: a warning in the suite is a defect with an owner, never a filter entry.
+
+*Round 3 — A-04 structural remedy: the board leaves the merge path (2026-10-15, ADR 0012).* The
+closeout census of 2026-10-15T20:13Z measured the finding instead of restating it: 63 open PRs, 52
+touching `.agents/board.json`, 43 with the file changed on both sides, and **7 dirty for no other
+reason** (`docs/audits/2026-10-15-overnight-stabilization/pr_census.json`). The multi-source referee
+of ADR 0007 had made the board honest, not disjoint: a lease committed in a PR's tree was both
+untrusted content and a guaranteed conflict. Decision: the live board moves to a **coordination ref**
+`refs/nexus/board` (not a branch — it cannot appear in a PR or be protected/rebased as one); every
+`claim`/`release`/`defer` is one commit written with git plumbing and published by `git push
+--force-with-lease=<ref>:<tip we read>`, so simultaneous writers resolve to exactly one winner and the
+loser is *re-run from a fresh read* (bounded to three attempts) — a now-live foreign lease or a stale
+generation is refused with the unchanged task-219 messages. `check` consults only the ref: code trees
+(ours, `main`, PR heads) stop being sources, so a planted `gates_owner` or a world-fencing
+`exclusive_paths` entry grants nothing. The tree file stays as a **frozen archive** at the content of
+`main@6b398565` (sha256-pinned) so the 56 PRs that carry it get no modify/delete conflicts; `guard`
+runs in CI and turns any board edit in a PR red with the one-line fix. Rejected: per-claim files
+(still flow through PRs, still conflict on the shared arrays, still make PR trees sources); deleting
+the file (56 modify/delete conflicts); the GitHub Git Data API as the CAS (needs a token per claim and
+cannot be tested against a local bare repository — kept as the documented fallback). Honesty rule
+carried over: the archive is wrong about the present by design, `show` is the only record, and an
+unreadable ref is exit 2, never a pass. Evidence: `tests/unit/test_agent_board_ref.py` (bare-origin
+adversarial suite), `scripts/board_referee_mutations.py` 14/14, live bootstrap `refs/nexus/board@04bacc8`
+seeded from the union of live leases across all 56 distinct open-PR boards (exactly one: `task-270`),
+first compare-and-swap heartbeat `04bacc8 → b1a5fac`.
