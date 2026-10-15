@@ -1,0 +1,61 @@
+# Scheduled dependency vulnerability audit (owner brief 2026-10-15 §7).
+#
+# Non-blocking by design: this workflow is not a pull-request check, so a red
+# run never blocks a merge — it is a weekly, dated, artifacted signal.  The
+# audit runs against the REAL resolved environment (`pip install -e ".[dev]"`),
+# not against a hand-written list, so what is audited is what CI tests.
+# Known, unfixable advisories are not suppressed here; triage happens in
+# docs/audits/<package>/07_* with the run id as evidence.
+name: dependency-audit
+
+on:
+  schedule:
+    - cron: "41 5 * * 2"  # Tuesdays 05:41 UTC (off the top of the hour, after maintenance)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-audit
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  pip-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]" pip-audit
+      - name: Audit the resolved environment (JSON artifact + human summary)
+        run: |
+          set +e
+          pip-audit --skip-editable --progress-spinner off -f json -o pip-audit.json
+          rc=$?
+          set -e
+          echo "pip-audit exit code: ${rc} (0 = no known vulnerabilities)"
+          python - <<'PY'
+          import json, pathlib
+          report = json.loads(pathlib.Path("pip-audit.json").read_text())
+          deps = report.get("dependencies", report if isinstance(report, list) else [])
+          vulns = [(d["name"], d["version"], v["id"], ",".join(v.get("fix_versions") or ["-"]))
+                   for d in deps for v in d.get("vulns", [])]
+          print(f"audited {len(deps)} distributions, {len(vulns)} advisories")
+          for name, version, vid, fix in sorted(vulns):
+              print(f"  {name}=={version}  {vid}  fix: {fix}")
+          PY
+          exit "${rc}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: pip-audit-${{ github.run_id }}
+          path: pip-audit.json
+          retention-days: 90

@@ -1,0 +1,626 @@
+{
+ "base": "origin/main",
+ "head": "7fd4112abbee7aa7677b07473db820d6cfa9e880",
+ "records": {
+  "src/nexus_ai_agent/adapters/in_process_job_queue.py": {
+   "commits": [
+    "8c4adf2",
+    "d80568f"
+   ],
+   "findings": [
+    "A-11",
+    "A-13"
+   ],
+   "tests": [
+    "tests/unit/test_process_job_characterization.py",
+    "tests/unit/test_strict_typing_boundaries.py"
+   ]
+  },
+  "src/nexus_ai_agent/agent/approval.py": {
+   "commits": [
+    "0632801"
+   ],
+   "findings": [
+    "A-14",
+    "A-18"
+   ],
+   "tests": [
+    "tests/unit/test_updater.py"
+   ]
+  },
+  "src/nexus_ai_agent/agent/updater.py": {
+   "commits": [
+    "0632801",
+    "a357b0f",
+    "c894d2d"
+   ],
+   "findings": [
+    "A-02",
+    "A-05",
+    "A-07",
+    "A-08",
+    "A-09",
+    "A-12",
+    "A-13",
+    "A-14",
+    "A-15",
+    "A-16",
+    "A-18",
+    "A-19",
+    "R1"
+   ],
+   "tests": [
+    "tests/unit/test_updater.py"
+   ]
+  },
+  "src/nexus_ai_agent/api/app.py": {
+   "commits": [
+    "9d31b39"
+   ],
+   "findings": [
+    "A-01",
+    "A-03",
+    "A-06",
+    "R0"
+   ],
+   "tests": [
+    "tests/unit/test_dashboard_api.py"
+   ]
+  },
+  "src/nexus_ai_agent/bot/app.py": {
+   "commits": [
+    "0632801"
+   ],
+   "findings": [
+    "A-14",
+    "A-18"
+   ],
+   "tests": [
+    "tests/integration/test_composition_root_runtime.py",
+    "tests/integration/test_creative_chain_e2e.py",
+    "tests/integration/test_gate5_closure.py",
+    "tests/unit/test_creative_notify.py"
+   ]
+  },
+  "src/nexus_ai_agent/bot/creative_surface.py": {
+   "commits": [
+    "0632801"
+   ],
+   "findings": [
+    "A-14",
+    "A-18"
+   ],
+   "tests": [
+    "tests/architecture/test_creative_channels.py"
+   ]
+  },
+  "src/nexus_ai_agent/bot/handlers.py": {
+   "commits": [
+    "0632801",
+    "9d31b39",
+    "c52f795"
+   ],
+   "findings": [
+    "A-01",
+    "A-03",
+    "A-06",
+    "A-12",
+    "A-14",
+    "A-18",
+    "R0"
+   ],
+   "tests": [
+    "tests/integration/test_a01_message_path.py",
+    "tests/integration/test_real_session_factory.py",
+    "tests/unit/test_async_offload.py"
+   ]
+  },
+  "src/nexus_ai_agent/bot/surface/__init__.py": {
+   "commits": [
+    "9d31b39"
+   ],
+   "findings": [
+    "A-01",
+    "A-03",
+    "A-06",
+    "R0"
+   ],
+   "tests": [
+    "tests/unit/test_surface_moderation.py",
+    "tests/unit/test_surface_registration.py",
+    "tests/unit/test_surface_viral.py"
+   ]
+  },
+  "src/nexus_ai_agent/bot/surface/moderation.py": {
+   "commits": [
+    "9d31b39"
+   ],
+   "findings": [
+    "A-01",
+    "A-03",
+    "A-06",
+    "R0"
+   ],
+   "tests": [
+    "tests/unit/test_surface_moderation.py"
+   ]
+  },
+  "src/nexus_ai_agent/bot/surface/viral.py": {
+   "commits": [
+    "9d31b39"
+   ],
+   "findings": [
+    "A-01",
+    "A-03",
+    "A-06",
+    "R0"
+   ],
+   "tests": [
+    "tests/unit/test_surface_viral.py"
+   ]
+  },
+  "src/nexus_ai_agent/bot/update_handlers.py": {
+   "commits": [
+    "c894d2d"
+   ],
+   "findings": [
+    "A-07",
+    "A-12",
+    "A-15",
+    "A-16",
+    "A-19"
+   ],
+   "tests": [
+    "tests/unit/test_update_command_outcomes.py"
+   ]
+  },
+  "src/nexus_ai_agent/cli.py": {
+   "commits": [
+    "0632801"
+   ],
+   "findings": [
+    "A-14",
+    "A-18"
+   ],
+   "tests": [
+    "tests/integration/test_migrate_race_condition.py",
+    "tests/unit/test_continuum_hardening.py",
+    "tests/unit/test_optional_extras.py"
+   ]
+  },
+  "src/nexus_ai_agent/config/settings.py": {
+   "commits": [
+    "0632801",
+    "a357b0f"
+   ],
+   "findings": [
+    "A-02",
+    "A-05",
+    "A-07",
+    "A-08",
+    "A-09",
+    "A-12",
+    "A-13",
+    "A-14",
+    "A-18",
+    "R1"
+   ],
+   "tests": [
+    "tests/conftest.py",
+    "tests/integration/test_a01_message_path.py",
+    "tests/integration/test_api_gate_inventory.py",
+    "tests/integration/test_checkpoint_composition.py",
+    "tests/integration/test_composition_root_runtime.py",
+    "tests/integration/test_creative_chain_e2e.py",
+    "tests/integration/test_nagar_durable_handoff_e2e.py",
+    "tests/integration/test_provenance_passport_e2e.py",
+    "tests/unit/test_api_ssrf_download.py",
+    "tests/unit/test_creative_render_jobs.py",
+    "tests/unit/test_dashboard_api.py",
+    "tests/unit/test_database_url.py",
+    "tests/unit/test_force_join_gate.py",
+    "tests/unit/test_knowledge_hardening.py",
+    "tests/unit/test_litellm_provider.py",
+    "tests/unit/test_local_server_provider.py",
+    "tests/unit/test_sync_engine_resolution.py"
+   ]
+  },
+  "src/nexus_ai_agent/creative/render_jobs.py": {
+   "commits": [
+    "0632801"
+   ],
+   "findings": [
+    "A-14",
+    "A-18"
+   ],
+   "tests": [
+    "tests/integration/test_creative_chain_e2e.py",
+    "tests/integration/test_nagar_durable_handoff_e2e.py",
+    "tests/unit/test_creative_render_jobs.py",
+    "tests/unit/test_nagar_cognition_queue_handoff.py"
+   ]
+  },
+  "src/nexus_ai_agent/creative/slideshow/ffmpeg.py": {
+   "commits": [
+    "0632801"
+   ],
+   "findings": [
+    "A-14",
+    "A-18"
+   ],
+   "tests": [
+    "tests/integration/test_creative_chain_e2e.py",
+    "tests/integration/test_nagar_durable_handoff_e2e.py",
+    "tests/integration/test_provenance_passport_e2e.py",
+    "tests/integration/test_verification_gap_closure.py",
+    "tests/unit/test_creative_render_jobs.py"
+   ]
+  },
+  "src/nexus_ai_agent/execution/asset_library.py": {
+   "commits": [
+    "7fd4112"
+   ],
+   "findings": [
+    "7fd4112"
+   ],
+   "tests": [
+    "tests/unit/test_asset_library.py"
+   ]
+  },
+  "src/nexus_ai_agent/features/ai_memory.py": {
+   "commits": [
+    "c894d2d"
+   ],
+   "findings": [
+    "A-07",
+    "A-12",
+    "A-15",
+    "A-16",
+    "A-19"
+   ],
+   "tests": [
+    "tests/unit/test_ai_memory_consent.py"
+   ]
+  },
+  "src/nexus_ai_agent/features/calculator.py": {
+   "commits": [
+    "8c4adf2"
+   ],
+   "findings": [
+    "A-13"
+   ],
+   "tests": [
+    "tests/unit/test_strict_typing_boundaries.py"
+   ]
+  },
+  "src/nexus_ai_agent/features/channel_manager.py": {
+   "commits": [
+    "0632801"
+   ],
+   "findings": [
+    "A-14",
+    "A-18"
+   ],
+   "tests": [
+    "tests/unit/test_surface_onboarding.py"
+   ]
+  },
+  "src/nexus_ai_agent/features/conversation_store.py": {
+   "commits": [
+    "a357b0f",
+    "c894d2d"
+   ],
+   "findings": [
+    "A-02",
+    "A-05",
+    "A-07",
+    "A-08",
+    "A-09",
+    "A-12",
+    "A-13",
+    "A-15",
+    "A-16",
+    "A-19",
+    "R1"
+   ],
+   "tests": [
+    "tests/integration/test_postgres_schema_authority.py",
+    "tests/unit/test_conversation_store_contract.py",
+    "tests/unit/test_schema_authority.py",
+    "tests/unit/test_sync_engine_resolution.py"
+   ]
+  },
+  "src/nexus_ai_agent/features/force_join.py": {
+   "commits": [
+    "a357b0f"
+   ],
+   "findings": [
+    "A-02",
+    "A-05",
+    "A-07",
+    "A-08",
+    "A-09",
+    "A-12",
+    "A-13",
+    "R1"
+   ],
+   "tests": [
+    "tests/unit/test_force_join_gate.py"
+   ]
+  },
+  "src/nexus_ai_agent/features/moderation.py": {
+   "commits": [
+    "9d31b39"
+   ],
+   "findings": [
+    "A-01",
+    "A-03",
+    "A-06",
+    "R0"
+   ],
+   "tests": [
+    "tests/unit/test_surface_moderation.py"
+   ]
+  },
+  "src/nexus_ai_agent/features/onboarding.py": {
+   "commits": [
+    "9d31b39"
+   ],
+   "findings": [
+    "A-01",
+    "A-03",
+    "A-06",
+    "R0"
+   ],
+   "tests": [
+    "tests/integration/test_real_session_factory.py"
+   ]
+  },
+  "src/nexus_ai_agent/features/rag.py": {
+   "commits": [
+    "0632801"
+   ],
+   "findings": [
+    "A-14",
+    "A-18"
+   ],
+   "tests": [
+    "tests/integration/test_gate5_closure.py",
+    "tests/integration/test_verification_gap_closure.py",
+    "tests/unit/test_rag_chunking.py"
+   ]
+  },
+  "src/nexus_ai_agent/features/referral.py": {
+   "commits": [
+    "a357b0f",
+    "c894d2d"
+   ],
+   "findings": [
+    "A-02",
+    "A-05",
+    "A-07",
+    "A-08",
+    "A-09",
+    "A-12",
+    "A-13",
+    "A-15",
+    "A-16",
+    "A-19",
+    "R1"
+   ],
+   "tests": [
+    "tests/unit/test_referral_models.py",
+    "tests/unit/test_schema_authority.py",
+    "tests/unit/test_sync_engine_resolution.py"
+   ]
+  },
+  "src/nexus_ai_agent/features/story_gen.py": {
+   "commits": [
+    "c52f795"
+   ],
+   "findings": [
+    "A-12"
+   ],
+   "tests": [
+    "tests/unit/test_async_offload.py"
+   ]
+  },
+  "src/nexus_ai_agent/features/tools.py": {
+   "commits": [
+    "a357b0f"
+   ],
+   "findings": [
+    "A-02",
+    "A-05",
+    "A-07",
+    "A-08",
+    "A-09",
+    "A-12",
+    "A-13",
+    "R1"
+   ],
+   "tests": [
+    "tests/unit/test_sync_engine_resolution.py"
+   ]
+  },
+  "src/nexus_ai_agent/features/viral_engine.py": {
+   "commits": [
+    "9d31b39"
+   ],
+   "findings": [
+    "A-01",
+    "A-03",
+    "A-06",
+    "R0"
+   ],
+   "tests": [
+    "tests/unit/test_surface_viral.py"
+   ]
+  },
+  "src/nexus_ai_agent/integrations/external.py": {
+   "commits": [
+    "0632801"
+   ],
+   "findings": [
+    "A-14",
+    "A-18"
+   ],
+   "tests": [
+    "tests/unit/test_external_contracts.py"
+   ]
+  },
+  "src/nexus_ai_agent/knowledge/knowledge_manager.py": {
+   "commits": [
+    "9d31b39"
+   ],
+   "findings": [
+    "A-01",
+    "A-03",
+    "A-06",
+    "R0"
+   ],
+   "tests": [
+    "tests/unit/test_knowledge_hardening.py"
+   ]
+  },
+  "src/nexus_ai_agent/nagar/creative/__init__.py": {
+   "commits": [
+    "0632801"
+   ],
+   "findings": [
+    "A-14",
+    "A-18"
+   ],
+   "tests": [
+    "tests/integration/test_nagar_durable_handoff_e2e.py",
+    "tests/unit/test_nagar_cognition_queue_handoff.py"
+   ]
+  },
+  "src/nexus_ai_agent/storage/clock.py": {
+   "commits": [
+    "c894d2d"
+   ],
+   "findings": [
+    "A-07",
+    "A-12",
+    "A-15",
+    "A-16",
+    "A-19"
+   ],
+   "tests": [
+    "tests/unit/test_time_contract.py",
+    "tests/unit/test_updater.py"
+   ]
+  },
+  "src/nexus_ai_agent/storage/db.py": {
+   "commits": [
+    "0632801",
+    "9d31b39",
+    "a357b0f",
+    "c894d2d"
+   ],
+   "findings": [
+    "A-01",
+    "A-02",
+    "A-03",
+    "A-05",
+    "A-06",
+    "A-07",
+    "A-08",
+    "A-09",
+    "A-12",
+    "A-13",
+    "A-14",
+    "A-15",
+    "A-16",
+    "A-18",
+    "A-19",
+    "R0",
+    "R1"
+   ],
+   "tests": [
+    "tests/conftest.py",
+    "tests/integration/test_a01_message_path.py",
+    "tests/integration/test_api_gate_inventory.py",
+    "tests/integration/test_composition_root_runtime.py",
+    "tests/integration/test_migrate_adoption.py",
+    "tests/integration/test_migrate_cli.py",
+    "tests/integration/test_migrate_race_condition.py",
+    "tests/integration/test_real_session_factory.py",
+    "tests/unit/test_ai_memory_consent.py",
+    "tests/unit/test_dashboard_api.py",
+    "tests/unit/test_database_url.py",
+    "tests/unit/test_db.py",
+    "tests/unit/test_db_engine_retirement.py",
+    "tests/unit/test_knowledge_hardening.py",
+    "tests/unit/test_migrations.py",
+    "tests/unit/test_schema_authority.py",
+    "tests/unit/test_storage_wal_init_race.py",
+    "tests/unit/test_sync_engine_resolution.py",
+    "tests/unit/test_updater.py"
+   ]
+  },
+  "src/nexus_ai_agent/storage/models.py": {
+   "commits": [
+    "807c197",
+    "a357b0f",
+    "c894d2d"
+   ],
+   "findings": [
+    "A-01",
+    "A-02",
+    "A-03",
+    "A-05",
+    "A-07",
+    "A-08",
+    "A-09",
+    "A-12",
+    "A-13",
+    "A-15",
+    "A-16",
+    "A-17",
+    "A-19",
+    "R1"
+   ],
+   "tests": [
+    "tests/integration/test_a01_message_path.py",
+    "tests/integration/test_migrate_cli.py",
+    "tests/integration/test_postgres_single_engine.py",
+    "tests/unit/test_ai_memory_consent.py",
+    "tests/unit/test_database_url.py",
+    "tests/unit/test_db.py",
+    "tests/unit/test_db_engine_retirement.py",
+    "tests/unit/test_force_join_gate.py",
+    "tests/unit/test_knowledge_hardening.py",
+    "tests/unit/test_referral_models.py",
+    "tests/unit/test_schema_authority.py",
+    "tests/unit/test_telegram_id_width.py",
+    "tests/unit/test_time_contract.py",
+    "tests/unit/test_updater.py"
+   ]
+  },
+  "src/nexus_ai_agent/storage/providers/github_releases.py": {
+   "commits": [
+    "8c4adf2"
+   ],
+   "findings": [
+    "A-13"
+   ],
+   "tests": [
+    "tests/unit/test_strict_typing_boundaries.py"
+   ]
+  },
+  "src/nexus_ai_agent/tools/filesystem_policy.py": {
+   "commits": [
+    "7bfd628"
+   ],
+   "findings": [
+    "7bfd628"
+   ],
+   "tests": [
+    "tests/unit/test_filesystem_policy_primitives.py"
+   ]
+  }
+ },
+ "rule": "module <-> test pairing per commit: the test file changed in the same commit and its text imports or names the module; findings parsed from the commit subject"
+}
