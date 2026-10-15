@@ -121,6 +121,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   command is backed by an engine since round 0; `/companion` and `/analyze`
   were never registered and are listed as such.
 
+### Fix — full-audit remediation, round 2 (deeper validation of A-01/A-02/A-03; new finding A-17; board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
+
+- **A-17 — Telegram identifiers overflowed PostgreSQL's INTEGER.** Found by
+  the first live PostgreSQL run of this remediation (PostgreSQL 16.2, local
+  server + the CI `migrate-postgres` leg): all 33 Telegram id columns
+  (`user.telegram_id`, every `chat_id`/`user_id`, `anonsession.user1_id/
+  user2_id`, `referral.referrer_id/referee_id`, `adcampaign.created_by`,
+  `personalityconfig.set_by`) were 32-bit, so `_upsert_user` failed with
+  `NumericValueOutOfRange` for any account created after 2021 and
+  `_upsert_chat` for any supergroup — the bot could not answer a single
+  message on a PostgreSQL deployment. SQLite hid it (64-bit INTEGER). Fix:
+  `storage.models.TelegramId = BigInteger().with_variant(Integer(), "sqlite")`
+  on every such column (SQLite schema byte-identical, `INTEGER PRIMARY KEY`
+  stays the rowid alias) and Alembic revision **`b5d8e2f4a917`** (PostgreSQL
+  only, type-only, 33 `ALTER COLUMN … TYPE BIGINT`; downgrade narrows back).
+  Verified on the live server: upgrade, downgrade, upgrade, `alembic check`
+  reports no column drift, and a `2**40`-range user id plus a `-100…`
+  supergroup id round-trip through both engines. The PostgreSQL LangGraph
+  golden (`storage/golden/postgres.langgraph.json`) was regenerated with the
+  human-only `nexus checkpoints golden update --yes`; the only payload delta
+  is `migration_head` (re-hashing the new payload with the old head reproduces
+  the previous fingerprint exactly). Head pins in CI, tests and docs moved to
+  `b5d8e2f4a917`. Guards: `tests/unit/test_telegram_id_width.py` (ORM ↔
+  migration list ↔ PostgreSQL DDL lockstep, SQLite unchanged, internal keys
+  stay 32-bit) and `tests/integration/test_postgres_single_engine.py` (runs
+  in the CI PostgreSQL job).
+- **A-01 deeper validation.** `tests/integration/test_a01_message_path.py`
+  drives the real `on_message` handler built by `build_handlers` through the
+  production `get_session` factory into a real SQLite file after the exact
+  `nexus run` schema bring-up (`ensure_startup_schema` → Alembic); on `main`
+  the same test fails with the audit's `'AsyncSession' object has no
+  attribute 'exec'`.
+- **A-02 deeper validation.** `test_postgres_single_engine.py` proves on a
+  live PostgreSQL that the async session factory and the synchronous feature
+  engines (force-join predicate, referral tables) read and write one
+  database (`current_database()` identical, no SQLite engine in the process).
+- **A-03 deeper validation.** `tests/integration/test_composition_root_runtime.py`
+  builds the real PTB `Application` (`build_application`, no network) and
+  uses PTB's own `check_update` dispatch: group −1 is exactly access guard →
+  moderation gate, group text reaches the gate and private text does not,
+  strangers stop at the guard, a private text reaches `on_message`, no text
+  handler is shadowed behind it, every command is registered exactly once
+  (115) and the eight A-03 commands map to their own `*_cmd` callbacks.
+- **Docs:** the golden-update command is `nexus checkpoints golden update`
+  (three documents said `nexus golden update`, which does not exist).
+
 ### Fix — governance recovery: both mutation harnesses attack again (GOV-1/GOV-2; board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
 
 - **GOV-1 — referee mutation `pr_branch_self_exclusion_removed` survived.**

@@ -2003,3 +2003,18 @@ campaigns against the job's own checkout (a crash would leave the tree mutated f
 dropping `AND attempt = ?` outright in the mutants (changes the binding count → sqlite error → red for
 the wrong reason).
 
+*Round 2 — live PostgreSQL and the composition root (2026-10-15).* The PostgreSQL blocker was
+lifted with a local PostgreSQL 16.2 (+pgvector) and immediately paid for itself: finding **A-17**
+— every Telegram id column was a 32-bit INTEGER on PostgreSQL, so a PostgreSQL deployment could not
+process a message from a post-2021 account or a supergroup. Decision: a *variant* column type
+(`BigInteger().with_variant(Integer(), "sqlite")`) rather than a plain `BigInteger`, because SQLite's
+INTEGER is already 64-bit and `INTEGER PRIMARY KEY` must remain the rowid alias — the SQLite schema
+and every existing SQLite file are untouched, and the Alembic revision `b5d8e2f4a917` is PostgreSQL-only
+and type-only. Rejected: (a) `BigInteger` everywhere (forces a batch table rebuild of every SQLite
+install for no gain); (b) widening only `user.telegram_id`/`chat.chat_id` (the feature tables hold the
+same ids); (c) leaving the LangGraph golden stale (its payload includes the Alembic head by design —
+the human-only `nexus checkpoints golden update` was run and the single-field delta proven by
+re-hashing). Validation rule confirmed: a finding is "deeper validated" only by a test that drives the
+*real* entry point (`on_message`, `build_application`, the real session factory) and that fails on
+`main` for the audited reason.
+
