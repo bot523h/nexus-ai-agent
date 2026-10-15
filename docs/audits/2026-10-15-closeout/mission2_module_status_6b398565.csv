@@ -1,0 +1,245 @@
+module_id,risk,own,cov%,tests_ok,neg,C1,C2,C3,C4,C5,C6,C7,C8,C9,C10,status,reason
+~.adapters.caption_unavailable,P3,OH/O2,0.0,0,0,P,0,-,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C2-depth(line coverage 0% < 60% floor)"
+~.adapters.in_process_job_queue,P0,OH/O2,87.2,236,137,P,P,p,P,P,-,S,P,P,P,NOT_ASSESSED,missing:C7
+~.adapters.langgraph.lifecycle_recording,P2,OH/O2,82.3,43,12,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.adapters.native_local_backend,P2,OH/O2,96.7,49,32,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.adapters.whisper_local,P1,OH/O2,85.7,19,7,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.agent.approval,P3,A/A3,66.7,8,2,F,P,-,P,P,-,-,P,P,P,NOT_ASSESSED,missing:C1
+~.agent.feedback,P3,A/A3,0.0,0,0,F,0,-,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C1,C2,C2-depth(line coverage 0% < 60% floor)"
+~.agent.self_monitor,P3,A/A3,61.4,3,0,F,P,-,P,P,-,-,P,P,P,NOT_ASSESSED,missing:C1
+~.agent.updater,P2,A/A3,73.1,7,2,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.agents.base,P3,A/A1,90.0,0,0,F,0,-,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C1,C2"
+~.agents.chat_agent,P3,A/A1,0.0,0,0,F,0,-,P,P,-,-,P,P,P,BLOCKED,HELD_CONFLICTED: final code pending critical PR(s) #198(critical);#121; referee exit 2
+~.agents.executor_agent,P3,A/A1,64.1,2,2,F,P,-,P,P,-,-,P,P,P,NOT_ASSESSED,missing:C1
+~.agents.gemma_agent,P3,A/A1,91.3,4,0,F,P,-,P,P,-,-,P,P,P,BLOCKED,HELD_CONFLICTED: final code pending critical PR(s) #198(critical);#121; referee exit 2
+~.agents.phi_agent,P3,A/A1,100.0,8,3,F,P,-,P,P,-,-,P,P,P,BLOCKED,HELD_CONFLICTED: final code pending critical PR(s) #198(critical);#121;#157; referee exit 
+~.agents.planner_agent,P3,A/A1,0.0,0,0,F,0,-,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C1,C2,C2-depth(line coverage 0% < 60% floor)"
+~.agents.qwen_agent,P3,A/A1,100.0,4,0,F,P,-,P,P,-,-,P,P,P,BLOCKED,HELD_CONFLICTED: final code pending critical PR(s) #198(critical);#121; referee exit 2
+~.agents.store.agent_manager,P2,A/A1,97.7,3,0,F,P,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C1,C3"
+~.agents.store.base_agent,P3,A/A1,72.2,0,0,F,0,-,P,P,-,-,?,P,P,BLOCKED,HELD_CONFLICTED: final code pending critical PR(s) #118(critical);#198(critical);#115; ref
+~.agents.store.specialized_agents,P3,A/A1,100.0,0,0,F,0,-,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C1,C2"
+~.api.app,P0,A/A4,92.7,89,32,F,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C1,C7"
+~.api.dashboard,P0,A/A4,88.6,0,0,F,0,u,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C1,C2,C3,C7"
+~.api.studio,P1,A/A4,87.1,0,0,P,0,u,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C2,C3,C7"
+~.application.image_generation,P3,OH/O2,63.6,0,0,P,0,-,P,P,-,-,P,P,P,NOT_ASSESSED,missing:C2
+~.application.ports.caption_engine,P3,OH/O2,100.0,34,11,P,P,-,P,P,-,-,P,P,P,VERIFIED,
+~.application.ports.checkpoint_lifecycle,P2,OH/O2,100.0,0,0,P,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C3"
+~.application.ports.conversation_store,P3,OH/O2,100.0,0,0,P,0,-,P,P,-,-,P,P,P,NOT_ASSESSED,missing:C2
+~.application.ports.job_queue,P2,OH/O2,100.0,286,162,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.application.ports.llm,P2,OH/O2,100.0,0,0,P,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C3"
+~.application.ports.object_storage,P2,OH/O2,100.0,0,0,P,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C3"
+~.bot.access_guard,P1,A/A2,92.0,41,17,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.bot.agent_handlers,P2,A/A2,14.8,0,0,F,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C1,C2,C3,C2-depth(line coverage 15% < 60% floor)"
+~.bot.app,P2,A/A2,49.5,51,27,P,P,p,P,P,-,-,P,P,P,NOT_ASSESSED,missing:C2-depth(line coverage 50% < 60% floor)
+~.bot.creative_surface,P1,A/A2,92.9,24,11,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.bot.feature_handlers,P1,A/A2,74.7,25,7,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.bot.handlers,P1,A/A2,25.9,13,4,F,P,p,P,P,U,0,F,P,P,BLOCKED,C8 open defect; no published repair; governance exit 2 blocks integration
+~.bot.knowledge_handlers,P3,A/A2,11.3,0,0,F,0,-,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C1,C2,C2-depth(line coverage 11% < 60% floor)"
+~.bot.memory_handlers,P1,A/A2,76.0,17,4,F,P,p,P,P,-,0,P,P,P,BLOCKED,HELD_CONFLICTED: final code pending critical PR(s) #198(critical); referee exit 2
+~.bot.middleware,P1,A/A2,96.0,4,3,F,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C1,C7"
+~.bot.monitor_handlers,P2,A/A2,17.3,0,0,F,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C1,C2,C3,C2-depth(line coverage 17% < 60% floor)"
+~.bot.rate_limiter,P2,A/A2,87.9,1,1,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.bot.safe_paths,P2,A/A2,93.3,17,8,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.bot.slideshow,P2,A/A2,98.5,42,17,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.bot.slideshow_handlers,P2,A/A2,52.6,8,3,P,P,p,P,P,-,-,P,P,P,NOT_ASSESSED,missing:C2-depth(line coverage 53% < 60% floor)
+~.bot.slideshow_notify,P1,A/A2,91.2,27,15,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.bot.surface._ptb,P3,A/A2,95.2,28,8,P,P,-,P,P,-,-,P,P,P,VERIFIED,
+~.bot.surface.ads,P2,A/A2,97.1,31,7,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.bot.surface.channel_management,P2,A/A2,85.2,41,11,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.bot.surface.docs,P2,A/A2,87.3,28,12,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.bot.surface.gamification,P3,A/A2,100.0,18,5,P,P,-,P,P,-,-,P,P,P,VERIFIED,
+~.bot.surface.onboarding,P3,A/A2,100.0,10,4,P,P,-,P,P,-,-,P,P,P,VERIFIED,
+~.bot.tool_handlers,P3,A/A2,13.6,0,0,F,0,-,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C1,C2,C2-depth(line coverage 14% < 60% floor)"
+~.bot.update_handlers,P2,A/A2,49.0,11,3,F,P,p,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C1,C2-depth(line coverage 49% < 60% floor)"
+~.bot.webhook,P2,A/A2,67.2,39,19,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.cli,P1,A/A5,69.2,205,86,F,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C1,C7"
+~.config.settings,P2,A/A5,93.9,612,213,F,P,p,P,P,-,-,P,P,P,NOT_ASSESSED,missing:C1
+~.continuum.gate,P1,A/A4,62.1,34,6,P,P,p,P,P,-,c,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; C7 by repository mutation gate (not Arena-B-authored mutan
+~.continuum.mutations,P1,A/A4,93.0,8,5,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.continuum.pack_coverage,P1,A/A4,96.7,133,49,P,P,p,P,P,-,c,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; C7 by repository mutation gate (not Arena-B-authored mutan
+~.continuum.provenance,P1,A/A4,96.9,81,30,P,P,p,P,P,-,c,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; C7 by repository mutation gate (not Arena-B-authored mutan
+~.continuum.snapshot,P1,A/A4,91.8,72,27,P,P,p,P,P,-,c,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; C7 by repository mutation gate (not Arena-B-authored mutan
+~.core.async_db,P2,A/A5,0.0,0,0,P,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C3,C2-depth(line coverage 0% < 60% floor)"
+~.core.http_client,P3,A/A5,72.3,116,35,P,P,-,P,P,-,-,P,P,P,VERIFIED,
+~.core.instrumentation,P3,A/A5,93.3,0,0,P,0,-,P,P,-,-,P,P,P,NOT_ASSESSED,missing:C2
+~.core.ssrf_guard,P1,A/A5,83.3,184,44,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.creative,P3,OH/O4,58.8,1319,456,P,P,-,P,P,-,-,P,P,P,NOT_ASSESSED,missing:C2-depth(line coverage 59% < 60% floor)
+~.creative.caption.bench,P3,OH/O3,100.0,3,0,P,P,-,P,P,-,-,P,P,P,VERIFIED,
+~.creative.caption.unavailable_adapter,P3,OH/O3,100.0,0,0,P,0,-,P,P,-,-,P,P,P,NOT_ASSESSED,missing:C2
+~.creative.ffmpeg_executor,P2,OH/O4,78.9,4,0,F,P,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C1,C3"
+~.creative.image_gen.gemini_adapter,P2,OH/O4,95.1,48,10,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.creative.image_gen.pollinations_adapter,P3,OH/O4,100.0,48,10,P,P,-,P,P,-,-,P,P,P,VERIFIED,
+~.creative.image_gen.provider,P2,OH/O4,88.9,0,0,P,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C3"
+~.creative.image_gen.resilience,P1,OH/O4,94.4,48,10,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.creative.image_post,P2,OH/O4,34.5,0,0,F,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C1,C2,C3,C2-depth(line coverage 34% < 60% floor)"
+~.creative.job_registry,P1,OH/O4,100.0,4,0,F,P,u,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C1,C3,C7"
+~.creative.packs.audio.models,P3,OH/O3,99.1,56,12,P,P,-,P,P,-,-,P,P,P,VERIFIED,
+~.creative.packs.audio.operations,P2,OH/O3,94.5,72,21,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.creative.packs.caption.formatters,P2,OH/O3,97.1,0,0,P,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C3"
+~.creative.packs.caption.models,P3,OH/O3,100.0,40,15,P,P,-,P,P,-,-,P,P,P,VERIFIED,
+~.creative.packs.caption.operations,P2,OH/O3,93.4,13,3,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.creative.packs.delivery.models,P3,OH/O3,100.0,10,1,P,P,-,P,P,-,-,P,P,P,VERIFIED,
+~.creative.packs.delivery.operations,P2,OH/O3,97.8,37,14,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.creative.packs.delivery.signing,P2,OH/O3,100.0,27,13,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.creative.packs.ed25519,P0,OH/O3,91.7,35,16,P,P,p,P,P,-,p,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; C7 by repository mutation gate (not Arena-B-authored mutan
+~.creative.packs.edit.models,P3,OH/O3,99.0,46,7,P,P,-,P,P,-,-,P,P,P,VERIFIED,
+~.creative.packs.edit.operations,P1,OH/O3,94.4,54,12,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.creative.packs.manifest,P2,OH/O3,96.5,90,41,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.creative.packs.motion.models,P3,OH/O3,100.0,55,10,P,P,-,P,P,-,-,P,P,P,VERIFIED,
+~.creative.packs.motion.operations,P1,OH/O3,97.0,55,10,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.creative.packs.registry,P2,OH/O3,100.0,150,60,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.creative.packs.runtime,P2,OH/O3,97.4,340,148,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.creative.packs.slideshow.models,P3,OH/O3,100.0,9,3,P,P,-,P,P,-,-,P,P,P,VERIFIED,
+~.creative.packs.slideshow.operations,P2,OH/O3,97.3,106,39,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.creative.packs.slideshow.planning,P3,OH/O3,96.5,51,18,P,P,-,P,P,-,-,P,P,P,VERIFIED,
+~.creative.packs.slideshow.templates,P3,OH/O3,96.2,47,16,P,P,-,P,P,-,-,P,P,P,VERIFIED,
+~.creative.packs.trust,P0,OH/O3,93.8,35,16,P,P,p,P,P,-,p,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; C7 by repository mutation gate (not Arena-B-authored mutan
+~.creative.packs.verify,P2,OH/O3,99.1,72,35,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.creative.render_jobs,P1,OH/O4,88.8,102,52,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.creative.rendering.bench,P1,OH/O5,100.0,3,0,P,P,u,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C3,C7"
+~.creative.rendering.compiler,P0,OH/O5,99.0,16,3,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.creative.rendering.executor,P0,OH/O5,82.9,38,19,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.creative.rendering.ir,P0,OH/O5,96.0,36,8,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.creative.slideshow.analysis,P2,OH/O5,88.2,34,10,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.creative.slideshow.audio,P3,OH/O5,85.2,29,10,P,P,-,P,P,-,-,P,P,P,VERIFIED,
+~.creative.slideshow.ffmpeg,P1,OH/O5,94.8,221,103,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.creative.slideshow.image_fill,P2,OH/O5,100.0,0,0,P,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C3"
+~.creative.slideshow.probe,P2,OH/O5,88.1,47,16,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.creative.slideshow.service,P1,OH/O5,96.2,52,20,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.creative.slideshow.upscale,P1,OH/O5,87.8,5,1,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.creative.slideshow.worker_adapter,P2,OH/O5,84.9,40,15,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.creative.spine.compiler,P3,OH/O4,100.0,0,0,P,0,-,P,P,-,-,P,P,P,NOT_ASSESSED,missing:C2
+~.creative.spine.execution,P1,OH/O4,98.0,0,0,P,0,u,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C2,C3,C7"
+~.creative.spine.models,P1,OH/O4,86.3,0,0,P,0,u,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C2,C3,C7"
+~.creative.spine.reference,P2,OH/O4,94.1,0,0,P,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C3"
+~.creative.studio.authorization,P1,OH/O4,100.0,109,48,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.creative.studio.bus,P0,OH/O4,98.3,317,104,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.creative.studio.capabilities,P2,OH/O4,97.1,369,161,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.creative.studio.lifecycle,P3,OH/O4,97.7,62,30,P,P,-,P,P,-,-,P,P,P,VERIFIED,
+~.creative.studio.models,P1,OH/O4,99.6,652,274,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.creative.studio.references,P2,OH/O4,93.0,0,0,P,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C3"
+~.creative.temporal.adapters,P3,OH/O4,66.7,52,12,P,P,-,P,P,-,-,P,P,P,VERIFIED,
+~.creative.temporal.core,P3,OH/O4,75.6,52,12,P,P,-,P,P,-,-,P,P,P,VERIFIED,
+~.creative.video_director,P3,OH/O4,87.3,4,0,F,P,-,P,P,-,-,P,P,P,BLOCKED,HELD_CONFLICTED: final code pending critical PR(s) #118(critical);#58; referee exit 2
+~.diagnostics.truth,P2,A/A5,85.1,29,11,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.domain.glossary,P3,OH/O4,88.9,0,0,P,0,-,P,P,-,-,P,P,P,NOT_ASSESSED,missing:C2
+~.domain.policies.lifecycle_health,P3,OH/O4,100.0,4,1,P,P,-,P,P,-,-,P,P,P,VERIFIED,
+~.domain.policies.reconciler_policy,P2,OH/O4,94.1,8,4,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.domain.policies.retention,P2,OH/O4,92.1,0,0,P,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C3"
+~.domain.retention,P2,OH/O4,0.0,0,0,P,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C3,C2-depth(line coverage 0% < 60% floor)"
+~.execution.contract,P0,OH/O2,99.4,88,43,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.execution.staging,P0,OH/O2,86.2,60,37,P,P,p,P,P,-,e,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; C7 by repository mutation gate (not Arena-B-authored mutan
+~.features.ads,P2,A/A3,76.6,31,7,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.features.ai_chat,P2,A/A3,34.6,9,0,P,P,u,P,P,U,-,F,P,P,HARDENED_BUT_NOT_COMPLETE,C8 open defect; repair exists but not integrated: #198 25c4965b / #118 d5a205f4; semantics
+~.features.ai_memory,P1,A/A3,94.6,19,4,F,P,p,P,P,-,0,?,P,P,BLOCKED,HELD_CONFLICTED: final code pending critical PR(s) #118(critical);#99;#158; referee exit 2
+~.features.analytics,P2,A/A3,19.9,0,0,P,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C3,C2-depth(line coverage 20% < 60% floor)"
+~.features.anonymous_chat,P2,A/A3,39.3,0,0,P,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C3,C2-depth(line coverage 39% < 60% floor)"
+~.features.calculator,P2,A/A3,87.7,52,26,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.features.channel_manager,P1,A/A3,57.1,41,11,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C7,C2-depth(line coverage 57% < 60% floor)"
+~.features.conversation_store,P2,A/A3,93.1,25,10,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.features.engagement,P2,A/A3,40.2,0,0,P,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C3,C2-depth(line coverage 40% < 60% floor)"
+~.features.force_join,P2,A/A3,73.3,13,3,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.features.games,P2,A/A3,70.8,21,5,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.features.gamification,P2,A/A3,91.6,28,9,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.features.image_gen,P2,A/A3,28.1,0,0,P,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C3,C2-depth(line coverage 28% < 60% floor)"
+~.features.moderation,P2,A/A4,25.0,0,0,P,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C3,C2-depth(line coverage 25% < 60% floor)"
+~.features.onboarding,P2,A/A4,53.8,0,0,P,0,u,P,P,U,-,F,P,P,BLOCKED,C8 open defect; no published repair; governance exit 2 blocks integration
+~.features.owner_control,P0,A/A4,66.2,105,30,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.features.personality,P2,A/A4,36.5,0,0,P,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C3,C2-depth(line coverage 36% < 60% floor)"
+~.features.rag,P1,A/A4,80.0,90,44,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.features.rag_core,P1,A/A4,96.7,70,7,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.features.referral,P2,A/A4,69.3,0,0,P,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C3"
+~.features.request_queue,P2,A/A4,90.4,21,12,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.features.speech,P2,A/A4,28.6,0,0,P,0,u,P,P,-,-,P,P,P,BLOCKED,HELD_CONFLICTED: final code pending critical PR(s) #198(critical);#33;#99;#117; referee ex
+~.features.story_gen,P2,A/A4,93.6,1,0,F,P,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C1,C3"
+~.features.summarizer,P2,A/A4,65.5,36,2,P,P,p,P,P,-,-,P,P,P,BLOCKED,HELD_CONFLICTED: final code pending critical PR(s) #118(critical);#58; referee exit 2
+~.features.tools,P1,A/A4,80.4,61,30,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.features.viral_engine,P2,A/A4,31.4,4,0,P,P,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C3,C2-depth(line coverage 31% < 60% floor)"
+~.i18n,P3,A/A5,62.5,52,9,P,P,-,P,P,-,-,P,P,P,VERIFIED,
+~.i18n.loader,P3,A/A5,0.0,0,0,P,0,-,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C2-depth(line coverage 0% < 60% floor)"
+~.infrastructure.observability.metrics,P3,A/A5,96.0,40,6,P,P,-,P,P,-,-,P,P,P,VERIFIED,
+~.infrastructure.observability.redaction,P1,A/A5,94.9,35,4,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.infrastructure.observability.structured,P2,A/A5,73.3,5,2,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.integrations.external,P1,A/A5,92.3,272,92,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.integrations.free_tools,P2,A/A5,99.4,184,60,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.jobs.creative_passport,P0,OH/O2,79.2,55,38,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.jobs.creative_verification,P0,OH/O2,100.0,45,25,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.jobs.failure_semantics,P0,OH/O2,96.6,56,23,P,P,p,P,P,-,g,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; C7 by repository mutation gate (not Arena-B-authored mutan
+~.jobs.feature_verification,P0,OH/O2,93.9,62,39,P,P,p,P,P,-,g,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; C7 by repository mutation gate (not Arena-B-authored mutan
+~.jobs.lifecycle,P0,OH/O2,97.4,99,63,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.jobs.verification,P0,OH/O2,96.6,135,90,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.knowledge.knowledge_manager,P1,A/A3,92.7,88,32,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.knowledge.web_trainer,P2,A/A3,93.3,199,64,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.knowledge.wikipedia_trainer,P2,A/A3,90.7,88,32,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.llm.errors,P3,A/A1,91.7,6,4,P,P,-,P,P,U,-,F,P,P,HARDENED_BUT_NOT_COMPLETE,C8 open defect; repair exists but not integrated: #118 d5a205f4; conflicts with main
+~.llm.fake_llm,P2,A/A1,100.0,38,9,F,P,p,P,P,-,-,P,P,P,BLOCKED,HELD_CONFLICTED: final code pending critical PR(s) #198(critical); referee exit 2
+~.llm.fallback_provider,P3,A/A1,88.2,23,7,P,P,-,P,P,U,-,F,P,P,HARDENED_BUT_NOT_COMPLETE,C8 open defect; repair exists but not integrated: #118 d5a205f4 / #198 25c4965b (73 PR tes
+~.llm.gemini_provider,P2,A/A1,78.6,22,3,P,P,p,P,P,-,-,P,P,P,BLOCKED,HELD_CONFLICTED: final code pending critical PR(s) #118(critical);#198(critical);#113;#115
+~.llm.litellm_provider,P2,A/A1,91.5,32,8,P,P,p,P,P,U,-,F,P,P,HARDENED_BUT_NOT_COMPLETE,C8 open defect; repair exists but not integrated: #118 d5a205f4 (808 PR tests green in iso
+~.llm.local_llama_cpp,P2,A/A1,0.0,0,0,F,0,u,P,P,-,-,P,P,P,BLOCKED,HELD_CONFLICTED: final code pending critical PR(s) #118(critical);#198(critical); referee 
+~.llm.local_server_provider,P2,A/A1,96.2,15,5,P,P,p,P,P,-,-,P,P,P,BLOCKED,HELD_CONFLICTED: final code pending critical PR(s) #198(critical); referee exit 2
+~.llm.provider,P3,A/A1,77.8,6,4,F,P,-,P,P,-,-,P,P,P,BLOCKED,HELD_CONFLICTED: final code pending critical PR(s) #198(critical); referee exit 2
+~.maintenance.backup,P0,A/A5,85.0,6,4,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.maintenance.housekeeping,P0,A/A5,85.0,3,2,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.memory.eval,P1,A/A1,97.5,4,1,P,P,p,P,P,-,0,P,P,P,BLOCKED,HELD_CONFLICTED: final code pending critical PR(s) #198(critical);#121; referee exit 2
+~.memory.long_term,P1,A/A1,84.2,9,0,F,P,u,P,P,-,0,P,P,P,BLOCKED,HELD_CONFLICTED: final code pending critical PR(s) #198(critical);#121;#204; referee exit 
+~.memory.short_term,P1,A/A1,0.0,0,0,F,0,u,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C1,C2,C3,C7,C2-depth(line coverage 0% < 60% floor)"
+~.nagar.cognition.adapter,P2,OH/O5,93.3,0,0,P,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C3"
+~.nagar.cognition.bridge,P2,OH/O5,100.0,0,0,P,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C3"
+~.nagar.cognition.capabilities,P3,OH/O5,100.0,0,0,P,0,-,P,P,-,-,P,P,P,NOT_ASSESSED,missing:C2
+~.nagar.cognition.context,P2,OH/O5,91.1,0,0,P,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C3"
+~.nagar.cognition.gateway,P2,OH/O5,92.6,0,0,P,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C3"
+~.nagar.cognition.null,P1,OH/O5,100.0,0,0,P,0,u,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C2,C3,C7"
+~.nagar.cognition.port,P2,OH/O5,100.0,0,0,P,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C3"
+~.nagar.cognition.proposal,P2,OH/O5,97.2,0,0,P,0,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C2,C3"
+~.nagar.cognition.router,P3,OH/O5,98.5,0,0,P,0,-,P,P,-,-,P,P,P,NOT_ASSESSED,missing:C2
+~.nagar.composition,P3,OH/O5,76.9,47,20,P,P,-,P,P,-,-,P,P,P,VERIFIED,
+~.nagar.creative,P2,OH/O5,94.3,69,29,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.nagar.creative.handoff,P1,OH/O5,94.4,20,7,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.nagar.observation,P2,OH/O5,100.0,45,20,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.observability.logging,P1,A/A5,95.4,71,20,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.orchestration.graph,P3,A/A1,78.1,6,2,F,P,-,P,P,-,-,P,P,P,BLOCKED,HELD_CONFLICTED: final code pending critical PR(s) #198(critical);#96;#122;#125;#150;#157;
+~.orchestration.router,P2,A/A1,100.0,34,0,F,P,u,P,P,-,-,P,P,P,NOT_ASSESSED,"missing:C1,C3"
+~.orchestration.state,P3,A/A1,100.0,0,0,F,0,-,P,P,-,-,P,P,P,BLOCKED,HELD_CONFLICTED: final code pending critical PR(s) #198(critical);#150; referee exit 2
+~.personality.engine,P1,A/A3,88.1,36,19,F,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C1,C7"
+~.presence,P2,A/A5,92.1,34,13,F,P,p,P,P,-,-,P,P,P,NOT_ASSESSED,missing:C1
+~.product.studio_experience,P2,OH/O4,93.2,9,7,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.product.studio_read,P2,OH/O4,96.9,6,5,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review
+~.provenance.backfill,P1,OH/O2,88.4,24,18,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.provenance.journal,P0,OH/O2,93.0,79,38,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.provenance.models,P0,OH/O2,97.5,104,51,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.provenance.observer,P1,OH/O2,94.1,13,7,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.provenance.passport,P0,OH/O2,92.0,27,13,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.provenance.paths,P1,OH/O2,100.0,8,5,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.storage.adopt_pg,P0,OH/O1,61.8,60,21,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.storage.ai_storage,P1,OH/O1,100.0,1,0,F,P,u,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C1,C3,C7"
+~.storage.ai_storage_manager,P1,OH/O1,69.8,24,11,F,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C1,C7"
+~.storage.checkpoint_adapter,P0,OH/O1,91.9,55,19,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.storage.checkpoint_fingerprint,P1,OH/O1,92.7,9,3,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.storage.checkpoint_lifecycle,P0,OH/O1,93.3,80,32,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.storage.checkpoint_lifecycle_adapter,P1,OH/O1,92.3,27,12,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.storage.checkpoint_lifecycle_pg_store,P0,OH/O1,51.6,23,6,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C7,C2-depth(line coverage 52% < 60% floor)"
+~.storage.checkpoint_lifecycle_store,P0,OH/O1,98.7,70,27,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.storage.checkpoint_pg_adapter,P0,OH/O1,27.2,15,5,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C7,C2-depth(line coverage 27% < 60% floor)"
+~.storage.checkpoint_reconciler,P0,OH/O1,87.8,32,12,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.storage.db,P0,OH/O1,93.3,207,71,F,P,p,P,P,U,0,F,P,P,HARDENED_BUT_NOT_COMPLETE,C8 open defect; repair exists but not integrated: #210 1d7390cc (WAL/first-use init fix; R
+~.storage.langgraph_checkpoint,P0,OH/O1,83.5,35,9,F,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C1,C7"
+~.storage.migration_metadata,P1,OH/O1,100.0,4,1,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.storage.migrations,P0,OH/O1,91.5,38,15,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.storage.model_fetch,P1,OH/O1,0.0,0,0,F,0,u,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C1,C2,C3,C7,C2-depth(line coverage 0% < 60% floor)"
+~.storage.models,P0,OH/O1,100.0,300,88,F,P,p,P,P,-,0,P,P,P,BLOCKED,HELD_CONFLICTED: final code pending critical PR(s) #205(critical);#210(critical);#99;#158;
+~.storage.providers.base,P0,OH/O1,92.6,65,25,F,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C1,C7"
+~.storage.providers.github_releases,P0,OH/O1,23.3,0,0,F,0,u,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C1,C2,C3,C7,C2-depth(line coverage 23% < 60% floor)"
+~.storage.providers.huggingface,P1,OH/O1,34.9,0,0,F,0,u,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C1,C2,C3,C7,C2-depth(line coverage 35% < 60% floor)"
+~.storage.providers.local_cache,P1,OH/O1,87.5,29,6,F,P,p,P,P,-,s,P,P,P,NOT_ASSESSED,missing:C1
+~.storage.providers.mega,P1,OH/O1,25.4,0,0,F,0,u,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C1,C2,C3,C7,C2-depth(line coverage 25% < 60% floor)"
+~.storage.providers.r2,P0,OH/O1,89.9,24,11,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.storage.providers.rclone,P1,OH/O1,32.4,0,0,F,0,u,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C1,C2,C3,C7,C2-depth(line coverage 32% < 60% floor)"
+~.storage.resilience,P0,OH/O1,100.0,69,24,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,missing:C7
+~.storage.unified_cloud,P0,OH/O1,43.6,6,4,P,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C7,C2-depth(line coverage 44% < 60% floor)"
+~.tools.base,P1,OH/O1,92.9,2,0,F,P,u,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C1,C3,C7"
+~.tools.files,P1,OH/O1,91.1,8,4,F,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C1,C7"
+~.tools.filesystem_policy,P0,OH/O1,75.4,77,51,P,P,p,P,P,U,0,F,P,P,HARDENED_BUT_NOT_COMPLETE,C8 open defect; repair exists but not integrated: #210 1d7390cc / #213 29ca3d66 (identical
+~.tools.registry,P1,OH/O1,87.1,14,6,F,P,p,P,P,-,0,P,P,P,NOT_ASSESSED,"missing:C1,C7"
+~.tools.system_shell,P0,OH/O1,91.2,81,19,P,P,p,P,P,-,s,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; C7 by repository mutation gate (not Arena-B-authored mutan
+~.worker,P2,A/A5,83.1,157,87,P,P,p,P,P,-,-,P,P,P,VERIFIED_WITH_LIMITATIONS,C3 by negative-test name proxy; no manual line-level review

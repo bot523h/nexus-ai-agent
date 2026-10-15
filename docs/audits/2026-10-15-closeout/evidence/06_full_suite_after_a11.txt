@@ -1,0 +1,8 @@
+== FULL fast suite after A-11 decomposition, 2026-10-15T18:53:39Z, dirty=9
+SKIPPED [1] tests/unit/test_optional_extras.py:145: core-only contract (proven by the `core` CI leg): full import walk
+SKIPPED [1] tests/unit/test_optional_extras.py:145: core-only contract (proven by the `core` CI leg): pdf fail-closed error
+SKIPPED [1] tests/unit/test_optional_extras.py:145: core-only contract (proven by the `core` CI leg): speech fail-closed error
+SKIPPED [1] tests/unit/test_optional_extras.py:145: core-only contract (proven by the `core` CI leg): translate fail-closed error
+SKIPPED [1] tests/unit/test_optional_extras.py:303: no active leg (default jobs) — leg validation is inert here
+4075 passed, 37 skipped in 212.33s (0:03:32)
+exit=0
