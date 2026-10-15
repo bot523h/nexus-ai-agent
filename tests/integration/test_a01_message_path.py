@@ -152,3 +152,36 @@ async def test_second_message_updates_the_same_rows_instead_of_duplicating(
     assert [(u.telegram_id, u.username) for u in users] == [(USER_ID, "after")]
     assert len(chats) == 1 and chats[0].chat_id == CHAT_ID
     assert len(message_env.graph.calls) == 2
+
+
+async def test_a_database_failure_is_not_reported_as_a_successful_message(
+    message_env: Any,
+) -> None:
+    """Negative control for the A-01 contract: when the configured database
+    cannot be written, ``on_message`` must not answer as if the message had
+    been handled.  The failing factory stands at the same seam as
+    ``get_session`` (a context manager whose ``__aenter__`` raises the
+    SQLAlchemy error a dead backend produces); the LLM graph must never be
+    invoked and no reply may be sent — the exception reaches PTB's error
+    handler, which logs it, instead of being swallowed into an "echo"."""
+    from contextlib import asynccontextmanager
+
+    from sqlalchemy.exc import OperationalError
+
+    settings = settings_module.get_settings()
+
+    @asynccontextmanager
+    async def failing_factory(db_path: str | None = None) -> Any:
+        raise OperationalError("INSERT INTO user", {}, Exception("database is locked"))
+        yield  # pragma: no cover - unreachable, keeps the generator shape
+
+    graph = _Graph()
+    handlers = build_handlers(graph, failing_factory, settings, PresenceStore(), object())
+    handler = _text_handler(handlers)
+    update = _Update("hello", username="first")
+
+    with pytest.raises(OperationalError):
+        await handler.callback(update, SimpleNamespace(args=[], bot=None, bot_data={}))
+
+    assert update.message.replies == [], "a failed persist must not look like a handled message"
+    assert graph.calls == [], "the LLM graph ran although the user/chat rows were never written"
