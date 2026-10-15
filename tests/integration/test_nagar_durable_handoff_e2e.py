@@ -253,10 +253,13 @@ async def test_tampered_artifact_fails_independent_verification(harness) -> None
     # Sanity: the pristine artifact verifies.
     assert creative_render_verifier(verifier_payload, result).ok is True
 
-    # Mutate the artifact bytes after the fact.
+    # Mutate the artifact bytes after the fact.  Archived evidence is an immutable
+    # (0o444) hard link into the content-addressed asset library, so simulated
+    # corruption must bypass the mode bit first.
     artifact = Path(str(result["artifact_path"]))
     blob = bytearray(artifact.read_bytes())
     blob[-1] ^= 0xFF
+    artifact.chmod(0o644)
     artifact.write_bytes(bytes(blob))
 
     tampered = creative_render_verifier(verifier_payload, result)

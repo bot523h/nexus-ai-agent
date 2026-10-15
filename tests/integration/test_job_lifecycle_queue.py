@@ -850,6 +850,9 @@ async def test_succeeded_implies_valid_stable_traceable_artifact(creative_env: P
     stored_artifact = passport["artifact"]
     assert isinstance(stored_artifact, dict)
     output_store_path = Path(str(db) + ".artifacts") / str(stored_artifact["storage_key"])
+    # Published evidence is an immutable (0o444) hard link into the content-addressed
+    # asset library; simulated disk corruption has to bypass the mode bit first.
+    output_store_path.chmod(0o644)
     output_store_path.write_bytes(output_store_path.read_bytes() + b"tamper")
     with pytest.raises(CreativePassportError, match="output asset"):
         await reopened.get_artifact_passport(job_id)

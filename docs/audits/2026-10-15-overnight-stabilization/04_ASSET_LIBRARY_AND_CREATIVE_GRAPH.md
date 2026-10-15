@@ -31,3 +31,28 @@
 Module docstring lists the properties; `tests/unit/test_asset_library.py` (38 tests) covers each. Hand mutants run against the suite (all killed): `os.link`→`os.rename` (overwrite), drop `O_NOFOLLOW`, drop `O_NONBLOCK` (FIFO blocks), skip re-hash on dedup, `gc` ignoring references. `mypy --strict`: clean (284 files). Status: **IMPLEMENTED · TESTED · NOT WIRED · NOT CI-VERIFIED (head `7fd4112` not yet run)**.
 
 Residual risk: a store that spans two filesystems cannot `os.link` (typed `AssetLibraryError`, nothing published) — the artifact root is one directory today; dedup verification re-reads the existing blob (cost = one extra read per duplicate; bounded by the 100 MiB ceiling).
+
+## Wiring delivered later the same night (`archive_trim_evidence` → CAS)
+* `_copy_verified` gained `library`/`attempt_id` parameters; `archive_trim_evidence` constructs
+  `AssetLibrary(artifact_root, max_bytes=MAX_EVIDENCE_FILE_BYTES)` and both evidence files are
+  admitted into `cas/` then published as hard links at the unchanged attempt keys
+  (`_publish_from_library`). The identity returned to the passport is the library's measured
+  `sha256:<hex>`/size; the existing "archived bytes must equal measured source/render" checks
+  remain in force on top. Status: **IMPLEMENTED · TESTED (local full suite) · NOT CI-VERIFIED
+  until the run on its head finishes · NOT MERGED**.
+* Fallback: link failure (`EXDEV`/`EPERM`) → previous verified streaming copy (tested with a
+  link that works only inside `cas/`); lost publish race → existing "same bytes or fail" rule.
+* Consequence (intentional): archived evidence is now `0o444` on disk. Three tests that
+  simulate disk corruption by writing to the archived file (`test_job_lifecycle_queue`,
+  `test_nagar_durable_handoff_e2e`, `test_provenance_passport_e2e`) now `chmod(0o644)` before
+  tampering; their tamper-detection assertions are unchanged. Blast-radius note: tampering a
+  shared blob affects every attempt that links it — detection still fires per attempt because
+  verification hashes the attempt path.
+* Tests: `test_copy_verified_publishes_attempt_paths_as_links_into_the_asset_library` (same
+  inode across attempts, `st_nlink ≥ 3`, `PermissionError` on write, idempotent re-publish),
+  `test_copy_verified_library_path_keeps_the_passport_error_contract` (too-large → typed error
+  with the caller's code, no staging leak, occupied key fails closed, `EXDEV` fallback). Hand
+  mutants: swallow too-large → 1 failure; off-by-one size → 2 failures. Full local suite
+  `pytest -m "not slow"`: 4181 passed / 37 skipped.
+* Still open: queue-side `fsck`/`gc` schedule (blob GC must consult attempt directories, which
+  remain the retention authority), an `asset_admitted` journal event, the graph projection.

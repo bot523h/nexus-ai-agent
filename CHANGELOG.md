@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Asset Library wired into the passport archive** — `archive_trim_evidence` now admits
+  both evidence files into the content-addressed `AssetLibrary` under the artifact root and
+  publishes each `jobs/<job>/<attempt>/…` key as an immutable (0o444) hard link to the blob:
+  identical bytes across attempts share one copy, every existing key/reader keeps working,
+  size/boundary violations keep the passport's own error types, and a filesystem that
+  cannot link falls back to the previous verified streaming copy. Tests that simulate disk
+  corruption of archived evidence now bypass the read-only mode bit explicitly.
 ### Added — content-addressed Asset Library (Phase 4 §4 substrate; board `task-270`)
 
 - `execution/asset_library.py`: SHA-256 content-addressed blob store under the queue-owned

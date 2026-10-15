@@ -191,6 +191,7 @@ async def test_tampered_artifact_bytes_flip_passport_to_compromised(harness) -> 
     result = await queue.get_result(job_id)
     artifact = Path(str(result["artifact_path"]))
     original = artifact.read_bytes()
+    artifact.chmod(0o644)  # archived evidence is an immutable CAS hard link; bypass to corrupt
     artifact.write_bytes(original[:-1] + bytes([original[-1] ^ 0xFF]))  # flip a bit
 
     passport = builder.build(job_id)
