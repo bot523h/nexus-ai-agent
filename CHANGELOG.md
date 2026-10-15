@@ -43,6 +43,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own declared zone (`full-audit-remediation`), satisfying the board
   invariants (`tests/unit/test_agent_board.py`).
 
+### Fix — full-audit remediation, round 1 (findings A-02/A-05/A-07/A-08/A-09/A-12/A-13; board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
+
+- **A-02 — one database per deployment.** Thirteen feature modules
+  (`ads`, `analytics`, `anonymous_chat`, `channel_manager`, `engagement`,
+  `force_join`, `games`, `gamification`, `moderation`, `owner_control`,
+  `personality`, `viral_engine`, plus `ReferralEngine`, `ReminderSystem`,
+  `ConversationStore` and the `/broadcast` commands) each built their own
+  `create_engine("sqlite:///…")`, so a PostgreSQL deployment
+  (`NEXUS_DATABASE_URL`) kept users/chats in Postgres and XP, moderation,
+  ads, games, referrals, reminders … in a SQLite file next to the code.
+  `storage.db.sync_engine()` is now the single resolution point (PostgreSQL
+  via `postgresql+psycopg://` with `pool_pre_ping`, else the configured SQLite
+  file; one cached engine per process, disposed on URL change); every
+  `_sync_engine` helper delegates to it, the composition roots hand engines
+  `sync_db_path_for(settings)`, `/broadcast` reads chats through the async
+  session factory, and the referral/conversation tables are created with
+  dialect-agnostic `create_all` instead of SQLite-only `AUTOINCREMENT` DDL.
+  Law **R19** in `docs/architecture/MODULE_MAP.md`; regression
+  `tests/unit/test_sync_engine_resolution.py` (21 tests incl. a structural
+  guard that no `src/` module outside `storage/db.py` builds a `sqlite:///`
+  engine).
+- **A-09 — one definition per table.** `Referral`/`ReferralCode` were
+  declared twice (`storage/models.py` and `features/referral.py`, glued with
+  `extend_existing=True`, with *different* constraints). The strict,
+  migration-matching definitions in `storage/models.py` are the only ones;
+  `features/referral.py` imports them. `tests/unit/test_referral_models.py`.
+- **A-12 — weak hashes and forgeable codes.** Content/filename hashes in
+  `image_gen.py`, `speech.py`, `viral_engine.py` moved from md5 to sha256.
+  Referral codes were `NEXUS-<telegram id>-<md5(id)[:8]>` — they leaked the
+  id and anyone could forge any user's code; they are now random
+  (`secrets`, 8 chars from an unambiguous alphabet, collision-checked in
+  `get_or_create_code`; stored legacy codes stay valid). The remaining
+  `datetime.utcnow()` sites (`agent_manager`, `ai_memory`,
+  `conversation_store`, `referral`, `agent/updater`) use an explicit
+  naive-UTC helper. `creative_temp_dir` defaults to `data/creative` (next to
+  the SQLite database) instead of the world-writable, reboot-cleared
+  `/tmp/nexus_creative` (bandit B108); override with `CREATIVE_TEMP_DIR`.
+- **A-07 — the self-updater blocked the event loop.** `git pull` and
+  `pip install .` ran with blocking `subprocess.run` (no timeout) on the bot's
+  loop, and the release check used an unbounded `httpx` client. Both steps
+  now run via `asyncio.to_thread` with timeouts (git 300 s, pip 1200 s), the
+  release probe times out at 15 s. `tests/unit/test_updater.py::
+  test_do_update_does_not_block_the_event_loop` (a heartbeat keeps ticking
+  while a slow step runs; fails on the old code).
+- **A-05 — declared dependencies match imports.** `langchain-community`
+  (never imported) and `pytest-mock` (no `mocker` use) removed; `pydantic`
+  declared explicitly; `deptry` added to `[dev]` with a `[tool.deptry]`
+  policy (optional integrations nacl/gtts/mega/imageio-ffmpeg allow-listed)
+  and run in the CI lint job and `make deps`.
+- **A-08 — CI hygiene.** `ci.yml` runs on pushes to `main`/`v*` tags and on
+  every PR (not on every branch push), declares read-only workflow
+  permissions, and every job has a `timeout-minutes` sized from real run
+  durations; `maintenance.yml` pins its actions to the same SHAs as `ci.yml`
+  and has timeouts.
+- **A-13 — imports from defining modules.** `creative/spine/__init__.py`,
+  `agents/store/agent_manager.py` and `llm/litellm_provider.py` import
+  `CompiledIntent`, `StoreAgent` and `Router` from the modules that define
+  them (`mypy --no-implicit-reexport` clean on all three).
+- **Tests:** the remaining `session.execute(select(...))` calls in the test
+  suite moved to `session.exec(...)` and the SSRF API tests send form bodies
+  via `content=` — the fast suite now passes with
+  `-W error::DeprecationWarning`.
+- **README:** the "Real vs. Simulated" table was stale — every registered
+  command is backed by an engine since round 0; `/companion` and `/analyze`
+  were never registered and are listed as such.
+
 ### Feature — truth doctor: one authority for repository truth (law R16, session `arena/runtime-truth-tooling`)
 
 - **The repository could not prove its own truth.** Version drift, an unindexed

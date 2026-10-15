@@ -755,7 +755,7 @@ async def test_r_a_write_replaces_the_keys_rows_instead_of_appending(
     from nexus_ai_agent.storage.models import KnowledgeCache
 
     async with get_session(_ACTIVE_DB.get("path")) as session:
-        await session.execute(
+        await session.exec(  # type: ignore[call-overload]
             update(KnowledgeCache)
             .where(col(KnowledgeCache.query) == rows_first[0].query)
             .values(expires_at=naive_utcnow())
@@ -909,7 +909,8 @@ async def test_m_f29_guard_is_red_against_scalar_one_or_none(knowledge_db: Path)
     async with get_session(_ACTIVE_DB.get("path")) as session:
         statement = select(KnowledgeCache).where(col(KnowledgeCache.query) == key)
         with pytest.raises(MultipleResultsFound):
-            (await session.execute(statement)).scalar_one_or_none()
+            # the pre-R-A reader's one-or-none read over the duplicated rows
+            (await session.exec(statement)).one_or_none()
 
     # the shipped reader survives the identical state
     km = manager(DeadWiki(), DeadWeb(), RecordingLLM())

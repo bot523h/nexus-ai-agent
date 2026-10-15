@@ -241,27 +241,31 @@ class AnalyticsEvent(SQLModel, table=True):
 
 
 class Referral(SQLModel, table=True):
-    __table_args__ = {"extend_existing": True}
-    """Referral tracking: who referred whom."""
+    """Referral tracking: who referred whom.
+
+    Single definition (audit A-09, 2026-10-15): ``features/referral.py`` used
+    to declare a second, stricter copy of this table with ``extend_existing``,
+    so the effective schema depended on import order. The indexes below are
+    the ones migration ``47903d282ede`` creates.
+    """
 
     id: int | None = Field(default=None, primary_key=True)
-    referrer_id: int = Field(default=0)
-    referee_id: int = Field(default=0)
-    referral_code: str = Field(default="")
-    status: str = Field(default="pending")  # pending | completed | rewarded
+    referrer_id: int = Field(index=True)
+    referee_id: int = Field(index=True, unique=True)  # each user can only be referred once
+    referral_code: str = Field(index=True)
+    status: str = Field(default="pending", index=True)  # pending | completed | rewarded
     reward_claimed: bool = Field(default=False)
     xp_awarded: bool = Field(default=False)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
     completed_at: datetime | None = Field(default=None)
 
 
 class ReferralCode(SQLModel, table=True):
-    __table_args__ = {"extend_existing": True}
-    """Per-user unique referral code and stats."""
+    """Per-user unique referral code and stats (single definition, see Referral)."""
 
     id: int | None = Field(default=None, primary_key=True)
-    user_id: int = Field(default=0)
-    code: str = Field(default="")
+    user_id: int = Field(index=True, unique=True)
+    code: str = Field(index=True, unique=True)
     total_referrals: int = Field(default=0)
     successful_referrals: int = Field(default=0)
     created_at: datetime = Field(default_factory=datetime.utcnow)

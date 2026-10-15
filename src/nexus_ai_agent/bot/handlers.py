@@ -186,6 +186,14 @@ async def _upsert_user(db_session_factory: SessionFactory, tg_user: Any) -> User
         return user
 
 
+async def _all_chat_ids(db_session_factory: SessionFactory) -> list[int]:
+    """Every known chat id, from the configured backend (audit A-02: the
+    broadcast commands used to open their own ``sqlite:///`` engine and so
+    never saw the chats of a PostgreSQL deployment)."""
+    async with db_session_factory() as session:
+        return [int(chat.chat_id) for chat in (await session.exec(select(Chat))).all()]
+
+
 async def _upsert_chat(db_session_factory: SessionFactory, chat_id: int, thread_id: str) -> Chat:
     async with db_session_factory() as session:
         stmt = select(Chat).where(Chat.chat_id == chat_id)
@@ -1040,17 +1048,7 @@ def build_handlers(
         if not text:
             await _reply(update, "❌ متن پیام را وارد کنید: /broadcast <text>")
             return
-        from sqlalchemy import create_engine as _ce
-        from sqlmodel import Session as _Session
-
-        from nexus_ai_agent.config.settings import get_settings as _gs
-
-        _eng = _ce(f"sqlite:///{_gs().db_path}", echo=False)
-        with _Session(_eng) as _s:
-            from nexus_ai_agent.storage.models import Chat as _Chat
-
-            _chats = _s.exec(select(_Chat)).all()
-            _ids = [c.chat_id for c in _chats]
+        _ids = await _all_chat_ids(db_session_factory)
         result = await OwnerControl.owner_broadcast(context.bot, _ids, text)
         await _reply(
             update,
@@ -1066,17 +1064,7 @@ def build_handlers(
         if not text:
             await _reply(update, "❌ متن پیام را وارد کنید: /broadcast_all <text>")
             return
-        from sqlalchemy import create_engine as _ce
-        from sqlmodel import Session as _Session
-
-        from nexus_ai_agent.config.settings import get_settings as _gs
-
-        _eng = _ce(f"sqlite:///{_gs().db_path}", echo=False)
-        with _Session(_eng) as _s:
-            from nexus_ai_agent.storage.models import Chat as _Chat
-
-            _chats = _s.exec(select(_Chat)).all()
-            _ids = [c.chat_id for c in _chats]
+        _ids = await _all_chat_ids(db_session_factory)
         result = await OwnerControl.owner_broadcast(context.bot, _ids, text)
         await _reply(
             update,

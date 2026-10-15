@@ -49,6 +49,12 @@ _pg_session_factories: dict[str, async_sessionmaker[AsyncSession]] = {}
 # per-URL so two different Neon databases in one process stay independent.
 _pg_prepared_urls: set[str] = set()
 
+# Synchronous engine for the feature engines (sync SQLModel CRUD executed in
+# worker threads) — one live engine per process, keyed by its URL; see
+# ``sync_engine``.
+_sync_engine_url: str | None = None
+_sync_engine_instance: Any | None = None
+
 # The only URL schemes accepted for NEXUS_DATABASE_URL.
 _SUPPORTED_URL_SCHEMES = ("postgresql", "postgres", "postgresql+asyncpg")
 
@@ -89,6 +95,13 @@ def to_asyncpg_url(url: str) -> str:
     normalized = normalize_database_url(url)
     parts = urlsplit(normalized)
     return urlunsplit(("postgresql+asyncpg", parts.netloc, parts.path, parts.query, parts.fragment))
+
+
+def to_psycopg_url(url: str) -> str:
+    """Return the SQLAlchemy psycopg (v3, synchronous) form of a PostgreSQL URL."""
+    normalized = normalize_database_url(url)
+    parts = urlsplit(normalized)
+    return urlunsplit(("postgresql+psycopg", parts.netloc, parts.path, parts.query, parts.fragment))
 
 
 def resolve_migration_url() -> str:
@@ -378,6 +391,79 @@ async def _ensure_pg_schema(url: str) -> None:
 
     await prepare_postgres(normalized)
     _pg_prepared_urls.add(normalized)
+
+
+def sync_database_url(db_path: str | None = None) -> str:
+    """The SQLAlchemy URL synchronous code must use for the configured backend.
+
+    Mirrors :func:`get_session`'s resolution: an explicit ``db_path`` pins a
+    SQLite file; otherwise ``NEXUS_DATABASE_URL`` (PostgreSQL, psycopg driver)
+    wins and the configured SQLite file (``NEXUS_DB_PATH``) is the fallback.
+    """
+    if db_path is None:
+        database_url = resolve_database_url()
+        if database_url is not None:
+            return to_psycopg_url(database_url)
+        from nexus_ai_agent.config.settings import get_settings
+
+        db_path = get_settings().db_path
+    return f"sqlite:///{Path(db_path).expanduser()}"
+
+
+def sync_db_path_for(settings: Any) -> str | None:
+    """The ``db_path`` a composition root hands to a feature engine.
+
+    ``None`` (= follow ``NEXUS_DATABASE_URL`` through :func:`sync_engine`) when
+    PostgreSQL is configured, otherwise the configured SQLite file — so a
+    root that was given an explicit ``Settings`` object keeps its SQLite path
+    while a PostgreSQL deployment no longer gets a second, SQLite database
+    beside the configured one (audit A-02).
+    """
+    if (getattr(settings, "database_url", None) or "").strip():
+        return None
+    return str(settings.db_path)
+
+
+def sync_engine(db_path: str | None = None) -> Any:
+    """Process-wide synchronous engine for the configured database.
+
+    Audit finding A-02 (2026-10-15): thirteen feature modules each built their
+    own ``create_engine(f"sqlite:///{settings.db_path}")`` — so a deployment
+    on PostgreSQL (``NEXUS_DATABASE_URL``) had its users/chats/files in
+    Postgres and its XP, moderation, ads, games, referrals … in a SQLite file
+    next to the code. This is the single resolution point for synchronous
+    work; the feature modules' ``_sync_engine`` helpers delegate here.
+
+    * One live engine per process. When the resolved URL changes (tests point
+      ``NEXUS_DB_PATH`` at a fresh temp file per case) the previous engine is
+      disposed so pooled connections never pile up.
+    * SQLite: ``check_same_thread=False`` because the callers run inside
+      ``asyncio.to_thread`` workers, plus the same busy timeout as the async
+      engine. The parent directory is created on demand.
+    * PostgreSQL: ``pool_pre_ping`` so a recycled Neon connection is detected
+      before a statement fails on it.
+    """
+    global _sync_engine_url, _sync_engine_instance
+
+    from sqlalchemy import create_engine as sync_create_engine
+
+    url = sync_database_url(db_path)
+    if _sync_engine_instance is not None and _sync_engine_url == url:
+        return _sync_engine_instance
+    if _sync_engine_instance is not None:
+        _sync_engine_instance.dispose()
+        _sync_engine_instance = None
+    if url.startswith("sqlite:///"):
+        Path(url[len("sqlite:///") :]).parent.mkdir(parents=True, exist_ok=True)
+        engine = sync_create_engine(
+            url,
+            echo=False,
+            connect_args={"check_same_thread": False, "timeout": _SQLITE_BUSY_TIMEOUT_SECONDS},
+        )
+    else:
+        engine = sync_create_engine(url, echo=False, pool_pre_ping=True)
+    _sync_engine_url, _sync_engine_instance = url, engine
+    return engine
 
 
 @asynccontextmanager

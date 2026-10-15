@@ -2,8 +2,19 @@ name: CI
 
 on:
   push:
+    # Audit 2026-10-15 (A-08): an unfiltered `push:` ran the whole matrix twice
+    # for every PR commit (push + pull_request). Branch work is gated by its
+    # PR; `main` and release tags keep their own post-merge signal.
+    branches: [main]
+    tags: ["v*"]
   pull_request:
     types: [opened, synchronize, reopened, edited]
+
+# Least privilege for every job (A-08). Nothing in this workflow writes to the
+# repository: artifacts use the runtime token, release-lineage only *reads*
+# tags/releases with GH_TOKEN.
+permissions:
+  contents: read
 
 # A superseded push's matrix run is wasted minutes: cancel it so the queue
 # always reflects the newest SHA (the maintenance workflow deliberately does
@@ -16,6 +27,7 @@ jobs:
   lint:
     name: lint (ruff + mypy + version lockstep)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -27,6 +39,9 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy src
+      # Dependency truth (audit A-05): undeclared imports / unused declarations
+      # are a red build. Optional integrations are allow-listed in pyproject.
+      - run: deptry src
       # Version-lockstep guard: VERSION == pyproject.toml == latest CHANGELOG
       # heading.  Fails fast with a human-readable message; the same check
       # also lives in tests/unit/test_version_command.py so ``make test``
@@ -36,6 +51,7 @@ jobs:
   test:
     name: test (pytest -m "not slow")
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # task-113: deliberately NOT `needs: lint`.  A broken-lint push must never be able to
     # turn the test suite red, and the `lint-fast` rail below already reports lint and
     # version drift in seconds.  tests/unit/test_ci_lint_parity.py enforces this.
@@ -70,6 +86,7 @@ jobs:
   extras-matrix:
     name: extras-matrix (${{ matrix.leg }})
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       NEXUS_EXTRA_LEG: ${{ matrix.leg }}
@@ -153,6 +170,7 @@ jobs:
   python-parity:
     name: python-parity (${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     strategy:
@@ -196,6 +214,7 @@ jobs:
   continuum-evidence:
     name: continuum-evidence (${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     strategy:
@@ -283,6 +302,7 @@ jobs:
   trust-mutations:
     name: trust-mutations (pack trust plane)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -302,6 +322,7 @@ jobs:
   temporal-mutations:
     name: temporal-mutations (temporal truth algebra)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -321,6 +342,7 @@ jobs:
   remote-key-mutations:
     name: remote-key-mutations (ingress + cache containment)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -339,6 +361,7 @@ jobs:
   # is later set to Neon, the exact same `nexus migrate` path runs against it.
   migrate-postgres:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -387,6 +410,7 @@ jobs:
     name: merge-base-guard (base == main)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -406,6 +430,7 @@ jobs:
   # version's tag exists, the whole chain behind it must hold.
   release-lineage:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       GH_TOKEN: ${{ github.token }}
@@ -447,6 +472,7 @@ jobs:
   lint-fast:
     name: lint-fast (lockstep + pinned ruff, no install)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:

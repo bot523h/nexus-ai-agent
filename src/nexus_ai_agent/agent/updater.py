@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import subprocess
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy import literal_column
@@ -19,6 +20,9 @@ logger = logging.getLogger(__name__)
 
 SELF_UPDATE_TYPE = "self_update"
 _APPROVAL_WINDOW = timedelta(minutes=30)
+_GIT_TIMEOUT_S = 300
+_PIP_TIMEOUT_S = 1200
+_RELEASE_CHECK_TIMEOUT_S = 15.0
 
 
 class AutoUpdater:
@@ -29,7 +33,7 @@ class AutoUpdater:
     async def check_for_update(self) -> tuple[bool, str | None]:
         """Check GitHub for latest release."""
         url = f"https://api.github.com/repos/{self.repo}/releases/latest"
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=_RELEASE_CHECK_TIMEOUT_S) as client:
             try:
                 resp = await client.get(url)
                 if resp.status_code == 200:
@@ -60,19 +64,30 @@ class AutoUpdater:
                 return False, detail
 
         try:
-            subprocess.run(["git", "pull"], check=True)
+            # Off the event loop (audit A-07): `git pull` + `pip install .` take
+            # minutes and used to freeze every other handler meanwhile. Each
+            # step is bounded so a hung network call cannot wedge the bot.
+            await asyncio.to_thread(
+                subprocess.run, ["git", "pull"], check=True, timeout=_GIT_TIMEOUT_S
+            )
             # The project has no requirements.txt — install from pyproject,
             # exactly like the Dockerfile does.
-            subprocess.run([sys.executable, "-m", "pip", "install", "."], check=True)
+            await asyncio.to_thread(
+                subprocess.run,
+                [sys.executable, "-m", "pip", "install", "."],
+                check=True,
+                timeout=_PIP_TIMEOUT_S,
+            )
             logger.info("Update completed. Please restart the bot.")
             return True, "update completed"
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 — every failure mode is reported to the owner
             logger.error(f"Update failed: {e}")
             return False, f"update failed: {e}"
 
     async def _ensure_self_update_approval(self, approval: ApprovalSystem) -> tuple[bool, str]:
         """Return (approved, detail) for the self-update approval gate."""
-        now = datetime.utcnow()  # naive UTC — matches PendingApproval.created_at
+        # naive UTC — matches PendingApproval.created_at
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         async with get_session() as session:
             result = await session.exec(
                 select(PendingApproval)

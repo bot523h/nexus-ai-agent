@@ -19,6 +19,7 @@ from nexus_ai_agent.config.settings import Settings
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.presence import PresenceStore
 from nexus_ai_agent.storage.ai_storage import AIStorageManager, ProviderConfig
+from nexus_ai_agent.storage.db import sync_db_path_for
 
 from .handlers import (
     build_handlers,
@@ -245,7 +246,7 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
     engines["causal_journal"] = causal_journal
 
     # Persistent conversation store
-    conv_store = ConversationStore(db_path=settings.db_path)
+    conv_store = ConversationStore(db_path=sync_db_path_for(settings))
     engines["conversation_store"] = conv_store
 
     # Request queue for fair Gemini API access
@@ -284,7 +285,7 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
     engines["summarizer_engine"] = summarizer_engine
 
     # Referral
-    engines["referral_engine"] = ReferralEngine(db_path=settings.db_path)
+    engines["referral_engine"] = ReferralEngine(db_path=sync_db_path_for(settings))
 
     # Unified Cloud Storage
     engines["unified_cloud"] = UnifiedCloudStorage(
