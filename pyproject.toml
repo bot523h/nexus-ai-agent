@@ -105,6 +105,7 @@ select = [
     "PIE",     # misc. correctness (unnecessary placeholders, dict kwargs, …)
     "RSE102",  # `raise Exc()` → `raise Exc`
     "FURB",    # refurb modernisations (regex flag aliases, decimal ctor, …)
+    "ASYNC",   # blocking I/O / sleep / subprocess inside `async def` (audit A-12 census)
 ]
 # `BLE001` is not selected, but its `# noqa: BLE001` comments document every
 # deliberate broad `except` for reviewers; `external` keeps RUF100 from
@@ -112,8 +113,10 @@ select = [
 external = ["BLE001"]
 
 [tool.ruff.lint.per-file-ignores]
-# Operator-facing CLIs print by design.
-"scripts/**" = ["T201"]
+# Operator-facing CLIs print by design.  Tests and scripts may block inside
+# `async def` (fixtures, probes, waits); the A-12 census is a production rule.
+"scripts/**" = ["T201", "ASYNC"]
+"tests/**" = ["ASYNC"]
 "src/nexus_ai_agent/diagnostics/truth.py" = ["T201"]
 
 [tool.ruff.format]

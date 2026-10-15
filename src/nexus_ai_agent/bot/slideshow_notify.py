@@ -11,6 +11,7 @@ optional client installed.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import shutil
 from pathlib import Path
@@ -77,7 +78,7 @@ async def notify_slideshow_completion(completion: Any, token: str) -> None:
             from telegram import InputFile
 
             artifact = Path(str(result.get("output_path", "")))
-            if artifact.is_file():
+            if await asyncio.to_thread(artifact.is_file):
                 # ``InputFile(path)`` opens — and closes — the file itself once
                 # the upload completes; the workspace removal below is ours.
                 await bot.send_document(

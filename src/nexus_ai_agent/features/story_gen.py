@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import textwrap
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 import arabic_reshaper
@@ -24,10 +26,16 @@ class AIStoryGenerator:
         self.gemini = gemini_engine
 
     async def create_story(self, user_id: int, text: str, style: str = "motivational") -> bytes:
-        """Generate a story image with properly rendered Persian text."""
+        """Generate a story image with properly rendered Persian text.
+
+        The PIL render (and the font probe) is CPU/disk work: it runs in a
+        worker thread so the event loop keeps serving other updates (A-12).
+        """
         _ = user_id
         _ = style
+        return await asyncio.to_thread(self._render_story, text)
 
+    def _render_story(self, text: str) -> bytes:
         # 1. Create a dark gradient background
         width, height = 1080, 1920
         image = Image.new("RGB", (width, height), color="#0f172a")
@@ -73,5 +81,4 @@ class AIStoryGenerator:
     async def generate_story_image(self, text: str, output_path: str) -> None:
         """Used by the in-process job queue to save to disk."""
         image_bytes = await self.create_story(0, text)
-        with open(output_path, "wb") as f:
-            f.write(image_bytes)
+        await asyncio.to_thread(Path(output_path).write_bytes, image_bytes)

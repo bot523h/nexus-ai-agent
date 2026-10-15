@@ -92,7 +92,7 @@ class GitHubReleasesProvider:
 
             upload_url = f"{self._uploads}/releases/{release['id']}/assets"
             params = {"name": asset_name}
-            data = local_path.read_bytes()
+            data = await asyncio.to_thread(local_path.read_bytes)
             r = await client.post(
                 upload_url,
                 headers={**self._headers(), "Content-Type": "application/octet-stream"},

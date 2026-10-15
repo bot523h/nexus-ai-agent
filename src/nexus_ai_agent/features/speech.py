@@ -103,7 +103,7 @@ class SpeechEngine:
         Returns dict with: success, text, lang, error.
         """
         filepath = Path(audio_path)
-        if not filepath.exists():
+        if not await asyncio.to_thread(filepath.exists):
             return {
                 "success": False,
                 "text": "",
@@ -121,7 +121,7 @@ class SpeechEngine:
             }
 
         try:
-            audio_bytes = filepath.read_bytes()
+            audio_bytes = await asyncio.to_thread(filepath.read_bytes)
             # Determine mime type
             suffix = filepath.suffix.lower()
             mime_map = {

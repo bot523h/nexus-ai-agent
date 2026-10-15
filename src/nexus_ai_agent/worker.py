@@ -159,11 +159,14 @@ async def generate_story_job(payload: dict[str, object]) -> dict[str, object]:
     from nexus_ai_agent.creative.slideshow.ffmpeg import sha256_file
 
     artifact = Path(result)
+    content_sha256, size_bytes = await asyncio.to_thread(
+        lambda: (sha256_file(artifact), artifact.stat().st_size)
+    )
     return {
         "output_path": result,
         "artifact_kind": "image",
-        "content_sha256": sha256_file(artifact),
-        "size_bytes": artifact.stat().st_size,
+        "content_sha256": content_sha256,
+        "size_bytes": size_bytes,
     }
 
 

@@ -119,20 +119,21 @@ async def _notify_creative_completion(completion: Any, token: str) -> None:
             return
         caption = i18n.t("creative.completed", lang=lang, command=command, operation=operation)
         artifact = result.get("artifact_path")
-        if artifact and Path(str(artifact)).exists():
+        if artifact and await asyncio.to_thread(Path(str(artifact)).exists):
             path = Path(str(artifact))
+            from nexus_ai_agent.bot.handlers import local_input_file
+
+            artifact_file = await local_input_file(path)
             if result.get("artifact_kind") == "video":
                 duration_us = result.get("duration_us")
-                with path.open("rb") as handle:
-                    await bot.send_video(
-                        chat_id=chat_id,
-                        video=handle,
-                        caption=caption,
-                        duration=int(duration_us / 1_000_000) if duration_us else None,
-                    )
+                await bot.send_video(
+                    chat_id=chat_id,
+                    video=artifact_file,
+                    caption=caption,
+                    duration=int(duration_us / 1_000_000) if duration_us else None,
+                )
             else:
-                with path.open("rb") as handle:
-                    await bot.send_document(chat_id=chat_id, document=handle, caption=caption)
+                await bot.send_document(chat_id=chat_id, document=artifact_file, caption=caption)
         else:
             await bot.send_message(chat_id=chat_id, text=caption)
     finally:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 from collections.abc import Callable
@@ -219,6 +220,22 @@ def _user_id(update: Update) -> int | None:
     if update.effective_user:
         return int(update.effective_user.id)
     return None
+
+
+async def local_input_file(path: str | Path, filename: str | None = None) -> io.BytesIO:
+    """Read a local artifact off the event loop and hand PTB a named buffer.
+
+    Passing an open disk handle makes PTB read it synchronously inside the
+    event loop (``InputFile`` reads eagerly).  Reading in a worker thread and
+    handing over an in-memory file-like object with the same ``name`` keeps
+    PTB's behaviour (filename inference, one upload) while the disk I/O no
+    longer blocks the loop (A-12).
+    """
+    artifact = Path(path)
+    data = await asyncio.to_thread(artifact.read_bytes)
+    buffer = io.BytesIO(data)
+    buffer.name = filename or artifact.name
+    return buffer
 
 
 def _message(update: Update) -> Message | None:
@@ -488,8 +505,8 @@ def build_handlers(
         elif result.get("file_path"):
             msg = _message(update)
             if msg is not None:
-                with open(result["file_path"], "rb") as photo:
-                    await msg.reply_photo(photo=photo, caption=f"🎨 {prompt[:100]}")
+                photo = await local_input_file(str(result["file_path"]))
+                await msg.reply_photo(photo=photo, caption=f"🎨 {prompt[:100]}")
         else:
             await _reply(update, "❌ Image generation failed.")
 
@@ -547,8 +564,8 @@ def build_handlers(
         elif result.get("file_path"):
             msg = _message(update)
             if msg is not None:
-                with open(result["file_path"], "rb") as voice:
-                    await msg.reply_voice(voice=voice)
+                voice = await local_input_file(str(result["file_path"]))
+                await msg.reply_voice(voice=voice)
         else:
             await _reply(update, "❌ TTS failed.")
 
@@ -668,7 +685,7 @@ def build_handlers(
             from pathlib import Path as _Path
 
             tmp_dir = _Path("data/cloud_tmp")
-            tmp_dir.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(tmp_dir.mkdir, parents=True, exist_ok=True)
             try:
                 safe_name = sanitize_file_name(doc.file_name or "unnamed")
                 tmp_path = safe_join(tmp_dir, safe_name, suffix=f"_{uuid4().hex[:8]}")
@@ -755,7 +772,7 @@ def build_handlers(
         from pathlib import Path as _Path2
 
         dl_dir = _Path2("data/cloud_downloads")
-        dl_dir.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(dl_dir.mkdir, parents=True, exist_ok=True)
         local_path = safe_join(dl_dir, display_name, suffix=f"_{uuid4().hex[:8]}")
         result = await unified_cloud.download_file(
             cloud_file.remote_path or display_name,
@@ -772,12 +789,12 @@ def build_handlers(
                     document=io.BytesIO(result["data"]),
                     filename=display_name,
                 )
-        elif local_path.exists():
+        elif await asyncio.to_thread(local_path.exists):
             msg = _message(update)
             if msg is not None:
-                with open(local_path, "rb") as handle:  # was an unclosed leak
-                    await msg.reply_document(document=handle, filename=display_name)
-                local_path.unlink(missing_ok=True)
+                document = await local_input_file(local_path, filename=display_name)
+                await msg.reply_document(document=document, filename=display_name)
+                await asyncio.to_thread(local_path.unlink, missing_ok=True)
         else:
             await _reply(update, "❌ Download failed.")
 
@@ -1566,10 +1583,9 @@ async def pdf_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     file = await doc.get_file()
     file_bytes = await file.download_as_bytearray()
 
-    os.makedirs("data/temp", exist_ok=True)
+    await asyncio.to_thread(os.makedirs, "data/temp", exist_ok=True)
     temp_path = f"data/temp/{doc.file_id}.pdf"
-    with open(temp_path, "wb") as handle:
-        handle.write(file_bytes)
+    await asyncio.to_thread(Path(temp_path).write_bytes, file_bytes)
 
     try:
         job_id = await queue.enqueue(
@@ -1583,7 +1599,7 @@ async def pdf_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             },
         )
     except Exception as exc:  # noqa: BLE001 - surface queue failure to the user
-        Path(temp_path).unlink(missing_ok=True)
+        await asyncio.to_thread(Path(temp_path).unlink, missing_ok=True)
         await _reply(update, f"❌ صف پردازش فایل در دسترس نیست: {exc}")
         return
 

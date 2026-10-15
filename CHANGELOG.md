@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fix — A-12 async-blocking census closed (board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
+
+- **No blocking file I/O inside `async def` in `src/` (35 → 0).** Every `open()`/`Path`
+  read/write/stat/exists/mkdir/unlink and `tempfile.mkstemp` that ran on the event loop now goes
+  through `asyncio.to_thread` with identical call semantics: Telegram uploads read the artifact
+  in a worker thread and hand PTB a named in-memory buffer (`bot.handlers.local_input_file`),
+  the story renderer's PIL work runs off-loop (`AIStoryGenerator._render_story`), API uploads
+  and URL downloads spool chunk-by-chunk off-loop, cloud providers read/write off-loop.
+  `ASYNC` joined the ruff rule set (production rule; `tests/**` and `scripts/**` exempt), pinned by
+  `tests/unit/test_ci_lint_parity.py`; `tests/unit/test_async_offload.py` proves the two
+  user-visible helpers never touch the loop thread.
 ### Fix — A-13 strict typing of `src/` (board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
 
 - **`mypy --strict src` is now clean and enforced.** The 57 strict-mode findings in 33 modules

@@ -212,3 +212,46 @@ def test_the_strict_check_is_red_on_a_non_strict_fixture() -> None:
     assert mypy_is_strict(
         "[tool.ruff]\nx = 1\n\n[tool.mypy]\nstrict = true\nwarn_unreachable = true\n"
     )
+
+
+# --------------------------------------------------------------------------- #
+# A-12 — the async-blocking census is a production lint rule, not a report
+# --------------------------------------------------------------------------- #
+_RUFF_LINT_SECTION = re.compile(
+    r"^\[tool\.ruff\.lint\]\n(?P<body>.*?)(?=^\[|\Z)", re.MULTILINE | re.DOTALL
+)
+_PER_FILE_SECTION = re.compile(
+    r"^\[tool\.ruff\.lint\.per-file-ignores\]\n(?P<body>.*?)(?=^\[|\Z)", re.MULTILINE | re.DOTALL
+)
+
+
+def async_census_is_enforced(pyproject_text: str) -> bool:
+    """``ASYNC`` is selected, and only ``tests/**`` / ``scripts/**`` may ignore it."""
+    lint = _RUFF_LINT_SECTION.search(pyproject_text)
+    if lint is None or not re.search(r'"ASYNC"', lint.group("body")):
+        return False
+    per_file = _PER_FILE_SECTION.search(pyproject_text)
+    body = per_file.group("body") if per_file else ""
+    for line in body.splitlines():
+        if "ASYNC" in line and not line.lstrip().startswith(('"tests/**"', '"scripts/**"', "#")):
+            return False
+    return True
+
+
+def test_async_blocking_census_is_enforced_for_src() -> None:
+    """Audit A-12: the 35 blocking calls inside ``async def`` in ``src/`` were
+    moved off the event loop (``asyncio.to_thread``); ``ASYNC`` is now part of
+    the ruff rule set and only tests/scripts are exempt."""
+    assert async_census_is_enforced(PYPROJECT.read_text(encoding="utf-8"))
+
+
+def test_the_async_census_check_is_red_on_a_src_exemption() -> None:
+    enforced = (
+        '[tool.ruff.lint]\nselect = ["E", "ASYNC"]\n\n'
+        '[tool.ruff.lint.per-file-ignores]\n"tests/**" = ["ASYNC"]\n'
+    )
+    assert async_census_is_enforced(enforced)
+    assert not async_census_is_enforced(
+        enforced.replace('"tests/**"', '"src/nexus_ai_agent/bot/**"')
+    )
+    assert not async_census_is_enforced('[tool.ruff.lint]\nselect = ["E"]\n')

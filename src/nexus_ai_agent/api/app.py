@@ -256,13 +256,17 @@ async def healthz() -> dict[str, str]:
 async def _save_upload_to_temp(upload: StarletteUploadFile) -> str:
     settings = get_settings()
     temp_dir = Path(settings.creative_temp_dir)
-    temp_dir.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(temp_dir.mkdir, parents=True, exist_ok=True)
     suffix = Path(upload.filename or "upload.bin").suffix or ".bin"
-    fd, temp_path = tempfile.mkstemp(prefix="creative-upload-", suffix=suffix, dir=temp_dir)
+    fd, temp_path = await asyncio.to_thread(
+        tempfile.mkstemp, prefix="creative-upload-", suffix=suffix, dir=temp_dir
+    )
     os.close(fd)
     written = 0
     try:
-        with Path(temp_path).open("wb") as handle:
+        # Disk writes run off the event loop (A-12): one thread hop per chunk.
+        handle = await asyncio.to_thread(Path(temp_path).open, "wb")
+        try:
             while True:
                 chunk = await upload.read(1024 * 1024)
                 if not chunk:
@@ -273,10 +277,12 @@ async def _save_upload_to_temp(upload: StarletteUploadFile) -> str:
                         status_code=413,
                         detail=f"upload exceeds the {_MAX_UPLOAD_BYTES}-byte limit",
                     )
-                handle.write(chunk)
+                await asyncio.to_thread(handle.write, chunk)
+        finally:
+            await asyncio.to_thread(handle.close)
     except Exception:
         # A rejected (or failed) upload never leaves a partial file behind.
-        Path(temp_path).unlink(missing_ok=True)
+        await asyncio.to_thread(Path(temp_path).unlink, missing_ok=True)
         raise
     await upload.close()
     return temp_path
@@ -303,9 +309,11 @@ async def _download_video_to_temp(video_url: str) -> str:
 
     settings = get_settings()
     temp_dir = Path(settings.creative_temp_dir)
-    temp_dir.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(temp_dir.mkdir, parents=True, exist_ok=True)
     suffix = Path(urlparse(video_url).path).suffix or ".mp4"
-    fd, temp_path = tempfile.mkstemp(prefix="creative-url-", suffix=suffix, dir=temp_dir)
+    fd, temp_path = await asyncio.to_thread(
+        tempfile.mkstemp, prefix="creative-url-", suffix=suffix, dir=temp_dir
+    )
     os.close(fd)
     try:
         async with httpx.AsyncClient(
@@ -313,12 +321,15 @@ async def _download_video_to_temp(video_url: str) -> str:
         ) as client:
             async with client.stream("GET", video_url) as response:
                 response.raise_for_status()
-                with Path(temp_path).open("wb") as handle:
+                handle = await asyncio.to_thread(Path(temp_path).open, "wb")
+                try:
                     async for chunk in response.aiter_bytes():
-                        handle.write(chunk)
+                        await asyncio.to_thread(handle.write, chunk)
+                finally:
+                    await asyncio.to_thread(handle.close)
     except Exception:
         # A refused/blocked/failed download never leaves a partial file.
-        Path(temp_path).unlink(missing_ok=True)
+        await asyncio.to_thread(Path(temp_path).unlink, missing_ok=True)
         raise
     return temp_path
 
@@ -355,7 +366,7 @@ async def _process_video_edit_job(
         await registry.update_job_status(job_id, "failed", error=str(exc))
     finally:
         if local_input_path:
-            Path(local_input_path).unlink(missing_ok=True)
+            await asyncio.to_thread(Path(local_input_path).unlink, missing_ok=True)
 
 
 # Legacy lane (ADR 0006): the canonical media path is the Telegram creative
