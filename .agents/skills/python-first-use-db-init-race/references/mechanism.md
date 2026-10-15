@@ -8,11 +8,11 @@ A lazy initialiser usually looks like this (NEXUS `storage/db.py`, pre-fix):
 async def create_all_tables(db_path: str) -> None:
     normalized = str(Path(db_path).expanduser())
     engine = _get_engine(normalized)
-    if normalized in _initialized_paths:   # (1) guard
+    if normalized in _initialized_paths:  # (1) guard
         return
     await _set_wal_mode(engine)
     await create_all_metadata(engine, SQLModel.metadata)  # (2) DDL
-    _initialized_paths.add(normalized)     # (3) set AFTER the DDL
+    _initialized_paths.add(normalized)  # (3) set AFTER the DDL
 ```
 
 Because the guard is set only at (3), N concurrent callers all reach (2). The
