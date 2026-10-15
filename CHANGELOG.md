@@ -101,6 +101,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `agents/store/agent_manager.py` and `llm/litellm_provider.py` import
   `CompiledIntent`, `StoreAgent` and `Router` from the modules that define
   them (`mypy --no-implicit-reexport` clean on all three).
+- **A-10 — nine never-imported modules removed.** `agents/chat_agent.py`,
+  `agents/planner_agent.py`, `agent/feedback.py`, `core/async_db.py`,
+  `domain/retention.py` (superseded by `domain/policies/retention.py`),
+  `memory/short_term.py`, `storage/model_fetch.py`,
+  `adapters/caption_unavailable.py` and `i18n/loader.py` had no importer in
+  `src/`, `tests/`, `scripts/` or `migrations/`, no dynamic/string reference
+  and no entry point. Law **R20** (`tests/architecture/test_no_orphan_modules.py`)
+  now fails on any new orphan; its entry-point allowlist (`cli`, `api.app`)
+  carries a reason per entry and is checked for staleness.
+- **Board:** the remediation lease was re-issued through the official CLI at
+  the documented 24 h TTL (`AGENTS.md` §5) instead of the 48 h it had been
+  claimed with (generation 3; release + re-claim, no hand edit).
 - **Tests:** the remaining `session.execute(select(...))` calls in the test
   suite moved to `session.exec(...)` and the SSRF API tests send form bodies
   via `content=` — the fast suite now passes with

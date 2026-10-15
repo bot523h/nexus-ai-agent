@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-15T11:11:11Z",
+  "updated_at": "2026-10-15T12:36:15Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -143,10 +143,8 @@
     },
     {
       "id": "core-database",
-      "description": "Async-only database access",
+      "description": "Async-only database access (the former core/async_db.py helper was never imported and was removed in the 2026-10-15 remediation, A-10; the central synchronous engine now lives in storage/db.py sync_engine)",
       "paths": [
-        "src/nexus_ai_agent/core/async_db.py",
-        "tests/unit/test_async_db_harmonization.py",
         "src/nexus_ai_agent/features/"
       ]
     },
@@ -1114,7 +1112,7 @@
         "صفر رگرسیون تست‌های DB"
       ],
       "evidence_required": [
-        "pytest tests/unit/test_async_db_harmonization.py"
+        "pytest tests/unit/test_sync_engine_resolution.py"
       ],
       "exclusive_paths": [],
       "owner_hint": "",
@@ -1122,7 +1120,7 @@
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "exclusive_paths released with terminal status during schema-2 merge (history in scope)"
+      "note": "exclusive_paths released with terminal status during schema-2 merge (history in scope) | 2026-10-15: central engine delivered as storage.db.sync_engine (A-02, D-0026); the async-session migration of the feature engines remains the open scope"
     },
     {
       "task": "task-127",
@@ -3656,10 +3654,10 @@
       ],
       "owner_hint": "repository owner mandate (chat, 2026-10-15)",
       "agent_branch": "arena/26f7d958-nexus-ai-agent",
-      "claimed_at": "2026-10-15T11:11:11Z",
-      "ttl_hours": 48,
+      "claimed_at": "2026-10-15T12:36:15Z",
+      "ttl_hours": 24,
       "gates_owner": true,
-      "generation": 1,
+      "generation": 3,
       "note": ""
     }
   ],

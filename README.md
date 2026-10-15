@@ -503,7 +503,7 @@ make types       # mypy
 ```
 src/nexus_ai_agent/
 ├── adapters/                # Out-of-band adapters (caption unavailable shim, in-process job queue)
-├── agent/                   # Governance: approval, feedback, self-monitor, updater
+├── agent/                   # Governance: approval, self-monitor, updater
 ├── agents/                  # Persona agents (planner/executor/chat + model-tuned variants) & agent store
 ├── api/                     # FastAPI dashboard app
 ├── application/             # Hexagon core: image-generation app service + ports/ (typed seams)

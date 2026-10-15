@@ -57,7 +57,6 @@ _FORBIDDEN_IMPORTS = {
 #: model call to a new agent must update this list, which forces a review of
 #: whether that agent needs the cognition boundary.
 _KNOWN_MODEL_CONSUMERS = {
-    "src/nexus_ai_agent/agents/chat_agent.py",
     "src/nexus_ai_agent/agents/qwen_agent.py",
     "src/nexus_ai_agent/agents/gemma_agent.py",
     "src/nexus_ai_agent/agents/phi_agent.py",
