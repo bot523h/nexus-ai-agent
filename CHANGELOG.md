@@ -18,6 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ASYNC` joined the ruff rule set (production rule; `tests/**` and `scripts/**` exempt), pinned by
   `tests/unit/test_ci_lint_parity.py`; `tests/unit/test_async_offload.py` proves the two
   user-visible helpers never touch the loop thread.
+### CI — A-16 container verification job (board `task-270`)
+
+- **CI `container` job.** Builds the production image and executes it: runs as `nexus`
+  (uid ≠ 0) with a writable `/app/data`, the CLI imports as that user, the image declares the
+  mode-aware `HEALTHCHECK`, the probe passes/fails correctly in polling mode (run-bot process
+  present/absent) and webhook mode (`/healthz` answering/not), and the in-container updater
+  reports `self-update unsupported` (no `.git`, no `git`). No Telegram token exists in CI, so
+  the probe is exercised against stand-in processes with the same observable shape — this
+  proves the probe plumbing inside the image, not a live bot session.
+  `tests/unit/test_container_contract.py::test_ci_executes_the_image_contract_end_to_end` pins
+  the job shape (positive **and** negative probe cases, `docker run -i` for the updater check).
+
 ### Fix — A-13 strict typing of `src/` (board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
 
 - **`mypy --strict src` is now clean and enforced.** The 57 strict-mode findings in 33 modules

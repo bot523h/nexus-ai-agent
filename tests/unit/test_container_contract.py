@@ -109,3 +109,30 @@ def test_polling_mode_checks_the_bot_process_not_http() -> None:
         bot.kill()
         bot.wait(timeout=10)
     assert _probe(NEXUS_RUN_MODE="polling") == 1
+
+
+def test_ci_executes_the_image_contract_end_to_end() -> None:
+    """The ``container`` CI job must build the image and run the same probes against it.
+
+    The sandbox has no Docker, so this pins the *shape* of the job (the runtime checks
+    happen in CI): unprivileged user, writable data dir, HEALTHCHECK present, polling and
+    webhook probes with a positive **and** a negative case, and the updater refusing to
+    self-update inside the image.  ``docker run -i`` matters: without ``-i`` the heredoc
+    is not attached and ``python -`` would exit 0 on an empty program (a vacuous pass).
+    """
+    import yaml
+
+    workflow = yaml.safe_load((REPO / ".github" / "workflows" / "ci.yml").read_text("utf-8"))
+    job = workflow["jobs"]["container"]
+    assert job["timeout-minutes"] <= 40
+    steps = "\n".join(step.get("run", "") for step in job["steps"])
+    assert "docker build --pull" in steps
+    assert 'id -un)" = "nexus"' in steps and 'id -u)" != "0"' in steps
+    assert "test -w /app/data" in steps
+    assert "/app/docker/healthcheck.sh" in steps
+    # positive + negative polling probe, positive + negative webhook probe
+    assert steps.count("docker exec hc-polling") >= 1 and "hc-polling-dead" in steps
+    assert "NEXUS_RUN_MODE=webhook" in steps and "hc-webhook-down" in steps
+    assert steps.count("healthcheck must fail") == 2
+    assert "docker run -i --rm" in steps and "probe_update_capability" in steps
+    assert "SystemExit(1 if capability.supported else 0)" in steps

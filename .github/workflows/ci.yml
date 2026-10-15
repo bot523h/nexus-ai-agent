@@ -552,3 +552,85 @@ jobs:
       - run: python -m pip install "ruff==0.16.8"
       - run: ruff check .
       - run: ruff format --check .
+
+  # ── Container contract (audit A-16, closeout 2026-10-15) ────────────────────
+  # The image is what production runs; the unit contract
+  # (tests/unit/test_container_contract.py) reads the Dockerfile and executes the
+  # probe script on the runner, this job executes the *image*: it must build, run
+  # as the unprivileged `nexus` user, own a writable /app/data, expose the
+  # mode-aware HEALTHCHECK, and the in-container updater must report
+  # "unsupported" (the image ships without .git and without git).
+  #
+  # No Telegram token exists in CI, so the probe is exercised against stand-in
+  # processes with the same observable shape (a `run-bot` argv in the PID
+  # namespace; an HTTP server answering /healthz) — this proves the probe
+  # plumbing inside the image, not a live bot session.
+  container:
+    name: container (build, unprivileged runtime, healthcheck, updater probe)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      IMAGE: nexus-ci:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: build the production image
+        run: docker build --pull -t "$IMAGE" .
+      - name: the runtime user is unprivileged and owns a writable data dir
+        run: |
+          set -eux
+          test "$(docker run --rm "$IMAGE" id -un)" = "nexus"
+          test "$(docker run --rm "$IMAGE" id -u)" != "0"
+          docker run --rm "$IMAGE" sh -c 'touch /app/data/.ci-write && test -w /app/data && test -w /app/data/chroma'
+          # the CLI imports and answers as that user (no root-only paths at import time)
+          docker run --rm "$IMAGE" python -m nexus_ai_agent.cli --help >/dev/null
+      - name: the image declares the mode-aware HEALTHCHECK
+        run: |
+          set -eux
+          docker inspect --format '{{json .Config.Healthcheck}}' "$IMAGE" | tee /tmp/healthcheck.json
+          grep -q '/app/docker/healthcheck.sh' /tmp/healthcheck.json
+          docker run --rm "$IMAGE" test -x /app/docker/healthcheck.sh
+      - name: polling mode — the probe passes only when a run-bot process is alive
+        run: |
+          set -eux
+          # stand-in with the observable shape of `… cli run-bot …` (no token in CI)
+          docker run -d --name hc-polling "$IMAGE" \
+            python -c 'import time; time.sleep(600)' run-bot nexus_ai_agent
+          sleep 2
+          docker exec hc-polling /app/docker/healthcheck.sh
+          docker run -d --name hc-polling-dead "$IMAGE" sleep 600
+          sleep 2
+          if docker exec hc-polling-dead /app/docker/healthcheck.sh; then
+            echo "healthcheck must fail without a run-bot process"; exit 1
+          fi
+          docker rm -f hc-polling hc-polling-dead
+      - name: webhook mode — the probe follows /healthz on the bound port
+        run: |
+          set -eux
+          docker run -d --name hc-webhook -e NEXUS_RUN_MODE=webhook -e PORT=8000 "$IMAGE" \
+            sh -c 'mkdir -p /tmp/www && echo ok > /tmp/www/healthz && cd /tmp/www && exec python -m http.server 8000'
+          for i in $(seq 1 20); do
+            docker exec hc-webhook python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/healthz", timeout=2)' && break
+            sleep 1
+          done
+          docker exec hc-webhook /app/docker/healthcheck.sh
+          docker run -d --name hc-webhook-down -e NEXUS_RUN_MODE=webhook -e PORT=8000 "$IMAGE" sleep 600
+          sleep 2
+          if docker exec hc-webhook-down /app/docker/healthcheck.sh; then
+            echo "healthcheck must fail when /healthz does not answer"; exit 1
+          fi
+          docker rm -f hc-webhook hc-webhook-down
+      - name: the in-container updater refuses to self-update (no .git, no git)
+        run: |
+          set -eux
+          # `-i` attaches the heredoc to the container's stdin (without it python
+          # would read an empty program and exit 0 — a vacuous pass).
+          docker run -i --rm "$IMAGE" python - <<'PY'
+          from nexus_ai_agent.agent.updater import probe_update_capability
+          capability = probe_update_capability()
+          print(f"supported={capability.supported} reason={capability.reason}")
+          raise SystemExit(1 if capability.supported else 0)
+          PY
+      - name: image facts for the evidence package
+        run: |
+          docker image inspect "$IMAGE" --format 'size_bytes={{.Size}} user={{.Config.User}} cmd={{json .Config.Cmd}}'
