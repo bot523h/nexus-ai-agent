@@ -67,7 +67,17 @@ jobs:
           set -o pipefail
           # -rs: skip REASONS are part of the contract — an optional-dependency
           # skip must be intentional and visible, never silent (task-132).
-          pytest -v -rs -m "not slow" --tb=short 2>&1 | tee pytest.log
+          pytest -v -rfEs -m "not slow" --tb=short 2>&1 | tee pytest.log
+      # Raw job logs and artifacts live on a blob store that is not reachable
+      # from every reviewer environment; the failing test ids are therefore
+      # also surfaced as check annotations (readable through the Checks API).
+      - name: failing tests as annotations
+        if: failure()
+        run: |
+          grep -E '^(FAILED|ERROR) ' pytest.log | head -n 10 | while IFS= read -r line; do
+            printf '::error title=pytest::%s\n' "$line"
+          done
+          printf '::warning title=pytest::%s failing test id(s) in total (first 10 annotated)\n' "$(grep -cE '^(FAILED|ERROR) ' pytest.log || true)"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
@@ -185,7 +195,14 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: |
           set -o pipefail
-          pytest -q -rs -m "not slow" --tb=short 2>&1 | tee parity.log
+          pytest -q -rfEs -m "not slow" --tb=short 2>&1 | tee parity.log
+      - name: failing tests as annotations
+        if: failure()
+        run: |
+          grep -E '^(FAILED|ERROR) ' parity.log | head -n 10 | while IFS= read -r line; do
+            printf '::error title=pytest %s::%s\n' "${{ matrix.python-version }}" "$line"
+          done
+          printf '::warning title=pytest %s::%s failing test id(s) in total (first 10 annotated)\n' "${{ matrix.python-version }}" "$(grep -cE '^(FAILED|ERROR) ' parity.log || true)"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
