@@ -326,12 +326,12 @@ PROBES: tuple[Probe, ...] = (
         name="M5a success notified without a committed COMPLETED (verified lane)",
         target=QUEUE,
         anchor=(
-            "                if not committed:\n"
-            "                    # Durable commit refused: we are no longer the owner."
+            "            if not committed:\n"
+            "                # Durable commit refused: we are no longer the owner."
         ),
         mutant=(
-            "                if not (committed or True):  # MUTATION: notify unconditionally\n"
-            "                    # Durable commit refused: we are no longer the owner."
+            "            if not (committed or True):  # MUTATION: notify unconditionally\n"
+            "                # Durable commit refused: we are no longer the owner."
         ),
         tests=(f"{F}test_t15_no_success_notification_without_durable_completed_state[verified]",),
     ),
@@ -339,16 +339,16 @@ PROBES: tuple[Probe, ...] = (
         name="M5b success notified without a committed COMPLETED (unverified lane)",
         target=QUEUE,
         anchor=(
-            "            if not await asyncio.to_thread("
+            "        if not await asyncio.to_thread("
             "self._mark_completed, claim, final_result):\n"
-            "                self._log_rejected(job_id, claim, JobStatus.COMPLETED)"
+            "            self._log_rejected(job_id, claim, JobStatus.COMPLETED)"
         ),
         mutant=(
-            "            if not (\n"
-            "                await asyncio.to_thread(self._mark_completed, claim, final_result)\n"
-            "                or True  # MUTATION: notify regardless of the commit\n"
-            "            ):\n"
-            "                self._log_rejected(job_id, claim, JobStatus.COMPLETED)"
+            "        if not (\n"
+            "            await asyncio.to_thread(self._mark_completed, claim, final_result)\n"
+            "            or True  # MUTATION: notify regardless of the commit\n"
+            "        ):\n"
+            "            self._log_rejected(job_id, claim, JobStatus.COMPLETED)"
         ),
         tests=(f"{F}test_t15_no_success_notification_without_durable_completed_state[unverified]",),
     ),

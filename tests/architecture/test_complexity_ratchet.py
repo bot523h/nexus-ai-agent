@@ -3,9 +3,12 @@
 The 2026-10-15 audit measured four execution-core functions far beyond any
 maintainable bound (``InProcessJobQueue._process_job`` 63, ``_compile`` 39,
 ``_planned_session`` 36, ``get_job_facts`` 35 on radon's scale; 62/38/36/33
-under the counter below, which reports nested scopes inside their parent).  Their
-behaviour-preserving decomposition is a separate, characterisation-tested
-change; what *this* guard does is make sure the debt can only shrink:
+under the counter below, which reports nested scopes inside their parent).
+``_process_job`` has since been decomposed into stage helpers under the
+characterisation contract in ``tests/unit/test_process_job_characterization.py``
+(62 → 17, every helper ≤ 16) and left the baseline for good; the remaining
+decompositions are separate, characterisation-tested changes.  What *this*
+guard does is make sure the debt can only shrink:
 
 * every function in :data:`BASELINE` may not grow past the value recorded here;
 * every other function in ``src/`` must stay at or below :data:`CEILING`;
@@ -37,7 +40,6 @@ CEILING = 20
 BASELINE: dict[str, int] = {
     "bot/handlers.py::build_handlers": 205,
     "bot/feature_handlers.py::build_feature_command_handlers": 77,
-    "adapters/in_process_job_queue.py::InProcessJobQueue._process_job": 62,
     "creative/rendering/compiler.py::_compile": 38,
     "creative/slideshow/service.py::_planned_session": 36,
     "adapters/in_process_job_queue.py::InProcessJobQueue.get_job_facts": 33,
@@ -195,4 +197,8 @@ def test_the_counter_matches_the_documented_rules() -> None:
 def test_the_guard_is_not_vacuous() -> None:
     measured = measure()
     assert len(measured) > 1000, "the scan found suspiciously few functions"
-    assert measured["adapters/in_process_job_queue.py::InProcessJobQueue._process_job"] > CEILING
+    assert measured["bot/handlers.py::build_handlers"] > CEILING
+    # The decomposed job pipeline must stay inside the ceiling — if this line
+    # fails, a stage helper regrew and the ratchet above would have caught it
+    # first; the explicit assertion documents the healed hotspot (A-11).
+    assert measured["adapters/in_process_job_queue.py::InProcessJobQueue._process_job"] <= CEILING

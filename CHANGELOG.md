@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Refactor — A-11 `InProcessJobQueue._process_job` decomposition (board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
+
+- **`_process_job` 62 → 17 (R22 ceiling 20), behaviour-preserving.** The 500-line job pipeline is
+  now a sequence of stage helpers — `_fail_claim_time_structural` (no handler → `FAILED_TERMINAL`
+  by unowned CAS), `_reserve` (shielded PENDING→PROCESSING CAS incl. the cancellation reopen of a
+  late-minted claim), `_trim_preflight` + `_reconcile_from_verified_attempt` (timeline.trim
+  verifier/reconciliation/source snapshot), `_reopen_after_cancellation`, `_complete_unverified`,
+  `_verify_and_complete` + `_persist_trim_passport` (VERIFYING → verify → publish/re-probe →
+  passport → durable COMPLETED → finalize). Every await, durable CAS, causal record and log line
+  keeps its order; a helper returning `None` is exactly the old early `return`.
+- **Characterisation contract first** — `tests/unit/test_process_job_characterization.py` (9 tests
+  on the real queue: no-handler failure before reservation, terminal/unknown-status rows never
+  execute, reservation-before-completion ordering, classified handler exceptions, non-dict results,
+  typed `success=False` results never verified, cancellation reopens only our row and announces
+  nothing, verifier refusal/acceptance) was proven green on the old method and on the new shape.
+- **Mutation anchors re-pointed, not dropped** — gate5 `M5a`/`M5b` and execution-core `M6` lived
+  inside `_process_job`; they now target the helpers and both campaigns remain 17/17.
+  `scripts/execution_core_mutations.py` is now run by the CI `governance-mutations` job (detached
+  worktree, `PYTHONPATH` pinned to the mutated tree, GOV-2 shape) and guarded by
+  `tests/unit/test_mutation_harness_anchors.py` (anchor uniqueness, mutant ≠ anchor, PYTHONPATH pin).
+- `_process_job` left the R22 `BASELINE` (21 pinned hotspots remain); the non-vacuity guard now
+  pins `build_handlers` and asserts the healed pipeline stays inside the ceiling.
+
 ### Fix — closeout follow-through (A-01 negative control, A-11 ratchet, 3.10 parity; board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
 
 - **A-01 negative control** — `tests/integration/test_a01_message_path.py` now also proves that a
