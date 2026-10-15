@@ -520,7 +520,9 @@ PROBES: tuple[Probe, ...] = (
 
 
 def _run_tests(tests: tuple[str, ...]) -> int:
-    result = subprocess.run([*PYTEST, *tests], cwd=REPO, capture_output=True, text=True)
+    result = subprocess.run(
+        [*PYTEST, *tests], cwd=REPO, capture_output=True, text=True, check=False
+    )
     return result.returncode
 
 

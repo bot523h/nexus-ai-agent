@@ -163,7 +163,8 @@ def parse_schedule_args(command_args: Sequence[str]) -> tuple[datetime, str] | s
         templates = _SPACE_FORMATS
     for template in templates:
         try:
-            parsed = datetime.strptime(candidate, template)
+            # Operator wall-clock input by contract (no zone in the command).
+            parsed = datetime.strptime(candidate, template)  # noqa: DTZ007
         except ValueError:
             continue
         break

@@ -2018,3 +2018,31 @@ re-hashing). Validation rule confirmed: a finding is "deeper validated" only by 
 *real* entry point (`on_message`, `build_application`, the real session factory) and that fails on
 `main` for the audited reason.
 
+*Round 2 — A-14 lint ratchet (2026-10-15).* The census over the whole tree (`ruff check --select
+<broad set> --statistics`, 841 hits) decided the rule set: a family is enabled only when every hit is
+a fix the project wants *today* (so the gate stays a ratchet, not a backlog), is fixed in the same
+commit, and the fix is semantically neutral or a real defect. Enabled: `RUF100` (77 stale `# noqa`
+for never-enabled rules — the single biggest lie in the tree), `T201` with a print allow-list for the
+operator CLIs, `PLW2901`, `PLW1510`, `A002`, `PGH003`, `RUF012`, `RUF015`, `DTZ`, `S324`, `SIM115`,
+`SIM300`, `G004`, `PIE`, `RSE102`, `FURB`. `BLE001` is *not* enabled (60 deliberate broad `except`
+clauses around third-party calls) but is declared `external` so its documenting `# noqa: BLE001`
+comments are preserved rather than stripped by `RUF100`. Deferred, each with a reason: `ASYNC240/230`
+(65 blocking path/file calls inside coroutines — a real but wide change that belongs to a dedicated
+I/O pass, not a lint commit), `S108` (45 hits, 42 are literal `/tmp` strings inside tests, 3 in the
+benchmark), `PERF401/203` (style), `TRY400` (24 `logger.error` inside `except` — judgement per site),
+`ISC004`, `SIM105/102/117`, `RET504`, `RUF005`, and `ERA001`, which flagged nine prose comments
+(`# filtergraph (pure)`, `# Fallback: base64`, …) for two genuine dead lines — the two were deleted by
+hand and the rule left off. Two per-line suppressions carry their reason in the comment:
+`channel_management.py` parses an operator's wall-clock schedule time (naive by contract) and
+`test_observability.py` logs pre-formatted f-strings on purpose, because httpx does, and the
+redaction boundary must mask exactly that.
+
+*Round 2 — A-18 engine retirement (2026-10-15).* A thread-spy run over the whole fast suite (a
+tiny pytest plugin listing live aiosqlite worker threads after every teardown) found two sources of
+the "Event loop is closed" noise: the Round-2 integration fixtures that nulled `storage.db._engine`
+without disposing it (test hygiene — fixed by leaving disposal to the autouse fixture, which runs on
+the live loop), and a production ordering bug: `create_all_tables` drained `_replaced_engines`
+*before* `_get_engine` retired the old engine, so the retirement always waited for the next call.
+Decision: dispose immediately after the lookup (same coroutine, same loop) rather than adding a
+finaliser or a background task — the loop that created the connections is the only one that can close
+them cleanly. Rule kept: a warning in the suite is a defect with an owner, never a filter entry.

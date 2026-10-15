@@ -207,7 +207,7 @@ def format_created(campaign: dict[str, Any] | None, campaign_id: int) -> str:
             f"شناسه: {campaign.get('id')}",
             f"وضعیت: {campaign.get('status')}",
             f"فاصلهٔ اجرا: {_hours(campaign.get('interval_hours'))} ساعت",
-            f"تعداد تکرار: {repeats if repeats else 'نامحدود'}",
+            f"تعداد تکرار: {repeats or 'نامحدود'}",
             f"اجرای بعدی: {campaign.get('next_run') or '—'}",
         ]
     )

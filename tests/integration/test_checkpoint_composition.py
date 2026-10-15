@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 from pathlib import Path
+from typing import Any, ClassVar
 
 import pytest
 
@@ -103,7 +104,7 @@ async def test_flush_drains_record_writes_before_touches() -> None:
 
     class _StubSaver:
         serde = None
-        config_specs: list = []
+        config_specs: ClassVar[list[Any]] = []
 
         async def aput(self, config, checkpoint, metadata, new_versions):
             return {"configurable": {"thread_id": "t1", "checkpoint_id": "cp1"}}

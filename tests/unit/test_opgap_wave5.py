@@ -112,7 +112,7 @@ def _project() -> Project:
     return new_project("proj_wave5", "Wave 5", timeline).model_copy(update={"assets": assets})
 
 
-def _bus(registry) -> CommandBus:  # noqa: ANN001 - test helper
+def _bus(registry) -> CommandBus:
     return CommandBus(_project(), registry=registry, allow_experimental=True)
 
 

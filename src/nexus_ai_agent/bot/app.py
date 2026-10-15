@@ -81,7 +81,7 @@ async def _notify_creative_completion(completion: Any, token: str) -> None:
     here, exactly like the slideshow notifier. Telegram I/O lives in this
     grandfathered file (frozen import-boundary test).
     """
-    from telegram import Bot  # noqa: PLC0415
+    from telegram import Bot
 
     from nexus_ai_agent.creative.render_jobs import ERROR_CODES, cleanup_workspace
     from nexus_ai_agent.i18n import i18n
@@ -407,8 +407,6 @@ def build_application(
 
     for _name, _fn in build_creative_handlers(job_queue).items():
         application.add_handler(_CommandHandler(_name, _fn))
-    # Custom command handlers removed as they should be part of build_handlers or imported correctly
-    # install_presence_heartbeat(application) # Removed as it was an unawaited mock
     return application
 
 

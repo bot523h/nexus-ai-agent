@@ -11,7 +11,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -24,7 +24,7 @@ from nexus_ai_agent.bot.slideshow import friendly_render_error
 class _RecordingInputFile:
     """``telegram.InputFile`` stand-in: records that the file was opened."""
 
-    instances: list[str] = []
+    instances: ClassVar[list[str]] = []
 
     def __init__(self, path: str) -> None:
         _RecordingInputFile.instances.append(path)
@@ -39,7 +39,7 @@ class _RecordingInputFile:
 class _RecordingBot:
     """``telegram.Bot`` stand-in: captures every outbound message/document."""
 
-    calls: list[tuple[str, dict[str, Any]]] = []
+    calls: ClassVar[list[tuple[str, dict[str, Any]]]] = []
 
     def __init__(self, token: str) -> None:
         assert token, "the notifier must forward a real token"

@@ -46,7 +46,7 @@ def test_redact_secrets_strips_tokens() -> None:
 
 def test_redact_secrets_scrubs_64_hex() -> None:
     hex64 = "a" * 64
-    assert sut.redact_secrets(f"key {hex64} end") == f"key {sut._REDACT_MARKER} end"  # noqa: SLF001
+    assert sut.redact_secrets(f"key {hex64} end") == f"key {sut._REDACT_MARKER} end"
 
 
 def test_redacted_log_never_raises() -> None:
@@ -94,7 +94,7 @@ async def test_non_retryable_is_not_retried() -> None:
         calls += 1
         raise ValueError("not retryable")
 
-    with pytest.raises(ValueError):  # noqa: PT011 — direct raise is the contract
+    with pytest.raises(ValueError):
         await sut.retry_with_backoff(bad, max_attempts=5, base_ms=1, max_ms=5)
     assert calls == 1  # no retry
 
@@ -109,7 +109,7 @@ async def test_non_idempotent_disables_retry() -> None:
         raise ConnectionError("x")
 
     # Even though ConnectionError is retryable, idempotent=False disables it
-    with pytest.raises(ConnectionError):  # noqa: PT011
+    with pytest.raises(ConnectionError):
         await sut.retry_with_backoff(flaky, idempotent=False, max_attempts=5, base_ms=1)
     assert calls == 1
 

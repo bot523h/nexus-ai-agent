@@ -33,7 +33,7 @@ class GitHubReleasesProvider:
         r = await client.get(f"{self._api}/releases/tags/{self._TAG}", headers=self._headers())
         if r.status_code == 200:
             return r.json()
-        if r.status_code not in (404,):
+        if r.status_code != 404:
             raise StorageError(f"GitHub release lookup failed: {r.status_code}")
 
         payload = {

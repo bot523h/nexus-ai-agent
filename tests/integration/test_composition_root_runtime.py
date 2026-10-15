@@ -65,9 +65,9 @@ def application(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
 
         yield build_application(settings_module.get_settings(), graph=object())
     finally:
+        # The async engine (if any) is disposed by the autouse
+        # ``_dispose_db_engine`` fixture on a live loop — never just dropped.
         settings_module.get_settings.cache_clear()
-        db_module._engine = None  # type: ignore[attr-defined]
-        db_module._session_factory = None  # type: ignore[attr-defined]
 
 
 def _text_update(*, user_id: int, chat_type: str, text: str = "سلام") -> Update:
@@ -144,7 +144,7 @@ def test_every_command_is_registered_exactly_once(application: Any) -> None:
             counts.update(handler.commands)
     duplicates = {name: n for name, n in counts.items() if n > 1}
     assert duplicates == {}, f"PTB runs only the first registration: {duplicates}"
-    assert A03_COMMANDS <= set(counts), sorted(A03_COMMANDS - set(counts))
+    assert set(counts) >= A03_COMMANDS, sorted(A03_COMMANDS - set(counts))
 
 
 def test_a03_commands_have_real_callbacks_not_shared_stubs(application: Any) -> None:

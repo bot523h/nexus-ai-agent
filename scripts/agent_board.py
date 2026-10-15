@@ -888,7 +888,7 @@ def _gh_get(url: str, token: str | None) -> object:
     if token:
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310 (github api only)
+    with urllib.request.urlopen(request, timeout=30) as response:
         return json.load(response)
 
 

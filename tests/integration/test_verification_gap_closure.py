@@ -86,7 +86,7 @@ def _row(db_path: Path, job_id: str, column: str) -> Any:
     with sqlite3.connect(db_path) as connection:
         row = connection.execute(
             f"SELECT {column} FROM nexus_job_queue WHERE id = ?",
-            (job_id,),  # noqa: S608
+            (job_id,),
         ).fetchone()
     assert row is not None
     return row[0]

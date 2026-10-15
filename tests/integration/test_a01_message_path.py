@@ -100,8 +100,10 @@ def message_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
         yield SimpleNamespace(db_file=db_file, graph=graph, handlers=handlers)
     finally:
         settings_module.get_settings.cache_clear()
-        db_module._engine = None  # type: ignore[attr-defined]
-        db_module._session_factory = None  # type: ignore[attr-defined]
+        # The engine is left in place on purpose: the autouse
+        # ``_dispose_db_engine`` fixture (tests/conftest.py) disposes it on the
+        # live loop.  Dropping the reference here instead leaks the aiosqlite
+        # worker thread, which later dies with "Event loop is closed".
 
 
 def _text_handler(handlers: list[Any]) -> MessageHandler:  # type: ignore[type-arg]

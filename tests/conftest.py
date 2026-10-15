@@ -33,6 +33,9 @@ async def _dispose_db_engine():
         db_module._engine = None
         db_module._engine_path = None
         db_module._session_factory = None
+    # Engines retired by a path switch inside the test are closed here too,
+    # on the same live loop, so no aiosqlite worker thread outlives the test.
+    await db_module._dispose_replaced_engines()
 
 
 @pytest.fixture()

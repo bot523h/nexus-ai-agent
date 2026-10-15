@@ -434,7 +434,7 @@ def test_cli_continuum_verify_exits_nonzero_when_snapshot_is_untrusted(
     combined = outcome.output + str(outcome.stderr or "")
     assert "state loss detected" in combined
 
-    monkeypatch.setattr(snapshot, "verify_snapshot", lambda: [])
+    monkeypatch.setattr(snapshot, "verify_snapshot", list)
     outcome = runner.invoke(app, ["continuum", "verify"])
     assert outcome.exit_code == 0
     assert "matches checkout" in outcome.output

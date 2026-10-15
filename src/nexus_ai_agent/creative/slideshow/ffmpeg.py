@@ -483,7 +483,7 @@ def resolve_ffmpeg_bin(explicit: str | None = None) -> str:
 
 
 def _run(args: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(  # noqa: S603 - argv list, shell=False, allow-listed binary
+    return subprocess.run(
         args,
         capture_output=True,
         text=True,

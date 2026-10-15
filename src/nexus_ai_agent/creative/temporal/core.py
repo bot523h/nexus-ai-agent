@@ -21,7 +21,7 @@ import math
 from dataclasses import dataclass
 from enum import Enum
 from fractions import Fraction
-from typing import Any, Generic, TypeVar, overload
+from typing import Any, ClassVar, Generic, TypeVar, overload
 
 
 class RoundingPolicy(str, Enum):
@@ -127,7 +127,7 @@ class Timebase:
 class FrameRateResolver:
     """Explicit resolver for standard frame-rate profiles and aliases."""
 
-    _STANDARD_PROFILES: dict[Any, Timebase] = {
+    _STANDARD_PROFILES: ClassVar[dict[Any, Timebase]] = {
         "23.976": Timebase.fps_23_976(),
         "23.976fps": Timebase.fps_23_976(),
         23.976: Timebase.fps_23_976(),

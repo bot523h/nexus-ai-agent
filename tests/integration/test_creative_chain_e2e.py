@@ -131,7 +131,7 @@ async def _drain(queue: InProcessJobQueue, job_id: str, timeout: float = 120.0) 
 
 
 @pytest.mark.asyncio
-async def test_enqueue_to_artifact_to_translated_delivery(harness) -> None:  # noqa: ANN001
+async def test_enqueue_to_artifact_to_translated_delivery(harness) -> None:
     queue, bot, completions = harness
     key = "creative:42:4242:777"
     workspace = Path(str(queue.db_path)).parent / "creative_tmp" / "creative_e2e777"
@@ -180,7 +180,7 @@ async def test_enqueue_to_artifact_to_translated_delivery(harness) -> None:  # n
 
 
 @pytest.mark.asyncio
-async def test_typed_failure_reaches_user_translated(harness) -> None:  # noqa: ANN001
+async def test_typed_failure_reaches_user_translated(harness) -> None:
     queue, bot, _ = harness
     key = "creative:42:4242:778"
     workspace = Path(str(queue.db_path)).parent / "creative_tmp" / "creative_e2e778"
@@ -211,7 +211,7 @@ async def test_typed_failure_reaches_user_translated(harness) -> None:  # noqa: 
 @pytest.mark.asyncio
 async def test_unexpected_crash_is_durable_failed_and_safe(
     harness, monkeypatch: pytest.MonkeyPatch
-) -> None:  # noqa: ANN001
+) -> None:
     queue, bot, _ = harness
     key = "creative:42:4242:779"
     workspace = Path(str(queue.db_path)).parent / "creative_tmp" / "creative_e2e779"

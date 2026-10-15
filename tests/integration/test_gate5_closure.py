@@ -41,8 +41,8 @@ from nexus_ai_agent.application.ports.job_queue import JobStatus
 # Module-level notifier imports: loading telegram.ext before any
 # ``telegram.Bot`` patching avoids the ExtBot metaclass conflict (the same
 # pattern as test_creative_notify).
-from nexus_ai_agent.bot.app import _build_job_completion_notifier  # noqa: E402
-from nexus_ai_agent.bot.slideshow_notify import notify_slideshow_completion  # noqa: E402
+from nexus_ai_agent.bot.app import _build_job_completion_notifier
+from nexus_ai_agent.bot.slideshow_notify import notify_slideshow_completion
 
 pytestmark = pytest.mark.integration
 
@@ -119,10 +119,10 @@ class _FakeTelegram:
     async def send_message(self, *, chat_id: int, text: str) -> None:
         self.messages.append((chat_id, text))
 
-    async def send_document(self, **kwargs: Any) -> None:  # noqa: ANN401
+    async def send_document(self, **kwargs: Any) -> None:
         self.documents.append(int(str(kwargs.get("chat_id") or 0)))
 
-    async def send_video(self, **kwargs: Any) -> None:  # noqa: ANN401
+    async def send_video(self, **kwargs: Any) -> None:
         self.videos.append(int(str(kwargs.get("chat_id") or 0)))
 
 

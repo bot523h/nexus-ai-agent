@@ -173,7 +173,7 @@ class AIMemoryEngine:
                 if data:
                     await self._save_memory(user_id, data)
         except Exception as e:
-            logger.error(f"Failed to update AI memory: {e}")
+            logger.error("Failed to update AI memory: %s", e)
         return EGRESSED
 
     async def _save_memory(self, user_id: int, data: dict) -> None:

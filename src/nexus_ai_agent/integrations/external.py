@@ -738,7 +738,7 @@ def _select_parser() -> tuple[str, bool]:
     for name in _PARSER_PREFERENCE:
         try:
             BeautifulSoup("", name)
-        except (FeatureNotFound, Exception):  # noqa: B014 — bs4 raises broadly here
+        except (FeatureNotFound, Exception):
             continue
         return name, name != _PARSER_PREFERENCE[0]
     return "html.parser", True

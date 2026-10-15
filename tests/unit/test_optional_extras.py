@@ -100,7 +100,7 @@ def test_extra_modules_importability_matches_the_active_leg(
     extra: str, modules: tuple[str, ...]
 ) -> None:
     present = {module: _module_available(module) for module in modules}
-    if LEG == extra:
+    if extra == LEG:
         # PACKAGING: the extra installed, but its module does not import.
         missing = [module for module, ok in present.items() if not ok]
         assert not missing, (
@@ -129,7 +129,7 @@ def test_extra_modules_importability_matches_the_active_leg(
 @pytest.mark.parametrize("extra,modules", sorted(LEG_MODULES.items()))
 def test_extra_import_smoke(extra: str, modules: tuple[str, ...]) -> None:
     """Import every module the extra's wheels provide (real import, not find_spec)."""
-    if LEG == extra or (LEG is None and all(_module_available(m) for m in modules)):
+    if extra == LEG or (LEG is None and all(_module_available(m) for m in modules)):
         for module in modules:
             imported = importlib.import_module(module)
             assert imported is not None
@@ -154,6 +154,7 @@ def test_core_leg_cli_import_tree_runs() -> None:
             capture_output=True,
             text=True,
             timeout=120,
+            check=False,
         )
         assert completed.returncode == 0, (
             f"`nexus {' '.join(arguments)}` exited {completed.returncode} on the "
@@ -310,7 +311,7 @@ def test_leg_environment_matches_declared_extras() -> None:
     # The script's parser is stdlib-only and Python-3.10-safe (no tomllib),
     # so the same declaration is read live from pyproject on every interpreter.
     pyproject_text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    extras = _EXTRAS_MATRIX._optional_dependencies(pyproject_text)  # noqa: SLF001
+    extras = _EXTRAS_MATRIX._optional_dependencies(pyproject_text)
     shipping = {name for name in extras if name != "dev"}
     assert set(LEG_MODULES) == shipping, (
         "scripts/extras_matrix.py LEG_DEFINITIONS drifted from pyproject "

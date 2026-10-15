@@ -365,7 +365,7 @@ class Settings(BaseSettings):
         max_length=100,
     )
     image_gen_estimated_cost_usd: Decimal = Field(
-        default=Decimal("0"),
+        default=Decimal(0),
         ge=0,
         allow_inf_nan=False,
         validation_alias="NEXUS_IMAGE_GEN_ESTIMATED_COST_USD",

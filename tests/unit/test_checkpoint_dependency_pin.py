@@ -21,7 +21,7 @@ PYPROJECT = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
 
 def _runtime_dependencies() -> list[str]:
-    block = re.search(r"^dependencies = \[(.*?)^\]", PYPROJECT, re.S | re.M)
+    block = re.search(r"^dependencies = \[(.*?)^\]", PYPROJECT, re.DOTALL | re.MULTILINE)
     assert block, "could not locate [project].dependencies"
     return re.findall(r'"([^"]+)"', block.group(1))
 

@@ -57,7 +57,7 @@ def _run_migrates(db_file: Path, count: int) -> list[subprocess.CompletedProcess
     env["PYTHONDONTWRITEBYTECODE"] = "1"
 
     processes = [
-        subprocess.Popen(  # noqa: S603 — fixed argv, no shell
+        subprocess.Popen(
             [sys.executable, "-m", "nexus_ai_agent.cli", "migrate"],
             env=env,
             cwd=str(db_file.parent),

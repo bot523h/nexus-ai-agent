@@ -52,9 +52,9 @@ def api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
     try:
         yield app
     finally:
+        # The async engine the dashboard opened is disposed by the autouse
+        # ``_dispose_db_engine`` fixture on a live loop — never just dropped.
         settings_module.get_settings.cache_clear()
-        db_module._engine = None  # type: ignore[attr-defined]
-        db_module._session_factory = None  # type: ignore[attr-defined]
 
 
 def _operations(app: Any) -> list[tuple[str, str]]:
@@ -77,7 +77,7 @@ def _probe(app: Any, headers: dict[str, str] | None = None) -> dict[tuple[str, s
 
 def test_inventory_contains_the_audited_surfaces(api: Any) -> None:
     ops = set(_operations(api))
-    assert PUBLIC <= ops and WEBHOOK in ops
+    assert ops >= PUBLIC and WEBHOOK in ops
     assert ("GET", "/api/dashboard/stats") in ops
     assert ("GET", "/api/dashboard/recent_users") in ops
     assert any(path.startswith("/api/studio/") for _, path in ops)

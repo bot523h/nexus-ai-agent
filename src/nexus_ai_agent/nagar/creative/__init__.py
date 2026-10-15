@@ -260,7 +260,7 @@ def _record_acceptance(
 
 
 def verify_trim_artifact(
-    bus: Any,  # noqa: ANN401 — the real CommandBus
+    bus: Any,
     outcome: FreeTextOutcome,
     *,
     artifact_path: str | None = None,

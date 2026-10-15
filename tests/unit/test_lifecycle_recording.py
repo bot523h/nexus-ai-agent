@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -46,9 +46,9 @@ async def test_touch_requires_user_context_and_is_coalesced():
 
 def test_touch_coalescer_keeps_latest_timestamp():
     coalescer = TouchCoalescer()
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     coalescer.add("t", now)
-    coalescer.add("t", datetime.fromtimestamp(now.timestamp() + 1))
+    coalescer.add("t", datetime.fromtimestamp(now.timestamp() + 1, tz=timezone.utc))
     assert list(coalescer.pending) == ["t"]
     assert coalescer.pending["t"].timestamp() == now.timestamp() + 1
 

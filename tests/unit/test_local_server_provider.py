@@ -11,7 +11,7 @@ import json
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -25,7 +25,7 @@ from nexus_ai_agent.llm.local_server_provider import (
 
 class _StubLlamaServer(BaseHTTPRequestHandler):
     mode: str = "healthy"
-    requests: list[dict[str, Any]] = []
+    requests: ClassVar[list[dict[str, Any]]] = []
 
     def log_message(self, *_args: object) -> None:  # silence test output
         return

@@ -79,12 +79,7 @@ def test_chain_priority_order() -> None:
 def test_only_configured_providers_enter_chain() -> None:
     chain = build_routing_chain(
         make_settings(
-            **{
-                "GROQ_API_KEY": None,
-                "GEMINI_API_KEY": None,
-                "OPENROUTER_API_KEY": None,
-                "NEXUS_OLLAMA_MODEL": "",
-            }
+            GROQ_API_KEY=None, GEMINI_API_KEY=None, OPENROUTER_API_KEY=None, NEXUS_OLLAMA_MODEL=""
         )
     )
     assert chain == []
@@ -94,12 +89,10 @@ def test_empty_chain_raises_value_error() -> None:
     with pytest.raises(ValueError, match="routing chain is empty"):
         LiteLLMRoutingProvider(
             make_settings(
-                **{
-                    "GROQ_API_KEY": None,
-                    "GEMINI_API_KEY": None,
-                    "OPENROUTER_API_KEY": None,
-                    "NEXUS_OLLAMA_MODEL": "",
-                }
+                GROQ_API_KEY=None,
+                GEMINI_API_KEY=None,
+                OPENROUTER_API_KEY=None,
+                NEXUS_OLLAMA_MODEL="",
             ),
             router=FakeRouter(),
         )
@@ -169,12 +162,10 @@ def test_real_litellm_router_accepts_wiring() -> None:
     fallbacks and cooldown kwargs (no network involved in construction)."""
     litellm = pytest.importorskip("litellm")
     settings = make_settings(
-        **{
-            "GROQ_API_KEY": None,
-            "GEMINI_API_KEY": None,
-            "OPENROUTER_API_KEY": None,
-            "NEXUS_OLLAMA_MODEL": "llama3.2",
-        }
+        GROQ_API_KEY=None,
+        GEMINI_API_KEY=None,
+        OPENROUTER_API_KEY=None,
+        NEXUS_OLLAMA_MODEL="llama3.2",
     )
     provider = LiteLLMRoutingProvider(settings)  # builds a real Router
     assert provider.deployment_count == 1
@@ -253,13 +244,11 @@ async def test_factory_respects_routing_disabled(monkeypatch: pytest.MonkeyPatch
     llm, label = build_llm_provider(
         make_settings(
             NEXUS_LLM_ROUTING_ENABLED="false",
-            **{
-                "GROQ_API_KEY": None,
-                "GEMINI_API_KEY": None,
-                "OPENROUTER_API_KEY": None,
-                "NEXUS_OLLAMA_MODEL": "",
-                "NEXUS_MODEL_PATH": "/nonexistent/model.gguf",
-            },
+            GROQ_API_KEY=None,
+            GEMINI_API_KEY=None,
+            OPENROUTER_API_KEY=None,
+            NEXUS_OLLAMA_MODEL="",
+            NEXUS_MODEL_PATH="/nonexistent/model.gguf",
         )
     )
     assert isinstance(llm, FakeLLMProvider)

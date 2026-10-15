@@ -81,9 +81,7 @@ def test_passport_builder_takes_no_write_path_to_the_queue() -> None:
     write_methods = {
         name
         for name in dir(PassportBuilder)
-        if not name.startswith("_")
-        and callable(getattr(PassportBuilder, name))
-        and name not in {"build"}
+        if not name.startswith("_") and callable(getattr(PassportBuilder, name)) and name != "build"
     }
     assert not write_methods, f"passport grew write surface: {sorted(write_methods)}"
     journal_write_api = {"append"}  # the ONLY write the journal exposes

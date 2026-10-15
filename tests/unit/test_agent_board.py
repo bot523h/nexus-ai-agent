@@ -202,7 +202,7 @@ def test_active_claims_carry_owner_timestamp_and_zone(board: dict) -> None:
         assert claim.get("claimed_at"), f"active claim {claim['task']} has no lease timestamp"
         assert int(claim.get("ttl_hours", 0)) > 0, f"active claim {claim['task']} has no TTL"
         assert claim.get("exclusive_paths") is not None
-        datetime.strptime(claim["claimed_at"], "%Y-%m-%dT%H:%M:%SZ")
+        datetime.strptime(claim["claimed_at"], "%Y-%m-%dT%H:%M:%S%z")
 
 
 def test_exclusive_paths_belong_to_a_declared_zone(board: dict) -> None:

@@ -171,6 +171,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or HMAC headers → `401`/`403`; the correct dashboard token opens only
   `/api/dashboard/*`. On `main` the same test reports the audited leak
   (`/api/dashboard/stats` and `/recent_users` answer `200` unconfigured).
+- **A-14 — lint ratchet widened from `E,F,I,B,UP` to the rules the audit
+  showed were catching real defects.** Newly enforced at zero violations:
+  `RUF100` (stale `# noqa` — 77 removed, every one of them a suppression for a
+  rule that was never on), `T201`, `PLW2901`, `PLW1510`, `A002`, `PGH003`,
+  `RUF012`, `RUF015`, `DTZ`, `S324`, `SIM115`, `SIM300`, `G004`, `PIE`,
+  `RSE102`, `FURB`; `scripts/**` and `diagnostics/truth.py` may `print`,
+  `BLE001` is declared `external` so its documenting `# noqa` comments
+  survive. Real fixes that fell out: two file-handle leaks in
+  `bot/handlers.py` (`reply_photo(photo=open(...))`,
+  `reply_voice(voice=open(...))` now use `with`), eleven f-string logging
+  calls, a blanket `# type: ignore`, a loop variable overwritten in
+  `features/rag.py`, five shared mutable class attributes made explicit
+  `ClassVar`s, twelve `subprocess.run` calls with an explicit `check=False`,
+  `nexus smoke`'s `input` parameter renamed `message`, and two blocks of
+  commented-out code deleted. Deferred with counts recorded in the decision
+  log: `ASYNC2xx`, `BLE001`, `S108`, `PERF`, `TRY400`, `ISC`, `SIM105/102/117`,
+  `RET504`, `RUF005`, `ERA001` (false positives on prose comments).
+- **A-18 — retired SQLite engine disposed at the switch, not "next time".**
+  `storage.db.create_all_tables` retired the previous engine on a path switch
+  but disposed it only on the *next* database call, so the last switch in a
+  process (and every one in a test) left an aiosqlite worker thread bound to
+  a loop that was about to close — the `RuntimeError: Event loop is closed`
+  thread noise. Disposal now happens right after the switch;
+  `tests/unit/test_db_engine_retirement.py` pins it (fails on the old code).
+  The autouse test fixture also drains retired engines, and the three
+  Round-2 integration fixtures no longer drop the engine reference without
+  disposing it (the fast suite is warning-free again: 4019 passed, 0 warnings).
 - **Docs:** the golden-update command is `nexus checkpoints golden update`
   (three documents said `nexus golden update`, which does not exist).
 

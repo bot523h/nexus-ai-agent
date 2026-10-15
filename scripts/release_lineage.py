@@ -85,6 +85,7 @@ def _git(*arguments: str) -> str:
         capture_output=True,
         text=True,
         timeout=60,
+        check=False,
     )
     return completed.stdout.strip() if completed.returncode == 0 else ""
 
@@ -102,6 +103,7 @@ def tag_reachable_from_head(tag: str) -> bool:
         ["git", "-C", str(REPO_ROOT), "merge-base", "--is-ancestor", tag, "HEAD"],
         capture_output=True,
         timeout=60,
+        check=False,
     )
     return completed.returncode == 0
 
@@ -129,7 +131,9 @@ def _gh_release(tag: str | None) -> dict[str, object] | None:
     if tag is not None:
         command.append(tag)
     command += ["--json", _GH_FIELDS]
-    completed = subprocess.run(command, capture_output=True, text=True, cwd=REPO_ROOT, timeout=60)
+    completed = subprocess.run(
+        command, capture_output=True, text=True, cwd=REPO_ROOT, timeout=60, check=False
+    )
     if completed.returncode != 0:
         return None
     data = json.loads(completed.stdout)

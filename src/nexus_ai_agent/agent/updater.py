@@ -41,7 +41,7 @@ class AutoUpdater:
                     if latest != self.current_version:
                         return True, latest
             except Exception as e:
-                logger.error(f"Update check error: {e}")
+                logger.error("Update check error: %s", e)
         return False, None
 
     async def do_update(self, approval: ApprovalSystem | None = None) -> tuple[bool, str]:
@@ -81,7 +81,7 @@ class AutoUpdater:
             logger.info("Update completed. Please restart the bot.")
             return True, "update completed"
         except Exception as e:  # noqa: BLE001 — every failure mode is reported to the owner
-            logger.error(f"Update failed: {e}")
+            logger.error("Update failed: %s", e)
             return False, f"update failed: {e}"
 
     async def _ensure_self_update_approval(self, approval: ApprovalSystem) -> tuple[bool, str]:

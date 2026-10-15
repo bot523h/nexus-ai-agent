@@ -128,7 +128,7 @@ def test_contrast_passes_through_and_stays_well_inside_the_eq_range() -> None:
     assert "eq=gamma=1.000000:contrast=0.200000" in _exposure_line(_compiled(low))
     assert "eq=gamma=1.000000:contrast=3.000000" in _exposure_line(_compiled(high))
     # The lane's whole usable contrast domain must sit inside eq's own bounds.
-    assert EQ_CONTRAST_MIN <= 0.2 and 3.0 <= EQ_CONTRAST_MAX
+    assert EQ_CONTRAST_MIN <= 0.2 and EQ_CONTRAST_MAX >= 3.0
     # And inside eq's fast path: vf_eq.c only takes the non-LUT branch while
     # |contrast| < 7.9, so 0.2–3.0 never pays for the 256-entry LUT rebuild.
     assert max(abs(0.2), abs(3.0)) < 7.9

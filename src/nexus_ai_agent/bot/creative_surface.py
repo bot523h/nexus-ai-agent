@@ -33,7 +33,7 @@ import shutil
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from nexus_ai_agent.application.ports.job_queue import JobQueuePort
 from nexus_ai_agent.bot.surface._ptb import bot_of, user_language_code
@@ -99,7 +99,7 @@ class CreativeSurfaceMapper:
     """
 
     # Allowed ops per command (allow-list, closed set)
-    ALLOWED: dict[str, frozenset[str]] = {
+    ALLOWED: ClassVar[dict[str, frozenset[str]]] = {
         "edit": frozenset({"trim", "speed", "reverse"}),
         "caption": frozenset({"transcribe"}),
         "grade": frozenset({"exposure", "proxy", "otio"}),
@@ -205,7 +205,7 @@ def build_creative_handlers(
     """
     _mapper = mapper or CreativeSurfaceMapper()
 
-    async def _reply(update: Any, text: str) -> None:  # noqa: ANN401
+    async def _reply(update: Any, text: str) -> None:
         message = getattr(update, "message", None) or getattr(update, "edited_message", None)
         if message is not None:
             await message.reply_text(text)
@@ -222,7 +222,7 @@ def build_creative_handlers(
             return i18n.t(failure.message_key, lang=lang, max_mb=MAX_MEDIA_BYTES // (1024 * 1024))
         return i18n.t(failure.message_key, lang=lang)
 
-    async def _stage_media(req: CreativeRequest, context: Any, workspace: Path) -> str | None:  # noqa: ANN401
+    async def _stage_media(req: CreativeRequest, context: Any, workspace: Path) -> str | None:
         """Download the replied media into the job workspace (PTB glue)."""
         bot = bot_of(context)
         if bot is None or req.media_file_id is None:
@@ -233,7 +233,7 @@ def build_creative_handlers(
         await tg_file.download_to_drive(target)
         return str(target)
 
-    async def _dispatch(update: Any, context: Any, command: str) -> None:  # noqa: ANN401
+    async def _dispatch(update: Any, context: Any, command: str) -> None:
         message = getattr(update, "message", None) or getattr(update, "edited_message", None)
         if message is None:
             return
@@ -332,8 +332,8 @@ def build_creative_handlers(
         )
         await _reply(update, queued_text)
 
-    def _make(command: str) -> Any:  # noqa: ANN401
-        async def handler(update: Any, context: Any) -> None:  # noqa: ANN401
+    def _make(command: str) -> Any:
+        async def handler(update: Any, context: Any) -> None:
             await _dispatch(update, context, command)
 
         handler.__name__ = f"creative_{command}_cmd"

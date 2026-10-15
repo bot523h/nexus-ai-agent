@@ -19,8 +19,9 @@ from nexus_ai_agent.storage.models import User
 def _reset_db_engine_cache() -> None:
     """The sqlite engine is cached by (relative) path string; reset per test.
 
-    Retired engines are disposed lazily by the db module on the next
-    async operation, so dropping the reference here is sufficient.
+    The autouse ``_dispose_db_engine`` fixture (tests/conftest.py) has already
+    disposed the previous test's engine on its own loop; this only clears a
+    stale cached path so the next request opens the fixture's database.
     """
     db_module._engine = None
     db_module._engine_path = None

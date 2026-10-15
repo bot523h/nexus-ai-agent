@@ -181,6 +181,7 @@ def _run_preflight(**overrides: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         env=env,
+        check=False,
     )
 
 

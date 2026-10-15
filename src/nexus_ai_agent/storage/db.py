@@ -335,9 +335,13 @@ async def _set_wal_mode(engine: Any) -> None:
 
 async def create_all_tables(db_path: str = "data/app.sqlite") -> None:
     """Create all SQLModel tables for the selected database, exactly once per path."""
-    await _dispose_replaced_engines()
     normalized_path = str(Path(db_path).expanduser())
     engine = _get_engine(normalized_path)
+    # Dispose *after* the lookup: a path switch retires the previous engine
+    # inside _get_engine, and disposing it here (rather than on the *next*
+    # database operation) closes its aiosqlite worker thread while the loop
+    # that owns it is still alive.
+    await _dispose_replaced_engines()
     if normalized_path in _initialized_paths:
         return
 

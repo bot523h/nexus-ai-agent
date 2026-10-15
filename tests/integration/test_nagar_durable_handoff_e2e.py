@@ -163,7 +163,7 @@ def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.asyncio
-async def test_free_text_to_durable_queue_to_verified_artifact(harness) -> None:  # noqa: ANN001
+async def test_free_text_to_durable_queue_to_verified_artifact(harness) -> None:
     queue, creative_root = harness
     actor, project = _project()
     workspace = creative_root / "creative_handoff_e2e"
@@ -221,7 +221,7 @@ async def test_free_text_to_durable_queue_to_verified_artifact(harness) -> None:
 
 
 @pytest.mark.asyncio
-async def test_tampered_artifact_fails_independent_verification(harness) -> None:  # noqa: ANN001
+async def test_tampered_artifact_fails_independent_verification(harness) -> None:
     queue, creative_root = harness
     actor, project = _project()
     workspace = creative_root / "creative_handoff_tamper"

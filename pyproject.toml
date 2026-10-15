@@ -84,7 +84,36 @@ line-length = 100
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP"]
+# Audit A-14 (2026-10-15): the rule set was the bare minimum; every rule below
+# is enabled at zero violations and is a ratchet (a new violation is red).
+select = [
+    "E", "F", "I", "B", "UP",
+    "RUF100",  # unused `# noqa` — a stale suppression is a lie about the code
+    "T201",    # `print` in library code (scripts/CLI output are exempt below)
+    "PLW2901", # loop variable overwritten inside the loop
+    "PLW1510", # `subprocess.run` without an explicit `check=`
+    "A002",    # argument shadows a builtin
+    "PGH003",  # blanket `# type: ignore`
+    "RUF012",  # mutable class attribute without ClassVar
+    "RUF015",  # `list(x)[0]` → `next(iter(x))`
+    "DTZ",     # naive datetime construction
+    "S324",    # insecure hash (md5/sha1) for security purposes
+    "SIM115",  # `open()` without a context manager (file-handle leak)
+    "SIM300",  # Yoda conditions
+    "G004",    # f-string in a logging call (formatted even when filtered out)
+    "PIE",     # misc. correctness (unnecessary placeholders, dict kwargs, …)
+    "RSE102",  # `raise Exc()` → `raise Exc`
+    "FURB",    # refurb modernisations (regex flag aliases, decimal ctor, …)
+]
+# `BLE001` is not selected, but its `# noqa: BLE001` comments document every
+# deliberate broad `except` for reviewers; `external` keeps RUF100 from
+# stripping them.
+external = ["BLE001"]
+
+[tool.ruff.lint.per-file-ignores]
+# Operator-facing CLIs print by design.
+"scripts/**" = ["T201"]
+"src/nexus_ai_agent/diagnostics/truth.py" = ["T201"]
 
 [tool.ruff.format]
 quote-style = "double"

@@ -1434,7 +1434,7 @@ def run_bot(
 
 @app.command()
 def smoke(
-    input: str = typer.Argument(
+    message: str = typer.Argument(
         "Hello, what can you do?",
         help="Message to send through the graph",
     ),
@@ -1470,7 +1470,7 @@ def smoke(
             "chat_id": 0,
             "user_id": 0,
             "correlation_id": str(uuid4()),
-            "messages": [{"role": "user", "content": input}],
+            "messages": [{"role": "user", "content": message}],
             "intent": "unknown",
             "active_persona": "gemma",
             "current_task": None,

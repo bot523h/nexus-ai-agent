@@ -194,7 +194,7 @@ class ChannelManager:
                 await bot.send_message(chat_id=self.channel_id, text=text, parse_mode="Markdown")
                 return True
             except TelegramError as e:
-                logger.error(f"Failed to post top users: {e}")
+                logger.error("Failed to post top users", error=str(e))
                 return False
 
     async def post_viral_content(self) -> int:
@@ -219,7 +219,7 @@ class ChannelManager:
                     session.add(post)
                     count += 1
                 except TelegramError as e:
-                    logger.error(f"Failed to post viral content {post.id}: {e}")
+                    logger.error("Failed to post viral content", post_id=post.id, error=str(e))
                     post.status = "failed"
                     session.add(post)
 

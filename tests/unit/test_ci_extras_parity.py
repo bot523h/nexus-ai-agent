@@ -91,7 +91,7 @@ def test_the_repository_matrix_agrees_with_pyproject() -> None:
 
 
 def test_leg_definitions_cover_the_shipping_extras() -> None:
-    extras = extras_matrix._optional_dependencies(PYPROJECT_TEXT)  # noqa: SLF001
+    extras = extras_matrix._optional_dependencies(PYPROJECT_TEXT)
     shipping = {name for name in extras if name != extras_matrix.DEV_EXTRA}
     assert set(extras_matrix.LEG_DEFINITIONS) == shipping
 

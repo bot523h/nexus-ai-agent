@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import random
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, ClassVar
 
 from sqlmodel import Session, select
 
@@ -92,8 +92,9 @@ class EngagementEngine:
     # Anti-spam: minimum seconds between engagements per chat
     MIN_INTERVAL_SECONDS = 300  # 5 minutes
 
-    # In-memory last engagement time per chat
-    _last_engagement: dict[int, datetime] = {}
+    # In-memory last engagement time per chat (process-wide, shared by every
+    # instance on purpose — one scheduler per process).
+    _last_engagement: ClassVar[dict[int, datetime]] = {}
 
     def __init__(self, bot: Any | None = None) -> None:
         self.bot = bot

@@ -148,7 +148,7 @@ async def test_typed_failure_is_translated_and_cleans_workspace(
     assert text.endswith(
         i18n.t("creative.failed.caption_profile_unavailable", lang="fa", detail="x")
     )
-    assert text.startswith("❌") or text.startswith("⚠️")
+    assert text.startswith(("❌", "⚠️"))
     assert not workspace.exists()
 
 

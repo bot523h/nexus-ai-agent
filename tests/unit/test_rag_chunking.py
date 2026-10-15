@@ -179,7 +179,7 @@ def _bm25_fixture() -> BM25:
 def test_bm25_ranks_the_relevant_document_first() -> None:
     index = _bm25_fixture()
     hits = index.search("postgres index", k=3)
-    assert [hit.doc_id for hit in hits][0] == "d1"
+    assert next(hit.doc_id for hit in hits) == "d1"
     assert all(hit.score > 0 for hit in hits)
 
 
@@ -195,8 +195,8 @@ def test_bm25_matches_across_persian_and_arabic_spellings() -> None:
     index = BM25()
     index.add("fa", "کتابخانه مرکزی دانشگاه")
     index.add("ar", "مكتبة الحرم")
-    assert [hit.doc_id for hit in index.search("كتابخانه", k=2)][0] == "fa"
-    assert [hit.doc_id for hit in index.search("کتابخانه", k=2)][0] == "fa"
+    assert next(hit.doc_id for hit in index.search("كتابخانه", k=2)) == "fa"
+    assert next(hit.doc_id for hit in index.search("کتابخانه", k=2)) == "fa"
 
 
 def test_bm25_matches_across_digit_scripts() -> None:

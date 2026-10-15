@@ -488,10 +488,8 @@ def build_handlers(
         elif result.get("file_path"):
             msg = _message(update)
             if msg is not None:
-                await msg.reply_photo(
-                    photo=open(result["file_path"], "rb"),
-                    caption=f"🎨 {prompt[:100]}",
-                )
+                with open(result["file_path"], "rb") as photo:
+                    await msg.reply_photo(photo=photo, caption=f"🎨 {prompt[:100]}")
         else:
             await _reply(update, "❌ Image generation failed.")
 
@@ -549,7 +547,8 @@ def build_handlers(
         elif result.get("file_path"):
             msg = _message(update)
             if msg is not None:
-                await msg.reply_voice(voice=open(result["file_path"], "rb"))
+                with open(result["file_path"], "rb") as voice:
+                    await msg.reply_voice(voice=voice)
         else:
             await _reply(update, "❌ TTS failed.")
 
@@ -632,7 +631,7 @@ def build_handlers(
             if len(parts) >= 2:
                 mode = parts[0].split(":")[1].lower()
                 content_text = parts[1]
-        if content_text.startswith("http://") or content_text.startswith("https://"):
+        if content_text.startswith(("http://", "https://")):
             result = await summarizer_engine.summarize_url(content_text, mode=mode)
         else:
             result = await summarizer_engine.summarize_text(content_text, mode=mode)
@@ -1646,4 +1645,3 @@ async def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def install_presence_heartbeat(application: Any) -> None:
     """Mock presence heartbeat for now."""
-    pass

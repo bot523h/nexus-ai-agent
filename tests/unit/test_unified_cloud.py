@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 import pytest
@@ -46,7 +46,7 @@ class LogSpy:
 
 
 class AsyncClientRecorder:
-    requests: list[dict[str, Any]] = []
+    requests: ClassVar[list[dict[str, Any]]] = []
 
     def __init__(self, *, timeout: float) -> None:
         self.timeout = timeout

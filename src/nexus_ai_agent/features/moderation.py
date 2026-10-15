@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, ClassVar
 
 from sqlmodel import Session, select
 
@@ -74,7 +74,7 @@ class ModerationEngine:
     """Smart moderation: anti-spam, flood, link filter, profanity, warnings."""
 
     # In-memory flood tracking: user_id -> list of timestamps
-    _flood_tracker: dict[int, list[float]] = {}
+    _flood_tracker: ClassVar[dict[int, list[float]]] = {}
 
     # Rate limits
     FLOOD_WINDOW_SECONDS = 5

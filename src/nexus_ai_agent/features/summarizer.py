@@ -199,7 +199,7 @@ class SummarizerEngine:
 def _strip_html(html: str) -> str:
     """Crude HTML → plain-text conversion."""
     # Remove script and style blocks
-    text = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", html, flags=re.S | re.I)
+    text = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", html, flags=re.DOTALL | re.IGNORECASE)
     # Remove HTML tags
     text = re.sub(r"<[^>]+>", " ", text)
     # Collapse whitespace

@@ -60,7 +60,7 @@ def test_build_application_registers_creative_surface() -> None:
 def test_creative_commands_are_exactly_the_three_surface_commands() -> None:
     from nexus_ai_agent.bot.creative_surface import build_creative_handlers
 
-    class _Q:  # noqa: D401 - structural stub, never called
+    class _Q:
         pass
 
     handlers = build_creative_handlers(_Q())  # type: ignore[arg-type]

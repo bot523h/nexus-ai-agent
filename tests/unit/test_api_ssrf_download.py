@@ -421,7 +421,7 @@ async def test_https_to_http_redirect_is_refused_not_followed(
         assert "Only https" in str(excinfo.value)
         # hop 1 only — the http hop never even attempted a TCP connect
         assert backend.connects == ["93.184.216.34:443"]
-        assert hop2_payload not in (str(excinfo.value),)
+        assert hop2_payload != str(excinfo.value)
     finally:
         await transport.aclose()
 

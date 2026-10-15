@@ -6,7 +6,7 @@ import os
 import time
 from typing import Any
 
-import psutil  # type: ignore
+import psutil  # type: ignore[import-untyped]
 from telegram import Bot
 
 from nexus_ai_agent.agent.approval import ApprovalSystem
@@ -51,14 +51,14 @@ class SelfMonitor:
                     parse_mode="Markdown",
                 )
             except Exception as e:
-                logger.error(f"Failed to notify owner of high RAM: {e}")
+                logger.error("Failed to notify owner of high RAM: %s", e)
 
         return status
 
     @instrumented("agent.monitor.autofix")
     async def auto_fix(self, issue: str) -> None:
         """Basic auto-fix logic and notify owner."""
-        logger.info(f"Attempting to fix: {issue}")
+        logger.info("Attempting to fix: %s", issue)
 
         if self.bot and self.settings.owner_telegram_id:
             try:
@@ -68,7 +68,7 @@ class SelfMonitor:
                     parse_mode="Markdown",
                 )
             except Exception as e:
-                logger.error(f"Failed to notify owner of auto-fix: {e}")
+                logger.error("Failed to notify owner of auto-fix: %s", e)
 
         if "RAM" in issue:
             gc.collect()

@@ -48,7 +48,7 @@ def _lose_the_mkdir_race(monkeypatch: pytest.MonkeyPatch, *, as_symlink_to: Path
     """
     real_mkdir = os.mkdir
 
-    def racing_mkdir(name, mode=0o777, *, dir_fd=None):  # noqa: ANN001, ANN202
+    def racing_mkdir(name, mode=0o777, *, dir_fd=None):
         if as_symlink_to is None:
             real_mkdir(name, mode, dir_fd=dir_fd)
         else:

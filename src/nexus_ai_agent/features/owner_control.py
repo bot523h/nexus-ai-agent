@@ -38,7 +38,7 @@ def _get_owner_id() -> int:
     sentinel; it is not a Telegram user id.  Every caller must treat it as
     *nobody*, never as an identity — see :func:`is_owner`.
     """
-    global _owner_id  # noqa: PLW0603
+    global _owner_id
     if _owner_id is None:
         _owner_id = get_settings().owner_telegram_id
     return _owner_id

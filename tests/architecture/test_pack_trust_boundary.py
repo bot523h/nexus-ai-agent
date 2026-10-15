@@ -67,8 +67,8 @@ def test_only_one_state_grants_trust() -> None:
     from nexus_ai_agent.creative.packs.trust import TRUSTED_STATES, TrustState
     from nexus_ai_agent.creative.packs.verify import TRUSTED_SIGNATURE_STATES
 
-    assert TRUSTED_STATES == {TrustState.VERIFIED}
-    assert TRUSTED_SIGNATURE_STATES == {"verified"}
+    assert {TrustState.VERIFIED} == TRUSTED_STATES
+    assert {"verified"} == TRUSTED_SIGNATURE_STATES
     # Every other state must exist as its own, distinguishable outcome.
     assert len(set(TrustState)) >= 9
 
