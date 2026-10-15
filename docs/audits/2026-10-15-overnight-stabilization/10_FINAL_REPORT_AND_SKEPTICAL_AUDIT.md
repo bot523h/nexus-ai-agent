@@ -9,8 +9,8 @@ summaries were treated as claims to reproduce.
 |---|---|
 | `main` | `6b398565` (unchanged all night — no direct commits, no bypass) |
 | Start SHA of this loop | `4cf8bbc` (PR #218 head at 19:30Z) |
-| Commits added tonight | `5bc146e` A-04 coordination ref + census · `7fd4112` Asset Library · *package commit* (this document; SHA in the PR ledger comment that follows the push) |
-| Final SHA | the package commit = PR #218 head after push (`git rev-parse origin/arena/26f7d958-nexus-ai-agent`) |
+| Commits added tonight | `5bc146e` A-04 coordination ref + census · `7fd4112` Asset Library · `bd8aab5` evidence package + scheduled dependency audit · `fae25fc` Asset Library wired into the passport archive |
+| Final SHA | `fae25fc` (+ this bookkeeping amendment) = PR #218 head after the last push (`git rev-parse origin/arena/26f7d958-nexus-ai-agent`) |
 | Branches | only `arena/26f7d958-nexus-ai-agent` was committed/pushed; the non-branch ref `refs/nexus/board` was created (`04bacc8`) and advanced once (`b1a5fac`) |
 | Board | `task-270-full-audit-remediation` on `refs/nexus/board`, generation 3, gates owner, expires 2026-10-16T20:24:55Z |
 
@@ -26,14 +26,15 @@ summaries were treated as claims to reproduce.
 |---|---|---|
 | `4cf8bbc` | [38796133745](https://github.com/bot523h/nexus-ai-agent/actions/runs/38796133745) | **success, 21/21** (per-job list in `01_…`) |
 | `5bc146e` | [38802616791](https://github.com/bot523h/nexus-ai-agent/actions/runs/38802616791) | **completed · success · 21/21 jobs success** (incl. `test`, `lint`, `governance-mutations`, `container`, `merge-base-guard` with the new `guard` step, 3× `continuum-evidence`). Verified at 2026-10-15 ≈21:03Z before this package was pushed. |
-| `7fd4112`, package commit | — | not run yet (pushed together) |
+| `bd8aab5` (= `7fd4112` Asset Library + evidence package + `dependency-audit.yml`) | [38806486544](https://github.com/bot523h/nexus-ai-agent/actions/runs/38806486544) | **completed · success · 21/21** (`test (pytest -m "not slow")` success with the 36 ref-board + 38 asset-library tests on the real runner) |
+| `fae25fc` (Asset Library wired into `archive_trim_evidence`) | run id in the PR ledger comment that follows the push | pending at writing — **not evidence until it completes**; local `-m "not slow"` suite 4181 passed / 37 skipped |
 
 Reconciled test counts: CI `test` at `4cf8bbc` 4103 passed / 37 skipped; local `5bc146e` (unit scope only) 3881 passed / 12 skipped; board suites 50 + 36; asset library 38; referee mutants 14/14; `mypy --strict src` 0 errors / 284 files; ruff + format clean (src, tests, scripts).
 
 ## 4. Remediated / delivered tonight (Requirement → Root cause → Paths → Test → Result → CI → SHA → Residual)
 1. **A-04 board on the merge path** → protocol v2 claims via code branches → `scripts/agent_board.py`, `.agents/board.json` (frozen), `ci.yml` guard, docs/ADR 0012 → `tests/unit/test_agent_board_ref.py` (36) + 50 + 14/14 mutants → pass; live ref bootstrapped; 7/7 merge-tree acceptance → CI 38802616791 (guard step success; full run see §3) → `5bc146e` → residual: ref writability for all accounts, stale archives in 56 PRs until rebase. Status: **IMPLEMENTED · TESTED · LIVE-BOOTSTRAPPED · CI-VERIFIED on exact head `5bc146e` (run 38802616791, 21/21) · NOT MERGED · NOT PRODUCTION-VERIFIED** — the structural remedy is implemented and verified; A-04 moves from `HARDENED_BUT_NOT_COMPLETE` to `REMEDIED_CI_VERIFIED_PENDING_MERGE`. `COMPLETE` only after merge and one real foreign claim through the ref.
 2. **Phase 2 census** → no repeatable PR truth → `scripts/pr_census.py` + ledger files → script is ruff/mypy-strict clean; outputs reproduced once → `5bc146e`.
-3. **Phase 4 Asset Library** → per-attempt copies, no CAS → `execution/asset_library.py` → 38 tests, 5 hand mutants killed → `7fd4112` → residual: not wired, not CI-run.
+3. **Phase 4 Asset Library** → per-attempt copies, no CAS → `execution/asset_library.py` → 38 tests, 5 hand mutants killed → CI 38806486544 (21/21) → `7fd4112`; **wired** into `archive_trim_evidence` in `fae25fc` (2 new tests + 3 corruption simulations adapted, 2 mutants killed, local full suite 4181/37; CI pending) → residual: GC schedule, journal event, graph projection (`04_…`).
 4. **Phase 7 scheduled dependency audit** → none existed (closeout wording was wrong) → `.github/workflows/dependency-audit.yml` → YAML parsed; **not executed yet** → package commit → residual: first run id pending.
 5. **Phases 5, 6, 8, 9** → audits/dispositions only (`05_…`–`09_…`); no code changed; no status upgraded from reading source.
 
@@ -44,7 +45,7 @@ Reconciled test counts: CI `test` at `4cf8bbc` 4103 passed / 37 skipped; local `
 | P0 | Backups never produced (`BLOCKED_BY_EXTERNAL_DEPENDENCY`) | **Owner:** set `NEXUS_DATABASE_URL`, `R2_*` secrets; then dispatch `maintenance.yml` and keep the run id |
 | P1 | Hash-locked install + builder image stage | owner decision on the Python version to lock (`07_…`) |
 | P1 | CommandBus per-command deadline / envelope cap; implicit-local-trust retirement | next session (`05_…`) |
-| P1 | Asset Library wiring + queue-side `fsck` feed; durable graph projection design | next session (`04_…`, `09_…` items 2–3) |
+| P1 | Asset Library queue-side `fsck`/`gc` schedule + `asset_admitted` journal event; durable graph projection design | next session (`04_…`, `09_…` items 2–3) |
 | P1 | 56 open PRs carry stale board archives | each PR's rebase: `git checkout origin/main -- .agents/board.json` |
 
 Real backup / restore drill: **did not run** (secrets). Live Telegram / LLM / container-runtime tests: **did not run** (the CI `container` job builds and probes the image; no live bot session).

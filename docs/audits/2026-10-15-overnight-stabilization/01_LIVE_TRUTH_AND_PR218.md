@@ -16,7 +16,8 @@
 | `6fb0a97` | 38777822652 | success |
 | `4cf8bbc` | [38796133745](https://github.com/bot523h/nexus-ai-agent/actions/runs/38796133745) | **success — 21/21 jobs success** (container; continuum-evidence 3.10/3.11/3.12; extras-matrix core/pdf/speech/translate; governance-mutations; lint; lint-fast; merge-base-guard; migrate-postgres; python-parity 3.10/3.11/3.12; release-lineage; remote-key-mutations; temporal-mutations; test; trust-mutations). No skipped, cancelled, failed or inaccessible job. |
 | `5bc146e` (A-04 remedy) | [38802616791](https://github.com/bot523h/nexus-ai-agent/actions/runs/38802616791) | **success — 21/21 jobs success**, including `merge-base-guard` with the new **"Board archive is frozen"** step. |
-| `7fd4112` + package commit | pushed after this package was written | **not yet run** — new head, no evidence yet. |
+| `bd8aab5` (Asset Library + package + dependency-audit workflow) | [38806486544](https://github.com/bot523h/nexus-ai-agent/actions/runs/38806486544) | **success — 21/21 jobs success** |
+| `fae25fc` (Asset Library wiring) | see ledger comment after push | pending at writing |
 
 Suite counts, reconciled: CI `test` job at `4cf8bbc`: 4103 passed / 37 skipped (full `pytest -m "not slow"`). Local at `5bc146e`, narrower scope (`--ignore=tests/integration --ignore=tests/e2e`): 3881 passed / 12 skipped in 170 s. The two numbers differ by scope, not by failures.
 
