@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fix — closeout follow-through (A-01 negative control, A-11 ratchet, 3.10 parity; board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
+
+- **A-01 negative control** — `tests/integration/test_a01_message_path.py` now also proves that a
+  database failure at the `get_session` seam makes `on_message` propagate the error, send no reply
+  and never invoke the LLM graph (a swallowed `OperationalError` can no longer look like a handled
+  message).
+- **A-11 complexity ratchet (new law R22)** — `tests/architecture/test_complexity_ratchet.py`: McCabe
+  complexity of every function in `src/` is capped at 20; the 22 pre-existing hotspots are pinned at
+  their measured values (`_process_job` 62, `_compile` 38, `_planned_session` 36, `get_job_facts` 33, …)
+  and may only shrink. The decomposition of the hotspots themselves is a separate change.
+- **Python 3.10 parity** — `datetime.UTC` (3.11+) removed from `test_composition_root_runtime.py`; the
+  3.10-blocker scanner covers `tests/` and `scripts/` and recognises `datetime.UTC`.
+- **CI legibility** — `test` and `python-parity` keep the pytest failure summary (`-rfEs`) and emit
+  failing test ids as check annotations.
+
 ### Fix — remediation closeout (schema authority, A-07/A-12/A-15/A-16/A-19; board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
 
 - **Schema authority — one writer of the schema.** `ConversationStore`
