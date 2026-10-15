@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — content-addressed Asset Library (Phase 4 §4 substrate; board `task-270`)
+
+- `execution/asset_library.py`: SHA-256 content-addressed blob store under the queue-owned
+  artifact root (`cas/sha256/aa/bb/<hex>`): attempt-scoped `.part` staging with `O_EXCL|O_NOFOLLOW`,
+  streamed hash + size ceiling, `fsync`, publication by `os.link` (never overwrites; dedup verifies
+  the existing bytes by full re-hash), sources opened `O_NOFOLLOW|O_NONBLOCK` and required to be
+  regular files (symlink/FIFO/directory refused before a byte is read), conservative MIME sniff with
+  `mime_mismatch` against the declared type, `verify`/`open_verified`, `fsck` (missing / orphans /
+  corrupt / stale parts / unexpected entries against the durable references) and `gc` (unreferenced
+  + older than a minimum age only; referenced blobs are never deleted, even when corrupt). No index,
+  manifest, queue or verifier of its own — authority stays with the job row / passport that
+  references a `storage_key`. Not yet wired into `jobs.creative_passport.archive_trim_evidence`
+  (next step; documented in the overnight audit package). Tests: `tests/unit/test_asset_library.py`
+  (38: dedup across attempts, idempotent retry, crash-before-publish, stale-part reaping, symlink,
+  FIFO non-blocking, oversize, unsafe ids/addresses, 16-thread identical-bytes race with exactly one
+  winner, distinct-content race, tamper detection without overwrite, fsck/gc, MIME table); five
+  hand mutants (rename-overwrite, follow-symlinks, blocking open, skip-verify-on-dedup,
+  gc-ignores-references) each killed.
+
 ### Changed — A-04 the claim board leaves the merge path (ADR 0012; board `task-270`)
 
 - The live multi-agent claim board now lives on the coordination ref **`refs/nexus/board`**
