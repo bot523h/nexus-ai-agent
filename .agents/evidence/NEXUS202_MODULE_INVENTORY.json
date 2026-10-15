@@ -1,0 +1,2406 @@
+{
+ "schema": "nexus-module-inventory.v1",
+ "generated": "2026-10-14",
+ "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f",
+ "total": 299,
+ "modules": [
+  {
+   "module_id": "src/nexus_ai_agent/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/adapters/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/adapters/caption_unavailable.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/adapters/langgraph/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/adapters/langgraph/lifecycle_recording.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/adapters/native_local_backend.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/adapters/whisper_local.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/agent/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/agent/approval.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/agent/feedback.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/agent/self_monitor.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/agent/updater.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/agents/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/agents/base.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/agents/chat_agent.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/agents/executor_agent.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/agents/gemma_agent.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/agents/phi_agent.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/agents/planner_agent.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/agents/qwen_agent.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/agents/store/agent_manager.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/agents/store/base_agent.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/agents/store/specialized_agents.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/api/app.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/api/dashboard.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/api/studio.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/application/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/application/image_generation.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/application/ports/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/application/ports/caption_engine.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/application/ports/checkpoint_lifecycle.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/application/ports/conversation_store.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/application/ports/job_queue.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/application/ports/llm.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/application/ports/object_storage.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/access_guard.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/agent_handlers.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/app.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/creative_surface.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/feature_handlers.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/handlers.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/knowledge_handlers.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/memory_handlers.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/middleware.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/monitor_handlers.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/rate_limiter.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/safe_paths.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/slideshow.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/slideshow_handlers.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/slideshow_notify.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/surface/__init__.py",
+   "owner": "ArenaA",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/surface/_ptb.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/surface/ads.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/surface/channel_management.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/surface/docs.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/surface/gamification.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/surface/onboarding.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/tool_handlers.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/update_handlers.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/bot/webhook.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/cli.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/config/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/config/settings.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/continuum/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/continuum/gate.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/continuum/mutations.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/continuum/pack_coverage.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/continuum/provenance.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/continuum/snapshot.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/core/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/core/async_db.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/core/http_client.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/core/instrumentation.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": false,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/core/ssrf_guard.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/__init__.py",
+   "owner": "ArenaA",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/assets/__init__.py",
+   "owner": "shared(#205+#210)",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/assets/authz.py",
+   "owner": "shared(#205+#210)",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/assets/blob_store.py",
+   "owner": "shared(#205+#210)",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/assets/errors.py",
+   "owner": "shared(#205+#213,#210)",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/assets/ingestion.py",
+   "owner": "shared(#205+#213,#210)",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/assets/mime.py",
+   "owner": "shared(#205+#213,#210)",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/assets/models.py",
+   "owner": "shared(#205+#210)",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/assets/ports.py",
+   "owner": "shared(#205+#213,#210)",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/assets/repository.py",
+   "owner": "shared(#205+#213,#210)",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/assets/service.py",
+   "owner": "shared(#205+#213,#210)",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/caption/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/caption/bench.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/caption/unavailable_adapter.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/ffmpeg_executor.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/image_gen/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/image_gen/gemini_adapter.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/image_gen/pollinations_adapter.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/image_gen/provider.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/image_gen/resilience.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/image_post.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/job_registry.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/audio/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/audio/models.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/audio/operations.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/caption/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/caption/formatters.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/caption/models.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/caption/operations.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/delivery/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/delivery/models.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/delivery/operations.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/delivery/signing.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/ed25519.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/edit/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/edit/models.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/edit/operations.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/manifest.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/motion/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/motion/models.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/motion/operations.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/registry.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/runtime.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/slideshow/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/slideshow/models.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/slideshow/operations.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/slideshow/planning.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/slideshow/templates.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/trust.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/packs/verify.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/render_jobs.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/rendering/__init__.py",
+   "owner": "ArenaA",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/rendering/bench.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/rendering/compiler.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/rendering/executor.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/rendering/ir.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/slideshow/analysis.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/slideshow/audio.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/slideshow/ffmpeg.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/slideshow/image_fill.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/slideshow/probe.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/slideshow/service.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/slideshow/upscale.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/slideshow/worker_adapter.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/spine/__init__.py",
+   "owner": "ArenaA",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/spine/compiler.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/spine/execution.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/spine/models.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/spine/reference.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/studio/__init__.py",
+   "owner": "ArenaA",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/studio/authorization.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/studio/bus.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/studio/capabilities.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/studio/lifecycle.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/studio/models.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/studio/references.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/temporal/__init__.py",
+   "owner": "ArenaA",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/temporal/adapters.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/temporal/core.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/creative/video_director.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/diagnostics/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/diagnostics/truth.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/domain/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/domain/glossary.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/domain/policies/lifecycle_health.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/domain/policies/reconciler_policy.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/domain/policies/retention.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/domain/retention.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/execution/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/execution/contract.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/execution/staging.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/ads.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/ai_chat.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/ai_memory.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/analytics.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/anonymous_chat.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/calculator.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/channel_manager.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/conversation_store.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/engagement.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/force_join.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/games.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/gamification.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/image_gen.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/moderation.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/onboarding.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/owner_control.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/personality.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/rag.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/rag_core.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/referral.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/request_queue.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/speech.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/story_gen.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/summarizer.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/tools.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/features/viral_engine.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/i18n/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/i18n/loader.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/infrastructure/observability/metrics.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/infrastructure/observability/redaction.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/infrastructure/observability/structured.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/integrations/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/integrations/external.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/integrations/free_tools.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/jobs/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/jobs/creative_passport.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/jobs/creative_verification.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/jobs/failure_semantics.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/jobs/feature_verification.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/jobs/lifecycle.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/jobs/verification.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/knowledge/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/knowledge/knowledge_manager.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/knowledge/web_trainer.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/knowledge/wikipedia_trainer.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/llm/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/llm/errors.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/llm/fake_llm.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/llm/fallback_provider.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/llm/gemini_provider.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/llm/litellm_provider.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/llm/local_llama_cpp.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/llm/local_server_provider.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/llm/provider.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/maintenance/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/maintenance/backup.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/maintenance/housekeeping.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/memory/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/memory/eval.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/memory/long_term.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/memory/short_term.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/nagar/__init__.py",
+   "owner": "ArenaA",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/nagar/cognition/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/nagar/cognition/adapter.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/nagar/cognition/bridge.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/nagar/cognition/capabilities.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/nagar/cognition/context.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/nagar/cognition/gateway.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/nagar/cognition/null.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/nagar/cognition/port.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/nagar/cognition/proposal.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/nagar/cognition/router.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/nagar/composition.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/nagar/creative/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/nagar/creative/handoff.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/nagar/observation.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/observability/__init__.py",
+   "owner": "ArenaA",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/observability/logging.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/orchestration/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/orchestration/graph.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/orchestration/router.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/orchestration/state.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/personality/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/personality/engine.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/presence.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/product/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/product/studio_experience.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/product/studio_read.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/provenance/__init__.py",
+   "owner": "ArenaA",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/provenance/backfill.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/provenance/journal.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/provenance/models.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/provenance/observer.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/provenance/passport.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/provenance/paths.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/adopt_pg.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/ai_storage.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/ai_storage_manager.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/checkpoint_adapter.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/checkpoint_fingerprint.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/checkpoint_lifecycle.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/checkpoint_lifecycle_adapter.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/checkpoint_lifecycle_pg_store.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/checkpoint_lifecycle_store.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/checkpoint_pg_adapter.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/checkpoint_reconciler.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/db.py",
+   "owner": "shared(#205+#210,#158,#117)",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/langgraph_checkpoint.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/migration_metadata.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/migrations.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/model_fetch.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/models.py",
+   "owner": "shared(#205+#210,#158,#99)",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/providers/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/providers/base.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/providers/github_releases.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/providers/huggingface.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/providers/local_cache.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/providers/mega.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/providers/r2.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/providers/rclone.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/resilience.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/storage/unified_cloud.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/tools/__init__.py",
+   "owner": "free",
+   "is_package_marker": true,
+   "has_dedicated_test": false,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/tools/base.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/tools/files.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/tools/filesystem_policy.py",
+   "owner": "shared(#205+#210,#209,#96)",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/tools/registry.py",
+   "owner": "free",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/tools/system_shell.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": false,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  },
+  {
+   "module_id": "src/nexus_ai_agent/worker.py",
+   "owner": "ArenaA",
+   "is_package_marker": false,
+   "has_dedicated_test": true,
+   "in_module_map": true,
+   "baseline_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f"
+  }
+ ],
+ "breakdown": {
+  "total_python_files": 299,
+  "package_markers_init": 49,
+  "importable_modules": 250
+ },
+ "methodology": "canonical inventory = every *.py under src/nexus_ai_agent at baseline 6b39856; owner from union of ALL open-PR manifests (.agents/evidence/open_pr_paths_2026-10-14.json); has_dedicated_test = basename appears in tests/**; in_module_map = basename appears in docs/architecture/MODULE_MAP.md. The contract 202-list is not published in the repo; this is the canonical superset."
+}
