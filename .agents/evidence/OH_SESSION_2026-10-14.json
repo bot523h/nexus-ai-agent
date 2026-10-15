@@ -1,0 +1,84 @@
+{
+  "schema": "oh-session-evidence.v1",
+  "session": "2026-10-14",
+  "owner_identity": {
+    "actor": "OpenHands",
+    "branch": "arena/nagar-asset-library-v1",
+    "pr": 205,
+    "note": "branch name is the canonical identity; 'OH1..OH5' group labels were never published to the repo or issues, so no module group could be adopted."
+  },
+  "live_baseline": {
+    "main_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f",
+    "base": "main",
+    "candidate_sha": "e60701d9290ad757fc98594173c19c0383e40c9c",
+    "merge_base_guard_r18": "base must be main (satisfied: PR #205 base=main)"
+  },
+  "collision_fence": {
+    "method": "union of changed-file manifests of ALL open PRs, compared against this branch's diff and the free src tree",
+    "open_prs_scanned": 63,
+    "protected_paths_count": 726,
+    "my_changed_files": 39,
+    "overlap_with_other_open_prs": 34,
+    "overlap_detail": "creative/assets/*, storage/db.py, storage/models.py, tools/filesystem_policy.py, migrations/versions/e575469d90b9_*, scripts/asset_library_mutations.py, asset tests, pyproject.toml, ci.yml, docs — owned by #210/#213 (asset+SQLite+checkpoint stack)",
+    "isolated_deliverables": [
+      "tests/unit/test_asset_library_repository.py",
+      ".agents/skills/README.md",
+      ".agents/skills/python-first-use-db-init-race/SKILL.md",
+      ".agents/skills/python-first-use-db-init-race/references/mechanism.md"
+    ],
+    "isolated_overlap_with_other_prs": 0,
+    "decision": "STOP expanding #205's duplicate db.py/models/assets work; keep the collision-free artifacts; do not rebase/force-push/close #205."
+  },
+  "oh1_reproduction": {
+    "claim_under_test": "8 focused repository tests pass; 10/10 mutation probes killed",
+    "test_selection": "tests/unit/test_asset_library_repository.py",
+    "command": "python -m pytest -q -p no:warnings tests/unit/test_asset_library_repository.py",
+    "result": "8 passed",
+    "exit_code": 0,
+    "mutation_command": "python scripts/asset_library_mutations.py",
+    "mutation_result": "10/10 killed; baseline GREEN both sides",
+    "mutation_exit_code": 0
+  },
+  "format_defect_fix": {
+    "defect": "ruff format --check . (the CI gate) reformats the aligned inline comments in the fenced Python snippet of references/mechanism.md",
+    "reproduce_red": "ruff format --check . -> '1 file would be reformatted ... mechanism.md:11:43'",
+    "fix": "ruff format .agents/skills/python-first-use-db-init-race/references/mechanism.md",
+    "verify_green": "ruff format --check . -> '689 files already formatted'",
+    "commit": "e60701d"
+  },
+  "static_checks": {
+    "ruff_check": "ruff check . -> All checks passed!",
+    "ruff_format_check": "ruff format --check . -> 689 files already formatted",
+    "truth_doctor": "python -m nexus_ai_agent.diagnostics.truth -> OK — no findings",
+    "version_lockstep": "python scripts/check_version_lockstep.py -> ok: VERSION == pyproject == CHANGELOG == 3.13.0"
+  },
+  "architecture_tests": {
+    "command": "python -m pytest -q -p no:warnings tests/architecture/",
+    "result": "244 passed",
+    "exit_code": 0
+  },
+  "focus": {
+    "command": "python -m pytest -q -p no:warnings tests/unit/test_asset_library_repository.py tests/unit/test_storage_wal_init_race.py",
+    "result": "14 passed",
+    "exit_code": 0
+  },
+  "domain_audit": {
+    "domains_audited": 50,
+    "finding": "repository is uniformly hardened: no TODO/FIXME markers in free src, R1-R18 boundary laws enforced by 244 architecture tests, truth doctor clean, version lockstep ok",
+    "dead_module_observation": "core/async_db.py has zero runtime callers and is reserved to the declared 'core-database' zone (task-128) — NOT touched",
+    "high_value_free_repair_found": false,
+    "reason": "every production module is either protected by an open PR, reserved to a declared zone, or already covered by dedicated tests; no safe unclaimed high-severity defect exists for this session"
+  },
+  "limitations": [
+    "OH1..OH5 module groups were never provided in-repo or via issues; five-group allocation cannot be executed as specified.",
+    "agent_board.py check returned exit 2 (UNVERIFIABLE: no single active gates_owner) — treated as not-a-pass; no claim was manufactured.",
+    "PostgreSQL concurrency evidence remains DEFERRED (no NEXUS_DATABASE_URL); SQLite is not presented as PostgreSQL proof.",
+    "The 6-test CI red on this branch is the pre-existing main dependency-drift flake (unpinned langgraph-checkpoint-sqlite; CI resolves 3.1.2 vs golden built at 3.1.1), reproduced on main @6b39856 and owned by #213.",
+    "The db.py/WAL fix on this branch duplicates protected #210; it is not extended."
+  ],
+  "judge_handoff": {
+    "candidate_sha": "e60701d9290ad757fc98594173c19c0383e40c9c",
+    "verify_command": "sha256sum -c .agents/evidence/OH_SESSION_2026-10-14.sha256",
+    "status": "HARDENED_BUT_NOT_COMPLETE"
+  }
+}
