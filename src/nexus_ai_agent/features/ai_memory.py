@@ -68,7 +68,7 @@ class AIMemoryEngine:
         """Return ``"unset"`` | ``"granted"`` | ``"denied"`` for *user_id*."""
         async with get_session() as session:
             stmt = select(UserMemory).where(UserMemory.user_id == user_id)
-            memory = (await session.execute(stmt)).scalar_one_or_none()
+            memory = (await session.exec(stmt)).one_or_none()
             if memory is None or memory.ai_memory_consent is None:
                 return CONSENT_UNSET
             return memory.ai_memory_consent
@@ -77,7 +77,7 @@ class AIMemoryEngine:
         """True if the one-time consent question was already shown."""
         async with get_session() as session:
             stmt = select(UserMemory).where(UserMemory.user_id == user_id)
-            memory = (await session.execute(stmt)).scalar_one_or_none()
+            memory = (await session.exec(stmt)).one_or_none()
             return bool(memory is not None and memory.ai_memory_prompted)
 
     async def set_consent(self, user_id: int, granted: bool) -> str:
@@ -85,7 +85,7 @@ class AIMemoryEngine:
         state = CONSENT_GRANTED if granted else CONSENT_DENIED
         async with get_session() as session:
             stmt = select(UserMemory).where(UserMemory.user_id == user_id)
-            memory = (await session.execute(stmt)).scalar_one_or_none()
+            memory = (await session.exec(stmt)).one_or_none()
             if memory is None:
                 memory = UserMemory(
                     user_id=user_id,
@@ -106,7 +106,7 @@ class AIMemoryEngine:
         """Record that the consent question was shown (idempotent)."""
         async with get_session() as session:
             stmt = select(UserMemory).where(UserMemory.user_id == user_id)
-            memory = (await session.execute(stmt)).scalar_one_or_none()
+            memory = (await session.exec(stmt)).one_or_none()
             if memory is None:
                 memory = UserMemory(
                     user_id=user_id,
@@ -170,7 +170,7 @@ class AIMemoryEngine:
         """Merge new data into persistent UserMemory."""
         async with get_session() as session:
             stmt = select(UserMemory).where(UserMemory.user_id == user_id)
-            memory = (await session.execute(stmt)).scalar_one_or_none()
+            memory = (await session.exec(stmt)).one_or_none()
 
             if not memory:
                 memory = UserMemory(user_id=user_id, last_updated=datetime.utcnow())
@@ -201,7 +201,7 @@ class AIMemoryEngine:
         """
         async with get_session() as session:
             stmt = select(UserMemory).where(UserMemory.user_id == user_id)
-            memory = (await session.execute(stmt)).scalar_one_or_none()
+            memory = (await session.exec(stmt)).one_or_none()
 
             if not memory:
                 return ""
@@ -231,7 +231,7 @@ class AIMemoryEngine:
         self._last_egress.pop(user_id, None)
         async with get_session() as session:
             stmt = select(UserMemory).where(UserMemory.user_id == user_id)
-            memory = (await session.execute(stmt)).scalar_one_or_none()
+            memory = (await session.exec(stmt)).one_or_none()
             if memory:
                 await session.delete(memory)
                 await session.commit()

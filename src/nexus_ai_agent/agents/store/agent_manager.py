@@ -38,7 +38,7 @@ class AgentManager:
 
         async with get_session() as session:
             stmt = select(UserActiveAgent).where(UserActiveAgent.user_id == user_id)
-            existing = (await session.execute(stmt)).scalar_one_or_none()
+            existing = (await session.exec(stmt)).one_or_none()
 
             if existing:
                 existing.agent_name = agent_id
@@ -56,7 +56,7 @@ class AgentManager:
         """Deactivate any active agent for a user."""
         async with get_session() as session:
             stmt = select(UserActiveAgent).where(UserActiveAgent.user_id == user_id)
-            existing = (await session.execute(stmt)).scalar_one_or_none()
+            existing = (await session.exec(stmt)).one_or_none()
             if existing:
                 await session.delete(existing)
                 await session.commit()
@@ -66,7 +66,7 @@ class AgentManager:
         """Get the currently active agent for a user."""
         async with get_session() as session:
             stmt = select(UserActiveAgent).where(UserActiveAgent.user_id == user_id)
-            active_record = (await session.execute(stmt)).scalar_one_or_none()
+            active_record = (await session.exec(stmt)).one_or_none()
 
             if active_record and active_record.agent_name in AGENTS:
                 agent_class = AGENTS[active_record.agent_name]

@@ -244,6 +244,22 @@ class ViralEngine:
             ]
 
     @staticmethod
+    def get_post(post_id: int) -> dict[str, Any] | None:
+        """Return one post with its *full* text (the queue listing truncates)."""
+        engine = _sync_engine()
+        with Session(engine) as session:
+            post = session.get(ViralPost, post_id)
+            if post is None:
+                return None
+            return {
+                "id": post.id,
+                "chat_id": post.chat_id,
+                "text": post.text,
+                "viral_score": post.viral_score,
+                "status": post.status,
+            }
+
+    @staticmethod
     def mark_posted(post_id: int) -> None:
         """Mark a viral post as posted."""
         engine = _sync_engine()

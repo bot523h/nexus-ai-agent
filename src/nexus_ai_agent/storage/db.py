@@ -11,8 +11,17 @@ from urllib.parse import urlsplit, urlunsplit
 
 from sqlalchemy import MetaData, inspect, text
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
+
+# The session class every factory below hands out. SQLModel's AsyncSession is
+# a strict subclass of SQLAlchemy's (``execute``/``scalars`` keep working) and
+# additionally provides ``exec()``, which the bot handlers, the dashboard and
+# the feature engines rely on. Building the factories with the plain
+# SQLAlchemy class made every ``await session.exec(...)`` raise
+# ``AttributeError`` at runtime (audit finding A-01, 2026-10-15) — a defect no
+# test caught because none drove a handler through the real factory.
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from nexus_ai_agent.storage import models as _models  # noqa: F401
 
@@ -212,7 +221,7 @@ def _get_engine(db_path: str) -> Any:
             # which is retried explicitly in _set_wal_mode.
             connect_args={"timeout": _SQLITE_BUSY_TIMEOUT_SECONDS},
         )
-        _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
+        _session_factory = async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)
         _engine_path = normalized_path
     return _engine
 
@@ -343,7 +352,9 @@ def _get_pg_session_factory(url: str) -> async_sessionmaker[AsyncSession]:
     normalized = normalize_database_url(url)
     factory = _pg_session_factories.get(normalized)
     if factory is None:
-        factory = async_sessionmaker(_get_pg_engine(normalized), expire_on_commit=False)
+        factory = async_sessionmaker(
+            _get_pg_engine(normalized), class_=AsyncSession, expire_on_commit=False
+        )
         _pg_session_factories[normalized] = factory
     return factory
 
@@ -376,8 +387,15 @@ async def get_session(db_path: str | None = None) -> AsyncIterator[AsyncSession]
     - ``db_path`` given  → SQLite backend, exactly as before (unchanged).
     - ``db_path`` is ``None`` → the backend comes from the environment:
       ``NEXUS_DATABASE_URL`` set → PostgreSQL, prepared lazily via Alembic
-      (D7: the ``create_all`` stopgap was retired); otherwise the default
-      SQLite path.
+      (D7: the ``create_all`` stopgap was retired); otherwise the configured
+      SQLite file (``NEXUS_DB_PATH``, default ``data/app.sqlite``).
+
+    The SQLite fallback used to hard-code ``"data/app.sqlite"`` and ignore
+    ``NEXUS_DB_PATH``, so an operator who pointed the bot at a persistent
+    volume still had the async paths (users, chats, files, dashboard) write
+    into an ephemeral file next to the code while the feature engines wrote
+    into the configured one — two databases for one deployment (audit
+    finding A-02b).
     """
     await _dispose_replaced_engines()
     if db_path is None:
@@ -388,7 +406,9 @@ async def get_session(db_path: str | None = None) -> AsyncIterator[AsyncSession]
             async with factory() as session:
                 yield session
             return
-        db_path = "data/app.sqlite"
+        from nexus_ai_agent.config.settings import get_settings
+
+        db_path = get_settings().db_path
 
     await create_all_tables(db_path)
     if _session_factory is None:

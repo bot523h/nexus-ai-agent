@@ -805,6 +805,31 @@
         "scripts/execution_core_mutations.py",
         "src/nexus_ai_agent/tools/filesystem_policy.py"
       ]
+    },
+    {
+      "id": "full-audit-remediation",
+      "description": "Repository-wide remediation of the 2026-10-15 full audit (A-01…A-16) under the owner mandate: storage, bot surface, API, CI, docs, packaging. Single-agent lease; dissolves on release.",
+      "paths": [
+        "src/",
+        "tests/",
+        "scripts/",
+        "docs/",
+        ".github/",
+        "migrations/",
+        ".agents/",
+        "pyproject.toml",
+        "README.md",
+        "AGENTS.md",
+        "CHANGELOG.md",
+        "VERSION",
+        "Makefile",
+        "Dockerfile",
+        "docker-compose.yml",
+        "koyeb.yaml",
+        ".env.example",
+        ".pre-commit-config.yaml",
+        ".dockerignore"
+      ]
     }
   ],
   "claims": [
@@ -3591,7 +3616,7 @@
       "task": "task-270-full-audit-remediation",
       "title": "OWNER-MANDATED FULL REMEDIATION (2026-10-15): fix audit findings A-01..A-16 on main, triage every open PR, prune dead branches",
       "title_fa": "اصلاح کامل به دستور مالک (۱۴۰۵/۰۷/۲۳): رفع یافته‌های ممیزی A-01 تا A-16 روی main، تعیین تکلیف همهٔ PRهای باز، حذف شاخه‌های مرده",
-      "zone": "coordination",
+      "zone": "full-audit-remediation",
       "priority": "P0",
       "status": "active",
       "scope": "Sole active agent with explicit repository-owner authority (no other agent active; last foreign push 2026-10-14T21:30Z). Implements the engineered remedies published in PR #198 comments 6190228525/6190229601, with regression tests and mutation proof per fix; merges reviewed PRs, closes superseded ones with a written rationale, deletes their branches.",

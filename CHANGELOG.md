@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fix — full-audit remediation, round 0 (findings A-01/A-02b/A-03/A-06; board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
+
+- **A-01 — every free-text message crashed on `main`.** `storage/db.py` built
+  its session factories with SQLAlchemy's `AsyncSession` while
+  `bot/handlers.py` (`_upsert_user` on every message), `/myfiles`, `/download`,
+  `/language` and `features/onboarding.py` call `session.exec(...)` — a
+  SQLModel-only method. The factories now use
+  `sqlmodel.ext.asyncio.session.AsyncSession`; `SessionFactory` is typed to
+  it; 19 `session.execute(...)` call sites moved to the SQLModel idiom.
+  `is_first_time_user` only degrades on `SQLAlchemyError` any more — an
+  `AttributeError` like this one propagates instead of being read as "first
+  time". Regression: `tests/integration/test_real_session_factory.py` drives
+  the helpers through the real factory (4/5 tests fail on the old code).
+- **A-02b — `get_session()` ignored `NEXUS_DB_PATH`.** The no-argument form
+  hard-coded `data/app.sqlite`, so the async paths and the feature engines
+  silently used two different SQLite files. It now resolves
+  `settings.db_path`.
+- **A-03 — the last ten canned commands are real.** `/mod_config` `/warn`
+  `/mute` `/unmute` `/reputation` (`bot/surface/moderation.py`, owner-gated,
+  real `ModerationEngine`, Telegram `restrict_chat_member` reported honestly)
+  and `/viral_preview` `/viral_stats` `/viral_post` (`bot/surface/viral.py`,
+  the real `ViralPost` queue; `publish` is owner-only). `/leaderboard` is an
+  alias of `/xp_leaderboard`; `/vision` downloads the photo and calls
+  `GeminiEngine.vision`. The moderation engine is finally *wired*: a group-
+  message ingress runs in group -1 right after the access guard and stops
+  propagation of a removed message. Found while wiring:
+  `ModerationEngine.is_muted` raised `TypeError` (naive vs aware datetime)
+  for every muted user — fixed with naive-UTC storage + tolerant read.
+- **A-06 — dashboard API fail-closed.** With `NEXUS_DASHBOARD_TOKEN` unset,
+  `/api/dashboard/*` now answers `503` (was: open). `?limit=` is bounded to
+  `1..100` (`422` otherwise). The HTML dashboard asks for the token once per
+  tab and renders the PII-free payload it actually receives.
+- **Board:** the remediation lease `task-270-full-audit-remediation` has its
+  own declared zone (`full-audit-remediation`), satisfying the board
+  invariants (`tests/unit/test_agent_board.py`).
+
 ### Feature — truth doctor: one authority for repository truth (law R16, session `arena/runtime-truth-tooling`)
 
 - **The repository could not prove its own truth.** Version drift, an unindexed

@@ -74,7 +74,7 @@ class AutoUpdater:
         """Return (approved, detail) for the self-update approval gate."""
         now = datetime.utcnow()  # naive UTC — matches PendingApproval.created_at
         async with get_session() as session:
-            result = await session.execute(
+            result = await session.exec(
                 select(PendingApproval)
                 .where(
                     PendingApproval.change_type == SELF_UPDATE_TYPE,
@@ -82,7 +82,7 @@ class AutoUpdater:
                 )
                 .order_by(literal_column("created_at").desc())
             )
-            latest = result.scalars().first()
+            latest = result.first()
 
         if latest is not None and latest.created_at >= now - _APPROVAL_WINDOW:
             return True, "approved"

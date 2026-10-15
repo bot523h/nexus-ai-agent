@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -11,6 +12,7 @@ from uuid import uuid4
 
 import structlog
 from sqlmodel import desc, select
+from sqlmodel.ext.asyncio.session import AsyncSession
 from telegram import (
     Audio,
     InlineKeyboardButton,
@@ -20,6 +22,7 @@ from telegram import (
     Voice,
 )
 from telegram.ext import (
+    ApplicationHandlerStop,
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
@@ -77,14 +80,23 @@ from nexus_ai_agent.bot.surface import (
     daily_cmd,
     doc_delete_cmd,
     docs_list_cmd,
+    evaluate_message,
+    mod_config_cmd,
+    mute_cmd,
     onboarding_callback_cmd,
     pin_cmd,
     post_cmd,
     profile_cmd,
+    reputation_cmd,
     route_doc_text,
     schedule_cmd,
     stats_cmd,
     unban_cmd,
+    unmute_cmd,
+    viral_post_cmd,
+    viral_preview_cmd,
+    viral_stats_cmd,
+    warn_cmd,
     welcome_cmd,
     xp_leaderboard_cmd,
 )
@@ -121,7 +133,42 @@ from nexus_ai_agent.storage.unified_cloud import UnifiedCloudStorage
 from .middleware import AuthMiddleware
 
 logger = get_logger(__name__)
-SessionFactory = Callable[[], Any]
+#: The database handle every handler receives: a zero-argument callable that
+#: opens an ``async with`` scope yielding a SQLModel ``AsyncSession`` — exactly
+#: what :func:`nexus_ai_agent.storage.db.get_session` is. The previous alias
+#: (``Callable[[], Any]``) hid the contract from mypy, which is how the
+#: ``session.exec`` calls below could point at a session class without
+#: ``exec`` for weeks (audit finding A-01).
+SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
+
+#: ``/vision`` refuses photos above this size before downloading them (Gemini's
+#: inline-data request ceiling is 20 MB; Telegram photos are ≤ 10 MB anyway).
+_VISION_MAX_BYTES = 10 * 1024 * 1024
+
+
+async def _moderation_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Group -1 ingress: run the moderation engine before any group-0 handler.
+
+    ``bot/surface/moderation.evaluate_message`` deletes/announces/mutes as the
+    chat's :class:`ModerationConfig` dictates and returns the verdict; a
+    disallowed message must not reach ``on_message`` (the AI would otherwise
+    answer the spam it just removed), hence :class:`ApplicationHandlerStop`.
+    Chats without a configuration — and the owner — pass through untouched.
+    """
+    verdict = await evaluate_message(update, context)
+    if verdict.get("allowed") is not True:
+        raise ApplicationHandlerStop
+
+
+def build_moderation_gate() -> MessageHandler[Any, Any]:
+    """The group-chat text ingress; register it in group -1 after the access guard.
+
+    The guard's ``check_update`` is false for allowed users, so PTB continues
+    to this handler within the same group; for denied users the guard raises
+    ``ApplicationHandlerStop`` first and the engine never sees the message.
+    """
+    group_text = filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS
+    return MessageHandler(group_text, _moderation_gate)
 
 
 async def _upsert_user(db_session_factory: SessionFactory, tg_user: Any) -> User:
@@ -131,7 +178,7 @@ async def _upsert_user(db_session_factory: SessionFactory, tg_user: Any) -> User
         if existing:
             existing.username = tg_user.username or existing.username or ""
             await session.commit()
-            return cast(User, existing)
+            return existing
         user = User(telegram_id=int(tg_user.id), username=tg_user.username or "", is_allowed=True)
         session.add(user)
         await session.commit()
@@ -146,7 +193,7 @@ async def _upsert_chat(db_session_factory: SessionFactory, chat_id: int, thread_
         if existing:
             existing.thread_id = thread_id
             await session.commit()
-            return cast(Chat, existing)
+            return existing
         chat = Chat(chat_id=chat_id, thread_id=thread_id)
         session.add(chat)
         await session.commit()
@@ -322,9 +369,6 @@ def build_handlers(
     quiz_cmd = feature_cmds["quiz"]
     quiz_callback = feature_cmds["quiz_callback"]
 
-    async def leaderboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await _reply(update, "🏆 **Leaderboard**\n\n1. UserA: 1500 XP\n2. UserB: 1200 XP")
-
     guess_start_cmd = feature_cmds["guess_start"]
     guess_stop_cmd = feature_cmds["guess_stop"]
     wordle_cmd = feature_cmds["wordle"]
@@ -374,15 +418,38 @@ def build_handlers(
         await _reply(update, f"🌐 {result}")
 
     async def vision_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """``/vision [question]`` on a photo (or replying to one) → Gemini vision.
+
+        Until the 2026-10-15 audit this command answered a fixed sentence for
+        every image; it now downloads the photo and asks the real engine.
+        """
         if gemini_engine is None:
             await _reply(update, "❌ Gemini AI not configured.")
             return
+        message = update.message
+        source = None
+        if message is not None:
+            source = message if message.photo else message.reply_to_message
+        photo = source.photo[-1] if source is not None and source.photo else None
+        if photo is None:
+            await _reply(
+                update, "🖼️ یک عکس با کپشن /vision بفرستید یا با /vision به عکسی پاسخ دهید."
+            )
+            return
+        if photo.file_size and photo.file_size > _VISION_MAX_BYTES:
+            await _reply(update, "❌ عکس بزرگ‌تر از ۱۰ مگابایت است.")
+            return
+        question = " ".join(context.args or []).strip() or "این تصویر را با جزئیات توصیف کن."
         try:
-            # Simulated vision check
-            result = "I see a beautiful landscape in this image."
-            await _reply(update, f"🤖 {result}")
-        except Exception as exc:  # noqa: BLE001
+            tg_file = await photo.get_file()
+            payload = bytes(await tg_file.download_as_bytearray())
+            result = await gemini_engine.vision(
+                payload, question=question, user_id=_user_id(update) or 0
+            )
+        except Exception as exc:  # noqa: BLE001 — network/API failure is reported to the caller
             await _reply(update, f"❌ Vision error: {exc}")
+            return
+        await _reply(update, f"👁️ {result}")
 
     # ── v2.0.0: /image — AI Image Generation via Pollinations.ai ──
     async def image_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1166,20 +1233,10 @@ def build_handlers(
         chat_id = _chat_id(update)
         text = ViralEngine.generate_post()
         score = ViralEngine.calculate_viral_score(text)
-        post_id = ViralEngine.save_post(chat_id, text, score)
+        post_id = await asyncio.to_thread(ViralEngine.save_post, chat_id, text, score)
         await _reply(update, f"🔥 Viral post saved (id={post_id}, score={score:.1f}):\n\n{text}")
 
-    async def viral_preview_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Preview next viral post."""
-        await _reply(update, "🔥 Preview: Top AI trends of the week...")
-
-    async def viral_stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Show viral engine stats."""
-        await _reply(update, "🔥 Viral Engine: 12 posts sent, 450 likes total.")
-
-    async def viral_post_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Manage pending viral posts."""
-        await _reply(update, "📋 Pending viral posts: 3 in queue.")
+    # /viral_preview /viral_stats /viral_post are imported from bot/surface/viral.py
 
     # ── Phase 12: Advertisement System ────────────────────────────
     # /ad_create /ad_list /ad_pause /ad_resume /ad_delete /ad_stats are
@@ -1195,8 +1252,13 @@ def build_handlers(
             await _reply(update, "⛔ Access denied")
             return
         chat_id = _chat_id(update)
-        ModerationEngine.set_config(
-            chat_id, anti_spam=True, anti_flood=True, link_filter=True, profanity_filter=True
+        await asyncio.to_thread(
+            ModerationEngine.set_config,
+            chat_id,
+            anti_spam=True,
+            anti_flood=True,
+            link_filter=True,
+            profanity_filter=True,
         )
         await _reply(update, "🛡️ Smart Moderation enabled.")
 
@@ -1206,30 +1268,18 @@ def build_handlers(
             await _reply(update, "⛔ Access denied")
             return
         chat_id = _chat_id(update)
-        ModerationEngine.set_config(
-            chat_id, anti_spam=False, anti_flood=False, link_filter=False, profanity_filter=False
+        await asyncio.to_thread(
+            ModerationEngine.set_config,
+            chat_id,
+            anti_spam=False,
+            anti_flood=False,
+            link_filter=False,
+            profanity_filter=False,
         )
         await _reply(update, "🛡️ Smart Moderation disabled.")
 
-    async def mod_config_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Configure moderation rules."""
-        await _reply(update, "🛡️ Moderation rules updated.")
-
-    async def mod_warn_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Warn a user."""
-        await _reply(update, "⚠️ User warned (1/3).")
-
-    async def mod_mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Mute a user."""
-        await _reply(update, "🔇 User muted for 10 minutes.")
-
-    async def mod_unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Unmute a user."""
-        await _reply(update, "🔊 User unmuted.")
-
-    async def mod_reputation_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Show user reputation."""
-        await _reply(update, "👤 User Reputation: 85/100 (Good).")
+    # /mod_config /warn /mute /unmute /reputation are imported from
+    # bot/surface/moderation.py (owner-gated, real ModerationEngine).
 
     # ── Phase 14: Gamification ─────────────────────────────────────
     # /profile /daily /xp_leaderboard /achievements are imported from
@@ -1350,7 +1400,9 @@ def build_handlers(
         anon_message_handler,
         # Phase 3: Games
         CommandHandler("quiz", quiz_cmd),
-        CommandHandler("leaderboard", leaderboard_cmd),
+        # /leaderboard is the historical alias of /xp_leaderboard (the stub it
+        # replaced answered with invented names; audit A-03, 2026-10-15).
+        CommandHandler("leaderboard", xp_leaderboard_cmd),
         CommandHandler("guess_start", guess_start_cmd),
         CommandHandler("guess_stop", guess_stop_cmd),
         CommandHandler("guess", feature_cmds["guess"]),
@@ -1417,10 +1469,10 @@ def build_handlers(
         CommandHandler("mod_on", mod_on_cmd),
         CommandHandler("mod_off", mod_off_cmd),
         CommandHandler("mod_config", mod_config_cmd),
-        CommandHandler("warn", mod_warn_cmd),
-        CommandHandler("mute", mod_mute_cmd),
-        CommandHandler("unmute", mod_unmute_cmd),
-        CommandHandler("reputation", mod_reputation_cmd),
+        CommandHandler("warn", warn_cmd),
+        CommandHandler("mute", mute_cmd),
+        CommandHandler("unmute", unmute_cmd),
+        CommandHandler("reputation", reputation_cmd),
         # Phase 14: Gamification
         CommandHandler("profile", profile_cmd),
         CommandHandler("daily", daily_cmd),

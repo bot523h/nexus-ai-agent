@@ -262,9 +262,8 @@ MEGA_PASSWORD=           # MEGA account password
 NEXUS_OWNER_TELEGRAM_ID=your_telegram_id
 NEXUS_ALLOWED_USER_IDS=12345,67890     # optional extra users
 
-# v3.13.0: Dashboard API bearer token. Set this whenever the dashboard
-# port is reachable beyond localhost. Responses are PII-free; the token
-# gates access.
+# Dashboard API bearer token (fail-closed): with it unset, /api/dashboard/*
+# answers 503 — the API is never open by accident. Responses are PII-free.
 NEXUS_DASHBOARD_TOKEN=                 # python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
@@ -273,7 +272,8 @@ NEXUS_DASHBOARD_TOKEN=                 # python -c "import secrets; print(secret
 > get one rate-limited denial and nothing else — this closes the hole
 > where only `/ai`-family and `/imagine` were checked. The dashboard
 > API no longer returns `telegram_id`/`username`, is bearer-token gated
-> when `NEXUS_DASHBOARD_TOKEN` is set, and docker-compose binds port
+> by `NEXUS_DASHBOARD_TOKEN` (disabled with `503` while the token is
+> unset — audit 2026-10-15), and docker-compose binds port
 > 8000 to `127.0.0.1` by default. `/cloud` and `/download` sanitize
 > file names (no path traversal). **AIMemory egress (P0-7)** is
 > default-deny: `/memory` extraction only sends text to the external

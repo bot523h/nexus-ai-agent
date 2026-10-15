@@ -561,7 +561,7 @@ async def cache_rows(query_key: str | None = None) -> list[Any]:
         statement = select(KnowledgeCache)
         if query_key is not None:
             statement = statement.where(col(KnowledgeCache.query) == query_key)
-        return list((await session.execute(statement)).scalars().all())
+        return list((await session.exec(statement)).all())
 
 
 async def test_r_f25_zero_working_sources_never_produce_a_summary(knowledge_db: Path) -> None:

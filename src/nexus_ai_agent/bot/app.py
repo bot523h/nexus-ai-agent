@@ -380,6 +380,12 @@ def build_application(
     from nexus_ai_agent.bot.access_guard import build_access_guard
 
     application.add_handler(build_access_guard(settings), group=-1)
+    # Smart moderation ingress (audit A-03, 2026-10-15): same group, right
+    # after the guard, so a violating group message is removed before the
+    # group-0 handlers (and the AI) ever see it.
+    from nexus_ai_agent.bot.handlers import build_moderation_gate
+
+    application.add_handler(build_moderation_gate(), group=-1)
 
     for handler in build_handlers(
         graph,
