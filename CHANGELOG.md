@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fix — filesystem boundary typing (re-scoped remainder of PR #209)
+
+- `tools.filesystem_policy`: a path that passes *through* a regular file or FIFO
+  (`file/child`) now raises `FilesystemBoundaryError("path component is not a directory")`
+  instead of leaking a raw `NotADirectoryError` from `lstat()`. Only the typed-error hunk and
+  the five tests of #209 were integrated; its `O_DIRECTORY` removal was not (the kernel
+  rationale does not reproduce on Linux 6.1 — see PR #209 comment 6197534460).
+
 ### Fix — A-12 async-blocking census closed (board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
 
 - **No blocking file I/O inside `async def` in `src/` (35 → 0).** Every `open()`/`Path`

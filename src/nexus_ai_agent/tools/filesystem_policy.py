@@ -84,6 +84,12 @@ class WorkspaceFilesystem:
                 mode = current.lstat().st_mode
             except FileNotFoundError:
                 return
+            except NotADirectoryError as exc:
+                # ``file/child``: an ancestor is not a directory.  Surface the
+                # typed boundary error rather than a raw OSError so callers
+                # that fail closed on FilesystemBoundaryError cannot miss it
+                # (re-scoped remainder of PR #209).
+                raise FilesystemBoundaryError("path component is not a directory") from exc
             if stat.S_ISLNK(mode):
                 raise FilesystemBoundaryError("symlinks are not allowed in workspace paths")
 
